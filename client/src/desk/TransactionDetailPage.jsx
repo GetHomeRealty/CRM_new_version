@@ -1,8 +1,11 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { getTransaction, updateTransaction, listAgents } from '../lib/api';
-import { typeClass, isListingType, emailLooksValid, parseNumber, TRANSACTION_TYPES } from './format';
+import { typeClass, isListingType, isPreconType, emailLooksValid, parseNumber, TRANSACTION_TYPES, formatCurrency } from './format';
 import { useToast } from './toast';
+import TeamSplitModal from './TeamSplitModal';
+import FinancialModal from './FinancialModal';
+import DocsModal from './DocsModal';
 
 const STATUS_LISTING = ['Open', 'Sold', 'Sold conditional', 'Terminated', 'Expired', 'Suspended', 'Mutual release', 'DFT', 'Void', 'MPR', 'Closed'];
 const STATUS_DEFAULT = ['Open', 'Hold', 'Closed', 'Mutual Release', 'DFT', 'Void', 'MPR'];
@@ -27,6 +30,15 @@ function toForm(t) {
       agent_email: t.brokerage?.agent_email || '', phone: t.brokerage?.phone || '',
       agents: (t.brokerage?.agents && t.brokerage.agents.length) ? [...t.brokerage.agents] : [''],
     },
+    // Preconstruction
+    precon_listing_type: t.precon_listing_type || 'mls',
+    precon_term_count: t.precon_term_count ?? '',
+    commission_agent: t.commission_agent || '',
+    builder: {
+      name: t.builder?.name || '', vendor: t.builder?.vendor || '', project: t.builder?.project || '',
+      address: t.builder?.address || '', office_email: t.builder?.office_email || '',
+      invoice_email: t.builder?.invoice_email || '', phone: t.builder?.phone || '',
+    },
   };
 }
 
@@ -37,25 +49,33 @@ export default function TransactionDetailPage() {
   const toast = useToast();
 
   const [form, setForm] = useState(null);
+  const [txn, setTxn] = useState(null); // raw API object (carries team + financial breakdown)
   const [mode, setMode] = useState(params.get('mode') === 'edit' ? 'edit' : 'view');
   const [agents, setAgents] = useState([]);
   const [saving, setSaving] = useState(false);
+  const [teamOpen, setTeamOpen] = useState(false);
+  const [finOpen, setFinOpen] = useState(false);
+  const [docsOpen, setDocsOpen] = useState(false);
 
   useEffect(() => {
-    getTransaction(id).then((t) => setForm(toForm(t))).catch(() => toast('Could not load transaction', 'bad'));
+    getTransaction(id).then((t) => { setForm(toForm(t)); setTxn(t); }).catch(() => toast('Could not load transaction', 'bad'));
     listAgents().then(setAgents).catch(() => {});
   }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const applyUpdated = (updated) => { setForm(toForm(updated)); setTxn(updated); };
 
   if (!form) return <div className="centered">Loading…</div>;
 
   const view = mode === 'view';
   const listing = isListingType(form.type);
+  const precon = isPreconType(form.type);
   const isLease = form.type.includes('Residential Lease');
   const statusOptions = listing ? STATUS_LISTING : STATUS_DEFAULT;
   const ro = view; // read-only flag
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
   const setBrok = (k, v) => setForm((f) => ({ ...f, brokerage: { ...f.brokerage, [k]: v } }));
+  const setBuilder = (k, v) => setForm((f) => ({ ...f, builder: { ...f.builder, [k]: v } }));
 
   const toggleStatus = (s) => {
     setForm((f) => {
@@ -116,10 +136,20 @@ export default function TransactionDetailPage() {
         agents: form.brokerage.agents.filter((a) => a && a.trim()),
       },
     };
+    if (precon) {
+      payload.precon_listing_type = form.precon_listing_type;
+      payload.precon_term_count = form.precon_term_count === '' ? null : parseInt(form.precon_term_count, 10);
+      payload.commission_agent = form.commission_agent || null;
+      payload.builder = {
+        name: form.builder.name || null, vendor: form.builder.vendor || null, project: form.builder.project || null,
+        address: form.builder.address || null, office_email: form.builder.office_email || null,
+        invoice_email: form.builder.invoice_email || null, phone: form.builder.phone || null,
+      };
+    }
     setSaving(true);
     try {
       const updated = await updateTransaction(id, payload);
-      setForm(toForm(updated));
+      applyUpdated(updated);
       setMode('view');
       toast('Transaction saved', 'ok');
     } catch (err) {
@@ -201,7 +231,64 @@ export default function TransactionDetailPage() {
         </div>
       </div>
 
-      {/* Brokerage */}
+      {/* Quick Actions */}
+      <div className="card">
+        <div className="modal-h" style={{ fontSize: 14 }}>Quick Actions</div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          <button className="btn ghost sm" disabled={!form.agent} title={form.agent ? '' : 'Assign an agent in Basic Info first'} onClick={() => setTeamOpen(true)}>👥 Team Split</button>
+          <button className="btn ghost sm" onClick={() => setFinOpen(true)}>💰 Financial</button>
+          <button className="btn ghost sm" onClick={() => setDocsOpen(true)}>📑 Legal &amp; Docs</button>
+          {txn?.financial && (
+            <span className="help" style={{ margin: 0 }}>
+              Commission <strong>{formatCurrency(txn.financial.total)}</strong> incl. HST · {(txn.team?.length || 0)} agent{(txn.team?.length || 0) === 1 ? '' : 's'} on split
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Preconstruction details */}
+      {precon && (
+        <div className="card">
+          <div className="modal-h" style={{ fontSize: 14 }}>Preconstruction Details</div>
+          <div className="g3">
+            <Field label="Listing Type">
+              <select value={form.precon_listing_type} disabled={ro} onChange={(e) => set('precon_listing_type', e.target.value)}>
+                <option value="mls">MLS</option><option value="builder">Builder</option>
+              </select>
+            </Field>
+            <Field label="Commission Agent">
+              <input list="agentList" value={form.commission_agent} disabled={ro} onChange={(e) => set('commission_agent', e.target.value)} placeholder="Search Agent..." />
+            </Field>
+            <Field label="Commission Receivable in Terms">
+              <input type="number" min="0" max="200" value={form.precon_term_count} disabled={ro} onChange={(e) => set('precon_term_count', e.target.value)} placeholder="e.g. 3" />
+            </Field>
+          </div>
+          <span className="help">Set the number of terms here, then open <strong>Financial</strong> to enter each term's commission % and closing date.</span>
+        </div>
+      )}
+
+      {/* Builder Information (precon) */}
+      {precon && (
+        <div className="card">
+          <div className="modal-h" style={{ fontSize: 14 }}>Builder Information</div>
+          <div className="g2">
+            <Field label="Builder Name"><input value={form.builder.name} disabled={ro} onChange={(e) => setBuilder('name', e.target.value)} /></Field>
+            <Field label="Vendor Name"><input value={form.builder.vendor} disabled={ro} onChange={(e) => setBuilder('vendor', e.target.value)} /></Field>
+          </div>
+          <div className="g2">
+            <Field label="Project Name"><input value={form.builder.project} disabled={ro} onChange={(e) => setBuilder('project', e.target.value)} /></Field>
+            <Field label="Address"><input value={form.builder.address} disabled={ro} onChange={(e) => setBuilder('address', e.target.value)} /></Field>
+          </div>
+          <div className="g3">
+            <Field label="Builder Office Email"><input type="email" value={form.builder.office_email} disabled={ro} onChange={(e) => setBuilder('office_email', e.target.value)} /></Field>
+            <Field label="Invoice Email"><input type="email" value={form.builder.invoice_email} disabled={ro} onChange={(e) => setBuilder('invoice_email', e.target.value)} /></Field>
+            <Field label="Phone"><input value={form.builder.phone} disabled={ro} onChange={(e) => setBuilder('phone', e.target.value)} placeholder="+1 000-000-0000" /></Field>
+          </div>
+        </div>
+      )}
+
+      {/* Brokerage (hidden for preconstruction — Builder card replaces it) */}
+      {!precon && (
       <div className="card">
         <div className="modal-h" style={{ fontSize: 14 }}>{brokLabel} Brokerage Information</div>
         <Field label={`${brokLabel} Brokerage Name`}><input value={form.brokerage.name} disabled={ro} onChange={(e) => setBrok('name', e.target.value)} placeholder="Brokerage name" /></Field>
@@ -223,6 +310,7 @@ export default function TransactionDetailPage() {
         </div>
         <Field label="Phone Number"><input value={form.brokerage.phone} disabled={ro} onChange={(e) => setBrok('phone', e.target.value)} placeholder="+1 000-000-0000" /></Field>
       </div>
+      )}
 
       {/* Clients */}
       <div className="card">
@@ -308,9 +396,35 @@ export default function TransactionDetailPage() {
       {/* Stage note */}
       <div className="card" style={{ background: 'var(--surface-2)' }}>
         <span className="help" style={{ margin: 0 }}>
-          Financial, Team Split, Legal &amp; Docs, Admin, Adjustments, Agent FAQ and PDF generation (Invoice / Notice of Sale / Trade Sheet) arrive in later stages. Commission totals are computed by the backend and shown on the Transactions list.
+          Legal &amp; Docs, Admin, Adjustments, Agent FAQ and PDF generation (Invoice / Notice of Sale / Trade Sheet) arrive in later stages, along with the listing &amp; preconstruction Financial variants. Commission totals are computed by the backend.
         </span>
       </div>
+
+      {teamOpen && txn && (
+        <TeamSplitModal
+          open={teamOpen}
+          onClose={() => setTeamOpen(false)}
+          transactionId={id}
+          primaryAgent={form.agent}
+          initialTeam={txn.team}
+          agents={agents}
+          isPrecon={precon}
+          termCount={parseInt(form.precon_term_count, 10) || 0}
+          onSaved={applyUpdated}
+        />
+      )}
+      {finOpen && txn && (
+        <FinancialModal
+          open={finOpen}
+          onClose={() => setFinOpen(false)}
+          transactionId={id}
+          txn={txn}
+          onSaved={applyUpdated}
+        />
+      )}
+      {docsOpen && (
+        <DocsModal open={docsOpen} onClose={() => setDocsOpen(false)} transactionId={id} />
+      )}
     </>
   );
 }

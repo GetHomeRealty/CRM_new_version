@@ -124,6 +124,9 @@ select{background-image:url("data:image/svg+xml,%3Csvg width='10' height='6' vie
 .stat-card .val{font-size:24px;font-weight:700;margin-top:4px;letter-spacing:-0.02em;color:var(--text)}
 .cond-row{padding:8px 0;border-top:1px dashed var(--line)}
 .cond-row:first-child{border-top:0;padding-top:0}
+.doc-table{width:100%;border-collapse:collapse}
+.doc-table th,.doc-table td{padding:9px 8px;border-bottom:1px solid var(--line-2);font-size:12px;text-align:left;vertical-align:middle}
+.doc-table th{background:var(--surface-3);font-weight:700;color:var(--text-2);font-size:10.5px;text-transform:uppercase;letter-spacing:0.04em}
 .ms-chip{display:inline-flex;align-items:center;gap:6px;padding:5px 11px;border:1px solid var(--line);border-radius:999px;background:var(--surface);font-size:12px;cursor:pointer;user-select:none;transition:all .15s ease;font-weight:500}
 .ms-chip input[type=checkbox]{margin:0;width:14px;height:14px}
 .ms-chip:hover{border-color:var(--brand);color:var(--brand)}

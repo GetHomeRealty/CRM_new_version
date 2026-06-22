@@ -41,9 +41,22 @@ class Transaction extends Model
         'offer_date', 'closing_date', 'listing_contract_date', 'listing_expiry_date',
         'mls_type', 'mls_num', 'mls_verified',
         'comm_type', 'comm_value', 'comm_pct', 'comm_amt',
+        'comm_adjust_enabled', 'comm_adjust_before', 'comm_adjust_after',
+        'listing_comm_pct', 'coop_comm_pct',
+        'listing_adj_enabled', 'listing_adj_before', 'listing_adj_after',
+        'coop_adj_enabled', 'coop_adj_before', 'coop_adj_after',
+        'precon_listing_type', 'precon_term_count', 'commission_agent',
+        'precon_net_of_hst', 'precon_comm_pct', 'precon_comm_amt_manual', 'precon_details_of_terms',
+        'builder_name', 'builder_vendor', 'builder_project', 'builder_address',
+        'builder_office_email', 'builder_invoice_email', 'builder_phone',
         'comm_status', 'comm_paid_status', 'valid_status',
         'conditional_offer', 'inter_board_enabled',
     ];
+
+    public static function isPreconType(?string $type): bool
+    {
+        return $type === 'Preconstruction';
+    }
 
     protected function casts(): array
     {
@@ -53,6 +66,20 @@ class Transaction extends Model
             'comm_value' => 'decimal:2',
             'comm_pct' => 'decimal:4',
             'comm_amt' => 'decimal:2',
+            'comm_adjust_enabled' => 'boolean',
+            'comm_adjust_before' => 'decimal:2',
+            'comm_adjust_after' => 'decimal:2',
+            'listing_comm_pct' => 'decimal:4',
+            'coop_comm_pct' => 'decimal:4',
+            'listing_adj_enabled' => 'boolean',
+            'listing_adj_before' => 'decimal:2',
+            'listing_adj_after' => 'decimal:2',
+            'coop_adj_enabled' => 'boolean',
+            'coop_adj_before' => 'decimal:2',
+            'coop_adj_after' => 'decimal:2',
+            'precon_net_of_hst' => 'boolean',
+            'precon_comm_pct' => 'decimal:4',
+            'precon_comm_amt_manual' => 'decimal:2',
             'offer_date' => 'date',
             'closing_date' => 'date',
             'listing_contract_date' => 'date',
@@ -86,6 +113,21 @@ class Transaction extends Model
     public function brokerage(): HasOne
     {
         return $this->hasOne(Brokerage::class);
+    }
+
+    public function teamMembers(): HasMany
+    {
+        return $this->hasMany(TeamMember::class)->orderBy('position');
+    }
+
+    public function preconTerms(): HasMany
+    {
+        return $this->hasMany(PreconTerm::class)->orderBy('term_no');
+    }
+
+    public function documents(): HasMany
+    {
+        return $this->hasMany(Document::class)->orderBy('position');
     }
 
     public function auditLogs(): HasMany

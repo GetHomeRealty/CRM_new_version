@@ -45,6 +45,8 @@ export const LISTING_TYPES = [
 
 export const isListingType = (t) => LISTING_TYPES.includes(t);
 
+export const isPreconType = (t) => t === 'Preconstruction';
+
 export const TRANSACTION_TYPES = [
   'Residential Buying',
   'Residential Lease',

@@ -72,14 +72,36 @@ class TransactionController extends Controller
         DB::transaction(function () use ($data, $transaction, $request) {
             $this->auditBasicChanges($transaction, $data);
 
-            $transaction->fill(array_intersect_key($data, array_flip([
+            $fill = array_intersect_key($data, array_flip([
                 'type', 'property', 'agent', 'price', 'deposit',
                 'offer_date', 'closing_date', 'listing_contract_date', 'listing_expiry_date',
                 'mls_type', 'mls_num', 'mls_verified',
                 'comm_type', 'comm_value', 'comm_pct', 'comm_amt',
+                'comm_adjust_enabled', 'comm_adjust_before', 'comm_adjust_after',
+                'listing_comm_pct', 'coop_comm_pct',
+                'listing_adj_enabled', 'listing_adj_before', 'listing_adj_after',
+                'coop_adj_enabled', 'coop_adj_before', 'coop_adj_after',
+                'precon_listing_type', 'precon_term_count', 'commission_agent',
+                'precon_net_of_hst', 'precon_comm_pct', 'precon_comm_amt_manual', 'precon_details_of_terms',
                 'comm_status', 'comm_paid_status', 'valid_status',
                 'conditional_offer', 'inter_board_enabled',
-            ])))->save();
+            ]));
+
+            // Builder Information (nested object → flat builder_* columns).
+            if (array_key_exists('builder', $data) && is_array($data['builder'])) {
+                foreach (['name', 'vendor', 'project', 'address', 'office_email', 'invoice_email', 'phone'] as $key) {
+                    $fill['builder_'.$key] = $data['builder'][$key] ?? null;
+                }
+            }
+
+            $transaction->fill($fill)->save();
+
+            if (array_key_exists('team', $data)) {
+                $this->syncTeam($transaction, $data['team']);
+            }
+            if (array_key_exists('precon_terms', $data)) {
+                $this->syncPreconTerms($transaction, $data['precon_terms']);
+            }
 
             if (array_key_exists('statuses', $data)) {
                 $this->syncStatuses($transaction, $data['statuses']);
@@ -112,8 +134,42 @@ class TransactionController extends Controller
     {
         return $t->load([
             'statuses', 'clients', 'conditions', 'interBoardListings',
-            'brokerage.agents', 'auditLogs',
+            'brokerage.agents', 'teamMembers.terms', 'preconTerms', 'auditLogs',
         ]);
+    }
+
+    private function syncPreconTerms(Transaction $t, array $terms): void
+    {
+        $t->preconTerms()->delete();
+        foreach ($terms as $term) {
+            if (! isset($term['term_no'])) {
+                continue;
+            }
+            $t->preconTerms()->create([
+                'term_no' => $term['term_no'],
+                'pct' => $term['pct'] ?? null,
+                'closing_date' => $term['closing_date'] ?? null,
+            ]);
+        }
+    }
+
+    private function syncTeam(Transaction $t, array $team): void
+    {
+        $t->teamMembers()->delete();
+        foreach (array_values($team) as $i => $m) {
+            $member = $t->teamMembers()->create([
+                'name' => $m['name'] ?? '',
+                'split' => $m['split'] ?? 0,
+                'agent_pct' => $m['agent_pct'] ?? 90,
+                'brok_pct' => $m['brok_pct'] ?? 10,
+                'is_primary' => (bool) ($m['is_primary'] ?? ($i === 0)),
+                'scope' => $m['scope'] ?? 'Entire',
+                'position' => $i,
+            ]);
+            foreach (array_values(array_unique($m['terms'] ?? [])) as $term) {
+                $member->terms()->create(['term_no' => $term]);
+            }
+        }
     }
 
     private function syncStatuses(Transaction $t, array $statuses): void
