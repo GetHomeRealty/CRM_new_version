@@ -17,7 +17,7 @@ export default function Login() {
     setSubmitting(true);
     try {
       await login(form.email, form.password);
-      navigate('/dashboard');
+      navigate('/app/transactions');
     } catch (err) {
       setError(err.response?.data?.message ?? 'Login failed. Check your credentials.');
     } finally {
@@ -26,7 +26,7 @@ export default function Login() {
   };
 
   return (
-    <div className="auth-card">
+    <div className="auth-shell"><div className="auth-card">
       <h1>Sign in</h1>
       {error && <p className="error">{error}</p>}
       <form onSubmit={onSubmit}>
@@ -45,6 +45,6 @@ export default function Login() {
       <p className="muted">
         No account? <Link to="/register">Create one</Link>
       </p>
-    </div>
+    </div></div>
   );
 }

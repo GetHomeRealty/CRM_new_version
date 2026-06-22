@@ -22,7 +22,7 @@ export default function Register() {
     setSubmitting(true);
     try {
       await register(form);
-      navigate('/dashboard');
+      navigate('/app/transactions');
     } catch (err) {
       // Laravel returns 422 with { errors: { field: [msg] } }
       setErrors(err.response?.data?.errors ?? { general: ['Registration failed.'] });
@@ -34,7 +34,7 @@ export default function Register() {
   const fieldError = (name) => errors[name]?.[0];
 
   return (
-    <div className="auth-card">
+    <div className="auth-shell"><div className="auth-card">
       <h1>Create account</h1>
       {errors.general && <p className="error">{errors.general[0]}</p>}
       <form onSubmit={onSubmit}>
@@ -70,6 +70,6 @@ export default function Register() {
       <p className="muted">
         Already have an account? <Link to="/login">Sign in</Link>
       </p>
-    </div>
+    </div></div>
   );
 }
