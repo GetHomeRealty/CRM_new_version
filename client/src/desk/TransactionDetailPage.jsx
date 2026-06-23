@@ -516,6 +516,7 @@ export default function TransactionDetailPage() {
           onClose={() => setFinOpen(false)}
           transactionId={id}
           txn={txn}
+          termCount={precon ? (parseInt(form.precon_term_count, 10) || 0) : undefined}
           onSaved={applyUpdated}
         />
       )}
