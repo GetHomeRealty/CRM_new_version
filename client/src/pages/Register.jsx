@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { registrationOpen } from '../lib/api';
 
 export default function Register() {
   const { register } = useAuth();
@@ -13,6 +14,21 @@ export default function Register() {
   });
   const [errors, setErrors] = useState({});
   const [submitting, setSubmitting] = useState(false);
+  const [open, setOpen] = useState(null);
+
+  useEffect(() => { registrationOpen().then(setOpen).catch(() => setOpen(true)); }, []);
+
+  if (open === false) {
+    return (
+      <div className="auth-shell"><div className="auth-card">
+        <h1>Registration closed</h1>
+        <p className="muted" style={{ textAlign: 'left' }}>
+          This Transaction Desk already has an administrator. New accounts are created by an admin under <strong>Users</strong>.
+        </p>
+        <p className="muted">Have an account? <Link to="/login">Sign in</Link></p>
+      </div></div>
+    );
+  }
 
   const update = (e) => setForm({ ...form, [e.target.name]: e.target.value });
 

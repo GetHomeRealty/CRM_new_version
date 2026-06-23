@@ -14,6 +14,11 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withMiddleware(function (Middleware $middleware): void {
         // Enable cookie-based (stateful) authentication for the React SPA via Sanctum.
         $middleware->statefulApi();
+
+        $middleware->alias([
+            'admin' => \App\Http\Middleware\EnsureAdmin::class,
+            'screen' => \App\Http\Middleware\EnsureScreenAccess::class,
+        ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         //

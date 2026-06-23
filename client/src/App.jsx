@@ -13,9 +13,11 @@ import InvoicePage from './desk/InvoicePage';
 import MlsPage from './desk/MlsPage';
 import ReportsPage from './desk/ReportsPage';
 import UsersPage from './desk/UsersPage';
+import CompanySettingsPage from './desk/CompanySettingsPage';
 import TransactionsPage from './desk/TransactionsPage';
 import TransactionDetailPage from './desk/TransactionDetailPage';
 import StubPage from './desk/StubPage';
+import { RequireScreen, LandingRedirect } from './desk/guards';
 
 export default function App() {
   return (
@@ -28,17 +30,18 @@ export default function App() {
 
             <Route element={<ProtectedRoute />}>
               <Route path="/app" element={<DeskLayout />}>
-                <Route index element={<Navigate to="/app/transactions" replace />} />
-                <Route path="dashboard" element={<DashboardPage />} />
-                <Route path="analytics" element={<AnalyticsPage />} />
-                <Route path="calendar" element={<CalendarPage />} />
-                <Route path="inventory" element={<InventoryPage />} />
-                <Route path="invoice" element={<InvoicePage />} />
-                <Route path="mls" element={<MlsPage />} />
-                <Route path="reports" element={<ReportsPage />} />
-                <Route path="users" element={<UsersPage />} />
-                <Route path="transactions" element={<TransactionsPage />} />
-                <Route path="transactions/:id" element={<TransactionDetailPage />} />
+                <Route index element={<LandingRedirect />} />
+                <Route path="dashboard" element={<RequireScreen screen="dashboard"><DashboardPage /></RequireScreen>} />
+                <Route path="analytics" element={<RequireScreen screen="analytics"><AnalyticsPage /></RequireScreen>} />
+                <Route path="calendar" element={<RequireScreen screen="calendar"><CalendarPage /></RequireScreen>} />
+                <Route path="inventory" element={<RequireScreen screen="inventory"><InventoryPage /></RequireScreen>} />
+                <Route path="invoice" element={<RequireScreen screen="invoice"><InvoicePage /></RequireScreen>} />
+                <Route path="mls" element={<RequireScreen screen="mls"><MlsPage /></RequireScreen>} />
+                <Route path="reports" element={<RequireScreen screen="reports"><ReportsPage /></RequireScreen>} />
+                <Route path="users" element={<RequireScreen screen="users"><UsersPage /></RequireScreen>} />
+                <Route path="settings" element={<RequireScreen screen="settings"><CompanySettingsPage /></RequireScreen>} />
+                <Route path="transactions" element={<RequireScreen screen="transactions"><TransactionsPage /></RequireScreen>} />
+                <Route path="transactions/:id" element={<RequireScreen screen="transactions"><TransactionDetailPage /></RequireScreen>} />
                 <Route path=":page" element={<StubPage />} />
               </Route>
             </Route>

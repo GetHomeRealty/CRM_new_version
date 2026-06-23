@@ -22,9 +22,11 @@ const NAV = [
 const TITLES = Object.fromEntries(NAV.map((n) => [n.key, n.label]));
 
 export default function DeskLayout() {
-  const { logout, user } = useAuth();
+  const { logout, user, can } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
+
+  const visibleNav = NAV.filter((n) => can(n.key, 'view'));
 
   const seg = location.pathname.split('/')[2] || 'transactions';
   const title = location.pathname.includes('/transactions/') ? 'Transaction Detail' : (TITLES[seg] || 'Transactions');
@@ -48,7 +50,7 @@ export default function DeskLayout() {
             <div className="brand-name">Get Home<br />Realty</div>
           </div>
           <nav className="nav">
-            {NAV.map((n) => (
+            {visibleNav.map((n) => (
               <button key={n.key} className={seg === n.key ? 'active' : ''} onClick={() => go(n.key)}>
                 <span className="ico">{n.ico}</span><span>{n.label}</span>
               </button>

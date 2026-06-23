@@ -1,11 +1,18 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { getTransaction, updateTransaction, listAgents } from '../lib/api';
-import { typeClass, isListingType, isPreconType, emailLooksValid, parseNumber, TRANSACTION_TYPES, formatCurrency } from './format';
+import { getTransaction, updateTransaction, listAgents, generateTransactionInvoices } from '../lib/api';
+import { typeClass, isListingType, isPreconType, isInvoiceableType, emailLooksValid, parseNumber, TRANSACTION_TYPES, formatCurrency } from './format';
 import { useToast } from './toast';
+import { useAuth } from '../context/AuthContext';
 import TeamSplitModal from './TeamSplitModal';
 import FinancialModal from './FinancialModal';
 import DocsModal from './DocsModal';
+import InvoiceModal from './InvoiceModal';
+import NoticeOfSaleModal from './NoticeOfSaleModal';
+import TradeSheetModal from './TradeSheetModal';
+import LawyerModal from './LawyerModal';
+import AuditTrailModal from './AuditTrailModal';
+import PlaceholderModal from './PlaceholderModal';
 
 const STATUS_LISTING = ['Open', 'Sold', 'Sold conditional', 'Terminated', 'Expired', 'Suspended', 'Mutual release', 'DFT', 'Void', 'MPR', 'Closed'];
 const STATUS_DEFAULT = ['Open', 'Hold', 'Closed', 'Mutual Release', 'DFT', 'Void', 'MPR'];
@@ -47,15 +54,26 @@ export default function TransactionDetailPage() {
   const [params] = useSearchParams();
   const navigate = useNavigate();
   const toast = useToast();
+  const { can } = useAuth();
+  const canEdit = can('transactions', 'edit');
+  const canInvoice = can('invoice', 'edit');
+  const [generating, setGenerating] = useState(false);
 
   const [form, setForm] = useState(null);
   const [txn, setTxn] = useState(null); // raw API object (carries team + financial breakdown)
-  const [mode, setMode] = useState(params.get('mode') === 'edit' ? 'edit' : 'view');
+  const [mode, setMode] = useState(params.get('mode') === 'edit' && canEdit ? 'edit' : 'view');
   const [agents, setAgents] = useState([]);
   const [saving, setSaving] = useState(false);
   const [teamOpen, setTeamOpen] = useState(false);
   const [finOpen, setFinOpen] = useState(false);
   const [docsOpen, setDocsOpen] = useState(false);
+  const [invoiceOpen, setInvoiceOpen] = useState(false);
+  const [nosOpen, setNosOpen] = useState(false);
+  const [tsOpen, setTsOpen] = useState(false);
+  const [lawyerOpen, setLawyerOpen] = useState(false);
+  const [auditOpen, setAuditOpen] = useState(false);
+  const [placeholder, setPlaceholder] = useState(null); // {title, description}
+  const bodyRef = useRef(null); // wraps the filterable cards for "search this transaction"
 
   useEffect(() => {
     getTransaction(id).then((t) => { setForm(toForm(t)); setTxn(t); }).catch(() => toast('Could not load transaction', 'bad'));
@@ -63,6 +81,17 @@ export default function TransactionDetailPage() {
   }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const applyUpdated = (updated) => { setForm(toForm(updated)); setTxn(updated); };
+
+  const generateInvoices = async () => {
+    setGenerating(true);
+    try {
+      const res = await generateTransactionInvoices(id);
+      toast(`Generated ${res.count} invoice${res.count === 1 ? '' : 's'}`, 'ok');
+      navigate('/app/invoices');
+    } catch (e) {
+      toast(e.response?.data?.message || 'Could not generate invoice', 'bad');
+    } finally { setGenerating(false); }
+  };
 
   if (!form) return <div className="centered">Loading…</div>;
 
@@ -76,6 +105,28 @@ export default function TransactionDetailPage() {
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
   const setBrok = (k, v) => setForm((f) => ({ ...f, brokerage: { ...f.brokerage, [k]: v } }));
   const setBuilder = (k, v) => setForm((f) => ({ ...f, builder: { ...f.builder, [k]: v } }));
+  const setListingType = (which) => set('mls_type', which);
+
+  // "Search this transaction" — filters the cards on the page (mirrors the original).
+  const onSearch = (q) => {
+    const root = bodyRef.current; if (!root) return;
+    const query = (q || '').toLowerCase().trim();
+    root.querySelectorAll('.card').forEach((c) => {
+      c.style.display = !query || (c.textContent || '').toLowerCase().includes(query) ? '' : 'none';
+    });
+  };
+
+  // Transaction progress stepper
+  const stages = [
+    { label: 'Drafted', pass: !!(txn?.id || form.property) },
+    { label: 'Agent Set', pass: !!(form.agent && form.agent.trim()) },
+    { label: 'Clients', pass: (form.clients || []).length > 0 },
+    { label: 'Financial', pass: !!(txn?.comm_pct || txn?.comm_amt || txn?.precon_comm_pct || (txn?.financial && txn.financial.total > 0)) },
+    { label: 'Closed', pass: (form.statuses || []).includes('Closed') },
+  ];
+  let curStage = stages.findIndex((s) => !s.pass);
+  if (curStage === -1) curStage = stages.length - 1;
+  const progressPct = Math.round(stages.filter((s) => s.pass).length / stages.length * 100);
 
   const toggleStatus = (s) => {
     setForm((f) => {
@@ -172,8 +223,14 @@ export default function TransactionDetailPage() {
           {form.statuses.map((s) => <span key={s} className={`pill ${stPill(s)}`}>{s}</span>)}
           <span className={`pill ${view ? 'info' : 'warn'}`} style={{ fontSize: 10 }}>{view ? '🔒 View Only' : '✏ Edit Mode'}</span>
         </div>
-        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-          {view
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+          <button className="btn ghost sm" onClick={() => setInvoiceOpen(true)}>🧾 Invoice</button>
+          <button className="btn ghost sm" onClick={() => setTsOpen(true)}>📋 Trade Sheet</button>
+          <button className="btn ghost sm" onClick={() => setNosOpen(true)}>📄 Notice of Sale</button>
+          <span style={{ width: 1, height: 18, background: 'var(--line)', margin: '0 4px' }} />
+          {!canEdit
+            ? <span className="pill info" style={{ fontSize: 10 }}>Read-only access</span>
+            : view
             ? <button className="btn primary sm" onClick={() => setMode('edit')}>✏ Edit</button>
             : (<>
                 <button className="btn ghost sm" onClick={() => setMode('view')}>Cancel</button>
@@ -182,69 +239,114 @@ export default function TransactionDetailPage() {
         </div>
       </div>
 
-      {/* Basic Info + Trade meta */}
-      <div className="card">
-        <div className="modal-h" style={{ fontSize: 14 }}>Basic Info</div>
-        <div className="g3">
-          <Field label="Type">
-            <select value={form.type} disabled={ro} onChange={(e) => set('type', e.target.value)}>
-              {TRANSACTION_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
-            </select>
-          </Field>
-          <Field label="Trade Number"><input value={form.trade_no} readOnly style={{ background: '#f9fafb' }} /></Field>
-          <Field label="Agent Name">
-            <input list="agentList" value={form.agent} disabled={ro} onChange={(e) => set('agent', e.target.value)} placeholder="Search Agent..." />
-            <datalist id="agentList">{agents.map((a) => <option key={a} value={a} />)}</datalist>
-          </Field>
+      {/* Transaction progress stepper */}
+      <div className="card" style={{ background: 'linear-gradient(180deg,#fff,#fafbff)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+          <strong style={{ fontSize: 13, color: 'var(--brand)' }}>Transaction Progress</strong>
+          <span className="pill info" style={{ fontSize: 11 }}>{progressPct}% complete</span>
         </div>
-        <div className="g3">
-          <Field label="Property Address" req><input value={form.property} disabled={ro} onChange={(e) => set('property', e.target.value)} /></Field>
-          <Field label={isLease ? 'Total lease price' : 'Total Purchase Price'}>
-            <input value={form.price} disabled={ro} onChange={(e) => set('price', e.target.value)} />
-          </Field>
-          <Field label="Deposit"><input value={form.deposit} disabled={ro} onChange={(e) => set('deposit', e.target.value)} /></Field>
+        <div style={{ display: 'flex', alignItems: 'flex-start', overflowX: 'auto', padding: '4px 2px' }}>
+          {stages.map((s, idx) => (
+            <div key={s.label} style={{ display: 'flex', alignItems: 'flex-start', flex: idx < stages.length - 1 ? 1 : '0 0 auto' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', minWidth: 72 }}>
+                <div style={{ width: 26, height: 26, borderRadius: '50%', display: 'grid', placeItems: 'center', fontSize: 12, fontWeight: 700,
+                  background: s.pass ? '#16a34a' : (idx === curStage ? 'var(--brand)' : '#e5e7eb'),
+                  color: s.pass || idx === curStage ? '#fff' : '#6b7280' }}>{s.pass ? '✓' : idx + 1}</div>
+                <div style={{ marginTop: 6, fontSize: 11, fontWeight: 600, textAlign: 'center', whiteSpace: 'nowrap',
+                  color: s.pass ? '#166534' : (idx === curStage ? 'var(--brand)' : '#9ca3af') }}>{s.label}</div>
+              </div>
+              {idx < stages.length - 1 && <div style={{ flex: 1, height: 2, background: '#e5e7eb', marginTop: 13 }} />}
+            </div>
+          ))}
         </div>
-        <div className="g3">
-          {listing ? (<>
-            <Field label="Listing Contract Date"><input type="date" value={form.listing_contract_date} disabled={ro} onChange={(e) => set('listing_contract_date', e.target.value)} /></Field>
-            <Field label="Listing Expiry Date"><input type="date" value={form.listing_expiry_date} disabled={ro} onChange={(e) => set('listing_expiry_date', e.target.value)} /></Field>
-          </>) : (<>
-            <Field label="Offer Date"><input type="date" value={form.offer_date} disabled={ro} onChange={(e) => set('offer_date', e.target.value)} /></Field>
-            <Field label="Closing Date"><input type="date" value={form.closing_date} disabled={ro} onChange={(e) => set('closing_date', e.target.value)} /></Field>
-          </>)}
-          <Field label="MLS #">
-            <input value={form.mls_num} disabled={ro} onChange={(e) => set('mls_num', e.target.value.toUpperCase())} placeholder="e.g. E12345678" />
-          </Field>
-        </div>
-        <div className="field" style={{ marginBottom: 0 }}>
-          <label>Status</label>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-            {statusOptions.map((s) => {
-              const on = form.statuses.includes(s);
-              return (
-                <label key={s} className={`ms-chip ${on ? 'on' : ''}`} style={ro ? { opacity: 0.7, pointerEvents: 'none' } : undefined}>
-                  <input type="checkbox" checked={on} disabled={ro} onChange={() => toggleStatus(s)} />{s}
-                </label>
-              );
-            })}
-          </div>
+        <div style={{ height: 6, borderRadius: 3, background: '#e5e7eb', marginTop: 12, overflow: 'hidden' }}>
+          <div style={{ height: '100%', width: `${progressPct}%`, background: 'linear-gradient(90deg,#16a34a,var(--brand))' }} />
         </div>
       </div>
 
-      {/* Quick Actions */}
-      <div className="card">
-        <div className="modal-h" style={{ fontSize: 14 }}>Quick Actions</div>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-          <button className="btn ghost sm" disabled={!form.agent} title={form.agent ? '' : 'Assign an agent in Basic Info first'} onClick={() => setTeamOpen(true)}>👥 Team Split</button>
-          <button className="btn ghost sm" onClick={() => setFinOpen(true)}>💰 Financial</button>
-          <button className="btn ghost sm" onClick={() => setDocsOpen(true)}>📑 Legal &amp; Docs</button>
-          {txn?.financial && (
-            <span className="help" style={{ margin: 0 }}>
-              Commission <strong>{formatCurrency(txn.financial.total)}</strong> incl. HST · {(txn.team?.length || 0)} agent{(txn.team?.length || 0) === 1 ? '' : 's'} on split
-            </span>
-          )}
+      {/* Search this transaction */}
+      <div className="card" style={{ padding: '10px 12px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 14 }}>🔍</span>
+          <input placeholder="Search this transaction (clients, brokerage, terms, conditions…)" onChange={(e) => onSearch(e.target.value)} style={{ flex: 1, minWidth: 240 }} />
         </div>
       </div>
+
+      <div ref={bodyRef}>
+        <div className="detail-2col">
+          {/* Basic Info */}
+          <div className="card" style={{ marginBottom: 0 }}>
+            <div className="modal-h" style={{ fontSize: 14 }}>Basic Info</div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1.1fr 1.2fr 1.6fr', gap: 12, marginBottom: 12 }}>
+              <Field label="Listing Type">
+                <div className="seg-toggle">
+                  <button type="button" className={`seg-btn ${form.mls_type !== 'exclusive' ? 'active' : ''}`} disabled={ro} onClick={() => setListingType('mls')}>MLS</button>
+                  <button type="button" className={`seg-btn ${form.mls_type === 'exclusive' ? 'active' : ''}`} disabled={ro} onClick={() => setListingType('exclusive')}>Exclusive</button>
+                </div>
+                {form.mls_type !== 'exclusive'
+                  ? <input style={{ marginTop: 6 }} value={form.mls_num} disabled={ro} onChange={(e) => set('mls_num', e.target.value.toUpperCase())} placeholder="e.g. E12345678" />
+                  : <span className="pill type-pre" style={{ marginTop: 6, display: 'inline-block', padding: '6px 12px' }}>Exclusive Listing</span>}
+              </Field>
+              <Field label="Type">
+                <select value={form.type} disabled={ro} onChange={(e) => set('type', e.target.value)}>
+                  {TRANSACTION_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+                </select>
+              </Field>
+              <Field label="Status">
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  {statusOptions.map((s) => {
+                    const on = form.statuses.includes(s);
+                    return (
+                      <label key={s} className={`ms-chip ${on ? 'on' : ''}`} style={ro ? { opacity: 0.7, pointerEvents: 'none' } : undefined}>
+                        <input type="checkbox" checked={on} disabled={ro} onChange={() => toggleStatus(s)} />{s}
+                      </label>
+                    );
+                  })}
+                </div>
+              </Field>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.5fr 1fr 1fr', gap: 12, marginBottom: 12 }}>
+              <Field label="Agent Name">
+                <input list="agentList" value={form.agent} disabled={ro} onChange={(e) => set('agent', e.target.value)} placeholder="Search Agent..." />
+                <datalist id="agentList">{agents.map((a) => <option key={a} value={a} />)}</datalist>
+              </Field>
+              <Field label="Property Address" req><input value={form.property} disabled={ro} onChange={(e) => set('property', e.target.value)} /></Field>
+              <Field label={isLease ? 'Total lease price' : 'Total Purchase Price'}><input value={form.price} disabled={ro} onChange={(e) => set('price', e.target.value)} /></Field>
+              <Field label="Deposit"><input value={form.deposit} disabled={ro} onChange={(e) => set('deposit', e.target.value)} /></Field>
+            </div>
+            <div className="g3">
+              <Field label="Trade Number"><input value={form.trade_no} readOnly style={{ background: '#f9fafb' }} /></Field>
+              {listing ? (<>
+                <Field label="Listing Contract Date"><input type="date" value={form.listing_contract_date} disabled={ro} onChange={(e) => set('listing_contract_date', e.target.value)} /></Field>
+                <Field label="Listing Expiry Date"><input type="date" value={form.listing_expiry_date} disabled={ro} onChange={(e) => set('listing_expiry_date', e.target.value)} /></Field>
+              </>) : (<>
+                <Field label="Offer Date"><input type="date" value={form.offer_date} disabled={ro} onChange={(e) => set('offer_date', e.target.value)} /></Field>
+                <Field label="Closing Date"><input type="date" value={form.closing_date} disabled={ro} onChange={(e) => set('closing_date', e.target.value)} /></Field>
+              </>)}
+            </div>
+          </div>
+
+          {/* Quick Actions */}
+          <div className="card" style={{ marginBottom: 0 }}>
+            <div className="modal-h" style={{ fontSize: 14 }}>Quick Actions</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {canInvoice && isInvoiceableType(form.type) && (
+                <button className="btn primary sm" style={{ textAlign: 'left' }} disabled={generating} onClick={generateInvoices}>
+                  🧾 {generating ? 'Generating…' : (precon ? `Generate Term Invoice${(parseInt(form.precon_term_count, 10) || 0) === 1 ? '' : 's'}` : 'Generate Invoice')}
+                </button>
+              )}
+              {canEdit && form.agent && <button className="btn ghost sm" style={{ textAlign: 'left' }} onClick={() => setTeamOpen(true)}>👥 Team Split</button>}
+              {canEdit && <button className="btn ghost sm" style={{ textAlign: 'left' }} onClick={() => setLawyerOpen(true)}>⚖ Lawyer Details</button>}
+              {canEdit && <button className="btn ghost sm" style={{ textAlign: 'left' }} onClick={() => setDocsOpen(true)}>📑 Legal &amp; Docs</button>}
+              {canEdit && <button className="btn ghost sm" style={{ textAlign: 'left' }} onClick={() => setPlaceholder({ title: 'Admin Activities', description: 'Invoice/commission received, agent payments, CTA transfers, deposits and remarks.' })}>🔧 Admin</button>}
+              {canEdit && <button className="btn ghost sm" style={{ textAlign: 'left' }} onClick={() => setFinOpen(true)}>💰 Financial</button>}
+              {canEdit && <button className="btn ghost sm" style={{ textAlign: 'left' }} onClick={() => setPlaceholder({ title: 'Adjustment & Advance Payment', description: 'Agent adjustments, advance payments, client referral and external brokerage referral.' })}>⚖ Adjustment</button>}
+              {canEdit && <button className="btn ghost sm" style={{ textAlign: 'left' }} onClick={() => setPlaceholder({ title: 'Agent FAQ Center', description: 'Docs cleared, final validation, agent payment readiness and per-agent paid status.' })}>📊 Agent FAQ Center</button>}
+              <button className="btn ghost sm" style={{ textAlign: 'left' }} onClick={() => setAuditOpen(true)}>📜 Audit Trail</button>
+              {!canEdit && <span className="help" style={{ margin: '4px 0 0' }}>Read-only access — editing actions are hidden.</span>}
+            </div>
+          </div>
+        </div>
 
       {/* Preconstruction details */}
       {precon && (
@@ -393,11 +495,6 @@ export default function TransactionDetailPage() {
         </div>
       )}
 
-      {/* Stage note */}
-      <div className="card" style={{ background: 'var(--surface-2)' }}>
-        <span className="help" style={{ margin: 0 }}>
-          Legal &amp; Docs, Admin, Adjustments, Agent FAQ and PDF generation (Invoice / Notice of Sale / Trade Sheet) arrive in later stages, along with the listing &amp; preconstruction Financial variants. Commission totals are computed by the backend.
-        </span>
       </div>
 
       {teamOpen && txn && (
@@ -424,6 +521,24 @@ export default function TransactionDetailPage() {
       )}
       {docsOpen && (
         <DocsModal open={docsOpen} onClose={() => setDocsOpen(false)} transactionId={id} />
+      )}
+      {invoiceOpen && txn && (
+        <InvoiceModal open={invoiceOpen} onClose={() => setInvoiceOpen(false)} txn={txn} />
+      )}
+      {nosOpen && txn && (
+        <NoticeOfSaleModal open={nosOpen} onClose={() => setNosOpen(false)} txn={txn} />
+      )}
+      {tsOpen && txn && (
+        <TradeSheetModal open={tsOpen} onClose={() => setTsOpen(false)} txn={txn} />
+      )}
+      {lawyerOpen && txn && (
+        <LawyerModal open={lawyerOpen} onClose={() => setLawyerOpen(false)} transactionId={id} txn={txn} onSaved={applyUpdated} />
+      )}
+      {auditOpen && txn && (
+        <AuditTrailModal open={auditOpen} onClose={() => setAuditOpen(false)} txn={txn} />
+      )}
+      {placeholder && (
+        <PlaceholderModal open onClose={() => setPlaceholder(null)} title={placeholder.title} description={placeholder.description} />
       )}
     </>
   );

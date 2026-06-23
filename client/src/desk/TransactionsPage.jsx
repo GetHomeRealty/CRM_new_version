@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { listTransactions, deleteTransaction } from '../lib/api';
 import { formatCurrency, formatPrice, typeClass, TRANSACTION_TYPES } from './format';
 import { useToast } from './toast';
+import { useAuth } from '../context/AuthContext';
 import AddTransactionModal from './AddTransactionModal';
 
 const EMPTY_FILTERS = { q: '', type: '', validation: '', agent: '', commission: '', status: '' };
@@ -10,6 +11,8 @@ const EMPTY_FILTERS = { q: '', type: '', validation: '', agent: '', commission: 
 export default function TransactionsPage() {
   const navigate = useNavigate();
   const toast = useToast();
+  const { can } = useAuth();
+  const canEdit = can('transactions', 'edit');
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [addOpen, setAddOpen] = useState(false);
@@ -75,7 +78,7 @@ export default function TransactionsPage() {
           </div>
           <span className="pill ok" style={{ fontSize: 11 }}>{rows.length} deals tracked</span>
         </div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10 }}>
+        <div className="tiles" style={{ marginBottom: 0 }}>
           <Tile bg="#f0fdf4" bd="#bbf7d0" fg="#166534" label="Paid" value={formatCurrency(stats.paidAmount)} sub={`${stats.paidCount} deal${stats.paidCount === 1 ? '' : 's'}`} />
           <Tile bg="#fef3c7" bd="#fde68a" fg="#92400e" label="Pending" value={formatCurrency(stats.pendingAmount)} sub={`${stats.pendingCount} deal${stats.pendingCount === 1 ? '' : 's'}`} />
           <Tile bg="#eff6ff" bd="#bfdbfe" fg="#1e3a8a" label="Total Pipeline" value={formatCurrency(stats.total)} sub="All commissions" />
@@ -106,7 +109,7 @@ export default function TransactionsPage() {
         <select value={filters.status} onChange={(e) => setF('status', e.target.value)}>
           <option value="">All statuses</option><option>Open</option><option>Hold</option><option>Closed</option><option>Void</option>
         </select>
-        <button className="btn primary sm" onClick={() => setAddOpen(true)}>+ Add Transaction</button>
+        {canEdit && <button className="btn primary sm" onClick={() => setAddOpen(true)}>+ Add Transaction</button>}
       </div></div>
 
       <div className="legend">
@@ -143,8 +146,8 @@ export default function TransactionsPage() {
                 <td><span className={`pill ${t.valid_status === 'Valid' ? 'ok' : (t.valid_status === 'Invalid' ? 'bad' : 'warn')}`}>{t.valid_status}</span></td>
                 <td><span className={`pill ${stPill(primary)}`}>{primary}</span></td>
                 <td>
-                  <button className="btn ghost sm" onClick={() => navigate(`/app/transactions/${t.id}?mode=edit`)}>Edit</button>
-                  <button className="btn ghost sm" onClick={() => onDelete(t)} style={{ marginLeft: 4 }}>🗑️</button>
+                  <button className="btn ghost sm" onClick={() => navigate(`/app/transactions/${t.id}?mode=${canEdit ? 'edit' : 'view'}`)}>{canEdit ? 'Edit' : 'View'}</button>
+                  {canEdit && <button className="btn ghost sm" onClick={() => onDelete(t)} style={{ marginLeft: 4 }}>🗑️</button>}
                 </td>
               </tr>
             );

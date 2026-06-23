@@ -47,6 +47,12 @@ export const isListingType = (t) => LISTING_TYPES.includes(t);
 
 export const isPreconType = (t) => t === 'Preconstruction';
 
+export const INVOICEABLE_TYPES = [
+  'Residential Buying', 'Residential Lease', 'Preconstruction',
+  'Commercial Property Buying', 'Commercial Property Lease', 'Business Buying',
+];
+export const isInvoiceableType = (t) => INVOICEABLE_TYPES.includes(t);
+
 export const TRANSACTION_TYPES = [
   'Residential Buying',
   'Residential Lease',
@@ -63,3 +69,11 @@ export const TRANSACTION_TYPES = [
 ];
 
 export const emailLooksValid = (s) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test((s || '').trim());
+
+// Variant-aware commission summary from the backend `financial` block.
+export function commissionSummary(fin) {
+  if (!fin) return { commission: 0, hst: 0, total: 0 };
+  if (fin.variant === 'listing') return fin.totals;
+  if (fin.variant === 'precon') return fin.master;
+  return { commission: fin.commission, hst: fin.hst, total: fin.total };
+}

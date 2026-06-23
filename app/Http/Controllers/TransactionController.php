@@ -83,6 +83,7 @@ class TransactionController extends Controller
                 'coop_adj_enabled', 'coop_adj_before', 'coop_adj_after',
                 'precon_listing_type', 'precon_term_count', 'commission_agent',
                 'precon_net_of_hst', 'precon_comm_pct', 'precon_comm_amt_manual', 'precon_details_of_terms',
+                'lawyer_name', 'lawyer_email', 'lawyer_phone', 'lawyer_address',
                 'comm_status', 'comm_paid_status', 'valid_status',
                 'conditional_offer', 'inter_board_enabled',
             ]));

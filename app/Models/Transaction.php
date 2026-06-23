@@ -36,6 +36,21 @@ class Transaction extends Model
         return in_array($type, self::LISTING_TYPES, true);
     }
 
+    /** Types an invoice can be generated for (co-op commission receivable). */
+    public const INVOICEABLE_TYPES = [
+        'Residential Buying',
+        'Residential Lease',
+        'Preconstruction',
+        'Commercial Property Buying',
+        'Commercial Property Lease',
+        'Business Buying',
+    ];
+
+    public static function isInvoiceableType(?string $type): bool
+    {
+        return in_array($type, self::INVOICEABLE_TYPES, true);
+    }
+
     protected $fillable = [
         'trade_no', 'type', 'property', 'agent', 'price', 'deposit',
         'offer_date', 'closing_date', 'listing_contract_date', 'listing_expiry_date',
@@ -49,6 +64,7 @@ class Transaction extends Model
         'precon_net_of_hst', 'precon_comm_pct', 'precon_comm_amt_manual', 'precon_details_of_terms',
         'builder_name', 'builder_vendor', 'builder_project', 'builder_address',
         'builder_office_email', 'builder_invoice_email', 'builder_phone',
+        'lawyer_name', 'lawyer_email', 'lawyer_phone', 'lawyer_address',
         'comm_status', 'comm_paid_status', 'valid_status',
         'conditional_offer', 'inter_board_enabled',
     ];

@@ -37,7 +37,7 @@ export default function DashboardPage() {
 
   return (
     <>
-      <div className="stat-grid" style={{ gridTemplateColumns: 'repeat(4,1fr)' }}>
+      <div className="tiles">
         <Tile label="Total Deals" value={rows.length} sub="all transactions" />
         <Tile label="Pipeline Commission" value={formatCurrency(kpi.total)} sub="incl. paid + pending" />
         <Tile label="Paid" value={formatCurrency(kpi.paid)} sub={`${kpi.paidN} deal${kpi.paidN === 1 ? '' : 's'}`} color="#166534" />

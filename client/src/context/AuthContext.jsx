@@ -39,7 +39,16 @@ export function AuthProvider({ children }) {
     setUser(null);
   };
 
-  const value = { user, loading, login, register, logout, setUser };
+  // Screen-level permission check (mirrors backend PermissionService).
+  const RANK = { none: 0, view: 1, edit: 2 };
+  const can = (screen, level = 'view') => {
+    if (!user) return false;
+    if (user.is_admin) return true;
+    const have = user.permissions?.[screen] ?? 'none';
+    return (RANK[have] ?? 0) >= (RANK[level] ?? 0);
+  };
+
+  const value = { user, loading, login, register, logout, setUser, can };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

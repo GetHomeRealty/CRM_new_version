@@ -47,7 +47,7 @@ export default function ReportsPage() {
         <div className="modal-h" style={{ fontSize: 14, margin: 0 }}>Transactions Report</div>
         <button className="btn primary sm" onClick={exportCsv} disabled={rows.length === 0}>⬇ Export CSV ({rows.length})</button>
       </div>
-      <div className="stat-grid" style={{ gridTemplateColumns: 'repeat(4,1fr)' }}>
+      <div className="tiles">
         <div className="stat-card"><div className="lbl">Total Volume (Price)</div><div className="val">{formatCurrency(summary.price)}</div></div>
         <div className="stat-card"><div className="lbl">Total Commission</div><div className="val">{formatCurrency(summary.commission)}</div></div>
         <div className="stat-card"><div className="lbl">Paid</div><div className="val" style={{ color: '#166534' }}>{formatCurrency(summary.paid)}</div></div>

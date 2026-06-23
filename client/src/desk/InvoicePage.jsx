@@ -1,52 +1,108 @@
-import { useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { listTransactions } from '../lib/api';
-import { formatCurrency, typeClass } from './format';
+import { useEffect, useState } from 'react';
+import { getInvoices, getInvoice, deleteInvoice, getCustomers, getCompanySettings, listAgents } from '../lib/api';
+import { formatCurrency } from './format';
 import { useToast } from './toast';
+import { useAuth } from '../context/AuthContext';
+import InvoiceEditorModal from './InvoiceEditorModal';
+import InvoicePreviewModal from './InvoicePreviewModal';
+
+const STATUS_PILL = {
+  Paid: 'ok', 'Partially Paid': 'warn', Unpaid: 'info', Overdue: 'bad', Void: 'bad', Draft: 'info',
+};
 
 export default function InvoicePage() {
-  const navigate = useNavigate();
   const toast = useToast();
-  const [rows, setRows] = useState([]);
+  const { can } = useAuth();
+  const canEdit = can('invoice', 'edit');
+
+  const [invoices, setInvoices] = useState([]);
+  const [customers, setCustomers] = useState([]);
+  const [settings, setSettings] = useState(null);
+  const [agents, setAgents] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [editorId, setEditorId] = useState(undefined); // undefined=closed, null=new, number=edit
+  const [preview, setPreview] = useState(null);
   const [filter, setFilter] = useState('');
 
+  const loadInvoices = () => getInvoices().then(setInvoices).catch(() => toast('Could not load invoices', 'bad'));
+
   useEffect(() => {
-    listTransactions().then(setRows).catch(() => toast('Could not load invoices', 'bad')).finally(() => setLoading(false));
+    Promise.all([getInvoices(), getCustomers().catch(() => []), getCompanySettings(), listAgents().catch(() => [])])
+      .then(([inv, cust, set, ag]) => { setInvoices(inv); setCustomers(cust); setSettings(set); setAgents(ag); })
+      .catch(() => toast('Could not load invoice module', 'bad'))
+      .finally(() => setLoading(false));
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const list = useMemo(() => rows.filter((t) => !filter || t.comm_status === filter), [rows, filter]);
-  const totalCommission = useMemo(() => list.reduce((s, t) => s + (t.commission?.total || 0), 0), [list]);
+  const onDelete = async (inv) => {
+    if (!window.confirm(`Delete invoice ${inv.invoice_no}?`)) return;
+    try { await deleteInvoice(inv.id); setInvoices((x) => x.filter((i) => i.id !== inv.id)); toast('Invoice deleted', 'ok'); }
+    catch { toast('Could not delete', 'bad'); }
+  };
+
+  const openPdf = async (inv) => {
+    try { setPreview(await getInvoice(inv.id)); } catch { toast('Could not load invoice', 'bad'); }
+  };
+
+  const afterSave = () => { loadInvoices(); getCustomers().then(setCustomers).catch(() => {}); };
+
+  const list = invoices.filter((i) => !filter || i.display_status === filter);
+  const totalOutstanding = invoices.reduce((s, i) => s + (i.balance_due || 0), 0);
 
   if (loading) return <div className="centered">Loading invoices…</div>;
 
   return (
     <>
-      <div className="stat-grid">
-        <div className="stat-card"><div className="lbl">Invoices</div><div className="val">{list.length}</div></div>
-        <div className="stat-card"><div className="lbl">Received</div><div className="val" style={{ color: '#166534' }}>{rows.filter((t) => t.comm_status === 'Received').length}</div></div>
-        <div className="stat-card"><div className="lbl">Total Commission (incl. HST)</div><div className="val">{formatCurrency(totalCommission)}</div></div>
+      <div className="tiles">
+        <div className="stat-card"><div className="lbl">Invoices</div><div className="val">{invoices.length}</div></div>
+        <div className="stat-card"><div className="lbl">Outstanding Balance</div><div className="val" style={{ color: 'var(--brand)' }}>{formatCurrency(totalOutstanding)}</div></div>
+        <div className="stat-card"><div className="lbl">Paid</div><div className="val" style={{ color: '#166534' }}>{invoices.filter((i) => i.status === 'Paid').length}</div></div>
       </div>
+
       <div className="toolbar"><div className="toolbar-row">
-        <select value={filter} onChange={(e) => setFilter(e.target.value)}><option value="">All commission status</option><option>Pending</option><option>Received</option></select>
+        <select value={filter} onChange={(e) => setFilter(e.target.value)}>
+          <option value="">All statuses</option>
+          <option>Draft</option><option>Unpaid</option><option>Partially Paid</option><option>Paid</option><option>Overdue</option><option>Void</option>
+        </select>
+        <div style={{ flex: 1 }} />
+        {canEdit && <button className="btn primary sm" onClick={() => setEditorId(null)}>+ New Invoice</button>}
       </div></div>
+
       <table className="list-table">
-        <thead><tr><th>Trade #</th><th>Type</th><th>Property</th><th>Agent</th><th>Commission</th><th>Status</th><th></th></tr></thead>
+        <thead><tr><th>Invoice #</th><th>Customer</th><th>Property</th><th>Date</th><th>Total</th><th>Balance</th><th>Status</th><th>Actions</th></tr></thead>
         <tbody>
-          {list.length === 0 && <tr><td colSpan={7} style={{ textAlign: 'center', color: 'var(--muted)', padding: 16 }}>No invoices.</td></tr>}
-          {list.map((t) => (
-            <tr key={t.id}>
-              <td>#{t.trade_no}</td>
-              <td><span className={`pill ${typeClass(t.type)}`}>{t.type}</span></td>
-              <td>{t.property}</td>
-              <td>{t.agent || 'Unassigned'}</td>
-              <td>{formatCurrency(t.commission?.total || 0)}</td>
-              <td><span className={`pill ${t.comm_status === 'Received' ? 'ok' : 'warn'}`}>{t.comm_status}</span></td>
-              <td><button className="btn ghost sm" onClick={() => navigate(`/app/transactions/${t.id}?mode=view`)}>Open</button></td>
+          {list.length === 0 ? (
+            <tr><td colSpan={8} style={{ textAlign: 'center', color: 'var(--muted)', padding: 20 }}>No invoices. {canEdit && 'Click "+ New Invoice" to create one.'}</td></tr>
+          ) : list.map((i) => (
+            <tr key={i.id}>
+              <td><strong>{i.invoice_no}</strong></td>
+              <td>{i.customer_name || '—'}</td>
+              <td>{i.property_reference || '—'}</td>
+              <td>{i.invoice_date}</td>
+              <td>{formatCurrency(i.total)}</td>
+              <td>{formatCurrency(i.balance_due)}</td>
+              <td><span className={`pill ${STATUS_PILL[i.display_status] || 'info'}`}>{i.display_status}</span></td>
+              <td>
+                <button className="btn ghost sm" onClick={() => setEditorId(i.id)}>{canEdit ? 'Edit' : 'View'}</button>
+                <button className="btn ghost sm" style={{ marginLeft: 4 }} onClick={() => openPdf(i)}>🖨 PDF</button>
+                {canEdit && <button className="btn ghost sm" style={{ marginLeft: 4 }} onClick={() => onDelete(i)}>🗑️</button>}
+              </td>
             </tr>
           ))}
         </tbody>
       </table>
+
+      {editorId !== undefined && (
+        <InvoiceEditorModal
+          open
+          invoiceId={editorId}
+          settings={settings}
+          customers={customers}
+          agents={agents}
+          onClose={() => setEditorId(undefined)}
+          onSaved={afterSave}
+        />
+      )}
+      {preview && <InvoicePreviewModal open onClose={() => setPreview(null)} invoice={preview} />}
     </>
   );
 }

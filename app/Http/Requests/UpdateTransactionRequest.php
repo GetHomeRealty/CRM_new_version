@@ -89,6 +89,11 @@ class UpdateTransactionRequest extends FormRequest
             'conditional_offer' => ['sometimes', 'boolean'],
             'inter_board_enabled' => ['sometimes', 'boolean'],
 
+            'lawyer_name' => ['sometimes', 'nullable', 'string', 'max:255'],
+            'lawyer_email' => ['sometimes', 'nullable', 'email', 'max:255'],
+            'lawyer_phone' => ['sometimes', 'nullable', 'string', 'max:50'],
+            'lawyer_address' => ['sometimes', 'nullable', 'string', 'max:255'],
+
             'statuses' => ['sometimes', 'array'],
             'statuses.*' => ['string'],
 

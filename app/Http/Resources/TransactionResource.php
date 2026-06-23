@@ -51,6 +51,12 @@ class TransactionResource extends JsonResource
             'conditional_offer' => (bool) $this->conditional_offer,
             'inter_board_enabled' => (bool) $this->inter_board_enabled,
 
+            // Lawyer
+            'lawyer_name' => $this->lawyer_name,
+            'lawyer_email' => $this->lawyer_email,
+            'lawyer_phone' => $this->lawyer_phone,
+            'lawyer_address' => $this->lawyer_address,
+
             // Preconstruction
             'precon_listing_type' => $this->precon_listing_type,
             'precon_term_count' => $this->precon_term_count !== null ? (int) $this->precon_term_count : null,
