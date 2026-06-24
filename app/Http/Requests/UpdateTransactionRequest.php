@@ -94,6 +94,11 @@ class UpdateTransactionRequest extends FormRequest
             'lawyer_phone' => ['sometimes', 'nullable', 'string', 'max:50'],
             'lawyer_address' => ['sometimes', 'nullable', 'string', 'max:255'],
 
+            'admin_activities' => ['sometimes', 'nullable', 'array'],
+            'activity_tracker' => ['sometimes', 'nullable', 'array'],
+            'adjustments' => ['sometimes', 'nullable', 'array'],
+            'commercial_lease' => ['sometimes', 'nullable', 'array'],
+
             'statuses' => ['sometimes', 'array'],
             'statuses.*' => ['string'],
 

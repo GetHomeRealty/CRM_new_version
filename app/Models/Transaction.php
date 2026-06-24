@@ -65,6 +65,7 @@ class Transaction extends Model
         'builder_name', 'builder_vendor', 'builder_project', 'builder_address',
         'builder_office_email', 'builder_invoice_email', 'builder_phone',
         'lawyer_name', 'lawyer_email', 'lawyer_phone', 'lawyer_address',
+        'admin_activities', 'activity_tracker', 'adjustments', 'commercial_lease',
         'comm_status', 'comm_paid_status', 'valid_status',
         'conditional_offer', 'inter_board_enabled',
     ];
@@ -72,6 +73,14 @@ class Transaction extends Model
     public static function isPreconType(?string $type): bool
     {
         return $type === 'Preconstruction';
+    }
+
+    /** Commercial lease types carry the extra lease calculator (structure/rent/commission). */
+    public static function isCommercialLeaseType(?string $type): bool
+    {
+        return $type !== null
+            && str_contains(strtolower($type), 'commercial')
+            && str_contains(strtolower($type), 'lease');
     }
 
     protected function casts(): array
@@ -96,6 +105,10 @@ class Transaction extends Model
             'precon_net_of_hst' => 'boolean',
             'precon_comm_pct' => 'decimal:4',
             'precon_comm_amt_manual' => 'decimal:2',
+            'admin_activities' => 'array',
+            'activity_tracker' => 'array',
+            'adjustments' => 'array',
+            'commercial_lease' => 'array',
             'offer_date' => 'date',
             'closing_date' => 'date',
             'listing_contract_date' => 'date',
@@ -144,6 +157,11 @@ class Transaction extends Model
     public function documents(): HasMany
     {
         return $this->hasMany(Document::class)->orderBy('position');
+    }
+
+    public function messages(): HasMany
+    {
+        return $this->hasMany(TransactionMessage::class)->orderBy('id');
     }
 
     public function auditLogs(): HasMany

@@ -57,6 +57,12 @@ class TransactionResource extends JsonResource
             'lawyer_phone' => $this->lawyer_phone,
             'lawyer_address' => $this->lawyer_address,
 
+            // Tracking modules (freeform JSON)
+            'admin_activities' => $this->admin_activities,
+            'activity_tracker' => $this->activity_tracker,
+            'adjustments' => $this->adjustments,
+            'commercial_lease' => $this->commercial_lease,
+
             // Preconstruction
             'precon_listing_type' => $this->precon_listing_type,
             'precon_term_count' => $this->precon_term_count !== null ? (int) $this->precon_term_count : null,

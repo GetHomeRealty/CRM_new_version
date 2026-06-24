@@ -16,6 +16,11 @@ export const updateTransaction = (id, payload) =>
 export const deleteTransaction = (id) =>
   api.delete(`/api/transactions/${id}`).then((r) => r.data);
 
+export const getTransactionMessages = (id) =>
+  api.get(`/api/transactions/${id}/messages`).then((r) => r.data);
+export const postTransactionMessage = (id, body) =>
+  api.post(`/api/transactions/${id}/messages`, { body }).then((r) => r.data);
+
 // --- Documents (Legal & Documentation) ---
 export const getDocuments = (txnId) =>
   api.get(`/api/transactions/${txnId}/documents`).then((r) => r.data);

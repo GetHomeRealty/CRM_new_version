@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { getTransaction, updateTransaction, listAgents, generateTransactionInvoices } from '../lib/api';
-import { typeClass, isListingType, isPreconType, isInvoiceableType, emailLooksValid, parseNumber, TRANSACTION_TYPES, formatCurrency } from './format';
+import { typeClass, isListingType, isPreconType, isCommercialLeaseType, isInvoiceableType, emailLooksValid, parseNumber, TRANSACTION_TYPES, formatCurrency } from './format';
 import { useToast } from './toast';
 import { useAuth } from '../context/AuthContext';
 import TeamSplitModal from './TeamSplitModal';
@@ -12,7 +12,11 @@ import NoticeOfSaleModal from './NoticeOfSaleModal';
 import TradeSheetModal from './TradeSheetModal';
 import LawyerModal from './LawyerModal';
 import AuditTrailModal from './AuditTrailModal';
-import PlaceholderModal from './PlaceholderModal';
+import AdminActivitiesModal from './AdminActivitiesModal';
+import AgentFaqModal from './AgentFaqModal';
+import AdjustmentModal from './AdjustmentModal';
+import ChatModal from './ChatModal';
+import CommercialLeaseCard, { CL_DEFAULTS } from './CommercialLeaseCard';
 
 const STATUS_LISTING = ['Open', 'Sold', 'Sold conditional', 'Terminated', 'Expired', 'Suspended', 'Mutual release', 'DFT', 'Void', 'MPR', 'Closed'];
 const STATUS_DEFAULT = ['Open', 'Hold', 'Closed', 'Mutual Release', 'DFT', 'Void', 'MPR'];
@@ -46,6 +50,10 @@ function toForm(t) {
       address: t.builder?.address || '', office_email: t.builder?.office_email || '',
       invoice_email: t.builder?.invoice_email || '', phone: t.builder?.phone || '',
     },
+    // Commercial lease calculator inputs (JSON column)
+    commercial_lease: t.commercial_lease || null,
+    // Preconstruction per-term rows (pct managed in Financial; closing dates editable here)
+    precon_terms: (t.precon_terms || []).map((p) => ({ term_no: p.term_no, pct: p.pct ?? null, closing_date: p.closing_date || '' })),
   };
 }
 
@@ -72,7 +80,10 @@ export default function TransactionDetailPage() {
   const [tsOpen, setTsOpen] = useState(false);
   const [lawyerOpen, setLawyerOpen] = useState(false);
   const [auditOpen, setAuditOpen] = useState(false);
-  const [placeholder, setPlaceholder] = useState(null); // {title, description}
+  const [adminOpen, setAdminOpen] = useState(false);
+  const [faqOpen, setFaqOpen] = useState(false);
+  const [adjOpen, setAdjOpen] = useState(false);
+  const [chatOpen, setChatOpen] = useState(false);
   const bodyRef = useRef(null); // wraps the filterable cards for "search this transaction"
 
   useEffect(() => {
@@ -98,13 +109,28 @@ export default function TransactionDetailPage() {
   const view = mode === 'view';
   const listing = isListingType(form.type);
   const precon = isPreconType(form.type);
-  const isLease = form.type.includes('Residential Lease');
+  const commercialLease = isCommercialLeaseType(form.type);
+  // Lease types use the free-text (Custom-only) condition layout.
+  const isLease = /lease/i.test(form.type);
+  // Lawyer Details is hidden for lease / preconstruction types (legal side handled differently).
+  const lawyerHidden = precon || /lease/i.test(form.type);
   const statusOptions = listing ? STATUS_LISTING : STATUS_DEFAULT;
   const ro = view; // read-only flag
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
   const setBrok = (k, v) => setForm((f) => ({ ...f, brokerage: { ...f.brokerage, [k]: v } }));
   const setBuilder = (k, v) => setForm((f) => ({ ...f, builder: { ...f.builder, [k]: v } }));
+  const cl = { ...CL_DEFAULTS, ...(form.commercial_lease || {}) };
+  const setCl = (k, v) => setForm((f) => ({ ...f, commercial_lease: { ...CL_DEFAULTS, ...(f.commercial_lease || {}), [k]: v } }));
+  // Preconstruction per-term closing dates (driven by the term count).
+  const preconTermClosing = (k) => ((form.precon_terms || []).find((x) => Number(x.term_no) === k)?.closing_date) || '';
+  const setPreconTermClosing = (k, date) => setForm((f) => {
+    const arr = [...(f.precon_terms || [])];
+    const idx = arr.findIndex((x) => Number(x.term_no) === k);
+    if (idx >= 0) arr[idx] = { ...arr[idx], closing_date: date };
+    else arr.push({ term_no: k, pct: null, closing_date: date });
+    return { ...f, precon_terms: arr };
+  });
   const setListingType = (which) => set('mls_type', which);
 
   // "Search this transaction" — filters the cards on the page (mirrors the original).
@@ -196,6 +222,16 @@ export default function TransactionDetailPage() {
         address: form.builder.address || null, office_email: form.builder.office_email || null,
         invoice_email: form.builder.invoice_email || null, phone: form.builder.phone || null,
       };
+      // Per-term rows from the term count; preserve pct set in Financial, carry closing dates entered here.
+      const tc = parseInt(form.precon_term_count, 10) || 0;
+      payload.precon_terms = Array.from({ length: tc }, (_, i) => {
+        const k = i + 1;
+        const existing = (form.precon_terms || []).find((x) => Number(x.term_no) === k) || {};
+        return { term_no: k, pct: existing.pct ?? null, closing_date: existing.closing_date || null };
+      });
+    }
+    if (commercialLease) {
+      payload.commercial_lease = { ...CL_DEFAULTS, ...(form.commercial_lease || {}) };
     }
     setSaving(true);
     try {
@@ -227,6 +263,7 @@ export default function TransactionDetailPage() {
           <button className="btn ghost sm" onClick={() => setInvoiceOpen(true)}>🧾 Invoice</button>
           <button className="btn ghost sm" onClick={() => setTsOpen(true)}>📋 Trade Sheet</button>
           <button className="btn ghost sm" onClick={() => setNosOpen(true)}>📄 Notice of Sale</button>
+          <button className="btn ghost sm" onClick={() => setChatOpen(true)}>💬 Chat</button>
           <span style={{ width: 1, height: 18, background: 'var(--line)', margin: '0 4px' }} />
           {!canEdit
             ? <span className="pill info" style={{ fontSize: 10 }}>Read-only access</span>
@@ -286,6 +323,12 @@ export default function TransactionDetailPage() {
                 {form.mls_type !== 'exclusive'
                   ? <input style={{ marginTop: 6 }} value={form.mls_num} disabled={ro} onChange={(e) => set('mls_num', e.target.value.toUpperCase())} placeholder="e.g. E12345678" />
                   : <span className="pill type-pre" style={{ marginTop: 6, display: 'inline-block', padding: '6px 12px' }}>Exclusive Listing</span>}
+                {listing && (
+                  <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--muted)', marginTop: 8, cursor: ro ? 'default' : 'pointer' }}>
+                    <input type="radio" checked={!!form.mls_verified} disabled={ro} onClick={() => !ro && set('mls_verified', !form.mls_verified)} readOnly />
+                    Mark Verified {form.mls_verified && <span className="pill ok" style={{ fontSize: 10 }}>Verified</span>}
+                  </label>
+                )}
               </Field>
               <Field label="Type">
                 <select value={form.type} disabled={ro} onChange={(e) => set('type', e.target.value)}>
@@ -336,17 +379,20 @@ export default function TransactionDetailPage() {
                 </button>
               )}
               {canEdit && form.agent && <button className="btn ghost sm" style={{ textAlign: 'left' }} onClick={() => setTeamOpen(true)}>👥 Team Split</button>}
-              {canEdit && <button className="btn ghost sm" style={{ textAlign: 'left' }} onClick={() => setLawyerOpen(true)}>⚖ Lawyer Details</button>}
+              {canEdit && !lawyerHidden && <button className="btn ghost sm" style={{ textAlign: 'left' }} onClick={() => setLawyerOpen(true)}>⚖ Lawyer Details</button>}
               {canEdit && <button className="btn ghost sm" style={{ textAlign: 'left' }} onClick={() => setDocsOpen(true)}>📑 Legal &amp; Docs</button>}
-              {canEdit && <button className="btn ghost sm" style={{ textAlign: 'left' }} onClick={() => setPlaceholder({ title: 'Admin Activities', description: 'Invoice/commission received, agent payments, CTA transfers, deposits and remarks.' })}>🔧 Admin</button>}
+              {canEdit && <button className="btn ghost sm" style={{ textAlign: 'left' }} onClick={() => setAdminOpen(true)}>🔧 Admin</button>}
               {canEdit && <button className="btn ghost sm" style={{ textAlign: 'left' }} onClick={() => setFinOpen(true)}>💰 Financial</button>}
-              {canEdit && <button className="btn ghost sm" style={{ textAlign: 'left' }} onClick={() => setPlaceholder({ title: 'Adjustment & Advance Payment', description: 'Agent adjustments, advance payments, client referral and external brokerage referral.' })}>⚖ Adjustment</button>}
-              {canEdit && <button className="btn ghost sm" style={{ textAlign: 'left' }} onClick={() => setPlaceholder({ title: 'Agent FAQ Center', description: 'Docs cleared, final validation, agent payment readiness and per-agent paid status.' })}>📊 Agent FAQ Center</button>}
+              {canEdit && <button className="btn ghost sm" style={{ textAlign: 'left' }} onClick={() => setAdjOpen(true)}>⚖ Adjustment</button>}
+              {canEdit && <button className="btn ghost sm" style={{ textAlign: 'left' }} onClick={() => setFaqOpen(true)}>📊 Agent FAQ Center</button>}
               <button className="btn ghost sm" style={{ textAlign: 'left' }} onClick={() => setAuditOpen(true)}>📜 Audit Trail</button>
               {!canEdit && <span className="help" style={{ margin: '4px 0 0' }}>Read-only access — editing actions are hidden.</span>}
             </div>
           </div>
         </div>
+
+      {/* Commercial Lease calculator (structure / rent / commission) */}
+      {commercialLease && <CommercialLeaseCard cl={cl} setCl={setCl} ro={ro} />}
 
       {/* Preconstruction details */}
       {precon && (
@@ -365,7 +411,23 @@ export default function TransactionDetailPage() {
               <input type="number" min="0" max="200" value={form.precon_term_count} disabled={ro} onChange={(e) => set('precon_term_count', e.target.value)} placeholder="e.g. 3" />
             </Field>
           </div>
-          <span className="help">Set the number of terms here, then open <strong>Financial</strong> to enter each term's commission % and closing date.</span>
+          {(() => {
+            const tc = parseInt(form.precon_term_count, 10) || 0;
+            if (tc <= 0) return null;
+            return (
+              <>
+                <div className="modal-sub" style={{ marginTop: 4 }}>{tc === 1 ? 'Closing Date' : 'Closing Dates'}</div>
+                <div className="g3">
+                  {Array.from({ length: tc }, (_, i) => i + 1).map((k) => (
+                    <Field key={k} label={tc === 1 ? 'Closing Date' : `Term ${k} Closing Date`}>
+                      <input type="date" value={preconTermClosing(k)} disabled={ro} onChange={(e) => setPreconTermClosing(k, e.target.value)} />
+                    </Field>
+                  ))}
+                </div>
+              </>
+            );
+          })()}
+          <span className="help">Set the number of terms and the closing date{(parseInt(form.precon_term_count, 10) || 0) === 1 ? '' : 's'} here; open <strong>Financial</strong> to enter each term's commission %.</span>
         </div>
       )}
 
@@ -434,7 +496,8 @@ export default function TransactionDetailPage() {
         {!ro && <button className="btn primary sm" onClick={addClient}>+ Add Client</button>}
       </div>
 
-      {/* Conditional Offer (non-listing UI mirrors original; shown for all here) */}
+      {/* Conditional Offer — hidden for preconstruction */}
+      {!precon && (
       <div className="card">
         <div className="modal-h" style={{ fontSize: 14 }}>Conditional Offer</div>
         <Field label="Is Offer Conditional?" style={{ maxWidth: 220 }}>
@@ -446,27 +509,42 @@ export default function TransactionDetailPage() {
           <div>
             {form.conditions.map((c, i) => (
               <div key={i} className="cond-row">
-                <div style={{ display: 'grid', gridTemplateColumns: c.type === 'Custom' ? '160px 1fr 1fr 1fr auto' : '200px 1fr 1fr auto', gap: 8, alignItems: 'end' }}>
-                  <Field label="Type">
-                    <select value={c.type} disabled={ro} onChange={(e) => updCond(i, 'type', e.target.value)}>
-                      {COND_TYPES.map((t) => <option key={t}>{t}</option>)}
-                    </select>
-                  </Field>
-                  {c.type === 'Custom' && <Field label="Custom Name"><input value={c.custom_name || ''} disabled={ro} onChange={(e) => updCond(i, 'custom_name', e.target.value)} /></Field>}
-                  <Field label="Deadline"><input type="date" value={c.deadline || ''} disabled={ro} onChange={(e) => updCond(i, 'deadline', e.target.value)} /></Field>
-                  <Field label="Status">
-                    <select value={c.status} disabled={ro} onChange={(e) => updCond(i, 'status', e.target.value)}>
-                      <option>Pending</option><option>Waived</option><option>Fulfilled</option><option>Not Met</option>
-                    </select>
-                  </Field>
-                  {!ro && <button className="row-rm" style={{ paddingBottom: 10 }} onClick={() => rmCond(i)}>🗑️</button>}
-                </div>
+                {isLease ? (
+                  /* Lease layout: free-text condition name, no Type column (fixed to Custom). */
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr auto', gap: 8, alignItems: 'end' }}>
+                    <Field label="Condition Name"><input value={c.custom_name || ''} disabled={ro} onChange={(e) => updCond(i, 'custom_name', e.target.value)} placeholder="Enter name" /></Field>
+                    <Field label="Condition Deadline"><input type="date" value={c.deadline || ''} disabled={ro} onChange={(e) => updCond(i, 'deadline', e.target.value)} /></Field>
+                    <Field label="Status">
+                      <select value={c.status} disabled={ro} onChange={(e) => updCond(i, 'status', e.target.value)}>
+                        <option>Pending</option><option>Waived</option><option>Fulfilled</option><option>Not Met</option>
+                      </select>
+                    </Field>
+                    {!ro && <button className="row-rm" style={{ paddingBottom: 10 }} onClick={() => rmCond(i)}>🗑️</button>}
+                  </div>
+                ) : (
+                  <div style={{ display: 'grid', gridTemplateColumns: c.type === 'Custom' ? '160px 1fr 1fr 1fr auto' : '200px 1fr 1fr auto', gap: 8, alignItems: 'end' }}>
+                    <Field label="Type">
+                      <select value={c.type} disabled={ro} onChange={(e) => updCond(i, 'type', e.target.value)}>
+                        {COND_TYPES.map((t) => <option key={t}>{t}</option>)}
+                      </select>
+                    </Field>
+                    {c.type === 'Custom' && <Field label="Custom Name"><input value={c.custom_name || ''} disabled={ro} onChange={(e) => updCond(i, 'custom_name', e.target.value)} /></Field>}
+                    <Field label="Deadline"><input type="date" value={c.deadline || ''} disabled={ro} onChange={(e) => updCond(i, 'deadline', e.target.value)} /></Field>
+                    <Field label="Status">
+                      <select value={c.status} disabled={ro} onChange={(e) => updCond(i, 'status', e.target.value)}>
+                        <option>Pending</option><option>Waived</option><option>Fulfilled</option><option>Not Met</option>
+                      </select>
+                    </Field>
+                    {!ro && <button className="row-rm" style={{ paddingBottom: 10 }} onClick={() => rmCond(i)}>🗑️</button>}
+                  </div>
+                )}
               </div>
             ))}
             {!ro && <button className="btn primary sm" style={{ marginTop: 8 }} onClick={addCond}>+ Add Condition</button>}
           </div>
         )}
       </div>
+      )}
 
       {/* Inter-board (listing types only) */}
       {listing && (
@@ -538,8 +616,17 @@ export default function TransactionDetailPage() {
       {auditOpen && txn && (
         <AuditTrailModal open={auditOpen} onClose={() => setAuditOpen(false)} txn={txn} />
       )}
-      {placeholder && (
-        <PlaceholderModal open onClose={() => setPlaceholder(null)} title={placeholder.title} description={placeholder.description} />
+      {adminOpen && txn && (
+        <AdminActivitiesModal open onClose={() => setAdminOpen(false)} transactionId={id} txn={txn} onSaved={applyUpdated} termCount={precon ? (parseInt(form.precon_term_count, 10) || 0) : undefined} />
+      )}
+      {faqOpen && txn && (
+        <AgentFaqModal open onClose={() => setFaqOpen(false)} transactionId={id} txn={txn} onSaved={applyUpdated} termCount={precon ? (parseInt(form.precon_term_count, 10) || 0) : undefined} />
+      )}
+      {adjOpen && txn && (
+        <AdjustmentModal open onClose={() => setAdjOpen(false)} transactionId={id} txn={txn} onSaved={applyUpdated} termCount={precon ? (parseInt(form.precon_term_count, 10) || 0) : undefined} />
+      )}
+      {chatOpen && (
+        <ChatModal open onClose={() => setChatOpen(false)} transactionId={id} />
       )}
     </>
   );

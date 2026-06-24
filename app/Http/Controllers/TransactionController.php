@@ -84,6 +84,7 @@ class TransactionController extends Controller
                 'precon_listing_type', 'precon_term_count', 'commission_agent',
                 'precon_net_of_hst', 'precon_comm_pct', 'precon_comm_amt_manual', 'precon_details_of_terms',
                 'lawyer_name', 'lawyer_email', 'lawyer_phone', 'lawyer_address',
+                'admin_activities', 'activity_tracker', 'adjustments', 'commercial_lease',
                 'comm_status', 'comm_paid_status', 'valid_status',
                 'conditional_offer', 'inter_board_enabled',
             ]));
@@ -129,6 +130,28 @@ class TransactionController extends Controller
         $transaction->delete();
 
         return response()->json(['message' => 'Transaction deleted']);
+    }
+
+    /** Per-transaction chat thread. */
+    public function messages(Transaction $transaction)
+    {
+        return response()->json($transaction->messages->map(fn ($m) => [
+            'id' => $m->id, 'author' => $m->author, 'body' => $m->body,
+            'at' => $m->created_at?->toDateTimeString(),
+            'mine' => $m->user_id === request()->user()?->id,
+        ]));
+    }
+
+    public function postMessage(Request $request, Transaction $transaction)
+    {
+        $data = $request->validate(['body' => ['required', 'string', 'max:5000']]);
+        $transaction->messages()->create([
+            'user_id' => $request->user()?->id,
+            'author' => $request->user()?->name ?? 'User',
+            'body' => $data['body'],
+        ]);
+
+        return $this->messages($transaction->fresh('messages'));
     }
 
     private function loadDetail(Transaction $t): Transaction

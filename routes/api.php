@@ -32,6 +32,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/transactions/{transaction}', [TransactionController::class, 'show']);
     Route::get('/transactions/{transaction}/documents', [DocumentController::class, 'index']);
     Route::get('/documents/{document}/file', [DocumentController::class, 'downloadFile']);
+    Route::get('/transactions/{transaction}/messages', [TransactionController::class, 'messages']);
+    Route::post('/transactions/{transaction}/messages', [TransactionController::class, 'postMessage']);
 
     Route::middleware('screen:transactions,edit')->group(function () {
         Route::post('/transactions', [TransactionController::class, 'store']);

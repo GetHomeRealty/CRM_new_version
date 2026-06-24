@@ -120,6 +120,11 @@ select{background-image:url("data:image/svg+xml,%3Csvg width='10' height='6' vie
 .agent-comm-card{background:linear-gradient(180deg,#f8fbff 0%,#f1f6fe 100%);border:1px solid #dbe5f5;border-radius:var(--r-md);padding:13px;margin-bottom:10px}
 .t4a-card{background:var(--surface-2);border:1px solid var(--line);border-radius:var(--r-md);padding:13px;margin-bottom:10px}
 .brok-card{background:#faf5ff;border:1px solid #e9d5ff;border-radius:var(--r-md);padding:13px;margin-bottom:10px}
+.pay-item{background:#f0fdf4;border:1px solid #bbf7d0;border-radius:var(--r-md);padding:13px;margin-bottom:9px}
+.xfer-item{background:var(--brand-soft);border:1px solid #fecaca;border-radius:var(--r-md);padding:13px;margin-bottom:9px;position:relative}
+.note-item{background:var(--surface-2);border:1px solid var(--line);border-radius:var(--r-md);padding:11px;margin-bottom:8px;font-size:13px}
+.modal-sub-ok{border-left-color:var(--ok)!important;color:#15803d!important}
+.dyn-list-box{border:1px solid var(--line);border-radius:var(--r-md);padding:12px;background:var(--surface-2);margin-bottom:10px}
 .prop-link{color:var(--brand);font-weight:600;cursor:pointer;text-decoration:underline;text-decoration-color:rgba(200,16,46,.32);text-underline-offset:3px;text-decoration-thickness:1.5px}
 .prop-link:hover{color:var(--brand-dark);text-decoration-color:var(--brand)}
 .legend{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px;padding:10px 14px;background:var(--surface);border:1px solid var(--line);border-radius:var(--r-md);align-items:center;box-shadow:var(--shadow-sm)}

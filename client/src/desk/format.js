@@ -47,6 +47,10 @@ export const isListingType = (t) => LISTING_TYPES.includes(t);
 
 export const isPreconType = (t) => t === 'Preconstruction';
 
+// Commercial lease types carry the extra lease calculator (structure/rent/commission).
+export const isCommercialLeaseType = (t) =>
+  !!t && /commercial/i.test(t) && /lease/i.test(t);
+
 export const INVOICEABLE_TYPES = [
   'Residential Buying', 'Residential Lease', 'Preconstruction',
   'Commercial Property Buying', 'Commercial Property Lease', 'Business Buying',
@@ -69,6 +73,16 @@ export const TRANSACTION_TYPES = [
 ];
 
 export const emailLooksValid = (s) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test((s || '').trim());
+
+// ISO week number (ported from getWeekNumber in app.js).
+function isoWeek(d) {
+  const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  date.setUTCDate(date.getUTCDate() + 4 - (date.getUTCDay() || 7));
+  const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
+  return Math.ceil((((date - yearStart) / 86400000) + 1) / 7);
+}
+export const batchNo = (dateStr) => { if (!dateStr) return ''; const d = new Date(dateStr); return `W${isoWeek(d)}-${d.getFullYear()}`; };
+export const t4aYear = (dateStr) => (dateStr ? String(new Date(dateStr).getFullYear()) : '');
 
 // Variant-aware commission summary from the backend `financial` block.
 export function commissionSummary(fin) {

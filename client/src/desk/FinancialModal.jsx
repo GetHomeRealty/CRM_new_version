@@ -15,7 +15,6 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
   const termCount = (termCountProp != null && termCountProp !== '') ? Number(termCountProp) : (txn.precon_term_count || 0);
 
   const [price, setPrice] = useState(txn.price ?? 0);
-  const [fin, setFin] = useState(txn.financial || null);
   const [saving, setSaving] = useState(false);
 
   // standard
@@ -84,6 +83,25 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
     return { m, agent: lineOf(agentWo), brok: lineOf(brokWo), t4a: lineOf(agentWo) };
   });
 
+  // ---- live listing computation (mirrors CommissionService::breakdownListing) ----
+  const sideOf = (pct, en, before, after) => {
+    const amount = parseNumber(pct) > 0 ? parseNumber(price) * parseNumber(pct) / 100 : 0;
+    const b = en ? parseNumber(before) : 0;
+    const a = en ? parseNumber(after) : 0;
+    const commission = r2(amount - b);
+    const hst = r2(commission * HST);
+    return { commission, hst, total: r2(commission + hst - a) };
+  };
+  const lSide = sideOf(listPct, lAdjEn, lBefore, lAfter);
+  const cSide = sideOf(coopPct, cAdjEn, cBefore, cAfter);
+  const listTotals = { commission: r2(lSide.commission + cSide.commission), hst: r2(lSide.hst + cSide.hst), total: r2(lSide.total + cSide.total) };
+  const listingMemberRows = members.map((m) => {
+    const base = r2(listTotals.commission * (parseNumber(m.split) / 100));
+    const agentWo = r2(base * (parseNumber(m.agent_pct) / 100));
+    const brokWo = r2(base * (parseNumber(m.brok_pct) / 100));
+    return { m, agent: lineOf(agentWo), brok: lineOf(brokWo), t4a: lineOf(agentWo) };
+  });
+
   // ---- live preconstruction master computation ----
   const pMasterAmt = parseNumber(masterAmtManual) > 0 ? parseNumber(masterAmtManual) : (parseNumber(masterPct) > 0 ? parseNumber(price) * parseNumber(masterPct) / 100 : 0);
   let mComm, mHst, mTotal;
@@ -115,6 +133,7 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
           listing_comm_pct: listPct === '' ? null : parseNumber(listPct), coop_comm_pct: coopPct === '' ? null : parseNumber(coopPct),
           listing_adj_enabled: lAdjEn, listing_adj_before: lAdjEn ? parseNumber(lBefore) : 0, listing_adj_after: lAdjEn ? parseNumber(lAfter) : 0,
           coop_adj_enabled: cAdjEn, coop_adj_before: cAdjEn ? parseNumber(cBefore) : 0, coop_adj_after: cAdjEn ? parseNumber(cAfter) : 0,
+          team: members.map((m, i) => ({ name: m.name, split: parseNumber(m.split), agent_pct: parseNumber(m.agent_pct), brok_pct: parseNumber(m.brok_pct), is_primary: i === 0, scope: m.scope, terms: m.terms })),
         }
       : {
           price: parseNumber(price),
@@ -125,7 +144,6 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
     setSaving(true);
     try {
       const updated = await updateTransaction(transactionId, payload);
-      setFin(updated.financial);
       toast('Financial saved', 'ok');
       onSaved?.(updated);
     } catch (err) {
@@ -265,17 +283,13 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
               <AdjSide title="Listing Commission" pct={listPct} setPct={setListPct} en={lAdjEn} setEn={setLAdjEn} before={lBefore} after={lAfter} setBefore={(v) => excl(v, setLBefore, lAfter, setLAfter)} setAfter={(v) => excl(v, setLAfter, lBefore, setLBefore)} />
               <AdjSide title="Co-op Commission" pct={coopPct} setPct={setCoopPct} en={cAdjEn} setEn={setCAdjEn} before={cBefore} after={cAfter} setBefore={(v) => excl(v, setCBefore, cAfter, setCAfter)} setAfter={(v) => excl(v, setCAfter, cBefore, setCBefore)} />
             </div>
-            <div style={{ textAlign: 'right', marginBottom: 8 }}><button className="btn primary sm" onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save & Recalculate'}</button></div>
-            {fin && fin.variant === 'listing' && (<>
-              <div className="modal-sub">Listing Commission</div>
-              <div className="fin-sum"><Box label="Commission" value={formatCurrency(fin.listing.commission)} /><Box label="HST" value={formatCurrency(fin.listing.hst)} /><Box label="Total" value={formatCurrency(fin.listing.total)} brand /></div>
-              <div className="modal-sub">Co-op Commission</div>
-              <div className="fin-sum"><Box label="Commission" value={formatCurrency(fin.coop.commission)} /><Box label="HST" value={formatCurrency(fin.coop.hst)} /><Box label="Total" value={formatCurrency(fin.coop.total)} brand /></div>
-              <div className="modal-sub">Total Commissions (Listing + Co-op)</div>
-              <div className="fin-sum"><Box label="Commission" value={formatCurrency(fin.totals.commission)} /><Box label="HST" value={formatCurrency(fin.totals.hst)} /><Box label="Total" value={formatCurrency(fin.totals.total)} brand /></div>
-              <AgentCards agents={fin.agents} />
-              <MinBrok mb={fin.min_brokerage} />
-            </>)}
+            <div className="modal-sub">Listing Commission</div>
+            <div className="fin-sum"><Box label="Commission" value={formatCurrency(lSide.commission)} /><Box label="HST" value={formatCurrency(lSide.hst)} /><Box label="Total" value={formatCurrency(lSide.total)} brand /></div>
+            <div className="modal-sub">Co-op Commission</div>
+            <div className="fin-sum"><Box label="Commission" value={formatCurrency(cSide.commission)} /><Box label="HST" value={formatCurrency(cSide.hst)} /><Box label="Total" value={formatCurrency(cSide.total)} brand /></div>
+            <div className="modal-sub">Total Commissions (Listing + Co-Op)</div>
+            <div className="fin-sum"><Box label="Commission" value={formatCurrency(listTotals.commission)} /><Box label="HST" value={formatCurrency(listTotals.hst)} /><Box label="Total" value={formatCurrency(listTotals.total)} brand /></div>
+            <AgentCommissionBlocks rows={listingMemberRows} setMember={setMember} minBrok={{ commission: 499, hst: 64.87, total: 563.87 }} />
           </>
         ) : (
           /* ---- STANDARD (live, like the original) ---- */
@@ -301,55 +315,7 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
               </div>
             )}
 
-            <div className="modal-sub">Agent Commission</div>
-            {memberRows.length === 0 && <div className="help">No agents assigned — set the agent in Basic Info or use Team Split.</div>}
-            {memberRows.map((r, i) => (
-              <div className="agent-comm-card" key={i}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><strong>{(r.m.name || '').toUpperCase()}</strong><span className="pill info" style={{ fontSize: 10 }}>{r.m.split}% Split</span></div>
-                  <strong style={{ color: 'var(--brand)' }}>{formatCurrency(r.agent.total)}</strong>
-                </div>
-                <div className="g4">
-                  <div className="field" style={{ marginBottom: 0 }}><label>Agent Comm (%)</label><input type="number" value={r.m.agent_pct} onChange={(e) => setMember(i, 'agent_pct', e.target.value)} /></div>
-                  <div className="field" style={{ marginBottom: 0 }}><label>Commission</label><input readOnly value={formatCurrency(r.agent.commission)} /></div>
-                  <div className="field" style={{ marginBottom: 0 }}><label>HST</label><input readOnly value={formatCurrency(r.agent.hst)} /></div>
-                  <div className="field" style={{ marginBottom: 0 }}><label>Total</label><input readOnly style={{ fontWeight: 700, color: 'var(--brand)' }} value={formatCurrency(r.agent.total)} /></div>
-                </div>
-              </div>
-            ))}
-
-            {memberRows.length > 0 && <><div className="modal-sub">Agent (T4A)</div>
-            {memberRows.map((r, i) => (
-              <div className="t4a-card" key={i}>
-                <strong style={{ fontSize: 13 }}>{(r.m.name || '').toUpperCase()}</strong>
-                <div className="g3" style={{ marginTop: 10 }}>
-                  <div className="field" style={{ marginBottom: 0 }}><label>Commission</label><input readOnly value={formatCurrency(r.t4a.commission)} /></div>
-                  <div className="field" style={{ marginBottom: 0 }}><label>HST</label><input readOnly value={formatCurrency(r.t4a.hst)} /></div>
-                  <div className="field" style={{ marginBottom: 0 }}><label>Total</label><input readOnly style={{ fontWeight: 700 }} value={formatCurrency(r.t4a.total)} /></div>
-                </div>
-              </div>
-            ))}</>}
-
-            <div className="modal-sub" style={{ borderLeftColor: '#7c3aed', color: '#5b21b6' }}>Brokerage Commission</div>
-            <div style={{ background: '#faf5ff', border: '1px solid #e9d5ff', borderRadius: 8, padding: 12, marginBottom: 12 }}>
-              <strong style={{ fontSize: 12, color: '#5b21b6' }}>Minimum Brokerage Commission</strong>
-              <div className="fin-sum" style={{ marginTop: 10, marginBottom: 0 }}>
-                <div className="field" style={{ marginBottom: 0 }}><label>Commission</label><input value="$200.00" readOnly /></div>
-                <div className="field" style={{ marginBottom: 0 }}><label>HST</label><input value="$26.00" readOnly /></div>
-                <div className="field" style={{ marginBottom: 0 }}><label>Total</label><input value="$226.00" readOnly style={{ fontWeight: 700, color: '#5b21b6' }} /></div>
-              </div>
-            </div>
-            {memberRows.map((r, i) => (
-              <div className="brok-card" key={i}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}><strong style={{ fontSize: 13 }}>{(r.m.name || '').toUpperCase()}</strong><span className="pill" style={{ background: '#f3e8ff', color: '#6b21a8', border: '1px solid #d8b4fe', fontSize: 10 }}>Split: {r.m.split}%</span></div>
-                <div className="g4">
-                  <div className="field" style={{ marginBottom: 0 }}><label>Brok Comm (%)</label><input type="number" value={r.m.brok_pct} onChange={(e) => setMember(i, 'brok_pct', e.target.value)} /></div>
-                  <div className="field" style={{ marginBottom: 0 }}><label>Commission</label><input readOnly value={formatCurrency(r.brok.commission)} /></div>
-                  <div className="field" style={{ marginBottom: 0 }}><label>HST</label><input readOnly value={formatCurrency(r.brok.hst)} /></div>
-                  <div className="field" style={{ marginBottom: 0 }}><label>Total</label><input readOnly style={{ fontWeight: 700, color: '#5b21b6' }} value={formatCurrency(r.brok.total)} /></div>
-                </div>
-              </div>
-            ))}
+            <AgentCommissionBlocks rows={memberRows} setMember={setMember} minBrok={{ commission: 200, hst: 26, total: 226 }} />
           </>
         )}
 
@@ -380,29 +346,63 @@ function AdjSide({ title, pct, setPct, en, setEn, before, after, setBefore, setA
   );
 }
 
-function AgentCards({ agents }) {
+// Shared per-agent commission cards (Agent Commission / Agent T4A / Brokerage
+// Commission + min-brokerage floor). Used by both the standard and listing
+// variants so they render identically. `minBrok` carries the type-specific floor.
+function AgentCommissionBlocks({ rows, setMember, minBrok }) {
   return (
     <>
       <div className="modal-sub">Agent Commission</div>
-      {(!agents || agents.length === 0) && <div className="help">No agents assigned — set the agent in Basic Info or use Team Split.</div>}
-      {agents && agents.map((a, i) => (
+      {rows.length === 0 && <div className="help">No agents assigned — set the agent in Basic Info or use Team Split.</div>}
+      {rows.map((r, i) => (
         <div className="agent-comm-card" key={i}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-            <strong>{a.name?.toUpperCase()}</strong>
-            <span className="pill info" style={{ fontSize: 10 }}>{a.split}% split · agent {a.agent_pct}% · brok {a.brok_pct}%</span>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><strong>{(r.m.name || '').toUpperCase()}</strong><span className="pill info" style={{ fontSize: 10 }}>{r.m.split}% Split</span></div>
+            <strong style={{ color: 'var(--brand)' }}>{formatCurrency(r.agent.total)}</strong>
           </div>
-          <div className="g3"><Mini label="Agent" line={a.agent} brand /><Mini label="Brokerage" line={a.brokerage} /><Mini label="T4A" line={a.t4a} /></div>
+          <div className="g4">
+            <div className="field" style={{ marginBottom: 0 }}><label>Agent Comm (%) <span style={{ color: 'var(--brand)' }}>✏</span></label><input type="number" value={r.m.agent_pct} onChange={(e) => setMember(i, 'agent_pct', e.target.value)} /></div>
+            <div className="field" style={{ marginBottom: 0 }}><label>Commission</label><input readOnly value={formatCurrency(r.agent.commission)} /></div>
+            <div className="field" style={{ marginBottom: 0 }}><label>HST</label><input readOnly value={formatCurrency(r.agent.hst)} /></div>
+            <div className="field" style={{ marginBottom: 0 }}><label>Total</label><input readOnly style={{ fontWeight: 700, color: 'var(--brand)' }} value={formatCurrency(r.agent.total)} /></div>
+          </div>
         </div>
       ))}
-    </>
-  );
-}
 
-function MinBrok({ mb }) {
-  return (
-    <>
-      <div className="modal-sub" style={{ borderLeftColor: '#7c3aed', color: '#5b21b6' }}>Minimum Brokerage Commission</div>
-      <div className="fin-sum"><Box label="Commission" value={formatCurrency(mb.commission)} /><Box label="HST" value={formatCurrency(mb.hst)} /><Box label="Total" value={formatCurrency(mb.total)} /></div>
+      {rows.length > 0 && (<>
+        <div className="modal-sub">Agent (T4A)</div>
+        {rows.map((r, i) => (
+          <div className="t4a-card" key={i}>
+            <strong style={{ fontSize: 13 }}>{(r.m.name || '').toUpperCase()}</strong>
+            <div className="g3" style={{ marginTop: 10 }}>
+              <div className="field" style={{ marginBottom: 0 }}><label>Commission</label><input readOnly value={formatCurrency(r.t4a.commission)} /></div>
+              <div className="field" style={{ marginBottom: 0 }}><label>HST</label><input readOnly value={formatCurrency(r.t4a.hst)} /></div>
+              <div className="field" style={{ marginBottom: 0 }}><label>Total</label><input readOnly style={{ fontWeight: 700 }} value={formatCurrency(r.t4a.total)} /></div>
+            </div>
+          </div>
+        ))}
+      </>)}
+
+      <div className="modal-sub" style={{ borderLeftColor: '#7c3aed', color: '#5b21b6' }}>Brokerage Commission</div>
+      <div style={{ background: '#faf5ff', border: '1px solid #e9d5ff', borderRadius: 8, padding: 12, marginBottom: 12 }}>
+        <strong style={{ fontSize: 12, color: '#5b21b6' }}>Minimum Brokerage Commission</strong>
+        <div className="fin-sum" style={{ marginTop: 10, marginBottom: 0 }}>
+          <div className="field" style={{ marginBottom: 0 }}><label>Commission</label><input value={formatCurrency(minBrok.commission)} readOnly /></div>
+          <div className="field" style={{ marginBottom: 0 }}><label>HST</label><input value={formatCurrency(minBrok.hst)} readOnly /></div>
+          <div className="field" style={{ marginBottom: 0 }}><label>Total</label><input value={formatCurrency(minBrok.total)} readOnly style={{ fontWeight: 700, color: '#5b21b6' }} /></div>
+        </div>
+      </div>
+      {rows.map((r, i) => (
+        <div className="brok-card" key={i}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}><strong style={{ fontSize: 13 }}>{(r.m.name || '').toUpperCase()}</strong><span className="pill" style={{ background: '#f3e8ff', color: '#6b21a8', border: '1px solid #d8b4fe', fontSize: 10 }}>Split: {r.m.split}%</span></div>
+          <div className="g4">
+            <div className="field" style={{ marginBottom: 0 }}><label>Brok Comm (%)</label><input type="number" value={r.m.brok_pct} onChange={(e) => setMember(i, 'brok_pct', e.target.value)} /></div>
+            <div className="field" style={{ marginBottom: 0 }}><label>Commission</label><input readOnly value={formatCurrency(r.brok.commission)} /></div>
+            <div className="field" style={{ marginBottom: 0 }}><label>HST</label><input readOnly value={formatCurrency(r.brok.hst)} /></div>
+            <div className="field" style={{ marginBottom: 0 }}><label>Total</label><input readOnly style={{ fontWeight: 700, color: '#5b21b6' }} value={formatCurrency(r.brok.total)} /></div>
+          </div>
+        </div>
+      ))}
     </>
   );
 }
