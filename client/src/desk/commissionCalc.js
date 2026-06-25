@@ -112,24 +112,23 @@ export function computeCommission(input = {}, hstRate = HST_RATE) {
  * Per-agent commission deductions from the Adjustment & Advance Payment module.
  *
  * Returns an array aligned to `members` of the pre-HST dollar amount to subtract
- * from each member's Agent Commission:
+ * from each member's Agent Commission Total — only the per-agent categories:
  *   • Agent Adjust + Advance Payment rows → matched to the member by name
- *   • Client Referral + External Brokerage Referral → pooled (no agent), shared
- *     across members by split %
- * For preconstruction, pass the 1-based `term`; only term-scoped Agent Adjust /
- * Advance rows apply and the (term-less) pooled referrals are skipped. Status is
+ * Client Referral and External Brokerage Referral are deal-level (see
+ * referralSections / CommissionService::referralSections) and are NOT included
+ * here. For preconstruction, pass the 1-based `term` to scope the rows. Status is
  * ignored — a row counts as soon as it is entered. Mirrors
  * CommissionService::memberDeduction() so the live preview matches the backend.
  *
  * @param {object} adjustments  transaction.adjustments JSON (or null)
  * @param {Array}  members      [{ name, split, ... }] aligned to the output
  * @param {number|null} term    1-based precon term, or null for the whole deal
- * @returns {Array<{total:number, agentAdjust:number, advance:number, clientReferral:number, extReferral:number}>}
+ * @returns {Array<{total:number, agentAdjust:number, advance:number}>}
  *          per-member pre-HST deduction, broken down by source
  */
 export function agentAdjustments(adjustments, members = [], term = null) {
   const a = adjustments || {};
-  const out = members.map(() => ({ agentAdjust: 0, advance: 0, clientReferral: 0, extReferral: 0 }));
+  const out = members.map(() => ({ agentAdjust: 0, advance: 0 }));
   const idxByName = {};
   members.forEach((m, i) => { if (m && m.name) idxByName[m.name] = i; });
 
@@ -144,23 +143,99 @@ export function agentAdjustments(adjustments, members = [], term = null) {
   addNamed(a.adjustment_rows, a.agent_adjust === 'Yes', 'agentAdjust');
   addNamed(a.advance_rows, a.advance_payment === 'Yes', 'advance');
 
-  if (term == null) {
-    let client = 0;
-    let ext = 0;
-    if (a.client_referral === 'Yes') (a.client_rows || []).forEach((r) => { client += num(r.amount); });
-    if (a.ext_referral === 'Yes') ext += num(a.ext && a.ext.amount);
-    if (client || ext) members.forEach((m, i) => {
-      const share = num(m.split) / 100;
-      out[i].clientReferral += client * share;
-      out[i].extReferral += ext * share;
-    });
-  }
-
   return out.map((d) => ({
     agentAdjust: ROUND(d.agentAdjust),
     advance: ROUND(d.advance),
-    clientReferral: ROUND(d.clientReferral),
-    extReferral: ROUND(d.extReferral),
-    total: ROUND(d.agentAdjust + d.advance + d.clientReferral + d.extReferral),
+    total: ROUND(d.agentAdjust + d.advance),
   }));
+}
+
+/**
+ * "Commissions after broker referral" section — Commission = full deal commission
+ * − broker referral, HST = ×rate, Total = ×(1+rate). Also surfaces the referral
+ * amounts and show flags. (The "Agent Commissions after client referral" section
+ * is computed by agentCommissionsAfterClient.)
+ *
+ * @param {number} dealComm     full deal commission without HST (pre-referral)
+ * @param {object} adjustments  transaction.adjustments JSON (or null)
+ * @param {number} hstRate
+ * @returns {{ brokerAmount:number, clientAmount:number, showBroker:boolean, showClient:boolean,
+ *   afterBroker:{commission:number,hst:number,total:number} }}
+ */
+export function referralSections(dealComm, adjustments, hstRate = HST_RATE) {
+  const a = adjustments || {};
+  const showBroker = a.ext_referral === 'Yes';
+  const showClient = a.client_referral === 'Yes';
+  const brokerAmount = showBroker ? num(a.ext && a.ext.amount) : 0;
+  const clientAmount = showClient ? (a.client_rows || []).reduce((s, r) => s + num(r.amount), 0) : 0;
+
+  const fullComm = ROUND(num(dealComm));
+  const afterBrokerComm = ROUND(fullComm - brokerAmount);
+  const afterBroker = { commission: afterBrokerComm, hst: ROUND(afterBrokerComm * hstRate), total: ROUND(afterBrokerComm * (1 + hstRate)) };
+
+  return { brokerAmount: ROUND(brokerAmount), clientAmount: ROUND(clientAmount), showBroker, showClient, afterBroker };
+}
+
+/**
+ * "Agent Commissions after client referral" section. Sums, across team members,
+ * each member's brokerage-floor-capped agent commission off the listing-side
+ * commission (Agent% and Brokerage% are both weighted by the member's Split %),
+ * then subtracts the client referral:
+ *
+ *   floor_i  = (lc == 0) ? 0 : max(lc × brok%_i × split_i, minBrokComm × 1.13) − (adjBefore×1.13 − adjAfter)
+ *   capped_i = max(0, min(lc × agent%_i × split_i, lc − floor_i))
+ *   pool     = Σ capped_i
+ *   Total    = pool × 1.13 − Client Referral   (client referral comes off the Total, with HST)
+ *   Commission = Total / 1.13 ;  HST = Total − Commission
+ *
+ * @param {number} listingComm  listing-side commission without HST
+ * @param {Array}  members      [{ agent_pct, brok_pct, split }]
+ * @param {object} opts         { minBrokComm, adjBefore, adjAfter, clientReferral }
+ * @param {number} hstRate
+ */
+export function agentCommissionsAfterClient(listingComm, members = [], opts = {}, hstRate = HST_RATE) {
+  const { minBrokComm = 0, adjBefore = 0, adjAfter = 0, clientReferral = 0 } = opts;
+  const g = 1 + hstRate;
+  const lc = num(listingComm);
+  const minBrokTotal = num(minBrokComm) * g;
+
+  let pool = 0;
+  members.forEach((m) => {
+    const a = num(m.agent_pct) / 100;
+    const b = num(m.brok_pct) / 100;
+    const split = num(m.split) / 100;
+    const brokRaw = Math.max(lc * b * split, minBrokTotal);
+    const floor = lc === 0 ? 0 : brokRaw - (num(adjBefore) * g - num(adjAfter));
+    pool += Math.max(0, Math.min(lc * a * split, lc - floor));
+  });
+
+  const total = ROUND(pool * g - num(clientReferral));
+  const commission = ROUND(total / g);
+  const hst = ROUND(total - commission);
+  return { commission, hst, total };
+}
+
+/**
+ * Per-team-member "Agent Commission" (payable, with HST). The Agent% and
+ * brokerage-floor cap are already applied in agentCommissionsAfterClient, so each
+ * member simply takes their Split % of that section's Total, then subtracts that
+ * member's Adjustment + Advance amounts:
+ *
+ *   Total      = (acTotal × split) − deduction
+ *   Commission = Total / 1.13 ;  HST = Total − Commission
+ *
+ * Pass deduction = 0 for the gross (T4A) line.
+ *
+ * @param {object} member  { split }
+ * @param {object} ctx     { acTotal }  Total from "Agent Commissions after client referral"
+ * @param {number} deduction  this member's Adjustment + Advance amount (off the Total)
+ * @param {number} hstRate
+ */
+export function agentCommissionLine(member, ctx, deduction = 0, hstRate = HST_RATE) {
+  const g = 1 + hstRate;
+  const split = num(member.split) / 100;
+  const total = ROUND(num(ctx.acTotal) * split - num(deduction));
+  const commission = ROUND(total / g);
+  const hst = ROUND(total - commission);
+  return { commission, hst, total };
 }

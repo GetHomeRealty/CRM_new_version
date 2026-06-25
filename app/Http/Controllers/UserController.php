@@ -28,9 +28,12 @@ class UserController extends Controller
 
         $user = User::create([
             'name' => $data['name'],
+            'username' => $data['username'] ?? null,
             'email' => $data['email'],
             'password' => Hash::make($data['password']),
             'role' => $data['role'],
+            'status' => $data['status'] ?? 'Active',
+            'profile' => $data['profile'] ?? null,
         ]);
 
         $this->syncPermissions($user, $data['permissions'] ?? []);
@@ -44,8 +47,11 @@ class UserController extends Controller
 
         $user->fill([
             'name' => $data['name'],
+            'username' => $data['username'] ?? $user->username,
             'email' => $data['email'],
             'role' => $data['role'],
+            'status' => $data['status'] ?? $user->status ?? 'Active',
+            'profile' => array_key_exists('profile', $data) ? $data['profile'] : $user->profile,
         ]);
         if (! empty($data['password'])) {
             $user->password = Hash::make($data['password']);
@@ -77,9 +83,12 @@ class UserController extends Controller
     {
         return [
             'name' => ['required', 'string', 'max:255'],
+            'username' => [$user ? 'nullable' : 'required', 'string', 'max:255', Rule::unique('users', 'username')->ignore($user?->id)],
             'email' => ['required', 'email', 'max:255', Rule::unique('users', 'email')->ignore($user?->id)],
             'password' => $user ? ['nullable', 'confirmed', Password::defaults()] : ['required', 'confirmed', Password::defaults()],
             'role' => ['required', Rule::in(PermissionService::ROLES)],
+            'status' => ['nullable', Rule::in(['Active', 'Inactive'])],
+            'profile' => ['nullable', 'array'],
             'permissions' => ['nullable', 'array'],
             'permissions.*' => [Rule::in(PermissionService::LEVELS)],
         ];
@@ -109,8 +118,11 @@ class UserController extends Controller
         return [
             'id' => $u->id,
             'name' => $u->name,
+            'username' => $u->username,
             'email' => $u->email,
             'role' => $u->role,
+            'status' => $u->status ?? 'Active',
+            'profile' => $u->profile ?? [],
             'is_admin' => $u->isAdmin(),
             'permissions' => $this->permissions->effectiveFor($u),
             'overrides' => $u->permissions->mapWithKeys(fn ($p) => [$p->screen => $p->level]),

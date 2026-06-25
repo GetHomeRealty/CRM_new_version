@@ -57,6 +57,14 @@ class AuthController extends Controller
             ]);
         }
 
+        // Inactive users cannot log in.
+        if (! $request->user()->isActive()) {
+            Auth::guard('web')->logout();
+            throw ValidationException::withMessages([
+                'email' => ['This account is inactive. Please contact an administrator.'],
+            ]);
+        }
+
         $request->session()->regenerate();
 
         return response()->json(['user' => $this->payload($request->user())]);

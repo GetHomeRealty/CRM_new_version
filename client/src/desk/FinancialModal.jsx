@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { updateTransaction } from '../lib/api';
 import { formatCurrency, parseNumber, isListingFinancialType, isPreconType } from './format';
-import { agentAdjustments } from './commissionCalc';
+import { agentAdjustments, referralSections, agentCommissionsAfterClient, agentCommissionLine } from './commissionCalc';
 import { useToast } from './toast';
 
 const HST = 0.13;
@@ -14,7 +14,7 @@ const lineLessTotal = (wo, deduct = 0) => ({ commission: r2(wo), hst: r2(wo * HS
 
 // Itemize an agent's deduction breakdown (from agentAdjustments) into a label,
 // e.g. "adjustment $300.00 + advance $200.00". Only non-zero parts are shown.
-const ADJ_PARTS = [['agentAdjust', 'adjustment'], ['advance', 'advance'], ['clientReferral', 'client referral'], ['extReferral', 'ext. referral']];
+const ADJ_PARTS = [['agentAdjust', 'adjustment'], ['advance', 'advance']];
 const adjLabel = (d) => ADJ_PARTS.filter(([k]) => d[k] > 0).map(([k, name]) => `${name} ${formatCurrency(d[k])}`).join(' + ');
 
 export default function FinancialModal({ open, onClose, transactionId, txn, termCount: termCountProp, onSaved }) {
@@ -96,12 +96,21 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
   const commWoHst = r2(gross - adjB);
   const stdHst = r2(commWoHst * HST);
   const stdTotal = r2(commWoHst + stdHst - adjA);
+  // Deal-level referrals: sections are computed from the full (pre-adjustment)
+  // commission; broker referral still reduces the team-split base (which keeps the
+  // commission adjustment), client referral comes off the deal Total only.
+  const stdRef = referralSections(gross, txn.adjustments, HST);
+  const stdSplitBase = r2(commWoHst - stdRef.brokerAmount);
+  // "Agent Commissions after client referral" (off the standard commission), then
+  // the per-member Agent Commission is capped against that section's Total.
+  const stdAfterClient = agentCommissionsAfterClient(commWoHst, members, { minBrokComm: 200, adjBefore: adjB, adjAfter: adjA, clientReferral: stdRef.clientAmount }, HST);
+  const stdRefView = { ...stdRef, afterClient: stdAfterClient };
+  const stdAgentCtx = { acTotal: stdAfterClient.total, acComm: stdAfterClient.commission, minBrokComm: 200, adjBefore: adjB, adjAfter: adjA };
   const memberRows = members.map((m, i) => {
-    const base = r2(commWoHst * (parseNumber(m.split) / 100));
-    const agentGross = r2(base * (parseNumber(m.agent_pct) / 100));
+    const base = r2(stdSplitBase * (parseNumber(m.split) / 100));
     const brokWo = r2(base * (parseNumber(m.brok_pct) / 100));
-    // Adjustments come off the Agent Commission Total (Commission + HST), not the commission.
-    return { m, agent: lineLessTotal(agentGross, memberDeduct[i].total), brok: lineOf(brokWo), t4a: lineOf(agentGross), adj: memberDeduct[i] };
+    // Agent + T4A take Split % of the after-client-referral section Total; T4A is gross (no per-agent deduction).
+    return { m, agent: agentCommissionLine(m, stdAgentCtx, memberDeduct[i].total, HST), brok: lineOf(brokWo), t4a: agentCommissionLine(m, stdAgentCtx, 0, HST), adj: memberDeduct[i] };
   });
 
   // ---- live listing computation (mirrors CommissionService::breakdownListing) ----
@@ -118,12 +127,23 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
   const lSide = sideOf(listPct, lAdjEff, lBefore, lAfter);
   const cSide = sideOf(coopPct, cAdjEff, cBefore, cAfter);
   const listTotals = { commission: r2(lSide.commission + cSide.commission), hst: r2(lSide.hst + cSide.hst), total: r2(lSide.total + cSide.total) };
+  // Full (pre-adjustment) listing+co-op commission for the referral sections:
+  // Price × (listing% + co-op%). Fixed-amount inputs would add in here too.
+  const listRawComm = r2(parseNumber(price) * (parseNumber(listPct) + parseNumber(coopPct)) / 100);
+  const listRef = referralSections(listRawComm, txn.adjustments, HST);
+  const listSplitBase = r2(listTotals.commission - listRef.brokerAmount);
+  // "Agent Commissions after client referral" uses the listing-side commission only.
+  const listAfterClient = agentCommissionsAfterClient(lSide.commission, members, { minBrokComm: 499, adjBefore: lAdjEff ? parseNumber(lBefore) : 0, adjAfter: lAdjEff ? parseNumber(lAfter) : 0, clientReferral: listRef.clientAmount }, HST);
+  const listRefView = { ...listRef, afterClient: listAfterClient };
+  const listAgentCtx = {
+    acTotal: listAfterClient.total, acComm: listAfterClient.commission, minBrokComm: 499,
+    adjBefore: lAdjEff ? parseNumber(lBefore) : 0, adjAfter: lAdjEff ? parseNumber(lAfter) : 0,
+  };
   const listingMemberRows = members.map((m, i) => {
-    const base = r2(listTotals.commission * (parseNumber(m.split) / 100));
-    const agentGross = r2(base * (parseNumber(m.agent_pct) / 100));
+    const base = r2(listSplitBase * (parseNumber(m.split) / 100));
     const brokWo = r2(base * (parseNumber(m.brok_pct) / 100));
-    // Adjustments come off the Agent Commission Total (Commission + HST), not the commission.
-    return { m, agent: lineLessTotal(agentGross, memberDeduct[i].total), brok: lineOf(brokWo), t4a: lineOf(agentGross), adj: memberDeduct[i] };
+    // Agent + T4A take Split % of the after-client-referral section Total; T4A is gross (no per-agent deduction).
+    return { m, agent: agentCommissionLine(m, listAgentCtx, memberDeduct[i].total, HST), brok: lineOf(brokWo), t4a: agentCommissionLine(m, listAgentCtx, 0, HST), adj: memberDeduct[i] };
   });
 
   // ---- live preconstruction master computation ----
@@ -352,6 +372,7 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
               </div>
             )}
 
+            <ReferralSections data={listRefView} />
             <AgentCommissionBlocks rows={listingMemberRows} setMember={setMember} minBrok={{ commission: 499, hst: 64.87, total: 563.87 }} />
           </>
         ) : (
@@ -378,6 +399,7 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
               </div>
             )}
 
+            <ReferralSections data={stdRefView} />
             <AgentCommissionBlocks rows={memberRows} setMember={setMember} minBrok={{ commission: 200, hst: 26, total: 226 }} />
           </>
         )}
@@ -449,6 +471,38 @@ function AgentCommissionBlocks({ rows, setMember, minBrok }) {
           </div>
         </div>
       ))}
+    </>
+  );
+}
+
+// Deal-level referral summary — "Commissions after broker referral" (external
+// brokerage referral, off commission) and "Agent Commissions after client
+// referral" (off Total). Shown only for the categories set to Yes in Adjustment.
+function ReferralSections({ data }) {
+  if (!data || (!data.showBroker && !data.showClient)) return null;
+  return (
+    <>
+      <div className="modal-sub">Commissions</div>
+      {data.showBroker && (
+        <>
+          <span className="pill info" style={{ fontSize: 11, marginBottom: 8, display: 'inline-block' }}>Commissions after broker referral</span>
+          <div className="fin-sum">
+            <Box label="Commission without HST" value={formatCurrency(data.afterBroker.commission)} />
+            <Box label="HST (13%)" value={formatCurrency(data.afterBroker.hst)} />
+            <Box label="Total Commission (With HST)" value={formatCurrency(data.afterBroker.total)} brand />
+          </div>
+        </>
+      )}
+      {data.showClient && (
+        <>
+          <span className="pill ok" style={{ fontSize: 11, marginBottom: 8, display: 'inline-block' }}>Agent Commissions after client referral</span>
+          <div className="fin-sum">
+            <Box label="Commission Without HST" value={formatCurrency(data.afterClient.commission)} />
+            <Box label="HST (13%)" value={formatCurrency(data.afterClient.hst)} />
+            <Box label="Total Commission (With HST)" value={formatCurrency(data.afterClient.total)} brand />
+          </div>
+        </>
+      )}
     </>
   );
 }

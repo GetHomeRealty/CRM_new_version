@@ -66,6 +66,10 @@ class TransactionInvoiceService
         $invoiceDate = Carbon::now();
         $suffix = $termLabel ? " — {$termLabel}" : '';
 
+        // Bill-To from the transaction's Listing/Co-op Brokerage Information.
+        $emails = array_values(array_unique(array_filter([$b?->invoice_email, $b?->email, $b?->agent_email])));
+        $brokAgents = $b ? $b->agents->pluck('name')->filter()->implode(', ') : '';
+
         $invoice = Invoice::create([
             'invoice_no' => $this->invoiceNumber($t, $termLabel),
             'transaction_id' => $t->id,
@@ -74,14 +78,16 @@ class TransactionInvoiceService
             'created_by' => auth()->id(),
             'property_reference' => $t->property,
             'customer_name' => $b?->name,
+            'customer_phone' => $b?->phone,
+            'customer_email' => implode(', ', $emails),
             'customer_address' => $b?->address,
             'customer_country' => 'Canada',
             'invoice_date' => $invoiceDate->toDateString(),
             'terms' => $settings->default_terms,
             'due_date' => optional($this->dueDate($invoiceDate, $settings->default_terms))->toDateString(),
             'trade_number' => $t->trade_no,
-            'listing_agent' => $t->agent,
-            'coop_salesperson' => $t->agent,
+            'listing_agent' => $brokAgents ?: $t->agent, // listing brokerage's agent name(s)
+            'coop_salesperson' => $t->agent,             // GHR (co-op) agent
             'subject' => 'Co-op Commission for '.$t->property.$suffix,
             'status' => 'Unpaid',
         ]);

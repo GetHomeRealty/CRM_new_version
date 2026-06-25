@@ -207,6 +207,21 @@ class CommissionService
         $hst = round($commission * self::HST_RATE, 2);
         $total = round($commission + $hst - $adjAfter, 2);
 
+        // Deal-level referrals: broker referral reduces the commission base that
+        // feeds the team split; client referral comes off the deal Total only.
+        $adj = $t->adjustments ?? [];
+        $members = $this->resolveMembers($t);
+        $splitBase = round($commission - $this->brokerReferralAmount($adj), 2);
+        // "Agent Commissions after client referral" off the standard commission.
+        $afterClient = $this->agentCommissionsAfterClient($commission, $members, 200.0, $adjBefore, $adjAfter, $this->clientReferralAmount($adj));
+        $agentCtx = [
+            'acComm' => $afterClient['commission'],
+            'acTotal' => $afterClient['total'],
+            'minBrokComm' => 200.0,
+            'adjBefore' => $adjBefore,
+            'adjAfter' => $adjAfter,
+        ];
+
         return [
             'variant' => 'standard',
             'base_commission' => $base,
@@ -218,7 +233,8 @@ class CommissionService
                 'before' => (float) $t->comm_adjust_before,
                 'after' => (float) $t->comm_adjust_after,
             ],
-            'agents' => $this->agentLines($this->resolveMembers($t), $commission, $t->adjustments ?? []),
+            'referrals' => $this->referralSections($base, $adj, $afterClient),
+            'agents' => $this->agentLines($members, $splitBase, $adj, null, $agentCtx),
             'min_brokerage' => ['commission' => 200.0, 'hst' => 26.0, 'total' => 226.0],
         ];
     }
@@ -251,6 +267,23 @@ class CommissionService
         $hst = round($listing['hst'] + $coop['hst'], 2);
         $total = round($listing['total'] + $coop['total'], 2);
 
+        $adj = $t->adjustments ?? [];
+        $members = $this->resolveMembers($t);
+        $splitBase = round($commission - $this->brokerReferralAmount($adj), 2);
+        // Full (pre-adjustment) commission for the broker-referral section: list + co-op amounts.
+        $rawComm = round($listing['amount'] + $coop['amount'], 2);
+        $lAdjBefore = $t->listing_adj_enabled ? (float) $t->listing_adj_before : 0.0;
+        $lAdjAfter = $t->listing_adj_enabled ? (float) $t->listing_adj_after : 0.0;
+        // "Agent Commissions after client referral" uses the listing-side commission only.
+        $afterClient = $this->agentCommissionsAfterClient($listing['commission'], $members, 499.0, $lAdjBefore, $lAdjAfter, $this->clientReferralAmount($adj));
+        $agentCtx = [
+            'acComm' => $afterClient['commission'],
+            'acTotal' => $afterClient['total'],
+            'minBrokComm' => 499.0,
+            'adjBefore' => $lAdjBefore,
+            'adjAfter' => $lAdjAfter,
+        ];
+
         return [
             'variant' => 'listing',
             'listing' => $listing,
@@ -260,7 +293,8 @@ class CommissionService
                 'listing' => ['enabled' => (bool) $t->listing_adj_enabled, 'before' => (float) $t->listing_adj_before, 'after' => (float) $t->listing_adj_after],
                 'coop' => ['enabled' => (bool) $t->coop_adj_enabled, 'before' => (float) $t->coop_adj_before, 'after' => (float) $t->coop_adj_after],
             ],
-            'agents' => $this->agentLines($this->resolveMembers($t), $commission, $t->adjustments ?? []),
+            'referrals' => $this->referralSections($rawComm, $adj, $afterClient),
+            'agents' => $this->agentLines($members, $splitBase, $adj, null, $agentCtx),
             'min_brokerage' => ['commission' => 499.0, 'hst' => 64.87, 'total' => 563.87],
         ];
     }
@@ -278,10 +312,12 @@ class CommissionService
 
     /**
      * Per-member agent / brokerage / T4A lines off a commission base (woHst).
-     * Agent adjustments (see memberDeduction) come off the Agent Commission Total
-     * (Commission + HST) only — the Commission/HST and the T4A line stay gross.
+     * Brokerage and T4A are simple split×pct lines. The Agent Commission line uses
+     * the brokerage-floor cap formula (agentCommissionLine) when $agentCtx is given
+     * (standard/listing); otherwise (precon per term) it is the gross agent line
+     * with the per-member adjustment taken off the Total.
      */
-    private function agentLines($members, float $commissionWoHst, array $adjustments = [], ?int $term = null): array
+    private function agentLines($members, float $commissionWoHst, array $adjustments = [], ?int $term = null, ?array $agentCtx = null): array
     {
         $line = fn ($wo) => [
             'commission' => $wo,
@@ -289,12 +325,24 @@ class CommissionService
             'total' => round($wo * (1 + self::HST_RATE), 2),
         ];
 
-        return $members->map(function (TeamMember $m) use ($commissionWoHst, $line, $adjustments, $term) {
+        return $members->map(function (TeamMember $m) use ($commissionWoHst, $line, $adjustments, $term, $agentCtx) {
             $memberWoHst = round($commissionWoHst * ((float) $m->split) / 100, 2);
             $agentWoHst = round($memberWoHst * ((float) $m->agent_pct) / 100, 2);
             $brokWoHst = round($memberWoHst * ((float) $m->brok_pct) / 100, 2);
 
             $deduction = $this->memberDeduction($adjustments, $m, $term);
+
+            if ($agentCtx !== null) {
+                $agent = $this->agentCommissionLine($m, $agentCtx, $deduction);
+                $t4a = $this->agentCommissionLine($m, $agentCtx, 0.0); // gross (no per-agent deduction)
+            } else {
+                $agent = [
+                    'commission' => $agentWoHst,
+                    'hst' => round($agentWoHst * self::HST_RATE, 2),
+                    'total' => round($agentWoHst * (1 + self::HST_RATE) - $deduction, 2),
+                ];
+                $t4a = $line($agentWoHst);
+            }
 
             return [
                 'name' => $m->name,
@@ -302,25 +350,38 @@ class CommissionService
                 'agent_pct' => (float) $m->agent_pct,
                 'brok_pct' => (float) $m->brok_pct,
                 'adjustment' => $deduction,
-                'agent' => [
-                    'commission' => $agentWoHst,
-                    'hst' => round($agentWoHst * self::HST_RATE, 2),
-                    'total' => round($agentWoHst * (1 + self::HST_RATE) - $deduction, 2),
-                ],
+                'agent' => $agent,
                 'brokerage' => $line($brokWoHst),
-                't4a' => $line($agentWoHst),
+                't4a' => $t4a,
             ];
         })->values()->all();
     }
 
     /**
-     * Pre-HST dollar deduction to apply to a member's Agent Commission, from the
-     * Adjustment & Advance Payment module:
+     * Per-member "Agent Commission" (payable, with HST). The Agent% / floor cap is
+     * already applied in agentCommissionsAfterClient, so each member takes their
+     * Split % of that section's Total, less this member's Adjustment + Advance.
+     * Pass $deduction = 0 for the gross (T4A) line. Mirrors agentCommissionLine()
+     * in commissionCalc.js. $ctx: ['acTotal' => ...].
+     */
+    private function agentCommissionLine(TeamMember $m, array $ctx, float $deduction): array
+    {
+        $g = 1 + self::HST_RATE;
+        $split = (float) $m->split / 100;
+        $total = round((float) ($ctx['acTotal'] ?? 0) * $split - $deduction, 2);
+        $commission = round($total / $g, 2);
+        $hst = round($total - $commission, 2);
+
+        return ['commission' => $commission, 'hst' => $hst, 'total' => $total];
+    }
+
+    /**
+     * Pre-HST dollar deduction to apply to a member's Agent Commission Total, from
+     * the Adjustment & Advance Payment module — per-agent categories only:
      *   • Agent Adjust + Advance Payment rows → matched to the member by name
-     *   • Client Referral + External Brokerage Referral → pooled, shared by split %
-     * For preconstruction (term given) only term-scoped rows apply and the
-     * (term-less) pooled referrals are skipped. Status is ignored. Mirrors the
-     * frontend agentAdjustments() helper.
+     * Client Referral + External Brokerage Referral are deal-level (see
+     * referralSections), not per-agent. For preconstruction (term given) only
+     * term-scoped rows apply. Status is ignored. Mirrors agentAdjustments().
      */
     private function memberDeduction(array $adj, TeamMember $m, ?int $term): float
     {
@@ -351,23 +412,85 @@ class CommissionService
             }
         }
 
-        // Pooled referrals (no agent / term attribution) shared by split %.
-        if ($term === null) {
-            $pooled = 0.0;
-            if (($adj['client_referral'] ?? 'No') === 'Yes') {
-                foreach ($adj['client_rows'] ?? [] as $r) {
-                    $pooled += $this->n($r['amount'] ?? 0);
-                }
-            }
-            if (($adj['ext_referral'] ?? 'No') === 'Yes') {
-                $pooled += $this->n($adj['ext']['amount'] ?? 0);
-            }
-            if ($pooled != 0.0) {
-                $sum += $pooled * ((float) $m->split / 100);
-            }
+        return round($sum, 2);
+    }
+
+    /** External brokerage referral amount (deal-level, pre-HST). */
+    private function brokerReferralAmount(array $adj): float
+    {
+        return ($adj['ext_referral'] ?? 'No') === 'Yes' ? $this->n($adj['ext']['amount'] ?? 0) : 0.0;
+    }
+
+    /** Total client referral amount (deal-level, off Total). */
+    private function clientReferralAmount(array $adj): float
+    {
+        if (($adj['client_referral'] ?? 'No') !== 'Yes') {
+            return 0.0;
+        }
+        $sum = 0.0;
+        foreach ($adj['client_rows'] ?? [] as $r) {
+            $sum += $this->n($r['amount'] ?? 0);
         }
 
-        return round($sum, 2);
+        return $sum;
+    }
+
+    /**
+     * "Commissions after broker referral" section (full commission − broker
+     * referral). The "Agent Commissions after client referral" section is passed
+     * in via $afterClient (see agentCommissionsAfterClient). Returns null when
+     * neither referral category is enabled. Mirrors the frontend helpers.
+     */
+    private function referralSections(float $dealComm, array $adj, ?array $afterClient = null): ?array
+    {
+        $showBroker = ($adj['ext_referral'] ?? 'No') === 'Yes';
+        $showClient = ($adj['client_referral'] ?? 'No') === 'Yes';
+        if (! $showBroker && ! $showClient) {
+            return null;
+        }
+        $afterBrokerComm = round($dealComm - $this->brokerReferralAmount($adj), 2);
+        $afterBroker = [
+            'commission' => $afterBrokerComm,
+            'hst' => round($afterBrokerComm * self::HST_RATE, 2),
+            'total' => round($afterBrokerComm * (1 + self::HST_RATE), 2),
+        ];
+
+        return [
+            'broker_amount' => round($this->brokerReferralAmount($adj), 2),
+            'client_amount' => round($this->clientReferralAmount($adj), 2),
+            'show_broker' => $showBroker,
+            'show_client' => $showClient,
+            'after_broker' => $afterBroker,
+            'after_client' => $afterClient,
+        ];
+    }
+
+    /**
+     * "Agent Commissions after client referral" — sum across team members of each
+     * member's brokerage-floor-capped agent commission off the listing-side
+     * commission (Agent% and Brokerage% both weighted by the member's Split %),
+     * minus the client referral. Mirrors agentCommissionsAfterClient() in
+     * commissionCalc.js.
+     */
+    private function agentCommissionsAfterClient(float $lc, $members, float $minBrokComm, float $adjBefore, float $adjAfter, float $clientReferral): array
+    {
+        $g = 1 + self::HST_RATE;
+        $minBrokTotal = $minBrokComm * $g;
+        $pool = 0.0;
+        foreach ($members as $m) {
+            $a = (float) $m->agent_pct / 100;
+            $b = (float) $m->brok_pct / 100;
+            $split = (float) $m->split / 100;
+            $brokRaw = max($lc * $b * $split, $minBrokTotal);
+            $floor = $lc == 0.0 ? 0.0 : $brokRaw - ($adjBefore * $g - $adjAfter);
+            $pool += max(0.0, min($lc * $a * $split, $lc - $floor));
+        }
+        // Client referral comes off the Total (with HST); commission is back-solved.
+        $total = round($pool * $g - $clientReferral, 2);
+        $commission = round($total / $g, 2);
+        $hst = round($total - $commission, 2);
+
+        return ['commission' => $commission, 'hst' => $hst, 'total' => $total];
     }
 
     private function n($v): float

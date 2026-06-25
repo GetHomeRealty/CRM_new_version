@@ -253,13 +253,20 @@ class InvoiceController extends Controller
     {
         $s = CompanySetting::current();
 
-        return $this->summary($i) + [
+        // Fall back to the transaction's Listing/Co-op Brokerage Information for any
+        // customer field left blank (so transaction-linked invoices show the brokerage).
+        $brok = optional($i->transaction)->brokerage;
+        $brokEmails = $brok ? array_values(array_unique(array_filter([$brok->invoice_email, $brok->email, $brok->agent_email]))) : [];
+
+        return array_merge($this->summary($i), [
             'transaction_id' => $i->transaction_id,
             'purchase_price' => $i->transaction_id ? (float) optional($i->transaction)->price : null,
             'customer_id' => $i->customer_id,
-            'customer_phone' => $i->customer_phone,
-            'customer_email' => $i->customer_email,
-            'customer_address' => $i->customer_address,
+            'customer_name' => $i->customer_name ?: ($brok->name ?? null),
+            'customer_phone' => $i->customer_phone ?: ($brok->phone ?? null),
+            'customer_email' => $i->customer_email ?: implode(', ', $brokEmails),
+            'customer_address' => $i->customer_address ?: ($brok->address ?? null),
+            'listing_agent' => $i->listing_agent ?: ($brok ? $brok->agents->pluck('name')->filter()->implode(', ') : null),
             'customer_city' => $i->customer_city,
             'customer_province' => $i->customer_province,
             'customer_postal_code' => $i->customer_postal_code,
@@ -291,6 +298,6 @@ class InvoiceController extends Controller
                 'currency' => $s->currency, 'tax_rate' => (float) $s->default_tax_rate,
                 'thank_you_note' => $s->thank_you_note, 'deposit_heading' => $s->deposit_heading,
             ],
-        ];
+        ]);
     }
 }
