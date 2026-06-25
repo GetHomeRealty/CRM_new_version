@@ -253,20 +253,24 @@ class InvoiceController extends Controller
     {
         $s = CompanySetting::current();
 
-        // Fall back to the transaction's Listing/Co-op Brokerage Information for any
-        // customer field left blank (so transaction-linked invoices show the brokerage).
-        $brok = optional($i->transaction)->brokerage;
+        // Fall back to the transaction's Listing/Co-op Brokerage Information + agent for
+        // any field left blank (so transaction-linked invoices show the saved data).
+        $txn = $i->transaction;
+        $brok = optional($txn)->brokerage;
         $brokEmails = $brok ? array_values(array_unique(array_filter([$brok->invoice_email, $brok->email, $brok->agent_email]))) : [];
+        $brokAgents = $brok ? $brok->agents->pluck('name')->filter()->implode(', ') : null;
 
         return array_merge($this->summary($i), [
             'transaction_id' => $i->transaction_id,
-            'purchase_price' => $i->transaction_id ? (float) optional($i->transaction)->price : null,
+            'purchase_price' => $i->transaction_id ? (float) optional($txn)->price : null,
             'customer_id' => $i->customer_id,
             'customer_name' => $i->customer_name ?: ($brok->name ?? null),
             'customer_phone' => $i->customer_phone ?: ($brok->phone ?? null),
             'customer_email' => $i->customer_email ?: implode(', ', $brokEmails),
             'customer_address' => $i->customer_address ?: ($brok->address ?? null),
-            'listing_agent' => $i->listing_agent ?: ($brok ? $brok->agents->pluck('name')->filter()->implode(', ') : null),
+            // Co-op salesperson = the GHR agent on the deal; Listing agent = the other brokerage's agent(s).
+            'coop_salesperson' => $i->coop_salesperson ?: (optional($txn)->agent),
+            'listing_agent' => $i->listing_agent ?: ($brokAgents ?: optional($txn)->agent),
             'customer_city' => $i->customer_city,
             'customer_province' => $i->customer_province,
             'customer_postal_code' => $i->customer_postal_code,
@@ -277,8 +281,6 @@ class InvoiceController extends Controller
             'signature_path' => $i->signature_path,
             'terms' => $i->terms,
             'trade_number' => $i->trade_number,
-            'listing_agent' => $i->listing_agent,
-            'coop_salesperson' => $i->coop_salesperson,
             'subject' => $i->subject,
             'sub_total' => (float) $i->sub_total,
             'tax_total' => (float) $i->tax_total,
