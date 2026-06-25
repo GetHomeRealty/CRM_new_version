@@ -33,7 +33,8 @@ class InvoiceCalculator
             }
         }
         $taxTotal = round($taxable * $taxRate / 100, 2);
-        $total = round($subTotal + $taxTotal, 2);
+        $discount = round((float) ($invoice->discount ?? 0), 2);
+        $total = round($subTotal + $taxTotal - $discount, 2);
         $paid = round($payments->sum('amount'), 2);
         $balance = round($total - $paid, 2);
 

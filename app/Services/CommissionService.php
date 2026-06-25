@@ -79,7 +79,7 @@ class CommissionService
         if (Transaction::isPreconType($t->type)) {
             return $this->breakdownPrecon($t);
         }
-        if (Transaction::isListingType($t->type)) {
+        if (Transaction::isListingFinancialType($t->type)) {
             return $this->breakdownListing($t);
         }
 
@@ -156,7 +156,7 @@ class CommissionService
                 'commission' => $tAmt,
                 'hst' => $tHst,
                 'total' => $tTotal,
-                'agents' => $this->agentLines($visible, $tAmt),
+                'agents' => $this->agentLines($visible, $tAmt, $t->adjustments ?? [], $k),
             ];
         }
 
@@ -218,7 +218,7 @@ class CommissionService
                 'before' => (float) $t->comm_adjust_before,
                 'after' => (float) $t->comm_adjust_after,
             ],
-            'agents' => $this->agentLines($this->resolveMembers($t), $commission),
+            'agents' => $this->agentLines($this->resolveMembers($t), $commission, $t->adjustments ?? []),
             'min_brokerage' => ['commission' => 200.0, 'hst' => 26.0, 'total' => 226.0],
         ];
     }
@@ -260,7 +260,7 @@ class CommissionService
                 'listing' => ['enabled' => (bool) $t->listing_adj_enabled, 'before' => (float) $t->listing_adj_before, 'after' => (float) $t->listing_adj_after],
                 'coop' => ['enabled' => (bool) $t->coop_adj_enabled, 'before' => (float) $t->coop_adj_before, 'after' => (float) $t->coop_adj_after],
             ],
-            'agents' => $this->agentLines($this->resolveMembers($t), $commission),
+            'agents' => $this->agentLines($this->resolveMembers($t), $commission, $t->adjustments ?? []),
             'min_brokerage' => ['commission' => 499.0, 'hst' => 64.87, 'total' => 563.87],
         ];
     }
@@ -276,8 +276,12 @@ class CommissionService
         return $members;
     }
 
-    /** Per-member agent / brokerage / T4A lines off a commission base (woHst). */
-    private function agentLines($members, float $commissionWoHst): array
+    /**
+     * Per-member agent / brokerage / T4A lines off a commission base (woHst).
+     * Agent adjustments (see memberDeduction) come off the Agent Commission Total
+     * (Commission + HST) only — the Commission/HST and the T4A line stay gross.
+     */
+    private function agentLines($members, float $commissionWoHst, array $adjustments = [], ?int $term = null): array
     {
         $line = fn ($wo) => [
             'commission' => $wo,
@@ -285,20 +289,89 @@ class CommissionService
             'total' => round($wo * (1 + self::HST_RATE), 2),
         ];
 
-        return $members->map(function (TeamMember $m) use ($commissionWoHst, $line) {
+        return $members->map(function (TeamMember $m) use ($commissionWoHst, $line, $adjustments, $term) {
             $memberWoHst = round($commissionWoHst * ((float) $m->split) / 100, 2);
             $agentWoHst = round($memberWoHst * ((float) $m->agent_pct) / 100, 2);
             $brokWoHst = round($memberWoHst * ((float) $m->brok_pct) / 100, 2);
+
+            $deduction = $this->memberDeduction($adjustments, $m, $term);
 
             return [
                 'name' => $m->name,
                 'split' => (float) $m->split,
                 'agent_pct' => (float) $m->agent_pct,
                 'brok_pct' => (float) $m->brok_pct,
-                'agent' => $line($agentWoHst),
+                'adjustment' => $deduction,
+                'agent' => [
+                    'commission' => $agentWoHst,
+                    'hst' => round($agentWoHst * self::HST_RATE, 2),
+                    'total' => round($agentWoHst * (1 + self::HST_RATE) - $deduction, 2),
+                ],
                 'brokerage' => $line($brokWoHst),
                 't4a' => $line($agentWoHst),
             ];
         })->values()->all();
+    }
+
+    /**
+     * Pre-HST dollar deduction to apply to a member's Agent Commission, from the
+     * Adjustment & Advance Payment module:
+     *   • Agent Adjust + Advance Payment rows → matched to the member by name
+     *   • Client Referral + External Brokerage Referral → pooled, shared by split %
+     * For preconstruction (term given) only term-scoped rows apply and the
+     * (term-less) pooled referrals are skipped. Status is ignored. Mirrors the
+     * frontend agentAdjustments() helper.
+     */
+    private function memberDeduction(array $adj, TeamMember $m, ?int $term): float
+    {
+        if (empty($adj)) {
+            return 0.0;
+        }
+        $sum = 0.0;
+        $name = $m->name;
+
+        if (($adj['agent_adjust'] ?? 'No') === 'Yes') {
+            foreach ($adj['adjustment_rows'] ?? [] as $r) {
+                if ($term !== null && (int) ($r['term'] ?? 0) !== $term) {
+                    continue;
+                }
+                if (($r['agent'] ?? null) === $name) {
+                    $sum += $this->n($r['amount'] ?? 0);
+                }
+            }
+        }
+        if (($adj['advance_payment'] ?? 'No') === 'Yes') {
+            foreach ($adj['advance_rows'] ?? [] as $r) {
+                if ($term !== null && (int) ($r['term'] ?? 0) !== $term) {
+                    continue;
+                }
+                if (($r['agent'] ?? null) === $name) {
+                    $sum += $this->n($r['amount'] ?? 0);
+                }
+            }
+        }
+
+        // Pooled referrals (no agent / term attribution) shared by split %.
+        if ($term === null) {
+            $pooled = 0.0;
+            if (($adj['client_referral'] ?? 'No') === 'Yes') {
+                foreach ($adj['client_rows'] ?? [] as $r) {
+                    $pooled += $this->n($r['amount'] ?? 0);
+                }
+            }
+            if (($adj['ext_referral'] ?? 'No') === 'Yes') {
+                $pooled += $this->n($adj['ext']['amount'] ?? 0);
+            }
+            if ($pooled != 0.0) {
+                $sum += $pooled * ((float) $m->split / 100);
+            }
+        }
+
+        return round($sum, 2);
+    }
+
+    private function n($v): float
+    {
+        return is_numeric($v) ? (float) $v : 0.0;
     }
 }

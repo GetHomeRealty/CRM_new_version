@@ -47,11 +47,26 @@ class TransactionController extends Controller
                 'valid_status' => 'Pending',
             ]);
 
-            $t->statuses()->create(['status' => 'Open']);
+            $t->statuses()->create(['status' => Transaction::isListingStatusFamily($data['type']) ? 'Active' : 'Open']);
             $this->audit($t, null, 'Transaction created', "Trade #{$t->trade_no} ({$t->type})");
 
             return $t;
         });
+
+        // Transaction Desk v2: auto-generate the commission invoice for invoiceable
+        // types on creation. Preconstruction is excluded here because its invoices
+        // are per-term and terms aren't set yet at creation — it generates via the
+        // "Create Term Invoices" action once terms exist. Never let an invoicing
+        // failure block the transaction.
+        if (\App\Models\CompanySetting::flag('transaction_desk_v2', true)
+            && Transaction::isInvoiceableType($transaction->type)
+            && $transaction->type !== 'Preconstruction') {
+            try {
+                app(\App\Services\TransactionInvoiceService::class)->generate($transaction, skipIfExists: true);
+            } catch (\Throwable $e) {
+                report($e);
+            }
+        }
 
         return (new TransactionResource($this->loadDetail($transaction)))
             ->response()
@@ -158,7 +173,7 @@ class TransactionController extends Controller
     {
         return $t->load([
             'statuses', 'clients', 'conditions', 'interBoardListings',
-            'brokerage.agents', 'teamMembers.terms', 'preconTerms', 'auditLogs',
+            'brokerage.agents', 'teamMembers.terms', 'preconTerms', 'auditLogs', 'invoices',
         ]);
     }
 

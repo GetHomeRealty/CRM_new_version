@@ -38,6 +38,11 @@ class Invoice extends Model
         return $this->belongsTo(Customer::class);
     }
 
+    public function transaction(): BelongsTo
+    {
+        return $this->belongsTo(Transaction::class);
+    }
+
     /** Overdue is derived: past due date with an outstanding balance. */
     public function displayStatus(): string
     {

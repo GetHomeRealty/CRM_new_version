@@ -91,7 +91,10 @@ class AuthController extends Controller
             'name' => $user->name,
             'email' => $user->email,
             'role' => $user->role,
+            'role_label' => $user->roleLabel(),
             'is_admin' => $user->isAdmin(),
+            'is_super_admin' => $user->isSuperAdmin(),
+            'is_admin_or_above' => $user->isAdminOrAbove(),
             'permissions' => $this->permissions->effectiveFor($user),
         ];
     }

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { createTransaction } from '../lib/api';
-import { TRANSACTION_TYPES, isListingType, parseNumber } from './format';
+import { TRANSACTION_TYPES, typeLabel, isListingType, parseNumber } from './format';
 import { useToast } from './toast';
 
 const EMPTY = {
@@ -72,7 +72,7 @@ export default function AddTransactionModal({ open, onClose, onCreated }) {
           <label>Transaction Type <span className="req">*</span></label>
           <select value={form.type} onChange={(e) => set('type', e.target.value)}>
             <option value="">Select type</option>
-            {TRANSACTION_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+            {TRANSACTION_TYPES.map((t) => <option key={t} value={t}>{typeLabel(t)}</option>)}
           </select>
         </div>
 

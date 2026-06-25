@@ -61,6 +61,28 @@ class User extends Authenticatable
         return $this->role === 'admin';
     }
 
+    /**
+     * Role tiers (relabel-in-place mapping — stored strings are unchanged):
+     *   stored 'admin'   => Super Admin (highest)
+     *   stored 'manager' => Admin
+     *   stored 'agent'   => Agent
+     */
+    public function isSuperAdmin(): bool
+    {
+        return $this->role === 'admin';
+    }
+
+    /** Admin tier or higher (Admin + Super Admin) — manage across agents. */
+    public function isAdminOrAbove(): bool
+    {
+        return in_array($this->role, ['admin', 'manager'], true);
+    }
+
+    public function roleLabel(): string
+    {
+        return app(PermissionService::class)->label($this->role ?? 'agent');
+    }
+
     /** Effective screen permission map (screen => level). */
     public function effectivePermissions(): array
     {

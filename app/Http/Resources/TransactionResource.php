@@ -144,6 +144,13 @@ class TransactionResource extends JsonResource
                 ];
             }),
 
+            'invoices' => $this->whenLoaded('invoices', fn () => $this->invoices->map(fn ($inv) => [
+                'id' => $inv->id,
+                'invoice_no' => $inv->invoice_no,
+                'status' => $inv->status,
+                'total' => (float) $inv->total,
+            ])),
+
             'audit_logs' => $this->whenLoaded('auditLogs', fn () => $this->auditLogs->map(fn ($a) => [
                 'id' => $a->id,
                 'who' => $a->who,

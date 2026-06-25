@@ -35,6 +35,14 @@ class PermissionService
 
     public const ROLES = ['admin', 'manager', 'agent'];
 
+    /** Display labels (relabel-in-place): stored role => UI tier name. */
+    public const ROLE_LABELS = ['admin' => 'Super Admin', 'manager' => 'Admin', 'agent' => 'Agent'];
+
+    public function label(string $role): string
+    {
+        return self::ROLE_LABELS[$role] ?? ucfirst($role);
+    }
+
     private function rank(string $level): int
     {
         return array_search($level, self::LEVELS, true) ?: 0;
@@ -95,6 +103,7 @@ class PermissionService
         return [
             'screens' => collect(self::SCREENS)->map(fn ($label, $key) => ['key' => $key, 'label' => $label])->values(),
             'roles' => self::ROLES,
+            'role_labels' => self::ROLE_LABELS,
             'levels' => self::LEVELS,
             'role_defaults' => collect(self::ROLES)->mapWithKeys(fn ($r) => [$r => $this->roleDefaults($r)]),
         ];

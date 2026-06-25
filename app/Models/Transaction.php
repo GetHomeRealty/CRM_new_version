@@ -21,7 +21,9 @@ class Transaction extends Model
         'Commercial Property Sale Listing',
         'Commercial Property Lease Listing',
         'Business Buying',
+        'Business Lease',
         'Business Sale',
+        'Business Lease Listing',
     ];
 
     public const LISTING_TYPES = [
@@ -29,11 +31,24 @@ class Transaction extends Model
         'Residential Lease Listing',
         'Commercial Property Sale Listing',
         'Commercial Property Lease Listing',
+        'Business Lease Listing',
     ];
+
+    /** Status family (deal-side vs listing-side). Independent of layout. Business Sale is listing-side for statuses. */
+    public static function isListingStatusFamily(?string $type): bool
+    {
+        return self::isListingType($type) || $type === 'Business Sale';
+    }
 
     public static function isListingType(?string $type): bool
     {
         return in_array($type, self::LISTING_TYPES, true);
+    }
+
+    /** Types that use the listing-style (Listing + Co-op) Financial layout. Business Sale opts in. */
+    public static function isListingFinancialType(?string $type): bool
+    {
+        return self::isListingType($type) || $type === 'Business Sale';
     }
 
     /** Types an invoice can be generated for (co-op commission receivable). */
@@ -41,6 +56,7 @@ class Transaction extends Model
         'Residential Buying',
         'Residential Lease',
         'Preconstruction',
+        'Referral',
         'Commercial Property Buying',
         'Commercial Property Lease',
         'Business Buying',
@@ -157,6 +173,11 @@ class Transaction extends Model
     public function documents(): HasMany
     {
         return $this->hasMany(Document::class)->orderBy('position');
+    }
+
+    public function invoices(): HasMany
+    {
+        return $this->hasMany(Invoice::class);
     }
 
     public function messages(): HasMany

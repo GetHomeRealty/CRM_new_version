@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { listTransactions, deleteTransaction } from '../lib/api';
-import { formatCurrency, formatPrice, typeClass, TRANSACTION_TYPES } from './format';
+import { formatCurrency, formatPrice, typeClass, typeLabel, TRANSACTION_TYPES } from './format';
 import { useToast } from './toast';
 import { useAuth } from '../context/AuthContext';
 import AddTransactionModal from './AddTransactionModal';
@@ -97,7 +97,7 @@ export default function TransactionsPage() {
         <input className="inp" placeholder="🔍 Search property, trade #, agent" value={filters.q} onChange={(e) => setF('q', e.target.value)} />
         <select value={filters.type} onChange={(e) => setF('type', e.target.value)}>
           <option value="">All types</option>
-          {TRANSACTION_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+          {TRANSACTION_TYPES.map((t) => <option key={t} value={t}>{typeLabel(t)}</option>)}
         </select>
         <select value={filters.validation} onChange={(e) => setF('validation', e.target.value)}>
           <option value="">All validation</option><option>Pending</option><option>Valid</option><option>Invalid</option>
@@ -107,7 +107,7 @@ export default function TransactionsPage() {
           <option value="">Commission: any</option><option>Received</option><option>Not received</option>
         </select>
         <select value={filters.status} onChange={(e) => setF('status', e.target.value)}>
-          <option value="">All statuses</option><option>Open</option><option>Hold</option><option>Closed</option><option>Void</option>
+          <option value="">All statuses</option><option>Open</option><option>Active</option><option>MPR</option><option>Closed</option><option>Sold</option><option>Leased</option><option>Mutual Release</option><option>DFT</option><option>Void</option><option>Suspended</option><option>Terminated</option><option>Expired</option>
         </select>
         {canEdit && <button className="btn primary sm" onClick={() => setAddOpen(true)}>+ Add Transaction</button>}
       </div></div>
@@ -135,7 +135,7 @@ export default function TransactionsPage() {
             const primary = (t.statuses && t.statuses[0]) || 'Open';
             return (
               <tr key={t.id}>
-                <td><span className={`pill ${typeClass(t.type)}`}>{t.type}</span></td>
+                <td><span className={`pill ${typeClass(t.type)}`}>{typeLabel(t.type)}</span></td>
                 <td>#{t.trade_no}</td>
                 <td>{t.offer_date || ''}</td>
                 <td>{t.closing_date || ''}</td>

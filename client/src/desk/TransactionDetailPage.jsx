@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { getTransaction, updateTransaction, listAgents, generateTransactionInvoices } from '../lib/api';
-import { typeClass, isListingType, isPreconType, isCommercialLeaseType, isInvoiceableType, emailLooksValid, parseNumber, TRANSACTION_TYPES, formatCurrency } from './format';
+import { getTransaction, updateTransaction, listAgents, generateTransactionInvoices, getCompanySettings, getCustomers } from '../lib/api';
+import { typeClass, typeLabel, isListingType, isPreconType, isCommercialLeaseType, isInvoiceableType, emailLooksValid, parseNumber, TRANSACTION_TYPES, formatCurrency, statusOptionsFor, allowedStatuses, normalizeStatus, defaultStatusFor } from './format';
 import { useToast } from './toast';
 import { useAuth } from '../context/AuthContext';
 import TeamSplitModal from './TeamSplitModal';
@@ -17,9 +17,8 @@ import AgentFaqModal from './AgentFaqModal';
 import AdjustmentModal from './AdjustmentModal';
 import ChatModal from './ChatModal';
 import CommercialLeaseCard, { CL_DEFAULTS } from './CommercialLeaseCard';
+import InvoiceEditorModal from './InvoiceEditorModal';
 
-const STATUS_LISTING = ['Open', 'Sold', 'Sold conditional', 'Terminated', 'Expired', 'Suspended', 'Mutual release', 'DFT', 'Void', 'MPR', 'Closed'];
-const STATUS_DEFAULT = ['Open', 'Hold', 'Closed', 'Mutual Release', 'DFT', 'Void', 'MPR'];
 const COND_TYPES = ['Financing', 'Home Inspection', 'Sale of Property', 'Status Certificate Review', 'Custom'];
 
 function toForm(t) {
@@ -31,7 +30,9 @@ function toForm(t) {
     listing_contract_date: t.listing_contract_date || '', listing_expiry_date: t.listing_expiry_date || '',
     mls_type: t.mls_type || 'mls', mls_num: t.mls_num || '', mls_verified: !!t.mls_verified,
     conditional_offer: !!t.conditional_offer, inter_board_enabled: !!t.inter_board_enabled,
-    statuses: t.statuses && t.statuses.length ? t.statuses : ['Open'],
+    statuses: t.statuses && t.statuses.length
+      ? Array.from(new Set(t.statuses.map((s) => normalizeStatus(t.type, s))))
+      : [defaultStatusFor(t.type)],
     clients: (t.clients || []).map((c) => ({ ...c })),
     conditions: (t.conditions || []).map((c) => ({ ...c })),
     inter_board_listings: (t.inter_board_listings || []).map((i) => ({ ...i })),
@@ -84,11 +85,17 @@ export default function TransactionDetailPage() {
   const [faqOpen, setFaqOpen] = useState(false);
   const [adjOpen, setAdjOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
+  const [invEditorId, setInvEditorId] = useState(undefined); // in-context invoice editor (undefined = closed)
+  const [invSettings, setInvSettings] = useState(null);
+  const [invCustomers, setInvCustomers] = useState([]);
   const bodyRef = useRef(null); // wraps the filterable cards for "search this transaction"
 
   useEffect(() => {
     getTransaction(id).then((t) => { setForm(toForm(t)); setTxn(t); }).catch(() => toast('Could not load transaction', 'bad'));
     listAgents().then(setAgents).catch(() => {});
+    // Loaded lazily so the invoice editor can open in-context on this page.
+    getCompanySettings().then(setInvSettings).catch(() => {});
+    getCustomers().then(setInvCustomers).catch(() => {});
   }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const applyUpdated = (updated) => { setForm(toForm(updated)); setTxn(updated); };
@@ -97,11 +104,23 @@ export default function TransactionDetailPage() {
     setGenerating(true);
     try {
       const res = await generateTransactionInvoices(id);
-      toast(`Generated ${res.count} invoice${res.count === 1 ? '' : 's'}`, 'ok');
-      navigate('/app/invoices');
+      toast(res.existing ? 'Opening existing invoice' : `Created ${res.count} invoice${res.count === 1 ? '' : 's'}`, 'ok');
+      // Open the (new or existing) invoice in the same editor, in-context on this page.
+      const invId = res.invoices?.[0]?.id;
+      if (invId) { setInvEditorId(invId); getTransaction(id).then(applyUpdated).catch(() => {}); }
+      else navigate('/app/invoices');
     } catch (e) {
       toast(e.response?.data?.message || 'Could not generate invoice', 'bad');
     } finally { setGenerating(false); }
+  };
+
+  // Unified invoice action (header + Quick Actions): existing invoice → open it in
+  // the new editor; invoiceable + none yet → generate then open; otherwise the
+  // on-the-fly document (non-invoiceable types have no persisted invoice).
+  const openInvoice = () => {
+    if (txn?.invoices?.length) setInvEditorId(txn.invoices[0].id);
+    else if (canInvoice && isInvoiceableType(form.type)) generateInvoices();
+    else setInvoiceOpen(true);
   };
 
   if (!form) return <div className="centered">Loading…</div>;
@@ -114,7 +133,8 @@ export default function TransactionDetailPage() {
   const isLease = /lease/i.test(form.type);
   // Lawyer Details is hidden for lease / preconstruction types (legal side handled differently).
   const lawyerHidden = precon || /lease/i.test(form.type);
-  const statusOptions = listing ? STATUS_LISTING : STATUS_DEFAULT;
+  const statusOptions = statusOptionsFor(form.type);
+  const statusAllowed = allowedStatuses(form.type, form.statuses);
   const ro = view; // read-only flag
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
@@ -157,11 +177,16 @@ export default function TransactionDetailPage() {
   const toggleStatus = (s) => {
     setForm((f) => {
       const has = f.statuses.includes(s);
+      // Enforce grouping: can't add a status outside the group of the current selection.
+      if (!has && !allowedStatuses(f.type, f.statuses).includes(s)) return f;
       let next = has ? f.statuses.filter((x) => x !== s) : [...f.statuses, s];
-      if (next.length === 0) next = ['Open'];
+      if (next.length === 0) next = [defaultStatusFor(f.type)];
       return { ...f, statuses: next };
     });
   };
+
+  // Changing type can switch status family — reset to that family's default status.
+  const onTypeChange = (newType) => setForm((f) => ({ ...f, type: newType, statuses: [defaultStatusFor(newType)] }));
 
   // clients
   const addClient = () => set('clients', [...form.clients, { name: '', email: '', phone: '' }]);
@@ -255,12 +280,12 @@ export default function TransactionDetailPage() {
         <button className="btn ghost sm" onClick={() => navigate('/app/transactions')}>← Back</button>
         <div className="detail-title">
           <strong>{form.property || 'Untitled'}</strong>
-          <span className={`pill ${typeClass(form.type)}`}>{form.type}</span>
+          <span className={`pill ${typeClass(form.type)}`}>{typeLabel(form.type)}</span>
           {form.statuses.map((s) => <span key={s} className={`pill ${stPill(s)}`}>{s}</span>)}
           <span className={`pill ${view ? 'info' : 'warn'}`} style={{ fontSize: 10 }}>{view ? '🔒 View Only' : '✏ Edit Mode'}</span>
         </div>
         <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-          <button className="btn ghost sm" onClick={() => setInvoiceOpen(true)}>🧾 Invoice</button>
+          <button className="btn ghost sm" onClick={openInvoice}>🧾 Invoice</button>
           <button className="btn ghost sm" onClick={() => setTsOpen(true)}>📋 Trade Sheet</button>
           <button className="btn ghost sm" onClick={() => setNosOpen(true)}>📄 Notice of Sale</button>
           <button className="btn ghost sm" onClick={() => setChatOpen(true)}>💬 Chat</button>
@@ -331,21 +356,12 @@ export default function TransactionDetailPage() {
                 )}
               </Field>
               <Field label="Type">
-                <select value={form.type} disabled={ro} onChange={(e) => set('type', e.target.value)}>
-                  {TRANSACTION_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+                <select value={form.type} disabled={ro} onChange={(e) => onTypeChange(e.target.value)}>
+                  {TRANSACTION_TYPES.map((t) => <option key={t} value={t}>{typeLabel(t)}</option>)}
                 </select>
               </Field>
               <Field label="Status">
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                  {statusOptions.map((s) => {
-                    const on = form.statuses.includes(s);
-                    return (
-                      <label key={s} className={`ms-chip ${on ? 'on' : ''}`} style={ro ? { opacity: 0.7, pointerEvents: 'none' } : undefined}>
-                        <input type="checkbox" checked={on} disabled={ro} onChange={() => toggleStatus(s)} />{s}
-                      </label>
-                    );
-                  })}
-                </div>
+                <StatusMultiSelect options={statusOptions} selected={form.statuses} allowed={statusAllowed} disabled={ro} onToggle={toggleStatus} />
               </Field>
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.5fr 1fr 1fr', gap: 12, marginBottom: 12 }}>
@@ -374,9 +390,15 @@ export default function TransactionDetailPage() {
             <div className="modal-h" style={{ fontSize: 14 }}>Quick Actions</div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {canInvoice && isInvoiceableType(form.type) && (
-                <button className="btn primary sm" style={{ textAlign: 'left' }} disabled={generating} onClick={generateInvoices}>
-                  🧾 {generating ? 'Generating…' : (precon ? `Generate Term Invoice${(parseInt(form.precon_term_count, 10) || 0) === 1 ? '' : 's'}` : 'Generate Invoice')}
-                </button>
+                (txn?.invoices && txn.invoices.length > 0) ? (
+                  <button className="btn ghost sm" style={{ textAlign: 'left' }} onClick={() => setInvEditorId(txn.invoices[0].id)}>
+                    🧾 View Invoice{txn.invoices.length === 1 ? '' : 's'} ({txn.invoices.length})
+                  </button>
+                ) : (
+                  <button className="btn primary sm" style={{ textAlign: 'left' }} disabled={generating} onClick={generateInvoices}>
+                    🧾 {generating ? 'Creating…' : (precon ? `Create Term Invoice${(parseInt(form.precon_term_count, 10) || 0) === 1 ? '' : 's'}` : 'Create Invoice')}
+                  </button>
+                )
               )}
               {canEdit && form.agent && <button className="btn ghost sm" style={{ textAlign: 'left' }} onClick={() => setTeamOpen(true)}>👥 Team Split</button>}
               {canEdit && !lawyerHidden && <button className="btn ghost sm" style={{ textAlign: 'left' }} onClick={() => setLawyerOpen(true)}>⚖ Lawyer Details</button>}
@@ -628,6 +650,18 @@ export default function TransactionDetailPage() {
       {chatOpen && (
         <ChatModal open onClose={() => setChatOpen(false)} transactionId={id} />
       )}
+      {invEditorId !== undefined && (
+        <InvoiceEditorModal
+          open
+          invoiceId={invEditorId}
+          settings={invSettings}
+          customers={invCustomers}
+          agents={agents}
+          onClose={() => setInvEditorId(undefined)}
+          onBack={() => setInvEditorId(undefined)}
+          onSaved={() => getTransaction(id).then(applyUpdated).catch(() => {})}
+        />
+      )}
     </>
   );
 }
@@ -637,6 +671,60 @@ function Field({ label, req, children, style }) {
     <div className="field" style={{ marginBottom: 0, ...style }}>
       <label>{label}{req && <span className="req">*</span>}</label>
       {children}
+    </div>
+  );
+}
+
+// Multi-select Status dropdown. Collapses the status checklist into a dropdown
+// while keeping the multi-status + grouping rules (allowed/blocked) intact.
+// `Expired` is auto-set from the listing expiry date and can't be picked here.
+function StatusMultiSelect({ options, selected, allowed, disabled, onToggle }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const onDoc = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, [open]);
+
+  const label = selected.length ? selected.join(', ') : 'Select status';
+
+  return (
+    <div ref={ref} style={{ position: 'relative' }}>
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => setOpen((o) => !o)}
+        style={{ width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8,
+          padding: '8px 10px', border: '1px solid var(--line)', borderRadius: 8, background: disabled ? '#f9fafb' : '#fff',
+          fontSize: 13, color: selected.length ? 'var(--text)' : 'var(--muted)', cursor: disabled ? 'default' : 'pointer', textAlign: 'left' }}
+      >
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
+        {!disabled && <span style={{ color: 'var(--muted)', flexShrink: 0 }}>▾</span>}
+      </button>
+      {open && !disabled && (
+        <div style={{ position: 'absolute', zIndex: 30, top: 'calc(100% + 4px)', left: 0, right: 0, background: '#fff',
+          border: '1px solid var(--line)', borderRadius: 8, boxShadow: '0 8px 24px rgba(0,0,0,.12)', padding: 6, maxHeight: 260, overflowY: 'auto' }}>
+          {options.map((s) => {
+            const on = selected.includes(s);
+            const auto = s === 'Expired'; // set automatically from listing expiry
+            const blocked = !on && (auto || !allowed.includes(s));
+            return (
+              <label
+                key={s}
+                title={auto ? 'Set automatically from the listing expiry date' : undefined}
+                style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px', borderRadius: 6, fontSize: 13,
+                  cursor: blocked ? 'not-allowed' : 'pointer', opacity: blocked ? 0.4 : 1,
+                  background: on ? 'var(--brand-soft, #eef2ff)' : 'transparent' }}
+              >
+                <input type="checkbox" checked={on} disabled={blocked} onChange={() => onToggle(s)} />{s}
+              </label>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

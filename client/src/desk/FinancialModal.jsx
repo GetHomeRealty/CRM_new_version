@@ -1,15 +1,25 @@
 import { useEffect, useState } from 'react';
 import { updateTransaction } from '../lib/api';
-import { formatCurrency, parseNumber, isListingType, isPreconType } from './format';
+import { formatCurrency, parseNumber, isListingFinancialType, isPreconType } from './format';
+import { agentAdjustments } from './commissionCalc';
 import { useToast } from './toast';
 
 const HST = 0.13;
 const r2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
+const clampPct = (n) => Math.max(0, Math.min(100, n));
 const lineOf = (wo) => ({ commission: r2(wo), hst: r2(wo * HST), total: r2(wo * (1 + HST)) });
+// Like lineOf, but the adjustment is subtracted from the Total only — Commission
+// and HST stay at their gross values.
+const lineLessTotal = (wo, deduct = 0) => ({ commission: r2(wo), hst: r2(wo * HST), total: r2(wo * (1 + HST) - deduct) });
+
+// Itemize an agent's deduction breakdown (from agentAdjustments) into a label,
+// e.g. "adjustment $300.00 + advance $200.00". Only non-zero parts are shown.
+const ADJ_PARTS = [['agentAdjust', 'adjustment'], ['advance', 'advance'], ['clientReferral', 'client referral'], ['extReferral', 'ext. referral']];
+const adjLabel = (d) => ADJ_PARTS.filter(([k]) => d[k] > 0).map(([k, name]) => `${name} ${formatCurrency(d[k])}`).join(' + ');
 
 export default function FinancialModal({ open, onClose, transactionId, txn, termCount: termCountProp, onSaved }) {
   const toast = useToast();
-  const listing = isListingType(txn.type);
+  const listing = isListingFinancialType(txn.type);
   const precon = isPreconType(txn.type);
   // Live term count from the detail form (so typing it divides immediately), falling back to the saved value.
   const termCount = (termCountProp != null && termCountProp !== '') ? Number(termCountProp) : (txn.precon_term_count || 0);
@@ -27,11 +37,21 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
     const t = (txn.team && txn.team.length) ? txn.team : (txn.agent ? [{ name: txn.agent, split: 100, agent_pct: 90, brok_pct: 10 }] : []);
     return t.map((m) => ({ name: m.name, split: m.split ?? 100, agent_pct: m.agent_pct ?? 90, brok_pct: m.brok_pct ?? 10, scope: m.scope || 'Entire', terms: m.terms || [] }));
   });
-  const setMember = (i, k, v) => setMembers((ms) => ms.map((m, idx) => idx === i ? { ...m, [k]: v } : m));
+  // Agent Comm (%) and Brok Comm (%) are complementary: editing one fills the
+  // other with the remaining percentage (e.g. Agent 80 → Brokerage 20).
+  const setMember = (i, k, v) => setMembers((ms) => ms.map((m, idx) => {
+    if (idx !== i) return m;
+    if (k === 'agent_pct') return { ...m, agent_pct: v, brok_pct: r2(clampPct(100 - parseNumber(v))) };
+    if (k === 'brok_pct') return { ...m, brok_pct: v, agent_pct: r2(clampPct(100 - parseNumber(v))) };
+    return { ...m, [k]: v };
+  }));
+  // Pre-HST per-agent deductions (Agent Adjust / Advance / referrals), aligned to members.
+  const memberDeduct = agentAdjustments(txn.adjustments, members);
 
   // listing
   const [listPct, setListPct] = useState(txn.listing_comm_pct ?? '');
   const [coopPct, setCoopPct] = useState(txn.coop_comm_pct ?? '');
+  const [commAdjMaster, setCommAdjMaster] = useState(!!(txn.listing_adj_enabled || txn.coop_adj_enabled));
   const [lAdjEn, setLAdjEn] = useState(!!txn.listing_adj_enabled);
   const [lBefore, setLBefore] = useState(txn.listing_adj_before ?? 0);
   const [lAfter, setLAfter] = useState(txn.listing_adj_after ?? 0);
@@ -76,11 +96,12 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
   const commWoHst = r2(gross - adjB);
   const stdHst = r2(commWoHst * HST);
   const stdTotal = r2(commWoHst + stdHst - adjA);
-  const memberRows = members.map((m) => {
+  const memberRows = members.map((m, i) => {
     const base = r2(commWoHst * (parseNumber(m.split) / 100));
-    const agentWo = r2(base * (parseNumber(m.agent_pct) / 100));
+    const agentGross = r2(base * (parseNumber(m.agent_pct) / 100));
     const brokWo = r2(base * (parseNumber(m.brok_pct) / 100));
-    return { m, agent: lineOf(agentWo), brok: lineOf(brokWo), t4a: lineOf(agentWo) };
+    // Adjustments come off the Agent Commission Total (Commission + HST), not the commission.
+    return { m, agent: lineLessTotal(agentGross, memberDeduct[i].total), brok: lineOf(brokWo), t4a: lineOf(agentGross), adj: memberDeduct[i] };
   });
 
   // ---- live listing computation (mirrors CommissionService::breakdownListing) ----
@@ -92,14 +113,17 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
     const hst = r2(commission * HST);
     return { commission, hst, total: r2(commission + hst - a) };
   };
-  const lSide = sideOf(listPct, lAdjEn, lBefore, lAfter);
-  const cSide = sideOf(coopPct, cAdjEn, cBefore, cAfter);
+  const lAdjEff = commAdjMaster && lAdjEn;
+  const cAdjEff = commAdjMaster && cAdjEn;
+  const lSide = sideOf(listPct, lAdjEff, lBefore, lAfter);
+  const cSide = sideOf(coopPct, cAdjEff, cBefore, cAfter);
   const listTotals = { commission: r2(lSide.commission + cSide.commission), hst: r2(lSide.hst + cSide.hst), total: r2(lSide.total + cSide.total) };
-  const listingMemberRows = members.map((m) => {
+  const listingMemberRows = members.map((m, i) => {
     const base = r2(listTotals.commission * (parseNumber(m.split) / 100));
-    const agentWo = r2(base * (parseNumber(m.agent_pct) / 100));
+    const agentGross = r2(base * (parseNumber(m.agent_pct) / 100));
     const brokWo = r2(base * (parseNumber(m.brok_pct) / 100));
-    return { m, agent: lineOf(agentWo), brok: lineOf(brokWo), t4a: lineOf(agentWo) };
+    // Adjustments come off the Agent Commission Total (Commission + HST), not the commission.
+    return { m, agent: lineLessTotal(agentGross, memberDeduct[i].total), brok: lineOf(brokWo), t4a: lineOf(agentGross), adj: memberDeduct[i] };
   });
 
   // ---- live preconstruction master computation ----
@@ -131,8 +155,8 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
       ? {
           price: parseNumber(price),
           listing_comm_pct: listPct === '' ? null : parseNumber(listPct), coop_comm_pct: coopPct === '' ? null : parseNumber(coopPct),
-          listing_adj_enabled: lAdjEn, listing_adj_before: lAdjEn ? parseNumber(lBefore) : 0, listing_adj_after: lAdjEn ? parseNumber(lAfter) : 0,
-          coop_adj_enabled: cAdjEn, coop_adj_before: cAdjEn ? parseNumber(cBefore) : 0, coop_adj_after: cAdjEn ? parseNumber(cAfter) : 0,
+          listing_adj_enabled: lAdjEff, listing_adj_before: lAdjEff ? parseNumber(lBefore) : 0, listing_adj_after: lAdjEff ? parseNumber(lAfter) : 0,
+          coop_adj_enabled: cAdjEff, coop_adj_before: cAdjEff ? parseNumber(cBefore) : 0, coop_adj_after: cAdjEff ? parseNumber(cAfter) : 0,
           team: members.map((m, i) => ({ name: m.name, split: parseNumber(m.split), agent_pct: parseNumber(m.agent_pct), brok_pct: parseNumber(m.brok_pct), is_primary: i === 0, scope: m.scope, terms: m.terms })),
         }
       : {
@@ -197,6 +221,7 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
               const tHst = r2(tAmt * HST);
               const tTotal = netHst ? tAmt : r2(tAmt + tHst);
               const visible = visibleAtTerm(k);
+              const termDeduct = agentAdjustments(txn.adjustments, members, k); // term-scoped, aligned to members
               const locked = isLocked(k);
               return (
                 <div key={k} style={{ background: '#f9fafb', border: '1px solid var(--line)', borderRadius: 8, padding: 12, marginBottom: 10 }}>
@@ -214,7 +239,7 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
                   <div className="modal-sub" style={{ marginTop: 14 }}>Agent Commission — Term {k}</div>
                   {visible.length === 0 ? <div className="help">No agents assigned to Term {k} (per Team Split scope).</div> : visible.map(({ m, i }) => {
                     const base = r2(tAmt * (parseNumber(m.split) / 100));
-                    const a = lineOf(r2(base * parseNumber(m.agent_pct) / 100));
+                    const a = lineLessTotal(r2(base * parseNumber(m.agent_pct) / 100), termDeduct[i].total);
                     return (
                       <div className="agent-comm-card" key={i}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
@@ -227,6 +252,7 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
                           <div className="field" style={{ marginBottom: 0 }}><label>HST</label><input readOnly value={formatCurrency(a.hst)} /></div>
                           <div className="field" style={{ marginBottom: 0 }}><label>Total</label><input readOnly style={{ fontWeight: 700, color: 'var(--brand)' }} value={formatCurrency(a.total)} /></div>
                         </div>
+                        {termDeduct[i].total > 0 && <div className="help" style={{ margin: '6px 0 0' }}>Less {adjLabel(termDeduct[i])} = −{formatCurrency(termDeduct[i].total)} off total</div>}
                       </div>
                     );
                   })}
@@ -279,16 +305,53 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
           </>
         ) : listing ? (
           <>
-            <div className="g2">
-              <AdjSide title="Listing Commission" pct={listPct} setPct={setListPct} en={lAdjEn} setEn={setLAdjEn} before={lBefore} after={lAfter} setBefore={(v) => excl(v, setLBefore, lAfter, setLAfter)} setAfter={(v) => excl(v, setLAfter, lBefore, setLBefore)} />
-              <AdjSide title="Co-op Commission" pct={coopPct} setPct={setCoopPct} en={cAdjEn} setEn={setCAdjEn} before={cBefore} after={cAfter} setBefore={(v) => excl(v, setCBefore, cAfter, setCAfter)} setAfter={(v) => excl(v, setCAfter, cBefore, setCBefore)} />
-            </div>
             <div className="modal-sub">Listing Commission</div>
-            <div className="fin-sum"><Box label="Commission" value={formatCurrency(lSide.commission)} /><Box label="HST" value={formatCurrency(lSide.hst)} /><Box label="Total" value={formatCurrency(lSide.total)} brand /></div>
+            <div className="g4">
+              <div className="field" style={{ marginBottom: 0 }}><label>Listing Commission %</label><input value={listPct} onChange={(e) => setListPct(e.target.value)} placeholder="e.g. 2.5" /></div>
+              <div className="field" style={{ marginBottom: 0 }}><label>Commission</label><input readOnly value={formatCurrency(lSide.commission)} /></div>
+              <div className="field" style={{ marginBottom: 0 }}><label>HST</label><input readOnly value={formatCurrency(lSide.hst)} /></div>
+              <div className="field" style={{ marginBottom: 0 }}><label>Total</label><input readOnly className="brand" value={formatCurrency(lSide.total)} /></div>
+            </div>
             <div className="modal-sub">Co-op Commission</div>
-            <div className="fin-sum"><Box label="Commission" value={formatCurrency(cSide.commission)} /><Box label="HST" value={formatCurrency(cSide.hst)} /><Box label="Total" value={formatCurrency(cSide.total)} brand /></div>
+            <div className="g4">
+              <div className="field" style={{ marginBottom: 0 }}><label>Co-op Commission %</label><input value={coopPct} onChange={(e) => setCoopPct(e.target.value)} placeholder="e.g. 2.5" /></div>
+              <div className="field" style={{ marginBottom: 0 }}><label>Commission</label><input readOnly value={formatCurrency(cSide.commission)} /></div>
+              <div className="field" style={{ marginBottom: 0 }}><label>HST</label><input readOnly value={formatCurrency(cSide.hst)} /></div>
+              <div className="field" style={{ marginBottom: 0 }}><label>Total</label><input readOnly className="brand" value={formatCurrency(cSide.total)} /></div>
+            </div>
             <div className="modal-sub">Total Commissions (Listing + Co-Op)</div>
             <div className="fin-sum"><Box label="Commission" value={formatCurrency(listTotals.commission)} /><Box label="HST" value={formatCurrency(listTotals.hst)} /><Box label="Total" value={formatCurrency(listTotals.total)} brand /></div>
+
+            <div className="modal-sub">Commission Adjustment</div>
+            <div className="field" style={{ maxWidth: 220 }}>
+              <label>Commission Adjustment</label>
+              <select value={commAdjMaster ? 'Yes' : 'No'} onChange={(e) => setCommAdjMaster(e.target.value === 'Yes')}><option>No</option><option>Yes</option></select>
+            </div>
+            {commAdjMaster && (
+              <div className="g2">
+                <div style={{ background: '#f9fafb', border: '1px solid var(--line)', borderRadius: 8, padding: 12 }}>
+                  <strong style={{ fontSize: 13 }}>Listing Commission Adjustment</strong>
+                  <div className="field" style={{ marginTop: 10, marginBottom: lAdjEn ? 13 : 0 }}><label>Listing Comm Adjustment</label><select value={lAdjEn ? 'Yes' : 'No'} onChange={(e) => setLAdjEn(e.target.value === 'Yes')}><option>No</option><option>Yes</option></select></div>
+                  {lAdjEn && (
+                    <div className="g2">
+                      <div className="field" style={{ marginBottom: 0 }}><label>Adjustment (Before HST)</label><input value={lBefore} onChange={(e) => excl(e.target.value, setLBefore, lAfter, setLAfter)} /></div>
+                      <div className="field" style={{ marginBottom: 0 }}><label>Adjustment (After HST)</label><input value={lAfter} onChange={(e) => excl(e.target.value, setLAfter, lBefore, setLBefore)} /></div>
+                    </div>
+                  )}
+                </div>
+                <div style={{ background: '#f9fafb', border: '1px solid var(--line)', borderRadius: 8, padding: 12 }}>
+                  <strong style={{ fontSize: 13 }}>Co-op Commission Adjustment</strong>
+                  <div className="field" style={{ marginTop: 10, marginBottom: cAdjEn ? 13 : 0 }}><label>Co-op Comm Adjustment</label><select value={cAdjEn ? 'Yes' : 'No'} onChange={(e) => setCAdjEn(e.target.value === 'Yes')}><option>No</option><option>Yes</option></select></div>
+                  {cAdjEn && (
+                    <div className="g2">
+                      <div className="field" style={{ marginBottom: 0 }}><label>Adjustment (Before HST)</label><input value={cBefore} onChange={(e) => excl(e.target.value, setCBefore, cAfter, setCAfter)} /></div>
+                      <div className="field" style={{ marginBottom: 0 }}><label>Adjustment (After HST)</label><input value={cAfter} onChange={(e) => excl(e.target.value, setCAfter, cBefore, setCBefore)} /></div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
             <AgentCommissionBlocks rows={listingMemberRows} setMember={setMember} minBrok={{ commission: 499, hst: 64.87, total: 563.87 }} />
           </>
         ) : (
@@ -328,24 +391,6 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
   );
 }
 
-function AdjSide({ title, pct, setPct, en, setEn, before, after, setBefore, setAfter }) {
-  return (
-    <div style={{ background: '#f9fafb', border: '1px solid var(--line)', borderRadius: 8, padding: 12 }}>
-      <div className="field"><label>{title} %</label><input value={pct} onChange={(e) => setPct(e.target.value)} placeholder="e.g. 2.5" /></div>
-      <div className="field" style={{ marginBottom: en ? 13 : 0 }}>
-        <label>Adjustment?</label>
-        <select value={en ? 'Yes' : 'No'} onChange={(e) => setEn(e.target.value === 'Yes')}><option>No</option><option>Yes</option></select>
-      </div>
-      {en && (
-        <div className="g2">
-          <div className="field" style={{ marginBottom: 0 }}><label>Before HST</label><input value={before} onChange={(e) => setBefore(e.target.value)} /></div>
-          <div className="field" style={{ marginBottom: 0 }}><label>After HST</label><input value={after} onChange={(e) => setAfter(e.target.value)} /></div>
-        </div>
-      )}
-    </div>
-  );
-}
-
 // Shared per-agent commission cards (Agent Commission / Agent T4A / Brokerage
 // Commission + min-brokerage floor). Used by both the standard and listing
 // variants so they render identically. `minBrok` carries the type-specific floor.
@@ -366,6 +411,7 @@ function AgentCommissionBlocks({ rows, setMember, minBrok }) {
             <div className="field" style={{ marginBottom: 0 }}><label>HST</label><input readOnly value={formatCurrency(r.agent.hst)} /></div>
             <div className="field" style={{ marginBottom: 0 }}><label>Total</label><input readOnly style={{ fontWeight: 700, color: 'var(--brand)' }} value={formatCurrency(r.agent.total)} /></div>
           </div>
+          {r.adj.total > 0 && <div className="help" style={{ margin: '6px 0 0' }}>Less {adjLabel(r.adj)} = −{formatCurrency(r.adj.total)} off total</div>}
         </div>
       ))}
 

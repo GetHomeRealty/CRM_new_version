@@ -3,6 +3,7 @@ import { updateTransaction } from '../lib/api';
 import { useToast } from './toast';
 
 const blank = (name = '', primary = false) => ({ name, split: primary ? 100 : 0, agent_pct: 90, brok_pct: 10, is_primary: primary, scope: 'Entire', terms: [] });
+const clampPct = (n) => Math.max(0, Math.min(100, Number.isFinite(+n) ? +n : 0));
 
 export default function TeamSplitModal({ open, onClose, transactionId, primaryAgent, initialTeam, agents, isPrecon, termCount = 0, onSaved }) {
   const toast = useToast();
@@ -17,7 +18,13 @@ export default function TeamSplitModal({ open, onClose, transactionId, primaryAg
   if (!open) return null;
 
   const total = members.reduce((s, m) => s + (parseFloat(m.split) || 0), 0);
-  const set = (i, k, v) => setMembers((ms) => ms.map((m, idx) => idx === i ? { ...m, [k]: v } : m));
+  // Agent % and Brokerage % are complementary — editing one fills the remainder.
+  const set = (i, k, v) => setMembers((ms) => ms.map((m, idx) => {
+    if (idx !== i) return m;
+    if (k === 'agent_pct') return { ...m, agent_pct: v, brok_pct: clampPct(100 - clampPct(v)) };
+    if (k === 'brok_pct') return { ...m, brok_pct: v, agent_pct: clampPct(100 - clampPct(v)) };
+    return { ...m, [k]: v };
+  }));
   const add = () => setMembers((ms) => [...ms, blank()]);
   const rm = (i) => setMembers((ms) => ms.filter((_, idx) => idx !== i));
   const toggleTerm = (i, term) => setMembers((ms) => ms.map((m, idx) => {

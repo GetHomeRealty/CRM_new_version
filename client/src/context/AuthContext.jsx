@@ -48,7 +48,11 @@ export function AuthProvider({ children }) {
     return (RANK[have] ?? 0) >= (RANK[level] ?? 0);
   };
 
-  const value = { user, loading, login, register, logout, setUser, can };
+  // Role tiers (relabel-in-place): Super Admin (stored 'admin') > Admin ('manager') > Agent.
+  const isSuperAdmin = !!user?.is_super_admin;
+  const isAdminOrAbove = !!user?.is_admin_or_above;
+
+  const value = { user, loading, login, register, logout, setUser, can, isSuperAdmin, isAdminOrAbove };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

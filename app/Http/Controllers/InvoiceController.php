@@ -5,9 +5,9 @@ namespace App\Http\Controllers;
 use App\Models\CompanySetting;
 use App\Models\Invoice;
 use App\Models\Transaction;
-use App\Services\CommissionService;
 use App\Services\InvoiceCalculator;
 use App\Services\InvoiceNumberService;
+use App\Services\TransactionInvoiceService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
@@ -35,10 +35,13 @@ class InvoiceController extends Controller
     {
         $data = $this->validateData($request);
         $settings = CompanySetting::current();
+        $userId = $request->user()?->id;
 
-        $invoice = DB::transaction(function () use ($data, $settings) {
+        $invoice = DB::transaction(function () use ($data, $settings, $userId) {
             $inv = Invoice::create($this->mapFields($data, $settings) + [
                 'invoice_no' => $this->numbers->next(),
+                'source' => 'manual',
+                'created_by' => $userId,
             ]);
             $this->syncLines($inv, $data['line_items'] ?? []);
             $this->calc->recalculate($inv, (float) $settings->default_tax_rate);
@@ -91,7 +94,7 @@ class InvoiceController extends Controller
      * Generate invoice(s) from a transaction. Only allowed transaction types.
      * Preconstruction → one invoice per commission term; otherwise a single invoice.
      */
-    public function generateForTransaction(Transaction $transaction, CommissionService $commissions)
+    public function generateForTransaction(Transaction $transaction, TransactionInvoiceService $generator)
     {
         abort_unless(
             Transaction::isInvoiceableType($transaction->type),
@@ -99,68 +102,24 @@ class InvoiceController extends Controller
             'Invoices can only be generated for: '.implode(', ', Transaction::INVOICEABLE_TYPES).'.'
         );
 
-        $settings = CompanySetting::current();
-        $transaction->load(['brokerage', 'teamMembers.terms', 'preconTerms']);
-        $created = [];
+        // Dedup: if invoices already exist for this transaction, return them
+        // (the UI shows "View Invoice") instead of creating duplicates.
+        $existing = $transaction->invoices()->get();
+        if ($existing->isNotEmpty()) {
+            return response()->json([
+                'count' => 0,
+                'existing' => true,
+                'invoices' => $existing->map(fn (Invoice $i) => $this->summary($i)),
+            ]);
+        }
 
-        DB::transaction(function () use ($transaction, $settings, $commissions, &$created) {
-            $breakdown = $commissions->breakdown($transaction);
-
-            if ($transaction->type === 'Preconstruction') {
-                $terms = $breakdown['terms'] ?? [];
-                if (count($terms) === 0) {
-                    $created[] = $this->makeFromTransaction($transaction, $settings, null, (float) ($breakdown['master']['commission'] ?? 0));
-                } else {
-                    foreach ($terms as $term) {
-                        $created[] = $this->makeFromTransaction($transaction, $settings, "Term {$term['term_no']}", (float) $term['commission']);
-                    }
-                }
-            } else {
-                $created[] = $this->makeFromTransaction($transaction, $settings, null, (float) ($breakdown['commission'] ?? 0));
-            }
-        });
+        $created = $generator->generate($transaction);
 
         return response()->json([
             'count' => count($created),
+            'existing' => false,
             'invoices' => array_map(fn (Invoice $i) => $this->summary($i), $created),
         ], 201);
-    }
-
-    private function makeFromTransaction(Transaction $t, CompanySetting $settings, ?string $termLabel, float $commission): Invoice
-    {
-        $b = $t->brokerage;
-        $invoiceDate = Carbon::now();
-        $suffix = $termLabel ? " — {$termLabel}" : '';
-
-        $invoice = Invoice::create([
-            'invoice_no' => $this->numbers->next(),
-            'transaction_id' => $t->id,
-            'property_reference' => $t->property,
-            'customer_name' => $b?->name,
-            'customer_address' => $b?->address,
-            'customer_country' => 'Canada',
-            'invoice_date' => $invoiceDate->toDateString(),
-            'terms' => $settings->default_terms,
-            'due_date' => optional($this->dueDate($invoiceDate, $settings->default_terms, null))->toDateString(),
-            'trade_number' => $t->trade_no,
-            'listing_agent' => $t->agent,
-            'coop_salesperson' => $t->agent,
-            'subject' => 'Co-op Commission for '.$t->property.$suffix,
-            'status' => 'Unpaid',
-        ]);
-
-        $invoice->lineItems()->create([
-            'row_no' => 1,
-            'description' => 'Co-op Commission'.$suffix,
-            'qty' => 1,
-            'rate' => round($commission, 2),
-            'amount' => round($commission, 2),
-            'is_taxable' => true,
-        ]);
-
-        $this->calc->recalculate($invoice, (float) $settings->default_tax_rate);
-
-        return $invoice;
     }
 
     public function deletePayment(Invoice $invoice, $paymentId)
@@ -180,6 +139,8 @@ class InvoiceController extends Controller
             'property_reference' => ['nullable', 'string', 'max:255'],
             'customer_id' => ['nullable', 'integer', 'exists:customers,id'],
             'customer_name' => ['nullable', 'string', 'max:255'],
+            'customer_phone' => ['nullable', 'string', 'max:50'],
+            'customer_email' => ['nullable', 'string', 'max:500'],
             'customer_address' => ['nullable', 'string', 'max:255'],
             'customer_city' => ['nullable', 'string', 'max:255'],
             'customer_province' => ['nullable', 'string', 'max:255'],
@@ -192,6 +153,10 @@ class InvoiceController extends Controller
             'listing_agent' => ['nullable', 'string', 'max:255'],
             'coop_salesperson' => ['nullable', 'string', 'max:255'],
             'subject' => ['nullable', 'string'],
+            'discount' => ['nullable', 'numeric', 'min:0'],
+            'customer_notes' => ['nullable', 'string'],
+            'terms_conditions' => ['nullable', 'string'],
+            'signature_path' => ['nullable', 'string'],
             'status' => ['nullable', Rule::in(['Draft', 'Unpaid', 'Partially Paid', 'Paid', 'Void'])],
             'line_items' => ['sometimes', 'array'],
             'line_items.*.description' => ['required_with:line_items', 'string', 'max:255'],
@@ -224,6 +189,12 @@ class InvoiceController extends Controller
             'listing_agent' => $data['listing_agent'] ?? null,
             'coop_salesperson' => $data['coop_salesperson'] ?? null,
             'subject' => $data['subject'] ?? null,
+            'customer_phone' => $data['customer_phone'] ?? null,
+            'customer_email' => $data['customer_email'] ?? null,
+            'discount' => $data['discount'] ?? 0,
+            'customer_notes' => $data['customer_notes'] ?? null,
+            'terms_conditions' => $data['terms_conditions'] ?? null,
+            'signature_path' => $data['signature_path'] ?? null,
             'status' => $data['status'] ?? 'Draft',
         ];
     }
@@ -269,6 +240,12 @@ class InvoiceController extends Controller
             'balance_due' => (float) $i->balance_due,
             'status' => $i->status,
             'display_status' => $i->displayStatus(),
+            // Origin markers (transaction-generated vs manual).
+            'source' => $i->source ?? 'manual',
+            'transaction_id' => $i->transaction_id,
+            'transaction_type' => $i->transaction_type,
+            'trade_number' => $i->trade_number,
+            'listing_agent' => $i->listing_agent,
         ];
     }
 
@@ -278,12 +255,19 @@ class InvoiceController extends Controller
 
         return $this->summary($i) + [
             'transaction_id' => $i->transaction_id,
+            'purchase_price' => $i->transaction_id ? (float) optional($i->transaction)->price : null,
             'customer_id' => $i->customer_id,
+            'customer_phone' => $i->customer_phone,
+            'customer_email' => $i->customer_email,
             'customer_address' => $i->customer_address,
             'customer_city' => $i->customer_city,
             'customer_province' => $i->customer_province,
             'customer_postal_code' => $i->customer_postal_code,
             'customer_country' => $i->customer_country,
+            'discount' => (float) $i->discount,
+            'customer_notes' => $i->customer_notes,
+            'terms_conditions' => $i->terms_conditions,
+            'signature_path' => $i->signature_path,
             'terms' => $i->terms,
             'trade_number' => $i->trade_number,
             'listing_agent' => $i->listing_agent,

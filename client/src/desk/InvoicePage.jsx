@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { getInvoices, getInvoice, deleteInvoice, getCustomers, getCompanySettings, listAgents } from '../lib/api';
-import { formatCurrency } from './format';
+import { formatCurrency, typeLabel } from './format';
 import { useToast } from './toast';
 import { useAuth } from '../context/AuthContext';
 import InvoiceEditorModal from './InvoiceEditorModal';
@@ -23,6 +24,13 @@ export default function InvoicePage() {
   const [editorId, setEditorId] = useState(undefined); // undefined=closed, null=new, number=edit
   const [preview, setPreview] = useState(null);
   const [filter, setFilter] = useState('');
+  const [params, setParams] = useSearchParams();
+
+  // Open a specific invoice when arrived via ?open=<id> (e.g. "View Invoice" from a transaction).
+  useEffect(() => {
+    const openId = params.get('open');
+    if (openId) { setEditorId(Number(openId)); params.delete('open'); setParams(params, { replace: true }); }
+  }, [params, setParams]);
 
   const loadInvoices = () => getInvoices().then(setInvoices).catch(() => toast('Could not load invoices', 'bad'));
 
@@ -68,21 +76,25 @@ export default function InvoicePage() {
       </div></div>
 
       <table className="list-table">
-        <thead><tr><th>Invoice #</th><th>Customer</th><th>Property</th><th>Date</th><th>Total</th><th>Balance</th><th>Status</th><th>Actions</th></tr></thead>
+        <thead><tr><th>Invoice #</th><th>Customer</th><th>Property</th><th>Type</th><th>Agent</th><th>Date</th><th>Total</th><th>Balance</th><th>Status</th><th>Source</th><th>Actions</th></tr></thead>
         <tbody>
           {list.length === 0 ? (
-            <tr><td colSpan={8} style={{ textAlign: 'center', color: 'var(--muted)', padding: 20 }}>No invoices. {canEdit && 'Click "+ New Invoice" to create one.'}</td></tr>
+            <tr><td colSpan={11} style={{ textAlign: 'center', color: 'var(--muted)', padding: 20 }}>No invoices. {canEdit && 'Click "+ New Invoice" to create one.'}</td></tr>
           ) : list.map((i) => (
             <tr key={i.id}>
               <td><strong>{i.invoice_no}</strong></td>
               <td>{i.customer_name || '—'}</td>
               <td>{i.property_reference || '—'}</td>
+              <td>{i.transaction_type ? typeLabel(i.transaction_type) : '—'}</td>
+              <td>{i.listing_agent || '—'}</td>
               <td>{i.invoice_date}</td>
               <td>{formatCurrency(i.total)}</td>
               <td>{formatCurrency(i.balance_due)}</td>
               <td><span className={`pill ${STATUS_PILL[i.display_status] || 'info'}`}>{i.display_status}</span></td>
+              <td><span className={`pill ${i.source === 'transaction' ? 'warn' : 'info'}`} style={{ fontSize: 10 }}>{i.source === 'transaction' ? 'Transaction' : 'Manual'}</span></td>
               <td>
-                <button className="btn ghost sm" onClick={() => setEditorId(i.id)}>{canEdit ? 'Edit' : 'View'}</button>
+                <button className="btn ghost sm" onClick={() => setEditorId(i.id)}>👁 View</button>
+                {canEdit && <button className="btn ghost sm" style={{ marginLeft: 4 }} onClick={() => setEditorId(i.id)}>Edit</button>}
                 <button className="btn ghost sm" style={{ marginLeft: 4 }} onClick={() => openPdf(i)}>🖨 PDF</button>
                 {canEdit && <button className="btn ghost sm" style={{ marginLeft: 4 }} onClick={() => onDelete(i)}>🗑️</button>}
               </td>

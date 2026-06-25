@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { getUsers, getUsersCatalog, createUser, updateUser, deleteUser } from '../lib/api';
+import { roleLabel } from './format';
 import { useToast } from './toast';
 import { useAuth } from '../context/AuthContext';
 
@@ -49,7 +50,7 @@ export default function UsersPage() {
             <tr key={u.id}>
               <td>{u.name}{u.id === me?.id && <span className="pill ok" style={{ fontSize: 9, marginLeft: 6 }}>You</span>}</td>
               <td>{u.email}</td>
-              <td><span className={`pill ${roleP(u.role)}`}>{u.role}</span></td>
+              <td><span className={`pill ${roleP(u.role)}`}>{roleLabel(u.role)}</span></td>
               <td><span className="help" style={{ margin: 0 }}>{u.is_admin ? 'Full access (all screens)' : accessSummary(u.permissions)}</span></td>
               <td>
                 <button className="btn ghost sm" onClick={() => setEditing(u)}>Edit</button>
@@ -128,7 +129,7 @@ function UserModal({ catalog, existing, onClose, onSaved }) {
         </div>
         <div className="g3">
           <div className="field"><label>Role</label>
-            <select value={form.role} onChange={(e) => onRole(e.target.value)}>{roles.map((r) => <option key={r} value={r}>{r}</option>)}</select>
+            <select value={form.role} onChange={(e) => onRole(e.target.value)}>{roles.map((r) => <option key={r} value={r}>{roleLabel(r)}</option>)}</select>
           </div>
           <div className="field"><label>{existing ? 'New Password' : 'Password'} {!existing && <span className="req">*</span>}</label>
             <input type="password" value={form.password} onChange={(e) => set('password', e.target.value)} placeholder={existing ? 'leave blank to keep' : ''} /></div>
@@ -138,7 +139,7 @@ function UserModal({ catalog, existing, onClose, onSaved }) {
 
         <div className="modal-sub" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <span>Screen Permissions</span>
-          {!isAdminRole && <button className="btn ghost sm" onClick={resetToRole}>↺ Reset to {form.role} defaults</button>}
+          {!isAdminRole && <button className="btn ghost sm" onClick={resetToRole}>↺ Reset to {roleLabel(form.role)} defaults</button>}
         </div>
 
         {isAdminRole ? (
