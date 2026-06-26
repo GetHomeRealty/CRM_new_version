@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { getTransaction, updateTransaction, listAgents, generateTransactionInvoices, getCompanySettings, getCustomers } from '../lib/api';
-import { typeClass, typeLabel, isListingType, isPreconType, isCommercialLeaseType, isInvoiceableType, emailLooksValid, parseNumber, TRANSACTION_TYPES, formatCurrency, statusOptionsFor, allowedStatuses, normalizeStatus, defaultStatusFor } from './format';
+import { typeClass, typeLabel, isListingType, isListingFinancialType, isPreconType, isCommercialLeaseType, isInvoiceableType, emailLooksValid, parseNumber, TRANSACTION_TYPES, formatCurrency, statusOptionsFor, allowedStatuses, normalizeStatus, defaultStatusFor } from './format';
 import { useToast } from './toast';
 import { useAuth } from '../context/AuthContext';
 import TeamSplitModal from './TeamSplitModal';
@@ -18,6 +18,8 @@ import AdjustmentModal from './AdjustmentModal';
 import ChatModal from './ChatModal';
 import CommercialLeaseCard, { CL_DEFAULTS } from './CommercialLeaseCard';
 import InvoiceEditorModal from './InvoiceEditorModal';
+import DepositReceiptModal from './DepositReceiptModal';
+import LawyerStatementModal from './LawyerStatementModal';
 
 const COND_TYPES = ['Financing', 'Home Inspection', 'Sale of Property', 'Status Certificate Review', 'Custom'];
 
@@ -88,6 +90,8 @@ export default function TransactionDetailPage() {
   const [invEditorId, setInvEditorId] = useState(undefined); // in-context invoice editor (undefined = closed)
   const [invSettings, setInvSettings] = useState(null);
   const [invCustomers, setInvCustomers] = useState([]);
+  const [depositOpen, setDepositOpen] = useState(false);   // listing-side: Deposit Receipt doc
+  const [lawyerStmtOpen, setLawyerStmtOpen] = useState(false); // listing-side: Commission/Lawyer Statement doc
   const bodyRef = useRef(null); // wraps the filterable cards for "search this transaction"
 
   useEffect(() => {
@@ -287,7 +291,12 @@ export default function TransactionDetailPage() {
           <span className={`pill ${view ? 'info' : 'warn'}`} style={{ fontSize: 10 }}>{view ? '🔒 View Only' : '✏ Edit Mode'}</span>
         </div>
         <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-          <button className="btn ghost sm" onClick={openInvoice}>🧾 Invoice</button>
+          {isListingFinancialType(form.type) ? (<>
+            <button className="btn ghost sm" onClick={() => setDepositOpen(true)}>🧾 Deposit Receipt</button>
+            <button className="btn ghost sm" onClick={() => setLawyerStmtOpen(true)}>📄 Lawyer Statement</button>
+          </>) : (
+            <button className="btn ghost sm" onClick={openInvoice}>🧾 Invoice</button>
+          )}
           <button className="btn ghost sm" onClick={() => setTsOpen(true)}>📋 Trade Sheet</button>
           <button className="btn ghost sm" onClick={() => setNosOpen(true)}>📄 Notice of Sale</button>
           <button className="btn ghost sm" onClick={() => setChatOpen(true)}>💬 Chat</button>
@@ -653,6 +662,12 @@ export default function TransactionDetailPage() {
       )}
       {chatOpen && (
         <ChatModal open onClose={() => setChatOpen(false)} transactionId={id} />
+      )}
+      {depositOpen && txn && (
+        <DepositReceiptModal open onClose={() => setDepositOpen(false)} txn={txn} />
+      )}
+      {lawyerStmtOpen && txn && (
+        <LawyerStatementModal open onClose={() => setLawyerStmtOpen(false)} txn={txn} settings={invSettings} />
       )}
       {invEditorId !== undefined && (
         <InvoiceEditorModal
