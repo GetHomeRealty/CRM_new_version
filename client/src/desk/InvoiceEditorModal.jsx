@@ -1,14 +1,24 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getInvoice, createInvoice, updateInvoice, recordInvoicePayment, deleteInvoicePayment, createCustomer } from '../lib/api';
+import { getInvoice, createInvoice, updateInvoice, recordInvoicePayment, deleteInvoicePayment, recordInvoiceReminder, createCustomer } from '../lib/api';
 import { formatCurrency, parseNumber, typeLabel } from './format';
 import { useToast } from './toast';
 import InvoicePreviewModal from './InvoicePreviewModal';
+import MiniCalendar from './MiniCalendar';
 
 const BRAND = '#c8102e';
 const TERMS = ['Due on Receipt', 'Net 7', 'Net 15', 'Net 30', 'Custom'];
 const TERM_DAYS = { 'Due on Receipt': 0, 'Net 7': 7, 'Net 15': 15, 'Net 30': 30 };
-const STATUSES = ['Draft', 'Unpaid', 'Partially Paid', 'Paid', 'Void'];
+const STATUSES = ['Paid', 'Overdue', 'Void', 'Due']; // §12.2
+const STATUS_PILL = { Paid: 'ok', Overdue: 'bad', Void: 'bad', Due: 'warn', Unpaid: 'info', Draft: 'info', 'Partially Paid': 'warn' };
+const COMM_VIA = ['Bank Transfer', 'Cash', 'EFT', 'Interac e-Transfer', 'Cheque'];
+const AUTO_REMINDERS = [
+  { mode: '2', label: 'Every 2 days (until Paid, excl. weekends/holidays)' },
+  { mode: '3', label: 'Every 3 days (until Paid, excl. weekends/holidays)' },
+  { mode: '5', label: 'Every 5 days (until Paid, excl. weekends/holidays)' },
+  { mode: 'custom', label: 'Custom — pick dates' },
+  { mode: 'off', label: 'Disable auto reminders' },
+];
 const today = () => new Date().toISOString().slice(0, 10);
 const addDays = (dateStr, n) => { const d = new Date(dateStr); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
 const blankItem = () => ({ description: 'Co-op Commission', qty: 1, rate: 0, is_taxable: true });
@@ -31,12 +41,13 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, customer
       getInvoice(invoiceId).then((d) => { setForm(toForm(d)); setSaved(d); });
     } else {
       setForm({
-        property_reference: '', customer_id: '', customer_name: '', customer_phone: '', emails: [''],
+        property_reference: '', customer_id: '', customer_name: '', customer_phone: '', customer_email: '',
         customer_address: '', customer_city: '', customer_province: '', customer_postal_code: '', customer_country: 'Canada',
         invoice_date: today(), terms: settings?.default_terms || 'Due on Receipt', due_date: today(),
         trade_number: '', listing_agent: '', coop_salesperson: '', subject: '', status: 'Draft',
         transaction_id: null, transaction_type: '', purchase_price: null,
         discount: 0, customer_notes: settings?.thank_you_note || '', terms_conditions: '', signature_path: '',
+        commission_received_date: '', commission_received_via: '', auto_reminder: null,
         line_items: [blankItem()],
       });
       setSaved(null);
@@ -63,11 +74,6 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, customer
     setForm((f) => ({ ...f, customer_id: id, ...(c ? { customer_name: c.name, customer_address: c.address || '', customer_city: c.city || '', customer_province: c.province || '', customer_postal_code: c.postal_code || '', customer_country: c.country || 'Canada' } : {}) }));
   };
 
-  // Email list helpers (Listing Brokerage Email 1, 2, … → stored comma-separated)
-  const setEmail = (i, v) => setForm((f) => ({ ...f, emails: f.emails.map((e, idx) => idx === i ? v : e) }));
-  const addEmail = () => setForm((f) => ({ ...f, emails: [...f.emails, ''] }));
-  const rmEmail = (i) => setForm((f) => ({ ...f, emails: f.emails.filter((_, idx) => idx !== i) }));
-
   const subTotal = form.line_items.reduce((s, it) => s + parseNumber(it.qty) * parseNumber(it.rate), 0);
   const taxable = form.line_items.reduce((s, it) => s + (it.is_taxable ? parseNumber(it.qty) * parseNumber(it.rate) : 0), 0);
   const tax = Math.round(taxable * taxRate) / 100;
@@ -79,14 +85,16 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, customer
   const buildPayload = () => ({
     ...form,
     customer_id: form.customer_id || null,
-    customer_email: (form.emails || []).map((e) => e.trim()).filter(Boolean).join(', '),
+    customer_email: (form.customer_email || '').trim() || null,
     discount: parseNumber(form.discount),
     line_items: form.line_items.map((it) => ({ description: it.description, qty: parseNumber(it.qty), rate: parseNumber(it.rate), is_taxable: !!it.is_taxable })),
   });
 
-  const save = async (statusOverride) => {
-    const payload = buildPayload();
+  const save = async (statusOverride, extra = {}) => {
+    const payload = { ...buildPayload(), ...extra };
     if (statusOverride) payload.status = statusOverride;
+    // §12.2 — Paid captures a Commission Received date if none given yet.
+    if (payload.status === 'Paid' && !payload.commission_received_date) payload.commission_received_date = today();
     setSaving(true);
     try {
       const d = (invoiceId || saved?.id)
@@ -101,7 +109,17 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, customer
     } finally { setSaving(false); }
   };
 
-  const onStatus = async (v) => { setMenu(''); set('status', v); await save(v); };
+  const onStatus = async (v) => {
+    setMenu('');
+    set('status', v);
+    // §12.3 — once settled (Paid or Void), auto-reminders are no longer needed → disable them.
+    if (v === 'Paid' || v === 'Void') {
+      setForm((f) => ({ ...f, auto_reminder: { mode: 'off' } }));
+      await save(v, { auto_reminder: { mode: 'off' } });
+    } else {
+      await save(v);
+    }
+  };
 
   const saveCustomer = async () => {
     if (!form.customer_name?.trim()) { toast('Enter a customer name first', 'bad'); return; }
@@ -128,10 +146,33 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, customer
     const tid = saved?.transaction_id || form.transaction_id;
     if (tid) navigate(`/app/transactions/${tid}`); else onClose();
   };
-  const sendMail = () => { setMenu(''); toast('Email delivery is set up in the Reminders/Email module (next phase).', 'info'); };
-  const sendReminder = () => { setMenu(''); toast('Reminder sending is part of the Reminders module (next phase).', 'info'); };
-  const autoReminder = () => { setMenu(''); toast('Auto-reminder scheduling is part of the Reminders module (next phase).', 'info'); };
+  const sendMail = () => { setMenu(''); toast('Email delivery is set up in the Email module (next phase).', 'info'); };
+  // §12.3 — record a reminder (history of count + dates); email delivery itself is wired in the Email phase.
+  const sendReminder = async () => {
+    setMenu('');
+    if (form.status === 'Paid' || form.status === 'Void') { toast(`Invoice is ${form.status} — no reminders needed`, 'info'); return; }
+    if (!saved?.id) { toast('Save the invoice first', 'info'); return; }
+    try {
+      const d = await recordInvoiceReminder(saved.id);
+      setSaved(d); setForm(toForm(d));
+      toast(`Reminder recorded (${(d.reminders || []).length} total)`, 'ok'); onSaved?.(d);
+    } catch { toast('Could not record reminder', 'bad'); }
+  };
+  const setAuto = async (mode) => {
+    setMenu('');
+    const auto = mode === 'custom' ? { mode: 'custom', dates: form.auto_reminder?.dates || [] } : { mode };
+    setForm((f) => ({ ...f, auto_reminder: auto }));
+    await save(null, { auto_reminder: auto });
+    if (mode === 'off') toast('Auto-reminders disabled', 'ok');
+    else if (mode !== 'custom') toast(`Auto-reminders set: every ${mode} days until Paid`, 'ok');
+  };
+  const addCustomDate = (d) => setForm((f) => ({ ...f, auto_reminder: { mode: 'custom', dates: [...new Set([...(f.auto_reminder?.dates || []), d])].sort() } }));
+  const rmCustomDate = (d) => setForm((f) => ({ ...f, auto_reminder: { mode: 'custom', dates: (f.auto_reminder?.dates || []).filter((x) => x !== d) } }));
+  const toggleCustomDate = (d) => ((form.auto_reminder?.dates || []).includes(d) ? rmCustomDate(d) : addCustomDate(d));
   const uploadSignature = () => toast('Signature image upload will be enabled with file storage (next phase).', 'info');
+
+  // Reminders apply only until the invoice is settled — disabled once Paid or Void.
+  const noReminders = form.status === 'Paid' || form.status === 'Void';
 
   // ---- styles ----
   const sideBtn = { display: 'flex', alignItems: 'center', gap: 10, width: '100%', textAlign: 'left', padding: '10px 12px', borderRadius: 8, border: '1px solid transparent', background: 'transparent', cursor: 'pointer', fontSize: 13.5, color: 'var(--text)' };
@@ -153,10 +194,20 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, customer
 
           <div style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--muted)', letterSpacing: '.05em', margin: '10px 0 2px 4px' }}>ACTIONS</div>
 
-          {/* Status */}
+          {/* 1. Send Email */}
+          <button style={{ ...sideBtn, justifyContent: 'center', background: BRAND, color: '#fff', fontWeight: 700, margin: '2px 0' }} onClick={sendMail}>✉ Send Email</button>
+
+          {/* 2. Save Invoice */}
+          <button style={sideBtn} onClick={() => save()} disabled={saving} onMouseEnter={(e) => e.currentTarget.style.background = '#f3f4f6'} onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}>💾 {saving ? 'Saving…' : 'Save Invoice'}</button>
+
+          {/* 3. Invoice Status */}
           <div style={{ position: 'relative' }}>
             <button style={{ ...sideBtn, justifyContent: 'space-between' }} onClick={() => setMenu(menu === 'status' ? '' : 'status')}>
-              <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>⊘ {form.status}</span><span>▾</span>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>🏷️ Status</span>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                {form.status && <span className={`pill ${STATUS_PILL[form.status] || 'info'}`} style={{ fontSize: 10 }}>{form.status}</span>}
+                <span>▾</span>
+              </span>
             </button>
             {menu === 'status' && (
               <div style={{ border: '1px solid var(--line)', borderRadius: 8, margin: '2px 0 6px', background: '#fff', boxShadow: '0 6px 18px rgba(0,0,0,.08)' }}>
@@ -167,23 +218,62 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, customer
             )}
           </div>
 
-          {/* Reminder */}
+          {/* §12.2 — when Paid, capture Commission Received date + via right here */}
+          {form.status === 'Paid' && (
+            <div style={{ border: '1px solid #bbf7d0', background: '#f0fdf4', borderRadius: 8, padding: 10, margin: '2px 0 6px' }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: '#166534', marginBottom: 6 }}>Commission Received</div>
+              <label style={{ fontSize: 11, color: '#475569', display: 'block', marginBottom: 2 }}>Date</label>
+              <input type="date" value={form.commission_received_date} onChange={(e) => set('commission_received_date', e.target.value)} style={{ width: '100%', marginBottom: 8, border: '1px solid #e6e8ef', borderRadius: 6, padding: '6px 8px' }} />
+              <label style={{ fontSize: 11, color: '#475569', display: 'block', marginBottom: 2 }}>Received via</label>
+              <select value={form.commission_received_via} onChange={(e) => set('commission_received_via', e.target.value)} style={{ width: '100%', border: '1px solid #e6e8ef', borderRadius: 6, padding: '6px 8px' }}>
+                <option value="">Select</option>{COMM_VIA.map((v) => <option key={v}>{v}</option>)}
+              </select>
+              <button className="btn primary sm" style={{ marginTop: 8, width: '100%' }} onClick={() => save()} disabled={saving}>Save</button>
+            </div>
+          )}
+
+          {/* 4. Reminders — only until settled; disabled once the invoice is Paid or Void */}
           <div style={{ position: 'relative' }}>
-            <button style={{ ...sideBtn, justifyContent: 'space-between' }} onClick={() => setMenu(menu === 'reminder' ? '' : 'reminder')}>
-              <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>🔔 Reminder</span><span>▾</span>
+            <button
+              style={{ ...sideBtn, justifyContent: 'space-between', opacity: noReminders ? 0.5 : 1, cursor: noReminders ? 'not-allowed' : 'pointer' }}
+              disabled={noReminders}
+              title={noReminders ? `Invoice is ${form.status} — no reminders needed` : undefined}
+              onClick={() => setMenu(menu === 'reminder' ? '' : 'reminder')}
+            >
+              <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>🔔 Reminders{noReminders ? ` (${form.status})` : ''}</span><span>▾</span>
             </button>
-            {menu === 'reminder' && (
+            {menu === 'reminder' && !noReminders && (
               <div style={{ border: '1px solid var(--line)', borderRadius: 8, margin: '2px 0 6px', background: '#fff', boxShadow: '0 6px 18px rgba(0,0,0,.08)' }}>
                 <button style={{ ...sideBtn, padding: '8px 12px' }} onClick={sendReminder}>Send Reminder</button>
-                <button style={{ ...sideBtn, padding: '8px 12px' }} onClick={autoReminder}>Set up Auto Reminders</button>
+                <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--muted)', padding: '6px 12px 2px' }}>SET UP AUTO REMINDERS</div>
+                {AUTO_REMINDERS.map((o) => {
+                  const active = (form.auto_reminder?.mode || '') === o.mode;
+                  return (
+                    <button key={o.mode} style={{ ...sideBtn, padding: '7px 12px', fontSize: 12, background: active ? '#eef2ff' : 'transparent', color: active ? '#3730a3' : 'var(--text)', fontWeight: active ? 700 : 400 }} onClick={() => setAuto(o.mode)}>
+                      {active ? '✓ ' : ''}{o.label}
+                    </button>
+                  );
+                })}
               </div>
             )}
           </div>
 
-          <button style={{ ...sideBtn, justifyContent: 'center', background: BRAND, color: '#fff', fontWeight: 700, margin: '4px 0' }} onClick={sendMail}>✉ Send Mail</button>
-          <button style={sideBtn} onClick={() => save()} disabled={saving} onMouseEnter={(e) => e.currentTarget.style.background = '#f3f4f6'} onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}>💾 {saving ? 'Saving…' : 'Save Invoice'}</button>
-          <button style={sideBtn} onClick={openPdf} onMouseEnter={(e) => e.currentTarget.style.background = '#f3f4f6'} onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}>🖨 Print</button>
-          <button style={sideBtn} onClick={openPdf} onMouseEnter={(e) => e.currentTarget.style.background = '#f3f4f6'} onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}>⬇ Download PDF</button>
+          {/* Custom reminder calendar — shown when "Custom" is chosen and not yet settled */}
+          {form.auto_reminder?.mode === 'custom' && !noReminders && (
+            <div style={{ border: '1px solid #c7d2fe', background: '#eef2ff', borderRadius: 8, padding: 10, margin: '2px 0 6px' }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: '#3730a3', marginBottom: 6 }}>Custom reminder dates</div>
+              <MiniCalendar selected={form.auto_reminder.dates || []} onToggle={toggleCustomDate} />
+              {(form.auto_reminder.dates || []).length > 0 && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 8 }}>
+                  {form.auto_reminder.dates.map((d) => <span key={d} className="pill info" style={{ fontSize: 10 }}>{d} <button className="row-rm" style={{ marginLeft: 2 }} onClick={() => rmCustomDate(d)}>×</button></span>)}
+                </div>
+              )}
+              <button className="btn primary sm" style={{ marginTop: 8, width: '100%' }} onClick={() => save()} disabled={saving}>Save dates</button>
+            </div>
+          )}
+
+          {/* 5. Print Invoice — always last */}
+          <button style={sideBtn} onClick={openPdf} onMouseEnter={(e) => e.currentTarget.style.background = '#f3f4f6'} onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}>🖨 Print Invoice</button>
         </div>
 
         {/* RIGHT: INVOICE DOCUMENT */}
@@ -238,13 +328,7 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, customer
             <input value={form.customer_name} onChange={(e) => set('customer_name', e.target.value)} placeholder="Listing Brokerage Name" style={docInput({})} />
             <input value={form.customer_address} onChange={(e) => set('customer_address', e.target.value)} placeholder="Address" style={docInput({})} />
             <input value={form.customer_phone} onChange={(e) => set('customer_phone', e.target.value)} placeholder="Phone Number" style={docInput({})} />
-            {form.emails.map((em, i) => (
-              <div key={i} style={{ display: 'flex', gap: 6 }}>
-                <input value={em} onChange={(e) => setEmail(i, e.target.value)} placeholder={`Listing Brokerage Email ${i + 1}`} style={docInput({ flex: 1 })} />
-                {form.emails.length > 1 && <button className="row-rm" onClick={() => rmEmail(i)}>🗑️</button>}
-              </div>
-            ))}
-            <div><button className="btn" style={{ border: `1px solid ${BRAND}`, color: BRAND, background: '#fff', borderRadius: 8, padding: '6px 12px', fontSize: 13 }} onClick={addEmail}>+ Add New</button></div>
+            <input type="email" value={form.customer_email} onChange={(e) => set('customer_email', e.target.value)} placeholder="Invoice Email" style={docInput({})} />
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 8, maxWidth: 460, marginTop: 8 }}>
             <input value={form.customer_city} onChange={(e) => set('customer_city', e.target.value)} placeholder="City" style={docInput({})} />
@@ -300,6 +384,37 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, customer
               {saved && <tr><td style={{ padding: '4px 14px', color: '#166534' }}>Paid</td><td style={{ padding: '4px 14px', textAlign: 'right', color: '#166534' }}>{formatCurrency(saved.amount_paid)}</td></tr>}
               {saved && <tr><td style={{ padding: '4px 14px', fontWeight: 700, color: BRAND }}>Balance Due</td><td style={{ padding: '4px 14px', textAlign: 'right', fontWeight: 700, color: BRAND }}>{formatCurrency(saved.balance_due)}</td></tr>}
             </tbody></table>
+          </div>
+
+          {/* §12.2 Commission Received summary (edited in the sidebar) + §12.3 Reminders */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, marginTop: 18, borderTop: '1px solid #eef0f5', paddingTop: 16 }}>
+            <div>
+              <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>Commission Received</div>
+              {form.status === 'Paid'
+                ? <div style={{ fontSize: 12.5, color: '#475569' }}>Date: <strong>{form.commission_received_date || '—'}</strong><br />Via: <strong>{form.commission_received_via || '—'}</strong></div>
+                : <div style={{ fontSize: 12, color: 'var(--muted)' }}>Set status to <strong>Paid</strong> (sidebar → Invoice Status) to record the commission received date &amp; method.</div>}
+            </div>
+            <div>
+              <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>Reminders</div>
+              <div style={{ fontSize: 12.5, color: '#475569' }}>
+                Sent <strong>{(saved?.reminders || []).length}</strong> time(s).
+                {(saved?.reminders || []).length > 0 && (
+                  <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+                    {saved.reminders.slice(-5).reverse().map((r, i) => <li key={i}>{(r.date || '').slice(0, 16).replace('T', ' ')}{r.by ? ` · ${r.by}` : ''}</li>)}
+                  </ul>
+                )}
+                {form.auto_reminder?.mode && <div style={{ marginTop: 6 }}>Auto: <strong>{form.auto_reminder.mode === 'custom' ? 'Custom dates' : (form.auto_reminder.mode === 'off' ? 'Off (disabled)' : `every ${form.auto_reminder.mode} days until Paid (excl. weekends/holidays)`)}</strong></div>}
+              </div>
+              {form.auto_reminder?.mode === 'custom' && (
+                <div style={{ marginTop: 8 }}>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                    {(form.auto_reminder.dates || []).length
+                      ? form.auto_reminder.dates.map((d) => <span key={d} className="pill info" style={{ fontSize: 11 }}>{d}</span>)
+                      : <span className="help" style={{ margin: 0 }}>Pick dates on the calendar (sidebar → Reminders → Custom).</span>}
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Notes & Terms */}
@@ -377,10 +492,11 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, customer
 }
 
 function toForm(d) {
-  const emails = (d.customer_email || '').split(',').map((s) => s.trim()).filter(Boolean);
+  // Show only the Invoice Email (first value if a legacy comma list was stored).
+  const invoiceEmail = (d.customer_email || '').split(',')[0].trim();
   return {
     property_reference: d.property_reference || '', customer_id: d.customer_id || '', customer_name: d.customer_name || '',
-    customer_phone: d.customer_phone || '', emails: emails.length ? emails : [''],
+    customer_phone: d.customer_phone || '', customer_email: invoiceEmail,
     customer_address: d.customer_address || '', customer_city: d.customer_city || '', customer_province: d.customer_province || '',
     customer_postal_code: d.customer_postal_code || '', customer_country: d.customer_country || 'Canada',
     invoice_date: d.invoice_date || '', terms: d.terms || 'Due on Receipt', due_date: d.due_date || '',
@@ -388,6 +504,7 @@ function toForm(d) {
     subject: d.subject || '', status: d.status || 'Draft',
     transaction_id: d.transaction_id || null, transaction_type: d.transaction_type || '', purchase_price: d.purchase_price ?? null,
     discount: d.discount ?? 0, customer_notes: d.customer_notes || '', terms_conditions: d.terms_conditions || '', signature_path: d.signature_path || '',
+    commission_received_date: d.commission_received_date || '', commission_received_via: d.commission_received_via || '', auto_reminder: d.auto_reminder || null,
     line_items: (d.line_items && d.line_items.length) ? d.line_items.map((it) => ({ description: it.description, qty: it.qty, rate: it.rate, is_taxable: it.is_taxable })) : [blankItem()],
   };
 }

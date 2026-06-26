@@ -2,7 +2,9 @@
 
 namespace App\Http\Resources;
 
+use App\Models\Transaction;
 use App\Services\CommissionService;
+use App\Services\InvoiceStatusService;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -151,6 +153,9 @@ class TransactionResource extends JsonResource
                 'total' => (float) $inv->total,
             ])),
 
+            // §12.4 — auto invoice fields for the Admin Activities block (read-only).
+            'invoice_admin' => $this->whenLoaded('invoices', fn () => $this->invoiceAdmin()),
+
             'audit_logs' => $this->whenLoaded('auditLogs', fn () => $this->auditLogs->map(fn ($a) => [
                 'id' => $a->id,
                 'who' => $a->who,
@@ -164,5 +169,36 @@ class TransactionResource extends JsonResource
 
             'created_at' => $this->created_at?->toDateTimeString(),
         ];
+    }
+
+    /**
+     * §12.4 auto fields for Admin Activities. Normal transactions → a single
+     * block; Preconstruction → one block per term (keyed by term_no). The sent
+     * status is derived (never stored) so it always reflects the live invoice.
+     */
+    private function invoiceAdmin(): array
+    {
+        $svc = app(InvoiceStatusService::class);
+        $closing = $this->closing_date;
+
+        $block = fn ($inv) => [
+            'invoice_number' => $inv?->invoice_no,
+            'invoice_sent_status' => $svc->sentStatus($inv, ($inv?->due_date) ?: $closing),
+            'commission_received_date' => optional($inv?->commission_received_date)->toDateString(),
+            'commission_received_via' => $inv?->commission_received_via,
+        ];
+
+        if (Transaction::isPreconType($this->type)) {
+            $byTerm = [];
+            foreach ($this->invoices as $inv) {
+                if ($inv->term_no) {
+                    $byTerm[$inv->term_no] = $block($inv);
+                }
+            }
+
+            return ['by_term' => $byTerm];
+        }
+
+        return $block($this->invoices->first());
     }
 }

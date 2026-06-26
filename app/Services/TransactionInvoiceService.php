@@ -49,7 +49,7 @@ class TransactionInvoiceService
                     $created[] = $this->make($transaction, $settings, null, (float) ($breakdown['master']['commission'] ?? 0));
                 } else {
                     foreach ($terms as $term) {
-                        $created[] = $this->make($transaction, $settings, "Term {$term['term_no']}", (float) $term['commission']);
+                        $created[] = $this->make($transaction, $settings, (int) $term['term_no'], (float) $term['commission']);
                     }
                 }
             } else {
@@ -60,26 +60,27 @@ class TransactionInvoiceService
         return $created;
     }
 
-    private function make(Transaction $t, CompanySetting $settings, ?string $termLabel, float $commission): Invoice
+    private function make(Transaction $t, CompanySetting $settings, ?int $termNo, float $commission): Invoice
     {
         $b = $t->brokerage;
         $invoiceDate = Carbon::now();
-        $suffix = $termLabel ? " — {$termLabel}" : '';
+        $suffix = $termNo ? " — Term {$termNo}" : '';
 
         // Bill-To from the transaction's Listing/Co-op Brokerage Information.
-        $emails = array_values(array_unique(array_filter([$b?->invoice_email, $b?->email, $b?->agent_email])));
+        // Invoices go to the brokerage's Invoice Email only.
         $brokAgents = $b ? $b->agents->pluck('name')->filter()->implode(', ') : '';
 
         $invoice = Invoice::create([
-            'invoice_no' => $this->invoiceNumber($t, $termLabel),
+            'invoice_no' => $this->numbers->forTransaction($t->trade_no, $termNo) ?? $this->numbers->next(),
             'transaction_id' => $t->id,
             'source' => 'transaction',
             'transaction_type' => $t->type,
+            'term_no' => $termNo,
             'created_by' => auth()->id(),
             'property_reference' => $t->property,
             'customer_name' => $b?->name,
             'customer_phone' => $b?->phone,
-            'customer_email' => implode(', ', $emails),
+            'customer_email' => $b?->invoice_email,
             'customer_address' => $b?->address,
             'customer_country' => 'Canada',
             'invoice_date' => $invoiceDate->toDateString(),
@@ -104,21 +105,6 @@ class TransactionInvoiceService
         $this->calc->recalculate($invoice, (float) $settings->default_tax_rate);
 
         return $invoice;
-    }
-
-    /**
-     * Invoice number from the transaction Trade No.: GHR-<trade>, and for
-     * Preconstruction terms GHR-<trade>_<Term N>. Falls back to the prefix
-     * counter only if the transaction somehow has no trade number.
-     */
-    private function invoiceNumber(Transaction $t, ?string $termLabel): string
-    {
-        if (! $t->trade_no) {
-            return $this->numbers->next();
-        }
-        $no = 'GHR-'.$t->trade_no;
-
-        return $termLabel ? $no.'_'.$termLabel : $no;
     }
 
     private function dueDate(Carbon $invoiceDate, ?string $terms): ?Carbon

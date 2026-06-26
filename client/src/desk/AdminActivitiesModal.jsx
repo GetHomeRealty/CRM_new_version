@@ -15,6 +15,9 @@ export default function AdminActivitiesModal({ open, onClose, transactionId, txn
   const termCount = (typeof termCountProp === 'number' ? termCountProp : (parseInt(txn.precon_term_count, 10) || 0));
   const termsArr = Array.from({ length: termCount }, (_, k) => k + 1);
   const visibleAt = (k) => team.filter((m) => (m.scope || 'Entire') === 'Entire' || (m.terms || []).map(Number).includes(k)).map((m) => m.name).filter(Boolean);
+  // §12.4 — auto, read-only invoice fields from the linked invoice (computed by the backend).
+  const invAdmin = txn.invoice_admin || {};
+  const invByTerm = invAdmin.by_term || {};
   const [termFilter, setTermFilter] = useState('All');
 
   const [form, setForm] = useState(() => {
@@ -107,14 +110,16 @@ export default function AdminActivitiesModal({ open, onClose, transactionId, txn
           {termCount === 0 && <div className="help">Set "Commission Receivable in Terms" in Preconstruction Details first.</div>}
           {termsArr.filter((k) => termFilter === 'All' || String(termFilter) === String(k)).map((k) => {
             const t = form.term_admin[k]; const visible = visibleAt(k);
+            const ia = invByTerm[k] || {}; // §12.4 auto fields for this term's invoice
             return (
               <div className="card" key={k} style={{ marginBottom: 14 }}>
                 <div className="modal-sub" style={{ marginTop: 0 }}>Term {k} — Invoice &amp; Commission Details</div>
+                <div className="help" style={{ marginTop: -4, marginBottom: 8 }}>Auto-filled from the linked term invoice — read-only.</div>
                 <div className="g4">
-                  <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Invoice Sent Status</label><select value={t.invoice_sent} onChange={(e) => setTA(k, { invoice_sent: e.target.value })}><option value="">Select</option><option>Yes</option><option>No</option><option>N/A</option></select></div>
-                  <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Invoice Number</label><input value={t.invoice_number} onChange={(e) => setTA(k, { invoice_number: e.target.value })} placeholder="INV-####" /></div>
-                  <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Commission Received Date</label><input type="date" value={t.commission_received_date} onChange={(e) => setTA(k, { commission_received_date: e.target.value })} /></div>
-                  <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Commission Received Via</label><select value={t.commission_received_via} onChange={(e) => setTA(k, { commission_received_via: e.target.value })}><option value="">Select</option><option>EFT</option><option>CHEQUE</option><option>WIRE</option><option>N/A</option></select></div>
+                  <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Invoice Sent Status</label><input value={ia.invoice_sent_status || '—'} readOnly style={{ background: '#f9fafb' }} /></div>
+                  <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Invoice Number</label><input value={ia.invoice_number || '—'} readOnly style={{ background: '#f9fafb' }} /></div>
+                  <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Commission Received Date</label><input value={ia.commission_received_date || '—'} readOnly style={{ background: '#f9fafb' }} /></div>
+                  <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Commission Received Via</label><input value={ia.commission_received_via || '—'} readOnly style={{ background: '#f9fafb' }} /></div>
                 </div>
 
                 <div className="modal-sub modal-sub-ok">Term {k} — Agent Commission Paid</div>
@@ -173,17 +178,14 @@ export default function AdminActivitiesModal({ open, onClose, transactionId, txn
         {!precon && (<>
         {!listing ? (<>
           <div className="modal-sub">Invoice &amp; Commission Details</div>
+          <div className="help" style={{ marginTop: -4, marginBottom: 8 }}>Auto-filled from the linked invoice — read-only.</div>
           <div className="g2">
-            <div className="field"><label style={lbl}>Invoice Sent Status</label>
-              <select value={form.invoice_sent_status} onChange={(e) => set('invoice_sent_status', e.target.value)}>
-                <option value="">Select</option><option>Draft</option><option>Pending</option><option>Sent</option><option>Received</option></select></div>
-            <div className="field"><label style={lbl}>Invoice Number</label><input value={form.invoice_number} readOnly style={{ background: '#f9fafb' }} /></div>
+            <div className="field"><label style={lbl}>Invoice Sent Status</label><input value={invAdmin.invoice_sent_status || '—'} readOnly style={{ background: '#f9fafb' }} /></div>
+            <div className="field"><label style={lbl}>Invoice Number</label><input value={invAdmin.invoice_number || '—'} readOnly style={{ background: '#f9fafb' }} /></div>
           </div>
           <div className="g2">
-            <div className="field"><label style={lbl}>Commission Received Date</label><input type="date" value={form.commission_received_date} onChange={(e) => set('commission_received_date', e.target.value)} /></div>
-            <div className="field"><label style={lbl}>Commission Received Via</label>
-              <select value={form.commission_received_via} onChange={(e) => set('commission_received_via', e.target.value)}>
-                <option value="">Select</option><option>EFT</option><option>CHEQUE</option><option>WIRE</option><option>BANK TRANSFER</option><option>CASH</option></select></div>
+            <div className="field"><label style={lbl}>Commission Received Date</label><input value={invAdmin.commission_received_date || '—'} readOnly style={{ background: '#f9fafb' }} /></div>
+            <div className="field"><label style={lbl}>Commission Received Via</label><input value={invAdmin.commission_received_via || '—'} readOnly style={{ background: '#f9fafb' }} /></div>
           </div>
         </>) : (<>
           {/* ---- Listing layout ---- */}

@@ -59,6 +59,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::delete('/invoices/{invoice}', [InvoiceController::class, 'destroy']);
         Route::post('/invoices/{invoice}/payments', [InvoiceController::class, 'recordPayment']);
         Route::delete('/invoices/{invoice}/payments/{payment}', [InvoiceController::class, 'deletePayment']);
+        Route::post('/invoices/{invoice}/reminders', [InvoiceController::class, 'recordReminder']);
         Route::post('/customers', [CustomerController::class, 'store']);
         Route::put('/customers/{customer}', [CustomerController::class, 'update']);
         Route::delete('/customers/{customer}', [CustomerController::class, 'destroy']);

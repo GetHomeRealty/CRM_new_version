@@ -47,11 +47,14 @@ class InvoiceCalculator
         $invoice->save();
     }
 
-    /** Draft and Void are sticky until explicitly changed; otherwise derive from payment. */
+    /**
+     * Explicitly-chosen statuses (the §12.2 set) stick — the user controls them in
+     * the editor. Draft sticks until a payment exists. Otherwise derive from payment.
+     */
     private function status(string $current, float $total, float $paid, float $balance): string
     {
-        if ($current === 'Void') {
-            return 'Void';
+        if (in_array($current, ['Void', 'Paid', 'Due', 'Overdue'], true)) {
+            return $current;
         }
         if ($current === 'Draft' && $paid <= 0) {
             return 'Draft';

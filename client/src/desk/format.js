@@ -123,7 +123,8 @@ export const defaultStatusFor = (type) => (isListingStatusFamily(type) ? 'Active
 // Valid multi-select groupings (4.3). Selecting within a group disables statuses
 // outside it; any single status alone is always valid ("All Singles").
 export function statusGroups(type) {
-  if (type === 'Referral') return [];
+  // Referral: Open/Closed in one group so the user can switch freely between them.
+  if (type === 'Referral') return [['Open', 'Closed']];
   if (isListingStatusFamily(type)) {
     const lease = /lease/i.test(type);
     const cond = lease ? 'Lease Conditional' : 'Sold Conditional';

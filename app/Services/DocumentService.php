@@ -17,6 +17,14 @@ class DocumentService
             return [];
         }
 
+        if ($t === 'referral') {
+            return $this->rows([
+                ['Referral doc', true],
+                ['Notice of Sale', false],
+                ['Trade Sheet', false],
+            ]);
+        }
+
         if ($t === 'preconstruction') {
             return $this->rows([
                 ['Agreement of Purchase and Sale (APS)', true],

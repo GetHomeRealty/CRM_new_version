@@ -122,6 +122,20 @@ class InvoiceController extends Controller
         ], 201);
     }
 
+    /** §12.3 Send Reminder — record a reminder event (history of count + dates). */
+    public function recordReminder(Request $request, Invoice $invoice)
+    {
+        $sent = $invoice->reminders ?? [];
+        $sent[] = [
+            'date' => now()->toDateTimeString(),
+            'by' => $request->user()?->name,
+        ];
+        $invoice->reminders = $sent;
+        $invoice->save();
+
+        return response()->json($this->detail($invoice->fresh(['lineItems', 'payments', 'customer'])));
+    }
+
     public function deletePayment(Invoice $invoice, $paymentId)
     {
         $invoice->payments()->whereKey($paymentId)->delete();
@@ -157,7 +171,11 @@ class InvoiceController extends Controller
             'customer_notes' => ['nullable', 'string'],
             'terms_conditions' => ['nullable', 'string'],
             'signature_path' => ['nullable', 'string'],
-            'status' => ['nullable', Rule::in(['Draft', 'Unpaid', 'Partially Paid', 'Paid', 'Void'])],
+            'commission_received_date' => ['nullable', 'date'],
+            'commission_received_via' => ['nullable', Rule::in(['Bank Transfer', 'Cash', 'EFT', 'Interac e-Transfer', 'Cheque'])],
+            'auto_reminder' => ['nullable', 'array'],
+            // Existing statuses kept for back-compat; §12.2 set: Paid / Overdue / Void / Due.
+            'status' => ['nullable', Rule::in(['Draft', 'Unpaid', 'Partially Paid', 'Paid', 'Overdue', 'Void', 'Due'])],
             'line_items' => ['sometimes', 'array'],
             'line_items.*.description' => ['required_with:line_items', 'string', 'max:255'],
             'line_items.*.qty' => ['nullable', 'numeric', 'min:0'],
@@ -195,6 +213,9 @@ class InvoiceController extends Controller
             'customer_notes' => $data['customer_notes'] ?? null,
             'terms_conditions' => $data['terms_conditions'] ?? null,
             'signature_path' => $data['signature_path'] ?? null,
+            'commission_received_date' => $data['commission_received_date'] ?? null,
+            'commission_received_via' => $data['commission_received_via'] ?? null,
+            'auto_reminder' => $data['auto_reminder'] ?? null,
             'status' => $data['status'] ?? 'Draft',
         ];
     }
@@ -257,7 +278,6 @@ class InvoiceController extends Controller
         // any field left blank (so transaction-linked invoices show the saved data).
         $txn = $i->transaction;
         $brok = optional($txn)->brokerage;
-        $brokEmails = $brok ? array_values(array_unique(array_filter([$brok->invoice_email, $brok->email, $brok->agent_email]))) : [];
         $brokAgents = $brok ? $brok->agents->pluck('name')->filter()->implode(', ') : null;
 
         return array_merge($this->summary($i), [
@@ -266,7 +286,7 @@ class InvoiceController extends Controller
             'customer_id' => $i->customer_id,
             'customer_name' => $i->customer_name ?: ($brok->name ?? null),
             'customer_phone' => $i->customer_phone ?: ($brok->phone ?? null),
-            'customer_email' => $i->customer_email ?: implode(', ', $brokEmails),
+            'customer_email' => $i->customer_email ?: ($brok->invoice_email ?? null),
             'customer_address' => $i->customer_address ?: ($brok->address ?? null),
             // Co-op salesperson = the GHR agent on the deal; Listing agent = the other brokerage's agent(s).
             'coop_salesperson' => $i->coop_salesperson ?: (optional($txn)->agent),
@@ -279,6 +299,10 @@ class InvoiceController extends Controller
             'customer_notes' => $i->customer_notes,
             'terms_conditions' => $i->terms_conditions,
             'signature_path' => $i->signature_path,
+            'commission_received_date' => optional($i->commission_received_date)->toDateString(),
+            'commission_received_via' => $i->commission_received_via,
+            'reminders' => $i->reminders ?? [],
+            'auto_reminder' => $i->auto_reminder,
             'terms' => $i->terms,
             'trade_number' => $i->trade_number,
             'subject' => $i->subject,

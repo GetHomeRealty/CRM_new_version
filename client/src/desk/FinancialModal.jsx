@@ -21,6 +21,7 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
   const toast = useToast();
   const listing = isListingFinancialType(txn.type);
   const precon = isPreconType(txn.type);
+  const referral = txn.type === 'Referral';
   // Live term count from the detail form (so typing it divides immediately), falling back to the saved value.
   const termCount = (termCountProp != null && termCountProp !== '') ? Number(termCountProp) : (txn.precon_term_count || 0);
 
@@ -208,9 +209,9 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
             <div className="field"><label>Deposit</label><input value={txn.deposit ?? 0} readOnly style={{ background: '#f9fafb' }} /></div>
           </div>
         ) : (
-          <div className="g2">
+          <div className={referral ? '' : 'g2'}>
             <div className="field"><label>Price</label><input value={price} onChange={(e) => setPrice(e.target.value)} onBlur={(e) => setPrice(parseNumber(e.target.value))} /></div>
-            <div className="field"><label>Deposit</label><input value={txn.deposit ?? 0} readOnly style={{ background: '#f9fafb' }} /></div>
+            {!referral && <div className="field"><label>Deposit</label><input value={txn.deposit ?? 0} readOnly style={{ background: '#f9fafb' }} /></div>}
           </div>
         )}
 

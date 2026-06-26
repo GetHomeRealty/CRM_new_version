@@ -57,6 +57,7 @@ export const updateInvoice = (id, payload) => api.put(`/api/invoices/${id}`, pay
 export const deleteInvoice = (id) => api.delete(`/api/invoices/${id}`).then((r) => r.data);
 export const recordInvoicePayment = (id, payload) => api.post(`/api/invoices/${id}/payments`, payload).then((r) => r.data);
 export const deleteInvoicePayment = (id, paymentId) => api.delete(`/api/invoices/${id}/payments/${paymentId}`).then((r) => r.data);
+export const recordInvoiceReminder = (id) => api.post(`/api/invoices/${id}/reminders`).then((r) => r.data);
 
 export const getCompanySettings = () => api.get('/api/company-settings').then((r) => r.data);
 export const updateCompanySettings = (payload) => api.put('/api/company-settings', payload).then((r) => r.data);

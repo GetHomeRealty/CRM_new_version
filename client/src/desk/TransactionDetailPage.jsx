@@ -129,10 +129,12 @@ export default function TransactionDetailPage() {
   const listing = isListingType(form.type);
   const precon = isPreconType(form.type);
   const commercialLease = isCommercialLeaseType(form.type);
+  // Referral is a stripped-down transaction (no MLS / deposit / conditions / lawyer).
+  const referral = form.type === 'Referral';
   // Lease types use the free-text (Custom-only) condition layout.
   const isLease = /lease/i.test(form.type);
-  // Lawyer Details is hidden for lease / preconstruction types (legal side handled differently).
-  const lawyerHidden = precon || /lease/i.test(form.type);
+  // Lawyer Details is hidden for lease / preconstruction / referral types (legal side handled differently).
+  const lawyerHidden = precon || /lease/i.test(form.type) || referral;
   const statusOptions = statusOptionsFor(form.type);
   const statusAllowed = allowedStatuses(form.type, form.statuses);
   const ro = view; // read-only flag
@@ -339,7 +341,8 @@ export default function TransactionDetailPage() {
           {/* Basic Info */}
           <div className="card" style={{ marginBottom: 0 }}>
             <div className="modal-h" style={{ fontSize: 14 }}>Basic Info</div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1.1fr 1.2fr 1.6fr', gap: 12, marginBottom: 12 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: referral ? '1.2fr 1.6fr' : '1.1fr 1.2fr 1.6fr', gap: 12, marginBottom: 12 }}>
+              {!referral && (
               <Field label="Listing Type">
                 <div className="seg-toggle">
                   <button type="button" className={`seg-btn ${form.mls_type !== 'exclusive' ? 'active' : ''}`} disabled={ro} onClick={() => setListingType('mls')}>MLS</button>
@@ -355,6 +358,7 @@ export default function TransactionDetailPage() {
                   </label>
                 )}
               </Field>
+              )}
               <Field label="Type">
                 <select value={form.type} disabled={ro} onChange={(e) => onTypeChange(e.target.value)}>
                   {TRANSACTION_TYPES.map((t) => <option key={t} value={t}>{typeLabel(t)}</option>)}
@@ -364,14 +368,14 @@ export default function TransactionDetailPage() {
                 <StatusMultiSelect options={statusOptions} selected={form.statuses} allowed={statusAllowed} disabled={ro} onToggle={toggleStatus} />
               </Field>
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.5fr 1fr 1fr', gap: 12, marginBottom: 12 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: referral ? '1fr 1.5fr 1fr' : '1fr 1.5fr 1fr 1fr', gap: 12, marginBottom: 12 }}>
               <Field label="Agent Name">
                 <input list="agentList" value={form.agent} disabled={ro} onChange={(e) => set('agent', e.target.value)} placeholder="Search Agent..." />
                 <datalist id="agentList">{agents.map((a) => <option key={a} value={a} />)}</datalist>
               </Field>
               <Field label="Property Address" req><input value={form.property} disabled={ro} onChange={(e) => set('property', e.target.value)} /></Field>
               <Field label={isLease ? 'Total lease price' : 'Total Purchase Price'}><input value={form.price} disabled={ro} onChange={(e) => set('price', e.target.value)} /></Field>
-              <Field label="Deposit"><input value={form.deposit} disabled={ro} onChange={(e) => set('deposit', e.target.value)} /></Field>
+              {!referral && <Field label="Deposit"><input value={form.deposit} disabled={ro} onChange={(e) => set('deposit', e.target.value)} /></Field>}
             </div>
             <div className="g3">
               <Field label="Trade Number"><input value={form.trade_no} readOnly style={{ background: '#f9fafb' }} /></Field>
@@ -518,8 +522,8 @@ export default function TransactionDetailPage() {
         {!ro && <button className="btn primary sm" onClick={addClient}>+ Add Client</button>}
       </div>
 
-      {/* Conditional Offer — hidden for preconstruction */}
-      {!precon && (
+      {/* Conditional Offer — hidden for preconstruction and referral */}
+      {!precon && !referral && (
       <div className="card">
         <div className="modal-h" style={{ fontSize: 14 }}>Conditional Offer</div>
         <Field label="Is Offer Conditional?" style={{ maxWidth: 220 }}>

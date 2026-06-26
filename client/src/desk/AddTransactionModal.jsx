@@ -19,6 +19,7 @@ export default function AddTransactionModal({ open, onClose, onCreated }) {
 
   const listing = isListingType(form.type);
   const isLease = form.type === 'Residential Lease';
+  const referral = form.type === 'Referral';
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
   const reset = () => setForm(EMPTY);
@@ -105,8 +106,8 @@ export default function AddTransactionModal({ open, onClose, onCreated }) {
                 <div className="g3">
                   <div className="field"><label>{isLease ? 'Total lease price' : 'Total Purchase Price'} <span className="req">*</span></label>
                     <input value={form.price} onChange={(e) => set('price', e.target.value)} placeholder="0.00" /></div>
-                  <div className="field"><label>Deposit</label>
-                    <input value={form.deposit} onChange={(e) => set('deposit', e.target.value)} placeholder="0.00" /></div>
+                  {!referral && <div className="field"><label>Deposit</label>
+                    <input value={form.deposit} onChange={(e) => set('deposit', e.target.value)} placeholder="0.00" /></div>}
                 </div>
                 <div className="g2">
                   <div className="field"><label>Offer Date <span className="req">*</span></label>
