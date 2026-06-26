@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { updateTransaction } from '../lib/api';
 import { formatCurrency, parseNumber, isListingFinancialType, isPreconType } from './format';
-import { agentAdjustments, referralSections, agentCommissionsAfterClient, agentCommissionLine } from './commissionCalc';
+import { agentAdjustments, referralSections, agentCommissionsAfterClient, agentCommissionLine, listingBreakdown } from './commissionCalc';
 import { useToast } from './toast';
 
 const HST = 0.13;
@@ -114,38 +114,48 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
     return { m, agent: agentCommissionLine(m, stdAgentCtx, memberDeduct[i].total, HST), brok: lineOf(brokWo), t4a: agentCommissionLine(m, stdAgentCtx, 0, HST), adj: memberDeduct[i] };
   });
 
-  // ---- live listing computation (mirrors CommissionService::breakdownListing) ----
-  const sideOf = (pct, en, before, after) => {
-    const amount = parseNumber(pct) > 0 ? parseNumber(price) * parseNumber(pct) / 100 : 0;
-    const b = en ? parseNumber(before) : 0;
-    const a = en ? parseNumber(after) : 0;
-    const commission = r2(amount - b);
-    const hst = r2(commission * HST);
-    return { commission, hst, total: r2(commission + hst - a) };
-  };
+  // ---- live listing computation (full client spec — mirrors CommissionService::breakdownListing) ----
   const lAdjEff = commAdjMaster && lAdjEn;
   const cAdjEff = commAdjMaster && cAdjEn;
-  const lSide = sideOf(listPct, lAdjEff, lBefore, lAfter);
-  const cSide = sideOf(coopPct, cAdjEff, cBefore, cAfter);
-  const listTotals = { commission: r2(lSide.commission + cSide.commission), hst: r2(lSide.hst + cSide.hst), total: r2(lSide.total + cSide.total) };
-  // Full (pre-adjustment) listing+co-op commission for the referral sections:
-  // Price × (listing% + co-op%). Fixed-amount inputs would add in here too.
-  const listRawComm = r2(parseNumber(price) * (parseNumber(listPct) + parseNumber(coopPct)) / 100);
-  const listRef = referralSections(listRawComm, txn.adjustments, HST);
-  const listSplitBase = r2(listTotals.commission - listRef.brokerAmount);
-  // "Agent Commissions after client referral" uses the listing-side commission only.
-  const listAfterClient = agentCommissionsAfterClient(lSide.commission, members, { minBrokComm: 499, adjBefore: lAdjEff ? parseNumber(lBefore) : 0, adjAfter: lAdjEff ? parseNumber(lAfter) : 0, clientReferral: listRef.clientAmount }, HST);
+  const listIsLease = /lease/i.test(txn.type);
+  const listClientReferral = (txn.adjustments?.client_referral === 'Yes') ? (txn.adjustments.client_rows || []).reduce((s, r) => s + parseNumber(r.amount), 0) : 0;
+  const listExtAmt = (txn.adjustments?.ext_referral === 'Yes') ? parseNumber(txn.adjustments.ext?.amount) : 0;
+  const lb = listingBreakdown({
+    price: parseNumber(price), deposit: txn.deposit,
+    listPct, coopPct, listFlat: 0, coopFlat: 0,
+    lAdjBefore: lAdjEff ? parseNumber(lBefore) : 0, lAdjAfter: lAdjEff ? parseNumber(lAfter) : 0,
+    cAdjBefore: cAdjEff ? parseNumber(cBefore) : 0, cAdjAfter: cAdjEff ? parseNumber(cAfter) : 0,
+    extAmt: listExtAmt, clientReferral: listClientReferral,
+    members: members.map((m) => ({ name: m.name, split: m.split, agent_pct: m.agent_pct, brok_pct: m.brok_pct })),
+    deductions: memberDeduct.map((d) => d.total), isLease: listIsLease, // Agent Adjust + Advance per member
+  }, HST);
+  // Deal-level agent split (spec uses one split for the listing pool); shown in the help line.
+  const listAgentSplitPct = members[0]?.agent_pct ?? (listIsLease ? 95 : 90);
+  // Referral sections are based on the (fixed) Listing Commission — the broker referral
+  // only changes "Commissions after broker referral", never the Listing Commission itself.
+  const listRef = referralSections(lb.listing.commission, txn.adjustments, HST);
+  const listAfterClient = agentCommissionsAfterClient(lb.listing.commission, members, {
+    minBrokComm: 499,
+    adjBefore: lAdjEff ? parseNumber(lBefore) : 0,
+    adjAfter: lAdjEff ? parseNumber(lAfter) : 0,
+    clientReferral: listRef.clientAmount,
+  }, HST);
   const listRefView = { ...listRef, afterClient: listAfterClient };
-  const listAgentCtx = {
-    acTotal: listAfterClient.total, acComm: listAfterClient.commission, minBrokComm: 499,
-    adjBefore: lAdjEff ? parseNumber(lBefore) : 0, adjAfter: lAdjEff ? parseNumber(lAfter) : 0,
+  // Reuse the Residential-Buying card design (AgentCommissionBlocks): Agent Commission =
+  // payable (cash after advance), Agent (T4A) = gross earned, Brokerage = per-member keep.
+  const listingRows = lb.members.map((mr, i) => ({
+    m: members[i],
+    agent: { commission: r2(mr.cashToPay / (1 + HST)), hst: r2(mr.cashToPay - mr.cashToPay / (1 + HST)), total: mr.cashToPay },
+    t4a: { commission: mr.commission, hst: mr.hst, total: mr.earned },
+    brok: { commission: r2(mr.brokerageFromMember / (1 + HST)), hst: r2(mr.brokerageFromMember - mr.brokerageFromMember / (1 + HST)), total: mr.brokerageFromMember },
+    adj: memberDeduct[i], // { agentAdjust, advance, total } → "Less adjustment + advance" note
+  }));
+  // Agent/Brokerage % is a single deal-level split for listings — editing any card updates all members.
+  const setListMember = (i, k, v) => {
+    if (k === 'agent_pct') return setMembers((ms) => ms.map((m) => ({ ...m, agent_pct: v, brok_pct: r2(clampPct(100 - parseNumber(v))) })));
+    if (k === 'brok_pct') return setMembers((ms) => ms.map((m) => ({ ...m, brok_pct: v, agent_pct: r2(clampPct(100 - parseNumber(v))) })));
+    return setMember(i, k, v);
   };
-  const listingMemberRows = members.map((m, i) => {
-    const base = r2(listSplitBase * (parseNumber(m.split) / 100));
-    const brokWo = r2(base * (parseNumber(m.brok_pct) / 100));
-    // Agent + T4A take Split % of the after-client-referral section Total; T4A is gross (no per-agent deduction).
-    return { m, agent: agentCommissionLine(m, listAgentCtx, memberDeduct[i].total, HST), brok: lineOf(brokWo), t4a: agentCommissionLine(m, listAgentCtx, 0, HST), adj: memberDeduct[i] };
-  });
 
   // ---- live preconstruction master computation ----
   const pMasterAmt = parseNumber(masterAmtManual) > 0 ? parseNumber(masterAmtManual) : (parseNumber(masterPct) > 0 ? parseNumber(price) * parseNumber(masterPct) / 100 : 0);
@@ -326,22 +336,22 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
           </>
         ) : listing ? (
           <>
-            <div className="modal-sub">Listing Commission</div>
+            <div className="modal-sub">Listing Commission {lb.dealType === 'Lease' && <span className="pill type-pre" style={{ fontSize: 10 }}>Lease</span>}</div>
             <div className="g4">
               <div className="field" style={{ marginBottom: 0 }}><label>Listing Commission %</label><input value={listPct} onChange={(e) => setListPct(e.target.value)} placeholder="e.g. 2.5" /></div>
-              <div className="field" style={{ marginBottom: 0 }}><label>Commission</label><input readOnly value={formatCurrency(lSide.commission)} /></div>
-              <div className="field" style={{ marginBottom: 0 }}><label>HST</label><input readOnly value={formatCurrency(lSide.hst)} /></div>
-              <div className="field" style={{ marginBottom: 0 }}><label>Total</label><input readOnly className="brand" value={formatCurrency(lSide.total)} /></div>
+              <div className="field" style={{ marginBottom: 0 }}><label>Commission</label><input readOnly value={formatCurrency(lb.listing.commission)} /></div>
+              <div className="field" style={{ marginBottom: 0 }}><label>HST</label><input readOnly value={formatCurrency(lb.listing.hst)} /></div>
+              <div className="field" style={{ marginBottom: 0 }}><label>Total</label><input readOnly className="brand" value={formatCurrency(lb.listing.total)} /></div>
             </div>
             <div className="modal-sub">Co-op Commission</div>
             <div className="g4">
               <div className="field" style={{ marginBottom: 0 }}><label>Co-op Commission %</label><input value={coopPct} onChange={(e) => setCoopPct(e.target.value)} placeholder="e.g. 2.5" /></div>
-              <div className="field" style={{ marginBottom: 0 }}><label>Commission</label><input readOnly value={formatCurrency(cSide.commission)} /></div>
-              <div className="field" style={{ marginBottom: 0 }}><label>HST</label><input readOnly value={formatCurrency(cSide.hst)} /></div>
-              <div className="field" style={{ marginBottom: 0 }}><label>Total</label><input readOnly className="brand" value={formatCurrency(cSide.total)} /></div>
+              <div className="field" style={{ marginBottom: 0 }}><label>Commission</label><input readOnly value={formatCurrency(lb.coop.commission)} /></div>
+              <div className="field" style={{ marginBottom: 0 }}><label>HST</label><input readOnly value={formatCurrency(lb.coop.hst)} /></div>
+              <div className="field" style={{ marginBottom: 0 }}><label>Total</label><input readOnly className="brand" value={formatCurrency(lb.coop.total)} /></div>
             </div>
             <div className="modal-sub">Total Commissions (Listing + Co-Op)</div>
-            <div className="fin-sum"><Box label="Commission" value={formatCurrency(listTotals.commission)} /><Box label="HST" value={formatCurrency(listTotals.hst)} /><Box label="Total" value={formatCurrency(listTotals.total)} brand /></div>
+            <div className="fin-sum"><Box label="Commission" value={formatCurrency(lb.totals.commission)} /><Box label="HST" value={formatCurrency(lb.totals.hst)} /><Box label="Total" value={formatCurrency(lb.totals.total)} brand /></div>
 
             <div className="modal-sub">Commission Adjustment</div>
             <div className="field" style={{ maxWidth: 220 }}>
@@ -374,7 +384,42 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
             )}
 
             <ReferralSections data={listRefView} />
-            <AgentCommissionBlocks rows={listingMemberRows} setMember={setMember} minBrok={{ commission: 499, hst: 64.87, total: 563.87 }} />
+
+            {/* Trust reconciliation */}
+            <div className="modal-sub">Trust Reconciliation</div>
+            <div className="fin-sum">
+              <Box label="Deposit Held" value={formatCurrency(lb.trust.deposit)} />
+              <Box label="Payable to Client" value={formatCurrency(lb.trust.payableToClient)} />
+              <Box label="Receivable from Lawyer" value={formatCurrency(Math.abs(lb.trust.receivableFromLawyer))} brand />
+            </div>
+
+            {/* Co-op payout (external) */}
+            <div className="modal-sub">Co-op Payout — External Brokerage</div>
+            <div className="fin-sum">
+              <Box label="Commission" value={formatCurrency(lb.coop.commission)} />
+              <Box label="HST" value={formatCurrency(lb.coop.hst)} />
+              <Box label="Total Paid Out" value={formatCurrency(lb.coopPayout)} brand />
+            </div>
+
+            {/* Listing Split / Members / Brokerage — Residential-Buying card design */}
+            <AgentCommissionBlocks rows={listingRows} setMember={setListMember} minBrok={lb.minBrok} />
+
+            {/* Deal summary + balance check */}
+            <div className="modal-sub">Listing Split Summary</div>
+            <div className="fin-sum">
+              <Box label="Agent Pool (with HST)" value={formatCurrency(lb.split.agentPool)} />
+              <Box label="Brokerage Keep (with HST)" value={formatCurrency(lb.split.brokerageKeep)} brand />
+              <div className="field" style={{ marginBottom: 0 }}>
+                <label>Balance Check</label>
+                <input readOnly value={`${lb.balanceCheck.pass ? 'PASS' : 'FAIL'} — ${formatCurrency(lb.balanceCheck.reconcile)}`} style={{ fontWeight: 700, color: lb.balanceCheck.pass ? 'var(--ok)' : 'var(--bad)' }} />
+              </div>
+            </div>
+            <span className="help">
+              Agent split {listAgentSplitPct}% / brokerage {r2(100 - parseNumber(listAgentSplitPct))}% (edit via Agent Comm % above). Min brokerage floor {formatCurrency(lb.minBrok.total)}.
+              {lb.clientReferral > 0 ? ` Client referral −${formatCurrency(lb.clientReferral)} shared across members.` : ''}
+              {lb.extReferral.amount > 0 ? ` External broker referral −${formatCurrency(lb.extReferral.amount)} off listing side.` : ''}
+              {' '}Referrals & advances are entered in the Adjustment modal.
+            </span>
           </>
         ) : (
           /* ---- STANDARD (live, like the original) ---- */

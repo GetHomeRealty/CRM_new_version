@@ -92,7 +92,7 @@ function UserModal({ catalog, existing, onClose, onSaved }) {
     // profile fields
     mobile: p.mobile || '', gender: p.gender || '',
     onboard_date: p.onboard_date || '', personal_email: p.personal_email || '', org_email: p.org_email || '',
-    experience: p.experience || 'N/A',
+    experience: p.experience || 'N/A', prev_brokerage: p.prev_brokerage || '',
     commission_structure: p.commission_structure || '', agent_comm_pct: p.agent_comm_pct ?? '', brok_comm_pct: p.brok_comm_pct ?? '',
     lease_comm_pct: p.lease_comm_pct ?? '', completed_deals: p.completed_deals ?? 0,
     has_loan: p.has_loan || 'No', loan_entries: p.loan_entries || [], address: p.address || '',
@@ -133,7 +133,7 @@ function UserModal({ catalog, existing, onClose, onSaved }) {
       profile: {
         mobile: form.mobile, gender: form.gender,
         onboard_date: form.onboard_date || null, personal_email: form.personal_email, org_email: form.org_email,
-        experience: form.experience,
+        experience: form.experience, prev_brokerage: form.experience === 'Experienced' ? form.prev_brokerage : '',
         commission_structure: form.commission_structure, agent_comm_pct: form.agent_comm_pct, brok_comm_pct: form.brok_comm_pct,
         lease_comm_pct: form.lease_comm_pct, completed_deals: form.completed_deals,
         has_loan: form.has_loan, loan_amount: loanTotal, loan_entries: form.loan_entries, address: form.address,
@@ -200,6 +200,10 @@ function UserModal({ catalog, existing, onClose, onSaved }) {
               </select></div>
             <div className="field"><label>Completed Deals Count</label><input type="number" min="0" value={form.completed_deals} onChange={(e) => set('completed_deals', e.target.value)} /></div>
           </div>
+          {form.experience === 'Experienced' && (
+            <div className="field"><label>Previous Brokerage Name</label>
+              <input value={form.prev_brokerage} onChange={(e) => set('prev_brokerage', e.target.value)} placeholder="Where did they work before?" /></div>
+          )}
           {form.commission_structure === 'custom' && (
             <div className="g2">
               <div className="field"><label>Agent % (Agent + Brokerage = 100)</label><input type="number" min="0" max="100" value={form.agent_comm_pct} onChange={(e) => setAgentSplit(e.target.value)} /></div>

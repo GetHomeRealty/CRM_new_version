@@ -242,60 +242,153 @@ class CommissionService
     /**
      * Listing variant — separate listing-side and co-op-side commission, each
      * with its own optional adjustment, then a combined total. Per-agent splits
-     * apply to the combined commission. Ports recalcFinListing(). Min brokerage
-     * floor for listings is $499 / $563.87.
+     * apply to the combined commission. Min brokerage floor $499 sale / $250 lease.
      */
     private function breakdownListing(Transaction $t): array
     {
+        $hst = self::HST_RATE;
+        $g = 1 + $hst;
         $price = (float) $t->price;
+        $deposit = (float) $t->deposit;
+        $isLease = (bool) preg_match('/lease/i', (string) $t->type);
+        $minBrok = $isLease ? 250.0 : 499.0;
 
-        $side = function (float $pct, bool $adjEnabled, float $adjBefore, float $adjAfter) use ($price) {
-            $amount = round($price * $pct / 100, 2);
-            $before = $adjEnabled ? $adjBefore : 0.0;
-            $after = $adjEnabled ? $adjAfter : 0.0;
-            $commission = round($amount - $before, 2);
-            $hst = round($commission * self::HST_RATE, 2);
-            $total = round($commission + $hst - $after, 2);
-
-            return compact('pct', 'amount', 'commission', 'hst', 'total');
-        };
-
-        $listing = $side((float) $t->listing_comm_pct, (bool) $t->listing_adj_enabled, (float) $t->listing_adj_before, (float) $t->listing_adj_after);
-        $coop = $side((float) $t->coop_comm_pct, (bool) $t->coop_adj_enabled, (float) $t->coop_adj_before, (float) $t->coop_adj_after);
-
-        $commission = round($listing['commission'] + $coop['commission'], 2);
-        $hst = round($listing['hst'] + $coop['hst'], 2);
-        $total = round($listing['total'] + $coop['total'], 2);
-
-        $adj = $t->adjustments ?? [];
-        $members = $this->resolveMembers($t);
-        $splitBase = round($commission - $this->brokerReferralAmount($adj), 2);
-        // Full (pre-adjustment) commission for the broker-referral section: list + co-op amounts.
-        $rawComm = round($listing['amount'] + $coop['amount'], 2);
+        $listPct = (float) $t->listing_comm_pct;
+        $coopPct = (float) $t->coop_comm_pct;
+        $listFlat = 0.0; // flat commission inputs not yet captured in the UI
+        $coopFlat = 0.0;
         $lAdjBefore = $t->listing_adj_enabled ? (float) $t->listing_adj_before : 0.0;
         $lAdjAfter = $t->listing_adj_enabled ? (float) $t->listing_adj_after : 0.0;
-        // "Agent Commissions after client referral" uses the listing-side commission only.
-        $afterClient = $this->agentCommissionsAfterClient($listing['commission'], $members, 499.0, $lAdjBefore, $lAdjAfter, $this->clientReferralAmount($adj));
-        $agentCtx = [
-            'acComm' => $afterClient['commission'],
-            'acTotal' => $afterClient['total'],
-            'minBrokComm' => 499.0,
-            'adjBefore' => $lAdjBefore,
-            'adjAfter' => $lAdjAfter,
-        ];
+        $cAdjBefore = $t->coop_adj_enabled ? (float) $t->coop_adj_before : 0.0;
+        $cAdjAfter = $t->coop_adj_enabled ? (float) $t->coop_adj_after : 0.0;
+
+        $adj = $t->adjustments ?? [];
+        $extAmt = $this->brokerReferralAmount($adj);
+        $clientReferral = $this->clientReferralAmount($adj);
+        $members = $this->resolveMembers($t);
+        $first = $members->first();
+        $agentSplit = $first ? (float) $first->agent_pct / 100 : ($isLease ? 0.95 : 0.90);
+        $brokerageSplit = 1 - $agentSplit;
+
+        $listBasePct = $price * $listPct / 100;
+        $coopBasePct = $price * $coopPct / 100;
+
+        // Step 1 — external referral (off the listing side)
+        $extHst = $extAmt * $hst;
+        $extTotal = $extAmt + $extHst;
+
+        $allZero = $listPct == 0.0 && $listFlat == 0.0 && $coopPct == 0.0 && $coopFlat == 0.0;
+
+        if (! $isLease) {
+            // Step 2 — listing side. Listing Commission stays fixed — the external broker
+            // referral only affects the "Commissions after broker referral" section.
+            $listComm = $listBasePct + $listFlat + $lAdjBefore;
+            $listHst = $listComm * $hst;
+            $listTotal = ($listComm + $listHst) + $lAdjAfter;
+            // Step 3 — co-op side
+            $coopComm = $coopBasePct + $coopFlat + $cAdjBefore;
+            $coopHst = $coopComm * $hst;
+            $coopTotal = ($coopComm + $coopHst) + $cAdjAfter;
+            // Step 4 — combined
+            $totalComm = $allZero ? 0.0 : $listBasePct + $coopBasePct + $listFlat + $coopFlat + $lAdjBefore + $cAdjBefore;
+            $totalHst = $totalComm * $hst;
+            $totalWithHst = ($totalComm + $totalHst) + $lAdjAfter + $cAdjAfter;
+            // Step 5 — trust
+            $payableToClient = max($deposit - $totalWithHst, 0);
+            $receivableFromLawyer = min($deposit - $totalWithHst, 0);
+            // Step 6 — listing split (agents vs brokerage)
+            $brokerageFloor = max($listTotal * $brokerageSplit, $minBrok * $g);
+            $agentPool = max(min($listTotal * $agentSplit, $listTotal - $brokerageFloor), 0);
+            $brokerageKeep = $listTotal - $agentPool;
+        } else {
+            // LEASE MODE
+            $listComm = $listBasePct + $listFlat;
+            $listHst = $listComm * $hst;
+            $listTotal = $listComm * $g; // no after-HST adj
+            $coopComm = $coopBasePct + $lAdjBefore + $coopFlat; // before-HST adj on the CO-OP side
+            $coopHst = $coopComm * $hst;
+            $coopTotal = ($coopComm + $coopHst) + $cAdjAfter;
+            $totalComm = $listComm + $coopComm;
+            $totalHst = $totalComm * $hst;
+            $totalWithHst = $listTotal + $coopTotal;
+            $payableToClient = $deposit - $totalWithHst; // not floored at zero
+            $receivableFromLawyer = min($deposit - $totalWithHst, 0);
+            $teamShareTotal = 0.0;
+            foreach ($members as $m) {
+                $teamShareTotal += (float) $m->split / 100;
+            }
+            $brokerageFloor = max($listTotal * $brokerageSplit, $minBrok * $g);
+            $brokerageKeep = round(($brokerageFloor + (-$lAdjBefore * $g)) * $teamShareTotal, 2);
+            $agentPool = max($listTotal - $brokerageKeep, 0);
+        }
+
+        // Step 7 — per member; also build a backward-compatible `agents` array.
+        $line = fn ($wo) => ['commission' => round($wo, 2), 'hst' => round($wo * $hst, 2), 'total' => round($wo * $g, 2)];
+        $memberRows = [];
+        $agents = [];
+        foreach ($members as $m) {
+            $teamShare = (float) $m->split / 100;
+            $earned = ($agentPool - $clientReferral) * $teamShare; // HST-inclusive (T4A amount)
+            $commission = $earned / $g;
+            $mHst = $commission * $hst;
+            $advance = $this->memberAdvance($adj, $m->name);
+            $deduction = $this->memberDeduction($adj, $m, null); // Agent Adjust + Advance
+            $cashToPay = $earned - $deduction;
+            $brokFromMember = $brokerageKeep * $teamShare;
+
+            $memberRows[] = [
+                'name' => $m->name,
+                'team_share' => $teamShare,
+                'commission' => round($commission, 2),
+                'hst' => round($mHst, 2),
+                'earned' => round($earned, 2),
+                'advance' => round($advance, 2),
+                'deduction' => round($deduction, 2),
+                'cash_to_pay' => round($cashToPay, 2),
+                'brokerage_from_member' => round($brokFromMember, 2),
+            ];
+            $agents[] = [
+                'name' => $m->name,
+                'split' => (float) $m->split,
+                'agent_pct' => (float) $m->agent_pct,
+                'brok_pct' => (float) $m->brok_pct,
+                'agent' => ['commission' => round($commission, 2), 'hst' => round($mHst, 2), 'total' => round($earned, 2)],
+                'brokerage' => $line($brokFromMember / $g),
+                't4a' => ['commission' => round($commission, 2), 'hst' => round($mHst, 2), 'total' => round($earned, 2)],
+            ];
+        }
+
+        // Step 9 — balance check
+        $sumCash = array_sum(array_column($memberRows, 'cash_to_pay'));
+        $sumDeduction = array_sum(array_column($memberRows, 'deduction'));
+        $coopPayout = $coopTotal;
+        $reconcile = $coopPayout + $clientReferral + $sumCash + $brokerageKeep + $sumDeduction;
+
+        // Referral sections are based on the (fixed) Listing Commission — the broker referral
+        // only changes "Commissions after broker referral", never the Listing Commission itself.
+        $afterClient = $this->agentCommissionsAfterClient($listComm, $members, 499.0, $lAdjBefore, $lAdjAfter, $clientReferral);
 
         return [
             'variant' => 'listing',
-            'listing' => $listing,
-            'coop' => $coop,
-            'totals' => ['commission' => $commission, 'hst' => $hst, 'total' => $total],
+            'referrals' => $this->referralSections($listComm, $adj, $afterClient),
+            'deal_type' => $isLease ? 'Lease' : 'Sale',
+            'listing' => ['pct' => $listPct, 'commission' => round($listComm, 2), 'hst' => round($listHst, 2), 'total' => round($listTotal, 2)],
+            'coop' => ['pct' => $coopPct, 'commission' => round($coopComm, 2), 'hst' => round($coopHst, 2), 'total' => round($coopTotal, 2)],
+            'totals' => ['commission' => round($totalComm, 2), 'hst' => round($totalHst, 2), 'total' => round($totalWithHst, 2)],
+            'ext_referral' => ['amount' => round($extAmt, 2), 'hst' => round($extHst, 2), 'total' => round($extTotal, 2)],
+            'trust' => ['deposit' => round($deposit, 2), 'payable_to_client' => round($payableToClient, 2), 'receivable_from_lawyer' => round($receivableFromLawyer, 2)],
+            'coop_payout' => round($coopPayout, 2),
+            'split' => ['agent_split' => $agentSplit, 'brokerage_split' => $brokerageSplit, 'agent_pool' => round($agentPool, 2), 'brokerage_keep' => round($brokerageKeep, 2), 'brokerage_floor' => round($brokerageFloor, 2)],
+            'client_referral' => round($clientReferral, 2),
+            'members' => $memberRows,
+            'brokerage_keep' => round($brokerageKeep, 2),
             'adjust' => [
                 'listing' => ['enabled' => (bool) $t->listing_adj_enabled, 'before' => (float) $t->listing_adj_before, 'after' => (float) $t->listing_adj_after],
                 'coop' => ['enabled' => (bool) $t->coop_adj_enabled, 'before' => (float) $t->coop_adj_before, 'after' => (float) $t->coop_adj_after],
             ],
-            'referrals' => $this->referralSections($rawComm, $adj, $afterClient),
-            'agents' => $this->agentLines($members, $splitBase, $adj, null, $agentCtx),
-            'min_brokerage' => ['commission' => 499.0, 'hst' => 64.87, 'total' => 563.87],
+            'agents' => $agents,
+            'min_brokerage' => ['commission' => $minBrok, 'hst' => round($minBrok * $hst, 2), 'total' => round($minBrok * $g, 2)],
+            'balance_check' => ['expected' => round($totalWithHst, 2), 'reconcile' => round($reconcile, 2), 'pass' => abs($reconcile - $totalWithHst) < 0.05],
         ];
     }
 
@@ -413,6 +506,22 @@ class CommissionService
         }
 
         return round($sum, 2);
+    }
+
+    /** Advance already paid to a member (matched by name), from Advance Payments. */
+    private function memberAdvance(array $adj, ?string $name): float
+    {
+        if (($adj['advance_payment'] ?? 'No') !== 'Yes' || $name === null) {
+            return 0.0;
+        }
+        $sum = 0.0;
+        foreach ($adj['advance_rows'] ?? [] as $r) {
+            if (($r['agent'] ?? null) === $name) {
+                $sum += $this->n($r['amount'] ?? 0);
+            }
+        }
+
+        return $sum;
     }
 
     /** External brokerage referral amount (deal-level, pre-HST). */

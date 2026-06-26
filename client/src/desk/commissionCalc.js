@@ -239,3 +239,112 @@ export function agentCommissionLine(member, ctx, deduction = 0, hstRate = HST_RA
   const hst = ROUND(total - commission);
   return { commission, hst, total };
 }
+
+/**
+ * Listing variant (Sale Listing / Lease Listing) — full client spec (2026-06-26).
+ * GHR is the listing brokerage: members split the LISTING commission; the CO-OP
+ * commission is paid in full to the external co-op brokerage. Mirrors
+ * CommissionService::breakdownListing(). Returns the report sections.
+ *
+ * @param {object} input { price, deposit, listPct, coopPct, listFlat, coopFlat,
+ *   lAdjBefore, lAdjAfter, cAdjBefore, cAdjAfter, extAmt, clientReferral,
+ *   members:[{name,split,agent_pct,brok_pct}], deductions:number[] (Agent Adjust +
+ *   Advance per member, aligned to members; reduces cash-to-pay), isLease }
+ */
+export function listingBreakdown(input, hstRate = HST_RATE) {
+  const g = 1 + hstRate;
+  const price = num(input.price);
+  const deposit = num(input.deposit);
+  const isLease = !!input.isLease;
+  const minBrok = isLease ? 250 : 499;
+  const listPct = num(input.listPct);
+  const coopPct = num(input.coopPct);
+  const listFlat = num(input.listFlat);
+  const coopFlat = num(input.coopFlat);
+  const lAdjBefore = num(input.lAdjBefore);
+  const lAdjAfter = num(input.lAdjAfter);
+  const cAdjBefore = num(input.cAdjBefore);
+  const cAdjAfter = num(input.cAdjAfter);
+  const extAmt = num(input.extAmt);
+  const clientReferral = num(input.clientReferral);
+  const members = input.members || [];
+  const deductions = input.deductions || [];
+  const first = members[0];
+  const agentSplit = first ? num(first.agent_pct) / 100 : (isLease ? 0.95 : 0.90);
+  const brokerageSplit = 1 - agentSplit;
+  const listBasePct = price * listPct / 100;
+  const coopBasePct = price * coopPct / 100;
+  const extHst = extAmt * hstRate;
+  const extTotal = extAmt + extHst;
+  const allZero = listPct === 0 && listFlat === 0 && coopPct === 0 && coopFlat === 0;
+
+  let listComm, listHst, listTotal, coopComm, coopHst, coopTotal, totalComm, totalHst, totalWithHst,
+    payableToClient, receivableFromLawyer, brokerageFloor, agentPool, brokerageKeep;
+
+  if (!isLease) {
+    // Listing Commission stays fixed — the external broker referral only affects the
+    // "Commissions after broker referral" section, not this commission or the split.
+    listComm = listBasePct + listFlat + lAdjBefore;
+    listHst = listComm * hstRate;
+    listTotal = (listComm + listHst) + lAdjAfter;
+    coopComm = coopBasePct + coopFlat + cAdjBefore;
+    coopHst = coopComm * hstRate;
+    coopTotal = (coopComm + coopHst) + cAdjAfter;
+    totalComm = allZero ? 0 : listBasePct + coopBasePct + listFlat + coopFlat + lAdjBefore + cAdjBefore;
+    totalHst = totalComm * hstRate;
+    totalWithHst = (totalComm + totalHst) + lAdjAfter + cAdjAfter;
+    payableToClient = Math.max(deposit - totalWithHst, 0);
+    receivableFromLawyer = Math.min(deposit - totalWithHst, 0);
+    brokerageFloor = Math.max(listTotal * brokerageSplit, minBrok * g);
+    agentPool = Math.max(Math.min(listTotal * agentSplit, listTotal - brokerageFloor), 0);
+    brokerageKeep = listTotal - agentPool;
+  } else {
+    listComm = listBasePct + listFlat;
+    listHst = listComm * hstRate;
+    listTotal = listComm * g;
+    coopComm = coopBasePct + lAdjBefore + coopFlat;
+    coopHst = coopComm * hstRate;
+    coopTotal = (coopComm + coopHst) + cAdjAfter;
+    totalComm = listComm + coopComm;
+    totalHst = totalComm * hstRate;
+    totalWithHst = listTotal + coopTotal;
+    payableToClient = deposit - totalWithHst;
+    receivableFromLawyer = Math.min(deposit - totalWithHst, 0);
+    const teamShareTotal = members.reduce((s, m) => s + num(m.split) / 100, 0);
+    brokerageFloor = Math.max(listTotal * brokerageSplit, minBrok * g);
+    brokerageKeep = ROUND((brokerageFloor + (-lAdjBefore * g)) * teamShareTotal);
+    agentPool = Math.max(listTotal - brokerageKeep, 0);
+  }
+
+  const memberRows = members.map((m, i) => {
+    const teamShare = num(m.split) / 100;
+    const earned = (agentPool - clientReferral) * teamShare;
+    const commission = earned / g;
+    const deduction = num(deductions[i]); // Agent Adjust + Advance for this member
+    return {
+      name: m.name, teamShare,
+      commission: ROUND(commission), hst: ROUND(commission * hstRate), earned: ROUND(earned),
+      deduction: ROUND(deduction), cashToPay: ROUND(earned - deduction),
+      brokerageFromMember: ROUND(brokerageKeep * teamShare),
+    };
+  });
+  const sumCash = memberRows.reduce((s, r) => s + r.cashToPay, 0);
+  const sumDeduction = memberRows.reduce((s, r) => s + r.deduction, 0);
+  const reconcile = coopTotal + clientReferral + sumCash + brokerageKeep + sumDeduction;
+
+  return {
+    dealType: isLease ? 'Lease' : 'Sale',
+    listing: { pct: listPct, commission: ROUND(listComm), hst: ROUND(listHst), total: ROUND(listTotal) },
+    coop: { pct: coopPct, commission: ROUND(coopComm), hst: ROUND(coopHst), total: ROUND(coopTotal) },
+    totals: { commission: ROUND(totalComm), hst: ROUND(totalHst), total: ROUND(totalWithHst) },
+    extReferral: { amount: ROUND(extAmt), hst: ROUND(extHst), total: ROUND(extTotal) },
+    trust: { deposit: ROUND(deposit), payableToClient: ROUND(payableToClient), receivableFromLawyer: ROUND(receivableFromLawyer) },
+    coopPayout: ROUND(coopTotal),
+    split: { agentSplit, brokerageSplit, agentPool: ROUND(agentPool), brokerageKeep: ROUND(brokerageKeep), brokerageFloor: ROUND(brokerageFloor) },
+    clientReferral: ROUND(clientReferral),
+    members: memberRows,
+    brokerageKeep: ROUND(brokerageKeep),
+    minBrok: { commission: minBrok, hst: ROUND(minBrok * hstRate), total: ROUND(minBrok * g) },
+    balanceCheck: { expected: ROUND(totalWithHst), reconcile: ROUND(reconcile), pass: Math.abs(reconcile - totalWithHst) < 0.05 },
+  };
+}
