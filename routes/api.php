@@ -6,6 +6,8 @@ use App\Http\Controllers\CompanySettingController;
 use App\Http\Controllers\CustomerController;
 use App\Http\Controllers\DocumentController;
 use App\Http\Controllers\InvoiceController;
+use App\Http\Controllers\NoticeOfSaleController;
+use App\Http\Controllers\SuggestionController;
 use App\Http\Controllers\TransactionController;
 use App\Http\Controllers\UserController;
 use Illuminate\Support\Facades\Route;
@@ -21,10 +23,15 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // Reference data (any authenticated staff).
     Route::get('/agents', [AgentController::class, 'index']);
+    Route::get('/agent-commissions', [AgentController::class, 'commissions']);
     Route::get('/transaction-types', fn () => response()->json([
         'types' => \App\Models\Transaction::TYPES,
         'listing_types' => \App\Models\Transaction::LISTING_TYPES,
     ]));
+
+    // Type-ahead suggestions from previously saved records.
+    Route::get('/suggestions/lawyers', [SuggestionController::class, 'lawyers']);
+    Route::get('/suggestions/brokerages', [SuggestionController::class, 'brokerages']);
 
     // Transactions — reads available to any authenticated user (Dashboard,
     // Analytics, etc. all consume this); writes require transactions:edit.
@@ -32,6 +39,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/transactions/{transaction}', [TransactionController::class, 'show']);
     Route::get('/transactions/{transaction}/documents', [DocumentController::class, 'index']);
     Route::get('/documents/{document}/file', [DocumentController::class, 'downloadFile']);
+    Route::get('/documents/{document}/files/{index}', [DocumentController::class, 'downloadDocFile']);
+    Route::get('/documents/{document}/validation-file', [DocumentController::class, 'downloadValidationFile']);
+    Route::get('/transactions/{transaction}/notice-of-sale', [NoticeOfSaleController::class, 'show']);
     Route::get('/transactions/{transaction}/messages', [TransactionController::class, 'messages']);
     Route::post('/transactions/{transaction}/messages', [TransactionController::class, 'postMessage']);
 
@@ -42,7 +52,14 @@ Route::middleware('auth:sanctum')->group(function () {
 
         Route::put('/transactions/{transaction}/documents', [DocumentController::class, 'bulkUpdate']);
         Route::post('/transactions/{transaction}/documents/{document}/file', [DocumentController::class, 'uploadFile']);
+        Route::post('/transactions/{transaction}/documents/{document}/files', [DocumentController::class, 'uploadDocFile']);
+        Route::delete('/transactions/{transaction}/documents/{document}/files/{index}', [DocumentController::class, 'deleteDocFile']);
+        Route::post('/transactions/{transaction}/documents/{document}/validation-file', [DocumentController::class, 'uploadValidationFile']);
+        Route::delete('/transactions/{transaction}/documents/{document}/validation-file', [DocumentController::class, 'deleteValidationFile']);
         Route::delete('/documents/{document}', [DocumentController::class, 'destroy']);
+
+        Route::put('/transactions/{transaction}/notice-of-sale', [NoticeOfSaleController::class, 'save']);
+        Route::post('/transactions/{transaction}/notice-of-sale/send', [NoticeOfSaleController::class, 'send']);
     });
 
     // Invoice module

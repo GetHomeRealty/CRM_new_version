@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { getTransaction, updateTransaction, listAgents, generateTransactionInvoices, getCompanySettings, getCustomers } from '../lib/api';
+import { getTransaction, updateTransaction, listAgents, generateTransactionInvoices, getCompanySettings, getCustomers, getBrokerageSuggestions } from '../lib/api';
 import { typeClass, typeLabel, isListingType, isListingFinancialType, isPreconType, isCommercialLeaseType, isInvoiceableType, emailLooksValid, parseNumber, TRANSACTION_TYPES, formatCurrency, statusOptionsFor, allowedStatuses, normalizeStatus, defaultStatusFor } from './format';
 import { useToast } from './toast';
 import { useAuth } from '../context/AuthContext';
@@ -20,6 +20,7 @@ import CommercialLeaseCard, { CL_DEFAULTS } from './CommercialLeaseCard';
 import InvoiceEditorModal from './InvoiceEditorModal';
 import DepositReceiptModal from './DepositReceiptModal';
 import LawyerStatementModal from './LawyerStatementModal';
+import AutoComplete from './AutoComplete';
 
 const COND_TYPES = ['Financing', 'Home Inspection', 'Sale of Property', 'Status Certificate Review', 'Custom'];
 
@@ -93,6 +94,7 @@ export default function TransactionDetailPage() {
   const [depositOpen, setDepositOpen] = useState(false);   // listing-side: Deposit Receipt doc
   const [lawyerStmtOpen, setLawyerStmtOpen] = useState(false); // listing-side: Commission/Lawyer Statement doc
   const bodyRef = useRef(null); // wraps the filterable cards for "search this transaction"
+  const [brokSuggestions, setBrokSuggestions] = useState([]);
 
   useEffect(() => {
     getTransaction(id).then((t) => { setForm(toForm(t)); setTxn(t); }).catch(() => toast('Could not load transaction', 'bad'));
@@ -100,6 +102,7 @@ export default function TransactionDetailPage() {
     // Loaded lazily so the invoice editor can open in-context on this page.
     getCompanySettings().then(setInvSettings).catch(() => {});
     getCustomers().then(setInvCustomers).catch(() => {});
+    getBrokerageSuggestions().then(setBrokSuggestions).catch(() => {});
   }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const applyUpdated = (updated) => { setForm(toForm(updated)); setTxn(updated); };
@@ -145,6 +148,19 @@ export default function TransactionDetailPage() {
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
   const setBrok = (k, v) => setForm((f) => ({ ...f, brokerage: { ...f.brokerage, [k]: v } }));
+  const pickBrokerage = (s) => setForm((f) => ({
+    ...f,
+    brokerage: {
+      ...f.brokerage,
+      name: s.name || '',
+      address: s.address || f.brokerage.address,
+      email: s.email || f.brokerage.email,
+      invoice_email: s.invoice_email || f.brokerage.invoice_email,
+      agent_email: s.agent_email || f.brokerage.agent_email,
+      phone: s.phone || f.brokerage.phone,
+      agents: (s.agents && s.agents.length) ? [...s.agents] : f.brokerage.agents,
+    },
+  }));
   const setBuilder = (k, v) => setForm((f) => ({ ...f, builder: { ...f.builder, [k]: v } }));
   const cl = { ...CL_DEFAULTS, ...(form.commercial_lease || {}) };
   const setCl = (k, v) => setForm((f) => ({ ...f, commercial_lease: { ...CL_DEFAULTS, ...(f.commercial_lease || {}), [k]: v } }));
@@ -490,7 +506,14 @@ export default function TransactionDetailPage() {
       {!precon && (
       <div className="card">
         <div className="modal-h" style={{ fontSize: 14 }}>{brokLabel} Brokerage Information</div>
-        <Field label={`${brokLabel} Brokerage Name`}><input value={form.brokerage.name} disabled={ro} onChange={(e) => setBrok('name', e.target.value)} placeholder="Brokerage name" /></Field>
+        <Field label={`${brokLabel} Brokerage Name`}>
+          <AutoComplete
+            value={form.brokerage.name} disabled={ro} onChange={(v) => setBrok('name', v)} onPick={pickBrokerage}
+            options={brokSuggestions} getLabel={(s) => s.name}
+            getSub={(s) => [s.address, s.phone].filter(Boolean).join(' · ')}
+            placeholder="Brokerage name"
+          />
+        </Field>
         <div className="field">
           <label>{brokLabel} Agent Name(s)</label>
           {form.brokerage.agents.map((a, i) => (

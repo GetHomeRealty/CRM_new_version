@@ -38,8 +38,34 @@ export const uploadDocumentFile = (txnId, docId, file) => {
 
 export const deleteDocument = (docId) => api.delete(`/api/documents/${docId}`).then((r) => r.data);
 
+// --- Notice of Sale ---
+export const getNoticeOfSale = (txnId) => api.get(`/api/transactions/${txnId}/notice-of-sale`).then((r) => r.data);
+export const saveNoticeOfSale = (txnId, payload) => api.put(`/api/transactions/${txnId}/notice-of-sale`, payload).then((r) => r.data);
+export const sendNoticeOfSale = (txnId, agents) => api.post(`/api/transactions/${txnId}/notice-of-sale/send`, { agents }).then((r) => r.data);
+
+// §13 multi-file / per-client uploads (clientName optional)
+export const uploadDocClientFile = (txnId, docId, file, clientName) => {
+  const fd = new FormData();
+  fd.append('file', file);
+  if (clientName) fd.append('client_name', clientName);
+  return api.post(`/api/transactions/${txnId}/documents/${docId}/files`, fd, { headers: { 'Content-Type': undefined } }).then((r) => r.data);
+};
+export const deleteDocClientFile = (txnId, docId, index) =>
+  api.delete(`/api/transactions/${txnId}/documents/${docId}/files/${index}`).then((r) => r.data);
+
+// §13 Invalid-validation supporting attachment
+export const uploadDocValidationFile = (txnId, docId, file) => {
+  const fd = new FormData();
+  fd.append('file', file);
+  return api.post(`/api/transactions/${txnId}/documents/${docId}/validation-file`, fd, { headers: { 'Content-Type': undefined } }).then((r) => r.data);
+};
+export const deleteDocValidationFile = (txnId, docId) =>
+  api.delete(`/api/transactions/${txnId}/documents/${docId}/validation-file`).then((r) => r.data);
+
 const apiBase = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
 export const documentFileUrl = (docId) => `${apiBase}/api/documents/${docId}/file`;
+export const docClientFileUrl = (docId, index) => `${apiBase}/api/documents/${docId}/files/${index}`;
+export const docValidationFileUrl = (docId) => `${apiBase}/api/documents/${docId}/validation-file`;
 
 // --- Users / RBAC (admin) ---
 export const getUsers = () => api.get('/api/users').then((r) => r.data);
@@ -67,7 +93,12 @@ export const createCustomer = (payload) => api.post('/api/customers', payload).t
 
 // --- Reference data ---
 export const listAgents = () => api.get('/api/agents').then((r) => r.data);
+export const getAgentCommissions = () => api.get('/api/agent-commissions').then((r) => r.data);
 export const registrationOpen = () => api.get('/api/registration-open').then((r) => r.data.open);
 
 export const getTransactionTypes = () =>
   api.get('/api/transaction-types').then((r) => r.data);
+
+// Type-ahead suggestions from previously saved records.
+export const getLawyerSuggestions = () => api.get('/api/suggestions/lawyers').then((r) => r.data);
+export const getBrokerageSuggestions = () => api.get('/api/suggestions/brokerages').then((r) => r.data);

@@ -1,6 +1,7 @@
-import { useState } from 'react';
-import { updateTransaction } from '../lib/api';
+import { useEffect, useState } from 'react';
+import { updateTransaction, getLawyerSuggestions } from '../lib/api';
 import { useToast } from './toast';
+import AutoComplete from './AutoComplete';
 
 export default function LawyerModal({ open, onClose, transactionId, txn, onSaved }) {
   const toast = useToast();
@@ -11,9 +12,18 @@ export default function LawyerModal({ open, onClose, transactionId, txn, onSaved
     lawyer_address: txn.lawyer_address || '',
   });
   const [saving, setSaving] = useState(false);
+  const [suggestions, setSuggestions] = useState([]);
+  useEffect(() => { if (open) getLawyerSuggestions().then(setSuggestions).catch(() => {}); }, [open]);
   if (!open) return null;
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+  const pickLawyer = (s) => setForm((f) => ({
+    ...f,
+    lawyer_name: s.name || '',
+    lawyer_email: s.email || f.lawyer_email,
+    lawyer_phone: s.phone || f.lawyer_phone,
+    lawyer_address: s.address || f.lawyer_address,
+  }));
 
   const save = async () => {
     setSaving(true);
@@ -32,7 +42,14 @@ export default function LawyerModal({ open, onClose, transactionId, txn, onSaved
       <div className="modal">
         <button className="close" onClick={onClose}>✕</button>
         <div className="modal-h">Lawyer Details</div>
-        <div className="field"><label>Lawyer Name</label><input value={form.lawyer_name} onChange={(e) => set('lawyer_name', e.target.value)} placeholder="e.g. Jane Smith" /></div>
+        <div className="field"><label>Lawyer Name</label>
+          <AutoComplete
+            value={form.lawyer_name} onChange={(v) => set('lawyer_name', v)} onPick={pickLawyer}
+            options={suggestions} getLabel={(s) => s.name}
+            getSub={(s) => [s.email, s.phone].filter(Boolean).join(' · ')}
+            placeholder="e.g. Jane Smith"
+          />
+        </div>
         <div className="field"><label>Address</label><input value={form.lawyer_address} onChange={(e) => set('lawyer_address', e.target.value)} placeholder="123 Legal Ave, Toronto, ON" /></div>
         <div className="g2">
           <div className="field"><label>Email</label><input type="email" value={form.lawyer_email} onChange={(e) => set('lawyer_email', e.target.value)} placeholder="lawyer@example.ca" /></div>

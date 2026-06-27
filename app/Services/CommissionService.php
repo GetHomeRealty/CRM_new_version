@@ -279,48 +279,24 @@ class CommissionService
 
         $allZero = $listPct == 0.0 && $listFlat == 0.0 && $coopPct == 0.0 && $coopFlat == 0.0;
 
-        if (! $isLease) {
-            // Step 2 — listing side. Listing Commission stays fixed — the external broker
-            // referral only affects the "Commissions after broker referral" section.
-            $listComm = $listBasePct + $listFlat + $lAdjBefore;
-            $listHst = $listComm * $hst;
-            $listTotal = ($listComm + $listHst) + $lAdjAfter;
-            // Step 3 — co-op side
-            $coopComm = $coopBasePct + $coopFlat + $cAdjBefore;
-            $coopHst = $coopComm * $hst;
-            $coopTotal = ($coopComm + $coopHst) + $cAdjAfter;
-            // Step 4 — combined
-            $totalComm = $allZero ? 0.0 : $listBasePct + $coopBasePct + $listFlat + $coopFlat + $lAdjBefore + $cAdjBefore;
-            $totalHst = $totalComm * $hst;
-            $totalWithHst = ($totalComm + $totalHst) + $lAdjAfter + $cAdjAfter;
-            // Step 5 — trust
-            $payableToClient = max($deposit - $totalWithHst, 0);
-            $receivableFromLawyer = min($deposit - $totalWithHst, 0);
-            // Step 6 — listing split (agents vs brokerage)
-            $brokerageFloor = max($listTotal * $brokerageSplit, $minBrok * $g);
-            $agentPool = max(min($listTotal * $agentSplit, $listTotal - $brokerageFloor), 0);
-            $brokerageKeep = $listTotal - $agentPool;
-        } else {
-            // LEASE MODE
-            $listComm = $listBasePct + $listFlat;
-            $listHst = $listComm * $hst;
-            $listTotal = $listComm * $g; // no after-HST adj
-            $coopComm = $coopBasePct + $lAdjBefore + $coopFlat; // before-HST adj on the CO-OP side
-            $coopHst = $coopComm * $hst;
-            $coopTotal = ($coopComm + $coopHst) + $cAdjAfter;
-            $totalComm = $listComm + $coopComm;
-            $totalHst = $totalComm * $hst;
-            $totalWithHst = $listTotal + $coopTotal;
-            $payableToClient = $deposit - $totalWithHst; // not floored at zero
-            $receivableFromLawyer = min($deposit - $totalWithHst, 0);
-            $teamShareTotal = 0.0;
-            foreach ($members as $m) {
-                $teamShareTotal += (float) $m->split / 100;
-            }
-            $brokerageFloor = max($listTotal * $brokerageSplit, $minBrok * $g);
-            $brokerageKeep = round(($brokerageFloor + (-$lAdjBefore * $g)) * $teamShareTotal, 2);
-            $agentPool = max($listTotal - $brokerageKeep, 0);
-        }
+        // Sale & Lease share the same listing/co-op/split math — adjustments apply to their
+        // own sides (listing adj → listing, co-op adj → co-op). Lease differs ONLY in the min
+        // brokerage floor ($250) and the trust floor (payable not floored at 0). The external
+        // broker referral never touches the Listing Commission (handled in referralSections).
+        $listComm = $listBasePct + $listFlat + $lAdjBefore;
+        $listHst = $listComm * $hst;
+        $listTotal = ($listComm + $listHst) + $lAdjAfter;
+        $coopComm = $coopBasePct + $coopFlat + $cAdjBefore;
+        $coopHst = $coopComm * $hst;
+        $coopTotal = ($coopComm + $coopHst) + $cAdjAfter;
+        $totalComm = $allZero ? 0.0 : $listBasePct + $coopBasePct + $listFlat + $coopFlat + $lAdjBefore + $cAdjBefore;
+        $totalHst = $totalComm * $hst;
+        $totalWithHst = ($totalComm + $totalHst) + $lAdjAfter + $cAdjAfter;
+        $payableToClient = $isLease ? ($deposit - $totalWithHst) : max($deposit - $totalWithHst, 0);
+        $receivableFromLawyer = min($deposit - $totalWithHst, 0);
+        $brokerageFloor = max($listTotal * $brokerageSplit, $minBrok * $g);
+        $agentPool = max(min($listTotal * $agentSplit, $listTotal - $brokerageFloor), 0);
+        $brokerageKeep = $listTotal - $agentPool;
 
         // Step 7 — per member; also build a backward-compatible `agents` array.
         $line = fn ($wo) => ['commission' => round($wo, 2), 'hst' => round($wo * $hst, 2), 'total' => round($wo * $g, 2)];

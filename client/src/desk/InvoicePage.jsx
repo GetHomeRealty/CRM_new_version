@@ -8,8 +8,23 @@ import InvoiceEditorModal from './InvoiceEditorModal';
 import InvoicePreviewModal from './InvoicePreviewModal';
 
 const STATUS_PILL = {
-  Paid: 'ok', 'Partially Paid': 'warn', Unpaid: 'info', Overdue: 'bad', Void: 'bad', Draft: 'info',
+  Paid: 'ok', 'Partially Paid': 'warn', Unpaid: 'info', Overdue: 'bad', Void: 'bad', Draft: 'info', Due: 'info',
 };
+
+// Due/overdue warning from the transaction closing date. Settled invoices (Paid/Void)
+// show none. ≤10 days → amber "Due in N days"; past → red "Overdue by N days".
+function dueWarning(closing, status) {
+  if (!closing || status === 'Paid' || status === 'Void') return null;
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const d = new Date(closing + 'T00:00:00');
+  if (Number.isNaN(d.getTime())) return null;
+  const days = Math.round((d - today) / 86400000);
+  const s = (n) => (Math.abs(n) === 1 ? '' : 's');
+  if (days < 0) return { label: `Overdue by ${-days} day${s(days)}`, cls: 'bad' };
+  if (days === 0) return { label: 'Due today', cls: 'bad' };
+  if (days <= 10) return { label: `Due in ${days} day${s(days)}`, cls: 'warn' };
+  return { label: `Due in ${days} days`, cls: 'info' };
+}
 
 export default function InvoicePage() {
   const toast = useToast();
@@ -76,10 +91,10 @@ export default function InvoicePage() {
       </div></div>
 
       <table className="list-table">
-        <thead><tr><th>Invoice #</th><th>Customer</th><th>Property</th><th>Type</th><th>Agent</th><th>Date</th><th>Total</th><th>Balance</th><th>Status</th><th>Source</th><th>Actions</th></tr></thead>
+        <thead><tr><th>Invoice #</th><th>Customer</th><th>Property</th><th>Type</th><th>Agent</th><th>Date</th><th>Due / Overdue</th><th>Total</th><th>Balance</th><th>Status</th><th>Source</th><th>Actions</th></tr></thead>
         <tbody>
           {list.length === 0 ? (
-            <tr><td colSpan={11} style={{ textAlign: 'center', color: 'var(--muted)', padding: 20 }}>No invoices. {canEdit && 'Click "+ New Invoice" to create one.'}</td></tr>
+            <tr><td colSpan={12} style={{ textAlign: 'center', color: 'var(--muted)', padding: 20 }}>No invoices. {canEdit && 'Click "+ New Invoice" to create one.'}</td></tr>
           ) : list.map((i) => (
             <tr key={i.id}>
               <td><strong>{i.invoice_no}</strong></td>
@@ -88,6 +103,7 @@ export default function InvoicePage() {
               <td>{i.transaction_type ? typeLabel(i.transaction_type) : '—'}</td>
               <td>{i.listing_agent || '—'}</td>
               <td>{i.invoice_date}</td>
+              <td>{(() => { const w = dueWarning(i.closing_date, i.status); return w ? <span className={`pill ${w.cls}`} style={{ fontSize: 10 }}>{w.label}</span> : '—'; })()}</td>
               <td>{formatCurrency(i.total)}</td>
               <td>{formatCurrency(i.balance_due)}</td>
               <td><span className={`pill ${STATUS_PILL[i.display_status] || 'info'}`}>{i.display_status}</span></td>

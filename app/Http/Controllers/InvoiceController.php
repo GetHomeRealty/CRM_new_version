@@ -22,7 +22,7 @@ class InvoiceController extends Controller
     public function index()
     {
         return response()->json(
-            Invoice::with('customer')->latest()->get()->map(fn (Invoice $i) => $this->summary($i))
+            Invoice::with(['customer', 'transaction'])->latest()->get()->map(fn (Invoice $i) => $this->summary($i))
         );
     }
 
@@ -171,6 +171,7 @@ class InvoiceController extends Controller
             'customer_notes' => ['nullable', 'string'],
             'terms_conditions' => ['nullable', 'string'],
             'signature_path' => ['nullable', 'string'],
+            'broker_name' => ['nullable', 'string', 'max:255'],
             'commission_received_date' => ['nullable', 'date'],
             'commission_received_via' => ['nullable', Rule::in(['Bank Transfer', 'Cash', 'EFT', 'Interac e-Transfer', 'Cheque'])],
             'auto_reminder' => ['nullable', 'array'],
@@ -213,6 +214,7 @@ class InvoiceController extends Controller
             'customer_notes' => $data['customer_notes'] ?? null,
             'terms_conditions' => $data['terms_conditions'] ?? null,
             'signature_path' => $data['signature_path'] ?? null,
+            'broker_name' => $data['broker_name'] ?? null,
             'commission_received_date' => $data['commission_received_date'] ?? null,
             'commission_received_via' => $data['commission_received_via'] ?? null,
             'auto_reminder' => $data['auto_reminder'] ?? null,
@@ -267,6 +269,8 @@ class InvoiceController extends Controller
             'transaction_type' => $i->transaction_type,
             'trade_number' => $i->trade_number,
             'listing_agent' => $i->listing_agent,
+            // Transaction closing date drives the due/overdue warning in the list.
+            'closing_date' => optional(optional($i->transaction)->closing_date)->toDateString(),
         ];
     }
 
@@ -288,9 +292,11 @@ class InvoiceController extends Controller
             'customer_phone' => $i->customer_phone ?: ($brok->phone ?? null),
             'customer_email' => $i->customer_email ?: ($brok->invoice_email ?? null),
             'customer_address' => $i->customer_address ?: ($brok->address ?? null),
-            // Co-op salesperson = the GHR agent on the deal; Listing agent = the other brokerage's agent(s).
-            'coop_salesperson' => $i->coop_salesperson ?: (optional($txn)->agent),
-            'listing_agent' => $i->listing_agent ?: ($brokAgents ?: optional($txn)->agent),
+            // Co-op salesperson = the GHR agent on the deal. Listing agent = ONLY the
+            // Listing/Co-op Brokerage Information → agent name(s); for transaction-linked
+            // invoices it never falls back to the deal agent. Manual invoices keep their value.
+            'coop_salesperson' => optional($txn)->agent ?: $i->coop_salesperson,
+            'listing_agent' => $txn ? ($brokAgents ?: null) : $i->listing_agent,
             'customer_city' => $i->customer_city,
             'customer_province' => $i->customer_province,
             'customer_postal_code' => $i->customer_postal_code,
@@ -299,6 +305,7 @@ class InvoiceController extends Controller
             'customer_notes' => $i->customer_notes,
             'terms_conditions' => $i->terms_conditions,
             'signature_path' => $i->signature_path,
+            'broker_name' => $i->broker_name,
             'commission_received_date' => optional($i->commission_received_date)->toDateString(),
             'commission_received_via' => $i->commission_received_via,
             'reminders' => $i->reminders ?? [],

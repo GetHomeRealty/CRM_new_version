@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getInvoice, createInvoice, updateInvoice, recordInvoicePayment, deleteInvoicePayment, recordInvoiceReminder, createCustomer } from '../lib/api';
+import { getInvoice, createInvoice, updateInvoice, recordInvoiceReminder, createCustomer } from '../lib/api';
 import { formatCurrency, parseNumber, typeLabel } from './format';
 import { useToast } from './toast';
 import InvoicePreviewModal from './InvoicePreviewModal';
@@ -10,7 +10,8 @@ const BRAND = '#c8102e';
 const TERMS = ['Due on Receipt', 'Net 7', 'Net 15', 'Net 30', 'Custom'];
 const TERM_DAYS = { 'Due on Receipt': 0, 'Net 7': 7, 'Net 15': 15, 'Net 30': 30 };
 const STATUSES = ['Paid', 'Overdue', 'Void', 'Due']; // §12.2
-const STATUS_PILL = { Paid: 'ok', Overdue: 'bad', Void: 'bad', Due: 'warn', Unpaid: 'info', Draft: 'info', 'Partially Paid': 'warn' };
+// Status colours: Due=blue, Overdue=red, Paid=green, Void=black.
+const STATUS_COLOR = { Due: '#2563eb', Overdue: '#dc2626', Paid: '#16a34a', Void: '#111827', Unpaid: '#2563eb', 'Partially Paid': '#d97706', Draft: '#64748b' };
 const COMM_VIA = ['Bank Transfer', 'Cash', 'EFT', 'Interac e-Transfer', 'Cheque'];
 const AUTO_REMINDERS = [
   { mode: '2', label: 'Every 2 days (until Paid, excl. weekends/holidays)' },
@@ -21,7 +22,7 @@ const AUTO_REMINDERS = [
 ];
 const today = () => new Date().toISOString().slice(0, 10);
 const addDays = (dateStr, n) => { const d = new Date(dateStr); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
-const blankItem = () => ({ description: 'Co-op Commission', qty: 1, rate: 0, is_taxable: true });
+const blankItem = () => ({ description: '', qty: 1, rate: 0, is_taxable: true });
 const r2c = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
 
 export default function InvoiceEditorModal({ open, invoiceId, settings, customers, agents, onClose, onSaved, onBack }) {
@@ -31,7 +32,6 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, customer
   const [form, setForm] = useState(null);
   const [saved, setSaved] = useState(null);
   const [saving, setSaving] = useState(false);
-  const [pay, setPay] = useState({ paid_on: today(), amount: '', method: 'EFT', reference: '' });
   const [preview, setPreview] = useState(false);
   const [menu, setMenu] = useState(''); // '', 'status', 'reminder'
 
@@ -41,13 +41,14 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, customer
       getInvoice(invoiceId).then((d) => { setForm(toForm(d)); setSaved(d); });
     } else {
       setForm({
-        property_reference: '', customer_id: '', customer_name: '', customer_phone: '', customer_email: '',
+        property_reference: '', customer_id: '', customer_name: '', customer_phone: '', emails: [''],
         customer_address: '', customer_city: '', customer_province: '', customer_postal_code: '', customer_country: 'Canada',
         invoice_date: today(), terms: settings?.default_terms || 'Due on Receipt', due_date: today(),
         trade_number: '', listing_agent: '', coop_salesperson: '', subject: '', status: 'Draft',
         transaction_id: null, transaction_type: '', purchase_price: null,
         discount: 0, customer_notes: settings?.thank_you_note || '', terms_conditions: '', signature_path: '',
         commission_received_date: '', commission_received_via: '', auto_reminder: null,
+        broker_name: settings?.broker_name || 'Sai Venkata Ramesh Gollu',
         line_items: [blankItem()],
       });
       setSaved(null);
@@ -74,18 +75,25 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, customer
     setForm((f) => ({ ...f, customer_id: id, ...(c ? { customer_name: c.name, customer_address: c.address || '', customer_city: c.city || '', customer_province: c.province || '', customer_postal_code: c.postal_code || '', customer_country: c.country || 'Canada' } : {}) }));
   };
 
+  // Invoice email(s): first is the primary Invoice Email; user can add more.
+  const setEmail = (i, v) => setForm((f) => ({ ...f, emails: f.emails.map((e, idx) => idx === i ? v : e) }));
+  const addEmail = () => setForm((f) => ({ ...f, emails: [...f.emails, ''] }));
+  const rmEmail = (i) => setForm((f) => ({ ...f, emails: f.emails.filter((_, idx) => idx !== i) }));
+
   const subTotal = form.line_items.reduce((s, it) => s + parseNumber(it.qty) * parseNumber(it.rate), 0);
   const taxable = form.line_items.reduce((s, it) => s + (it.is_taxable ? parseNumber(it.qty) * parseNumber(it.rate) : 0), 0);
   const tax = Math.round(taxable * taxRate) / 100;
   const discount = parseNumber(form.discount);
   const displaySubTotal = Math.round((subTotal + tax) * 100) / 100; // image "Sub Total" = items + HST
   const grandTotal = Math.round((displaySubTotal - discount) * 100) / 100;
-  const balanceDue = saved ? saved.balance_due : grandTotal;
+  // Balance Due tracks the live grand total minus payments already recorded.
+  const amountPaid = saved ? Number(saved.amount_paid) || 0 : 0;
+  const balanceDue = Math.round((grandTotal - amountPaid) * 100) / 100;
 
   const buildPayload = () => ({
     ...form,
     customer_id: form.customer_id || null,
-    customer_email: (form.customer_email || '').trim() || null,
+    customer_email: (form.emails || []).map((e) => e.trim()).filter(Boolean).join(', ') || null,
     discount: parseNumber(form.discount),
     line_items: form.line_items.map((it) => ({ description: it.description, qty: parseNumber(it.qty), rate: parseNumber(it.rate), is_taxable: !!it.is_taxable })),
   });
@@ -129,16 +137,6 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, customer
     } catch { toast('Could not save customer', 'bad'); }
   };
 
-  const addPayment = async () => {
-    if (!saved?.id) { toast('Save the invoice first', 'info'); return; }
-    if (!pay.amount || parseNumber(pay.amount) <= 0) { toast('Enter a payment amount', 'bad'); return; }
-    try {
-      const d = await recordInvoicePayment(saved.id, { ...pay, amount: parseNumber(pay.amount) });
-      setForm(toForm(d)); setSaved(d); setPay({ paid_on: today(), amount: '', method: 'EFT', reference: '' });
-      toast('Payment recorded', 'ok'); onSaved?.(d);
-    } catch (e) { toast(e.response?.data?.message || 'Could not record payment', 'bad'); }
-  };
-  const rmPayment = async (pid) => { const d = await deleteInvoicePayment(saved.id, pid); setForm(toForm(d)); setSaved(d); onSaved?.(d); };
 
   const openPdf = async () => { const d = saved || (await save()); if (d) setPreview(true); };
   const backToTransaction = () => {
@@ -205,7 +203,7 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, customer
             <button style={{ ...sideBtn, justifyContent: 'space-between' }} onClick={() => setMenu(menu === 'status' ? '' : 'status')}>
               <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>🏷️ Status</span>
               <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                {form.status && <span className={`pill ${STATUS_PILL[form.status] || 'info'}`} style={{ fontSize: 10 }}>{form.status}</span>}
+                {form.status && <span style={{ fontSize: 10, fontWeight: 700, color: '#fff', background: STATUS_COLOR[form.status] || '#64748b', borderRadius: 999, padding: '2px 8px' }}>{form.status}</span>}
                 <span>▾</span>
               </span>
             </button>
@@ -228,7 +226,7 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, customer
               <select value={form.commission_received_via} onChange={(e) => set('commission_received_via', e.target.value)} style={{ width: '100%', border: '1px solid #e6e8ef', borderRadius: 6, padding: '6px 8px' }}>
                 <option value="">Select</option>{COMM_VIA.map((v) => <option key={v}>{v}</option>)}
               </select>
-              <button className="btn primary sm" style={{ marginTop: 8, width: '100%' }} onClick={() => save()} disabled={saving}>Save</button>
+              <button className="btn primary sm" style={{ marginTop: 8, width: '100%' }} onClick={() => save()} disabled={saving}>Record Payment</button>
             </div>
           )}
 
@@ -328,28 +326,28 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, customer
             <input value={form.customer_name} onChange={(e) => set('customer_name', e.target.value)} placeholder="Listing Brokerage Name" style={docInput({})} />
             <input value={form.customer_address} onChange={(e) => set('customer_address', e.target.value)} placeholder="Address" style={docInput({})} />
             <input value={form.customer_phone} onChange={(e) => set('customer_phone', e.target.value)} placeholder="Phone Number" style={docInput({})} />
-            <input type="email" value={form.customer_email} onChange={(e) => set('customer_email', e.target.value)} placeholder="Invoice Email" style={docInput({})} />
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 8, maxWidth: 460, marginTop: 8 }}>
-            <input value={form.customer_city} onChange={(e) => set('customer_city', e.target.value)} placeholder="City" style={docInput({})} />
-            <input value={form.customer_province} onChange={(e) => set('customer_province', e.target.value)} placeholder="Province" style={docInput({})} />
-            <input value={form.customer_postal_code} onChange={(e) => set('customer_postal_code', e.target.value)} placeholder="Postal Code" style={docInput({})} />
+            {form.emails.map((em, i) => (
+              <div key={i} style={{ display: 'flex', gap: 6 }}>
+                <input type="email" value={em} onChange={(e) => setEmail(i, e.target.value)} placeholder={i === 0 ? 'Invoice Email' : `Additional Email ${i}`} style={docInput({ flex: 1 })} />
+                {form.emails.length > 1 && <button className="row-rm" onClick={() => rmEmail(i)}>🗑️</button>}
+              </div>
+            ))}
+            <div><button className="btn" style={{ border: `1px solid ${BRAND}`, color: BRAND, background: '#fff', borderRadius: 8, padding: '6px 12px', fontSize: 13 }} onClick={addEmail}>+ Add Email</button></div>
           </div>
           <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, marginTop: 10, color: '#334155' }}>
             <input type="checkbox" defaultChecked /> Billing Address = Shipping Address
           </label>
 
-          {/* AGENT DETAILS */}
+          {/* AGENT DETAILS — read-only, auto-fetched from the transaction */}
           <div style={{ ...sectionLbl, marginTop: 18 }}>AGENT DETAILS</div>
           <div style={{ marginBottom: 10 }}>
             <div style={{ fontSize: 12.5, color: '#475569', marginBottom: 4 }}>Sales Person (Co-op Agent):</div>
-            <input list="agentList" value={form.coop_salesperson} onChange={(e) => set('coop_salesperson', e.target.value)} style={docInput({ width: '100%' })} />
+            <input value={form.coop_salesperson} readOnly style={docInput({ width: '100%', background: '#f9fafb' })} />
           </div>
           <div>
             <div style={{ fontSize: 12.5, color: '#475569', marginBottom: 4 }}>Listing Agent / Sales Person:</div>
-            <input list="agentList" value={form.listing_agent} onChange={(e) => set('listing_agent', e.target.value)} placeholder="Enter agent names separated by commas" style={docInput({ width: '100%' })} />
+            <input value={form.listing_agent} readOnly placeholder="From Listing Brokerage Information → Listing Agent Name(s)" style={docInput({ width: '100%', background: '#f9fafb' })} />
           </div>
-          <datalist id="agentList">{(agents || []).map((a) => <option key={a} value={a} />)}</datalist>
 
           {/* Description / Amount table */}
           <table style={{ borderCollapse: 'collapse', width: '100%', marginTop: 18 }}>
@@ -381,40 +379,9 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, customer
               <tr><td style={{ padding: '6px 14px', color: '#475569' }}>Sub Total</td><td style={{ padding: '6px 14px', textAlign: 'right', fontWeight: 700 }}>{formatCurrency(displaySubTotal)}</td></tr>
               <tr><td style={{ padding: '6px 14px', color: '#475569' }}>Discount</td><td style={{ padding: '6px 14px', textAlign: 'right' }}><input value={form.discount} onChange={(e) => set('discount', e.target.value)} style={docInput({ width: 120, textAlign: 'right' })} /></td></tr>
               <tr><td style={{ padding: '8px 14px', fontWeight: 800, borderTop: '2px solid #0f172a', fontSize: 15 }}>GRAND TOTAL</td><td style={{ padding: '8px 14px', textAlign: 'right', fontWeight: 800, borderTop: '2px solid #0f172a', fontSize: 15 }}>{formatCurrency(grandTotal)}</td></tr>
-              {saved && <tr><td style={{ padding: '4px 14px', color: '#166534' }}>Paid</td><td style={{ padding: '4px 14px', textAlign: 'right', color: '#166534' }}>{formatCurrency(saved.amount_paid)}</td></tr>}
-              {saved && <tr><td style={{ padding: '4px 14px', fontWeight: 700, color: BRAND }}>Balance Due</td><td style={{ padding: '4px 14px', textAlign: 'right', fontWeight: 700, color: BRAND }}>{formatCurrency(saved.balance_due)}</td></tr>}
+              {amountPaid > 0 && <tr><td style={{ padding: '4px 14px', color: '#166534' }}>Paid</td><td style={{ padding: '4px 14px', textAlign: 'right', color: '#166534' }}>{formatCurrency(amountPaid)}</td></tr>}
+              <tr><td style={{ padding: '4px 14px', fontWeight: 700, color: BRAND }}>Balance Due</td><td style={{ padding: '4px 14px', textAlign: 'right', fontWeight: 700, color: BRAND }}>{formatCurrency(balanceDue)}</td></tr>
             </tbody></table>
-          </div>
-
-          {/* §12.2 Commission Received summary (edited in the sidebar) + §12.3 Reminders */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, marginTop: 18, borderTop: '1px solid #eef0f5', paddingTop: 16 }}>
-            <div>
-              <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>Commission Received</div>
-              {form.status === 'Paid'
-                ? <div style={{ fontSize: 12.5, color: '#475569' }}>Date: <strong>{form.commission_received_date || '—'}</strong><br />Via: <strong>{form.commission_received_via || '—'}</strong></div>
-                : <div style={{ fontSize: 12, color: 'var(--muted)' }}>Set status to <strong>Paid</strong> (sidebar → Invoice Status) to record the commission received date &amp; method.</div>}
-            </div>
-            <div>
-              <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>Reminders</div>
-              <div style={{ fontSize: 12.5, color: '#475569' }}>
-                Sent <strong>{(saved?.reminders || []).length}</strong> time(s).
-                {(saved?.reminders || []).length > 0 && (
-                  <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
-                    {saved.reminders.slice(-5).reverse().map((r, i) => <li key={i}>{(r.date || '').slice(0, 16).replace('T', ' ')}{r.by ? ` · ${r.by}` : ''}</li>)}
-                  </ul>
-                )}
-                {form.auto_reminder?.mode && <div style={{ marginTop: 6 }}>Auto: <strong>{form.auto_reminder.mode === 'custom' ? 'Custom dates' : (form.auto_reminder.mode === 'off' ? 'Off (disabled)' : `every ${form.auto_reminder.mode} days until Paid (excl. weekends/holidays)`)}</strong></div>}
-              </div>
-              {form.auto_reminder?.mode === 'custom' && (
-                <div style={{ marginTop: 8 }}>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                    {(form.auto_reminder.dates || []).length
-                      ? form.auto_reminder.dates.map((d) => <span key={d} className="pill info" style={{ fontSize: 11 }}>{d}</span>)
-                      : <span className="help" style={{ margin: 0 }}>Pick dates on the calendar (sidebar → Reminders → Custom).</span>}
-                  </div>
-                </div>
-              )}
-            </div>
           </div>
 
           {/* Notes & Terms */}
@@ -440,7 +407,7 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, customer
                 <div>Bank Transit Number: {settings?.transit_no || '—'}</div>
                 <div>Account Number: {settings?.account_no || '—'}</div>
                 <div>Institution Number: {settings?.institution_no || '—'}</div>
-                <div style={{ marginTop: 10, fontWeight: 700 }}>HST Number : {settings?.hst_number || '—'}</div>
+                <div style={{ fontWeight: 700 }}>HST Number : {settings?.hst_number || '—'}</div>
               </div>
             </div>
             <div>
@@ -448,9 +415,9 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, customer
               <button className="btn" style={{ border: `1px solid ${BRAND}`, color: BRAND, background: '#fff', borderRadius: 8, padding: '6px 14px', fontSize: 13 }} onClick={uploadSignature}>Upload Signature Image</button>
               {form.signature_path && <div style={{ marginTop: 10 }}><img src={form.signature_path} alt="signature" style={{ maxHeight: 70 }} /></div>}
               <div style={{ marginTop: 28, borderTop: '1px dashed #94a3b8', paddingTop: 6, fontSize: 11, fontStyle: 'italic', color: '#94a3b8', textAlign: 'center' }}>Signature</div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 10, fontSize: 12.5 }}>
-                <span style={{ fontStyle: 'italic', color: '#475569' }}>(Broker Manager / Broker of Record):</span>
-                <strong>{settings?.broker_name || 'Sai Venkata Ramesh Gollu'}</strong>
+              <div style={{ marginTop: 10, fontSize: 12.5 }}>
+                <div style={{ fontStyle: 'italic', color: '#475569', marginBottom: 4 }}>(Broker Manager / Broker of Record):</div>
+                <input value={form.broker_name} onChange={(e) => set('broker_name', e.target.value)} style={docInput({ width: '100%', fontWeight: 700 })} />
               </div>
             </div>
           </div>
@@ -459,30 +426,6 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, customer
             This is a system-generated invoice from {settings?.name || 'GetHomeRealty Inc'}.
           </div>
 
-          {/* Payments */}
-          {saved && (
-            <>
-              <div className="modal-sub">Payments &amp; History</div>
-              <div className="g4" style={{ alignItems: 'end' }}>
-                <div className="field"><label style={{ fontSize: 11.5 }}>Date</label><input type="date" value={pay.paid_on} onChange={(e) => setPay({ ...pay, paid_on: e.target.value })} /></div>
-                <div className="field"><label style={{ fontSize: 11.5 }}>Amount</label><input value={pay.amount} onChange={(e) => setPay({ ...pay, amount: e.target.value })} placeholder="0.00" /></div>
-                <div className="field"><label style={{ fontSize: 11.5 }}>Method</label>
-                  <select value={pay.method} onChange={(e) => setPay({ ...pay, method: e.target.value })}><option>EFT</option><option>Cheque</option><option>Wire</option><option>Cash</option><option>Bank Transfer</option><option>Interac e-Transfer</option></select></div>
-                <div className="field"><label style={{ fontSize: 11.5 }}>Reference</label><input value={pay.reference} onChange={(e) => setPay({ ...pay, reference: e.target.value })} /></div>
-              </div>
-              <button className="btn ok-btn sm" onClick={addPayment}>+ Record Payment</button>
-              {saved.payments?.length > 0 && (
-                <table className="doc-table" style={{ marginTop: 10 }}>
-                  <thead><tr><th>Date</th><th>Method</th><th>Reference</th><th style={{ textAlign: 'right' }}>Amount</th><th style={{ width: 36 }}></th></tr></thead>
-                  <tbody>
-                    {saved.payments.map((p) => (
-                      <tr key={p.id}><td>{p.paid_on}</td><td>{p.method || '—'}</td><td>{p.reference || '—'}</td><td style={{ textAlign: 'right' }}>{formatCurrency(p.amount)}</td><td><button className="row-rm" onClick={() => rmPayment(p.id)}>🗑️</button></td></tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </>
-          )}
         </div>
       </div>
 
@@ -492,19 +435,20 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, customer
 }
 
 function toForm(d) {
-  // Show only the Invoice Email (first value if a legacy comma list was stored).
-  const invoiceEmail = (d.customer_email || '').split(',')[0].trim();
+  const emails = (d.customer_email || '').split(',').map((s) => s.trim()).filter(Boolean);
   return {
     property_reference: d.property_reference || '', customer_id: d.customer_id || '', customer_name: d.customer_name || '',
-    customer_phone: d.customer_phone || '', customer_email: invoiceEmail,
+    customer_phone: d.customer_phone || '', emails: emails.length ? emails : [''],
     customer_address: d.customer_address || '', customer_city: d.customer_city || '', customer_province: d.customer_province || '',
     customer_postal_code: d.customer_postal_code || '', customer_country: d.customer_country || 'Canada',
-    invoice_date: d.invoice_date || '', terms: d.terms || 'Due on Receipt', due_date: d.due_date || '',
+    // Due Date follows the transaction closing date when present.
+    invoice_date: d.invoice_date || '', terms: d.terms || 'Due on Receipt', due_date: d.closing_date || d.due_date || '',
     trade_number: d.trade_number || '', listing_agent: d.listing_agent || '', coop_salesperson: d.coop_salesperson || '',
     subject: d.subject || '', status: d.status || 'Draft',
     transaction_id: d.transaction_id || null, transaction_type: d.transaction_type || '', purchase_price: d.purchase_price ?? null,
     discount: d.discount ?? 0, customer_notes: d.customer_notes || '', terms_conditions: d.terms_conditions || '', signature_path: d.signature_path || '',
     commission_received_date: d.commission_received_date || '', commission_received_via: d.commission_received_via || '', auto_reminder: d.auto_reminder || null,
+    broker_name: d.broker_name || 'Sai Venkata Ramesh Gollu',
     line_items: (d.line_items && d.line_items.length) ? d.line_items.map((it) => ({ description: it.description, qty: it.qty, rate: it.rate, is_taxable: it.is_taxable })) : [blankItem()],
   };
 }

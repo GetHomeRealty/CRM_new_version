@@ -64,6 +64,7 @@ class TransactionResource extends JsonResource
             'activity_tracker' => $this->activity_tracker,
             'adjustments' => $this->adjustments,
             'commercial_lease' => $this->commercial_lease,
+            'notice_of_sale' => $this->notice_of_sale,
 
             // Preconstruction
             'precon_listing_type' => $this->precon_listing_type,

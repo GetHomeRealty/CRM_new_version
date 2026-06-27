@@ -81,7 +81,7 @@ class Transaction extends Model
         'builder_name', 'builder_vendor', 'builder_project', 'builder_address',
         'builder_office_email', 'builder_invoice_email', 'builder_phone',
         'lawyer_name', 'lawyer_email', 'lawyer_phone', 'lawyer_address',
-        'admin_activities', 'activity_tracker', 'adjustments', 'commercial_lease',
+        'admin_activities', 'activity_tracker', 'adjustments', 'commercial_lease', 'notice_of_sale',
         'comm_status', 'comm_paid_status', 'valid_status',
         'conditional_offer', 'inter_board_enabled',
     ];
@@ -125,6 +125,7 @@ class Transaction extends Model
             'activity_tracker' => 'array',
             'adjustments' => 'array',
             'commercial_lease' => 'array',
+            'notice_of_sale' => 'array',
             'offer_date' => 'date',
             'closing_date' => 'date',
             'listing_contract_date' => 'date',

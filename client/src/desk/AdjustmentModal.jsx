@@ -1,9 +1,34 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { updateTransaction } from '../lib/api';
 import { batchNo, parseNumber, formatCurrency, isPreconType } from './format';
 import { useToast } from './toast';
 
 const lbl = { fontSize: 11.5, color: 'var(--text-2)', fontWeight: 600, marginBottom: 5, display: 'block' };
+
+// Amount input with a +/− sign toggle. "−" deducts from the agent commission
+// (stored positive — the commission math subtracts it); "+" adds it back (stored
+// negative). Default "−" (deduct).
+function SignedAmount({ value, onChange }) {
+  const [sign, setSign] = useState(parseNumber(value) < 0 ? '+' : '-');
+  const [mag, setMag] = useState(() => { const n = parseNumber(value); return n === 0 ? '' : String(Math.abs(n)); });
+  useEffect(() => {
+    const n = parseNumber(value);
+    if (Math.abs(n) !== Math.abs(parseNumber(mag))) setMag(n === 0 ? '' : String(Math.abs(n)));
+    if (n !== 0) setSign(n < 0 ? '+' : '-');
+  }, [value]); // eslint-disable-line react-hooks/exhaustive-deps
+  const stored = (s, m) => { const mm = Math.abs(parseNumber(m)); return s === '-' ? mm : -mm; };
+  const pick = (s) => { setSign(s); onChange(stored(s, mag)); };
+  const onMag = (m) => { setMag(m); onChange(stored(sign, m)); };
+  return (
+    <div style={{ display: 'flex', gap: 6 }}>
+      <div className="seg-toggle" style={{ flex: '0 0 auto' }}>
+        <button type="button" className={`seg-btn ${sign === '+' ? 'active' : ''}`} onClick={() => pick('+')} title="Add to agent commission">+</button>
+        <button type="button" className={`seg-btn ${sign === '-' ? 'active' : ''}`} onClick={() => pick('-')} title="Deduct from agent commission">−</button>
+      </div>
+      <input value={mag} onChange={(e) => onMag(e.target.value)} placeholder="0.00" style={{ flex: 1 }} />
+    </div>
+  );
+}
 
 export default function AdjustmentModal({ open, onClose, transactionId, txn, onSaved, termCount: termCountProp }) {
   const toast = useToast();
@@ -65,7 +90,7 @@ export default function AdjustmentModal({ open, onClose, transactionId, txn, onS
             <div className="dyn-list-box" key={i}>
               <div style={{ display: 'grid', gridTemplateColumns: precon ? 'repeat(4,1fr)' : 'repeat(3,1fr)', gap: 14 }}>
                 <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Agent Name</label>{agentSelect(r.agent, (e) => setRow('adjustment_rows', i, { agent: e.target.value }))}</div>
-                <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Amount</label><input value={r.amount} onChange={(e) => setRow('adjustment_rows', i, { amount: e.target.value })} placeholder="0.00" /></div>
+                <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Amount</label><SignedAmount value={r.amount} onChange={(nv) => setRow('adjustment_rows', i, { amount: nv })} /></div>
                 <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Status</label><select value={r.status} onChange={(e) => setRow('adjustment_rows', i, { status: e.target.value })}><option value="">Select status</option><option>Yet to Adjust</option><option>Closed</option></select></div>
                 {precon && termSelect(r.term, (e) => setRow('adjustment_rows', i, { term: e.target.value }))}
               </div>
@@ -133,8 +158,14 @@ export default function AdjustmentModal({ open, onClose, transactionId, txn, onS
               <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Referral Agent Name</label><input value={form.ext.agent_name} onChange={(e) => setExt({ agent_name: e.target.value })} /></div>
               <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Brokerage Details</label><input value={form.ext.brokerage} onChange={(e) => setExt({ brokerage: e.target.value })} /></div>
             </div>
-            <div className="g3" style={{ marginTop: 10 }}>
-              <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Amount</label><input value={form.ext.amount} onChange={(e) => setExt({ amount: e.target.value })} placeholder="0.00" /></div>
+            <div className="g4" style={{ marginTop: 10 }}>
+              <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Percentage (%)</label>
+                <input value={form.ext.pct ?? ''} onChange={(e) => {
+                  const p = e.target.value;
+                  const amt = parseNumber(p) > 0 ? Math.round((parseNumber(txn.price) * parseNumber(p) / 100 + Number.EPSILON) * 100) / 100 : '';
+                  setExt({ pct: p, amount: amt });
+                }} placeholder="e.g. 1.5" /></div>
+              <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Amount</label><input value={form.ext.amount} onChange={(e) => setExt({ amount: e.target.value, pct: '' })} placeholder="0.00" /></div>
               <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>HST</label><input value={formatCurrency(extHst)} readOnly style={{ background: '#f9fafb' }} /></div>
               <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Total</label><input value={formatCurrency(extTotal)} readOnly style={{ background: '#f9fafb' }} /></div>
             </div>

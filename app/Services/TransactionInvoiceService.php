@@ -87,7 +87,7 @@ class TransactionInvoiceService
             'terms' => $settings->default_terms,
             'due_date' => optional($this->dueDate($invoiceDate, $settings->default_terms))->toDateString(),
             'trade_number' => $t->trade_no,
-            'listing_agent' => $brokAgents ?: $t->agent, // listing brokerage's agent name(s)
+            'listing_agent' => $brokAgents ?: null,      // Listing Brokerage Information → Listing Agent Name(s)
             'coop_salesperson' => $t->agent,             // GHR (co-op) agent
             'subject' => 'Co-op Commission for '.$t->property.$suffix,
             'status' => 'Unpaid',

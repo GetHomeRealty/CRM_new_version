@@ -278,43 +278,24 @@ export function listingBreakdown(input, hstRate = HST_RATE) {
   const extTotal = extAmt + extHst;
   const allZero = listPct === 0 && listFlat === 0 && coopPct === 0 && coopFlat === 0;
 
-  let listComm, listHst, listTotal, coopComm, coopHst, coopTotal, totalComm, totalHst, totalWithHst,
-    payableToClient, receivableFromLawyer, brokerageFloor, agentPool, brokerageKeep;
-
-  if (!isLease) {
-    // Listing Commission stays fixed — the external broker referral only affects the
-    // "Commissions after broker referral" section, not this commission or the split.
-    listComm = listBasePct + listFlat + lAdjBefore;
-    listHst = listComm * hstRate;
-    listTotal = (listComm + listHst) + lAdjAfter;
-    coopComm = coopBasePct + coopFlat + cAdjBefore;
-    coopHst = coopComm * hstRate;
-    coopTotal = (coopComm + coopHst) + cAdjAfter;
-    totalComm = allZero ? 0 : listBasePct + coopBasePct + listFlat + coopFlat + lAdjBefore + cAdjBefore;
-    totalHst = totalComm * hstRate;
-    totalWithHst = (totalComm + totalHst) + lAdjAfter + cAdjAfter;
-    payableToClient = Math.max(deposit - totalWithHst, 0);
-    receivableFromLawyer = Math.min(deposit - totalWithHst, 0);
-    brokerageFloor = Math.max(listTotal * brokerageSplit, minBrok * g);
-    agentPool = Math.max(Math.min(listTotal * agentSplit, listTotal - brokerageFloor), 0);
-    brokerageKeep = listTotal - agentPool;
-  } else {
-    listComm = listBasePct + listFlat;
-    listHst = listComm * hstRate;
-    listTotal = listComm * g;
-    coopComm = coopBasePct + lAdjBefore + coopFlat;
-    coopHst = coopComm * hstRate;
-    coopTotal = (coopComm + coopHst) + cAdjAfter;
-    totalComm = listComm + coopComm;
-    totalHst = totalComm * hstRate;
-    totalWithHst = listTotal + coopTotal;
-    payableToClient = deposit - totalWithHst;
-    receivableFromLawyer = Math.min(deposit - totalWithHst, 0);
-    const teamShareTotal = members.reduce((s, m) => s + num(m.split) / 100, 0);
-    brokerageFloor = Math.max(listTotal * brokerageSplit, minBrok * g);
-    brokerageKeep = ROUND((brokerageFloor + (-lAdjBefore * g)) * teamShareTotal);
-    agentPool = Math.max(listTotal - brokerageKeep, 0);
-  }
+  // Sale & Lease share the same listing/co-op/split math — adjustments apply to their own
+  // sides (listing adj → listing, co-op adj → co-op). Lease differs ONLY in the min
+  // brokerage floor ($250) and the trust floor (payable not floored at 0). The external
+  // broker referral never touches the Listing Commission (handled in referralSections).
+  const listComm = listBasePct + listFlat + lAdjBefore;
+  const listHst = listComm * hstRate;
+  const listTotal = (listComm + listHst) + lAdjAfter;
+  const coopComm = coopBasePct + coopFlat + cAdjBefore;
+  const coopHst = coopComm * hstRate;
+  const coopTotal = (coopComm + coopHst) + cAdjAfter;
+  const totalComm = allZero ? 0 : listBasePct + coopBasePct + listFlat + coopFlat + lAdjBefore + cAdjBefore;
+  const totalHst = totalComm * hstRate;
+  const totalWithHst = (totalComm + totalHst) + lAdjAfter + cAdjAfter;
+  const payableToClient = isLease ? (deposit - totalWithHst) : Math.max(deposit - totalWithHst, 0);
+  const receivableFromLawyer = Math.min(deposit - totalWithHst, 0);
+  const brokerageFloor = Math.max(listTotal * brokerageSplit, minBrok * g);
+  const agentPool = Math.max(Math.min(listTotal * agentSplit, listTotal - brokerageFloor), 0);
+  const brokerageKeep = listTotal - agentPool;
 
   const memberRows = members.map((m, i) => {
     const teamShare = num(m.split) / 100;

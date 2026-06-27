@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { updateTransaction } from '../lib/api';
+import { updateTransaction, getAgentCommissions } from '../lib/api';
 import { formatCurrency, parseNumber, isListingFinancialType, isPreconType } from './format';
 import { agentAdjustments, referralSections, agentCommissionsAfterClient, agentCommissionLine, listingBreakdown } from './commissionCalc';
 import { useToast } from './toast';
@@ -16,6 +16,10 @@ const lineLessTotal = (wo, deduct = 0) => ({ commission: r2(wo), hst: r2(wo * HS
 // e.g. "adjustment $300.00 + advance $200.00". Only non-zero parts are shown.
 const ADJ_PARTS = [['agentAdjust', 'adjustment'], ['advance', 'advance']];
 const adjLabel = (d) => ADJ_PARTS.filter(([k]) => d[k] > 0).map(([k, name]) => `${name} ${formatCurrency(d[k])}`).join(' + ');
+
+// Commission-adjustment note (under Commission / Total). Positive = reduces (Less),
+// negative = increases (Plus). `amt` is the signed value from a 'sub'-convention field.
+const adjNote = (amt, when) => (amt === 0 ? null : `${amt > 0 ? 'Less' : 'Plus'} adjustment ${formatCurrency(Math.abs(amt))} (${when})`);
 
 export default function FinancialModal({ open, onClose, transactionId, txn, termCount: termCountProp, onSaved }) {
   const toast = useToast();
@@ -46,6 +50,32 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
     if (k === 'brok_pct') return { ...m, brok_pct: v, agent_pct: r2(clampPct(100 - parseNumber(v))) };
     return { ...m, [k]: v };
   }));
+  // Agent Comm (%) is locked by default per member (pencil unlocks); Brok Comm (%) stays locked.
+  const [agentUnlock, setAgentUnlock] = useState({});
+  const lockField = { background: '#f3f4f6', cursor: 'not-allowed' };
+
+  // Each agent's registered default commission split (from their user profile).
+  // Used to pre-fill Agent Comm (%) and to flag transaction-specific overrides.
+  const leaseType = /lease/i.test(txn.type);
+  const [agentDefaults, setAgentDefaults] = useState({});
+  useEffect(() => { if (open) getAgentCommissions().then(setAgentDefaults).catch(() => {}); }, [open]);
+  const defaultPctFor = (name) => {
+    const d = agentDefaults[name];
+    if (!d) return null;
+    const v = leaseType ? (d.lease_pct ?? d.agent_pct) : d.agent_pct;
+    return (v === null || v === undefined || v === '') ? null : parseNumber(v);
+  };
+  // For transactions not yet customised via Team Split, seed Agent Comm (%) from
+  // the agent's registered default once it loads.
+  const hadSavedTeam = !!(txn.team && txn.team.length);
+  useEffect(() => {
+    if (hadSavedTeam) return;
+    setMembers((ms) => ms.map((m) => {
+      const def = defaultPctFor(m.name);
+      if (def === null) return m;
+      return { ...m, agent_pct: def, brok_pct: r2(clampPct(100 - def)) };
+    }));
+  }, [agentDefaults]); // eslint-disable-line react-hooks/exhaustive-deps
   // Pre-HST per-agent deductions (Agent Adjust / Advance / referrals), aligned to members.
   const memberDeduct = agentAdjustments(txn.adjustments, members);
 
@@ -231,9 +261,9 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5,1fr)', gap: 10, marginBottom: 14 }}>
               <div className="field" style={{ marginBottom: 0 }}><label>Commission %</label><input type="number" value={masterPct} onChange={(e) => setMasterPct(e.target.value)} placeholder="e.g. 4" /></div>
               <div className="field" style={{ marginBottom: 0 }}><label>Commission Amount</label><input value={masterAmtManual} onChange={(e) => setMasterAmtManual(e.target.value)} placeholder="0.00" /></div>
-              <div className="field" style={{ marginBottom: 0 }}><label>Commission</label><input readOnly value={formatCurrency(mComm)} /></div>
+              <div className="field" style={{ marginBottom: 0 }}><label>Commission</label><input readOnly value={formatCurrency(mComm)} />{adjEnabled && adjB !== 0 && <div className="help" style={{ margin: '4px 0 0' }}>{adjNote(adjB, 'before HST')}</div>}</div>
               <div className="field" style={{ marginBottom: 0 }}><label>HST</label><input readOnly value={formatCurrency(mHst)} /></div>
-              <div className="field" style={{ marginBottom: 0 }}><label>Total</label><input readOnly className="brand" value={formatCurrency(mTotal)} /></div>
+              <div className="field" style={{ marginBottom: 0 }}><label>Total</label><input readOnly className="brand" value={formatCurrency(mTotal)} />{adjEnabled && adjA !== 0 && <div className="help" style={{ margin: '4px 0 0' }}>{adjNote(adjA, 'after HST')}</div>}</div>
             </div>
 
             <div className="modal-sub">Commission Structure</div>
@@ -254,6 +284,14 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
               const visible = visibleAtTerm(k);
               const termDeduct = agentAdjustments(txn.adjustments, members, k); // term-scoped, aligned to members
               const locked = isLocked(k);
+              const agentTermTotal = visible.reduce((s, { m, i }) => {
+                const base = r2(tAmt * (parseNumber(m.split) / 100));
+                return s + lineLessTotal(r2(base * parseNumber(m.agent_pct) / 100), termDeduct[i].total).total;
+              }, 0);
+              const brokTermTotal = visible.reduce((s, { m }) => {
+                const base = r2(tAmt * (parseNumber(m.split) / 100));
+                return s + lineOf(r2(base * parseNumber(m.brok_pct) / 100)).total;
+              }, 0);
               return (
                 <div key={k} style={{ background: '#f9fafb', border: '1px solid var(--line)', borderRadius: 8, padding: 12, marginBottom: 10 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
@@ -267,7 +305,7 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
                     <div className="field" style={{ marginBottom: 0 }}><label>Total</label><input readOnly className="brand" value={formatCurrency(tTotal)} /></div>
                   </div>
 
-                  <div className="modal-sub" style={{ marginTop: 14 }}>Agent Commission — Term {k}</div>
+                  <div className="modal-sub" style={{ marginTop: 14 }}>Agent Commission — Term {k} <span style={{ color: 'var(--brand)' }}>({formatCurrency(agentTermTotal)})</span></div>
                   {visible.length === 0 ? <div className="help">No agents assigned to Term {k} (per Team Split scope).</div> : visible.map(({ m, i }) => {
                     const base = r2(tAmt * (parseNumber(m.split) / 100));
                     const a = lineLessTotal(r2(base * parseNumber(m.agent_pct) / 100), termDeduct[i].total);
@@ -278,11 +316,21 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
                           <strong style={{ color: 'var(--brand)' }}>{formatCurrency(a.total)}</strong>
                         </div>
                         <div className="g4">
-                          <div className="field" style={{ marginBottom: 0 }}><label>Agent Comm (%)</label><input type="number" value={m.agent_pct} onChange={(e) => setMember(i, 'agent_pct', e.target.value)} /></div>
+                          <div className="field" style={{ marginBottom: 0 }}>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>Agent Comm (%)
+                              <button type="button" className="row-rm" style={{ color: 'var(--brand)', lineHeight: 1 }} title={agentUnlock[i] ? 'Lock Agent Comm %' : 'Unlock to edit Agent Comm %'} onClick={() => setAgentUnlock((u) => ({ ...u, [i]: !u[i] }))}>{agentUnlock[i] ? '🔓' : '✏'}</button>
+                            </label>
+                            <input type="number" value={m.agent_pct} readOnly={!agentUnlock[i]} style={!agentUnlock[i] ? lockField : undefined} onChange={(e) => setMember(i, 'agent_pct', e.target.value)} />
+                          </div>
                           <div className="field" style={{ marginBottom: 0 }}><label>Commission</label><input readOnly value={formatCurrency(a.commission)} /></div>
                           <div className="field" style={{ marginBottom: 0 }}><label>HST</label><input readOnly value={formatCurrency(a.hst)} /></div>
                           <div className="field" style={{ marginBottom: 0 }}><label>Total</label><input readOnly style={{ fontWeight: 700, color: 'var(--brand)' }} value={formatCurrency(a.total)} /></div>
                         </div>
+                        {defaultPctFor(m.name) !== null && parseNumber(m.agent_pct) !== defaultPctFor(m.name) && (
+                          <div className="help" style={{ margin: '6px 0 0', color: 'var(--brand)' }}>
+                            This commission split applies only to this transaction; the agent’s main/default commission split is {defaultPctFor(m.name)}%.
+                          </div>
+                        )}
                         {termDeduct[i].total > 0 && <div className="help" style={{ margin: '6px 0 0' }}>Less {adjLabel(termDeduct[i])} = −{formatCurrency(termDeduct[i].total)} off total</div>}
                       </div>
                     );
@@ -304,7 +352,7 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
                     );
                   })}
 
-                  <div className="modal-sub" style={{ borderLeftColor: '#7c3aed', color: '#5b21b6' }}>Brokerage Commission — Term {k}</div>
+                  <div className="modal-sub" style={{ borderLeftColor: '#7c3aed', color: '#5b21b6' }}>Brokerage Commission — Term {k} <span>({formatCurrency(brokTermTotal)})</span></div>
                   {visible.length === 0 ? <div className="help">No agents assigned to Term {k}.</div> : visible.map(({ m, i }) => {
                     const base = r2(tAmt * (parseNumber(m.split) / 100));
                     const b = lineOf(r2(base * parseNumber(m.brok_pct) / 100));
@@ -312,7 +360,7 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
                       <div className="brok-card" key={i}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}><strong style={{ fontSize: 13 }}>{(m.name || '').toUpperCase()}</strong><span className="pill" style={{ background: '#f3e8ff', color: '#6b21a8', border: '1px solid #d8b4fe', fontSize: 10 }}>Split: {m.split}%</span></div>
                         <div className="g4">
-                          <div className="field" style={{ marginBottom: 0 }}><label>Brok Comm (%)</label><input type="number" value={m.brok_pct} onChange={(e) => setMember(i, 'brok_pct', e.target.value)} /></div>
+                          <div className="field" style={{ marginBottom: 0 }}><label>Brok Comm (%) 🔒</label><input type="number" value={m.brok_pct} readOnly style={lockField} /></div>
                           <div className="field" style={{ marginBottom: 0 }}><label>Commission</label><input readOnly value={formatCurrency(b.commission)} /></div>
                           <div className="field" style={{ marginBottom: 0 }}><label>HST</label><input readOnly value={formatCurrency(b.hst)} /></div>
                           <div className="field" style={{ marginBottom: 0 }}><label>Total</label><input readOnly style={{ fontWeight: 700, color: '#5b21b6' }} value={formatCurrency(b.total)} /></div>
@@ -329,8 +377,8 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
             <div className="field" style={{ maxWidth: 220 }}><label>Commission Adjustment</label><select value={adjEnabled ? 'Yes' : 'No'} onChange={(e) => setAdjEnabled(e.target.value === 'Yes')}><option>No</option><option>Yes</option></select></div>
             {adjEnabled && (
               <div className="g2">
-                <div className="field"><label>Adjustment (Before HST)</label><input value={adjBefore} onChange={(e) => excl(e.target.value, setAdjBefore, adjAfter, setAdjAfter)} /></div>
-                <div className="field"><label>Adjustment (After HST)</label><input value={adjAfter} onChange={(e) => excl(e.target.value, setAdjAfter, adjBefore, setAdjBefore)} /></div>
+                <SignedAdjField label="Adjustment (Before HST)" value={adjBefore} onChange={(nv) => excl(nv, setAdjBefore, adjAfter, setAdjAfter)} convention="sub" />
+                <SignedAdjField label="Adjustment (After HST)" value={adjAfter} onChange={(nv) => excl(nv, setAdjAfter, adjBefore, setAdjBefore)} convention="sub" />
               </div>
             )}
           </>
@@ -365,8 +413,8 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
                   <div className="field" style={{ marginTop: 10, marginBottom: lAdjEn ? 13 : 0 }}><label>Listing Comm Adjustment</label><select value={lAdjEn ? 'Yes' : 'No'} onChange={(e) => setLAdjEn(e.target.value === 'Yes')}><option>No</option><option>Yes</option></select></div>
                   {lAdjEn && (
                     <div className="g2">
-                      <div className="field" style={{ marginBottom: 0 }}><label>Adjustment (Before HST)</label><input value={lBefore} onChange={(e) => excl(e.target.value, setLBefore, lAfter, setLAfter)} /></div>
-                      <div className="field" style={{ marginBottom: 0 }}><label>Adjustment (After HST)</label><input value={lAfter} onChange={(e) => excl(e.target.value, setLAfter, lBefore, setLBefore)} /></div>
+                      <SignedAdjField label="Adjustment (Before HST)" value={lBefore} onChange={(nv) => excl(nv, setLBefore, lAfter, setLAfter)} convention="add" />
+                      <SignedAdjField label="Adjustment (After HST)" value={lAfter} onChange={(nv) => excl(nv, setLAfter, lBefore, setLBefore)} convention="add" />
                     </div>
                   )}
                 </div>
@@ -375,8 +423,8 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
                   <div className="field" style={{ marginTop: 10, marginBottom: cAdjEn ? 13 : 0 }}><label>Co-op Comm Adjustment</label><select value={cAdjEn ? 'Yes' : 'No'} onChange={(e) => setCAdjEn(e.target.value === 'Yes')}><option>No</option><option>Yes</option></select></div>
                   {cAdjEn && (
                     <div className="g2">
-                      <div className="field" style={{ marginBottom: 0 }}><label>Adjustment (Before HST)</label><input value={cBefore} onChange={(e) => excl(e.target.value, setCBefore, cAfter, setCAfter)} /></div>
-                      <div className="field" style={{ marginBottom: 0 }}><label>Adjustment (After HST)</label><input value={cAfter} onChange={(e) => excl(e.target.value, setCAfter, cBefore, setCBefore)} /></div>
+                      <SignedAdjField label="Adjustment (Before HST)" value={cBefore} onChange={(nv) => excl(nv, setCBefore, cAfter, setCAfter)} convention="add" />
+                      <SignedAdjField label="Adjustment (After HST)" value={cAfter} onChange={(nv) => excl(nv, setCAfter, cBefore, setCBefore)} convention="add" />
                     </div>
                   )}
                 </div>
@@ -402,7 +450,7 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
             </div>
 
             {/* Listing Split / Members / Brokerage — Residential-Buying card design */}
-            <AgentCommissionBlocks rows={listingRows} setMember={setListMember} minBrok={lb.minBrok} />
+            <AgentCommissionBlocks rows={listingRows} setMember={setListMember} minBrok={lb.minBrok} agentDefaults={agentDefaults} isLease={leaseType} />
 
             {/* Deal summary + balance check */}
             <div className="modal-sub">Listing Split Summary</div>
@@ -429,9 +477,9 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
               <div className="field"><label>Commission Amount</label><input value={commAmt} onChange={(e) => onAmt(e.target.value)} placeholder="0.00" /></div>
             </div>
             <div className="fin-sum">
-              <div className="field" style={{ marginBottom: 0 }}><label>Commission</label><input value={formatCurrency(commWoHst)} readOnly /></div>
+              <div className="field" style={{ marginBottom: 0 }}><label>Commission</label><input value={formatCurrency(commWoHst)} readOnly />{adjB !== 0 && <div className="help" style={{ margin: '4px 0 0' }}>{adjNote(adjB, 'before HST')}</div>}</div>
               <div className="field" style={{ marginBottom: 0 }}><label>HST</label><input value={formatCurrency(stdHst)} readOnly /></div>
-              <div className="field" style={{ marginBottom: 0 }}><label>Total</label><input className="brand" value={formatCurrency(stdTotal)} readOnly /></div>
+              <div className="field" style={{ marginBottom: 0 }}><label>Total</label><input className="brand" value={formatCurrency(stdTotal)} readOnly />{adjA !== 0 && <div className="help" style={{ margin: '4px 0 0' }}>{adjNote(adjA, 'after HST')}</div>}</div>
             </div>
 
             <div className="field" style={{ maxWidth: 220 }}>
@@ -440,13 +488,13 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
             </div>
             {adjEnabled && (
               <div className="g2">
-                <div className="field"><label>Adjustment (Before HST)</label><input value={adjBefore} onChange={(e) => excl(e.target.value, setAdjBefore, adjAfter, setAdjAfter)} /></div>
-                <div className="field"><label>Adjustment (After HST)</label><input value={adjAfter} onChange={(e) => excl(e.target.value, setAdjAfter, adjBefore, setAdjBefore)} /></div>
+                <SignedAdjField label="Adjustment (Before HST)" value={adjBefore} onChange={(nv) => excl(nv, setAdjBefore, adjAfter, setAdjAfter)} convention="sub" />
+                <SignedAdjField label="Adjustment (After HST)" value={adjAfter} onChange={(nv) => excl(nv, setAdjAfter, adjBefore, setAdjBefore)} convention="sub" />
               </div>
             )}
 
             <ReferralSections data={stdRefView} />
-            <AgentCommissionBlocks rows={memberRows} setMember={setMember} minBrok={{ commission: 200, hst: 26, total: 226 }} />
+            <AgentCommissionBlocks rows={memberRows} setMember={setMember} minBrok={{ commission: 200, hst: 26, total: 226 }} agentDefaults={agentDefaults} isLease={leaseType} />
           </>
         )}
 
@@ -462,10 +510,22 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
 // Shared per-agent commission cards (Agent Commission / Agent T4A / Brokerage
 // Commission + min-brokerage floor). Used by both the standard and listing
 // variants so they render identically. `minBrok` carries the type-specific floor.
-function AgentCommissionBlocks({ rows, setMember, minBrok }) {
+function AgentCommissionBlocks({ rows, setMember, minBrok, agentDefaults = {}, isLease = false }) {
+  // Agent Comm (%) is locked by default (click the pencil to edit); Brok Comm (%)
+  // is always locked — it auto-fills as the complement of Agent Comm.
+  const [unlocked, setUnlocked] = useState({});
+  const lockField = { background: '#f3f4f6', cursor: 'not-allowed' };
+  const defOf = (name) => {
+    const d = agentDefaults[name];
+    if (!d) return null;
+    const v = isLease ? (d.lease_pct ?? d.agent_pct) : d.agent_pct;
+    return (v === null || v === undefined || v === '') ? null : Number(v);
+  };
+  const agentTotal = rows.reduce((s, r) => s + (r.agent?.total || 0), 0);
+  const brokTotal = rows.reduce((s, r) => s + (r.brok?.total || 0), 0);
   return (
     <>
-      <div className="modal-sub">Agent Commission</div>
+      <div className="modal-sub">Agent Commission <span style={{ color: 'var(--brand)' }}>({formatCurrency(agentTotal)})</span></div>
       {rows.length === 0 && <div className="help">No agents assigned — set the agent in Basic Info or use Team Split.</div>}
       {rows.map((r, i) => (
         <div className="agent-comm-card" key={i}>
@@ -474,11 +534,21 @@ function AgentCommissionBlocks({ rows, setMember, minBrok }) {
             <strong style={{ color: 'var(--brand)' }}>{formatCurrency(r.agent.total)}</strong>
           </div>
           <div className="g4">
-            <div className="field" style={{ marginBottom: 0 }}><label>Agent Comm (%) <span style={{ color: 'var(--brand)' }}>✏</span></label><input type="number" value={r.m.agent_pct} onChange={(e) => setMember(i, 'agent_pct', e.target.value)} /></div>
+            <div className="field" style={{ marginBottom: 0 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>Agent Comm (%)
+                <button type="button" className="row-rm" style={{ color: 'var(--brand)', lineHeight: 1 }} title={unlocked[i] ? 'Lock Agent Comm %' : 'Unlock to edit Agent Comm %'} onClick={() => setUnlocked((u) => ({ ...u, [i]: !u[i] }))}>{unlocked[i] ? '🔓' : '✏'}</button>
+              </label>
+              <input type="number" value={r.m.agent_pct} readOnly={!unlocked[i]} style={!unlocked[i] ? lockField : undefined} onChange={(e) => setMember(i, 'agent_pct', e.target.value)} />
+            </div>
             <div className="field" style={{ marginBottom: 0 }}><label>Commission</label><input readOnly value={formatCurrency(r.agent.commission)} /></div>
             <div className="field" style={{ marginBottom: 0 }}><label>HST</label><input readOnly value={formatCurrency(r.agent.hst)} /></div>
             <div className="field" style={{ marginBottom: 0 }}><label>Total</label><input readOnly style={{ fontWeight: 700, color: 'var(--brand)' }} value={formatCurrency(r.agent.total)} /></div>
           </div>
+          {defOf(r.m.name) !== null && parseNumber(r.m.agent_pct) !== defOf(r.m.name) && (
+            <div className="help" style={{ margin: '6px 0 0', color: 'var(--brand)' }}>
+              This commission split applies only to this transaction; the agent’s main/default commission split is {defOf(r.m.name)}%.
+            </div>
+          )}
           {r.adj.total > 0 && <div className="help" style={{ margin: '6px 0 0' }}>Less {adjLabel(r.adj)} = −{formatCurrency(r.adj.total)} off total</div>}
         </div>
       ))}
@@ -497,7 +567,7 @@ function AgentCommissionBlocks({ rows, setMember, minBrok }) {
         ))}
       </>)}
 
-      <div className="modal-sub" style={{ borderLeftColor: '#7c3aed', color: '#5b21b6' }}>Brokerage Commission</div>
+      <div className="modal-sub" style={{ borderLeftColor: '#7c3aed', color: '#5b21b6' }}>Brokerage Commission <span>({formatCurrency(brokTotal)})</span></div>
       <div style={{ background: '#faf5ff', border: '1px solid #e9d5ff', borderRadius: 8, padding: 12, marginBottom: 12 }}>
         <strong style={{ fontSize: 12, color: '#5b21b6' }}>Minimum Brokerage Commission</strong>
         <div className="fin-sum" style={{ marginTop: 10, marginBottom: 0 }}>
@@ -510,7 +580,7 @@ function AgentCommissionBlocks({ rows, setMember, minBrok }) {
         <div className="brok-card" key={i}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}><strong style={{ fontSize: 13 }}>{(r.m.name || '').toUpperCase()}</strong><span className="pill" style={{ background: '#f3e8ff', color: '#6b21a8', border: '1px solid #d8b4fe', fontSize: 10 }}>Split: {r.m.split}%</span></div>
           <div className="g4">
-            <div className="field" style={{ marginBottom: 0 }}><label>Brok Comm (%)</label><input type="number" value={r.m.brok_pct} onChange={(e) => setMember(i, 'brok_pct', e.target.value)} /></div>
+            <div className="field" style={{ marginBottom: 0 }}><label>Brok Comm (%) 🔒</label><input type="number" value={r.m.brok_pct} readOnly style={lockField} /></div>
             <div className="field" style={{ marginBottom: 0 }}><label>Commission</label><input readOnly value={formatCurrency(r.brok.commission)} /></div>
             <div className="field" style={{ marginBottom: 0 }}><label>HST</label><input readOnly value={formatCurrency(r.brok.hst)} /></div>
             <div className="field" style={{ marginBottom: 0 }}><label>Total</label><input readOnly style={{ fontWeight: 700, color: '#5b21b6' }} value={formatCurrency(r.brok.total)} /></div>
@@ -550,6 +620,42 @@ function ReferralSections({ data }) {
         </>
       )}
     </>
+  );
+}
+
+// Adjustment input with a +/− sign toggle. "+" increases the commission, "−"
+// decreases it. The stored value is signed to match the formula convention:
+//   'sub'  → commission − value  (so "−" stores +mag, "+" stores −mag)
+//   'add'  → commission + value  (so "+" stores +mag, "−" stores −mag)
+function SignedAdjField({ label, value, onChange, convention = 'sub' }) {
+  const signOf = (n) => (n === 0 ? null : (convention === 'sub' ? (n > 0 ? '-' : '+') : (n < 0 ? '-' : '+')));
+  const [sign, setSign] = useState(signOf(parseNumber(value)) || '-');
+  const [mag, setMag] = useState(() => { const n = parseNumber(value); return n === 0 ? '' : String(Math.abs(n)); });
+
+  // Re-sync from the parent when the magnitude actually changes elsewhere (e.g. the
+  // mutually-exclusive sibling field clears this one) — but don't fight live typing.
+  useEffect(() => {
+    const n = parseNumber(value);
+    if (Math.abs(n) !== Math.abs(parseNumber(mag))) setMag(n === 0 ? '' : String(Math.abs(n)));
+    const s = signOf(n);
+    if (s) setSign(s);
+  }, [value]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const stored = (s, m) => { const mm = Math.abs(parseNumber(m)); return convention === 'sub' ? (s === '-' ? mm : -mm) : (s === '-' ? -mm : mm); };
+  const pickSign = (s) => { setSign(s); onChange(stored(s, mag)); };
+  const onMag = (m) => { setMag(m); onChange(stored(sign, m)); };
+
+  return (
+    <div className="field" style={{ marginBottom: 0 }}>
+      <label>{label}</label>
+      <div style={{ display: 'flex', gap: 6 }}>
+        <div className="seg-toggle" style={{ flex: '0 0 auto' }}>
+          <button type="button" className={`seg-btn ${sign === '+' ? 'active' : ''}`} onClick={() => pickSign('+')} title="Increase commission">+</button>
+          <button type="button" className={`seg-btn ${sign === '-' ? 'active' : ''}`} onClick={() => pickSign('-')} title="Decrease commission">−</button>
+        </div>
+        <input value={mag} onChange={(e) => onMag(e.target.value)} placeholder="0.00" style={{ flex: 1 }} />
+      </div>
+    </div>
   );
 }
 
