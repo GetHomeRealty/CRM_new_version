@@ -16,6 +16,7 @@ import UsersPage from './desk/UsersPage';
 import CompanySettingsPage from './desk/CompanySettingsPage';
 import TransactionsPage from './desk/TransactionsPage';
 import TransactionDetailPage from './desk/TransactionDetailPage';
+import EmailSettingsPage from './desk/EmailSettingsPage';
 import AuditLogPage from './desk/AuditLogPage';
 import StubPage from './desk/StubPage';
 import { RequireScreen, LandingRedirect } from './desk/guards';
@@ -44,6 +45,7 @@ export default function App() {
                 <Route path="transactions" element={<RequireScreen screen="transactions"><TransactionsPage /></RequireScreen>} />
                 <Route path="transactions/:id" element={<RequireScreen screen="transactions"><TransactionDetailPage /></RequireScreen>} />
                 <Route path="audit" element={<RequireScreen screen="audit"><AuditLogPage /></RequireScreen>} />
+                <Route path="email-settings" element={<RequireScreen superAdmin><EmailSettingsPage /></RequireScreen>} />
                 <Route path=":page" element={<StubPage />} />
               </Route>
             </Route>

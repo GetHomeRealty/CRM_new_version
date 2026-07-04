@@ -21,12 +21,13 @@ const NAV = [
   { key: 'audit', label: 'Audit Trail', ico: '\u{1F4DD}' },
   { key: 'users', label: 'Users', ico: '\u{1F465}' },
   { key: 'settings', label: 'Settings', ico: '\u{2699}' },
+  { key: 'email-settings', label: 'Email Settings', ico: '\u{1F4E7}', superAdmin: true },
 ];
 
 const TITLES = Object.fromEntries(NAV.map((n) => [n.key, n.label]));
 
 export default function DeskLayout() {
-  const { logout, user, can, isAdminOrAbove } = useAuth();
+  const { logout, user, can, isAdminOrAbove, isSuperAdmin } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const [pwOpen, setPwOpen] = useState(false);
@@ -52,7 +53,7 @@ export default function DeskLayout() {
 
   const openNotif = (item) => { setBellOpen(false); navigate(`/app/transactions/${item.id}`); };
 
-  const visibleNav = NAV.filter((n) => can(n.key, 'view'));
+  const visibleNav = NAV.filter((n) => (n.superAdmin ? isSuperAdmin : can(n.key, 'view')));
 
   const seg = location.pathname.split('/')[2] || 'transactions';
   const title = location.pathname.includes('/transactions/') ? 'Transaction Detail' : (TITLES[seg] || 'Transactions');

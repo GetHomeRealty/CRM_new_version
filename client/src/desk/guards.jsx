@@ -3,10 +3,12 @@ import { useAuth } from '../context/AuthContext';
 
 const ORDER = ['dashboard', 'transactions', 'analytics', 'calendar', 'inventory', 'invoice', 'mls', 'reports', 'users', 'reviews', 'favorites', 'inbox', 'lead', 'triggers', 'settings'];
 
-// Blocks a screen the user can't at least view.
-export function RequireScreen({ screen, children }) {
-  const { can } = useAuth();
-  if (!can(screen, 'view')) {
+// Blocks a screen the user can't at least view. Pass `superAdmin` to restrict a
+// screen to Super Admins regardless of the screen permission map.
+export function RequireScreen({ screen, superAdmin = false, children }) {
+  const { can, isSuperAdmin } = useAuth();
+  const allowed = superAdmin ? isSuperAdmin : can(screen, 'view');
+  if (!allowed) {
     return (
       <div className="card stub">
         <h2>🔒 No access</h2>

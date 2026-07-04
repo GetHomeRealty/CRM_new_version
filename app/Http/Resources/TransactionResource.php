@@ -68,6 +68,7 @@ class TransactionResource extends JsonResource
             'adjustments' => $this->adjustments,
             'commercial_lease' => $this->commercial_lease,
             'notice_of_sale' => $this->notice_of_sale,
+            'trade_sheet_sent_at' => optional($this->trade_sheet_sent_at)->toIso8601String(),
 
             // Preconstruction
             'precon_listing_type' => $this->precon_listing_type,

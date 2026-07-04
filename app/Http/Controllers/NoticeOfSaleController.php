@@ -2,8 +2,11 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\CompanySetting;
 use App\Models\Transaction;
+use App\Models\User;
 use App\Services\AuditService;
+use App\Services\TemplateMailService;
 use Illuminate\Http\Request;
 
 /**
@@ -104,6 +107,24 @@ class NoticeOfSaleController extends Controller
             'section' => self::SECTION, 'field' => 'Send for signature', 'action' => 'Quick Action executed',
             'source' => 'Quick Action', 'new' => implode(', ', $data['agents']),
         ]);
+
+        // Email the Notice of Sale to the selected salespersons (those with an email
+        // on file). A mail/config failure never blocks the send action.
+        $emails = User::whereIn('name', $data['agents'])->whereNotNull('email')->pluck('email')->all();
+        if ($emails) {
+            try {
+                app(TemplateMailService::class)->send('notice_of_sale.send', [
+                    'transaction_number' => $transaction->trade_no,
+                    'property_address' => $transaction->property,
+                    'sale_price' => number_format((float) $transaction->price, 2),
+                    'closing_date' => optional($transaction->closing_date)->toFormattedDateString(),
+                    'agent_name' => implode(', ', $data['agents']),
+                    'company_name' => CompanySetting::current()->name,
+                ], $emails);
+            } catch (\Throwable $e) {
+                report($e);
+            }
+        }
 
         return response()->json($this->present($this->normalize($transaction->fresh()->notice_of_sale)));
     }

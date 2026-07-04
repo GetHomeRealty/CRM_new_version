@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { PDFDocument } from 'pdf-lib';
 import { formatCurrency, commissionSummary, isListingFinancialType } from './format';
+import { sendTradeSheet } from '../lib/api';
+import { useToast } from './toast';
 
 // Original OREA Form 640 (editable / AcroForm) lives here:
 //   client/public/forms/trade-record-sheet-640.pdf
@@ -112,8 +114,25 @@ async function fillPdf(buf, txn) {
 }
 
 export default function TradeSheetModal({ open, onClose, txn }) {
+  const toast = useToast();
   const [src, setSrc] = useState(null);
   const [status, setStatus] = useState('loading'); // loading | ready | missing | error
+  const [sentAt, setSentAt] = useState(txn?.trade_sheet_sent_at || null);
+  const [sending, setSending] = useState(false);
+
+  useEffect(() => { setSentAt(txn?.trade_sheet_sent_at || null); }, [txn?.trade_sheet_sent_at]);
+
+  const emailSheet = async () => {
+    const to = window.prompt(`${sentAt ? 'Resend' : 'Send'} the Trade Record Sheet to:`);
+    if (!to) return;
+    setSending(true);
+    try {
+      const r = await sendTradeSheet(txn.id, to.trim());
+      setSentAt(r.sent_at || new Date().toISOString());
+      toast(r.message || 'Trade sheet sent', 'ok');
+    } catch (e) { toast(e.response?.data?.message || 'Could not send trade sheet', 'bad'); }
+    finally { setSending(false); }
+  };
 
   useEffect(() => {
     if (!open) return undefined;
@@ -147,9 +166,11 @@ export default function TradeSheetModal({ open, onClose, txn }) {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, gap: 8, flexWrap: 'wrap' }}>
           <div className="modal-h" style={{ margin: 0, border: 0, padding: 0 }}>Trade Record Sheet — OREA Form 640</div>
           {status === 'ready' && (
-            <div style={{ display: 'flex', gap: 6 }}>
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              {sentAt && <span className="pill info" style={{ fontSize: 10 }}>Last sent {new Date(sentAt).toLocaleDateString()}</span>}
               <a className="btn ghost sm" href={src} target="_blank" rel="noreferrer">↗ Open in new tab</a>
-              <a className="btn primary sm" href={src} download={`Trade Record Sheet ${txn?.trade_no || ''}.pdf`}>📄 Download PDF</a>
+              <a className="btn ghost sm" href={src} download={`Trade Record Sheet ${txn?.trade_no || ''}.pdf`}>📄 Download PDF</a>
+              <button className="btn primary sm" onClick={emailSheet} disabled={sending}>✉ {sending ? 'Sending…' : (sentAt ? 'Resend' : 'Send')}</button>
             </div>
           )}
         </div>

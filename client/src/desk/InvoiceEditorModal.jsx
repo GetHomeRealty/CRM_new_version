@@ -149,11 +149,12 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, customer
     const d = saved || (await save());
     if (!d?.id) return;
     try {
+      const wasSent = !!(saved?.sent_at || form.sent_at);
       const upd = await sendInvoice(d.id);
       setSaved(upd); setForm(toForm(upd));
       onSaved?.(upd);
-      toast('Invoice marked as Sent. Email delivery is set up in the Email module (next phase).', 'ok');
-    } catch (e) { toast(e.response?.data?.message || 'Could not mark as sent', 'bad'); }
+      toast(wasSent ? 'Invoice resent to the customer.' : 'Invoice sent to the customer.', 'ok');
+    } catch (e) { toast(e.response?.data?.message || 'Could not send invoice', 'bad'); }
   };
   // §12.3 — record a reminder (history of count + dates); email delivery itself is wired in the Email phase.
   const sendReminder = async () => {
@@ -202,8 +203,8 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, customer
 
           <div style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--muted)', letterSpacing: '.05em', margin: '10px 0 2px 4px' }}>ACTIONS</div>
 
-          {/* 1. Send Email */}
-          <button style={{ ...sideBtn, justifyContent: 'center', background: BRAND, color: '#fff', fontWeight: 700, margin: '2px 0' }} onClick={sendMail}>✉ Send Email</button>
+          {/* 1. Send / Resend Email */}
+          <button style={{ ...sideBtn, justifyContent: 'center', background: BRAND, color: '#fff', fontWeight: 700, margin: '2px 0' }} onClick={sendMail}>✉ {(saved?.sent_at || form.sent_at) ? 'Resend Email' : 'Send Email'}</button>
 
           {/* 2. Save Invoice */}
           <button style={sideBtn} onClick={() => save()} disabled={saving} onMouseEnter={(e) => e.currentTarget.style.background = '#f3f4f6'} onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}>💾 {saving ? 'Saving…' : 'Save Invoice'}</button>

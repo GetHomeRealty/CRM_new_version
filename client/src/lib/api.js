@@ -70,6 +70,7 @@ export const sendNoticeOfSale = (txnId, agents) => api.post(`/api/transactions/$
 
 // --- Deposit Receipt ---
 export const sendDepositReceipt = (txnId, email, cc) => api.post(`/api/transactions/${txnId}/deposit-receipt/send`, { email, cc }).then((r) => r.data);
+export const sendTradeSheet = (txnId, email) => api.post(`/api/transactions/${txnId}/trade-sheet/send`, { email }).then((r) => r.data);
 
 // §13 multi-file / per-client uploads (clientName optional)
 export const uploadDocClientFile = (txnId, docId, file, clientName) => {
@@ -138,3 +139,16 @@ export const getTransactionTypes = () =>
 // Type-ahead suggestions from previously saved records.
 export const getLawyerSuggestions = () => api.get('/api/suggestions/lawyers').then((r) => r.data);
 export const getBrokerageSuggestions = () => api.get('/api/suggestions/brokerages').then((r) => r.data);
+
+// --- Email settings (Super Admin): SMTP accounts + per-event templates ---
+export const getMailAccounts = () => api.get('/api/mail-accounts').then((r) => r.data.data ?? r.data);
+export const createMailAccount = (payload) => api.post('/api/mail-accounts', payload).then((r) => r.data.data ?? r.data);
+export const updateMailAccount = (id, payload) => api.put(`/api/mail-accounts/${id}`, payload).then((r) => r.data.data ?? r.data);
+export const deleteMailAccount = (id) => api.delete(`/api/mail-accounts/${id}`).then((r) => r.data);
+export const setDefaultMailAccount = (id) => api.post(`/api/mail-accounts/${id}/default`).then((r) => r.data.data ?? r.data);
+export const testMailAccount = (id, to) => api.post(`/api/mail-accounts/${id}/test`, { to }).then((r) => r.data);
+
+export const getEmailTemplates = () => api.get('/api/email-templates').then((r) => r.data);
+export const updateEmailTemplate = (id, payload) => api.put(`/api/email-templates/${id}`, payload).then((r) => r.data.data ?? r.data);
+export const previewEmailTemplate = (id) => api.post(`/api/email-templates/${id}/preview`).then((r) => r.data);
+export const getMailEvents = () => api.get('/api/mail-events').then((r) => r.data);

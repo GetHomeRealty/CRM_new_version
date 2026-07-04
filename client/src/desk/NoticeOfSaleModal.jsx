@@ -156,7 +156,7 @@ export default function NoticeOfSaleModal({ open, onClose, txn }) {
           <div className="modal-h" style={{ margin: 0, border: 0, padding: 0 }}>Notice of Sale</div>
           <div style={{ display: 'flex', gap: 6 }}>
             <button className="btn ghost sm" onClick={save} disabled={saving}>{saving ? 'Saving…' : '💾 Save'}</button>
-            <button className="btn ghost sm" onClick={() => doSend(signatories)} disabled={saving || !signatories.length}>✉ Send</button>
+            <button className="btn ghost sm" onClick={() => doSend(signatories)} disabled={saving || !signatories.length}>✉ {sentAt ? 'Resend' : 'Send'}</button>
             <button className="btn primary sm" onClick={printNow}>🖨 Print / Save PDF</button>
           </div>
         </div>

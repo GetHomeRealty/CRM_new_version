@@ -8,6 +8,7 @@ use App\Models\Transaction;
 use App\Services\AuditService;
 use App\Services\InvoiceCalculator;
 use App\Services\InvoiceNumberService;
+use App\Services\TemplateMailService;
 use App\Services\TransactionInvoiceService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
@@ -153,7 +154,7 @@ class InvoiceController extends Controller
         ], 201);
     }
 
-    /** Mark the invoice as Sent (stamps sent_at; email delivery is the Email phase). */
+    /** Mark the invoice as Sent (stamps sent_at) and email it via the templated mailer. */
     public function send(Invoice $invoice)
     {
         if (! $invoice->sent_at) {
@@ -164,7 +165,40 @@ class InvoiceController extends Controller
             'field' => $invoice->invoice_no, 'action' => 'Invoice sent', 'new' => optional($invoice->sent_at)->toDateString(),
         ]);
 
+        $this->emailInvoice($invoice, 'invoice.send');
+
         return response()->json($this->detail($invoice->fresh(['lineItems', 'payments', 'customer'])));
+    }
+
+    /**
+     * Send a templated invoice email to the linked customer. Never lets a mail
+     * failure (or missing SMTP config / recipient) break the invoice action.
+     */
+    private function emailInvoice(Invoice $invoice, string $eventKey): void
+    {
+        $customer = $invoice->customer?->email;
+        $agents = $invoice->transaction?->agentEmails() ?? [];
+
+        // Customer is the primary recipient; the deal's agents are CC'd. If there's
+        // no customer on file, the agents become the primary recipients instead.
+        $to = $customer ?: $agents;
+        $cc = $customer ? $agents : [];
+        if (empty($to)) {
+            return; // nobody to send to — the action still succeeds
+        }
+
+        try {
+            app(TemplateMailService::class)->send($eventKey, [
+                'invoice_number' => $invoice->invoice_no,
+                'invoice_total' => number_format((float) $invoice->total, 2),
+                'due_date' => optional($invoice->due_date)->toFormattedDateString(),
+                'customer_name' => $invoice->customer_name ?: $invoice->customer?->name,
+                'transaction_number' => $invoice->trade_number ?: optional($invoice->transaction)->trade_no,
+                'company_name' => CompanySetting::current()->name,
+            ], $to, $cc);
+        } catch (\Throwable $e) {
+            report($e);
+        }
     }
 
     /** §12.3 Send Reminder — record a reminder event (history of count + dates). */
@@ -182,6 +216,9 @@ class InvoiceController extends Controller
             'field' => "Invoice {$invoice->invoice_no} — Reminder", 'action' => 'Reminder sent',
             'new' => 'Reminder #'.count($sent),
         ]);
+
+        // Overdue invoices use the overdue notice; otherwise the reminder template.
+        $this->emailInvoice($invoice, $invoice->displayStatus() === 'Overdue' ? 'invoice.overdue' : 'invoice.reminder');
 
         return response()->json($this->detail($invoice->fresh(['lineItems', 'payments', 'customer'])));
     }
@@ -317,6 +354,7 @@ class InvoiceController extends Controller
             'balance_due' => (float) $i->balance_due,
             'status' => $i->status,
             'display_status' => $i->displayStatus(),
+            'sent_at' => optional($i->sent_at)->toIso8601String(),
             // Origin markers (transaction-generated vs manual).
             'source' => $i->source ?? 'manual',
             'transaction_id' => $i->transaction_id,

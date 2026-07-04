@@ -98,7 +98,7 @@ class Transaction extends Model
         'admin_activities', 'activity_tracker', 'adjustments', 'commercial_lease', 'notice_of_sale',
         'comm_status', 'comm_paid_status', 'valid_status',
         'conditional_offer', 'inter_board_enabled',
-        'reco_audit_ready', 'reco_audit_remarks',
+        'reco_audit_ready', 'reco_audit_remarks', 'trade_sheet_sent_at',
     ];
 
     public static function isPreconType(?string $type): bool
@@ -152,7 +152,33 @@ class Transaction extends Model
             'conditional_offer' => 'boolean',
             'inter_board_enabled' => 'boolean',
             'agent_review_at' => 'datetime',
+            'trade_sheet_sent_at' => 'datetime',
         ];
+    }
+
+    /**
+     * Account emails of the agents involved in this deal — the primary agent plus
+     * every team member — for CC-ing on outgoing module emails. Distinct, non-empty.
+     *
+     * @return array<int, string>
+     */
+    public function agentEmails(): array
+    {
+        $names = collect([$this->agent])
+            ->merge($this->teamMembers()->pluck('name'))
+            ->filter()
+            ->unique();
+
+        if ($names->isEmpty()) {
+            return [];
+        }
+
+        return User::whereIn('name', $names)
+            ->whereNotNull('email')
+            ->pluck('email')
+            ->unique()
+            ->values()
+            ->all();
     }
 
     public function statuses(): HasMany

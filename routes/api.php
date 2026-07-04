@@ -7,9 +7,12 @@ use App\Http\Controllers\CompanySettingController;
 use App\Http\Controllers\CustomerController;
 use App\Http\Controllers\DepositReceiptController;
 use App\Http\Controllers\DocumentController;
+use App\Http\Controllers\EmailTemplateController;
 use App\Http\Controllers\InvoiceController;
+use App\Http\Controllers\MailAccountController;
 use App\Http\Controllers\NoticeOfSaleController;
 use App\Http\Controllers\SuggestionController;
+use App\Http\Controllers\TradeSheetController;
 use App\Http\Controllers\TransactionController;
 use App\Http\Controllers\TransactionDeleteRequestController;
 use App\Http\Controllers\TransactionEditRequestController;
@@ -85,6 +88,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::put('/transactions/{transaction}/notice-of-sale', [NoticeOfSaleController::class, 'save']);
         Route::post('/transactions/{transaction}/notice-of-sale/send', [NoticeOfSaleController::class, 'send']);
         Route::post('/transactions/{transaction}/deposit-receipt/send', [DepositReceiptController::class, 'send']);
+        Route::post('/transactions/{transaction}/trade-sheet/send', [TradeSheetController::class, 'send']);
     });
 
     // Invoice module
@@ -118,5 +122,18 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::put('/company-settings', [CompanySettingController::class, 'update']);
         Route::get('/users/catalog', [UserController::class, 'catalog']);
         Route::apiResource('users', UserController::class)->except(['show']);
+
+        // Email settings — SMTP sender accounts + per-event templates (Super Admin only).
+        Route::get('/mail-accounts', [MailAccountController::class, 'index']);
+        Route::post('/mail-accounts', [MailAccountController::class, 'store']);
+        Route::put('/mail-accounts/{mailAccount}', [MailAccountController::class, 'update']);
+        Route::delete('/mail-accounts/{mailAccount}', [MailAccountController::class, 'destroy']);
+        Route::post('/mail-accounts/{mailAccount}/default', [MailAccountController::class, 'setDefault']);
+        Route::post('/mail-accounts/{mailAccount}/test', [MailAccountController::class, 'test']);
+
+        Route::get('/email-templates', [EmailTemplateController::class, 'index']);
+        Route::put('/email-templates/{emailTemplate}', [EmailTemplateController::class, 'update']);
+        Route::post('/email-templates/{emailTemplate}/preview', [EmailTemplateController::class, 'preview']);
+        Route::get('/mail-events', [EmailTemplateController::class, 'events']);
     });
 });
