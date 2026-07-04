@@ -15,6 +15,7 @@ class Invoice extends Model
         return [
             'invoice_date' => 'date',
             'due_date' => 'date',
+            'sent_at' => 'datetime',
             'commission_received_date' => 'date',
             'reminders' => 'array',
             'auto_reminder' => 'array',

@@ -29,6 +29,7 @@ class PermissionService
         'reports' => 'Reports',
         'triggers' => 'Triggers',
         'transactions' => 'Transactions',
+        'audit' => 'Audit Trail',
         'users' => 'Users',
         'settings' => 'Settings',
     ];
@@ -55,16 +56,15 @@ class PermissionService
 
         return match ($role) {
             'admin' => $all('edit'),
-            'manager' => array_merge($all('edit'), ['users' => 'none', 'settings' => 'view']),
-            default => array_merge($all('none'), [ // agent
-                'dashboard' => 'view',
+            'manager' => array_merge($all('edit'), ['users' => 'none', 'settings' => 'view', 'audit' => 'view']),
+            // Agents see every module except Invoice and Audit Trail (and the
+            // admin-only Users / Settings). Transactions is editable.
+            default => array_merge($all('view'), [ // agent
                 'transactions' => 'edit',
-                'analytics' => 'view',
-                'calendar' => 'view',
-                'inventory' => 'view',
-                'invoice' => 'view',
-                'mls' => 'view',
-                'reports' => 'view',
+                'invoice' => 'none',
+                'audit' => 'none',
+                'users' => 'none',
+                'settings' => 'none',
             ]),
         };
     }

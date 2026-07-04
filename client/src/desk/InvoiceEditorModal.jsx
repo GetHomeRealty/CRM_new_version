@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getInvoice, createInvoice, updateInvoice, recordInvoiceReminder, createCustomer } from '../lib/api';
+import { getInvoice, createInvoice, updateInvoice, recordInvoiceReminder, sendInvoice, createCustomer } from '../lib/api';
 import { formatCurrency, parseNumber, typeLabel } from './format';
 import { useToast } from './toast';
 import InvoicePreviewModal from './InvoicePreviewModal';
@@ -144,7 +144,17 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, customer
     const tid = saved?.transaction_id || form.transaction_id;
     if (tid) navigate(`/app/transactions/${tid}`); else onClose();
   };
-  const sendMail = () => { setMenu(''); toast('Email delivery is set up in the Email module (next phase).', 'info'); };
+  const sendMail = async () => {
+    setMenu('');
+    const d = saved || (await save());
+    if (!d?.id) return;
+    try {
+      const upd = await sendInvoice(d.id);
+      setSaved(upd); setForm(toForm(upd));
+      onSaved?.(upd);
+      toast('Invoice marked as Sent. Email delivery is set up in the Email module (next phase).', 'ok');
+    } catch (e) { toast(e.response?.data?.message || 'Could not mark as sent', 'bad'); }
+  };
   // §12.3 — record a reminder (history of count + dates); email delivery itself is wired in the Email phase.
   const sendReminder = async () => {
     setMenu('');

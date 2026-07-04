@@ -40,6 +40,9 @@ class TransactionResource extends JsonResource
             'comm_adjust_after' => (float) $this->comm_adjust_after,
             'listing_comm_pct' => $this->listing_comm_pct !== null ? (float) $this->listing_comm_pct : null,
             'coop_comm_pct' => $this->coop_comm_pct !== null ? (float) $this->coop_comm_pct : null,
+            'listing_comm_flat' => $this->listing_comm_flat !== null ? (float) $this->listing_comm_flat : null,
+            'coop_comm_flat' => $this->coop_comm_flat !== null ? (float) $this->coop_comm_flat : null,
+            'trust_payable' => $this->trust_payable !== null ? (float) $this->trust_payable : null,
             'listing_adj_enabled' => (bool) $this->listing_adj_enabled,
             'listing_adj_before' => (float) $this->listing_adj_before,
             'listing_adj_after' => (float) $this->listing_adj_after,
@@ -99,9 +102,15 @@ class TransactionResource extends JsonResource
                 'agent_pct' => (float) $m->agent_pct,
                 'brok_pct' => (float) $m->brok_pct,
                 'is_primary' => (bool) $m->is_primary,
+                'access' => $m->access,
                 'scope' => $m->scope,
                 'terms' => $m->relationLoaded('terms') ? $m->terms->pluck('term_no') : [],
             ])),
+
+            // Current agent's access to this transaction: 'full' (primary or founding
+            // team member) → same edit rights as primary; 'docs' → upload docs only,
+            // rest view-only; null → not an agent / not on the team.
+            'my_team_access' => $this->myTeamAccess($request),
 
             // Full backend-computed Financial breakdown (standard variant).
             'financial' => $this->when(
@@ -160,16 +169,107 @@ class TransactionResource extends JsonResource
             'audit_logs' => $this->whenLoaded('auditLogs', fn () => $this->auditLogs->map(fn ($a) => [
                 'id' => $a->id,
                 'who' => $a->who,
+                'section' => $a->section,
                 'field' => $a->field,
                 'old_value' => $a->old_value,
                 'new_value' => $a->new_value,
                 'action' => $a->action,
+                'source' => $a->source,
                 'details' => $a->details,
                 'stamp' => $a->created_at?->toDateTimeString(),
             ])),
 
+            // Agent-made changes awaiting admin review (per-transaction banner).
+            'agent_changes' => $this->whenLoaded('auditLogs', function () {
+                return $this->auditLogs
+                    ->filter(fn ($a) => $a->source === 'Agent' && ! $a->handled
+                        && stripos((string) $a->field, 'Team Member') === false
+                        && stripos((string) $a->field, 'Lawyer') === false)
+                    ->map(fn ($a) => [
+                        'id' => $a->id,
+                        'who' => $a->who,
+                        'section' => $a->section,
+                        'field' => $a->field,
+                        'action' => $a->action,
+                        'old_value' => $a->old_value,
+                        'new_value' => $a->new_value,
+                        'stamp' => $a->created_at?->toDateTimeString(),
+                    ])->values();
+            }),
+
+            // Active (pending/forwarded) transaction deletion request, if any.
+            'delete_request' => $this->whenLoaded('deleteRequests', function () {
+                $r = $this->deleteRequests->firstWhere(fn ($x) => in_array($x->status, ['pending', 'forwarded'], true));
+
+                return $r ? [
+                    'id' => $r->id,
+                    'status' => $r->status,
+                    'reason' => $r->reason,
+                    'requested_by_name' => $r->requested_by_name,
+                    'forwarded_by_name' => $r->forwarded_by_name,
+                    'forward_reason' => $r->forward_reason,
+                    'stamp' => $r->created_at?->toDateTimeString(),
+                ] : null;
+            }),
+
+            // Unread chat messages for the requesting user (badge on the list row).
+            'unread_messages' => $this->unreadMessages($request),
+
+            'edit_locked' => $this->isEditLocked(),
+            'edit_requests' => $this->whenLoaded('editRequests', fn () => $this->editRequests->map(fn ($r) => [
+                'id' => $r->id,
+                'status' => $r->status,
+                'status_at_request' => $r->status_at_request,
+                'requested_by_name' => $r->requested_by_name,
+                'reason' => $r->reason,
+                'reviewed_by_name' => $r->reviewed_by_name,
+                'reviewed_at' => optional($r->reviewed_at)->toDateTimeString(),
+                'stamp' => $r->created_at?->toDateTimeString(),
+            ])),
+
             'created_at' => $this->created_at?->toDateTimeString(),
         ];
+    }
+
+    /**
+     * Count of chat messages the requesting user hasn't seen — messages posted by
+     * someone else after the user's last read of this transaction's thread.
+     */
+    private function unreadMessages(Request $request): int
+    {
+        $user = $request->user();
+        if (! $user) {
+            return 0;
+        }
+        $lastRead = \App\Models\TransactionMessageRead::where('transaction_id', $this->id)
+            ->where('user_id', $user->id)
+            ->value('last_read_at');
+
+        return $this->messages()
+            ->where('user_id', '!=', $user->id)
+            ->when($lastRead, fn ($q) => $q->where('created_at', '>', $lastRead))
+            ->count();
+    }
+
+    /**
+     * The requesting agent's access level to this transaction:
+     * 'full' for the primary agent or a full-access team member, 'docs' for a
+     * docs-only split member, null for admins / non-members.
+     */
+    private function myTeamAccess(Request $request): ?string
+    {
+        $user = $request->user();
+        if (! $user || $user->role !== 'agent') {
+            return null;
+        }
+        if ($this->agent === $user->name) {
+            return 'full';
+        }
+        $member = $this->relationLoaded('teamMembers')
+            ? $this->teamMembers->firstWhere('name', $user->name)
+            : $this->teamMembers()->where('name', $user->name)->first();
+
+        return $member?->access;
     }
 
     /**

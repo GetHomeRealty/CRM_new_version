@@ -20,6 +20,13 @@ class StoreTransactionRequest extends FormRequest
         $rules = [
             'type' => ['required', 'string', Rule::in(Transaction::TYPES)],
             'property' => ['required', 'string', 'max:255'],
+            // Status is chosen at creation (mandatory in the Add modal).
+            'status' => ['required', 'string', 'max:50'],
+            // Team option: primary agent (Agent 1) + involved team members. Split %
+            // is filled in later under Team Split, so only names are captured here.
+            'primary_agent' => ['nullable', 'string', 'max:255'],
+            'team_members' => ['nullable', 'array'],
+            'team_members.*' => ['string', 'max:255'],
         ];
 
         if ($isListing) {

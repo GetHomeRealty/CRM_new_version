@@ -2,6 +2,16 @@ import { useState, useEffect } from 'react';
 import { updateTransaction } from '../lib/api';
 import { batchNo, parseNumber, formatCurrency, isPreconType } from './format';
 import { useToast } from './toast';
+import SavedBadge from './SavedBadge';
+import ConfirmDialog, { useConfirm } from './ConfirmDialog';
+
+// Linked-impact note shown per adjustment list when deleting a row.
+const ADJ_LINKED = {
+  adjustment_rows: ['Agent Commission (deducted from the agent total in Financial Information)', 'Agent breakdown in the Agent FAQ Center'],
+  advance_rows: ['Agent cash-to-pay (advance is deducted in Financial Information)', 'Agent breakdown in the Agent FAQ Center'],
+  client_rows: ['“Commissions after client referral” in Financial Information', 'Client referral totals'],
+};
+const ADJ_TITLE = { adjustment_rows: 'agent adjustment', advance_rows: 'advance payment', client_rows: 'client referral' };
 
 const lbl = { fontSize: 11.5, color: 'var(--text-2)', fontWeight: 600, marginBottom: 5, display: 'block' };
 
@@ -30,7 +40,7 @@ function SignedAmount({ value, onChange }) {
   );
 }
 
-export default function AdjustmentModal({ open, onClose, transactionId, txn, onSaved, termCount: termCountProp }) {
+export default function AdjustmentModal({ open, onClose, transactionId, txn, onSaved, termCount: termCountProp, readOnly = false }) {
   const toast = useToast();
   const precon = isPreconType(txn.type);
   const termCount = (typeof termCountProp === 'number' ? termCountProp : (parseInt(txn.precon_term_count, 10) || 0));
@@ -51,12 +61,19 @@ export default function AdjustmentModal({ open, onClose, transactionId, txn, onS
     };
   });
   const [saving, setSaving] = useState(false);
+  const [savedOk, setSavedOk] = useState(false); // §3.2 — "Saved" then auto-close
+  const { confirm, askDelete, closeConfirm } = useConfirm();
   if (!open) return null;
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
   const setRow = (key, i, patch) => setForm((f) => ({ ...f, [key]: f[key].map((r, idx) => idx === i ? { ...r, ...patch } : r) }));
   const addRow = (key, row) => setForm((f) => ({ ...f, [key]: [...f[key], row] }));
-  const rmRow = (key, i) => setForm((f) => ({ ...f, [key]: f[key].filter((_, idx) => idx !== i) }));
+  const rmRow = (key, i) => askDelete({
+    title: `Delete ${ADJ_TITLE[key] || 'row'}?`,
+    message: 'Remove this entry? It will apply when you Save.',
+    linked: ADJ_LINKED[key] || [],
+    onConfirm: () => setForm((f) => ({ ...f, [key]: f[key].filter((_, idx) => idx !== i) })),
+  });
   const setExt = (patch) => setForm((f) => ({ ...f, ext: { ...f.ext, ...patch } }));
 
   const extAmt = parseNumber(form.ext.amount);
@@ -67,19 +84,38 @@ export default function AdjustmentModal({ open, onClose, transactionId, txn, onS
     setSaving(true);
     try {
       const updated = await updateTransaction(transactionId, { adjustments: form });
-      toast('Adjustment saved', 'ok'); onSaved?.(updated); onClose();
-    } catch (e) { toast(e.response?.data?.message || 'Could not save', 'bad'); } finally { setSaving(false); }
+      onSaved?.(updated);
+      setSavedOk(true);
+      setTimeout(() => { setSavedOk(false); onClose(); }, 2000);
+    } catch (e) { toast(e.response?.data?.message || 'Could not save', 'bad'); setSaving(false); }
   };
 
-  const agentSelect = (val, onCh) => (
-    <select value={val} onChange={onCh}><option value="">Select agent</option>{agentNames.map((n) => <option key={n} value={n}>{n}</option>)}</select>
-  );
+  // Each agent can only be picked once per list (except preconstruction, which is
+  // term-based and may repeat an agent across terms). `usedAgents` are the agents
+  // already chosen in the OTHER rows of the same list.
+  const agentSelect = (val, onCh, usedAgents = []) => {
+    const opts = precon ? agentNames : agentNames.filter((n) => n === val || !usedAgents.includes(n));
+    return (
+      <select value={val} onChange={onCh}><option value="">Select agent</option>{opts.map((n) => <option key={n} value={n}>{n}</option>)}</select>
+    );
+  };
+  const usedIn = (key, i) => form[key].filter((_, idx) => idx !== i).map((r) => r.agent).filter(Boolean);
+  // For non-preconstruction, you can't add more rows than there are agents.
+  const canAddFor = (key) => precon || form[key].length < agentNames.length;
 
   return (
     <div className="overlay open" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="modal lg">
         <button className="close" onClick={onClose}>✕</button>
         <div className="modal-h">Adjustment &amp; Advance Payment</div>
+
+        {readOnly && (
+          <div className="card" style={{ borderLeft: '4px solid #2563eb', background: '#eff6ff', marginBottom: 12 }}>
+            <span style={{ fontSize: 12.5, color: '#1e3a8a' }}>🔒 Locked — adjustments, advance payments and referrals can’t be changed once the agent payment is complete (or while viewing). Click <strong>Edit</strong> if the transaction is still open.</span>
+          </div>
+        )}
+
+        <fieldset disabled={readOnly} style={{ border: 0, margin: 0, padding: 0, minInlineSize: 0 }}>
 
         {/* Adjustment Details */}
         <div className="modal-sub">Adjustment Details</div>
@@ -89,7 +125,7 @@ export default function AdjustmentModal({ open, onClose, transactionId, txn, onS
           {form.adjustment_rows.map((r, i) => (
             <div className="dyn-list-box" key={i}>
               <div style={{ display: 'grid', gridTemplateColumns: precon ? 'repeat(4,1fr)' : 'repeat(3,1fr)', gap: 14 }}>
-                <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Agent Name</label>{agentSelect(r.agent, (e) => setRow('adjustment_rows', i, { agent: e.target.value }))}</div>
+                <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Agent Name</label>{agentSelect(r.agent, (e) => setRow('adjustment_rows', i, { agent: e.target.value }), usedIn('adjustment_rows', i))}</div>
                 <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Amount</label><SignedAmount value={r.amount} onChange={(nv) => setRow('adjustment_rows', i, { amount: nv })} /></div>
                 <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Status</label><select value={r.status} onChange={(e) => setRow('adjustment_rows', i, { status: e.target.value })}><option value="">Select status</option><option>Yet to Adjust</option><option>Closed</option></select></div>
                 {precon && termSelect(r.term, (e) => setRow('adjustment_rows', i, { term: e.target.value }))}
@@ -98,7 +134,7 @@ export default function AdjustmentModal({ open, onClose, transactionId, txn, onS
               <div style={{ textAlign: 'right', marginTop: 6 }}><button className="row-rm" onClick={() => rmRow('adjustment_rows', i)}>🗑️</button></div>
             </div>
           ))}
-          <button className="btn primary sm" onClick={() => addRow('adjustment_rows', { agent: '', amount: '', status: '', remarks: '' })}>+ Add New</button>
+          {canAddFor('adjustment_rows') && <button className="btn primary sm" onClick={() => addRow('adjustment_rows', { agent: '', amount: '', status: '', remarks: '' })}>+ Add New</button>}
         </>)}
 
         {/* Advance Payment */}
@@ -109,7 +145,7 @@ export default function AdjustmentModal({ open, onClose, transactionId, txn, onS
           {form.advance_rows.map((r, i) => (
             <div className="dyn-list-box" key={i}>
               <div style={{ display: 'grid', gridTemplateColumns: precon ? 'repeat(5,1fr)' : 'repeat(4,1fr)', gap: 14 }}>
-                <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Agent Name</label>{agentSelect(r.agent, (e) => setRow('advance_rows', i, { agent: e.target.value }))}</div>
+                <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Agent Name</label>{agentSelect(r.agent, (e) => setRow('advance_rows', i, { agent: e.target.value }), usedIn('advance_rows', i))}</div>
                 <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Amount</label><input value={r.amount} onChange={(e) => setRow('advance_rows', i, { amount: e.target.value })} placeholder="0.00" /></div>
                 <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Paid Date</label><input type="date" value={r.paid_date} onChange={(e) => setRow('advance_rows', i, { paid_date: e.target.value, batch_no: batchNo(e.target.value) })} /></div>
                 <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Batch No.</label><input value={r.batch_no} readOnly style={{ background: '#f9fafb' }} /></div>
@@ -119,7 +155,7 @@ export default function AdjustmentModal({ open, onClose, transactionId, txn, onS
               <div style={{ textAlign: 'right', marginTop: 6 }}><button className="row-rm" onClick={() => rmRow('advance_rows', i)}>🗑️</button></div>
             </div>
           ))}
-          <button className="btn primary sm" onClick={() => addRow('advance_rows', { agent: '', amount: '', paid_date: '', batch_no: '', remarks: '' })}>+ Add New</button>
+          {canAddFor('advance_rows') && <button className="btn primary sm" onClick={() => addRow('advance_rows', { agent: '', amount: '', paid_date: '', batch_no: '', remarks: '' })}>+ Add New</button>}
         </>)}
 
         {/* Client Referral */}
@@ -131,7 +167,7 @@ export default function AdjustmentModal({ open, onClose, transactionId, txn, onS
             <div className="dyn-list-box" key={i}>
               <div className="g3">
                 <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Client Name</label><input value={r.client_name} onChange={(e) => setRow('client_rows', i, { client_name: e.target.value })} /></div>
-                <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Referral Amount (CAD)</label><input value={r.amount} onChange={(e) => setRow('client_rows', i, { amount: e.target.value })} placeholder="0.00" /></div>
+                <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Referral Amount</label><input value={r.amount} onChange={(e) => setRow('client_rows', i, { amount: e.target.value })} placeholder="0.00" /></div>
                 <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Void Cheque Received</label><select value={r.void_cheque} onChange={(e) => setRow('client_rows', i, { void_cheque: e.target.value })}><option>No</option><option>Yes</option></select></div>
               </div>
               {r.void_cheque === 'Yes' && (
@@ -184,11 +220,16 @@ export default function AdjustmentModal({ open, onClose, transactionId, txn, onS
           </div>
         )}
 
+        </fieldset>
+
+        <SavedBadge show={savedOk} />
+
         <div className="actions">
           <button className="btn ghost" onClick={onClose}>Close</button>
-          <button className="btn primary" onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save'}</button>
+          {!readOnly && <button className="btn primary" onClick={save} disabled={saving || savedOk}>{savedOk ? '✓ Saved' : (saving ? 'Saving…' : 'Save')}</button>}
         </div>
       </div>
+      <ConfirmDialog confirm={confirm} onClose={closeConfirm} />
     </div>
   );
 }

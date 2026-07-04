@@ -2,16 +2,18 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\Agent;
 use App\Models\User;
 
 class AgentController extends Controller
 {
-    /** Agent directory for the name datalists/autocomplete. */
+    /** Agent directory for the name datalists/autocomplete — only active Agent users. */
     public function index()
     {
         return response()->json(
-            Agent::where('active', true)->orderBy('name')->pluck('name')
+            User::where('role', 'agent')
+                ->where(fn ($q) => $q->where('status', 'Active')->orWhereNull('status'))
+                ->orderBy('name')
+                ->pluck('name')
         );
     }
 
@@ -20,6 +22,19 @@ class AgentController extends Controller
      * the user profile (Current Agent Commission % + lease %). Used to pre-fill
      * Agent Comm (%) on transactions and to flag transaction-specific overrides.
      */
+    /** Map of agent/user name => email, for CC-ing listing agents on documents. */
+    public function emails()
+    {
+        $map = [];
+        foreach (User::all(['name', 'email']) as $u) {
+            if ($u->email) {
+                $map[$u->name] = $u->email;
+            }
+        }
+
+        return response()->json($map);
+    }
+
     public function commissions()
     {
         $map = [];

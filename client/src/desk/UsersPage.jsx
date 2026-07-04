@@ -3,6 +3,7 @@ import { getUsers, getUsersCatalog, createUser, updateUser, deleteUser } from '.
 import { roleLabel, formatCurrency } from './format';
 import { useToast } from './toast';
 import { useAuth } from '../context/AuthContext';
+import PasswordInput from './PasswordInput';
 
 export default function UsersPage() {
   const toast = useToast();
@@ -92,9 +93,10 @@ function UserModal({ catalog, existing, onClose, onSaved }) {
     // profile fields
     mobile: p.mobile || '', gender: p.gender || '',
     onboard_date: p.onboard_date || '', personal_email: p.personal_email || '', org_email: p.org_email || '',
-    experience: p.experience || 'N/A', prev_brokerage: p.prev_brokerage || '',
-    commission_structure: p.commission_structure || '', agent_comm_pct: p.agent_comm_pct ?? '', brok_comm_pct: p.brok_comm_pct ?? '',
-    lease_comm_pct: p.lease_comm_pct ?? '', completed_deals: p.completed_deals ?? 0,
+    experience: (p.experience && p.experience !== 'N/A') ? p.experience : '', prev_brokerage: p.prev_brokerage || '',
+    commission_structure: p.commission_structure || '', agent_comm_pct: p.agent_comm_pct ?? 0, brok_comm_pct: p.brok_comm_pct ?? 0,
+    lease_comm_pct: p.lease_comm_pct ?? 95, completed_deals: p.completed_deals ?? 0,
+    commission_history: p.commission_history || [],
     has_loan: p.has_loan || 'No', loan_entries: p.loan_entries || [], address: p.address || '',
   }));
   const [perms, setPerms] = useState(() => existing?.permissions || role_defaults[existing?.role || 'agent']);
@@ -107,10 +109,12 @@ function UserModal({ catalog, existing, onClose, onSaved }) {
   const isAdminRole = form.role === 'admin';
   const isAgent = form.role === 'agent';
 
+  // Selecting a preset split (e.g. "90-10%") auto-fills Agent % / Brokerage %.
+  // "Add custom split…" leaves both empty for manual entry.
   const onCommStructure = (v) => {
     const m = v.match(/^(\d+)-(\d+)/);
     if (m) setForm((f) => ({ ...f, commission_structure: v, agent_comm_pct: m[1], brok_comm_pct: m[2] }));
-    else set('commission_structure', v); // 'custom'
+    else setForm((f) => ({ ...f, commission_structure: v, agent_comm_pct: '', brok_comm_pct: '' }));
   };
   const setAgentSplit = (v) => setForm((f) => ({ ...f, agent_comm_pct: v, brok_comm_pct: v === '' ? '' : Math.max(0, 100 - (parseFloat(v) || 0)) }));
 
@@ -120,6 +124,15 @@ function UserModal({ catalog, existing, onClose, onSaved }) {
   const rmLoan = (i) => set('loan_entries', form.loan_entries.filter((_, idx) => idx !== i));
   const loanTotal = form.loan_entries.reduce((s, e) => s + (parseFloat(e.amount) || 0), 0);
 
+  // Previous Commission History entries (brokerage + agent/brokerage split + remarks)
+  const addHist = () => set('commission_history', [...form.commission_history, { brokerage: '', agent_pct: '', brok_pct: '', remarks: '' }]);
+  const setHist = (i, k, v) => set('commission_history', form.commission_history.map((e, idx) => {
+    if (idx !== i) return e;
+    if (k === 'agent_pct') return { ...e, agent_pct: v, brok_pct: v === '' ? '' : Math.max(0, 100 - (parseFloat(v) || 0)) };
+    return { ...e, [k]: v };
+  }));
+  const rmHist = (i) => set('commission_history', form.commission_history.filter((_, idx) => idx !== i));
+
   const emailStub = (what) => toast(`${what} will be sent once the email module is configured (next phase).`, 'info');
 
   const save = async () => {
@@ -127,6 +140,19 @@ function UserModal({ catalog, existing, onClose, onSaved }) {
     if (!existing && !form.username.trim()) { toast('Username is required', 'bad'); return; }
     if (!existing && !form.password) { toast('Password is required for a new user', 'bad'); return; }
     if (form.password && form.password !== form.password_confirmation) { toast('Passwords do not match', 'bad'); return; }
+    // Mandatory Basic Information fields.
+    if (!String(form.mobile).trim()) { toast('Mobile Number is required', 'bad'); return; }
+    if (!form.gender) { toast('Gender is required', 'bad'); return; }
+    if (!form.status) { toast('Status is required', 'bad'); return; }
+    // Mandatory Agent Details (only shown for the Agent role).
+    if (isAgent) {
+      if (!form.onboard_date) { toast('Date of Onboard is required', 'bad'); return; }
+      if (!form.experience) { toast('Please select Fresher / Experienced', 'bad'); return; }
+      if (form.experience === 'Experienced' && !String(form.prev_brokerage).trim()) { toast('Previous Brokerage Name is required for an experienced agent', 'bad'); return; }
+      if (!form.commission_structure) { toast('Commission Structure is required', 'bad'); return; }
+      if (form.agent_comm_pct === '' || form.agent_comm_pct === null) { toast('Agent % is required', 'bad'); return; }
+      if (form.lease_comm_pct === '' || form.lease_comm_pct === null) { toast('Lease % is required', 'bad'); return; }
+    }
     const payload = {
       name: form.name.trim(), username: form.username.trim() || null, email: form.email.trim(), role: form.role,
       status: form.status, permissions: isAdminRole ? {} : perms,
@@ -136,6 +162,7 @@ function UserModal({ catalog, existing, onClose, onSaved }) {
         experience: form.experience, prev_brokerage: form.experience === 'Experienced' ? form.prev_brokerage : '',
         commission_structure: form.commission_structure, agent_comm_pct: form.agent_comm_pct, brok_comm_pct: form.brok_comm_pct,
         lease_comm_pct: form.lease_comm_pct, completed_deals: form.completed_deals,
+        commission_history: form.commission_history,
         has_loan: form.has_loan, loan_amount: loanTotal, loan_entries: form.loan_entries, address: form.address,
       },
     };
@@ -165,7 +192,7 @@ function UserModal({ catalog, existing, onClose, onSaved }) {
           <div className="field"><label>Email <span className="req">*</span></label><input type="email" value={form.email} onChange={(e) => set('email', e.target.value)} /></div>
         </div>
         <div className="g3">
-          <div className="field"><label>Mobile Number <span className="req">*</span></label><input value={form.mobile} onChange={(e) => set('mobile', e.target.value)} /></div>
+          <div className="field"><label>Mobile Number <span className="req">*</span></label><input type="tel" autoComplete="off" value={form.mobile} onChange={(e) => set('mobile', e.target.value)} /></div>
           <div className="field"><label>Gender <span className="req">*</span></label>
             <select value={form.gender} onChange={(e) => set('gender', e.target.value)}><option value="">Select gender</option><option>Male</option><option>Female</option><option>Other</option></select></div>
           <div className="field"><label>Role <span className="req">*</span></label>
@@ -173,9 +200,9 @@ function UserModal({ catalog, existing, onClose, onSaved }) {
         </div>
         <div className="g3">
           <div className="field"><label>{existing ? 'New Password' : 'Password'} {!existing && <span className="req">*</span>}</label>
-            <input type="password" value={form.password} onChange={(e) => set('password', e.target.value)} placeholder={existing ? 'leave blank to keep' : ''} /></div>
+            <PasswordInput value={form.password} onChange={(e) => set('password', e.target.value)} placeholder={existing ? 'leave blank to keep' : ''} autoComplete="new-password" /></div>
           <div className="field"><label>Confirm Password</label>
-            <input type="password" value={form.password_confirmation} onChange={(e) => set('password_confirmation', e.target.value)} /></div>
+            <PasswordInput value={form.password_confirmation} onChange={(e) => set('password_confirmation', e.target.value)} autoComplete="new-password" /></div>
           <div className="field"><label>Status <span className="req">*</span></label>
             <select value={form.status} onChange={(e) => set('status', e.target.value)}><option>Active</option><option>Inactive</option></select>
             <span className="help">Inactive users cannot login to the system.</span></div>
@@ -190,30 +217,25 @@ function UserModal({ catalog, existing, onClose, onSaved }) {
             <div className="field"><label>Organisational Mail ID</label><input type="email" value={form.org_email} onChange={(e) => set('org_email', e.target.value)} /></div>
           </div>
           <div className="g3">
-            <div className="field"><label>Fresher / Experienced</label>
-              <select value={form.experience} onChange={(e) => set('experience', e.target.value)}><option>N/A</option><option>Fresher</option><option>Experienced</option></select></div>
+            <div className="field"><label>Fresher / Experienced <span className="req">*</span></label>
+              <select value={form.experience} onChange={(e) => set('experience', e.target.value)}><option value="">Select</option><option>Fresher</option><option>Experienced</option></select></div>
+            {form.experience === 'Experienced' && (
+              <div className="field"><label>Previous Brokerage Name <span className="req">*</span></label>
+                <input value={form.prev_brokerage} onChange={(e) => set('prev_brokerage', e.target.value)} placeholder="Where did they work before?" /></div>
+            )}
             <div className="field"><label>Commission Structure (Split %) <span className="req">*</span></label>
               <select value={form.commission_structure} onChange={(e) => onCommStructure(e.target.value)}>
                 <option value="">Select commission structure</option>
                 {COMM_PRESETS.map((c) => <option key={c} value={c}>{c}</option>)}
                 <option value="custom">Add custom split…</option>
               </select></div>
-            <div className="field"><label>Completed Deals Count</label><input type="number" min="0" value={form.completed_deals} onChange={(e) => set('completed_deals', e.target.value)} /></div>
           </div>
-          {form.experience === 'Experienced' && (
-            <div className="field"><label>Previous Brokerage Name</label>
-              <input value={form.prev_brokerage} onChange={(e) => set('prev_brokerage', e.target.value)} placeholder="Where did they work before?" /></div>
-          )}
-          {form.commission_structure === 'custom' && (
-            <div className="g2">
-              <div className="field"><label>Agent % (Agent + Brokerage = 100)</label><input type="number" min="0" max="100" value={form.agent_comm_pct} onChange={(e) => setAgentSplit(e.target.value)} /></div>
-              <div className="field"><label>Brokerage %</label><input value={form.brok_comm_pct} readOnly style={{ background: '#f9fafb' }} /></div>
-            </div>
-          )}
-          <div className="g2">
-            <div className="field"><label>Current Agent Commission % <span className="req">*</span></label><input type="number" min="0" max="100" value={form.agent_comm_pct} onChange={(e) => set('agent_comm_pct', e.target.value)} /></div>
+          <div className="g3">
+            <div className="field"><label>Agent % <span className="req">*</span></label><input type="number" min="0" max="100" value={form.agent_comm_pct} onChange={(e) => setAgentSplit(e.target.value)} /><span className="help">Agent + Brokerage = 100.</span></div>
+            <div className="field"><label>Brokerage %</label><input value={form.brok_comm_pct} readOnly style={{ background: '#f9fafb' }} /></div>
             <div className="field"><label>Lease (Residential / Listing / Commercial) % <span className="req">*</span></label><input type="number" min="0" max="100" value={form.lease_comm_pct} onChange={(e) => set('lease_comm_pct', e.target.value)} /><span className="help">Commission % for lease/listing transactions.</span></div>
           </div>
+          <div className="field" style={{ maxWidth: 240 }}><label>Existing Split Deals Count</label><input type="number" min="0" value={form.completed_deals} onChange={(e) => set('completed_deals', e.target.value)} /></div>
 
           {/* Loan */}
           <div className="g2">
@@ -241,6 +263,21 @@ function UserModal({ catalog, existing, onClose, onSaved }) {
               <button className="btn primary sm" onClick={addLoan}>+ Add Loan Entry</button>
             </div>
           )}
+
+          {/* Previous Commission History */}
+          <div className="modal-sub">Previous Commission History</div>
+          <div className="card" style={{ background: '#f9fafb' }}>
+            {form.commission_history.length === 0 && <div className="help" style={{ marginBottom: 8 }}>No previous commission records. Add entries from earlier brokerages or split changes.</div>}
+            {form.commission_history.map((e, i) => (
+              <div className="g4" key={i} style={{ alignItems: 'end', marginBottom: 6 }}>
+                <div className="field" style={{ marginBottom: 0 }}><label>Brokerage</label><input value={e.brokerage} onChange={(ev) => setHist(i, 'brokerage', ev.target.value)} placeholder="Brokerage name" /></div>
+                <div className="field" style={{ marginBottom: 0 }}><label>Agent %</label><input type="number" min="0" max="100" value={e.agent_pct} onChange={(ev) => setHist(i, 'agent_pct', ev.target.value)} placeholder="0" /></div>
+                <div className="field" style={{ marginBottom: 0 }}><label>Brokerage %</label><input value={e.brok_pct} readOnly style={{ background: '#fff' }} /></div>
+                <div style={{ display: 'flex', gap: 6, alignItems: 'end' }}><div className="field" style={{ marginBottom: 0, flex: 1 }}><label>Remarks</label><input value={e.remarks} onChange={(ev) => setHist(i, 'remarks', ev.target.value)} placeholder="Period / notes" /></div><button className="row-rm" onClick={() => rmHist(i)}>🗑️</button></div>
+              </div>
+            ))}
+            <button className="btn primary sm" onClick={addHist}>+ Add Commission Record</button>
+          </div>
 
           <div className="field"><label>Address</label><textarea rows={2} value={form.address} onChange={(e) => set('address', e.target.value)} /></div>
         </>)}

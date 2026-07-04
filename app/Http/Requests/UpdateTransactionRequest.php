@@ -46,6 +46,9 @@ class UpdateTransactionRequest extends FormRequest
 
             'listing_comm_pct' => ['sometimes', 'nullable', 'numeric', 'min:0', 'max:100'],
             'coop_comm_pct' => ['sometimes', 'nullable', 'numeric', 'min:0', 'max:100'],
+            'listing_comm_flat' => ['sometimes', 'nullable', 'numeric', 'min:0'],
+            'coop_comm_flat' => ['sometimes', 'nullable', 'numeric', 'min:0'],
+            'trust_payable' => ['sometimes', 'nullable', 'numeric'],
             'listing_adj_enabled' => ['sometimes', 'boolean'],
             'listing_adj_before' => ['sometimes', 'nullable', 'numeric', 'min:0'],
             'listing_adj_after' => ['sometimes', 'nullable', 'numeric', 'min:0'],
@@ -82,6 +85,7 @@ class UpdateTransactionRequest extends FormRequest
             'team.*.agent_pct' => ['nullable', 'numeric', 'min:0', 'max:100'],
             'team.*.brok_pct' => ['nullable', 'numeric', 'min:0', 'max:100'],
             'team.*.is_primary' => ['nullable', 'boolean'],
+            'team.*.access' => ['nullable', Rule::in(['full', 'docs'])],
             'team.*.scope' => ['nullable', Rule::in(['Entire', 'Particular'])],
             'team.*.terms' => ['nullable', 'array'],
             'team.*.terms.*' => ['integer', 'min:1'],

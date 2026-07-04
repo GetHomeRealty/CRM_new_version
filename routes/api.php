@@ -1,14 +1,18 @@
 <?php
 
 use App\Http\Controllers\AgentController;
+use App\Http\Controllers\AuditLogController;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\CompanySettingController;
 use App\Http\Controllers\CustomerController;
+use App\Http\Controllers\DepositReceiptController;
 use App\Http\Controllers\DocumentController;
 use App\Http\Controllers\InvoiceController;
 use App\Http\Controllers\NoticeOfSaleController;
 use App\Http\Controllers\SuggestionController;
 use App\Http\Controllers\TransactionController;
+use App\Http\Controllers\TransactionDeleteRequestController;
+use App\Http\Controllers\TransactionEditRequestController;
 use App\Http\Controllers\UserController;
 use Illuminate\Support\Facades\Route;
 
@@ -20,10 +24,12 @@ Route::get('/registration-open', [AuthController::class, 'registrationOpen']);
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('/user', [AuthController::class, 'me']);
     Route::post('/logout', [AuthController::class, 'logout']);
+    Route::post('/user/password', [AuthController::class, 'changePassword']);
 
     // Reference data (any authenticated staff).
     Route::get('/agents', [AgentController::class, 'index']);
     Route::get('/agent-commissions', [AgentController::class, 'commissions']);
+    Route::get('/agent-emails', [AgentController::class, 'emails']);
     Route::get('/transaction-types', fn () => response()->json([
         'types' => \App\Models\Transaction::TYPES,
         'listing_types' => \App\Models\Transaction::LISTING_TYPES,
@@ -43,6 +49,23 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/documents/{document}/validation-file', [DocumentController::class, 'downloadValidationFile']);
     Route::get('/transactions/{transaction}/notice-of-sale', [NoticeOfSaleController::class, 'show']);
     Route::get('/transactions/{transaction}/messages', [TransactionController::class, 'messages']);
+
+    // §5.1 edit-approval workflow (DFT / Closed). Admins request; Super Admins approve.
+    Route::post('/transactions/{transaction}/edit-requests', [TransactionEditRequestController::class, 'store']);
+    Route::middleware('admin')->group(function () {
+        Route::post('/edit-requests/{editRequest}/approve', [TransactionEditRequestController::class, 'approve']);
+        Route::post('/edit-requests/{editRequest}/reject', [TransactionEditRequestController::class, 'reject']);
+    });
+    // Admin/manager reviews an agent's pending changes (role checked in-controller).
+    Route::post('/transactions/{transaction}/review-agent-changes', [TransactionController::class, 'reviewAgentChanges']);
+    Route::post('/transactions/{transaction}/reject-agent-change', [TransactionController::class, 'rejectAgentChange']);
+    Route::get('/agent-change-notifications', [TransactionController::class, 'agentChangeNotifications']);
+
+    // Transaction deletion approval workflow (roles checked in-controller).
+    Route::post('/transactions/{transaction}/delete-requests', [TransactionDeleteRequestController::class, 'store']);
+    Route::post('/delete-requests/{deleteRequest}/forward', [TransactionDeleteRequestController::class, 'forward']);
+    Route::post('/delete-requests/{deleteRequest}/approve', [TransactionDeleteRequestController::class, 'approve']);
+    Route::post('/delete-requests/{deleteRequest}/reject', [TransactionDeleteRequestController::class, 'reject']);
     Route::post('/transactions/{transaction}/messages', [TransactionController::class, 'postMessage']);
 
     Route::middleware('screen:transactions,edit')->group(function () {
@@ -57,9 +80,11 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/transactions/{transaction}/documents/{document}/validation-file', [DocumentController::class, 'uploadValidationFile']);
         Route::delete('/transactions/{transaction}/documents/{document}/validation-file', [DocumentController::class, 'deleteValidationFile']);
         Route::delete('/documents/{document}', [DocumentController::class, 'destroy']);
+        Route::post('/documents/{document}/restore', [DocumentController::class, 'restore']);
 
         Route::put('/transactions/{transaction}/notice-of-sale', [NoticeOfSaleController::class, 'save']);
         Route::post('/transactions/{transaction}/notice-of-sale/send', [NoticeOfSaleController::class, 'send']);
+        Route::post('/transactions/{transaction}/deposit-receipt/send', [DepositReceiptController::class, 'send']);
     });
 
     // Invoice module
@@ -77,9 +102,15 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/invoices/{invoice}/payments', [InvoiceController::class, 'recordPayment']);
         Route::delete('/invoices/{invoice}/payments/{payment}', [InvoiceController::class, 'deletePayment']);
         Route::post('/invoices/{invoice}/reminders', [InvoiceController::class, 'recordReminder']);
+        Route::post('/invoices/{invoice}/send', [InvoiceController::class, 'send']);
         Route::post('/customers', [CustomerController::class, 'store']);
         Route::put('/customers/{customer}', [CustomerController::class, 'update']);
         Route::delete('/customers/{customer}', [CustomerController::class, 'destroy']);
+    });
+
+    // Global audit trail — anyone with the Audit Trail screen (Super Admin always; Admin by default).
+    Route::middleware('screen:audit,view')->group(function () {
+        Route::get('/audit-logs', [AuditLogController::class, 'index']);
     });
 
     // User management — administrators only.

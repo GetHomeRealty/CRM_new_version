@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\CompanySetting;
 use App\Models\Invoice;
 use App\Models\Transaction;
+use App\Services\AuditService;
 use App\Services\InvoiceCalculator;
 use App\Services\InvoiceNumberService;
 use App\Services\TransactionInvoiceService;
@@ -15,8 +16,22 @@ use Illuminate\Validation\Rule;
 
 class InvoiceController extends Controller
 {
-    public function __construct(private InvoiceNumberService $numbers, private InvoiceCalculator $calc)
+    public function __construct(private InvoiceNumberService $numbers, private InvoiceCalculator $calc, private AuditService $audit)
     {
+    }
+
+    private const SECTION = 'Quick Actions — Invoice';
+
+    /** Record an invoice event: always on the global Invoice trail, plus its linked transaction (if any). */
+    private function auditInvoice(Invoice $invoice, array $a): void
+    {
+        $entry = $a + ['section' => self::SECTION, 'source' => $a['source'] ?? 'Quick Action'];
+        $this->audit->logModule('Invoice', $entry);
+
+        $txn = $invoice->transaction;
+        if ($txn) {
+            $this->audit->record($txn, $entry);
+        }
     }
 
     public function index()
@@ -49,6 +64,8 @@ class InvoiceController extends Controller
             return $inv;
         });
 
+        $this->auditInvoice($invoice, ['field' => $invoice->invoice_no, 'action' => 'Invoice created', 'new' => $invoice->invoice_no]);
+
         return response()->json($this->detail($invoice->fresh(['lineItems', 'payments', 'customer'])), 201);
     }
 
@@ -56,6 +73,7 @@ class InvoiceController extends Controller
     {
         $data = $this->validateData($request);
         $settings = CompanySetting::current();
+        $oldStatus = $invoice->status;
 
         DB::transaction(function () use ($data, $invoice, $settings) {
             $invoice->fill($this->mapFields($data, $settings))->save();
@@ -65,11 +83,19 @@ class InvoiceController extends Controller
             $this->calc->recalculate($invoice, (float) $settings->default_tax_rate);
         });
 
+        $no = $invoice->invoice_no;
+        if ($oldStatus !== $invoice->status) {
+            $this->auditInvoice($invoice, ['field' => "Invoice {$no} — Status", 'action' => 'Status changed', 'old' => $oldStatus, 'new' => $invoice->status]);
+        } else {
+            $this->auditInvoice($invoice, ['field' => "Invoice {$no}", 'action' => 'Invoice updated']);
+        }
+
         return response()->json($this->detail($invoice->fresh(['lineItems', 'payments', 'customer'])));
     }
 
     public function destroy(Invoice $invoice)
     {
+        $this->auditInvoice($invoice, ['field' => $invoice->invoice_no, 'action' => 'Invoice deleted', 'old' => $invoice->invoice_no]);
         $invoice->delete();
 
         return response()->json(['message' => 'Invoice deleted']);
@@ -86,6 +112,11 @@ class InvoiceController extends Controller
 
         $invoice->payments()->create($data);
         $this->calc->recalculate($invoice, (float) CompanySetting::current()->default_tax_rate);
+
+        $this->auditInvoice($invoice, [
+            'field' => "Invoice {$invoice->invoice_no} — Payment", 'action' => 'Payment recorded',
+            'new' => number_format((float) $data['amount'], 2).($data['method'] ?? null ? " ({$data['method']})" : ''),
+        ]);
 
         return response()->json($this->detail($invoice->fresh(['lineItems', 'payments', 'customer'])));
     }
@@ -122,6 +153,20 @@ class InvoiceController extends Controller
         ], 201);
     }
 
+    /** Mark the invoice as Sent (stamps sent_at; email delivery is the Email phase). */
+    public function send(Invoice $invoice)
+    {
+        if (! $invoice->sent_at) {
+            $invoice->sent_at = now();
+            $invoice->save();
+        }
+        $this->auditInvoice($invoice, [
+            'field' => $invoice->invoice_no, 'action' => 'Invoice sent', 'new' => optional($invoice->sent_at)->toDateString(),
+        ]);
+
+        return response()->json($this->detail($invoice->fresh(['lineItems', 'payments', 'customer'])));
+    }
+
     /** §12.3 Send Reminder — record a reminder event (history of count + dates). */
     public function recordReminder(Request $request, Invoice $invoice)
     {
@@ -133,6 +178,11 @@ class InvoiceController extends Controller
         $invoice->reminders = $sent;
         $invoice->save();
 
+        $this->auditInvoice($invoice, [
+            'field' => "Invoice {$invoice->invoice_no} — Reminder", 'action' => 'Reminder sent',
+            'new' => 'Reminder #'.count($sent),
+        ]);
+
         return response()->json($this->detail($invoice->fresh(['lineItems', 'payments', 'customer'])));
     }
 
@@ -140,6 +190,10 @@ class InvoiceController extends Controller
     {
         $invoice->payments()->whereKey($paymentId)->delete();
         $this->calc->recalculate($invoice, (float) CompanySetting::current()->default_tax_rate);
+
+        $this->auditInvoice($invoice, [
+            'field' => "Invoice {$invoice->invoice_no} — Payment", 'action' => 'Payment removed',
+        ]);
 
         return response()->json($this->detail($invoice->fresh(['lineItems', 'payments', 'customer'])));
     }

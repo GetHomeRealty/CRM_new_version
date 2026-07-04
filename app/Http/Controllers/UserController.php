@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\User;
+use App\Services\AuditService;
 use App\Services\PermissionService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
@@ -11,7 +12,7 @@ use Illuminate\Validation\Rules\Password;
 
 class UserController extends Controller
 {
-    public function __construct(private PermissionService $permissions)
+    public function __construct(private PermissionService $permissions, private AuditService $audit)
     {
     }
 
@@ -38,6 +39,11 @@ class UserController extends Controller
 
         $this->syncPermissions($user, $data['permissions'] ?? []);
 
+        $this->audit->logModule('Users', [
+            'section' => 'User Management', 'field' => $user->name, 'action' => 'User created',
+            'details' => "{$user->email} · {$this->permissions->label($user->role)}",
+        ]);
+
         return response()->json($this->payload($user->fresh('permissions')), 201);
     }
 
@@ -60,6 +66,11 @@ class UserController extends Controller
 
         $this->syncPermissions($user, $data['permissions'] ?? []);
 
+        $this->audit->logModule('Users', [
+            'section' => 'User Management', 'field' => $user->name, 'action' => 'User updated',
+            'details' => "{$user->email} · {$this->permissions->label($user->role)} · {$user->status}",
+        ]);
+
         return response()->json($this->payload($user->fresh('permissions')));
     }
 
@@ -68,7 +79,13 @@ class UserController extends Controller
         abort_if($user->id === $request->user()->id, 422, 'You cannot delete your own account.');
         abort_if($user->isAdmin() && User::where('role', 'admin')->count() <= 1, 422, 'Cannot delete the last administrator.');
 
+        $name = $user->name;
+        $email = $user->email;
         $user->delete();
+
+        $this->audit->logModule('Users', [
+            'section' => 'User Management', 'field' => $name, 'action' => 'User deleted', 'details' => $email,
+        ]);
 
         return response()->json(['message' => 'User deleted']);
     }

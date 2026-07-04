@@ -11,11 +11,12 @@ class Document extends Model
         'transaction_id', 'title', 'mandatory', 'is_condition', 'condition_id',
         'status', 'validation', 'remarks', 'file_name', 'file_path', 'files',
         'validation_file_name', 'validation_file_path', 'position',
+        'pending_delete', 'deleted_by', 'reminder', 'agent_accepted', 'manual',
     ];
 
     protected function casts(): array
     {
-        return ['mandatory' => 'boolean', 'is_condition' => 'boolean', 'files' => 'array'];
+        return ['mandatory' => 'boolean', 'is_condition' => 'boolean', 'files' => 'array', 'pending_delete' => 'boolean', 'reminder' => 'boolean', 'manual' => 'boolean'];
     }
 
     public function transaction(): BelongsTo

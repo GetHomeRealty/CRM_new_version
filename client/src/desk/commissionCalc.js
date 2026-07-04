@@ -293,9 +293,12 @@ export function listingBreakdown(input, hstRate = HST_RATE) {
   const totalWithHst = (totalComm + totalHst) + lAdjAfter + cAdjAfter;
   const payableToClient = isLease ? (deposit - totalWithHst) : Math.max(deposit - totalWithHst, 0);
   const receivableFromLawyer = Math.min(deposit - totalWithHst, 0);
-  const brokerageFloor = Math.max(listTotal * brokerageSplit, minBrok * g);
-  const agentPool = Math.max(Math.min(listTotal * agentSplit, listTotal - brokerageFloor), 0);
-  const brokerageKeep = listTotal - agentPool;
+  // The agent/brokerage split (and agent commissions) are computed on the commission
+  // AFTER the external broker referral; the external broker is paid out separately.
+  const splitTotal = ROUND(listTotal - extAmt * g);
+  const brokerageFloor = Math.max(splitTotal * brokerageSplit, minBrok * g);
+  const agentPool = Math.max(Math.min(splitTotal * agentSplit, splitTotal - brokerageFloor), 0);
+  const brokerageKeep = splitTotal - agentPool;
 
   const memberRows = members.map((m, i) => {
     const teamShare = num(m.split) / 100;
@@ -311,7 +314,7 @@ export function listingBreakdown(input, hstRate = HST_RATE) {
   });
   const sumCash = memberRows.reduce((s, r) => s + r.cashToPay, 0);
   const sumDeduction = memberRows.reduce((s, r) => s + r.deduction, 0);
-  const reconcile = coopTotal + clientReferral + sumCash + brokerageKeep + sumDeduction;
+  const reconcile = coopTotal + ROUND(extAmt * g) + clientReferral + sumCash + brokerageKeep + sumDeduction;
 
   return {
     dealType: isLease ? 'Lease' : 'Sale',

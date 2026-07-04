@@ -41,7 +41,6 @@ export const LISTING_TYPES = [
   'Residential Lease Listing',
   'Commercial Property Sale Listing',
   'Commercial Property Lease Listing',
-  'Business Lease Listing',
 ];
 
 // Display labels (relabel-in-place): stored type string => UI label. Stored
@@ -50,7 +49,6 @@ export const TYPE_LABELS = {
   'Preconstruction': 'Pre-construction',
   'Residential Sale Listing': 'Sale Listing',
   'Residential Lease Listing': 'Lease Listing',
-  'Business Lease Listing': 'Business Lease',
 };
 export const typeLabel = (t) => TYPE_LABELS[t] || t;
 
@@ -88,9 +86,7 @@ export const TRANSACTION_TYPES = [
   'Commercial Property Sale Listing',
   'Commercial Property Lease Listing',
   'Business Buying',
-  'Business Lease',
   'Business Sale',
-  'Business Lease Listing',
 ];
 
 // ---- Statuses (Transaction Desk v2) -------------------------------------
@@ -101,6 +97,12 @@ export const STATUS_LISTING_FAMILY = [...LISTING_TYPES, 'Business Sale'];
 export const isListingStatusFamily = (t) => STATUS_LISTING_FAMILY.includes(t);
 
 export const STATUS_DEAL = ['Open', 'MPR', 'Closed', 'Mutual Release', 'DFT', 'Void'];
+// Buy/Lease/Business deal types use a "Secured" lifecycle instead of Active.
+export const SECURED_DEAL_TYPES = [
+  'Residential Buying', 'Residential Lease',
+  'Commercial Property Buying', 'Commercial Property Lease', 'Business Buying',
+];
+export const STATUS_DEAL_SECURED = ['Secured Firm', 'Secured Conditionally', 'MPR', 'Closed', 'Mutual Release', 'DFT', 'Void'];
 export const STATUS_REFERRAL = ['Open', 'Closed'];
 export const AUTO_STATUSES = ['Expired']; // set automatically (listing expiry), never picked manually
 
@@ -115,10 +117,13 @@ export function listingStatuses(type) {
 export function statusOptionsFor(type) {
   if (type === 'Referral') return STATUS_REFERRAL;
   if (isListingStatusFamily(type)) return listingStatuses(type);
+  if (SECURED_DEAL_TYPES.includes(type)) return STATUS_DEAL_SECURED;
   return STATUS_DEAL;
 }
 
-export const defaultStatusFor = (type) => (isListingStatusFamily(type) ? 'Active' : 'Open');
+// Secured deal types start with NO status (the user picks Secured Firm/Conditionally).
+export const defaultStatusFor = (type) =>
+  (isListingStatusFamily(type) ? 'Active' : (SECURED_DEAL_TYPES.includes(type) ? '' : 'Open'));
 
 // Valid multi-select groupings (4.3). Selecting within a group disables statuses
 // outside it; any single status alone is always valid ("All Singles").
@@ -152,6 +157,8 @@ export function allowedStatuses(type, selected) {
 
 // Map legacy stored statuses to the current vocabulary for display/matching.
 export function normalizeStatus(type, s) {
+  // Buy/Lease/Business deal types replaced "Open" with the Secured lifecycle.
+  if (SECURED_DEAL_TYPES.includes(type) && (s === 'Open' || s === 'Hold')) return 'Secured Conditionally';
   if (s === 'Hold') return 'Open';
   if (s === 'Mutual release') return 'Mutual Release';
   if (s === 'Sold conditional') return /lease/i.test(type) ? 'Lease Conditional' : 'Sold Conditional';

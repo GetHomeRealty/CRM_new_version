@@ -15,7 +15,7 @@ button{font-family:inherit;cursor:pointer}
 .titlebar{background:linear-gradient(135deg,var(--brand) 0%,var(--brand-dark) 100%);color:#fff;padding:7px 14px;font-size:11.5px;display:flex;gap:8px;align-items:center;letter-spacing:0.01em;font-weight:500;box-shadow:inset 0 -1px 0 rgba(0,0,0,.12)}
 .titlebar .dot{width:16px;height:16px;background:#fff;border-radius:4px;display:inline-grid;place-items:center;color:var(--brand);font-weight:800;font-size:10px;line-height:1}
 .app{display:grid;grid-template-columns:232px 1fr;min-height:calc(100vh - 30px)}
-.sidebar{background:var(--surface);border-right:1px solid var(--line);padding:14px 12px;display:flex;flex-direction:column;gap:6px}
+.sidebar{background:var(--surface);border-right:1px solid var(--line);padding:14px 12px;display:flex;flex-direction:column;gap:6px;position:sticky;top:0;align-self:start;height:calc(100vh - 30px);overflow-y:auto}
 .logo{display:flex;align-items:center;gap:10px;padding:6px 8px 16px;border-bottom:1px solid var(--line-2);margin-bottom:8px}
 .logo-circle{width:38px;height:38px;border-radius:10px;background:linear-gradient(135deg,var(--brand) 0%,var(--brand-dark) 100%);color:#fff;display:grid;place-items:center;font-weight:800;font-size:16px;box-shadow:0 4px 10px rgba(200,16,46,.30), inset 0 1px 0 rgba(255,255,255,.18)}
 .brand-name{font-weight:700;color:var(--brand);font-size:13px;line-height:1.15;letter-spacing:-0.01em}
@@ -75,7 +75,7 @@ select{background-image:url("data:image/svg+xml,%3Csvg width='10' height='6' vie
 .toolbar-row input,.toolbar-row select{width:auto;flex:0 1 auto;min-width:120px}
 .toolbar-row .inp{min-width:200px;flex:1 1 200px}
 .list-table{width:100%;border-collapse:separate;border-spacing:0;background:var(--surface);border:1px solid var(--line);border-radius:var(--r-lg);overflow:hidden;box-shadow:var(--shadow-sm)}
-.list-table thead th{background:var(--surface-3);color:var(--text-2);text-align:left;padding:10px 12px;font-size:11px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;border-bottom:1px solid var(--line);white-space:nowrap}
+.list-table thead th{background:var(--brand);color:#fff;text-align:left;padding:11px 12px;font-size:11px;font-weight:800;letter-spacing:0.05em;text-transform:uppercase;border-bottom:2px solid var(--brand);white-space:nowrap}
 .list-table tbody td{padding:11px 12px;border-bottom:1px solid var(--line-2);font-size:13px;vertical-align:middle;color:var(--text)}
 .list-table tbody tr:last-child td{border-bottom:0}
 .list-table tbody tr{transition:background .12s}
@@ -96,9 +96,23 @@ select{background-image:url("data:image/svg+xml,%3Csvg width='10' height='6' vie
 .overlay{position:fixed;inset:0;background:rgba(15,23,42,.45);backdrop-filter:saturate(140%) blur(2px);-webkit-backdrop-filter:saturate(140%) blur(2px);display:none;align-items:flex-start;justify-content:center;padding:32px 16px;z-index:50;overflow-y:auto}
 .overlay.open{display:flex;animation:overlayIn .18s ease-out}
 @keyframes overlayIn{from{opacity:0}to{opacity:1}}
+@keyframes savedPop{from{transform:scale(.85);opacity:0}to{transform:none;opacity:1}}
 .modal{background:var(--surface);border-radius:var(--r-2xl);width:780px;max-width:100%;padding:24px;box-shadow:var(--shadow-xl);position:relative;flex-shrink:0;border:1px solid var(--line-2);animation:modalIn .22s cubic-bezier(.2,.8,.2,1)}
 @keyframes modalIn{from{transform:translateY(8px) scale(.98);opacity:0}to{transform:none;opacity:1}}
 .modal.lg{width:980px}.modal.xl{width:1140px}
+
+/* Legal & Documentation — polished checklist rows */
+.doc-row{border:1px solid var(--line);border-left:3px solid #cbd5e1;border-radius:12px;margin-bottom:9px;background:#fff;transition:box-shadow .15s ease,border-color .15s ease,transform .06s ease}
+.doc-row:hover{box-shadow:0 4px 14px rgba(15,23,42,.07);border-color:#c7d2fe}
+.doc-row.rcv{border-left-color:#16a34a}
+.doc-row.pend{border-left-color:#f59e0b}
+.doc-row.cond{border-left-color:#7c3aed}
+.doc-row .doc-head{display:grid;align-items:center;gap:10px;padding:11px 14px}
+.doc-badge{display:inline-flex;align-items:center;gap:5px;font-size:10px;font-weight:700;padding:3px 9px;border-radius:999px;letter-spacing:.02em;text-transform:uppercase}
+.doc-badge.rcv{background:#dcfce7;color:#166534;border:1px solid #bbf7d0}
+.doc-badge.pend{background:#fef3c7;color:#92400e;border:1px solid #fde68a}
+.doc-badge.valid{background:#dbeafe;color:#1e40af;border:1px solid #bfdbfe}
+.doc-badge.invalid{background:#fee2e2;color:#991b1b;border:1px solid #fecaca}
 .modal-h{margin:0 0 18px;font-size:15px;padding:6px 0 6px 12px;border-left:3px solid var(--brand);font-weight:700;color:var(--text);letter-spacing:-0.01em}
 .modal-sub{margin:18px 0 10px;font-size:13px;padding:4px 0 4px 10px;border-left:3px solid var(--brand);font-weight:700;color:var(--text);letter-spacing:-0.005em}
 .modal .close{position:absolute;top:14px;right:14px;background:transparent;border:0;font-size:18px;color:var(--muted-2);cursor:pointer;z-index:100;width:30px;height:30px;border-radius:8px;display:grid;place-items:center;transition:background .15s, color .15s}

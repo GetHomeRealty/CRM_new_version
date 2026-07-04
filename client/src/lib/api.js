@@ -16,8 +16,32 @@ export const updateTransaction = (id, payload) =>
 export const deleteTransaction = (id) =>
   api.delete(`/api/transactions/${id}`).then((r) => r.data);
 
+// --- Transaction deletion approval workflow ---
+export const requestTransactionDeletion = (id, reason) =>
+  api.post(`/api/transactions/${id}/delete-requests`, { reason }).then((r) => r.data);
+export const forwardDeleteRequest = (reqId, reason) =>
+  api.post(`/api/delete-requests/${reqId}/forward`, { reason }).then((r) => r.data);
+export const approveDeleteRequest = (reqId) =>
+  api.post(`/api/delete-requests/${reqId}/approve`).then((r) => r.data);
+export const rejectDeleteRequest = (reqId) =>
+  api.post(`/api/delete-requests/${reqId}/reject`).then((r) => r.data);
+
 export const getTransactionMessages = (id) =>
   api.get(`/api/transactions/${id}/messages`).then((r) => r.data);
+
+// --- §5.1 edit-approval workflow (DFT / Closed) ---
+export const requestTransactionEdit = (id, reason) =>
+  api.post(`/api/transactions/${id}/edit-requests`, { reason }).then((r) => r.data);
+export const approveEditRequest = (reqId) =>
+  api.post(`/api/edit-requests/${reqId}/approve`).then((r) => r.data);
+export const rejectEditRequest = (reqId) =>
+  api.post(`/api/edit-requests/${reqId}/reject`).then((r) => r.data);
+export const reviewAgentChanges = (id) =>
+  api.post(`/api/transactions/${id}/review-agent-changes`).then((r) => r.data.data);
+export const rejectAgentChange = (id, auditId) =>
+  api.post(`/api/transactions/${id}/reject-agent-change`, { audit_id: auditId }).then((r) => r.data.data);
+export const getAgentChangeNotifications = () =>
+  api.get('/api/agent-change-notifications').then((r) => r.data);
 export const postTransactionMessage = (id, body) =>
   api.post(`/api/transactions/${id}/messages`, { body }).then((r) => r.data);
 
@@ -25,8 +49,8 @@ export const postTransactionMessage = (id, body) =>
 export const getDocuments = (txnId) =>
   api.get(`/api/transactions/${txnId}/documents`).then((r) => r.data);
 
-export const saveDocuments = (txnId, documents) =>
-  api.put(`/api/transactions/${txnId}/documents`, { documents }).then((r) => r.data);
+export const saveDocuments = (txnId, documents, extra = {}) =>
+  api.put(`/api/transactions/${txnId}/documents`, { documents, ...extra }).then((r) => r.data);
 
 export const uploadDocumentFile = (txnId, docId, file) => {
   const fd = new FormData();
@@ -37,11 +61,15 @@ export const uploadDocumentFile = (txnId, docId, file) => {
 };
 
 export const deleteDocument = (docId) => api.delete(`/api/documents/${docId}`).then((r) => r.data);
+export const restoreDocument = (docId) => api.post(`/api/documents/${docId}/restore`).then((r) => r.data);
 
 // --- Notice of Sale ---
 export const getNoticeOfSale = (txnId) => api.get(`/api/transactions/${txnId}/notice-of-sale`).then((r) => r.data);
 export const saveNoticeOfSale = (txnId, payload) => api.put(`/api/transactions/${txnId}/notice-of-sale`, payload).then((r) => r.data);
 export const sendNoticeOfSale = (txnId, agents) => api.post(`/api/transactions/${txnId}/notice-of-sale/send`, { agents }).then((r) => r.data);
+
+// --- Deposit Receipt ---
+export const sendDepositReceipt = (txnId, email, cc) => api.post(`/api/transactions/${txnId}/deposit-receipt/send`, { email, cc }).then((r) => r.data);
 
 // §13 multi-file / per-client uploads (clientName optional)
 export const uploadDocClientFile = (txnId, docId, file, clientName) => {
@@ -84,6 +112,9 @@ export const deleteInvoice = (id) => api.delete(`/api/invoices/${id}`).then((r) 
 export const recordInvoicePayment = (id, payload) => api.post(`/api/invoices/${id}/payments`, payload).then((r) => r.data);
 export const deleteInvoicePayment = (id, paymentId) => api.delete(`/api/invoices/${id}/payments/${paymentId}`).then((r) => r.data);
 export const recordInvoiceReminder = (id) => api.post(`/api/invoices/${id}/reminders`).then((r) => r.data);
+export const sendInvoice = (id) => api.post(`/api/invoices/${id}/send`).then((r) => r.data);
+
+export const changePassword = (payload) => api.post('/api/user/password', payload).then((r) => r.data);
 
 export const getCompanySettings = () => api.get('/api/company-settings').then((r) => r.data);
 export const updateCompanySettings = (payload) => api.put('/api/company-settings', payload).then((r) => r.data);
@@ -91,9 +122,14 @@ export const updateCompanySettings = (payload) => api.put('/api/company-settings
 export const getCustomers = () => api.get('/api/customers').then((r) => r.data);
 export const createCustomer = (payload) => api.post('/api/customers', payload).then((r) => r.data);
 
+// --- Global Audit Trail (admin) ---
+export const getAuditLogs = (params = {}) =>
+  api.get('/api/audit-logs', { params }).then((r) => r.data);
+
 // --- Reference data ---
 export const listAgents = () => api.get('/api/agents').then((r) => r.data);
 export const getAgentCommissions = () => api.get('/api/agent-commissions').then((r) => r.data);
+export const getAgentEmails = () => api.get('/api/agent-emails').then((r) => r.data);
 export const registrationOpen = () => api.get('/api/registration-open').then((r) => r.data.open);
 
 export const getTransactionTypes = () =>

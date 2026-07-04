@@ -1,7 +1,7 @@
 // Opens populated document HTML in a new window and triggers the browser's
 // Print dialog (which includes "Save as PDF"). Inline styles in the markup
 // carry over, so the printout matches the on-screen document.
-export function printDoc(title, html) {
+export function printDoc(title, html, autoPrint = true) {
   const w = window.open('', '_blank', 'width=840,height=940');
   if (!w) {
     alert('Please allow pop-ups to print/download this document.');
@@ -19,5 +19,7 @@ export function printDoc(title, html) {
     </style></head><body>${html}</body></html>`);
   w.document.close();
   w.focus();
-  setTimeout(() => { try { w.print(); } catch { /* user can print manually */ } }, 350);
+  if (autoPrint) {
+    setTimeout(() => { try { w.print(); } catch { /* user can print manually */ } }, 350);
+  }
 }

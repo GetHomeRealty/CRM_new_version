@@ -6,7 +6,10 @@ const BRAND = '#c8102e';
 const today = () => new Date().toISOString().slice(0, 10);
 
 // Direct-deposit bank block (GHR's fixed details; matches the printed statement).
-const BANK = { name: 'TD Canada Trust', beneficiary: 'Get Home Realty Inc.', transit: '21222', institution: '004', account: '2122-5086185' };
+const BANK = { name: 'TD Canada Trust', beneficiary: 'Get Home Realty Inc.', transit: '21222', institution: '004', account: '2122-5073474' };
+
+const WIRE_NOTE = "We recommend avoiding due to the significant fees involved. However, if you choose to proceed with a wire transfer, please consider adding an additional $17.50 to the deposit amount, in addition to your bank's basic wire transfer charges. This will ensure the full amount is credited to our account without any deductions.";
+const DISCLAIMER = '*Please Confirm with the Client before Processing on this Transaction. Get Home Realty is not Responsible for any Legal Fee during the Transaction*';
 
 // Commission / Lawyer Statement document (listing-side transactions).
 export default function LawyerStatementModal({ open, onClose, txn, settings }) {
@@ -80,10 +83,10 @@ export default function LawyerStatementModal({ open, onClose, txn, settings }) {
       <li>Institution Number: ${bank.institution}</li>
       <li>Account Number: ${bank.account}</li>
     </ul>
-    <p style="font-size:11px;color:#475569">We recommend avoiding wire transfers due to the significant fees involved. If you choose to proceed with a wire transfer, please add an additional $17.50 to the deposit amount, in addition to your bank's basic wire transfer charges, so the full amount is credited without deductions.</p>
+    <p style="font-size:11px;color:#475569">${WIRE_NOTE}</p>
     <div style="margin-top:30px">Signature: ______________________________</div>
     <div style="font-weight:700">Sai Ramesh Gollu @ Get Home Realty</div>
-    <p style="text-align:center;margin-top:16px;font-weight:700">*Please Confirm with the Client before Processing on this Transaction. Get Home Realty is not Responsible for any Legal Fee during the Transaction*</p>
+    <p style="text-align:center;margin-top:16px;font-weight:700">${DISCLAIMER}</p>
     <p style="text-align:center">Admin Department @ Get Home Realty</p>
   `;
 
@@ -137,8 +140,16 @@ export default function LawyerStatementModal({ open, onClose, txn, settings }) {
         <div style={{ fontSize: 12.5, color: '#334155', lineHeight: 1.8, background: '#f8fafc', border: '1px solid #e6e8ef', borderRadius: 8, padding: 12 }}>
           <div>Name of Bank: <strong>{bank.name}</strong></div>
           <div>Beneficiary Name: <strong>{bank.beneficiary}</strong></div>
-          <div>Transit: <strong>{bank.transit}</strong> · Institution: <strong>{bank.institution}</strong> · Account: <strong>{bank.account}</strong></div>
+          <div>Transit: <strong>{bank.transit}</strong> · Institution Number: <strong>{bank.institution}</strong> · Account Number: <strong>{bank.account}</strong></div>
         </div>
+        <p style={{ fontSize: 11.5, color: '#475569', lineHeight: 1.6, marginTop: 8 }}>{WIRE_NOTE}</p>
+
+        <div style={{ marginTop: 16 }}>
+          <div style={lbl}>Signature</div>
+          <div style={{ borderBottom: '1px dotted #94a3b8', height: 24, maxWidth: 300, marginTop: 4 }} />
+          <div style={{ fontWeight: 700, marginTop: 6 }}>Sai Ramesh Gollu @ Get Home Realty</div>
+        </div>
+        <p style={{ textAlign: 'center', marginTop: 14, fontWeight: 700, fontSize: 12 }}>{DISCLAIMER}</p>
 
         <div className="actions"><button className="btn ghost" onClick={onClose}>Close</button></div>
       </div>

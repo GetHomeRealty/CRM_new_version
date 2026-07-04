@@ -21,9 +21,7 @@ class Transaction extends Model
         'Commercial Property Sale Listing',
         'Commercial Property Lease Listing',
         'Business Buying',
-        'Business Lease',
         'Business Sale',
-        'Business Lease Listing',
     ];
 
     public const LISTING_TYPES = [
@@ -31,13 +29,29 @@ class Transaction extends Model
         'Residential Lease Listing',
         'Commercial Property Sale Listing',
         'Commercial Property Lease Listing',
-        'Business Lease Listing',
     ];
 
     /** Status family (deal-side vs listing-side). Independent of layout. Business Sale is listing-side for statuses. */
     public static function isListingStatusFamily(?string $type): bool
     {
         return self::isListingType($type) || $type === 'Business Sale';
+    }
+
+    /** Buy/Lease/Business deal types use the Secured lifecycle (no "Open"/"Active"). */
+    public const SECURED_DEAL_TYPES = [
+        'Residential Buying', 'Residential Lease',
+        'Commercial Property Buying', 'Commercial Property Lease', 'Business Buying',
+    ];
+
+    /** Default status for a new transaction (empty string = no status). */
+    public static function defaultStatus(?string $type): string
+    {
+        if (self::isListingStatusFamily($type)) {
+            return 'Active';
+        }
+
+        // Secured deal types start with no status; the user picks Secured Firm/Conditionally.
+        return in_array($type, self::SECURED_DEAL_TYPES, true) ? '' : 'Open';
     }
 
     public static function isListingType(?string $type): bool
@@ -68,12 +82,12 @@ class Transaction extends Model
     }
 
     protected $fillable = [
-        'trade_no', 'type', 'property', 'agent', 'price', 'deposit',
+        'trade_no', 'type', 'property', 'agent', 'agent_review_at', 'price', 'deposit',
         'offer_date', 'closing_date', 'listing_contract_date', 'listing_expiry_date',
         'mls_type', 'mls_num', 'mls_verified',
         'comm_type', 'comm_value', 'comm_pct', 'comm_amt',
         'comm_adjust_enabled', 'comm_adjust_before', 'comm_adjust_after',
-        'listing_comm_pct', 'coop_comm_pct',
+        'listing_comm_pct', 'coop_comm_pct', 'listing_comm_flat', 'coop_comm_flat', 'trust_payable',
         'listing_adj_enabled', 'listing_adj_before', 'listing_adj_after',
         'coop_adj_enabled', 'coop_adj_before', 'coop_adj_after',
         'precon_listing_type', 'precon_term_count', 'commission_agent',
@@ -84,6 +98,7 @@ class Transaction extends Model
         'admin_activities', 'activity_tracker', 'adjustments', 'commercial_lease', 'notice_of_sale',
         'comm_status', 'comm_paid_status', 'valid_status',
         'conditional_offer', 'inter_board_enabled',
+        'reco_audit_ready', 'reco_audit_remarks',
     ];
 
     public static function isPreconType(?string $type): bool
@@ -112,6 +127,9 @@ class Transaction extends Model
             'comm_adjust_after' => 'decimal:2',
             'listing_comm_pct' => 'decimal:4',
             'coop_comm_pct' => 'decimal:4',
+            'listing_comm_flat' => 'decimal:2',
+            'coop_comm_flat' => 'decimal:2',
+            'trust_payable' => 'decimal:2',
             'listing_adj_enabled' => 'boolean',
             'listing_adj_before' => 'decimal:2',
             'listing_adj_after' => 'decimal:2',
@@ -133,6 +151,7 @@ class Transaction extends Model
             'mls_verified' => 'boolean',
             'conditional_offer' => 'boolean',
             'inter_board_enabled' => 'boolean',
+            'agent_review_at' => 'datetime',
         ];
     }
 
@@ -189,6 +208,22 @@ class Transaction extends Model
     public function auditLogs(): HasMany
     {
         return $this->hasMany(AuditLog::class)->latest();
+    }
+
+    public function editRequests(): HasMany
+    {
+        return $this->hasMany(TransactionEditRequest::class)->latest();
+    }
+
+    public function deleteRequests(): HasMany
+    {
+        return $this->hasMany(TransactionDeleteRequest::class)->latest();
+    }
+
+    /** Statuses that lock the transaction from direct Admin edits (DFT / Closed). */
+    public function isEditLocked(): bool
+    {
+        return (bool) array_intersect($this->statusList(), ['DFT', 'Closed']);
     }
 
     /** Status values as a flat array (UI works with a list). */

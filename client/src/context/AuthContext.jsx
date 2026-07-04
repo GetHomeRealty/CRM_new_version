@@ -20,9 +20,9 @@ export function AuthProvider({ children }) {
     };
   }, []);
 
-  const login = async (email, password, remember = false) => {
+  const login = async (username, password, remember = false) => {
     await getCsrfCookie();
-    const { data } = await api.post('/api/login', { email, password, remember });
+    const { data } = await api.post('/api/login', { username, password, remember });
     setUser(data.user);
     return data.user;
   };

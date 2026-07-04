@@ -3,10 +3,15 @@
 namespace App\Http\Controllers;
 
 use App\Models\CompanySetting;
+use App\Services\AuditService;
 use Illuminate\Http\Request;
 
 class CompanySettingController extends Controller
 {
+    public function __construct(private AuditService $audit)
+    {
+    }
+
     public function show()
     {
         return response()->json(CompanySetting::current());
@@ -36,6 +41,11 @@ class CompanySettingController extends Controller
 
         $settings = CompanySetting::current();
         $settings->update($data);
+
+        $this->audit->logModule('Settings', [
+            'section' => 'Company Settings', 'field' => 'Company Settings', 'action' => 'Settings updated',
+            'details' => $data['name'] ?? null,
+        ]);
 
         return response()->json($settings);
     }

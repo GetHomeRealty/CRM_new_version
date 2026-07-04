@@ -20,6 +20,7 @@ class TransactionInvoiceService
         private InvoiceNumberService $numbers,
         private InvoiceCalculator $calc,
         private CommissionService $commissions,
+        private AuditService $audit,
     ) {
     }
 
@@ -56,6 +57,13 @@ class TransactionInvoiceService
                 $created[] = $this->make($transaction, $settings, null, (float) ($breakdown['commission'] ?? 0));
             }
         });
+
+        foreach ($created as $inv) {
+            $this->audit->record($transaction, [
+                'section' => 'Quick Actions — Invoice', 'field' => $inv->invoice_no,
+                'action' => 'Invoice generated', 'source' => 'System', 'new' => $inv->invoice_no,
+            ]);
+        }
 
         return $created;
     }

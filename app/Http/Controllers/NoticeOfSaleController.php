@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\Transaction;
+use App\Services\AuditService;
 use Illuminate\Http\Request;
 
 /**
@@ -12,6 +13,12 @@ use Illuminate\Http\Request;
  */
 class NoticeOfSaleController extends Controller
 {
+    public function __construct(private AuditService $audit)
+    {
+    }
+
+    private const SECTION = 'Quick Actions — Notice of Sale';
+
     /** Current saved Notice of Sale data (empty object if never edited). */
     public function show(Transaction $transaction)
     {
@@ -32,7 +39,8 @@ class NoticeOfSaleController extends Controller
             'agents.*.signed_date' => ['nullable', 'string', 'max:20'],
         ]);
 
-        $current = $this->normalize($transaction->notice_of_sale);
+        $previous = $this->normalize($transaction->notice_of_sale);
+        $current = $previous;
 
         $current['buyers'] = array_values(array_filter(array_map('trim', $data['buyers']), fn ($v) => $v !== ''));
         $current['sellers'] = array_values(array_filter(array_map('trim', $data['sellers']), fn ($v) => $v !== ''));
@@ -46,6 +54,25 @@ class NoticeOfSaleController extends Controller
                 'signed_date' => $row['signed_date'] ?? ($existing['signed_date'] ?? null),
                 'sent_at' => $existing['sent_at'] ?? null,
             ];
+        }
+
+        // Audit meaningful changes (buyers / sellers / new signatures).
+        $prevBuyers = implode(', ', $previous['buyers'] ?? []);
+        $prevSellers = implode(', ', $previous['sellers'] ?? []);
+        if (implode(', ', $current['buyers']) !== $prevBuyers) {
+            $this->audit->record($transaction, ['section' => self::SECTION, 'field' => 'Buyers', 'action' => 'Updated', 'source' => 'Quick Action', 'old' => $prevBuyers, 'new' => implode(', ', $current['buyers'])]);
+        }
+        if (implode(', ', $current['sellers']) !== $prevSellers) {
+            $this->audit->record($transaction, ['section' => self::SECTION, 'field' => 'Sellers', 'action' => 'Updated', 'source' => 'Quick Action', 'old' => $prevSellers, 'new' => implode(', ', $current['sellers'])]);
+        }
+        foreach ($data['agents'] ?? [] as $name => $row) {
+            $hadSig = ! empty(($previous['agents'][$name] ?? [])['signature']);
+            $hasSig = ! empty($current['agents'][$name]['signature']);
+            if ($hasSig && ! $hadSig) {
+                $this->audit->record($transaction, ['section' => self::SECTION, 'field' => "Signature — {$name}", 'action' => 'Document uploaded', 'source' => 'Quick Action']);
+            } elseif (! $hasSig && $hadSig) {
+                $this->audit->record($transaction, ['section' => self::SECTION, 'field' => "Signature — {$name}", 'action' => 'Document deleted', 'source' => 'Quick Action']);
+            }
         }
 
         $transaction->update(['notice_of_sale' => $current]);
@@ -72,6 +99,11 @@ class NoticeOfSaleController extends Controller
         }
 
         $transaction->update(['notice_of_sale' => $current]);
+
+        $this->audit->record($transaction, [
+            'section' => self::SECTION, 'field' => 'Send for signature', 'action' => 'Quick Action executed',
+            'source' => 'Quick Action', 'new' => implode(', ', $data['agents']),
+        ]);
 
         return response()->json($this->present($this->normalize($transaction->fresh()->notice_of_sale)));
     }

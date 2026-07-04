@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\TeamMember;
 use App\Models\Transaction;
+use App\Models\User;
 
 /**
  * Backend-authoritative commission math. PHP is the source of truth for all
@@ -27,26 +28,53 @@ class CommissionService
      */
     public function summarize(Transaction $t): array
     {
-        $price = (float) $t->price;
-        $amount = 0.0;
-
-        if ($t->comm_amt !== null && (float) $t->comm_amt > 0) {
-            $amount = (float) $t->comm_amt;
-        } elseif ($t->comm_pct !== null && (float) $t->comm_pct > 0) {
-            $amount = $price * (float) $t->comm_pct / 100;
-        } elseif ($t->comm_type === '%' && (float) $t->comm_value > 0) {
-            $amount = $price * (float) $t->comm_value / 100;
-        } elseif ($t->comm_type === 'Fixed' && (float) $t->comm_value > 0) {
-            $amount = (float) $t->comm_value;
-        }
-
-        $amount = round($amount, 2);
+        $amount = round($this->grossCommission($t), 2);
         $hst = round($amount * self::HST_RATE, 2);
         $total = round($amount + $hst, 2);
 
         $paid = $t->comm_paid_status === 'Yes' || $t->comm_status === 'Received';
 
         return compact('amount', 'hst', 'total', 'paid');
+    }
+
+    /** Gross commission for a transaction, by type (listing / precon / standard). */
+    private function grossCommission(Transaction $t): float
+    {
+        $price = (float) $t->price;
+
+        // Preconstruction: manual amount, else master % of price.
+        if (Transaction::isPreconType($t->type)) {
+            $manual = $t->precon_comm_amt_manual;
+            if ($manual !== null && (float) $manual > 0) {
+                return (float) $manual;
+            }
+
+            return $price * (float) $t->precon_comm_pct / 100;
+        }
+
+        // Listing side: listing + co-op commission (percent and/or flat).
+        if (Transaction::isListingFinancialType($t->type)) {
+            $list = $price * (float) $t->listing_comm_pct / 100 + (float) $t->listing_comm_flat;
+            $coop = $price * (float) $t->coop_comm_pct / 100 + (float) $t->coop_comm_flat;
+
+            return $list + $coop;
+        }
+
+        // Standard buying / lease.
+        if ($t->comm_amt !== null && (float) $t->comm_amt > 0) {
+            return (float) $t->comm_amt;
+        }
+        if ($t->comm_pct !== null && (float) $t->comm_pct > 0) {
+            return $price * (float) $t->comm_pct / 100;
+        }
+        if ($t->comm_type === '%' && (float) $t->comm_value > 0) {
+            return $price * (float) $t->comm_value / 100;
+        }
+        if ($t->comm_type === 'Fixed' && (float) $t->comm_value > 0) {
+            return (float) $t->comm_value;
+        }
+
+        return 0.0;
     }
 
     /** Gross commission amount (before adjustments/HST). */
@@ -212,8 +240,9 @@ class CommissionService
         $adj = $t->adjustments ?? [];
         $members = $this->resolveMembers($t);
         $splitBase = round($commission - $this->brokerReferralAmount($adj), 2);
-        // "Agent Commissions after client referral" off the standard commission.
-        $afterClient = $this->agentCommissionsAfterClient($commission, $members, 200.0, $adjBefore, $adjAfter, $this->clientReferralAmount($adj));
+        // "Agent Commissions after client referral" is computed off the commission AFTER the
+        // external broker referral ($splitBase = commission − broker referral).
+        $afterClient = $this->agentCommissionsAfterClient($splitBase, $members, 200.0, $adjBefore, $adjAfter, $this->clientReferralAmount($adj));
         $agentCtx = [
             'acComm' => $afterClient['commission'],
             'acTotal' => $afterClient['total'],
@@ -255,8 +284,8 @@ class CommissionService
 
         $listPct = (float) $t->listing_comm_pct;
         $coopPct = (float) $t->coop_comm_pct;
-        $listFlat = 0.0; // flat commission inputs not yet captured in the UI
-        $coopFlat = 0.0;
+        $listFlat = (float) $t->listing_comm_flat; // fixed-amount alternative to the %
+        $coopFlat = (float) $t->coop_comm_flat;
         $lAdjBefore = $t->listing_adj_enabled ? (float) $t->listing_adj_before : 0.0;
         $lAdjAfter = $t->listing_adj_enabled ? (float) $t->listing_adj_after : 0.0;
         $cAdjBefore = $t->coop_adj_enabled ? (float) $t->coop_adj_before : 0.0;
@@ -294,9 +323,12 @@ class CommissionService
         $totalWithHst = ($totalComm + $totalHst) + $lAdjAfter + $cAdjAfter;
         $payableToClient = $isLease ? ($deposit - $totalWithHst) : max($deposit - $totalWithHst, 0);
         $receivableFromLawyer = min($deposit - $totalWithHst, 0);
-        $brokerageFloor = max($listTotal * $brokerageSplit, $minBrok * $g);
-        $agentPool = max(min($listTotal * $agentSplit, $listTotal - $brokerageFloor), 0);
-        $brokerageKeep = $listTotal - $agentPool;
+        // The agent/brokerage split (and agent commissions) are computed on the commission
+        // AFTER the external broker referral; the external broker is paid out separately.
+        $splitTotal = round($listTotal - $extAmt * $g, 2);
+        $brokerageFloor = max($splitTotal * $brokerageSplit, $minBrok * $g);
+        $agentPool = max(min($splitTotal * $agentSplit, $splitTotal - $brokerageFloor), 0);
+        $brokerageKeep = $splitTotal - $agentPool;
 
         // Step 7 — per member; also build a backward-compatible `agents` array.
         $line = fn ($wo) => ['commission' => round($wo, 2), 'hst' => round($wo * $hst, 2), 'total' => round($wo * $g, 2)];
@@ -338,11 +370,13 @@ class CommissionService
         $sumCash = array_sum(array_column($memberRows, 'cash_to_pay'));
         $sumDeduction = array_sum(array_column($memberRows, 'deduction'));
         $coopPayout = $coopTotal;
-        $reconcile = $coopPayout + $clientReferral + $sumCash + $brokerageKeep + $sumDeduction;
+        $reconcile = $coopPayout + round($extAmt * $g, 2) + $clientReferral + $sumCash + $brokerageKeep + $sumDeduction;
 
         // Referral sections are based on the (fixed) Listing Commission — the broker referral
         // only changes "Commissions after broker referral", never the Listing Commission itself.
-        $afterClient = $this->agentCommissionsAfterClient($listComm, $members, 499.0, $lAdjBefore, $lAdjAfter, $clientReferral);
+        // Agent commissions are computed off the commission AFTER the external broker referral.
+        $listAfterBrokerComm = round($listComm - $this->brokerReferralAmount($adj), 2);
+        $afterClient = $this->agentCommissionsAfterClient($listAfterBrokerComm, $members, 499.0, $lAdjBefore, $lAdjAfter, $clientReferral);
 
         return [
             'variant' => 'listing',
@@ -373,10 +407,36 @@ class CommissionService
     {
         $members = $t->relationLoaded('teamMembers') ? $t->teamMembers : $t->teamMembers()->get();
         if ($members->isEmpty() && $t->agent) {
-            $members = collect([new TeamMember(['name' => $t->agent, 'split' => 100, 'agent_pct' => 90, 'brok_pct' => 10])]);
+            // Apply the agent's registered split (from their User profile) to the deal.
+            $split = $this->agentDefaultSplit($t->agent, $t->type);
+            $members = collect([new TeamMember([
+                'name' => $t->agent, 'split' => 100,
+                'agent_pct' => $split['agent'], 'brok_pct' => $split['brok'],
+            ])]);
         }
 
         return $members;
+    }
+
+    /**
+     * The agent / brokerage split registered for an agent in their User profile.
+     * Lease deals use the lease % (default 95); buying/sale use the agent % (default 90).
+     */
+    private function agentDefaultSplit(?string $name, ?string $type): array
+    {
+        $isLease = (bool) preg_match('/lease/i', (string) $type);
+        $agent = $isLease ? 95.0 : 90.0;
+
+        if ($name) {
+            $u = User::where('name', $name)->first(['profile']);
+            $p = $u?->profile ?? [];
+            $v = $p[$isLease ? 'lease_comm_pct' : 'agent_comm_pct'] ?? null;
+            if ($v !== null && $v !== '') {
+                $agent = (float) $v;
+            }
+        }
+
+        return ['agent' => $agent, 'brok' => round(100 - $agent, 2)];
     }
 
     /**

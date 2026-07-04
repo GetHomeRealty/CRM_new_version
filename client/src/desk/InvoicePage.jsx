@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { getInvoices, getInvoice, deleteInvoice, getCustomers, getCompanySettings, listAgents } from '../lib/api';
+import { getInvoices, getInvoice, getCustomers, getCompanySettings, listAgents } from '../lib/api';
 import { formatCurrency, typeLabel } from './format';
 import { useToast } from './toast';
 import { useAuth } from '../context/AuthContext';
 import InvoiceEditorModal from './InvoiceEditorModal';
 import InvoicePreviewModal from './InvoicePreviewModal';
+import CommissionAnalytics from './CommissionAnalytics';
 
 const STATUS_PILL = {
   Paid: 'ok', 'Partially Paid': 'warn', Unpaid: 'info', Overdue: 'bad', Void: 'bad', Draft: 'info', Due: 'info',
@@ -56,12 +57,6 @@ export default function InvoicePage() {
       .finally(() => setLoading(false));
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const onDelete = async (inv) => {
-    if (!window.confirm(`Delete invoice ${inv.invoice_no}?`)) return;
-    try { await deleteInvoice(inv.id); setInvoices((x) => x.filter((i) => i.id !== inv.id)); toast('Invoice deleted', 'ok'); }
-    catch { toast('Could not delete', 'bad'); }
-  };
-
   const openPdf = async (inv) => {
     try { setPreview(await getInvoice(inv.id)); } catch { toast('Could not load invoice', 'bad'); }
   };
@@ -75,6 +70,7 @@ export default function InvoicePage() {
 
   return (
     <>
+      <CommissionAnalytics />
       <div className="tiles">
         <div className="stat-card"><div className="lbl">Invoices</div><div className="val">{invoices.length}</div></div>
         <div className="stat-card"><div className="lbl">Outstanding Balance</div><div className="val" style={{ color: 'var(--brand)' }}>{formatCurrency(totalOutstanding)}</div></div>
@@ -102,7 +98,7 @@ export default function InvoicePage() {
               <td>{i.property_reference || '—'}</td>
               <td>{i.transaction_type ? typeLabel(i.transaction_type) : '—'}</td>
               <td>{i.listing_agent || '—'}</td>
-              <td>{i.invoice_date}</td>
+              <td>{i.closing_date || i.invoice_date || '—'}</td>
               <td>{(() => { const w = dueWarning(i.closing_date, i.status); return w ? <span className={`pill ${w.cls}`} style={{ fontSize: 10 }}>{w.label}</span> : '—'; })()}</td>
               <td>{formatCurrency(i.total)}</td>
               <td>{formatCurrency(i.balance_due)}</td>
@@ -112,7 +108,6 @@ export default function InvoicePage() {
                 <button className="btn ghost sm" onClick={() => setEditorId(i.id)}>👁 View</button>
                 {canEdit && <button className="btn ghost sm" style={{ marginLeft: 4 }} onClick={() => setEditorId(i.id)}>Edit</button>}
                 <button className="btn ghost sm" style={{ marginLeft: 4 }} onClick={() => openPdf(i)}>🖨 PDF</button>
-                {canEdit && <button className="btn ghost sm" style={{ marginLeft: 4 }} onClick={() => onDelete(i)}>🗑️</button>}
               </td>
             </tr>
           ))}

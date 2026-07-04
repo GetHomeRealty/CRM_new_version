@@ -3,6 +3,7 @@ import { updateTransaction, getAgentCommissions } from '../lib/api';
 import { formatCurrency, parseNumber, isListingFinancialType, isPreconType } from './format';
 import { agentAdjustments, referralSections, agentCommissionsAfterClient, agentCommissionLine, listingBreakdown } from './commissionCalc';
 import { useToast } from './toast';
+import SavedBadge from './SavedBadge';
 
 const HST = 0.13;
 const r2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
@@ -21,7 +22,7 @@ const adjLabel = (d) => ADJ_PARTS.filter(([k]) => d[k] > 0).map(([k, name]) => `
 // negative = increases (Plus). `amt` is the signed value from a 'sub'-convention field.
 const adjNote = (amt, when) => (amt === 0 ? null : `${amt > 0 ? 'Less' : 'Plus'} adjustment ${formatCurrency(Math.abs(amt))} (${when})`);
 
-export default function FinancialModal({ open, onClose, transactionId, txn, termCount: termCountProp, onSaved }) {
+export default function FinancialModal({ open, onClose, transactionId, txn, termCount: termCountProp, onSaved, hideClientCommission = false, dftNA = false, readOnly = false, isAgent = false }) {
   const toast = useToast();
   const listing = isListingFinancialType(txn.type);
   const precon = isPreconType(txn.type);
@@ -31,6 +32,7 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
 
   const [price, setPrice] = useState(txn.price ?? 0);
   const [saving, setSaving] = useState(false);
+  const [savedOk, setSavedOk] = useState(false); // §3.2 — "Saved" then auto-close
 
   // standard
   const [commPct, setCommPct] = useState(txn.comm_pct ?? (txn.comm_type === '%' ? txn.comm_value : '') ?? '');
@@ -82,6 +84,9 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
   // listing
   const [listPct, setListPct] = useState(txn.listing_comm_pct ?? '');
   const [coopPct, setCoopPct] = useState(txn.coop_comm_pct ?? '');
+  const [listFlat, setListFlat] = useState(txn.listing_comm_flat ?? '');
+  const [coopFlat, setCoopFlat] = useState(txn.coop_comm_flat ?? '');
+  const [trustPayable, setTrustPayable] = useState(txn.trust_payable ?? ''); // manual "Payable to Client" for Trust Verification
   const [commAdjMaster, setCommAdjMaster] = useState(!!(txn.listing_adj_enabled || txn.coop_adj_enabled));
   const [lAdjEn, setLAdjEn] = useState(!!txn.listing_adj_enabled);
   const [lBefore, setLBefore] = useState(txn.listing_adj_before ?? 0);
@@ -119,6 +124,11 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
   const onPct = (v) => { setCommPct(v); if (v) setCommAmt(''); };
   const onAmt = (v) => { setCommAmt(v); if (v) setCommPct(''); };
   const excl = (v, setThis, other, setOther) => { setThis(v); if (parseNumber(v) !== 0) setOther(0); };
+  // Listing/Co-op: % and fixed Amount are mutually exclusive — entering one clears the other.
+  const onListPct = (v) => { setListPct(v); if (parseNumber(v) !== 0) setListFlat(''); };
+  const onListFlat = (v) => { setListFlat(v); if (parseNumber(v) !== 0) setListPct(''); };
+  const onCoopPct = (v) => { setCoopPct(v); if (parseNumber(v) !== 0) setCoopFlat(''); };
+  const onCoopFlat = (v) => { setCoopFlat(v); if (parseNumber(v) !== 0) setCoopPct(''); };
 
   // ---- live standard computation ----
   const gross = parseNumber(commAmt) > 0 ? parseNumber(commAmt) : (parseNumber(commPct) > 0 ? parseNumber(price) * parseNumber(commPct) / 100 : 0);
@@ -132,9 +142,9 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
   // commission adjustment), client referral comes off the deal Total only.
   const stdRef = referralSections(gross, txn.adjustments, HST);
   const stdSplitBase = r2(commWoHst - stdRef.brokerAmount);
-  // "Agent Commissions after client referral" (off the standard commission), then
-  // the per-member Agent Commission is capped against that section's Total.
-  const stdAfterClient = agentCommissionsAfterClient(commWoHst, members, { minBrokComm: 200, adjBefore: adjB, adjAfter: adjA, clientReferral: stdRef.clientAmount }, HST);
+  // "Agent Commissions after client referral" is computed off the commission AFTER the
+  // external broker referral (stdSplitBase = commission − broker referral), per spec.
+  const stdAfterClient = agentCommissionsAfterClient(stdSplitBase, members, { minBrokComm: 200, adjBefore: adjB, adjAfter: adjA, clientReferral: stdRef.clientAmount }, HST);
   const stdRefView = { ...stdRef, afterClient: stdAfterClient };
   const stdAgentCtx = { acTotal: stdAfterClient.total, acComm: stdAfterClient.commission, minBrokComm: 200, adjBefore: adjB, adjAfter: adjA };
   const memberRows = members.map((m, i) => {
@@ -152,19 +162,18 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
   const listExtAmt = (txn.adjustments?.ext_referral === 'Yes') ? parseNumber(txn.adjustments.ext?.amount) : 0;
   const lb = listingBreakdown({
     price: parseNumber(price), deposit: txn.deposit,
-    listPct, coopPct, listFlat: 0, coopFlat: 0,
+    listPct, coopPct, listFlat: parseNumber(listFlat), coopFlat: parseNumber(coopFlat),
     lAdjBefore: lAdjEff ? parseNumber(lBefore) : 0, lAdjAfter: lAdjEff ? parseNumber(lAfter) : 0,
     cAdjBefore: cAdjEff ? parseNumber(cBefore) : 0, cAdjAfter: cAdjEff ? parseNumber(cAfter) : 0,
     extAmt: listExtAmt, clientReferral: listClientReferral,
     members: members.map((m) => ({ name: m.name, split: m.split, agent_pct: m.agent_pct, brok_pct: m.brok_pct })),
     deductions: memberDeduct.map((d) => d.total), isLease: listIsLease, // Agent Adjust + Advance per member
   }, HST);
-  // Deal-level agent split (spec uses one split for the listing pool); shown in the help line.
-  const listAgentSplitPct = members[0]?.agent_pct ?? (listIsLease ? 95 : 90);
   // Referral sections are based on the (fixed) Listing Commission — the broker referral
   // only changes "Commissions after broker referral", never the Listing Commission itself.
   const listRef = referralSections(lb.listing.commission, txn.adjustments, HST);
-  const listAfterClient = agentCommissionsAfterClient(lb.listing.commission, members, {
+  // Agent commissions are computed off the commission AFTER the external broker referral.
+  const listAfterClient = agentCommissionsAfterClient(listRef.afterBroker.commission, members, {
     minBrokComm: 499,
     adjBefore: lAdjEff ? parseNumber(lBefore) : 0,
     adjAfter: lAdjEff ? parseNumber(lAfter) : 0,
@@ -186,6 +195,11 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
     if (k === 'brok_pct') return setMembers((ms) => ms.map((m) => ({ ...m, brok_pct: v, agent_pct: r2(clampPct(100 - parseNumber(v))) })));
     return setMember(i, k, v);
   };
+  // Trust Verification: Deposit − Total Commissions − Receivable from Lawyer − Payable to Client.
+  // Receivable is the signed value (≤ 0 when the trust is short), so a balanced deal nets to 0 = PASS.
+  const tvReceivable = lb.trust.receivableFromLawyer;
+  const tvCheck = r2(parseNumber(txn.deposit) - lb.totals.total - tvReceivable - parseNumber(trustPayable));
+  const tvPass = Math.abs(tvCheck) < 0.005;
 
   // ---- live preconstruction master computation ----
   const pMasterAmt = parseNumber(masterAmtManual) > 0 ? parseNumber(masterAmtManual) : (parseNumber(masterPct) > 0 ? parseNumber(price) * parseNumber(masterPct) / 100 : 0);
@@ -201,6 +215,11 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
   const visibleAtTerm = (k) => members.map((m, i) => ({ m, i })).filter(({ m }) => (m.scope || 'Entire') === 'Entire' || (m.terms || []).map(Number).includes(k));
 
   const save = async () => {
+    // Validation: % and fixed Amount are mutually exclusive per side.
+    if (listing) {
+      if (parseNumber(listPct) > 0 && parseNumber(listFlat) > 0) { toast('Enter a Listing Commission % OR Amount, not both', 'bad'); return; }
+      if (parseNumber(coopPct) > 0 && parseNumber(coopFlat) > 0) { toast('Enter a Co-op Commission % OR Amount, not both', 'bad'); return; }
+    }
     const payload = precon
       ? {
           price: parseNumber(price), precon_net_of_hst: netHst,
@@ -216,6 +235,8 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
       ? {
           price: parseNumber(price),
           listing_comm_pct: listPct === '' ? null : parseNumber(listPct), coop_comm_pct: coopPct === '' ? null : parseNumber(coopPct),
+          listing_comm_flat: listFlat === '' ? null : parseNumber(listFlat), coop_comm_flat: coopFlat === '' ? null : parseNumber(coopFlat),
+          trust_payable: trustPayable === '' ? null : parseNumber(trustPayable),
           listing_adj_enabled: lAdjEff, listing_adj_before: lAdjEff ? parseNumber(lBefore) : 0, listing_adj_after: lAdjEff ? parseNumber(lAfter) : 0,
           coop_adj_enabled: cAdjEff, coop_adj_before: cAdjEff ? parseNumber(cBefore) : 0, coop_adj_after: cAdjEff ? parseNumber(cAfter) : 0,
           team: members.map((m, i) => ({ name: m.name, split: parseNumber(m.split), agent_pct: parseNumber(m.agent_pct), brok_pct: parseNumber(m.brok_pct), is_primary: i === 0, scope: m.scope, terms: m.terms })),
@@ -229,11 +250,13 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
     setSaving(true);
     try {
       const updated = await updateTransaction(transactionId, payload);
-      toast('Financial saved', 'ok');
       onSaved?.(updated);
+      setSavedOk(true);
+      setTimeout(() => { setSavedOk(false); onClose(); }, 2000);
     } catch (err) {
       toast(err.response?.data?.message || 'Could not save', 'bad');
-    } finally { setSaving(false); }
+      setSaving(false);
+    }
   };
 
   return (
@@ -241,6 +264,20 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
       <div className="modal xl">
         <button className="close" onClick={onClose}>✕</button>
         <div className="modal-h">Financial Information {listing && <span className="pill type-res-sell" style={{ fontSize: 10 }}>Listing</span>}{precon && <span className="pill type-pre" style={{ fontSize: 10 }}>Preconstruction</span>}</div>
+
+        {dftNA && (
+          <div className="card" style={{ borderLeft: '4px solid var(--bad)', background: '#fff7ed', marginBottom: 12 }}>
+            <strong style={{ color: '#9a3412' }}>🔒 DFT — Deal Fell Through.</strong>{' '}
+            <span style={{ fontSize: 12.5, color: '#7c2d12' }}>Statuses default to N/A and are locked.</span>
+          </div>
+        )}
+        {readOnly && !dftNA && !isAgent && (
+          <div className="card" style={{ borderLeft: '4px solid #2563eb', background: '#eff6ff', marginBottom: 12 }}>
+            <span style={{ fontSize: 12.5, color: '#1e3a8a' }}>🔒 View-only — click <strong>Edit</strong> on the transaction to make changes.</span>
+          </div>
+        )}
+
+        <fieldset disabled={dftNA || readOnly} style={{ border: 0, margin: 0, padding: 0, minInlineSize: 0 }}>
 
         {precon ? (
           <div className="g3">
@@ -336,8 +373,8 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
                     );
                   })}
 
-                  <div className="modal-sub">Agent (T4A) — Term {k}</div>
-                  {visible.length === 0 ? <div className="help">No agents assigned to Term {k}.</div> : visible.map(({ m, i }) => {
+                  {!isAgent && <div className="modal-sub">Agent (T4A) — Term {k}</div>}
+                  {!isAgent && (visible.length === 0 ? <div className="help">No agents assigned to Term {k}.</div> : visible.map(({ m, i }) => {
                     const base = r2(tAmt * (parseNumber(m.split) / 100));
                     const a = lineOf(r2(base * parseNumber(m.agent_pct) / 100));
                     return (
@@ -350,7 +387,7 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
                         </div>
                       </div>
                     );
-                  })}
+                  }))}
 
                   <div className="modal-sub" style={{ borderLeftColor: '#7c3aed', color: '#5b21b6' }}>Brokerage Commission — Term {k} <span>({formatCurrency(brokTermTotal)})</span></div>
                   {visible.length === 0 ? <div className="help">No agents assigned to Term {k}.</div> : visible.map(({ m, i }) => {
@@ -385,15 +422,17 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
         ) : listing ? (
           <>
             <div className="modal-sub">Listing Commission {lb.dealType === 'Lease' && <span className="pill type-pre" style={{ fontSize: 10 }}>Lease</span>}</div>
-            <div className="g4">
-              <div className="field" style={{ marginBottom: 0 }}><label>Listing Commission %</label><input value={listPct} onChange={(e) => setListPct(e.target.value)} placeholder="e.g. 2.5" /></div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 10 }}>
+              <div className="field" style={{ marginBottom: 0 }}><label>Listing Commission %</label><input value={listPct} onChange={(e) => onListPct(e.target.value)} placeholder="e.g. 2.5" /></div>
+              <div className="field" style={{ marginBottom: 0 }}><label>Listing Commission Amount</label><input value={listFlat} onChange={(e) => onListFlat(e.target.value)} placeholder="0.00" /></div>
               <div className="field" style={{ marginBottom: 0 }}><label>Commission</label><input readOnly value={formatCurrency(lb.listing.commission)} /></div>
               <div className="field" style={{ marginBottom: 0 }}><label>HST</label><input readOnly value={formatCurrency(lb.listing.hst)} /></div>
               <div className="field" style={{ marginBottom: 0 }}><label>Total</label><input readOnly className="brand" value={formatCurrency(lb.listing.total)} /></div>
             </div>
             <div className="modal-sub">Co-op Commission</div>
-            <div className="g4">
-              <div className="field" style={{ marginBottom: 0 }}><label>Co-op Commission %</label><input value={coopPct} onChange={(e) => setCoopPct(e.target.value)} placeholder="e.g. 2.5" /></div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 10 }}>
+              <div className="field" style={{ marginBottom: 0 }}><label>Co-op Commission %</label><input value={coopPct} onChange={(e) => onCoopPct(e.target.value)} placeholder="e.g. 2.5" /></div>
+              <div className="field" style={{ marginBottom: 0 }}><label>Co-op Commission Amount</label><input value={coopFlat} onChange={(e) => onCoopFlat(e.target.value)} placeholder="0.00" /></div>
               <div className="field" style={{ marginBottom: 0 }}><label>Commission</label><input readOnly value={formatCurrency(lb.coop.commission)} /></div>
               <div className="field" style={{ marginBottom: 0 }}><label>HST</label><input readOnly value={formatCurrency(lb.coop.hst)} /></div>
               <div className="field" style={{ marginBottom: 0 }}><label>Total</label><input readOnly className="brand" value={formatCurrency(lb.coop.total)} /></div>
@@ -437,8 +476,8 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
             <div className="modal-sub">Trust Reconciliation</div>
             <div className="fin-sum">
               <Box label="Deposit Held" value={formatCurrency(lb.trust.deposit)} />
-              <Box label="Payable to Client" value={formatCurrency(lb.trust.payableToClient)} />
-              <Box label="Receivable from Lawyer" value={formatCurrency(Math.abs(lb.trust.receivableFromLawyer))} brand />
+              {!hideClientCommission && <Box label="Payable to Client" value={formatCurrency(lb.trust.payableToClient)} />}
+              {!hideClientCommission && <Box label="Receivable from Lawyer" value={formatCurrency(Math.abs(lb.trust.receivableFromLawyer))} brand />}
             </div>
 
             {/* Co-op payout (external) */}
@@ -450,24 +489,27 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
             </div>
 
             {/* Listing Split / Members / Brokerage — Residential-Buying card design */}
-            <AgentCommissionBlocks rows={listingRows} setMember={setListMember} minBrok={lb.minBrok} agentDefaults={agentDefaults} isLease={leaseType} />
+            {!hideClientCommission && (
+              <AgentCommissionBlocks rows={listingRows} setMember={setListMember} minBrok={lb.minBrok} agentDefaults={agentDefaults} isLease={leaseType} hideT4A={isAgent} />
+            )}
 
-            {/* Deal summary + balance check */}
-            <div className="modal-sub">Listing Split Summary</div>
-            <div className="fin-sum">
-              <Box label="Agent Pool (with HST)" value={formatCurrency(lb.split.agentPool)} />
-              <Box label="Brokerage Keep (with HST)" value={formatCurrency(lb.split.brokerageKeep)} brand />
+            {/* Trust Verification */}
+            {!hideClientCommission && (<>
+            <div className="modal-sub">Trust Verification</div>
+            <div className="g4">
+              <div className="field" style={{ marginBottom: 0 }}><label>Deposit</label><input readOnly value={formatCurrency(parseNumber(txn.deposit))} /></div>
+              <div className="field" style={{ marginBottom: 0 }}><label>Total Commissions (Listing + Co-Op)</label><input readOnly value={formatCurrency(lb.totals.total)} /></div>
+              <div className="field" style={{ marginBottom: 0 }}><label>Receivable from Lawyer</label><input readOnly value={formatCurrency(tvReceivable)} /></div>
+              <div className="field" style={{ marginBottom: 0 }}><label>Paid to Client</label><input value={trustPayable} onChange={(e) => setTrustPayable(e.target.value)} placeholder="0.00" /></div>
+            </div>
+            <div className="fin-sum" style={{ marginTop: 10 }}>
+              <Box label="Verification (Deposit − Commissions − Receivable − Paid)" value={formatCurrency(tvCheck)} />
               <div className="field" style={{ marginBottom: 0 }}>
-                <label>Balance Check</label>
-                <input readOnly value={`${lb.balanceCheck.pass ? 'PASS' : 'FAIL'} — ${formatCurrency(lb.balanceCheck.reconcile)}`} style={{ fontWeight: 700, color: lb.balanceCheck.pass ? 'var(--ok)' : 'var(--bad)' }} />
+                <label>Status</label>
+                <input readOnly value={tvPass ? 'PASS' : 'FAIL'} style={{ fontWeight: 700, color: tvPass ? 'var(--ok)' : 'var(--bad)' }} />
               </div>
             </div>
-            <span className="help">
-              Agent split {listAgentSplitPct}% / brokerage {r2(100 - parseNumber(listAgentSplitPct))}% (edit via Agent Comm % above). Min brokerage floor {formatCurrency(lb.minBrok.total)}.
-              {lb.clientReferral > 0 ? ` Client referral −${formatCurrency(lb.clientReferral)} shared across members.` : ''}
-              {lb.extReferral.amount > 0 ? ` External broker referral −${formatCurrency(lb.extReferral.amount)} off listing side.` : ''}
-              {' '}Referrals & advances are entered in the Adjustment modal.
-            </span>
+            </>)}
           </>
         ) : (
           /* ---- STANDARD (live, like the original) ---- */
@@ -494,13 +536,17 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
             )}
 
             <ReferralSections data={stdRefView} />
-            <AgentCommissionBlocks rows={memberRows} setMember={setMember} minBrok={{ commission: 200, hst: 26, total: 226 }} agentDefaults={agentDefaults} isLease={leaseType} />
+            <AgentCommissionBlocks rows={memberRows} setMember={setMember} minBrok={{ commission: 200, hst: 26, total: 226 }} agentDefaults={agentDefaults} isLease={leaseType} hideT4A={isAgent} />
           </>
         )}
 
+        </fieldset>
+
+        <SavedBadge show={savedOk} />
+
         <div className="actions">
           <button className="btn ghost" onClick={onClose}>Close</button>
-          <button className="btn primary" onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save'}</button>
+          {!readOnly && <button className="btn primary" onClick={save} disabled={saving || dftNA || savedOk}>{savedOk ? '✓ Saved' : (saving ? 'Saving…' : 'Save')}</button>}
         </div>
       </div>
     </div>
@@ -510,7 +556,7 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
 // Shared per-agent commission cards (Agent Commission / Agent T4A / Brokerage
 // Commission + min-brokerage floor). Used by both the standard and listing
 // variants so they render identically. `minBrok` carries the type-specific floor.
-function AgentCommissionBlocks({ rows, setMember, minBrok, agentDefaults = {}, isLease = false }) {
+function AgentCommissionBlocks({ rows, setMember, minBrok, agentDefaults = {}, isLease = false, hideT4A = false }) {
   // Agent Comm (%) is locked by default (click the pencil to edit); Brok Comm (%)
   // is always locked — it auto-fills as the complement of Agent Comm.
   const [unlocked, setUnlocked] = useState({});
@@ -553,7 +599,7 @@ function AgentCommissionBlocks({ rows, setMember, minBrok, agentDefaults = {}, i
         </div>
       ))}
 
-      {rows.length > 0 && (<>
+      {!hideT4A && rows.length > 0 && (<>
         <div className="modal-sub">Agent (T4A)</div>
         {rows.map((r, i) => (
           <div className="t4a-card" key={i}>

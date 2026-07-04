@@ -31,9 +31,10 @@ class SuggestionController extends Controller
     /** Distinct brokerages previously entered (with their agent names), newest first. */
     public function brokerages()
     {
+        // Contact details only — agent name(s) are intentionally NOT suggested,
+        // since they differ per transaction even for the same brokerage.
         $rows = Brokerage::query()
             ->whereNotNull('name')->where('name', '!=', '')
-            ->with('agents')
             ->orderByDesc('id')->get();
 
         return response()->json($this->dedupe($rows, 'name', fn ($b) => [
@@ -43,7 +44,6 @@ class SuggestionController extends Controller
             'invoice_email' => $b->invoice_email,
             'agent_email' => $b->agent_email,
             'phone' => $b->phone,
-            'agents' => $b->agents->pluck('name')->filter()->values(),
         ]));
     }
 

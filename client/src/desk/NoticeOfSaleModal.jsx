@@ -6,37 +6,6 @@ import { useToast } from './toast';
 
 const BRAND = '#c8102e';
 
-// Mandatory Documents tailored to the transaction type — drawn solely from the
-// Legal & Documentation checklist. Lease / business variants swap labels.
-function mandatoryDocsFor(type) {
-  const t = (type || '').toLowerCase();
-  const isLease = t.includes('lease');
-  const isBusiness = t.includes('business');
-  const list = [
-    { label: isLease ? 'Agreement to Lease' : 'Agreement of Purchase and Sale', keys: ['agreement of purchase', 'aps', 'agreement to lease'] },
-    { label: 'Co-op', keys: ['co-op', 'coop'] },
-    { label: 'Schedule B', keys: ['schedule b'] },
-    { label: isLease ? 'First & Last Month Deposit Receipt' : 'Deposit Receipt', keys: ['deposit receipt', 'deposit slip'] },
-    { label: 'MLS Data Information', keys: ['mls data'] },
-    { label: 'MLS (Copy of Listing)', keys: ['mls'], exclude: ['mls data'] },
-    { label: 'FINTRAC', keys: ['fintrac'] },
-    { label: 'Waiver (if conditional offer)', keys: ['waiver'] },
-    { label: 'Amendment (if any changes in APS)', keys: ['amendment'] },
-    { label: 'Trade Sheet', keys: ['trade sheet'] },
-    { label: isLease ? 'Tenant Representation' : 'Buyer Representation', keys: ['buyer representation', 'tenant representation', 'representation'] },
-  ];
-  if (isBusiness) list.push({ label: 'Asset List / Chattels', keys: ['asset list', 'chattels'] });
-  return list;
-}
-
-function isValid(docs, item) {
-  return docs.some((d) => {
-    const t = (d.title || '').toLowerCase();
-    if (item.exclude && item.exclude.some((x) => t.includes(x))) return false;
-    return item.keys.some((k) => t.includes(k)) && d.validation === 'Valid';
-  });
-}
-
 const ORD = ['', '2nd', '3rd', '4th', '5th', '6th', '7th', '8th', '9th', '10th'];
 const ordinal = (i) => (i === 0 ? 'Salesperson' : `${ORD[i] || `${i + 1}th`} Salesperson`);
 
@@ -71,14 +40,25 @@ export default function NoticeOfSaleModal({ open, onClose, txn }) {
   const ref = useRef(null);
   const [docs, setDocs] = useState([]);
 
-  const brokerage = txn.brokerage || {};
   const clients = txn.clients || [];
   const team = (txn.team && txn.team.length) ? txn.team : (txn.agent ? [{ name: txn.agent, split: 100 }] : []);
-  const commRate = txn.comm_type === 'Fixed' ? formatCurrency(txn.comm_value) : `${txn.comm_value || txn.comm_pct || 0}%`;
+  // Commission in %/$: the Agent Commission total shown in Financial Information's
+  // "Agent Commission (<Value>)" header — listing nets to cash-to-pay; standard
+  // uses each agent's Agent total.
+  const fin = txn.financial || {};
+  const agentCommissionTotal = (fin.members && fin.members.length)
+    ? fin.members.reduce((s, m) => s + (m.cash_to_pay || 0), 0)
+    : (fin.agents || []).reduce((s, a) => s + (a.agent?.total || 0), 0);
+  const commRate = agentCommissionTotal > 0
+    ? formatCurrency(agentCommissionTotal)
+    : (txn.comm_type === 'Fixed' ? formatCurrency(txn.comm_value) : `${txn.comm_value || txn.comm_pct || 0}%`);
 
-  // Salesperson(s) = Listing Agent Name(s) from Listing Brokerage Information.
-  const listingAgents = (brokerage.agents || []).filter(Boolean);
-  const salespersons = listingAgents.length ? listingAgents : team.map((m) => m.name).filter(Boolean);
+  // Signatories = the deal's primary agent + any split agents (the Team), who sign at the bottom.
+  const signatories = team.map((m) => m.name).filter(Boolean);
+
+  // The Mutual Release document is a Mutual-Release-status artefact and must never
+  // appear on the Notice of Sale.
+  const nosDocs = docs.filter((d) => !/mutual release/i.test(d.title || ''));
 
   // Which party the brokerage's clients represent:
   //  - Listing-side types (Sale/Lease Listings + Business Sale): clients are the
@@ -116,8 +96,6 @@ export default function NoticeOfSaleModal({ open, onClose, txn }) {
   }, [open, txn.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!open) return null;
-
-  const mandatory = mandatoryDocsFor(txn.type);
 
   // ---- signatures ----
   const setAgentDate = (name, v) => setAgents((a) => ({ ...a, [name]: { ...(a[name] || {}), signed_date: v } }));
@@ -178,7 +156,7 @@ export default function NoticeOfSaleModal({ open, onClose, txn }) {
           <div className="modal-h" style={{ margin: 0, border: 0, padding: 0 }}>Notice of Sale</div>
           <div style={{ display: 'flex', gap: 6 }}>
             <button className="btn ghost sm" onClick={save} disabled={saving}>{saving ? 'Saving…' : '💾 Save'}</button>
-            <button className="btn ghost sm" onClick={() => doSend(salespersons)} disabled={saving || !salespersons.length}>✉ Send</button>
+            <button className="btn ghost sm" onClick={() => doSend(signatories)} disabled={saving || !signatories.length}>✉ Send</button>
             <button className="btn primary sm" onClick={printNow}>🖨 Print / Save PDF</button>
           </div>
         </div>
@@ -190,22 +168,20 @@ export default function NoticeOfSaleModal({ open, onClose, txn }) {
               <div style={{ fontSize: 22, fontWeight: 800, color: BRAND, letterSpacing: '-0.5px' }}>GET<span style={{ color: '#0f172a' }}>&#9730;</span>HOME REALTY</div>
               <div style={{ fontSize: 10, color: '#64748b', fontStyle: 'italic' }}>"A Tradition of Trust" — Brokerage</div>
             </div>
-            <div style={{ color: BRAND, fontSize: 22, fontWeight: 700 }}>Notice of Sale</div>
+            <div style={{ color: BRAND, fontSize: 44, fontWeight: 700 }}>Notice of Sale</div>
           </div>
 
           {/* Main details card */}
           <div style={card}>
-            <div style={grid2}>
+            <div style={grid3}>
               <Field label="Property Address" value={txn.property} />
               <Field label="Transaction Type" value={txn.type} />
+              <Field label="MLS Number" value={txn.mls_num} />
             </div>
-            <div style={grid2}>
+            <div style={grid3}>
               <Field label="Purchase Price" value={formatCurrency(txn.price)} />
               <Field label="Sold Date" value={txn.offer_date} />
-            </div>
-            <div style={grid2}>
               <Field label="Closing Date" value={txn.closing_date} />
-              <Field label="MLS Number" value={txn.mls_num} />
             </div>
 
             <div style={{ marginBottom: 14 }}>
@@ -225,14 +201,10 @@ export default function NoticeOfSaleModal({ open, onClose, txn }) {
 
             <div style={divider} />
             <div style={sectionTitle}>Lawyer Information</div>
-            <div style={{ marginBottom: 14 }}><Field label="Name" value={txn.lawyer_name} /></div>
-            <div style={grid2}>
+            <div style={grid3}>
+              <Field label="Name" value={txn.lawyer_name} />
               <Field label="Phone" value={txn.lawyer_phone} />
               <Field label="Email" value={txn.lawyer_email} />
-            </div>
-            <div style={grid2}>
-              <Field label="Listing Brokerage Name" value={brokerage.name || 'GET HOME REALTY'} />
-              <Field label="Salesperson Name" value={salespersons.join(', ')} />
             </div>
 
             <div style={divider} />
@@ -249,20 +221,21 @@ export default function NoticeOfSaleModal({ open, onClose, txn }) {
 
           {/* Documents & Signatures card */}
           <div style={card}>
-            <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 14 }}>Documents &amp; Signatures</div>
             <div style={sectionTitle}>Mandatory Documents</div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 14 }}>
-              {mandatory.map((item) => {
-                const checked = isValid(docs, item);
+            {nosDocs.length === 0 && <div style={{ fontSize: 12, color: '#64748b', marginBottom: 14 }}>No documents in the Legal &amp; Documentation section yet.</div>}
+            {/* Column-major: up to 6 per column, then the 7th sits beside the 1st, 8th beside the 2nd, … */}
+            <div style={{ display: 'grid', gridAutoFlow: 'column', gridTemplateRows: `repeat(${Math.min(6, nosDocs.length || 1)}, auto)`, gridAutoColumns: '1fr', gap: '8px 28px', marginBottom: 14 }}>
+              {nosDocs.map((d) => {
+                const checked = d.validation === 'Valid';
                 return (
-                  <div key={item.label} style={{ display: 'flex', alignItems: 'center', gap: 9, fontSize: 13 }}>
+                  <div key={d.id ?? d.title} style={{ display: 'flex', alignItems: 'center', gap: 9, fontSize: 13 }}>
                     <span style={{
                       width: 16, height: 16, borderRadius: 4, flexShrink: 0,
                       border: `1.5px solid ${checked ? '#2563eb' : '#94a3b8'}`,
                       background: checked ? '#2563eb' : '#fff',
                       color: '#fff', fontSize: 11, fontWeight: 700, lineHeight: '14px', textAlign: 'center',
                     }}>{checked ? '✓' : ''}</span>
-                    {item.label}
+                    {d.title}
                   </div>
                 );
               })}
@@ -273,8 +246,8 @@ export default function NoticeOfSaleModal({ open, onClose, txn }) {
 
             {sentAt && <div data-noprint className="help" style={{ marginBottom: 10 }}>Last sent for signature: {new Date(sentAt).toLocaleString()}</div>}
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '22px 24px' }}>
-              {(salespersons.length ? salespersons : ['']).map((name, i) => {
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '22px 24px' }}>
+              {(signatories.length ? signatories : ['']).map((name, i) => {
                 const a = agents[name] || {};
                 const needsResend = !!sentAt && !!name && !a.signature;
                 return (

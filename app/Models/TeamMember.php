@@ -8,7 +8,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class TeamMember extends Model
 {
-    protected $fillable = ['transaction_id', 'name', 'split', 'agent_pct', 'brok_pct', 'is_primary', 'scope', 'position'];
+    protected $fillable = ['transaction_id', 'name', 'split', 'agent_pct', 'brok_pct', 'is_primary', 'access', 'scope', 'position'];
 
     protected function casts(): array
     {

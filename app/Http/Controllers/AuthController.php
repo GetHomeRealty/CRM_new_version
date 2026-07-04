@@ -47,13 +47,22 @@ class AuthController extends Controller
     public function login(Request $request): JsonResponse
     {
         $credentials = $request->validate([
-            'email' => ['required', 'string', 'email'],
+            'username' => ['required', 'string'],
             'password' => ['required', 'string'],
         ]);
 
-        if (! Auth::attempt($credentials, $request->boolean('remember'))) {
+        // Log in by username, falling back to email (usernames may themselves be
+        // email-formatted, so we can't guess the column — try both).
+        $login = $credentials['username'];
+        $password = $credentials['password'];
+        $remember = $request->boolean('remember');
+
+        $ok = Auth::attempt(['username' => $login, 'password' => $password], $remember)
+            || Auth::attempt(['email' => $login, 'password' => $password], $remember);
+
+        if (! $ok) {
             throw ValidationException::withMessages([
-                'email' => ['The provided credentials are incorrect.'],
+                'username' => ['The provided credentials are incorrect.'],
             ]);
         }
 
@@ -61,13 +70,33 @@ class AuthController extends Controller
         if (! $request->user()->isActive()) {
             Auth::guard('web')->logout();
             throw ValidationException::withMessages([
-                'email' => ['This account is inactive. Please contact an administrator.'],
+                'username' => ['This account is inactive. Please contact an administrator.'],
             ]);
         }
 
         $request->session()->regenerate();
 
         return response()->json(['user' => $this->payload($request->user())]);
+    }
+
+    /** Any signed-in user changes their own password (current password required). */
+    public function changePassword(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'current_password' => ['required', 'string'],
+            'password' => ['required', 'confirmed', Password::defaults()],
+        ]);
+
+        $user = $request->user();
+        if (! Hash::check($data['current_password'], $user->password)) {
+            throw ValidationException::withMessages([
+                'current_password' => ['Your current password is incorrect.'],
+            ]);
+        }
+
+        $user->update(['password' => $data['password']]); // 'hashed' cast hashes it
+
+        return response()->json(['message' => 'Password updated']);
     }
 
     public function logout(Request $request): JsonResponse
