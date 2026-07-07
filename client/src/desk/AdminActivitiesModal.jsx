@@ -4,13 +4,28 @@ import { batchNo, t4aYear, isListingType, isPreconType } from './format';
 import { useToast } from './toast';
 import SavedBadge from './SavedBadge';
 import ConfirmDialog, { useConfirm } from './ConfirmDialog';
+import { useAuth } from '../context/AuthContext';
+import MoneyInput from './MoneyInput';
 
 const PAY_LINKED = ['Agent payment / T4A history in Admin Activities', 'Agent breakdown in the Agent FAQ Center'];
 
 const lbl = { fontSize: 11.5, color: 'var(--text-2)', fontWeight: 600, marginBottom: 5, display: 'block' };
 
+// Remarks stamp: the saved date plus Canada EST + India IST times (only for notes that
+// carry a full timestamp), then the author's role + name.
+const noteStamp = (note) => {
+  const dateStr = note.date || (note.created_at ? note.created_at.slice(0, 10) : '');
+  if (!note.created_at) return dateStr;
+  const d = new Date(note.created_at);
+  if (isNaN(d.getTime())) return dateStr;
+  const t = (tz) => d.toLocaleTimeString('en-US', { timeZone: tz, hour: '2-digit', minute: '2-digit' });
+  return `${dateStr} · ${t('America/Toronto')} EST · ${t('Asia/Kolkata')} IST`;
+};
+const noteAuthor = (note) => `${note.role || 'Admin'}${note.author ? ` · ${note.author}` : ''}`;
+
 export default function AdminActivitiesModal({ open, onClose, transactionId, txn, onSaved, termCount: termCountProp, depositOnly = false, dftNA = false, readOnly = false }) {
   const na = (v) => (dftNA ? 'N/A' : v); // §5.1 DFT — status dropdowns default to N/A
+  const { user, isSuperAdmin } = useAuth();
   const toast = useToast();
   const listing = isListingType(txn.type);
   const precon = isPreconType(txn.type);
@@ -18,6 +33,19 @@ export default function AdminActivitiesModal({ open, onClose, transactionId, txn
   // Trust "Payable to Client" = 0 → Paid to Client must be N/A (listing trust only).
   const fin = txn.financial || {};
   const clientNA = !!fin.trust && Number(fin.trust.payable_to_client || 0) <= 0;
+  // Agent's net cash payable (after advance / adjustments). ≤ 0 → fully covered.
+  const agentNet = (n) => {
+    const m = (fin.members || []).find((x) => x.name === n) || (fin.agents || []).find((x) => x.name === n);
+    return m ? Number(m.cash_to_pay ?? m.agent?.total ?? 0) : null;
+  };
+  const netZeroAgent = (n) => { const v = agentNet(n); return v != null && v <= 0.005; };
+  // Paid Status is auto-derived (no dropdown): N/A when the agent's commission is fully
+  // covered by advance/adjustments; Paid when a Paid Type + Paid Date are entered; else blank.
+  const paidStatusOf = (n, p) => {
+    if (netZeroAgent(n)) return 'N/A';
+    if (p.paid_type && p.paid_type !== 'N/A' && p.paid_date) return 'Paid';
+    return '';
+  };
   const team = txn.team && txn.team.length ? txn.team : (txn.agent ? [{ name: txn.agent, scope: 'Entire', terms: [] }] : []);
   const agentNames = team.map((t) => t.name).filter(Boolean);
   const termCount = (typeof termCountProp === 'number' ? termCountProp : (parseInt(txn.precon_term_count, 10) || 0));
@@ -52,7 +80,16 @@ export default function AdminActivitiesModal({ open, onClose, transactionId, txn
         }
         return rl;
       })(),
-      paid_lawyer: a.paid_lawyer || { enabled: '', via: '', date: '', batch: '' },
+      paid_lawyer: (() => {
+        const pl = { enabled: '', via: '', date: '', batch: '', paid_status: 'Pending', amount: '', payments: [], ...(a.paid_lawyer || {}) };
+        // Default Paid to Lawyer? — N/A when the lawyer owes us (Receivable > 0); No when we owe them (< 0). Editable.
+        if (!pl.enabled && fin.trust) {
+          pl.enabled = Number(fin.trust.receivable_from_lawyer || 0) > 0 ? 'N/A' : (Number(fin.trust.receivable_from_lawyer || 0) < 0 ? 'No' : 'N/A');
+        }
+        if (!pl.paid_status) pl.paid_status = 'Pending';
+        if (!Array.isArray(pl.payments)) pl.payments = [];
+        return pl;
+      })(),
       paid_client: (() => {
         const pc = a.paid_client || { enabled: '', via: '', date: '', batch: '' };
         // Default Paid to Client? from the financial payable: N/A when ≤0, else No.
@@ -107,6 +144,10 @@ export default function AdminActivitiesModal({ open, onClose, transactionId, txn
     onConfirm: () => setForm((f) => ({ ...f, notes: f.notes.filter((_, idx) => idx !== i) })),
   });
   const setObj = (key, patch) => setForm((f) => ({ ...f, [key]: { ...f[key], ...patch } }));
+  // Paid to Lawyer — additional partial payments.
+  const addPaidLawyerPayment = () => setForm((f) => ({ ...f, paid_lawyer: { ...f.paid_lawyer, payments: [...(f.paid_lawyer.payments || []), { paid_status: 'Pending', amount: '', via: '', date: '' }] } }));
+  const setPaidLawyerPayment = (i, patch) => setForm((f) => ({ ...f, paid_lawyer: { ...f.paid_lawyer, payments: (f.paid_lawyer.payments || []).map((p, idx) => idx === i ? { ...p, ...patch } : p) } }));
+  const rmPaidLawyerPayment = (i) => setForm((f) => ({ ...f, paid_lawyer: { ...f.paid_lawyer, payments: (f.paid_lawyer.payments || []).filter((_, idx) => idx !== i) } }));
   const addDeposit = () => setForm((f) => ({ ...f, deposits: [...f.deposits, { date: '', received_via: '', receipt_sent: '' }] }));
   const setDeposit = (i, patch) => setForm((f) => ({ ...f, deposits: f.deposits.map((d, idx) => idx === i ? { ...d, ...patch } : d) }));
   const rmDeposit = (i) => askDelete({
@@ -133,8 +174,18 @@ export default function AdminActivitiesModal({ open, onClose, transactionId, txn
 
   const save = async () => {
     setSaving(true);
+    // Persist the auto-derived Paid Status; for fully-covered agents also reset paid type/date to N/A.
+    const payload = { ...form, agents: { ...(form.agents || {}) } };
+    Object.keys(payload.agents).forEach((n) => {
+      const ag = payload.agents[n];
+      if (!ag?.payments) return;
+      const zero = netZeroAgent(n);
+      payload.agents[n] = { ...ag, payments: ag.payments.map((p) => zero
+        ? { ...p, paid_type: 'N/A', paid_date: '', batch_no: '', paid_status: 'N/A' }
+        : { ...p, paid_status: paidStatusOf(n, p) }) };
+    });
     try {
-      const updated = await updateTransaction(transactionId, { admin_activities: form });
+      const updated = await updateTransaction(transactionId, { admin_activities: payload });
       onSaved?.(updated);
       setSavedOk(true);
       setTimeout(() => { setSavedOk(false); onClose(); }, 2000);
@@ -280,13 +331,32 @@ export default function AdminActivitiesModal({ open, onClose, transactionId, txn
 
             <div className="modal-sub">Paid to Lawyer</div>
             <div className="field" style={{ maxWidth: 240 }}><label style={lbl}>Paid to Lawyer?</label><select value={na(form.paid_lawyer.enabled)} onChange={(e) => setObj('paid_lawyer', { enabled: e.target.value })}><option value="">Select</option><option>Yes</option><option>No</option><option>N/A</option></select></div>
-            {form.paid_lawyer.enabled === 'Yes' && (
-              <div className="g3">
+            {form.paid_lawyer.enabled === 'Yes' && (<>
+              <div className="g4">
+                <div className="field"><label style={lbl}>Paid Status</label><select value={form.paid_lawyer.paid_status || 'Pending'} onChange={(e) => setObj('paid_lawyer', { paid_status: e.target.value })}><option>Paid</option><option>Paid Partially</option><option>Pending</option></select></div>
+                {form.paid_lawyer.paid_status === 'Paid Partially' && (
+                  <div className="field"><label style={lbl}>Amount Paid</label>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}><span style={{ color: 'var(--muted)' }}>$</span><MoneyInput value={form.paid_lawyer.amount} onChange={(v) => setObj('paid_lawyer', { amount: v })} placeholder="0.00" style={{ flex: 1 }} /></div>
+                  </div>
+                )}
                 <div className="field"><label style={lbl}>Paid Via</label><select value={form.paid_lawyer.via} onChange={(e) => setObj('paid_lawyer', { via: e.target.value })}><option value="">Select</option>{VIA.map((v) => <option key={v}>{v}</option>)}</select></div>
                 <div className="field"><label style={lbl}>Paid Date</label><input type="date" value={form.paid_lawyer.date} onChange={(e) => setObj('paid_lawyer', { date: e.target.value, batch: batchNo(e.target.value) })} /></div>
                 <div className="field"><label style={lbl}>Batch No.</label><input value={form.paid_lawyer.batch} readOnly style={{ background: '#f9fafb' }} /></div>
               </div>
-            )}
+              {form.paid_lawyer.paid_status === 'Paid Partially' && (<>
+                {(form.paid_lawyer.payments || []).map((p, i) => (
+                  <div className="g4" key={i} style={{ alignItems: 'end', marginTop: 6 }}>
+                    <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Paid Status</label><select value={p.paid_status || 'Pending'} onChange={(e) => setPaidLawyerPayment(i, { paid_status: e.target.value })}><option>Paid</option><option>Paid Partially</option><option>Pending</option></select></div>
+                    <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Amount Paid</label>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}><span style={{ color: 'var(--muted)' }}>$</span><MoneyInput value={p.amount} onChange={(v) => setPaidLawyerPayment(i, { amount: v })} placeholder="0.00" style={{ flex: 1 }} /></div>
+                    </div>
+                    <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Paid Via</label><select value={p.via} onChange={(e) => setPaidLawyerPayment(i, { via: e.target.value })}><option value="">Select</option>{VIA.map((v) => <option key={v}>{v}</option>)}</select></div>
+                    <div style={{ display: 'flex', gap: 6, alignItems: 'end' }}><div className="field" style={{ marginBottom: 0, flex: 1 }}><label style={lbl}>Paid Date</label><input type="date" value={p.date} onChange={(e) => setPaidLawyerPayment(i, { date: e.target.value })} /></div><button className="row-rm" onClick={() => rmPaidLawyerPayment(i)}>🗑️</button></div>
+                  </div>
+                ))}
+                <button className="btn btn-blue sm" style={{ marginTop: 8 }} onClick={addPaidLawyerPayment}>+ Add Payment</button>
+              </>)}
+            </>)}
           </>)}
 
           <div className="modal-sub">Paid to Client</div>
@@ -335,13 +405,15 @@ export default function AdminActivitiesModal({ open, onClose, transactionId, txn
                 <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
                   <label style={{ fontSize: 12, color: '#166534', margin: 0, fontWeight: 600 }}>Agent Invoice Received</label>
                   <select style={{ width: 'auto' }} value={na(a.invoice_received)} onChange={(e) => setAgent(n, 'invoice_received', e.target.value)}><option>N/A</option><option>Yes</option><option>No</option></select>
-                  <button className="btn btn-blue sm" onClick={() => addRow(n, 'payments', { paid_type: 'N/A', paid_date: '', batch_no: '', t4a_year: '' })}>+ Add Payment</button>
+                  <button className="btn btn-blue sm" onClick={() => addRow(n, 'payments', { paid_type: 'N/A', paid_status: '', paid_date: '', batch_no: '', t4a_year: '' })}>+ Add Payment</button>
                 </div>
               </div>
               {a.payments.map((p, i) => (
-                <div className="g4" key={i} style={{ alignItems: 'end', marginBottom: 6 }}>
+                <div className="g4" key={i} style={{ alignItems: 'end', marginBottom: 6, gridTemplateColumns: 'repeat(5, 1fr)' }}>
                   <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Paid Type</label>
                     <select value={na(p.paid_type)} onChange={(e) => setRow(n, 'payments', i, { paid_type: e.target.value })}><option>N/A</option><option>TDB-EFT</option><option>CTA-BA Transfer</option><option>Cheque</option></select></div>
+                  <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Paid Status</label>
+                    <input value={paidStatusOf(n, p) || '—'} readOnly style={{ background: '#f9fafb', fontWeight: 600 }} title="Auto — Paid when Paid Type + Paid Date are set; N/A when the agent's commission is fully covered by advance/adjustments." /></div>
                   <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Paid Date</label><input type="date" value={p.paid_date} onChange={(e) => onPayDate(n, i, e.target.value)} /></div>
                   <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Batch No.</label><input value={p.batch_no} readOnly style={{ background: '#f9fafb' }} /></div>
                   <div style={{ display: 'flex', gap: 6, alignItems: 'end' }}>
@@ -382,11 +454,11 @@ export default function AdminActivitiesModal({ open, onClose, transactionId, txn
         {form.notes.map((note, i) => (
           <div className="note-item" key={i}>
             <textarea rows={2} value={note.text} onChange={(e) => set('notes', form.notes.map((x, idx) => idx === i ? { ...x, text: e.target.value } : x))} placeholder="Enter note…" style={{ marginBottom: 6 }} />
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--muted)' }}><span>{note.date} — Admin</span><button className="row-rm" onClick={() => rmNote(i)}>🗑️</button></div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--muted)' }}><span>{noteStamp(note)} — {noteAuthor(note)}</span><button className="row-rm" onClick={() => rmNote(i)}>🗑️</button></div>
           </div>
         ))}
         <div style={{ textAlign: 'right', marginBottom: 10 }}>
-          <button className="btn primary sm" onClick={() => set('notes', [...form.notes, { text: '', date: new Date().toISOString().slice(0, 10) }])}>+ Add Note</button>
+          <button className="btn primary sm" onClick={() => { const now = new Date().toISOString(); set('notes', [...form.notes, { text: '', date: now.slice(0, 10), created_at: now, author: user?.name || '', role: isSuperAdmin ? 'Super Admin' : 'Admin' }]); }}>+ Add Note</button>
         </div>
         </>)}
         </>)}

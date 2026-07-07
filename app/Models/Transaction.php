@@ -95,6 +95,8 @@ class Transaction extends Model
         'builder_name', 'builder_vendor', 'builder_project', 'builder_address',
         'builder_office_email', 'builder_invoice_email', 'builder_phone',
         'lawyer_name', 'lawyer_email', 'lawyer_phone', 'lawyer_address',
+        'buyer_lawyer_name', 'buyer_lawyer_email', 'buyer_lawyer_phone', 'buyer_lawyer_address',
+        'seller_lawyer_name', 'seller_lawyer_email', 'seller_lawyer_phone', 'seller_lawyer_address',
         'admin_activities', 'activity_tracker', 'adjustments', 'commercial_lease', 'notice_of_sale',
         'comm_status', 'comm_paid_status', 'valid_status',
         'conditional_offer', 'inter_board_enabled',

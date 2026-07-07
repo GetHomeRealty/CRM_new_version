@@ -10,6 +10,7 @@ import DocsModal from './DocsModal';
 import InvoiceModal from './InvoiceModal';
 import NoticeOfSaleModal from './NoticeOfSaleModal';
 import TradeSheetModal from './TradeSheetModal';
+import MoneyInput from './MoneyInput';
 import LawyerModal from './LawyerModal';
 import AuditTrailModal from './AuditTrailModal';
 import AdminActivitiesModal from './AdminActivitiesModal';
@@ -355,12 +356,14 @@ export default function TransactionDetailPage() {
     }
   };
 
-  const stPill = (s) => s === 'Open' ? 'info' : (s === 'Closed' ? 'ok' : (s === 'Void' || s === 'MPR' ? 'bad' : 'warn'));
+  const stPill = (s) => s === 'Open' ? 'info' : (s === 'Closed' ? 'ok' : (s === 'Void' ? 'bad' : 'warn'));
   const brokLabel = listing ? 'Co-Op' : 'Listing';
 
   // §5.2 — Sale Listing status matrix (sale listings only; lease excluded).
   const saleListing = isListingStatusFamily(form.type) && !/lease/i.test(form.type);
   const stActive = saleListing && form.statuses.includes('Active');
+  // A listing that's still Active has no price/deposit yet — hide those fields.
+  const hidePriceDeposit = listing && form.statuses.includes('Active');
   const stSoldCond = saleListing && form.statuses.includes('Sold Conditional');
   const stTerminated = saleListing && form.statuses.includes('Terminated');
 
@@ -370,6 +373,15 @@ export default function TransactionDetailPage() {
   const stVoid = dealSide && form.statuses.includes('Void');
   const stMutualRelease = dealSide && form.statuses.includes('Mutual Release');
   const stSecuredFirm = form.statuses.includes('Secured Firm'); // hides Conditional Offer
+  // Once Sold / Leased, hide the Conditional Offer section (its saved data stays
+  // interlinked — e.g. Legal & Documentation condition docs remain).
+  const stSoldOrLeased = form.statuses.includes('Sold') || form.statuses.includes('Leased');
+  // Header doc buttons: Active hides Lawyer Statement + Notice of Sale + Trade Sheet;
+  // Sold/Lease Conditional hides Lawyer Statement + Notice of Sale (Trade Sheet stays).
+  const stHdrActive = form.statuses.includes('Active');
+  const stHdrConditional = form.statuses.includes('Sold Conditional') || form.statuses.includes('Lease Conditional');
+  const hideStmtNos = stHdrActive || stHdrConditional; // Lawyer Statement + Notice of Sale
+  const hideTradeSheet = stHdrActive;
   const docsOnly = stVoid || stMutualRelease;
   const docRestrict = stVoid
     ? ['agreement of purchase', 'aps', 'agreement to lease']
@@ -399,14 +411,21 @@ export default function TransactionDetailPage() {
 
   // §6 — lifecycle locks layered on top of status rules.
   const nosSent = !!txn?.notice_of_sale?.sent_at; // Notice of Sale sent for signing
+  const tradeSheetSent = !!txn?.trade_sheet_sent_at;
+  const invoiceSent = (txn?.invoices || []).some((i) => i.sent_at);
   const agentPaid = txn?.activity_tracker?.agent_commission_paid_status === 'Yes' || txn?.comm_paid_status === 'Yes'; // agent payment complete
-  // Team Split: hidden entirely once agent payment is complete (Super Admin only);
+  // Once the deal is Closed AND the agent commission is paid, the money-side sections
+  // (Team Split, Adjustments/Advances, agent %, client & external referrals) lock for
+  // everyone except a Super Admin.
+  const closedAndPaid = stClosed && agentPaid;
+  // Team Split: hidden entirely once closed & paid (Super Admin only);
   // after Notice of Sale is sent, agents can't be added/removed/renamed (Admin+ retain access).
-  const teamSplitVisible = !agentPaid || isSuperAdmin;
-  const teamReadOnly = view || (agentPaid && !isSuperAdmin) || !teamSplitEditableByRole;
+  const teamSplitVisible = !closedAndPaid || isSuperAdmin;
+  const teamReadOnly = view || (closedAndPaid && !isSuperAdmin) || !teamSplitEditableByRole;
   const teamLockAgents = nosSent && !isAdminOrAbove && !agentPaid;
-  // Adjustment / advance / client referral / external brokerage referral: fully locked once agent payment is complete.
-  const adjReadOnly = view || agentPaid;
+  // Adjustment / advance / client referral / external brokerage referral: locked to
+  // Super Admin once the deal is closed and the agent commission is paid.
+  const adjReadOnly = view || (closedAndPaid && !isSuperAdmin);
   const editRequests = txn?.edit_requests || [];
   const pendingReq = editRequests.find((r) => r.status === 'pending');
   const approvedReq = editRequests.find((r) => r.status === 'approved');
@@ -470,12 +489,12 @@ export default function TransactionDetailPage() {
           {/* Invoice / Trade Sheet / Notice of Sale are hidden for agents. */}
           {!isAgent && (isListingFinancialType(form.type) ? (<>
             <button className="btn ghost sm" onClick={() => setDepositOpen(true)}>🧾 Deposit Receipt</button>
-            <button className="btn ghost sm" onClick={() => setLawyerStmtOpen(true)}>📄 Lawyer Statement</button>
+            {!hideStmtNos && <button className="btn ghost sm" onClick={() => setLawyerStmtOpen(true)}>📄 Lawyer Statement</button>}
           </>) : (
-            !docsOnly && <button className="btn ghost sm" onClick={openInvoice}>🧾 Invoice</button>
+            !docsOnly && <button className="btn ghost sm" onClick={openInvoice}>🧾 Invoice{invoiceSent ? ' sent' : ''}</button>
           ))}
-          {!isAgent && !docsOnly && <button className="btn ghost sm" onClick={() => setTsOpen(true)}>📋 Trade Sheet</button>}
-          {!isAgent && !docsOnly && <button className="btn ghost sm" onClick={() => setNosOpen(true)}>📄 Notice of Sale</button>}
+          {!isAgent && !docsOnly && !hideTradeSheet && <button className="btn ghost sm" onClick={() => setTsOpen(true)}>📋 Trade Sheet{tradeSheetSent ? ' sent' : ''}</button>}
+          {!isAgent && !docsOnly && !hideStmtNos && <button className="btn ghost sm" onClick={() => setNosOpen(true)}>📄 Notice of Sale{nosSent ? ' sent' : ''}</button>}
           <button className="btn ghost sm" onClick={() => setChatOpen(true)}>💬 Chat</button>
           <span style={{ width: 1, height: 18, background: 'var(--line)', margin: '0 4px' }} />
           {!canEdit
@@ -670,8 +689,8 @@ export default function TransactionDetailPage() {
                   </>)}
               </Field>
               <Field label="Property Address" req><input value={form.property} disabled={ro} onChange={(e) => set('property', e.target.value)} /></Field>
-              <Field label={isLease ? 'Total lease price' : 'Total Purchase Price'}><input value={form.price} disabled={ro} onChange={(e) => set('price', e.target.value)} /></Field>
-              {!referral && <Field label="Deposit"><input value={form.deposit} disabled={ro} onChange={(e) => set('deposit', e.target.value)} /></Field>}
+              {!hidePriceDeposit && <Field label={isLease ? 'Total lease price' : 'Total Purchase Price'}><MoneyInput value={form.price} disabled={ro} onChange={(v) => set('price', v)} /></Field>}
+              {!hidePriceDeposit && !referral && <Field label="Deposit"><MoneyInput value={form.deposit} disabled={ro} onChange={(v) => set('deposit', v)} /></Field>}
             </div>
             {!OFFER_CLOSING_LISTING_TYPES.includes(form.type) && (
               <div className="g3">
@@ -846,12 +865,12 @@ export default function TransactionDetailPage() {
         {!ro && <button className="btn primary sm" onClick={addClient}>+ Add Client</button>}
       </div>
 
-      {/* Conditional Offer — hidden for preconstruction, referral, §5.2 Active/Terminated sale listings, Void / Mutual Release, and Secured Firm */}
-      {!precon && !referral && !slHideBasic && !docsOnly && !stSecuredFirm && (
+      {/* Conditional Offer — hidden for preconstruction, referral, §5.2 Active/Terminated sale listings, Void / Mutual Release, Secured Firm, and once Sold/Leased */}
+      {!precon && !referral && !slHideBasic && !docsOnly && !stSecuredFirm && !stSoldOrLeased && (
       <div className="card">
         <div className="modal-h" style={{ fontSize: 14 }}>Conditional Offer</div>
         <Field label="Is Offer Conditional?" style={{ maxWidth: 220 }}>
-          <select value={form.conditional_offer ? 'Yes' : 'No'} disabled={ro} onChange={(e) => set('conditional_offer', e.target.value === 'Yes')}>
+          <select value={form.conditional_offer ? 'Yes' : 'No'} disabled={ro} onChange={(e) => { const yes = e.target.value === 'Yes'; set('conditional_offer', yes); if (yes && form.conditions.length === 0) addCond(); }}>
             <option>No</option><option>Yes</option>
           </select>
         </Field>
@@ -904,7 +923,7 @@ export default function TransactionDetailPage() {
         <div className="card">
           <div className="modal-h" style={{ fontSize: 14 }}>Inter Board Listing</div>
           <Field label="Inter Board Listing?" style={{ maxWidth: 220 }}>
-            <select value={form.inter_board_enabled ? 'Yes' : 'No'} disabled={ro} onChange={(e) => set('inter_board_enabled', e.target.value === 'Yes')}>
+            <select value={form.inter_board_enabled ? 'Yes' : 'No'} disabled={ro} onChange={(e) => { const yes = e.target.value === 'Yes'; set('inter_board_enabled', yes); if (yes && form.inter_board_listings.length === 0) addIb(); }}>
               <option>No</option><option>Yes</option>
             </select>
           </Field>
@@ -955,13 +974,13 @@ export default function TransactionDetailPage() {
           termCount={precon ? (parseInt(form.precon_term_count, 10) || 0) : undefined}
           hideClientCommission={slDepositOnly}
           dftNA={stDFT}
-          readOnly={view || isAgent}
+          readOnly={view || isAgent || (closedAndPaid && !isSuperAdmin)}
           isAgent={isAgent}
           onSaved={applyUpdated}
         />
       )}
       {docsOpen && (
-        <DocsModal open={docsOpen} onClose={() => setDocsOpen(false)} transactionId={id} restrictTitles={docRestrict} hideTitles={stMutualRelease ? [] : ['mutual release']} readOnly={isAgent ? false : view} agentMode={isAgent} canDeleteConditionDocs={isSuperAdmin} canReviewDeleted={isAdminOrAbove} />
+        <DocsModal open={docsOpen} onClose={() => setDocsOpen(false)} transactionId={id} txn={txn} restrictTitles={docRestrict} hideTitles={stMutualRelease ? [] : ['mutual release']} readOnly={isAgent ? false : view} agentMode={isAgent} canDeleteConditionDocs={isSuperAdmin} canReviewDeleted={isAdminOrAbove} />
       )}
       {invoiceOpen && txn && (
         <InvoiceModal open={invoiceOpen} onClose={() => setInvoiceOpen(false)} txn={txn} />

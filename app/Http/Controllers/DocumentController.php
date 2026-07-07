@@ -31,6 +31,16 @@ class DocumentController extends Controller
         );
     }
 
+    /** A Valid document can only be replaced/deleted by a Super Admin. */
+    private function guardValidLocked(Request $request, Document $document): void
+    {
+        abort_if(
+            $document->validation === 'Valid' && ! $request->user()?->isSuperAdmin(),
+            403,
+            'This document is marked Valid — only a Super Admin can replace or delete it.'
+        );
+    }
+
     /** Agents may only touch documents on transactions they own or are split into. */
     private function guardAgent(Request $request, Transaction $transaction): void
     {
@@ -195,6 +205,7 @@ class DocumentController extends Controller
             'documents.*.mandatory' => ['nullable', 'boolean'],
             'documents.*.status' => ['nullable', 'in:Pending,Received'],
             'documents.*.validation' => ['nullable', 'in:Pending,Valid,Invalid'],
+            'documents.*.drive_uploaded' => ['nullable', 'in:Yes,No'],
             'documents.*.remarks' => ['nullable', 'string'],
             'documents.*.reminder' => ['nullable', 'boolean'],
             'documents.*.agent_accepted' => ['nullable', 'in:Accepted,Not Accepted'],
@@ -250,6 +261,7 @@ class DocumentController extends Controller
                 'mandatory' => (bool) ($row['mandatory'] ?? false),
                 'status' => $row['status'] ?? 'Pending',
                 'validation' => $row['validation'] ?? 'Pending',
+                'drive_uploaded' => ($row['drive_uploaded'] ?? null) ?: null,
                 'remarks' => $row['remarks'] ?? null,
                 // A document the agent hasn't accepted can never carry a reminder.
                 'reminder' => $accepted === 'Not Accepted' ? false : (bool) ($row['reminder'] ?? false),
@@ -317,6 +329,7 @@ class DocumentController extends Controller
         abort_unless($document->transaction_id === $transaction->id, 404);
         $this->guardAgent($request, $transaction);
         $this->guardAccepted($document);
+        $this->guardValidLocked($request, $document);
         $request->validate(['file' => ['required', 'file', 'max:20480']]); // 20 MB
 
         $file = $request->file('file');
@@ -374,6 +387,7 @@ class DocumentController extends Controller
         abort_unless($document->transaction_id === $transaction->id, 404);
         $this->guardAgent($request, $transaction);
         $this->guardAccepted($document);
+        $this->guardValidLocked($request, $document);
         $request->validate(['file' => ['required', 'file', 'max:20480'], 'client_name' => ['nullable', 'string']]);
 
         $client = $request->input('client_name');
@@ -429,9 +443,10 @@ class DocumentController extends Controller
     }
 
     /** Remove one file (by index) from a multi-file / per-client document. */
-    public function deleteDocFile(Transaction $transaction, Document $document, int $index)
+    public function deleteDocFile(Request $request, Transaction $transaction, Document $document, int $index)
     {
         abort_unless($document->transaction_id === $transaction->id, 404);
+        $this->guardValidLocked($request, $document);
         $files = $document->files ?? [];
         if (isset($files[$index])) {
             $removed = $files[$index]['file_name'] ?? null;
@@ -505,21 +520,84 @@ class DocumentController extends Controller
         return Storage::disk('local')->download($document->validation_file_path, $document->validation_file_name);
     }
 
-    /** Stream a document's single file (auth cookie is sent on normal navigation). */
-    public function downloadFile(Document $document)
+    /**
+     * Bundle every uploaded document for a transaction into a single ZIP whose top
+     * folder is the property name, so extracting it drops all docs in one folder.
+     */
+    public function downloadAll(Request $request, Transaction $transaction)
+    {
+        $this->guardAgent($request, $transaction);
+
+        $folder = $this->safeName($transaction->property ?: ('Trade '.$transaction->trade_no));
+        $tmp = tempnam(sys_get_temp_dir(), 'txndocs');
+        $zip = new \ZipArchive();
+        $zip->open($tmp, \ZipArchive::CREATE | \ZipArchive::OVERWRITE);
+
+        $used = [];
+        $add = function (?string $path, string $label) use ($zip, $folder, &$used) {
+            if (empty($path) || ! Storage::disk('local')->exists($path)) {
+                return;
+            }
+            $name = $folder.'/'.$label;
+            // De-duplicate identical names.
+            if (isset($used[$name])) {
+                $used[$name]++;
+                $dot = strrpos($name, '.');
+                $name = $dot !== false ? substr($name, 0, $dot).' ('.$used[$name].')'.substr($name, $dot) : $name.' ('.$used[$name].')';
+            } else {
+                $used[$name] = 0;
+            }
+            $zip->addFromString($name, Storage::disk('local')->get($path));
+        };
+
+        foreach ($transaction->documents()->where('pending_delete', false)->orderBy('position')->get() as $d) {
+            $title = $this->safeName($d->title);
+            $add($d->file_path, $title.' - '.($d->file_name ?: 'document'));
+            foreach (($d->files ?? []) as $f) {
+                $who = ! empty($f['client_name']) ? ' - '.$this->safeName($f['client_name']) : '';
+                $add($f['file_path'] ?? null, $title.$who.' - '.($f['file_name'] ?? 'file'));
+            }
+        }
+
+        $count = $zip->numFiles;
+        $zip->close();
+
+        if ($count === 0) {
+            @unlink($tmp);
+            abort(404, 'No uploaded documents to download for this transaction.');
+        }
+
+        return response()->download($tmp, $folder.'.zip')->deleteFileAfterSend(true);
+    }
+
+    /** Filesystem-safe name for a folder/file entry. */
+    private function safeName(string $s): string
+    {
+        $s = preg_replace('#[\\\\/:*?"<>|]+#', ' ', $s);
+        $s = trim((string) preg_replace('/\s+/', ' ', $s));
+
+        return $s !== '' ? $s : 'documents';
+    }
+
+    /** Stream a document's single file (?inline=1 views in-browser, else downloads). */
+    public function downloadFile(Request $request, Document $document)
     {
         abort_unless($document->file_path && Storage::disk('local')->exists($document->file_path), 404);
 
-        return Storage::disk('local')->download($document->file_path, $document->file_name);
+        return $request->boolean('inline')
+            ? Storage::disk('local')->response($document->file_path, $document->file_name)
+            : Storage::disk('local')->download($document->file_path, $document->file_name);
     }
 
-    /** Stream one file (by index) from a multi-file / per-client document. */
-    public function downloadDocFile(Document $document, int $index)
+    /** Stream one file (by index) from a multi/per-client doc (?inline=1 views, else downloads). */
+    public function downloadDocFile(Request $request, Document $document, int $index)
     {
         $f = ($document->files ?? [])[$index] ?? null;
         abort_unless($f && ! empty($f['file_path']) && Storage::disk('local')->exists($f['file_path']), 404);
 
-        return Storage::disk('local')->download($f['file_path'], $f['file_name'] ?? 'download');
+        return $request->boolean('inline')
+            ? Storage::disk('local')->response($f['file_path'], $f['file_name'] ?? 'file')
+            : Storage::disk('local')->download($f['file_path'], $f['file_name'] ?? 'download');
     }
 
     /** Delete every stored file for a document (single + JSON files). */
@@ -545,6 +623,7 @@ class DocumentController extends Controller
 
         // Only administrators may delete documents.
         abort_if($user && $user->role === 'agent', 403, 'Only an administrator can delete documents.');
+        $this->guardValidLocked($request, $document);
 
         if ($transaction) {
             $this->audit->record($transaction, [
@@ -602,6 +681,7 @@ class DocumentController extends Controller
                 'deadline' => $d->is_condition ? optional(optional($d->condition)->deadline)->toDateString() : null,
                 'status' => $d->status,
                 'validation' => $d->validation,
+                'drive_uploaded' => $d->drive_uploaded,
                 'reminder' => (bool) $d->reminder,
                 'agent_accepted' => $d->agent_accepted,
                 'remarks' => $d->remarks,

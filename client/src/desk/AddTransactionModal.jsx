@@ -3,6 +3,7 @@ import { createTransaction, listAgents } from '../lib/api';
 import { TRANSACTION_TYPES, typeLabel, isListingType, parseNumber, statusOptionsFor } from './format';
 import { useToast } from './toast';
 import { useAuth } from '../context/AuthContext';
+import MoneyInput from './MoneyInput';
 
 const EMPTY = {
   type: '', property: '', status: '',
@@ -234,16 +235,16 @@ export default function AddTransactionModal({ open, onClose, onCreated }) {
                     </select>
                   </div>
                   <div className="field"><label>Commission Value <span className="req">*</span></label>
-                    <input type="number" min="0" max={form.comm_type === '%' ? 100 : undefined} value={form.comm_value}
-                      onChange={(e) => { const v = e.target.value; set('comm_value', (form.comm_type === '%' && parseNumber(v) > 100) ? '100' : v); }}
+                    <MoneyInput value={form.comm_value}
+                      onChange={(v) => set('comm_value', (form.comm_type === '%' && parseNumber(v) > 100) ? '100' : v)}
                       placeholder="0.00" />
                     {form.comm_type === '%' && <span className="help">Percentage cannot exceed 100.</span>}</div>
                 </div>
                 <div className="g3">
                   <div className="field"><label>{isLease ? 'Total lease price' : 'Total Purchase Price'} <span className="req">*</span></label>
-                    <input value={form.price} onChange={(e) => set('price', e.target.value)} placeholder="0.00" /></div>
+                    <MoneyInput value={form.price} onChange={(v) => set('price', v)} placeholder="0.00" /></div>
                   {!referral && <div className="field"><label>Deposit</label>
-                    <input value={form.deposit} onChange={(e) => set('deposit', e.target.value)} placeholder="0.00" /></div>}
+                    <MoneyInput value={form.deposit} onChange={(v) => set('deposit', v)} placeholder="0.00" /></div>}
                   <div className="field"><label>Status <span className="req">*</span></label>
                     <select value={form.status} onChange={(e) => set('status', e.target.value)}>
                       <option value="">Select status</option>

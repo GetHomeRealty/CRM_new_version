@@ -16,6 +16,14 @@ class AuditLogController extends Controller
     {
         $q = AuditLog::query()->with('transaction:id,trade_no')->latest();
 
+        // Agent-made transaction changes are already shown in each transaction's own
+        // audit trail — keep them out of the global feed.
+        $q->where(function ($w) {
+            $w->whereNull('transaction_id')
+                ->orWhereNull('source')
+                ->orWhere('source', '!=', 'Agent');
+        });
+
         if ($cat = $request->query('category')) {
             $cat === 'Transactions'
                 ? $q->whereNotNull('transaction_id')

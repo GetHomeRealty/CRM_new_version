@@ -96,13 +96,13 @@ export const TRANSACTION_TYPES = [
 export const STATUS_LISTING_FAMILY = [...LISTING_TYPES, 'Business Sale'];
 export const isListingStatusFamily = (t) => STATUS_LISTING_FAMILY.includes(t);
 
-export const STATUS_DEAL = ['Open', 'MPR', 'Closed', 'Mutual Release', 'DFT', 'Void'];
+export const STATUS_DEAL = ['Open', 'Closed', 'Mutual Release', 'DFT', 'Void'];
 // Buy/Lease/Business deal types use a "Secured" lifecycle instead of Active.
 export const SECURED_DEAL_TYPES = [
   'Residential Buying', 'Residential Lease',
   'Commercial Property Buying', 'Commercial Property Lease', 'Business Buying',
 ];
-export const STATUS_DEAL_SECURED = ['Secured Firm', 'Secured Conditionally', 'MPR', 'Closed', 'Mutual Release', 'DFT', 'Void'];
+export const STATUS_DEAL_SECURED = ['Secured Firm', 'Secured Conditional', 'Closed', 'Mutual Release', 'DFT', 'Void'];
 export const STATUS_REFERRAL = ['Open', 'Closed'];
 export const AUTO_STATUSES = ['Expired']; // set automatically (listing expiry), never picked manually
 
@@ -111,7 +111,7 @@ export const AUTO_STATUSES = ['Expired']; // set automatically (listing expiry),
 export function listingStatuses(type) {
   const lease = /lease/i.test(type);
   return ['Active', lease ? 'Lease Conditional' : 'Sold Conditional', lease ? 'Leased' : 'Sold',
-    'Closed', 'MPR', 'Mutual Release', 'DFT', 'Void', 'Suspended', 'Terminated', 'Expired'];
+    'Closed', 'Mutual Release', 'DFT', 'Void', 'Suspended', 'Terminated', 'Expired'];
 }
 
 export function statusOptionsFor(type) {
@@ -135,14 +135,14 @@ export function statusGroups(type) {
     const cond = lease ? 'Lease Conditional' : 'Sold Conditional';
     const sold = lease ? 'Leased' : 'Sold';
     return [
-      ['Active', cond, 'MPR', 'Suspended'],
-      [sold, 'Closed', 'MPR'],
-      [cond, 'Void', 'MPR', 'Mutual Release'],
+      ['Active', cond, 'Suspended'],
+      [sold, 'Closed'],
+      [cond, 'Void', 'Mutual Release'],
     ];
   }
   return [
-    ['Open', 'MPR'],
-    ['Closed', 'MPR', 'Mutual Release', 'DFT', 'Void'],
+    ['Open'],
+    ['Closed', 'Mutual Release', 'DFT', 'Void'],
   ];
 }
 
@@ -158,7 +158,7 @@ export function allowedStatuses(type, selected) {
 // Map legacy stored statuses to the current vocabulary for display/matching.
 export function normalizeStatus(type, s) {
   // Buy/Lease/Business deal types replaced "Open" with the Secured lifecycle.
-  if (SECURED_DEAL_TYPES.includes(type) && (s === 'Open' || s === 'Hold')) return 'Secured Conditionally';
+  if (SECURED_DEAL_TYPES.includes(type) && (s === 'Open' || s === 'Hold')) return 'Secured Conditional';
   if (s === 'Hold') return 'Open';
   if (s === 'Mutual release') return 'Mutual Release';
   if (s === 'Sold conditional') return /lease/i.test(type) ? 'Lease Conditional' : 'Sold Conditional';

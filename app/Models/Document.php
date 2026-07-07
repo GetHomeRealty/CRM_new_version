@@ -9,7 +9,7 @@ class Document extends Model
 {
     protected $fillable = [
         'transaction_id', 'title', 'mandatory', 'is_condition', 'condition_id',
-        'status', 'validation', 'remarks', 'file_name', 'file_path', 'files',
+        'status', 'validation', 'drive_uploaded', 'remarks', 'file_name', 'file_path', 'files',
         'validation_file_name', 'validation_file_path', 'position',
         'pending_delete', 'deleted_by', 'reminder', 'agent_accepted', 'manual',
     ];

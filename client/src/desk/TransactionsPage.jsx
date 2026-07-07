@@ -105,7 +105,7 @@ export default function TransactionsPage() {
           <option value="">Commission: any</option><option>Received</option><option>Not received</option>
         </select>
         <select value={filters.status} onChange={(e) => setF('status', e.target.value)}>
-          <option value="">All statuses</option><option>Open</option><option>Active</option><option>MPR</option><option>Closed</option><option>Sold</option><option>Leased</option><option>Mutual Release</option><option>DFT</option><option>Void</option><option>Suspended</option><option>Terminated</option><option>Expired</option>
+          <option value="">All statuses</option><option>Open</option><option>Active</option><option>Closed</option><option>Sold</option><option>Leased</option><option>Mutual Release</option><option>DFT</option><option>Void</option><option>Suspended</option><option>Terminated</option><option>Expired</option>
         </select>
         {canEdit && <button className="btn primary sm" onClick={() => setAddOpen(true)}>+ Add Transaction</button>}
       </div></div>

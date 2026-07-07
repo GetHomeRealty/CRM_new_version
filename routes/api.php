@@ -3,6 +3,7 @@
 use App\Http\Controllers\AgentController;
 use App\Http\Controllers\AuditLogController;
 use App\Http\Controllers\AuthController;
+use App\Http\Controllers\ClientIdentificationController;
 use App\Http\Controllers\CompanySettingController;
 use App\Http\Controllers\CustomerController;
 use App\Http\Controllers\DepositReceiptController;
@@ -33,6 +34,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/agents', [AgentController::class, 'index']);
     Route::get('/agent-commissions', [AgentController::class, 'commissions']);
     Route::get('/agent-emails', [AgentController::class, 'emails']);
+    Route::get('/agent-loans', [AgentController::class, 'loans']);
     Route::get('/transaction-types', fn () => response()->json([
         'types' => \App\Models\Transaction::TYPES,
         'listing_types' => \App\Models\Transaction::LISTING_TYPES,
@@ -47,6 +49,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/transactions', [TransactionController::class, 'index']);
     Route::get('/transactions/{transaction}', [TransactionController::class, 'show']);
     Route::get('/transactions/{transaction}/documents', [DocumentController::class, 'index']);
+    Route::get('/transactions/{transaction}/documents/download-all', [DocumentController::class, 'downloadAll']);
+    Route::get('/transactions/{transaction}/identifications', [ClientIdentificationController::class, 'show']);
     Route::get('/documents/{document}/file', [DocumentController::class, 'downloadFile']);
     Route::get('/documents/{document}/files/{index}', [DocumentController::class, 'downloadDocFile']);
     Route::get('/documents/{document}/validation-file', [DocumentController::class, 'downloadValidationFile']);
@@ -77,6 +81,8 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::delete('/transactions/{transaction}', [TransactionController::class, 'destroy']);
 
         Route::put('/transactions/{transaction}/documents', [DocumentController::class, 'bulkUpdate']);
+        Route::put('/transactions/{transaction}/identifications', [ClientIdentificationController::class, 'update']);
+        Route::post('/transactions/{transaction}/identifications/extract', [ClientIdentificationController::class, 'extract']);
         Route::post('/transactions/{transaction}/documents/{document}/file', [DocumentController::class, 'uploadFile']);
         Route::post('/transactions/{transaction}/documents/{document}/files', [DocumentController::class, 'uploadDocFile']);
         Route::delete('/transactions/{transaction}/documents/{document}/files/{index}', [DocumentController::class, 'deleteDocFile']);
@@ -121,6 +127,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::middleware('admin')->group(function () {
         Route::put('/company-settings', [CompanySettingController::class, 'update']);
         Route::get('/users/catalog', [UserController::class, 'catalog']);
+        Route::get('/users/{user}/deal-history', [UserController::class, 'dealHistory']);
         Route::apiResource('users', UserController::class)->except(['show']);
 
         // Email settings — SMTP sender accounts + per-event templates (Super Admin only).

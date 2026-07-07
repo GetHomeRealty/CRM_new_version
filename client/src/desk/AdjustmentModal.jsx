@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react';
-import { updateTransaction } from '../lib/api';
+import { updateTransaction, getAgentLoans } from '../lib/api';
 import { batchNo, parseNumber, formatCurrency, isPreconType } from './format';
 import { useToast } from './toast';
 import SavedBadge from './SavedBadge';
 import ConfirmDialog, { useConfirm } from './ConfirmDialog';
+import MoneyInput, { groupMoney } from './MoneyInput';
 
 // Linked-impact note shown per adjustment list when deleting a row.
 const ADJ_LINKED = {
@@ -35,7 +36,7 @@ function SignedAmount({ value, onChange }) {
         <button type="button" className={`seg-btn ${sign === '+' ? 'active' : ''}`} onClick={() => pick('+')} title="Add to agent commission">+</button>
         <button type="button" className={`seg-btn ${sign === '-' ? 'active' : ''}`} onClick={() => pick('-')} title="Deduct from agent commission">−</button>
       </div>
-      <input value={mag} onChange={(e) => onMag(e.target.value)} placeholder="0.00" style={{ flex: 1 }} />
+      <input value={groupMoney(mag)} inputMode="decimal" onChange={(e) => onMag(e.target.value.replace(/,/g, ''))} placeholder="0.00" style={{ flex: 1 }} />
     </div>
   );
 }
@@ -63,6 +64,25 @@ export default function AdjustmentModal({ open, onClose, transactionId, txn, onS
   const [saving, setSaving] = useState(false);
   const [savedOk, setSavedOk] = useState(false); // §3.2 — "Saved" then auto-close
   const { confirm, askDelete, closeConfirm } = useConfirm();
+
+  // Each agent's outstanding loan (actual − prior loan-repayment adjustments across
+  // all deals) so a loan-repayment row can show what's still owed.
+  const [agentLoans, setAgentLoans] = useState({});
+  useEffect(() => { if (open) getAgentLoans().then(setAgentLoans).catch(() => {}); }, [open]);
+  // Balance still owed once this transaction's own loan repayments are applied
+  // (backend already reflects saved rows; subtract this form's rows to avoid double count for a re-edit).
+  const loanBalanceFor = (name) => {
+    const info = agentLoans[name];
+    if (!info) return null;
+    const savedHere = ((txn.adjustments?.adjustment_rows) || [])
+      .filter((r) => r.agent === name && r.is_loan)
+      .reduce((s, r) => s + Math.max(0, parseNumber(r.amount)), 0);
+    const pendingHere = form.adjustment_rows
+      .filter((r) => r.agent === name && r.is_loan)
+      .reduce((s, r) => s + Math.max(0, parseNumber(r.amount)), 0);
+    return Math.max(0, (info.loan_balance || 0) + savedHere - pendingHere);
+  };
+
   if (!open) return null;
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
@@ -80,10 +100,53 @@ export default function AdjustmentModal({ open, onClose, transactionId, txn, onS
   const extHst = Math.round(extAmt * 0.13 * 100) / 100;
   const extTotal = Math.round((extAmt + extHst) * 100) / 100;
 
+  // Gross Agent Commission total per agent (the T4A total) — the cap for an agent's
+  // adjustment + advance so the Agent Commission total can't go negative.
+  const fin = txn.financial || {};
+  const grossByAgent = {};
+  const addGross = (name, v) => { if (name) grossByAgent[name] = (grossByAgent[name] || 0) + (v || 0); };
+  // Cap = each agent's gross Agent Commission (T4A total). `financial.agents` carries
+  // t4a for BOTH the standard (Buying) and listing variants, so prefer it — the listing
+  // `members` rows omit t4a, which previously left the cap wrong. Precon uses per-term agents.
+  if (fin.terms?.length) fin.terms.forEach((t) => (t.agents || []).forEach((a) => addGross(a.name, a.t4a?.total)));
+  else if (fin.agents?.length) fin.agents.forEach((a) => addGross(a.name, a.t4a?.total));
+  else (fin.members || []).forEach((m) => addGross(m.name, m.t4a?.total ?? m.earned));
+
+  // Adjustment Status is auto: 'Yet to Adjust' once agent + amount are set; 'Closed'
+  // when the deal is closed and the agent commission has been paid.
+  const dealClosed = (txn.statuses || []).includes('Closed');
+  const dealPaid = txn.activity_tracker?.agent_commission_paid_status === 'Yes' || txn.comm_paid_status === 'Yes';
+  const autoStatus = (r) => ((dealClosed && dealPaid) ? 'Closed' : ((r.agent && parseNumber(r.amount) !== 0) ? 'Yet to Adjust' : ''));
+
+  // Total deduction (agent adjust + advance) entered for an agent.
+  const deductFor = (name) => {
+    let d = 0;
+    if (form.agent_adjust === 'Yes') form.adjustment_rows.forEach((r) => { if (r.agent === name) d += parseNumber(r.amount); });
+    if (form.advance_payment === 'Yes') form.advance_rows.forEach((r) => { if (r.agent === name) d += parseNumber(r.amount); });
+    return d;
+  };
+  // Inline "max allowed" note when an agent's adjustment + advance exceeds their total.
+  const overNote = (name) => {
+    const cap = grossByAgent[name];
+    if (cap == null || !name || deductFor(name) <= cap + 0.005) return null;
+    return <div className="help" style={{ color: '#dc2626', margin: '4px 0 0' }}>⚠ Max adjustment allowed: {formatCurrency(cap)} (agent's Agent Commission total)</div>;
+  };
+
   const save = async () => {
+    // Adjustment + advance must not exceed the agent's Agent Commission total.
+    for (const name of agentNames) {
+      const cap = grossByAgent[name];
+      if (cap == null) continue;
+      if (deductFor(name) > cap + 0.005) {
+        toast(`Max adjustment allowed for ${name} is ${formatCurrency(cap)} (the agent's Agent Commission total).`, 'bad');
+        return;
+      }
+    }
     setSaving(true);
+    // Persist the auto-derived Status on each adjustment row.
+    const payload = { ...form, adjustment_rows: form.adjustment_rows.map((r) => ({ ...r, status: autoStatus(r) })) };
     try {
-      const updated = await updateTransaction(transactionId, { adjustments: form });
+      const updated = await updateTransaction(transactionId, { adjustments: payload });
       onSaved?.(updated);
       setSavedOk(true);
       setTimeout(() => { setSavedOk(false); onClose(); }, 2000);
@@ -120,33 +183,48 @@ export default function AdjustmentModal({ open, onClose, transactionId, txn, onS
         {/* Adjustment Details */}
         <div className="modal-sub">Adjustment Details</div>
         <div className="field" style={{ maxWidth: 220 }}><label style={lbl}>Agent Adjust</label>
-          <select value={form.agent_adjust} onChange={(e) => set('agent_adjust', e.target.value)}><option>No</option><option>Yes</option></select></div>
+          <select value={form.agent_adjust} onChange={(e) => { const v = e.target.value; set('agent_adjust', v); if (v === 'Yes' && form.adjustment_rows.length === 0) addRow('adjustment_rows', { agent: '', amount: '', status: '', remarks: '', is_loan: false }); }}><option>No</option><option>Yes</option></select></div>
         {form.agent_adjust === 'Yes' && (<>
           {form.adjustment_rows.map((r, i) => (
             <div className="dyn-list-box" key={i}>
               <div style={{ display: 'grid', gridTemplateColumns: precon ? 'repeat(4,1fr)' : 'repeat(3,1fr)', gap: 14 }}>
                 <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Agent Name</label>{agentSelect(r.agent, (e) => setRow('adjustment_rows', i, { agent: e.target.value }), usedIn('adjustment_rows', i))}</div>
-                <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Amount</label><SignedAmount value={r.amount} onChange={(nv) => setRow('adjustment_rows', i, { amount: nv })} /></div>
-                <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Status</label><select value={r.status} onChange={(e) => setRow('adjustment_rows', i, { status: e.target.value })}><option value="">Select status</option><option>Yet to Adjust</option><option>Closed</option></select></div>
+                <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Amount</label><SignedAmount value={r.amount} onChange={(nv) => setRow('adjustment_rows', i, { amount: nv })} />{overNote(r.agent)}</div>
+                <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Status</label><input value={autoStatus(r) || '—'} readOnly style={{ background: '#f9fafb', fontWeight: 600 }} title="Auto — 'Yet to Adjust' once agent + amount are set; 'Closed' when the deal is closed and the agent commission is paid." /></div>
                 {precon && termSelect(r.term, (e) => setRow('adjustment_rows', i, { term: e.target.value }))}
               </div>
+              {(r.is_loan || loanBalanceFor(r.agent) != null) && (
+                <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, color: 'var(--text-2)', cursor: 'pointer' }}>
+                    <input type="checkbox" checked={!!r.is_loan} onChange={(e) => setRow('adjustment_rows', i, { is_loan: e.target.checked })} />
+                    Loan repayment
+                  </label>
+                  {r.agent && loanBalanceFor(r.agent) != null && (
+                    <span className="pill info" style={{ fontSize: 11 }}>Outstanding loan: {formatCurrency(loanBalanceFor(r.agent))}</span>
+                  )}
+                  {r.is_loan && r.agent && loanBalanceFor(r.agent) != null && parseNumber(r.amount) > loanBalanceFor(r.agent) + 0.005 && (
+                    <span className="help" style={{ color: '#dc2626', margin: 0 }}>⚠ Exceeds the agent's outstanding loan balance.</span>
+                  )}
+                </div>
+              )}
               <div className="field" style={{ marginTop: 10, marginBottom: 0 }}><label style={lbl}>Remarks</label><textarea rows={1} value={r.remarks} onChange={(e) => setRow('adjustment_rows', i, { remarks: e.target.value })} /></div>
               <div style={{ textAlign: 'right', marginTop: 6 }}><button className="row-rm" onClick={() => rmRow('adjustment_rows', i)}>🗑️</button></div>
             </div>
           ))}
-          {canAddFor('adjustment_rows') && <button className="btn primary sm" onClick={() => addRow('adjustment_rows', { agent: '', amount: '', status: '', remarks: '' })}>+ Add New</button>}
+          {canAddFor('adjustment_rows') && <button className="btn primary sm" onClick={() => addRow('adjustment_rows', { agent: '', amount: '', status: '', remarks: '', is_loan: false })}>+ Add New</button>}
         </>)}
 
         {/* Advance Payment */}
         <div className="modal-sub">Advance Payment Details</div>
         <div className="field" style={{ maxWidth: 220 }}><label style={lbl}>Advance Payment</label>
-          <select value={form.advance_payment} onChange={(e) => set('advance_payment', e.target.value)}><option>No</option><option>Yes</option></select></div>
+          <select value={form.advance_payment} onChange={(e) => { const v = e.target.value; set('advance_payment', v); if (v === 'Yes' && form.advance_rows.length === 0) addRow('advance_rows', { agent: '', amount: '', paid_type: 'N/A', paid_date: '', batch_no: '', remarks: '' }); }}><option>No</option><option>Yes</option></select></div>
         {form.advance_payment === 'Yes' && (<>
           {form.advance_rows.map((r, i) => (
             <div className="dyn-list-box" key={i}>
-              <div style={{ display: 'grid', gridTemplateColumns: precon ? 'repeat(5,1fr)' : 'repeat(4,1fr)', gap: 14 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: precon ? 'repeat(6,1fr)' : 'repeat(5,1fr)', gap: 14 }}>
                 <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Agent Name</label>{agentSelect(r.agent, (e) => setRow('advance_rows', i, { agent: e.target.value }), usedIn('advance_rows', i))}</div>
-                <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Amount</label><input value={r.amount} onChange={(e) => setRow('advance_rows', i, { amount: e.target.value })} placeholder="0.00" /></div>
+                <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Amount</label><MoneyInput value={r.amount} onChange={(v) => setRow('advance_rows', i, { amount: v })} placeholder="0.00" />{overNote(r.agent)}</div>
+                <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Paid Type</label><select value={r.paid_type || 'N/A'} onChange={(e) => setRow('advance_rows', i, { paid_type: e.target.value })}><option>N/A</option><option>TDB-EFT</option><option>Cheque</option><option>Wire</option></select></div>
                 <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Paid Date</label><input type="date" value={r.paid_date} onChange={(e) => setRow('advance_rows', i, { paid_date: e.target.value, batch_no: batchNo(e.target.value) })} /></div>
                 <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Batch No.</label><input value={r.batch_no} readOnly style={{ background: '#f9fafb' }} /></div>
                 {precon && termSelect(r.term, (e) => setRow('advance_rows', i, { term: e.target.value }))}
@@ -155,7 +233,7 @@ export default function AdjustmentModal({ open, onClose, transactionId, txn, onS
               <div style={{ textAlign: 'right', marginTop: 6 }}><button className="row-rm" onClick={() => rmRow('advance_rows', i)}>🗑️</button></div>
             </div>
           ))}
-          {canAddFor('advance_rows') && <button className="btn primary sm" onClick={() => addRow('advance_rows', { agent: '', amount: '', paid_date: '', batch_no: '', remarks: '' })}>+ Add New</button>}
+          {canAddFor('advance_rows') && <button className="btn primary sm" onClick={() => addRow('advance_rows', { agent: '', amount: '', paid_type: 'N/A', paid_date: '', batch_no: '', remarks: '' })}>+ Add New</button>}
         </>)}
 
         {/* Client Referral */}
@@ -167,7 +245,7 @@ export default function AdjustmentModal({ open, onClose, transactionId, txn, onS
             <div className="dyn-list-box" key={i}>
               <div className="g3">
                 <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Client Name</label><input value={r.client_name} onChange={(e) => setRow('client_rows', i, { client_name: e.target.value })} /></div>
-                <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Referral Amount</label><input value={r.amount} onChange={(e) => setRow('client_rows', i, { amount: e.target.value })} placeholder="0.00" /></div>
+                <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Referral Amount</label><MoneyInput value={r.amount} onChange={(v) => setRow('client_rows', i, { amount: v })} placeholder="0.00" /></div>
                 <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Void Cheque Received</label><select value={r.void_cheque} onChange={(e) => setRow('client_rows', i, { void_cheque: e.target.value })}><option>No</option><option>Yes</option></select></div>
               </div>
               {r.void_cheque === 'Yes' && (
@@ -201,7 +279,7 @@ export default function AdjustmentModal({ open, onClose, transactionId, txn, onS
                   const amt = parseNumber(p) > 0 ? Math.round((parseNumber(txn.price) * parseNumber(p) / 100 + Number.EPSILON) * 100) / 100 : '';
                   setExt({ pct: p, amount: amt });
                 }} placeholder="e.g. 1.5" /></div>
-              <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Amount</label><input value={form.ext.amount} onChange={(e) => setExt({ amount: e.target.value, pct: '' })} placeholder="0.00" /></div>
+              <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Amount</label><MoneyInput value={form.ext.amount} onChange={(v) => setExt({ amount: v, pct: '' })} placeholder="0.00" /></div>
               <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>HST</label><input value={formatCurrency(extHst)} readOnly style={{ background: '#f9fafb' }} /></div>
               <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Total</label><input value={formatCurrency(extTotal)} readOnly style={{ background: '#f9fafb' }} /></div>
             </div>

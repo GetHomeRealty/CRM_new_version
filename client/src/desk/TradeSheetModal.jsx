@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { PDFDocument } from 'pdf-lib';
 import { formatCurrency, commissionSummary, isListingFinancialType } from './format';
 import { sendTradeSheet } from '../lib/api';
+import { bytesToBase64 } from './pdf';
 import { useToast } from './toast';
 
 // Original OREA Form 640 (editable / AcroForm) lives here:
@@ -30,9 +31,16 @@ async function fillPdf(buf, txn) {
   const yy = String(d.getFullYear()).slice(-2);
   const sellerC = listing ? clients : [];
   const buyerC = listing ? [] : clients;
-  const lawyerSide = listing
-    ? { txts_lawyername: txn.lawyer_name || '', txts_lawyerphone: txn.lawyer_phone || '', txts_lawyeraddr: txn.lawyer_address || '' }
-    : { txtb_lawyername: txn.lawyer_name || '', txtb_lawyerphone: txn.lawyer_phone || '', txtb_lawyeraddr: txn.lawyer_address || '' };
+  // Fill BOTH the Seller and Buyer lawyer blocks from their dedicated fields; fall back
+  // to the legacy (mirrored primary) lawyer_* for the side that matches this deal.
+  const lawyerSide = {
+    txts_lawyername: txn.seller_lawyer_name || (listing ? txn.lawyer_name : '') || '',
+    txts_lawyerphone: txn.seller_lawyer_phone || (listing ? txn.lawyer_phone : '') || '',
+    txts_lawyeraddr: txn.seller_lawyer_address || (listing ? txn.lawyer_address : '') || '',
+    txtb_lawyername: txn.buyer_lawyer_name || (!listing ? txn.lawyer_name : '') || '',
+    txtb_lawyerphone: txn.buyer_lawyer_phone || (!listing ? txn.lawyer_phone : '') || '',
+    txtb_lawyeraddr: txn.buyer_lawyer_address || (!listing ? txn.lawyer_address : '') || '',
+  };
 
   const map = {
     // Header / brokerage / salesperson
@@ -119,6 +127,7 @@ export default function TradeSheetModal({ open, onClose, txn }) {
   const [status, setStatus] = useState('loading'); // loading | ready | missing | error
   const [sentAt, setSentAt] = useState(txn?.trade_sheet_sent_at || null);
   const [sending, setSending] = useState(false);
+  const [pdfBytes, setPdfBytes] = useState(null); // filled Form 640 bytes, for attaching
 
   useEffect(() => { setSentAt(txn?.trade_sheet_sent_at || null); }, [txn?.trade_sheet_sent_at]);
 
@@ -127,7 +136,8 @@ export default function TradeSheetModal({ open, onClose, txn }) {
     if (!to) return;
     setSending(true);
     try {
-      const r = await sendTradeSheet(txn.id, to.trim());
+      const extra = pdfBytes ? { pdf: bytesToBase64(pdfBytes), filename: `Trade Record Sheet ${txn?.trade_no || ''}.pdf` } : {};
+      const r = await sendTradeSheet(txn.id, to.trim(), extra);
       setSentAt(r.sent_at || new Date().toISOString());
       toast(r.message || 'Trade sheet sent', 'ok');
     } catch (e) { toast(e.response?.data?.message || 'Could not send trade sheet', 'bad'); }
@@ -147,6 +157,7 @@ export default function TradeSheetModal({ open, onClose, txn }) {
         if (!res.ok || !sig.startsWith('%PDF')) { if (!cancelled) setStatus('missing'); return; }
         let bytes;
         try { bytes = await fillPdf(buf, txn); } catch { bytes = new Uint8Array(buf); } // show original if fill fails
+        if (!cancelled) setPdfBytes(bytes);
         const blob = new Blob([bytes], { type: 'application/pdf' });
         url = URL.createObjectURL(blob);
         if (!cancelled) { setSrc(url); setStatus('ready'); }

@@ -20,8 +20,9 @@ class TemplateMailService
      *
      * @param  string|array<int, string>  $to
      * @param  array<int, string>  $cc
+     * @param  array<int, array{data:string,name?:string,mime?:string}>  $attachments
      */
-    public function send(string $eventKey, array $vars, string|array $to, array $cc = [], ?string $replyTo = null): void
+    public function send(string $eventKey, array $vars, string|array $to, array $cc = [], array $attachments = [], ?string $replyTo = null): void
     {
         $template = $this->resolveTemplate($eventKey);
         if (! $template || ! $template->is_active) {
@@ -41,7 +42,7 @@ class TemplateMailService
         $subject = TemplateRenderer::render($template->subject, $vars);
         $body = TemplateRenderer::render($template->body_html, $vars);
 
-        $this->dispatchViaAccount($account, $to, $subject, $body, $cc, $replyTo);
+        $this->dispatchViaAccount($account, $to, $subject, $body, $cc, $attachments, $replyTo);
     }
 
     /** Send a fixed test message through a specific account (SMTP smoke test). */
@@ -90,8 +91,9 @@ class TemplateMailService
      *
      * @param  string|array<int, string>  $to
      * @param  array<int, string>  $cc
+     * @param  array<int, array{data:string,name?:string,mime?:string}>  $attachments
      */
-    protected function dispatchViaAccount(MailAccount $account, string|array $to, string $subject, string $html, array $cc = [], ?string $replyTo = null): void
+    protected function dispatchViaAccount(MailAccount $account, string|array $to, string $subject, string $html, array $cc = [], array $attachments = [], ?string $replyTo = null): void
     {
         config(['mail.mailers.tx_dynamic' => [
             'transport' => 'smtp',
@@ -120,6 +122,7 @@ class TemplateMailService
             fromEmail: $account->from_email,
             fromName: $account->from_name,
             replyToAddress: $replyTo,
+            pdfFiles: $attachments,
         ));
     }
 }

@@ -66,11 +66,19 @@ export const restoreDocument = (docId) => api.post(`/api/documents/${docId}/rest
 // --- Notice of Sale ---
 export const getNoticeOfSale = (txnId) => api.get(`/api/transactions/${txnId}/notice-of-sale`).then((r) => r.data);
 export const saveNoticeOfSale = (txnId, payload) => api.put(`/api/transactions/${txnId}/notice-of-sale`, payload).then((r) => r.data);
-export const sendNoticeOfSale = (txnId, agents) => api.post(`/api/transactions/${txnId}/notice-of-sale/send`, { agents }).then((r) => r.data);
+export const sendNoticeOfSale = (txnId, agents, extra = {}) => api.post(`/api/transactions/${txnId}/notice-of-sale/send`, { agents, ...extra }).then((r) => r.data);
 
 // --- Deposit Receipt ---
 export const sendDepositReceipt = (txnId, email, cc) => api.post(`/api/transactions/${txnId}/deposit-receipt/send`, { email, cc }).then((r) => r.data);
-export const sendTradeSheet = (txnId, email) => api.post(`/api/transactions/${txnId}/trade-sheet/send`, { email }).then((r) => r.data);
+export const sendTradeSheet = (txnId, email, extra = {}) => api.post(`/api/transactions/${txnId}/trade-sheet/send`, { email, ...extra }).then((r) => r.data);
+
+// --- FINTRAC per-client identity (Form 630 auto-fill) ---
+export const getClientIdentification = (txnId, clientName) =>
+  api.get(`/api/transactions/${txnId}/identifications`, { params: { client_name: clientName } }).then((r) => r.data);
+export const saveClientIdentification = (txnId, payload) =>
+  api.put(`/api/transactions/${txnId}/identifications`, payload).then((r) => r.data);
+export const extractClientIdentification = (txnId, clientName, documentId) =>
+  api.post(`/api/transactions/${txnId}/identifications/extract`, { client_name: clientName, document_id: documentId }).then((r) => r.data);
 
 // §13 multi-file / per-client uploads (clientName optional)
 export const uploadDocClientFile = (txnId, docId, file, clientName) => {
@@ -94,11 +102,13 @@ export const deleteDocValidationFile = (txnId, docId) =>
 const apiBase = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
 export const documentFileUrl = (docId) => `${apiBase}/api/documents/${docId}/file`;
 export const docClientFileUrl = (docId, index) => `${apiBase}/api/documents/${docId}/files/${index}`;
+export const documentsDownloadAllUrl = (txnId) => `${apiBase}/api/transactions/${txnId}/documents/download-all`;
 export const docValidationFileUrl = (docId) => `${apiBase}/api/documents/${docId}/validation-file`;
 
 // --- Users / RBAC (admin) ---
 export const getUsers = () => api.get('/api/users').then((r) => r.data);
 export const getUsersCatalog = () => api.get('/api/users/catalog').then((r) => r.data);
+export const getUserDealHistory = (id) => api.get(`/api/users/${id}/deal-history`).then((r) => r.data);
 export const createUser = (payload) => api.post('/api/users', payload).then((r) => r.data);
 export const updateUser = (id, payload) => api.put(`/api/users/${id}`, payload).then((r) => r.data);
 export const deleteUser = (id) => api.delete(`/api/users/${id}`).then((r) => r.data);
@@ -112,8 +122,8 @@ export const updateInvoice = (id, payload) => api.put(`/api/invoices/${id}`, pay
 export const deleteInvoice = (id) => api.delete(`/api/invoices/${id}`).then((r) => r.data);
 export const recordInvoicePayment = (id, payload) => api.post(`/api/invoices/${id}/payments`, payload).then((r) => r.data);
 export const deleteInvoicePayment = (id, paymentId) => api.delete(`/api/invoices/${id}/payments/${paymentId}`).then((r) => r.data);
-export const recordInvoiceReminder = (id) => api.post(`/api/invoices/${id}/reminders`).then((r) => r.data);
-export const sendInvoice = (id) => api.post(`/api/invoices/${id}/send`).then((r) => r.data);
+export const recordInvoiceReminder = (id, payload = {}) => api.post(`/api/invoices/${id}/reminders`, payload).then((r) => r.data);
+export const sendInvoice = (id, payload = {}) => api.post(`/api/invoices/${id}/send`, payload).then((r) => r.data);
 
 export const changePassword = (payload) => api.post('/api/user/password', payload).then((r) => r.data);
 
@@ -131,6 +141,7 @@ export const getAuditLogs = (params = {}) =>
 export const listAgents = () => api.get('/api/agents').then((r) => r.data);
 export const getAgentCommissions = () => api.get('/api/agent-commissions').then((r) => r.data);
 export const getAgentEmails = () => api.get('/api/agent-emails').then((r) => r.data);
+export const getAgentLoans = () => api.get('/api/agent-loans').then((r) => r.data);
 export const registrationOpen = () => api.get('/api/registration-open').then((r) => r.data.open);
 
 export const getTransactionTypes = () =>

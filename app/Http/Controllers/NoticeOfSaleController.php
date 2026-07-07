@@ -89,6 +89,8 @@ class NoticeOfSaleController extends Controller
         $data = $request->validate([
             'agents' => ['present', 'array'],
             'agents.*' => ['string', 'max:255'],
+            'pdf' => ['nullable', 'string'],
+            'filename' => ['nullable', 'string', 'max:255'],
         ]);
 
         $current = $this->normalize($transaction->notice_of_sale);
@@ -112,6 +114,9 @@ class NoticeOfSaleController extends Controller
         // on file). A mail/config failure never blocks the send action.
         $emails = User::whereIn('name', $data['agents'])->whereNotNull('email')->pluck('email')->all();
         if ($emails) {
+            $attachments = ! empty($data['pdf'])
+                ? [['data' => $data['pdf'], 'name' => $data['filename'] ?? "Notice of Sale {$transaction->trade_no}.pdf", 'mime' => 'application/pdf']]
+                : [];
             try {
                 app(TemplateMailService::class)->send('notice_of_sale.send', [
                     'transaction_number' => $transaction->trade_no,
@@ -120,7 +125,7 @@ class NoticeOfSaleController extends Controller
                     'closing_date' => optional($transaction->closing_date)->toFormattedDateString(),
                     'agent_name' => implode(', ', $data['agents']),
                     'company_name' => CompanySetting::current()->name,
-                ], $emails);
+                ], $emails, [], $attachments);
             } catch (\Throwable $e) {
                 report($e);
             }

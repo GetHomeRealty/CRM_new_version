@@ -2,15 +2,23 @@ import { useEffect, useState } from 'react';
 import {
   getDocuments, saveDocuments, uploadDocumentFile, deleteDocument, restoreDocument, documentFileUrl,
   uploadDocClientFile, deleteDocClientFile, docClientFileUrl,
-  uploadDocValidationFile, deleteDocValidationFile, docValidationFileUrl,
+  uploadDocValidationFile, deleteDocValidationFile, docValidationFileUrl, documentsDownloadAllUrl,
 } from '../lib/api';
+import { extractClientIdentification } from '../lib/api';
 import { useToast } from './toast';
+import { useAuth } from '../context/AuthContext';
+import Form630Modal from './Form630Modal';
 
 const BRAND = '#c8102e';
 
-export default function DocsModal({ open, onClose, transactionId, restrictTitles = null, hideTitles = [], readOnly = false, agentMode = false, canDeleteConditionDocs = false, canReviewDeleted = false }) {
+export default function DocsModal({ open, onClose, transactionId, txn = null, restrictTitles = null, hideTitles = [], readOnly = false, agentMode = false, canDeleteConditionDocs = false, canReviewDeleted = false }) {
   const toast = useToast();
+  const { isSuperAdmin } = useAuth();
+  // Once a document is Valid, only a Super Admin may replace or delete it.
+  const validLocked = (d) => d.validation === 'Valid' && !isSuperAdmin;
   const [docs, setDocs] = useState([]);
+  const [f630Client, setF630Client] = useState(null); // FINTRAC → view Form 630 for this client
+  const [extracting, setExtracting] = useState({});   // clientName → true while ID extraction runs
   const [deletedDocs, setDeletedDocs] = useState([]); // agent-flagged deletions (admin review)
   // §5.1 — Mutual Release / Void limit the visible checklist to specific documents.
   // hideTitles blacklists titles regardless of the whitelist (e.g. the Mutual
@@ -78,14 +86,14 @@ export default function DocsModal({ open, onClose, transactionId, restrictTitles
   const toggle = (key) => setExpanded((e) => ({ ...e, [key]: !e[key] }));
   const addDoc = () => {
     const title = newTitle.trim(); if (!title) return;
-    setDocs((ds) => [...ds, { title, mandatory: false, manual: true, status: 'Pending', validation: 'Pending', reminder: false, remarks: '', has_file: false, kind: 'single', files: [], file_count: 0 }]);
+    setDocs((ds) => [...ds, { title, mandatory: false, manual: true, status: 'Pending', validation: 'Pending', drive_uploaded: null, reminder: false, remarks: '', has_file: false, kind: 'single', files: [], file_count: 0 }]);
     setNewTitle('');
   };
 
   const save = async () => {
     setSaving(true);
     try {
-      const payload = docs.map((d) => ({ id: d.id, title: d.title, mandatory: d.mandatory, status: d.status, validation: d.validation, reminder: d.reminder, agent_accepted: d.agent_accepted || null, remarks: d.remarks }));
+      const payload = docs.map((d) => ({ id: d.id, title: d.title, mandatory: d.mandatory, status: d.status, validation: d.validation, drive_uploaded: d.drive_uploaded || 'No', reminder: d.reminder, agent_accepted: d.agent_accepted || null, remarks: d.remarks }));
       const res = await saveDocuments(transactionId, payload, { reco_audit_ready: recoReady || null, reco_audit_remarks: recoReady === 'No' ? recoRemarks : null });
       setDocs(res.documents); setClients(res.clients || []);
       setRecoReady(res.reco_audit_ready || ''); setRecoRemarks(res.reco_audit_remarks || '');
@@ -101,8 +109,18 @@ export default function DocsModal({ open, onClose, transactionId, restrictTitles
   };
   const onMulti = async (doc, file, clientName) => {
     if (!file || needSaved(doc)) return;
-    try { const r = await uploadDocClientFile(transactionId, doc.id, file, clientName); setDocs(r.documents); toast('File uploaded', 'ok'); }
+    let uploaded = false;
+    try { const r = await uploadDocClientFile(transactionId, doc.id, file, clientName); setDocs(r.documents); uploaded = true; toast('File uploaded', 'ok'); }
     catch { toast('Upload failed', 'bad'); }
+    // FINTRAC: after the ID saves, auto-extract identity fields for Form 630 (non-blocking).
+    if (uploaded && clientName && (doc.title || '').toLowerCase().includes('fintrac')) {
+      setExtracting((s) => ({ ...s, [clientName]: true }));
+      try {
+        const ex = await extractClientIdentification(transactionId, clientName, doc.id);
+        toast(ex.message || (ex.ok ? 'ID details extracted' : 'Enter the ID details manually'), ex.ok ? 'ok' : 'info');
+      } catch { toast('Could not auto-read the ID — enter the details manually', 'info'); }
+      finally { setExtracting((s) => ({ ...s, [clientName]: false })); }
+    }
   };
   const onRemoveFile = async (doc, index) => {
     try { const r = await deleteDocClientFile(transactionId, doc.id, index); setDocs(r.documents); }
@@ -128,8 +146,9 @@ export default function DocsModal({ open, onClose, transactionId, restrictTitles
 
   const sel = { width: '100%' };
   const fileById = (doc, name) => (doc.files || []).find((f) => f.client_name === name);
-  // Title · Upload · Status · Validation · View/Download · Replace · Delete (Delete hidden for agents).
-  const COLS = agentMode ? '2.2fr 1.2fr 105px 105px 105px 85px' : '2.2fr 1.2fr 105px 105px 105px 85px 55px';
+  // Title · Upload · Status · Validation · View/Download · [Uploaded to Drive · Replace · Delete].
+  // Uploaded to Drive + Delete are admin-only (hidden for agents).
+  const COLS = agentMode ? '2.2fr 1.2fr 105px 105px 105px 85px' : '2.2fr 1.2fr 105px 105px 105px 110px 85px 55px';
   const hCell = { fontSize: 11, fontWeight: 700, color: 'var(--text-2)', textTransform: 'uppercase', letterSpacing: '.03em' };
 
   return (
@@ -145,11 +164,6 @@ export default function DocsModal({ open, onClose, transactionId, restrictTitles
           </div>
         )}
 
-        <div className="stat-grid">
-          <div className="stat-card"><div className="lbl">Total Documents</div><div className="val">{total}</div></div>
-          <div className="stat-card"><div className="lbl">Received</div><div className="val" style={{ color: 'var(--ok)' }}>{received}</div></div>
-          <div className="stat-card"><div className="lbl">Pending</div><div className="val" style={{ color: pending > 0 ? 'var(--bad)' : 'var(--ok)' }}>{pending}</div></div>
-        </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
           <div style={{ background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 'var(--r-md)', padding: 12 }}>
@@ -199,6 +213,12 @@ export default function DocsModal({ open, onClose, transactionId, restrictTitles
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
           <strong>Document List</strong>
           <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            {docs.some((d) => d.has_file || d.file_count > 0) && (
+              <a className="btn ghost sm" title="Download every uploaded document for this transaction as a ZIP"
+                href={documentsDownloadAllUrl(transactionId)}>
+                📦 Download all
+              </a>
+            )}
             {!agentMode && pendingDocs.length > 0 && (
               <button className="btn ghost sm" onClick={toggleAllPendingReminders}
                 title="Select every pending document for automated email reminders">
@@ -217,6 +237,7 @@ export default function DocsModal({ open, onClose, transactionId, restrictTitles
             <div style={hCell}>Status</div>
             <div style={hCell}>Validation</div>
             <div style={{ ...hCell, textAlign: 'center' }}>View / Download</div>
+            {!agentMode && <div style={{ ...hCell, textAlign: 'center' }}>Uploaded to Drive</div>}
             <div style={{ ...hCell, textAlign: 'center' }}>Replace</div>
             {!agentMode && <div style={{ ...hCell, textAlign: 'center' }}>Delete</div>}
           </div>
@@ -300,26 +321,43 @@ export default function DocsModal({ open, onClose, transactionId, restrictTitles
                       <option>Pending</option><option>Valid</option><option>Invalid</option>
                     </select>
                   : <span style={{ fontSize: 12.5, color: 'var(--muted-2)', textAlign: 'center' }}>N/A</span>}
-                {/* View / Download */}
+                {/* View (in-browser) + Download */}
                 <div style={{ fontSize: 12.5, textAlign: 'center' }}>
                   {expandable
                     ? <span style={{ color: 'var(--muted)' }}>{d.file_count} file(s)</span>
                     : (d.has_file
-                      ? <a className="btn ghost sm" href={documentFileUrl(d.id)} target="_blank" rel="noreferrer">👁 View</a>
+                      ? <div style={{ display: 'flex', gap: 4, justifyContent: 'center' }}>
+                          <a className="btn ghost sm" title="View" href={`${documentFileUrl(d.id)}?inline=1`} target="_blank" rel="noreferrer">👁</a>
+                          <a className="btn ghost sm" title="Download" href={documentFileUrl(d.id)}>⬇</a>
+                        </div>
                       : <span style={{ color: 'var(--muted-2)' }}>—</span>)}
                 </div>
-                {/* Replace — only available once a file has been uploaded (via Upload). */}
+                {/* Uploaded to Drive — Yes/No radio (admins only; hidden for agents). Default No (red); Yes green. */}
+                {!agentMode && (
+                  <div style={{ display: 'flex', gap: 10, justifyContent: 'center', fontSize: 12 }}>
+                    {['Yes', 'No'].map((opt) => {
+                      const selected = (d.drive_uploaded || 'No') === opt;
+                      const color = selected ? (opt === 'Yes' ? '#16a34a' : '#dc2626') : 'var(--muted-2)';
+                      return (
+                        <label key={opt} style={{ display: 'inline-flex', alignItems: 'center', gap: 3, cursor: readOnly ? 'default' : 'pointer', color, fontWeight: selected ? 700 : 400 }}>
+                          <input type="radio" name={`drive-${d.id ?? 'n' + i}`} checked={selected} disabled={readOnly} onChange={() => upd(i, 'drive_uploaded', opt)} style={{ accentColor: opt === 'Yes' ? '#16a34a' : '#dc2626' }} />{opt}
+                        </label>
+                      );
+                    })}
+                  </div>
+                )}
+                {/* Replace — after a file is uploaded; locked to Super Admin once Valid. */}
                 <div style={{ textAlign: 'center' }}>
-                  {single && d.has_file && !uploadBlocked
+                  {single && d.has_file && !uploadBlocked && !validLocked(d)
                     ? <label className="btn ghost sm" style={{ cursor: 'pointer' }}>Replace
                         <input type="file" style={{ display: 'none' }} onChange={(e) => { onSingle(d, e.target.files[0]); e.target.value = ''; }} /></label>
-                    : <span style={{ color: 'var(--muted-2)' }}>—</span>}
+                    : <span style={{ color: 'var(--muted-2)' }} title={validLocked(d) ? 'Valid — only a Super Admin can replace' : undefined}>{validLocked(d) && d.has_file ? '🔒' : '—'}</span>}
                 </div>
-                {/* Delete — admins only; the whole column is hidden for agents. */}
+                {/* Delete — admins only (hidden for agents); locked to Super Admin once Valid. */}
                 {!agentMode && (
                   <div style={{ textAlign: 'center' }}>
-                    {(d.is_condition && !canDeleteConditionDocs)
-                      ? <span style={{ color: '#9ca3af', fontSize: 11 }}>—</span>
+                    {((d.is_condition && !canDeleteConditionDocs) || validLocked(d))
+                      ? <span style={{ color: '#9ca3af', fontSize: 11 }} title={validLocked(d) ? 'Valid — only a Super Admin can delete' : undefined}>{validLocked(d) ? '🔒' : '—'}</span>
                       : <button className="row-rm" disabled={readOnly} onClick={() => onDeleteRow(d, i)}>🗑️</button>}
                   </div>
                 )}
@@ -339,10 +377,20 @@ export default function DocsModal({ open, onClose, transactionId, restrictTitles
                       <div key={name} style={{ display: 'grid', gridTemplateColumns: '1fr 2fr auto', gap: 10, alignItems: 'center', border: '1px solid var(--line)', borderRadius: 8, padding: 10, marginBottom: 6, background: '#fff' }}>
                         <div><div style={{ fontSize: 11, color: 'var(--muted)' }}>Client Name</div><strong>{name}</strong></div>
                         <div><div style={{ fontSize: 11, color: 'var(--muted)' }}>Upload</div>
-                          <input type="file" disabled={uploadBlocked} onChange={(e) => { onMulti(d, e.target.files[0], name); e.target.value = ''; }} style={{ fontSize: 12 }} />
-                          {f && <span style={{ fontSize: 11, color: 'var(--ok)', marginLeft: 6 }}>✓ {f.file_name}</span>}</div>
-                        <div style={{ display: 'flex', gap: 4 }}>
-                          {f ? <><a className="btn ghost sm" href={docClientFileUrl(d.id, f.index)} target="_blank" rel="noreferrer">👁 View</a>{!agentMode && <button className="row-rm" onClick={() => onRemoveFile(d, f.index)}>🗑️</button>}</> : <span style={{ color: 'var(--muted-2)', fontSize: 12 }}>—</span>}
+                          <input type="file" disabled={uploadBlocked || validLocked(d)} onChange={(e) => { onMulti(d, e.target.files[0], name); e.target.value = ''; }} style={{ fontSize: 12 }} />
+                          {f && <span style={{ fontSize: 11, color: 'var(--ok)', marginLeft: 6 }}>✓ {f.file_name}</span>}
+                          {validLocked(d) && <span style={{ fontSize: 11, color: '#9ca3af', marginLeft: 6 }} title="Valid — only a Super Admin can replace">🔒 locked</span>}
+                          {extracting[name] && <span style={{ fontSize: 11, color: '#2563eb', marginLeft: 6 }}>⏳ Reading ID…</span>}</div>
+                        <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                          {/* FINTRAC: once a client uploads their ID, offer their prefilled Form 630. */}
+                          {f && txn && (d.title || '').toLowerCase().includes('fintrac') && (
+                            <button className="btn ghost sm" title="View this client's Form 630" onClick={() => setF630Client(name)}>📄 630</button>
+                          )}
+                          {f ? <>
+                            <a className="btn ghost sm" title="View" href={`${docClientFileUrl(d.id, f.index)}?inline=1`} target="_blank" rel="noreferrer">👁</a>
+                            <a className="btn ghost sm" title="Download" href={docClientFileUrl(d.id, f.index)}>⬇</a>
+                            {!agentMode && !validLocked(d) && <button className="row-rm" onClick={() => onRemoveFile(d, f.index)}>🗑️</button>}
+                          </> : <span style={{ color: 'var(--muted-2)', fontSize: 12 }}>—</span>}
                         </div>
                       </div>
                     );
@@ -419,6 +467,10 @@ export default function DocsModal({ open, onClose, transactionId, restrictTitles
           {!readOnly && <button className="btn primary" onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save'}</button>}
         </div>
       </div>
+
+      {f630Client && txn && (
+        <Form630Modal open onClose={() => setF630Client(null)} txn={txn} clientName={f630Client} />
+      )}
     </div>
   );
 }

@@ -35,4 +35,13 @@ return [
         ],
     ],
 
+    // FINTRAC ID auto-extraction (Form 630). Dormant until a key is set.
+    'id_extraction' => [
+        'provider' => env('ID_EXTRACTION_PROVIDER', 'anthropic'),
+        'anthropic' => [
+            'key' => env('ANTHROPIC_API_KEY'),
+            'model' => env('ID_EXTRACTION_MODEL', 'claude-sonnet-5'),
+        ],
+    ],
+
 ];

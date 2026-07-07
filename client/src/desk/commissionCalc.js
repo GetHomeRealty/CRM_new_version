@@ -128,24 +128,28 @@ export function computeCommission(input = {}, hstRate = HST_RATE) {
  */
 export function agentAdjustments(adjustments, members = [], term = null) {
   const a = adjustments || {};
-  const out = members.map(() => ({ agentAdjust: 0, advance: 0 }));
+  const out = members.map(() => ({ agentAdjust: 0, advance: 0, loan: 0 }));
   const idxByName = {};
   members.forEach((m, i) => { if (m && m.name) idxByName[m.name] = i; });
 
-  const addNamed = (rows, enabled, key) => {
+  const addNamed = (rows, enabled, key, trackLoan = false) => {
     if (!enabled) return;
     (rows || []).forEach((r) => {
       if (term != null && Number(r.term) !== Number(term)) return;
       const i = idxByName[r.agent];
-      if (i != null) out[i][key] += num(r.amount);
+      if (i != null) {
+        out[i][key] += num(r.amount);
+        if (trackLoan && r.is_loan) out[i].loan += num(r.amount);
+      }
     });
   };
-  addNamed(a.adjustment_rows, a.agent_adjust === 'Yes', 'agentAdjust');
+  addNamed(a.adjustment_rows, a.agent_adjust === 'Yes', 'agentAdjust', true);
   addNamed(a.advance_rows, a.advance_payment === 'Yes', 'advance');
 
   return out.map((d) => ({
     agentAdjust: ROUND(d.agentAdjust),
     advance: ROUND(d.advance),
+    loan: ROUND(d.loan),
     total: ROUND(d.agentAdjust + d.advance),
   }));
 }

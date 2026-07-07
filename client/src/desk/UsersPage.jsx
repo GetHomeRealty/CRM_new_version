@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { getUsers, getUsersCatalog, createUser, updateUser, deleteUser } from '../lib/api';
+import { getUsers, getUsersCatalog, createUser, updateUser, deleteUser, getUserDealHistory, getAgentLoans } from '../lib/api';
 import { roleLabel, formatCurrency } from './format';
 import { useToast } from './toast';
 import { useAuth } from '../context/AuthContext';
@@ -96,11 +96,29 @@ function UserModal({ catalog, existing, onClose, onSaved }) {
     experience: (p.experience && p.experience !== 'N/A') ? p.experience : '', prev_brokerage: p.prev_brokerage || '',
     commission_structure: p.commission_structure || '', agent_comm_pct: p.agent_comm_pct ?? 0, brok_comm_pct: p.brok_comm_pct ?? 0,
     lease_comm_pct: p.lease_comm_pct ?? 95, completed_deals: p.completed_deals ?? 0,
+    upgrade_agent_pct: p.upgrade_agent_pct ?? '', upgrade_brok_pct: p.upgrade_brok_pct ?? '',
     commission_history: p.commission_history || [],
     has_loan: p.has_loan || 'No', loan_entries: p.loan_entries || [], address: p.address || '',
   }));
   const [perms, setPerms] = useState(() => existing?.permissions || role_defaults[existing?.role || 'agent']);
   const [saving, setSaving] = useState(false);
+  // Previous Commission History is derived: the agent's paid deals (under the previous split).
+  const [dealHistory, setDealHistory] = useState([]);
+  useEffect(() => {
+    if (existing?.id) getUserDealHistory(existing.id).then(setDealHistory).catch(() => setDealHistory([]));
+  }, [existing?.id]);
+
+  // Amount of this agent's loan already repaid via loan-repayment adjustments on
+  // their deals (from the backend), so "Balance Loan Amount" = actual − repaid.
+  const [loanRepaid, setLoanRepaid] = useState(0);
+  const [loanRepayments, setLoanRepayments] = useState([]);
+  useEffect(() => {
+    if (!existing?.name) { setLoanRepaid(0); setLoanRepayments([]); return; }
+    getAgentLoans().then((m) => {
+      setLoanRepaid(m[existing.name]?.loan_repaid || 0);
+      setLoanRepayments(m[existing.name]?.repayments || []);
+    }).catch(() => { setLoanRepaid(0); setLoanRepayments([]); });
+  }, [existing?.name]);
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
   const onRole = (r) => { set('role', r); setPerms({ ...role_defaults[r] }); };
@@ -123,6 +141,10 @@ function UserModal({ catalog, existing, onClose, onSaved }) {
   const setLoan = (i, k, v) => set('loan_entries', form.loan_entries.map((e, idx) => idx === i ? { ...e, [k]: v } : e));
   const rmLoan = (i) => set('loan_entries', form.loan_entries.filter((_, idx) => idx !== i));
   const loanTotal = form.loan_entries.reduce((s, e) => s + (parseFloat(e.amount) || 0), 0);
+  const loanBalance = Math.max(0, loanTotal - loanRepaid);
+  // Already-saved loan entries are locked (amount/date/remarks); only newly added rows are editable.
+  const savedLoanCount = (p.loan_entries || []).length;
+  const lockedLoan = { background: '#f3f4f6', cursor: 'not-allowed' };
 
   // Previous Commission History entries (brokerage + agent/brokerage split + remarks)
   const addHist = () => set('commission_history', [...form.commission_history, { brokerage: '', agent_pct: '', brok_pct: '', remarks: '' }]);
@@ -162,6 +184,7 @@ function UserModal({ catalog, existing, onClose, onSaved }) {
         experience: form.experience, prev_brokerage: form.experience === 'Experienced' ? form.prev_brokerage : '',
         commission_structure: form.commission_structure, agent_comm_pct: form.agent_comm_pct, brok_comm_pct: form.brok_comm_pct,
         lease_comm_pct: form.lease_comm_pct, completed_deals: form.completed_deals,
+        upgrade_agent_pct: form.upgrade_agent_pct, upgrade_brok_pct: form.upgrade_brok_pct,
         commission_history: form.commission_history,
         has_loan: form.has_loan, loan_amount: loanTotal, loan_entries: form.loan_entries, address: form.address,
       },
@@ -223,24 +246,35 @@ function UserModal({ catalog, existing, onClose, onSaved }) {
               <div className="field"><label>Previous Brokerage Name <span className="req">*</span></label>
                 <input value={form.prev_brokerage} onChange={(e) => set('prev_brokerage', e.target.value)} placeholder="Where did they work before?" /></div>
             )}
+            <div className="field"><label>Lease (Residential / Listing / Commercial) % <span className="req">*</span></label><input type="number" min="0" max="100" value={form.lease_comm_pct} onChange={(e) => set('lease_comm_pct', e.target.value)} /><span className="help">Commission % for lease/listing transactions.</span></div>
+          </div>
+          <div className="g3">
             <div className="field"><label>Commission Structure (Split %) <span className="req">*</span></label>
               <select value={form.commission_structure} onChange={(e) => onCommStructure(e.target.value)}>
                 <option value="">Select commission structure</option>
                 {COMM_PRESETS.map((c) => <option key={c} value={c}>{c}</option>)}
                 <option value="custom">Add custom split…</option>
               </select></div>
-          </div>
-          <div className="g3">
             <div className="field"><label>Agent % <span className="req">*</span></label><input type="number" min="0" max="100" value={form.agent_comm_pct} onChange={(e) => setAgentSplit(e.target.value)} /><span className="help">Agent + Brokerage = 100.</span></div>
             <div className="field"><label>Brokerage %</label><input value={form.brok_comm_pct} readOnly style={{ background: '#f9fafb' }} /></div>
-            <div className="field"><label>Lease (Residential / Listing / Commercial) % <span className="req">*</span></label><input type="number" min="0" max="100" value={form.lease_comm_pct} onChange={(e) => set('lease_comm_pct', e.target.value)} /><span className="help">Commission % for lease/listing transactions.</span></div>
           </div>
-          <div className="field" style={{ maxWidth: 240 }}><label>Existing Split Deals Count</label><input type="number" min="0" value={form.completed_deals} onChange={(e) => set('completed_deals', e.target.value)} /></div>
+          <div className="g3">
+            <div className="field" style={{ marginBottom: 0 }}><label>Existing Split Deals Count</label>
+              <input type="number" min="0" value={form.completed_deals} onChange={(e) => set('completed_deals', e.target.value)} />
+              <span className="help">After this many deals close with the agent as primary, the split below is applied.</span></div>
+            <div className="field" style={{ marginBottom: 0 }}><label>Agent % (new split)</label>
+              <input type="number" min="0" max="100" value={form.upgrade_agent_pct} onChange={(e) => { const v = e.target.value; setForm((f) => ({ ...f, upgrade_agent_pct: v, upgrade_brok_pct: v === '' ? '' : Math.max(0, 100 - (parseFloat(v) || 0)) })); }} /></div>
+            <div className="field" style={{ marginBottom: 0 }}><label>Brokerage % (new split)</label>
+              <input value={form.upgrade_brok_pct} readOnly style={{ background: '#f9fafb' }} /></div>
+          </div>
+          <div className="field"><label>Address</label><textarea rows={2} value={form.address} onChange={(e) => set('address', e.target.value)} /></div>
 
           {/* Loan */}
+          <div className="modal-sub">Loan</div>
           <div className="g2">
-            <div className="field"><label>Loan</label>
-              <select value={form.has_loan} onChange={(e) => set('has_loan', e.target.value)}><option>No</option><option>Yes</option></select></div>
+            <div className="field" style={{ marginBottom: 0 }}><label>Loan</label>
+              <select value={form.has_loan} onChange={(e) => set('has_loan', e.target.value)} disabled={loanBalance > 0} style={loanBalance > 0 ? lockedLoan : undefined} title={loanBalance > 0 ? "Can't be turned off while a loan balance is outstanding." : undefined}><option>No</option><option>Yes</option></select>
+              {loanBalance > 0 && <span className="help">🔒 Locked — an outstanding balance of {formatCurrency(loanBalance)} is yet to be adjusted.</span>}</div>
           </div>
           {form.has_loan === 'Yes' && (
             <div className="card" style={{ background: '#f9fafb' }}>
@@ -250,36 +284,70 @@ function UserModal({ catalog, existing, onClose, onSaved }) {
               </div>
               <div className="g2">
                 <div className="field"><label>Actual Loan Amount (Total)</label><input value={formatCurrency(loanTotal)} readOnly style={{ background: '#fff' }} /></div>
-                <div className="field"><label>Balance Loan Amount (Yet to Adjust)</label><input value={formatCurrency(loanTotal)} readOnly style={{ background: '#fff' }} /><span className="help">Actual Loan Amount − total adjustments from this agent's deals.</span></div>
+                <div className="field"><label>Balance Loan Amount (Yet to Adjust)</label><input value={formatCurrency(loanBalance)} readOnly style={{ background: '#fff' }} /><span className="help">Actual Loan Amount − loan repayments recorded on this agent's deals{loanRepaid > 0 ? ` (${formatCurrency(loanRepaid)} repaid)` : ''}.</span></div>
               </div>
               <div className="modal-sub" style={{ marginTop: 6 }}>Loan Entries</div>
               {form.loan_entries.map((e, i) => (
                 <div className="g3" key={i} style={{ alignItems: 'end', marginBottom: 6 }}>
-                  <div className="field" style={{ marginBottom: 0 }}><label>Amount</label><input value={e.amount} onChange={(ev) => setLoan(i, 'amount', ev.target.value)} placeholder="0.00" /></div>
-                  <div className="field" style={{ marginBottom: 0 }}><label>Date</label><input type="date" value={e.date} onChange={(ev) => setLoan(i, 'date', ev.target.value)} /></div>
-                  <div style={{ display: 'flex', gap: 6, alignItems: 'end' }}><div className="field" style={{ marginBottom: 0, flex: 1 }}><label>Remarks</label><input value={e.remarks} onChange={(ev) => setLoan(i, 'remarks', ev.target.value)} /></div><button className="row-rm" onClick={() => rmLoan(i)}>🗑️</button></div>
+                  {i < savedLoanCount ? (<>
+                    <div className="field" style={{ marginBottom: 0 }}><label>Amount</label><input value={e.amount} readOnly style={lockedLoan} title="A recorded loan entry can't be modified." /></div>
+                    <div className="field" style={{ marginBottom: 0 }}><label>Date</label><input type="date" value={e.date} readOnly style={lockedLoan} title="A recorded loan entry can't be modified." /></div>
+                    <div className="field" style={{ marginBottom: 0 }}><label>Remarks</label><input value={e.remarks} readOnly style={lockedLoan} title="A recorded loan entry can't be modified." /></div>
+                  </>) : (<>
+                    <div className="field" style={{ marginBottom: 0 }}><label>Amount</label><input value={e.amount} onChange={(ev) => setLoan(i, 'amount', ev.target.value)} placeholder="0.00" /></div>
+                    <div className="field" style={{ marginBottom: 0 }}><label>Date</label><input type="date" value={e.date} onChange={(ev) => setLoan(i, 'date', ev.target.value)} /></div>
+                    <div style={{ display: 'flex', gap: 6, alignItems: 'end' }}><div className="field" style={{ marginBottom: 0, flex: 1 }}><label>Remarks</label><input value={e.remarks} onChange={(ev) => setLoan(i, 'remarks', ev.target.value)} /></div><button className="row-rm" onClick={() => rmLoan(i)}>🗑️</button></div>
+                  </>)}
                 </div>
               ))}
               <button className="btn primary sm" onClick={addLoan}>+ Add Loan Entry</button>
+
+              {/* Loan repayments deducted from this agent's deal commissions. */}
+              <div className="modal-sub" style={{ marginTop: 12 }}>Loan Repayments</div>
+              {loanRepayments.length === 0
+                ? <div className="help" style={{ margin: 0 }}>No repayments yet. Amounts marked “Loan repayment” in a deal's Adjustment Details appear here.</div>
+                : (<>
+                  <div className="g3" style={{ marginBottom: 6, fontSize: 11, fontWeight: 700, color: 'var(--text-2)', textTransform: 'uppercase', letterSpacing: '.03em' }}>
+                    <div>Transaction</div><div>Closing Date</div><div style={{ textAlign: 'right' }}>Amount Deducted</div>
+                  </div>
+                  {loanRepayments.map((r, i) => (
+                    <div className="g3" key={i} style={{ alignItems: 'center', marginBottom: 6, fontSize: 12.5 }}>
+                      <div style={{ fontWeight: 600 }}>{r.property || `Trade #${r.trade_no}`}</div>
+                      <div style={{ color: 'var(--muted)' }}>{r.closing_date || '—'}</div>
+                      <div style={{ textAlign: 'right', fontWeight: 700, color: '#b45309' }}>{formatCurrency(r.amount)}</div>
+                    </div>
+                  ))}
+                  <div className="g3" style={{ alignItems: 'center', marginTop: 4, paddingTop: 6, borderTop: '1px solid var(--line)', fontSize: 12.5 }}>
+                    <div style={{ fontWeight: 700 }}>Total repaid</div><div />
+                    <div style={{ textAlign: 'right', fontWeight: 700, color: '#b45309' }}>{formatCurrency(loanRepaid)}</div>
+                  </div>
+                </>)}
             </div>
           )}
 
-          {/* Previous Commission History */}
+          {/* Previous Commission History — auto-derived: the agent's paid (Closed) deals
+              done as primary agent under the previous split (up to Existing Split Deals Count). */}
           <div className="modal-sub">Previous Commission History</div>
           <div className="card" style={{ background: '#f9fafb' }}>
-            {form.commission_history.length === 0 && <div className="help" style={{ marginBottom: 8 }}>No previous commission records. Add entries from earlier brokerages or split changes.</div>}
-            {form.commission_history.map((e, i) => (
-              <div className="g4" key={i} style={{ alignItems: 'end', marginBottom: 6 }}>
-                <div className="field" style={{ marginBottom: 0 }}><label>Brokerage</label><input value={e.brokerage} onChange={(ev) => setHist(i, 'brokerage', ev.target.value)} placeholder="Brokerage name" /></div>
-                <div className="field" style={{ marginBottom: 0 }}><label>Agent %</label><input type="number" min="0" max="100" value={e.agent_pct} onChange={(ev) => setHist(i, 'agent_pct', ev.target.value)} placeholder="0" /></div>
-                <div className="field" style={{ marginBottom: 0 }}><label>Brokerage %</label><input value={e.brok_pct} readOnly style={{ background: '#fff' }} /></div>
-                <div style={{ display: 'flex', gap: 6, alignItems: 'end' }}><div className="field" style={{ marginBottom: 0, flex: 1 }}><label>Remarks</label><input value={e.remarks} onChange={(ev) => setHist(i, 'remarks', ev.target.value)} placeholder="Period / notes" /></div><button className="row-rm" onClick={() => rmHist(i)}>🗑️</button></div>
-              </div>
-            ))}
-            <button className="btn primary sm" onClick={addHist}>+ Add Commission Record</button>
+            {dealHistory.length === 0
+              ? <div className="help" style={{ margin: 0 }}>No paid deals under the previous split yet. Closed deals where this agent is the primary agent appear here automatically.</div>
+              : (<>
+                <div className="g4" style={{ marginBottom: 6, fontSize: 11, fontWeight: 700, color: 'var(--text-2)', textTransform: 'uppercase', letterSpacing: '.03em' }}>
+                  <div>Brokerage</div><div>Agent %</div><div>Brokerage %</div><div>Deal</div>
+                </div>
+                {dealHistory.map((e, i) => (
+                  <div className="g4" key={i} style={{ alignItems: 'center', marginBottom: 6 }}>
+                    <div style={{ fontSize: 13 }}>{e.brokerage}</div>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: '#dc2626' }}>{e.agent_pct ?? '—'}{e.agent_pct != null ? '%' : ''}</div>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: '#dc2626' }}>{e.brok_pct ?? '—'}{e.brok_pct != null ? '%' : ''}</div>
+                    <div style={{ fontSize: 12.5 }}>
+                      <div style={{ fontWeight: 600 }}>{e.property || '—'}</div>
+                      {e.closing_date && <div style={{ color: 'var(--muted)', fontSize: 11 }}>{e.closing_date}</div>}
+                    </div>
+                  </div>
+                ))}
+              </>)}
           </div>
-
-          <div className="field"><label>Address</label><textarea rows={2} value={form.address} onChange={(e) => set('address', e.target.value)} /></div>
         </>)}
 
         <div className="modal-sub" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>

@@ -61,6 +61,14 @@ class TransactionResource extends JsonResource
             'lawyer_email' => $this->lawyer_email,
             'lawyer_phone' => $this->lawyer_phone,
             'lawyer_address' => $this->lawyer_address,
+            'buyer_lawyer_name' => $this->buyer_lawyer_name,
+            'buyer_lawyer_email' => $this->buyer_lawyer_email,
+            'buyer_lawyer_phone' => $this->buyer_lawyer_phone,
+            'buyer_lawyer_address' => $this->buyer_lawyer_address,
+            'seller_lawyer_name' => $this->seller_lawyer_name,
+            'seller_lawyer_email' => $this->seller_lawyer_email,
+            'seller_lawyer_phone' => $this->seller_lawyer_phone,
+            'seller_lawyer_address' => $this->seller_lawyer_address,
 
             // Tracking modules (freeform JSON)
             'admin_activities' => $this->admin_activities,
@@ -162,6 +170,7 @@ class TransactionResource extends JsonResource
                 'invoice_no' => $inv->invoice_no,
                 'status' => $inv->status,
                 'total' => (float) $inv->total,
+                'sent_at' => optional($inv->sent_at)->toIso8601String(),
             ])),
 
             // §12.4 — auto invoice fields for the Admin Activities block (read-only).

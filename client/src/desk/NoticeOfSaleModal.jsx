@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { formatCurrency, isListingFinancialType } from './format';
 import { getDocuments, getNoticeOfSale, saveNoticeOfSale, sendNoticeOfSale } from '../lib/api';
 import { printDoc } from './printDoc';
+import { elementToPdfBase64 } from './pdf';
 import { useToast } from './toast';
 
 const BRAND = '#c8102e';
@@ -42,16 +43,21 @@ export default function NoticeOfSaleModal({ open, onClose, txn }) {
 
   const clients = txn.clients || [];
   const team = (txn.team && txn.team.length) ? txn.team : (txn.agent ? [{ name: txn.agent, split: 100 }] : []);
-  // Commission in %/$: the Agent Commission total shown in Financial Information's
-  // "Agent Commission (<Value>)" header — listing nets to cash-to-pay; standard
-  // uses each agent's Agent total.
+  // Commission in %/$: the value shown beside "Agent (T4A)" in Financial Information
+  // (sum of each agent's T4A total), for all transaction types. `financial.agents`
+  // carries t4a for both the standard and listing variants (listing `members` omit it).
   const fin = txn.financial || {};
-  const agentCommissionTotal = (fin.members && fin.members.length)
-    ? fin.members.reduce((s, m) => s + (m.cash_to_pay || 0), 0)
-    : (fin.agents || []).reduce((s, a) => s + (a.agent?.total || 0), 0);
-  const commRate = agentCommissionTotal > 0
-    ? formatCurrency(agentCommissionTotal)
+  let t4aTotal = 0;
+  if (fin.terms?.length) fin.terms.forEach((t) => (t.agents || []).forEach((a) => { t4aTotal += a.t4a?.total || 0; }));
+  else if (fin.agents?.length) fin.agents.forEach((a) => { t4aTotal += a.t4a?.total || 0; });
+  else (fin.members || []).forEach((m) => { t4aTotal += m.t4a?.total ?? m.earned ?? 0; });
+  const commRate = t4aTotal > 0
+    ? formatCurrency(t4aTotal)
     : (txn.comm_type === 'Fixed' ? formatCurrency(txn.comm_value) : `${txn.comm_value || txn.comm_pct || 0}%`);
+  // Lawyer Information source: Buyer Lawyer for Buying deals, Seller Lawyer otherwise;
+  // fall back to the legacy (mirrored) lawyer_* fields.
+  const useBuyerLawyer = /buying/i.test(txn.type);
+  const lw = (field) => (useBuyerLawyer ? txn[`buyer_lawyer_${field}`] : txn[`seller_lawyer_${field}`]) || txn[`lawyer_${field}`] || '';
 
   // Signatories = the deal's primary agent + any split agents (the Team), who sign at the bottom.
   const signatories = team.map((m) => m.name).filter(Boolean);
@@ -124,7 +130,9 @@ export default function NoticeOfSaleModal({ open, onClose, txn }) {
     setSaving(true);
     try {
       await persist();
-      const res = await sendNoticeOfSale(txn.id, names);
+      const pdf = await buildDocBase64();
+      const extra = pdf ? { pdf, filename: `Notice of Sale ${txn.trade_no}.pdf` } : {};
+      const res = await sendNoticeOfSale(txn.id, names, extra);
       applyNotice(res);
       toast(names.length === 1 ? `Resent to ${names[0]}` : `Notice sent to ${names.length} salesperson(s)`, 'ok');
     } catch { toast('Could not send', 'bad'); }
@@ -133,9 +141,10 @@ export default function NoticeOfSaleModal({ open, onClose, txn }) {
 
   // Print: replace live inputs with styled text (so typed values + dd/mm/yyyy dates
   // survive serialization) and drop edit-only controls — keeping the original look.
-  const printNow = () => {
+  // Build a print-ready clone: live inputs → styled text, edit-only controls removed.
+  const buildPrintClone = () => {
     const root = ref.current;
-    if (!root) return;
+    if (!root) return null;
     root.querySelectorAll('input').forEach((el) => el.setAttribute('value', el.value));
     const clone = root.cloneNode(true);
     clone.querySelectorAll('[data-noprint]').forEach((el) => el.remove());
@@ -145,7 +154,23 @@ export default function NoticeOfSaleModal({ open, onClose, txn }) {
       div.textContent = el.getAttribute('type') === 'date' ? fmtDMY(el.getAttribute('value')) : (el.getAttribute('value') || ' ');
       el.replaceWith(div);
     });
-    printDoc(`Notice of Sale ${txn.trade_no}`, clone.innerHTML);
+    return clone;
+  };
+  const printNow = () => {
+    const clone = buildPrintClone();
+    if (clone) printDoc(`Notice of Sale ${txn.trade_no}`, clone.innerHTML);
+  };
+  // Render the notice to a PDF (base64) for attaching to the email — best-effort.
+  const buildDocBase64 = async () => {
+    const clone = buildPrintClone();
+    if (!clone) return null;
+    const holder = document.createElement('div');
+    holder.style.cssText = 'position:fixed;left:-10000px;top:0;width:760px;background:#ffffff;padding:16px;font-family:Inter,Arial,sans-serif;color:#0f172a;';
+    holder.appendChild(clone);
+    document.body.appendChild(holder);
+    try { return await elementToPdfBase64(holder); }
+    catch { return null; }
+    finally { holder.remove(); }
   };
 
   return (
@@ -202,9 +227,9 @@ export default function NoticeOfSaleModal({ open, onClose, txn }) {
             <div style={divider} />
             <div style={sectionTitle}>Lawyer Information</div>
             <div style={grid3}>
-              <Field label="Name" value={txn.lawyer_name} />
-              <Field label="Phone" value={txn.lawyer_phone} />
-              <Field label="Email" value={txn.lawyer_email} />
+              <Field label="Name" value={lw('name')} />
+              <Field label="Phone" value={lw('phone')} />
+              <Field label="Email" value={lw('email')} />
             </div>
 
             <div style={divider} />

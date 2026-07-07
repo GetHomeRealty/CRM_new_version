@@ -23,9 +23,14 @@ class TradeSheetController extends Controller
     {
         $data = $request->validate([
             'email' => ['required', 'email', 'max:255'],
+            'pdf' => ['nullable', 'string'],
+            'filename' => ['nullable', 'string', 'max:255'],
         ]);
 
         $resend = (bool) $transaction->trade_sheet_sent_at;
+        $attachments = ! empty($data['pdf'])
+            ? [['data' => $data['pdf'], 'name' => $data['filename'] ?? "Trade Record Sheet {$transaction->trade_no}.pdf", 'mime' => 'application/pdf']]
+            : [];
 
         try {
             $mailer->send('trade_sheet.send', [
@@ -33,7 +38,7 @@ class TradeSheetController extends Controller
                 'property_address' => $transaction->property,
                 'agent_name' => $transaction->agent,
                 'company_name' => CompanySetting::current()->name,
-            ], $data['email'], $transaction->agentEmails());
+            ], $data['email'], $transaction->agentEmails(), $attachments);
         } catch (\Throwable $e) {
             return response()->json(['ok' => false, 'message' => 'Send failed: '.$e->getMessage()], 422);
         }

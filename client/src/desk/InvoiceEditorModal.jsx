@@ -1,10 +1,13 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getInvoice, createInvoice, updateInvoice, recordInvoiceReminder, sendInvoice, createCustomer } from '../lib/api';
+import InvoiceDoc from './InvoiceDoc';
+import { reactToPdfBase64 } from './pdf';
 import { formatCurrency, parseNumber, typeLabel } from './format';
 import { useToast } from './toast';
 import InvoicePreviewModal from './InvoicePreviewModal';
 import MiniCalendar from './MiniCalendar';
+import SavedBadge from './SavedBadge';
 
 const BRAND = '#c8102e';
 const TERMS = ['Due on Receipt', 'Net 7', 'Net 15', 'Net 30', 'Custom'];
@@ -32,8 +35,12 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, customer
   const [form, setForm] = useState(null);
   const [saved, setSaved] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [savedOk, setSavedOk] = useState(false); // centered "Saved" badge
+  const [sending, setSending] = useState(false); // Send Email in progress
   const [preview, setPreview] = useState(false);
   const [menu, setMenu] = useState(''); // '', 'status', 'reminder'
+  const [edited, setEdited] = useState(false); // changed since the last send → shows "Resend"
+  const [hstLocked, setHstLocked] = useState(true); // HST % locked at default until unlocked
 
   useEffect(() => {
     if (!open) return;
@@ -49,6 +56,7 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, customer
         discount: 0, customer_notes: settings?.thank_you_note || '', terms_conditions: '', signature_path: '',
         commission_received_date: '', commission_received_via: '', auto_reminder: null,
         broker_name: settings?.broker_name || 'Sai Venkata Ramesh Gollu',
+        tax_rate: settings?.default_tax_rate ?? 13,
         line_items: [blankItem()],
       });
       setSaved(null);
@@ -57,17 +65,17 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, customer
 
   if (!open || !form) return null;
 
-  const set = (k, v) => setForm((f) => {
+  const set = (k, v) => { setEdited(true); setForm((f) => {
     const next = { ...f, [k]: v };
     if (k === 'terms' && v !== 'Custom') next.due_date = addDays(next.invoice_date, TERM_DAYS[v] ?? 0);
     if (k === 'invoice_date' && next.terms !== 'Custom') next.due_date = addDays(v, TERM_DAYS[next.terms] ?? 0);
     return next;
-  });
-  const setItem = (i, k, v) => setForm((f) => ({ ...f, line_items: f.line_items.map((it, idx) => idx === i ? { ...it, [k]: v } : it) }));
-  const addItem = () => setForm((f) => ({ ...f, line_items: [...f.line_items, blankItem()] }));
-  const rmItem = (i) => setForm((f) => ({ ...f, line_items: f.line_items.filter((_, idx) => idx !== i) }));
+  }); };
+  const setItem = (i, k, v) => { setEdited(true); setForm((f) => ({ ...f, line_items: f.line_items.map((it, idx) => idx === i ? { ...it, [k]: v } : it) })); };
+  const addItem = () => { setEdited(true); setForm((f) => ({ ...f, line_items: [...f.line_items, blankItem()] })); };
+  const rmItem = (i) => { setEdited(true); setForm((f) => ({ ...f, line_items: f.line_items.filter((_, idx) => idx !== i) })); };
   // Single "Amount (CAD)" column → store as rate with qty 1.
-  const setAmount = (i, v) => setForm((f) => ({ ...f, line_items: f.line_items.map((it, idx) => idx === i ? { ...it, rate: v, qty: 1 } : it) }));
+  const setAmount = (i, v) => { setEdited(true); setForm((f) => ({ ...f, line_items: f.line_items.map((it, idx) => idx === i ? { ...it, rate: v, qty: 1 } : it) })); };
   const amountOf = (it) => (parseNumber(it.qty) === 1 ? it.rate : r2c(parseNumber(it.qty) * parseNumber(it.rate)));
 
   const pickCustomer = (id) => {
@@ -76,13 +84,13 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, customer
   };
 
   // Invoice email(s): first is the primary Invoice Email; user can add more.
-  const setEmail = (i, v) => setForm((f) => ({ ...f, emails: f.emails.map((e, idx) => idx === i ? v : e) }));
-  const addEmail = () => setForm((f) => ({ ...f, emails: [...f.emails, ''] }));
-  const rmEmail = (i) => setForm((f) => ({ ...f, emails: f.emails.filter((_, idx) => idx !== i) }));
+  const setEmail = (i, v) => { setEdited(true); setForm((f) => ({ ...f, emails: f.emails.map((e, idx) => idx === i ? v : e) })); };
+  const addEmail = () => { setEdited(true); setForm((f) => ({ ...f, emails: [...f.emails, ''] })); };
+  const rmEmail = (i) => { setEdited(true); setForm((f) => ({ ...f, emails: f.emails.filter((_, idx) => idx !== i) })); };
 
   const subTotal = form.line_items.reduce((s, it) => s + parseNumber(it.qty) * parseNumber(it.rate), 0);
   const taxable = form.line_items.reduce((s, it) => s + (it.is_taxable ? parseNumber(it.qty) * parseNumber(it.rate) : 0), 0);
-  const tax = Math.round(taxable * taxRate) / 100;
+  const tax = Math.round(taxable * parseNumber(form.tax_rate)) / 100;
   const discount = parseNumber(form.discount);
   const displaySubTotal = Math.round((subTotal + tax) * 100) / 100; // image "Sub Total" = items + HST
   const grandTotal = Math.round((displaySubTotal - discount) * 100) / 100;
@@ -109,12 +117,17 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, customer
         ? await updateInvoice(invoiceId || saved.id, payload)
         : await createInvoice(payload);
       setForm(toForm(d)); setSaved(d);
-      toast('Saved', 'ok');
       onSaved?.(d);
       return d;
     } catch (e) {
       toast(e.response?.data?.message || 'Could not save invoice', 'bad');
     } finally { setSaving(false); }
+  };
+
+  // Explicit Save button → show the centered "Saved" badge like the other modals.
+  const saveClick = async () => {
+    const d = await save();
+    if (d) { setSavedOk(true); setTimeout(() => setSavedOk(false), 1600); }
   };
 
   const onStatus = async (v) => {
@@ -144,17 +157,30 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, customer
     const tid = saved?.transaction_id || form.transaction_id;
     if (tid) navigate(`/app/transactions/${tid}`); else onClose();
   };
-  const sendMail = async () => {
-    setMenu('');
-    const d = saved || (await save());
-    if (!d?.id) return;
+  // Render the invoice document to a PDF (base64) so it can be attached to the email.
+  // Reuse the already-loaded invoice detail when we have it to skip a redundant fetch.
+  const buildInvoicePdf = async (id, known = null) => {
     try {
+      const full = known && known.id === id ? known : await getInvoice(id);
+      const pdf = await reactToPdfBase64(<InvoiceDoc invoice={full} />);
+      return { pdf, filename: `${full.invoice_no || 'invoice'}.pdf` };
+    } catch { return {}; } // attachment is best-effort — never block the send
+  };
+  const sendMail = async () => {
+    if (sending) return;
+    setMenu('');
+    setSending(true);
+    try {
+      const d = saved || (await save());
+      if (!d?.id) return;
       const wasSent = !!(saved?.sent_at || form.sent_at);
-      const upd = await sendInvoice(d.id);
-      setSaved(upd); setForm(toForm(upd));
+      const payload = await buildInvoicePdf(d.id, d); // reuse detail — no extra round-trip
+      const upd = await sendInvoice(d.id, payload);
+      setSaved(upd); setForm(toForm(upd)); setEdited(false);
       onSaved?.(upd);
-      toast(wasSent ? 'Invoice resent to the customer.' : 'Invoice sent to the customer.', 'ok');
+      toast(wasSent ? 'Invoice resent (PDF attached) to the customer.' : 'Invoice sent (PDF attached) to the customer.', 'ok');
     } catch (e) { toast(e.response?.data?.message || 'Could not send invoice', 'bad'); }
+    finally { setSending(false); }
   };
   // §12.3 — record a reminder (history of count + dates); email delivery itself is wired in the Email phase.
   const sendReminder = async () => {
@@ -162,10 +188,11 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, customer
     if (form.status === 'Paid' || form.status === 'Void') { toast(`Invoice is ${form.status} — no reminders needed`, 'info'); return; }
     if (!saved?.id) { toast('Save the invoice first', 'info'); return; }
     try {
-      const d = await recordInvoiceReminder(saved.id);
+      const payload = await buildInvoicePdf(saved.id);
+      const d = await recordInvoiceReminder(saved.id, payload);
       setSaved(d); setForm(toForm(d));
-      toast(`Reminder recorded (${(d.reminders || []).length} total)`, 'ok'); onSaved?.(d);
-    } catch { toast('Could not record reminder', 'bad'); }
+      toast(`Reminder sent — ${(d.reminders || []).length} total`, 'ok'); onSaved?.(d);
+    } catch { toast('Could not send reminder', 'bad'); }
   };
   const setAuto = async (mode) => {
     setMenu('');
@@ -203,11 +230,22 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, customer
 
           <div style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--muted)', letterSpacing: '.05em', margin: '10px 0 2px 4px' }}>ACTIONS</div>
 
-          {/* 1. Send / Resend Email */}
-          <button style={{ ...sideBtn, justifyContent: 'center', background: BRAND, color: '#fff', fontWeight: 700, margin: '2px 0' }} onClick={sendMail}>✉ {(saved?.sent_at || form.sent_at) ? 'Resend Email' : 'Send Email'}</button>
+          {/* 1. Send → Sent → (on edit) Resend → (on resend) Sent */}
+          {(() => {
+            const isSent = !!(saved?.sent_at || form.sent_at);
+            const sentIdle = isSent && !edited; // sent with no changes since
+            const label = sending ? '✉ Sending…' : (!isSent ? '✉ Send Email' : (edited ? '✉ Resend Email' : '✓ Sent'));
+            return (
+              <button
+                style={{ ...sideBtn, justifyContent: 'center', background: sentIdle ? '#16a34a' : BRAND, color: '#fff', fontWeight: 700, margin: '2px 0', cursor: (sentIdle || sending) ? 'default' : 'pointer', opacity: (sentIdle || sending) ? 0.8 : 1 }}
+                disabled={sentIdle || sending}
+                onClick={sendMail}
+              >{label}</button>
+            );
+          })()}
 
           {/* 2. Save Invoice */}
-          <button style={sideBtn} onClick={() => save()} disabled={saving} onMouseEnter={(e) => e.currentTarget.style.background = '#f3f4f6'} onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}>💾 {saving ? 'Saving…' : 'Save Invoice'}</button>
+          <button style={sideBtn} onClick={saveClick} disabled={saving} onMouseEnter={(e) => e.currentTarget.style.background = '#f3f4f6'} onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}>💾 {saving ? 'Saving…' : 'Save Invoice'}</button>
 
           {/* 3. Invoice Status */}
           <div style={{ position: 'relative' }}>
@@ -277,7 +315,7 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, customer
                   {form.auto_reminder.dates.map((d) => <span key={d} className="pill info" style={{ fontSize: 10 }}>{d} <button className="row-rm" style={{ marginLeft: 2 }} onClick={() => rmCustomDate(d)}>×</button></span>)}
                 </div>
               )}
-              <button className="btn primary sm" style={{ marginTop: 8, width: '100%' }} onClick={() => save()} disabled={saving}>Save dates</button>
+              <button className="btn primary sm" style={{ marginTop: 8, width: '100%' }} onClick={saveClick} disabled={saving}>Save dates</button>
             </div>
           )}
 
@@ -323,16 +361,7 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, customer
           </div>
 
           {/* CUSTOMER */}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', ...sectionLbl }}>
-            <span>CUSTOMER:</span>
-            <button className="btn ghost sm" onClick={saveCustomer}>💾 Save as customer</button>
-          </div>
-          {(customers || []).length > 0 && (
-            <select value={form.customer_id || ''} onChange={(e) => pickCustomer(e.target.value)} style={docInput({ width: '100%', marginBottom: 8 })}>
-              <option value="">— New / one-off —</option>
-              {customers.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
-          )}
+          <div style={{ ...sectionLbl }}><span>CUSTOMER:</span></div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 460 }}>
             <input value={form.customer_name} onChange={(e) => set('customer_name', e.target.value)} placeholder="Listing Brokerage Name" style={docInput({})} />
             <input value={form.customer_address} onChange={(e) => set('customer_address', e.target.value)} placeholder="Address" style={docInput({})} />
@@ -376,7 +405,15 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, customer
                 </tr>
               ))}
               <tr>
-                <td style={{ border: '1px solid #e6e8ef', padding: '8px 12px', fontWeight: 700 }}>HST({taxRate})</td>
+                <td style={{ border: '1px solid #e6e8ef', padding: '8px 12px', fontWeight: 700 }}>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                    HST
+                    <input value={form.tax_rate} readOnly={hstLocked} onChange={(e) => set('tax_rate', e.target.value)}
+                      style={{ width: 52, textAlign: 'right', padding: '3px 6px', border: '1px solid #e6e8ef', borderRadius: 6, background: hstLocked ? '#f3f4f6' : '#fff', cursor: hstLocked ? 'not-allowed' : 'text' }} />
+                    <span>%</span>
+                    <button type="button" className="row-rm" title={hstLocked ? 'Unlock to edit HST %' : 'Lock HST % at default'} style={{ color: BRAND }} onClick={() => setHstLocked((v) => !v)}>{hstLocked ? '🔒' : '🔓'}</button>
+                  </span>
+                </td>
                 <td style={{ border: '1px solid #e6e8ef', padding: '8px 12px' }}>{formatCurrency(tax)}</td>
                 <td style={{ border: '1px solid #e6e8ef' }}></td>
               </tr>
@@ -441,6 +478,7 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, customer
       </div>
 
       {preview && saved && <InvoicePreviewModal open onClose={() => setPreview(false)} invoice={saved} />}
+      <SavedBadge show={savedOk} />
     </div>
   );
 }
@@ -460,6 +498,7 @@ function toForm(d) {
     discount: d.discount ?? 0, customer_notes: d.customer_notes || '', terms_conditions: d.terms_conditions || '', signature_path: d.signature_path || '',
     commission_received_date: d.commission_received_date || '', commission_received_via: d.commission_received_via || '', auto_reminder: d.auto_reminder || null,
     broker_name: d.broker_name || 'Sai Venkata Ramesh Gollu',
+    tax_rate: d.tax_rate ?? 13,
     line_items: (d.line_items && d.line_items.length) ? d.line_items.map((it) => ({ description: it.description, qty: it.qty, rate: it.rate, is_taxable: it.is_taxable })) : [blankItem()],
   };
 }

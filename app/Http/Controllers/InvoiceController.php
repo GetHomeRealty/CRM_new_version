@@ -60,7 +60,7 @@ class InvoiceController extends Controller
                 'created_by' => $userId,
             ]);
             $this->syncLines($inv, $data['line_items'] ?? []);
-            $this->calc->recalculate($inv, (float) $settings->default_tax_rate);
+            $this->calc->recalculate($inv, (float) ($inv->tax_rate ?? $settings->default_tax_rate));
 
             return $inv;
         });
@@ -81,7 +81,7 @@ class InvoiceController extends Controller
             if (array_key_exists('line_items', $data)) {
                 $this->syncLines($invoice, $data['line_items']);
             }
-            $this->calc->recalculate($invoice, (float) $settings->default_tax_rate);
+            $this->calc->recalculate($invoice, (float) ($invoice->tax_rate ?? $settings->default_tax_rate));
         });
 
         $no = $invoice->invoice_no;
@@ -112,7 +112,7 @@ class InvoiceController extends Controller
         ]);
 
         $invoice->payments()->create($data);
-        $this->calc->recalculate($invoice, (float) CompanySetting::current()->default_tax_rate);
+        $this->calc->recalculate($invoice, (float) ($invoice->tax_rate ?? CompanySetting::current()->default_tax_rate));
 
         $this->auditInvoice($invoice, [
             'field' => "Invoice {$invoice->invoice_no} — Payment", 'action' => 'Payment recorded',
@@ -155,7 +155,7 @@ class InvoiceController extends Controller
     }
 
     /** Mark the invoice as Sent (stamps sent_at) and email it via the templated mailer. */
-    public function send(Invoice $invoice)
+    public function send(Request $request, Invoice $invoice)
     {
         if (! $invoice->sent_at) {
             $invoice->sent_at = now();
@@ -165,16 +165,27 @@ class InvoiceController extends Controller
             'field' => $invoice->invoice_no, 'action' => 'Invoice sent', 'new' => optional($invoice->sent_at)->toDateString(),
         ]);
 
-        $this->emailInvoice($invoice, 'invoice.send');
+        $this->emailInvoice($invoice, 'invoice.send', $this->pdfAttachment($request, "{$invoice->invoice_no}.pdf"));
 
         return response()->json($this->detail($invoice->fresh(['lineItems', 'payments', 'customer'])));
+    }
+
+    /** Build the optional PDF attachment (base64) sent from the client, or []. */
+    private function pdfAttachment(Request $request, string $default): array
+    {
+        $pdf = $request->input('pdf');
+        if (! $pdf) {
+            return [];
+        }
+
+        return [['data' => $pdf, 'name' => $request->input('filename') ?: $default, 'mime' => 'application/pdf']];
     }
 
     /**
      * Send a templated invoice email to the linked customer. Never lets a mail
      * failure (or missing SMTP config / recipient) break the invoice action.
      */
-    private function emailInvoice(Invoice $invoice, string $eventKey): void
+    private function emailInvoice(Invoice $invoice, string $eventKey, array $attachments = []): void
     {
         $customer = $invoice->customer?->email;
         $agents = $invoice->transaction?->agentEmails() ?? [];
@@ -195,7 +206,7 @@ class InvoiceController extends Controller
                 'customer_name' => $invoice->customer_name ?: $invoice->customer?->name,
                 'transaction_number' => $invoice->trade_number ?: optional($invoice->transaction)->trade_no,
                 'company_name' => CompanySetting::current()->name,
-            ], $to, $cc);
+            ], $to, $cc, $attachments);
         } catch (\Throwable $e) {
             report($e);
         }
@@ -218,7 +229,11 @@ class InvoiceController extends Controller
         ]);
 
         // Overdue invoices use the overdue notice; otherwise the reminder template.
-        $this->emailInvoice($invoice, $invoice->displayStatus() === 'Overdue' ? 'invoice.overdue' : 'invoice.reminder');
+        $this->emailInvoice(
+            $invoice,
+            $invoice->displayStatus() === 'Overdue' ? 'invoice.overdue' : 'invoice.reminder',
+            $this->pdfAttachment($request, "{$invoice->invoice_no}.pdf"),
+        );
 
         return response()->json($this->detail($invoice->fresh(['lineItems', 'payments', 'customer'])));
     }
@@ -226,7 +241,7 @@ class InvoiceController extends Controller
     public function deletePayment(Invoice $invoice, $paymentId)
     {
         $invoice->payments()->whereKey($paymentId)->delete();
-        $this->calc->recalculate($invoice, (float) CompanySetting::current()->default_tax_rate);
+        $this->calc->recalculate($invoice, (float) ($invoice->tax_rate ?? CompanySetting::current()->default_tax_rate));
 
         $this->auditInvoice($invoice, [
             'field' => "Invoice {$invoice->invoice_no} — Payment", 'action' => 'Payment removed',
@@ -259,6 +274,7 @@ class InvoiceController extends Controller
             'coop_salesperson' => ['nullable', 'string', 'max:255'],
             'subject' => ['nullable', 'string'],
             'discount' => ['nullable', 'numeric', 'min:0'],
+            'tax_rate' => ['nullable', 'numeric', 'min:0', 'max:100'],
             'customer_notes' => ['nullable', 'string'],
             'terms_conditions' => ['nullable', 'string'],
             'signature_path' => ['nullable', 'string'],
@@ -302,6 +318,7 @@ class InvoiceController extends Controller
             'customer_phone' => $data['customer_phone'] ?? null,
             'customer_email' => $data['customer_email'] ?? null,
             'discount' => $data['discount'] ?? 0,
+            'tax_rate' => (isset($data['tax_rate']) && $data['tax_rate'] !== '') ? (float) $data['tax_rate'] : null,
             'customer_notes' => $data['customer_notes'] ?? null,
             'terms_conditions' => $data['terms_conditions'] ?? null,
             'signature_path' => $data['signature_path'] ?? null,
@@ -394,6 +411,7 @@ class InvoiceController extends Controller
             'customer_postal_code' => $i->customer_postal_code,
             'customer_country' => $i->customer_country,
             'discount' => (float) $i->discount,
+            'tax_rate' => $i->tax_rate !== null ? (float) $i->tax_rate : null,
             'customer_notes' => $i->customer_notes,
             'terms_conditions' => $i->terms_conditions,
             'signature_path' => $i->signature_path,

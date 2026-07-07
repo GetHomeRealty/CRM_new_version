@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { updateTransaction } from '../lib/api';
 import { isListingType, isPreconType, formatCurrency } from './format';
 import { printDoc } from './printDoc';
@@ -37,6 +37,10 @@ export default function AgentFaqModal({ open, onClose, transactionId, txn, onSav
   const clientNA = !!fin.trust && Number(fin.trust.payable_to_client || 0) <= 0;
   const team = (txn.team && txn.team.length ? txn.team : (txn.agent ? [{ name: txn.agent }] : [])).filter((t) => t && t.name);
   const agentNames = team.map((t) => t.name);
+  // Agent Commission Total (sum of each agent's payable). When it's 0 with a single agent
+  // (no team split), there's nothing to pay → Ready to Process Agent Payment = N/A.
+  const agentCommTotal = (fin.agents || []).reduce((s, a) => s + Number(a.agent?.total ?? 0), 0);
+  const naReady = agentNames.length <= 1 && agentCommTotal <= 0.005;
   const termCount = precon ? (typeof termCountProp === 'number' ? termCountProp : (parseInt(txn.precon_term_count, 10) || 0)) : 0;
   const termsArr = Array.from({ length: termCount }, (_, i) => i + 1);
   const visibleAt = (k) => team.filter((m) => (m.scope || 'Entire') === 'Entire' || (m.terms || []).map(Number).includes(k)).map((m) => m.name).filter(Boolean);
@@ -72,7 +76,7 @@ export default function AgentFaqModal({ open, onClose, transactionId, txn, onSav
       final_validation: a.final_validation || '',
       final_validation_remarks: a.final_validation_remarks || '',
       ready_to_process: a.ready_to_process || '',
-      agent_commission_paid_status: a.agent_commission_paid_status || '',
+      agent_commission_paid_status: a.agent_commission_paid_status || 'No',
       client_payment_paid: a.client_payment_paid || '',
       per_agent_paid: perAgent,
       term_tracker: termTracker,
@@ -89,16 +93,39 @@ export default function AgentFaqModal({ open, onClose, transactionId, txn, onSav
   const [termFilter, setTermFilter] = useState('All');
   const [saving, setSaving] = useState(false);
   const [savedOk, setSavedOk] = useState(false); // §3.2 — "Saved" then auto-close
+
+  // Agent Commission Paid Status is auto-driven from Admin Activities: once every agent's
+  // payment is resolved there (Paid Type + Paid Date entered, or the agent is fully covered
+  // by advance/adjustments → N/A), this flips to Yes to reveal the agent Breakdown.
+  const adminAgents = txn.admin_activities?.agents || {};
+  const agentPaidResolved = (n) => {
+    const m = (fin.members || []).find((x) => x.name === n) || (fin.agents || []).find((x) => x.name === n);
+    const net = m ? Number(m.cash_to_pay ?? m.agent?.total ?? 0) : null;
+    if (net != null && net <= 0.005) return true; // fully covered → N/A
+    const pays = adminAgents[n]?.payments || [];
+    return pays.some((p) => (p.paid_type && p.paid_type !== 'N/A' && p.paid_date) || p.paid_status === 'Paid' || p.paid_status === 'N/A');
+  };
+  const adminAgentPaidYes = agentNames.length > 0 && agentNames.every(agentPaidResolved);
+  useEffect(() => {
+    const v = adminAgentPaidYes ? 'Yes' : 'No';
+    setForm((f) => (f.agent_commission_paid_status === v ? f : { ...f, agent_commission_paid_status: v }));
+  }, [adminAgentPaidYes]);
+  // Nothing to pay (Agent Commission total 0, single agent) → Ready to Process = N/A.
+  useEffect(() => {
+    if (naReady) setForm((f) => (f.ready_to_process === 'N/A' ? f : { ...f, ready_to_process: 'N/A' }));
+  }, [naReady]);
+
   if (!open) return null;
 
   const set = (k, v) => setForm((f) => {
     const next = { ...f, [k]: v };
     if (k === 'docs_cleared' && v === 'Yes' && f.final_validation !== 'Done') next.final_validation = 'Pending';
-    // Final Validation drives payment readiness: Done → Yes (may be changed to N/A
-    // manually later); Docs cleared = Yes but validation still Pending → No.
+    // Final Validation drives payment readiness: Done → Yes; any other value (Pending /
+    // Invalid / unset), even on reselection → No. N/A when there's nothing to pay.
     if (k === 'final_validation' || k === 'docs_cleared') {
-      if (next.final_validation === 'Done') next.ready_to_process = 'Yes';
-      else if (next.docs_cleared === 'Yes' && next.final_validation === 'Pending') next.ready_to_process = 'No';
+      if (naReady) next.ready_to_process = 'N/A';
+      else if (next.final_validation === 'Done') next.ready_to_process = 'Yes';
+      else next.ready_to_process = 'No';
     }
     return next;
   });
@@ -107,10 +134,11 @@ export default function AgentFaqModal({ open, onClose, transactionId, txn, onSav
     const cur = f.term_tracker[k] || {};
     const next = { ...cur, ...patch };
     if (patch.docs_cleared === 'Yes' && cur.final_validation !== 'Done') next.final_validation = 'Pending';
-    // Same payment-readiness rule as the single form, per precon term.
+    // Same payment-readiness rule as the single form, per precon term: Done → Yes; any
+    // other value (even on reselection) → No.
     if ('final_validation' in patch || 'docs_cleared' in patch) {
       if (next.final_validation === 'Done') next.ready_to_process = 'Yes';
-      else if (next.docs_cleared === 'Yes' && next.final_validation === 'Pending') next.ready_to_process = 'No';
+      else next.ready_to_process = 'No';
     }
     return { ...f, term_tracker: { ...f.term_tracker, [k]: next } };
   });
@@ -144,6 +172,7 @@ export default function AgentFaqModal({ open, onClose, transactionId, txn, onSav
   // Adjustment / referral sources (from Adjustment & Advance Payment).
   const adj = txn.adjustments || {};
   const adjRows = adj.agent_adjust === 'Yes' ? (adj.adjustment_rows || []) : [];
+  const advanceRows = adj.advance_payment === 'Yes' ? (adj.advance_rows || []) : [];
   const extReferralTotal = fin.ext_referral?.total != null
     ? Number(fin.ext_referral.total)
     : (adj.ext_referral === 'Yes' ? Number(adj.ext?.amount || 0) * 1.13 : 0);
@@ -157,6 +186,8 @@ export default function AgentFaqModal({ open, onClose, transactionId, txn, onSav
     const m = (fin.members || []).find((x) => x.name === a.name) || {};
     // Agent Adjustments — the Adjustment Details "Amount" (with sign) for this agent.
     const agentAdj = adjRows.filter((r) => r.agent === a.name).reduce((s, r) => s + Number(r.amount || 0), 0);
+    // Agent Advance — the Advance Payment Details "Amount" for this agent (a deduction).
+    const agentAdvance = advanceRows.filter((r) => r.agent === a.name).reduce((s, r) => s + Number(r.amount || 0), 0);
     const brokerage = Number(a.brokerage?.total ?? m.brokerage_from_member ?? 0);
     // Net payable to the agent (after Agent Adjust / Advance deductions).
     const finalTotal = Number(m.cash_to_pay ?? a.agent?.total ?? 0);
@@ -177,6 +208,7 @@ export default function AgentFaqModal({ open, onClose, transactionId, txn, onSav
         ${bBar('Adjustments & Commission Summary')}
         ${bRow('Team Split Adjustment', `${splitPct}% of ${money(dealComm.total)}`, true)}
         ${bRow('Agent Adjustments', signedAdj(agentAdj), true)}
+        ${bRow('Agent Advance', agentAdvance ? `-${money(agentAdvance)}` : money(0), true)}
         ${bRow('External Brokerage Referral', money(extReferralTotal), true)}
         ${bRow('Client Referral', money(clientReferralTotal), true)}
         ${bRow('Brokerage Commission', money(brokerage), true)}
@@ -373,8 +405,8 @@ export default function AgentFaqModal({ open, onClose, transactionId, txn, onSav
           </div>
           <div className="g2">
             <div className="field"><label style={lbl}>Agent Commission Paid Status</label>
-              <select value={na(form.agent_commission_paid_status)} onChange={(e) => set('agent_commission_paid_status', e.target.value)}><option value="">Select</option><option>Yes</option><option>No</option><option>N/A</option></select>
-              <span className="help">When set to Yes, the Breakdown Summary (Agent) card appears below.</span></div>
+              <input value={na(form.agent_commission_paid_status) || 'No'} readOnly style={{ background: '#f9fafb', fontWeight: 600 }} />
+              <span className="help">Auto — turns Yes once every agent's payment is resolved in Admin Activities (Paid Type + Paid Date, or fully covered by advance/adjustments → N/A). Then the Breakdown Summary (Agent) card appears below.</span></div>
           </div>
 
           {form.client_payment_paid === 'Yes' && (
@@ -463,8 +495,8 @@ export default function AgentFaqModal({ open, onClose, transactionId, txn, onSav
             <select value={form.ready_to_process} onChange={(e) => set('ready_to_process', e.target.value)}><option value="">Select</option><option>Yes</option><option>No</option><option>N/A</option></select>
             <span className="help">Auto-set to Yes when Final Validation = Done (change to N/A manually if needed); No when Docs cleared = Yes but validation still Pending.</span></div>
           <div className="field"><label style={lbl}>Agent Commission Paid Status</label>
-            <select value={na(form.agent_commission_paid_status)} onChange={(e) => set('agent_commission_paid_status', e.target.value)}><option value="">Select</option><option>Yes</option><option>No</option><option>N/A</option></select>
-            <span className="help">When set to Yes, the Breakdown Summary (Agent) card appears below.</span></div>
+            <input value={na(form.agent_commission_paid_status) || 'No'} readOnly style={{ background: '#f9fafb', fontWeight: 600 }} />
+            <span className="help">Auto — turns Yes once every agent's payment is resolved in Admin Activities (Paid Type + Paid Date, or fully covered by advance/adjustments → N/A). Then the Breakdown Summary (Agent) card appears below.</span></div>
           {listing && (
             <div className="field"><label style={lbl}>Client Payment Paid</label>
               <select value={na(form.client_payment_paid)} onChange={(e) => set('client_payment_paid', e.target.value)}><option value="">Select</option><option>Yes</option><option>No</option><option>N/A</option></select></div>

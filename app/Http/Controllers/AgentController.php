@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Transaction;
 use App\Models\User;
 
 class AgentController extends Controller
@@ -52,5 +53,63 @@ class AgentController extends Controller
         }
 
         return response()->json($map);
+    }
+
+    /**
+     * Per-agent loan position: the actual loan the agent carries (from their user
+     * profile) minus every adjustment across all their deals that was marked as a
+     * loan repayment. Powers the loan reminder in Financial Information and the
+     * "Balance Loan Amount" field in Users. Map of name => {loan_amount,
+     * loan_repaid, loan_balance, repayments[]}; only agents with an outstanding
+     * loan appear. `repayments` lists which deal each repayment came from.
+     */
+    public function loans()
+    {
+        $loans = [];
+        foreach (User::all(['name', 'profile']) as $u) {
+            $p = $u->profile ?? [];
+            $amount = (float) str_replace(',', '', (string) ($p['loan_amount'] ?? 0));
+            if (! empty($p['has_loan']) && $amount > 0) {
+                $loans[$u->name] = ['loan_amount' => $amount, 'loan_repaid' => 0.0, 'repayments' => []];
+            }
+        }
+
+        if ($loans) {
+            foreach (Transaction::whereNotNull('adjustments')->get(['id', 'trade_no', 'property', 'closing_date', 'adjustments']) as $t) {
+                foreach (($t->adjustments['adjustment_rows'] ?? []) as $r) {
+                    if (empty($r['is_loan'])) {
+                        continue;
+                    }
+                    $name = $r['agent'] ?? null;
+                    if ($name === null || ! isset($loans[$name])) {
+                        continue;
+                    }
+                    // Loan repayments are stored as a positive deduction (see the
+                    // SignedAmount "−" convention); only those reduce the balance.
+                    $amt = (float) str_replace(',', '', (string) ($r['amount'] ?? 0));
+                    if ($amt > 0) {
+                        $loans[$name]['loan_repaid'] += $amt;
+                        $loans[$name]['repayments'][] = [
+                            'trade_no' => $t->trade_no,
+                            'property' => $t->property,
+                            'closing_date' => optional($t->closing_date)->toDateString(),
+                            'amount' => round($amt, 2),
+                        ];
+                    }
+                }
+            }
+        }
+
+        $out = [];
+        foreach ($loans as $name => $v) {
+            $out[$name] = [
+                'loan_amount' => round($v['loan_amount'], 2),
+                'loan_repaid' => round($v['loan_repaid'], 2),
+                'loan_balance' => max(0, round($v['loan_amount'] - $v['loan_repaid'], 2)),
+                'repayments' => $v['repayments'],
+            ];
+        }
+
+        return response()->json($out);
     }
 }

@@ -357,6 +357,8 @@ class TransactionController extends Controller
                 'precon_listing_type', 'precon_term_count', 'commission_agent',
                 'precon_net_of_hst', 'precon_comm_pct', 'precon_comm_amt_manual', 'precon_details_of_terms',
                 'lawyer_name', 'lawyer_email', 'lawyer_phone', 'lawyer_address',
+                'buyer_lawyer_name', 'buyer_lawyer_email', 'buyer_lawyer_phone', 'buyer_lawyer_address',
+                'seller_lawyer_name', 'seller_lawyer_email', 'seller_lawyer_phone', 'seller_lawyer_address',
                 'admin_activities', 'activity_tracker', 'adjustments', 'commercial_lease',
                 'comm_status', 'comm_paid_status', 'valid_status',
                 'conditional_offer', 'inter_board_enabled',
@@ -393,6 +395,12 @@ class TransactionController extends Controller
 
                 if ($justSold && $transaction->mls_verified) {
                     $transaction->update(['mls_verified' => false]);
+                }
+
+                // Split upgrade: on this transaction newly Closing, bump the primary
+                // agent's default split once they've hit their configured deal threshold.
+                if (in_array('Closed', $newStatuses, true) && ! in_array('Closed', $oldStatuses, true)) {
+                    $this->applySplitUpgrade($transaction->agent);
                 }
 
                 // §5.1 — DFT (deal fell through): the workflow status dropdowns default
@@ -663,6 +671,47 @@ class TransactionController extends Controller
                 'closing_date' => $term['closing_date'] ?? null,
             ]);
         }
+    }
+
+    /**
+     * Once an agent has CLOSED the configured number of deals as the PRIMARY agent,
+     * apply the new commission split from their user profile — one-time. Only
+     * primary-agent deals count. Changes the profile default used for FUTURE
+     * transactions; existing records keep their stored per-transaction split.
+     */
+    private function applySplitUpgrade(?string $agentName): void
+    {
+        if (! $agentName) {
+            return;
+        }
+        $user = User::where('name', $agentName)->first();
+        if (! $user) {
+            return;
+        }
+        $profile = $user->profile ?? [];
+        if (! empty($profile['split_upgraded'])) {
+            return; // already upgraded
+        }
+        $threshold = (int) ($profile['completed_deals'] ?? 0);
+        $newAgent = $profile['upgrade_agent_pct'] ?? null;
+        if ($threshold <= 0 || $newAgent === null || $newAgent === '') {
+            return; // no upgrade configured
+        }
+
+        $closed = Transaction::where('agent', $agentName)
+            ->whereHas('statuses', fn ($q) => $q->where('status', 'Closed'))
+            ->count();
+        if ($closed < $threshold) {
+            return;
+        }
+
+        $newBrok = $profile['upgrade_brok_pct'] ?? null;
+        $profile['agent_comm_pct'] = (float) $newAgent;
+        $profile['brok_comm_pct'] = ($newBrok === null || $newBrok === '')
+            ? round(100 - (float) $newAgent, 2)
+            : (float) $newBrok;
+        $profile['split_upgraded'] = true;
+        $user->update(['profile' => $profile]);
     }
 
     private function syncTeam(Transaction $t, array $team): void

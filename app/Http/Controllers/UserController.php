@@ -130,6 +130,41 @@ class UserController extends Controller
         }
     }
 
+    /**
+     * The agent's paid (Closed) deals as PRIMARY agent, oldest first, limited to the
+     * "Existing Split Deals Count" — i.e. the deals done under the previous split.
+     * Each row carries the split that was used on that deal.
+     */
+    public function dealHistory(User $user)
+    {
+        $name = $user->name;
+        $threshold = (int) (($user->profile['completed_deals'] ?? 0));
+
+        $query = \App\Models\Transaction::where('agent', $name)
+            ->whereHas('statuses', fn ($s) => $s->where('status', 'Closed'))
+            ->with(['teamMembers' => fn ($tm) => $tm->where('name', $name)])
+            ->orderBy('closing_date')
+            ->orderBy('id');
+
+        $deals = ($threshold > 0 ? $query->limit($threshold)->get() : $query->get());
+
+        $profile = $user->profile ?? [];
+        return response()->json($deals->map(function ($t) use ($name, $profile) {
+            $m = $t->teamMembers->firstWhere('name', $name);
+            $agentPct = $m ? (float) $m->agent_pct : ($profile['agent_comm_pct'] ?? null);
+            $brokPct = $m ? (float) $m->brok_pct : ($profile['brok_comm_pct'] ?? null);
+
+            return [
+                'brokerage' => 'Get Home Realty',
+                'property' => $t->property,
+                'trade_no' => $t->trade_no,
+                'agent_pct' => $agentPct !== null ? (float) $agentPct : null,
+                'brok_pct' => $brokPct !== null ? (float) $brokPct : null,
+                'closing_date' => optional($t->closing_date)->toDateString(),
+            ];
+        })->values());
+    }
+
     private function payload(User $u): array
     {
         return [
