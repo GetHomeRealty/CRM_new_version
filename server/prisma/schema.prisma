@@ -1,0 +1,1682 @@
+// Transaction Desk — PostgreSQL schema (Prisma).
+//
+// Ported from the existing Laravel MySQL database (prisma/schema.mysql.prisma,
+// produced by `prisma db pull`). Porting rules applied consistently:
+//   • MySQL unsigned bigint/int (id/FK/counter) → Postgres Int (serial); the app's
+//     magnitudes fit in int4 and ids then serialize as plain JSON numbers, exactly
+//     like Laravel (Prisma BigInt → JS BigInt is not JSON-serializable).
+//   • text/mediumtext/longtext → Text.
+//   • JSON blob columns (Eloquent array/json casts: transactions.financial-related
+//     admin_activities/adjustments/activity_tracker, users.profile, documents.files,
+//     invoices.reminders/auto_reminder, …) are stored as Text and parsed/encoded in
+//     the service layer, preserving Laravel's exact behaviour.
+//   • timestamps → Timestamp(0); dates → Date; decimals unchanged.
+//
+// This is a faithful 1:1 port of every table (incl. Laravel infra tables like
+// cache/jobs/migrations, kept harmless for shape parity; the ETL copies domain
+// data only).
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model agents {
+  id         Int       @id @default(autoincrement())
+  name       String    @unique @db.VarChar(255)
+  email      String?   @db.VarChar(255)
+  phone      String?   @db.VarChar(255)
+  is_team    Boolean   @default(false)
+  active     Boolean   @default(true)
+  created_at DateTime? @db.Timestamp(0)
+  updated_at DateTime? @db.Timestamp(0)
+}
+
+model audit_logs {
+  id             Int           @id @default(autoincrement())
+  category       String?       @db.VarChar(255)
+  transaction_id Int?
+  who            String?       @db.VarChar(255)
+  user_id        Int?
+  section        String?       @db.VarChar(255)
+  field          String?       @db.VarChar(255)
+  old_value      String?       @db.Text
+  new_value      String?       @db.Text
+  action         String?       @db.VarChar(255)
+  source         String?       @db.VarChar(255)
+  handled        Boolean       @default(false)
+  details        String?       @db.Text
+  created_at     DateTime?     @db.Timestamp(0)
+  updated_at     DateTime?     @db.Timestamp(0)
+  transactions   transactions? @relation(fields: [transaction_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@index([category])
+  @@index([transaction_id])
+}
+
+model brokerage_agents {
+  id           Int        @id @default(autoincrement())
+  brokerage_id Int
+  name         String     @db.VarChar(255)
+  position     Int        @default(0)
+  created_at   DateTime?  @db.Timestamp(0)
+  updated_at   DateTime?  @db.Timestamp(0)
+  brokerages   brokerages @relation(fields: [brokerage_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@index([brokerage_id])
+}
+
+model brokerages {
+  id               Int                @id @default(autoincrement())
+  transaction_id   Int                @unique
+  name             String?            @db.VarChar(255)
+  address          String?            @db.VarChar(255)
+  email            String?            @db.VarChar(255)
+  invoice_email    String?            @db.VarChar(255)
+  agent_email      String?            @db.VarChar(255)
+  phone            String?            @db.VarChar(255)
+  created_at       DateTime?          @db.Timestamp(0)
+  updated_at       DateTime?          @db.Timestamp(0)
+  brokerage_agents brokerage_agents[]
+  transactions     transactions       @relation(fields: [transaction_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+}
+
+model cache {
+  key        String @id @db.VarChar(255)
+  value      String @db.Text
+  expiration Int
+
+  @@index([expiration])
+}
+
+model cache_locks {
+  key        String @id @db.VarChar(255)
+  owner      String @db.VarChar(255)
+  expiration Int
+
+  @@index([expiration])
+}
+
+model client_identifications {
+  id                   Int          @id @default(autoincrement())
+  transaction_id       Int
+  client_name          String       @db.VarChar(255)
+  full_legal_name      String?      @db.Text
+  address              String?      @db.Text
+  dob                  String?      @db.Text
+  occupation           String?      @db.Text
+  id_type              String?      @db.Text
+  id_number            String?      @db.Text
+  issuing_jurisdiction String?      @db.Text
+  country              String?      @db.Text
+  expiry_date          String?      @db.Text
+  source               String       @default("extracted") @db.VarChar(255)
+  verified             Boolean      @default(false)
+  extracted_at         DateTime?    @db.Timestamp(0)
+  created_at           DateTime?    @db.Timestamp(0)
+  updated_at           DateTime?    @db.Timestamp(0)
+  transactions         transactions @relation(fields: [transaction_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@unique([transaction_id, client_name])
+}
+
+model clients {
+  id             Int          @id @default(autoincrement())
+  transaction_id Int
+  name           String       @db.VarChar(255)
+  email          String?      @db.VarChar(255)
+  phone          String?      @db.VarChar(255)
+  position       Int          @default(0)
+  created_at     DateTime?    @db.Timestamp(0)
+  updated_at     DateTime?    @db.Timestamp(0)
+  transactions   transactions @relation(fields: [transaction_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@index([transaction_id])
+}
+
+model company_settings {
+  id               Int       @id @default(autoincrement())
+  feature_flags    String?   @db.Text
+  name             String    @default("GetHomeRealty INC") @db.VarChar(255)
+  address          String?   @db.VarChar(255)
+  phone            String?   @db.VarChar(255)
+  email            String?   @db.VarChar(255)
+  logo_path        String?   @db.VarChar(255)
+  hst_number       String?   @db.VarChar(255)
+  bank_beneficiary String?   @db.VarChar(255)
+  bank_name        String?   @db.VarChar(255)
+  transit_no       String?   @db.VarChar(255)
+  account_no       String?   @db.VarChar(255)
+  institution_no   String?   @db.VarChar(255)
+  currency         String    @default("CAD") @db.VarChar(8)
+  default_tax_rate Decimal   @default(13.00) @db.Decimal(6, 2)
+  invoice_prefix   String    @default("INV-") @db.VarChar(255)
+  next_invoice_no  Int       @default(601107)
+  default_terms    String    @default("Due on Receipt") @db.VarChar(255)
+  thank_you_note   String?   @db.Text
+  deposit_heading  String?   @db.Text
+  created_at       DateTime? @db.Timestamp(0)
+  updated_at       DateTime? @db.Timestamp(0)
+}
+
+model conditions {
+  id             Int          @id @default(autoincrement())
+  transaction_id Int
+  type           String       @default("Financing") @db.VarChar(255)
+  custom_name    String?      @db.VarChar(255)
+  deadline       DateTime?    @db.Date
+  status         String       @default("Pending") @db.VarChar(255)
+  position       Int          @default(0)
+  created_at     DateTime?    @db.Timestamp(0)
+  updated_at     DateTime?    @db.Timestamp(0)
+  transactions   transactions @relation(fields: [transaction_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@index([transaction_id])
+}
+
+model customers {
+  id          Int        @id @default(autoincrement())
+  name        String     @db.VarChar(255)
+  address     String?    @db.VarChar(255)
+  city        String?    @db.VarChar(255)
+  province    String?    @db.VarChar(255)
+  postal_code String?    @db.VarChar(255)
+  country     String     @default("Canada") @db.VarChar(255)
+  email       String?    @db.VarChar(255)
+  phone       String?    @db.VarChar(255)
+  created_at  DateTime?  @db.Timestamp(0)
+  updated_at  DateTime?  @db.Timestamp(0)
+  invoices    invoices[]
+}
+
+model documents {
+  id                   Int          @id @default(autoincrement())
+  transaction_id       Int
+  title                String       @db.VarChar(255)
+  mandatory            Boolean      @default(false)
+  is_condition         Boolean      @default(false)
+  manual               Boolean      @default(false)
+  condition_id         Int?
+  status               String       @default("Pending") @db.VarChar(255)
+  reminder             Boolean      @default(false)
+  agent_accepted       String?      @db.VarChar(255)
+  pending_delete       Boolean      @default(false)
+  deleted_by           String?      @db.VarChar(255)
+  validation           String       @default("Pending") @db.VarChar(255)
+  drive_uploaded       String?      @db.VarChar(255)
+  remarks              String?      @db.Text
+  file_name            String?      @db.VarChar(255)
+  file_path            String?      @db.VarChar(255)
+  files                String?      @db.Text
+  validation_file_name String?      @db.VarChar(255)
+  validation_file_path String?      @db.VarChar(255)
+  position             Int          @default(0)
+  created_at           DateTime?    @db.Timestamp(0)
+  updated_at           DateTime?    @db.Timestamp(0)
+  deleted_at           DateTime?    @db.Timestamp(0)
+  transactions         transactions @relation(fields: [transaction_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@index([transaction_id])
+}
+
+/**
+ * Marketing leads — the audience campaigns are sent to.
+ *
+ * Ported from the Next.js/MongoDB `Lead` model. The segmentation fields drive campaign
+ * audience filters; the property_* fields fill the personalisation tokens in a template.
+ * `unsubscribed` is the per-lead CASL opt-out (the global list lives in email_suppressions).
+ */
+model leads {
+  id                Int                   @id @default(autoincrement())
+  name              String                @db.VarChar(255)
+  email             String                @db.VarChar(255)
+  phone             String?               @db.VarChar(64)
+  /** cold | warm | hot | mild */
+  lead_status       String?               @db.VarChar(32)
+  /** Pre construction | resale | seller | buyer | tenant | lease | landlord */
+  lead_type         String?               @db.VarChar(48)
+  /** google ads | meta | refferal | linkedin | youtube */
+  lead_source       String?               @db.VarChar(48)
+  /** Investor | custom buyer | first home buyer | seasonal investor | commercial buyer */
+  client_type       String?               @db.VarChar(48)
+  /** active | inactive | not answering | not actively answering | always responding */
+  lead_response     String?               @db.VarChar(48)
+  /** converted | not-converted */
+  lead_conversion   String?               @db.VarChar(24)
+  /** JSON array of free-form tags. */
+  tags              String?               @db.Text
+  location          String?               @db.VarChar(255)
+  /** Free-text property the lead enquired about. */
+  property          String?               @db.VarChar(255)
+  notes             String?               @db.Text
+  // Demographics, used to segment campaigns and to time greeting emails.
+  gender            String?               @db.VarChar(24)
+  language          String?               @db.VarChar(64)
+  religion          String?               @db.VarChar(64)
+  age               Int?
+  date_of_birth     DateTime?             @db.Date
+  marriage_day      DateTime?             @db.Date
+  /** JSON: { budget:{min,max}, propertyType:[], bedrooms, bathrooms, squareFootage, yearBuilt, lotSize, parking, locations:[], features:[] } */
+  property_preferences String?            @db.Text
+  /** users.id of the agent this lead is assigned to. */
+  assigned_to       Int?
+  // ---- provenance ----
+  /** manual | import | facebook_meta */
+  source            String?               @db.VarChar(32)
+  /** Meta lead-ad identifiers, used to dedupe on re-sync. */
+  facebook_lead_id  String?               @unique @db.VarChar(64)
+  facebook_form_id  String?               @db.VarChar(64)
+  facebook_page_id  String?               @db.VarChar(64)
+  /** Free-text answers from a Meta lead form. */
+  message           String?               @db.Text
+  budget            String?               @db.VarChar(128)
+  timeline          String?               @db.VarChar(128)
+  property_type     String?               @db.VarChar(128)
+  /** JSON map of lead-form answers that don't map to a column. */
+  custom_fields     String?               @db.Text
+  // ---- Meta attribution (all nullable; blank for manually created leads) ----
+  first_name        String?               @db.VarChar(128)
+  last_name         String?               @db.VarChar(128)
+  /** Digits-only phone, used for duplicate detection across formats. */
+  phone_normalized  String?               @db.VarChar(32)
+  meta_page_name    String?               @db.VarChar(255)
+  meta_form_name    String?               @db.VarChar(255)
+  meta_campaign_id  String?               @db.VarChar(64)
+  meta_campaign_name String?              @db.VarChar(255)
+  meta_adset_id     String?               @db.VarChar(64)
+  meta_adset_name   String?               @db.VarChar(255)
+  meta_ad_id        String?               @db.VarChar(64)
+  meta_ad_name      String?               @db.VarChar(255)
+  /** When Meta recorded the submission, as distinct from when we imported it. */
+  meta_created_at   DateTime?             @db.Timestamp(0)
+  meta_imported_at  DateTime?             @db.Timestamp(0)
+  /** The untouched Graph payload, kept for audit and for re-mapping a form later. */
+  meta_raw          String?               @db.Text
+  // Personalisation tokens (PROPERTY_ADDRESS, PROPERTY_PRICE, BEDROOMS, …).
+  property_address  String?               @db.VarChar(255)
+  property_price    String?               @db.VarChar(64)
+  bedrooms          String?               @db.VarChar(16)
+  bathrooms         String?               @db.VarChar(16)
+  square_footage    String?               @db.VarChar(24)
+  key_features      String?               @db.Text
+  unsubscribed      Boolean               @default(false)
+  unsubscribed_at   DateTime?             @db.Timestamp(0)
+  owner_user_id     Int?
+  created_by        String?               @db.VarChar(255)
+  /** Who moved the lead to the Recently Deleted bin. */
+  deleted_by        String?               @db.VarChar(255)
+  created_at        DateTime?             @db.Timestamp(0)
+  updated_at        DateTime?             @db.Timestamp(0)
+  deleted_at        DateTime?             @db.Timestamp(0)
+  campaign_recipients campaign_recipients[]
+  lead_notes        lead_notes[]
+  lead_tasks        lead_tasks[]
+  lead_showings     lead_showings[]
+  lead_calls        lead_calls[]
+  lead_messages     lead_messages[]
+  lead_emails       lead_emails[]
+  inbound_emails    inbound_emails[]
+
+  @@index([email])
+  @@index([lead_status])
+  @@index([lead_source])
+  @@index([unsubscribed])
+  @@index([assigned_to])
+  @@index([deleted_at])
+  @@index([source])
+  @@index([phone_normalized])
+  @@index([meta_campaign_id])
+}
+
+/**
+ * A user's Google Calendar OAuth connection.
+ *
+ * One per user. Access and refresh tokens are stored AES-256-GCM encrypted (never returned to the
+ * browser). The refresh token is the durable credential — Google issues it once, on the first
+ * consent with access_type=offline — so it is preserved across re-syncs. `sync_token` powers
+ * incremental pulls; `calendar_id` is the calendar being synced ("primary" by default).
+ */
+model google_connections {
+  id                Int       @id @default(autoincrement())
+  user_id           Int       @unique
+  google_email      String?   @db.VarChar(320)
+  /** enc:v1:… ciphertext. */
+  access_token      String?   @db.Text
+  refresh_token     String?   @db.Text
+  token_expires_at  DateTime? @db.Timestamp(0)
+  scopes            String?   @db.Text
+  calendar_id       String    @default("primary") @db.VarChar(255)
+  /** Google's incremental sync token, so a pull only fetches what changed. */
+  sync_token        String?   @db.Text
+  last_sync         DateTime? @db.Timestamp(0)
+  /** Last connection/sync error, surfaced in Settings; null when healthy. */
+  connect_error     String?   @db.VarChar(500)
+  is_active         Boolean   @default(true)
+  created_at        DateTime? @db.Timestamp(0)
+  updated_at        DateTime? @db.Timestamp(0)
+
+  @@index([user_id])
+}
+
+/**
+ * A read-only Google Calendar subscription by its secret iCal (.ics) address — the no-OAuth way
+ * to connect. One per user. The URL is a private link, so it is a credential; it is fetched
+ * server-side (restricted to Google's calendar host) and its events are pulled into the CRM
+ * calendar. Read-only by nature: an iCal feed cannot receive pushes, so CRM events are not
+ * mirrored back through it.
+ */
+model ical_feeds {
+  id            Int       @id @default(autoincrement())
+  user_id       Int       @unique
+  /** The secret ICS URL (calendar.google.com/.../basic.ics). */
+  url           String    @db.Text
+  /** Calendar name from the feed (X-WR-CALNAME), for display. */
+  name          String?   @db.VarChar(255)
+  last_sync     DateTime? @db.Timestamp(0)
+  sync_error    String?   @db.VarChar(500)
+  created_at    DateTime? @db.Timestamp(0)
+  updated_at    DateTime? @db.Timestamp(0)
+
+  @@index([user_id])
+}
+
+// ---------------------------------------------------------------------------
+// CRM Settings — migrated from the CRM app and kept deliberately separate from
+// Transaction Desk's own settings (`company_settings`, `mail_accounts`,
+// `email_templates`), which are untouched. Duplication between the two is
+// expected at this stage and will be reconciled later.
+// ---------------------------------------------------------------------------
+
+/**
+ * Per-user (and global) CRM settings. `user_id = null` is the global/admin scope, matching the
+ * CRM's `settings` collection where an admin edits the shared document and each user edits
+ * their own. JSON columns mirror the CRM's nested shape exactly so no field is lost.
+ */
+model crm_settings {
+  id             Int       @id @default(autoincrement())
+  /** null = the global scope an administrator edits. */
+  user_id        Int?      @unique
+  /** { emailAlerts, smsAlerts, leadNotifications, showingReminders, marketUpdates, documentAlerts } */
+  notifications  String?   @db.Text
+  /** { signature, replyTemplate, autoResponder:{enabled,message}, forwardingAddress } */
+  email_settings String?   @db.Text
+  /** { language, timeZone, currency, dateFormat, theme } */
+  preferences    String?   @db.Text
+  /** { birthdayWishes:{enabled,daysBefore,template}, weddingGreetings, seasonalWishes, promotionalOffers, referralCodes } */
+  templates      String?   @db.Text
+  updated_by     String?   @db.VarChar(255)
+  created_at     DateTime? @db.Timestamp(0)
+  updated_at     DateTime? @db.Timestamp(0)
+}
+
+/** The CRM's global `emailSettings` document: SMTP details, the auto-send flag and trigger toggles. */
+model crm_email_settings {
+  id                Int       @id @default(autoincrement())
+  smtp_host         String?   @db.VarChar(255)
+  smtp_port         String?   @db.VarChar(16)
+  smtp_user         String?   @db.VarChar(255)
+  admin_email       String?   @db.VarChar(255)
+  auto_send_enabled Boolean   @default(true)
+  /** { birthday, anniversary, wedding, seasonal, promotional, referral, custom } */
+  template_toggles  String?   @db.Text
+  updated_by        String?   @db.VarChar(255)
+  created_at        DateTime? @db.Timestamp(0)
+  updated_at        DateTime? @db.Timestamp(0)
+}
+
+/** Referral codes generated from CRM Settings. */
+model crm_referral_codes {
+  id          Int       @id @default(autoincrement())
+  code        String    @unique @db.VarChar(32)
+  discount    Int       @default(10)
+  valid_until DateTime  @db.Timestamp(0)
+  usage_count Int       @default(0)
+  max_usage   Int       @default(5)
+  created_by  String?   @db.VarChar(255)
+  created_at  DateTime? @db.Timestamp(0)
+}
+
+/** Every advanced/bulk CRM email attempt, so a send can be audited after the fact. */
+model crm_email_log {
+  id         Int       @id @default(autoincrement())
+  /** wedding | seasonal | promotional | referral | custom */
+  kind       String    @db.VarChar(32)
+  lead_name  String?   @db.VarChar(255)
+  recipient  String    @db.VarChar(255)
+  subject    String?   @db.VarChar(500)
+  success    Boolean   @default(false)
+  error      String?   @db.Text
+  /** Set when MAIL_REDIRECT_TO diverted the message away from the real recipient. */
+  redirected String?   @db.VarChar(255)
+  sent_by    String?   @db.VarChar(255)
+  created_at DateTime? @db.Timestamp(0)
+
+  @@index([kind])
+  @@index([created_at])
+}
+
+/** Broadcast messages sent to all users from CRM Settings → Notifications. */
+model crm_broadcasts {
+  id         Int       @id @default(autoincrement())
+  message    String    @db.Text
+  /** info | warning | success */
+  type       String    @default("info") @db.VarChar(16)
+  recipients Int       @default(0)
+  sent_by    String?   @db.VarChar(255)
+  sent_by_id Int?
+  created_at DateTime? @db.Timestamp(0)
+
+  @@index([created_at])
+}
+
+/**
+ * Quick checklist items shown alongside the calendar. Deliberately standalone: a todo is a
+ * personal reminder with no time slot, so it is not a calendar_event.
+ */
+model todos {
+  id           Int       @id @default(autoincrement())
+  title        String    @db.VarChar(255)
+  description  String?   @db.Text
+  /** pending | completed | cancelled */
+  status       String    @default("pending") @db.VarChar(16)
+  /** low | medium | high */
+  priority     String    @default("medium") @db.VarChar(16)
+  due_date     DateTime? @db.Date
+  completed_at DateTime? @db.Timestamp(0)
+  user_id      Int?
+  created_by   String?   @db.VarChar(255)
+  created_at   DateTime? @db.Timestamp(0)
+  updated_at   DateTime? @db.Timestamp(0)
+  deleted_at   DateTime? @db.Timestamp(0)
+
+  @@index([status])
+  @@index([user_id])
+  @@index([due_date])
+  @@index([deleted_at])
+}
+
+/**
+ * A user's Facebook/Meta connection. `access_token` is a long-lived user token — encrypted at
+ * rest with APP_KEY (see meta-crypto.ts), never returned to the browser.
+ */
+model meta_connections {
+  id                  Int          @id @default(autoincrement())
+  user_id             Int          @unique
+  access_token        String       @db.Text
+  facebook_user_id    String?      @db.VarChar(64)
+  facebook_user_name  String?      @db.VarChar(255)
+  facebook_user_email String?      @db.VarChar(255)
+  is_active           Boolean      @default(true)
+  connected_at        DateTime?    @db.Timestamp(0)
+  last_sync           DateTime?    @db.Timestamp(0)
+  disconnected_at     DateTime?    @db.Timestamp(0)
+  /** When the long-lived token stops working — drives the reconnect warning. */
+  token_expires_at    DateTime?    @db.Timestamp(0)
+  /** Comma-separated permissions Meta actually granted, for the missing-permission notice. */
+  granted_scopes      String?      @db.Text
+  /** Ad account selected for campaign/ad-set/ad attribution, when ads_read was granted. */
+  ad_account_id       String?      @db.VarChar(64)
+  ad_account_name     String?      @db.VarChar(255)
+  /** Last Graph failure seen for this connection, surfaced in the UI. */
+  last_error          String?      @db.Text
+  last_error_at       DateTime?    @db.Timestamp(0)
+  last_webhook_at     DateTime?    @db.Timestamp(0)
+  created_at          DateTime?    @db.Timestamp(0)
+  updated_at          DateTime?    @db.Timestamp(0)
+  pages               meta_pages[]
+
+  @@index([is_active])
+  @@index([token_expires_at])
+}
+
+/**
+ * Every webhook delivery Meta makes. The unique `event_key` is what makes processing
+ * idempotent: Meta retries aggressively, and a retry must never create a second lead.
+ */
+model meta_webhook_events {
+  id           Int       @id @default(autoincrement())
+  /** `${page_id}:${form_id}:${leadgen_id}` — unique per actual submission. */
+  event_key    String    @unique @db.VarChar(200)
+  leadgen_id   String?   @db.VarChar(64)
+  form_id      String?   @db.VarChar(64)
+  page_id      String?   @db.VarChar(64)
+  /** received | processed | duplicate | failed | ignored */
+  status       String    @default("received") @db.VarChar(16)
+  error        String?   @db.Text
+  lead_id      Int?
+  attempts     Int       @default(1)
+  payload      String?   @db.Text
+  received_at  DateTime  @db.Timestamp(0)
+  processed_at DateTime? @db.Timestamp(0)
+
+  @@index([status])
+  @@index([leadgen_id])
+  @@index([received_at])
+}
+
+/** One row per sync run — manual, webhook or scheduled — so history is auditable. */
+model meta_sync_history {
+  id          Int       @id @default(autoincrement())
+  user_id     Int
+  /** manual | webhook | scheduled */
+  trigger     String    @default("manual") @db.VarChar(16)
+  forms_read  Int       @default(0)
+  imported    Int       @default(0)
+  updated     Int       @default(0)
+  skipped     Int       @default(0)
+  duplicates  Int       @default(0)
+  errors      String?   @db.Text
+  started_at  DateTime  @db.Timestamp(0)
+  finished_at DateTime? @db.Timestamp(0)
+
+  @@index([user_id])
+  @@index([started_at])
+}
+
+/** A Facebook Page the connected user administers. Page tokens are encrypted like user tokens. */
+model meta_pages {
+  id            Int              @id @default(autoincrement())
+  connection_id Int
+  page_id       String           @db.VarChar(64)
+  name          String           @db.VarChar(255)
+  access_token  String           @db.Text
+  created_at    DateTime?        @db.Timestamp(0)
+  updated_at    DateTime?        @db.Timestamp(0)
+  connection    meta_connections @relation(fields: [connection_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@unique([connection_id, page_id])
+  @@index([page_id])
+}
+
+/** A lead form the user opted into. Only forms listed here produce leads. */
+model meta_lead_forms {
+  id         Int       @id @default(autoincrement())
+  user_id    Int
+  form_id    String    @db.VarChar(64)
+  page_id    String    @db.VarChar(64)
+  form_name  String?   @db.VarChar(255)
+  page_name  String?   @db.VarChar(255)
+  is_active  Boolean   @default(true)
+  last_sync  DateTime? @db.Timestamp(0)
+  created_at DateTime? @db.Timestamp(0)
+  updated_at DateTime? @db.Timestamp(0)
+
+  @@unique([user_id, form_id, page_id])
+  @@index([page_id])
+  @@index([is_active])
+}
+
+/**
+ * Timestamped note history on a lead. The source system appended notes into one text
+ * blob; separate rows keep each entry's author and time, and make pinning possible.
+ */
+model lead_notes {
+  id         Int       @id @default(autoincrement())
+  lead_id    Int
+  content    String    @db.Text
+  pinned     Boolean   @default(false)
+  created_by String?   @db.VarChar(255)
+  user_id    Int?
+  created_at DateTime? @db.Timestamp(0)
+  updated_at DateTime? @db.Timestamp(0)
+  leads      leads     @relation(fields: [lead_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@index([lead_id])
+}
+
+model lead_tasks {
+  id          Int       @id @default(autoincrement())
+  lead_id     Int
+  title       String    @db.VarChar(255)
+  due_date    DateTime  @db.Date
+  description String?   @db.Text
+  /** pending | completed | cancelled */
+  status      String    @default("pending") @db.VarChar(16)
+  /** low | medium | high */
+  priority    String    @default("medium") @db.VarChar(16)
+  assigned_to Int?
+  created_by  String?   @db.VarChar(255)
+  user_id     Int?
+  created_at  DateTime? @db.Timestamp(0)
+  updated_at  DateTime? @db.Timestamp(0)
+  leads       leads     @relation(fields: [lead_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@index([lead_id])
+  @@index([status])
+  @@index([assigned_to])
+}
+
+model lead_showings {
+  id           Int       @id @default(autoincrement())
+  lead_id      Int
+  showing_date DateTime  @db.Date
+  time         String    @db.VarChar(8)
+  property     String?   @db.VarChar(255)
+  notes        String?   @db.Text
+  /** scheduled | completed | cancelled */
+  status       String    @default("scheduled") @db.VarChar(16)
+  created_by   String?   @db.VarChar(255)
+  user_id      Int?
+  created_at   DateTime? @db.Timestamp(0)
+  updated_at   DateTime? @db.Timestamp(0)
+  leads        leads     @relation(fields: [lead_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@index([lead_id])
+  @@index([showing_date])
+}
+
+/**
+ * Manually logged contact attempts. The source system filled this from Twilio; this app
+ * has no telephony, so entries are recorded by the agent after a call.
+ */
+model lead_calls {
+  id         Int       @id @default(autoincrement())
+  lead_id    Int
+  called_at  DateTime  @db.Timestamp(0)
+  /** Call length in seconds. */
+  duration   Int?
+  /** connected | no answer | voicemail | wrong number | callback requested */
+  outcome    String?   @db.VarChar(32)
+  notes      String?   @db.Text
+  created_by String?   @db.VarChar(255)
+  user_id    Int?
+  created_at DateTime? @db.Timestamp(0)
+  /** Twilio Call SID when placed via click-to-call; null for manually logged calls. */
+  provider_sid String? @db.VarChar(64)
+  /** Live Twilio call status for click-to-call: initiated|ringing|in-progress|completed|no-answer|busy|failed. */
+  status       String? @db.VarChar(24)
+  leads      leads     @relation(fields: [lead_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  recording  lead_call_recordings?
+
+  @@index([lead_id])
+  @@index([provider_sid])
+}
+
+/**
+ * The audio recording of a logged call, at most one per call.
+ *
+ * There is no telephony integration, so nothing here is captured automatically — an agent
+ * attaches the file their phone or dialler produced. It is a separate table rather than columns
+ * on `lead_calls` so that loading a lead never drags the audio along with it; the lead detail
+ * selects only the metadata.
+ */
+model lead_call_recordings {
+  id           Int        @id @default(autoincrement())
+  /** One recording per call. */
+  call_id      Int        @unique
+  filename     String     @db.VarChar(255)
+  /** Always an audio/* type — validated against an allowlist before it is stored. */
+  content_type String     @db.VarChar(128)
+  size         Int
+  data         Bytes
+  created_by   String?    @db.VarChar(255)
+  created_at   DateTime?  @db.Timestamp(0)
+  call         lead_calls @relation(fields: [call_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+}
+
+/**
+ * A one-off email sent to a lead from their own page, as distinct from a Campaign, which goes to
+ * a whole audience and is tracked for opens and unsubscribes. This is a record of correspondence:
+ * an agent writing to one person.
+ *
+ * The row is written only after SMTP accepts the message, so the history never claims something
+ * was sent that was not. A failure is recorded too, with the reason, rather than vanishing.
+ */
+model lead_emails {
+  id         Int       @id @default(autoincrement())
+  lead_id    Int
+  recipient  String    @db.VarChar(255)
+  subject    String    @db.VarChar(255)
+  body       String    @db.Text
+  /** sent | failed */
+  status     String    @db.VarChar(16)
+  /** Why it did not go, when it did not. */
+  error      String?   @db.VarChar(500)
+  /** Which mail_accounts row it went out through, for tracing a delivery problem. */
+  account_id Int?
+  sent_by    String?   @db.VarChar(255)
+  user_id    Int?
+  sent_at    DateTime  @db.Timestamp(0)
+  leads      leads     @relation(fields: [lead_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@index([lead_id])
+}
+
+/**
+ * The SMS conversation with a lead.
+ *
+ * There is no SMS gateway wired into this app, so nothing here is transmitted by the server.
+ * "Send SMS" hands the message to the device's own messaging app through an `sms:` link and
+ * records what was sent; an agent logs a reply the same way. The table therefore holds the
+ * conversation history, not a delivery queue — there are deliberately no delivery-status or
+ * provider-id columns to imply otherwise.
+ */
+model lead_messages {
+  id         Int       @id @default(autoincrement())
+  lead_id    Int
+  /** outbound (agent → lead) | inbound (lead → agent, logged by the agent) */
+  direction  String    @db.VarChar(16)
+  /**
+   * queued | sent | delivered | read | failed, for outbound messages only; null on an inbound one.
+   *
+   * Filled automatically from Twilio's status callback when a gateway is connected. Without one
+   * it is set by hand and only ever holds what the agent knows. Note that "read" is never
+   * reported for plain SMS by any provider — the protocol has no read receipt — so it stays a
+   * manual mark even when Twilio is connected.
+   */
+  status     String?   @db.VarChar(16)
+  /** Twilio's Message SID, so a status callback can find the row it belongs to. */
+  provider_sid String? @unique @db.VarChar(64)
+  /** Twilio's numeric error code on a failed send (e.g. 21211 = invalid "to" number). */
+  error_code   String? @db.VarChar(16)
+  /** What went wrong, in words, for the agent looking at a failed message. */
+  error_message String? @db.VarChar(255)
+  body       String    @db.Text
+  /** The number the message was addressed to or came from, as it stood at the time. */
+  phone      String?   @db.VarChar(64)
+  sent_at    DateTime  @db.Timestamp(0)
+  created_by String?   @db.VarChar(255)
+  user_id    Int?
+  created_at DateTime? @db.Timestamp(0)
+  leads      leads     @relation(fields: [lead_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@index([lead_id])
+}
+
+/**
+ * Tag registry, so a tag stays selectable in the dropdowns even when no lead carries it
+ * yet. The full tag list anywhere is this registry unioned with tags present on leads.
+ */
+model lead_tags {
+  id         Int       @id @default(autoincrement())
+  name       String    @unique @db.VarChar(64)
+  created_by String?   @db.VarChar(255)
+  created_at DateTime? @db.Timestamp(0)
+}
+
+/**
+ * An email campaign: a template sent to a resolved lead segment. Subject/content are
+ * snapshotted so the record stays accurate even if the template is later edited or deleted.
+ */
+model campaigns {
+  id            Int                   @id @default(autoincrement())
+  name          String                @db.VarChar(255)
+  template_id   Int?
+  template_name String?               @db.VarChar(255)
+  category      String?               @db.VarChar(64)
+  subject       String                @db.VarChar(500)
+  content       String                @db.Text
+  /** JSON snapshot of the audience filter this campaign targeted. */
+  audience      String?               @db.Text
+  /** JSON array of labels on the campaign itself. */
+  tags          String?               @db.Text
+  /** draft | sending | completed | failed */
+  status        String                @default("draft") @db.VarChar(16)
+  total         Int                   @default(0)
+  sent          Int                   @default(0)
+  failed        Int                   @default(0)
+  opened        Int                   @default(0)
+  unsubscribed  Int                   @default(0)
+  bounced       Int                   @default(0)
+  created_by    String?               @db.VarChar(255)
+  created_by_id Int?
+  sent_at       DateTime?             @db.Timestamp(0)
+  created_at    DateTime?             @db.Timestamp(0)
+  updated_at    DateTime?             @db.Timestamp(0)
+  recipients    campaign_recipients[]
+
+  @@index([status])
+  @@index([created_at])
+}
+
+/**
+ * Marketing / physical-asset inventory (signboards, lock boxes, banners, ...).
+ * Distinct from the property-listing "Inventory" screen. `assignments` is the authoritative
+ * per-person breakdown ({assignedTo, qty, assignedDate, returnedDate}); the flat assigned_*
+ * columns mirror it for legacy readers. Status/balance are derived, never trusted from storage.
+ */
+model marketing_inventory {
+  id            Int       @id @default(autoincrement())
+  as_on_date    String?   @db.VarChar(10)
+  type          String    @db.VarChar(64)
+  custom_type   String?   @db.VarChar(191)
+  count         Int       @default(0)
+  /** JSON array of {assignedTo, qty, assignedDate, returnedDate}. */
+  assignments   Json?     @db.JsonB
+  assigned_qty  Int       @default(0)
+  assigned_to   String?   @db.VarChar(255)
+  assigned_date String?   @db.VarChar(10)
+  returned_date String?   @db.VarChar(10)
+  status        String    @default("Available") @db.VarChar(16)
+  remarks       String?   @db.Text
+  created_at    DateTime? @db.Timestamp(0)
+  updated_at    DateTime? @db.Timestamp(0)
+  /** Soft-delete marker — deleted rows are hidden from the live list, restorable from the bin. */
+  deleted_at    DateTime? @db.Timestamp(0)
+
+  @@index([deleted_at])
+  @@index([type])
+}
+
+/**
+ * Per-user MLS favorites. A favorite is an MLS listing key plus a small JSON snapshot of the
+ * listing (address/price/beds/…) so the Favorites page renders without re-hitting the MLS feed.
+ * Private to whoever saved it; unique per (user, listing).
+ */
+model favorites {
+  id          Int       @id @default(autoincrement())
+  user_id     Int
+  listing_key String    @db.VarChar(128)
+  snapshot    Json?     @db.JsonB
+  notes       String?   @db.Text
+  created_at  DateTime? @db.Timestamp(0)
+
+  @@unique([user_id, listing_key])
+  @@index([user_id])
+}
+
+/** One row per person a campaign was sent to, carrying its own engagement state. */
+/**
+ * Marketing email templates owned by the Campaigns module.
+ *
+ * Deliberately separate from `email_templates`, which drives transactional mail from Email
+ * Settings and is keyed by `event_key`. A campaign template is free-form content an agent
+ * writes and reuses; the two must not share a table or editing one would change the other.
+ */
+model campaign_templates {
+  id          Int                             @id @default(autoincrement())
+  name        String                          @db.VarChar(255)
+  subject     String                          @db.VarChar(500)
+  content     String                          @db.Text
+  /** welcome | follow-up | showing | property-update | thank-you | custom */
+  category    String                          @default("custom") @db.VarChar(32)
+  is_active   Boolean                         @default(true)
+  created_by  String?                         @db.VarChar(255)
+  user_id     Int?
+  created_at  DateTime?                       @db.Timestamp(0)
+  updated_at  DateTime?                       @db.Timestamp(0)
+  deleted_at  DateTime?                       @db.Timestamp(0)
+  attachments campaign_template_attachments[]
+
+  @@index([category])
+  @@index([deleted_at])
+}
+
+/** A file that rides along with every send of its template. */
+model campaign_template_attachments {
+  id           Int                @id @default(autoincrement())
+  template_id  Int
+  filename     String             @db.VarChar(255)
+  content_type String             @db.VarChar(128)
+  size         Int
+  data         Bytes
+  created_at   DateTime?          @db.Timestamp(0)
+  template     campaign_templates @relation(fields: [template_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@index([template_id])
+}
+
+model campaign_recipients {
+  id              Int       @id @default(autoincrement())
+  campaign_id     Int
+  lead_id         Int?
+  name            String?   @db.VarChar(255)
+  email           String    @db.VarChar(255)
+  /** Unguessable per-recipient token embedded in the open pixel and unsubscribe link. */
+  token           String    @unique @db.VarChar(64)
+  /** pending | sent | failed */
+  status          String    @default("pending") @db.VarChar(16)
+  error           String?   @db.Text
+  opened          Boolean   @default(false)
+  opened_at       DateTime? @db.Timestamp(0)
+  unsubscribed    Boolean   @default(false)
+  unsubscribed_at DateTime? @db.Timestamp(0)
+  bounced         Boolean   @default(false)
+  created_at      DateTime? @db.Timestamp(0)
+  updated_at      DateTime? @db.Timestamp(0)
+  campaigns       campaigns @relation(fields: [campaign_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  leads           leads?    @relation(fields: [lead_id], references: [id], onDelete: SetNull, onUpdate: Restrict)
+
+  @@index([campaign_id])
+  @@index([lead_id])
+  @@index([email])
+}
+
+/** Global opt-out list. Any address here is excluded from every future send. */
+model email_suppressions {
+  id          Int       @id @default(autoincrement())
+  email       String    @unique @db.VarChar(255)
+  reason      String?   @db.VarChar(64)
+  campaign_id Int?
+  created_at  DateTime? @db.Timestamp(0)
+  updated_at  DateTime? @db.Timestamp(0)
+}
+
+/**
+ * Calendar events — appointments, showings, viewings, open houses, follow-ups and calls.
+ *
+ * Ported from the Next.js/MongoDB `events` collection onto this stack: the document fields
+ * become real columns, the free-form `leadId` becomes a nullable FK to a transaction (this
+ * app has transactions, not leads), and rows are scoped per user like the source did.
+ *
+ * `google_calendar_id` / `last_synced_to_google` mirror the source schema so a future Google
+ * Calendar sync has somewhere to record itself; nothing writes them yet.
+ */
+model calendar_events {
+  id                     Int           @id @default(autoincrement())
+  title                  String        @db.VarChar(255)
+  date                   DateTime      @db.Date
+  time                   String        @db.VarChar(8)
+  /** viewing | meeting | open-house | follow-up | call | showing | task */
+  type                   String        @default("meeting") @db.VarChar(24)
+  /** scheduled | completed | cancelled | rescheduled */
+  status                 String        @default("scheduled") @db.VarChar(16)
+  location               String?       @db.VarChar(255)
+  description            String?       @db.Text
+  attendees              String?       @db.VarChar(255)
+  contact_phone          String?       @db.VarChar(64)
+  contact_email          String?       @db.VarChar(255)
+  property_details       String?       @db.Text
+  notes                  String?       @db.Text
+  enable_reminder        Boolean       @default(false)
+  reminder_sent          Boolean       @default(false)
+  transaction_id         Int?
+  /** Optional link to a lead — set when the event was raised from the Leads module. */
+  lead_id                Int?
+  user_id                Int?
+  created_by             String?       @db.VarChar(255)
+  google_calendar_id     String?       @db.VarChar(255)
+  last_synced_to_google  DateTime?     @db.Timestamp(0)
+  created_at             DateTime?     @db.Timestamp(0)
+  updated_at             DateTime?     @db.Timestamp(0)
+  deleted_at             DateTime?     @db.Timestamp(0)
+  transactions           transactions? @relation(fields: [transaction_id], references: [id], onDelete: SetNull, onUpdate: Restrict)
+
+  @@index([date])
+  @@index([user_id])
+  @@index([transaction_id])
+  @@index([lead_id])
+  @@index([status])
+}
+
+/**
+ * Export & Download Centre. One row per bulk export or document download request, processed
+ * off the request thread so a large job cannot time out the API. The generated file lives on
+ * disk under storage/app/exports and is reachable only through `token` until `expires_at`.
+ */
+model export_jobs {
+  id                Int       @id @default(autoincrement())
+  export_id         String    @unique @db.VarChar(64)
+  token             String    @unique @db.VarChar(64)
+  action_type       String    @db.VarChar(48)
+  format            String    @db.VarChar(16)
+  status            String    @default("Queued") @db.VarChar(24)
+  transaction_count Int       @default(0)
+  document_count    Int       @default(0)
+  skipped_count     Int       @default(0)
+  file_name         String?   @db.VarChar(255)
+  file_path         String?   @db.VarChar(255)
+  file_size         Int?
+  filters           String?   @db.Text
+  selection         String?   @db.Text
+  /** Hash of (user + action + format + selection) — blocks duplicate concurrent requests. */
+  request_hash      String?   @db.VarChar(64)
+  requested_by      String?   @db.VarChar(255)
+  requested_by_id   Int?
+  requested_at      DateTime? @db.Timestamp(0)
+  started_at        DateTime? @db.Timestamp(0)
+  completed_at      DateTime? @db.Timestamp(0)
+  expires_at        DateTime? @db.Timestamp(0)
+  download_status   String    @default("Not Downloaded") @db.VarChar(24)
+  downloaded_at     DateTime? @db.Timestamp(0)
+  download_count    Int       @default(0)
+  failure_reason    String?   @db.Text
+  created_at        DateTime? @db.Timestamp(0)
+  updated_at        DateTime? @db.Timestamp(0)
+
+  @@index([requested_by_id])
+  @@index([status])
+  @@index([requested_at])
+}
+
+/**
+ * One row per bulk-transaction upload. Records what was validated, what was actually
+ * imported and what was rejected, so an import can be audited after the fact. `errors`
+ * holds the per-row validation report as JSON (row number, field, value, message, fix).
+ */
+model import_batches {
+  id              Int       @id @default(autoincrement())
+  batch_id        String    @unique @db.VarChar(64)
+  file_name       String?   @db.VarChar(255)
+  uploaded_by     String?   @db.VarChar(255)
+  uploaded_by_id  Int?
+  uploaded_at     DateTime? @db.Timestamp(0)
+  completed_at    DateTime? @db.Timestamp(0)
+  total_rows      Int       @default(0)
+  valid_rows      Int       @default(0)
+  imported_rows   Int       @default(0)
+  failed_rows     Int       @default(0)
+  duplicate_rows  Int       @default(0)
+  warning_rows    Int       @default(0)
+  status          String    @default("Validated") @db.VarChar(32)
+  errors          String?   @db.Text
+  created_at      DateTime? @db.Timestamp(0)
+  updated_at      DateTime? @db.Timestamp(0)
+
+  @@index([uploaded_at])
+}
+
+/**
+ * Express session store (connect-pg-simple). Created at runtime by the session middleware;
+ * modelled here so it is tracked by migrations instead of showing up as schema drift.
+ */
+model user_sessions {
+  sid    String   @id(map: "session_pkey") @db.VarChar
+  sess   Json     @db.Json
+  expire DateTime @db.Timestamp(6)
+
+  @@index([expire], map: "IDX_session_expire")
+}
+
+/**
+ * Every documentation reminder that was sent (or attempted), one row per document per
+ * recipient. Consolidated reminders share a batch_id so a single "all pending documents in
+ * this deal" send can be reported either as one action or as its individual documents.
+ */
+model document_reminders {
+  id              Int          @id @default(autoincrement())
+  batch_id        String?      @db.VarChar(64)
+  transaction_id  Int
+  document_id     Int?
+  document_name   String?      @db.VarChar(255)
+  document_status String?      @db.VarChar(32)
+  reminder_type   String       @db.VarChar(32)
+  channel         String       @default("email") @db.VarChar(32)
+  recipient       String?      @db.VarChar(255)
+  recipient_name  String?      @db.VarChar(255)
+  sent_by         String?      @db.VarChar(255)
+  sent_by_id      Int?
+  sent_at         DateTime?    @db.Timestamp(0)
+  delivery_status String       @default("Sent") @db.VarChar(32)
+  failure_reason  String?      @db.Text
+  message         String?      @db.Text
+  document_count  Int          @default(1)
+  created_at      DateTime?    @db.Timestamp(0)
+  updated_at      DateTime?    @db.Timestamp(0)
+  transactions    transactions @relation(fields: [transaction_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@index([transaction_id])
+  @@index([document_id])
+  @@index([sent_at])
+  @@index([batch_id])
+}
+
+model email_templates {
+  id              Int            @id @default(autoincrement())
+  event_key       String         @unique @db.VarChar(255)
+  module          String         @db.VarChar(255)
+  name            String         @db.VarChar(255)
+  subject         String         @db.VarChar(255)
+  body_html       String         @db.Text
+  mail_account_id Int?
+  is_active       Boolean        @default(true)
+  created_at      DateTime?      @db.Timestamp(0)
+  updated_at      DateTime?      @db.Timestamp(0)
+  mail_accounts   mail_accounts? @relation(fields: [mail_account_id], references: [id], onUpdate: Restrict)
+
+  @@index([mail_account_id])
+}
+
+model failed_jobs {
+  id         Int      @id @default(autoincrement())
+  uuid       String   @unique @db.VarChar(255)
+  connection String   @db.Text
+  queue      String   @db.Text
+  payload    String   @db.Text
+  exception  String   @db.Text
+  failed_at  DateTime @default(now()) @db.Timestamp(0)
+}
+
+model inter_board_listings {
+  id             Int          @id @default(autoincrement())
+  transaction_id Int
+  name           String?      @db.VarChar(255)
+  board_id       String?      @db.VarChar(255)
+  verified       Boolean      @default(false)
+  position       Int          @default(0)
+  created_at     DateTime?    @db.Timestamp(0)
+  updated_at     DateTime?    @db.Timestamp(0)
+  transactions   transactions @relation(fields: [transaction_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@index([transaction_id])
+}
+
+model invoice_line_items {
+  id          Int       @id @default(autoincrement())
+  invoice_id  Int
+  row_no      Int       @default(1)
+  description String    @db.VarChar(255)
+  qty         Decimal   @default(1.00) @db.Decimal(12, 2)
+  rate        Decimal   @default(0.00) @db.Decimal(15, 2)
+  amount      Decimal   @default(0.00) @db.Decimal(15, 2)
+  is_taxable  Boolean   @default(true)
+  created_at  DateTime? @db.Timestamp(0)
+  updated_at  DateTime? @db.Timestamp(0)
+  invoices    invoices  @relation(fields: [invoice_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@index([invoice_id])
+}
+
+model invoice_payments {
+  id         Int       @id @default(autoincrement())
+  invoice_id Int
+  paid_on    DateTime  @db.Date
+  amount     Decimal   @db.Decimal(15, 2)
+  method     String?   @db.VarChar(255)
+  reference  String?   @db.VarChar(255)
+  created_at DateTime? @db.Timestamp(0)
+  updated_at DateTime? @db.Timestamp(0)
+  deleted_at DateTime? @db.Timestamp(0)
+  invoices   invoices  @relation(fields: [invoice_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@index([invoice_id])
+}
+
+model invoices {
+  id                       Int                  @id @default(autoincrement())
+  invoice_no               String               @unique @db.VarChar(255)
+  transaction_id           Int?
+  source                   String               @default("manual") @db.VarChar(20)
+  transaction_type         String?              @db.VarChar(255)
+  term_no                  Int?
+  created_by               Int?
+  property_reference       String?              @db.VarChar(255)
+  customer_id              Int?
+  customer_name            String?              @db.VarChar(255)
+  customer_phone           String?              @db.VarChar(255)
+  customer_email           String?              @db.VarChar(255)
+  customer_address         String?              @db.VarChar(255)
+  customer_city            String?              @db.VarChar(255)
+  customer_province        String?              @db.VarChar(255)
+  customer_postal_code     String?              @db.VarChar(255)
+  customer_country         String               @default("Canada") @db.VarChar(255)
+  invoice_date             DateTime             @db.Date
+  terms                    String               @default("Due on Receipt") @db.VarChar(255)
+  due_date                 DateTime?            @db.Date
+  trade_number             String?              @db.VarChar(255)
+  listing_agent            String?              @db.VarChar(255)
+  coop_salesperson         String?              @db.VarChar(255)
+  subject                  String?              @db.Text
+  status                   String               @default("Draft") @db.VarChar(255)
+  delete_reason            String?              @db.VarChar(1000)
+  sent_at                  DateTime?            @db.Timestamp(0)
+  sub_total                Decimal              @default(0.00) @db.Decimal(15, 2)
+  tax_total                Decimal              @default(0.00) @db.Decimal(15, 2)
+  total                    Decimal              @default(0.00) @db.Decimal(15, 2)
+  discount                 Decimal              @default(0.00) @db.Decimal(12, 2)
+  tax_rate                 Decimal?             @db.Decimal(5, 2)
+  commission_received_date DateTime?            @db.Date
+  commission_received_via  String?              @db.VarChar(255)
+  reminders                String?              @db.Text
+  auto_reminder            String?              @db.Text
+  customer_notes           String?              @db.Text
+  terms_conditions         String?              @db.Text
+  signature_path           String?              @db.Text
+  broker_name              String?              @db.VarChar(255)
+  amount_paid              Decimal              @default(0.00) @db.Decimal(15, 2)
+  balance_due              Decimal              @default(0.00) @db.Decimal(15, 2)
+  created_at               DateTime?            @db.Timestamp(0)
+  updated_at               DateTime?            @db.Timestamp(0)
+  deleted_at               DateTime?            @db.Timestamp(0)
+  invoice_line_items       invoice_line_items[]
+  invoice_payments         invoice_payments[]
+  customers                customers?           @relation(fields: [customer_id], references: [id], onUpdate: Restrict)
+  transactions             transactions?        @relation(fields: [transaction_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@index([customer_id])
+  @@index([transaction_id])
+}
+
+model job_batches {
+  id             String  @id @db.VarChar(255)
+  name           String  @db.VarChar(255)
+  total_jobs     Int
+  pending_jobs   Int
+  failed_jobs    Int
+  failed_job_ids String  @db.Text
+  options        String? @db.Text
+  cancelled_at   Int?
+  created_at     Int
+  finished_at    Int?
+}
+
+model jobs {
+  id           Int    @id @default(autoincrement())
+  queue        String @db.VarChar(255)
+  payload      String @db.Text
+  attempts     Int
+  reserved_at  Int?
+  available_at Int
+  created_at   Int
+
+  @@index([queue])
+}
+
+model mail_accounts {
+  id              Int               @id @default(autoincrement())
+  name            String            @db.VarChar(255)
+  from_name       String?           @db.VarChar(255)
+  from_email      String            @db.VarChar(255)
+  host            String            @db.VarChar(255)
+  port            Int               @default(587)
+  username        String?           @db.VarChar(255)
+  password        String?           @db.Text
+  encryption      String?           @db.VarChar(255)
+  is_active       Boolean           @default(true)
+  is_default      Boolean           @default(false)
+  /**
+   * Whose account this is. NULL = a brokerage account, managed under admin Email Settings and
+   * available as the shared fallback sender. A non-null value is a user's personal account,
+   * private to them and used to send their own lead emails and campaigns from their own address.
+   */
+  user_id         Int?
+  // ---- IMAP inbound sync (optional; SMTP-only accounts leave these null) ----
+  /** IMAP server for pulling received mail, e.g. imap.gmail.com. Null = no inbound sync. */
+  imap_host       String?           @db.VarChar(255)
+  imap_port       Int?
+  /** ssl (implicit TLS, usually 993) | tls (STARTTLS) — mirrors the SMTP encryption field. */
+  imap_encryption String?           @db.VarChar(8)
+  /** Whether the poller pulls new mail for this account. This is the real "Auto Sync" switch. */
+  inbound_enabled Boolean           @default(false)
+  /** Highest IMAP UID already fetched, so each poll only pulls what is new. */
+  last_uid        Int?
+  last_synced_at  DateTime?         @db.Timestamp(0)
+  /** The last sync error, surfaced in Settings; null when the last sync succeeded. */
+  sync_error      String?           @db.VarChar(500)
+  created_at      DateTime?         @db.Timestamp(0)
+  updated_at      DateTime?         @db.Timestamp(0)
+  email_templates email_templates[]
+  inbound_emails  inbound_emails[]
+
+  @@index([user_id])
+}
+
+/**
+ * A message pulled from a user's connected mailbox over IMAP.
+ *
+ * Private to the account's owner and deduped by (account, IMAP UID) so a re-poll never stores a
+ * message twice. Matched to a lead by sender address where one exists, the same way an inbound
+ * SMS is, so correspondence lands on the lead automatically.
+ */
+model inbound_emails {
+  id           Int           @id @default(autoincrement())
+  /** The owner — every inbox query is scoped to this, so no one reads another user's mail. */
+  user_id      Int
+  account_id   Int
+  /** IMAP UID within the account's INBOX; unique per account. */
+  uid          Int
+  /** RFC Message-ID, kept for cross-referencing and as a secondary dedupe key. */
+  message_id   String?       @db.VarChar(512)
+  from_email   String?       @db.VarChar(320)
+  from_name    String?       @db.VarChar(255)
+  to_email     String?       @db.VarChar(320)
+  subject      String?       @db.VarChar(998)
+  /** A short plain-text preview for the list, so the list query stays light. */
+  snippet      String?       @db.VarChar(300)
+  body_text    String?       @db.Text
+  body_html    String?       @db.Text
+  received_at  DateTime      @db.Timestamp(0)
+  /** Read/unread in our UI, independent of the mailbox's own \Seen flag. */
+  seen         Boolean       @default(false)
+  /** The lead this came from, matched on sender address; null when unmatched. */
+  lead_id      Int?
+  created_at   DateTime?     @db.Timestamp(0)
+  mail_account mail_accounts @relation(fields: [account_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  leads        leads?        @relation(fields: [lead_id], references: [id], onDelete: SetNull, onUpdate: Restrict)
+
+  @@unique([account_id, uid])
+  @@index([user_id])
+  @@index([lead_id])
+}
+
+model migrations {
+  id        Int    @id @default(autoincrement())
+  migration String @db.VarChar(255)
+  batch     Int
+}
+
+model password_reset_tokens {
+  email      String    @id @db.VarChar(255)
+  token      String    @db.VarChar(255)
+  created_at DateTime? @db.Timestamp(0)
+}
+
+model personal_access_tokens {
+  id             Int       @id @default(autoincrement())
+  tokenable_type String    @db.VarChar(255)
+  tokenable_id   Int
+  name           String    @db.Text
+  token          String    @unique @db.VarChar(64)
+  abilities      String?   @db.Text
+  last_used_at   DateTime? @db.Timestamp(0)
+  expires_at     DateTime? @db.Timestamp(0)
+  created_at     DateTime? @db.Timestamp(0)
+  updated_at     DateTime? @db.Timestamp(0)
+
+  @@index([expires_at])
+  @@index([tokenable_type, tokenable_id])
+}
+
+model precon_terms {
+  id             Int          @id @default(autoincrement())
+  transaction_id Int
+  term_no        Int
+  pct            Decimal?     @db.Decimal(8, 4)
+  closing_date   DateTime?    @db.Date
+  created_at     DateTime?    @db.Timestamp(0)
+  updated_at     DateTime?    @db.Timestamp(0)
+  transactions   transactions @relation(fields: [transaction_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@unique([transaction_id, term_no])
+}
+
+model sessions {
+  id            String  @id @db.VarChar(255)
+  user_id       Int?
+  ip_address    String? @db.VarChar(45)
+  user_agent    String? @db.Text
+  payload       String  @db.Text
+  last_activity Int
+
+  @@index([last_activity])
+  @@index([user_id])
+}
+
+model team_member_terms {
+  id             Int          @id @default(autoincrement())
+  team_member_id Int
+  term_no        Int
+  created_at     DateTime?    @db.Timestamp(0)
+  updated_at     DateTime?    @db.Timestamp(0)
+  team_members   team_members @relation(fields: [team_member_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@unique([team_member_id, term_no])
+}
+
+model team_members {
+  id                Int                 @id @default(autoincrement())
+  transaction_id    Int
+  name              String              @db.VarChar(255)
+  split             Decimal             @default(0.0000) @db.Decimal(8, 4)
+  agent_pct         Decimal             @default(90.0000) @db.Decimal(8, 4)
+  brok_pct          Decimal             @default(10.0000) @db.Decimal(8, 4)
+  is_primary        Boolean             @default(false)
+  access            String              @default("docs") @db.VarChar(255)
+  scope             String              @default("Entire") @db.VarChar(255)
+  position          Int                 @default(0)
+  created_at        DateTime?           @db.Timestamp(0)
+  updated_at        DateTime?           @db.Timestamp(0)
+  team_member_terms team_member_terms[]
+  transactions      transactions        @relation(fields: [transaction_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@index([transaction_id])
+}
+
+model transaction_delete_requests {
+  id                Int          @id @default(autoincrement())
+  transaction_id    Int
+  requested_by      Int?
+  requested_by_name String?      @db.VarChar(255)
+  reason            String?      @db.Text
+  status            String       @default("pending") @db.VarChar(255)
+  forwarded_by      Int?
+  forwarded_by_name String?      @db.VarChar(255)
+  forward_reason    String?      @db.Text
+  reviewed_by       Int?
+  reviewed_by_name  String?      @db.VarChar(255)
+  reviewed_at       DateTime?    @db.Timestamp(0)
+  created_at        DateTime?    @db.Timestamp(0)
+  updated_at        DateTime?    @db.Timestamp(0)
+  transactions      transactions @relation(fields: [transaction_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@index([transaction_id, status])
+}
+
+model transaction_edit_requests {
+  id                Int          @id @default(autoincrement())
+  transaction_id    Int
+  status_at_request String?      @db.VarChar(255)
+  scope             String?      @db.VarChar(255)
+  requested_by      Int?
+  requested_by_name String?      @db.VarChar(255)
+  reason            String?      @db.Text
+  status            String       @default("pending") @db.VarChar(255)
+  reviewed_by       Int?
+  reviewed_by_name  String?      @db.VarChar(255)
+  reviewed_at       DateTime?    @db.Timestamp(0)
+  created_at        DateTime?    @db.Timestamp(0)
+  updated_at        DateTime?    @db.Timestamp(0)
+  transactions      transactions @relation(fields: [transaction_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@index([transaction_id])
+}
+
+model transaction_message_reads {
+  id             Int          @id @default(autoincrement())
+  transaction_id Int
+  user_id        Int
+  last_read_at   DateTime?    @db.Timestamp(0)
+  created_at     DateTime?    @db.Timestamp(0)
+  updated_at     DateTime?    @db.Timestamp(0)
+  transactions   transactions @relation(fields: [transaction_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  users          users        @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@unique([transaction_id, user_id])
+  @@index([user_id])
+}
+
+model transaction_messages {
+  id             Int          @id @default(autoincrement())
+  transaction_id Int
+  user_id        Int?
+  author         String?      @db.VarChar(255)
+  body           String       @db.Text
+  created_at     DateTime?    @db.Timestamp(0)
+  updated_at     DateTime?    @db.Timestamp(0)
+  transactions   transactions @relation(fields: [transaction_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@index([transaction_id])
+}
+
+model transaction_snapshots {
+  id             Int          @id @default(autoincrement())
+  transaction_id Int
+  module         String       @db.VarChar(255)
+  data           String?      @db.Text
+  who            String?      @db.VarChar(255)
+  user_id        Int?
+  created_at     DateTime?    @db.Timestamp(0)
+  updated_at     DateTime?    @db.Timestamp(0)
+  transactions   transactions @relation(fields: [transaction_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@index([transaction_id, module])
+}
+
+model transaction_statuses {
+  id             Int          @id @default(autoincrement())
+  transaction_id Int
+  status         String       @db.VarChar(255)
+  created_at     DateTime?    @db.Timestamp(0)
+  updated_at     DateTime?    @db.Timestamp(0)
+  transactions   transactions @relation(fields: [transaction_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@unique([transaction_id, status])
+}
+
+model transactions {
+  id                          Int                           @id @default(autoincrement())
+  trade_no                    String                        @unique @db.VarChar(255)
+  type                        String                        @db.VarChar(255)
+  property                    String?                       @db.VarChar(255)
+  agent                       String?                       @db.VarChar(255)
+  agent_review_at             DateTime?                     @db.Timestamp(0)
+  price                       Decimal                       @default(0.00) @db.Decimal(15, 2)
+  deposit                     Decimal                       @default(0.00) @db.Decimal(15, 2)
+  offer_date                  DateTime?                     @db.Date
+  closing_date                DateTime?                     @db.Date
+  listing_contract_date       DateTime?                     @db.Date
+  listing_expiry_date         DateTime?                     @db.Date
+  mls_type                    String                        @default("mls") @db.VarChar(255)
+  mls_num                     String?                       @db.VarChar(255)
+  mls_verified                Boolean                       @default(false)
+  comm_type                   String                        @default("%") @db.VarChar(255)
+  comm_value                  Decimal                       @default(0.00) @db.Decimal(15, 2)
+  comm_pct                    Decimal?                      @db.Decimal(8, 4)
+  comm_amt                    Decimal?                      @db.Decimal(15, 2)
+  comm_adjust_enabled         Boolean                       @default(false)
+  comm_adjust_before          Decimal                       @default(0.00) @db.Decimal(15, 2)
+  comm_adjust_after           Decimal                       @default(0.00) @db.Decimal(15, 2)
+  listing_comm_pct            Decimal?                      @db.Decimal(8, 4)
+  coop_comm_pct               Decimal?                      @db.Decimal(8, 4)
+  listing_comm_flat           Decimal?                      @db.Decimal(15, 2)
+  coop_comm_flat              Decimal?                      @db.Decimal(15, 2)
+  trust_payable               Decimal?                      @db.Decimal(15, 2)
+  listing_adj_enabled         Boolean                       @default(false)
+  listing_adj_before          Decimal                       @default(0.00) @db.Decimal(15, 2)
+  listing_adj_after           Decimal                       @default(0.00) @db.Decimal(15, 2)
+  coop_adj_enabled            Boolean                       @default(false)
+  coop_adj_before             Decimal                       @default(0.00) @db.Decimal(15, 2)
+  coop_adj_after              Decimal                       @default(0.00) @db.Decimal(15, 2)
+  precon_listing_type         String                        @default("mls") @db.VarChar(255)
+  precon_term_count           Int?
+  commission_agent            String?                       @db.VarChar(255)
+  precon_net_of_hst           Boolean                       @default(false)
+  precon_comm_pct             Decimal?                      @db.Decimal(8, 4)
+  precon_comm_amt_manual      Decimal?                      @db.Decimal(15, 2)
+  precon_details_of_terms     String                        @default("Entire") @db.VarChar(255)
+  builder_name                String?                       @db.VarChar(255)
+  builder_vendor              String?                       @db.VarChar(255)
+  builder_project             String?                       @db.VarChar(255)
+  builder_address             String?                       @db.VarChar(255)
+  builder_office_email        String?                       @db.VarChar(255)
+  builder_invoice_email       String?                       @db.VarChar(255)
+  builder_phone               String?                       @db.VarChar(255)
+  lawyer_name                 String?                       @db.VarChar(255)
+  lawyer_email                String?                       @db.VarChar(255)
+  lawyer_phone                String?                       @db.VarChar(255)
+  lawyer_address              String?                       @db.VarChar(255)
+  buyer_lawyer_name           String?                       @db.VarChar(255)
+  buyer_lawyer_email          String?                       @db.VarChar(255)
+  buyer_lawyer_phone          String?                       @db.VarChar(255)
+  buyer_lawyer_address        String?                       @db.VarChar(255)
+  seller_lawyer_name          String?                       @db.VarChar(255)
+  seller_lawyer_email         String?                       @db.VarChar(255)
+  seller_lawyer_phone         String?                       @db.VarChar(255)
+  seller_lawyer_address       String?                       @db.VarChar(255)
+  admin_activities            String?                       @db.Text
+  activity_tracker            String?                       @db.Text
+  adjustments                 String?                       @db.Text
+  commercial_lease            String?                       @db.Text
+  notice_of_sale              String?                       @db.Text
+  comm_status                 String                        @default("Pending") @db.VarChar(255)
+  comm_paid_status            String?                       @db.VarChar(255)
+  valid_status                String                        @default("Pending") @db.VarChar(255)
+  conditional_offer           Boolean                       @default(false)
+  inter_board_enabled         Boolean                       @default(false)
+  created_at                  DateTime?                     @db.Timestamp(0)
+  updated_at                  DateTime?                     @db.Timestamp(0)
+  reco_audit_ready            String?                       @db.VarChar(255)
+  reco_audit_remarks          String?                       @db.Text
+  trade_sheet_sent_at         DateTime?                     @db.Timestamp(0)
+  trade_sheet_data            String?                       @db.Text
+  // Reports module (backward-compatible; NULL on all legacy records)
+  payment_type                String?                       @db.VarChar(255)
+  listing_price               Decimal?                      @db.Decimal(15, 2)
+  lead_source                 String?                       @db.VarChar(255)
+  lead_assigned_date          DateTime?                     @db.Date
+  lead_converted_date         DateTime?                     @db.Date
+  review_email_sent_at        DateTime?                     @db.Timestamp(0)
+  review_received_at          DateTime?                     @db.Timestamp(0)
+  gift_coupon_value           Decimal?                      @db.Decimal(15, 2)
+  gift_coupon_issued_at       DateTime?                     @db.Date
+  deleted_at                  DateTime?                     @db.Timestamp(0)
+  audit_logs                  audit_logs[]
+  brokerages                  brokerages?
+  calendar_events             calendar_events[]
+  client_identifications      client_identifications[]
+  clients                     clients[]
+  conditions                  conditions[]
+  document_reminders          document_reminders[]
+  documents                   documents[]
+  inter_board_listings        inter_board_listings[]
+  invoices                    invoices[]
+  precon_terms                precon_terms[]
+  team_members                team_members[]
+  transaction_delete_requests transaction_delete_requests[]
+  transaction_edit_requests   transaction_edit_requests[]
+  transaction_message_reads   transaction_message_reads[]
+  transaction_messages        transaction_messages[]
+  transaction_snapshots       transaction_snapshots[]
+  transaction_statuses        transaction_statuses[]
+  trashed_row_items           trashed_row_items[]
+
+  @@index([agent])
+  @@index([type])
+  @@index([offer_date])
+  @@index([closing_date])
+  @@index([payment_type])
+  @@index([lead_source])
+}
+
+model trashed_row_items {
+  id             Int          @id @default(autoincrement())
+  transaction_id Int
+  module         String       @db.VarChar(255)
+  kind           String       @db.VarChar(255)
+  agent          String?      @db.VarChar(255)
+  term           Int?
+  label          String?      @db.VarChar(500)
+  data           String?      @db.Text
+  who            String?      @db.VarChar(255)
+  user_id        Int?
+  created_at     DateTime?    @db.Timestamp(0)
+  updated_at     DateTime?    @db.Timestamp(0)
+  transactions   transactions @relation(fields: [transaction_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@index([transaction_id])
+}
+
+model user_permissions {
+  id         Int       @id @default(autoincrement())
+  user_id    Int
+  screen     String    @db.VarChar(255)
+  level      String    @db.VarChar(255)
+  created_at DateTime? @db.Timestamp(0)
+  updated_at DateTime? @db.Timestamp(0)
+  users      users     @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@unique([user_id, screen])
+}
+
+model users {
+  id                        Int                         @id @default(autoincrement())
+  name                      String                      @db.VarChar(255)
+  username                  String?                     @unique @db.VarChar(255)
+  email                     String                      @unique @db.VarChar(255)
+  role                      String                      @default("agent") @db.VarChar(255)
+  /** Added for CRM Settings → Personal Information. Nullable, so nothing existing changes. */
+  phone                     String?                     @db.VarChar(64)
+  status                    String                      @default("Active") @db.VarChar(255)
+  profile                   String?                     @db.Text
+  email_verified_at         DateTime?                   @db.Timestamp(0)
+  password                  String                      @db.VarChar(255)
+  remember_token            String?                     @db.VarChar(100)
+  created_at                DateTime?                   @db.Timestamp(0)
+  updated_at                DateTime?                   @db.Timestamp(0)
+  transaction_message_reads transaction_message_reads[]
+  user_permissions          user_permissions[]
+}

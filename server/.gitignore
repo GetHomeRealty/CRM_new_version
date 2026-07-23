@@ -1,0 +1,7 @@
+/node_modules
+/dist
+/coverage
+*.log
+.env
+# Keep .env.example tracked.
+prisma/schema.mysql.prisma

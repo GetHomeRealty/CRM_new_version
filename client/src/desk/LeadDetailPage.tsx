@@ -1,0 +1,983 @@
+import { useCallback, useEffect, useState } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
+import {
+  addCallRecording, addLeadCall, addLeadMessage, addLeadNote, addLeadShowing, addLeadTask,
+  callRecordingUrl, deleteCallRecording, getLead, leadOptions, placeLeadCall, sendLeadEmail, smsGatewayStatus, updateLeadMessage,
+  updateLeadNote, updateLeadShowing, updateLeadTask,
+} from '../lib/leadsApi';
+import { apiErrorMessage } from '../lib/apiError';
+import { useToast } from './toast';
+import { useAuth } from '../context/AuthContext';
+import LeadEditorModal, { label, prefHeading } from './LeadEditorModal';
+import { createEvent } from '../lib/calendarApi';
+import type {
+  CalendarEventInput, LeadCall, LeadDetail, LeadOptions, MessageStatus, SmsGatewayStatus,
+} from '../types';
+
+const stamp = (iso: string | null): string => (iso ? iso.replace('T', ' ').slice(0, 16) : '—');
+
+/** 24-hour "14:30" → "2:30 PM". */
+const clock = (t: string): string => {
+  const m = /^(\d{2}):(\d{2})$/.exec(t ?? '');
+  if (!m) return t ?? '';
+  const h = Number(m[1]);
+  return `${h % 12 === 0 ? 12 : h % 12}:${m[2]} ${h >= 12 ? 'PM' : 'AM'}`;
+};
+
+/** Seconds → "3m 20s"; blank when the duration wasn't recorded. */
+const mmss = (secs: number | null): string => {
+  if (secs == null) return '';
+  const m = Math.floor(secs / 60);
+  return m ? `${m}m ${secs % 60}s` : `${secs}s`;
+};
+
+const today = (): string => new Date().toISOString().slice(0, 10);
+
+const priorityPill = (p: string): string => (p === 'high' ? 'bad' : p === 'low' ? 'ok' : 'warn');
+const statePill = (s: string): string => (s === 'completed' ? 'ok' : s === 'cancelled' ? 'bad' : 'info');
+
+export default function LeadDetailPage() {
+  const { id } = useParams();
+  const leadId = Number(id);
+  const toast = useToast();
+  const navigate = useNavigate();
+  const { can, user } = useAuth();
+  const canEdit = can('lead', 'edit');
+
+  const [lead, setLead] = useState<LeadDetail | null>(null);
+  const [options, setOptions] = useState<LeadOptions | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [notFound, setNotFound] = useState(false);
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [followUpOpen, setFollowUpOpen] = useState(false);
+
+  /**
+   * `quiet` refetches without showing the loader, so adding a note or task refreshes the panels
+   * in place instead of blanking the whole page for a moment. Only the first load — when there
+   * is nothing on screen yet — shows a loading state.
+   */
+  const load = useCallback(async (quiet = false) => {
+    if (!Number.isInteger(leadId) || leadId <= 0) { setNotFound(true); setLoading(false); return; }
+    if (!quiet) setLoading(true);
+    try {
+      setLead(await getLead(leadId));
+      setNotFound(false);
+    } catch (ex) {
+      setNotFound(true);
+      toast(apiErrorMessage(ex, 'Could not load the lead'), 'bad');
+    } finally {
+      if (!quiet) setLoading(false);
+    }
+  }, [leadId, toast]);
+
+  useEffect(() => { void load(); }, [load]);
+  useEffect(() => { leadOptions().then(setOptions).catch(() => setOptions(null)); }, []);
+
+  /** Wrap a write so every panel refreshes from the server rather than guessing. */
+  const run = async (fn: () => Promise<unknown>, ok: string) => {
+    try {
+      await fn();
+      toast(ok, 'ok');
+      await load(true);
+    } catch (ex) {
+      toast(apiErrorMessage(ex, 'That did not work'), 'bad');
+    }
+  };
+
+  if (loading) return <div className="card"><p className="help">Loading lead…</p></div>;
+  if (notFound || !lead) {
+    return (
+      <div className="card stub">
+        <h2>Lead not found</h2>
+        <p>It may have been deleted, or it belongs to another agent.</p>
+        <button className="btn ghost" type="button" onClick={() => navigate('/app/lead')}>Back to Leads</button>
+      </div>
+    );
+  }
+
+  const prefs = lead.property_preferences;
+
+  return (
+    <>
+      <div className="toolbar">
+        <div className="toolbar-row" style={{ justifyContent: 'space-between' }}>
+          <div>
+            <button className="btn ghost sm" type="button" onClick={() => navigate('/app/lead')}>← Back to Leads</button>
+            <h2 className="lead-title">{lead.name}</h2>
+            <div className="lead-subtitle">
+              {lead.lead_status && <span className="pill info">{label(lead.lead_status)}</span>}
+              {lead.lead_type && <span className="pill">{label(lead.lead_type)}</span>}
+              {/* Source indicator, added alongside the existing lead_source value rather than replacing it. */}
+              {lead.source === 'facebook_meta' && <span className="pill type-res-buy" title="Imported from Facebook Lead Ads">Meta</span>}
+              {lead.unsubscribed && <span className="pill bad">Unsubscribed</span>}
+              <span className="muted">Added {stamp(lead.created_at)}{lead.created_by ? ` by ${lead.created_by}` : ''}</span>
+            </div>
+          </div>
+          <div className="toolbar-row">
+            {canEdit && (
+              <button className="btn ghost" type="button" onClick={() => setFollowUpOpen(true)}>
+                📅 Schedule Follow-up
+              </button>
+            )}
+            {canEdit && <button className="btn primary" type="button" onClick={() => setEditorOpen(true)}>Edit Lead</button>}
+          </div>
+        </div>
+      </div>
+
+      <div className="g2">
+        <div className="card">
+          <div className="modal-sub">Contact &amp; Classification</div>
+          <dl className="lead-dl">
+            <Row k="Email" v={lead.email} />
+            <Row k="Phone" v={lead.phone} />
+            <Row k="Location" v={lead.location} />
+            <Row k="Property" v={lead.property} />
+            <Row k="Assigned To" v={lead.assigned_to_name ?? 'Unassigned'} />
+            <Row k="Lead Source" v={lead.lead_source && label(lead.lead_source)} />
+            <Row k="Lead Response" v={lead.lead_response && label(lead.lead_response)} />
+            <Row k="Client Type" v={lead.client_type && label(lead.client_type)} />
+            <Row k="Conversion" v={lead.lead_conversion && label(lead.lead_conversion)} />
+            <Row k="Tags" v={lead.tags.length ? lead.tags.join(', ') : null} />
+          </dl>
+
+          <div className="modal-sub">Demographics</div>
+          <dl className="lead-dl">
+            <Row k="Age" v={lead.age != null ? String(lead.age) : null} />
+            <Row k="Gender" v={lead.gender && label(lead.gender)} />
+            <Row k="Language" v={lead.language} />
+            <Row k="Religion" v={lead.religion} />
+            <Row k="Date of Birth" v={lead.date_of_birth} />
+            <Row k="Marriage Day" v={lead.marriage_day} />
+          </dl>
+
+          {/* A lead may keep several sets — "Property Preferences", then "2nd Preference", … */}
+          {!prefs?.length ? (
+            <>
+              <div className="modal-sub">Property Preferences</div>
+              <p className="help">None recorded.</p>
+            </>
+          ) : prefs.map((p, i) => (
+            <div key={i}>
+              <div className="modal-sub">{prefHeading(i)}</div>
+              <dl className="lead-dl">
+                <Row k="Budget" v={p.budget?.min != null || p.budget?.max != null
+                  ? `${p.budget?.min ?? '—'} – ${p.budget?.max ?? '—'}` : null} />
+                <Row k="Property Type" v={(p.propertyType ?? []).join(', ') || null} />
+                <Row k="Bedrooms" v={p.bedrooms != null ? String(p.bedrooms) : null} />
+                <Row k="Bathrooms" v={p.bathrooms != null ? String(p.bathrooms) : null} />
+                <Row k="Square Footage" v={p.squareFootage != null ? String(p.squareFootage) : null} />
+                <Row k="Year Built" v={p.yearBuilt != null ? String(p.yearBuilt) : null} />
+                <Row k="Lot Size" v={p.lotSize || null} />
+                <Row k="Parking" v={p.parking != null ? String(p.parking) : null} />
+                <Row k="Features" v={(p.features ?? []).join(', ') || null} />
+              </dl>
+            </div>
+          ))}
+
+          {lead.meta && (
+            <>
+              <div className="modal-sub">Meta / Facebook Source</div>
+              <dl className="lead-dl">
+                <Row k="Page" v={lead.meta.page_name ?? lead.meta.page_id} />
+                <Row k="Lead form" v={lead.meta.form_name ?? lead.meta.form_id} />
+                <Row k="Campaign" v={lead.meta.campaign_name ?? lead.meta.campaign_id} />
+                <Row k="Ad set" v={lead.meta.adset_name ?? lead.meta.adset_id} />
+                <Row k="Ad" v={lead.meta.ad_name ?? lead.meta.ad_id} />
+                <Row k="Budget" v={lead.meta.budget} />
+                <Row k="Timeline" v={lead.meta.timeline} />
+                <Row k="Property type" v={lead.meta.property_type} />
+                <Row k="Submitted" v={lead.meta.submitted_at ? stamp(lead.meta.submitted_at) : null} />
+                <Row k="Imported" v={lead.meta.imported_at ? stamp(lead.meta.imported_at) : null} />
+                <Row k="Meta lead ID" v={lead.meta.lead_id} />
+              </dl>
+              {lead.meta.message && (
+                <>
+                  <div className="modal-sub">Enquiry</div>
+                  <p className="lead-summary">{lead.meta.message}</p>
+                </>
+              )}
+              {!lead.meta.campaign_id && (
+                <span className="help">
+                  Campaign, ad-set and ad names are blank when the connected Meta app lacks the
+                  ads permissions — the lead itself is unaffected.
+                </span>
+              )}
+            </>
+          )}
+
+          {lead.notes && (
+            <>
+              <div className="modal-sub">Summary Notes</div>
+              <p className="lead-summary">{lead.notes}</p>
+            </>
+          )}
+        </div>
+
+        <div>
+          <CommunicationPanel lead={lead} canEdit={canEdit} run={run} onSent={() => void load(true)} />
+          <NotesPanel lead={lead} canEdit={canEdit} run={run} />
+          <TasksPanel lead={lead} options={options} canEdit={canEdit} run={run} />
+          <ShowingsPanel lead={lead} canEdit={canEdit} run={run} />
+          <CallsPanel lead={lead} options={options} canEdit={canEdit} run={run} />
+        </div>
+      </div>
+
+      {editorOpen && (
+        <LeadEditorModal
+          lead={lead}
+          options={options}
+          lockIdentity={user?.role === 'agent' && lead.owner_user_id != null && lead.owner_user_id !== user.id}
+          onClose={() => setEditorOpen(false)}
+          onSaved={() => { setEditorOpen(false); void load(true); }}
+        />
+      )}
+
+      {/* Creates a real calendar event linked to this lead — the Calendar module owns it. */}
+      {followUpOpen && (
+        <FollowUpModal
+          lead={lead}
+          onClose={() => setFollowUpOpen(false)}
+          onSaved={() => { setFollowUpOpen(false); toast('Follow-up added to the calendar.', 'ok'); }}
+        />
+      )}
+    </>
+  );
+}
+
+function Row({ k, v }: { k: string; v: string | null | undefined }) {
+  return (
+    <>
+      <dt>{k}</dt>
+      <dd>{v ? v : <span className="muted">—</span>}</dd>
+    </>
+  );
+}
+
+type Run = (fn: () => Promise<unknown>, ok: string) => Promise<void>;
+
+/*
+ * The activity panels below — Notes, Tasks, Showings, Call Log and the SMS conversation — are
+ * append-only from the UI: entries can be added and their state changed, but not deleted. That
+ * was a deliberate request; the lead's history is a record of what happened. The delete
+ * endpoints still exist for administrative cleanup, they are simply not reachable from here.
+ */
+
+// ------------------------------------------------------------------- notes
+function NotesPanel({ lead, canEdit, run }: { lead: LeadDetail; canEdit: boolean; run: Run }) {
+  const [text, setText] = useState('');
+  return (
+    <div className="card">
+      <div className="modal-sub">Notes ({lead.notes_history.length})</div>
+      {canEdit && (
+        <div className="lead-add-row">
+          <textarea rows={2} value={text} onChange={(e) => setText(e.target.value)} placeholder="Add a dated note…" />
+          <button className="btn primary sm" type="button" disabled={!text.trim()}
+            onClick={() => void run(() => addLeadNote(lead.id, text.trim()), 'Note added.').then(() => setText(''))}>
+            Add
+          </button>
+        </div>
+      )}
+      {lead.notes_history.length === 0 ? <p className="help">No notes yet.</p> : (
+        <ul className="lead-feed">
+          {lead.notes_history.map((n) => (
+            <li key={n.id} className={n.pinned ? 'pinned' : ''}>
+              <div className="lead-feed-body">{n.content}</div>
+              <div className="lead-feed-meta">
+                <span className="muted">{stamp(n.created_at)}{n.created_by ? ` · ${n.created_by}` : ''}</span>
+                {canEdit && (
+                  <>
+                    <button className="btn ghost sm" type="button"
+                      onClick={() => void run(() => updateLeadNote(lead.id, n.id, { pinned: !n.pinned }), n.pinned ? 'Note unpinned.' : 'Note pinned.')}>
+                      {n.pinned ? 'Unpin' : 'Pin'}
+                    </button>
+                  </>
+                )}
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+// ------------------------------------------------------------------- tasks
+function TasksPanel({ lead, options, canEdit, run }: { lead: LeadDetail; options: LeadOptions | null; canEdit: boolean; run: Run }) {
+  const [title, setTitle] = useState('');
+  const [due, setDue] = useState(today());
+  const [priority, setPriority] = useState('medium');
+  const [assignee, setAssignee] = useState('');
+
+  const pending = lead.tasks.filter((t) => t.status === 'pending').length;
+
+  return (
+    <div className="card">
+      <div className="modal-sub">Tasks ({pending} pending of {lead.tasks.length})</div>
+      {canEdit && (
+        <div className="lead-add-grid">
+          <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Task title" />
+          <input type="date" value={due} onChange={(e) => setDue(e.target.value)} />
+          <select value={priority} onChange={(e) => setPriority(e.target.value)}>
+            {(options?.task_priority ?? ['low', 'medium', 'high']).map((p) => <option key={p} value={p}>{label(p)}</option>)}
+          </select>
+          <select value={assignee} onChange={(e) => setAssignee(e.target.value)}>
+            <option value="">Assign to me</option>
+            {(options?.users ?? []).map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+          </select>
+          <button className="btn primary sm" type="button" disabled={!title.trim()}
+            onClick={() => void run(
+              () => addLeadTask(lead.id, {
+                title: title.trim(), due_date: due, priority,
+                ...(assignee ? { assigned_to: Number(assignee) } : {}),
+              }),
+              'Task added.',
+            ).then(() => setTitle(''))}>
+            Add
+          </button>
+        </div>
+      )}
+      {lead.tasks.length === 0 ? <p className="help">No tasks yet.</p> : (
+        <ul className="lead-feed">
+          {lead.tasks.map((t) => (
+            <li key={t.id}>
+              <div className="lead-feed-body">
+                {/* A cancelled task reads as struck through too — it is finished with, just not done. */}
+                <strong className={t.status === 'pending' ? '' : 'done'}>{t.title}</strong>
+                {t.description && <div className="muted">{t.description}</div>}
+              </div>
+              <div className="lead-feed-meta">
+                <span className="pill info">{t.due_date}</span>
+                <span className={`pill ${priorityPill(t.priority)}`}>{label(t.priority)}</span>
+                <span className={`pill ${statePill(t.status)}`}>{label(t.status)}</span>
+                {t.assigned_to_name && <span className="muted">{t.assigned_to_name}</span>}
+                {canEdit && (
+                  <>
+                    {/* Cancelled is a third resting state, not a kind of done: the task was
+                        dropped rather than finished, and it stays on the lead as a record.
+                        Deleting is still there for something logged by mistake. */}
+                    {t.status === 'pending' ? (
+                      <>
+                        <button className="btn ghost sm" type="button"
+                          onClick={() => void run(() => updateLeadTask(lead.id, t.id, { status: 'completed' }), 'Task completed.')}>
+                          Complete
+                        </button>
+                        <button className="btn ghost sm" type="button"
+                          onClick={() => void run(() => updateLeadTask(lead.id, t.id, { status: 'cancelled' }), 'Task cancelled.')}>
+                          Cancel
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button className="btn ghost sm" type="button"
+                          onClick={() => void run(() => updateLeadTask(lead.id, t.id, { status: 'pending' }), 'Task reopened.')}>
+                          Reopen
+                        </button>
+                        {t.status === 'completed' && (
+                          <button className="btn ghost sm" type="button"
+                            onClick={() => void run(() => updateLeadTask(lead.id, t.id, { status: 'cancelled' }), 'Task cancelled.')}>
+                            Cancel
+                          </button>
+                        )}
+                      </>
+                    )}
+                  </>
+                )}
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- showings
+function ShowingsPanel({ lead, canEdit, run }: { lead: LeadDetail; canEdit: boolean; run: Run }) {
+  const [date, setDate] = useState(today());
+  const [time, setTime] = useState('12:00');
+  const [property, setProperty] = useState('');
+
+  return (
+    <div className="card">
+      <div className="modal-sub">Showings ({lead.showings.length})</div>
+      {canEdit && (
+        <div className="lead-add-grid">
+          <input value={property} onChange={(e) => setProperty(e.target.value)} placeholder="Property address" />
+          <input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+          <input type="time" value={time} onChange={(e) => setTime(e.target.value)} />
+          <button className="btn primary sm" type="button" disabled={!property.trim()}
+            onClick={() => void run(
+              () => addLeadShowing(lead.id, { showing_date: date, time, property: property.trim() }),
+              'Showing scheduled.',
+            ).then(() => setProperty(''))}>
+            Add
+          </button>
+        </div>
+      )}
+      {lead.showings.length === 0 ? <p className="help">No showings scheduled.</p> : (
+        <ul className="lead-feed">
+          {lead.showings.map((s) => (
+            <li key={s.id}>
+              <div className="lead-feed-body">
+                <strong>{s.property || 'Property showing'}</strong>
+                {s.notes && <div className="muted">{s.notes}</div>}
+              </div>
+              <div className="lead-feed-meta">
+                <span className="pill info">{s.showing_date} · {clock(s.time)}</span>
+                <span className={`pill ${statePill(s.status)}`}>{label(s.status)}</span>
+                {canEdit && (
+                  <>
+                    {/* Reopen was removed on request. The third state is Cancelled, for a showing
+                        that was called off; Reschedule is the way back to scheduled, so a
+                        mis-click on Complete or Cancel does not need a delete to undo. */}
+                    {s.status !== 'completed' && (
+                      <button className="btn ghost sm" type="button"
+                        onClick={() => void run(() => updateLeadShowing(lead.id, s.id, { status: 'completed' }), 'Showing completed.')}>
+                        Complete
+                      </button>
+                    )}
+                    {s.status !== 'cancelled' && (
+                      <button className="btn ghost sm" type="button"
+                        onClick={() => void run(() => updateLeadShowing(lead.id, s.id, { status: 'cancelled' }), 'Showing cancelled.')}>
+                        Cancel
+                      </button>
+                    )}
+                    {s.status !== 'scheduled' && (
+                      <button className="btn ghost sm" type="button"
+                        onClick={() => void run(() => updateLeadShowing(lead.id, s.id, { status: 'scheduled' }), 'Showing rescheduled.')}>
+                        Reschedule
+                      </button>
+                    )}
+                  </>
+                )}
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+// ----------------------------------------------------------- communication
+/**
+ * How an outbound SMS is doing, in the agent's words. These are recorded by hand — see the note
+ * under the thread — so the list stays to things a person can actually know.
+ */
+const STATUS_LABEL: Record<MessageStatus, string> = {
+  queued: 'Queued',
+  sent: 'Sent',
+  delivered: 'Delivered',
+  read: 'Read',
+  failed: 'Failed to send',
+};
+
+const STATUS_PILL: Record<MessageStatus, string> = {
+  queued: '', sent: 'info', delivered: 'ok', read: 'ok', failed: 'bad',
+};
+
+/** The id the Communication panel scrolls to; the Call Log panel carries it. */
+const CALL_LOG_ANCHOR = 'lead-call-log';
+
+/** Everything but digits and a leading + — `tel:`/`sms:` links choke on spaces and brackets. */
+const dialable = (phone: string | null): string => (phone ?? '').replace(/[^\d+]/g, '');
+
+/**
+ * Calling and texting a lead.
+ *
+ * Calls always hand off to the device: there is no telephony integration, so `tel:` opens
+ * whatever dialler the machine has and the outcome is logged afterwards.
+ *
+ * SMS works one of two ways depending on the server. With an SMS gateway configured, the server
+ * sends the message itself and the delivery status updates on its own from the provider's
+ * callback. Without one, the message goes to the device's messaging app through an `sms:` link
+ * and only the record is kept — with the status set by hand. The panel says which mode it is in
+ * rather than leaving the agent to guess whether a message actually went.
+ */
+function CommunicationPanel({ lead, canEdit, run, onSent }: {
+  lead: LeadDetail; canEdit: boolean; run: Run; onSent: () => void;
+}) {
+  const toast = useToast();
+  const [composing, setComposing] = useState(false);
+  const [emailing, setEmailing] = useState(false);
+  const [text, setText] = useState('');
+  const [direction, setDirection] = useState<'outbound' | 'inbound'>('outbound');
+  const [gateway, setGateway] = useState<SmsGatewayStatus | null>(null);
+
+  useEffect(() => { smsGatewayStatus().then(setGateway).catch(() => setGateway(null)); }, []);
+  const liveSms = gateway?.configured === true;
+  // With a Twilio voice gateway, "Make Call" is a real click-to-call; without one it hands off to
+  // the device dialler. The panel says which mode it's in so the agent knows what will happen.
+  const liveCall = gateway?.voice === true;
+  const [calling, setCalling] = useState(false);
+
+  const number = dialable(lead.phone);
+  const hasPhone = number.length > 0;
+
+  const call = async () => {
+    if (!hasPhone || calling) return;
+    if (liveCall) {
+      setCalling(true);
+      try {
+        await placeLeadCall(lead.id);
+        toast('Calling you now — answer your phone to be connected to the lead.', 'ok');
+        onSent(); // the new call row appears in the log
+        document.getElementById(CALL_LOG_ANCHOR)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      } catch (ex) {
+        toast(apiErrorMessage(ex, 'Could not start the call'), 'bad');
+      } finally {
+        setCalling(false);
+      }
+      return;
+    }
+    window.location.href = `tel:${number}`;
+    toast('Opening your dialler — log the outcome in the Call Log below.', 'info');
+    document.getElementById(CALL_LOG_ANCHOR)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  };
+
+  const send = async () => {
+    const body = text.trim();
+    if (!body) return;
+    const outbound = direction === 'outbound';
+
+    // With no gateway the message has to leave through the device, so open the messaging app
+    // first and record only what was handed over. With one, the server does the sending and
+    // nothing should open — opening a second draft would risk the lead getting it twice.
+    if (outbound && hasPhone && !liveSms) {
+      window.open(`sms:${number}?&body=${encodeURIComponent(body)}`, '_self');
+    }
+
+    await run(
+      () => addLeadMessage(lead.id, {
+        direction, body, phone: lead.phone ?? null,
+        ...(outbound && liveSms ? { send: true } : {}),
+      }),
+      outbound ? (liveSms ? 'Message sent.' : 'Message logged.') : 'Reply logged.',
+    );
+    setText('');
+    setComposing(false);
+  };
+
+  return (
+    <div className="card">
+      <div className="modal-sub">Communication</div>
+      {!hasPhone && <p className="help">This lead has no phone number, so calling and texting are unavailable.</p>}
+
+      <div className="lead-comm-actions">
+        <button className="btn primary sm" type="button" disabled={!hasPhone || calling} onClick={call}
+          title={liveCall ? 'Twilio rings your phone, then connects the lead' : 'Opens your device dialler'}>
+          {calling ? '📞 Calling…' : '📞 Make Call'}
+        </button>
+        <button className="btn sm" type="button" disabled={!canEdit || (!hasPhone && direction === 'outbound')}
+          onClick={() => setComposing((c) => !c)}>💬 Send SMS</button>
+        <button className="btn sm" type="button"
+          disabled={!canEdit || !lead.email || lead.unsubscribed}
+          title={lead.unsubscribed ? `${lead.name} has unsubscribed` : lead.email || 'No email address'}
+          onClick={() => setEmailing(true)}>
+          ✉ Send Email
+        </button>
+        <button className="btn ghost sm" type="button"
+          onClick={() => document.getElementById(CALL_LOG_ANCHOR)?.scrollIntoView({ behavior: 'smooth', block: 'center' })}>
+          View Call History ({lead.calls.length})
+        </button>
+      </div>
+      {hasPhone && (
+        <p className="help" style={{ marginTop: 4 }}>
+          {liveCall
+            ? '📞 Make Call rings your phone, then connects the lead — the call is recorded and logged automatically.'
+            : '📞 Make Call opens your device dialler (no Twilio gateway configured) — log the outcome below.'}
+        </p>
+      )}
+
+      {emailing && canEdit && (
+        <EmailComposer lead={lead} onClose={() => setEmailing(false)} onSent={() => { setEmailing(false); onSent(); }} />
+      )}
+
+      {lead.emails.length > 0 && (
+        <>
+          <div className="modal-sub">Email History ({lead.emails.length})</div>
+          <ul className="lead-feed">
+            {lead.emails.map((e) => (
+              <li key={e.id}>
+                <div className="lead-feed-body">
+                  <strong>{e.subject}</strong>
+                  {e.error && <div className="lead-sms-error" style={{ textAlign: 'left' }}>{e.error}</div>}
+                </div>
+                <div className="lead-feed-meta">
+                  <span className={`pill ${e.status === 'sent' ? 'ok' : 'bad'}`}>
+                    {e.status === 'sent' ? 'Sent' : 'Failed'}
+                  </span>
+                  <span className="muted">{stamp(e.sent_at)} · to {e.recipient}{e.sent_by ? ` · ${e.sent_by}` : ''}</span>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+
+      {composing && canEdit && (
+        <div className="lead-comm-compose">
+          <select value={direction} onChange={(e) => setDirection(e.target.value as 'outbound' | 'inbound')}>
+            <option value="outbound">Sent to {lead.name.split(' ')[0]}</option>
+            <option value="inbound">Received from {lead.name.split(' ')[0]}</option>
+          </select>
+          <textarea rows={3} value={text} maxLength={2000} onChange={(e) => setText(e.target.value)}
+            placeholder={direction === 'outbound' ? 'Type the message…' : 'What did they reply?'} />
+          <div className="lead-comm-compose-row">
+            <span className="help">
+              {direction !== 'outbound' ? 'Recorded on the lead only.'
+                : liveSms ? `Sent by the server from ${gateway?.from}. Delivery status updates on its own.`
+                : 'Opens your messaging app with this text ready to send, and records it here.'}
+            </span>
+            <button className="btn primary sm" type="button" disabled={!text.trim()} onClick={() => void send()}>
+              {direction !== 'outbound' ? 'Log Reply' : liveSms ? 'Send' : 'Open & Log'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className="modal-sub">SMS Conversation ({lead.messages.length})</div>
+      {lead.messages.length === 0 ? <p className="help">No SMS messages yet.</p> : (
+        <>
+          <ul className="lead-sms">
+            {lead.messages.map((m) => (
+              <li key={m.id} className={m.direction === 'inbound' ? 'in' : 'out'}>
+                <div className="lead-sms-bubble">{m.body}</div>
+                <div className="lead-sms-meta">
+                  <span className="muted">{stamp(m.sent_at)}{m.created_by ? ` · ${m.created_by}` : ''}</span>
+                  {m.status && <span className={`pill ${STATUS_PILL[m.status]}`}>{STATUS_LABEL[m.status]}</span>}
+                  {/* With a gateway connected the status is the provider's, so it is not editable
+                      — except Read, which no SMS provider ever reports and only a person knows. */}
+                  {m.status && canEdit && !liveSms && (
+                    <select className="sms-status" value={m.status} aria-label="Delivery status"
+                      onChange={(e) => void run(
+                        () => updateLeadMessage(lead.id, m.id, { status: e.target.value as MessageStatus }),
+                        'Status updated.',
+                      )}>
+                      {(Object.keys(STATUS_LABEL) as MessageStatus[]).map((s) => (
+                        <option key={s} value={s}>{STATUS_LABEL[s]}</option>
+                      ))}
+                    </select>
+                  )}
+                  {m.status && canEdit && liveSms && m.status !== 'read' && m.status !== 'failed' && (
+                    <button className="btn ghost sm" type="button"
+                      onClick={() => void run(() => updateLeadMessage(lead.id, m.id, { status: 'read' }), 'Marked read.')}>
+                      Mark read
+                    </button>
+                  )}
+                </div>
+                {m.error_message && <div className="lead-sms-error">{m.error_message}</div>}
+              </li>
+            ))}
+          </ul>
+          <p className="help">
+            {liveSms ? (
+              <>
+                Sent through the SMS gateway, so <strong>Queued</strong>, <strong>Sent</strong>,
+                <strong> Delivered</strong> and <strong>Failed to send</strong> come from the
+                carrier and update on their own. <strong>Read</strong> stays a manual mark: plain
+                SMS has no read receipt — no provider can report it — so tick it when the lead
+                replies or confirms they saw the message.
+              </>
+            ) : (
+              <>
+                Statuses are set by hand. No SMS gateway is connected, so nothing can report
+                delivery: mark a message <strong>Read</strong> when the lead replies or confirms
+                they saw it, and <strong>Failed to send</strong> if the number bounced.
+              </>
+            )}
+          </p>
+        </>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Write one email to one lead.
+ *
+ * Not a campaign: there is no tracking pixel, no unsubscribe footer and no audience — it is
+ * correspondence with a single person, sent through the SMTP account Email Settings manages. A
+ * lead who has unsubscribed cannot be reached from here at all; the button is disabled and the
+ * server refuses it too, so neither alone is load-bearing.
+ *
+ * Rendered outside the panel's `.card`: a card animates a transform, which makes it the
+ * containing block for a fixed-position descendant and lands the overlay inside the card.
+ */
+function EmailComposer({ lead, onClose, onSent }: { lead: LeadDetail; onClose: () => void; onSent: () => void }) {
+  const toast = useToast();
+  const [subject, setSubject] = useState('');
+  const [body, setBody] = useState('');
+  const [sending, setSending] = useState(false);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSending(true);
+    try {
+      // Plain text typed into a textarea, sent as HTML: newlines have to be converted or the
+      // whole message arrives as one paragraph.
+      await sendLeadEmail(lead.id, { subject: subject.trim(), body: escapeHtml(body.trim()).replace(/\n/g, '<br>') });
+      toast(`Email sent to ${lead.email}.`, 'ok');
+      onSent();
+    } catch (ex) {
+      toast(apiErrorMessage(ex, 'The email could not be sent'), 'bad');
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <form className="modal" onClick={(e) => e.stopPropagation()} onSubmit={(e) => void submit(e)}>
+        <div className="modal-head">
+          <h3>Email {lead.name}</h3>
+          <button className="btn ghost sm" type="button" onClick={onClose}>Close</button>
+        </div>
+        <div className="modal-body">
+          <p className="help">
+            Sent to <strong>{lead.email}</strong> through your configured mail account. This is a
+            one-off message, not a campaign — no tracking and no unsubscribe footer.
+          </p>
+          <div className="field">
+            <label>Subject</label>
+            <input value={subject} maxLength={255} autoFocus required
+              onChange={(e) => setSubject(e.target.value)} placeholder="What is this about?" />
+          </div>
+          <div className="field">
+            <label>Message</label>
+            <textarea rows={10} value={body} required onChange={(e) => setBody(e.target.value)}
+              placeholder={`Hi ${lead.name.split(' ')[0]},`} />
+          </div>
+        </div>
+        <div className="modal-foot">
+          <button className="btn ghost" type="button" onClick={onClose}>Cancel</button>
+          <button className="btn primary" type="submit" disabled={sending || !subject.trim() || !body.trim()}>
+            {sending ? 'Sending…' : 'Send Email'}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+/** The message is typed as plain text; anything that looks like markup must not become markup. */
+const escapeHtml = (s: string): string =>
+  s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+const MAX_RECORDING_BYTES = 8 * 1024 * 1024;   // mirrors the server's limit, to fail before uploading
+const AUDIO_ACCEPT = 'audio/*,.mp3,.m4a,.aac,.wav,.ogg,.webm,.flac';
+
+const fileSize = (bytes: number): string =>
+  (bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`);
+
+/**
+ * The audio recording on a logged call: a player when one is attached, an upload control when
+ * not. Nothing captures these automatically — there is no telephony integration — so this is the
+ * file the agent's phone or dialler produced.
+ *
+ * The <audio> element streams from the API behind the same session cookie; the bytes are never
+ * part of a lead payload.
+ */
+function Recording({ lead, call, canEdit, run }: { lead: LeadDetail; call: LeadCall; canEdit: boolean; run: Run }) {
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
+  const inputId = `rec-${call.id}`;
+
+  const upload = async (file: File | undefined) => {
+    if (!file) return;
+    if (file.size > MAX_RECORDING_BYTES) {
+      toast(`That file is ${fileSize(file.size)}, above the 8 MB limit.`, 'bad');
+      return;
+    }
+    setBusy(true);
+    try {
+      const data = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result));
+        reader.onerror = () => reject(new Error('Could not read that file'));
+        reader.readAsDataURL(file);
+      });
+      // `file.type` is blank for some formats on Windows; fall back to the extension so a valid
+      // mp3 is not refused for the browser's failure to label it.
+      const type = file.type || TYPE_BY_EXTENSION[file.name.split('.').pop()?.toLowerCase() ?? ''] || '';
+      await run(
+        () => addCallRecording(lead.id, call.id, { filename: file.name, content_type: type, data }),
+        'Recording attached.',
+      );
+    } catch (ex) {
+      toast(apiErrorMessage(ex, 'Could not attach that recording'), 'bad');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (call.recording) {
+    return (
+      <div className="call-rec">
+        <audio controls preload="none" src={callRecordingUrl(lead.id, call.id)} />
+        <div className="call-rec-meta">
+          <span className="muted">{call.recording.filename} · {fileSize(call.recording.size)}</span>
+          <a className="btn ghost sm" href={callRecordingUrl(lead.id, call.id)} download={call.recording.filename}>Download</a>
+          {canEdit && (
+            <button className="btn ghost sm" type="button"
+              onClick={() => void run(() => deleteCallRecording(lead.id, call.id), 'Recording removed.')}>
+              Remove
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  if (!canEdit) return null;
+  return (
+    <div className="call-rec">
+      <input id={inputId} type="file" accept={AUDIO_ACCEPT} className="visually-hidden" disabled={busy}
+        onChange={(e) => { void upload(e.target.files?.[0]); e.target.value = ''; }} />
+      <label className="btn ghost sm" htmlFor={inputId}>{busy ? 'Attaching…' : '🎙 Attach recording'}</label>
+    </div>
+  );
+}
+
+/** Windows often reports a blank MIME type from a file input; the extension is the fallback. */
+const TYPE_BY_EXTENSION: Record<string, string> = {
+  mp3: 'audio/mpeg', m4a: 'audio/x-m4a', aac: 'audio/aac', wav: 'audio/wav',
+  ogg: 'audio/ogg', webm: 'audio/webm', flac: 'audio/flac',
+};
+
+// ------------------------------------------------------------------- calls
+function CallsPanel({ lead, options, canEdit, run }: { lead: LeadDetail; options: LeadOptions | null; canEdit: boolean; run: Run }) {
+  const [outcome, setOutcome] = useState('connected');
+  const [duration, setDuration] = useState('');
+  const [notes, setNotes] = useState('');
+
+  return (
+    <div className="card" id={CALL_LOG_ANCHOR}>
+      <div className="modal-sub">Call Log ({lead.calls.length})</div>
+      <p className="help">
+        There is no telephony integration here, so calls are logged manually after the fact, and
+        a recording is whatever audio file you attach from your phone or dialler.
+        The <strong>No Calls</strong> counter on the Leads list counts leads with nothing logged.
+      </p>
+      {canEdit && (
+        <div className="lead-add-grid">
+          <select value={outcome} onChange={(e) => setOutcome(e.target.value)}>
+            {(options?.call_outcome ?? ['connected']).map((o) => <option key={o} value={o}>{label(o)}</option>)}
+          </select>
+          <input type="number" min={0} value={duration} onChange={(e) => setDuration(e.target.value)} placeholder="Seconds" />
+          <input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="What was said" />
+          <button className="btn primary sm" type="button"
+            onClick={() => void run(
+              () => addLeadCall(lead.id, {
+                outcome,
+                duration: duration.trim() === '' ? null : Number(duration),
+                notes: notes.trim(),
+              }),
+              'Call logged.',
+            ).then(() => { setDuration(''); setNotes(''); })}>
+            Log
+          </button>
+        </div>
+      )}
+      {lead.calls.length === 0 ? <p className="help">No calls logged.</p> : (
+        <ul className="lead-feed">
+          {lead.calls.map((c) => (
+            <li key={c.id}>
+              <div className="lead-feed-body">
+                <strong>{c.outcome ? label(c.outcome) : 'Call'}</strong>
+                {c.notes && <div className="muted">{c.notes}</div>}
+                <Recording lead={lead} call={c} canEdit={canEdit} run={run} />
+              </div>
+              <div className="lead-feed-meta">
+                <span className="muted">{stamp(c.called_at)}{c.duration != null ? ` · ${mmss(c.duration)}` : ''}{c.created_by ? ` · ${c.created_by}` : ''}</span>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Schedule a follow-up for a lead. This writes a normal calendar event through the existing
+ * Calendar API with `lead_id` set, so it appears on the calendar like any other appointment and
+ * the Calendar module keeps sole ownership of events.
+ */
+function FollowUpModal({ lead, onClose, onSaved }: { lead: LeadDetail; onClose: () => void; onSaved: () => void }) {
+  const toast = useToast();
+  const [form, setForm] = useState({
+    title: `Follow up — ${lead.name}`,
+    date: today(),
+    time: '10:00',
+    type: 'follow-up',
+    notes: '',
+  });
+  const [saving, setSaving] = useState(false);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSaving(true);
+    try {
+      const payload: CalendarEventInput & { lead_id: number } = {
+        title: form.title.trim(),
+        date: form.date,
+        time: form.time,
+        type: form.type as CalendarEventInput['type'],
+        status: 'scheduled',
+        contact_email: lead.email,
+        contact_phone: lead.phone ?? '',
+        notes: form.notes.trim(),
+        lead_id: lead.id,
+      };
+      await createEvent(payload);
+      onSaved();
+    } catch (ex) {
+      toast(apiErrorMessage(ex, 'Could not create the follow-up'), 'bad');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="overlay open" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="modal" style={{ maxWidth: 480 }}>
+        <button className="close" type="button" onClick={onClose} aria-label="Close">✕</button>
+        <div className="modal-h">Schedule Follow-up</div>
+        <form onSubmit={submit}>
+          <div className="field">
+            <label>Title *</label>
+            <input value={form.title} required onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))} />
+          </div>
+          <div className="g3">
+            <div className="field">
+              <label>Date *</label>
+              <input type="date" value={form.date} required onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))} />
+            </div>
+            <div className="field">
+              <label>Time *</label>
+              <input type="time" value={form.time} required onChange={(e) => setForm((f) => ({ ...f, time: e.target.value }))} />
+            </div>
+            <div className="field">
+              <label>Type</label>
+              <select value={form.type} onChange={(e) => setForm((f) => ({ ...f, type: e.target.value }))}>
+                {['follow-up', 'call', 'meeting', 'viewing', 'showing', 'task'].map((t) => (
+                  <option key={t} value={t}>{label(t)}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <div className="field">
+            <label>Notes</label>
+            <textarea rows={2} value={form.notes} onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))} />
+          </div>
+          <span className="help">Appears on the Calendar and stays linked to this lead.</span>
+          <div className="actions">
+            <button className="btn ghost" type="button" onClick={onClose} disabled={saving}>Cancel</button>
+            <button className="btn primary" type="submit" disabled={saving}>{saving ? 'Saving…' : 'Add to Calendar'}</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}

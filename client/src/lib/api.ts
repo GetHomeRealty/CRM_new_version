@@ -1,0 +1,232 @@
+import type { AxiosRequestConfig } from 'axios';
+import api from './axios';
+import type { AgentChangeNotif, AgentCommissionMap, AgentLoanMap, AuditLogPage, BrokerageSuggestion, ChatMessage, ClientIdentification, CompanySettings, DashboardCommissions, DealHistoryEntry, DeletionLogEntry, DocNotif, DocumentsResponse, EmailTemplate, EmailTemplatesResponse, GenerateInvoicesResult, Invoice, LawyerSuggestion, MailAccount, ManagedUser, NoticeOfSaleData, SendResult, TemplatePreview, TestMailResult, Transaction, TrashedDocument, TrashedInvoice, TrashedPayment, TrashedResponse, TrashedRowItem, TrashedTransaction, UsersCatalog } from '../types';
+
+/** Route parameter identifiers (Laravel accepts numeric or string ids). */
+type Id = number | string;
+
+/**
+ * Multipart uploads: unset the JSON Content-Type so the browser sets the
+ * multipart boundary itself. axios's header value type excludes `undefined`,
+ * so this single shape is asserted once — the runtime value MUST remain
+ * `undefined` (do not change it to a string, or the boundary is lost).
+ */
+const MULTIPART = { headers: { 'Content-Type': undefined } } as unknown as AxiosRequestConfig;
+
+// --- Transactions ---
+export const listTransactions = (): Promise<Transaction[]> =>
+  api.get<{ data: Transaction[] }>('/api/transactions').then((r) => r.data.data);
+
+export const getDashboardCommissions = (): Promise<DashboardCommissions> =>
+  api.get<DashboardCommissions>('/api/dashboard/commissions').then((r) => r.data);
+
+export const getTransaction = (id: Id): Promise<Transaction> =>
+  api.get<{ data: Transaction }>(`/api/transactions/${id}`).then((r) => r.data.data);
+
+export const createTransaction = (payload: unknown): Promise<Transaction> =>
+  api.post<{ data: Transaction }>('/api/transactions', payload).then((r) => r.data.data);
+
+export const updateTransaction = (id: Id, payload: unknown): Promise<Transaction> =>
+  api.put<{ data: Transaction }>(`/api/transactions/${id}`, payload).then((r) => r.data.data);
+
+export const deleteTransaction = (id: Id): Promise<unknown> =>
+  api.delete(`/api/transactions/${id}`).then((r) => r.data);
+
+// --- Transaction deletion approval workflow ---
+export const requestTransactionDeletion = (id: Id, reason: string): Promise<unknown> =>
+  api.post(`/api/transactions/${id}/delete-requests`, { reason }).then((r) => r.data);
+export const forwardDeleteRequest = (reqId: Id, reason: string): Promise<unknown> =>
+  api.post(`/api/delete-requests/${reqId}/forward`, { reason }).then((r) => r.data);
+export const approveDeleteRequest = (reqId: Id): Promise<unknown> =>
+  api.post(`/api/delete-requests/${reqId}/approve`).then((r) => r.data);
+export const rejectDeleteRequest = (reqId: Id): Promise<unknown> =>
+  api.post(`/api/delete-requests/${reqId}/reject`).then((r) => r.data);
+
+export const getTransactionMessages = (id: Id): Promise<ChatMessage[]> =>
+  api.get<ChatMessage[]>(`/api/transactions/${id}/messages`).then((r) => r.data);
+
+// --- §5.1 edit-approval workflow (DFT / Closed) ---
+export const requestTransactionEdit = (id: Id, reason: string, scope: string | null = null): Promise<unknown> =>
+  api.post(`/api/transactions/${id}/edit-requests`, { reason, scope }).then((r) => r.data);
+export const approveEditRequest = (reqId: Id): Promise<unknown> =>
+  api.post(`/api/edit-requests/${reqId}/approve`).then((r) => r.data);
+export const rejectEditRequest = (reqId: Id): Promise<unknown> =>
+  api.post(`/api/edit-requests/${reqId}/reject`).then((r) => r.data);
+export const reviewAgentChanges = (id: Id): Promise<Transaction> =>
+  api.post<{ data: Transaction }>(`/api/transactions/${id}/review-agent-changes`).then((r) => r.data.data);
+export const rejectAgentChange = (id: Id, auditId: Id): Promise<Transaction> =>
+  api.post<{ data: Transaction }>(`/api/transactions/${id}/reject-agent-change`, { audit_id: auditId }).then((r) => r.data.data);
+export const getAgentChangeNotifications = (): Promise<AgentChangeNotif> =>
+  api.get<AgentChangeNotif>('/api/agent-change-notifications').then((r) => r.data);
+export const postTransactionMessage = (id: Id, body: string): Promise<ChatMessage[]> =>
+  api.post<ChatMessage[]>(`/api/transactions/${id}/messages`, { body }).then((r) => r.data);
+
+// --- Documents (Legal & Documentation) ---
+export const getDocuments = (txnId: Id): Promise<DocumentsResponse> =>
+  api.get<DocumentsResponse>(`/api/transactions/${txnId}/documents`).then((r) => r.data);
+
+export const saveDocuments = (txnId: Id, documents: unknown[], extra: Record<string, unknown> = {}): Promise<DocumentsResponse> =>
+  api.put<DocumentsResponse>(`/api/transactions/${txnId}/documents`, { documents, ...extra }).then((r) => r.data);
+
+export const sendDocumentReminders = (txnId: Id): Promise<{ message?: string; count?: number; recipients?: string[] }> =>
+  api.post<{ message?: string; count?: number; recipients?: string[] }>(`/api/transactions/${txnId}/documents/send-reminders`).then((r) => r.data);
+
+export const uploadDocumentFile = (txnId: Id, docId: Id, file: File): Promise<DocumentsResponse> => {
+  const fd = new FormData();
+  fd.append('file', file);
+  return api
+    .post<DocumentsResponse>(`/api/transactions/${txnId}/documents/${docId}/file`, fd, MULTIPART)
+    .then((r) => r.data);
+};
+
+export const deleteDocument = (docId: Id): Promise<unknown> => api.delete(`/api/documents/${docId}`).then((r) => r.data);
+export const restoreDocument = (docId: Id): Promise<unknown> => api.post(`/api/documents/${docId}/restore`).then((r) => r.data);
+
+// --- Notice of Sale ---
+export const getNoticeOfSale = (txnId: Id): Promise<NoticeOfSaleData> => api.get<NoticeOfSaleData>(`/api/transactions/${txnId}/notice-of-sale`).then((r) => r.data);
+export const saveNoticeOfSale = (txnId: Id, payload: unknown): Promise<NoticeOfSaleData> => api.put<NoticeOfSaleData>(`/api/transactions/${txnId}/notice-of-sale`, payload).then((r) => r.data);
+export const sendNoticeOfSale = (txnId: Id, agents: unknown, extra: Record<string, unknown> = {}): Promise<NoticeOfSaleData> => api.post<NoticeOfSaleData>(`/api/transactions/${txnId}/notice-of-sale/send`, { agents, ...extra }).then((r) => r.data);
+
+// --- Deposit Receipt ---
+export const sendDepositReceipt = (txnId: Id, email: string, cc?: unknown): Promise<SendResult> => api.post<SendResult>(`/api/transactions/${txnId}/deposit-receipt/send`, { email, cc }).then((r) => r.data);
+export const sendTradeSheet = (txnId: Id, email: string, extra: Record<string, unknown> = {}): Promise<SendResult> => api.post<SendResult>(`/api/transactions/${txnId}/trade-sheet/send`, { email, ...extra }).then((r) => r.data);
+
+// --- FINTRAC per-client identity (Form 630 auto-fill) ---
+export const getClientIdentification = (txnId: Id, clientName: string): Promise<ClientIdentification | null> =>
+  api.get<ClientIdentification | null>(`/api/transactions/${txnId}/identifications`, { params: { client_name: clientName } }).then((r) => r.data);
+export const saveClientIdentification = (txnId: Id, payload: unknown): Promise<ClientIdentification> =>
+  api.put<ClientIdentification>(`/api/transactions/${txnId}/identifications`, payload).then((r) => r.data);
+export const extractClientIdentification = (txnId: Id, clientName: string, documentId: Id): Promise<unknown> =>
+  api.post(`/api/transactions/${txnId}/identifications/extract`, { client_name: clientName, document_id: documentId }).then((r) => r.data);
+
+// §13 multi-file / per-client uploads (clientName optional)
+export const uploadDocClientFile = (txnId: Id, docId: Id, file: File, clientName?: string): Promise<DocumentsResponse> => {
+  const fd = new FormData();
+  fd.append('file', file);
+  if (clientName) fd.append('client_name', clientName);
+  return api.post<DocumentsResponse>(`/api/transactions/${txnId}/documents/${docId}/files`, fd, MULTIPART).then((r) => r.data);
+};
+export const deleteDocClientFile = (txnId: Id, docId: Id, index: number): Promise<DocumentsResponse> =>
+  api.delete<DocumentsResponse>(`/api/transactions/${txnId}/documents/${docId}/files/${index}`).then((r) => r.data);
+
+// §13 Invalid-validation supporting attachment
+export const uploadDocValidationFile = (txnId: Id, docId: Id, file: File): Promise<DocumentsResponse> => {
+  const fd = new FormData();
+  fd.append('file', file);
+  return api.post<DocumentsResponse>(`/api/transactions/${txnId}/documents/${docId}/validation-file`, fd, MULTIPART).then((r) => r.data);
+};
+export const deleteDocValidationFile = (txnId: Id, docId: Id): Promise<DocumentsResponse> =>
+  api.delete<DocumentsResponse>(`/api/transactions/${txnId}/documents/${docId}/validation-file`).then((r) => r.data);
+
+const apiBase = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
+export const documentFileUrl = (docId: Id): string => `${apiBase}/api/documents/${docId}/file`;
+export const docClientFileUrl = (docId: Id, index: number): string => `${apiBase}/api/documents/${docId}/files/${index}`;
+export const documentsDownloadAllUrl = (txnId: Id): string => `${apiBase}/api/transactions/${txnId}/documents/download-all`;
+export const docValidationFileUrl = (docId: Id): string => `${apiBase}/api/documents/${docId}/validation-file`;
+
+// Fetch a protected file through the authenticated axios instance (sends the Sanctum
+// session cookie + XSRF), then view it in a new tab or trigger a download. A bare
+// <a href> to the cross-origin API doesn't carry that auth, which is why plain links
+// failed to view/download after deployment.
+const fetchFileBlob = async (path: string, { inline = false }: { inline?: boolean } = {}): Promise<void> => {
+  const res = await api.get<Blob>(path, { responseType: 'blob' });
+  const dispo = String(res.headers['content-disposition'] ?? '');
+  const m = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(dispo);
+  const name = m ? decodeURIComponent(m[1]) : 'download';
+  const url = URL.createObjectURL(res.data);
+  if (inline) {
+    window.open(url, '_blank', 'noopener');
+  } else {
+    const a = document.createElement('a');
+    a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+  }
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+};
+export const viewDocumentFile = (docId: Id): Promise<void> => fetchFileBlob(`/api/documents/${docId}/file?inline=1`, { inline: true });
+export const downloadDocumentFile = (docId: Id): Promise<void> => fetchFileBlob(`/api/documents/${docId}/file`);
+export const viewDocClientFile = (docId: Id, index: number): Promise<void> => fetchFileBlob(`/api/documents/${docId}/files/${index}?inline=1`, { inline: true });
+export const downloadDocClientFile = (docId: Id, index: number): Promise<void> => fetchFileBlob(`/api/documents/${docId}/files/${index}`);
+export const viewDocValidationFile = (docId: Id): Promise<void> => fetchFileBlob(`/api/documents/${docId}/validation-file?inline=1`, { inline: true });
+export const downloadAllDocuments = (txnId: Id): Promise<void> => fetchFileBlob(`/api/transactions/${txnId}/documents/download-all`);
+
+// --- Document notifications (agent upload → admin; admin review → agent) ---
+export const getDocNotifications = (): Promise<DocNotif> => api.get<DocNotif>('/api/doc-notifications').then((r) => r.data);
+export const markDocNotificationsSeen = (txnId: Id): Promise<unknown> => api.post(`/api/transactions/${txnId}/doc-notifications/seen`).then((r) => r.data);
+
+// --- Users / RBAC (admin) ---
+export const getUsers = (): Promise<ManagedUser[]> => api.get('/api/users').then((r) => r.data);
+export const getUsersCatalog = (): Promise<UsersCatalog> => api.get('/api/users/catalog').then((r) => r.data);
+export const getUserDealHistory = (id: Id): Promise<DealHistoryEntry[]> => api.get(`/api/users/${id}/deal-history`).then((r) => r.data);
+export const createUser = (payload: unknown): Promise<ManagedUser> => api.post('/api/users', payload).then((r) => r.data);
+export const updateUser = (id: Id, payload: unknown): Promise<ManagedUser> => api.put(`/api/users/${id}`, payload).then((r) => r.data);
+export const deleteUser = (id: Id): Promise<unknown> => api.delete(`/api/users/${id}`).then((r) => r.data);
+
+// --- Invoice module ---
+export const getInvoices = (): Promise<Invoice[]> => api.get<Invoice[]>('/api/invoices').then((r) => r.data);
+export const getInvoice = (id: Id): Promise<Invoice> => api.get<Invoice>(`/api/invoices/${id}`).then((r) => r.data);
+export const createInvoice = (payload: unknown): Promise<Invoice> => api.post<Invoice>('/api/invoices', payload).then((r) => r.data);
+export const generateTransactionInvoices = (txnId: Id): Promise<GenerateInvoicesResult> => api.post<GenerateInvoicesResult>(`/api/transactions/${txnId}/invoices`).then((r) => r.data);
+export const updateInvoice = (id: Id, payload: unknown): Promise<Invoice> => api.put<Invoice>(`/api/invoices/${id}`, payload).then((r) => r.data);
+export const deleteInvoice = (id: Id, reason?: string): Promise<unknown> => api.delete(`/api/invoices/${id}`, { data: { reason } }).then((r) => r.data);
+export const recordInvoicePayment = (id: Id, payload: unknown): Promise<Invoice> => api.post<Invoice>(`/api/invoices/${id}/payments`, payload).then((r) => r.data);
+export const deleteInvoicePayment = (id: Id, paymentId: Id): Promise<unknown> => api.delete(`/api/invoices/${id}/payments/${paymentId}`).then((r) => r.data);
+export const recordInvoiceReminder = (id: Id, payload: unknown = {}): Promise<Invoice> => api.post<Invoice>(`/api/invoices/${id}/reminders`, payload).then((r) => r.data);
+export const sendInvoice = (id: Id, payload: unknown = {}): Promise<Invoice> => api.post<Invoice>(`/api/invoices/${id}/send`, payload).then((r) => r.data);
+
+export const changePassword = (payload: unknown): Promise<unknown> => api.post('/api/user/password', payload).then((r) => r.data);
+
+export const getCompanySettings = (): Promise<CompanySettings> => api.get<CompanySettings>('/api/company-settings').then((r) => r.data);
+export const updateCompanySettings = (payload: unknown): Promise<CompanySettings> => api.put<CompanySettings>('/api/company-settings', payload).then((r) => r.data);
+
+export const getCustomers = (): Promise<unknown[]> => api.get<unknown[]>('/api/customers').then((r) => r.data);
+export const createCustomer = (payload: unknown): Promise<unknown> => api.post('/api/customers', payload).then((r) => r.data);
+
+// --- Recycle Bin (Super Admin) ---
+export const getTrashedTransactions = (): Promise<TrashedResponse<TrashedTransaction>> => api.get('/api/trash/transactions').then((r) => r.data);
+export const restoreTransaction = (id: Id): Promise<unknown> => api.post(`/api/trash/transactions/${id}/restore`).then((r) => r.data);
+export const forceDeleteTransaction = (id: Id): Promise<unknown> => api.delete(`/api/trash/transactions/${id}`).then((r) => r.data);
+export const getTrashedDocuments = (): Promise<TrashedResponse<TrashedDocument>> => api.get('/api/trash/documents').then((r) => r.data);
+export const restoreTrashedDocument = (id: Id): Promise<unknown> => api.post(`/api/trash/documents/${id}/restore`).then((r) => r.data);
+export const forceDeleteTrashedDocument = (id: Id): Promise<unknown> => api.delete(`/api/trash/documents/${id}`).then((r) => r.data);
+export const getTrashedInvoices = (): Promise<TrashedResponse<TrashedInvoice>> => api.get('/api/trash/invoices').then((r) => r.data);
+export const restoreTrashedInvoice = (id: Id): Promise<unknown> => api.post(`/api/trash/invoices/${id}/restore`).then((r) => r.data);
+export const forceDeleteTrashedInvoice = (id: Id): Promise<unknown> => api.delete(`/api/trash/invoices/${id}`).then((r) => r.data);
+export const getTrashedPayments = (): Promise<TrashedResponse<TrashedPayment>> => api.get('/api/trash/payments').then((r) => r.data);
+export const restoreTrashedPayment = (id: Id): Promise<unknown> => api.post(`/api/trash/payments/${id}/restore`).then((r) => r.data);
+export const forceDeleteTrashedPayment = (id: Id): Promise<unknown> => api.delete(`/api/trash/payments/${id}`).then((r) => r.data);
+export const getTrashedRowItems = (): Promise<TrashedResponse<TrashedRowItem>> => api.get('/api/trash/row-items').then((r) => r.data);
+export const restoreTrashedRowItem = (id: Id): Promise<unknown> => api.post(`/api/trash/row-items/${id}/restore`).then((r) => r.data);
+export const forceDeleteTrashedRowItem = (id: Id): Promise<unknown> => api.delete(`/api/trash/row-items/${id}`).then((r) => r.data);
+export const getDeletionLog = (): Promise<TrashedResponse<DeletionLogEntry>> => api.get('/api/trash/deletions').then((r) => r.data);
+
+// --- Global Audit Trail (admin) ---
+export const getAuditLogs = (params: Record<string, unknown> = {}): Promise<AuditLogPage> =>
+  api.get<AuditLogPage>('/api/audit-logs', { params }).then((r) => r.data);
+
+// --- Reference data ---
+export const listAgents = (): Promise<string[]> => api.get<string[]>('/api/agents').then((r) => r.data);
+export const getAgentCommissions = (): Promise<AgentCommissionMap> => api.get<AgentCommissionMap>('/api/agent-commissions').then((r) => r.data);
+export const getAgentEmails = (): Promise<Record<string, string>> => api.get<Record<string, string>>('/api/agent-emails').then((r) => r.data);
+export const getAgentLoans = (): Promise<AgentLoanMap> => api.get<AgentLoanMap>('/api/agent-loans').then((r) => r.data);
+export const registrationOpen = (): Promise<boolean> => api.get<{ open: boolean }>('/api/registration-open').then((r) => r.data.open);
+
+export const getTransactionTypes = (): Promise<unknown> =>
+  api.get('/api/transaction-types').then((r) => r.data);
+
+// Type-ahead suggestions from previously saved records.
+export const getLawyerSuggestions = (): Promise<LawyerSuggestion[]> => api.get<LawyerSuggestion[]>('/api/suggestions/lawyers').then((r) => r.data);
+export const getBrokerageSuggestions = (): Promise<BrokerageSuggestion[]> => api.get<BrokerageSuggestion[]>('/api/suggestions/brokerages').then((r) => r.data);
+
+// --- Email settings (Super Admin): SMTP accounts + per-event templates ---
+export const getMailAccounts = (): Promise<MailAccount[]> => api.get('/api/mail-accounts').then((r) => r.data.data ?? r.data);
+export const createMailAccount = (payload: unknown): Promise<MailAccount> => api.post('/api/mail-accounts', payload).then((r) => r.data.data ?? r.data);
+export const updateMailAccount = (id: Id, payload: unknown): Promise<MailAccount> => api.put(`/api/mail-accounts/${id}`, payload).then((r) => r.data.data ?? r.data);
+export const deleteMailAccount = (id: Id): Promise<unknown> => api.delete(`/api/mail-accounts/${id}`).then((r) => r.data);
+export const setDefaultMailAccount = (id: Id): Promise<MailAccount> => api.post(`/api/mail-accounts/${id}/default`).then((r) => r.data.data ?? r.data);
+export const testMailAccount = (id: Id, to: string): Promise<TestMailResult> => api.post(`/api/mail-accounts/${id}/test`, { to }).then((r) => r.data);
+
+export const getEmailTemplates = (): Promise<EmailTemplatesResponse> => api.get('/api/email-templates').then((r) => r.data);
+export const updateEmailTemplate = (id: Id, payload: unknown): Promise<EmailTemplate> => api.put(`/api/email-templates/${id}`, payload).then((r) => r.data.data ?? r.data);
+export const previewEmailTemplate = (id: Id): Promise<TemplatePreview> => api.post(`/api/email-templates/${id}/preview`).then((r) => r.data);
+export const getMailEvents = (): Promise<unknown> => api.get('/api/mail-events').then((r) => r.data);

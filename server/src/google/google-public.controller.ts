@@ -1,0 +1,63 @@
+import { Controller, Get, Logger, Query, Req, Res } from '@nestjs/common';
+import type { Request, Response } from 'express';
+import { GoogleConnectionService } from './google-connection.service';
+import { GoogleService } from './google.service';
+import { GoogleStateService } from './google-state.service';
+import { GoogleCalendarSyncService } from './google-calendar-sync.service';
+import { frontendReturn, isConfigured, redirectUri } from './google.constants';
+
+const str = (v: unknown): string => String(v ?? '').trim();
+
+/**
+ * The endpoint Google redirects the browser back to after consent. No AuthGuard and no CSRF token
+ * — there is no session on a cross-site redirect from Google. It is trusted via the signed
+ * `state`, which carries the user id and is verified before anything is stored. Always ends in a
+ * redirect back into the SPA; the user never sees raw JSON.
+ *
+ * Registered before GoogleController so `/api/google/callback` is matched here, not by the guarded
+ * controller. Express matches in registration order.
+ */
+@Controller('google')
+export class GooglePublicController {
+  private readonly log = new Logger(GooglePublicController.name);
+
+  constructor(
+    private readonly connections: GoogleConnectionService,
+    private readonly google: GoogleService,
+    private readonly state: GoogleStateService,
+    private readonly sync: GoogleCalendarSyncService,
+  ) {}
+
+  @Get('callback')
+  async callback(@Query() q: Record<string, string>, @Req() req: Request, @Res() res: Response): Promise<void> {
+    const fail = (reason: string, detail = ''): void => {
+      if (detail) this.log.warn(`Google OAuth callback failed (${reason}): ${detail}`);
+      res.redirect(frontendReturn(`google_error=${encodeURIComponent(reason)}`));
+    };
+
+    if (str(q.error)) return fail(str(q.error));
+    const code = str(q.code);
+    if (!code) return fail('missing_code');
+    // A bad state means forged, expired or replayed — never fall back to trusting the caller.
+    const userId = this.state.verify(str(q.state));
+    if (!userId) return fail('invalid_state');
+    if (!isConfigured()) return fail('not_configured');
+
+    try {
+      const proto = str(req.headers['x-forwarded-proto']) || req.protocol || 'http';
+      const host = str(req.headers['x-forwarded-host']) || str(req.headers.host);
+      const uri = redirectUri(host ? `${proto}://${host}` : '');
+
+      const tokens = await this.google.exchangeCode(code, uri);
+      const email = await this.google.email(tokens.access_token);
+      await this.connections.save(userId, tokens, email);
+
+      // Pull once immediately so the calendar isn't empty right after connecting. Best-effort.
+      try { await this.sync.pull(userId); } catch { /* surfaced later via status */ }
+
+      res.redirect(frontendReturn('google_connected=1'));
+    } catch (ex) {
+      return fail('exchange_failed', (ex as Error).message);
+    }
+  }
+}
