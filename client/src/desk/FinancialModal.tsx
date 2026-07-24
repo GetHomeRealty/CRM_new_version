@@ -462,10 +462,20 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
             <div className="field"><label>NET of HST</label><select value={netHst ? 'Yes' : 'No'} onChange={(e) => setNetHst(e.target.value === 'Yes')}><option>No</option><option>Yes</option></select></div>
             <div className="field"><label>Deposit {finPencil()}</label><input value={txn.deposit ?? 0} readOnly style={{ background: '#f9fafb' }} /></div>
           </div>
-        ) : (
+        ) : listing ? (
           <div className={referral ? '' : 'g2'}>
             <div className="field"><label>Price {finPencil()}</label><MoneyInput value={price} onChange={(v) => setPrice(v)} onBlur={(e) => setPrice(parseNumber(e.target.value))} readOnly={finLock} style={finLock ? finLockStyle : undefined} /></div>
             {!referral && <div className="field"><label>Deposit {finPencil()}</label><input value={txn.deposit ?? 0} readOnly style={{ background: '#f9fafb' }} /></div>}
+          </div>
+        ) : (
+          /* Buying / Lease: Price, Deposit, Commission % and Commission Amount are the four
+             figures the deal is priced from, so they read as one row rather than two stacked
+             pairs. Referral has no deposit, so it drops to three columns. */
+          <div className={referral ? 'g3' : 'g4'}>
+            <div className="field"><label>Price {finPencil()}</label><MoneyInput value={price} onChange={(v) => setPrice(v)} onBlur={(e) => setPrice(parseNumber(e.target.value))} readOnly={finLock} style={finLock ? finLockStyle : undefined} /></div>
+            {!referral && <div className="field"><label>Deposit {finPencil()}</label><input value={txn.deposit ?? 0} readOnly style={{ background: '#f9fafb' }} /></div>}
+            <div className="field"><label>Commission % {finPencil()}</label><input value={commPct} onChange={(e) => onPct(e.target.value)} placeholder="e.g. 5" readOnly={finLock} style={finLock ? { ...finLockStyle, ...pctStyle } : pctStyle} /></div>
+            <div className="field"><label>Commission Amount {finPencil()}</label><MoneyInput value={commAmt} onChange={(v) => onAmt(v)} placeholder="0.00" readOnly={finLock} style={finLock ? finLockStyle : undefined} /></div>
           </div>
         )}
 
@@ -691,11 +701,8 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
           </>
         ) : (
           /* ---- STANDARD (live, like the original) ---- */
+          /* Commission % / Amount now sit in the Price + Deposit row above. */
           <>
-            <div className="g2">
-              <div className="field"><label>Commission % {finPencil()}</label><input value={commPct} onChange={(e) => onPct(e.target.value)} placeholder="e.g. 5" readOnly={finLock} style={finLock ? { ...finLockStyle, ...pctStyle } : pctStyle} /></div>
-              <div className="field"><label>Commission Amount {finPencil()}</label><MoneyInput value={commAmt} onChange={(v) => onAmt(v)} placeholder="0.00" readOnly={finLock} style={finLock ? finLockStyle : undefined} /></div>
-            </div>
             <div className="fin-sum">
               <div className="field" style={{ marginBottom: 0 }}><label>Commission</label><input value={formatCurrency(commWoHst)} readOnly />{adjB !== 0 && <div className="help" style={{ margin: '4px 0 0' }}>{adjNote(adjB, 'before HST')}</div>}</div>
               <div className="field" style={{ marginBottom: 0 }}><label>HST</label><input value={formatCurrency(stdHst)} readOnly /></div>

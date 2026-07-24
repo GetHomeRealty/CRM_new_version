@@ -340,6 +340,15 @@ export class CommissionService {
       const split = await this.agentDefaultSplit(t.agent, t.type, profileCache);
       return [{ name: t.agent, split: 100, agent_pct: split.agent, brok_pct: split.brok, scope: 'Entire', terms: [] }];
     }
+    // Members exist, but nobody has been given a share yet — `team_members.split` defaults to 0,
+    // and selecting agents on the Add Transaction screen adds them with no split. Every agent line
+    // would otherwise multiply out to zero and the whole Financial section would read as blank.
+    // Until the splits are entered the primary agent holds the entire deal, so give them 100%.
+    // The moment any real split is entered this no longer applies and the stored values are used.
+    if (members.length > 0 && members.every((m) => !(m.split > 0))) {
+      const primary = t.agent ? members.findIndex((m) => m.name === t.agent) : -1;
+      if (primary !== -1) return members.map((m, i) => (i === primary ? { ...m, split: 100 } : m));
+    }
     return members;
   }
 
