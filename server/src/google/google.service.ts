@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import {
-  AUTH_URL, CALENDAR_API, OAUTH_SCOPES, REVOKE_URL, TOKEN_URL, USERINFO_URL, clientId, clientSecret,
+  AUTH_URL, CALENDAR_API, MAIL_OAUTH_SCOPES, OAUTH_SCOPES, REVOKE_URL, TOKEN_URL, USERINFO_URL,
+  clientId, clientSecret,
 } from './google.constants';
 
 export interface TokenResponse {
@@ -38,6 +39,22 @@ export class GoogleService {
       response_type: 'code',
       scope: OAUTH_SCOPES.join(' '),
       // offline + consent so Google returns a refresh token we can keep syncing with.
+      access_type: 'offline',
+      prompt: 'consent',
+      include_granted_scopes: 'true',
+      state,
+    });
+    return `${AUTH_URL}?${params.toString()}`;
+  }
+
+  /** Consent URL for connecting a Gmail account to send/receive mail (SMTP/IMAP XOAUTH2 scope). */
+  mailAuthUrl(state: string, redirectUri: string): string {
+    const params = new URLSearchParams({
+      client_id: clientId(),
+      redirect_uri: redirectUri,
+      response_type: 'code',
+      scope: MAIL_OAUTH_SCOPES.join(' '),
+      // offline + consent so Google returns a refresh token we can keep sending/receiving with.
       access_type: 'offline',
       prompt: 'consent',
       include_granted_scopes: 'true',

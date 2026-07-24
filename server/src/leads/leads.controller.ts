@@ -103,6 +103,13 @@ export class LeadsController {
     return this.leads.allTasks(user);
   }
 
+  /** Every lead showing the caller can see, for the Dashboard. Registered before `:id`. */
+  @Get('showings')
+  @Screen('lead', 'view')
+  allShowings(@CurrentUser() user: AuthUserRecord): Promise<unknown> {
+    return this.leads.allShowings(user);
+  }
+
   // ------------------------------------------------------ recently deleted
   @Get('deleted')
   @Screen('lead', 'view')
@@ -251,6 +258,14 @@ export class LeadsController {
     return this.activity.initiateCall(id, u);
   }
 
+  /** In-browser dialer: create the call log + return the E.164 number for the Voice SDK to dial. */
+  @Post(':id/browser-call')
+  @HttpCode(200)
+  @Screen('lead', 'edit')
+  browserCall(@CurrentUser() u: AuthUserRecord, @Param('id', ParseIntPipe) id: number): Promise<unknown> {
+    return this.activity.prepareBrowserCall(id, u);
+  }
+
   @Delete(':id/calls/:callId')
   @Screen('lead', 'edit')
   removeCall(@CurrentUser() u: AuthUserRecord, @Param('id', ParseIntPipe) id: number, @Param('callId', ParseIntPipe) callId: number): Promise<unknown> {
@@ -263,6 +278,14 @@ export class LeadsController {
   @Screen('lead', 'edit')
   sendEmail(@CurrentUser() u: AuthUserRecord, @Param('id', ParseIntPipe) id: number, @Body() b: Record<string, unknown>): Promise<unknown> {
     return this.activity.sendEmail(id, b ?? {}, u);
+  }
+
+  /** Draft an email with AI from a plain-language prompt. Returns {subject, html} — sends nothing. */
+  @Post(':id/email/generate')
+  @HttpCode(200)
+  @Screen('lead', 'edit')
+  generateEmail(@CurrentUser() u: AuthUserRecord, @Param('id', ParseIntPipe) id: number, @Body() b: Record<string, unknown>): Promise<unknown> {
+    return this.activity.generateEmail(id, String(b?.prompt ?? ''), u);
   }
 
   // ------------------------------------------------------- call recordings

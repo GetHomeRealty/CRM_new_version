@@ -1,0 +1,110 @@
+import { useCallback, useEffect, useState } from 'react';
+import {
+  googleCalendarStatus, googleCalendarConnect, googleCalendarSync, googleCalendarDisconnect,
+  type GoogleCalendarStatus,
+} from '../lib/accountApi';
+import { apiErrorMessage } from '../lib/apiError';
+import { useToast } from './toast';
+
+/** Where the connect flow starts and returns to — CRM Settings lives under the Email Settings screen. */
+const RETURN_PATH = '/app/email-settings?tab=crm';
+
+/** The multicolour Google "G", inline so the card stays self-contained. */
+const GoogleG = ({ size = 20 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 48 48" aria-hidden="true">
+    <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z" />
+    <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z" />
+    <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z" />
+    <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z" />
+  </svg>
+);
+
+const fmtSync = (iso: string | null): string => (iso ? iso.slice(0, 16).replace('T', ' ') : '');
+
+/**
+ * Google Calendar via real OAuth, as a self-contained card. "Sign in with Google" fetches Google's
+ * own consent-screen URL and sends the browser there; after the round-trip the server returns to
+ * /app/account, and the hint stored below bounces the browser back here (see AccountSettingsPage).
+ * Per-user; explains itself when the server has no Google credentials rather than failing silently.
+ */
+export default function GoogleCalendarCard() {
+  const toast = useToast();
+  const [st, setSt] = useState<GoogleCalendarStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(() => { googleCalendarStatus().then(setSt).catch(() => setSt(null)); }, []);
+  useEffect(() => { load(); }, [load]);
+
+  // If the OAuth round-trip lands back here, surface the outcome once and clean the URL.
+  useEffect(() => {
+    const p = new URLSearchParams(window.location.search);
+    if (p.get('google_connected')) toast('Google Calendar connected.', 'ok');
+    else if (p.get('google_error')) toast(`Google connection failed: ${p.get('google_error')}`, 'bad');
+    if (p.get('google_connected') || p.get('google_error')) {
+      window.history.replaceState({}, '', RETURN_PATH);
+      load();
+    }
+  }, [toast, load]);
+
+  const connect = async () => {
+    setBusy(true);
+    try {
+      const res = await googleCalendarConnect();
+      if (res.url) {
+        sessionStorage.setItem('gcal_return', RETURN_PATH);   // return here after the /app/account round-trip
+        window.location.href = res.url;                        // → Google's own consent screen
+      } else {
+        toast(res.message || 'Google sign-in is not set up on the server.', 'bad');
+      }
+    } catch (ex) {
+      toast(apiErrorMessage(ex, 'Could not start Google sign-in'), 'bad');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const run = async (fn: () => Promise<{ message?: string; error?: string | null }>, ok: string) => {
+    setBusy(true);
+    try { const r = await fn(); toast(r.error ? (r.message || r.error) : (r.message || ok), r.error ? 'bad' : 'ok'); load(); }
+    catch (ex) { toast(apiErrorMessage(ex, 'That did not work'), 'bad'); }
+    finally { setBusy(false); }
+  };
+
+  const subtitle = !st ? 'Checking…'
+    : !st.configured ? (st.setup_hint || 'Google sign-in is not set up on the server yet.')
+    : st.connected ? `Signed in as ${st.email ?? 'your Google account'}${st.last_sync ? ` · last synced ${fmtSync(st.last_sync)}` : ''}`
+    : 'Sign in with Google — your events sync both ways between Google Calendar and the CRM.';
+
+  return (
+    <div className="intg-card">
+      <div className="intg-card-head">
+        <div className="intg-card-icon"><GoogleG /></div>
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div className="intg-card-title">Google Calendar</div>
+          <div className="muted" style={{ fontSize: 12.5 }}>{subtitle}</div>
+        </div>
+        <span className={`pill ${st?.connected ? 'ok' : ''}`} style={{ flex: 'none' }}>
+          {!st ? 'Checking…' : st.connected ? 'Connected' : 'Not connected'}
+        </span>
+      </div>
+
+      {st?.error && <div className="muted" style={{ color: 'var(--bad)', marginTop: 8 }}>{st.error}</div>}
+
+      <div className="intg-card-actions">
+        {st?.connected ? (
+          <>
+            <button className="btn ghost sm" type="button" disabled={busy} onClick={() => void run(() => googleCalendarSync(), 'Synced.')}>↻ Sync now</button>
+            <button className="btn ghost sm" type="button" disabled={busy} onClick={() => void run(() => googleCalendarDisconnect().then(() => ({ message: 'Disconnected.' })), 'Disconnected.')}>Disconnect</button>
+          </>
+        ) : (
+          <button className="btn gsi" type="button" disabled={busy || (st ? !st.configured : true)} onClick={() => void connect()}>
+            <GoogleG size={18} /><span>{busy ? 'Starting…' : 'Sign in with Google'}</span>
+          </button>
+        )}
+        {st && !st.configured && (
+          <span className="muted" style={{ fontSize: 12 }}>Ask an admin to add the Google keys on the server.</span>
+        )}
+      </div>
+    </div>
+  );
+}

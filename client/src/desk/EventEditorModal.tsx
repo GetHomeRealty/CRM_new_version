@@ -199,20 +199,21 @@ export default function EventEditorModal({ event, defaultDate, options, onClose,
 
           <div className="field">
             <label>Description</label>
-            <textarea rows={3} value={form.description} onChange={(e) => set('description', e.target.value)} />
+            <textarea rows={2} value={form.description} onChange={(e) => set('description', e.target.value)} />
             {err('description')}
           </div>
 
-          <div className="field">
-            <label>Property Details</label>
-            <textarea rows={2} value={form.property_details} onChange={(e) => set('property_details', e.target.value)} />
-            {err('property_details')}
-          </div>
-
-          <div className="field">
-            <label>Notes</label>
-            <textarea rows={2} value={form.notes} onChange={(e) => set('notes', e.target.value)} />
-            {err('notes')}
+          <div className="grid2">
+            <div className="field">
+              <label>Property Details</label>
+              <textarea rows={2} value={form.property_details} onChange={(e) => set('property_details', e.target.value)} />
+              {err('property_details')}
+            </div>
+            <div className="field">
+              <label>Notes</label>
+              <textarea rows={2} value={form.notes} onChange={(e) => set('notes', e.target.value)} />
+              {err('notes')}
+            </div>
           </div>
 
           <label className="cal-reminder">

@@ -59,6 +59,30 @@ const typePill = (t: string | null): string => {
   }
 };
 
+const SOURCE_PILL: Record<string, string> = { meta: 'info', 'google ads': 'warn', website: 'ok' };
+
+/**
+ * The Source cell: a pill for the channel and, underneath, the exact form the lead came through.
+ * Only Meta leads carry a form/page name (`meta.form_name` / `meta.page_name`); website and Google
+ * leads have no form recorded in the data, so they show just the channel.
+ */
+function SourceCell({ lead }: { lead: Lead }) {
+  const src = lead.lead_source;
+  if (!src) return <span className="muted">—</span>;
+  const form = lead.meta?.form_name;
+  const page = lead.meta?.page_name;
+  return (
+    <>
+      <span className={`pill ${SOURCE_PILL[src] ?? ''}`}>{label(src)}</span>
+      {(form || page) && (
+        <div className="muted lead-form-name" title={[page, form].filter(Boolean).join(' · ')}>
+          {form ? `📋 ${form}` : `📄 ${page}`}
+        </div>
+      )}
+    </>
+  );
+}
+
 const shortDate = (iso: string | null): string => (iso ? iso.slice(0, 10) : '—');
 
 /** Build a CSV from row objects and hand it to the browser as a download. */
@@ -244,14 +268,26 @@ export default function LeadsPage() {
       <div className="toolbar">
         <div className="toolbar-row" style={{ justifyContent: 'space-between' }}>
           <div className="lead-counters">
-            <span className="lead-counter"><strong>{stats.total}</strong> leads</span>
+            <button className={`lead-counter as-btn${filters.recent === 'true' ? ' on' : ''}`} type="button"
+              title={`Leads that arrived in the last ${options?.recent_days ?? 30} days`}
+              onClick={() => setFilter('recent', filters.recent === 'true' ? '' : 'true')}>
+              🆕 Recent Leads <strong>{stats.recent}</strong>
+            </button>
             <button className="lead-counter as-btn" type="button" title="Leads with no logged call"
               onClick={() => { setFilter('recent', ''); toast(`${stats.noCalls} lead(s) have no logged call.`, 'info'); }}>
               📞 No Calls <strong>{stats.noCalls}</strong>
             </button>
-            <button className="lead-counter as-btn" type="button" title="Leads from Google Ads or Meta"
+            <button className={`lead-counter as-btn${filters.leadSource === 'website' ? ' on' : ''}`} type="button" title="Leads from the website"
+              onClick={() => setFilter('leadSource', filters.leadSource === 'website' ? '' : 'website')}>
+              🌐 Website Enquiries <strong>{stats.bySource.website}</strong>
+            </button>
+            <button className={`lead-counter as-btn${filters.leadSource === 'meta' ? ' on' : ''}`} type="button" title="Leads from Meta (Facebook / Instagram)"
+              onClick={() => setFilter('leadSource', filters.leadSource === 'meta' ? '' : 'meta')}>
+              📘 Meta <strong>{stats.bySource.meta}</strong>
+            </button>
+            <button className={`lead-counter as-btn${filters.leadSource === 'google ads' ? ' on' : ''}`} type="button" title="Leads from Google Ads"
               onClick={() => setFilter('leadSource', filters.leadSource === 'google ads' ? '' : 'google ads')}>
-              🌐 Website Enquiries <strong>{stats.websiteEnquiries}</strong>
+              🔎 Google <strong>{stats.bySource.google}</strong>
             </button>
           </div>
           <div className="toolbar-row">
@@ -288,13 +324,6 @@ export default function LeadsPage() {
               </button>
             );
           })}
-          {/* A different axis from the status tabs — it narrows by arrival date, so it can be on
-              at the same time as Hot or Warm rather than replacing them. */}
-          <button type="button" className={`lead-tab recent${filters.recent === 'true' ? ' on' : ''}`}
-            title={`Leads that arrived in the last ${options?.recent_days ?? 30} days`}
-            onClick={() => setFilter('recent', filters.recent === 'true' ? '' : 'true')}>
-            🆕 Recent ({options?.recent_days ?? 30}d) <span className="lead-tab-n">{stats.recent}</span>
-          </button>
         </div>
 
         <div className="toolbar-row" style={{ marginTop: 10 }}>
@@ -403,11 +432,7 @@ export default function LeadsPage() {
                   </td>
                   <td>{l.lead_status ? <span className={`pill ${statusPill(l.lead_status)}`}>{label(l.lead_status)}</span> : <span className="muted">—</span>}</td>
                   <td>{l.lead_type ? <span className={`pill ${typePill(l.lead_type)}`}>{label(l.lead_type)}</span> : <span className="muted">—</span>}</td>
-                  <td>
-                    {l.lead_source === 'meta'
-                      ? <span className="pill info">Meta</span>
-                      : <span className="muted">{l.lead_source ? label(l.lead_source) : '—'}</span>}
-                  </td>
+                  <td><SourceCell lead={l} /></td>
                   <td>
                     {l.tags.length === 0 ? <span className="muted">—</span> : (
                       <div className="lead-tags">

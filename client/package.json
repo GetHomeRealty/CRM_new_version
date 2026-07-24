@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.node.json"
   },
   "dependencies": {
+    "@twilio/voice-sdk": "^2.18.3",
     "axios": "^1.7.9",
     "browserslist": "^4.28.4",
     "html2canvas": "^1.4.1",

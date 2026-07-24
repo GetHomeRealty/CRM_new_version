@@ -3,6 +3,7 @@ import { ImapFlow } from 'imapflow';
 import { simpleParser } from 'mailparser';
 import { PrismaService } from '../prisma/prisma.service';
 import { LaravelCryptService } from '../common/laravel-crypt.service';
+import { GoogleService } from '../google/google.service';
 
 /** How often the poller pulls new mail for every sync-enabled account. */
 const POLL_INTERVAL_MS = 5 * 60 * 1000;
@@ -19,7 +20,7 @@ export interface SyncResult {
 
 type AccountRow = {
   id: number; user_id: number | null; username: string | null; from_email: string;
-  password: string | null; imap_host: string | null; imap_port: number | null;
+  password: string | null; encryption: string | null; imap_host: string | null; imap_port: number | null;
   imap_encryption: string | null; last_uid: number | null;
 };
 
@@ -40,7 +41,11 @@ export class ImapSyncService implements OnModuleInit, OnModuleDestroy {
   private timer: ReturnType<typeof setInterval> | null = null;
   private polling = false;
 
-  constructor(private readonly prisma: PrismaService, private readonly crypt: LaravelCryptService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly crypt: LaravelCryptService,
+    private readonly google: GoogleService,
+  ) {}
 
   onModuleInit(): void {
     // A background poll on top of the manual "Sync now" button. Disabled in tests and when the
@@ -84,11 +89,39 @@ export class ImapSyncService implements OnModuleInit, OnModuleDestroy {
    * caught and written to `sync_error` rather than thrown, so one bad mailbox never stops a poll.
    */
   async syncAccount(account: AccountRow): Promise<SyncResult> {
-    const password = this.crypt.decryptString(account.password);
-    if (!account.imap_host || !password) {
-      const error = !account.imap_host ? 'No IMAP server configured.' : 'No password stored for this account.';
+    if (!account.imap_host) {
+      const error = 'No IMAP server configured.';
       await this.recordOutcome(account.id, error);
       return { fetched: 0, matched: 0, error };
+    }
+
+    // OAuth (Gmail) accounts authenticate with a short-lived access token minted from the stored
+    // refresh token; password accounts decrypt their stored password. Either yields an ImapFlow auth.
+    const user = account.username || account.from_email;
+    const auth: { user: string; pass?: string; accessToken?: string } = { user };
+    if (account.encryption === 'oauth') {
+      const refresh = this.crypt.decryptString(account.password);
+      if (!refresh) {
+        const error = 'No Google token stored for this account — reconnect it.';
+        await this.recordOutcome(account.id, error);
+        return { fetched: 0, matched: 0, error };
+      }
+      try {
+        const tok = await this.google.refresh(refresh);
+        auth.accessToken = tok.access_token;
+      } catch (ex) {
+        const error = `Google token refresh failed: ${(ex as Error).message}`;
+        await this.recordOutcome(account.id, error);
+        return { fetched: 0, matched: 0, error };
+      }
+    } else {
+      const password = this.crypt.decryptString(account.password);
+      if (!password) {
+        const error = 'No password stored for this account.';
+        await this.recordOutcome(account.id, error);
+        return { fetched: 0, matched: 0, error };
+      }
+      auth.pass = password;
     }
 
     const port = account.imap_port ?? 993;
@@ -96,7 +129,7 @@ export class ImapSyncService implements OnModuleInit, OnModuleDestroy {
     const secure = account.imap_encryption ? account.imap_encryption === 'ssl' : port === 993;
     const client = new ImapFlow({
       host: account.imap_host, port, secure,
-      auth: { user: account.username || account.from_email, pass: password },
+      auth,
       logger: false,
       // Fail fast rather than hang a poll on an unreachable server.
       socketTimeout: 20000,

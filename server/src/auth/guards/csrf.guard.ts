@@ -18,6 +18,9 @@ const CSRF_EXEMPT_PATHS = new Set([
   '/api/sms/twilio/status',
   '/api/sms/twilio/inbound',
   '/api/sms/twilio/call-status',
+  '/api/sms/twilio/recording-status',
+  // TwiML Twilio fetches when a browser Voice-SDK call connects; X-Twilio-Signature verified.
+  '/api/twilio/voice',
   // Google redirects the browser here after consent; trusted via the signed OAuth `state`.
   '/api/google/callback',
 ]);

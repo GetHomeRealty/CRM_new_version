@@ -125,20 +125,13 @@ export const googleCalendarSync = (): Promise<{ pulled: number; error: string | 
 export const googleCalendarDisconnect = (): Promise<{ disconnected: boolean }> =>
   api.post('/api/google/calendar/disconnect', {}).then((r) => r.data);
 
-// ---- Google Calendar via secret iCal link (no OAuth, read-only) ----
-export interface IcalStatus { connected: boolean; name: string | null; last_sync: string | null; error: string | null }
-
-export const icalStatus = (): Promise<IcalStatus> =>
-  api.get<IcalStatus>('/api/calendar/ical/status').then((r) => r.data);
-
-export const icalConnect = (url: string): Promise<{ pulled: number; name: string | null; message: string }> =>
-  api.post('/api/calendar/ical/connect', { url }).then((r) => r.data);
-
-export const icalSync = (): Promise<{ pulled: number; error: string | null; message: string }> =>
-  api.post('/api/calendar/ical/sync', {}).then((r) => r.data);
-
-export const icalDisconnect = (): Promise<{ disconnected: boolean }> =>
-  api.post('/api/calendar/ical/disconnect', {}).then((r) => r.data);
+/**
+ * Start connecting a Gmail account with OAuth ("Sign in with Google"). Returns Google's consent-URL;
+ * the caller navigates the browser there. After consent the server stores the account and redirects
+ * back with `mail_connected=1`. Works once the server has Google OAuth credentials + Gmail scope.
+ */
+export const mailGoogleConnect = (): Promise<{ configured: boolean; url?: string; message?: string }> =>
+  api.get('/api/google/mail/connect').then((r) => r.data);
 
 export const addMyMailAccount = (body: MailAccountInput): Promise<AccountMailAccount> =>
   api.post<AccountMailAccount>('/api/account/mail-accounts', body).then((r) => r.data);

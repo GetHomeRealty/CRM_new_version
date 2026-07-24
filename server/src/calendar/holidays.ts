@@ -179,11 +179,52 @@ const LUNAR_FESTIVALS: Record<number, { date: string; name: string }[]> = {
   ],
 };
 
+/**
+ * Indian (Hindu) festivals — festivals only, deliberately NOT civic/national days like Republic
+ * Day, Independence Day or Gandhi Jayanti. These are lunisolar and cannot be computed, so they are
+ * tabulated per year and flagged `approximate`: confirm against a local panchang before relying on
+ * one. Diwali and Holi already live in LUNAR_FESTIVALS and are not repeated here.
+ */
+const INDIAN_FESTIVALS: Record<number, { date: string; name: string }[]> = {
+  2026: [
+    { date: '2026-01-14', name: 'Makar Sankranti / Pongal' },
+    { date: '2026-01-23', name: 'Vasant Panchami' },
+    { date: '2026-02-15', name: 'Maha Shivaratri' },
+    { date: '2026-03-19', name: 'Ugadi / Gudi Padwa' },
+    { date: '2026-03-26', name: 'Ram Navami' },
+    { date: '2026-04-20', name: 'Akshaya Tritiya' },
+    { date: '2026-07-29', name: 'Guru Purnima' },
+    { date: '2026-08-26', name: 'Onam' },
+    { date: '2026-08-28', name: 'Raksha Bandhan' },
+    { date: '2026-09-04', name: 'Krishna Janmashtami' },
+    { date: '2026-09-14', name: 'Ganesh Chaturthi' },
+    { date: '2026-10-11', name: 'Navratri begins' },
+    { date: '2026-10-20', name: 'Dussehra (Vijayadashami)' },
+    { date: '2026-11-06', name: 'Dhanteras' },
+    { date: '2026-11-10', name: 'Govardhan Puja' },
+    { date: '2026-11-11', name: 'Bhai Dooj' },
+    { date: '2026-11-15', name: 'Chhath Puja' },
+  ],
+  2027: [
+    { date: '2027-01-14', name: 'Makar Sankranti / Pongal' },
+    { date: '2027-02-15', name: 'Vasant Panchami' },
+    { date: '2027-03-06', name: 'Maha Shivaratri' },
+    { date: '2027-04-15', name: 'Ram Navami' },
+    { date: '2027-08-17', name: 'Raksha Bandhan' },
+    { date: '2027-08-25', name: 'Krishna Janmashtami' },
+    { date: '2027-09-04', name: 'Ganesh Chaturthi' },
+    { date: '2027-09-30', name: 'Navratri begins' },
+    { date: '2027-10-09', name: 'Dussehra (Vijayadashami)' },
+    { date: '2027-10-27', name: 'Dhanteras' },
+  ],
+};
+
 /** The years LUNAR_FESTIVALS covers, so the UI can say when a year has no festival data. */
 export const FESTIVAL_YEARS = Object.keys(LUNAR_FESTIVALS).map(Number).sort();
 
 function lunarFestivals(year: number): Holiday[] {
-  return (LUNAR_FESTIVALS[year] ?? []).map((f) => ({
+  const merged = [...(LUNAR_FESTIVALS[year] ?? []), ...(INDIAN_FESTIVALS[year] ?? [])];
+  return merged.map((f) => ({
     date: f.date, name: f.name, kind: 'festival' as const,
     provinces: [], national: false, approximate: true,
   }));

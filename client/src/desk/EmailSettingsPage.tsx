@@ -9,6 +9,12 @@ import { useToast, type ToastFn } from './toast';
 import { apiErrorMessage } from '../lib/apiError';
 import type { EmailTemplate, MailAccount, TemplateGroup, TemplatePreview } from '../types';
 
+/** Which tab to open on load — lets the Google OAuth round-trip land back on CRM Settings. */
+const initialTab = (): string => {
+  const t = new URLSearchParams(window.location.search).get('tab');
+  return t === 'templates' || t === 'crm' ? t : 'accounts';
+};
+
 interface AccountForm {
   name: string;
   from_name: string;
@@ -29,7 +35,7 @@ const EMPTY_ACCOUNT: AccountForm = {
 
 export default function EmailSettingsPage() {
   const toast = useToast();
-  const [tab, setTab] = useState('accounts');
+  const [tab, setTab] = useState<string>(initialTab);
 
   return (
     <>

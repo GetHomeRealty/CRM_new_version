@@ -3,7 +3,7 @@ import type { Request } from 'express';
 import { TwilioService } from './twilio.service';
 import { SmsInboundService } from './sms-inbound.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { mapProviderStatus, explainError } from './sms.constants';
+import { mapProviderStatus, explainError, accountSid, authToken } from './sms.constants';
 
 const str = (v: unknown): string => String(v ?? '').trim();
 
@@ -122,6 +122,44 @@ export class SmsPublicController {
         ...(outcome !== undefined ? { outcome } : {}),
       },
     });
+    return { received: true };
+  }
+
+  /**
+   * A finished call recording. Twilio posts the recording's URL once the audio is ready; we fetch
+   * the MP3 (authenticated) and store it against the call so it plays/downloads in the Call Log
+   * through the same path as a manually-attached recording. `?call=<id>` names the row.
+   */
+  @Post('recording-status')
+  @HttpCode(200)
+  async recordingStatus(@Req() req: Request): Promise<{ received: boolean }> {
+    this.requireTwilio(req);
+
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const callId = Number(str((req.query as Record<string, unknown>)?.call));
+    const recUrl = str(b.RecordingUrl);
+    const recSid = str(b.RecordingSid);
+    if (!Number.isInteger(callId) || callId <= 0 || !recUrl) return { received: true };
+
+    const row = await this.prisma.lead_calls.findUnique({ where: { id: callId }, select: { id: true } });
+    if (!row) return { received: true };
+    // One recording per call — a re-posted callback must not create a second row.
+    const existing = await this.prisma.lead_call_recordings.findUnique({ where: { call_id: callId }, select: { id: true } });
+    if (existing) return { received: true };
+
+    try {
+      const auth = Buffer.from(`${accountSid()}:${authToken()}`).toString('base64');
+      const res = await fetch(`${recUrl}.mp3`, { headers: { Authorization: `Basic ${auth}` } });
+      if (!res.ok) { this.log.warn(`Recording fetch for call ${callId} failed (HTTP ${res.status}).`); return { received: true }; }
+      const buf = Buffer.from(await res.arrayBuffer());
+      const MAX = 15 * 1024 * 1024;
+      if (buf.length === 0 || buf.length > MAX) { this.log.warn(`Recording for call ${callId} is ${buf.length} bytes — skipped.`); return { received: true }; }
+      await this.prisma.lead_call_recordings.create({
+        data: { call_id: callId, filename: `call-${recSid || callId}.mp3`, content_type: 'audio/mpeg', size: buf.length, data: buf, created_by: 'Twilio', created_at: new Date() },
+      });
+    } catch (ex) {
+      this.log.warn(`Could not store recording for call ${callId}: ${(ex as Error).message}`);
+    }
     return { received: true };
   }
 

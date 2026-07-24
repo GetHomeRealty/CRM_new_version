@@ -4,6 +4,7 @@ import { LeadsController } from './leads.controller';
 import { LeadsService } from './leads.service';
 import { LeadActivityService } from './lead-activity.service';
 import { LeadAuditService } from './lead-audit.service';
+import { LeadNotificationService } from './lead-notification.service';
 import { SmsModule } from '../sms/sms.module';
 import { EmailModule } from '../email/email.module';
 
@@ -14,7 +15,7 @@ import { EmailModule } from '../email/email.module';
 @Module({
   imports: [AuthModule, SmsModule, EmailModule],
   controllers: [LeadsController],
-  providers: [LeadsService, LeadActivityService, LeadAuditService],
-  exports: [LeadsService],
+  providers: [LeadsService, LeadActivityService, LeadAuditService, LeadNotificationService],
+  exports: [LeadsService, LeadNotificationService],
 })
 export class LeadsModule {}
