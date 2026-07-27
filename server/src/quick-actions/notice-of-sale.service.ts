@@ -1,10 +1,11 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { MailerService } from '../email/mailer.service';
 import { CompanySettingsService } from '../settings/company-settings.service';
 import { throwValidation, type FieldErrors } from '../common/laravel-exceptions';
 import { parseJsonObject, phpJsonNormalize } from '../common/serialize';
+import { isBuyingType } from '../transactions/lawyer-details';
 import type { AuthUserRecord } from '../auth/auth.types';
 
 const SECTION = 'Quick Actions — Notice of Sale';
@@ -73,6 +74,7 @@ export class NoticeOfSaleService {
   async send(user: Actor, txnId: number, body: Record<string, unknown>): Promise<Record<string, unknown>> {
     const t = await this.txnOr404(txnId);
     this.validateSend(body);
+    await this.requireBuyerLawyer(txnId);
     const agents = (body.agents as unknown[]).map(String);
     const current = this.normalize(t.notice_of_sale);
     const now = new Date().toISOString().replace(/\.\d{3}Z$/, '+00:00');
@@ -99,6 +101,21 @@ export class NoticeOfSaleService {
 
     const fresh = await this.txnOr404(txnId);
     return this.present(this.normalize(fresh.notice_of_sale));
+  }
+
+  /**
+   * A Buying transaction's Notice of Sale cannot be sent for signature until the buyer lawyer
+   * details are on file. Non-buying types are unaffected.
+   */
+  private async requireBuyerLawyer(txnId: number): Promise<void> {
+    const t = await this.prisma.transactions.findUnique({
+      where: { id: txnId }, select: { type: true, buyer_lawyer_name: true, property: true },
+    });
+    if (isBuyingType(t?.type) && !String(t?.buyer_lawyer_name ?? '').trim()) {
+      throw new UnprocessableEntityException({
+        message: `Buyer lawyer details are required before the Notice of Sale can be sent for ${t?.property || 'this transaction'}. Please update the buyer lawyer details first.`,
+      });
+    }
   }
 
   private async store(txnId: number, notice: Notice): Promise<void> {

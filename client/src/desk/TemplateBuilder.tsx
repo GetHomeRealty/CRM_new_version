@@ -17,10 +17,10 @@ export type Block =
   | { type: 'image'; url: string; alt: string; align: Align; width: number; link?: string }
   | { type: 'heading'; text: string; level: 1 | 2 | 3; align: Align; color: string }
   | { type: 'paragraph'; text: string; align: Align }
-  | { type: 'button'; text: string; url: string; color: string; align: Align }
+  | { type: 'button'; text: string; url: string; color: string; textColor?: string; align: Align }
   | { type: 'divider' }
   | { type: 'spacer'; height: number }
-  | { type: 'columns'; left: string; right: string }
+  | { type: 'columns'; left: string; right: string; leftImg?: string; rightImg?: string }
   | { type: 'box'; title: string; body: string; color: string }
   | { type: 'list'; title: string; items: string }
   // Combined banner — gradient header with an optional logo (image or text), heading and subtitle.
@@ -46,10 +46,10 @@ export const newBlock = (type: Block['type']): Block => {
     case 'image': return { type: 'image', url: '', alt: '', align: 'center', width: 100 };
     case 'heading': return { type: 'heading', text: 'Your heading', level: 2, align: 'left', color: '#111827' };
     case 'paragraph': return { type: 'paragraph', text: 'Dear {{LEAD_NAME}},\n\nWrite your message here.', align: 'left' };
-    case 'button': return { type: 'button', text: 'Reply to This Email', url: 'mailto:{{AGENT_EMAIL}}', color: '#dc2626', align: 'center' };
+    case 'button': return { type: 'button', text: 'Reply to This Email', url: 'mailto:{{AGENT_EMAIL}}', color: '#dc2626', textColor: '#ffffff', align: 'center' };
     case 'divider': return { type: 'divider' };
     case 'spacer': return { type: 'spacer', height: 24 };
-    case 'columns': return { type: 'columns', left: 'Left column text.', right: 'Right column text.' };
+    case 'columns': return { type: 'columns', left: 'Left column text.', right: 'Right column text.', leftImg: '', rightImg: '' };
     case 'box': return { type: 'box', title: 'Section title', body: 'A highlighted point.\nAnother line.', color: '#2563eb' };
     case 'list': return { type: 'list', title: 'Next steps', items: 'Schedule a viewing\nDiscuss financing\nMake an offer' };
     case 'banner': return { type: 'banner', text: 'Your headline', subtitle: '', logo: '', logoText: 'Get Home Realty', color: '#dc2626', color2: '#7c3aed' };
@@ -89,16 +89,20 @@ function blockHtml(b: Block): string {
     case 'paragraph':
       return `<p style="text-align:${b.align};font-size:15px;line-height:1.65;color:#1f2937;margin:14px 4px;">${brs(b.text)}</p>`;
     case 'button':
-      return `<div style="text-align:${b.align};margin:20px 4px;"><a href="${esc(b.url)}" style="display:inline-block;background:${b.color};color:#ffffff;text-decoration:none;padding:12px 26px;border-radius:8px;font-weight:600;font-size:15px;">${esc(b.text)}</a></div>`;
+      return `<div style="text-align:${b.align};margin:20px 4px;"><a href="${esc(b.url)}" style="display:inline-block;background:${b.color};color:${b.textColor ?? '#ffffff'};text-decoration:none;padding:12px 26px;border-radius:8px;font-weight:600;font-size:15px;">${esc(b.text)}</a></div>`;
     case 'divider':
       return `<hr style="border:none;border-top:1px solid #e5e7eb;margin:20px 4px;">`;
     case 'spacer':
       return `<div style="height:${Math.max(0, b.height)}px;line-height:${Math.max(0, b.height)}px;font-size:1px;">&nbsp;</div>`;
-    case 'columns':
+    case 'columns': {
+      const cell = (text: string, img?: string): string =>
+        `<td valign="top" style="width:50%;padding:0 8px;font-size:14px;line-height:1.6;color:#334155;">`
+        + (img ? `<img src="${esc(img)}" alt="" style="width:100%;max-width:100%;display:block;border:0;border-radius:6px;margin-bottom:8px;">` : '')
+        + `${brs(text)}</td>`;
       return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:12px 0;"><tr>`
-        + `<td valign="top" style="width:50%;padding:0 8px;font-size:14px;line-height:1.6;color:#334155;">${brs(b.left)}</td>`
-        + `<td valign="top" style="width:50%;padding:0 8px;font-size:14px;line-height:1.6;color:#334155;">${brs(b.right)}</td>`
+        + cell(b.left, b.leftImg) + cell(b.right, b.rightImg)
         + `</tr></table>`;
+    }
     case 'box':
       return `<div style="background:${tint(b.color, 0.08)};border-left:4px solid ${b.color};border-radius:8px;padding:15px 18px;margin:16px 4px;">`
         + `<div style="color:${b.color};font-weight:700;font-size:15px;margin-bottom:7px;">${esc(b.title)}</div>`
@@ -169,6 +173,14 @@ export function parseBuilder(content: string): Design | null {
 }
 
 const COLORS = ['#dc2626', '#f97316', '#f59e0b', '#16a34a', '#0ea5e9', '#2563eb', '#7c3aed', '#111827'];
+
+/** Read a picked image file into a base64 data URI so it can be embedded straight into the email. */
+const fileToDataUrl = (file: File): Promise<string> => new Promise((resolve, reject) => {
+  const r = new FileReader();
+  r.onload = () => resolve(String(r.result ?? ''));
+  r.onerror = () => reject(new Error('That image could not be read.'));
+  r.readAsDataURL(file);
+});
 
 /** The editing surface: a palette + Blocks/Styles tabs, then each block with its own controls. */
 export function TemplateBuilder({ blocks, setBlocks, styles, setStyles }: {
@@ -276,7 +288,14 @@ export function TemplateBuilder({ blocks, setBlocks, styles, setStyles }: {
             <div className="tb2-bbody">
               {b.type === 'image' && (
                 <>
-                  <input value={b.url} onChange={(e) => update(i, { url: e.target.value })} placeholder="Image URL" />
+                  <label className="tb2-drop">
+                    {b.url
+                      ? <img src={b.url} alt="" style={{ maxHeight: 90, maxWidth: '100%', borderRadius: 6 }} />
+                      : <span className="tb2-drop-hint">⬆ Click to upload image</span>}
+                    <input type="file" accept="image/*" style={{ display: 'none' }}
+                      onChange={(e) => { const f = e.target.files?.[0]; if (f) void fileToDataUrl(f).then((d) => update(i, { url: d })); e.currentTarget.value = ''; }} />
+                  </label>
+                  <input value={b.url} onChange={(e) => update(i, { url: e.target.value })} placeholder="or paste an image URL" />
                   <input value={b.alt} onChange={(e) => update(i, { alt: e.target.value })} placeholder="Alt text" />
                   <input value={b.link ?? ''} onChange={(e) => update(i, { link: e.target.value })} placeholder="Link URL (optional)" />
                   <div className="tb2-row">{alignBtns(b.align, (a) => update(i, { align: a }))}
@@ -306,7 +325,11 @@ export function TemplateBuilder({ blocks, setBlocks, styles, setStyles }: {
                 <>
                   <input value={b.text} onChange={(e) => update(i, { text: e.target.value })} placeholder="Button label" />
                   <input value={b.url} onChange={(e) => update(i, { url: e.target.value })} placeholder="Link (https:// or mailto:)" />
-                  <div className="tb2-row">{alignBtns(b.align, (a) => update(i, { align: a }))}<span className="muted">Colour</span>{swatch(b.color, (c) => update(i, { color: c }))}</div>
+                  <div className="tb2-row">
+                    {alignBtns(b.align, (a) => update(i, { align: a }))}
+                    <span className="muted">Fill</span>{swatch(b.color, (c) => update(i, { color: c }))}
+                    <span className="muted">Text</span>{swatch(b.textColor ?? '#ffffff', (c) => update(i, { textColor: c }))}
+                  </div>
                 </>
               )}
               {b.type === 'spacer' && (
@@ -314,8 +337,22 @@ export function TemplateBuilder({ blocks, setBlocks, styles, setStyles }: {
               )}
               {b.type === 'columns' && (
                 <div className="g2">
-                  <textarea rows={3} value={b.left} onChange={(e) => update(i, { left: e.target.value })} placeholder="Left column" />
-                  <textarea rows={3} value={b.right} onChange={(e) => update(i, { right: e.target.value })} placeholder="Right column" />
+                  {([['leftImg', 'left'], ['rightImg', 'right']] as const).map(([imgKey, textKey], side) => (
+                    <div key={imgKey} className="tb2-col">
+                      <label className="tb2-drop tb2-drop-sm">
+                        {b[imgKey]
+                          ? <img src={b[imgKey]} alt="" style={{ maxHeight: 64, maxWidth: '100%', borderRadius: 6 }} />
+                          : <span className="tb2-drop-hint">⬆ Image (optional)</span>}
+                        <input type="file" accept="image/*" style={{ display: 'none' }}
+                          onChange={(e) => { const f = e.target.files?.[0]; if (f) void fileToDataUrl(f).then((d) => update(i, { [imgKey]: d })); e.currentTarget.value = ''; }} />
+                      </label>
+                      <div className="tb2-row">
+                        <input value={b[imgKey] ?? ''} onChange={(e) => update(i, { [imgKey]: e.target.value })} placeholder="or image URL" style={{ flex: 1 }} />
+                        {b[imgKey] && <button type="button" className="icon-btn danger" title="Remove image" onClick={() => update(i, { [imgKey]: '' })}>🗑️</button>}
+                      </div>
+                      <textarea rows={3} value={b[textKey]} onChange={(e) => update(i, { [textKey]: e.target.value })} placeholder={`${side === 0 ? 'Left' : 'Right'} column text`} />
+                    </div>
+                  ))}
                 </div>
               )}
               {b.type === 'box' && (

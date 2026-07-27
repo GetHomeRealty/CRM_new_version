@@ -709,16 +709,20 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
               <div className="field" style={{ marginBottom: 0 }}><label>Total</label><input style={ts(stdTotal)} value={formatCurrency(stdTotal)} readOnly />{adjA !== 0 && <div className="help" style={{ margin: '4px 0 0' }}>{adjNote(adjA, 'after HST')}</div>}</div>
             </div>
 
-            <div className="field" style={{ maxWidth: 220 }}>
-              <label>Commission Adjustment {finPencil()}</label>
-              <select value={adjEnabled ? 'Yes' : 'No'} disabled={finLock} style={finLock ? finLockStyle : undefined} onChange={(e) => setAdjEnabled(e.target.value === 'Yes')}><option>No</option><option>Yes</option></select>
-            </div>
-            {adjEnabled && (
-              <div className="g2">
-                <SignedAdjField label="Adjustment (Before HST)" value={adjBefore} onChange={(nv) => excl(nv, setAdjBefore, adjAfter, setAdjAfter)} convention="sub" />
-                <SignedAdjField label="Adjustment (After HST)" value={adjAfter} onChange={(nv) => excl(nv, setAdjAfter, adjBefore, setAdjBefore)} convention="sub" />
+            {/* Commission Adjustment sits on one row with its Before/After HST fields when enabled,
+                so the two adjustments read beside the toggle rather than dropping below it. */}
+            <div style={{ display: 'grid', gridTemplateColumns: adjEnabled ? '220px 1fr 1fr' : '220px', gap: 16, alignItems: 'end' }}>
+              <div className="field" style={{ marginBottom: 0 }}>
+                <label>Commission Adjustment {finPencil()}</label>
+                <select value={adjEnabled ? 'Yes' : 'No'} disabled={finLock} style={finLock ? finLockStyle : undefined} onChange={(e) => setAdjEnabled(e.target.value === 'Yes')}><option>No</option><option>Yes</option></select>
               </div>
-            )}
+              {adjEnabled && (
+                <>
+                  <SignedAdjField label="Adjustment (Before HST)" value={adjBefore} onChange={(nv) => excl(nv, setAdjBefore, adjAfter, setAdjAfter)} convention="sub" />
+                  <SignedAdjField label="Adjustment (After HST)" value={adjAfter} onChange={(nv) => excl(nv, setAdjAfter, adjBefore, setAdjBefore)} convention="sub" />
+                </>
+              )}
+            </div>
 
             <ReferralSections data={stdRefView} />
             <AgentCommissionBlocks rows={memberRows} setMember={setMember} minBrok={{ commission: 200, hst: 26, total: 226 }} agentDefaults={agentDefaults} isLease={leaseType} hideT4A={isAgent} hadSavedTeam={hadSavedTeam} finLock={finLock} finPencil={finPencil} />

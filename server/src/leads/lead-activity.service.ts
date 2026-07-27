@@ -78,7 +78,7 @@ async function draftEmailWithAi(cfg: EmailAiConfig, system: string, userText: st
       res = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: { 'x-api-key': cfg.key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-        body: JSON.stringify({ model: cfg.model, max_tokens: 1500, system, messages: [{ role: 'user', content: userText }] }),
+        body: JSON.stringify({ model: cfg.model, max_tokens: 4000, system, messages: [{ role: 'user', content: userText }] }),
         signal: timeout,
       });
     } else if (cfg.provider === 'openai') {
@@ -86,7 +86,7 @@ async function draftEmailWithAi(cfg: EmailAiConfig, system: string, userText: st
         method: 'POST',
         headers: { authorization: `Bearer ${cfg.key}`, 'content-type': 'application/json' },
         body: JSON.stringify({
-          model: cfg.model, max_tokens: 1500, response_format: { type: 'json_object' },
+          model: cfg.model, max_tokens: 4000, response_format: { type: 'json_object' },
           messages: [{ role: 'system', content: system }, { role: 'user', content: userText }],
         }),
         signal: timeout,
@@ -100,7 +100,12 @@ async function draftEmailWithAi(cfg: EmailAiConfig, system: string, userText: st
         body: JSON.stringify({
           system_instruction: { parts: [{ text: system }] },
           contents: [{ role: 'user', parts: [{ text: userText }] }],
-          generationConfig: { responseMimeType: 'application/json', maxOutputTokens: 1500 },
+          // The `-latest` aliases now resolve to a Gemini 2.5+ "thinking" model whose reasoning
+          // tokens are drawn from this same output budget. A small budget can be spent entirely on
+          // thinking, truncating the email JSON before it closes — which surfaces to the agent as
+          // "did not return a usable email". A generous ceiling leaves ample room for both the
+          // hidden reasoning and the actual email; we cap length via the prompt, not this number.
+          generationConfig: { responseMimeType: 'application/json', maxOutputTokens: 8192 },
         }),
         signal: timeout,
       });

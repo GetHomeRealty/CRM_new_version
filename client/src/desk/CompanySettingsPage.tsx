@@ -54,6 +54,18 @@ export default function CompanySettingsPage() {
       <div className="card"><div className="modal-h" style={{ fontSize: 14 }}>Company Profile</div>{grid(FIELDS_A)}</div>
       <div className="card"><div className="modal-h" style={{ fontSize: 14 }}>Bank / Deposit Instructions</div>{grid(FIELDS_BANK)}</div>
       <div className="card">
+        <div className="modal-h" style={{ fontSize: 14 }}>Automatic Reminders</div>
+        <div className="g3">
+          <div className="field">
+            <label>Lawyer detail reminder — every (days)</label>
+            <input type="number" min={0} max={365} value={String(form.lawyer_reminder_days ?? 3)} disabled={!canEdit}
+              onChange={(e) => set('lawyer_reminder_days', e.target.value)} />
+            <span className="help">Agents are re-emailed this often while buyer/seller lawyer details are missing on a Buying/Lease deal. Set to 0 to turn recurring reminders off.</span>
+          </div>
+        </div>
+      </div>
+
+      <div className="card">
         <div className="modal-h" style={{ fontSize: 14 }}>Invoicing Defaults</div>
         {grid(FIELDS_INV)}
         <div className="g2">

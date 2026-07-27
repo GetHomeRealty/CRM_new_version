@@ -112,6 +112,16 @@ select{background-image:url("data:image/svg+xml,%3Csvg width='10' height='6' vie
 .g2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
 .g3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px}
 .g4{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:16px}
+/* +/- sign toggle used by adjustment amount fields (Financial Info + Adjustment & Advance Payment).
+   The classes were used but never styled, so the selected sign never highlighted. */
+.seg-toggle{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--surface);height:38px}
+.seg-btn{border:0;background:transparent;padding:0 13px;min-width:38px;font-size:16px;font-weight:800;line-height:1;color:var(--muted);cursor:pointer;transition:background .12s,color .12s}
+.seg-btn+.seg-btn{border-left:1px solid var(--line)}
+.seg-btn:hover:not(.active){background:var(--brand-soft)}
+.seg-btn.active{color:#fff}
+/* Green when the selected sign increases, red when it decreases — the first button is always "+". */
+.seg-btn.active:first-child{background:#16a34a}
+.seg-btn.active:last-child{background:#dc2626}
 .overlay{position:fixed;inset:0;background:rgba(15,23,42,.42);backdrop-filter:saturate(140%) blur(4px);-webkit-backdrop-filter:saturate(140%) blur(4px);display:none;align-items:flex-start;justify-content:center;padding:36px 16px;z-index:50;overflow-y:auto}
 .overlay.open{display:flex;animation:overlayIn .2s ease-out}
 @keyframes overlayIn{from{opacity:0}to{opacity:1}}
@@ -849,14 +859,27 @@ input[type="number"],.numeric,.stat-card .val{font-variant-numeric:tabular-nums;
 .tb2-pblock:hover{border-color:var(--brand);background:var(--brand-soft)}
 .tb2-pico{font-size:17px}
 .tb2-styles{display:flex;flex-direction:column;gap:10px}
-.tb2-canvas{display:flex;flex-direction:column;gap:10px;max-height:460px;overflow:auto;padding-right:4px}
+/* No internal max-height/scroll: the canvas grows to fit all blocks and the whole modal scrolls
+   (via the overlay). The palette and Live preview are sticky, so they stay in view while scrolling.
+   A fixed inner height here created a cramped nested scrollbar and clipped the lower blocks. */
+.tb2-canvas{display:flex;flex-direction:column;gap:10px;padding-right:4px;min-width:0}
 .tb2-locked{border:1px dashed var(--line-2);border-radius:9px;padding:9px 12px;font-size:12px;color:var(--muted);background:var(--surface-3,#f8f9fc)}
-.tb2-block{border:1px solid var(--line-2);border-radius:10px;overflow:hidden;background:var(--surface)}
+/* flex-shrink:0 is essential: .tb2-canvas is a flex column with a max-height, so without it each
+   block shrinks to fit and `overflow:hidden` clips its edit fields (e.g. a paragraph textarea
+   collapses to one line). Keeping natural height makes the canvas scroll instead. */
+.tb2-block{border:1px solid var(--line-2);border-radius:10px;overflow:hidden;background:var(--surface);flex-shrink:0}
+.tb2-locked{flex-shrink:0}
 .tb2-bhead{display:flex;align-items:center;justify-content:space-between;padding:6px 10px;background:var(--bad-soft)}
 .tb2-btype{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#b91c1c}
 .tb2-btools{display:flex;gap:5px}
 .tb2-bbody{display:flex;flex-direction:column;gap:7px;padding:10px}
 .tb2-bbody input,.tb2-bbody textarea{width:100%}
+/* Image upload dropzone in the Image block. */
+.tb2-drop{display:flex;align-items:center;justify-content:center;min-height:74px;border:2px dashed var(--line-strong,#cbd5e1);border-radius:9px;background:var(--surface-3,#f8f9fc);cursor:pointer;padding:10px;text-align:center;transition:border-color .12s,background .12s}
+.tb2-drop:hover{border-color:var(--brand);background:var(--brand-soft)}
+.tb2-drop-hint{font-size:12.5px;font-weight:600;color:var(--brand)}
+.tb2-drop-sm{min-height:56px;padding:8px}
+.tb2-col{display:flex;flex-direction:column;gap:6px}
 .tb2-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
 .tb2-row .muted{font-size:11.5px}
 .tb2-width{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)}

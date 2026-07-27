@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 
 /** Options describing a delete-confirmation popup. */
 export interface ConfirmOptions {
@@ -26,10 +27,11 @@ export function useConfirm() {
 
 export default function ConfirmDialog({ confirm, onClose }: { confirm: ConfirmOptions | null; onClose: () => void }) {
   if (!confirm) return null;
-  return (
-    // Fixed + viewport-centered with a high z-index so it appears in the middle of
-    // whatever is on screen — even when opened from a tall, scrolled parent modal
-    // (previously it anchored to the parent's top and scrolled out of view).
+  // Rendered through a portal to <body> so the fixed overlay always centres on the VIEWPORT and can
+  // never be trapped by a transformed/animated ancestor (e.g. the parent modal). Without this, when
+  // opened from inside another modal the dialog anchored to that modal and drifted above the screen
+  // with a mis-placed backdrop mask.
+  return createPortal(
     <div className="overlay open" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
       style={{ position: 'fixed', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 4000 }}>
       <div className="modal" style={{ maxWidth: 480, margin: 0 }}>
@@ -51,6 +53,7 @@ export default function ConfirmDialog({ confirm, onClose }: { confirm: ConfirmOp
             onClick={() => { confirm.onConfirm?.(); onClose(); }}>Delete</button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
