@@ -121,7 +121,9 @@ export default function AgentFaqModal({ open, onClose, transactionId, txn, onSav
       });
     }
     return {
-      batch_review_email: !!a.batch_review_email,
+      // Default ON: a transaction is included in batch review emails unless the user deselects it.
+      // Only an explicitly stored `false` (a deliberate deselect) keeps it off.
+      batch_review_email: a.batch_review_email == null ? true : !!a.batch_review_email,
       // Auto-reflected from Admin Activities (the linked invoice's Commission Received Date).
       commission_received_date: txn.invoice_admin?.commission_received_date || (a.commission_received_date as string) || txn.admin_activities?.commission_received_date || '',
       docs_cleared: (a.docs_cleared as string) || '',

@@ -11,6 +11,8 @@ export interface CompanySettings {
   hst_number?: string;
   thank_you_note?: string;
   deposit_heading?: string;
+  /** Cadence (days) for recurring lawyer-detail reminder emails. 0 = off. */
+  lawyer_reminder_days?: number;
   default_terms?: string;
   default_tax_rate?: number;
   broker_name?: string;

@@ -5,6 +5,7 @@ import { MailerService } from '../email/mailer.service';
 import { CompanySettingsService } from '../settings/company-settings.service';
 import { throwValidation, type FieldErrors } from '../common/laravel-exceptions';
 import { toIso8601String } from '../common/serialize';
+import { isBuyingType, missingLawyerParties, lawyerPartyLabel } from '../transactions/lawyer-details';
 import type { AuthUserRecord } from '../auth/auth.types';
 
 type Actor = AuthUserRecord | null;
@@ -79,6 +80,19 @@ export class QuickSendService {
   // ---- Trade Record Sheet ----
   async tradeSheet(user: Actor, txnId: number, body: Record<string, unknown>): Promise<Record<string, unknown>> {
     const t = await this.txnOr404(txnId);
+    // A Buying transaction's Trade Record Sheet needs both the buyer AND seller lawyer details
+    // before it can be sent for signature. Non-buying types are unaffected.
+    const g = await this.prisma.transactions.findUnique({
+      where: { id: txnId }, select: { type: true, buyer_lawyer_name: true, seller_lawyer_name: true, property: true },
+    });
+    if (isBuyingType(g?.type)) {
+      const missing = missingLawyerParties(g ?? {});
+      if (missing.length > 0) {
+        throw new UnprocessableEntityException({
+          message: `${lawyerPartyLabel(missing).replace(/^./, (c) => c.toUpperCase())} lawyer details are required before the Trade Record Sheet can be sent for ${g?.property || 'this transaction'}. Please update them first.`,
+        });
+      }
+    }
     this.validateEmail(body, (errors) => {
       if (body.filename !== undefined && body.filename !== null && body.filename !== '' && [...String(body.filename)].length > 255) (errors.filename ??= []).push('The filename field must not be greater than 255 characters.');
     });

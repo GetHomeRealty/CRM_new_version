@@ -7,6 +7,7 @@ import { normalizeCommissionTxn } from './commission.loader';
 import { parseJsonObject, phpEmpty, phpFloat, phpJsonNormalize, round2, toFloat } from '../common/serialize';
 import { isInvoiceableType, isListingType, SECURED_DEAL_TYPES } from '../reference/transaction.constants';
 import { TradeNumberService } from './trade-number.service';
+import { TransactionLawyerReminderService } from './transaction-lawyer-reminder.service';
 import { TransactionInvoiceService } from '../invoices/transaction-invoice.service';
 import { parseJson } from '../common/serialize';
 import {
@@ -82,6 +83,7 @@ export class TransactionsWriteService {
     private readonly commission: CommissionService,
     private readonly tradeNumbers: TradeNumberService,
     private readonly txnInvoices: TransactionInvoiceService,
+    private readonly lawyerReminder: TransactionLawyerReminderService,
   ) {}
 
   /** Create a transaction (port of TransactionController::store). */
@@ -164,6 +166,8 @@ export class TransactionsWriteService {
         /* never let invoicing block the transaction */
       }
     }
+    // Best-effort nudge if buyer/seller lawyer details are missing on a Buying/Lease deal.
+    void this.lawyerReminder.maybeRemind(txnId);
     // Columns with a non-null DB default that store() never sets → null in the in-memory
     // model Laravel returns from create (mls_type, precon_listing_type, precon_details_of_terms).
     return this.loadResource(txnId, user, ['mls_type', 'precon_listing_type', 'precon_details_of_terms']);
@@ -344,6 +348,9 @@ export class TransactionsWriteService {
 
     const source = user && user.role === 'agent' ? 'Agent' : 'Manual';
     await this.audit.recordChanges(txnId, actor, before, await this.audit.snapshot(txnId), source);
+
+    // Re-check lawyer details after the edit — only re-emails when the missing set actually changed.
+    void this.lawyerReminder.maybeRemind(txnId);
 
     const full = (await this.prisma.transactions.findUnique({ where: { id: txnId }, include: txnShowInclude })) as LoadedTxn;
     const ctx = { user: user ? ({ id: user.id, role: user.role, name: user.name } as ResourceUser) : null, commission: this.commission, prisma: this.prisma };

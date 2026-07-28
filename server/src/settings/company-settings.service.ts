@@ -5,7 +5,7 @@ import * as fs from 'fs/promises';
 import * as crypto from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService, type ActingUser } from '../audit/audit.service';
-import { decimalCast, jsonField, laravelJsonDate, phpBlank } from '../common/serialize';
+import { decimalCast, jsonField, laravelJsonDate, phpBlank, parseJsonObject, phpJsonNormalize } from '../common/serialize';
 import type { UpdateCompanySettingsDto } from './dto/update-company-settings.dto';
 import { trimPngTransparentBorder } from './image-trim';
 
@@ -53,10 +53,22 @@ export class CompanySettingsService {
 
   /** CompanySettingController::update — save present fields, audit, return the model. */
   async update(user: ActingUser | null, dto: UpdateCompanySettingsDto): Promise<company_settings> {
-    await this.current(); // ensure the row exists (+ self-heal blanks) first
+    const cur = await this.current(); // ensure the row exists (+ self-heal blanks) first
     // Only fields actually present in the request are saved (matches validated()).
     const data: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(dto)) if (v !== undefined) data[k] = v;
+    const flags = parseJsonObject(cur.feature_flags);
+    let flagsChanged = false;
+    for (const [k, v] of Object.entries(dto)) {
+      if (v === undefined) continue;
+      // `lawyer_reminder_days` isn't a column — it lives inside the feature_flags JSON.
+      if (k === 'lawyer_reminder_days') {
+        flags.lawyer_reminder_days = Math.max(0, Math.floor(Number(v) || 0));
+        flagsChanged = true;
+      } else {
+        data[k] = v;
+      }
+    }
+    if (flagsChanged) data.feature_flags = JSON.stringify(phpJsonNormalize(flags));
     data.updated_at = new Date();
 
     const s = await this.prisma.company_settings.update({
@@ -196,6 +208,8 @@ export class CompanySettingsService {
       default_terms: s.default_terms,
       thank_you_note: s.thank_you_note,
       deposit_heading: s.deposit_heading,
+      // Recurring lawyer-detail reminder cadence (days) — surfaced from feature_flags for the UI.
+      lawyer_reminder_days: (() => { const n = Number(parseJsonObject(s.feature_flags).lawyer_reminder_days); return Number.isFinite(n) ? Math.max(0, Math.floor(n)) : 3; })(),
       created_at: laravelJsonDate(s.created_at),
       updated_at: laravelJsonDate(s.updated_at),
     };

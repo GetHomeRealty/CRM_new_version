@@ -175,6 +175,7 @@ export class ImapSyncService implements OnModuleInit, OnModuleDestroy {
       auth.pass = password;
     }
 
+
     const port = account.imap_port ?? 993;
     // ssl / 993 => implicit TLS; tls / 143 => STARTTLS. Matches the SMTP encryption field.
     const secure = account.imap_encryption ? account.imap_encryption === 'ssl' : port === 993;

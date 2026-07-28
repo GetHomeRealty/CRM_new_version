@@ -4,6 +4,9 @@ import type { CompanySettings, Invoice } from '../types';
 
 const BRAND = '#c8102e';
 
+/** Every dollar figure on the invoice is rendered bold. */
+const money = (v: Parameters<typeof formatCurrency>[0]) => <strong>{formatCurrency(v)}</strong>;
+
 // The printable / emailable invoice document body. Rendered inside the preview
 // modal and also offscreen when generating the PDF attachment.
 export default function InvoiceDoc({ invoice }: { invoice: Invoice }) {
@@ -30,7 +33,7 @@ export default function InvoiceDoc({ invoice }: { invoice: Invoice }) {
           <div style={{ color: '#475569' }}>Phone: {co.phone}</div>
           <div style={{ color: '#475569' }}>Email: {co.email}</div>
           <div style={{ display: 'inline-block', marginTop: 10, border: `1px solid ${BRAND}`, color: BRAND, fontWeight: 700, padding: '5px 10px', borderRadius: 6 }}>
-            Balance Due : {formatCurrency(invoice.balance_due)}
+            Balance Due : {money(invoice.balance_due)}
           </div>
         </div>
         <table style={{ borderCollapse: 'collapse', width: '100%' }}><tbody>
@@ -73,9 +76,9 @@ export default function InvoiceDoc({ invoice }: { invoice: Invoice }) {
               <td style={{ border: '1px solid #e6e8ef', padding: '8px 10px' }}>{i + 1}</td>
               <td style={{ border: '1px solid #e6e8ef', padding: '8px 10px' }}>
                 <div style={{ fontWeight: 600 }}>{it.description}</div>
-                <div style={{ fontSize: 11, color: '#64748b' }}>{Number(it.qty).toFixed(2)} × {formatCurrency(it.rate)}</div>
+                <div style={{ fontSize: 11, color: '#64748b' }}>{Number(it.qty).toFixed(2)} × {money(it.rate)}</div>
               </td>
-              <td style={{ border: '1px solid #e6e8ef', padding: '8px 10px', textAlign: 'right', fontWeight: 600 }}>{formatCurrency(it.amount)}</td>
+              <td style={{ border: '1px solid #e6e8ef', padding: '8px 10px', textAlign: 'right', fontWeight: 600 }}>{money(it.amount)}</td>
             </tr>
           ))}
           {Number(invoice.tax_total) > 0 && (
@@ -83,9 +86,9 @@ export default function InvoiceDoc({ invoice }: { invoice: Invoice }) {
               <td style={{ border: '1px solid #e6e8ef', padding: '8px 10px' }}>{items.length + 1}</td>
               <td style={{ border: '1px solid #e6e8ef', padding: '8px 10px' }}>
                 <div style={{ fontWeight: 600 }}>HST{co.hst_number ? <span style={{ fontWeight: 400, color: '#64748b' }}> (Number : {co.hst_number})</span> : null}</div>
-                <div style={{ fontSize: 11, color: '#64748b' }}>1.00 × {formatCurrency(invoice.tax_total)}</div>
+                <div style={{ fontSize: 11, color: '#64748b' }}>1.00 × {money(invoice.tax_total)}</div>
               </td>
-              <td style={{ border: '1px solid #e6e8ef', padding: '8px 10px', textAlign: 'right', fontWeight: 600 }}>{formatCurrency(invoice.tax_total)}</td>
+              <td style={{ border: '1px solid #e6e8ef', padding: '8px 10px', textAlign: 'right', fontWeight: 600 }}>{money(invoice.tax_total)}</td>
             </tr>
           )}
         </tbody>
@@ -93,11 +96,11 @@ export default function InvoiceDoc({ invoice }: { invoice: Invoice }) {
 
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
         <table style={{ borderCollapse: 'collapse', minWidth: 300 }}><tbody>
-          <tr><td style={{ padding: '4px 10px', color: '#475569' }}>Sub Total</td><td style={{ padding: '4px 10px', textAlign: 'right' }}>{formatCurrency(Number(invoice.sub_total || 0) + Number(invoice.tax_total || 0))}</td></tr>
-          <tr><td style={{ padding: '4px 10px', color: '#475569' }}>Discount</td><td style={{ padding: '4px 10px', textAlign: 'right' }}>{formatCurrency(invoice.discount)}</td></tr>
-          <tr><td style={{ padding: '6px 10px', fontWeight: 800, borderTop: '2px solid #0f172a' }}>Total</td><td style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 800, borderTop: '2px solid #0f172a' }}>{formatCurrency(invoice.total)}</td></tr>
-          <tr><td style={{ padding: '4px 10px', color: '#166534' }}>Paid</td><td style={{ padding: '4px 10px', textAlign: 'right', color: '#166534' }}>{formatCurrency(invoice.amount_paid)}</td></tr>
-          <tr><td style={{ padding: '6px 10px', fontWeight: 800, color: BRAND }}>Balance Due</td><td style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 800, color: BRAND }}>{formatCurrency(invoice.balance_due)}</td></tr>
+          <tr><td style={{ padding: '4px 10px', color: '#475569' }}>Sub Total</td><td style={{ padding: '4px 10px', textAlign: 'right' }}>{money(Number(invoice.sub_total || 0) + Number(invoice.tax_total || 0))}</td></tr>
+          <tr><td style={{ padding: '4px 10px', color: '#475569' }}>Discount</td><td style={{ padding: '4px 10px', textAlign: 'right' }}>{money(invoice.discount)}</td></tr>
+          <tr><td style={{ padding: '6px 10px', fontWeight: 800, borderTop: '2px solid #0f172a' }}>Total</td><td style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 800, borderTop: '2px solid #0f172a' }}>{money(invoice.total)}</td></tr>
+          <tr><td style={{ padding: '4px 10px', color: '#166534' }}>Paid</td><td style={{ padding: '4px 10px', textAlign: 'right', color: '#166534' }}>{money(invoice.amount_paid)}</td></tr>
+          <tr><td style={{ padding: '6px 10px', fontWeight: 800, color: BRAND }}>Balance Due</td><td style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 800, color: BRAND }}>{money(invoice.balance_due)}</td></tr>
         </tbody></table>
       </div>
 

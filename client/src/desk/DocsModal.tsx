@@ -94,11 +94,17 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
     ? { ...d, agent_accepted: v, reminder: v === 'Not Accepted' ? false : d.reminder }
     : d));
 
-  const remindable = (d: DeskDocument) => d.validation !== 'Valid' && d.agent_accepted !== 'Not Accepted';
+  // A document is remindable only while the ball is in the AGENT'S court. Once they submit it
+  // (status "Received") it is the reviewer's job to validate — a submitted doc still awaiting
+  // validation is NOT chased. It becomes remindable again only if the reviewer marks it Invalid.
+  // (Mirrors the backend reminder filter in documents.service.)
+  const remindable = (d: DeskDocument) =>
+    d.validation !== 'Valid' && d.agent_accepted !== 'Not Accepted'
+    && (d.status !== 'Received' || d.validation === 'Invalid');
   const remindableDocs = shownDocs.filter(remindable);
   const allRemindersOn = remindableDocs.length > 0 && remindableDocs.every((d) => d.reminder);
   // Docs the "Send reminders now" email will actually chase.
-  const flaggedReminderDocs = shownDocs.filter((d) => d.reminder && remindable(d) && (d.status !== 'Received' || d.validation === 'Invalid'));
+  const flaggedReminderDocs = shownDocs.filter((d) => d.reminder && remindable(d));
   const toggleAllReminders = () => {
     const next = !allRemindersOn;
     setDocs((ds) => ds.map((d) => (remindable(d) ? { ...d, reminder: next } : d)));
@@ -110,7 +116,11 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
     setNewTitle('');
   };
 
-  const docPayload = () => docs.map((d) => ({ id: d.id, title: d.title, mandatory: d.mandatory, status: d.status, validation: d.validation, drive_uploaded: d.drive_uploaded || 'No', reminder: d.validation === 'Valid' ? false : d.reminder, agent_accepted: d.agent_accepted || null, remarks: d.remarks }));
+  // Never persist a reminder flag on a document that isn't remindable (Valid, or submitted and not
+  // yet marked Invalid) — so a stale 🔔 can't linger on a doc that has moved out of the agent's court.
+  const persistReminder = (d: DeskDocument) =>
+    (d.validation === 'Valid' || (d.status === 'Received' && d.validation !== 'Invalid')) ? false : d.reminder;
+  const docPayload = () => docs.map((d) => ({ id: d.id, title: d.title, mandatory: d.mandatory, status: d.status, validation: d.validation, drive_uploaded: d.drive_uploaded || 'No', reminder: persistReminder(d), agent_accepted: d.agent_accepted || null, remarks: d.remarks }));
 
   const save = async () => {
     setSaving(true);
@@ -300,7 +310,9 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
                     <div style={{ fontWeight: 600, color: BRAND, lineHeight: 1.3, wordBreak: 'break-word' }}>{d.title}</div>
                     {d.is_condition && d.deadline && <div style={{ fontSize: 11, color: 'var(--muted)' }}>Deadline: {d.deadline}</div>}
                     {d.is_condition && <span className="pill warn" style={{ fontSize: 9, padding: '1px 5px' }}>Condition</span>}
-                    {!agentMode && d.validation !== 'Valid' && (
+                    {/* No reminder option once a doc is submitted and awaiting validation — only a
+                        still-missing or reviewer-rejected (Invalid) doc is the agent's to chase. */}
+                    {!agentMode && d.validation !== 'Valid' && (d.status !== 'Received' || d.validation === 'Invalid') && (
                       <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, color: notAccepted ? 'var(--muted-2)' : (d.reminder ? '#b45309' : 'var(--muted)'), marginTop: 3, cursor: (readOnly || notAccepted) ? 'default' : 'pointer' }} title={notAccepted ? 'Reminders are off — this document was not accepted by the agent' : 'Include this document in automated pending-document email reminders'}>
                         <input type="checkbox" checked={!!d.reminder && !notAccepted} disabled={readOnly || notAccepted} onChange={(e) => upd(i, 'reminder', e.target.checked)} /> 🔔 Reminder
                       </label>
