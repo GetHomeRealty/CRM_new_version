@@ -1,7 +1,7 @@
-import { easterSunday, holidaysBetween, holidaysForYear, statutoryHolidays } from './holidays';
+import { DEFAULT_PROVINCE, easterSunday, holidaysBetween, holidaysForYear, statutoryHolidays, type Province } from './holidays';
 
-/** The date of a named holiday in a year, or undefined. */
-const on = (year: number, name: string, province = 'ON' as const): string | undefined =>
+/** The date of a named holiday in a year, or undefined. Defaults to Ontario, like the app does. */
+const on = (year: number, name: string, province: Province = DEFAULT_PROVINCE): string | undefined =>
   holidaysForYear(year, province).find((h) => h.name === name)?.date;
 
 /**

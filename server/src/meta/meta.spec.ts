@@ -93,7 +93,7 @@ describe('meta OAuth state', () => {
 
 describe('meta lead field mapping', () => {
   // Only mapLead is exercised, so the collaborators are never touched.
-  const sync = new MetaSyncService(null as never, null as never, null as never, null as never);
+  const sync = new MetaSyncService(null as never, null as never, null as never, null as never, null as never);
 
   it('maps the standard lead-form fields', () => {
     const m = sync.mapLead([

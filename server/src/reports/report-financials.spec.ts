@@ -130,7 +130,7 @@ describe('report-financials — transaction JSON parsers', () => {
   it('reads Prisma Decimal columns instead of zeroing them', () => {
     // Prisma returns Decimal objects for numeric columns (price, comm_pct, comm_amt).
     // Treating an object as 0 silently blanked Price and "Commission % / Amount".
-    const decimal = (s) => ({ toString: () => s, valueOf: () => s });
+    const decimal = (s: string) => ({ toString: () => s, valueOf: () => s });
     expect(num(decimal('900000'))).toBe(900000);
     expect(num(decimal('2.5'))).toBe(2.5);
     expect(num(decimal('0'))).toBe(0);
