@@ -147,6 +147,11 @@ export default function CalendarPage() {
     () => events.filter((e) => e.date > today).sort((a, b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time)).slice(0, 8),
     [events, today],
   );
+  // Holidays + festivals in the month currently shown, listed under Upcoming Events.
+  const monthHolidays = useMemo(
+    () => [...holidays].sort((a, b) => a.date.localeCompare(b.date) || a.name.localeCompare(b.name)),
+    [holidays],
+  );
 
   // ConfirmDialog closes itself after onConfirm, so this only does the work.
   const remove = async () => {
@@ -161,6 +166,7 @@ export default function CalendarPage() {
   };
 
   const shiftMonth = (by: number) => setAnchor((a) => new Date(a.getFullYear(), a.getMonth() + by, 1));
+  const goToday = () => { const now = new Date(); setAnchor(new Date(now.getFullYear(), now.getMonth(), 1)); setSelected(iso(now)); };
 
   if (loading) return <div className="centered">Loading calendar…</div>;
 
@@ -181,39 +187,60 @@ export default function CalendarPage() {
       </div>
 
       <div className="cal-layout">
-        {/* month grid — "Pick a date": days with events are highlighted; the events themselves
-            are read in the cards on the right, so the grid stays clean. */}
+        {/* Large month grid — the main view. Each day shows its holidays/festivals by name and its
+            events as chips; the sidebar on the right lists today's and upcoming events in full. */}
         <div className="card cal-grid-card">
-          <div className="modal-h" style={{ fontSize: 14 }}>📅 Pick a date</div>
           <div className="cal-monthbar">
             <button className="btn ghost sm" onClick={() => shiftMonth(-1)} aria-label="Previous month">‹</button>
-            <strong>{MONTHS[anchor.getMonth()]} {anchor.getFullYear()}</strong>
+            <strong className="cal-monthname">{MONTHS[anchor.getMonth()]} {anchor.getFullYear()}</strong>
             <button className="btn ghost sm" onClick={() => shiftMonth(1)} aria-label="Next month">›</button>
+            <button className="btn ghost sm" onClick={goToday} style={{ marginLeft: 8 }}>Today</button>
           </div>
 
-          <div className="cal-grid pick">
+          <div className="cal-grid big">
             {WEEKDAYS.map((d) => <div key={d} className="cal-dow">{d}</div>)}
             {cells.map(({ date, inMonth }) => {
               const key = iso(date);
               const dayList = byDate.get(key) ?? [];
               const hols = holidaysByDate.get(key) ?? [];
-              const hint = [dayList.length ? `${dayList.length} event(s)` : 'No events', ...hols.map(holidayTitle)].join(' · ');
               return (
-                <button
-                  type="button"
+                <div
                   key={key}
-                  className={`cal-cell${inMonth ? '' : ' out'}${key === selected ? ' sel' : ''}${key === today ? ' today' : ''}${dayList.length ? ' has-events' : ''}`}
+                  className={`cal-cell${inMonth ? '' : ' out'}${key === selected ? ' sel' : ''}${key === today ? ' today' : ''}`}
                   onClick={() => setSelected(key)}
                   onDoubleClick={() => canEdit && setEditing('new')}
-                  title={hint}
+                  role="button"
+                  tabIndex={0}
                 >
-                  <span className="cal-daynum">{date.getDate()}</span>
-                  {/* A small dot marks a statutory holiday or festival; its name is shown in the
-                      day card on the right. Keeps the grid clean, per the "Pick a date" style. */}
-                  {hols.length > 0 && <span className={`cal-hol-dot${hols.some((h) => h.kind === 'festival') ? ' festival' : ''}`} />}
-                </button>
+                  <div className="cal-cell-head">
+                    <span className="cal-daynum">{date.getDate()}</span>
+                  </div>
+                  {hols.map((h) => (
+                    <span key={h.name} className={`cal-holiday${h.kind === 'festival' ? ' festival' : ''}`} title={holidayTitle(h)}>
+                      {h.approximate ? '◐ ' : ''}{h.name}
+                    </span>
+                  ))}
+                  {dayList.slice(0, 3).map((e) => (
+                    <button
+                      key={e.id}
+                      type="button"
+                      className={`cal-chip ${typePill(e.type)}`}
+                      title={`${clock(e.time)} · ${e.title}`}
+                      onClick={(ev) => { ev.stopPropagation(); canEdit ? setEditing(e) : setSelected(key); }}
+                    >
+                      {clock(e.time)} {e.title}
+                    </button>
+                  ))}
+                  {dayList.length > 3 && <span className="cal-more">+{dayList.length - 3} more</span>}
+                </div>
               );
             })}
+          </div>
+
+          <div className="cal-legend">
+            <span><i className="cal-lg-dot stat" /> Holiday</span>
+            <span><i className="cal-lg-dot fest" /> Festival</span>
+            <span className="muted">◐ date may vary (lunar)</span>
           </div>
         </div>
 
@@ -232,6 +259,22 @@ export default function CalendarPage() {
             {upcoming.length === 0
               ? <div className="help">Nothing upcoming.</div>
               : upcoming.map((e) => <EventRow key={e.id} e={e} showDate canEdit={canEdit} onEdit={() => setEditing(e)} onDelete={() => setToDelete(e)} onDeal={() => navigate(`/app/transactions/${e.transaction_id}?mode=view`)} />)}
+          </div>
+
+          {/* Holidays & festivals for the month being viewed. */}
+          <div className="card">
+            <div className="modal-h" style={{ fontSize: 14 }}>Holidays &amp; Festivals<span className="sec-count">{monthHolidays.length}</span></div>
+            {monthHolidays.length === 0
+              ? <div className="help">None this month.</div>
+              : monthHolidays.map((h) => (
+                <div key={`${h.date}-${h.name}`} className="cal-hol-row" title={holidayTitle(h)}>
+                  <span className={`cal-hol-swatch${h.kind === 'festival' ? ' festival' : ''}`} />
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600 }}>{h.name}{h.approximate ? ' ◐' : ''}</div>
+                    <div className="muted" style={{ fontSize: 12 }}>{longDate(h.date)}</div>
+                  </div>
+                </div>
+              ))}
           </div>
         </div>
       </div>

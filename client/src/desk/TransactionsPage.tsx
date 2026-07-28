@@ -5,6 +5,8 @@ import { formatPrice, typeClass, typeLabel, TRANSACTION_TYPES } from './format';
 import { useToast } from './toast';
 import { apiErrorMessage } from '../lib/apiError';
 import { useAuth } from '../context/AuthContext';
+import { exportCompleteXlsx, ALL_TRANSACTIONS } from '../lib/bulkApi';
+import { queueExport } from '../lib/exportCentreApi';
 import AddTransactionModal from './AddTransactionModal';
 import ChatModal from './ChatModal';
 import BulkExportModal from './BulkExportModal';
@@ -53,7 +55,29 @@ export default function TransactionsPage() {
   // bulk selection + export/download
   const [selected, setSelected] = useState<number[]>([]);
   const [bulk, setBulk] = useState<'data' | 'documents' | null>(null);
+  const [downloadingAll, setDownloadingAll] = useState(false);
   const toggleSel = (id: number) => setSelected((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
+
+  /**
+   * One click = every transaction, every detail, one row each. Small sets stream straight
+   * back; large ones are queued and collected from the Download Centre, because a request
+   * that spends minutes building a workbook would otherwise time out in the browser.
+   */
+  const downloadEverything = async () => {
+    setDownloadingAll(true);
+    try {
+      if (rows.length > 25) {
+        const job = await queueExport('transaction-complete-xlsx', ALL_TRANSACTIONS);
+        toast(`Preparing ${rows.length} transactions (${job.export_id}) — collecting it in the Download Centre`, 'ok');
+        navigate('/app/transactions/downloads');
+      } else {
+        await exportCompleteXlsx(ALL_TRANSACTIONS);
+        toast('Download started', 'ok');
+      }
+    } catch (e) {
+      toast(apiErrorMessage(e, 'The download failed'), 'bad');
+    } finally { setDownloadingAll(false); }
+  };
 
   const load = () => {
     setLoading(true);
@@ -184,7 +208,11 @@ export default function TransactionsPage() {
         <button className={`btn ${showRibbon || activeRibbonCount ? 'primary' : 'ghost'} sm`} onClick={() => setShowRibbon((s) => !s)}>
           ⚙ Add Filter{activeRibbonCount ? ` (${activeRibbonCount})` : ''} {showRibbon ? '▲' : '▾'}
         </button>
-        <button className="btn ghost sm" onClick={() => navigate('/app/transactions/downloads')} title="Background exports and generated downloads">⇩ Download Centre</button>
+        <button className="btn ghost sm" disabled={downloadingAll || loading} onClick={downloadEverything}
+          title="Download every transaction — one row each, with team split, clients, lawyer, financial, adjustments and conditions">
+          {downloadingAll ? '⏳ Preparing…' : '⇩ Download All Transactions'}
+        </button>
+        <button className="btn ghost sm" onClick={() => navigate('/app/transactions/downloads')} title="Past and queued exports">⇩ Download Centre</button>
         {canEdit && <button className="btn ghost sm" onClick={() => navigate('/app/transactions/import')} title="Create many transactions from a spreadsheet">⭳ Bulk Import</button>}
         {canEdit && <button className="btn primary sm" onClick={() => setAddOpen(true)}>+ Add Transaction</button>}
       </div>

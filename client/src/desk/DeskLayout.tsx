@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { getAgentChangeNotifications, getDocNotifications, markDocNotificationsSeen } from '../lib/api';
+import { companyLogoUrl, getAgentChangeNotifications, getDocNotifications, markDocNotificationsSeen } from '../lib/api';
 import type { AgentChangeItem, AgentChangeNotif, DocNotif, DocNotifItem } from '../types';
 import ChangePasswordModal from './ChangePasswordModal';
+import UserAvatar from './UserAvatar';
 
 interface NavItem {
   key: string;
@@ -38,7 +39,6 @@ const NAV: NavItem[] = [
   // Settings above instead, so this is shown to agents only.
   { key: 'account', label: 'Settings', ico: '\u{2699}', agentOnly: true },
   { key: 'triggers', label: 'Triggers', ico: '\u{26A1}' },
-  { key: 'email-settings', label: 'Email Settings', ico: '\u{1F4E7}', superAdmin: true },
   { key: 'recycle-bin', label: 'Recycle Bin', ico: '\u{1F5D1}', superAdmin: true },
 ];
 
@@ -105,7 +105,6 @@ export default function DeskLayout() {
     navigate('/login');
   };
 
-  const avatarInitial = (user?.name || 'G').charAt(0).toUpperCase();
 
   return (
     <>
@@ -113,7 +112,13 @@ export default function DeskLayout() {
       <div className="app">
         <aside className="sidebar">
           <div className="logo">
-            <img src="/logo.svg" alt="Get Home Realty" className="logo-img" />
+            {/* The uploaded brand logo (Settings → Company), falling back to the bundled mark. */}
+            <img
+              src={companyLogoUrl()}
+              alt="Get Home Realty"
+              className="logo-img"
+              onError={(e) => { const i = e.currentTarget; if (i.src !== `${window.location.origin}/logo.svg`) i.src = '/logo.svg'; }}
+            />
           </div>
           <nav className="nav">
             {visibleNav.map((n) => (
@@ -177,7 +182,7 @@ export default function DeskLayout() {
                 </div>
               )}
               <div style={{ fontSize: 13, color: '#374151' }}>{'\u{1F1E8}\u{1F1E6}'} English</div>
-              <div className="avatar">{avatarInitial}</div>
+              <UserAvatar userId={user?.id ?? null} name={user?.name} size={34} title={user?.name ?? undefined} />
               <span style={{ fontSize: 12, color: 'var(--muted)' }}>{user?.name || 'Gethomerealty'}</span>
               <button className="btn ghost sm" onClick={() => setPwOpen(true)} title="Change your password">🔑 Password</button>
             </div>

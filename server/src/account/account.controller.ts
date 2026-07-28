@@ -1,9 +1,9 @@
-import { Body, Controller, Delete, Get, HttpCode, Param, ParseIntPipe, Post, Put, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Param, ParseIntPipe, Post, Put, Query, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '../auth/guards/auth.guard';
 import { CurrentUser } from '../auth/decorators';
 import type { AuthUserRecord } from '../auth/auth.types';
 import { CrmSettingsService } from '../crm-settings/crm-settings.service';
-import { MailAccountService } from '../email/mail-account.service';
+import { MailAccountService, parseScope } from '../email/mail-account.service';
 import { MailerService } from '../email/mailer.service';
 
 const str = (v: unknown): string => String(v ?? '').trim();
@@ -57,15 +57,32 @@ export class AccountController {
   }
 
   // ---------------------------------------------------- personal mail accounts
+  /**
+   * `?scope=crm|desk` narrows the list to the integrations area that is asking, so CRM
+   * Settings and Transaction Desk Settings never show each other's accounts. Omitting it
+   * returns every account, which is what the personal Settings screen wants — and keeps
+   * the endpoint backward compatible for any caller that predates the split.
+   */
   @Get('mail-accounts')
-  mailAccounts(@CurrentUser() user: AuthUserRecord): Promise<unknown> {
-    return this.accounts.indexForUser(user.id ?? -1);
+  mailAccounts(@CurrentUser() user: AuthUserRecord, @Query('scope') scope?: string): Promise<unknown> {
+    return this.accounts.indexForUser(user.id ?? -1, parseScope(scope));
   }
 
   @Post('mail-accounts')
   @HttpCode(201)
   addMailAccount(@CurrentUser() user: AuthUserRecord, @Body() body: Record<string, unknown>): Promise<unknown> {
-    return this.accounts.storeForUser(user.id ?? -1, body ?? {});
+    // The new account belongs to whichever area added it.
+    return this.accounts.storeForUser(user.id ?? -1, body ?? {}, parseScope(body?.scope));
+  }
+
+  /** Assign an existing account to CRM / Transaction Desk, or back to unassigned (both). */
+  @Put('mail-accounts/:id/scope')
+  setMailAccountScope(
+    @CurrentUser() user: AuthUserRecord,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: Record<string, unknown>,
+  ): Promise<unknown> {
+    return this.accounts.setScopeForUser(user.id ?? -1, id, parseScope(body?.scope) ?? null);
   }
 
   @Put('mail-accounts/:id')

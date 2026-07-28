@@ -7,6 +7,9 @@ import { GoogleConnectionService } from './google-connection.service';
 import { GoogleCalendarSyncService } from './google-calendar-sync.service';
 import { GoogleController } from './google.controller';
 import { GooglePublicController } from './google-public.controller';
+import { GoogleMailController } from './google-mail.controller';
+import { GmailConnectService } from './gmail-connect.service';
+import { LaravelCryptService } from '../common/laravel-crypt.service';
 import { IcalFeedService } from './ical-feed.service';
 import { IcalController } from './ical.controller';
 
@@ -17,8 +20,8 @@ import { IcalController } from './ical.controller';
  */
 @Module({
   imports: [AuthModule, PrismaModule],
-  controllers: [GooglePublicController, GoogleController, IcalController],
-  providers: [GoogleService, GoogleStateService, GoogleConnectionService, GoogleCalendarSyncService, IcalFeedService],
-  exports: [GoogleCalendarSyncService],
+  controllers: [GooglePublicController, GoogleController, GoogleMailController, IcalController],
+  providers: [GoogleService, GoogleStateService, GoogleConnectionService, GoogleCalendarSyncService, GmailConnectService, LaravelCryptService, IcalFeedService],
+  exports: [GoogleCalendarSyncService, GoogleService],
 })
 export class GoogleModule {}

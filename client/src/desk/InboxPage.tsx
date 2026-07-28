@@ -38,6 +38,33 @@ export default function InboxPage() {
 
   useEffect(() => { void load(); }, [load]);
 
+  /**
+   * Keep the list fresh on its own. The server polls the mailboxes in the background, but this
+   * page used to fetch once and never again — so mail could arrive, be stored, and still not
+   * show until the user navigated away and back. Refreshing here is what makes new mail
+   * actually appear without pressing anything.
+   *
+   * Paused while the tab is hidden (no point polling a page nobody is looking at) and resumed
+   * with an immediate fetch when it comes back, so returning to the tab shows current mail
+   * rather than a stale list waiting for the next tick.
+   */
+  useEffect(() => {
+    const REFRESH_MS = 30_000;
+    let timer: ReturnType<typeof setInterval> | null = null;
+    const start = () => {
+      if (timer) return;
+      timer = setInterval(() => { if (!document.hidden) void load(); }, REFRESH_MS);
+    };
+    const stop = () => { if (timer) { clearInterval(timer); timer = null; } };
+    const onVisibility = () => {
+      if (document.hidden) stop();
+      else { void load(); start(); }
+    };
+    start();
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => { stop(); document.removeEventListener('visibilitychange', onVisibility); };
+  }, [load]);
+
   const openMessage = async (row: InboxMessageRow) => {
     try {
       setOpen(await getInboxMessage(row.id));

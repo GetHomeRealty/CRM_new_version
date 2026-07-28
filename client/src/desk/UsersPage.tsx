@@ -1,10 +1,15 @@
-import { useEffect, useState } from 'react';
-import { getUsers, getUsersCatalog, createUser, updateUser, deleteUser, getUserDealHistory, getAgentLoans } from '../lib/api';
+import { useEffect, useRef, useState } from 'react';
+import { getUsers, getUsersCatalog, createUser, updateUser, deleteUser, getUserDealHistory, getAgentLoans, uploadUserPhoto } from '../lib/api';
+import { fileToBase64 } from '../lib/importApi';
 import { roleLabel, formatCurrency } from './format';
 import { useToast } from './toast';
 import { apiErrorMessage, apiFieldErrors } from '../lib/apiError';
 import { useAuth } from '../context/AuthContext';
 import PasswordInput from './PasswordInput';
+import UserAvatar, { bumpPhotoVersion } from './UserAvatar';
+
+const PHOTO_ACCEPT = '.png,.jpg,.jpeg,.gif,.webp';
+const PHOTO_MAX_MB = 4;
 import type {
   AuthUser, CommissionHistoryEntry, DealHistoryEntry, LoanEntry, LoanRepayment,
   ManagedUser, Permissions, ScreenLevel, UserProfile, UsersCatalog,
@@ -17,6 +22,35 @@ export default function UsersPage() {
   const [catalog, setCatalog] = useState<UsersCatalog | null>(null);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<Partial<ManagedUser> | null>(null); // user object or {} for new
+  // Profile pictures: administrators may set one for any user, not just themselves.
+  const [photoBusy, setPhotoBusy] = useState<number | null>(null);
+  const [photoV, setPhotoV] = useState<Record<number, number>>({});
+  const photoInput = useRef<HTMLInputElement>(null);
+  const photoTarget = useRef<number | null>(null);
+
+  const pickFor = (userId: number) => { photoTarget.current = userId; photoInput.current?.click(); };
+
+  const onPhotoChosen = async (file: File | null) => {
+    const userId = photoTarget.current;
+    if (!file || !userId) return;
+    if (file.size > PHOTO_MAX_MB * 1024 * 1024) {
+      toast(`That image is ${(file.size / 1024 / 1024).toFixed(1)} MB — the limit is ${PHOTO_MAX_MB} MB.`, 'bad');
+      return;
+    }
+    setPhotoBusy(userId);
+    try {
+      const info = await uploadUserPhoto(userId, file.name, await fileToBase64(file));
+      setPhotoV((v) => ({ ...v, [userId]: info.photo_version ?? Date.now() }));
+      bumpPhotoVersion();
+      toast('Profile picture updated', 'ok');
+    } catch (e) {
+      toast(apiErrorMessage(e, 'Could not upload the picture'), 'bad');
+    } finally {
+      setPhotoBusy(null);
+      photoTarget.current = null;
+      if (photoInput.current) photoInput.current.value = '';
+    }
+  };
 
   const load = () => {
     setLoading(true);
@@ -43,6 +77,10 @@ export default function UsersPage() {
 
   return (
     <>
+      {/* One hidden picker, retargeted per row — avoids an input per user. */}
+      <input ref={photoInput} type="file" accept={PHOTO_ACCEPT} style={{ display: 'none' }}
+        onChange={(e) => void onPhotoChosen(e.target.files?.[0] ?? null)} />
+
       <div className="toolbar"><div className="toolbar-row">
         <span className="pill info" style={{ fontSize: 11 }}>{users.length} users</span>
         <div style={{ flex: 1 }} />
@@ -54,12 +92,21 @@ export default function UsersPage() {
         <tbody>
           {users.map((u) => (
             <tr key={u.id}>
-              <td>{u.name}{u.id === me?.id && <span className="pill ok" style={{ fontSize: 9, marginLeft: 6 }}>You</span>}</td>
+              <td>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <UserAvatar userId={u.id} name={u.name} size={32} version={photoV[u.id]} />
+                  <span>{u.name}{u.id === me?.id && <span className="pill ok" style={{ fontSize: 9, marginLeft: 6 }}>You</span>}</span>
+                </div>
+              </td>
               <td>{u.email}</td>
               <td><span className={`pill ${roleP(u.role)}`}>{roleLabel(u.role)}</span></td>
               <td><span className="help" style={{ margin: 0 }}>{u.is_admin ? 'Full access (all screens)' : accessSummary(u.permissions)}</span></td>
               <td>
                 <button className="btn ghost sm" onClick={() => setEditing(u)}>Edit</button>
+                <button className="btn ghost sm" style={{ marginLeft: 4 }} disabled={photoBusy === u.id}
+                  title={`Set ${u.name}'s profile picture`} onClick={() => pickFor(u.id)}>
+                  {photoBusy === u.id ? '…' : '🖼'}
+                </button>
                 {u.id !== me?.id && <button className="btn ghost sm" style={{ marginLeft: 4 }} onClick={() => onDelete(u)}>🗑️</button>}
               </td>
             </tr>

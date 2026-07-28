@@ -103,16 +103,34 @@ export class MailerService {
   }
 
   private async dispatch(account: mail_accounts, to: string | string[], subject: string, body: string, cc: string[] = [], attachments: { data: string; name?: string; mime?: string }[] = []): Promise<void> {
-    const transport = nodemailer.createTransport({
-      host: account.host,
-      port: Number(account.port),
-      secure: account.encryption === 'ssl',
-      requireTLS: account.encryption === 'tls',
-      // The password is stored Laravel-encrypted (encrypted cast); decrypt for SMTP auth.
-      auth: account.username ? { user: account.username, pass: this.crypt.decryptString(account.password) ?? account.password ?? '' } : undefined,
-      connectionTimeout: 30000,
-      greetingTimeout: 30000,
-    });
+    const transport = account.encryption === 'oauth'
+      // Google OAuth account: `password` holds the encrypted refresh token. Nodemailer mints a
+      // fresh access token from it (via the app's client id/secret) for each send with XOAUTH2.
+      ? nodemailer.createTransport({
+          host: account.host || 'smtp.gmail.com',
+          port: Number(account.port) || 587,
+          secure: Number(account.port) === 465,
+          requireTLS: Number(account.port) !== 465,
+          auth: {
+            type: 'OAuth2',
+            user: account.username || account.from_email,
+            clientId: (process.env.GOOGLE_CLIENT_ID ?? '').trim(),
+            clientSecret: (process.env.GOOGLE_CLIENT_SECRET ?? '').trim(),
+            refreshToken: this.crypt.decryptString(account.password) ?? '',
+          },
+          connectionTimeout: 30000,
+          greetingTimeout: 30000,
+        })
+      : nodemailer.createTransport({
+          host: account.host,
+          port: Number(account.port),
+          secure: account.encryption === 'ssl',
+          requireTLS: account.encryption === 'tls',
+          // The password is stored Laravel-encrypted (encrypted cast); decrypt for SMTP auth.
+          auth: account.username ? { user: account.username, pass: this.crypt.decryptString(account.password) ?? account.password ?? '' } : undefined,
+          connectionTimeout: 30000,
+          greetingTimeout: 30000,
+        });
 
     // Global safety valve. When MAIL_REDIRECT_TO is set every message goes there instead of the
     // real recipient, and the intended addresses are carried in the subject so nothing is lost.

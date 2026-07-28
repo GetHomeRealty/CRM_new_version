@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { formatCurrency } from './format';
 import { printDoc } from './printDoc';
+import BrandMark, { brandMarkHtml } from './BrandMark';
 import { sendDepositReceipt, getAgentEmails, getDocuments, uploadDocClientFile } from '../lib/api';
 import { useToast } from './toast';
 import { apiErrorMessage } from '../lib/apiError';
-import type { Transaction } from '../types';
+import type { CompanySettings, Transaction } from '../types';
 
 // Convert a data URI (image) into a File so it can be uploaded as multipart.
 function dataUriToFile(uri: string, name: string): File {
@@ -57,12 +58,14 @@ interface DepositReceiptModalProps {
   open: boolean;
   onClose: () => void;
   txn: Transaction;
+  /** Company settings — supplies the uploaded brand logo and the letterhead address. */
+  settings?: CompanySettings | null;
 }
 
 // Deposit Receipt document (listing-side transactions). Auto-fills from the
 // transaction; blank fields are editable. Print/Save-PDF builds the markup from
 // state so typed values are included.
-export default function DepositReceiptModal({ open, onClose, txn }: DepositReceiptModalProps) {
+export default function DepositReceiptModal({ open, onClose, txn, settings = null }: DepositReceiptModalProps) {
   const toast = useToast();
   const [f, setF] = useState<DepositForm>(() => ({
     date: today(),
@@ -212,9 +215,8 @@ export default function DepositReceiptModal({ open, onClose, txn }: DepositRecei
     </style>
     <div class="dr">
     <div style="text-align:center">
-      <div style="font-size:22px;font-weight:800;color:${BRAND}">GET&#9730;HOME REALTY</div>
-      <div style="font-size:10px;font-style:italic;color:#64748b">"A Tradition of Trust" — Brokerage</div>
-      <div style="font-size:10px;color:#475569">Unit-101, 218 Export Blvd, Mississauga, L5S 0A7, Ontario, Canada</div>
+      <div style="display:flex;justify-content:center">${brandMarkHtml(!!settings?.logo_path, { color: BRAND, version: settings?.updated_at })}</div>
+      <div style="font-size:10px;color:#475569">${settings?.address || 'Unit-101, 218 Export Blvd, Mississauga, L5S 0A7, Ontario, Canada'}</div>
     </div>
     <div style="display:flex;justify-content:space-between;align-items:center;margin:10px 0">
       <div style="background:${BRAND};color:#fff;font-weight:800;padding:5px 14px;border-radius:4px;font-size:16px">Deposit Receipt</div>
@@ -317,9 +319,8 @@ export default function DepositReceiptModal({ open, onClose, txn }: DepositRecei
           ))}
         </div>
 
-        <div style={{ textAlign: 'center', marginBottom: 12 }}>
-          <div style={{ fontSize: 22, fontWeight: 800, color: BRAND }}>GET<span style={{ color: '#0f172a' }}>&#9730;</span>HOME REALTY</div>
-          <div style={{ fontSize: 10, fontStyle: 'italic', color: '#64748b' }}>"A Tradition of Trust" — Brokerage</div>
+        <div style={{ textAlign: 'center', marginBottom: 12, display: 'grid', justifyItems: 'center' }}>
+          <BrandMark color={BRAND} version={settings?.updated_at} />
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
           <span style={{ background: BRAND, color: '#fff', fontWeight: 700, padding: '4px 14px', borderRadius: 4 }}>Deposit Receipt</span>

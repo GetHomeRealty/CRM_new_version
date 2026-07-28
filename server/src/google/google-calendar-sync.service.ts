@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { GoogleService, type GoogleEvent } from './google.service';
 import { GoogleConnectionService } from './google-connection.service';
+import type { IntegrationScope } from '../email/mail-account.service';
 import { MAX_EVENTS_PER_SYNC, SYNC_WINDOW_FUTURE_DAYS, SYNC_WINDOW_PAST_DAYS } from './google.constants';
 
 export interface SyncResult { pulled: number; error: string | null }
@@ -27,10 +28,10 @@ export class GoogleCalendarSyncService {
   ) {}
 
   /** Pull the user's Google events into their CRM calendar. */
-  async pull(userId: number): Promise<SyncResult> {
-    const token = await this.connections.accessToken(userId);
+  async pull(userId: number, scope: IntegrationScope = 'crm'): Promise<SyncResult> {
+    const token = await this.connections.accessToken(userId, scope);
     if (!token) return { pulled: 0, error: 'Not connected to Google, or the connection needs renewing.' };
-    const conn = await this.connections.find(userId);
+    const conn = await this.connections.find(userId, scope);
     if (!conn) return { pulled: 0, error: 'Not connected.' };
 
     try {
@@ -43,7 +44,7 @@ export class GoogleCalendarSyncService {
       });
       // A stale incremental token forces a clean full window pull.
       if (res.expiredSyncToken) {
-        await this.connections.touchSync(userId, null);
+        await this.connections.touchSync(userId, null, scope);
         res = await this.google.listEvents(token, conn.calendar_id, {
           timeMin: new Date(now - SYNC_WINDOW_PAST_DAYS * 86400000).toISOString(),
           timeMax: new Date(now + SYNC_WINDOW_FUTURE_DAYS * 86400000).toISOString(),
@@ -55,11 +56,11 @@ export class GoogleCalendarSyncService {
       for (const ev of res.events) {
         if (await this.applyGoogleEvent(userId, ev)) pulled++;
       }
-      await this.connections.touchSync(userId, res.nextSyncToken);
+      await this.connections.touchSync(userId, res.nextSyncToken, scope);
       return { pulled, error: null };
     } catch (ex) {
       const error = (ex as Error).message.slice(0, 500);
-      await this.connections.recordError(userId, error);
+      await this.connections.recordError(userId, error, scope);
       return { pulled: 0, error };
     }
   }

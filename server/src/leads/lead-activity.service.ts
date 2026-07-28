@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { LeadAuditService } from './lead-audit.service';
 import type { AuthUserRecord } from '../auth/auth.types';
@@ -31,6 +31,98 @@ function toE164(raw: string | null | undefined): string {
 function normalizeCallStatus(raw: string): string | null {
   const s = String(raw ?? '').trim().toLowerCase();
   return ['queued', 'initiated', 'ringing', 'in-progress', 'completed', 'busy', 'no-answer', 'canceled', 'failed'].includes(s) ? s : null;
+}
+
+type EmailAiProvider = 'anthropic' | 'openai' | 'gemini';
+interface EmailAiConfig { provider: EmailAiProvider; key: string; model: string; }
+
+/**
+ * Which AI provider drafts emails. AI_EMAIL_PROVIDER pins one explicitly; otherwise the first
+ * provider with a key set wins (Anthropic → OpenAI → Gemini). Returns null when none is configured,
+ * so the caller can 503 with a clear message. GOOGLE_API_KEY is accepted as an alias for Gemini.
+ */
+function resolveEmailAi(): EmailAiConfig | null {
+  const env = (n: string) => (process.env[n] ?? '').trim();
+  const keys: Record<EmailAiProvider, string> = {
+    anthropic: env('ANTHROPIC_API_KEY'),
+    openai: env('OPENAI_API_KEY'),
+    gemini: env('GEMINI_API_KEY') || env('GOOGLE_API_KEY'),
+  };
+  const model = (p: EmailAiProvider): string => {
+    const override = env('AI_EMAIL_MODEL');
+    if (p === 'anthropic') return override || env('ID_EXTRACTION_MODEL') || 'claude-sonnet-5';
+    if (p === 'openai') return env('OPENAI_MODEL') || override || 'gpt-4o-mini';
+    return env('GEMINI_MODEL') || override || 'gemini-1.5-flash';
+  };
+
+  const pinned = env('AI_EMAIL_PROVIDER').toLowerCase();
+  const order: EmailAiProvider[] = pinned === 'anthropic' || pinned === 'openai' || pinned === 'gemini'
+    ? [pinned] : ['anthropic', 'openai', 'gemini'];
+  for (const p of order) {
+    if (keys[p]) return { provider: p, key: keys[p], model: model(p) };
+  }
+  return null;
+}
+
+/**
+ * Calls the configured provider and returns the raw model text (expected to be a JSON object with
+ * `subject`/`html`). Each provider is asked for JSON directly. Network failures surface as 503;
+ * an HTTP error surfaces with the status and a short snippet of the provider's body so a bad key or
+ * exhausted quota is diagnosable — the API key itself is never included.
+ */
+async function draftEmailWithAi(cfg: EmailAiConfig, system: string, userText: string): Promise<string> {
+  const timeout = AbortSignal.timeout(45000);
+  let res: Response;
+  try {
+    if (cfg.provider === 'anthropic') {
+      res = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'x-api-key': cfg.key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+        body: JSON.stringify({ model: cfg.model, max_tokens: 1500, system, messages: [{ role: 'user', content: userText }] }),
+        signal: timeout,
+      });
+    } else if (cfg.provider === 'openai') {
+      res = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: { authorization: `Bearer ${cfg.key}`, 'content-type': 'application/json' },
+        body: JSON.stringify({
+          model: cfg.model, max_tokens: 1500, response_format: { type: 'json_object' },
+          messages: [{ role: 'system', content: system }, { role: 'user', content: userText }],
+        }),
+        signal: timeout,
+      });
+    } else {
+      // Gemini: system prompt goes in system_instruction; JSON forced via responseMimeType.
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(cfg.model)}:generateContent?key=${encodeURIComponent(cfg.key)}`;
+      res = await fetch(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          system_instruction: { parts: [{ text: system }] },
+          contents: [{ role: 'user', parts: [{ text: userText }] }],
+          generationConfig: { responseMimeType: 'application/json', maxOutputTokens: 1500 },
+        }),
+        signal: timeout,
+      });
+    }
+  } catch (ex) {
+    throw new ServiceUnavailableException({ message: `Could not reach the AI service (${cfg.provider}): ${(ex as Error).message}` });
+  }
+
+  if (!res.ok) {
+    const snippet = (await res.text().catch(() => '')).slice(0, 300);
+    throw new BadRequestException({ message: `The AI service (${cfg.provider}) returned HTTP ${res.status}. ${snippet}`.trim() });
+  }
+
+  const data = (await res.json()) as Record<string, unknown>;
+  if (cfg.provider === 'anthropic') {
+    return ((data.content as { text?: string }[] | undefined)?.[0]?.text ?? '').trim();
+  }
+  if (cfg.provider === 'openai') {
+    return ((data.choices as { message?: { content?: string } }[] | undefined)?.[0]?.message?.content ?? '').trim();
+  }
+  const parts = (data.candidates as { content?: { parts?: { text?: string }[] } }[] | undefined)?.[0]?.content?.parts;
+  return (parts?.map((x) => x.text ?? '').join('') ?? '').trim();
 }
 
 /**
@@ -281,8 +373,11 @@ export class LeadActivityService {
 
     const base = publicUrl();
     const callback = base ? `${base}/api/sms/twilio/call-status?call=${row.id}` : '';
+    const recCb = base
+      ? ` recordingStatusCallback="${base}/api/sms/twilio/recording-status?call=${row.id}" recordingStatusCallbackEvent="completed" recordingStatusCallbackMethod="POST"`
+      : '';
     const spoken = (lead.name || 'your lead').replace(/[<>&]/g, ' ').slice(0, 80);
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response><Say>Connecting you to ${spoken}. Please hold.</Say><Dial callerId="${fromNumber()}" record="record-from-answer"><Number>${leadNumber}</Number></Dial></Response>`;
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response><Say>Connecting you to ${spoken}. Please hold.</Say><Dial callerId="${fromNumber()}" record="record-from-answer"${recCb}><Number>${leadNumber}</Number></Dial></Response>`;
 
     try {
       const res = await this.twilio.call(agentNumber, twiml, callback);
@@ -295,6 +390,25 @@ export class LeadActivityService {
       await this.prisma.lead_calls.update({ where: { id: row.id }, data: { status: 'failed', notes: (err instanceof Error ? err.message : 'Call failed').slice(0, 255) } });
       throw err;
     }
+  }
+
+  /**
+   * Prepare an in-browser (Voice SDK) call: create the log row up front so the child-leg status
+   * callback has something to update, and hand the browser the E.164 number to dial. The actual
+   * audio happens in the browser via the Voice SDK; this only sets up the record + validates.
+   */
+  async prepareBrowserCall(leadId: number, user: AuthUserRecord): Promise<{ callId: number; to: string; leadName: string }> {
+    const lead = await this.prisma.leads.findFirst({ where: { id: leadId, deleted_at: null }, select: { id: true, name: true, phone: true } });
+    if (!lead) throw new NotFoundException({ message: 'Lead not found.' });
+
+    const to = toE164(lead.phone);
+    if (!to) throw new BadRequestException({ message: 'This lead has no valid phone number to call.' });
+
+    const row = await this.prisma.lead_calls.create({
+      data: { lead_id: lead.id, called_at: new Date(), status: 'initiated', notes: 'In-browser call', created_by: user.name, user_id: user.id ?? null, created_at: new Date() },
+    });
+    await this.audit.record(user, 'Lead call placed', lead.name, `In-browser call to ${to}`);
+    return { callId: row.id, to, leadName: lead.name };
   }
 
   async removeCall(leadId: number, callId: number, user: AuthUserRecord): Promise<{ deleted: boolean }> {
@@ -576,6 +690,50 @@ export class LeadActivityService {
       property: s.property, notes: s.notes, status: s.status,
       created_by: s.created_by, created_at: s.created_at?.toISOString() ?? null,
     };
+  }
+
+  /**
+   * Draft a one-off email with AI. Takes the agent's plain-language instruction and the lead's
+   * name, returns a subject + a styled HTML body the agent can review and send. Works with any one
+   * of Anthropic, OpenAI or Google Gemini — whichever key is configured (see `resolveEmailAi`). It
+   * only drafts; nothing is sent here.
+   */
+  async generateEmail(leadId: number, prompt: string, user: AuthUserRecord): Promise<{ subject: string; html: string }> {
+    const cfg = resolveEmailAi();
+    if (!cfg) {
+      throw new ServiceUnavailableException({
+        message: 'AI email generation is not configured on the server. Set one of ANTHROPIC_API_KEY, OPENAI_API_KEY or GEMINI_API_KEY, then restart.',
+      });
+    }
+    const p = str(prompt);
+    if (!p) throw new BadRequestException({ message: 'Describe the email you want to send.' });
+    if (p.length > 2000) throw new BadRequestException({ message: 'That instruction is too long.' });
+
+    const lead = await this.prisma.leads.findFirst({ where: { id: leadId, deleted_at: null }, select: { name: true } });
+    if (!lead) throw new NotFoundException({ message: 'Lead not found.' });
+
+    const system =
+      'You write professional real-estate emails for Get Home Realty, a Canadian brokerage. ' +
+      'From the agent\'s instruction, produce a complete, ready-to-send email. ' +
+      'Return ONLY a compact JSON object: {"subject": string, "html": string}. Rules: ' +
+      '"html" is a self-contained HTML email body with inline CSS and clean, professional styling ' +
+      '(a simple header, well-spaced paragraphs, and a signature) — no <html>/<head>/<body> wrapper, just the content. ' +
+      `Address the recipient by first name where natural; recipient full name is "${lead.name}". ` +
+      `Sign off as the agent "${user.name}"${user.email ? ` (${user.email})` : ''} at Get Home Realty. ` +
+      'Canadian English, warm and concise. Never use bracketed placeholders like [Name]. ' +
+      'Do not invent specific facts (prices, addresses, dates) unless the instruction supplies them.';
+    const userText = `Agent instruction: ${p}`;
+
+    const raw = await draftEmailWithAi(cfg, system, userText);
+    let cleaned = raw.trim();
+    if (cleaned.startsWith('```')) cleaned = cleaned.replace(/^```[a-z]*\s*/i, '').replace(/\s*```$/i, '');
+    const m = /\{[\s\S]*\}/.exec(cleaned);
+    let parsed: { subject?: string; html?: string } | null = null;
+    try { parsed = JSON.parse(m ? m[0] : cleaned); } catch { parsed = null; }
+    if (!parsed || !str(parsed.html)) {
+      throw new BadRequestException({ message: 'The AI did not return a usable email. Try rephrasing your instruction.' });
+    }
+    return { subject: str(parsed.subject) || `A note from ${user.name}`, html: String(parsed.html) };
   }
 
   private presentCall(c: {

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  downloadImportTemplate, downloadImportErrors, fileToBase64,
+  downloadImportTemplate, downloadImportSample, downloadImportErrors, fileToBase64,
   validateImport, confirmImport, importHistory,
 } from '../lib/importApi';
 import { apiErrorMessage } from '../lib/apiError';
@@ -67,10 +67,18 @@ export default function BulkImportPage() {
           <button className="btn ghost sm" onClick={() => nav('/app/transactions')}>← Transactions</button>
           <div>
             <h2 style={{ margin: 0 }}>Bulk Transaction Import</h2>
-            <div className="muted" style={{ fontSize: 13 }}>Create many transactions at once from a spreadsheet.</div>
+            <div className="muted" style={{ fontSize: 13 }}>
+              Create many transactions at once from a spreadsheet — with their team split, clients,
+              financial info, adjustments and conditions. (Legal &amp; Documentation is uploaded per deal.)
+            </div>
           </div>
           <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
-            <button className="btn ghost" onClick={() => downloadImportTemplate().catch((e) => toast(apiErrorMessage(e, 'Download failed'), 'bad'))}>
+            <button className="btn" title="A filled example — four worked transactions, one per type, using this system's agent names"
+              onClick={() => downloadImportSample().catch((e) => toast(apiErrorMessage(e, 'Download failed'), 'bad'))}>
+              ⭳ Download Sample
+            </button>
+            <button className="btn ghost" title="The blank template — headings, dropdowns, instructions and the status reference"
+              onClick={() => downloadImportTemplate().catch((e) => toast(apiErrorMessage(e, 'Download failed'), 'bad'))}>
               Download Template
             </button>
           </div>
@@ -100,6 +108,14 @@ export default function BulkImportPage() {
             </>
           )}
         </div>
+        <p className="muted" style={{ fontSize: 12, marginTop: 10 }}>
+          Two layouts are accepted and the importer detects which you used.
+          {' '}<strong>Multi-sheet</strong> (.xlsx): a Transactions sheet plus Financial, Team Split, Clients,
+          Adjustments and Conditions sheets, tied together by the <code>Ref</code> column — no limit on how many
+          clients or team members a deal can have.
+          {' '}<strong>One sheet</strong> (.xlsx or .csv): everything on a single wide sheet with numbered
+          columns such as “Client 1 Name”. Both are in the template.
+        </p>
         {busy === 'validating' && <div className="muted" style={{ marginTop: 10 }}>Validating…</div>}
         {error && <div className="import-error" style={{ marginTop: 10 }}>{error}</div>}
       </div>
@@ -115,6 +131,19 @@ export default function BulkImportPage() {
             <div className="warn"><strong>{preview.duplicate_rows}</strong><span>duplicates</span></div>
             <div className="warn"><strong>{preview.warning_rows}</strong><span>warnings</span></div>
           </div>
+
+          <div className="muted" style={{ fontSize: 12.5, marginTop: 8 }}>
+            Read as the <strong>{preview.layout === 'one-sheet' ? 'one-sheet' : 'multi-sheet'}</strong> layout.
+            {' '}If that isn’t what you filled in, the column headings don’t match the template.
+          </div>
+
+          {Object.keys(preview.section_counts ?? {}).length > 0 && (
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
+              {Object.entries(preview.section_counts).map(([name, n]) => (
+                <span key={name} className="pill info" title={`${n} ${name} row(s) will be applied`}>{name}: {n}</span>
+              ))}
+            </div>
+          )}
 
           {preview.issues.length > 0 && <IssueTable issues={preview.issues} />}
 
@@ -146,12 +175,27 @@ export default function BulkImportPage() {
             <div className="good"><strong>{result.imported_rows}</strong><span>imported</span></div>
             <div className="bad"><strong>{result.failed_rows}</strong><span>rejected</span></div>
             <div className="warn"><strong>{result.duplicate_rows}</strong><span>duplicates</span></div>
+            {result.skipped_sections > 0 && (
+              <div className="warn"><strong>{result.skipped_sections}</strong><span>areas skipped</span></div>
+            )}
           </div>
+          {result.skipped_sections > 0 && (
+            <div className="reminder-warn" style={{ marginTop: 8 }}>
+              {result.skipped_sections} area{result.skipped_sections === 1 ? '' : 's'} could not be saved on
+              otherwise-created transactions — the deal and every other area were kept. Each one is listed below
+              with the reason, and in the validation report.
+            </div>
+          )}
           {result.created.length > 0 && (
             <div className="import-created">
               <strong>Created:</strong>{' '}
               {result.created.map((c) => (
-                <span key={c.trade_no} className="pill ok" style={{ marginRight: 6 }}>{c.trade_no}</span>
+                <span key={c.trade_no} className={`pill ${c.skipped?.length ? 'warn' : 'ok'}`} style={{ marginRight: 6 }}
+                  title={c.skipped?.length
+                    ? `${c.property ?? ''} — skipped: ${c.skipped.join(', ')}`
+                    : `${c.property ?? ''}${c.sections?.length ? ` — with ${c.sections.join(', ')}` : ''}`}>
+                  {c.trade_no}{c.skipped?.length ? ' ⚠' : ''}
+                </span>
               ))}
             </div>
           )}
@@ -218,13 +262,14 @@ function IssueTable({ issues }: { issues: ImportIssue[] }) {
       <div className="report-table-wrap" style={{ marginTop: 12, maxHeight: 340, overflowY: 'auto' }}>
         <table className="list-table">
           <thead>
-            <tr><th>Row</th><th>Reference</th><th>Field</th><th>Value</th><th>Problem</th><th>Suggested Correction</th></tr>
+            <tr><th>Row</th><th>Reference</th><th>Area</th><th>Field</th><th>Value</th><th>Problem</th><th>Suggested Correction</th></tr>
           </thead>
           <tbody>
             {shown.map((i, n) => (
               <tr key={n} className={`import-issue ${i.severity}`}>
                 <td>{i.row}</td>
                 <td>{i.reference}</td>
+                <td>{i.section || 'Transaction'}</td>
                 <td>{i.field}</td>
                 <td>{i.value || '—'}</td>
                 <td>{i.message}</td>

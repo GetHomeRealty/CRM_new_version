@@ -1,6 +1,7 @@
 import { useRef } from 'react';
 import { formatCurrency, commissionSummary } from './format';
 import { printDoc } from './printDoc';
+import BrandMark from './BrandMark';
 import type { BrokerageLite, Transaction } from '../types';
 
 const BRAND = '#c8102e';
@@ -46,10 +47,7 @@ export default function InvoiceModal({ open, onClose, txn }: { open: boolean; on
         <div ref={ref} style={{ fontSize: 13, color: '#0f172a' }}>
           {/* Letterhead */}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14 }}>
-            <div style={{ fontSize: 22, fontWeight: 800, color: BRAND, letterSpacing: '-0.5px' }}>
-              GET<span style={{ color: '#0f172a' }}>&#9730;</span>HOME REALTY
-              <div style={{ fontSize: 10, color: '#64748b', fontStyle: 'italic', fontWeight: 400 }}>"A Tradition of Trust" — Brokerage</div>
-            </div>
+            <BrandMark color={BRAND} />
             <div style={{ fontSize: 26, fontWeight: 800, letterSpacing: '1px' }}>INVOICE</div>
           </div>
 
@@ -68,7 +66,8 @@ export default function InvoiceModal({ open, onClose, txn }: { open: boolean; on
               <tbody>
                 <tr><td style={dLabel}>Invoice Number:</td><td style={{ ...dVal, fontWeight: 700 }}>{invNo}</td></tr>
                 <tr><td style={dLabel}>Invoice Date:</td><td style={dVal}>{isoPlus(0)}</td></tr>
-                <tr><td style={dLabel}>Due Date:</td><td style={dVal}>{isoPlus(3)}</td></tr>
+                {/* Always the transaction's Closing Date — never a date derived from today. */}
+                <tr><td style={dLabel}>Due Date:</td><td style={dVal}>{txn.closing_date || '—'}</td></tr>
                 <tr><td style={dLabel}>Trade No.:</td><td style={dVal}>{txn.trade_no}</td></tr>
                 <tr><td style={dLabel}>Deal Name:</td><td style={dVal}>{txn.property}</td></tr>
                 <tr><td style={dLabel}>Purchase Price:</td><td style={{ ...dVal, fontWeight: 700 }}>{formatCurrency(txn.price)}</td></tr>

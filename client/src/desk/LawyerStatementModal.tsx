@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { formatCurrency, commissionSummary } from './format';
 import { printDoc } from './printDoc';
+import BrandMark, { brandMarkHtml } from './BrandMark';
 import type { CompanySettings, Transaction } from '../types';
 
 const BRAND = '#c8102e';
@@ -72,9 +73,8 @@ export default function LawyerStatementModal({ open, onClose, txn, settings }: L
 
   const printHtml = () => `
     <div style="text-align:center">
-      <div style="font-size:24px;font-weight:800;color:${BRAND}">GET&#9730;HOME REALTY</div>
-      <div style="font-size:11px;font-style:italic;color:#64748b">"A Tradition of Trust" — Brokerage</div>
-      <div style="font-size:11px;color:#475569">Unit-101, 218 Export Blvd, Mississauga, L5S 0A7, Ontario, Canada</div>
+      <div style="display:flex;justify-content:center">${brandMarkHtml(!!settings?.logo_path, { color: BRAND, height: 96, version: settings?.updated_at })}</div>
+      <div style="font-size:11px;color:#475569">${settings?.address || 'Unit-101, 218 Export Blvd, Mississauga, L5S 0A7, Ontario, Canada'}</div>
     </div>
     <div style="display:flex;justify-content:space-between;align-items:center;margin:14px 0">
       <div style="background:${BRAND};color:#fff;font-weight:800;padding:6px 16px;border-radius:4px;font-size:18px">Commission Statement</div>
@@ -134,9 +134,8 @@ export default function LawyerStatementModal({ open, onClose, txn, settings }: L
           <button className="btn primary sm" onClick={() => printDoc(`Commission Statement - ${tradeNo}`, printHtml())}>🖨 Print / Save PDF</button>
         </div>
 
-        <div style={{ textAlign: 'center', marginBottom: 12 }}>
-          <div style={{ fontSize: 22, fontWeight: 800, color: BRAND }}>GET<span style={{ color: '#0f172a' }}>&#9730;</span>HOME REALTY</div>
-          <div style={{ fontSize: 10, fontStyle: 'italic', color: '#64748b' }}>"A Tradition of Trust" — Brokerage</div>
+        <div style={{ textAlign: 'center', marginBottom: 12, display: 'grid', justifyItems: 'center' }}>
+          <BrandMark color={BRAND} version={settings?.updated_at} />
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
           <span style={{ background: BRAND, color: '#fff', fontWeight: 700, padding: '4px 14px', borderRadius: 4 }}>Commission Statement</span>

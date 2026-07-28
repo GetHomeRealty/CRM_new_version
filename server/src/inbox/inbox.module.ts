@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
 import { PrismaModule } from '../prisma/prisma.module';
 import { LaravelCryptService } from '../common/laravel-crypt.service';
+import { GoogleModule } from '../google/google.module';
 import { InboxController } from './inbox.controller';
 import { InboxService } from './inbox.service';
 import { ImapSyncService } from './imap-sync.service';
@@ -12,7 +13,7 @@ import { ImapSyncService } from './imap-sync.service';
  * the crypto dependency stay contained.
  */
 @Module({
-  imports: [AuthModule, PrismaModule],
+  imports: [AuthModule, PrismaModule, GoogleModule],
   controllers: [InboxController],
   providers: [InboxService, ImapSyncService, LaravelCryptService],
   exports: [ImapSyncService],

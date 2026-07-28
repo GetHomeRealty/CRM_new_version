@@ -37,6 +37,7 @@ import { GoogleModule } from './google/google.module';
 import { MarketingInventoryModule } from './marketing-inventory/marketing-inventory.module';
 import { MlsModule } from './mls/mls.module';
 import { FavoritesModule } from './favorites/favorites.module';
+import { TwilioVoiceModule } from './twilio-voice/twilio-voice.module';
 
 @Module({
   imports: [
@@ -77,6 +78,7 @@ import { FavoritesModule } from './favorites/favorites.module';
     MarketingInventoryModule,
     MlsModule,
     FavoritesModule,
+    TwilioVoiceModule,
   ],
   controllers: [AppController],
   providers: [

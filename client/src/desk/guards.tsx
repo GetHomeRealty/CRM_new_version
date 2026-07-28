@@ -5,12 +5,21 @@ import { useAuth } from '../context/AuthContext';
 const ORDER = ['dashboard', 'transactions', 'invoice', 'reports', 'analytics', 'calendar', 'inventory', 'mls', 'users', 'reviews', 'favorites', 'inbox', 'lead', 'campaigns', 'meta', 'triggers', 'settings'];
 
 // Blocks a screen the user can't at least view. Pass `superAdmin` to restrict a
-// screen to Super Admins regardless of the screen permission map.
-export function RequireScreen({ screen, superAdmin = false, children }: { screen?: string; superAdmin?: boolean; children: ReactNode }): ReactNode {
+// screen to Super Admins regardless of the screen permission map, or `orSuperAdmin`
+// to widen a screen permission so Super Admins are always let in as well.
+export function RequireScreen({ screen, superAdmin = false, orSuperAdmin = false, children }: {
+  screen?: string; superAdmin?: boolean; orSuperAdmin?: boolean; children: ReactNode;
+}): ReactNode {
   const { can, isSuperAdmin } = useAuth();
   // `screen` is only consulted when superAdmin is false, and every non-superAdmin
   // route supplies it; `?? ''` keeps can()'s string contract without changing behaviour.
-  const allowed = superAdmin ? isSuperAdmin : can(screen ?? '', 'view');
+  //
+  // `orSuperAdmin` exists for Settings: it now also hosts the sections that used to live
+  // on the Super-Admin-only Email Settings route. Without it, a Super Admin whose
+  // `settings` permission had been revoked would lose access they previously had. The
+  // tabs inside apply their own per-section checks, so widening the door does not widen
+  // what anyone can actually see.
+  const allowed = superAdmin ? isSuperAdmin : (can(screen ?? '', 'view') || (orSuperAdmin && isSuperAdmin));
   if (!allowed) {
     return (
       <div className="card stub">

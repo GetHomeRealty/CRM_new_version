@@ -4,6 +4,7 @@ import { GoogleConnectionService } from './google-connection.service';
 import { GoogleService } from './google.service';
 import { GoogleStateService } from './google-state.service';
 import { GoogleCalendarSyncService } from './google-calendar-sync.service';
+import { GmailConnectService } from './gmail-connect.service';
 import { frontendReturn, isConfigured, redirectUri } from './google.constants';
 
 const str = (v: unknown): string => String(v ?? '').trim();
@@ -26,6 +27,7 @@ export class GooglePublicController {
     private readonly google: GoogleService,
     private readonly state: GoogleStateService,
     private readonly sync: GoogleCalendarSyncService,
+    private readonly gmail: GmailConnectService,
   ) {}
 
   @Get('callback')
@@ -39,9 +41,10 @@ export class GooglePublicController {
     const code = str(q.code);
     if (!code) return fail('missing_code');
     // A bad state means forged, expired or replayed — never fall back to trusting the caller.
-    const userId = this.state.verify(str(q.state));
-    if (!userId) return fail('invalid_state');
+    const verified = this.state.verify(str(q.state));
+    if (!verified) return fail('invalid_state');
     if (!isConfigured()) return fail('not_configured');
+    const { userId, purpose, scope } = verified;
 
     try {
       const proto = str(req.headers['x-forwarded-proto']) || req.protocol || 'http';
@@ -50,14 +53,26 @@ export class GooglePublicController {
 
       const tokens = await this.google.exchangeCode(code, uri);
       const email = await this.google.email(tokens.access_token);
-      await this.connections.save(userId, tokens, email);
 
+      // Same callback finishes either a Gmail (mail) or a Calendar connect, per the signed state.
+      if (purpose === 'mail') {
+        await this.gmail.upsert(userId, tokens, email, scope);
+        return res.redirect(frontendReturn('mail_connected=1'));
+      }
+
+      // Stored against the area that began the flow — CRM and Transaction Desk hold
+      // independent calendar connections.
+      await this.connections.save(userId, tokens, email, scope);
       // Pull once immediately so the calendar isn't empty right after connecting. Best-effort.
-      try { await this.sync.pull(userId); } catch { /* surfaced later via status */ }
-
+      try { await this.sync.pull(userId, scope); } catch { /* surfaced later via status */ }
       res.redirect(frontendReturn('google_connected=1'));
     } catch (ex) {
-      return fail('exchange_failed', (ex as Error).message);
+      const detail = (ex as Error).message;
+      if (purpose === 'mail') {
+        this.log.warn(`Gmail OAuth connect failed: ${detail}`);
+        return res.redirect(frontendReturn(`mail_error=${encodeURIComponent(detail.slice(0, 140))}`));
+      }
+      return fail('exchange_failed', detail);
     }
   }
 }

@@ -9,13 +9,27 @@ import { PrismaService } from '../prisma/prisma.service';
 import { ReportDataService, type EnrichedTxn } from './report-data.service';
 import { CompanySettingsService } from '../settings/company-settings.service';
 import { longDate, longStamp } from './report-export.service';
+import { IMPORT_FIELDS, FINANCIAL_FIELDS, CHILD_SHEETS, flatColumn } from './import-template';
+import { buildDownloadAllWorkbook, type ExportRow, type RawTxnRow } from './download-all-export';
 import type { AuthUserRecord } from '../auth/auth.types';
 import type { ReportFilters } from './report.types';
 import type { DocRow } from './report-documents';
 
 const STORAGE_ROOT = path.join(process.cwd(), '..', 'storage', 'app');
-/** Ceiling on one bulk operation — protects the API from an accidental "select everything". */
+/**
+ * Ceiling on one bulk operation — protects the API from an accidental "select everything".
+ * This is the limit for the EXPENSIVE actions: a PDF per transaction, or a ZIP that reads
+ * every uploaded file off disk. Those costs scale with document count, not row count.
+ */
 export const MAX_BULK_TRANSACTIONS = 500;
+/**
+ * Row-based exports (the complete sheet, the data workbook, CSV) cost one spreadsheet row
+ * per deal and touch no files, so they get a far higher ceiling — "download everything"
+ * should not start refusing the day the brokerage passes 500 deals.
+ */
+export const MAX_BULK_DATA_TRANSACTIONS = 20_000;
+/** Ids per database round trip, so a large export never builds one enormous IN (…) list. */
+const QUERY_BATCH = 400;
 
 /** Which documents a ZIP download should contain. */
 export type DocFilter = 'all' | 'pending' | 'invalid' | 'valid' | 'mandatory';
@@ -66,11 +80,11 @@ export class BulkExportService {
    * Resolve a selection to the transactions the user is actually allowed to see. An agent is
    * locked to their own deals, so an id outside their scope simply never resolves.
    */
-  async resolve(sel: BulkSelection, user: AuthUserRecord): Promise<EnrichedTxn[]> {
+  async resolve(sel: BulkSelection, user: AuthUserRecord, limit = MAX_BULK_TRANSACTIONS): Promise<EnrichedTxn[]> {
     // Guard the REQUESTED size before doing any work — scoping would otherwise shrink an
     // accidental "select everything" down to a passing number and hide the mistake.
-    if (!sel.all_matching && (sel.transaction_ids?.length ?? 0) > MAX_BULK_TRANSACTIONS) {
-      throw new BadRequestException({ message: `${sel.transaction_ids.length} transactions selected — the limit is ${MAX_BULK_TRANSACTIONS} per export.` });
+    if (!sel.all_matching && (sel.transaction_ids?.length ?? 0) > limit) {
+      throw new BadRequestException({ message: `${sel.transaction_ids.length} transactions selected — the limit is ${limit} per export.` });
     }
 
     const agentScoped = (user.role ?? 'agent') === 'agent';
@@ -86,10 +100,31 @@ export class BulkExportService {
       chosen = all.filter((t) => ids.has(t.id));
     }
     if (!chosen.length) throw new NotFoundException({ message: 'No matching transactions are available to you.' });
-    if (chosen.length > MAX_BULK_TRANSACTIONS) {
-      throw new BadRequestException({ message: `${chosen.length} transactions selected — the limit is ${MAX_BULK_TRANSACTIONS} per export.` });
+    if (chosen.length > limit) {
+      throw new BadRequestException({ message: `${chosen.length} transactions selected — the limit is ${limit} per export.` });
     }
     return chosen;
+  }
+
+  /**
+   * Fetch raw transaction rows in batches. Prisma turns `id: { in: [...] }` into a literal
+   * IN list, which Postgres will accept but which gets unwieldy — and the joined include
+   * makes one huge result set. Chunking keeps both bounded however many deals are exported.
+   */
+  private async rawInBatches<T>(
+    ids: number[],
+    include: Record<string, unknown>,
+  ): Promise<T[]> {
+    const out: T[] = [];
+    for (let i = 0; i < ids.length; i += QUERY_BATCH) {
+      const slice = ids.slice(i, i + QUERY_BATCH);
+      const rows = await this.prisma.transactions.findMany({
+        where: { id: { in: slice } },
+        include: include as never,
+      });
+      out.push(...(rows as unknown as T[]));
+    }
+    return out;
   }
 
   /** The subset of report filters that make sense for a bulk selection. */
@@ -186,11 +221,26 @@ export class BulkExportService {
    * uploaded FILES are never embedded — only their metadata.
    */
   async dataXlsx(sel: BulkSelection, user: AuthUserRecord): Promise<Buffer> {
-    const txns = await this.resolve(sel, user);
-    const ids = txns.map((t) => t.id);
-    const raw = await this.prisma.transactions.findMany({
-      where: { id: { in: ids } },
-      include: { brokerages: true, team_members: true, clients: true },
+    const wb = await this.dataWorkbook(sel, user);
+    return Buffer.from(await wb.xlsx.writeBuffer());
+  }
+
+  /**
+   * The same data as the XLSX export, flattened to CSV. CSV is a single table by
+   * definition, so this is the `Transactions` sheet — one row per deal, every headline
+   * column. The per-agent, per-client, per-condition and per-document breakdowns only
+   * exist as separate sheets, so they are XLSX-only; the UI says so where CSV is offered.
+   */
+  async dataCsv(sel: BulkSelection, user: AuthUserRecord): Promise<Buffer> {
+    const wb = await this.dataWorkbook(sel, user);
+    return Buffer.from(await wb.csv.writeBuffer({ sheetName: 'Transactions' }));
+  }
+
+  private async dataWorkbook(sel: BulkSelection, user: AuthUserRecord): Promise<ExcelJS.Workbook> {
+    // Row export like the complete sheet — high ceiling, batched reads.
+    const txns = await this.resolve(sel, user, MAX_BULK_DATA_TRANSACTIONS);
+    const raw = await this.rawInBatches<RawTxnRow>(txns.map((t) => t.id), {
+      brokerages: true, team_members: true, clients: true,
     });
     const rawById = new Map(raw.map((r) => [r.id, r]));
     const company = (await this.settings.current()).name;
@@ -316,12 +366,227 @@ export class BulkExportService {
     wi.addRow(['Note', 'Uploaded document files are not included in this export — only their metadata. Use the ZIP download for the files.']);
     autoWidth(wi);
 
-    return Buffer.from(await wb.xlsx.writeBuffer());
+    return wb;
   }
 
   private d(v: unknown): string { return v ? longDate(String(v).slice(0, 10)) : ''; }
   private moneyFormat(ws: ExcelJS.Worksheet, cols: number[]): void {
     for (const c of cols) ws.getColumn(c).numFmt = '$#,##0.00';
+  }
+
+  // -------------------------------------------------- complete flat export
+  /**
+   * ISO date — the flat table round-trips back through Bulk Import, so no prose dates.
+   * Prisma hands back Date objects for date columns while the enriched view hands back
+   * YYYY-MM-DD strings; stringifying a Date here would emit "Wed Nov 13" and fail import.
+   */
+  private iso(v: unknown): string {
+    if (v instanceof Date) return Number.isNaN(v.getTime()) ? '' : v.toISOString().slice(0, 10);
+    return v ? String(v).slice(0, 10) : '';
+  }
+  private yn(v: unknown): string { return v === true || v === 'Yes' || v === 1 ? 'Yes' : v === false || v === 'No' || v === 0 ? 'No' : ''; }
+  private num(v: unknown): number | string { return v === null || v === undefined || v === '' ? '' : Number(v); }
+
+  /**
+   * EVERYTHING about a transaction on ONE row: Basic Info, team split, clients, lawyer,
+   * co-op brokerage, the full financial block, adjustments and conditions, plus the
+   * calculated commission/documentation columns that only exist server-side.
+   *
+   * Column names deliberately match the Bulk Import contract, so this file can be edited
+   * and fed straight back into the importer. Repeat groups (Team 1..n, Client 1..n …) are
+   * sized to the widest transaction in the selection rather than a fixed cap, so nothing is
+   * ever silently truncated — a deal with nine team members gets nine groups.
+   */
+  private async completeTable(sel: BulkSelection, user: AuthUserRecord): Promise<{ headers: string[]; rows: (string | number)[][]; txns: EnrichedTxn[] }> {
+    // Row export: no files are read, so it uses the high ceiling rather than the ZIP/PDF one.
+    const txns = await this.resolve(sel, user, MAX_BULK_DATA_TRANSACTIONS);
+    const raw = await this.rawInBatches<RawTxnRow>(txns.map((t) => t.id), {
+      brokerages: { include: { brokerage_agents: { orderBy: { position: 'asc' } } } },
+      team_members: { orderBy: { position: 'asc' } },
+      clients: { orderBy: { position: 'asc' } },
+      conditions: { orderBy: { position: 'asc' } },
+    });
+    const byId = new Map(raw.map((r) => [r.id, r]));
+
+    /** Adjustment rows for a deal, flattened out of the JSON blob into import-shaped rows. */
+    const adjRowsFor = (rec: Record<string, unknown>): Record<string, unknown>[] => {
+      let a = rec.adjustments as unknown;
+      if (typeof a === 'string') { try { a = JSON.parse(a); } catch { a = null; } }
+      const blob = (a ?? {}) as Record<string, unknown>;
+      const list: Record<string, unknown>[] = [];
+      const take = (rows: unknown, section: string) => {
+        for (const r of (Array.isArray(rows) ? rows : []) as Record<string, unknown>[]) {
+          list.push({ ...r, Section: section });
+        }
+      };
+      take(blob.adjustment_rows, 'Agent Adjustment');
+      take(blob.advance_rows, 'Advance Payment');
+      take(blob.client_rows, 'Client Referral');
+      if (blob.ext && typeof blob.ext === 'object') {
+        const e = blob.ext as Record<string, unknown>;
+        if (Object.values(e).some((v) => v !== '' && v !== null && v !== undefined && v !== 'No')) {
+          list.push({ ...e, agent: e.agent_name, Section: 'External Referral' });
+        }
+      }
+      return list;
+    };
+
+    // Widest transaction in the selection decides how many repeat groups the sheet carries.
+    const widest = { team: 1, clients: 1, adjustments: 1, conditions: 1 };
+    for (const t of txns) {
+      const r = byId.get(t.id);
+      widest.team = Math.max(widest.team, r?.team_members.length ?? 0);
+      widest.clients = Math.max(widest.clients, r?.clients.length ?? 0);
+      widest.conditions = Math.max(widest.conditions, r?.conditions.length ?? 0);
+      widest.adjustments = Math.max(widest.adjustments, adjRowsFor((r ?? {}) as unknown as Record<string, unknown>).length);
+    }
+
+    // ---- headers ----
+    const CALC = [
+      'Total Commission (Excl HST)', 'Total Commission HST', 'Total Commission (Incl HST)',
+      'Agent Commission (Excl HST)', 'Agent Commission HST', 'Agent Commission (Incl HST)',
+      'Brokerage Commission (Excl HST)', 'Brokerage Commission HST', 'Brokerage Commission (Incl HST)',
+      'Adjustments Total', 'Cashback', 'Referral Fee', 'Advance Paid', 'Agent Paid', 'Agent Balance',
+      'Agent Payment Status', 'Commission Received', 'CTA to BA',
+      'Documentation Status', 'Pending Documents', 'Invalid Documents', 'Valid Documents',
+      'Total Documents', 'Missing Mandatory Documents', 'Last Document Update', 'RECO Audit Ready',
+      'Lead Source', 'Created', 'Last Updated',
+    ];
+    const headers = [
+      'Transaction ID', 'Deal Number',
+      ...IMPORT_FIELDS.map((f) => f.column),
+      ...FINANCIAL_FIELDS.map((f) => f.column),
+      ...CALC,
+    ];
+    for (const child of CHILD_SHEETS) {
+      const n = widest[child.key];
+      for (let i = 1; i <= n; i++) for (const f of child.fields) headers.push(flatColumn(child, i, f));
+    }
+
+    // ---- rows ----
+    const rows: (string | number)[][] = [];
+    for (const t of txns) {
+      const r = byId.get(t.id);
+      const rec = (r ?? {}) as unknown as Record<string, unknown>;
+      const brok = r?.brokerages ?? null;
+
+      const mainVal: Record<string, string | number> = {
+        type: t.type,
+        property: t.property ?? '',
+        status: t.statuses.join(', '),
+        primary_agent: t.agent ?? '',
+        // Split agents excludes the primary — the Team columns carry the full picture.
+        team_members: t.agent_names.filter((n) => n !== t.agent).join(', '),
+        price: this.num(rec.price),
+        deposit: this.num(rec.deposit),
+        offer_date: this.iso(t.offer_date),
+        closing_date: this.iso(t.closing_date),
+        listing_contract_date: this.iso(rec.listing_contract_date),
+        listing_expiry_date: this.iso(rec.listing_expiry_date),
+        comm_type: (rec.comm_type as string) ?? '',
+        comm_value: this.num(rec.comm_value),
+        mls_type: (rec.mls_type as string) ?? '',
+        mls_num: (rec.mls_num as string) ?? '',
+        mls_verified: this.yn(rec.mls_verified),
+        payment_type: (rec.payment_type as string) ?? '',
+        conditional_offer: this.yn(rec.conditional_offer),
+        inter_board_enabled: this.yn(rec.inter_board_enabled),
+        lawyer_name: (rec.lawyer_name as string) ?? '',
+        lawyer_email: (rec.lawyer_email as string) ?? '',
+        lawyer_phone: (rec.lawyer_phone as string) ?? '',
+        lawyer_address: (rec.lawyer_address as string) ?? '',
+        brokerage_name: brok?.name ?? '',
+        brokerage_email: brok?.email ?? '',
+        brokerage_phone: brok?.phone ?? '',
+        brokerage_address: brok?.address ?? '',
+        brokerage_agents: (brok?.brokerage_agents ?? []).map((a) => a.name).join(', '),
+      };
+
+      const row: (string | number)[] = [t.id, t.trade_no];
+      for (const f of IMPORT_FIELDS) row.push(mainVal[f.key] ?? '');
+      for (const f of FINANCIAL_FIELDS) {
+        const v = rec[f.key];
+        row.push(f.type === 'yesno' ? this.yn(v) : f.type === 'number' ? this.num(v) : ((v as string) ?? ''));
+      }
+      row.push(
+        t.total.commission, t.total.hst, t.total.total,
+        t.agentComm.commission, t.agentComm.hst, t.agentComm.total,
+        t.brokerageComm.commission, t.brokerageComm.hst, t.brokerageComm.total,
+        t.adjustments_total, t.cashback.total, t.referral?.total ?? 0, t.advance, t.agent_paid, t.agent_balance,
+        t.agent_payment_status, t.commission_received ? 'Yes' : 'No', t.cta_to_ba,
+        t.documentation_status, t.doc_counts.pending, t.doc_counts.invalid, t.doc_counts.valid,
+        t.doc_counts.total, t.doc_counts.missing_mandatory, this.iso(t.last_doc_update), t.reco_audit_ready,
+        t.lead_source ?? '', this.iso(t.created_at), this.iso(t.updated_at),
+      );
+
+      // ---- repeat groups, in the importer's own column order ----
+      const members = r?.team_members ?? [];
+      for (let i = 0; i < widest.team; i++) {
+        const m = members[i];
+        row.push(m?.name ?? '', m ? this.yn(m.is_primary) : '', m ? Number(m.split) : '',
+          m ? Number(m.agent_pct) : '', m ? Number(m.brok_pct) : '', m?.access ?? '');
+      }
+      const clients = r?.clients ?? [];
+      for (let i = 0; i < widest.clients; i++) {
+        const c = clients[i];
+        row.push(c?.name ?? '', c?.email ?? '', c?.phone ?? '');
+      }
+      const adjs = adjRowsFor(rec);
+      for (let i = 0; i < widest.adjustments; i++) {
+        const a = (adjs[i] ?? {}) as Record<string, unknown>;
+        row.push(
+          (a.Section as string) ?? '', (a.agent as string) ?? '', (a.client_name as string) ?? '',
+          (a.brokerage as string) ?? '', this.num(a.amount), this.yn(a.is_loan), this.num(a.term),
+          (a.paid_type as string) ?? '', this.iso(a.paid_date), (a.batch_no as string) ?? '',
+          (a.paid_status as string) ?? '', (a.remarks as string) ?? '',
+        );
+      }
+      const conds = r?.conditions ?? [];
+      for (let i = 0; i < widest.conditions; i++) {
+        const c = conds[i];
+        row.push(c?.type ?? '', c?.custom_name ?? '', this.iso(c?.deadline), c?.status ?? '');
+      }
+      rows.push(row);
+    }
+    return { headers, rows, txns };
+  }
+
+  /**
+   * "Download All Transactions" — one worksheet per transaction type, each carrying only
+   * the fields that apply to that type, under merged group headings. The layout is defined
+   * by the export specification; see download-all-export.ts.
+   */
+  async completeXlsx(sel: BulkSelection, user: AuthUserRecord): Promise<Buffer> {
+    const txns = await this.resolve(sel, user, MAX_BULK_DATA_TRANSACTIONS);
+    const raw = await this.rawInBatches<RawTxnRow>(txns.map((t) => t.id), {
+      brokerages: { include: { brokerage_agents: { orderBy: { position: 'asc' } } } },
+      team_members: { orderBy: { position: 'asc' } },
+      clients: { orderBy: { position: 'asc' } },
+      conditions: { orderBy: { position: 'asc' } },
+    });
+    const byId = new Map(raw.map((r) => [r.id, r]));
+    const empty: RawTxnRow = { id: 0, brokerages: null, team_members: [], clients: [], conditions: [] };
+    const rows: ExportRow[] = txns.map((t) => ({ t, raw: byId.get(t.id) ?? { ...empty, id: t.id } }));
+
+    const wb = buildDownloadAllWorkbook(rows, {
+      company: (await this.settings.current()).name,
+      generatedBy: user.name,
+      generatedAt: new Date(),
+      filters: this.filterChips(sel),
+    });
+    return Buffer.from(await wb.xlsx.writeBuffer());
+  }
+
+  /** The same complete table as CSV. */
+  async completeCsv(sel: BulkSelection, user: AuthUserRecord): Promise<Buffer> {
+    const { headers, rows } = await this.completeTable(sel, user);
+    const cell = (v: string | number): string => {
+      const s = v === null || v === undefined ? '' : String(v);
+      return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const lines = [headers.map(cell).join(','), ...rows.map((r) => r.map(cell).join(','))];
+    // BOM so Excel opens UTF-8 accented names correctly on a double-click.
+    return Buffer.from('﻿' + lines.join('\r\n'), 'utf8');
   }
 
   // -------------------------------------------------------- data export PDF

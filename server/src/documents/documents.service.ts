@@ -432,7 +432,24 @@ export class DocumentsService {
     const emails = await this.agentEmails(txn);
     if (emails.length === 0) throw new UnprocessableEntityException({ message: 'No agent email is on file for this transaction to send the reminder to.' });
 
-    const list = '<ul>' + docs.map((d) => '<li>' + this.e(d.title) + (d.validation === 'Invalid' ? ' — <em>Invalid</em>' : '') + '</li>').join('') + '</ul>';
+    // An "invalid" line without the reason tells the agent something is wrong but not what to
+    // fix, so they have to open the deal to find out. The reason lives in `remarks` — the same
+    // text shown on the document in Legal & Documentation — so it goes in the email alongside
+    // the title. Documents marked invalid with no reason recorded say so plainly rather than
+    // rendering an empty trailing colon.
+    // Styling is inline because mail clients drop <style> blocks: "Invalid" bold red so it is
+    // impossible to miss when skimming, the reason red but NOT bold so the word itself still
+    // stands out against it.
+    const RED = '#dc2626';
+    const list = '<ul>' + docs.map((d) => {
+      if (d.validation !== 'Invalid') return '<li>' + this.e(d.title) + '</li>';
+      const reason = (d.remarks ?? '').trim();
+      const detail = reason
+        ? `<span style="color:${RED}">${this.e(reason)}</span>`
+        : `<span style="color:${RED}"><em>no reason recorded</em></span>`;
+      return '<li>' + this.e(d.title)
+        + ` — <strong style="color:${RED}">Invalid</strong>: ` + detail + '</li>';
+    }).join('') + '</ul>';
     try {
       await this.mailer.send('document.pending_reminder', {
         agent_name: txn.agent, property_address: txn.property, transaction_number: txn.trade_no, pending_docs: list, company_name: (await this.settings.current()).name,

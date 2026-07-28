@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 
 import { formatCurrency, isListingFinancialType } from './format';
 import { getDocuments, getNoticeOfSale, saveNoticeOfSale, sendNoticeOfSale } from '../lib/api';
 import { printDoc } from './printDoc';
+import BrandMark from './BrandMark';
 import { elementToPdfBase64 } from './pdf';
 import { useToast } from './toast';
 import type { AgentSignature, DeskDocument, NoticeOfSaleData, Transaction } from '../types';
@@ -204,10 +205,7 @@ export default function NoticeOfSaleModal({ open, onClose, txn, onSaved = null }
         <div ref={ref}>
           {/* Letterhead */}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
-            <div>
-              <div style={{ fontSize: 22, fontWeight: 800, color: BRAND, letterSpacing: '-0.5px' }}>GET<span style={{ color: '#0f172a' }}>&#9730;</span>HOME REALTY</div>
-              <div style={{ fontSize: 10, color: '#64748b', fontStyle: 'italic' }}>"A Tradition of Trust" — Brokerage</div>
-            </div>
+            <BrandMark color={BRAND} />
             <div style={{ color: BRAND, fontSize: 44, fontWeight: 700 }}>Notice of Sale</div>
           </div>
 

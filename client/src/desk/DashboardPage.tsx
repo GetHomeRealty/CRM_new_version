@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { listTransactions, getDashboardCommissions } from '../lib/api';
-import { listAllLeadTasks, listLeads } from '../lib/leadsApi';
+import { listAllLeadTasks, listAllLeadShowings, listLeads } from '../lib/leadsApi';
 import { formatCurrency } from './format';
 import { useToast } from './toast';
 import { useAuth } from '../context/AuthContext';
 import TodoList from './TodoList';
-import type { DashboardCommissions, LeadStats, LeadTaskRow, TodoCounts, Transaction } from '../types';
+import type { DashboardCommissions, LeadStats, LeadShowingRow, LeadTaskRow, TodoCounts, Transaction } from '../types';
 
 const EMPTY_TODO_COUNTS: TodoCounts = { total: 0, pending: 0, completed: 0, cancelled: 0, overdue: 0 };
 
@@ -22,6 +22,7 @@ export default function DashboardPage() {
   const [rows, setRows] = useState<Transaction[]>([]);
   const [comm, setComm] = useState<DashboardCommissions | null>(null);     // backend commission/T4A aggregates
   const [tasks, setTasks] = useState<LeadTaskRow[]>([]);
+  const [showings, setShowings] = useState<LeadShowingRow[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -36,6 +37,7 @@ export default function DashboardPage() {
   const [leadStats, setLeadStats] = useState<LeadStats | null>(null);
   useEffect(() => {
     listAllLeadTasks().then(setTasks).catch(() => setTasks([]));
+    listAllLeadShowings().then(setShowings).catch(() => setShowings([]));
     // One row is enough: the header counters come back with every page of the list, and they are
     // scoped the same way, so an agent's totals count only their own leads.
     listLeads({}, 1, 1).then((r) => setLeadStats(r.stats)).catch(() => setLeadStats(null));
@@ -142,6 +144,8 @@ export default function DashboardPage() {
 
       {canSeeLeads && <LeadTasksPanel tasks={tasks} />}
 
+      {canSeeLeads && <LeadShowingsPanel showings={showings} />}
+
       {/* Moved here from the Calendar. Todos are still owned by the Calendar module — same
           endpoints, same `calendar` permission — so this only renders for someone who has it. */}
       {can('calendar', 'view') && <TodoList onCounts={takeTodoCounts} />}
@@ -197,6 +201,54 @@ function LeadTasksPanel({ tasks }: { tasks: LeadTaskRow[] }) {
                     </td>
                     <td><span className={`pill ${priorityPill(t.priority)}`}>{humanise(t.priority)}</span></td>
                     <td>{t.description ? t.description : <span className="muted">—</span>}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Every showing scheduled against a lead, across all leads the user can see. Soonest first (server
+ * ordered). Clicking a row opens the lead it belongs to, where the showing is editable.
+ */
+function LeadShowingsPanel({ showings }: { showings: LeadShowingRow[] }) {
+  const navigate = useNavigate();
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const upcoming = showings.filter((s) => s.showing_date >= todayIso && s.status === 'scheduled').length;
+
+  return (
+    <div className="card">
+      <div className="modal-sub">Lead Showings ({upcoming} upcoming of {showings.length})</div>
+      {showings.length === 0 ? <p className="help">No showings have been scheduled on any lead yet.</p> : (
+        <div className="lead-scroll">
+          <table className="list-table">
+            <thead>
+              <tr>
+                <th>Lead</th>
+                <th>Status</th>
+                <th>Property</th>
+                <th>Date</th>
+                <th>Time</th>
+                <th>Notes</th>
+              </tr>
+            </thead>
+            <tbody>
+              {showings.map((s) => {
+                const past = s.showing_date < todayIso;
+                return (
+                  <tr key={s.id} className="clickable" onClick={() => navigate(`/app/lead/${s.lead_id}`)}
+                    title={`Open ${s.lead_name}`}>
+                    <td><strong>{s.lead_name || <span className="muted">—</span>}</strong></td>
+                    <td><span className={`pill ${statusPill(s.status)}`}>{humanise(s.status)}</span></td>
+                    <td>{s.property || <span className="muted">—</span>}</td>
+                    <td className={past && s.status === 'scheduled' ? 'due-overdue' : undefined}>{s.showing_date}</td>
+                    <td>{s.time || <span className="muted">—</span>}</td>
+                    <td>{s.notes ? s.notes : <span className="muted">—</span>}</td>
                   </tr>
                 );
               })}

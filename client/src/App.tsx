@@ -1,4 +1,4 @@
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
+import { BrowserRouter, Navigate, Route, Routes, useSearchParams } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext';
 import { ToastProvider } from './desk/toast';
 import ProtectedRoute from './components/ProtectedRoute';
@@ -16,7 +16,7 @@ import FavoritesPage from './desk/FavoritesPage';
 import ReportsPage from './desk/ReportsPage';
 import ReportDetailPage from './desk/ReportDetailPage';
 import UsersPage from './desk/UsersPage';
-import CompanySettingsPage from './desk/CompanySettingsPage';
+import SettingsPage from './desk/SettingsPage';
 import TransactionsPage from './desk/TransactionsPage';
 import TransactionDetailPage from './desk/TransactionDetailPage';
 import BulkImportPage from './desk/BulkImportPage';
@@ -25,13 +25,28 @@ import CampaignsPage from './desk/CampaignsPage';
 import LeadsPage from './desk/LeadsPage';
 import LeadDetailPage from './desk/LeadDetailPage';
 import MetaPage from './desk/MetaPage';
-import EmailSettingsPage from './desk/EmailSettingsPage';
 import AccountSettingsPage from './desk/AccountSettingsPage';
 import InboxPage from './desk/InboxPage';
 import AuditLogPage from './desk/AuditLogPage';
 import RecycleBinPage from './desk/RecycleBinPage';
 import StubPage from './desk/StubPage';
 import { RequireScreen, LandingRedirect } from './desk/guards';
+
+/**
+ * /app/email-settings → /app/settings, preserving the requested tab.
+ *
+ * The screen was removed, but its URL is still reachable from bookmarks and — more
+ * importantly — from OAuth return URLs that may already be recorded outside this build.
+ * A redirect keeps every one of those working instead of dropping the user on a stub.
+ */
+function EmailSettingsRedirect() {
+  const [params] = useSearchParams();
+  const tab = params.get('tab') ?? 'integrations';
+  const rest = new URLSearchParams(params);
+  rest.delete('tab');
+  const extra = rest.toString();
+  return <Navigate to={`/app/settings?tab=${encodeURIComponent(tab)}${extra ? `&${extra}` : ''}`} replace />;
+}
 
 export default function App() {
   return (
@@ -60,7 +75,10 @@ export default function App() {
                 <Route path="reports" element={<RequireScreen screen="reports"><ReportsPage /></RequireScreen>} />
                 <Route path="reports/:reportType" element={<RequireScreen screen="reports"><ReportDetailPage /></RequireScreen>} />
                 <Route path="users" element={<RequireScreen screen="users"><UsersPage /></RequireScreen>} />
-                <Route path="settings" element={<RequireScreen screen="settings"><CompanySettingsPage /></RequireScreen>} />
+                {/* `orSuperAdmin`: Settings now also hosts what used to be the Super-Admin-only
+                    Email Settings screen, so a Super Admin must still get in even if their
+                    `settings` screen permission was revoked. Each tab re-checks for itself. */}
+                <Route path="settings" element={<RequireScreen screen="settings" orSuperAdmin><SettingsPage /></RequireScreen>} />
                 <Route path="transactions" element={<RequireScreen screen="transactions"><TransactionsPage /></RequireScreen>} />
                 {/* must precede :id so "import" isn't read as a transaction id */}
                 <Route path="transactions/import" element={<RequireScreen screen="transactions"><BulkImportPage /></RequireScreen>} />
@@ -72,7 +90,12 @@ export default function App() {
                 `inbox` screen; a plain authenticated route. */}
             <Route path="account" element={<AccountSettingsPage />} />
             <Route path="inbox" element={<InboxPage />} />
-            <Route path="email-settings" element={<RequireScreen superAdmin><EmailSettingsPage /></RequireScreen>} />
+            {/* Email Settings has been folded into Settings. This redirect is kept so old
+                bookmarks — and the Google/Gmail OAuth round-trips, whose return URL may
+                already be stored server-side — still land somewhere real. It carries the
+                requested tab across: ?tab=crm keeps working, ?tab=accounts maps to
+                Integrations (see SettingsPage's ALIASES). */}
+            <Route path="email-settings" element={<EmailSettingsRedirect />} />
                 <Route path="recycle-bin" element={<RequireScreen superAdmin><RecycleBinPage /></RequireScreen>} />
                 <Route path=":page" element={<StubPage />} />
               </Route>

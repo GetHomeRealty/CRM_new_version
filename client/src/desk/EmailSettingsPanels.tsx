@@ -1,13 +1,22 @@
 import { useEffect, useRef, useState } from 'react';
-import CrmSettingsPanel from './CrmSettingsPanel';
 import {
   getMailAccounts, createMailAccount, updateMailAccount, deleteMailAccount,
   setDefaultMailAccount, testMailAccount, getEmailTemplates, updateEmailTemplate,
   previewEmailTemplate,
 } from '../lib/api';
-import { useToast, type ToastFn } from './toast';
+import { type ToastFn } from './toast';
 import { apiErrorMessage } from '../lib/apiError';
 import type { EmailTemplate, MailAccount, TemplateGroup, TemplatePreview } from '../types';
+
+/**
+ * The SMTP-account and email-template panels.
+ *
+ * These were the whole of the standalone "Email Settings" screen. That screen is gone —
+ * everything it did now lives inside Settings — so this file exports the two panels
+ * unchanged and SettingsPage supplies the surrounding tab shell. The components
+ * themselves, their API calls, validation and permissions are exactly as they were; only
+ * where they are mounted has changed.
+ */
 
 interface AccountForm {
   name: string;
@@ -27,29 +36,9 @@ const EMPTY_ACCOUNT: AccountForm = {
   username: '', password: '', encryption: 'tls', is_active: true, is_default: false,
 };
 
-export default function EmailSettingsPage() {
-  const toast = useToast();
-  const [tab, setTab] = useState('accounts');
-
-  return (
-    <>
-      <div className="toolbar"><div className="toolbar-row">
-        <button className={`btn sm ${tab === 'accounts' ? 'primary' : 'ghost'}`} onClick={() => setTab('accounts')}>📮 SMTP Accounts</button>
-        <button className={`btn sm ${tab === 'templates' ? 'primary' : 'ghost'}`} onClick={() => setTab('templates')}>📝 Templates</button>
-        {/* Migrated CRM Settings — its own tab, so the two tabs above are untouched. */}
-        <button className={`btn sm ${tab === 'crm' ? 'primary' : 'ghost'}`} onClick={() => setTab('crm')}>⚙️ CRM Settings</button>
-      </div></div>
-
-      {tab === 'accounts' && <AccountsTab toast={toast} />}
-      {tab === 'templates' && <TemplatesTab toast={toast} />}
-      {tab === 'crm' && <CrmSettingsPanel />}
-    </>
-  );
-}
-
 /* ---------------------------------- SMTP Accounts ---------------------------------- */
 
-function AccountsTab({ toast }: { toast: ToastFn }) {
+export function AccountsTab({ toast }: { toast: ToastFn }) {
   const [accounts, setAccounts] = useState<MailAccount[]>([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<Partial<MailAccount> | null>(null); // account object or {} for new
@@ -198,7 +187,7 @@ function AccountModal({ account, onClose, onSaved, toast }: AccountModalProps) {
 
 /* ---------------------------------- Templates ---------------------------------- */
 
-function TemplatesTab({ toast }: { toast: ToastFn }) {
+export function TemplatesTab({ toast }: { toast: ToastFn }) {
   const [groups, setGroups] = useState<TemplateGroup[]>([]);
   const [accounts, setAccounts] = useState<MailAccount[]>([]);
   const [loading, setLoading] = useState(true);

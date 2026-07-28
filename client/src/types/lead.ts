@@ -132,6 +132,12 @@ export interface LeadShowing {
   created_at: string | null;
 }
 
+/** A showing with its owning lead, for the cross-lead Dashboard panel. */
+export interface LeadShowingRow extends LeadShowing {
+  lead_id: number;
+  lead_name: string;
+}
+
 /**
  * Metadata for an audio recording attached to a call. The audio itself is never in a lead
  * payload — it is streamed from `/api/leads/:id/calls/:callId/recording`.

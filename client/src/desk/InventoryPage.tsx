@@ -81,6 +81,15 @@ export default function InventoryPage() {
 
   const typeSummaries = useMemo(() => {
     const map = new Map<string, { label: string; total: number; out: number; onHand: number }>();
+    // Managers see a card for every catalogue type, even ones with nothing in stock yet. 'Custom'
+    // is a placeholder — custom items surface under their own name via displayType, so skip it here.
+    // Agents only see the types actually assigned to them, so no empty cards are seeded for them.
+    if (canManage) {
+      for (const t of MARKETING_ITEM_TYPES) {
+        if (t === 'Custom') continue;
+        map.set(t, { label: t, total: 0, out: 0, onHand: 0 });
+      }
+    }
     for (const item of items) {
       const label = displayType(item);
       const e = map.get(label) || { label, total: 0, out: 0, onHand: 0 };
@@ -89,8 +98,13 @@ export default function InventoryPage() {
       e.onHand += countAsOnDateFor(item);
       map.set(label, e);
     }
-    return Array.from(map.values()).sort((a, b) => a.label.localeCompare(b.label));
-  }, [items]);
+    // Catalogue types first, in their defined order; any custom types after, alphabetically.
+    const order = (label: string) => {
+      const i = (MARKETING_ITEM_TYPES as readonly string[]).indexOf(label);
+      return i === -1 ? MARKETING_ITEM_TYPES.length : i;
+    };
+    return Array.from(map.values()).sort((a, b) => order(a.label) - order(b.label) || a.label.localeCompare(b.label));
+  }, [items, canManage]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -236,9 +250,10 @@ export default function InventoryPage() {
         </div>
       )}
 
-      {/* Type cards — click to narrow the table to one item type */}
+      {/* Type cards — every type in a single row (wrapping at most 10 per row); click to narrow
+          the table to one item type. */}
       {!showDeleted && typeSummaries.length > 0 && (
-        <div className="stat-grid" style={{ marginBottom: 12 }}>
+        <div className="inv-type-grid" style={{ gridTemplateColumns: `repeat(${Math.min(10, typeSummaries.length + 1)}, minmax(0, 1fr))`, marginBottom: 12 }}>
           <button className="stat-card" onClick={() => setTypeFilter(null)}
             style={{ textAlign: 'left', cursor: 'pointer', outline: typeFilter === null ? '2px solid var(--brand)' : 'none' }}>
             <div className="lbl">📦 All Types</div>

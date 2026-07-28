@@ -1,20 +1,27 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  addMyMailAccount, deleteMyMailAccount, getAccountProfile, getAccountSettings, listMyMailAccounts,
+  deleteMyMailAccount, getAccountProfile, getAccountSettings, listMyMailAccounts,
   saveAccountEmailPrefs, saveAccountProfile, setMyDefaultMailAccount, syncMailAccount, testMyMailAccount,
-  updateMyMailAccount, googleCalendarStatus, googleCalendarConnect, googleCalendarSync, googleCalendarDisconnect,
-  icalStatus, icalConnect, icalSync, icalDisconnect,
-  type AccountEmailPrefs, type AccountIntegrations, type AccountMailAccount, type MailAccountInput,
-  type GoogleCalendarStatus, type IcalStatus,
+  googleCalendarStatus, googleCalendarConnect, googleCalendarSync, googleCalendarDisconnect,
+  type AccountEmailPrefs, type AccountIntegrations, type AccountMailAccount,
+  type GoogleCalendarStatus,
 } from '../lib/accountApi';
+import { getMyPhoto, uploadMyPhoto, deleteMyPhoto } from '../lib/api';
+import { fileToBase64 } from '../lib/importApi';
 import { apiErrorMessage, apiFieldErrors } from '../lib/apiError';
+import { useAuth } from '../context/AuthContext';
 import { useToast } from './toast';
+import MailAccountModal from './MailAccountModal';
+import UserAvatar, { bumpPhotoVersion } from './UserAvatar';
 
 const EMPTY_PREFS: AccountEmailPrefs = {
   signature: '', replyTemplate: '', autoSync: false,
   autoResponder: { enabled: false, message: '' }, forwardingAddress: '',
 };
+
+const PHOTO_ACCEPT = '.png,.jpg,.jpeg,.gif,.webp';
+const PHOTO_MAX_MB = 4;
 
 /**
  * A user's own Settings, the same for everyone. Everything here is scoped to the signed-in user
@@ -24,6 +31,12 @@ const EMPTY_PREFS: AccountEmailPrefs = {
 export default function AccountSettingsPage() {
   const toast = useToast();
   const navigate = useNavigate();
+  const { user } = useAuth();
+
+  const [hasPhoto, setHasPhoto] = useState(false);
+  const [photoBusy, setPhotoBusy] = useState('');
+  const [photoV, setPhotoV] = useState<number>(0);
+  const photoInput = useRef<HTMLInputElement>(null);
 
   const [name, setName] = useState('');
   const [username, setUsername] = useState('');
@@ -48,9 +61,13 @@ export default function AccountSettingsPage() {
    */
   const load = useCallback(async () => {
     if (!loadedOnce.current) setLoading(true);
-    const [p, s, a] = await Promise.allSettled([getAccountProfile(), getAccountSettings(), listMyMailAccounts()]);
+    const [p, s, a, ph] = await Promise.allSettled([
+      getAccountProfile(), getAccountSettings(), listMyMailAccounts(), getMyPhoto(),
+    ]);
 
     if (p.status === 'fulfilled') { setName(p.value.name); setUsername(p.value.username); setPhone(p.value.phone); }
+    // A failed photo read is not worth a warning — the avatar just shows the initial.
+    if (ph.status === 'fulfilled') { setHasPhoto(ph.value.has_photo); setPhotoV(ph.value.photo_version ?? 0); }
     if (s.status === 'fulfilled') { setPrefs({ ...EMPTY_PREFS, ...s.value.emailSettings }); setIntegrations(s.value.integrations); }
     if (a.status === 'fulfilled') setAccounts(a.value);
 
@@ -66,6 +83,60 @@ export default function AccountSettingsPage() {
   }, []);
 
   useEffect(() => { void load(); }, [load]);
+
+  const pickPhoto = async (file: File | null) => {
+    if (!file) return;
+    if (file.size > PHOTO_MAX_MB * 1024 * 1024) {
+      toast(`That image is ${(file.size / 1024 / 1024).toFixed(1)} MB — the limit is ${PHOTO_MAX_MB} MB.`, 'bad');
+      return;
+    }
+    setPhotoBusy('upload');
+    try {
+      const info = await uploadMyPhoto(file.name, await fileToBase64(file));
+      setHasPhoto(info.has_photo);
+      setPhotoV(info.photo_version ?? bumpPhotoVersion());
+      bumpPhotoVersion();
+      toast('Profile picture updated', 'ok');
+    } catch (e) {
+      toast(apiErrorMessage(e, 'Could not upload the picture'), 'bad');
+    } finally {
+      setPhotoBusy('');
+      if (photoInput.current) photoInput.current.value = '';
+    }
+  };
+
+  const removePhoto = async () => {
+    setPhotoBusy('remove');
+    try {
+      const info = await deleteMyPhoto();
+      setHasPhoto(info.has_photo);
+      setPhotoV(info.photo_version ?? bumpPhotoVersion());
+      bumpPhotoVersion();
+      toast('Profile picture removed', 'ok');
+    } catch (e) {
+      toast(apiErrorMessage(e, 'Could not remove the picture'), 'bad');
+    } finally { setPhotoBusy(''); }
+  };
+
+  // Finish a Gmail OAuth connect: the server returns to /app/account?mail_connected=1 (or
+  // ?mail_error=…). If the connect was started from another page (e.g. CRM Settings), a stored hint
+  // bounces the browser back there; otherwise show the result here and refresh the accounts list.
+  useEffect(() => {
+    const p = new URLSearchParams(window.location.search);
+    const outcome = p.get('mail_connected') ? 'mail_connected=1'
+      : p.get('mail_error') ? `mail_error=${encodeURIComponent(p.get('mail_error') ?? '')}` : '';
+    if (!outcome) return;
+    const back = sessionStorage.getItem('mail_return');
+    sessionStorage.removeItem('mail_return');
+    if (back && new URL(back, window.location.origin).pathname !== window.location.pathname) {
+      window.location.replace(back + (back.includes('?') ? '&' : '?') + outcome);
+      return;
+    }
+    if (p.get('mail_connected')) toast('Email account connected.', 'ok');
+    else toast(`Could not connect the email account: ${p.get('mail_error')}`, 'bad');
+    window.history.replaceState({}, '', '/app/account');
+    void load();
+  }, [toast, load]);
 
   const saveProfile = async () => {
     setSavingProfile(true);
@@ -121,6 +192,34 @@ export default function AccountSettingsPage() {
         <div className="lead-lock-note" style={{ marginBottom: 12 }}>⚠ {loadWarning}</div>
       )}
 
+      {/* ---- Profile Picture ---- */}
+      <div className="card">
+        <div className="modal-sub">Profile Picture</div>
+        <p className="help" style={{ marginTop: 0 }}>
+          Shown beside your name across the app. Yours to set — every account has one,
+          whatever your role.
+        </p>
+        <div style={{ display: 'flex', gap: 20, alignItems: 'center', flexWrap: 'wrap' }}>
+          <UserAvatar userId={user?.id ?? null} name={name || user?.name} size={112} version={photoV} />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <input ref={photoInput} type="file" accept={PHOTO_ACCEPT} style={{ display: 'none' }}
+              onChange={(e) => void pickPhoto(e.target.files?.[0] ?? null)} />
+            <button className="btn primary sm" type="button" disabled={!!photoBusy} onClick={() => photoInput.current?.click()}>
+              {photoBusy === 'upload' ? 'Uploading…' : hasPhoto ? '⭱ Replace Picture' : '⭱ Upload Picture'}
+            </button>
+            {hasPhoto && (
+              <button className="btn ghost sm" type="button" disabled={!!photoBusy} onClick={() => void removePhoto()}>
+                {photoBusy === 'remove' ? 'Removing…' : '🗑 Remove Picture'}
+              </button>
+            )}
+            <span className="help" style={{ maxWidth: 280 }}>
+              PNG, JPG, GIF or WEBP · up to {PHOTO_MAX_MB} MB. A square, head-and-shoulders
+              crop looks best — the picture is displayed as a circle.
+            </span>
+          </div>
+        </div>
+      </div>
+
       {/* ---- Personal Information ---- */}
       <div className="card">
         <div className="modal-sub">Personal Information</div>
@@ -148,15 +247,15 @@ export default function AccountSettingsPage() {
         </div>
       </div>
 
-      {/* ---- Connected Email Accounts ---- */}
+      {/* ---- Integration — Mail / Calendar / Meta ---- */}
       <div className="card">
-        <div className="modal-sub">Mail Configuration</div>
-        <p className="help">Connect your own SMTP account to send lead emails and campaigns from your own address. Until you add one, your mail goes out through the brokerage account.</p>
+        <div className="modal-sub">Integration — Mail / Calendar / Meta</div>
 
         <div className="acct-head">
-          <strong>Connected Email Accounts</strong>
+          <strong>Mail Configuration</strong>
           <button className="btn primary sm" type="button" onClick={() => setEditing('new')}>+ Add Email Account</button>
         </div>
+        <p className="help">Connect your own email to send lead emails and campaigns from your own address. Until you add one, your mail goes out through the brokerage account.</p>
 
         {accounts.length === 0 ? (
           <div className="acct-empty">
@@ -198,7 +297,7 @@ export default function AccountSettingsPage() {
                   )}
                   <button className="btn ghost sm" type="button" disabled={busy === a.id}
                     onClick={() => void act(a.id, () => testMyMailAccount(a.id).then((r) => toast(r.message, 'ok')), 'Test sent.')}>Test</button>
-                  <button className="btn ghost sm" type="button" onClick={() => setEditing(a)}>Edit</button>
+                  {a.encryption !== 'oauth' && <button className="btn ghost sm" type="button" onClick={() => setEditing(a)}>Edit</button>}
                   <button className="btn ghost sm" type="button" disabled={busy === a.id}
                     onClick={() => void act(a.id, () => deleteMyMailAccount(a.id), 'Account removed.')}>Delete</button>
                 </div>
@@ -212,6 +311,26 @@ export default function AccountSettingsPage() {
           every few minutes, and matched to your leads by sender address. Use <em>Sync now</em> on an
           account to pull immediately.
         </p>
+
+        {/* Calendar & social — grouped with mail under one Integrations section. */}
+        <div className="intg" style={{ marginTop: 14 }}>
+          <GoogleCalendarRow />
+
+          <div className="intg-row">
+            <div>
+              <strong>Facebook Meta — Lead Ads</strong>
+              <div className="muted">{integrations?.meta.detail ?? 'Link your own Meta account to sync your lead forms.'}</div>
+            </div>
+            <div className="acct-actions">
+              <span className={`pill ${integrations?.meta.connected ? 'ok' : ''}`}>
+                {integrations?.meta.connected ? 'Connected' : 'Not connected'}
+              </span>
+              <button className="btn ghost sm" type="button" onClick={() => navigate('/app/meta')}>
+                {integrations?.meta.connected ? 'Open' : 'Connect'}
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* ---- Email Preferences ---- */}
@@ -233,33 +352,6 @@ export default function AccountSettingsPage() {
           <button className="btn primary" type="button" disabled={savingPrefs} onClick={() => void savePrefs()}>
             {savingPrefs ? 'Saving…' : 'Save Email Preferences'}
           </button>
-        </div>
-      </div>
-
-      {/* ---- Other Integrations ---- */}
-      <div className="card">
-        <div className="modal-sub">Other Integrations</div>
-        <p className="help">Calendar and social accounts.</p>
-
-        <div className="intg">
-          <GoogleCalendarRow />
-          <IcalFeedRow />
-
-
-          <div className="intg-row">
-            <div>
-              <strong>Facebook Meta — Lead Ads</strong>
-              <div className="muted">{integrations?.meta.detail ?? 'Link your own Meta account to sync your lead forms.'}</div>
-            </div>
-            <div className="acct-actions">
-              <span className={`pill ${integrations?.meta.connected ? 'ok' : ''}`}>
-                {integrations?.meta.connected ? 'Connected' : 'Not connected'}
-              </span>
-              <button className="btn ghost sm" type="button" onClick={() => navigate('/app/meta')}>
-                {integrations?.meta.connected ? 'Open' : 'Connect'}
-              </button>
-            </div>
-          </div>
         </div>
       </div>
 
@@ -288,15 +380,24 @@ function GoogleCalendarRow() {
   const load = useCallback(() => { googleCalendarStatus().then(setSt).catch(() => setSt(null)); }, []);
   useEffect(() => { load(); }, [load]);
 
-  // Surface the outcome of the round-trip once, then clean the URL.
+  // Surface the outcome of the round-trip once, then clean the URL. If the connect was started from
+  // another page (e.g. Email Settings → Integrations), a stored hint sends the browser back there so
+  // the flow ends where it began.
   useEffect(() => {
     const p = new URLSearchParams(window.location.search);
-    if (p.get('google_connected')) { toast('Google Calendar connected.', 'ok'); }
-    else if (p.get('google_error')) { toast(`Google connection failed: ${p.get('google_error')}`, 'bad'); }
-    if (p.get('google_connected') || p.get('google_error')) {
-      window.history.replaceState({}, '', '/app/account');
-      load();
+    const outcome = p.get('google_connected') ? 'google_connected=1'
+      : p.get('google_error') ? `google_error=${encodeURIComponent(p.get('google_error') ?? '')}` : '';
+    if (!outcome) return;
+    const back = sessionStorage.getItem('gcal_return');
+    if (back) {
+      sessionStorage.removeItem('gcal_return');
+      window.location.replace(back + (back.includes('?') ? '&' : '?') + outcome);
+      return;
     }
+    if (p.get('google_connected')) toast('Google Calendar connected.', 'ok');
+    else toast(`Google connection failed: ${p.get('google_error')}`, 'bad');
+    window.history.replaceState({}, '', '/app/account');
+    load();
   }, [toast, load]);
 
   const connect = async () => {
@@ -347,324 +448,5 @@ function GoogleCalendarRow() {
         )}
       </div>
     </div>
-  );
-}
-
-/**
- * Google Calendar via the secret iCal link — the no-OAuth option. Read-only: it pulls Google
- * events into the CRM calendar but cannot push CRM events back. No account picker; you paste the
- * "Secret address in iCal format" from Google Calendar settings.
- */
-function IcalFeedRow() {
-  const toast = useToast();
-  const [st, setSt] = useState<IcalStatus | null>(null);
-  const [adding, setAdding] = useState(false);
-  const [url, setUrl] = useState('');
-  const [busy, setBusy] = useState(false);
-
-  const load = useCallback(() => { icalStatus().then(setSt).catch(() => setSt(null)); }, []);
-  useEffect(() => { load(); }, [load]);
-
-  const connect = async () => {
-    if (!url.trim()) return;
-    setBusy(true);
-    try {
-      const r = await icalConnect(url.trim());
-      toast(r.message, 'ok');
-      setAdding(false); setUrl(''); load();
-    } catch (ex) {
-      toast(apiErrorMessage(ex, 'Could not connect that calendar link'), 'bad');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const run = async (fn: () => Promise<{ message?: string; error?: string | null }>, ok: string) => {
-    setBusy(true);
-    try { const r = await fn(); toast(r.error ? (r.message || r.error) : (r.message || ok), r.error ? 'bad' : 'ok'); load(); }
-    catch (ex) { toast(apiErrorMessage(ex, 'That did not work'), 'bad'); }
-    finally { setBusy(false); }
-  };
-
-  return (
-    <div className="intg-row" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 8 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-        <div>
-          <strong>Google Calendar — link (no sign-in)</strong>
-          <div className="muted">
-            {st?.connected
-              ? `Connected${st.name ? ` "${st.name}"` : ''} via secret link — read-only${st.last_sync ? ` · last synced ${st.last_sync.slice(0, 16).replace('T', ' ')}` : ''}`
-              : 'Paste your calendar’s secret iCal link — your Google events appear on the calendar. No account picker; read-only.'}
-          </div>
-          {st?.error && <div className="muted" style={{ color: 'var(--bad)' }}>{st.error}</div>}
-        </div>
-        <div className="acct-actions">
-          <span className={`pill ${st?.connected ? 'ok' : ''}`}>{st?.connected ? 'Connected' : 'Not connected'}</span>
-          {st?.connected ? (
-            <>
-              <button className="btn ghost sm" type="button" disabled={busy} onClick={() => void run(() => icalSync(), 'Synced.')}>↻ Sync now</button>
-              <button className="btn ghost sm" type="button" disabled={busy} onClick={() => void run(() => icalDisconnect().then(() => ({ message: 'Disconnected.' })), 'Disconnected.')}>Disconnect</button>
-            </>
-          ) : (
-            <button className="btn sm" type="button" onClick={() => setAdding((a) => !a)}>Use a calendar link</button>
-          )}
-        </div>
-      </div>
-
-      {adding && !st?.connected && (
-        <div className="notice-box">
-          In Google Calendar, open <em>Settings → your calendar → Integrate calendar</em>, and copy the
-          <strong> “Secret address in iCal format”</strong> (ends in <code>/basic.ics</code>). Paste it here.
-          <div className="type-custom-row" style={{ marginTop: 8 }}>
-            <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://calendar.google.com/calendar/ical/…/basic.ics" />
-            <button className="btn primary sm" type="button" disabled={busy || !url.trim()} onClick={() => void connect()}>
-              {busy ? 'Connecting…' : 'Connect'}
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// Gmail's own SMTP/IMAP settings, auto-filled so an agent only supplies an app password.
-const GMAIL = { host: 'smtp.gmail.com', port: 587, encryption: 'tls', imap_host: 'imap.gmail.com', imap_port: 993, imap_encryption: 'ssl' };
-
-// ------------------------------------------------------------- add/edit modal
-/**
- * Adding is a short wizard — enter the address, pick Gmail or Custom SMTP, and give one password.
- * Editing an existing account shows the full detail form. Kept deliberately simple for agents;
- * the fiddly host/port defaults are filled in for them.
- */
-function MailAccountModal({ account, onClose, onSaved }: {
-  account: AccountMailAccount | null;
-  onClose: () => void;
-  onSaved: () => void;
-}) {
-  const editing = !!account;
-  // Adding: 'choose' → 'gmail' | 'smtp'. Editing: straight to the detail form.
-  const [step, setStep] = useState<'choose' | 'gmail' | 'smtp' | 'edit'>(editing ? 'edit' : 'choose');
-  const [email, setEmail] = useState(account?.from_email ?? '');
-
-  return (
-    <div className="overlay open" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="modal">
-        <button className="close" type="button" onClick={onClose} aria-label="Close">✕</button>
-
-        {step === 'choose' && (
-          <ChooseProvider email={email} setEmail={setEmail}
-            onGmail={() => setStep('gmail')} onSmtp={() => setStep('smtp')} onCancel={onClose} />
-        )}
-        {step === 'gmail' && (
-          <ProviderForm mode="gmail" email={email} onBack={() => setStep('choose')} onClose={onClose} onSaved={onSaved} />
-        )}
-        {step === 'smtp' && (
-          <ProviderForm mode="smtp" email={email} onBack={() => setStep('choose')} onClose={onClose} onSaved={onSaved} />
-        )}
-        {step === 'edit' && account && (
-          <EditForm account={account} onClose={onClose} onSaved={onSaved} />
-        )}
-      </div>
-    </div>
-  );
-}
-
-/** Step 1 — the address and the two ways to connect it. */
-function ChooseProvider({ email, setEmail, onGmail, onSmtp, onCancel }: {
-  email: string; setEmail: (v: string) => void; onGmail: () => void; onSmtp: () => void; onCancel: () => void;
-}) {
-  const valid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
-  const isGmail = /@(gmail\.com|googlemail\.com)$/i.test(email.trim());
-  return (
-    <>
-      <div className="modal-h">Add Email Account</div>
-      <div className="field">
-        <label>Email Address</label>
-        <input type="email" value={email} autoFocus onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" />
-      </div>
-      <p className="help">How would you like to connect it?</p>
-      <div className="provider-choice">
-        <button type="button" className="provider-card" disabled={!valid} onClick={onGmail}>
-          <span className="provider-ico">📧</span>
-          <strong>Gmail{isGmail ? '' : ' / Google Workspace'}</strong>
-          <span className="muted">Sign in with a Gmail app password. Hosts filled in for you.</span>
-        </button>
-        <button type="button" className="provider-card" disabled={!valid} onClick={onSmtp}>
-          <span className="provider-ico">🛠</span>
-          <strong>Custom SMTP</strong>
-          <span className="muted">Your own mail server — app password, host and port.</span>
-        </button>
-      </div>
-      <div className="modal-foot">
-        <button className="btn ghost" type="button" onClick={onCancel}>Cancel</button>
-      </div>
-    </>
-  );
-}
-
-/** Step 2 — Gmail (just an app password) or Custom SMTP (password + host + port). */
-function ProviderForm({ mode, email, onBack, onClose, onSaved }: {
-  mode: 'gmail' | 'smtp'; email: string; onBack: () => void; onClose: () => void; onSaved: () => void;
-}) {
-  const toast = useToast();
-  const [password, setPassword] = useState('');
-  const [smtpHost, setSmtpHost] = useState('');
-  const [smtpPort, setSmtpPort] = useState(587);
-  const [errors, setErrors] = useState<Record<string, string[]>>({});
-  const [saving, setSaving] = useState(false);
-  const err = (k: string) => (errors[k]?.length ? <div className="field-err">{errors[k][0]}</div> : null);
-
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setSaving(true);
-    setErrors({});
-    try {
-      const common = { name: email, from_email: email, username: email, password };
-      const body: MailAccountInput = mode === 'gmail'
-        ? { ...common, ...GMAIL, is_default: true, inbound_enabled: true }
-        : {
-            ...common, host: smtpHost.trim(), port: Number(smtpPort), encryption: 'tls',
-            // Reasonable IMAP guess from the SMTP host (smtp.x → imap.x), so inbound works too.
-            imap_host: smtpHost.trim().replace(/^smtp\./i, 'imap.'),
-            imap_port: 993, imap_encryption: 'ssl', inbound_enabled: true, is_default: true,
-          };
-      await addMyMailAccount(body);
-      toast('Email account added.', 'ok');
-      onSaved();
-    } catch (ex) {
-      const f = apiFieldErrors(ex);
-      if (f) setErrors(f);
-      toast(apiErrorMessage(ex, 'Could not add the account'), 'bad');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <form onSubmit={submit}>
-      <div className="modal-h">{mode === 'gmail' ? 'Connect Gmail' : 'Custom SMTP'}</div>
-      <p className="help"><strong>{email}</strong></p>
-
-      {mode === 'gmail' ? (
-        <div className="notice-box">
-          Gmail is connected with an <strong>app password</strong>, not your normal password. In your
-          Google Account go to <em>Security → App passwords</em> (2-step verification must be on),
-          create one for “Mail”, and paste the 16-character code below. Sending and inbox sync both
-          use it.
-        </div>
-      ) : (
-        <p className="help">Enter your provider’s SMTP details. Use an app password if your provider requires one.</p>
-      )}
-
-      <div className="field">
-        <label>App Password *</label>
-        <input type="password" value={password} autoFocus onChange={(e) => setPassword(e.target.value)}
-          placeholder={mode === 'gmail' ? '16-character Gmail app password' : 'App password or SMTP password'} required />
-        {err('password')}
-      </div>
-
-      {mode === 'smtp' && (
-        <div className="g2">
-          <div className="field">
-            <label>SMTP Host *</label>
-            <input value={smtpHost} onChange={(e) => setSmtpHost(e.target.value)} placeholder="smtp.yourprovider.com" required />
-            {err('host')}
-          </div>
-          <div className="field">
-            <label>SMTP Port *</label>
-            <input type="number" value={smtpPort} onChange={(e) => setSmtpPort(Number(e.target.value))} placeholder="587" required />
-            {err('port')}
-          </div>
-        </div>
-      )}
-
-      <div className="modal-foot">
-        <button className="btn ghost" type="button" onClick={onBack}>← Back</button>
-        <button className="btn ghost" type="button" onClick={onClose}>Cancel</button>
-        <button className="btn primary" type="submit" disabled={saving || !password || (mode === 'smtp' && !smtpHost.trim())}>
-          {saving ? 'Adding…' : 'Add Account'}
-        </button>
-      </div>
-    </form>
-  );
-}
-
-/** The full detail form, used only when editing an existing account. */
-function EditForm({ account, onClose, onSaved }: { account: AccountMailAccount; onClose: () => void; onSaved: () => void }) {
-  const toast = useToast();
-  const [form, setForm] = useState({
-    name: account.name, from_name: account.from_name ?? '', from_email: account.from_email,
-    host: account.host, port: account.port, username: account.username ?? '', password: '',
-    encryption: account.encryption ?? 'tls', is_active: account.is_active, is_default: account.is_default,
-    imap_host: account.imap_host ?? '', imap_port: account.imap_port ?? 993,
-    imap_encryption: account.imap_encryption ?? 'ssl', inbound_enabled: account.inbound_enabled,
-  });
-  const [errors, setErrors] = useState<Record<string, string[]>>({});
-  const [saving, setSaving] = useState(false);
-  const set = <K extends keyof typeof form>(k: K, v: (typeof form)[K]) => setForm((f) => ({ ...f, [k]: v }));
-  const err = (k: string) => (errors[k]?.length ? <div className="field-err">{errors[k][0]}</div> : null);
-
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setSaving(true);
-    setErrors({});
-    try {
-      const body: Partial<MailAccountInput> = {
-        name: form.name.trim(), from_name: form.from_name.trim(), from_email: form.from_email.trim(),
-        host: form.host.trim(), port: Number(form.port), username: form.username.trim(),
-        encryption: form.encryption, is_active: form.is_active, is_default: form.is_default,
-        imap_host: form.imap_host.trim(), imap_port: form.imap_host ? Number(form.imap_port) : null,
-        imap_encryption: form.imap_encryption, inbound_enabled: !!(form.imap_host && form.inbound_enabled),
-      };
-      if (form.password) body.password = form.password;
-      await updateMyMailAccount(account.id, body);
-      toast('Email account updated.', 'ok');
-      onSaved();
-    } catch (ex) {
-      const f = apiFieldErrors(ex);
-      if (f) setErrors(f);
-      toast(apiErrorMessage(ex, 'Could not save the account'), 'bad');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <form onSubmit={submit}>
-      <div className="modal-h">Edit Email Account</div>
-      <div className="g2">
-        <div className="field"><label>Account Name *</label><input value={form.name} onChange={(e) => set('name', e.target.value)} required />{err('name')}</div>
-        <div className="field"><label>From Name</label><input value={form.from_name} onChange={(e) => set('from_name', e.target.value)} /></div>
-        <div className="field"><label>From Email *</label><input type="email" value={form.from_email} onChange={(e) => set('from_email', e.target.value)} required />{err('from_email')}</div>
-        <div className="field"><label>SMTP Host *</label><input value={form.host} onChange={(e) => set('host', e.target.value)} required />{err('host')}</div>
-        <div className="field"><label>Port</label><input type="number" value={form.port} onChange={(e) => set('port', Number(e.target.value))} />{err('port')}</div>
-        <div className="field">
-          <label>Encryption</label>
-          <select value={form.encryption} onChange={(e) => set('encryption', e.target.value)}><option value="tls">TLS</option><option value="ssl">SSL</option></select>
-        </div>
-        <div className="field"><label>Username</label><input value={form.username} onChange={(e) => set('username', e.target.value)} /></div>
-        <div className="field"><label>App Password (leave blank to keep)</label><input type="password" value={form.password} onChange={(e) => set('password', e.target.value)} placeholder={account.has_password ? '•••••••• stored' : ''} /></div>
-      </div>
-      <div className="toolbar-row" style={{ gap: 16 }}>
-        <label className="acct-toggle"><input type="checkbox" checked={form.is_active} onChange={(e) => set('is_active', e.target.checked)} /><span>Active</span></label>
-        <label className="acct-toggle"><input type="checkbox" checked={form.is_default} onChange={(e) => set('is_default', e.target.checked)} /><span>Default sender</span></label>
-      </div>
-
-      <div className="modal-sub" style={{ marginTop: 12 }}>Receive Mail (IMAP)</div>
-      <div className="g3">
-        <div className="field"><label>IMAP Host</label><input value={form.imap_host} onChange={(e) => set('imap_host', e.target.value)} placeholder="imap.gmail.com" />{err('imap_host')}</div>
-        <div className="field"><label>IMAP Port</label><input type="number" value={form.imap_port ?? 993} onChange={(e) => set('imap_port', Number(e.target.value))} />{err('imap_port')}</div>
-        <div className="field"><label>IMAP Security</label><select value={form.imap_encryption} onChange={(e) => set('imap_encryption', e.target.value)}><option value="ssl">SSL (993)</option><option value="tls">STARTTLS (143)</option></select></div>
-      </div>
-      <label className="acct-toggle">
-        <input type="checkbox" checked={form.inbound_enabled} disabled={!form.imap_host} onChange={(e) => set('inbound_enabled', e.target.checked)} />
-        <span><strong>Automatically sync received mail</strong></span>
-      </label>
-
-      <div className="modal-foot">
-        <button className="btn ghost" type="button" onClick={onClose}>Cancel</button>
-        <button className="btn primary" type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save'}</button>
-      </div>
-    </form>
   );
 }

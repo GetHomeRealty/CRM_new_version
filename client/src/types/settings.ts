@@ -19,5 +19,9 @@ export interface CompanySettings {
   transit_no?: string;
   institution_no?: string;
   account_no?: string;
+  /** Stored path of the uploaded brand logo; null/absent means "use the text wordmark". */
+  logo_path?: string | null;
+  /** Changes whenever settings are saved — used to cache-bust the logo image. */
+  updated_at?: string | null;
   [key: string]: unknown;
 }

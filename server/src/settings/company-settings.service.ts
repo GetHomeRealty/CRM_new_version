@@ -1,9 +1,28 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { Prisma, type company_settings } from '@prisma/client';
+import * as path from 'path';
+import * as fs from 'fs/promises';
+import * as crypto from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService, type ActingUser } from '../audit/audit.service';
 import { decimalCast, jsonField, laravelJsonDate, phpBlank } from '../common/serialize';
 import type { UpdateCompanySettingsDto } from './dto/update-company-settings.dto';
+import { trimPngTransparentBorder } from './image-trim';
+
+/** Same storage root the documents module uses, so uploads all live in one place. */
+const STORAGE_ROOT = path.join(process.cwd(), '..', 'storage', 'app');
+const LOGO_DIR = 'branding';
+/** A brand logo is a small asset; anything larger is a mistake, not a logo. */
+export const MAX_LOGO_BYTES = 2 * 1024 * 1024;
+/** Raster + SVG. Anything else is rejected — this file is rendered in customers' inboxes. */
+const LOGO_TYPES: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.svg': 'image/svg+xml',
+};
 
 /** Canonical company details — mirrors CompanySetting::defaults(). */
 const DEFAULTS: Record<string, string | number> = {
@@ -66,6 +85,92 @@ export class CompanySettingsService {
       s = await this.prisma.company_settings.update({ where: { id: 1 }, data: fill });
     }
     return s;
+  }
+
+  // ------------------------------------------------------------------ logo
+  /**
+   * Store an uploaded brand logo and point `logo_path` at it. The previous file is removed
+   * so the branding folder never accumulates orphans. The stored name is randomised, so a
+   * re-upload always produces a new URL and no browser serves a stale cached logo.
+   */
+  async storeLogo(user: ActingUser | null, fileName: string, base64: string): Promise<company_settings> {
+    const ext = path.extname(String(fileName || '')).toLowerCase();
+    const mime = LOGO_TYPES[ext];
+    if (!mime) {
+      throw new BadRequestException({
+        message: `"${ext || fileName}" is not a supported image. Use ${Object.keys(LOGO_TYPES).join(', ')}.`,
+      });
+    }
+    let buffer: Buffer;
+    try { buffer = Buffer.from(String(base64 ?? ''), 'base64'); }
+    catch { throw new BadRequestException({ message: 'The uploaded file could not be read.' }); }
+    if (!buffer.length) throw new BadRequestException({ message: 'The uploaded file is empty.' });
+    if (buffer.length > MAX_LOGO_BYTES) {
+      throw new BadRequestException({
+        message: `The logo is ${(buffer.length / 1024 / 1024).toFixed(1)} MB — the limit is ${MAX_LOGO_BYTES / 1024 / 1024} MB.`,
+      });
+    }
+
+    // Logo exports are routinely centred on a big square canvas. That padding is pixels in
+    // the file, so no styling can remove it — the mark would render with a thick empty band
+    // above and below it on every letterhead. Trim it once, here, rather than everywhere.
+    const trim = trimPngTransparentBorder(buffer);
+    buffer = trim.buffer;
+
+    const current = await this.current();
+    const dir = path.join(STORAGE_ROOT, LOGO_DIR);
+    await fs.mkdir(dir, { recursive: true });
+    const name = `logo-${crypto.randomBytes(12).toString('hex')}${ext}`;
+    await fs.writeFile(path.join(dir, name), buffer);
+
+    const rel = `${LOGO_DIR}/${name}`;
+    const saved = await this.prisma.company_settings.update({
+      where: { id: 1 },
+      data: { logo_path: rel, updated_at: new Date() },
+    });
+    await this.removeFile(current.logo_path);
+    await this.audit.logModule(user, 'Settings', {
+      section: 'Company Settings', field: 'Logo', action: 'Logo uploaded', details: fileName,
+    });
+    return saved;
+  }
+
+  /** Clear the logo — every surface falls back to the text wordmark. */
+  async removeLogo(user: ActingUser | null): Promise<company_settings> {
+    const current = await this.current();
+    const saved = await this.prisma.company_settings.update({
+      where: { id: 1 },
+      data: { logo_path: null, updated_at: new Date() },
+    });
+    await this.removeFile(current.logo_path);
+    await this.audit.logModule(user, 'Settings', {
+      section: 'Company Settings', field: 'Logo', action: 'Logo removed', details: null,
+    });
+    return saved;
+  }
+
+  /** Absolute path + content type of the current logo, or null when none is set. */
+  async logoFile(): Promise<{ abs: string; mime: string; size: number; mtime: number } | null> {
+    const s = await this.current();
+    if (!s.logo_path) return null;
+    // Defend the storage root: logo_path is written by this service, but never trust a
+    // database value with a filesystem read.
+    const abs = path.resolve(STORAGE_ROOT, s.logo_path);
+    if (!abs.startsWith(path.resolve(STORAGE_ROOT) + path.sep)) return null;
+    try {
+      const stat = await fs.stat(abs);
+      if (!stat.isFile()) return null;
+      return { abs, mime: LOGO_TYPES[path.extname(abs).toLowerCase()] ?? 'application/octet-stream', size: stat.size, mtime: stat.mtimeMs };
+    } catch {
+      return null; // recorded but missing from disk — treated as "no logo"
+    }
+  }
+
+  private async removeFile(rel: string | null | undefined): Promise<void> {
+    if (!rel) return;
+    const abs = path.resolve(STORAGE_ROOT, rel);
+    if (!abs.startsWith(path.resolve(STORAGE_ROOT) + path.sep)) return;
+    try { await fs.unlink(abs); } catch { /* best-effort */ }
   }
 
   /** Serialize the model to JSON exactly as Laravel does (column order + casts). */

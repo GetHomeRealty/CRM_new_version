@@ -1,6 +1,9 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { bulkSummary, exportTransactionsXlsx, exportTransactionsPdf, downloadDocumentsZip } from '../lib/bulkApi';
+import {
+  bulkSummary, exportTransactionsXlsx, exportTransactionsCsv, exportTransactionsPdf,
+  exportCompleteXlsx, exportCompleteCsv, downloadDocumentsZip,
+} from '../lib/bulkApi';
 import { queueExport, type ExportAction } from '../lib/exportCentreApi';
 import { apiErrorMessage } from '../lib/apiError';
 import { useToast } from './toast';
@@ -153,6 +156,9 @@ export default function BulkExportModal({ mode, transactionIds, onClose }: {
               <p className="muted" style={{ fontSize: 12 }}>
                 Includes all structured transaction, financial, commission, condition and documentation data.
                 The uploaded document files themselves are not included — use “Download Documents” for those.
+                {' '}<strong>Download All Transactions</strong> gives one worksheet per transaction type, each with
+                only the fields that apply to it. <strong>Export XLSX</strong> is the older layout with a sheet per
+                area (deals, agents, clients, conditions, documents).
               </p>
             )}
 
@@ -173,9 +179,24 @@ export default function BulkExportModal({ mode, transactionIds, onClose }: {
           <button className="btn ghost" onClick={onClose} disabled={!!busy}>Cancel</button>
           {mode === 'data' ? (
             <>
+              <button className="btn primary" disabled={!!busy || loading || !summary?.transactions}
+                title="One worksheet per transaction type, grouped headers, only the fields that apply to each type"
+                onClick={() => (shouldQueue ? queue('transaction-complete-xlsx') : run('complete', () => exportCompleteXlsx(selection)))}>
+                {busy ? 'Preparing…' : 'Download All Transactions (XLSX)'}
+              </button>
+              <button className="btn ghost" disabled={!!busy || loading || !summary?.transactions}
+                title="A single flat table across all types — for pivot tables and re-import, not the grouped layout"
+                onClick={() => (shouldQueue ? queue('transaction-complete-csv') : run('completecsv', () => exportCompleteCsv(selection)))}>
+                {busy ? 'Preparing…' : 'Flat CSV (all types, one table)'}
+              </button>
               <button className="btn" disabled={!!busy || loading || !summary?.transactions}
                 onClick={() => (shouldQueue ? queue('transaction-data-xlsx') : run('xlsx', () => exportTransactionsXlsx(selection)))}>
                 {busy ? 'Preparing…' : 'Export XLSX'}
+              </button>
+              <button className="btn" disabled={!!busy || loading || !summary?.transactions}
+                title="One flat table, one row per transaction — opens in any spreadsheet"
+                onClick={() => (shouldQueue ? queue('transaction-data-csv') : run('csv', () => exportTransactionsCsv(selection)))}>
+                {busy ? 'Preparing…' : 'Export CSV'}
               </button>
               <button className="btn" disabled={!!busy || loading || !summary?.transactions}
                 onClick={() => (shouldQueue ? queue('transaction-data-pdf') : run('pdf', () => exportTransactionsPdf(selection)))}>

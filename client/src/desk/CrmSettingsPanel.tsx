@@ -7,6 +7,8 @@ import {
 import { apiErrorMessage, apiFieldErrors } from '../lib/apiError';
 import { useToast } from './toast';
 import MetaConnectionPanel from './MetaConnectionPanel';
+import GoogleCalendarCard from './GoogleCalendarCard';
+import EmailIntegrationCard from './EmailIntegrationCard';
 import type {
   CrmBroadcast, CrmEmailLogRow, CrmEmailSettings, CrmIntegrations, CrmProfile, CrmReferralCode,
   CrmSendResult, CrmSettings, CrmTriggerTemplates,
@@ -413,34 +415,26 @@ export default function CrmSettingsPanel() {
       </div>
 
       {/* -------------------------------------------------------- integrations */}
+      {/* CRM-side integrations. Meta lives here and ONLY here: Facebook/Instagram lead
+          capture is a CRM concern, so it is deliberately absent from Settings →
+          Integrations, which serves the transaction side. Mail and calendar appear in
+          both places because a single per-user connection powers both — the same card,
+          the same connection, reachable from whichever area you happen to be working in. */}
       <div className="card">
         <div className="modal-h">Integrations</div>
-        {integrations && (
-          <ul className="crm-integrations">
-            <li>
-              <span className={`pill ${integrations.email.connected ? 'ok' : 'bad'}`}>
-                {integrations.email.connected ? 'Connected' : 'Not connected'}
-              </span>
-              <div><strong>Email Integration</strong><div className="muted">{integrations.email.detail}</div></div>
-            </li>
-            <li>
-              <span className={`pill ${integrations.google_calendar.connected ? 'ok' : ''}`}>
-                {integrations.google_calendar.connected ? 'Connected' : 'Unavailable'}
-              </span>
-              <div><strong>Google Calendar</strong><div className="muted">{integrations.google_calendar.detail}</div></div>
-            </li>
-            <li>
-              <span className={`pill ${integrations.meta.connected ? 'ok' : 'bad'}`}>
-                {integrations.meta.connected ? 'Connected' : 'Not connected'}
-              </span>
-              <div><strong>Meta</strong><div className="muted">{integrations.meta.detail}</div></div>
-            </li>
-          </ul>
-        )}
+        <p className="help">
+          Connect the outside services the CRM works with. Each connection is scoped to your own login.
+        </p>
+
+        {/* Mail Configuration — connect your own Gmail / SMTP sending + inbox account. */}
+        <EmailIntegrationCard scope="crm" />
+
+        {/* Google Calendar — real OAuth "Sign in with Google", connected right here. */}
+        <GoogleCalendarCard scope="crm" />
       </div>
 
       {/* Live Meta connection — the same panel the Meta screen uses, embedded here so the
-          integration can be managed without leaving Settings. Nothing above it changes. */}
+          integration can be managed without leaving CRM Settings. */}
       <MetaConnectionPanel compact />
 
       {/* ----------------------------------------------------------- send log */}

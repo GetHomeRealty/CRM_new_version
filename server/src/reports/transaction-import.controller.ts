@@ -32,6 +32,16 @@ export class TransactionImportController {
     res.end(buf);
   }
 
+  /** Download a filled example — the same sheets as the template, with four worked deals. */
+  @Get('sample')
+  async sample(@Res() res: Response): Promise<void> {
+    const buf = await this.imports.sample();
+    res.setHeader('Content-Type', XLSX_MIME);
+    res.setHeader('Content-Disposition', 'attachment; filename="transaction-import-sample.xlsx"');
+    res.setHeader('Content-Length', String(buf.length));
+    res.end(buf);
+  }
+
   /** Validate an uploaded file. Nothing is created — this only reports what would happen. */
   @Post('validate')
   @HttpCode(200)

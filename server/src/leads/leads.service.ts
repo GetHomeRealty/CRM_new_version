@@ -2,6 +2,7 @@ import { BadRequestException, ForbiddenException, Injectable, NotFoundException 
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { LeadAuditService } from './lead-audit.service';
+import { LeadNotificationService } from './lead-notification.service';
 import { normalizePhone } from '../meta/meta-lead-mapper';
 import type { AuthUserRecord } from '../auth/auth.types';
 import {
@@ -40,7 +41,11 @@ export interface LeadQuery {
 
 @Injectable()
 export class LeadsService {
-  constructor(private readonly prisma: PrismaService, private readonly audit: LeadAuditService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly audit: LeadAuditService,
+    private readonly notifications: LeadNotificationService,
+  ) {}
 
   // --------------------------------------------------------------- scoping
   /**
@@ -156,6 +161,34 @@ export class LeadsService {
       }));
   }
 
+  /**
+   * Every lead showing the caller can see, for the Dashboard. Scoped through the lead exactly like
+   * the lists, so an agent sees showings on their own leads and nobody else's. Ordered by date so
+   * the soonest sits at the top.
+   */
+  async allShowings(user: AuthUserRecord): Promise<Record<string, unknown>[]> {
+    // Only today and upcoming — past showings drop off the dashboard so it reads as a to-do list.
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const rows = await this.prisma.lead_showings.findMany({
+      where: { showing_date: { gte: todayStart }, leads: { deleted_at: null, ...this.scopeWhere(user) } },
+      include: { leads: { select: { id: true, name: true } } },
+      orderBy: [{ showing_date: 'asc' }, { time: 'asc' }],
+    });
+    return rows.map((s) => ({
+      id: s.id,
+      lead_id: s.lead_id,
+      lead_name: s.leads.name,
+      showing_date: s.showing_date.toISOString().slice(0, 10),
+      time: s.time,
+      property: s.property,
+      notes: s.notes,
+      status: s.status,
+      created_by: s.created_by,
+      created_at: s.created_at?.toISOString() ?? null,
+    }));
+  }
+
   async get(id: number, user: AuthUserRecord): Promise<Record<string, unknown>> {
     const row = await this.prisma.leads.findFirst({
       where: { id, deleted_at: null, ...this.scopeWhere(user) },
@@ -234,6 +267,8 @@ export class LeadsService {
       include: { _count: { select: { lead_calls: true, lead_tasks: true } } },
     });
     await this.audit.record(user, 'Lead created', row.name, `${row.email}${row.phone ? ` · ${row.phone}` : ''}`);
+    // Best-effort inbound-lead email (Meta / Google Ads / Website only); never blocks creation.
+    void this.notifications.notifyNewLead(row);
     return this.present(row, await this.assigneeNames([row.assigned_to]));
   }
 

@@ -2,10 +2,11 @@ import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   addCallRecording, addLeadCall, addLeadMessage, addLeadNote, addLeadShowing, addLeadTask,
-  callRecordingUrl, deleteCallRecording, getLead, leadOptions, placeLeadCall, sendLeadEmail, smsGatewayStatus, updateLeadMessage,
-  updateLeadNote, updateLeadShowing, updateLeadTask,
+  callRecordingUrl, deleteCallRecording, generateLeadEmail, getLead, leadOptions, placeLeadCall, sendLeadEmail, smsGatewayStatus, updateLeadMessage, voiceCallStatus,
+  updateLeadNote, updateLeadShowing, updateLeadTask, deleteLeadShowing,
 } from '../lib/leadsApi';
 import { apiErrorMessage } from '../lib/apiError';
+import TwilioDialer from './TwilioDialer';
 import { useToast } from './toast';
 import { useAuth } from '../context/AuthContext';
 import LeadEditorModal, { label, prefHeading } from './LeadEditorModal';
@@ -448,6 +449,10 @@ function ShowingsPanel({ lead, canEdit, run }: { lead: LeadDetail; canEdit: bool
                         Reschedule
                       </button>
                     )}
+                    <button className="btn ghost sm" type="button" style={{ color: 'var(--bad)' }}
+                      onClick={() => { if (window.confirm('Delete this showing? This cannot be undone.')) void run(() => deleteLeadShowing(lead.id, s.id), 'Showing deleted.'); }}>
+                      Delete
+                    </button>
                   </>
                 )}
               </div>
@@ -506,9 +511,14 @@ function CommunicationPanel({ lead, canEdit, run, onSent }: {
 
   useEffect(() => { smsGatewayStatus().then(setGateway).catch(() => setGateway(null)); }, []);
   const liveSms = gateway?.configured === true;
-  // With a Twilio voice gateway, "Make Call" is a real click-to-call; without one it hands off to
-  // the device dialler. The panel says which mode it's in so the agent knows what will happen.
+  // Three calling modes, most capable first:
+  //   • in-browser dialer (Voice SDK) — talk in the browser;
+  //   • server click-to-call — Twilio rings the agent's phone, then bridges the lead;
+  //   • device dialler (`tel:`) — nothing configured.
   const liveCall = gateway?.voice === true;
+  const [browserCall, setBrowserCall] = useState(false);
+  useEffect(() => { voiceCallStatus().then((s) => setBrowserCall(s.configured)).catch(() => setBrowserCall(false)); }, []);
+  const [dialerOpen, setDialerOpen] = useState(false);
   const [calling, setCalling] = useState(false);
 
   const number = dialable(lead.phone);
@@ -516,6 +526,7 @@ function CommunicationPanel({ lead, canEdit, run, onSent }: {
 
   const call = async () => {
     if (!hasPhone || calling) return;
+    if (browserCall) { setDialerOpen(true); return; }
     if (liveCall) {
       setCalling(true);
       try {
@@ -583,10 +594,19 @@ function CommunicationPanel({ lead, canEdit, run, onSent }: {
       </div>
       {hasPhone && (
         <p className="help" style={{ marginTop: 4 }}>
-          {liveCall
-            ? '📞 Make Call rings your phone, then connects the lead — the call is recorded and logged automatically.'
-            : '📞 Make Call opens your device dialler (no Twilio gateway configured) — log the outcome below.'}
+          {browserCall
+            ? '📞 Make Call opens an in-browser dialler — talk to the lead through your computer, recorded and logged automatically.'
+            : liveCall
+              ? '📞 Make Call rings your phone, then connects the lead — recorded and logged automatically.'
+              : '📞 Make Call opens your device dialler (no Twilio gateway configured) — log the outcome below.'}
         </p>
+      )}
+      {dialerOpen && (
+        <TwilioDialer
+          lead={{ id: lead.id, name: lead.name, phone: lead.phone }}
+          onClose={() => setDialerOpen(false)}
+          onLogged={onSent}
+        />
       )}
 
       {emailing && canEdit && (
@@ -709,14 +729,36 @@ function EmailComposer({ lead, onClose, onSent }: { lead: LeadDetail; onClose: (
   const [subject, setSubject] = useState('');
   const [body, setBody] = useState('');
   const [sending, setSending] = useState(false);
+  const [aiPrompt, setAiPrompt] = useState('');
+  const [generating, setGenerating] = useState(false);
+  // Once AI drafts the body it is real HTML, so it is sent verbatim; a hand-typed body is plain
+  // text and gets escaped + newline-converted so markup can't sneak in and lines survive.
+  const [isHtml, setIsHtml] = useState(false);
+
+  const generate = async () => {
+    const p = aiPrompt.trim();
+    if (!p || generating) return;
+    setGenerating(true);
+    try {
+      const res = await generateLeadEmail(lead.id, p);
+      setSubject(res.subject);
+      setBody(res.html);
+      setIsHtml(true);
+      toast('Draft generated — review and send.', 'ok');
+    } catch (ex) {
+      toast(apiErrorMessage(ex, 'Could not generate the email'), 'bad');
+    } finally {
+      setGenerating(false);
+    }
+  };
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSending(true);
     try {
-      // Plain text typed into a textarea, sent as HTML: newlines have to be converted or the
-      // whole message arrives as one paragraph.
-      await sendLeadEmail(lead.id, { subject: subject.trim(), body: escapeHtml(body.trim()).replace(/\n/g, '<br>') });
+      // AI output is HTML already; a typed message is plain text, so convert newlines to <br>.
+      const html = isHtml ? body.trim() : escapeHtml(body.trim()).replace(/\n/g, '<br>');
+      await sendLeadEmail(lead.id, { subject: subject.trim(), body: html });
       toast(`Email sent to ${lead.email}.`, 'ok');
       onSent();
     } catch (ex) {
@@ -734,6 +776,29 @@ function EmailComposer({ lead, onClose, onSent }: { lead: LeadDetail; onClose: (
           <button className="btn ghost sm" type="button" onClick={onClose}>Close</button>
         </div>
         <div className="modal-body">
+          {/* AI Email Generator */}
+          <div className="field" style={{ background: 'var(--surface-2, #f8fafc)', border: '1px solid var(--line)', borderRadius: 10, padding: 12 }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>✨ AI Email Generator</label>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'stretch' }}>
+              <textarea rows={2} style={{ flex: 1 }} value={aiPrompt} onChange={(e) => setAiPrompt(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); void generate(); } }}
+                placeholder="Describe the email you want to send (e.g., 'Send a follow-up about the property showing we had yesterday')" />
+              <button className="btn primary sm" type="button" style={{ whiteSpace: 'nowrap' }} disabled={generating || !aiPrompt.trim()} onClick={() => void generate()}>
+                {generating ? 'Generating…' : '✨ Generate'}
+              </button>
+            </div>
+            <div className="help" style={{ marginTop: 6 }}>💡 AI writes a complete HTML email with professional styling.</div>
+            <div className="help" style={{ marginTop: 4 }}>
+              <span style={{ fontWeight: 600 }}>Examples:</span>
+              {AI_EMAIL_EXAMPLES.map((ex) => (
+                <button key={ex} type="button" onClick={() => setAiPrompt(ex)}
+                  style={{ display: 'block', textAlign: 'left', background: 'none', border: 'none', color: 'var(--brand)', cursor: 'pointer', padding: '1px 0', fontSize: 12 }}>
+                  • {ex}
+                </button>
+              ))}
+            </div>
+          </div>
+
           <p className="help">
             Sent to <strong>{lead.email}</strong> through your configured mail account. This is a
             one-off message, not a campaign — no tracking and no unsubscribe footer.
@@ -743,10 +808,19 @@ function EmailComposer({ lead, onClose, onSent }: { lead: LeadDetail; onClose: (
             <input value={subject} maxLength={255} autoFocus required
               onChange={(e) => setSubject(e.target.value)} placeholder="What is this about?" />
           </div>
+          {isHtml && (
+            <div className="field">
+              <label>Preview</label>
+              <iframe title="Email preview" sandbox="" srcDoc={body}
+                style={{ width: '100%', height: 240, border: '1px solid var(--line)', borderRadius: 8, background: '#fff' }} />
+            </div>
+          )}
           <div className="field">
-            <label>Message</label>
-            <textarea rows={10} value={body} required onChange={(e) => setBody(e.target.value)}
-              placeholder={`Hi ${lead.name.split(' ')[0]},`} />
+            <label>{isHtml ? 'Message (HTML — editable)' : 'Message'}</label>
+            <textarea rows={isHtml ? 6 : 10} value={body} required
+              onChange={(e) => setBody(e.target.value)} placeholder={`Hi ${lead.name.split(' ')[0]},`}
+              style={isHtml ? { fontFamily: 'monospace', fontSize: 12 } : undefined} />
+            {isHtml && <div className="help">This is AI-generated HTML and will be sent as a formatted email. Edit if needed; the preview updates on change.</div>}
           </div>
         </div>
         <div className="modal-foot">
@@ -763,6 +837,14 @@ function EmailComposer({ lead, onClose, onSent }: { lead: LeadDetail; onClose: (
 /** The message is typed as plain text; anything that looks like markup must not become markup. */
 const escapeHtml = (s: string): string =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+/** Starter prompts shown under the AI email generator. */
+const AI_EMAIL_EXAMPLES = [
+  "Send a follow-up email about yesterday's property showing",
+  'Create a welcome email for a new client with a market update',
+  'Write a thank-you email after closing a deal',
+  'Send a property recommendation with pricing details',
+];
 
 const MAX_RECORDING_BYTES = 8 * 1024 * 1024;   // mirrors the server's limit, to fail before uploading
 const AUDIO_ACCEPT = 'audio/*,.mp3,.m4a,.aac,.wav,.ogg,.webm,.flac';

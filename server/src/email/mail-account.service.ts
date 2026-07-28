@@ -5,6 +5,16 @@ import { LaravelCryptService } from '../common/laravel-crypt.service';
 import { throwValidation, type FieldErrors } from '../common/laravel-exceptions';
 import { toDateTimeString } from '../common/serialize';
 
+/**
+ * Which area owns an integration. CRM Settings and Transaction Desk Settings keep separate
+ * connections, so an address added on one side never shows up on the other.
+ */
+export type IntegrationScope = 'crm' | 'desk';
+
+/** Read a scope off a query string or request body; anything unrecognised means "no filter". */
+export const parseScope = (v: unknown): IntegrationScope | undefined =>
+  (v === 'crm' || v === 'desk' ? v : undefined);
+
 @Injectable()
 export class MailAccountService {
   constructor(private readonly prisma: PrismaService, private readonly crypt: LaravelCryptService) {}
@@ -28,20 +38,33 @@ export class MailAccountService {
    * One user's own accounts. Everything below is scoped to `userId`, so a user can only ever see
    * or change their own — never another user's, and never the brokerage's.
    */
-  async indexForUser(userId: number): Promise<Record<string, unknown>[]> {
-    const rows = await this.prisma.mail_accounts.findMany({ where: { user_id: userId } });
+  /**
+   * CRM Settings and Transaction Desk Settings are completely separate: an account belongs
+   * to exactly one of them and is only ever listed there. The match is strict — an account
+   * connected on one side never surfaces on the other, and there is no shared middle
+   * ground.
+   *
+   * Passing no scope returns every account, which is what the personal Settings screen and
+   * the sending pipeline want.
+   */
+  async indexForUser(userId: number, scope?: IntegrationScope): Promise<Record<string, unknown>[]> {
+    const rows = await this.prisma.mail_accounts.findMany({
+      where: { user_id: userId, ...(scope ? { scope } : {}) },
+    });
     rows.sort((a, b) => Number(b.is_default) - Number(a.is_default) || a.name.localeCompare(b.name, 'en', { sensitivity: 'base' }) || a.id - b.id);
     return rows.map((a) => this.resource(a));
   }
 
-  async storeForUser(userId: number, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+  async storeForUser(userId: number, body: Record<string, unknown>, scope?: IntegrationScope): Promise<Record<string, unknown>> {
     const data = this.validate(body, false);
     if ((data.password ?? '') === '') delete data.password;
     else data.password = this.crypt.encryptString(String(data.password));
 
     const now = new Date();
     const account = await this.prisma.mail_accounts.create({
-      data: { ...(data as Prisma.mail_accountsCreateInput), user_id: userId, created_at: now, updated_at: now },
+      // A new account belongs to the area it was added from — that is the whole point of
+      // the split, so it is stamped at creation rather than left to be assigned later.
+      data: { ...(data as Prisma.mail_accountsCreateInput), user_id: userId, scope: scope ?? null, created_at: now, updated_at: now },
     });
     // The user's first account becomes their default automatically, so there is always a sender.
     const count = await this.prisma.mail_accounts.count({ where: { user_id: userId } });
@@ -61,6 +84,16 @@ export class MailAccountService {
     await this.prisma.mail_accounts.update({ where: { id }, data: { ...(data as Prisma.mail_accountsUpdateInput), updated_at: new Date() } });
     const fresh = (await this.find(id))!;
     if (fresh.is_default) await this.makeSoleDefault(id, userId);
+    return this.resource((await this.find(id))!);
+  }
+
+  /**
+   * Assign an existing account to an area — the picker for connections that pre-date the
+   * split. `null` puts it back to unassigned, where it shows on both sides.
+   */
+  async setScopeForUser(userId: number, id: number, scope: IntegrationScope | null): Promise<Record<string, unknown>> {
+    await this.ownOrThrow(userId, id);
+    await this.prisma.mail_accounts.update({ where: { id }, data: { scope, updated_at: new Date() } });
     return this.resource((await this.find(id))!);
   }
 
@@ -164,6 +197,8 @@ export class MailAccountService {
       is_active: !!a.is_active,
       is_default: !!a.is_default,
       has_password: filled,
+      /** 'crm' | 'desk' | null. Null pre-dates the split and shows on both sides. */
+      scope: a.scope ?? null,
       // ---- IMAP inbound sync ----
       imap_host: a.imap_host,
       imap_port: a.imap_port ? Number(a.imap_port) : null,

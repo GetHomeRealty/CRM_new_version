@@ -22,17 +22,24 @@ export class GoogleStateService {
     return createHmac('sha256', this.secret()).update(payload).digest('base64url');
   }
 
-  issue(userId: number): string {
-    const payload = `${userId}.${Date.now()}.${randomBytes(12).toString('base64url')}`;
+  /**
+   * `purpose` distinguishes what the same callback is finishing — calendar connect vs. mail
+   * connect. `scope` carries which area started the flow (CRM Settings or Transaction Desk
+   * Settings), so the callback stores the tokens against the right one; the two are
+   * independent connections. It is inside the signed payload, so a user cannot tamper with
+   * it to write into the other area.
+   */
+  issue(userId: number, purpose: 'calendar' | 'mail' = 'calendar', scope: 'crm' | 'desk' = 'crm'): string {
+    const payload = `${userId}.${purpose}.${scope}.${Date.now()}.${randomBytes(12).toString('base64url')}`;
     return `${payload}.${this.sign(payload)}`;
   }
 
-  verify(state: string): number | null {
+  verify(state: string): { userId: number; purpose: 'calendar' | 'mail'; scope: 'crm' | 'desk' } | null {
     const parts = String(state ?? '').split('.');
-    if (parts.length !== 4) return null;
-    const [userIdRaw, issuedRaw, nonce, signature] = parts;
+    if (parts.length !== 6) return null;
+    const [userIdRaw, purposeRaw, scopeRaw, issuedRaw, nonce, signature] = parts;
 
-    const expected = this.sign(`${userIdRaw}.${issuedRaw}.${nonce}`);
+    const expected = this.sign(`${userIdRaw}.${purposeRaw}.${scopeRaw}.${issuedRaw}.${nonce}`);
     const a = Buffer.from(signature);
     const b = Buffer.from(expected);
     if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
@@ -45,6 +52,9 @@ export class GoogleStateService {
     if (this.used.size > 5000) this.used.clear();
 
     const userId = Number(userIdRaw);
-    return Number.isInteger(userId) && userId > 0 ? userId : null;
+    if (!Number.isInteger(userId) || userId <= 0) return null;
+    const purpose = purposeRaw === 'mail' ? 'mail' : 'calendar';
+    const scope = scopeRaw === 'desk' ? 'desk' : 'crm';
+    return { userId, purpose, scope };
   }
 }

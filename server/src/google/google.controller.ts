@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Req, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Query, Req, UseGuards } from '@nestjs/common';
 import type { Request } from 'express';
 import { AuthGuard } from '../auth/guards/auth.guard';
 import { CurrentUser } from '../auth/decorators';
@@ -8,6 +8,7 @@ import { GoogleService } from './google.service';
 import { GoogleStateService } from './google-state.service';
 import { GoogleCalendarSyncService } from './google-calendar-sync.service';
 import { isConfigured, redirectUri } from './google.constants';
+import { parseScope } from '../email/mail-account.service';
 
 const str = (v: unknown): string => String(v ?? '').trim();
 
@@ -34,8 +35,11 @@ export class GoogleController {
 
   /** Whether Google sign-in is set up on this server, and this user's connection state. */
   @Get('status')
-  async status(@CurrentUser() user: AuthUserRecord): Promise<Record<string, unknown>> {
-    const conn = await this.connections.find(user.id ?? -1);
+  async status(@CurrentUser() user: AuthUserRecord, @Query('scope') scope?: string): Promise<Record<string, unknown>> {
+    // CRM Settings and Transaction Desk Settings hold independent connections, so the
+    // status reported is the one for the area that asked. Callers that send no scope get
+    // the CRM connection, which is where this card originally lived.
+    const conn = await this.connections.find(user.id ?? -1, parseScope(scope) ?? 'crm');
     return {
       configured: isConfigured(),
       connected: !!(conn && conn.is_active),
@@ -52,24 +56,26 @@ export class GoogleController {
    * navigates there, Google shows the account picker, and the callback finishes the handshake.
    */
   @Get('connect')
-  connect(@CurrentUser() user: AuthUserRecord, @Req() req: Request): Record<string, unknown> {
+  connect(@CurrentUser() user: AuthUserRecord, @Req() req: Request, @Query('scope') scope?: string): Record<string, unknown> {
     if (!isConfigured()) {
       return { configured: false, message: 'Google sign-in is not set up on the server yet.' };
     }
-    const state = this.state.issue(user.id ?? -1);
+    // The area is carried through the OAuth round trip in the state token, so the callback
+    // stores the tokens against the side that started the flow.
+    const state = this.state.issue(user.id ?? -1, 'calendar', parseScope(scope) ?? 'crm');
     const url = this.google.authUrl(state, redirectUri(origin(req)));
     return { configured: true, url };
   }
 
   @Post('sync')
-  async syncNow(@CurrentUser() user: AuthUserRecord): Promise<Record<string, unknown>> {
-    const result = await this.sync.pull(user.id ?? -1);
+  async syncNow(@CurrentUser() user: AuthUserRecord, @Query('scope') scope?: string): Promise<Record<string, unknown>> {
+    const result = await this.sync.pull(user.id ?? -1, parseScope(scope) ?? 'crm');
     return { ...result, message: result.error ? result.error : `Synced ${result.pulled} event${result.pulled === 1 ? '' : 's'} from Google.` };
   }
 
   @Post('disconnect')
-  async disconnect(@CurrentUser() user: AuthUserRecord): Promise<{ disconnected: boolean }> {
-    await this.connections.disconnect(user.id ?? -1);
+  async disconnect(@CurrentUser() user: AuthUserRecord, @Query('scope') scope?: string): Promise<{ disconnected: boolean }> {
+    await this.connections.disconnect(user.id ?? -1, parseScope(scope) ?? 'crm');
     return { disconnected: true };
   }
 }

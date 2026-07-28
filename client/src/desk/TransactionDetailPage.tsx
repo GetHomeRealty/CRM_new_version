@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { getTransaction, updateTransaction, listAgents, generateTransactionInvoices, getCompanySettings, getCustomers, getBrokerageSuggestions, requestTransactionEdit, approveEditRequest, rejectEditRequest, reviewAgentChanges, rejectAgentChange, requestTransactionDeletion, forwardDeleteRequest, approveDeleteRequest, rejectDeleteRequest, getDocuments } from '../lib/api';
 import { typeClass, typeLabel, isListingType, isListingFinancialType, isListingStatusFamily, isPreconType, isCommercialLeaseType, isInvoiceableType, emailLooksValid, parseNumber, TRANSACTION_TYPES, statusOptionsFor, normalizeStatus, defaultStatusFor } from './format';
@@ -109,6 +109,71 @@ function toForm(t: Transaction): DetailForm {
   };
 }
 
+const dOrNull = (v: string | null | undefined) => (v && v.trim() ? v : null);
+
+/**
+ * The exact PUT body for a form. Shared by the manual Save and the auto-save so the
+ * two can never drift — an auto-save that wrote a different shape than Save would be
+ * far worse than no auto-save at all.
+ */
+function buildPayload(form: DetailForm): Record<string, unknown> {
+  const payload: Record<string, unknown> = {
+    type: form.type, property: form.property, agent: form.agent || null,
+    price: parseNumber(form.price), deposit: parseNumber(form.deposit),
+    offer_date: dOrNull(form.offer_date), closing_date: dOrNull(form.closing_date),
+    listing_contract_date: dOrNull(form.listing_contract_date), listing_expiry_date: dOrNull(form.listing_expiry_date),
+    mls_type: form.mls_type, mls_num: form.mls_num || null, mls_verified: form.mls_verified,
+    conditional_offer: form.conditional_offer, inter_board_enabled: form.inter_board_enabled,
+    statuses: form.statuses,
+    clients: form.clients.map((c) => ({ name: c.name, email: c.email || null, phone: c.phone || null })),
+    conditions: form.conditional_offer
+      ? form.conditions.map((c) => ({ type: c.type, custom_name: c.custom_name || null, deadline: dOrNull(c.deadline), status: c.status }))
+      : [],
+    inter_board_listings: form.inter_board_enabled
+      ? form.inter_board_listings.map((i) => ({ name: i.name || null, board_id: i.board_id || null, verified: !!i.verified }))
+      : [],
+    brokerage: {
+      name: form.brokerage.name || null, address: form.brokerage.address || null,
+      email: form.brokerage.email || null, invoice_email: form.brokerage.invoice_email || null,
+      agent_email: form.brokerage.agent_email || null, phone: form.brokerage.phone || null,
+      agents: form.brokerage.agents.filter((a) => a && a.trim()),
+    },
+  };
+  if (isPreconType(form.type)) {
+    payload.precon_listing_type = form.precon_listing_type;
+    payload.precon_term_count = form.precon_term_count === '' ? null : parseInt(String(form.precon_term_count), 10);
+    payload.commission_agent = form.commission_agent || null;
+    payload.builder = {
+      name: form.builder.name || null, vendor: form.builder.vendor || null, project: form.builder.project || null,
+      address: form.builder.address || null, office_email: form.builder.office_email || null,
+      invoice_email: form.builder.invoice_email || null, phone: form.builder.phone || null,
+    };
+    // Per-term rows from the term count; preserve pct set in Financial, carry closing dates entered here.
+    const tc = parseInt(String(form.precon_term_count), 10) || 0;
+    payload.precon_terms = Array.from({ length: tc }, (_, i) => {
+      const k = i + 1;
+      const existing = (form.precon_terms || []).find((x) => Number(x.term_no) === k) || { pct: null, closing_date: '' };
+      return { term_no: k, pct: existing.pct ?? null, closing_date: existing.closing_date || null };
+    });
+  }
+  if (isCommercialLeaseType(form.type)) {
+    payload.commercial_lease = { ...CL_DEFAULTS, ...(form.commercial_lease || {}) };
+  }
+  return payload;
+}
+
+/** Why the form can't be persisted yet, or null when it's good to save. */
+function validateForm(form: DetailForm): string | null {
+  for (const c of form.clients) {
+    if (!c.name?.trim()) return 'Each client needs a name';
+    if (c.email && !emailLooksValid(c.email)) return 'Invalid client email';
+  }
+  return null;
+}
+
+/** Idle gap after the last keystroke before an auto-save fires. */
+const AUTOSAVE_MS = 1200;
+
 export default function TransactionDetailPage() {
   const { id = '' } = useParams();
   const [params, setParams] = useSearchParams();
@@ -152,7 +217,9 @@ export default function TransactionDetailPage() {
   const [coreDocReminders, setCoreDocReminders] = useState<string[]>([]); // §5.2 Active: pending core listing docs
 
   useEffect(() => {
-    getTransaction(id).then((t) => { setForm(toForm(t)); setTxn(t); }).catch(() => toast('Could not load transaction', 'bad'));
+    // applyUpdated (not a bare setForm) so the auto-save baseline is captured with the
+    // freshly loaded values — otherwise the first render looks dirty and re-saves.
+    getTransaction(id).then(applyUpdated).catch(() => toast('Could not load transaction', 'bad'));
     listAgents().then(setAgents).catch(() => {});
     // Loaded lazily so the invoice editor can open in-context on this page.
     getCompanySettings().then(setInvSettings).catch(() => {});
@@ -182,7 +249,81 @@ export default function TransactionDetailPage() {
     }
   }, [params, txn]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const applyUpdated = (updated: Transaction) => { setForm(toForm(updated)); setTxn(updated); };
+  // ─── Auto-save ────────────────────────────────────────────────────────────
+  // Every field on this page persists on its own. The sections behind Team Split,
+  // Financial, Legal & Documentation etc. read this transaction's *saved* values, so
+  // anything left unsaved here used to reappear as missing data over there — and was
+  // lost outright on navigating back. Edits are now debounced and PUT automatically,
+  // and flushed the moment a section opens or the page unmounts.
+  const formRef = useRef<DetailForm | null>(null);
+  const savedSnapRef = useRef<string | null>(null); // payload JSON as last persisted; null until loaded
+  const savingRef = useRef(false);
+  const rerunRef = useRef(false);                   // an edit landed while a save was in flight
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const autoOnRef = useRef(false);                  // assigned during render, once the edit gate is known
+  const [autoState, setAutoState] = useState<'idle' | 'saving' | 'saved' | 'blocked' | 'error'>('idle');
+  const [autoMsg, setAutoMsg] = useState('');
+
+  useEffect(() => { formRef.current = form; }, [form]);
+
+  /** Persist now if there is anything to persist. Safe to call spuriously. */
+  const flushAutoSave = useCallback(async (): Promise<void> => {
+    if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
+    const f = formRef.current;
+    if (!autoOnRef.current || !f || savedSnapRef.current === null) return;
+    const snap = JSON.stringify(buildPayload(f));
+    if (snap === savedSnapRef.current) return;      // nothing changed since the last write
+    const problem = validateForm(f);
+    // Hold rather than write a half-filled row — the indicator says why, and the save
+    // goes through as soon as the field is completed.
+    if (problem) { setAutoState('blocked'); setAutoMsg(problem); return; }
+    if (savingRef.current) { rerunRef.current = true; return; }
+    savingRef.current = true;
+    setAutoState('saving'); setAutoMsg('');
+    try {
+      const updated = await updateTransaction(id, JSON.parse(snap) as Record<string, unknown>);
+      savedSnapRef.current = snap;
+      // Refresh the raw transaction only — never `form`, which would fight whatever the
+      // user is typing right now (cursor jumps, dropped keystrokes mid-flight).
+      setTxn(updated);
+      setAutoState('saved'); setAutoMsg('');
+    } catch (err) {
+      setAutoState('error'); setAutoMsg(apiErrorMessage(err, 'Could not save'));
+    } finally {
+      savingRef.current = false;
+      if (rerunRef.current) { rerunRef.current = false; void flushAutoSave(); }
+    }
+  }, [id]);
+
+  // Debounce: restart the clock on every edit, write once the user pauses.
+  useEffect(() => {
+    if (!autoOnRef.current || !form || savedSnapRef.current === null) return;
+    if (JSON.stringify(buildPayload(form)) === savedSnapRef.current) return;
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => { void flushAutoSave(); }, AUTOSAVE_MS);
+    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
+  }, [form, flushAutoSave]);
+
+  // Leaving the page (route change or tab close) must not outrun the debounce.
+  useEffect(() => {
+    const onLeave = () => { void flushAutoSave(); };
+    window.addEventListener('beforeunload', onLeave);
+    return () => { window.removeEventListener('beforeunload', onLeave); void flushAutoSave(); };
+  }, [flushAutoSave]);
+
+  // Opening another section — the reported case. Those modals load the transaction
+  // server-side, so the pending edit has to land before they read it.
+  const sectionOpen = teamOpen || finOpen || docsOpen || invoiceOpen || nosOpen || tsOpen
+    || lawyerOpen || auditOpen || adminOpen || faqOpen || adjOpen || chatOpen
+    || depositOpen || lawyerStmtOpen || invEditorId !== undefined;
+  useEffect(() => { if (sectionOpen) void flushAutoSave(); }, [sectionOpen, flushAutoSave]);
+
+  const applyUpdated = (updated: Transaction) => {
+    setForm(toForm(updated));
+    setTxn(updated);
+    // New baseline — without this the next render would look "dirty" and re-save.
+    savedSnapRef.current = JSON.stringify(buildPayload(toForm(updated)));
+  };
 
   const generateInvoices = async () => {
     setGenerating(true);
@@ -313,7 +454,7 @@ export default function TransactionDetailPage() {
     title: 'Delete client?',
     message: `Remove client "${form.clients[i]?.name || `#${i + 1}`}" from this transaction?`,
     linked: ['Notice of Sale buyers/sellers', 'Invoice customer details', 'Agent FAQ document clearance'],
-    note: 'The change applies when you click Save on the transaction.',
+    note: 'The change is saved automatically a moment after you confirm.',
     onConfirm: () => setForm((f) => (f ? { ...f, clients: f.clients.filter((_, idx) => idx !== i) } : f)),
   });
 
@@ -324,7 +465,7 @@ export default function TransactionDetailPage() {
     title: 'Delete condition?',
     message: `Remove condition "${form.conditions[i]?.custom_name || form.conditions[i]?.type || `#${i + 1}`}"?`,
     linked: ['Its matching row in Legal & Documentation (and any files uploaded to it)', 'Document clearance / Final Validation in Agent FAQ'],
-    note: 'The change applies when you click Save on the transaction.',
+    note: 'The change is saved automatically a moment after you confirm.',
     onConfirm: () => setForm((f) => (f ? { ...f, conditions: f.conditions.filter((_, idx) => idx !== i) } : f)),
   });
 
@@ -335,7 +476,7 @@ export default function TransactionDetailPage() {
     title: 'Delete inter-board listing?',
     message: `Remove inter-board listing "${form.inter_board_listings[i]?.name || `#${i + 1}`}"?`,
     linked: ['MLS / board verification on this transaction'],
-    note: 'The change applies when you click Save on the transaction.',
+    note: 'The change is saved automatically a moment after you confirm.',
     onConfirm: () => setForm((f) => (f ? { ...f, inter_board_listings: f.inter_board_listings.filter((_, idx) => idx !== i) } : f)),
   });
 
@@ -346,65 +487,25 @@ export default function TransactionDetailPage() {
     title: 'Delete agent name?',
     message: `Remove agent "${form.brokerage.agents[i] || `#${i + 1}`}" from the brokerage?`,
     linked: ['Listing Agent Name(s) shown on Invoices, Notice of Sale, Deposit Receipt and Lawyer Statement'],
-    note: 'The change applies when you click Save on the transaction.',
+    note: 'The change is saved automatically a moment after you confirm.',
     onConfirm: () => setForm((f) => (f ? { ...f, brokerage: { ...f.brokerage, agents: f.brokerage.agents.filter((_, idx) => idx !== i) } } : f)),
   });
 
-  const dOrNull = (v: string | null | undefined) => (v && v.trim() ? v : null);
-
+  /**
+   * Manual save — now a "save and leave edit mode" shortcut over the same payload the
+   * auto-save writes. Cancels any pending debounce so the two can't race.
+   */
   const save = async () => {
-    // validate clients
-    for (const c of form.clients) {
-      if (!c.name?.trim()) { toast('Each client needs a name', 'bad'); return; }
-      if (c.email && !emailLooksValid(c.email)) { toast('Invalid client email', 'bad'); return; }
-    }
-    const payload: Record<string, unknown> = {
-      type: form.type, property: form.property, agent: form.agent || null,
-      price: parseNumber(form.price), deposit: parseNumber(form.deposit),
-      offer_date: dOrNull(form.offer_date), closing_date: dOrNull(form.closing_date),
-      listing_contract_date: dOrNull(form.listing_contract_date), listing_expiry_date: dOrNull(form.listing_expiry_date),
-      mls_type: form.mls_type, mls_num: form.mls_num || null, mls_verified: form.mls_verified,
-      conditional_offer: form.conditional_offer, inter_board_enabled: form.inter_board_enabled,
-      statuses: form.statuses,
-      clients: form.clients.map((c) => ({ name: c.name, email: c.email || null, phone: c.phone || null })),
-      conditions: form.conditional_offer
-        ? form.conditions.map((c) => ({ type: c.type, custom_name: c.custom_name || null, deadline: dOrNull(c.deadline), status: c.status }))
-        : [],
-      inter_board_listings: form.inter_board_enabled
-        ? form.inter_board_listings.map((i) => ({ name: i.name || null, board_id: i.board_id || null, verified: !!i.verified }))
-        : [],
-      brokerage: {
-        name: form.brokerage.name || null, address: form.brokerage.address || null,
-        email: form.brokerage.email || null, invoice_email: form.brokerage.invoice_email || null,
-        agent_email: form.brokerage.agent_email || null, phone: form.brokerage.phone || null,
-        agents: form.brokerage.agents.filter((a) => a && a.trim()),
-      },
-    };
-    if (precon) {
-      payload.precon_listing_type = form.precon_listing_type;
-      payload.precon_term_count = form.precon_term_count === '' ? null : parseInt(String(form.precon_term_count), 10);
-      payload.commission_agent = form.commission_agent || null;
-      payload.builder = {
-        name: form.builder.name || null, vendor: form.builder.vendor || null, project: form.builder.project || null,
-        address: form.builder.address || null, office_email: form.builder.office_email || null,
-        invoice_email: form.builder.invoice_email || null, phone: form.builder.phone || null,
-      };
-      // Per-term rows from the term count; preserve pct set in Financial, carry closing dates entered here.
-      const tc = parseInt(String(form.precon_term_count), 10) || 0;
-      payload.precon_terms = Array.from({ length: tc }, (_, i) => {
-        const k = i + 1;
-        const existing = (form.precon_terms || []).find((x) => Number(x.term_no) === k) || { pct: null, closing_date: '' };
-        return { term_no: k, pct: existing.pct ?? null, closing_date: existing.closing_date || null };
-      });
-    }
-    if (commercialLease) {
-      payload.commercial_lease = { ...CL_DEFAULTS, ...(form.commercial_lease || {}) };
-    }
+    const problem = validateForm(form);
+    if (problem) { toast(problem, 'bad'); return; }
+    if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
+    const payload = buildPayload(form);
     setSaving(true);
     try {
       const updated = await updateTransaction(id, payload);
       applyUpdated(updated);
       setMode('view');
+      setAutoState('saved'); setAutoMsg('');
       toast('Transaction saved', 'ok');
     } catch (err) {
       toast(apiErrorMessage(err, 'Could not save'), 'bad');
@@ -415,6 +516,15 @@ export default function TransactionDetailPage() {
 
   const stPill = (s: string) => s === 'Open' ? 'info' : (s === 'Closed' ? 'ok' : (s === 'Void' ? 'bad' : 'warn'));
   const brokLabel = listing ? 'Co-Op' : 'Listing';
+
+  // Auto-save status shown beside the Done button, so "did that save?" is never a guess.
+  const autoPill = autoState === 'error' || autoState === 'blocked' ? 'bad'
+    : autoState === 'saving' ? 'warn'
+      : autoState === 'saved' ? 'ok' : 'info';
+  const autoText = autoState === 'saving' ? '⏳ Saving…'
+    : autoState === 'error' ? `⚠ ${autoMsg || 'Not saved'}`
+      : autoState === 'blocked' ? `⚠ ${autoMsg}`
+        : autoState === 'saved' ? '✓ Saved' : '⚡ Auto-save on';
 
   // §5.2 — Sale Listing status matrix (sale listings only; lease excluded).
   const saleListing = isListingStatusFamily(form.type) && !/lease/i.test(form.type);
@@ -489,6 +599,24 @@ export default function TransactionDetailPage() {
   // are handled inside the Financial modal.
   const pendingReq = editRequests.find((r) => r.status === 'pending' && r.scope !== 'financial');
   const approvedReq = editRequests.find((r) => r.status === 'approved' && r.scope !== 'financial');
+
+  // Auto-save is allowed exactly when the Save button would have been offered — same
+  // permission, role and lifecycle-lock gate, so it can never write where a manual
+  // save was refused. Assigned during render; the effects above read it when they run.
+  const autoSaveOn = !view && canEdit && !isSplitViewer
+    && !(stClosed && !isSuperAdmin)
+    && !(lockedForUser && !approvedReq);
+  autoOnRef.current = autoSaveOn;
+
+  // Is there an edit the server hasn't got yet? Computed during render, not in an
+  // effect, because it gates whether a section may mount at all — an effect would run
+  // a commit too late and the section would already have snapshotted stale values.
+  const dirty = savedSnapRef.current !== null && JSON.stringify(buildPayload(form)) !== savedSnapRef.current;
+  // Sections like Financial copy txn.price into their own state on mount, so a late
+  // setTxn never reaches them. Hold the section closed until the write lands. Released
+  // on 'blocked'/'error' too, so a save that can't succeed never traps the user.
+  const holdSections = sectionOpen && autoSaveOn && dirty && autoState !== 'blocked' && autoState !== 'error';
+
   const reloadTxn = () => getTransaction(id).then(applyUpdated).catch(() => {});
   const onRequestEdit = async () => {
     const reason = window.prompt('Reason for the edit request (optional):');
@@ -577,8 +705,12 @@ export default function TransactionDetailPage() {
             : view
             ? <button className="btn primary sm" onClick={() => setMode('edit')}>✏ Edit{lockedForUser && approvedReq ? ' (approved)' : ''}</button>
             : (<>
-                <button className="btn ghost sm" onClick={() => setMode('view')}>Cancel</button>
-                <button className="btn primary sm" onClick={save} disabled={saving}>{saving ? 'Saving…' : '💾 Save'}</button>
+                {/* No Cancel here any more: with auto-save on there is nothing pending to
+                    discard, so a Cancel button would only mislead. Done flushes and returns
+                    to view mode. */}
+                <span className={`pill ${autoPill}`} style={{ fontSize: 10 }}
+                  title={autoMsg || 'Every field on this page saves by itself a moment after you stop typing.'}>{autoText}</span>
+                <button className="btn primary sm" onClick={save} disabled={saving}>{saving ? 'Saving…' : '✓ Done'}</button>
               </>)}
           {/* Agents request deletion (their own deals); admins/super admins delete via the workflow banner. */}
           {isFullAgent && !deleteReq && <button className="btn ghost sm" style={{ color: '#dc2626' }} onClick={onRequestDelete}>🗑 Request Deletion</button>}
@@ -1012,6 +1144,18 @@ export default function TransactionDetailPage() {
 
       </div>
 
+      {/* A section was opened with an edit still in flight — land it first, then let the
+          section mount so it reads the saved values. */}
+      {holdSections && (
+        <div className="overlay open">
+          <div className="modal" style={{ maxWidth: 320, textAlign: 'center', padding: '26px 24px' }}>
+            <div style={{ fontSize: 15, fontWeight: 700 }}>⏳ Saving your changes…</div>
+            <p className="help" style={{ marginTop: 6 }}>Opening as soon as this transaction is up to date.</p>
+          </div>
+        </div>
+      )}
+
+      {!holdSections && (<>
       {teamOpen && txn && (
         <TeamSplitModal
           open={teamOpen}
@@ -1075,7 +1219,7 @@ export default function TransactionDetailPage() {
         <ChatModal open onClose={() => setChatOpen(false)} transactionId={id} />
       )}
       {depositOpen && txn && (
-        <DepositReceiptModal open onClose={() => setDepositOpen(false)} txn={txn} />
+        <DepositReceiptModal open onClose={() => setDepositOpen(false)} txn={txn} settings={invSettings} />
       )}
       {lawyerStmtOpen && txn && (
         <LawyerStatementModal open onClose={() => setLawyerStmtOpen(false)} txn={txn} settings={invSettings} />
@@ -1092,6 +1236,7 @@ export default function TransactionDetailPage() {
           onSaved={() => getTransaction(id).then(applyUpdated).catch(() => {})}
         />
       )}
+      </>)}
       <ConfirmDialog confirm={confirm} onClose={() => setConfirm(null)} />
     </>
   );

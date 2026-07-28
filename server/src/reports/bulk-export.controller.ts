@@ -35,6 +35,32 @@ export class BulkExportController {
   }
 
   /**
+   * EVERYTHING on one row per transaction — Basic Info, team split, clients, lawyer,
+   * co-op brokerage, financial, adjustments, conditions and the calculated columns.
+   */
+  @Post('export/complete/xlsx')
+  @HttpCode(200)
+  async completeXlsx(@CurrentUser() user: AuthUserRecord, @Body() body: Record<string, unknown>, @Res() res: Response): Promise<void> {
+    const buf = await this.bulk.completeXlsx(parseSelection(body), user);
+    this.send(res, buf, `All_Transactions_${stamp()}.xlsx`, XLSX_MIME);
+  }
+
+  @Post('export/complete/csv')
+  @HttpCode(200)
+  async completeCsv(@CurrentUser() user: AuthUserRecord, @Body() body: Record<string, unknown>, @Res() res: Response): Promise<void> {
+    const buf = await this.bulk.completeCsv(parseSelection(body), user);
+    this.send(res, buf, `All_Transactions_${stamp()}.csv`, 'text/csv; charset=utf-8');
+  }
+
+  /** The same data flattened to a single CSV table (one row per transaction). */
+  @Post('export/csv')
+  @HttpCode(200)
+  async csv(@CurrentUser() user: AuthUserRecord, @Body() body: Record<string, unknown>, @Res() res: Response): Promise<void> {
+    const buf = await this.bulk.dataCsv(parseSelection(body), user);
+    this.send(res, buf, `Transaction_Data_${stamp()}.csv`, 'text/csv; charset=utf-8');
+  }
+
+  /**
    * PDF export. `mode: 'zip'` produces one PDF per transaction packaged in a ZIP; the
    * default produces a single consolidated PDF with each transaction on its own page.
    */

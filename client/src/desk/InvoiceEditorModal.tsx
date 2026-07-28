@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getInvoice, createInvoice, updateInvoice, recordInvoiceReminder, recordInvoicePayment, sendInvoice } from '../lib/api';
 import InvoiceDoc from './InvoiceDoc';
+import BrandMark from './BrandMark';
 import { reactToPdfBase64 } from './pdf';
 import { formatCurrency, parseNumber, typeLabel } from './format';
 import { useToast } from './toast';
@@ -429,10 +430,7 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
         <div style={{ flex: 1, overflowY: 'auto', padding: '28px 34px', background: '#fff' }}>
           {/* Letterhead */}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 18 }}>
-            <div style={{ fontSize: 26, fontWeight: 800, color: BRAND, letterSpacing: '-0.5px' }}>
-              GET<span style={{ color: '#0f172a' }}>&#9730;</span>HOME REALTY
-              <div style={{ fontSize: 11, color: '#64748b', fontStyle: 'italic', fontWeight: 400 }}>"A Tradition of Trust" — Brokerage</div>
-            </div>
+            <BrandMark color={BRAND} height={96} version={settings?.updated_at} style={{ fontSize: 26 }} />
             <div style={{ fontSize: 30, fontWeight: 800, letterSpacing: '1px' }}>INVOICE</div>
           </div>
 

@@ -1,9 +1,14 @@
-import { useEffect, useState } from 'react';
-import { getCompanySettings, updateCompanySettings } from '../lib/api';
+import { useEffect, useRef, useState } from 'react';
+import { getCompanySettings, updateCompanySettings, uploadCompanyLogo, deleteCompanyLogo, companyLogoUrl } from '../lib/api';
+import { fileToBase64 } from '../lib/importApi';
+import { bumpLogoVersion, TextWordmark, LOGO_MAX_HEIGHT } from './BrandMark';
 import { useToast } from './toast';
 import { apiErrorMessage } from '../lib/apiError';
 import { useAuth } from '../context/AuthContext';
 import type { CompanySettings } from '../types';
+
+const LOGO_ACCEPT = '.png,.jpg,.jpeg,.gif,.webp,.svg';
+const LOGO_MAX_MB = 2;
 
 const FIELDS_A: [string, string][] = [
   ['name', 'Company Name'], ['address', 'Address'], ['phone', 'Phone'], ['email', 'Email'], ['hst_number', 'HST / Tax Number'],
@@ -21,9 +26,43 @@ export default function CompanySettingsPage() {
   const canEdit = can('settings', 'edit');
   const [form, setForm] = useState<CompanySettings | null>(null);
   const [saving, setSaving] = useState(false);
+  const [logoBusy, setLogoBusy] = useState('');
+  // Bumped after every logo change so the <img> below re-fetches instead of showing a cached file.
+  const [logoV, setLogoV] = useState(0);
+  const logoInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => { getCompanySettings().then(setForm).catch(() => toast('Could not load settings', 'bad')); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   if (!form) return <div className="centered">Loading settings…</div>;
+
+  const pickLogo = async (file: File | null) => {
+    if (!file) return;
+    if (file.size > LOGO_MAX_MB * 1024 * 1024) {
+      toast(`That image is ${(file.size / 1024 / 1024).toFixed(1)} MB — the limit is ${LOGO_MAX_MB} MB.`, 'bad');
+      return;
+    }
+    setLogoBusy('upload');
+    try {
+      setForm(await uploadCompanyLogo(file.name, await fileToBase64(file)));
+      setLogoV(bumpLogoVersion());
+      toast('Logo updated — it now appears on every document', 'ok');
+    } catch (e) {
+      toast(apiErrorMessage(e, 'Could not upload the logo'), 'bad');
+    } finally {
+      setLogoBusy('');
+      if (logoInput.current) logoInput.current.value = '';
+    }
+  };
+
+  const removeLogo = async () => {
+    setLogoBusy('remove');
+    try {
+      setForm(await deleteCompanyLogo());
+      setLogoV(bumpLogoVersion());
+      toast('Logo removed — documents fall back to the text letterhead', 'ok');
+    } catch (e) {
+      toast(apiErrorMessage(e, 'Could not remove the logo'), 'bad');
+    } finally { setLogoBusy(''); }
+  };
 
   const set = (k: string, v: string) => setForm((f) => (f ? { ...f, [k]: v } : f));
   const save = async () => {
@@ -49,6 +88,41 @@ export default function CompanySettingsPage() {
           {canEdit && <button className="btn primary sm" onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save'}</button>}
         </div>
         {!canEdit && <span className="help">Read-only — only administrators can change company settings.</span>}
+      </div>
+
+      <div className="card">
+        <div className="modal-h" style={{ fontSize: 14 }}>Brand Logo</div>
+        <p className="help" style={{ marginTop: 0 }}>
+          Used everywhere the brokerage is branded — the sidebar and sign-in screen, and the
+          letterhead of every Invoice, Deposit Receipt, Lawyer Statement, Notice of Sale and
+          Trade Sheet. Remove it and those fall back to the built-in text letterhead.
+        </p>
+        <div style={{ display: 'flex', gap: 20, alignItems: 'center', flexWrap: 'wrap' }}>
+          {/* Preview at the size documents actually use, so what you see here is what prints. */}
+          <div style={{ border: '1px solid var(--line)', borderRadius: 10, padding: 16, background: '#fff', minWidth: 240, minHeight: 120, maxWidth: '100%', overflow: 'hidden', display: 'grid', placeItems: 'center' }}>
+            {form.logo_path
+              ? <img key={logoV} src={companyLogoUrl(logoV || form.updated_at)} alt="Brand logo"
+                  style={{ maxHeight: LOGO_MAX_HEIGHT, maxWidth: '100%', objectFit: 'contain', display: 'block' }} />
+              : <TextWordmark />}
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <input ref={logoInput} type="file" accept={LOGO_ACCEPT} style={{ display: 'none' }}
+              onChange={(e) => void pickLogo(e.target.files?.[0] ?? null)} />
+            <button className="btn primary sm" disabled={!canEdit || !!logoBusy} onClick={() => logoInput.current?.click()}>
+              {logoBusy === 'upload' ? 'Uploading…' : form.logo_path ? '⭱ Replace Logo' : '⭱ Upload Logo'}
+            </button>
+            {form.logo_path && (
+              <button className="btn ghost sm" disabled={!canEdit || !!logoBusy} onClick={() => void removeLogo()}>
+                {logoBusy === 'remove' ? 'Removing…' : '🗑 Remove Logo'}
+              </button>
+            )}
+            <span className="help" style={{ maxWidth: 260 }}>
+              PNG, JPG, GIF, WEBP or SVG · up to {LOGO_MAX_MB} MB.
+              A wide image on a transparent background prints best.
+            </span>
+            {!canEdit && <span className="help">Administrators only.</span>}
+          </div>
+        </div>
       </div>
 
       <div className="card"><div className="modal-h" style={{ fontSize: 14 }}>Company Profile</div>{grid(FIELDS_A)}</div>

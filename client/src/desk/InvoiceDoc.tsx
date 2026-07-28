@@ -1,4 +1,5 @@
 import { formatCurrency } from './format';
+import BrandMark from './BrandMark';
 import type { CompanySettings, Invoice } from '../types';
 
 const BRAND = '#c8102e';
@@ -18,10 +19,7 @@ export default function InvoiceDoc({ invoice }: { invoice: Invoice }) {
   return (
     <div style={{ fontSize: 13, color: '#0f172a' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14 }}>
-        <div style={{ fontSize: 22, fontWeight: 800, color: BRAND, letterSpacing: '-0.5px' }}>
-          GET<span style={{ color: '#0f172a' }}>&#9730;</span>HOME REALTY
-          <div style={{ fontSize: 10, color: '#64748b', fontStyle: 'italic', fontWeight: 400 }}>"A Tradition of Trust" — Brokerage</div>
-        </div>
+        <BrandMark color={BRAND} version={co.updated_at} />
         <div style={{ fontSize: 26, fontWeight: 800, letterSpacing: '1px' }}>INVOICE</div>
       </div>
 
@@ -39,7 +37,11 @@ export default function InvoiceDoc({ invoice }: { invoice: Invoice }) {
           <tr><td style={dLabel}>Invoice Number:</td><td style={{ ...dVal, fontWeight: 700 }}>{invoice.invoice_no}</td></tr>
           <tr><td style={dLabel}>Invoice Date:</td><td style={dVal}>{invoice.invoice_date}</td></tr>
           <tr><td style={dLabel}>Terms:</td><td style={dVal}>{invoice.terms}</td></tr>
-          <tr><td style={dLabel}>Due Date:</td><td style={dVal}>{invoice.due_date || '—'}</td></tr>
+          {/* The Due Date is the transaction's Closing Date. The editor already resolves it
+              that way on screen (toForm: closing_date || due_date), but this document read
+              the stored due_date, so a printed or emailed invoice could disagree with what
+              the user had just been looking at. Same precedence here keeps them identical. */}
+          <tr><td style={dLabel}>Due Date:</td><td style={dVal}>{invoice.closing_date || invoice.due_date || '—'}</td></tr>
           <tr><td style={dLabel}>Trade No.:</td><td style={dVal}>{invoice.trade_number || '—'}</td></tr>
           <tr><td style={dLabel}>Property:</td><td style={dVal}>{invoice.property_reference || '—'}</td></tr>
         </tbody></table>

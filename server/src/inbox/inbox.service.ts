@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 
 /**
@@ -13,8 +14,17 @@ export class InboxService {
   async list(userId: number, opts: { unread?: boolean; leadId?: number; page?: number } = {}): Promise<Record<string, unknown>> {
     const perPage = 30;
     const page = Math.max(1, opts.page ?? 1);
-    const where = {
+    // The Inbox is the CRM's mailbox, so it shows mail from CRM-side accounts only. Accounts
+    // with no area yet are included too, so nothing disappears before they are assigned;
+    // mail from an account assigned to Transaction Desk is excluded.
+    //
+    // NOTE the relation is `mail_account`, singular — the field name, not the model name.
+    // Typed as Prisma.inbound_emailsWhereInput on purpose: built as a bare object literal in
+    // a variable, a wrong key slips past excess-property checking and only fails at runtime,
+    // which is exactly how this filter shipped broken once.
+    const where: Prisma.inbound_emailsWhereInput = {
       user_id: userId,
+      mail_account: { is: { OR: [{ scope: 'crm' }, { scope: null }] } },
       ...(opts.unread ? { seen: false } : {}),
       ...(opts.leadId ? { lead_id: opts.leadId } : {}),
     };

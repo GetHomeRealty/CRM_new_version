@@ -179,6 +179,54 @@ export const changePassword = (payload: unknown): Promise<unknown> => api.post('
 export const getCompanySettings = (): Promise<CompanySettings> => api.get<CompanySettings>('/api/company-settings').then((r) => r.data);
 export const updateCompanySettings = (payload: unknown): Promise<CompanySettings> => api.put<CompanySettings>('/api/company-settings', payload).then((r) => r.data);
 
+/**
+ * The brand logo endpoint. Absolute (not a relative path) because it is rendered by plain
+ * <img> tags — including inside the print window, which has no page origin of its own.
+ * The `v` cache-buster changes whenever the logo does, so a replacement shows immediately.
+ */
+export const companyLogoUrl = (version?: string | number | null): string =>
+  `${(import.meta.env.VITE_API_URL ?? 'http://localhost:8000') as string}/api/company-settings/logo`
+  + (version ? `?v=${encodeURIComponent(String(version))}` : '');
+
+/** Upload a new brand logo (admin only). Returns the updated settings. */
+export const uploadCompanyLogo = (fileName: string, base64: string): Promise<CompanySettings> =>
+  api.post<CompanySettings>('/api/company-settings/logo', { file_name: fileName, content: base64 }).then((r) => r.data);
+
+/** Remove the brand logo (admin only); every surface reverts to the text wordmark. */
+export const deleteCompanyLogo = (): Promise<CompanySettings> =>
+  api.delete<CompanySettings>('/api/company-settings/logo').then((r) => r.data);
+
+// ---- profile pictures (every user, whatever their role) ----
+
+/** What the photo endpoints report back. */
+export interface UserPhotoInfo { id: number; name: string; has_photo: boolean; photo_version: number | null }
+
+/**
+ * A user's profile picture. Absolute, because it is rendered by plain <img> tags. Unlike
+ * the brand logo this route requires a session, so the tag must be marked
+ * crossOrigin="use-credentials" for the cookie to travel in development, where the SPA and
+ * the API sit on different ports.
+ */
+export const userPhotoUrl = (userId: number, version?: string | number | null): string =>
+  `${(import.meta.env.VITE_API_URL ?? 'http://localhost:8000') as string}/api/users/${userId}/photo`
+  + (version ? `?v=${encodeURIComponent(String(version))}` : '');
+
+export const getMyPhoto = (): Promise<UserPhotoInfo> =>
+  api.get<UserPhotoInfo>('/api/account/photo').then((r) => r.data);
+
+export const uploadMyPhoto = (fileName: string, base64: string): Promise<UserPhotoInfo> =>
+  api.post<UserPhotoInfo>('/api/account/photo', { file_name: fileName, content: base64 }).then((r) => r.data);
+
+export const deleteMyPhoto = (): Promise<UserPhotoInfo> =>
+  api.delete<UserPhotoInfo>('/api/account/photo').then((r) => r.data);
+
+/** Set a picture for any user — administrators, or the user themselves. */
+export const uploadUserPhoto = (userId: number, fileName: string, base64: string): Promise<UserPhotoInfo> =>
+  api.post<UserPhotoInfo>(`/api/users/${userId}/photo`, { file_name: fileName, content: base64 }).then((r) => r.data);
+
+export const deleteUserPhoto = (userId: number): Promise<UserPhotoInfo> =>
+  api.delete<UserPhotoInfo>(`/api/users/${userId}/photo`).then((r) => r.data);
+
 export const getCustomers = (): Promise<unknown[]> => api.get<unknown[]>('/api/customers').then((r) => r.data);
 export const createCustomer = (payload: unknown): Promise<unknown> => api.post('/api/customers', payload).then((r) => r.data);
 

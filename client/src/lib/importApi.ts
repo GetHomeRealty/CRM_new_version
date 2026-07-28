@@ -19,6 +19,10 @@ async function download(url: string, fallbackName: string): Promise<void> {
 export const downloadImportTemplate = (): Promise<void> =>
   download('/api/transaction-imports/template', 'transaction-import-template.xlsx');
 
+/** A filled example — the same sheets as the template, with four worked transactions. */
+export const downloadImportSample = (): Promise<void> =>
+  download('/api/transaction-imports/sample', 'transaction-import-sample.xlsx');
+
 export const downloadImportErrors = (batchId: string): Promise<void> =>
   download(`/api/transaction-imports/${batchId}/errors`, `import-errors-${batchId}.xlsx`);
 

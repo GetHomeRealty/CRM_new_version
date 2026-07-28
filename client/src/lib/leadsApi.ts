@@ -2,7 +2,7 @@ import api from './axios';
 import type {
   DeletedLead, Lead, LeadCall, LeadCallRecording, LeadDetail, LeadEmail, LeadFilters,
   LeadImportResult, LeadListResponse,
-  LeadMessage, LeadNote, LeadOptions, LeadShowing, LeadTagCounts, LeadTask, LeadTaskRow,
+  LeadMessage, LeadNote, LeadOptions, LeadShowing, LeadShowingRow, LeadTagCounts, LeadTask, LeadTaskRow,
   MessageStatus, SmsGatewayStatus,
 } from '../types';
 
@@ -58,6 +58,10 @@ export const purgeLead = (id: number): Promise<void> =>
 export const listAllLeadTasks = (): Promise<LeadTaskRow[]> =>
   api.get<LeadTaskRow[]>('/api/leads/tasks').then((r) => r.data);
 
+/** Every showing across the caller's leads, for the Dashboard. */
+export const listAllLeadShowings = (): Promise<LeadShowingRow[]> =>
+  api.get<LeadShowingRow[]>('/api/leads/showings').then((r) => r.data);
+
 export const listLeadTags = (): Promise<LeadTagCounts> =>
   api.get<LeadTagCounts>('/api/leads/tags').then((r) => r.data);
 
@@ -111,6 +115,19 @@ export const deleteLeadCall = (leadId: number, callId: number): Promise<void> =>
 export const placeLeadCall = (leadId: number): Promise<LeadCall> =>
   api.post<LeadCall>(`/api/leads/${leadId}/call`, {}).then((r) => r.data);
 
+// ---- In-browser (Voice SDK) calling ----
+/** Whether the server can hand the browser a Voice token (API key/secret + TwiML app all set). */
+export const voiceCallStatus = (): Promise<{ configured: boolean }> =>
+  api.get<{ configured: boolean }>('/api/twilio/voice/status').then((r) => r.data);
+
+/** A short-lived Twilio Voice access token for this browser to place a call. */
+export const voiceToken = (): Promise<{ token: string; identity: string; ttl: number }> =>
+  api.get<{ token: string; identity: string; ttl: number }>('/api/twilio/voice/token').then((r) => r.data);
+
+/** Log the call up front + get the E.164 number for the Voice SDK to dial. */
+export const startBrowserCall = (leadId: number): Promise<{ callId: number; to: string; leadName: string }> =>
+  api.post<{ callId: number; to: string; leadName: string }>(`/api/leads/${leadId}/browser-call`, {}).then((r) => r.data);
+
 /** Audio a user attaches to a logged call — nothing records it automatically. */
 export const addCallRecording = (
   leadId: number, callId: number, body: { filename: string; content_type: string; data: string },
@@ -140,6 +157,10 @@ export const addLeadMessage = (leadId: number, body: Partial<LeadMessage> & { se
  */
 export const sendLeadEmail = (leadId: number, body: { subject: string; body: string; account_id?: number | null }): Promise<LeadEmail> =>
   api.post<LeadEmail>(`/api/leads/${leadId}/email`, body).then((r) => r.data);
+
+/** Draft an email with AI from a plain-language prompt. Returns a subject + styled HTML; sends nothing. */
+export const generateLeadEmail = (leadId: number, prompt: string): Promise<{ subject: string; html: string }> =>
+  api.post<{ subject: string; html: string }>(`/api/leads/${leadId}/email/generate`, { prompt }).then((r) => r.data);
 
 /** Whether the server can send SMS for real. No credentials are ever returned. */
 export const smsGatewayStatus = (): Promise<SmsGatewayStatus> =>

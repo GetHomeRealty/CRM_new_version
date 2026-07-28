@@ -48,6 +48,17 @@ export const OAUTH_SCOPES = [
   'https://www.googleapis.com/auth/calendar.events',
 ] as const;
 
+/**
+ * Scopes for connecting a Gmail account to SEND and RECEIVE mail over SMTP/IMAP with XOAUTH2.
+ * `https://mail.google.com/` is the scope Google requires for SMTP/IMAP access — it is a
+ * "restricted" scope, so the OAuth consent screen must be verified for use beyond test users.
+ */
+export const MAIL_OAUTH_SCOPES = [
+  'openid',
+  'https://www.googleapis.com/auth/userinfo.email',
+  'https://mail.google.com/',
+] as const;
+
 export const AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
 export const TOKEN_URL = 'https://oauth2.googleapis.com/token';
 export const REVOKE_URL = 'https://oauth2.googleapis.com/revoke';

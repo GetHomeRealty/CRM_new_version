@@ -19,7 +19,34 @@ export function printDoc(title: string, html: string, autoPrint = true): void {
     </style></head><body>${html}</body></html>`);
   w.document.close();
   w.focus();
-  if (autoPrint) {
-    setTimeout(() => { try { w.print(); } catch { /* user can print manually */ } }, 350);
+  if (autoPrint) whenReady(w, () => { try { w.print(); } catch { /* user can print manually */ } });
+}
+
+/**
+ * Print only once every image has settled. The brokerage logo is fetched from the API, so
+ * a fixed delay would race it and print a document with a blank letterhead. Images that
+ * fail (no logo uploaded) resolve too — the markup falls back to the text wordmark.
+ */
+function whenReady(w: Window, print: () => void): void {
+  const MIN_MS = 350;   // let layout settle even when there is nothing to load
+  const MAX_MS = 5000;  // never hold the dialog hostage to a slow or dead image
+  const started = Date.now();
+  let done = false;
+  const go = (): void => {
+    if (done) return;
+    done = true;
+    setTimeout(print, Math.max(0, MIN_MS - (Date.now() - started)));
+  };
+
+  const imgs = Array.from(w.document.images);
+  const pending = imgs.filter((i) => !i.complete);
+  if (!pending.length) { go(); return; }
+
+  let left = pending.length;
+  const settle = (): void => { if (--left <= 0) go(); };
+  for (const img of pending) {
+    img.addEventListener('load', settle, { once: true });
+    img.addEventListener('error', settle, { once: true });
   }
+  setTimeout(go, MAX_MS);
 }

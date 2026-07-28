@@ -3,7 +3,10 @@ import type { BulkSelection, ExportJob } from '../types';
 
 /** Export & Download Centre — queue background exports and fetch their status. */
 
-export type ExportAction = 'transaction-data-xlsx' | 'transaction-data-pdf' | 'transaction-pdf-zip' | 'documents-zip';
+export type ExportAction =
+  | 'transaction-complete-xlsx' | 'transaction-complete-csv'
+  | 'transaction-data-xlsx' | 'transaction-data-csv' | 'transaction-data-pdf'
+  | 'transaction-pdf-zip' | 'documents-zip';
 
 /** Queue an export. Returns immediately; the file is generated in the background. */
 export const queueExport = (action: ExportAction, sel: BulkSelection): Promise<ExportJob> =>

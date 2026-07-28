@@ -10,7 +10,10 @@ import type { AuthUserRecord } from '../auth/auth.types';
 const EXPORT_ROOT = path.join(process.cwd(), '..', 'storage', 'app', 'exports');
 
 /** What a job produces. */
-export type ExportAction = 'transaction-data-xlsx' | 'transaction-data-pdf' | 'transaction-pdf-zip' | 'documents-zip';
+export type ExportAction =
+  | 'transaction-complete-xlsx' | 'transaction-complete-csv'
+  | 'transaction-data-xlsx' | 'transaction-data-csv' | 'transaction-data-pdf'
+  | 'transaction-pdf-zip' | 'documents-zip';
 
 /** Job lifecycle, as reported to the Download Centre. */
 export const JOB_STATUSES = ['Queued', 'Processing', 'Completed', 'Partially Completed', 'Failed', 'Expired'] as const;
@@ -23,7 +26,10 @@ const SWEEP_INTERVAL_MS = 15 * 60 * 1000;
 const DUPLICATE_STATUSES = ['Queued', 'Processing'];
 
 const ACTION_META: Record<ExportAction, { label: string; format: string; ext: string; mime: string }> = {
+  'transaction-complete-xlsx': { label: 'Complete Transaction Export (one row per deal)', format: 'XLSX', ext: 'xlsx', mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' },
+  'transaction-complete-csv': { label: 'Complete Transaction Export (one row per deal)', format: 'CSV', ext: 'csv', mime: 'text/csv; charset=utf-8' },
   'transaction-data-xlsx': { label: 'Transaction Data Export', format: 'XLSX', ext: 'xlsx', mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' },
+  'transaction-data-csv': { label: 'Transaction Data Export', format: 'CSV', ext: 'csv', mime: 'text/csv; charset=utf-8' },
   'transaction-data-pdf': { label: 'Transaction Data Export', format: 'PDF', ext: 'pdf', mime: 'application/pdf' },
   'transaction-pdf-zip': { label: 'Transaction PDFs (separate files)', format: 'ZIP', ext: 'zip', mime: 'application/zip' },
   'documents-zip': { label: 'Transaction Documents', format: 'ZIP', ext: 'zip', mime: 'application/zip' },
@@ -161,9 +167,11 @@ export class ExportJobService implements OnModuleInit {
         documents = counts.documents_available;
         skipped = counts.documents_unavailable;
       } else {
-        const buf = job.action_type === 'transaction-data-xlsx'
-          ? await this.bulk.dataXlsx(sel, user)
-          : await this.bulk.dataPdf(sel, user);
+        const buf = job.action_type === 'transaction-complete-xlsx' ? await this.bulk.completeXlsx(sel, user)
+          : job.action_type === 'transaction-complete-csv' ? await this.bulk.completeCsv(sel, user)
+            : job.action_type === 'transaction-data-xlsx' ? await this.bulk.dataXlsx(sel, user)
+              : job.action_type === 'transaction-data-csv' ? await this.bulk.dataCsv(sel, user)
+                : await this.bulk.dataPdf(sel, user);
         await fs.writeFile(abs, buf);
       }
 

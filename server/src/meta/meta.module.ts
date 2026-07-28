@@ -7,6 +7,7 @@ import { MetaGraphService } from './meta-graph.service';
 import { MetaSyncService } from './meta-sync.service';
 import { MetaStateService } from './meta-state.service';
 import { LeadAuditService } from '../leads/lead-audit.service';
+import { LeadsModule } from '../leads/leads.module';
 
 /**
  * Meta (Facebook / Instagram) lead ads. Synced leads land in the `leads` table with
@@ -17,7 +18,7 @@ import { LeadAuditService } from '../leads/lead-audit.service';
  * guarded controller Facebook's own callbacks would be rejected as unauthenticated.
  */
 @Module({
-  imports: [AuthModule],
+  imports: [AuthModule, LeadsModule],
   controllers: [MetaPublicController, MetaController],
   providers: [MetaConnectionService, MetaGraphService, MetaSyncService, MetaStateService, LeadAuditService],
   exports: [MetaSyncService, MetaConnectionService],

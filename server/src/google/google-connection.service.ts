@@ -2,6 +2,15 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { encryptToken, decryptToken } from '../meta/meta-crypto';
 import { GoogleService, type TokenResponse } from './google.service';
+import type { IntegrationScope } from '../email/mail-account.service';
+
+/**
+ * CRM Settings and Transaction Desk Settings hold INDEPENDENT Google connections, so every
+ * lookup here is keyed on (user, area). Connecting a calendar on one side does not connect
+ * one on the other. Callers that predate the split default to 'crm', which is where the
+ * Google Calendar card originally lived.
+ */
+const DEFAULT_SCOPE: IntegrationScope = 'crm';
 
 /**
  * Stores and hands out a user's Google tokens. Access and refresh tokens are held AES-256-GCM
@@ -11,14 +20,14 @@ import { GoogleService, type TokenResponse } from './google.service';
 export class GoogleConnectionService {
   constructor(private readonly prisma: PrismaService, private readonly google: GoogleService) {}
 
-  async find(userId: number) {
-    return this.prisma.google_connections.findUnique({ where: { user_id: userId } });
+  async find(userId: number, scope: IntegrationScope = DEFAULT_SCOPE) {
+    return this.prisma.google_connections.findUnique({ where: { user_id_scope: { user_id: userId, scope } } });
   }
 
   /** Save the tokens from a fresh consent. A refresh token is only issued the first time, so an
    *  existing one is preserved when Google omits it on a re-consent. */
-  async save(userId: number, tokens: TokenResponse, email: string | null): Promise<void> {
-    const existing = await this.find(userId);
+  async save(userId: number, tokens: TokenResponse, email: string | null, scope: IntegrationScope = DEFAULT_SCOPE): Promise<void> {
+    const existing = await this.find(userId, scope);
     const now = new Date();
     const expiresAt = new Date(now.getTime() + (tokens.expires_in ?? 3600) * 1000);
     const refresh = tokens.refresh_token
@@ -37,16 +46,16 @@ export class GoogleConnectionService {
       sync_token: null,
       updated_at: now,
     };
-    if (existing) await this.prisma.google_connections.update({ where: { user_id: userId }, data });
-    else await this.prisma.google_connections.create({ data: { user_id: userId, calendar_id: 'primary', ...data, created_at: now } });
+    if (existing) await this.prisma.google_connections.update({ where: { user_id_scope: { user_id: userId, scope } }, data });
+    else await this.prisma.google_connections.create({ data: { user_id: userId, scope, calendar_id: 'primary', ...data, created_at: now } });
   }
 
   /**
    * A usable access token, refreshing it first if it has expired (or is about to). Returns null if
    * the user is not connected or the refresh fails — the caller records that as a connect error.
    */
-  async accessToken(userId: number): Promise<string | null> {
-    const conn = await this.find(userId);
+  async accessToken(userId: number, scope: IntegrationScope = DEFAULT_SCOPE): Promise<string | null> {
+    const conn = await this.find(userId, scope);
     if (!conn || !conn.is_active || !conn.access_token) return null;
 
     const expiresSoon = !conn.token_expires_at || conn.token_expires_at.getTime() - Date.now() < 60_000;
@@ -56,7 +65,7 @@ export class GoogleConnectionService {
     try {
       const refreshed = await this.google.refresh(decryptToken(conn.refresh_token));
       await this.prisma.google_connections.update({
-        where: { user_id: userId },
+        where: { user_id_scope: { user_id: userId, scope } },
         data: {
           access_token: encryptToken(refreshed.access_token),
           token_expires_at: new Date(Date.now() + (refreshed.expires_in ?? 3600) * 1000),
@@ -65,27 +74,27 @@ export class GoogleConnectionService {
       });
       return refreshed.access_token;
     } catch (ex) {
-      await this.recordError(userId, `Could not refresh Google access — reconnect. ${(ex as Error).message}`);
+      await this.recordError(userId, `Could not refresh Google access — reconnect. ${(ex as Error).message}`, scope);
       return null;
     }
   }
 
-  async recordError(userId: number, message: string): Promise<void> {
-    await this.prisma.google_connections.updateMany({ where: { user_id: userId }, data: { connect_error: message.slice(0, 500), updated_at: new Date() } });
+  async recordError(userId: number, message: string, scope: IntegrationScope = DEFAULT_SCOPE): Promise<void> {
+    await this.prisma.google_connections.updateMany({ where: { user_id: userId, scope }, data: { connect_error: message.slice(0, 500), updated_at: new Date() } });
   }
 
-  async touchSync(userId: number, syncToken: string | null): Promise<void> {
+  async touchSync(userId: number, syncToken: string | null, scope: IntegrationScope = DEFAULT_SCOPE): Promise<void> {
     await this.prisma.google_connections.update({
-      where: { user_id: userId },
+      where: { user_id_scope: { user_id: userId, scope } },
       data: { last_sync: new Date(), connect_error: null, ...(syncToken ? { sync_token: syncToken } : {}), updated_at: new Date() },
     });
   }
 
-  async disconnect(userId: number): Promise<void> {
-    const conn = await this.find(userId);
+  async disconnect(userId: number, scope: IntegrationScope = DEFAULT_SCOPE): Promise<void> {
+    const conn = await this.find(userId, scope);
     if (!conn) return;
     if (conn.refresh_token) await this.google.revoke(decryptToken(conn.refresh_token));
     else if (conn.access_token) await this.google.revoke(decryptToken(conn.access_token));
-    await this.prisma.google_connections.delete({ where: { user_id: userId } });
+    await this.prisma.google_connections.delete({ where: { user_id_scope: { user_id: userId, scope } } });
   }
 }

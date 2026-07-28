@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { companyLogoUrl } from '../lib/api';
 
 /**
  * A block-based visual builder for email templates.
@@ -247,7 +248,15 @@ export function TemplateBuilder({ blocks, setBlocks, styles, setStyles }: {
               <span><strong>Standard footer</strong><span className="muted"> — brand + contact at the bottom.</span></span>
             </label>
             <div className="field"><label>Brand name</label><input value={styles.brandName} onChange={(e) => setStyles({ ...styles, brandName: e.target.value })} placeholder="Get Home Realty" /></div>
-            <div className="field"><label>Logo image (URL or data:image…)</label><input value={styles.logo} onChange={(e) => setStyles({ ...styles, logo: e.target.value })} placeholder="Header logo (falls back to the brand name)" /></div>
+            <div className="field">
+              <label>Logo image (URL or data:image…)</label>
+              <input value={styles.logo} onChange={(e) => setStyles({ ...styles, logo: e.target.value })} placeholder="Header logo (falls back to the brand name)" />
+              <button type="button" className="btn ghost sm" style={{ marginTop: 6 }}
+                title="Use the logo uploaded in Settings → Company. Recipients load it from this server, so it must be reachable from the internet."
+                onClick={() => setStyles({ ...styles, logo: companyLogoUrl() })}>
+                Use company logo
+              </button>
+            </div>
             <div className="field"><label>Footer text</label><textarea rows={3} value={styles.footerText} onChange={(e) => setStyles({ ...styles, footerText: e.target.value })} placeholder={'"A Tradition of Trust" — Brokerage\n{{AGENT_NAME}} · {{AGENT_EMAIL}} · {{AGENT_PHONE}}'} /></div>
             <div className="field"><label>Brand / footer colour</label>{swatch(styles.brand, (c) => setStyles({ ...styles, brand: c }))}</div>
             <div className="field"><label>Accent line colour</label>{swatch(styles.accent, (c) => setStyles({ ...styles, accent: c }))}</div>

@@ -342,7 +342,16 @@ model leads {
  */
 model google_connections {
   id                Int       @id @default(autoincrement())
-  user_id           Int       @unique
+  user_id           Int
+  /**
+   * Which area this calendar connection belongs to: 'crm' or 'desk'. The two are
+   * independent OAuth grants, so connecting a calendar under Transaction Desk Settings
+   * does not connect one for the CRM, and vice versa.
+   *
+   * Connections that pre-date the split are 'crm', because the Google Calendar card
+   * originally lived in CRM Settings → Integrations.
+   */
+  scope             String    @default("crm") @db.VarChar(8)
   google_email      String?   @db.VarChar(320)
   /** enc:v1:… ciphertext. */
   access_token      String?   @db.Text
@@ -359,6 +368,9 @@ model google_connections {
   created_at        DateTime? @db.Timestamp(0)
   updated_at        DateTime? @db.Timestamp(0)
 
+  // One connection per area per user — the pair is what must be unique now that a user can
+  // hold a separate CRM and Transaction Desk calendar.
+  @@unique([user_id, scope])
   @@index([user_id])
 }
 
@@ -1284,6 +1296,16 @@ model mail_accounts {
    * private to them and used to send their own lead emails and campaigns from their own address.
    */
   user_id         Int?
+  /**
+   * Which area owns this account: 'crm' or 'desk'. CRM Settings and Transaction Desk
+   * Settings each manage their own connections, so an address added on one side never
+   * appears on the other.
+   *
+   * NULL means "not yet assigned" — accounts that pre-date the split. Those still show on
+   * both sides so nothing vanished when the column was introduced; assigning one from
+   * Settings claims it for that area.
+   */
+  scope           String?           @db.VarChar(8)
   // ---- IMAP inbound sync (optional; SMTP-only accounts leave these null) ----
   /** IMAP server for pulling received mail, e.g. imap.gmail.com. Null = no inbound sync. */
   imap_host       String?           @db.VarChar(255)

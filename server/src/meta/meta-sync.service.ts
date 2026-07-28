@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { LeadAuditService } from '../leads/lead-audit.service';
+import { LeadNotificationService } from '../leads/lead-notification.service';
 import { MetaConnectionService } from './meta-connection.service';
 import { MetaGraphService, GraphError, type GraphLead } from './meta-graph.service';
 import { mapMetaLead, normalizePhone, type MappedMetaLead } from './meta-lead-mapper';
@@ -40,6 +41,7 @@ export class MetaSyncService {
     private readonly connections: MetaConnectionService,
     private readonly graph: MetaGraphService,
     private readonly audit: LeadAuditService,
+    private readonly notifications: LeadNotificationService,
   ) {}
 
   /** Exposed for tests and for re-mapping a stored payload. */
@@ -168,6 +170,8 @@ export class MetaSyncService {
         created_at: createdAt,
       },
     });
+    // Best-effort "new lead from Meta" email to the assigned agent; never blocks the sync.
+    void this.notifications.notifyNewLead(row);
     return { outcome: 'imported', leadId: row.id };
   }
 

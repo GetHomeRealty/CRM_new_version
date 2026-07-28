@@ -3,9 +3,20 @@ import { ImapFlow } from 'imapflow';
 import { simpleParser } from 'mailparser';
 import { PrismaService } from '../prisma/prisma.service';
 import { LaravelCryptService } from '../common/laravel-crypt.service';
+import { GoogleService } from '../google/google.service';
 
 /** How often the poller pulls new mail for every sync-enabled account. */
-const POLL_INTERVAL_MS = 5 * 60 * 1000;
+/**
+ * How often connected mailboxes are polled for new mail.
+ *
+ * Mail is expected to turn up in the Inbox on its own, so this is a minute rather than the
+ * five it used to be — long enough not to hammer the IMAP server, short enough that a
+ * message does not feel like it needs the "Sync now" button. Override with
+ * IMAP_POLL_SECONDS; the floor stops a stray 0 or 1 from turning it into a hot loop.
+ */
+const POLL_INTERVAL_MS = Math.max(15, Number(process.env.IMAP_POLL_SECONDS ?? 60)) * 1000;
+/** A first pass shortly after boot, so a restart does not leave a silent gap until the first tick. */
+const FIRST_POLL_DELAY_MS = 8 * 1000;
 /** Most messages to pull in a single sync, so a long-neglected mailbox can't stall a poll. */
 const MAX_PER_SYNC = 50;
 /** How far back the very first sync of an account reaches. */
@@ -19,7 +30,7 @@ export interface SyncResult {
 
 type AccountRow = {
   id: number; user_id: number | null; username: string | null; from_email: string;
-  password: string | null; imap_host: string | null; imap_port: number | null;
+  password: string | null; encryption: string | null; imap_host: string | null; imap_port: number | null;
   imap_encryption: string | null; last_uid: number | null;
 };
 
@@ -38,19 +49,44 @@ type AccountRow = {
 export class ImapSyncService implements OnModuleInit, OnModuleDestroy {
   private readonly log = new Logger(ImapSyncService.name);
   private timer: ReturnType<typeof setInterval> | null = null;
+  private first: ReturnType<typeof setTimeout> | null = null;
   private polling = false;
 
-  constructor(private readonly prisma: PrismaService, private readonly crypt: LaravelCryptService) {}
+  /**
+   * Accounts currently being synced. The background poller guards itself with `polling`, but
+   * the manual "Sync now" button reaches syncAccount directly — so a click landing while the
+   * poller was working the same mailbox ran two syncs at once. Both would look up a UID, both
+   * would find nothing, and both would insert: one won, the other died on the
+   * (account_id, uid) unique index. Worse, that thrown error skipped the code that advances
+   * `last_uid`, so every later poll re-fetched the same range and failed the same way — the
+   * mailbox stopped pulling new mail permanently.
+   */
+  private readonly syncing = new Set<number>();
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly crypt: LaravelCryptService,
+    private readonly google: GoogleService,
+  ) {}
 
   onModuleInit(): void {
     // A background poll on top of the manual "Sync now" button. Disabled in tests and when the
     // interval is set to 0, so a test run never opens real network connections on its own.
     if (process.env.NODE_ENV === 'test' || process.env.IMAP_POLL_DISABLED === '1') return;
+
+    // setInterval alone means the first poll is a whole interval away, so every restart left a
+    // window where nothing synced and mail only appeared if someone pressed "Sync now". Kick
+    // one off shortly after boot instead — delayed a little so it does not compete with startup.
+    this.first = setTimeout(() => { void this.pollAll(); }, FIRST_POLL_DELAY_MS);
+    if (typeof this.first.unref === 'function') this.first.unref();
+
     this.timer = setInterval(() => { void this.pollAll(); }, POLL_INTERVAL_MS);
     if (typeof this.timer.unref === 'function') this.timer.unref();
+    this.log.log(`IMAP polling every ${POLL_INTERVAL_MS / 1000}s (first pass in ${FIRST_POLL_DELAY_MS / 1000}s)`);
   }
 
   onModuleDestroy(): void {
+    if (this.first) clearTimeout(this.first);
     if (this.timer) clearInterval(this.timer);
   }
 
@@ -84,11 +120,59 @@ export class ImapSyncService implements OnModuleInit, OnModuleDestroy {
    * caught and written to `sync_error` rather than thrown, so one bad mailbox never stops a poll.
    */
   async syncAccount(account: AccountRow): Promise<SyncResult> {
-    const password = this.crypt.decryptString(account.password);
-    if (!account.imap_host || !password) {
-      const error = !account.imap_host ? 'No IMAP server configured.' : 'No password stored for this account.';
+    if (!account.imap_host) {
+      const error = 'No IMAP server configured.';
       await this.recordOutcome(account.id, error);
       return { fetched: 0, matched: 0, error };
+    }
+    // Already running for this mailbox — joining in would only duplicate the work and race
+    // the insert. Reported as a quiet no-op, not an error: pressing "Sync now" while the
+    // poller happens to be busy is normal, and the poll in flight is doing the job anyway.
+    if (this.syncing.has(account.id)) {
+      return { fetched: 0, matched: 0, error: null };
+    }
+    this.syncing.add(account.id);
+    try {
+      return await this.runSync(account as AccountRow & { imap_host: string });
+    } finally {
+      this.syncing.delete(account.id);
+    }
+  }
+
+  /**
+   * The actual sync, guarded by syncAccount so only one runs per mailbox at a time.
+   * The `imap_host` narrowing is in the signature rather than re-checked here, so the
+   * caller's guard is what makes this callable at all.
+   */
+  private async runSync(account: AccountRow & { imap_host: string }): Promise<SyncResult> {
+
+    // OAuth (Gmail) accounts authenticate with a short-lived access token minted from the stored
+    // refresh token; password accounts decrypt their stored password. Either yields an ImapFlow auth.
+    const user = account.username || account.from_email;
+    const auth: { user: string; pass?: string; accessToken?: string } = { user };
+    if (account.encryption === 'oauth') {
+      const refresh = this.crypt.decryptString(account.password);
+      if (!refresh) {
+        const error = 'No Google token stored for this account — reconnect it.';
+        await this.recordOutcome(account.id, error);
+        return { fetched: 0, matched: 0, error };
+      }
+      try {
+        const tok = await this.google.refresh(refresh);
+        auth.accessToken = tok.access_token;
+      } catch (ex) {
+        const error = `Google token refresh failed: ${(ex as Error).message}`;
+        await this.recordOutcome(account.id, error);
+        return { fetched: 0, matched: 0, error };
+      }
+    } else {
+      const password = this.crypt.decryptString(account.password);
+      if (!password) {
+        const error = 'No password stored for this account.';
+        await this.recordOutcome(account.id, error);
+        return { fetched: 0, matched: 0, error };
+      }
+      auth.pass = password;
     }
 
     const port = account.imap_port ?? 993;
@@ -96,7 +180,7 @@ export class ImapSyncService implements OnModuleInit, OnModuleDestroy {
     const secure = account.imap_encryption ? account.imap_encryption === 'ssl' : port === 993;
     const client = new ImapFlow({
       host: account.imap_host, port, secure,
-      auth: { user: account.username || account.from_email, pass: password },
+      auth,
       logger: false,
       // Fail fast rather than hang a poll on an unreachable server.
       socketTimeout: 20000,
@@ -144,16 +228,28 @@ export class ImapSyncService implements OnModuleInit, OnModuleDestroy {
           const leadId = await this.matchLead(account.user_id, record.from_email);
           if (leadId) matched++;
 
-          await this.prisma.inbound_emails.create({
-            data: {
-              user_id: account.user_id ?? -1, account_id: account.id, uid,
-              message_id: record.message_id, from_email: record.from_email, from_name: record.from_name,
-              to_email: record.to_email, subject: record.subject, snippet: record.snippet,
-              body_text: record.body_text, body_html: record.body_html,
-              received_at: record.received_at, lead_id: leadId, created_at: new Date(),
-            },
-          });
-          fetched++;
+          // The check above is an optimisation — it avoids re-downloading a body we already
+          // have — not a guarantee. Between that read and this write another worker (a second
+          // app instance, say, where the in-memory guard cannot reach) may have stored the
+          // same UID. Losing the whole sync to that is the wrong trade: the row we wanted
+          // exists either way, so a duplicate is treated as success and the loop carries on
+          // to advance last_uid.
+          try {
+            await this.prisma.inbound_emails.create({
+              data: {
+                user_id: account.user_id ?? -1, account_id: account.id, uid,
+                message_id: record.message_id, from_email: record.from_email, from_name: record.from_name,
+                to_email: record.to_email, subject: record.subject, snippet: record.snippet,
+                body_text: record.body_text, body_html: record.body_html,
+                received_at: record.received_at, lead_id: leadId, created_at: new Date(),
+              },
+            });
+            fetched++;
+          } catch (ex) {
+            // P2002 = unique violation on (account_id, uid): someone else got there first.
+            if ((ex as { code?: string }).code !== 'P2002') throw ex;
+            if (leadId) matched--;   // it was not this run that matched it
+          }
         }
       } finally {
         lock.release();
