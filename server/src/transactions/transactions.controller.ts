@@ -1,11 +1,12 @@
-import { Body, Controller, Delete, Get, HttpCode, Param, ParseIntPipe, Post, Put, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Param, ParseIntPipe, Post, Put, Query, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '../auth/guards/auth.guard';
 import { ScreenGuard } from '../auth/guards/screen.guard';
 import { CurrentUser, Screen } from '../auth/decorators';
 import type { AuthUserRecord } from '../auth/auth.types';
-import { TransactionsService } from './transactions.service';
+import { TransactionsService, type TransactionListResult } from './transactions.service';
 import { TransactionsWriteService } from './transactions-write.service';
 import type { ResourceUser } from './transaction.resource';
+import { ListTransactionsDto } from './dto/list-transactions.dto';
 
 const toResourceUser = (u: AuthUserRecord | undefined): ResourceUser | null =>
   u ? { id: u.id, role: u.role, name: u.name } : null;
@@ -70,8 +71,11 @@ export class TransactionsController {
   }
 
   @Get()
-  index(@CurrentUser() user: AuthUserRecord | undefined): Promise<{ data: Record<string, unknown>[] }> {
-    return this.transactions.index(toResourceUser(user));
+  index(
+    @CurrentUser() user: AuthUserRecord | undefined,
+    @Query() query: ListTransactionsDto,
+  ): Promise<TransactionListResult> {
+    return this.transactions.index(toResourceUser(user), query);
   }
 
   @Get(':transaction')

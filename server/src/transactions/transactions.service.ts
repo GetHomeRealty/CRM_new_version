@@ -4,6 +4,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CommissionService } from './commission.service';
 import { isListingType } from '../reference/transaction.constants';
 import { parseJsonObject } from '../common/serialize';
+import { filterClauses } from './transaction-filters';
+import type { ListTransactionsDto } from './dto/list-transactions.dto';
 import {
   transactionResource,
   txnIndexInclude,
@@ -12,6 +14,23 @@ import {
   type ResourceBulk,
   type ResourceUser,
 } from './transaction.resource';
+
+/** The list response. `meta` is present only when the caller asked for a page. */
+export interface TransactionListResult {
+  data: Record<string, unknown>[];
+  meta?: {
+    current_page: number;
+    per_page: number;
+    last_page: number;
+    total: number;
+    /** Every id matching the filters, in list order — powers "select all N matching". */
+    ids: number[];
+    /** Closing-date years available to this user, newest first. */
+    years: string[];
+    /** Open deletion requests across all pages, for the reviewer banner. */
+    pending_deletions: Record<string, unknown>[];
+  };
+}
 
 const isListingStatusFamily = (type: string): boolean => isListingType(type) || type === 'Business Sale';
 const TERMINAL = ['Closed', 'Sold', 'Leased', 'Void', 'Terminated', 'Mutual Release', 'DFT', 'Expired'];
@@ -23,27 +42,49 @@ export class TransactionsService {
     private readonly commission: CommissionService,
   ) {}
 
-  /** Transactions list (newest first). Agents only see their own + team-split deals. */
-  async index(user: ResourceUser | null): Promise<{ data: Record<string, unknown>[] }> {
+  /**
+   * Transactions list (newest first). Agents only see their own + team-split deals.
+   *
+   * Filtering and paging are opt-in. With no query the answer is the entire list under a bare
+   * `data` key, exactly as before — the Dashboard, Analytics, Commission and calendar screens all
+   * aggregate over the full set, so the default had to stay total. Pass `page` and the same
+   * response gains a `meta` block and returns one page.
+   */
+  async index(user: ResourceUser | null, query: ListTransactionsDto = {}): Promise<TransactionListResult> {
     const where: Prisma.transactionsWhereInput = { deleted_at: null };
+    const and: Prisma.transactionsWhereInput[] = [];
     if (user && user.role === 'agent') {
-      where.OR = [
-        { agent: user.name },
-        {
-          AND: [
-            { agent: { not: null } },
-            { agent: { not: '' } },
-            { team_members: { some: { name: user.name } } },
-          ],
-        },
-      ];
+      // Kept as its own AND term rather than `where.OR`, so a filter that needs an OR of its own
+      // (status, payout) cannot overwrite the visibility rule and widen what an agent can see.
+      and.push({
+        OR: [
+          { agent: user.name },
+          {
+            AND: [
+              { agent: { not: null } },
+              { agent: { not: '' } },
+              { team_members: { some: { name: user.name } } },
+            ],
+          },
+        ],
+      });
     }
+    and.push(...filterClauses(query));
+    if (and.length) where.AND = and;
 
-    const txns = await this.prisma.transactions.findMany({
-      where,
-      orderBy: { created_at: 'desc' },
-      include: txnIndexInclude,
-    });
+    const paged = query.page !== undefined;
+    const perPage = Math.min(200, Math.max(1, query.per_page ?? 25));
+
+    // The count and the page are independent, and the extra lists only matter when paging.
+    const [total, txns] = await Promise.all([
+      paged ? this.prisma.transactions.count({ where }) : Promise.resolve(0),
+      this.prisma.transactions.findMany({
+        where,
+        orderBy: { created_at: 'desc' },
+        include: txnIndexInclude,
+        ...(paged ? { skip: (Math.max(1, query.page ?? 1) - 1) * perPage, take: perPage } : {}),
+      }),
+    ]);
 
     const rows = txns as LoadedTxn[];
     // Expiry can rewrite a row's statuses, so it has to settle before anything is serialised.
@@ -54,7 +95,88 @@ export class TransactionsService {
 
     // Everything the serialiser would otherwise fetch per row, fetched once for the whole set.
     const ctx = { user, commission: this.commission, prisma: this.prisma, bulk: await this.bulkFor(rows, user) };
-    return { data: await Promise.all(rows.map((t) => transactionResource(t, ctx))) };
+    const data = await Promise.all(rows.map((t) => transactionResource(t, ctx)));
+    if (!paged) return { data };
+
+    // Three things on that screen are about the whole result set, not the visible page: the
+    // year dropdown, "select all N matching", and the deletion-requests banner. Paging the rows
+    // without supplying these would quietly shrink all three to whatever page you were on.
+    const scope: Prisma.transactionsWhereInput = { AND: [{ deleted_at: null }, ...(and.length ? and : [])] };
+    const [ids, years, pending] = await Promise.all([
+      this.prisma.transactions.findMany({ where, orderBy: { created_at: 'desc' }, select: { id: true } }),
+      this.matchingYears(scope, user),
+      this.pendingDeletions(user),
+    ]);
+
+    return {
+      data,
+      meta: {
+        current_page: Math.max(1, query.page ?? 1),
+        per_page: perPage,
+        last_page: Math.max(1, Math.ceil(total / perPage)),
+        total,
+        ids: ids.map((r) => r.id),
+        years,
+        pending_deletions: pending,
+      },
+    };
+  }
+
+  /**
+   * Closing-date years present in what this user can see, newest first.
+   *
+   * Deliberately ignores the filters and reflects only visibility, so the dropdown does not
+   * delete its own options: picking 2025 must not leave 2025 as the only year on offer.
+   */
+  private async matchingYears(_scope: Prisma.transactionsWhereInput, user: ResourceUser | null): Promise<string[]> {
+    const where: Prisma.transactionsWhereInput = { deleted_at: null, closing_date: { not: null } };
+    if (user && user.role === 'agent') {
+      where.OR = [
+        { agent: user.name },
+        { AND: [{ agent: { not: null } }, { agent: { not: '' } }, { team_members: { some: { name: user.name } } }] },
+      ];
+    }
+    const rows = await this.prisma.transactions.findMany({ where, select: { closing_date: true }, distinct: ['closing_date'] });
+    const years = new Set<string>();
+    // Same rule the screen used client-side: the year of the ISO date string.
+    for (const r of rows) if (r.closing_date) years.add(r.closing_date.toISOString().slice(0, 10).slice(0, 4));
+    return [...years].sort((a, b) => b.localeCompare(a));
+  }
+
+  /**
+   * Open deletion requests across every page, for the reviewer banner. Admin-facing only, and
+   * scoped the same way the list is, so an agent never sees another agent's request.
+   */
+  private async pendingDeletions(user: ResourceUser | null): Promise<Record<string, unknown>[]> {
+    const where: Prisma.transactionsWhereInput = {
+      deleted_at: null,
+      transaction_delete_requests: { some: { status: { in: ['pending', 'forwarded'] } } },
+    };
+    if (user && user.role === 'agent') {
+      where.OR = [
+        { agent: user.name },
+        { AND: [{ agent: { not: null } }, { agent: { not: '' } }, { team_members: { some: { name: user.name } } }] },
+      ];
+    }
+    const rows = await this.prisma.transactions.findMany({
+      where,
+      orderBy: { created_at: 'desc' },
+      select: {
+        id: true, trade_no: true, property: true,
+        transaction_delete_requests: {
+          where: { status: { in: ['pending', 'forwarded'] } },
+          orderBy: [{ created_at: 'desc' }, { id: 'asc' }],
+          take: 1,
+          select: { id: true, reason: true, status: true, requested_by_name: true },
+        },
+      },
+    });
+    return rows.map((r) => ({
+      id: r.id,
+      trade_no: r.trade_no,
+      property: r.property,
+      delete_request: r.transaction_delete_requests[0] ?? null,
+    }));
   }
 
   /**

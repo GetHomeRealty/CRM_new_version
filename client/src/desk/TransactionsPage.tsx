@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { listTransactions, deleteTransaction, requestTransactionDeletion } from '../lib/api';
+import { listTransactionsPage, deleteTransaction, requestTransactionDeletion, type TransactionQuery } from '../lib/api';
 import { formatPrice, typeClass, typeLabel, TRANSACTION_TYPES } from './format';
 import { useToast } from './toast';
 import { apiErrorMessage } from '../lib/apiError';
@@ -30,8 +30,17 @@ interface Filters {
   brokerage: string;
 }
 
-/** Closing-date year of a deal (null when it has no closing date) — same rule as the Dashboard. */
-const dealYear = (t: Transaction): string | null => (t.closing_date ? String(t.closing_date).slice(0, 4) : null);
+const PER_PAGE = 25;
+/** Typing shouldn't fire a request per keystroke; selects and dates apply immediately. */
+const TYPING_DEBOUNCE_MS = 350;
+const TYPED_KEYS: (keyof Filters)[] = ['q', 'agent', 'client', 'brokerage'];
+
+/** UI filter names → the query string the API expects. */
+const toQuery = (f: Filters): TransactionQuery => ({
+  q: f.q, year: f.year, type: f.type, validation: f.validation, agent: f.agent,
+  commission: f.commission, status: f.status, payout: f.payout, client: f.client, brokerage: f.brokerage,
+  offer_from: f.offerFrom, offer_to: f.offerTo, closing_from: f.closingFrom, closing_to: f.closingTo,
+});
 
 const EMPTY_FILTERS: Filters = {
   q: '', year: '', type: '', validation: '', agent: '', commission: '', status: '',
@@ -48,6 +57,15 @@ export default function TransactionsPage() {
   const isAgent = user?.role === 'agent';
   const [rows, setRows] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(true);
+  // Whole-result-set facts the server reports alongside the page: the ids behind "select all",
+  // the year options, the deletion-request banner, and the total. None can be derived from the
+  // rows on screen once the list is paged.
+  const [page, setPage] = useState(1);
+  const [lastPage, setLastPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [matchingIds, setMatchingIds] = useState<number[]>([]);
+  const [years, setYears] = useState<string[]>([]);
+  const [pendingDeletions, setPendingDeletions] = useState<Transaction[]>([]);
   const [addOpen, setAddOpen] = useState(false);
   const [chatTxn, setChatTxn] = useState<Transaction | null>(null); // transaction whose chat is open
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
@@ -66,9 +84,11 @@ export default function TransactionsPage() {
   const downloadEverything = async () => {
     setDownloadingAll(true);
     try {
-      if (rows.length > 25) {
+      // Sized by the whole set, not the visible page — otherwise every export past page one
+      // would take the "small enough to stream" branch and time out.
+      if (total > 25) {
         const job = await queueExport('transaction-complete-xlsx', ALL_TRANSACTIONS);
-        toast(`Preparing ${rows.length} transactions (${job.export_id}) — collecting it in the Download Centre`, 'ok');
+        toast(`Preparing ${total} transactions (${job.export_id}) — collecting it in the Download Centre`, 'ok');
         navigate('/app/transactions/downloads');
       } else {
         await exportCompleteXlsx(ALL_TRANSACTIONS);
@@ -79,67 +99,61 @@ export default function TransactionsPage() {
     } finally { setDownloadingAll(false); }
   };
 
-  const load = () => {
+  /**
+   * Fetch one page. `seq` guards against out-of-order responses: typing quickly leaves several
+   * requests in flight, and without it a slow early reply can land after a fast later one and
+   * repaint the table with stale rows.
+   */
+  const seq = useRef(0);
+  const load = (toPage = page, f = filters) => {
+    const mine = ++seq.current;
     setLoading(true);
-    listTransactions()
-      .then(setRows)
-      .catch(() => toast('Could not load transactions', 'bad'))
-      .finally(() => setLoading(false));
+    listTransactionsPage({ ...toQuery(f), page: toPage, per_page: PER_PAGE })
+      .then((res) => {
+        if (mine !== seq.current) return;
+        setRows(res.data);
+        setLastPage(res.meta.last_page);
+        setTotal(res.meta.total);
+        setMatchingIds(res.meta.ids);
+        setYears(res.meta.years);
+        setPendingDeletions(res.meta.pending_deletions);
+        // A filter (or a deletion) can shrink the set past the page you were on.
+        if (toPage > res.meta.last_page) setPage(res.meta.last_page);
+      })
+      .catch(() => { if (mine === seq.current) toast('Could not load transactions', 'bad'); })
+      .finally(() => { if (mine === seq.current) setLoading(false); });
   };
-  useEffect(load, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Filters are applied by the database now, so each change refetches. Text inputs wait for a
+  // pause in typing; selects and date pickers apply at once. Any filter change returns to page 1,
+  // because staying on page 7 of a set that now has two pages shows nothing.
+  const firstRun = useRef(true);
+  const prevFilters = useRef(filters);
+  useEffect(() => {
+    if (firstRun.current) { firstRun.current = false; load(1, filters); return; }
+    // Only a typed field earns the delay. Waiting 350 ms after a dropdown or date pick would
+    // read as lag, since there is no further input coming.
+    const changed = (Object.keys(filters) as (keyof Filters)[]).filter((k) => filters[k] !== prevFilters.current[k]);
+    prevFilters.current = filters;
+    const wait = changed.length > 0 && changed.every((k) => TYPED_KEYS.includes(k)) ? TYPING_DEBOUNCE_MS : 0;
+    const t = setTimeout(() => { setPage(1); load(1, filters); }, wait);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filters]);
 
-  // Years actually present in the data, newest first — no empty options, and no hardcoded range.
-  const years = useMemo(() => {
-    const set = new Set<string>();
-    rows.forEach((t) => { const y = dealYear(t); if (y) set.add(y); });
-    return [...set].sort((a, b) => b.localeCompare(a));
-  }, [rows]);
-
-  const filtered = useMemo(() => {
-    const f = filters;
-    const q = f.q.toLowerCase().trim();
-    return rows.filter((t) => {
-      if (q && !`${t.property} ${t.trade_no} ${t.agent || ''}`.toLowerCase().includes(q)) return false;
-      // A deal with no closing date belongs to no year, so it drops out once a year is chosen.
-      if (f.year && dealYear(t) !== f.year) return false;
-      if (f.type && t.type !== f.type) return false;
-      if (f.validation && t.valid_status !== f.validation) return false;
-      if (f.agent && !(t.agent || '').toLowerCase().includes(f.agent.toLowerCase())) return false;
-      if (f.commission === 'Received' && t.comm_status !== 'Received') return false;
-      if (f.commission === 'Not received' && t.comm_status === 'Received') return false;
-      if (f.status && !(t.statuses || []).includes(f.status)) return false;
-      // --- Advanced ribbon filters ---
-      if (f.offerFrom && (!t.offer_date || t.offer_date < f.offerFrom)) return false;
-      if (f.offerTo && (!t.offer_date || t.offer_date > f.offerTo)) return false;
-      if (f.closingFrom && (!t.closing_date || t.closing_date < f.closingFrom)) return false;
-      if (f.closingTo && (!t.closing_date || t.closing_date > f.closingTo)) return false;
-      if (f.payout) {
-        const paid = t.comm_paid_status; // Yes | No | N/A
-        if (f.payout === 'Paid' && paid !== 'Yes') return false;
-        if (f.payout === 'Pending' && paid === 'Yes') return false; // No / '' / null
-        if (f.payout === 'N/A' && paid !== 'N/A') return false;
-      }
-      if (f.client) {
-        const names = (t.clients || []).map((c) => (c.name || '').toLowerCase()).join(' ');
-        if (!names.includes(f.client.toLowerCase())) return false;
-      }
-      if (f.brokerage) {
-        const b = (t.brokerage?.name || '').toLowerCase();
-        if (!b.includes(f.brokerage.toLowerCase())) return false;
-      }
-      return true;
-    });
-  }, [rows, filters]);
-
-  /** Select/deselect every transaction currently visible under the applied filters. */
+  /**
+   * Select/deselect every row on this page. Selection deliberately spans pages — paging away
+   * does not drop what you already picked — so this only toggles the visible ids.
+   */
   const togglePageSel = () => setSelected((s) => {
-    const visible = filtered.map((t) => t.id);
+    const visible = rows.map((t) => t.id);
     return visible.every((id) => s.includes(id)) ? s.filter((id) => !visible.includes(id)) : [...new Set([...s, ...visible])];
   });
 
   const setF = (k: keyof Filters, v: string) => setFilters((p) => ({ ...p, [k]: v }));
+  const anyFilter = (Object.keys(filters) as (keyof Filters)[]).some((k) => filters[k] !== '');
   const activeRibbonCount = RIBBON_KEYS.filter((k) => filters[k]).length;
+  const goto = (p: number) => { const n = Math.min(Math.max(1, p), lastPage); setPage(n); load(n); };
   const clearRibbon = () => setFilters((p) => ({ ...p, offerFrom: '', offerTo: '', closingFrom: '', closingTo: '', payout: '', client: '', brokerage: '' }));
 
   const onDelete = async (t: Transaction) => {
@@ -155,14 +169,15 @@ export default function TransactionsPage() {
     if (!window.confirm(`Delete transaction #${t.trade_no}?`)) return;
     try {
       await deleteTransaction(t.id);
-      setRows((r) => r.filter((x) => x.id !== t.id));
+      setSelected((sel) => sel.filter((x) => x !== t.id));
+      // Refetch rather than splice: removing a row pulls one up from the next page and changes
+      // the total, neither of which a local filter can know about.
+      load();
       toast('Transaction deleted', 'ok');
     } catch (e) { toast(apiErrorMessage(e, 'Could not delete'), 'bad'); }
   };
 
   const stPill = (s: string) => s === 'Open' ? 'info' : (s === 'Closed' ? 'ok' : (s === 'Void' ? 'bad' : 'warn'));
-
-  const pendingDeletions = rows.filter((t) => t.delete_request);
 
   return (
     <>
@@ -249,9 +264,9 @@ export default function TransactionsPage() {
       {selected.length > 0 && (
         <div className="report-bulkbar">
           <strong>{selected.length}</strong> transaction{selected.length === 1 ? '' : 's'} selected
-          {selected.length < filtered.length && (
-            <button className="btn ghost sm" onClick={() => setSelected(filtered.map((t) => t.id))}>
-              Select all {filtered.length} matching
+          {selected.length < total && (
+            <button className="btn ghost sm" onClick={() => setSelected(matchingIds)}>
+              Select all {total} matching
             </button>
           )}
           <span className="spacer" />
@@ -266,7 +281,7 @@ export default function TransactionsPage() {
           <th className="report-sel-col">
             <input
               type="checkbox"
-              checked={filtered.length > 0 && filtered.every((t) => selected.includes(t.id))}
+              checked={rows.length > 0 && rows.every((t) => selected.includes(t.id))}
               onChange={togglePageSel}
               title="Select all transactions on this page"
             />
@@ -277,9 +292,12 @@ export default function TransactionsPage() {
         <tbody>
           {loading ? (
             <tr><td colSpan={10} className="centered">Loading…</td></tr>
-          ) : filtered.length === 0 ? (
-            <tr><td colSpan={10} style={{ textAlign: 'center', color: 'var(--muted)', padding: 20 }}>No transactions found. Click "+ Add Transaction" to create one.</td></tr>
-          ) : filtered.map((t) => {
+          ) : rows.length === 0 ? (
+            <tr><td colSpan={10} style={{ textAlign: 'center', color: 'var(--muted)', padding: 20 }}>
+              {/* With filters on, an empty table means "nothing matched", not "nothing exists". */}
+              {anyFilter ? 'No transactions match these filters.' : 'No transactions found. Click "+ Add Transaction" to create one.'}
+            </td></tr>
+          ) : rows.map((t) => {
             const primary = (t.statuses && t.statuses[0]) || 'Open';
             return (
               <tr key={t.id}>
@@ -314,6 +332,20 @@ export default function TransactionsPage() {
           })}
         </tbody>
       </table>
+
+      {/* Pager. Hidden when everything fits on one page, so a short list looks exactly as before. */}
+      {!loading && lastPage > 1 && (
+        <div className="toolbar" style={{ display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'flex-end', marginTop: 10 }}>
+          <span style={{ fontSize: 12, color: 'var(--muted)' }}>
+            {(page - 1) * PER_PAGE + 1}–{Math.min(page * PER_PAGE, total)} of {total}
+          </span>
+          <button className="btn ghost sm" disabled={page <= 1} onClick={() => goto(1)}>« First</button>
+          <button className="btn ghost sm" disabled={page <= 1} onClick={() => goto(page - 1)}>‹ Prev</button>
+          <span style={{ fontSize: 12 }}>Page {page} of {lastPage}</span>
+          <button className="btn ghost sm" disabled={page >= lastPage} onClick={() => goto(page + 1)}>Next ›</button>
+          <button className="btn ghost sm" disabled={page >= lastPage} onClick={() => goto(lastPage)}>Last »</button>
+        </div>
+      )}
 
       <AddTransactionModal open={addOpen} onClose={() => setAddOpen(false)} onCreated={(t) => { load(); navigate(`/app/transactions/${t.id}?mode=edit`); }} />
 

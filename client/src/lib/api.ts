@@ -14,8 +14,63 @@ type Id = number | string;
 const MULTIPART = { headers: { 'Content-Type': undefined } } as unknown as AxiosRequestConfig;
 
 // --- Transactions ---
+/**
+ * Every transaction the caller may see, unpaginated.
+ *
+ * Kept for the screens that aggregate over the whole set — Dashboard, Analytics, Commission
+ * Analytics and the calendar's deal picker — which would report wrong totals from a page.
+ * The transactions list itself uses `listTransactionsPage`.
+ */
 export const listTransactions = (): Promise<Transaction[]> =>
   api.get<{ data: Transaction[] }>('/api/transactions').then((r) => r.data.data);
+
+/** Filters accepted by the paginated list. Names match the query string the API expects. */
+export interface TransactionQuery {
+  page?: number;
+  per_page?: number;
+  q?: string;
+  year?: string;
+  type?: string;
+  validation?: string;
+  agent?: string;
+  commission?: string;
+  status?: string;
+  offer_from?: string;
+  offer_to?: string;
+  closing_from?: string;
+  closing_to?: string;
+  payout?: string;
+  client?: string;
+  brokerage?: string;
+}
+
+export interface TransactionPage {
+  data: Transaction[];
+  meta: {
+    current_page: number;
+    per_page: number;
+    last_page: number;
+    total: number;
+    /** Ids of everything matching the filters, not just this page — for "select all". */
+    ids: number[];
+    years: string[];
+    pending_deletions: Transaction[];
+  };
+}
+
+/**
+ * One filtered page. Filtering runs in the database, so the counts and the "select all N
+ * matching" action describe the entire result set rather than the rows currently on screen.
+ * Blank filter values are dropped so they never reach the API as empty strings.
+ */
+export const listTransactionsPage = (query: TransactionQuery): Promise<TransactionPage> => {
+  const params: Record<string, string | number> = { page: query.page ?? 1, per_page: query.per_page ?? 25 };
+  for (const [k, v] of Object.entries(query)) {
+    if (k === 'page' || k === 'per_page') continue;
+    if (typeof v === 'string' && v.trim() !== '') params[k] = v.trim();
+  }
+  return api.get<TransactionPage>('/api/transactions', { params }).then((r) => r.data);
+};
 
 export const getDashboardCommissions = (): Promise<DashboardCommissions> =>
   api.get<DashboardCommissions>('/api/dashboard/commissions').then((r) => r.data);
