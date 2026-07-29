@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   campaignOptions, listCampaigns, getCampaign, deleteCampaign,
   previewAudience, sendCampaign, trackingHealth, importLeads, previewSegment, tagSegment, sendTestEmail,
@@ -36,7 +37,20 @@ export default function CampaignsPage() {
 
   const [campaigns, setCampaigns] = useState<CampaignSummary[]>([]);
   const [options, setOptions] = useState<CampaignOptions | null>(null);
-  const [tab, setTab] = useState<'campaigns' | 'templates'>('campaigns');
+  /**
+   * Which section is showing, held in the URL rather than local state.
+   *
+   * The sidebar lists Campaigns and Templates as sections of this module, and it can only point
+   * at something addressable. Keeping it here also means the section survives a reload and can
+   * be linked to; `replace` is used so switching does not stack history entries.
+   */
+  const [params, setParams] = useSearchParams();
+  const tab: 'campaigns' | 'templates' = params.get('tab') === 'templates' ? 'templates' : 'campaigns';
+  const setTab = (next: 'campaigns' | 'templates') => {
+    const p = new URLSearchParams(params);
+    if (next === 'campaigns') p.delete('tab'); else p.set('tab', next);
+    setParams(p, { replace: true });
+  };
   const [tracking, setTracking] = useState<TrackingHealth | null>(null);
   const [checkingTracking, setCheckingTracking] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -215,15 +229,12 @@ export default function CampaignsPage() {
       </div>
 
       {/* Two views, one at a time — the same tab pattern Email Settings uses. */}
+      {/* The two section buttons that used to open this row have moved to the sidebar, which now
+          lists Campaigns and Templates under this module. What is left here is an action, not
+          navigation, so the row stays. */}
       <div className="toolbar"><div className="toolbar-row">
-        <button className={`btn sm ${tab === 'campaigns' ? 'primary' : 'ghost'}`} onClick={() => setTab('campaigns')}>
-          📣 All Campaigns
-        </button>
-        <button className={`btn sm ${tab === 'templates' ? 'primary' : 'ghost'}`} onClick={() => setTab('templates')}>
-          📝 Email Templates
-        </button>
         {canEdit && (
-          <button className="btn sm ghost" style={{ marginLeft: 'auto' }} type="button"
+          <button className="btn sm ghost" type="button"
             onClick={() => { setTestResult(null); setTestOpen(true); }} title="Verify your SMTP credentials before sending a campaign">
             ✉️ Send test email
           </button>

@@ -33,6 +33,14 @@ interface NavChild {
   path?: string;
   /** Whether this child is the one currently open. */
   match?: (pathname: string, search: string) => boolean;
+  /**
+   * What the child is gated on. Left unset it is `key` treated as a screen permission, which
+   * suits sections that are screens in their own right (Favorites). Sections of one screen —
+   * the Settings tabs — name the permission that already guarded them instead, so the sidebar
+   * shows exactly what the page would let you open and never advertises a locked tab.
+   */
+  screen?: string;
+  superAdmin?: boolean;
 }
 
 const NAV: NavItem[] = [
@@ -44,7 +52,15 @@ const NAV: NavItem[] = [
   // CRM group: Inbox → Lead → Campaigns
   { key: 'inbox', label: 'Inbox', ico: '\u{2709}' },
   { key: 'lead', label: 'Lead', ico: '\u{1F9D1}' },
-  { key: 'campaigns', label: 'Campaigns', ico: '\u{1F4E3}' },
+  {
+    key: 'campaigns', label: 'Campaigns', ico: '\u{1F4E3}',
+    children: [
+      { key: 'campaigns', label: 'Campaigns', ico: '\u{1F4E3}', screen: 'campaigns', path: '/app/campaigns',
+        match: (_p, q) => new URLSearchParams(q).get('tab') !== 'templates' },
+      { key: 'campaign-templates', label: 'Templates', ico: '\u{1F4DD}', screen: 'campaigns', path: '/app/campaigns?tab=templates',
+        match: (_p, q) => new URLSearchParams(q).get('tab') === 'templates' },
+    ],
+  },
   { key: 'meta', label: 'Meta', ico: '\u{1F310}' },
   {
     key: 'mls', label: 'MLS', ico: '\u{1F3F7}',
@@ -61,7 +77,19 @@ const NAV: NavItem[] = [
   { key: 'reports', label: 'Reports', ico: '\u{1F4D1}' },
   { key: 'audit', label: 'Audit Trail', ico: '\u{1F4DD}' },
   { key: 'users', label: 'Users', ico: '\u{1F465}' },
-  { key: 'settings', label: 'Settings', ico: '\u{2699}' },
+  {
+    key: 'settings', label: 'Settings', ico: '\u{2699}',
+    // Mirrors SettingsPage's own tabs, with the permissions those tabs already carried: the two
+    // that came from the Super-Admin-only Email Settings screen stay Super Admin.
+    children: [
+      { key: 'settings-desk', label: 'Transaction Desk', ico: '\u{1F4DA}', superAdmin: true, path: '/app/settings?tab=desk',
+        match: (_p, q) => (new URLSearchParams(q).get('tab') ?? 'desk') === 'desk' },
+      { key: 'settings-crm', label: 'CRM Settings', ico: '\u{2699}', superAdmin: true, path: '/app/settings?tab=crm',
+        match: (_p, q) => new URLSearchParams(q).get('tab') === 'crm' },
+      { key: 'settings-company', label: 'Company Settings', ico: '\u{1F3E2}', screen: 'settings', path: '/app/settings?tab=company',
+        match: (_p, q) => new URLSearchParams(q).get('tab') === 'company' },
+    ],
+  },
   // Agent's own settings — profile, their email accounts, signature. Admins have the admin
   // Settings above instead, so this is shown to agents only.
   { key: 'account', label: 'Settings', ico: '\u{2699}', agentOnly: true },
@@ -128,7 +156,7 @@ export default function DeskLayout() {
     // when only one is left — an expander that reveals a single item is just a slower click.
     .map((n) => {
       if (!n.children) return n;
-      const kids = n.children.filter((c) => can(c.key, 'view'));
+      const kids = n.children.filter((c) => (c.superAdmin ? isSuperAdmin : can(c.screen ?? c.key, 'view')));
       return kids.length > 1 ? { ...n, children: kids } : { ...n, children: undefined };
     });
 
