@@ -27,6 +27,22 @@ const EVENT_KEY: Record<OnboardingKind, string> = {
   contract: 'user.contract_agreement',
 };
 
+/** A file picked in the review dialog, attached to this one send. */
+export interface AdHocAttachment {
+  filename: string;
+  content_type?: string;
+  /** Base64; a full `data:` URI from a file input is accepted too. */
+  data: string;
+}
+
+/**
+ * Ceiling for files attached to a single send, on top of whatever the template already carries.
+ * Matches the template limit for the same reason: providers reject an oversized message outright,
+ * and a send that fails after the fact is worse than a file refused up front.
+ */
+export const MAX_ADHOC_BYTES = 5 * 1024 * 1024;
+export const MAX_ADHOC_FILES = 5;
+
 export interface OnboardingPreview {
   kind: OnboardingKind;
   event_key: string;
@@ -124,7 +140,7 @@ export class UserOnboardingService {
         : !template.is_active
           ? 'This template is switched off in Settings → Templates and will not send until it is set to Active.'
           : template.attachments.length === 0 && kind === 'contract'
-            ? 'No contract document is attached to this template yet — attach it in Settings → Templates.'
+            ? 'No contract document is attached. Attach the signed agreement below for this agent, or add one to the template in Settings → Templates to send it with every contract email.'
             : null,
     };
   }
@@ -133,7 +149,11 @@ export class UserOnboardingService {
    * Send it. `subject` and `html` are whatever came back from the review, so an edit made there
    * is what the agent receives; omit them and the stored template is used unchanged.
    */
-  async send(userId: number, kind: OnboardingKind, edited: { subject?: string; html?: string }): Promise<{ message: string; to: string }> {
+  async send(
+    userId: number,
+    kind: OnboardingKind,
+    edited: { subject?: string; html?: string; attachments?: AdHocAttachment[] },
+  ): Promise<{ message: string; to: string }> {
     const preview = await this.preview(userId, kind);
     if (!preview.to) throw new BadRequestException({ message: 'This agent has no email address on file.' });
 
@@ -155,7 +175,45 @@ export class UserOnboardingService {
       mime: a.content_type,
     }));
 
+    // Files picked in the review go out with this email only and are not stored on the template.
+    // A contract agreement is usually filled in for one agent, so keeping it on the template would
+    // attach that agent's copy to every future send.
+    files.push(...this.adhocFiles(edited.attachments ?? []));
+
     await this.mailer.sendDirect(preview.to, subject, html, template?.mail_account_id ?? null, files, null);
-    return { message: `Sent to ${preview.to}.`, to: preview.to };
+    const extra = (edited.attachments ?? []).length;
+    return {
+      message: extra ? `Sent to ${preview.to} with ${extra} attached file${extra === 1 ? '' : 's'}.` : `Sent to ${preview.to}.`,
+      to: preview.to,
+    };
+  }
+
+  /** Decode and check the files picked in the review, before anything is sent. */
+  private adhocFiles(input: AdHocAttachment[]): { data: string; name: string; mime: string }[] {
+    if (!input.length) return [];
+    if (input.length > MAX_ADHOC_FILES) {
+      throw new BadRequestException({ message: `Attach at most ${MAX_ADHOC_FILES} files to one email.` });
+    }
+
+    let total = 0;
+    return input.map((a) => {
+      const name = String(a.filename ?? '').trim() || 'attachment';
+      const base64 = String(a.data ?? '').replace(/^data:[^;]+;base64,/, '');
+      if (!base64) throw new BadRequestException({ message: `"${name}" is empty.` });
+
+      let bytes: number;
+      try { bytes = Buffer.from(base64, 'base64').length; }
+      catch { throw new BadRequestException({ message: `"${name}" could not be read.` }); }
+      if (!bytes) throw new BadRequestException({ message: `"${name}" is empty.` });
+
+      total += bytes;
+      if (total > MAX_ADHOC_BYTES) {
+        const mb = (MAX_ADHOC_BYTES / 1024 / 1024).toFixed(0);
+        throw new BadRequestException({
+          message: `Attachments total ${(total / 1024 / 1024).toFixed(1)} MB, above the ${mb} MB limit — most mail servers would reject the message.`,
+        });
+      }
+      return { data: base64, name: name.slice(0, 255), mime: String(a.content_type ?? '').trim() || 'application/octet-stream' };
+    });
   }
 }

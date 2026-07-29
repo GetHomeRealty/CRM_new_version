@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { getOnboardingPreview, sendOnboardingEmail, type OnboardingPreview } from '../lib/api';
+import { getOnboardingPreview, sendOnboardingEmail, type OnboardingAttachment, type OnboardingPreview } from '../lib/api';
 import RichTextEditor, { type RichTextHandle } from './RichTextEditor';
 import { useToast } from './toast';
 import { apiErrorMessage } from '../lib/apiError';
@@ -34,6 +34,14 @@ export default function OnboardingEmailModal({ userId, kind, onClose }: {
   const [sending, setSending] = useState(false);
   const [editing, setEditing] = useState(false);
   const bodyRef = useRef<RichTextHandle>(null);
+  /**
+   * Files picked here go with this email only and are never stored on the template.
+   *
+   * That is the point for a contract agreement: it is filled in for one agent, so keeping it on
+   * the template would attach that agent's copy to every future send.
+   */
+  const [files, setFiles] = useState<(OnboardingAttachment & { size: number })[]>([]);
+  const fileInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     getOnboardingPreview(userId, kind)
@@ -43,10 +51,32 @@ export default function OnboardingEmailModal({ userId, kind, onClose }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId, kind]);
 
+  const pick = async (file: File | null) => {
+    if (!file) return;
+    try {
+      const data = await new Promise<string>((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve(String(r.result ?? '').split(',')[1] ?? '');
+        r.onerror = () => reject(new Error('Could not read that file'));
+        r.readAsDataURL(file);
+      });
+      setFiles((f) => [...f, { filename: file.name, content_type: file.type || 'application/octet-stream', data, size: file.size }]);
+    } catch (e) {
+      toast(apiErrorMessage(e, 'Could not read that file'), 'bad');
+    } finally {
+      // Cleared so picking the same file again still fires change.
+      if (fileInput.current) fileInput.current.value = '';
+    }
+  };
+
   const send = async () => {
     setSending(true);
     try {
-      const r = await sendOnboardingEmail(userId, kind, { subject, html });
+      const r = await sendOnboardingEmail(userId, kind, {
+        subject,
+        html,
+        attachments: files.map(({ filename, content_type, data }) => ({ filename, content_type, data })),
+      });
       toast(r.message, 'ok');
       onClose();
     } catch (e) {
@@ -89,21 +119,41 @@ export default function OnboardingEmailModal({ userId, kind, onClose }: {
               )}
             </div>
 
-            {preview.attachments.length > 0 && (
-              <div className="field" style={{ marginBottom: 12 }}>
-                <label>Attachments</label>
+            <div className="field" style={{ marginBottom: 12 }}>
+              <label>Attachments</label>
+              {(preview.attachments.length > 0 || files.length > 0) && (
                 <ul className="tmpl-files">
+                  {/* From the template — the same files go to every agent. */}
                   {preview.attachments.map((a) => (
-                    <li key={a.id}>
+                    <li key={`t${a.id}`}>
                       <span className="tmpl-file-ico">📎</span>
                       <span>{a.filename}</span>
-                      <span className="tmpl-file-size">{size(a.size)}</span>
+                      <span className="tmpl-file-size">{size(a.size)} · from template</span>
+                    </li>
+                  ))}
+                  {/* Picked here — this email only. */}
+                  {files.map((f, i) => (
+                    <li key={`a${i}`}>
+                      <span className="tmpl-file-ico">📎</span>
+                      <span>{f.filename}</span>
+                      <span className="tmpl-file-size">{size(f.size)}</span>
+                      <button type="button" className="btn ghost sm" disabled={sending}
+                        onClick={() => setFiles((list) => list.filter((_, n) => n !== i))}>Remove</button>
                     </li>
                   ))}
                 </ul>
-                <span className="help">Sent with this email. Change them in Settings → Templates.</span>
-              </div>
-            )}
+              )}
+              <input ref={fileInput} type="file" style={{ display: 'none' }}
+                onChange={(e) => void pick(e.target.files?.[0] ?? null)} />
+              <button type="button" className="btn ghost sm" disabled={sending || files.length >= 5}
+                onClick={() => fileInput.current?.click()}>
+                {files.length >= 5 ? 'Attachment limit reached' : '📎 Attach a file'}
+              </button>
+              <span className="help" style={{ display: 'block', marginTop: 4 }}>
+                Files added here are sent with this email only. Files that should go to every agent
+                belong on the template, in Settings → Templates.
+              </span>
+            </div>
 
             <div className="actions" style={{ flexWrap: 'wrap', gap: 8 }}>
               <button className="btn ghost" onClick={onClose}>Close</button>

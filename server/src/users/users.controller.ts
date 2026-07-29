@@ -4,7 +4,7 @@ import { AdminGuard } from '../auth/guards/admin.guard';
 import { CurrentUser } from '../auth/decorators';
 import type { AuthUserRecord } from '../auth/auth.types';
 import { UsersService } from './users.service';
-import { UserOnboardingService, type OnboardingKind, type OnboardingPreview } from './user-onboarding.service';
+import { UserOnboardingService, type AdHocAttachment, type OnboardingKind, type OnboardingPreview } from './user-onboarding.service';
 
 // User management — administrators only (Route::middleware('admin')).
 @Controller()
@@ -34,7 +34,7 @@ export class UsersController {
   onboardingSend(
     @Param('user', ParseIntPipe) id: number,
     @Param('kind') kind: string,
-    @Body() body: { subject?: string; html?: string },
+    @Body() body: { subject?: string; html?: string; attachments?: AdHocAttachment[] },
   ): Promise<{ message: string; to: string }> {
     return this.onboarding.send(id, kind as OnboardingKind, body ?? {});
   }

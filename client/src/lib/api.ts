@@ -31,9 +31,19 @@ export interface OnboardingPreview {
 export const getOnboardingPreview = (userId: Id, kind: 'onboard' | 'contract'): Promise<OnboardingPreview> =>
   api.get<OnboardingPreview>(`/api/users/${userId}/onboarding/${kind}`).then((r) => r.data);
 
+/** A file attached to one send only — not stored on the template. */
+export interface OnboardingAttachment {
+  filename: string;
+  content_type?: string;
+  /** Base64, without the data: prefix. */
+  data: string;
+}
+
 /** Send it. Subject/body are the reviewed version and win over the stored template. */
 export const sendOnboardingEmail = (
-  userId: Id, kind: 'onboard' | 'contract', edited: { subject?: string; html?: string },
+  userId: Id,
+  kind: 'onboard' | 'contract',
+  edited: { subject?: string; html?: string; attachments?: OnboardingAttachment[] },
 ): Promise<{ message: string; to: string }> =>
   api.post(`/api/users/${userId}/onboarding/${kind}`, edited).then((r) => r.data);
 
