@@ -12,7 +12,10 @@
     "esModuleInterop": true,
     "sourceMap": true,
     "outDir": "./dist",
-    "baseUrl": "./",
+    // Pinned, not inferred. Without it TypeScript derives the root from the longest common
+    // directory of the inputs, so adding one .ts file outside src/ would silently move every
+    // output to dist/src/... and break `start:prod` (node dist/main.js) with no error.
+    "rootDir": "./src",
     "incremental": true,
     "skipLibCheck": true,
     "resolveJsonModule": true,
@@ -29,6 +32,7 @@
     // constructor, so property-init checking is disabled (standard for Nest).
     "strictPropertyInitialization": false
   },
-  "include": ["src/**/*.ts", "test/**/*.ts"],
+  // Specs live beside the code they cover (src/**/*.spec.ts); there is no test/ directory.
+  "include": ["src/**/*.ts"],
   "exclude": ["node_modules", "dist"]
 }
