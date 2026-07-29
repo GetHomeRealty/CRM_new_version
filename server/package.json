@@ -4,6 +4,9 @@
   "description": "Transaction Desk API — NestJS port of the Laravel 12 backend (PostgreSQL + Prisma). Behaviour-preserving.",
   "private": true,
   "type": "commonjs",
+  "engines": {
+    "node": ">=20.19"
+  },
   "scripts": {
     "build": "nest build",
     "start": "nest start",

@@ -1,9 +1,14 @@
 {
   "compilerOptions": {
-    "module": "commonjs",
+    // nodenext, not commonjs/node10. package.json sets "type": "commonjs", so the emitted
+    // JavaScript is unchanged — every file still compiles to require()/exports. What changes is
+    // resolution: node10 predates package.json "exports" and "type", so it could not read modern
+    // export maps and had no notion of a module's format. nodenext models the Node we actually
+    // run on, including require() of an ESM package (archiver v8) — legal since Node 20.19.
+    "module": "nodenext",
     "target": "ES2022",
     "lib": ["ES2022"],
-    "moduleResolution": "node",
+    "moduleResolution": "nodenext",
     "declaration": false,
     "removeComments": true,
     "emitDecoratorMetadata": true,

@@ -1,5 +1,8 @@
 /node_modules
 /dist
+# Incremental build state. It is not derived from /dist, so deleting dist alone leaves this
+# claiming everything is up to date and `nest build` silently emits nothing — delete both.
+*.tsbuildinfo
 /coverage
 *.log
 .env
