@@ -3,11 +3,13 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CommissionService } from './commission.service';
 import { isListingType } from '../reference/transaction.constants';
+import { parseJsonObject } from '../common/serialize';
 import {
   transactionResource,
   txnIndexInclude,
   txnShowInclude,
   type LoadedTxn,
+  type ResourceBulk,
   type ResourceUser,
 } from './transaction.resource';
 
@@ -43,13 +45,76 @@ export class TransactionsService {
       include: txnIndexInclude,
     });
 
-    const ctx = { user, commission: this.commission, prisma: this.prisma };
-    const data: Record<string, unknown>[] = [];
-    for (const t of txns as LoadedTxn[]) {
-      await this.applyExpiry(t);
-      data.push(await transactionResource(t, ctx));
+    const rows = txns as LoadedTxn[];
+    // Expiry can rewrite a row's statuses, so it has to settle before anything is serialised.
+    // It is a no-op unless a listing is past its expiry date and not already in a terminal
+    // status, and the status it writes ('Expired') is itself terminal — so it fires at most
+    // once per listing, not on every load.
+    for (const t of rows) await this.applyExpiry(t);
+
+    // Everything the serialiser would otherwise fetch per row, fetched once for the whole set.
+    const ctx = { user, commission: this.commission, prisma: this.prisma, bulk: await this.bulkFor(rows, user) };
+    return { data: await Promise.all(rows.map((t) => transactionResource(t, ctx))) };
+  }
+
+  /**
+   * Resolve the three per-row lookups for a whole list in a fixed number of queries.
+   *
+   * Serialising a transaction needs the caller's unread count, the caller's team access, and the
+   * agent profiles behind the commission split. Left to the resource these are three round trips
+   * per row, run sequentially — 500 transactions meant ~1,500 serial queries, which is seconds of
+   * dead time on a local database and far worse across a network. This resolves the same data in
+   * at most four queries regardless of list length.
+   */
+  private async bulkFor(rows: LoadedTxn[], user: ResourceUser | null): Promise<ResourceBulk> {
+    const empty: ResourceBulk = { unread: new Map(), teamAccess: new Map(), profiles: new Map() };
+    if (!user || rows.length === 0) return empty;
+    const ids = rows.map((t) => t.id);
+
+    const [reads, memberships, users] = await Promise.all([
+      this.prisma.transaction_message_reads.findMany({
+        where: { transaction_id: { in: ids }, user_id: user.id },
+        select: { transaction_id: true, last_read_at: true },
+      }),
+      // Only agents have a team access value; for everyone else the resource returns null anyway.
+      user.role === 'agent'
+        ? this.prisma.team_members.findMany({
+            where: { transaction_id: { in: ids }, name: user.name },
+            select: { transaction_id: true, access: true },
+          })
+        : Promise.resolve([]),
+      this.prisma.users.findMany({ select: { name: true, profile: true } }),
+    ]);
+
+    const teamAccess = new Map<number, string>();
+    for (const m of memberships) teamAccess.set(m.transaction_id, m.access);
+
+    const profiles = new Map<string, Record<string, unknown>>();
+    for (const u of users) profiles.set(u.name, parseJsonObject(u.profile));
+
+    // "Unread" means messages from someone else, newer than this user's last read of THAT
+    // transaction — so the cutoff differs per row and a single count query cannot express it.
+    // One OR term per row does: transactions never opened match on id alone, the rest carry
+    // their own cutoff. Grouping then returns every count in one round trip.
+    const seen = new Map<number, Date>();
+    for (const r of reads) if (r.last_read_at) seen.set(r.transaction_id, r.last_read_at);
+
+    const never = ids.filter((id) => !seen.has(id));
+    const or: Prisma.transaction_messagesWhereInput[] = [];
+    if (never.length) or.push({ transaction_id: { in: never } });
+    for (const [id, at] of seen) or.push({ transaction_id: id, created_at: { gt: at } });
+
+    const unread = new Map<number, number>();
+    if (or.length) {
+      const grouped = await this.prisma.transaction_messages.groupBy({
+        by: ['transaction_id'],
+        where: { user_id: { not: user.id }, OR: or },
+        _count: { _all: true },
+      });
+      for (const g of grouped) unread.set(g.transaction_id, g._count._all);
     }
-    return { data };
+
+    return { unread, teamAccess, profiles };
   }
 
   /** Transaction detail. Agents may only access transactions they own or are split into. */

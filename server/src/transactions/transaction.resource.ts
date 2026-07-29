@@ -49,10 +49,34 @@ export interface ResourceUser {
   name: string;
 }
 
+/**
+ * Per-row lookups hoisted out of the row loop and answered once for the whole set.
+ *
+ * Serialising a transaction needs three things that are not on the row: the caller's unread
+ * message count, the caller's team access, and the agent profile that sets the default
+ * commission split. Fetched per row those are three round trips each, so a list of N costs 3N
+ * sequential queries — fine at 7 transactions, minutes at several hundred.
+ *
+ * A caller that is serialising many rows loads all three up front and passes them here. When
+ * absent (the detail endpoint, which serialises exactly one row) every lookup falls back to the
+ * query it always did, so the output is identical either way. This mirrors the `profileCache`
+ * the reports module already threads into CommissionService.breakdown().
+ */
+export interface ResourceBulk {
+  /** transaction id → unread count for the current user. Absent id means zero. */
+  unread: Map<number, number>;
+  /** transaction id → the current agent's team access. Absent id means no membership. */
+  teamAccess: Map<number, string>;
+  /** agent name → parsed profile, for commission defaults. */
+  profiles: Map<string, Record<string, unknown>>;
+}
+
 export interface ResourceCtx {
   user: ResourceUser | null;
   commission: CommissionService;
   prisma: Prisma.TransactionClient | import('@prisma/client').PrismaClient;
+  /** Set by list endpoints; omitted when serialising a single row. */
+  bulk?: ResourceBulk;
 }
 
 const num = (d: Prisma.Decimal | number | null): number => (d === null ? 0 : Number(d));
@@ -79,6 +103,8 @@ async function myTeamAccess(t: LoadedTxn, ctx: ResourceCtx): Promise<string | nu
   let member: { access: string } | null | undefined;
   if (t.team_members !== undefined) {
     member = t.team_members.find((m) => m.name === user.name) ?? null;
+  } else if (ctx.bulk) {
+    return ctx.bulk.teamAccess.get(t.id) ?? null;
   } else {
     member = await ctx.prisma.team_members.findFirst({ where: { transaction_id: t.id, name: user.name } });
   }
@@ -88,6 +114,7 @@ async function myTeamAccess(t: LoadedTxn, ctx: ResourceCtx): Promise<string | nu
 async function unreadMessages(t: LoadedTxn, ctx: ResourceCtx): Promise<number> {
   const user = ctx.user;
   if (!user) return 0;
+  if (ctx.bulk) return ctx.bulk.unread.get(t.id) ?? 0;
   const read = await ctx.prisma.transaction_message_reads.findFirst({
     where: { transaction_id: t.id, user_id: user.id },
     select: { last_read_at: true },
@@ -233,7 +260,8 @@ export async function transactionResource(t: LoadedTxn, ctx: ResourceCtx): Promi
 
   // financial (when teamMembers loaded)
   if (t.team_members !== undefined) {
-    out.financial = await ctx.commission.breakdown(commissionInput);
+    // The profile cache, when supplied, spares breakdown() a users lookup per agent name.
+    out.financial = await ctx.commission.breakdown(commissionInput, ctx.bulk?.profiles);
   }
 
   // clients (whenLoaded)
