@@ -97,9 +97,10 @@ export default function OnboardingEmailModal({ userId, kind, onClose }: {
 
         {loading ? <div className="centered">Loading…</div> : preview && (
           <>
-            {/* Anything that would make the send fail or arrive incomplete is said before the
-                button is pressed, not after. */}
-            {preview.warning && (
+            {/* Said before the button is pressed, not after — but "no contract attached" stops
+                being true the moment one is attached here, and a warning that contradicts what is
+                on screen teaches people to ignore warnings. */}
+            {preview.warning && !(preview.warning_kind === 'no_attachment' && files.length > 0) && (
               <div className="import-error" style={{ marginBottom: 12 }}>{preview.warning}</div>
             )}
 

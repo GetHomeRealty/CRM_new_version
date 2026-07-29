@@ -25,6 +25,8 @@ export interface OnboardingPreview {
   sender: string | null;
   /** Anything that would make the send fail or arrive incomplete. */
   warning: string | null;
+  /** Which warning it is, so the screen can decide when it stops applying. */
+  warning_kind: 'no_recipient' | 'template_off' | 'no_attachment' | null;
 }
 
 /** The message as it would arrive for this agent — read-only, nothing is sent. */

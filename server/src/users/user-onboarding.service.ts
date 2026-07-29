@@ -52,8 +52,14 @@ export interface OnboardingPreview {
   variables: string[];
   attachments: { id: number; filename: string; size: number }[];
   sender: string | null;
-  /** Set when the template exists but is switched off — sending would fail, so say so up front. */
+  /** Set when something would make the send fail or arrive incomplete. */
   warning: string | null;
+  /**
+   * Which warning it is, so the screen can reason about it rather than matching on the words.
+   * `no_attachment` in particular stops applying the moment a file is attached in the dialog,
+   * which the message itself cannot know.
+   */
+  warning_kind: 'no_recipient' | 'template_off' | 'no_attachment' | null;
 }
 
 @Injectable()
@@ -141,6 +147,13 @@ export class UserOnboardingService {
           ? 'This template is switched off in Settings → Templates and will not send until it is set to Active.'
           : template.attachments.length === 0 && kind === 'contract'
             ? 'No contract document is attached. Attach the signed agreement below for this agent, or add one to the template in Settings → Templates to send it with every contract email.'
+            : null,
+      warning_kind: !to
+        ? 'no_recipient'
+        : !template.is_active
+          ? 'template_off'
+          : template.attachments.length === 0 && kind === 'contract'
+            ? 'no_attachment'
             : null,
     };
   }
