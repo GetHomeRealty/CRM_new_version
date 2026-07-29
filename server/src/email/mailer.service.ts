@@ -4,6 +4,7 @@ import { type mail_accounts } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { LaravelCryptService } from '../common/laravel-crypt.service';
 import { MAIL_EVENTS, renderTemplate } from './mail-event-registry';
+import { MailAccountService } from './mail-account.service';
 
 const e = (s: string): string => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -13,7 +14,11 @@ const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', '
 export class MailerService {
   private readonly log = new Logger(MailerService.name);
 
-  constructor(private readonly prisma: PrismaService, private readonly crypt: LaravelCryptService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly crypt: LaravelCryptService,
+    private readonly accounts: MailAccountService,
+  ) {}
 
   /** The address every outgoing message is diverted to, or null when sending normally. */
   static redirectTarget(): string | null {
@@ -32,9 +37,12 @@ export class MailerService {
     }
     if (!template || !template.is_active) throw new Error(`No active email template for event '${eventKey}'.`);
 
+    // The template's own sender wins. Without one, fall back to the Transaction Desk default
+    // rather than "any account flagged default" — CRM and Desk each have their own default, so
+    // an unscoped lookup could send a Transaction Desk email from the CRM mailbox.
     const account = template.mail_accounts && template.mail_accounts.is_active
       ? template.mail_accounts
-      : await this.prisma.mail_accounts.findFirst({ where: { is_active: true, is_default: true } });
+      : await this.accounts.defaultSender('desk');
     if (!account) throw new Error(`No SMTP sender is configured for '${eventKey}' (no template account and no default active account).`);
 
     const now = new Date();

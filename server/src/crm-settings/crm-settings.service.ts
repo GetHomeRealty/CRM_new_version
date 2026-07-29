@@ -6,6 +6,8 @@ import {
   DEFAULT_NOTIFICATIONS, DEFAULT_PREFERENCES, DEFAULT_TRIGGERS, DEFAULT_TRIGGER_TEMPLATES,
   EMAIL_SHAPE, LANGUAGES, NOTIFICATION_KEYS, THEMES, TIME_ZONES, TRIGGER_KEYS,
 } from './crm-settings.constants';
+import { MailerService } from '../email/mailer.service';
+import { MailAccountService } from '../email/mail-account.service';
 
 const str = (v: unknown): string => String(v ?? '').trim();
 const bool = (v: unknown, fallback: boolean): boolean =>
@@ -32,7 +34,11 @@ function merge<T extends Record<string, unknown>>(stored: string | null, default
 export class CrmSettingsService {
   private readonly log = new Logger(CrmSettingsService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly mailer: MailerService,
+    private readonly accounts: MailAccountService,
+  ) {}
 
   isAdmin(user: AuthUserRecord): boolean {
     return CRM_ADMIN_ROLES.includes(str(user.role).toLowerCase());
@@ -295,16 +301,76 @@ export class CrmSettingsService {
     if (message.length > 5000) throw new BadRequestException({ message: 'The message must be 5,000 characters or fewer.' });
     const type = BROADCAST_TYPES.includes(str(body.type)) ? str(body.type) : 'info';
 
-    const recipients = await this.prisma.users.count({ where: { status: 'Active' } });
+    // Recipients are active users who actually have an address. Counting every active user and
+    // reporting that number was misleading: one without an email can never receive anything.
+    const users = await this.prisma.users.findMany({
+      where: { status: 'Active' },
+      select: { id: true, name: true, email: true },
+    });
+    const to = users.map((u) => str(u.email).trim()).filter((e) => e.includes('@'));
+
+    // Sent from the CRM mailbox — this is a CRM Settings action, and the two areas are separate.
+    const sender = await this.accounts.defaultSender('crm');
+    if (!sender) {
+      throw new BadRequestException({
+        message: 'No active CRM email account is connected. Connect one under CRM Settings → Integrations before sending a broadcast.',
+      });
+    }
+
+    // Delivered one at a time rather than as a single message with everyone in To: recipients
+    // must not see each other's addresses, and one bad address must not lose the whole send.
+    const failures: string[] = [];
+    for (const address of to) {
+      try {
+        await this.mailer.sendDirect(address, this.broadcastSubject(type), this.broadcastHtml(message, type), sender.id, [], user.id ?? null);
+      } catch (err) {
+        failures.push(`${address}: ${err instanceof Error ? err.message : String(err)}`);
+        this.log.warn(`Broadcast to ${address} failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    const delivered = to.length - failures.length;
     const row = await this.prisma.crm_broadcasts.create({
-      data: { message, type, recipients, sent_by: user.name, sent_by_id: user.id ?? null, created_at: new Date() },
+      data: { message, type, recipients: delivered, sent_by: user.name, sent_by_id: user.id ?? null, created_at: new Date() },
     });
 
-    await this.audit(user, 'CRM broadcast sent', `${recipients} recipient(s)`, message.slice(0, 160));
+    await this.audit(user, 'CRM broadcast sent', `${delivered} of ${to.length} recipient(s)`, message.slice(0, 160));
+
+    // Reported honestly. A broadcast that reached nobody used to return the same cheerful
+    // message as one that reached everyone, which is how this went unnoticed.
+    if (delivered === 0) {
+      throw new BadRequestException({
+        message: to.length === 0
+          ? 'No active user has an email address, so there was nobody to send to.'
+          : `The broadcast could not be delivered to any of the ${to.length} recipients. First error — ${failures[0]}`,
+      });
+    }
     return {
-      id: row.id, recipients, type,
-      message: `Broadcast recorded for ${recipients} active user${recipients === 1 ? '' : 's'}.`,
+      id: row.id, recipients: delivered, type,
+      message: failures.length
+        ? `Broadcast sent to ${delivered} of ${to.length} users. ${failures.length} failed — check the mail account under Integrations.`
+        : `Broadcast emailed to ${delivered} active user${delivered === 1 ? '' : 's'}.`,
     };
+  }
+
+  /** Subject line per broadcast type, so it is recognisable in an inbox. */
+  private broadcastSubject(type: string): string {
+    const label = type === 'alert' ? 'Alert' : type === 'warning' ? 'Important' : 'Announcement';
+    return `${label} from Get Home Realty`;
+  }
+
+  /** Minimal, inline-styled HTML — the same constraints every mail client imposes. */
+  private broadcastHtml(message: string, type: string): string {
+    const accent = type === 'alert' ? '#dc2626' : type === 'warning' ? '#d97706' : '#4f46e5';
+    const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    // Author-entered text, so newlines carry meaning; everything else is escaped.
+    const body = esc(message).replace(/\n/g, '<br />');
+    return `<div style="font-family:Arial,Helvetica,sans-serif;color:#111827;line-height:1.6;">
+  <div style="border-left:4px solid ${accent};padding:12px 16px;background:#f8fafc;border-radius:6px;">
+    ${body}
+  </div>
+  <p style="color:#6b7280;font-size:12px;margin-top:16px;">Sent to all active users of Transaction Desk.</p>
+</div>`;
   }
 
   async listBroadcasts(limit = 50): Promise<Record<string, unknown>[]> {

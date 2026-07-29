@@ -17,6 +17,8 @@ import { GoogleService } from '../google/google.service';
  */
 const POLL_INTERVAL_MS = Math.max(15, Number(process.env.IMAP_POLL_SECONDS ?? 60)) * 1000;
 /** A first pass shortly after boot, so a restart does not leave a silent gap until the first tick. */
+/** Mailboxes synced at once. Enough to overlap the waiting, few enough to stay polite. */
+const POLL_CONCURRENCY = Math.max(1, Number(process.env.IMAP_POLL_CONCURRENCY ?? 4));
 const FIRST_POLL_DELAY_MS = 8 * 1000;
 /** Most messages to pull in a single sync, so a long-neglected mailbox can't stall a poll. */
 const MAX_PER_SYNC = 50;
@@ -103,10 +105,31 @@ export class ImapSyncService implements OnModuleInit, OnModuleDestroy {
       const accounts = await this.prisma.mail_accounts.findMany({
         where: { inbound_enabled: true, is_active: true, imap_host: { not: null } },
       });
-      for (const a of accounts) {
-        try { await this.syncAccount(a as AccountRow); }
-        catch (ex) { this.log.warn(`IMAP poll failed for account #${a.id}: ${(ex as Error).message}`); }
-      }
+
+      /*
+       * Mailboxes are synced side by side rather than one after another.
+       *
+       * Almost all of the time here is waiting, not working: minting a Google access token, the
+       * TLS handshake, LOGIN, SELECT, SEARCH, LOGOUT. Measured at ~4.5-5.6 s per account even
+       * when there is nothing new to fetch, so three accounts took 15.5 s in sequence — and that
+       * whole time sits between a message arriving and it appearing in the Inbox. Overlapping
+       * them makes a round take about as long as the slowest single mailbox.
+       *
+       * Concurrency is capped rather than unbounded: each sync is a live IMAP connection, and a
+       * brokerage with twenty accounts opening twenty at once would be rude to the mail server
+       * and heavy on this one. Accounts are independent, and syncAccount already refuses to run
+       * two syncs for the same mailbox, so nothing here can race.
+       */
+      const queue = [...accounts];
+      const worker = async (): Promise<void> => {
+        for (;;) {
+          const a = queue.shift();
+          if (!a) return;
+          try { await this.syncAccount(a as AccountRow); }
+          catch (ex) { this.log.warn(`IMAP poll failed for account #${a.id}: ${(ex as Error).message}`); }
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(POLL_CONCURRENCY, accounts.length) }, worker));
     } finally {
       this.polling = false;
     }
@@ -166,7 +189,16 @@ export class ImapSyncService implements OnModuleInit, OnModuleDestroy {
         const tok = await this.google.refresh(refresh);
         auth.accessToken = tok.access_token;
       } catch (ex) {
-        const error = `Google token refresh failed: ${(ex as Error).message}`;
+        // Distinguish the one cause that the user can actually do something about. Google
+        // revokes a refresh token when access is withdrawn, the password changes, or — most
+        // often here — the OAuth app is still in "Testing", where every refresh token expires
+        // after seven days. "Google token refresh failed: invalid_grant" gives no hint of that;
+        // the account simply has to be connected again.
+        const raw = (ex as Error).message;
+        const revoked = /invalid_grant|expired or revoked|Token has been expired/i.test(raw);
+        const error = revoked
+          ? 'Google has revoked this connection — click Reconnect to sign in again. (Refresh tokens also expire after 7 days while the Google OAuth app is in Testing mode.)'
+          : `Google token refresh failed: ${raw}`;
         await this.recordOutcome(account.id, error);
         return { fetched: 0, matched: 0, error };
       }

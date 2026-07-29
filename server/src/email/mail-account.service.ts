@@ -33,6 +33,43 @@ export class MailAccountService {
     return (await this.list()).map((a) => this.resource(a));
   }
 
+  /**
+   * Every account a Transaction Desk template may send from.
+   *
+   * Templates used to offer only brokerage accounts (user_id = NULL), which no longer exist:
+   * accounts are now connected through Integrations and belong to the user who connected them.
+   * The result was a "Sender account" dropdown with nothing in it but "Use default sender", so a
+   * template could not be pointed at a specific address at all.
+   *
+   * CRM accounts are deliberately excluded. The two areas are separate by design, and a
+   * Transaction Desk template offering the CRM mailbox would undo that.
+   */
+  async sendersForDesk(): Promise<Record<string, unknown>[]> {
+    const rows = await this.prisma.mail_accounts.findMany({
+      where: { is_active: true, OR: [{ scope: 'desk' }, { user_id: null }] },
+    });
+    rows.sort((a, b) => Number(b.is_default) - Number(a.is_default) || a.name.localeCompare(b.name, 'en', { sensitivity: 'base' }) || a.id - b.id);
+    return rows.map((a) => this.resource(a));
+  }
+
+  /**
+   * The account to fall back on when a template names none.
+   *
+   * Scoped, because `is_default` is per-user-and-area: with a default on each side an unscoped
+   * lookup returns whichever row the database happens to yield first, so a Transaction Desk
+   * email could go out from the CRM mailbox. Prefers the area's default, then any active
+   * account in the area, then a brokerage account.
+   */
+  async defaultSender(scope: IntegrationScope): Promise<mail_accounts | null> {
+    const inScope = { is_active: true, scope };
+    return (
+      (await this.prisma.mail_accounts.findFirst({ where: { ...inScope, is_default: true } }))
+      ?? (await this.prisma.mail_accounts.findFirst({ where: inScope, orderBy: { id: 'asc' } }))
+      ?? (await this.prisma.mail_accounts.findFirst({ where: { is_active: true, user_id: null, is_default: true } }))
+      ?? (await this.prisma.mail_accounts.findFirst({ where: { is_active: true, user_id: null }, orderBy: { id: 'asc' } }))
+    );
+  }
+
   // --------------------------------------------------- per-user accounts
   /**
    * One user's own accounts. Everything below is scoped to `userId`, so a user can only ever see

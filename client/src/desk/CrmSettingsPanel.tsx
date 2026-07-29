@@ -11,7 +11,7 @@ import GoogleCalendarCard from './GoogleCalendarCard';
 import EmailIntegrationCard from './EmailIntegrationCard';
 import type {
   CrmBroadcast, CrmEmailLogRow, CrmEmailSettings, CrmIntegrations, CrmProfile, CrmReferralCode,
-  CrmSendResult, CrmSettings, CrmTriggerTemplates,
+  CrmSendResult, CrmSettings,
 } from '../types';
 
 const title = (v: string): string => v.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase()).trim();
@@ -349,40 +349,8 @@ export default function CrmSettingsPanel() {
         </div>
       </div>
 
-      {/* ------------------------------------------------- trigger templates */}
-      <div className="card">
-        <div className="modal-h">Trigger Templates</div>
-        <p className="help">The message used for each automatic email, with its own on/off switch.</p>
-        {(Object.keys(settings.templates) as (keyof CrmTriggerTemplates)[]).map((key) => {
-          const t = settings.templates[key];
-          return (
-            <div key={String(key)} className="crm-trigger">
-              <Toggle label={title(String(key))} checked={t.enabled}
-                onChange={(v) => setSettings({ ...settings, templates: { ...settings.templates, [key]: { ...t, enabled: v } } })} />
-              <div className="g2">
-                <div className="field">
-                  <label>Message</label>
-                  <input value={t.template}
-                    onChange={(e) => setSettings({ ...settings, templates: { ...settings.templates, [key]: { ...t, template: e.target.value } } })} />
-                </div>
-                {t.daysBefore !== undefined && (
-                  <div className="field">
-                    <label>Days Before</label>
-                    <input type="number" min={0} max={365} value={t.daysBefore}
-                      onChange={(e) => setSettings({ ...settings, templates: { ...settings.templates, [key]: { ...t, daysBefore: Number(e.target.value) } } })} />
-                  </div>
-                )}
-              </div>
-            </div>
-          );
-        })}
-        <div className="actions">
-          <button className="btn primary" type="button" disabled={busy !== ''}
-            onClick={() => void run('templates', () => saveCrmSettings({ templates: settings.templates }), 'Trigger templates saved')}>
-            {busy === 'templates' ? 'Saving…' : 'Save Trigger Templates'}
-          </button>
-        </div>
-      </div>
+      {/* Trigger templates moved to the Triggers screen (Triggers -> CRM Triggers), where an
+          automation is actually looked for. Same data, same endpoint — only the location moved. */}
 
       {/* -------------------------------------------------- send an email */}
       <SendEmailCard

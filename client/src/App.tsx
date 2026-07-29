@@ -45,6 +45,7 @@ const InboxPage = lazy(() => import('./desk/InboxPage'));
 const AuditLogPage = lazy(() => import('./desk/AuditLogPage'));
 const RecycleBinPage = lazy(() => import('./desk/RecycleBinPage'));
 const StubPage = lazy(() => import('./desk/StubPage'));
+const TriggersPage = lazy(() => import('./desk/TriggersPage'));
 
 
 /**
@@ -99,6 +100,8 @@ export default function App() {
                 <Route path="transactions/import" element={<RequireScreen screen="transactions"><BulkImportPage /></RequireScreen>} />
                 <Route path="transactions/downloads" element={<RequireScreen screen="transactions"><DownloadCentrePage /></RequireScreen>} />
                 <Route path="transactions/:id" element={<RequireScreen screen="transactions"><TransactionDetailPage /></RequireScreen>} />
+                {/* Was falling through to the ":page" stub — the sidebar has always linked here. */}
+                <Route path="triggers" element={<RequireScreen screen="triggers"><TriggersPage /></RequireScreen>} />
                 <Route path="audit" element={<RequireScreen screen="audit"><AuditLogPage /></RequireScreen>} />
                 {/* Personal settings + inbox — available to every authenticated user, no screen gate.
                 Inbox is a personal mailbox (own IMAP accounts), so it is not the admin-permissioned

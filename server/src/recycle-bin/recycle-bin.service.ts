@@ -76,10 +76,22 @@ export class RecycleBinService {
   async restoreTransaction(user: Actor, id: number): Promise<{ message: string; id: number }> {
     this.guard(user);
     const t = await this.onlyTrashed('transactions', id, 'Transaction');
+
+    // Deleting a transaction takes its invoices with it, stamping both with the same instant.
+    // Restoring reverses exactly that: only invoices carrying this transaction's deletion
+    // timestamp come back, so an invoice that had been deleted separately, earlier, stays
+    // deleted rather than reappearing as a side effect.
+    const restored = t.deleted_at
+      ? await this.prisma.invoices.updateMany({
+          where: { transaction_id: id, deleted_at: t.deleted_at },
+          data: { deleted_at: null },
+        })
+      : { count: 0 };
+
     await this.prisma.transactions.update({ where: { id }, data: { deleted_at: null } });
     await this.audit.record(id, this.actingUser(user), {
       section: 'Basic Information', action: 'Record restored', source: 'Manual',
-      details: `Trade #${t.trade_no} restored from Recycle Bin`,
+      details: `Trade #${t.trade_no} restored from Recycle Bin${restored.count ? ` (with ${restored.count} invoice${restored.count === 1 ? '' : 's'})` : ''}`,
     });
     return { message: 'Transaction restored', id };
   }

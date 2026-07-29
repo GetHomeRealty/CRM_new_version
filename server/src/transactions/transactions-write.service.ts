@@ -718,7 +718,19 @@ export class TransactionsWriteService {
       section: 'Basic Information', action: 'Record removed', source: 'Manual',
       details: `Trade #${t.trade_no} (${t.type})`,
     });
-    await this.prisma.transactions.update({ where: { id: txnId }, data: { deleted_at: new Date() } });
+    // An invoice only exists because of its transaction, so it goes with it. Left behind it
+    // stays listed on the Invoice screen and in the financial totals, pointing at a deal that is
+    // no longer there — which is how this database already came to hold an invoice whose
+    // transaction was deleted.
+    //
+    // The SAME timestamp is written to both. That is what makes the pairing reversible: on
+    // restore, only invoices deleted in this exact moment come back, so an invoice that was
+    // deleted on its own beforehand stays deleted.
+    const at = new Date();
+    await this.prisma.$transaction([
+      this.prisma.invoices.updateMany({ where: { transaction_id: txnId, deleted_at: null }, data: { deleted_at: at } }),
+      this.prisma.transactions.update({ where: { id: txnId }, data: { deleted_at: at } }),
+    ]);
     return { message: 'Transaction deleted' };
   }
 

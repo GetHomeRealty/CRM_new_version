@@ -36,7 +36,8 @@ export class EmailTemplateService {
       byModule.get(t.module)!.push(this.resource(t));
     }
 
-    return { groups, mail_accounts: await this.mailAccounts.index() };
+    // Desk senders, not brokerage-only accounts — see MailAccountService.sendersForDesk.
+    return { groups, mail_accounts: await this.mailAccounts.sendersForDesk() };
   }
 
   async update(id: number, body: Record<string, unknown>): Promise<Record<string, unknown>> {
