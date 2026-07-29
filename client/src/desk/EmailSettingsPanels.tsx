@@ -7,6 +7,7 @@ import {
 import { type ToastFn } from './toast';
 import { apiErrorMessage } from '../lib/apiError';
 import type { EmailTemplate, MailAccount, TemplateGroup, TemplatePreview } from '../types';
+import RichTextEditor, { type RichTextHandle } from './RichTextEditor';
 
 /**
  * The SMTP-account and email-template panels.
@@ -253,18 +254,14 @@ function TemplateEditor({ template, accounts, onClose, onSaved, toast }: Templat
   });
   const [saving, setSaving] = useState(false);
   const [preview, setPreview] = useState<TemplatePreview | null>(null);
-  const bodyRef = useRef<HTMLTextAreaElement>(null);
+  const bodyRef = useRef<RichTextHandle>(null);
   const set = <K extends keyof TemplateForm>(k: K, v: TemplateForm[K]) => setForm((f) => ({ ...f, [k]: v }));
 
+  // The editor owns the caret in both of its views, so insertion is delegated to it.
   const insertVar = (v: string) => {
     const token = `{{ ${v} }}`;
-    const el = bodyRef.current;
-    if (!el) { set('body_html', form.body_html + token); return; }
-    const start = el.selectionStart ?? form.body_html.length;
-    const end = el.selectionEnd ?? form.body_html.length;
-    const next = form.body_html.slice(0, start) + token + form.body_html.slice(end);
-    set('body_html', next);
-    requestAnimationFrame(() => { el.focus(); el.selectionStart = el.selectionEnd = start + token.length; });
+    if (bodyRef.current) bodyRef.current.insert(token);
+    else set('body_html', form.body_html + token);
   };
 
   const doSave = async () => {
@@ -312,8 +309,10 @@ function TemplateEditor({ template, accounts, onClose, onSaved, toast }: Templat
             <span className="help">When Off, this email is not sent.</span></div>
         </div>
 
-        <div className="field" style={{ marginBottom: 4 }}><label>HTML Body</label>
-          <textarea ref={bodyRef} rows={10} value={form.body_html} onChange={(e) => set('body_html', e.target.value)} style={{ width: '100%', fontFamily: 'monospace', fontSize: 12.5 }} /></div>
+        <div className="field" style={{ marginBottom: 4 }}><label>Message</label>
+          {/* Written as it will be read. The HTML button on the toolbar still opens the source,
+              because email HTML sometimes has to be adjusted by hand. */}
+          <RichTextEditor ref={bodyRef} value={form.body_html} onChange={(v) => set('body_html', v)} rows={10} /></div>
 
         {template.variables && template.variables.length > 0 && (
           <div style={{ marginBottom: 12 }}>

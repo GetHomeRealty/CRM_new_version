@@ -963,3 +963,27 @@ input[type="number"],.numeric,.stat-card .val{font-variant-numeric:tabular-nums;
 .lead-tab.recent{margin-left:auto;border-style:dashed}
 .lead-tab.recent.on{border-style:solid;border-color:var(--brand);background:var(--brand-soft)}
 @media(max-width:760px){.lead-tab.recent{margin-left:0}}
+
+/* ---------------------------------------------------------------- rich text editor
+   Scoped entirely to .rte, used only by the email-template modal. Appended rather than
+   inserted so no existing rule is disturbed. */
+.rte{border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--surface)}
+.rte-bar{display:flex;align-items:center;gap:4px;flex-wrap:wrap;padding:6px 8px;background:var(--surface-3);border-bottom:1px solid var(--line)}
+.rte-btn{min-width:30px;height:28px;padding:0 8px;border:1px solid transparent;border-radius:7px;background:transparent;font-size:12.5px;font-weight:600;color:var(--text-2);cursor:pointer;line-height:1}
+.rte-btn:hover{background:var(--surface);border-color:var(--line-strong);color:var(--text)}
+.rte-btn.on{background:var(--surface);border-color:var(--line-strong);color:var(--text)}
+/* The editable surface renders the message the way it will arrive, so what is typed is what is
+   sent — hence real heading/list/link styling here rather than the app's form styling. */
+.rte-body{padding:12px 14px;font-size:13.5px;line-height:1.6;color:var(--text);outline:none;overflow-y:auto;max-height:420px}
+.rte-body:focus{box-shadow:inset 0 0 0 2px var(--info-soft)}
+.rte-body p{margin:0 0 10px}
+.rte-body h2{font-size:17px;font-weight:700;margin:0 0 8px}
+.rte-body h3{font-size:15px;font-weight:700;margin:0 0 8px}
+.rte-body ul,.rte-body ol{margin:0 0 10px;padding-left:22px}
+.rte-body li{margin:2px 0}
+.rte-body a{color:var(--info);text-decoration:underline}
+.rte-body table{border-collapse:collapse}
+.rte-body td,.rte-body th{padding:4px 8px}
+/* Empty-state hint, so a blank template does not look broken. */
+.rte-body:empty::before{content:"Write the message…";color:var(--muted-2)}
+.rte-html{width:100%;border:0;padding:12px 14px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;line-height:1.55;resize:vertical;outline:none;background:var(--surface)}
