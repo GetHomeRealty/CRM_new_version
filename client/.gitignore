@@ -5,3 +5,14 @@ dist-ssr
 .env
 .vite
 tsconfig.tsbuildinfo
+
+# Deliberate exception to the repository-wide `.env.production` rule.
+#
+# That rule exists for server-side env files, which hold real secrets. This one cannot: Vite
+# exposes only VITE_-prefixed variables and compiles them into the JavaScript served to every
+# browser, so its contents are public by definition. Tracking it means a production build is
+# correct on any machine instead of depending on someone creating the file first — which is
+# what stops a deployed site from quietly calling http://localhost:8000.
+#
+# Do not put anything secret in it. Anything here ships to the browser.
+!.env.production

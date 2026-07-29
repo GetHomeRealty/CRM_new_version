@@ -6,6 +6,7 @@ import connectPgSimple from 'connect-pg-simple';
 import { Pool } from 'pg';
 import { AppModule } from './app.module';
 import configuration from './config/configuration';
+import { assertProductionConfig } from './config/validate-config';
 import { laravelValidationExceptionFactory } from './common/laravel-exceptions';
 
 async function bootstrap(): Promise<void> {
@@ -15,6 +16,11 @@ async function bootstrap(): Promise<void> {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, { rawBody: true });
   // Pure, deterministic from env — identical to what ConfigModule loaded for DI.
   const appCfg = configuration();
+
+  // Checked before anything binds a port. Each setting it guards fails silently at runtime
+  // rather than at boot — a non-secure cookie is discarded by the browser, so login "works" and
+  // the next request is anonymous — so a deploy that stops here is the cheap outcome.
+  assertProductionConfig(appCfg);
 
   // All API routes live under /api (matching Laravel). The Sanctum CSRF-cookie
   // route is served at the root, so it is excluded from the prefix.
