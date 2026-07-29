@@ -8,6 +8,7 @@ import { AppModule } from './app.module';
 import configuration from './config/configuration';
 import { assertProductionConfig } from './config/validate-config';
 import { laravelValidationExceptionFactory } from './common/laravel-exceptions';
+import { installShutdownHandlers } from './common/shutdown';
 
 async function bootstrap(): Promise<void> {
   // `rawBody` keeps the exact bytes of each request alongside the parsed body. The Meta webhook
@@ -85,6 +86,10 @@ async function bootstrap(): Promise<void> {
   await app.listen(appCfg.port);
   // eslint-disable-next-line no-console
   console.log(`Transaction Desk API listening on http://localhost:${appCfg.port}`);
+
+  // Every deploy stops this process. Without handlers that is an instant kill mid-request,
+  // with the IMAP sockets dropped and Prisma never disconnected.
+  installShutdownHandlers(app, sessionPool);
 }
 
 void bootstrap();

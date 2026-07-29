@@ -16,6 +16,7 @@ const good = (): AppConfig => ({
   frontendUrl: 'https://gethomehub.ca',
   corsOrigins: ['https://gethomehub.ca'],
   bcryptRounds: 12,
+  runSchedulers: true,
   session: {
     secret: 'x'.repeat(48),
     cookieName: 'laravel_session',

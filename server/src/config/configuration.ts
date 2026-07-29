@@ -27,6 +27,8 @@ export interface AppConfig {
   frontendUrl: string;
   corsOrigins: string[];
   bcryptRounds: number;
+  /** Whether THIS process runs the background schedulers. See `runSchedulers` below. */
+  runSchedulers: boolean;
   session: {
     secret: string;
     cookieName: string;
@@ -56,6 +58,15 @@ export default (): AppConfig => {
       ? list(process.env.CORS_ORIGINS)
       : [process.env.FRONTEND_URL ?? 'http://localhost:5173'],
     bcryptRounds: int(process.env.BCRYPT_ROUNDS, 12),
+    // Three schedulers live inside this process: the IMAP poller, the export sweeper and the
+    // lawyer-detail reminders. They are timers, not distributed jobs, so every process that runs
+    // them runs them — two instances means two IMAP syncs racing on the same mailbox and two
+    // copies of every reminder email arriving at a real client.
+    //
+    // Defaults to true, which is right for the single instance this deployment runs (uploads live
+    // on local disk, so it cannot meaningfully scale out anyway). If a second process is ever
+    // added, start it with RUN_SCHEDULERS=false and leave exactly one with it on.
+    runSchedulers: bool(process.env.RUN_SCHEDULERS, true),
     session: {
       secret: process.env.SESSION_SECRET ?? 'insecure-dev-secret',
       cookieName: process.env.SESSION_COOKIE_NAME ?? 'laravel_session',

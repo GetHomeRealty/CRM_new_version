@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
 import * as crypto from 'crypto';
 import * as path from 'path';
 import * as fs from 'fs/promises';
@@ -6,6 +6,7 @@ import { createWriteStream } from 'fs';
 import { PrismaService } from '../prisma/prisma.service';
 import { BulkExportService, type BulkSelection } from './bulk-export.service';
 import type { AuthUserRecord } from '../auth/auth.types';
+import { schedulersEnabled, schedulerSkipReason } from '../common/schedulers';
 
 const EXPORT_ROOT = path.join(process.cwd(), '..', 'storage', 'app', 'exports');
 
@@ -48,7 +49,7 @@ const ACTION_META: Record<ExportAction, { label: string; format: string; ext: st
  * broker later only means replacing `enqueue`/`drain`.
  */
 @Injectable()
-export class ExportJobService implements OnModuleInit {
+export class ExportJobService implements OnModuleInit, OnModuleDestroy {
   private readonly log = new Logger(ExportJobService.name);
   private queue: number[] = [];
   private draining = false;
@@ -58,6 +59,18 @@ export class ExportJobService implements OnModuleInit {
 
   async onModuleInit(): Promise<void> {
     await fs.mkdir(EXPORT_ROOT, { recursive: true });
+
+    // Everything below reaches across the whole export_jobs table rather than this process's own
+    // work, so only the scheduler owner may do it. On a second instance the reclaim would mark a
+    // job another instance is actively generating as failed, and the backlog pickup would have
+    // both instances building the same file. Jobs enqueued here are still drained here — that
+    // part is process-local and writes to this machine's disk, which is where the download is
+    // served from.
+    if (!schedulersEnabled()) {
+      this.log.log(`Export reclaim and sweeper not started (${schedulerSkipReason()}). Exports queued on this process still run.`);
+      return;
+    }
+
     // A job left mid-flight by a restart can never finish — fail it honestly rather than
     // leaving it "Processing" forever.
     const orphaned = await this.prisma.export_jobs.updateMany({
@@ -74,6 +87,14 @@ export class ExportJobService implements OnModuleInit {
     this.sweeper = setInterval(() => { void this.sweepExpired(); }, SWEEP_INTERVAL_MS);
     this.sweeper.unref?.();
     void this.sweepExpired();
+  }
+
+  /**
+   * Release the sweep timer on shutdown. Unlike the other two schedulers this had no destroy
+   * hook, so the interval outlived `app.close()` and kept the event loop from draining.
+   */
+  onModuleDestroy(): void {
+    if (this.sweeper) { clearInterval(this.sweeper); this.sweeper = undefined; }
   }
 
   // ------------------------------------------------------------------ queue

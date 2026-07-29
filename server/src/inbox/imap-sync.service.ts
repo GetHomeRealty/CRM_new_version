@@ -2,6 +2,7 @@ import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/commo
 import { ImapFlow } from 'imapflow';
 import { simpleParser } from 'mailparser';
 import { PrismaService } from '../prisma/prisma.service';
+import { schedulersEnabled, schedulerSkipReason } from '../common/schedulers';
 import { LaravelCryptService } from '../common/laravel-crypt.service';
 import { GoogleService } from '../google/google.service';
 
@@ -70,9 +71,13 @@ export class ImapSyncService implements OnModuleInit, OnModuleDestroy {
   ) {}
 
   onModuleInit(): void {
-    // A background poll on top of the manual "Sync now" button. Disabled in tests and when the
-    // interval is set to 0, so a test run never opens real network connections on its own.
-    if (process.env.NODE_ENV === 'test' || process.env.IMAP_POLL_DISABLED === '1') return;
+    // A background poll on top of the manual "Sync now" button. Skipped in tests, when this
+    // process is not the scheduler owner, and when disabled outright — so a test run never opens
+    // real network connections, and a second instance never races this one on the same mailbox.
+    if (!schedulersEnabled() || process.env.IMAP_POLL_DISABLED === '1') {
+      this.log.log(`IMAP polling not started (${process.env.IMAP_POLL_DISABLED === '1' ? 'IMAP_POLL_DISABLED=1' : schedulerSkipReason()}). "Sync now" still works.`);
+      return;
+    }
 
     // setInterval alone means the first poll is a whole interval away, so every restart left a
     // window where nothing synced and mail only appeared if someone pressed "Sync now". Kick

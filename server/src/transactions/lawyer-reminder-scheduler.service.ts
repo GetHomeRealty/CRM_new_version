@@ -1,5 +1,6 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { schedulersEnabled, schedulerSkipReason } from '../common/schedulers';
 import { parseJsonObject } from '../common/serialize';
 import { TransactionLawyerReminderService } from './transaction-lawyer-reminder.service';
 import { tracksBothLawyers } from './lawyer-details';
@@ -29,7 +30,12 @@ export class LawyerReminderSchedulerService implements OnModuleInit, OnModuleDes
   ) {}
 
   onModuleInit(): void {
-    if (process.env.NODE_ENV === 'test' || process.env.LAWYER_REMINDER_DISABLED === '1') return;
+    // Only one process may sweep: these send real email, so a second instance would deliver a
+    // duplicate of every reminder to the agent it is chasing.
+    if (!schedulersEnabled() || process.env.LAWYER_REMINDER_DISABLED === '1') {
+      this.log.log(`Lawyer-detail reminders not scheduled (${process.env.LAWYER_REMINDER_DISABLED === '1' ? 'LAWYER_REMINDER_DISABLED=1' : schedulerSkipReason()}).`);
+      return;
+    }
     this.timer = setInterval(() => { void this.sweep(); }, POLL_INTERVAL_MS);
     if (typeof this.timer.unref === 'function') this.timer.unref();
   }
