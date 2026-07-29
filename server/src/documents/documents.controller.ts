@@ -10,8 +10,8 @@ import { CurrentUser, Screen } from '../auth/decorators';
 import type { AuthUserRecord } from '../auth/auth.types';
 import { DocumentsService } from './documents.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { STORAGE_ROOT } from '../config/storage';
 
-const STORAGE_ROOT = path.join(process.cwd(), '..', 'storage', 'app');
 type Res0 = Record<string, unknown>;
 const u = (x: AuthUserRecord | undefined): AuthUserRecord | null => x ?? null;
 const MB20 = 20480 * 1024;

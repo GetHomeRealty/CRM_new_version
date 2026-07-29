@@ -7,8 +7,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { BulkExportService, type BulkSelection } from './bulk-export.service';
 import type { AuthUserRecord } from '../auth/auth.types';
 import { schedulersEnabled, schedulerSkipReason } from '../common/schedulers';
+import { EXPORT_ROOT } from '../config/storage';
 
-const EXPORT_ROOT = path.join(process.cwd(), '..', 'storage', 'app', 'exports');
 
 /** What a job produces. */
 export type ExportAction =

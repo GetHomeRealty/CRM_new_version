@@ -8,9 +8,9 @@ import { IdExtractionService } from './id-extraction.service';
 import { throwValidation } from '../common/laravel-exceptions';
 import { toIso8601String } from '../common/serialize';
 import type { AuthUserRecord } from '../auth/auth.types';
+import { STORAGE_ROOT } from '../config/storage';
 
 const FIELDS = ['full_legal_name', 'address', 'dob', 'occupation', 'id_type', 'id_number', 'issuing_jurisdiction', 'country', 'expiry_date'] as const;
-const STORAGE_ROOT = path.join(process.cwd(), '..', 'storage', 'app');
 type Actor = AuthUserRecord | null;
 type FileEntry = { client_name?: string | null; file_path?: string | null };
 

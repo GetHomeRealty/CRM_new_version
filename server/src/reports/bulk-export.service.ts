@@ -14,8 +14,8 @@ import { buildDownloadAllWorkbook, type ExportRow, type RawTxnRow } from './down
 import type { AuthUserRecord } from '../auth/auth.types';
 import type { ReportFilters } from './report.types';
 import type { DocRow } from './report-documents';
+import { STORAGE_ROOT } from '../config/storage';
 
-const STORAGE_ROOT = path.join(process.cwd(), '..', 'storage', 'app');
 /**
  * Ceiling on one bulk operation — protects the API from an accidental "select everything".
  * This is the limit for the EXPENSIVE actions: a PDF per transaction, or a ZIP that reads

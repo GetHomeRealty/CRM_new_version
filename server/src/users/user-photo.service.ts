@@ -7,6 +7,7 @@ import { AuditService, type ActingUser } from '../audit/audit.service';
 import { parseJsonObject } from '../common/serialize';
 import { trimPngTransparentBorder } from '../settings/image-trim';
 import type { AuthUserRecord } from '../auth/auth.types';
+import { STORAGE_ROOT } from '../config/storage';
 
 /**
  * Profile pictures, for every account — agent, accounting, documentation, CRM, manager,
@@ -19,7 +20,6 @@ import type { AuthUserRecord } from '../auth/auth.types';
  * (commission split, loan position).
  */
 
-const STORAGE_ROOT = path.join(process.cwd(), '..', 'storage', 'app');
 const PHOTO_DIR = 'avatars';
 /** The key inside users.profile. */
 const PHOTO_KEY = 'photo_path';

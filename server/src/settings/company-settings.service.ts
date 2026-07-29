@@ -8,9 +8,8 @@ import { AuditService, type ActingUser } from '../audit/audit.service';
 import { decimalCast, jsonField, laravelJsonDate, phpBlank, parseJsonObject, phpJsonNormalize } from '../common/serialize';
 import type { UpdateCompanySettingsDto } from './dto/update-company-settings.dto';
 import { trimPngTransparentBorder } from './image-trim';
+import { STORAGE_ROOT } from '../config/storage';
 
-/** Same storage root the documents module uses, so uploads all live in one place. */
-const STORAGE_ROOT = path.join(process.cwd(), '..', 'storage', 'app');
 const LOGO_DIR = 'branding';
 /** A brand logo is a small asset; anything larger is a mistake, not a logo. */
 export const MAX_LOGO_BYTES = 2 * 1024 * 1024;

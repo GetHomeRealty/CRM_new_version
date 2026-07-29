@@ -13,9 +13,9 @@ import { throwValidation, type FieldErrors } from '../common/laravel-exceptions'
 import { isListingType } from '../reference/transaction.constants';
 import { parseJson, toDateString } from '../common/serialize';
 import type { AuthUserRecord } from '../auth/auth.types';
+import { STORAGE_ROOT } from '../config/storage';
 
 const SECTION = 'Legal & Documents';
-const STORAGE_ROOT = path.join(process.cwd(), '..', 'storage', 'app');
 type Actor = AuthUserRecord | null;
 type FileEntry = { client_name?: string | null; file_name?: string | null; file_path?: string | null };
 interface UploadedFile { originalname: string; buffer: Buffer }

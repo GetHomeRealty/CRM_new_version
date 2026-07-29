@@ -1,4 +1,4 @@
-import { ValidationPipe } from '@nestjs/common';
+import { Logger, ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import session from 'express-session';
@@ -8,6 +8,7 @@ import helmet from 'helmet';
 import { AppModule } from './app.module';
 import configuration from './config/configuration';
 import { assertProductionConfig } from './config/validate-config';
+import { STORAGE_ROOT, checkStorageRoot } from './config/storage';
 import { laravelValidationExceptionFactory } from './common/laravel-exceptions';
 import { installShutdownHandlers } from './common/shutdown';
 
@@ -23,6 +24,14 @@ async function bootstrap(): Promise<void> {
   // rather than at boot — a non-secure cookie is discarded by the browser, so login "works" and
   // the next request is anonymous — so a deploy that stops here is the cheap outcome.
   assertProductionConfig(appCfg);
+
+  // Where uploads live. Checked before serving, because an unreachable or wrong storage root
+  // fails only at the moment someone uploads or opens a document — and a *wrong* one is worse
+  // than an unreachable one: writes succeed into the new place while every existing file appears
+  // to have vanished. Logged unconditionally so the resolved path is never a matter of guesswork.
+  const storage = checkStorageRoot(appCfg.env);
+  if (!storage.ok) throw new Error(`Refusing to start: ${storage.problem}\n`);
+  new Logger('Storage').log(`Files are stored in ${STORAGE_ROOT}`);
 
   // All API routes live under /api (matching Laravel). The Sanctum CSRF-cookie
   // route is served at the root, so it is excluded from the prefix.

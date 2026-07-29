@@ -7,6 +7,7 @@ import { InvoiceCalculator } from '../invoices/invoice.calculator';
 import { CompanySettingsService } from '../settings/company-settings.service';
 import { parseJson, round2, toDateString, toDateTimeString } from '../common/serialize';
 import type { AuthUserRecord } from '../auth/auth.types';
+import { STORAGE_ROOT } from '../config/storage';
 
 type Actor = AuthUserRecord | null;
 
@@ -20,7 +21,6 @@ const KIND_LABELS: Record<string, string> = {
 };
 
 // Laravel Storage::disk('local') root = <app>/storage/app; the Nest server runs in <app>/server.
-const STORAGE_ROOT = path.join(process.cwd(), '..', 'storage', 'app');
 
 @Injectable()
 export class RecycleBinService {
