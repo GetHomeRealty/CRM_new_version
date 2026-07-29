@@ -5,6 +5,7 @@ import { MetaPublicController } from './meta-public.controller';
 import { MetaConnectionService } from './meta-connection.service';
 import { MetaGraphService } from './meta-graph.service';
 import { MetaSyncService } from './meta-sync.service';
+import { MetaSyncSchedulerService } from './meta-sync-scheduler.service';
 import { MetaStateService } from './meta-state.service';
 import { LeadAuditService } from '../leads/lead-audit.service';
 import { LeadsModule } from '../leads/leads.module';
@@ -20,7 +21,7 @@ import { LeadsModule } from '../leads/leads.module';
 @Module({
   imports: [AuthModule, LeadsModule],
   controllers: [MetaPublicController, MetaController],
-  providers: [MetaConnectionService, MetaGraphService, MetaSyncService, MetaStateService, LeadAuditService],
+  providers: [MetaConnectionService, MetaGraphService, MetaSyncService, MetaSyncSchedulerService, MetaStateService, LeadAuditService],
   exports: [MetaSyncService, MetaConnectionService],
 })
 export class MetaModule {}
