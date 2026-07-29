@@ -1020,3 +1020,13 @@ input[type="number"],.numeric,.stat-card .val{font-variant-numeric:tabular-nums;
 /* A modal opened from inside another one. Without this the overlay beneath shows through at the
    same corner and its close button reads as a second ✕ on the modal in front. */
 .overlay.stacked{z-index:60;background:rgba(15,23,42,.74)}
+
+/* Campaign template builder — room to work in.
+   With the live preview closed the builder has the full width, so the canvas is no longer a
+   narrow column and the blocks can use it. */
+.tpl-build.solo{grid-template-columns:1fr}
+.tpl-build.solo .tb2-canvas{max-width:none}
+/* The two blocks that carry the actual message. A heading is one line but it is the line read
+   first; a paragraph is the body of the email and was being written through a three-row slot. */
+.tb2-heading-input{font-size:16px;font-weight:600;padding:10px 12px;line-height:1.35}
+.tb2-para-input{min-height:150px;font-size:13.5px;line-height:1.6;padding:10px 12px;resize:vertical}

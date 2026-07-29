@@ -314,7 +314,10 @@ export function TemplateBuilder({ blocks, setBlocks, styles, setStyles }: {
               )}
               {b.type === 'heading' && (
                 <>
-                  <input value={b.text} onChange={(e) => update(i, { text: e.target.value })} placeholder="Heading text" />
+                  {/* A heading is short but it is the line people read first, so it is shown at a
+                      size that reflects that rather than as another small field. */}
+                  <input className="tb2-heading-input" value={b.text}
+                    onChange={(e) => update(i, { text: e.target.value })} placeholder="Heading text" />
                   <div className="tb2-row">
                     <div className="tb-seg">
                       {([1, 2, 3] as const).map((l) => <button key={l} type="button" className={`tb-seg-b${b.level === l ? ' on' : ''}`} onClick={() => update(i, { level: l })}>H{l}</button>)}
@@ -326,7 +329,9 @@ export function TemplateBuilder({ blocks, setBlocks, styles, setStyles }: {
               )}
               {b.type === 'paragraph' && (
                 <>
-                  <textarea rows={3} value={b.text} onChange={(e) => update(i, { text: e.target.value })} placeholder="Your message. Use {{LEAD_NAME}} etc." />
+                  {/* Three rows meant the body of the email was written through a slot. */}
+                  <textarea className="tb2-para-input" rows={7} value={b.text}
+                    onChange={(e) => update(i, { text: e.target.value })} placeholder="Your message. Use {{LEAD_NAME}} etc." />
                   {alignBtns(b.align, (a) => update(i, { align: a }))}
                 </>
               )}

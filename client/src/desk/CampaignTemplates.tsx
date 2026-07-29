@@ -321,6 +321,8 @@ function TemplateEditor({ template, options, onClose, onSaved }: {
   const [loading, setLoading] = useState(!!template);
   // Visual builder ("design") vs. raw HTML. New templates start in the builder.
   const [mode, setMode] = useState<'design' | 'html'>(template ? 'html' : 'design');
+  /** Closed until asked for — see the toggle beside the builder/HTML switch. */
+  const [showPreview, setShowPreview] = useState(false);
   const [blocks, setBlocks] = useState<Block[]>(() => (template ? [] : starterDesign().blocks));
   const [styles, setStyles] = useState<Styles>(() => (template ? BLANK_STYLES : starterDesign().styles));
 
@@ -405,17 +407,29 @@ function TemplateEditor({ template, options, onClose, onSaved }: {
                 <button type="button" className={`seg-btn${mode === 'html' ? ' on' : ''}`}
                   onClick={() => { setForm((f) => ({ ...f, content })); setMode('html'); }}>{'</>'} HTML</button>
               </div>
+              {/* The preview used to be a permanent second column, which left the blocks
+                  themselves in a little over half the width. Off by default so building has the
+                  room, on when you want to check the result. */}
+              {mode === 'design' && (
+                <button type="button" className={`btn ghost sm${showPreview ? ' primary' : ''}`}
+                  style={{ marginLeft: 'auto' }}
+                  onClick={() => setShowPreview((v) => !v)}>
+                  {showPreview ? '✕ Hide preview' : '👁 Preview'}
+                </button>
+              )}
             </div>
 
             {loading ? (
               <p className="help">Loading…</p>
             ) : mode === 'design' ? (
-              <div className="tpl-build">
+              <div className={`tpl-build${showPreview ? '' : ' solo'}`}>
                 <TemplateBuilder blocks={blocks} setBlocks={setBlocks} styles={styles} setStyles={setStyles} />
-                <div className="tpl-build-preview">
-                  <div className="muted" style={{ fontSize: 11, marginBottom: 4 }}>Live preview</div>
-                  <iframe className="tpl-preview" title="Template preview" sandbox="" srcDoc={content} />
-                </div>
+                {showPreview && (
+                  <div className="tpl-build-preview">
+                    <div className="muted" style={{ fontSize: 11, marginBottom: 4 }}>Live preview</div>
+                    <iframe className="tpl-preview" title="Template preview" sandbox="" srcDoc={content} />
+                  </div>
+                )}
               </div>
             ) : (
               <textarea rows={12} className="tpl-code" value={form.content}
