@@ -1008,3 +1008,15 @@ input[type="number"],.numeric,.stat-card .val{font-variant-numeric:tabular-nums;
 .nav .nav-child::before{content:"";position:absolute;left:17px;top:6px;bottom:6px;width:2px;border-radius:2px;background:var(--line-strong);opacity:.6}
 .nav .nav-child.active::before{background:var(--brand);opacity:1}
 .nav .nav-child .ico{font-size:12px}
+
+/* Onboarding review modal — read-only rendering of the message about to be sent. */
+.onb-static{padding:9px 12px;border:1px solid var(--line);border-radius:9px;background:var(--surface-2);font-size:13.5px}
+.onb-preview{border:1px solid var(--line);border-radius:10px;padding:14px 16px;background:#fff;font-size:13.5px;line-height:1.6;max-height:420px;overflow-y:auto}
+.onb-preview h2,.onb-preview h3{margin:14px 0 6px;font-size:15px}
+.onb-preview p{margin:0 0 10px}
+.onb-preview ul,.onb-preview ol{margin:0 0 10px;padding-left:22px}
+.onb-preview a{color:var(--info)}
+
+/* A modal opened from inside another one. Without this the overlay beneath shows through at the
+   same corner and its close button reads as a second ✕ on the modal in front. */
+.overlay.stacked{z-index:60;background:rgba(15,23,42,.58)}

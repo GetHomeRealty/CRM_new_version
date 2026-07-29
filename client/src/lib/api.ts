@@ -13,6 +13,30 @@ type Id = number | string;
  */
 const MULTIPART = { headers: { 'Content-Type': undefined } } as unknown as AxiosRequestConfig;
 
+// --- Agent onboarding emails (Users screen) ---
+export interface OnboardingPreview {
+  kind: 'onboard' | 'contract';
+  event_key: string;
+  subject: string;
+  html: string;
+  to: string;
+  variables: string[];
+  attachments: { id: number; filename: string; size: number }[];
+  sender: string | null;
+  /** Anything that would make the send fail or arrive incomplete. */
+  warning: string | null;
+}
+
+/** The message as it would arrive for this agent — read-only, nothing is sent. */
+export const getOnboardingPreview = (userId: Id, kind: 'onboard' | 'contract'): Promise<OnboardingPreview> =>
+  api.get<OnboardingPreview>(`/api/users/${userId}/onboarding/${kind}`).then((r) => r.data);
+
+/** Send it. Subject/body are the reviewed version and win over the stored template. */
+export const sendOnboardingEmail = (
+  userId: Id, kind: 'onboard' | 'contract', edited: { subject?: string; html?: string },
+): Promise<{ message: string; to: string }> =>
+  api.post(`/api/users/${userId}/onboarding/${kind}`, edited).then((r) => r.data);
+
 // --- Transactions ---
 /**
  * Every transaction the caller may see, unpaginated.

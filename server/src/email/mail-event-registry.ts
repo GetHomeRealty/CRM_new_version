@@ -12,6 +12,20 @@ export interface MailEvent {
 }
 
 export const MAIL_EVENTS: Record<string, MailEvent> = {
+  'user.onboard_email': {
+    module: 'Onboarding',
+    label: 'Agent — Onboarding Guide',
+    variables: ['agent_name', 'agent_email', 'company_name', 'broker_of_record', 'broker_email', 'accounts_email', 'onboard_date', 'current_date'],
+    default_subject: 'Welcome, {{ agent_name }}! Here’s your onboarding guide to {{ company_name }}',
+    default_body_html: '<p>Dear {{ agent_name }},</p><p>Welcome to {{ company_name }}! We&rsquo;re excited to have you join our team of experienced professionals. To ensure a smooth and efficient transition, we&rsquo;ve outlined a simple step-by-step onboarding process for you:</p><h3>Step 1: Submit Your Resignation Letter</h3><ul><li>Please submit your resignation letter to your current brokerage (a sample is attached to this email).</li><li>Send the resignation email copy to our Broker of Record {{ broker_of_record }} at {{ broker_email }}.</li></ul><h3>Step 2: Transfer Process Initiation</h3><ul><li>Once we receive a copy of your resignation email, TREB Membership, and RECO registration details, our Broker of Record will initiate the transfer process.</li></ul><h3>Step 3: Transfer Confirmation &amp; Setup</h3><ul><li>Once the transfer is completed, we will notify you immediately.</li></ul><h3>Step 4: Providing Your Basic Details</h3><ul><li>Please provide your professional headshot.</li><li>Along with this, provide your PREC / SP bank account details for upcoming commission payouts to our accounts team at {{ accounts_email }}.</li></ul><h3>Step 5: Business Cards</h3><ul><li>Please have a look at the attached sample headshots and indicate your style preference &mdash; you will be issued your personalized business cards accordingly.</li></ul><p>Should you have any further questions during this process, feel free to reach out. We&rsquo;re here to support you every step of the way and look forward to your success with {{ company_name }}.</p><p><em>Kindly confirm having received this onboarding email, along with the attached documents.</em></p><p>Thank you again for choosing us as your new brokerage!</p><p>Appreciatively,<br>Department of Recruitment<br>{{ company_name }}</p>',
+  },
+  'user.contract_agreement': {
+    module: 'Onboarding',
+    label: 'Agent — Contract Agreement',
+    variables: ['agent_name', 'agent_email', 'company_name', 'broker_of_record', 'contract_date', 'onboard_date', 'current_date'],
+    default_subject: 'Your Independent Contractor Agreement with {{ company_name }}',
+    default_body_html: '<p>Dear {{ agent_name }},</p><p>Please find attached your Independent Contractor Agreement with {{ company_name }}, dated {{ contract_date }}.</p><p>Kindly review it in full, then sign and return a copy to us. The agreement covers your commission structure, the minimum brokerage commission, termination terms, and the non-solicitation and confidentiality provisions.</p><p>If anything in it is unclear, reply to this email before signing and we will walk you through it.</p><p>Regards,<br>{{ company_name }}</p>',
+  },
   'invoice.send': {
     module: 'Invoice',
     label: 'Invoice — Send',

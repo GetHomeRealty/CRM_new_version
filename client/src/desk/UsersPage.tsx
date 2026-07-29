@@ -14,6 +14,7 @@ import type {
   AuthUser, CommissionHistoryEntry, DealHistoryEntry, LoanEntry, LoanRepayment,
   ManagedUser, Permissions, ScreenLevel, UserProfile, UsersCatalog,
 } from '../types';
+import OnboardingEmailModal from './OnboardingEmailModal';
 
 export default function UsersPage() {
   const toast = useToast();
@@ -233,7 +234,7 @@ function UserModal({ catalog, existing, onClose, onSaved }: UserModalProps) {
   const savedLoanCount = (p.loan_entries || []).length;
   const lockedLoan = { background: '#f3f4f6', cursor: 'not-allowed' };
 
-  const emailStub = (what: string) => toast(`${what} will be sent once the email module is configured (next phase).`, 'info');
+  const [onboarding, setOnboarding] = useState<'onboard' | 'contract' | null>(null);
 
   const save = async () => {
     if (!form.name.trim() || !form.email.trim()) { toast('Name and email are required', 'bad'); return; }
@@ -452,13 +453,28 @@ function UserModal({ catalog, existing, onClose, onSaved }: UserModalProps) {
         )}
 
         <div className="actions" style={{ flexWrap: 'wrap', gap: 8 }}>
-          {isAgent && <button className="btn ghost" onClick={() => emailStub('Onboard email')}>📧 Send Onboard Email</button>}
-          {isAgent && <button className="btn ghost" onClick={() => emailStub('Contract agreement')}>📄 Send Contract Agreement</button>}
+          {/* Both open a review first: the message as it will arrive for this agent, editable
+              before it goes. Only for a saved user — there is nobody to address it to otherwise. */}
+          {isAgent && (
+            <button className="btn ghost" disabled={!existing}
+              title={existing ? 'Preview and send the onboarding guide' : 'Save the agent first'}
+              onClick={() => setOnboarding('onboard')}>📧 Send Onboard Email</button>
+          )}
+          {isAgent && (
+            <button className="btn ghost" disabled={!existing}
+              title={existing ? 'Preview and send the contract agreement' : 'Save the agent first'}
+              onClick={() => setOnboarding('contract')}>📄 Send Contract Agreement</button>
+          )}
           <div style={{ flex: 1 }} />
           <button className="btn ghost" onClick={onClose}>Close</button>
           <button className="btn primary" onClick={save} disabled={saving}>{saving ? 'Saving…' : (existing ? 'Save' : 'Create User')}</button>
         </div>
       </div>
+
+      {/* Review-and-send, over the top of the user editor so closing it returns here. */}
+      {onboarding && existing && (
+        <OnboardingEmailModal userId={existing.id} kind={onboarding} onClose={() => setOnboarding(null)} />
+      )}
     </div>
   );
 }

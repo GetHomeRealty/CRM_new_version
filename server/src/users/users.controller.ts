@@ -4,12 +4,40 @@ import { AdminGuard } from '../auth/guards/admin.guard';
 import { CurrentUser } from '../auth/decorators';
 import type { AuthUserRecord } from '../auth/auth.types';
 import { UsersService } from './users.service';
+import { UserOnboardingService, type OnboardingKind, type OnboardingPreview } from './user-onboarding.service';
 
 // User management — administrators only (Route::middleware('admin')).
 @Controller()
 @UseGuards(AuthGuard, AdminGuard)
 export class UsersController {
-  constructor(private readonly users: UsersService) {}
+  constructor(
+    private readonly users: UsersService,
+    private readonly onboarding: UserOnboardingService,
+  ) {}
+
+  // ---- Onboarding email + contract agreement --------------------------------
+  /**
+   * The message as it would arrive for this agent, variables already filled in. Read-only, so
+   * the screen can show it before anything is sent.
+   */
+  @Get('users/:user/onboarding/:kind')
+  onboardingPreview(
+    @Param('user', ParseIntPipe) id: number,
+    @Param('kind') kind: string,
+  ): Promise<OnboardingPreview> {
+    return this.onboarding.preview(id, kind as OnboardingKind);
+  }
+
+  /** Send it. A subject/body in the body are the reviewed version and win over the template. */
+  @Post('users/:user/onboarding/:kind')
+  @HttpCode(200)
+  onboardingSend(
+    @Param('user', ParseIntPipe) id: number,
+    @Param('kind') kind: string,
+    @Body() body: { subject?: string; html?: string },
+  ): Promise<{ message: string; to: string }> {
+    return this.onboarding.send(id, kind as OnboardingKind, body ?? {});
+  }
 
   @Get('users/catalog')
   catalog(): ReturnType<UsersService['catalog']> {
