@@ -1,6 +1,6 @@
 import type { AxiosRequestConfig } from 'axios';
 import api from './axios';
-import type { AgentChangeNotif, AgentCommissionMap, AgentLoanMap, AuditLogPage, BrokerageSuggestion, ChatMessage, ClientIdentification, CompanySettings, DashboardCommissions, DealHistoryEntry, DeletionLogEntry, DocNotif, DocumentsResponse, EmailTemplate, EmailTemplatesResponse, GenerateInvoicesResult, Invoice, LawyerSuggestion, MailAccount, ManagedUser, NoticeOfSaleData, SendResult, TemplatePreview, TestMailResult, Transaction, TrashedDocument, TrashedInvoice, TrashedPayment, TrashedResponse, TrashedRowItem, TrashedTransaction, UsersCatalog } from '../types';
+import type { EmailTemplateAttachment, AgentChangeNotif, AgentCommissionMap, AgentLoanMap, AuditLogPage, BrokerageSuggestion, ChatMessage, ClientIdentification, CompanySettings, DashboardCommissions, DealHistoryEntry, DeletionLogEntry, DocNotif, DocumentsResponse, EmailTemplate, EmailTemplatesResponse, GenerateInvoicesResult, Invoice, LawyerSuggestion, MailAccount, ManagedUser, NoticeOfSaleData, SendResult, TemplatePreview, TestMailResult, Transaction, TrashedDocument, TrashedInvoice, TrashedPayment, TrashedResponse, TrashedRowItem, TrashedTransaction, UsersCatalog } from '../types';
 
 /** Route parameter identifiers (Laravel accepts numeric or string ids). */
 type Id = number | string;
@@ -331,5 +331,23 @@ export const testMailAccount = (id: Id, to: string): Promise<TestMailResult> => 
 
 export const getEmailTemplates = (): Promise<EmailTemplatesResponse> => api.get('/api/email-templates').then((r) => r.data);
 export const updateEmailTemplate = (id: Id, payload: unknown): Promise<EmailTemplate> => api.put(`/api/email-templates/${id}`, payload).then((r) => r.data.data ?? r.data);
+
+/**
+ * Template attachments — files sent with every email from that template.
+ *
+ * Uploaded as base64 in JSON rather than multipart, matching how campaign template attachments
+ * and document uploads already work here, so the 12 MB body limit set in main.ts applies.
+ */
+export const addEmailTemplateAttachment = (
+  id: Id, filename: string, contentType: string, base64: string,
+): Promise<EmailTemplateAttachment> =>
+  api.post(`/api/email-templates/${id}/attachments`, { filename, content_type: contentType, data: base64 }).then((r) => r.data);
+
+export const deleteEmailTemplateAttachment = (id: Id, attachmentId: number): Promise<{ deleted: boolean }> =>
+  api.delete(`/api/email-templates/${id}/attachments/${attachmentId}`).then((r) => r.data);
+
+/** Download URL — relative, so it resolves against whatever host serves the app. */
+export const emailTemplateAttachmentUrl = (id: Id, attachmentId: number): string =>
+  `${api.defaults.baseURL ?? ''}/api/email-templates/${id}/attachments/${attachmentId}`;
 export const previewEmailTemplate = (id: Id): Promise<TemplatePreview> => api.post(`/api/email-templates/${id}/preview`).then((r) => r.data);
 export const getMailEvents = (): Promise<unknown> => api.get('/api/mail-events').then((r) => r.data);

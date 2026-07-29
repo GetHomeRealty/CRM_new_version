@@ -52,7 +52,19 @@ export class MailerService {
     // Never CC an address that's already a primary recipient (mirrors dispatchViaAccount).
     const toList = (Array.isArray(to) ? to : [to]).map((e) => e.toLowerCase());
     const ccClean = [...new Set(cc)].filter((e) => e && !toList.includes(e.toLowerCase()));
-    await this.dispatch(account, to, subject, body, ccClean, attachments);
+    // Files attached to the template ride along with every send, ahead of anything the caller
+    // supplied (a generated invoice PDF, say) so the fixed material comes first in the message.
+    const stored = await this.prisma.email_template_attachments.findMany({
+      where: { template_id: template.id },
+      select: { filename: true, content_type: true, data: true },
+    });
+    const templateFiles = stored.map((a) => ({
+      data: Buffer.from(a.data).toString('base64'),
+      name: a.filename,
+      mime: a.content_type,
+    }));
+
+    await this.dispatch(account, to, subject, body, ccClean, [...templateFiles, ...attachments]);
   }
 
   /**

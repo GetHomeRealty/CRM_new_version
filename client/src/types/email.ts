@@ -17,6 +17,14 @@ export interface MailAccount {
 }
 
 /** A configurable email template. */
+/** A file sent with every email from a template. Metadata only — the bytes stay on the server. */
+export interface EmailTemplateAttachment {
+  id: number;
+  filename: string;
+  content_type: string;
+  size: number;
+}
+
 export interface EmailTemplate {
   id: number | string;
   name: string;
@@ -27,6 +35,7 @@ export interface EmailTemplate {
   mail_account_id?: number | string | null;
   is_active?: boolean;
   variables?: string[];
+  attachments?: EmailTemplateAttachment[];
   [key: string]: unknown;
 }
 

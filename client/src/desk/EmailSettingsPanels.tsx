@@ -8,6 +8,8 @@ import { type ToastFn } from './toast';
 import { apiErrorMessage } from '../lib/apiError';
 import type { EmailTemplate, MailAccount, TemplateGroup, TemplatePreview } from '../types';
 import RichTextEditor, { type RichTextHandle } from './RichTextEditor';
+import { addEmailTemplateAttachment, deleteEmailTemplateAttachment, emailTemplateAttachmentUrl } from '../lib/api';
+import type { EmailTemplateAttachment } from '../types/email';
 
 /**
  * The SMTP-account and email-template panels.
@@ -255,6 +257,12 @@ function TemplateEditor({ template, accounts, onClose, onSaved, toast }: Templat
   const [saving, setSaving] = useState(false);
   const [preview, setPreview] = useState<TemplatePreview | null>(null);
   const bodyRef = useRef<RichTextHandle>(null);
+  // Attachments are managed on their own endpoints, not through the template body, so they
+  // save the moment they are picked rather than waiting for Save. That keeps a large file out
+  // of the template PUT, and means closing without saving does not silently discard an upload.
+  const [files, setFiles] = useState<EmailTemplateAttachment[]>(template.attachments ?? []);
+  const [busyFile, setBusyFile] = useState('');
+  const fileInput = useRef<HTMLInputElement>(null);
   const set = <K extends keyof TemplateForm>(k: K, v: TemplateForm[K]) => setForm((f) => ({ ...f, [k]: v }));
 
   // The editor owns the caret in both of its views, so insertion is delegated to it.
@@ -262,6 +270,40 @@ function TemplateEditor({ template, accounts, onClose, onSaved, toast }: Templat
     const token = `{{ ${v} }}`;
     if (bodyRef.current) bodyRef.current.insert(token);
     else set('body_html', form.body_html + token);
+  };
+
+  const addFile = async (file: File | null) => {
+    if (!file) return;
+    setBusyFile('upload');
+    try {
+      const base64 = await new Promise<string>((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve(String(r.result ?? '').split(',')[1] ?? '');
+        r.onerror = () => reject(new Error('Could not read that file'));
+        r.readAsDataURL(file);
+      });
+      const added = await addEmailTemplateAttachment(template.id, file.name, file.type || 'application/octet-stream', base64);
+      setFiles((f) => [...f, added]);
+      toast(`${file.name} attached`, 'ok');
+    } catch (e) {
+      toast(apiErrorMessage(e, 'Could not attach that file'), 'bad');
+    } finally {
+      setBusyFile('');
+      // Cleared so re-picking the same file fires change again.
+      if (fileInput.current) fileInput.current.value = '';
+    }
+  };
+
+  const removeFile = async (a: EmailTemplateAttachment) => {
+    if (!window.confirm(`Remove ${a.filename} from this template?`)) return;
+    setBusyFile(String(a.id));
+    try {
+      await deleteEmailTemplateAttachment(template.id, a.id);
+      setFiles((f) => f.filter((x) => x.id !== a.id));
+      toast('Attachment removed', 'ok');
+    } catch (e) {
+      toast(apiErrorMessage(e, 'Could not remove it'), 'bad');
+    } finally { setBusyFile(''); }
   };
 
   const doSave = async () => {
@@ -324,6 +366,30 @@ function TemplateEditor({ template, accounts, onClose, onSaved, toast }: Templat
             </div>
           </div>
         )}
+
+        <div className="field" style={{ marginBottom: 12 }}>
+          <label>Attachments</label>
+          <span className="help" style={{ marginBottom: 6, display: 'block' }}>
+            Sent with every email from this template — up to 5 files, 5 MB in total.
+          </span>
+          {files.length > 0 && (
+            <ul className="tmpl-files">
+              {files.map((a) => (
+                <li key={a.id}>
+                  <span className="tmpl-file-ico">📎</span>
+                  <a href={emailTemplateAttachmentUrl(template.id, a.id)} target="_blank" rel="noreferrer">{a.filename}</a>
+                  <span className="tmpl-file-size">{a.size < 1024 * 1024 ? `${Math.max(1, Math.round(a.size / 1024))} KB` : `${(a.size / 1024 / 1024).toFixed(1)} MB`}</span>
+                  <button type="button" className="btn ghost sm" disabled={busyFile !== ''} onClick={() => void removeFile(a)}>Remove</button>
+                </li>
+              ))}
+            </ul>
+          )}
+          <input ref={fileInput} type="file" style={{ display: 'none' }} onChange={(e) => void addFile(e.target.files?.[0] ?? null)} />
+          <button type="button" className="btn ghost sm" disabled={busyFile !== '' || files.length >= 5}
+            onClick={() => fileInput.current?.click()}>
+            {busyFile === 'upload' ? 'Attaching…' : files.length >= 5 ? 'Attachment limit reached' : '📎 Attach a file'}
+          </button>
+        </div>
 
         {preview && (
           <div className="card" style={{ background: '#f8fafc', marginBottom: 12 }}>

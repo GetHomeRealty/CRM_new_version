@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { type email_templates, type mail_accounts } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CompanySettingsService } from '../settings/company-settings.service';
@@ -7,7 +7,22 @@ import { throwValidation, type FieldErrors } from '../common/laravel-exceptions'
 import { toDateTimeString } from '../common/serialize';
 import { MAIL_EVENTS, renderTemplate, variablesFor, type MailEvent } from './mail-event-registry';
 
-type TemplateWithAccount = email_templates & { mail_accounts: mail_accounts | null };
+type AttachmentMeta = { id: number; filename: string; content_type: string; size: number };
+type TemplateWithAccount = email_templates & {
+  mail_accounts: mail_accounts | null;
+  attachments?: AttachmentMeta[];
+};
+
+/**
+ * Files that ride along with every send of a template.
+ *
+ * The ceilings mirror the campaign templates, for the same reason: SMTP providers reject an
+ * oversized message outright, and a template that quietly fails to send is worse than one that
+ * refuses the file at upload time. Gmail's own limit is 25 MB for the whole encoded message, and
+ * base64 inflates by a third, so 5 MB of attachments leaves ample room for the body.
+ */
+export const MAX_TEMPLATE_ATTACHMENT_BYTES = 5 * 1024 * 1024;
+export const MAX_TEMPLATE_ATTACHMENTS = 5;
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 @Injectable()
@@ -22,7 +37,9 @@ export class EmailTemplateService {
   async index(): Promise<Record<string, unknown>> {
     for (const [key, meta] of Object.entries(MAIL_EVENTS)) await this.firstOrCreate(key, meta);
 
-    const templates = (await this.prisma.email_templates.findMany({ include: { mail_accounts: true } })) as TemplateWithAccount[];
+    const templates = (await this.prisma.email_templates.findMany({
+      include: { mail_accounts: true, attachments: { select: { id: true, filename: true, content_type: true, size: true } } },
+    })) as TemplateWithAccount[];
     templates.sort((a, b) =>
       a.module.localeCompare(b.module, 'en', { sensitivity: 'base' }) ||
       a.name.localeCompare(b.name, 'en', { sensitivity: 'base' }) ||
@@ -45,7 +62,10 @@ export class EmailTemplateService {
     if (!existing) throw new NotFoundException({ message: `No query results for model [App\\Models\\EmailTemplate] ${id}.` });
     const data = await this.validate(body);
     await this.prisma.email_templates.update({ where: { id }, data: { ...data, updated_at: new Date() } });
-    const fresh = (await this.prisma.email_templates.findUnique({ where: { id }, include: { mail_accounts: true } })) as TemplateWithAccount;
+    const fresh = (await this.prisma.email_templates.findUnique({
+      where: { id },
+      include: { mail_accounts: true, attachments: { select: { id: true, filename: true, content_type: true, size: true } } },
+    })) as TemplateWithAccount;
     return this.resource(fresh);
   }
 
@@ -81,6 +101,8 @@ export class EmailTemplateService {
       is_active: !!t.is_active,
       variables: variablesFor(t.event_key),
       mail_account: t.mail_accounts ? { id: t.mail_accounts.id, name: t.mail_accounts.name, from_email: t.mail_accounts.from_email } : null,
+      // Metadata only — the bytes are fetched on demand, so listing templates stays small.
+      attachments: t.attachments ?? [],
       updated_at: toDateTimeString(t.updated_at),
     };
   }
@@ -141,4 +163,68 @@ export class EmailTemplateService {
     if (Object.prototype.hasOwnProperty.call(body, 'is_active')) out.is_active = body.is_active === true || body.is_active === 1 || ['1', 'true'].includes(String(body.is_active));
     return out;
   }
+  // ----------------------------------------------------------- attachments
+  /**
+   * Store a file that is sent with every email from this template — a brochure, a form, a
+   * terms sheet. Held in the row rather than on disk so a template and its files travel
+   * together in a backup and neither can be orphaned by the other.
+   */
+  async addAttachment(templateId: number, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const template = await this.prisma.email_templates.findUnique({
+      where: { id: templateId },
+      include: { attachments: { select: { id: true, size: true } } },
+    });
+    if (!template) throw new NotFoundException({ message: `No query results for model [App\Models\EmailTemplate] ${templateId}.` });
+
+    const filename = String(body.filename ?? '').trim() || 'attachment';
+    const contentType = String(body.content_type ?? '').trim() || 'application/octet-stream';
+    // A file input may hand over a full data: URI; accept either that or bare base64.
+    const base64 = String(body.data ?? '').replace(/^data:[^;]+;base64,/, '');
+    if (!base64) throw new BadRequestException({ message: 'The file is empty.' });
+
+    let buffer: Buffer;
+    try { buffer = Buffer.from(base64, 'base64'); }
+    catch { throw new BadRequestException({ message: 'That file could not be read.' }); }
+    if (buffer.length === 0) throw new BadRequestException({ message: 'The file is empty.' });
+
+    if (template.attachments.length >= MAX_TEMPLATE_ATTACHMENTS) {
+      throw new BadRequestException({ message: `A template can carry at most ${MAX_TEMPLATE_ATTACHMENTS} attachments.` });
+    }
+    const totalAfter = template.attachments.reduce((sum, a) => sum + a.size, 0) + buffer.length;
+    if (totalAfter > MAX_TEMPLATE_ATTACHMENT_BYTES) {
+      const mb = (MAX_TEMPLATE_ATTACHMENT_BYTES / 1024 / 1024).toFixed(0);
+      throw new BadRequestException({
+        message: `Attachments would total ${(totalAfter / 1024 / 1024).toFixed(1)} MB, above the ${mb} MB limit — most mail servers would reject the message.`,
+      });
+    }
+
+    return this.prisma.email_template_attachments.create({
+      data: {
+        template_id: templateId,
+        filename: filename.slice(0, 255),
+        content_type: contentType.slice(0, 128),
+        size: buffer.length,
+        // Prisma's Bytes maps to Uint8Array; a Node Buffer may sit on a SharedArrayBuffer,
+        // which the generated type rejects. Copy into a plain view.
+        data: new Uint8Array(buffer),
+        created_at: new Date(),
+      },
+      select: { id: true, filename: true, content_type: true, size: true },
+    });
+  }
+
+  /** The stored bytes, for downloading a file back out of a template. */
+  async getAttachment(templateId: number, attachmentId: number): Promise<{ filename: string; contentType: string; data: Buffer }> {
+    const row = await this.prisma.email_template_attachments.findFirst({ where: { id: attachmentId, template_id: templateId } });
+    if (!row) throw new NotFoundException({ message: 'Attachment not found.' });
+    return { filename: row.filename, contentType: row.content_type, data: Buffer.from(row.data) };
+  }
+
+  async removeAttachment(templateId: number, attachmentId: number): Promise<{ deleted: boolean }> {
+    const row = await this.prisma.email_template_attachments.findFirst({ where: { id: attachmentId, template_id: templateId }, select: { id: true } });
+    if (!row) throw new NotFoundException({ message: 'Attachment not found.' });
+    await this.prisma.email_template_attachments.delete({ where: { id: row.id } });
+    return { deleted: true };
+  }
+
 }

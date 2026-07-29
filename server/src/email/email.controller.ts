@@ -1,4 +1,5 @@
-import { Body, Controller, Delete, Get, HttpCode, NotFoundException, Param, ParseIntPipe, Post, Put, UnprocessableEntityException, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, NotFoundException, Param, ParseIntPipe, Post, Put, Res as ResponseParam, UnprocessableEntityException, UseGuards } from '@nestjs/common';
+import type { Response as ExpressResponse } from 'express';
 import { AuthGuard } from '../auth/guards/auth.guard';
 import { AdminGuard } from '../auth/guards/admin.guard';
 import { MailAccountService } from './mail-account.service';
@@ -65,6 +66,36 @@ export class EmailController {
   @Post('email-templates/:emailTemplate/preview')
   @HttpCode(200)
   templatePreview(@Param('emailTemplate', ParseIntPipe) id: number): Promise<{ subject: string; html: string }> { return this.templates.preview(id); }
+
+  // ---- Template attachments ----
+  @Post('email-templates/:emailTemplate/attachments')
+  @HttpCode(200)
+  templateAddAttachment(@Param('emailTemplate', ParseIntPipe) id: number, @Body() body: Res): Promise<Res> {
+    return this.templates.addAttachment(id, body ?? {});
+  }
+
+  @Get('email-templates/:emailTemplate/attachments/:attachmentId')
+  async templateGetAttachment(
+    @Param('emailTemplate', ParseIntPipe) id: number,
+    @Param('attachmentId', ParseIntPipe) attachmentId: number,
+    @ResponseParam() res: ExpressResponse,
+  ): Promise<void> {
+    const file = await this.templates.getAttachment(id, attachmentId);
+    res.setHeader('Content-Type', file.contentType);
+    // Always `attachment`: a stored HTML or SVG file must download rather than execute in
+    // this origin, where it would sit alongside the session cookie.
+    res.setHeader('Content-Disposition', `attachment; filename="${file.filename.replace(/"/g, '')}"`);
+    res.end(file.data);
+  }
+
+  @Delete('email-templates/:emailTemplate/attachments/:attachmentId')
+  @HttpCode(200)
+  templateRemoveAttachment(
+    @Param('emailTemplate', ParseIntPipe) id: number,
+    @Param('attachmentId', ParseIntPipe) attachmentId: number,
+  ): Promise<{ deleted: boolean }> {
+    return this.templates.removeAttachment(id, attachmentId);
+  }
 
   @Get('mail-events')
   events(): Record<string, MailEvent> { return this.templates.events(); }
