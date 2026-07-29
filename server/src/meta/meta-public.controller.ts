@@ -7,6 +7,7 @@ import { MetaSyncService } from './meta-sync.service';
 import { MetaStateService } from './meta-state.service';
 import { REQUIRED_LIVE_PERMISSIONS, isConfigured, redirectUri, webhookSecret, webhookVerifyToken } from './meta.constants';
 import { createHash } from 'node:crypto';
+import { SkipThrottle } from '@nestjs/throttler';
 
 const str = (v: unknown): string => String(v ?? '').trim();
 
@@ -18,6 +19,13 @@ const str = (v: unknown): string => String(v ?? '').trim();
  * Registered BEFORE MetaController so `meta/callback` and `meta/webhook` are matched by these
  * literal routes rather than falling into the guarded controller.
  */
+/**
+ * Exempt from rate limiting.
+ *
+ * Meta lead-ad deliveries and the OAuth callback. A lead form spike arrives as a burst from
+ * Meta's own addresses; a throttled webhook is a lost lead, not a blocked attacker.
+ */
+@SkipThrottle()
 @Controller('meta')
 export class MetaPublicController {
   private readonly log = new Logger(MetaPublicController.name);

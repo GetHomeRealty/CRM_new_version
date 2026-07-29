@@ -4,6 +4,7 @@ import type { NestExpressApplication } from '@nestjs/platform-express';
 import session from 'express-session';
 import connectPgSimple from 'connect-pg-simple';
 import { Pool } from 'pg';
+import helmet from 'helmet';
 import { AppModule } from './app.module';
 import configuration from './config/configuration';
 import { assertProductionConfig } from './config/validate-config';
@@ -34,8 +35,27 @@ async function bootstrap(): Promise<void> {
   app.useBodyParser('json', { limit: '12mb' });
   app.useBodyParser('urlencoded', { limit: '12mb', extended: true });
 
-  // Trust the proxy so secure cookies work behind nginx in production.
+  // Trust the proxy so secure cookies work behind nginx in production. It is also what makes
+  // rate limiting meaningful: without it every request appears to come from the proxy's address
+  // and the whole site would share one bucket.
   app.set('trust proxy', 1);
+
+  // Security response headers: HSTS, nosniff, no referrer leakage, framing and CSP.
+  app.use(
+    helmet({
+      // Two things this API serves are *meant* to be loaded from other origins, and the default
+      // (same-origin) silently blocks both:
+      //   - the campaign open-tracking pixel, fetched by recipients' mail clients;
+      //   - the brand logo and user photos, used as <img src> by the SPA, which in development
+      //     runs on a different port.
+      // Cross-origin READS of these is the intended behaviour; what must stay closed is
+      // credentialed API access, and that is CORS's job, which is configured above.
+      crossOriginResourcePolicy: { policy: 'cross-origin' },
+      // The one HTML page this API serves (campaign unsubscribe) styles itself with inline
+      // `style` attributes, which helmet's default style-src already permits. Scripts are not
+      // relaxed: nothing here serves any.
+    }),
+  );
 
   // CORS for the React SPA — credentials required for cookie auth.
   app.enableCors({

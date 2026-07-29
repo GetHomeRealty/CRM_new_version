@@ -1,6 +1,7 @@
 import { Controller, Get, Query, Req, Res } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { CampaignsService } from './campaigns.service';
+import { SkipThrottle } from '@nestjs/throttler';
 
 /** 1×1 transparent GIF. */
 const PIXEL = Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64');
@@ -25,6 +26,13 @@ const looksAutomated = (userAgent: string): boolean => {
  * exempts. Neither exposes data: the pixel returns an image whatever happens, and the
  * unsubscribe page reveals nothing beyond whether the link was valid.
  */
+/**
+ * Exempt from rate limiting.
+ *
+ * Open-tracking pixel and unsubscribe, fetched by recipients' mail clients. One corporate mail
+ * gateway can prefetch many at once, and a throttled unsubscribe link is a compliance problem.
+ */
+@SkipThrottle()
 @Controller('campaigns')
 export class CampaignTrackingController {
   constructor(private readonly campaigns: CampaignsService) {}

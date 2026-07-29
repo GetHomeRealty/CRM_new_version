@@ -1,7 +1,9 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
+import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import configuration from './config/configuration';
+import { GLOBAL_LIMIT } from './config/rate-limits';
 import { PrismaModule } from './prisma/prisma.module';
 import { AppController } from './app.controller';
 import { AuditModule } from './audit/audit.module';
@@ -45,6 +47,14 @@ import { TwilioVoiceModule } from './twilio-voice/twilio-voice.module';
       isGlobal: true,
       load: [configuration],
     }),
+    // Rate limiting, keyed by client IP — the real one, because `trust proxy` is set in main.ts;
+    // without that every request would look like it came from nginx and the whole site would
+    // share a single bucket.
+    //
+    // Exactly ONE bucket belongs here. Every throttler listed applies to every route, so the
+    // stricter sign-in limit is an endpoint-level override rather than a second entry — see
+    // config/rate-limits.ts, which explains why and is regression-tested.
+    ThrottlerModule.forRoot([GLOBAL_LIMIT]),
     PrismaModule,
     AuditModule,
     CommissionModule,
@@ -84,6 +94,10 @@ import { TwilioVoiceModule } from './twilio-voice/twilio-voice.module';
   providers: [
     // Global CSRF protection (Sanctum double-submit); safe methods are exempt.
     { provide: APP_GUARD, useClass: CsrfGuard },
+    // Rate limiting for every route. Provider callbacks that legitimately burst — Twilio status
+    // webhooks during a bulk send, Meta lead deliveries — opt out with @SkipThrottle on their
+    // controllers, since throttling those drops real data rather than turning away an attacker.
+    { provide: APP_GUARD, useClass: ThrottlerGuard },
   ],
 })
 export class AppModule {}

@@ -2,6 +2,7 @@ import { Controller, ForbiddenException, Header, HttpCode, Logger, Post, Req } f
 import type { Request } from 'express';
 import { TwilioService } from '../sms/twilio.service';
 import { TwilioVoiceService } from './twilio-voice.service';
+import { SkipThrottle } from '@nestjs/throttler';
 
 const str = (v: unknown): string => String(v ?? '').trim();
 
@@ -10,6 +11,12 @@ const str = (v: unknown): string => String(v ?? '').trim();
  * authenticated by the `X-Twilio-Signature` HMAC, exactly like the SMS webhooks. Returns TwiML
  * that dials the lead and records the call.
  */
+/**
+ * Exempt from rate limiting.
+ *
+ * Twilio voice webhook. Dropping one breaks a call that is in progress.
+ */
+@SkipThrottle()
 @Controller('twilio/voice')
 export class TwilioVoicePublicController {
   private readonly log = new Logger(TwilioVoicePublicController.name);

@@ -4,6 +4,7 @@ import { TwilioService } from './twilio.service';
 import { SmsInboundService } from './sms-inbound.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { mapProviderStatus, explainError, accountSid, authToken } from './sms.constants';
+import { SkipThrottle } from '@nestjs/throttler';
 
 const str = (v: unknown): string => String(v ?? '').trim();
 
@@ -18,6 +19,13 @@ const str = (v: unknown): string => String(v ?? '').trim();
  * point being retried about a message that does not exist. A bad signature is the exception: it
  * gets a 403, so a misconfiguration is loud rather than silently swallowed.
  */
+/**
+ * Exempt from rate limiting.
+ *
+ * Twilio delivery-status and inbound-message callbacks. A bulk SMS send produces one status
+ * POST per recipient in a burst; throttling them would silently discard real delivery data.
+ */
+@SkipThrottle()
 @Controller('sms/twilio')
 export class SmsPublicController {
   private readonly log = new Logger(SmsPublicController.name);

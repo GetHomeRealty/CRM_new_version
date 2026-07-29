@@ -9,7 +9,9 @@ import {
   UnauthorizedException,
   UseGuards,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { ConfigService } from '@nestjs/config';
+import { AUTH_LIMIT } from '../config/rate-limits';
 import { randomBytes } from 'crypto';
 import type { Request, Response } from 'express';
 import type { AppConfig } from '../config/configuration';
@@ -53,7 +55,14 @@ export class AuthController {
     res.status(204).send();
   }
 
+  /**
+   * Registration and sign-in are the endpoints where repetition IS the attack, so both take the
+   * strict limit instead of the generous global one. It overrides the single global bucket for
+   * these routes only — a second bucket declared in AppModule would apply to the entire API and
+   * turn the eleventh request of any kind into a 429.
+   */
   @Post('register')
+  @Throttle({ default: AUTH_LIMIT })
   async register(@Body() dto: RegisterDto, @Req() req: Request): Promise<{ user: AuthPayload }> {
     const user = await this.auth.register(dto.name, dto.email, dto.password, dto.password_confirmation);
     req.session.userId = user.id; // Auth::login + session regenerate
@@ -61,6 +70,7 @@ export class AuthController {
   }
 
   @Post('login')
+  @Throttle({ default: AUTH_LIMIT })
   @HttpCode(200)
   async login(@Body() dto: LoginDto, @Req() req: Request): Promise<{ user: AuthPayload }> {
     const user = await this.auth.login(dto.username, dto.password);
@@ -89,7 +99,9 @@ export class AuthController {
     return { message: 'Logged out' };
   }
 
+  // Changing a password requires the current one, so this is a guessing surface too.
   @Post('user/password')
+  @Throttle({ default: AUTH_LIMIT })
   @HttpCode(200)
   @UseGuards(AuthGuard)
   async changePassword(
