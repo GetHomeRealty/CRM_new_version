@@ -34,6 +34,16 @@ const withSession = (over: Partial<AppConfig['session']>): AppConfig => {
 };
 
 describe('production configuration guard', () => {
+  // TZ is read from the real environment, not the config object, so it is pinned for these tests.
+  const savedTz = process.env.TZ;
+  beforeEach(() => { process.env.TZ = 'America/Toronto'; });
+  afterAll(() => { if (savedTz === undefined) delete process.env.TZ; else process.env.TZ = savedTz; });
+
+  it('requires TZ, because several modules derive dates from the server clock', () => {
+    delete process.env.TZ;
+    expect(productionConfigProblems(good()).join(' ')).toContain('TZ is not set');
+  });
+
   it('passes a correct single-origin production setup', () => {
     expect(productionConfigProblems(good())).toEqual([]);
   });
@@ -80,6 +90,27 @@ describe('production configuration guard', () => {
 
     it('rejects a short secret', () => {
       expect(productionConfigProblems(withSession({ secret: 'tooshort' })).join(' ')).toContain('at least 32');
+    });
+  });
+
+  describe('FRONTEND_URL — builds outgoing links, so a dev value escapes the building', () => {
+    it('rejects the localhost default even when CORS_ORIGINS is correct', () => {
+      // The trap: corsOrigins only falls back to FRONTEND_URL when CORS_ORIGINS is empty, so a
+      // correct CORS_ORIGINS hides an unset FRONTEND_URL completely.
+      const cfg = { ...good(), frontendUrl: 'http://localhost:5173', corsOrigins: ['https://gethomehub.ca'] };
+      expect(productionConfigProblems(cfg).join(' ')).toContain('FRONTEND_URL');
+    });
+
+    it('rejects an unset value', () => {
+      expect(productionConfigProblems({ ...good(), frontendUrl: '' }).join(' ')).toContain('FRONTEND_URL');
+    });
+
+    it('rejects a trailing slash, which would produce "//" in every generated link', () => {
+      expect(productionConfigProblems({ ...good(), frontendUrl: 'https://gethomehub.ca/' }).join(' ')).toContain('trailing slash');
+    });
+
+    it('accepts a proper https origin', () => {
+      expect(productionConfigProblems({ ...good(), frontendUrl: 'https://gethomehub.ca' })).toEqual([]);
     });
   });
 

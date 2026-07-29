@@ -63,6 +63,37 @@ export function productionConfigProblems(cfg: AppConfig): string[] {
       + 'and drop the cookie, which surfaces as a login that immediately bounces back.');
   }
 
+  // FRONTEND_URL is checked separately from CORS, not folded into it. corsOrigins falls back to
+  // FRONTEND_URL only when CORS_ORIGINS is empty, so setting CORS_ORIGINS correctly hides an
+  // unset FRONTEND_URL entirely — and FRONTEND_URL builds OUTGOING links: the Google and Meta
+  // OAuth returns, and the "view this lead" link in notification emails. Left unset those all
+  // point at http://localhost:5173, which reaches nothing from a recipient's inbox.
+  const frontend = cfg.frontendUrl.trim();
+  if (!frontend || /localhost|127\.0\.0\.1/i.test(frontend)) {
+    problems.push(
+      `FRONTEND_URL is "${frontend || '(unset)'}". It builds the OAuth return URLs and the links `
+      + 'inside notification emails, so a development value would send recipients to their own machine.',
+    );
+  } else if (!frontend.startsWith('https://')) {
+    problems.push(`FRONTEND_URL "${frontend}" is not https.`);
+  } else if (frontend.endsWith('/')) {
+    problems.push(`FRONTEND_URL "${frontend}" has a trailing slash; the URLs built from it would contain "//".`);
+  }
+
+  // Several modules build a calendar date from the server's LOCAL time — Inventory's `todayKey`,
+  // the all-day event dates in the calendar sync and iCal feed, Meta's week-start figure. That is
+  // deliberate (the comment on todayKey says so) and correct on an Eastern machine, which is what
+  // development runs on. A Linux server defaults to UTC, where the same instant at 10:30pm Toronto
+  // is already the next day — so those dates silently shift forward by one, every evening. One
+  // environment variable settles it, and it is not something to discover from a misdated record.
+  const tz = (process.env.TZ ?? '').trim();
+  if (!tz) {
+    problems.push(
+      'TZ is not set. Parts of the application build dates from the server\'s local time, so a '
+      + 'UTC host records anything entered after 8pm as the following day. Set TZ=America/Toronto.',
+    );
+  }
+
   const origins = cfg.corsOrigins;
   if (!origins.length) {
     problems.push('CORS_ORIGINS (or FRONTEND_URL) is not set, so the browser has no allowed origin.');
