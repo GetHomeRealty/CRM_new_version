@@ -15,11 +15,6 @@ import FavoritesPage from './FavoritesPage';
  * Back button steps between the two.
  */
 
-const TABS = [
-  { key: 'listings', label: 'Listings', ico: '\u{1F3F7}' },
-  { key: 'favorites', label: 'Favorites', ico: '\u{2665}' },
-] as const;
-
 export default function MlsModulePage() {
   const [params, setParams] = useSearchParams();
   const { can } = useAuth();
@@ -38,20 +33,12 @@ export default function MlsModulePage() {
     setParams(next, { replace: true });
   };
 
-  const visible = TABS.filter((t) => t.key !== 'favorites' || maySeeFavorites);
-
   return (
     <>
-      {visible.length > 1 && (
-        <div className="toolbar"><div className="toolbar-row">
-          {visible.map((t) => (
-            <button key={t.key} className={`btn sm ${tab === t.key ? 'primary' : 'ghost'}`} onClick={() => go(t.key)}>
-              {t.ico} {t.label}
-            </button>
-          ))}
-        </div></div>
-      )}
-
+      {/* No tab bar here: the sidebar now lists MLS and Favorites as sections, and putting the
+          same choice in two places means two things to keep in step and a row of buttons that
+          repeats what is already on screen. `go` is still used by the page's own
+          "♥ My Favorites" button. */}
       {tab === 'favorites' ? <FavoritesPage /> : <MlsPage onShowFavorites={() => go('favorites')} />}
     </>
   );

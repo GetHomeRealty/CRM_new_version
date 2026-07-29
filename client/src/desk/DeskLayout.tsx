@@ -14,6 +14,25 @@ interface NavItem {
   superAdmin?: boolean;
   /** Shown only to agents — their own personal settings, self-scoped. */
   agentOnly?: boolean;
+  /**
+   * Sections of this module, shown as an indented list under the entry.
+   *
+   * Each child carries its own `key`, which is both its screen permission and, by default,
+   * where it goes. A child the user has no permission for is dropped, and an entry left with
+   * one child collapses back to a plain link — so a module never advertises a section that
+   * cannot be opened.
+   */
+  children?: NavChild[];
+}
+
+interface NavChild {
+  key: string;
+  label: string;
+  ico?: string;
+  /** Where it navigates. Defaults to `/app/<key>`. */
+  path?: string;
+  /** Whether this child is the one currently open. */
+  match?: (pathname: string, search: string) => boolean;
 }
 
 const NAV: NavItem[] = [
@@ -27,7 +46,15 @@ const NAV: NavItem[] = [
   { key: 'lead', label: 'Lead', ico: '\u{1F9D1}' },
   { key: 'campaigns', label: 'Campaigns', ico: '\u{1F4E3}' },
   { key: 'meta', label: 'Meta', ico: '\u{1F310}' },
-  { key: 'mls', label: 'MLS', ico: '\u{1F3F7}' },
+  {
+    key: 'mls', label: 'MLS', ico: '\u{1F3F7}',
+    children: [
+      { key: 'mls', label: 'MLS', ico: '\u{1F3F7}', path: '/app/mls',
+        match: (_p, q) => new URLSearchParams(q).get('tab') !== 'favorites' },
+      { key: 'favorites', label: 'Favorites', ico: '\u{2665}', path: '/app/mls?tab=favorites',
+        match: (_p, q) => new URLSearchParams(q).get('tab') === 'favorites' },
+    ],
+  },
   // Deal group: Transactions → Invoice → Reports
   { key: 'transactions', label: 'Transactions', ico: '\u{1F4DA}' },
   { key: 'invoice', label: 'Invoice', ico: '\u{1F9FE}' },
@@ -96,7 +123,22 @@ export default function DeskLayout() {
     markDocNotificationsSeen(item.id).then(loadDocNotif).catch(() => {});
   };
 
-  const visibleNav = NAV.filter((n) => (n.agentOnly ? isAgent : n.superAdmin ? isSuperAdmin : can(n.key, 'view')));
+  const visibleNav = NAV.filter((n) => (n.agentOnly ? isAgent : n.superAdmin ? isSuperAdmin : can(n.key, 'view')))
+    // Drop sections the user has no permission for, and flatten an entry back to a plain link
+    // when only one is left — an expander that reveals a single item is just a slower click.
+    .map((n) => {
+      if (!n.children) return n;
+      const kids = n.children.filter((c) => can(c.key, 'view'));
+      return kids.length > 1 ? { ...n, children: kids } : { ...n, children: undefined };
+    });
+
+  /**
+   * Which module entries are expanded. Seeded so the one containing the current page is already
+   * open on arrival — landing on Favorites with its parent collapsed would leave no indication
+   * of where you are.
+   */
+  const [openNav, setOpenNav] = useState<Record<string, boolean>>({});
+  const toggleNav = (key: string) => setOpenNav((o) => ({ ...o, [key]: !(o[key] ?? false) }));
 
   const seg = location.pathname.split('/')[2] || 'transactions';
   const title = location.pathname.includes('/transactions/') ? 'Transaction Detail' : (TITLES[seg] || 'Transactions');
@@ -124,11 +166,43 @@ export default function DeskLayout() {
             />
           </div>
           <nav className="nav">
-            {visibleNav.map((n) => (
-              <button key={n.key} className={seg === n.key ? 'active' : ''} onClick={() => go(n.key)}>
-                <span className="ico">{n.ico}</span><span>{n.label}</span>
-              </button>
-            ))}
+            {visibleNav.map((n) => {
+              if (!n.children) {
+                return (
+                  <button key={n.key} className={seg === n.key ? 'active' : ''} onClick={() => go(n.key)}>
+                    <span className="ico">{n.ico}</span><span>{n.label}</span>
+                  </button>
+                );
+              }
+              const onModule = seg === n.key;
+              // Open if explicitly toggled, otherwise whenever the current page is inside it.
+              const open = openNav[n.key] ?? onModule;
+              return (
+                <div key={n.key} className="nav-group">
+                  <button
+                    className={`nav-parent ${onModule ? 'active' : ''}`}
+                    onClick={() => { toggleNav(n.key); if (!onModule) go(n.key); }}
+                    aria-expanded={open}
+                  >
+                    <span className="ico">{n.ico}</span>
+                    <span>{n.label}</span>
+                    <span className={`nav-caret ${open ? 'open' : ''}`}>{'▾'}</span>
+                  </button>
+                  {open && n.children!.map((c) => {
+                    const active = onModule && (c.match ? c.match(location.pathname, location.search) : false);
+                    return (
+                      <button
+                        key={c.key}
+                        className={`nav-child ${active ? 'active' : ''}`}
+                        onClick={() => navigate(c.path ?? `/app/${c.key}`)}
+                      >
+                        <span className="ico">{c.ico ?? ''}</span><span>{c.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              );
+            })}
             <button onClick={onLogout}>
               <span className="ico">{'\u{23FB}'}</span><span>Logout</span>
             </button>
