@@ -1,7 +1,7 @@
 {
   "name": "transaction-desk-server",
   "version": "0.0.1",
-  "description": "Transaction Desk API — NestJS port of the Laravel 12 backend (PostgreSQL + Prisma). Behaviour-preserving.",
+  "description": "Transaction Desk API \u2014 NestJS port of the Laravel 12 backend (PostgreSQL + Prisma). Behaviour-preserving.",
   "private": true,
   "type": "commonjs",
   "engines": {
@@ -15,7 +15,9 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "prisma:generate": "prisma generate",
     "prisma:pull:mysql": "prisma db pull --schema prisma/schema.mysql.prisma",
-    "prisma:migrate": "prisma migrate dev",
+    "prisma:migrate": "node scripts/guard-migrate-dev.cjs && prisma migrate dev",
+    "prisma:deploy": "prisma migrate deploy",
+    "prisma:status": "prisma migrate status",
     "test": "jest",
     "test:e2e": "jest --config test/jest-e2e.json"
   },
