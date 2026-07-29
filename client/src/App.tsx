@@ -1,3 +1,4 @@
+import { lazy } from 'react';
 import { BrowserRouter, Navigate, Route, Routes, useSearchParams } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext';
 import { ToastProvider } from './desk/toast';
@@ -5,32 +6,46 @@ import ProtectedRoute from './components/ProtectedRoute';
 import Login from './pages/Login';
 import Register from './pages/Register';
 import DeskLayout from './desk/DeskLayout';
-import DashboardPage from './desk/DashboardPage';
-import AnalyticsPage from './desk/AnalyticsPage';
-import CalendarPage from './desk/CalendarPage';
-import InventoryPage from './desk/InventoryPage';
-import InvoicePage from './desk/InvoicePage';
-import MlsPage from './desk/MlsPage';
-import MlsDetailPage from './desk/MlsDetailPage';
-import FavoritesPage from './desk/FavoritesPage';
-import ReportsPage from './desk/ReportsPage';
-import ReportDetailPage from './desk/ReportDetailPage';
-import UsersPage from './desk/UsersPage';
-import SettingsPage from './desk/SettingsPage';
-import TransactionsPage from './desk/TransactionsPage';
-import TransactionDetailPage from './desk/TransactionDetailPage';
-import BulkImportPage from './desk/BulkImportPage';
-import DownloadCentrePage from './desk/DownloadCentrePage';
-import CampaignsPage from './desk/CampaignsPage';
-import LeadsPage from './desk/LeadsPage';
-import LeadDetailPage from './desk/LeadDetailPage';
-import MetaPage from './desk/MetaPage';
-import AccountSettingsPage from './desk/AccountSettingsPage';
-import InboxPage from './desk/InboxPage';
-import AuditLogPage from './desk/AuditLogPage';
-import RecycleBinPage from './desk/RecycleBinPage';
-import StubPage from './desk/StubPage';
 import { RequireScreen, LandingRedirect } from './desk/guards';
+
+/**
+ * Route-level code splitting.
+ *
+ * Every screen used to be bundled into the one file the browser downloads before it can render
+ * anything, so opening the transactions list also paid for the campaign builder, the MLS pages
+ * and the recycle bin. Each of these now becomes its own chunk, fetched when its route is first
+ * visited and cached thereafter.
+ *
+ * Login, Register and DeskLayout are deliberately NOT lazy. The first two are the cold-start
+ * path for a signed-out visitor, where an extra round trip before the form appears is a
+ * regression, and the third is the shell every /app route renders inside.
+ */
+const DashboardPage = lazy(() => import('./desk/DashboardPage'));
+const AnalyticsPage = lazy(() => import('./desk/AnalyticsPage'));
+const CalendarPage = lazy(() => import('./desk/CalendarPage'));
+const InventoryPage = lazy(() => import('./desk/InventoryPage'));
+const InvoicePage = lazy(() => import('./desk/InvoicePage'));
+const MlsPage = lazy(() => import('./desk/MlsPage'));
+const MlsDetailPage = lazy(() => import('./desk/MlsDetailPage'));
+const FavoritesPage = lazy(() => import('./desk/FavoritesPage'));
+const ReportsPage = lazy(() => import('./desk/ReportsPage'));
+const ReportDetailPage = lazy(() => import('./desk/ReportDetailPage'));
+const UsersPage = lazy(() => import('./desk/UsersPage'));
+const SettingsPage = lazy(() => import('./desk/SettingsPage'));
+const TransactionsPage = lazy(() => import('./desk/TransactionsPage'));
+const TransactionDetailPage = lazy(() => import('./desk/TransactionDetailPage'));
+const BulkImportPage = lazy(() => import('./desk/BulkImportPage'));
+const DownloadCentrePage = lazy(() => import('./desk/DownloadCentrePage'));
+const CampaignsPage = lazy(() => import('./desk/CampaignsPage'));
+const LeadsPage = lazy(() => import('./desk/LeadsPage'));
+const LeadDetailPage = lazy(() => import('./desk/LeadDetailPage'));
+const MetaPage = lazy(() => import('./desk/MetaPage'));
+const AccountSettingsPage = lazy(() => import('./desk/AccountSettingsPage'));
+const InboxPage = lazy(() => import('./desk/InboxPage'));
+const AuditLogPage = lazy(() => import('./desk/AuditLogPage'));
+const RecycleBinPage = lazy(() => import('./desk/RecycleBinPage'));
+const StubPage = lazy(() => import('./desk/StubPage'));
+
 
 /**
  * /app/email-settings → /app/settings, preserving the requested tab.

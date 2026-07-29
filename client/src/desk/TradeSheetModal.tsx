@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { PDFDocument } from 'pdf-lib';
+import { loadPdfLib } from './heavyLibs';
 import { formatCurrency, commissionSummary, isListingFinancialType } from './format';
 import { sendTradeSheet } from '../lib/api';
 import { bytesToBase64 } from './pdf';
@@ -15,6 +15,8 @@ const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 
 
 // Fill OREA Form 640 by its exact AcroForm field names.
 async function fillPdf(buf: ArrayBuffer, txn: Transaction): Promise<Uint8Array> {
+  // Fetched on first use — see heavyLibs.
+  const { PDFDocument } = await loadPdfLib();
   const pdf = await PDFDocument.load(buf, { ignoreEncryption: true });
   const form = (() => { try { return pdf.getForm(); } catch { return null; } })();
   if (!form) return pdf.save();

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { PDFDocument, StandardFonts, rgb, type PDFDocument as PDFDoc } from 'pdf-lib';
+import type { PDFDocument as PDFDoc } from 'pdf-lib';   // type only — erased at build time
+import { loadPdfLib } from './heavyLibs';
 import { getClientIdentification, saveClientIdentification } from '../lib/api';
 import { useToast } from './toast';
 import { useAuth } from '../context/AuthContext';
@@ -40,6 +41,7 @@ async function makeFillable630(pdf: PDFDoc, v: Form630Values) {
   const page = pdf.getPages()[0];
   const { width, height } = page.getSize();
   const form = pdf.getForm();
+  const { StandardFonts, rgb } = await loadPdfLib();   // already resolved and cached by the caller
   const font = await pdf.embedFont(StandardFonts.Helvetica);
   let n = 0;
 
@@ -86,6 +88,7 @@ interface FillResult { bytes: Uint8Array; fieldCount: number; error?: string; st
 async function fillForm630(buf: Uint8Array, v: Form630Values): Promise<FillResult> {
   let pdf: PDFDoc;
   try {
+    const { PDFDocument } = await loadPdfLib();
     pdf = await PDFDocument.load(buf, { ignoreEncryption: true });
   } catch {
     // XFA / secured / malformed — pdf-lib can't read it. Show the original as-is.

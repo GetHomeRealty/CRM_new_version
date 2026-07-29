@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Device, type Call } from '@twilio/voice-sdk';
+import type { Device, Call } from '@twilio/voice-sdk';   // types only — erased at build time
+import { loadTwilioVoice } from './heavyLibs';
 import { useToast } from './toast';
 import { apiErrorMessage } from '../lib/apiError';
 import { voiceToken, startBrowserCall } from '../lib/leadsApi';
@@ -62,6 +63,11 @@ export default function TwilioDialer({ lead, onClose, onLogged }: {
           );
         }
         const { token } = await voiceToken();
+        if (cancelled) return;
+        // The Voice SDK (~43 kB gzipped) is fetched only when the dialer is actually opened —
+        // it is already behind a mic-permission prompt and a token request, so one more await
+        // costs nothing perceptible. See heavyLibs.
+        const { Device } = await loadTwilioVoice();
         if (cancelled) return;
         const device = new Device(token, { logLevel: 'error' });
         device.on('error', (e: { message?: string; code?: number }) => {

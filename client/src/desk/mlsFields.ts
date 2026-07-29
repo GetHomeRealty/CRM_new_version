@@ -1,4 +1,4 @@
-import jsPDF from 'jspdf';
+import { loadJsPdf } from './heavyLibs';
 import type { MlsProperty } from '../lib/mlsApi';
 
 /** A field to render on the detail page: the RESO key + a human label + optional prefix/suffix. */
@@ -110,9 +110,15 @@ export function money(value: unknown): string {
   return Number.isFinite(n) ? n.toLocaleString('en-CA') : 'N/A';
 }
 
-/** Build and download a property report PDF from a full MLS listing (ported, CAD/en-CA). */
-export function downloadPropertyPdf(property: MlsProperty): void {
-  const doc = new jsPDF();
+/**
+ * Build and download a property report PDF from a full MLS listing (ported, CAD/en-CA).
+ *
+ * Asynchronous only because jsPDF is now fetched on demand — roughly 111 kB gzipped that no
+ * longer loads for people who never export a listing. The work itself is unchanged.
+ */
+export async function downloadPropertyPdf(property: MlsProperty): Promise<void> {
+  const JsPDF = await loadJsPdf();
+  const doc = new JsPDF();
   let y = 20;
   const currency = (v: number) => new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD', maximumFractionDigits: 0 }).format(v);
   const date = (s: string) => (s ? new Date(s).toLocaleDateString('en-CA', { year: 'numeric', month: 'long', day: 'numeric' }) : 'N/A');

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { Suspense, useEffect, useRef, useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { companyLogoUrl, getAgentChangeNotifications, getDocNotifications, markDocNotificationsSeen } from '../lib/api';
@@ -197,9 +197,20 @@ export default function DeskLayout() {
             until it remounts: without the key, one broken page would keep showing its error
             over every screen visited afterwards.
           */}
+          {/*
+            Suspense sits INSIDE the shell so a route's chunk downloads with the sidebar and
+            topbar still on screen — a full-page spinner would blank and redraw the whole
+            application on every first visit to a screen, which reads as a flash.
+
+            It is inside the boundary as well: a chunk that fails to load (a stale build after a
+            deploy, a dropped connection) throws where the error panel can catch it and offer a
+            reload, rather than leaving an empty frame.
+          */}
           <div className="content">
             <ErrorBoundary key={location.pathname} what="This page">
-              <Outlet />
+              <Suspense fallback={<div className="empty-cell">Loading…</div>}>
+                <Outlet />
+              </Suspense>
             </ErrorBoundary>
           </div>
         </main>

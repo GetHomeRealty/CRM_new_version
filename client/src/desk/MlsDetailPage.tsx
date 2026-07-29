@@ -136,7 +136,7 @@ export default function MlsDetailPage() {
           <div className="card" style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 8 }}>
             <button className={`btn ${fav ? 'primary' : 'ghost'}`} onClick={heart}>{fav ? '♥ Saved to Favorites' : '♡ Save to Favorites'}</button>
             <button className="btn ghost" onClick={share}>↗ Share Property</button>
-            <button className="btn ghost" onClick={() => downloadPropertyPdf(property)}>⬇ Download PDF</button>
+            <button className="btn ghost" onClick={() => { void downloadPropertyPdf(property).catch((e) => toast(apiErrorMessage(e, 'Could not generate the PDF'), 'bad')); }}>⬇ Download PDF</button>
           </div>
 
           {!!(property.ListAgentFullName || property.ListAgentEmail || property.ListAgentPhone) && (

@@ -61,7 +61,7 @@ export default function FavoritesPage() {
     setPdfBusy(key);
     try {
       const full = await getMlsListing(key); // full record for a complete report
-      downloadPropertyPdf(full);
+      await downloadPropertyPdf(full);
     } catch (e) {
       toast(apiErrorMessage(e, 'Could not generate the PDF'), 'bad');
     } finally {

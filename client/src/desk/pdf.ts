@@ -3,7 +3,8 @@
 //  - downloadElementPdf: render a node to a PDF and trigger a browser download
 //  - reactToPdfBase64: render a React element offscreen, then to a PDF
 //  - bytesToBase64: base64-encode raw PDF bytes (e.g. from pdf-lib)
-import { jsPDF, type HTMLOptions } from 'jspdf';
+import type { jsPDF, HTMLOptions } from 'jspdf';   // types only — erased at build time
+import { loadJsPdf } from './heavyLibs';
 import { createRoot } from 'react-dom/client';
 import type { ReactElement } from 'react';
 
@@ -16,7 +17,10 @@ const HTML_OPTS: HTMLOptions = {
 };
 
 async function renderPdf(el: HTMLElement): Promise<jsPDF> {
-  const pdf = new jsPDF({ orientation: 'p', unit: 'pt', format: 'a4' });
+  // jsPDF (and the html2canvas it pulls in) is fetched the first time a PDF is produced, rather
+  // than by everyone who opens the application. See heavyLibs.
+  const JsPDF = await loadJsPdf();
+  const pdf = new JsPDF({ orientation: 'p', unit: 'pt', format: 'a4' });
   await pdf.html(el, HTML_OPTS);
   return pdf;
 }
