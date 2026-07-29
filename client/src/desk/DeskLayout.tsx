@@ -5,6 +5,7 @@ import { companyLogoUrl, getAgentChangeNotifications, getDocNotifications, markD
 import type { AgentChangeItem, AgentChangeNotif, DocNotif, DocNotifItem } from '../types';
 import ChangePasswordModal from './ChangePasswordModal';
 import UserAvatar from './UserAvatar';
+import ErrorBoundary from '../components/ErrorBoundary';
 
 interface NavItem {
   key: string;
@@ -187,7 +188,20 @@ export default function DeskLayout() {
               <button className="btn ghost sm" onClick={() => setPwOpen(true)} title="Change your password">🔑 Password</button>
             </div>
           </div>
-          <div className="content"><Outlet /></div>
+          {/*
+            Inside the shell, so a page that fails to render leaves the sidebar and topbar
+            working and the user can simply navigate elsewhere — rather than facing a blank
+            document with no way out but the browser's back button.
+
+            Keyed by pathname because a boundary that has caught an error stays in that state
+            until it remounts: without the key, one broken page would keep showing its error
+            over every screen visited afterwards.
+          */}
+          <div className="content">
+            <ErrorBoundary key={location.pathname} what="This page">
+              <Outlet />
+            </ErrorBoundary>
+          </div>
         </main>
       </div>
       <ChangePasswordModal open={pwOpen} onClose={() => setPwOpen(false)} />
