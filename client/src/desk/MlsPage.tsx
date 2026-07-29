@@ -21,7 +21,12 @@ type Filters = typeof emptyFilters;
 
 const stPill = (s?: string) => (s === 'Active' ? 'ok' : s === 'Sold' || s === 'Closed' ? 'bad' : s === 'Pending' ? 'warn' : 'info');
 
-export default function MlsPage() {
+/**
+ * `onShowFavorites` is supplied when this is mounted inside the MLS shell, where Favorites is a
+ * section rather than a route. Without it the button still navigates, so the page keeps working
+ * on its own.
+ */
+export default function MlsPage({ onShowFavorites }: { onShowFavorites?: () => void } = {}) {
   const navigate = useNavigate();
   const toast = useToast();
 
@@ -119,7 +124,7 @@ export default function MlsPage() {
           <h2 style={{ margin: 0 }}>MLS Listings</h2>
           <div className="muted" style={{ fontSize: 13 }}>{loading ? 'Searching…' : `${total.toLocaleString('en-CA')} properties found`}</div>
         </div>
-        <button className="btn ghost sm" onClick={() => navigate('/app/favorites')}>♥ My Favorites</button>
+        <button className="btn ghost sm" onClick={() => (onShowFavorites ? onShowFavorites() : navigate('/app/favorites'))}>♥ My Favorites</button>
       </div>
 
       {/* Filter bar */}

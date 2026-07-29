@@ -25,7 +25,7 @@ const AnalyticsPage = lazy(() => import('./desk/AnalyticsPage'));
 const CalendarPage = lazy(() => import('./desk/CalendarPage'));
 const InventoryPage = lazy(() => import('./desk/InventoryPage'));
 const InvoicePage = lazy(() => import('./desk/InvoicePage'));
-const MlsPage = lazy(() => import('./desk/MlsPage'));
+const MlsModulePage = lazy(() => import('./desk/MlsModulePage'));
 const MlsDetailPage = lazy(() => import('./desk/MlsDetailPage'));
 const FavoritesPage = lazy(() => import('./desk/FavoritesPage'));
 const ReportsPage = lazy(() => import('./desk/ReportsPage'));
@@ -85,8 +85,12 @@ export default function App() {
                 <Route path="lead/:id" element={<RequireScreen screen="lead"><LeadDetailPage /></RequireScreen>} />
                 <Route path="meta" element={<RequireScreen screen="meta"><MetaPage /></RequireScreen>} />
                 <Route path="invoice" element={<RequireScreen screen="invoice"><InvoicePage /></RequireScreen>} />
-                <Route path="mls" element={<RequireScreen screen="mls"><MlsPage /></RequireScreen>} />
+                {/* MLS now hosts Favorites as a section — see MlsModulePage. */}
+                <Route path="mls" element={<RequireScreen screen="mls"><MlsModulePage /></RequireScreen>} />
                 <Route path="mls/:id" element={<RequireScreen screen="mls"><MlsDetailPage /></RequireScreen>} />
+                {/* Favorites moved inside MLS. The route stays so existing links keep working, and anyone
+                    whose `mls` permission was revoked can still reach their own favourites — merging
+                    the navigation must not quietly take that away. */}
                 <Route path="favorites" element={<RequireScreen screen="favorites"><FavoritesPage /></RequireScreen>} />
                 <Route path="reports" element={<RequireScreen screen="reports"><ReportsPage /></RequireScreen>} />
                 <Route path="reports/:reportType" element={<RequireScreen screen="reports"><ReportDetailPage /></RequireScreen>} />

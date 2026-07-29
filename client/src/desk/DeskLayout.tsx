@@ -21,7 +21,6 @@ const NAV: NavItem[] = [
   { key: 'analytics', label: 'Analytics', ico: '\u{1F4C8}' },
   { key: 'calendar', label: 'Calendar', ico: '\u{1F4C5}' },
   { key: 'reviews', label: 'Client Reviews', ico: '\u{2B50}' },
-  { key: 'favorites', label: 'Favorites', ico: '\u{2665}' },
   { key: 'inventory', label: 'Inventory', ico: '\u{1F4E6}' },
   // CRM group: Inbox → Lead → Campaigns
   { key: 'inbox', label: 'Inbox', ico: '\u{2709}' },
@@ -44,6 +43,9 @@ const NAV: NavItem[] = [
 ];
 
 const TITLES: Record<string, string> = Object.fromEntries(NAV.map((n): [string, string] => [n.key, n.label]));
+// Favorites is a section of MLS now, so it has no sidebar entry — but the route still exists and
+// needs a heading when someone arrives on it directly.
+TITLES.favorites = 'Favorites';
 
 export default function DeskLayout() {
   const { logout, user, can, isAdminOrAbove, isSuperAdmin } = useAuth();
