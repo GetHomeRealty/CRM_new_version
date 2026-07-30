@@ -1,6 +1,7 @@
 import { deskPath } from './area';
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { useNavigate } from 'react-router-dom';
+import Icon from '../ui/Icon';
 import { getInvoice, createInvoice, updateInvoice, recordInvoiceReminder, recordInvoicePayment, sendInvoice } from '../lib/api';
 import InvoiceDoc from './InvoiceDoc';
 import BrandMark from './BrandMark';
@@ -320,21 +321,21 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
         <div style={{ width: 232, flexShrink: 0, borderRight: '1px solid var(--line)', background: '#fff', padding: 14, display: 'flex', flexDirection: 'column', gap: 4, overflowY: 'auto' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
             <strong style={{ fontSize: 15 }}>Invoice</strong>
-            <button className="close" style={{ position: 'static' }} onClick={onClose}>✕</button>
+            <button className="close" style={{ position: 'static' }} onClick={onClose}><Icon name="close" size={15} /></button>
           </div>
-          <button style={sideBtn} onClick={backToTransaction} onMouseEnter={(e) => e.currentTarget.style.background = '#f3f4f6'} onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}>← Back to transaction</button>
+          <button style={sideBtn} onClick={backToTransaction} onMouseEnter={(e) => e.currentTarget.style.background = '#f3f4f6'} onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}><Icon name="arrowLeft" size={13} /> Back to transaction</button>
 
           <div style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--muted)', letterSpacing: '.05em', margin: '10px 0 2px 4px' }}>ACTIONS</div>
 
           {/* 1. Send → Sent → (on edit) Resend → (on resend) Sent. */}
           {paymentRecorded ? (
             <div style={{ ...sideBtn, justifyContent: 'center', background: '#16a34a', color: '#fff', fontWeight: 700, margin: '2px 0', cursor: 'default' }}>
-              ✓ Paid
+              <Icon name="check" size={13} /> Paid
             </div>
           ) : (() => {
             const isSent = !!(saved?.sent_at || form.sent_at);
             const sentIdle = isSent && !edited; // sent with no changes since
-            const label = sending ? '✉ Sending…' : (!isSent ? '✉ Send Email' : (edited ? '✉ Resend Email' : '✓ Sent'));
+            const label = sending ? <><Icon name="mail" size={13} /> Sending…</> : (!isSent ? <><Icon name="mail" size={13} /> Send Email</> : (edited ? <><Icon name="refresh" size={13} /> Resend Email</> : <><Icon name="check" size={13} /> Sent</>));
             return (
               <button
                 style={{ ...sideBtn, justifyContent: 'center', background: sentIdle ? '#16a34a' : BRAND, color: '#fff', fontWeight: 700, margin: '2px 0', cursor: (sentIdle || sending) ? 'default' : 'pointer', opacity: (sentIdle || sending) ? 0.8 : 1 }}
@@ -345,15 +346,15 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
           })()}
 
           {/* 2. Save Invoice */}
-          <button style={sideBtn} onClick={saveClick} disabled={saving} onMouseEnter={(e) => e.currentTarget.style.background = '#f3f4f6'} onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}>💾 {saving ? 'Saving…' : 'Save Invoice'}</button>
+          <button style={sideBtn} onClick={saveClick} disabled={saving} onMouseEnter={(e) => e.currentTarget.style.background = '#f3f4f6'} onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}><Icon name="save" size={13} /> {saving ? 'Saving…' : 'Save Invoice'}</button>
 
           {/* 3. Invoice Status */}
           <div style={{ position: 'relative' }}>
             <button style={{ ...sideBtn, justifyContent: 'space-between' }} onClick={() => setMenu(menu === 'status' ? '' : 'status')}>
-              <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>🏷️ Status</span>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}><Icon name="tag" size={13} /> Status</span>
               <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                 {form.status && <span style={{ fontSize: 10, fontWeight: 700, color: '#fff', background: STATUS_COLOR[form.status] || '#64748b', borderRadius: 999, padding: '2px 8px' }}>{form.status}</span>}
-                <span>▾</span>
+                <span><Icon name="chevronDown" size={12} /></span>
               </span>
             </button>
             {menu === 'status' && (
@@ -376,7 +377,7 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
                 <option value="">Select</option>{COMM_VIA.map((v) => <option key={v}>{v}</option>)}
               </select>
               {paymentRecorded ? (
-                <button className="btn sm" style={{ marginTop: 8, width: '100%', background: '#16a34a', borderColor: '#16a34a', color: '#fff', fontWeight: 700, cursor: 'default' }} disabled>✓ Payment Recorded</button>
+                <button className="btn sm" style={{ marginTop: 8, width: '100%', background: '#16a34a', borderColor: '#16a34a', color: '#fff', fontWeight: 700, cursor: 'default' }} disabled><Icon name="check" size={13} /> Payment Recorded</button>
               ) : (
                 <button className="btn primary sm" style={{ marginTop: 8, width: '100%' }} onClick={recordCommissionPayment} disabled={saving}>Record Payment</button>
               )}
@@ -391,7 +392,7 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
               title={noReminders ? `Invoice is ${form.status} — no reminders needed` : undefined}
               onClick={() => setMenu(menu === 'reminder' ? '' : 'reminder')}
             >
-              <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>🔔 Reminders{noReminders ? ` (${form.status})` : ''}</span><span>▾</span>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}><Icon name="bell" size={13} /> Reminders{noReminders ? ` (${form.status})` : ''}</span><span><Icon name="chevronDown" size={12} /></span>
             </button>
             {menu === 'reminder' && !noReminders && (
               <div style={{ border: '1px solid var(--line)', borderRadius: 8, margin: '2px 0 6px', background: '#fff', boxShadow: '0 6px 18px rgba(0,0,0,.08)' }}>
@@ -401,7 +402,7 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
                   const active = (form.auto_reminder?.mode || '') === o.mode;
                   return (
                     <button key={o.mode} style={{ ...sideBtn, padding: '7px 12px', fontSize: 12, background: active ? '#eef2ff' : 'transparent', color: active ? '#3730a3' : 'var(--text)', fontWeight: active ? 700 : 400 }} onClick={() => setAuto(o.mode)}>
-                      {active ? '✓ ' : ''}{o.label}
+                      {active ? <><Icon name="check" size={12} /> </> : null}{o.label}
                     </button>
                   );
                 })}
@@ -424,7 +425,7 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
           )}
 
           {/* 5. Print Invoice — always last */}
-          <button style={sideBtn} onClick={openPdf} onMouseEnter={(e) => e.currentTarget.style.background = '#f3f4f6'} onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}>🖨 Print Invoice</button>
+          <button style={sideBtn} onClick={openPdf} onMouseEnter={(e) => e.currentTarget.style.background = '#f3f4f6'} onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}><Icon name="printer" size={13} /> Print Invoice</button>
         </div>
 
         {/* RIGHT: INVOICE DOCUMENT */}
@@ -470,7 +471,7 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
             {form.emails.map((em, i) => (
               <div key={i} style={{ display: 'flex', gap: 6 }}>
                 <input type="email" value={em} onChange={(e) => setEmail(i, e.target.value)} placeholder={i === 0 ? 'Invoice Email' : `Additional Email ${i}`} style={docInput({ flex: 1 })} />
-                {form.emails.length > 1 && <button className="row-rm" onClick={() => rmEmail(i)}>🗑️</button>}
+                {form.emails.length > 1 && <button className="row-rm" onClick={() => rmEmail(i)}><Icon name="trash" size={13} /></button>}
               </div>
             ))}
             <div><button className="btn" style={{ border: `1px solid ${BRAND}`, color: BRAND, background: '#fff', borderRadius: 8, padding: '6px 12px', fontSize: 13 }} onClick={addEmail}>+ Add Email</button></div>
@@ -502,7 +503,7 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
                 <tr key={i}>
                   <td style={{ border: '1px solid #e6e8ef', padding: '8px 12px' }}><input value={it.description} onChange={(e) => setItem(i, 'description', e.target.value)} style={docInput({ width: '100%', fontWeight: 600 })} /></td>
                   <td style={{ border: '1px solid #e6e8ef', padding: '8px 12px' }}><input value={amountOf(it)} onChange={(e) => setAmount(i, e.target.value)} style={docInput({ width: '100%' })} /></td>
-                  <td style={{ border: '1px solid #e6e8ef', textAlign: 'center' }}>{form.line_items.length > 1 && <button className="row-rm" onClick={() => rmItem(i)}>🗑️</button>}</td>
+                  <td style={{ border: '1px solid #e6e8ef', textAlign: 'center' }}>{form.line_items.length > 1 && <button className="row-rm" onClick={() => rmItem(i)}><Icon name="trash" size={13} /></button>}</td>
                 </tr>
               ))}
               <tr>
@@ -513,7 +514,7 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
                     <input value={form.tax_rate} readOnly={hstLocked} onChange={(e) => set('tax_rate', e.target.value)}
                       style={{ width: 52, textAlign: 'right', padding: '3px 6px', border: '1px solid #e6e8ef', borderRadius: 6, background: hstLocked ? '#f3f4f6' : '#fff', cursor: hstLocked ? 'not-allowed' : 'text' }} />
                     <span>%</span>
-                    <button type="button" className="row-rm" title={hstLocked ? 'Unlock to edit HST %' : 'Lock HST % at default'} style={{ color: BRAND }} onClick={() => setHstLocked((v) => !v)}>{hstLocked ? '🔒' : '🔓'}</button>
+                    <button type="button" className="row-rm" title={hstLocked ? 'Unlock to edit HST %' : 'Lock HST % at default'} style={{ color: BRAND }} onClick={() => setHstLocked((v) => !v)}>{hstLocked ? <Icon name="lock" size={13} /> : <Icon name="unlock" size={13} />}</button>
                   </span>
                 </td>
                 <td style={{ border: '1px solid #e6e8ef', padding: '8px 12px' }}>{formatCurrency(tax)}</td>
@@ -569,7 +570,7 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
               {form.signature_path && (
                 <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 10 }}>
                   <img src={form.signature_path} alt="signature" style={{ maxHeight: 70, border: '1px solid #e6e8ef', borderRadius: 6, padding: 4 }} />
-                  <button className="row-rm" title="Remove signature" onClick={() => set('signature_path', '')}>🗑️</button>
+                  <button className="row-rm" title="Remove signature" onClick={() => set('signature_path', '')}><Icon name="trash" size={13} /></button>
                 </div>
               )}
               <div style={{ marginTop: 28, borderTop: '1px dashed #94a3b8', paddingTop: 6, fontSize: 11, fontStyle: 'italic', color: '#94a3b8', textAlign: 'center' }}>Signature</div>

@@ -1,6 +1,7 @@
 import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 import { updateTransaction, getAgentCommissions, getAgentLoans, getTransaction, requestTransactionEdit, approveEditRequest, rejectEditRequest } from '../lib/api';
 import { formatCurrency, parseNumber, isListingFinancialType, isPreconType } from './format';
+import Icon from '../ui/Icon';
 import { agentAdjustments, referralSections, agentCommissionsAfterClient, agentCommissionLine, listingBreakdown, type AgentAdjustment } from './commissionCalc';
 import MoneyInput from './MoneyInput';
 import { useToast } from './toast';
@@ -106,7 +107,7 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
     <button type="button" className="row-rm" disabled={reqBusy || !!pendingFinReq}
       title={pendingFinReq ? 'Edit approval pending with Super Admin' : 'Locked — click to request Super Admin approval to edit'}
       onClick={() => { setReason(''); setReasonOpen(true); }} style={{ marginLeft: 4, color: pendingFinReq ? '#d97706' : 'var(--brand)' }}>
-      {pendingFinReq ? '⏳' : '🔒✏'}
+      {pendingFinReq ? <Icon name="clock" size={14} /> : <><Icon name="lock" size={14} /><Icon name="edit" size={14} /></>}
     </button>
   ) : null);
 
@@ -378,7 +379,7 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
       {pendingLoanAgents.length > 0 && !loanAlertSeen && (
         <div className="overlay open" style={{ zIndex: 60 }} onMouseDown={(e) => { if (e.target === e.currentTarget) setLoanAlertSeen(true); }}>
           <div className="modal sm" onMouseDown={(e) => e.stopPropagation()}>
-            <div className="modal-h" style={{ color: '#92400e' }}>💰 Agent loan outstanding</div>
+            <div className="modal-h" style={{ color: '#92400e' }}><Icon name="dollar" size={14} /> Agent loan outstanding</div>
             <p style={{ fontSize: 13, color: 'var(--text-2)', margin: '4px 0 10px' }}>
               This deal is ready for payment and the following agent{pendingLoanAgents.length > 1 ? 's have' : ' has'} an outstanding loan balance:
             </p>
@@ -399,36 +400,36 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
         </div>
       )}
       <div className="modal xl">
-        <button className="close" onClick={onClose}>✕</button>
+        <button className="close" onClick={onClose}><Icon name="close" size={15} /></button>
         <div className="modal-h">Financial Information {listing && <span className="pill type-res-sell" style={{ fontSize: 10 }}>Listing</span>}{precon && <span className="pill type-pre" style={{ fontSize: 10 }}>Preconstruction</span>}</div>
 
         {/* Locked-fields hint + pending state (the 🔒✏ pencils sit on each field). */}
         {finLock && (
           <div className="card" style={{ borderLeft: '4px solid #d97706', background: '#fffbeb', marginBottom: 12, fontSize: 12.5, color: '#7c2d12' }}>
-            <strong style={{ color: '#92400e' }}>🔒 Price, Deposit &amp; Commission fields are locked.</strong>{' '}
+            <strong style={{ color: '#92400e' }}><Icon name="lock" size={13} /> Price, Deposit &amp; Commission fields are locked.</strong>{' '}
             {pendingFinReq
               ? <span>An edit request is <strong>awaiting Super Admin approval</strong>.</span>
-              : <span>Click the <strong>🔒✏</strong> beside a field to request Super Admin approval to edit.</span>}
+              : <span>Click the <strong><Icon name="lock" size={12} /><Icon name="edit" size={12} /></strong> beside a field to request Super Admin approval to edit.</span>}
           </div>
         )}
         {/* Super Admin: approve/reject a pending financial edit request inline. */}
         {isSuperAdmin && pendingFinReq && (
           <div className="card" style={{ borderLeft: '4px solid #2563eb', background: '#eff6ff', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 12.5, color: '#1e3a8a' }}>✋ <strong>{pendingFinReq.requested_by_name || 'A user'}</strong> requested to edit financial fields{pendingFinReq.reason ? ` — “${pendingFinReq.reason}”` : ''}.</span>
+            <span style={{ fontSize: 12.5, color: '#1e3a8a' }}><Icon name="edit" size={13} /> <strong>{pendingFinReq.requested_by_name || 'A user'}</strong> requested to edit financial fields{pendingFinReq.reason ? ` — “${pendingFinReq.reason}”` : ''}.</span>
             <div style={{ flex: 1 }} />
-            <button className="btn primary sm" onClick={approveFinReq} disabled={reqBusy}>✓ Approve</button>
-            <button className="btn ghost sm" onClick={rejectFinReq} disabled={reqBusy}>✕ Reject</button>
+            <button className="btn primary sm" onClick={approveFinReq} disabled={reqBusy}><Icon name="check" size={13} /> Approve</button>
+            <button className="btn ghost sm" onClick={rejectFinReq} disabled={reqBusy}><Icon name="close" size={13} /> Reject</button>
           </div>
         )}
         {approvedFinReq && !isSuperAdmin && (
           <div className="card" style={{ borderLeft: '4px solid #16a34a', background: '#f0fdf4', marginBottom: 12 }}>
-            <span style={{ fontSize: 12.5, color: '#166534' }}>🔓 <strong>Approved</strong>{approvedFinReq.reviewed_by_name ? ` by ${approvedFinReq.reviewed_by_name}` : ''} — edit the fields and Save. The section re-locks after you save.</span>
+            <span style={{ fontSize: 12.5, color: '#166534' }}><Icon name="unlock" size={13} /> <strong>Approved</strong>{approvedFinReq.reviewed_by_name ? ` by ${approvedFinReq.reviewed_by_name}` : ''} — edit the fields and Save. The section re-locks after you save.</span>
           </div>
         )}
 
         {dftNA && (
           <div className="card" style={{ borderLeft: '4px solid var(--bad)', background: '#fff7ed', marginBottom: 12 }}>
-            <strong style={{ color: '#9a3412' }}>🔒 DFT — Deal Fell Through.</strong>{' '}
+            <strong style={{ color: '#9a3412' }}><Icon name="lock" size={13} /> DFT — Deal Fell Through.</strong>{' '}
             <span style={{ fontSize: 12.5, color: '#7c2d12' }}>Statuses default to N/A and are locked.</span>
           </div>
         )}
@@ -437,12 +438,12 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
             intended flag — the view-only banner hides while the finLock banner shows. */}
         {readOnly && !dftNA && !isAgent && !finLock && (
           <div className="card" style={{ borderLeft: '4px solid #2563eb', background: '#eff6ff', marginBottom: 12 }}>
-            <span style={{ fontSize: 12.5, color: '#1e3a8a' }}>🔒 View-only — click <strong>Edit</strong> on the transaction to make changes.</span>
+            <span style={{ fontSize: 12.5, color: '#1e3a8a' }}><Icon name="lock" size={13} /> View-only — click <strong>Edit</strong> on the transaction to make changes.</span>
           </div>
         )}
         {(pendingLoanAgents.length > 0 || adjustedLoanAgents.length > 0) && (
           <div className="card" style={{ borderLeft: '4px solid #d97706', background: '#fffbeb', marginBottom: 12 }}>
-            <strong style={{ color: '#92400e' }}>💰 Outstanding agent loan{loanAgents.length > 1 ? 's' : ''}.</strong>{' '}
+            <strong style={{ color: '#92400e' }}><Icon name="dollar" size={13} /> Outstanding agent loan{loanAgents.length > 1 ? 's' : ''}.</strong>{' '}
             <span style={{ fontSize: 12.5, color: '#78350f' }}>
               {adjustedLoanAgents.map((a) => `${a.name} — ${formatCurrency(a.adjusted)} adjusted from this deal`).join(' · ')}
               {adjustedLoanAgents.length > 0 && pendingLoanAgents.length > 0 ? '. ' : ''}
@@ -524,7 +525,7 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
                 <div key={k} style={{ background: '#f9fafb', border: '1px solid var(--line)', borderRadius: 8, padding: 12, marginBottom: 10 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
                     <strong>Term {k}</strong>
-                    <button type="button" className="btn ghost sm" style={{ padding: '4px 8px', lineHeight: 1 }} title={locked ? 'Unlock to edit Commission %' : 'Lock Commission %'} onClick={() => toggleLock(k)}>{locked ? '✏' : '🔒'}</button>
+                    <button type="button" className="btn ghost sm" style={{ padding: '4px 8px', lineHeight: 1 }} title={locked ? 'Unlock to edit Commission %' : 'Lock Commission %'} onClick={() => toggleLock(k)}>{locked ? <Icon name="edit" size={13} /> : <Icon name="lock" size={13} />}</button>
                   </div>
                   <div className="g4">
                     <div className="field" style={{ marginBottom: 0 }}><label>Commission %</label><input type="number" value={t.pct} readOnly={locked} style={locked ? { background: '#f3f4f6', cursor: 'not-allowed', ...pctStyle } : pctStyle} onChange={(e) => setTerm(idx, 'pct', e.target.value)} /></div>
@@ -546,7 +547,7 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
                         <div className="g4">
                           <div className="field" style={{ marginBottom: 0 }}>
                             <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>Agent Comm (%)
-                              <button type="button" className="row-rm" style={{ color: 'var(--brand)', lineHeight: 1 }} title={agentUnlock[i] ? 'Lock Agent Comm %' : 'Unlock to edit Agent Comm %'} onClick={() => setAgentUnlock((u) => ({ ...u, [i]: !u[i] }))}>{agentUnlock[i] ? '🔓' : '✏'}</button>
+                              <button type="button" className="row-rm" style={{ color: 'var(--brand)', lineHeight: 1 }} title={agentUnlock[i] ? 'Lock Agent Comm %' : 'Unlock to edit Agent Comm %'} onClick={() => setAgentUnlock((u) => ({ ...u, [i]: !u[i] }))}>{agentUnlock[i] ? <Icon name="unlock" size={13} /> : <Icon name="edit" size={13} />}</button>
                             </label>
                             <input type="number" value={m.agent_pct} readOnly={!agentUnlock[i]} style={!agentUnlock[i] ? { ...lockField, ...pctStyle } : pctStyle} onChange={(e) => setMember(i, 'agent_pct', e.target.value)} />
                           </div>
@@ -590,7 +591,7 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
                       <div className="brok-card" key={i}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}><strong style={{ fontSize: 13 }}>{(m.name || '').toUpperCase()}</strong><span className="pill" style={{ background: '#f3e8ff', color: '#6b21a8', border: '1px solid #d8b4fe', fontSize: 10 }}>Split: {m.split}%</span></div>
                         <div className="g4">
-                          <div className="field" style={{ marginBottom: 0 }}><label>Brok Comm (%) 🔒</label><input type="number" value={m.brok_pct} readOnly style={{ ...lockField, ...pctStyle }} /></div>
+                          <div className="field" style={{ marginBottom: 0 }}><label>Brok Comm (%) <Icon name="lock" size={11} /></label><input type="number" value={m.brok_pct} readOnly style={{ ...lockField, ...pctStyle }} /></div>
                           <div className="field" style={{ marginBottom: 0 }}><label>Commission</label><input readOnly value={formatCurrency(b.commission)} /></div>
                           <div className="field" style={{ marginBottom: 0 }}><label>HST</label><input readOnly value={formatCurrency(b.hst)} /></div>
                           <div className="field" style={{ marginBottom: 0 }}><label>Total</label><input readOnly style={{ fontWeight: 700, color: '#5b21b6' }} value={formatCurrency(b.total)} /></div>
@@ -601,7 +602,7 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
                 </div>
               );
             })}
-            {!preconTermsValid && <div style={{ color: 'var(--bad)', fontSize: 12, fontWeight: 600, marginBottom: 8 }}>⚠ Sum of term % exceeds the master Commission %.</div>}
+            {!preconTermsValid && <div style={{ color: 'var(--bad)', fontSize: 12, fontWeight: 600, marginBottom: 8 }}><Icon name="alert" size={13} /> Sum of term % exceeds the master Commission %.</div>}
 
             <div className="modal-sub">Commission Adjustment</div>
             <div className="field" style={{ maxWidth: 220 }}><label>Commission Adjustment</label><select value={adjEnabled ? 'Yes' : 'No'} onChange={(e) => setAdjEnabled(e.target.value === 'Yes')}><option>No</option><option>Yes</option></select></div>
@@ -735,7 +736,7 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
 
         <div className="actions">
           <button className="btn ghost" onClick={onClose}>Close</button>
-          {!readOnly && <button className="btn primary" onClick={save} disabled={saving || dftNA || savedOk}>{savedOk ? '✓ Saved' : (saving ? 'Saving…' : 'Save')}</button>}
+          {!readOnly && <button className="btn primary" onClick={save} disabled={saving || dftNA || savedOk}>{savedOk ? <><Icon name="check" size={13} /> Saved</> : (saving ? 'Saving…' : 'Save')}</button>}
         </div>
       </div>
 
@@ -744,7 +745,7 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
         <div className="overlay open" style={{ position: 'fixed', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 4000 }}
           onMouseDown={(e) => { if (e.target === e.currentTarget) setReasonOpen(false); }}>
           <div className="modal" style={{ maxWidth: 460, margin: 0 }}>
-            <button className="close" onClick={() => setReasonOpen(false)}>✕</button>
+            <button className="close" onClick={() => setReasonOpen(false)}><Icon name="close" size={15} /></button>
             <div className="modal-h">Request edit approval</div>
             <p style={{ fontSize: 13, marginTop: 4 }}>Give a reason for editing the locked financial fields. It's sent to the Super Admin for approval.</p>
             <div className="field" style={{ marginTop: 8 }}>
@@ -807,7 +808,7 @@ function AgentCommissionBlocks({ rows, setMember, minBrok, agentDefaults = {}, i
               <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>Agent Comm (%)
                 {/* When financially locked, the approval pencil replaces the local unlock. */}
                 {(finLock && finPencil) ? finPencil() : (
-                  <button type="button" className="row-rm" style={{ color: 'var(--brand)', lineHeight: 1 }} title={unlocked[i] ? 'Lock Agent Comm %' : 'Unlock to edit Agent Comm %'} onClick={() => setUnlocked((u) => ({ ...u, [i]: !u[i] }))}>{unlocked[i] ? '🔓' : '✏'}</button>
+                  <button type="button" className="row-rm" style={{ color: 'var(--brand)', lineHeight: 1 }} title={unlocked[i] ? 'Lock Agent Comm %' : 'Unlock to edit Agent Comm %'} onClick={() => setUnlocked((u) => ({ ...u, [i]: !u[i] }))}>{unlocked[i] ? <Icon name="unlock" size={13} /> : <Icon name="edit" size={13} />}</button>
                 )}
               </label>
               <input type="number" value={r.m.agent_pct} readOnly={finLock || !unlocked[i]} style={(finLock || !unlocked[i]) ? { ...lockField, ...pctStyle } : pctStyle} onChange={(e) => setMember(i, 'agent_pct', e.target.value)} />
@@ -854,7 +855,7 @@ function AgentCommissionBlocks({ rows, setMember, minBrok, agentDefaults = {}, i
         <div className="brok-card" key={i}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}><strong style={{ fontSize: 13 }}>{(r.m.name || '').toUpperCase()}</strong><span className="pill" style={{ background: '#f3e8ff', color: '#6b21a8', border: '1px solid #d8b4fe', fontSize: 10 }}>Split: {r.m.split}%</span></div>
           <div className="g4">
-            <div className="field" style={{ marginBottom: 0 }}><label>Brok Comm (%) 🔒</label><input type="number" value={r.m.brok_pct} readOnly style={{ ...lockField, ...pctStyle }} /></div>
+            <div className="field" style={{ marginBottom: 0 }}><label>Brok Comm (%) <Icon name="lock" size={11} /></label><input type="number" value={r.m.brok_pct} readOnly style={{ ...lockField, ...pctStyle }} /></div>
             <div className="field" style={{ marginBottom: 0 }}><label>Commission</label><input readOnly style={cs(r.brok.commission)} value={formatCurrency(r.brok.commission)} /></div>
             <div className="field" style={{ marginBottom: 0 }}><label>HST</label><input readOnly style={cs(r.brok.hst)} value={formatCurrency(r.brok.hst)} /></div>
             <div className="field" style={{ marginBottom: 0 }}><label>Total</label><input readOnly style={ts(r.brok.total)} value={formatCurrency(r.brok.total)} /></div>

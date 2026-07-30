@@ -301,7 +301,7 @@ export default function DeskLayout({ area = DEFAULT_AREA }: { area?: Area }) {
                   >
                     <span className="ico"><Icon name={n.ico} size={17} /></span>
                     <span>{n.label}</span>
-                    <span className={`nav-caret ${open ? 'open' : ''}`}>{'▾'}</span>
+                    <span className={`nav-caret ${open ? 'open' : ''}`}><Icon name="chevronDown" size={12} /></span>
                   </button>
                   {open && n.children!.map((c) => {
                     const active = onModule && (c.match ? c.match(location.pathname, location.search) : false);
@@ -356,13 +356,13 @@ export default function DeskLayout({ area = DEFAULT_AREA }: { area?: Area }) {
               {isAdminOrAbove && (
                 <div ref={bellRef} style={{ position: 'relative' }}>
                   <button className="icon-btn" onClick={() => setBellOpen((o) => !o)} title="Agent changes to review">
-                    {'\u{1F514}'}{notif.count > 0 && <span className="badge">{notif.count}</span>}
+                    <Icon name="bell" size={17} />{notif.count > 0 && <span className="badge">{notif.count}</span>}
                   </button>
                   {bellOpen && (
                     <div style={{ position: 'absolute', right: 0, top: 'calc(100% + 6px)', width: 340, maxHeight: 380, overflowY: 'auto', background: '#fff', border: '1px solid var(--line)', borderRadius: 10, boxShadow: '0 12px 32px rgba(15,23,42,.16)', zIndex: 50, padding: 8 }}>
                       <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-2)', textTransform: 'uppercase', letterSpacing: '.04em', padding: '4px 8px 8px' }}>Agent changes to review</div>
                       {notif.items.length === 0
-                        ? <div style={{ padding: 12, textAlign: 'center', color: 'var(--muted)', fontSize: 12.5 }}>Nothing to review 🎉</div>
+                        ? <div style={{ padding: 12, textAlign: 'center', color: 'var(--muted)', fontSize: 12.5 }}>Nothing to review</div>
                         : notif.items.map((it) => (
                           <button key={it.id} onClick={() => openNotif(it)} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', width: '100%', textAlign: 'left', background: it.unread ? '#f8fafc' : 'none', border: 'none', borderRadius: 8, padding: '8px 10px', cursor: 'pointer', opacity: it.unread ? 1 : 0.6 }} onMouseEnter={(e) => (e.currentTarget.style.background = '#eef2f7')} onMouseLeave={(e) => (e.currentTarget.style.background = it.unread ? '#f8fafc' : 'none')}>
                             <span style={{ flexShrink: 0, width: 8, height: 8, borderRadius: '50%', marginTop: 5, background: it.unread ? 'var(--brand)' : 'transparent' }} />
@@ -379,13 +379,13 @@ export default function DeskLayout({ area = DEFAULT_AREA }: { area?: Area }) {
               {isAgent && (
                 <div ref={docBellRef} style={{ position: 'relative' }}>
                   <button className="icon-btn" onClick={() => setDocBellOpen((o) => !o)} title="Document review updates">
-                    {'\u{1F514}'}{docNotif.count > 0 && <span className="badge">{docNotif.count}</span>}
+                    <Icon name="bell" size={17} />{docNotif.count > 0 && <span className="badge">{docNotif.count}</span>}
                   </button>
                   {docBellOpen && (
                     <div style={{ position: 'absolute', right: 0, top: 'calc(100% + 6px)', width: 340, maxHeight: 380, overflowY: 'auto', background: '#fff', border: '1px solid var(--line)', borderRadius: 10, boxShadow: '0 12px 32px rgba(15,23,42,.16)', zIndex: 50, padding: 8 }}>
                       <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-2)', textTransform: 'uppercase', letterSpacing: '.04em', padding: '4px 8px 8px' }}>Document review updates</div>
                       {docNotif.items.length === 0
-                        ? <div style={{ padding: 12, textAlign: 'center', color: 'var(--muted)', fontSize: 12.5 }}>No updates 🎉</div>
+                        ? <div style={{ padding: 12, textAlign: 'center', color: 'var(--muted)', fontSize: 12.5 }}>No updates</div>
                         : docNotif.items.map((it) => (
                           <button key={it.id} onClick={() => openDocNotif(it)} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', width: '100%', textAlign: 'left', background: it.unread ? '#f8fafc' : 'none', border: 'none', borderRadius: 8, padding: '8px 10px', cursor: 'pointer', opacity: it.unread ? 1 : 0.6 }} onMouseEnter={(e) => (e.currentTarget.style.background = '#eef2f7')} onMouseLeave={(e) => (e.currentTarget.style.background = it.unread ? '#f8fafc' : 'none')}>
                             <span style={{ flexShrink: 0, width: 8, height: 8, borderRadius: '50%', marginTop: 5, background: it.unread ? 'var(--brand)' : 'transparent' }} />
@@ -402,7 +402,7 @@ export default function DeskLayout({ area = DEFAULT_AREA }: { area?: Area }) {
               <div style={{ fontSize: 13, color: '#374151' }}>{'\u{1F1E8}\u{1F1E6}'} English</div>
               <UserAvatar userId={user?.id ?? null} name={user?.name} size={34} title={user?.name ?? undefined} />
               <span style={{ fontSize: 12, color: 'var(--muted)' }}>{user?.name || 'Gethomerealty'}</span>
-              <button className="btn ghost sm" onClick={() => setPwOpen(true)} title="Change your password">🔑 Password</button>
+              <button className="btn ghost sm" onClick={() => setPwOpen(true)} title="Change your password"><Icon name="lock" size={13} /> Password</button>
             </div>
           </div>
           {/*

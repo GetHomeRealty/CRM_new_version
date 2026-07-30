@@ -60,6 +60,18 @@ const PATHS = {
   dollar: <><path d="M12 3v18" /><path d="M16.5 7.5A3.5 3.5 0 0 0 13 5h-1.5a3 3 0 0 0 0 6h1a3 3 0 0 1 0 6H11a3.5 3.5 0 0 1-3.5-2.5" /></>,
   clock: <><circle cx="12" cy="12" r="9" /><path d="M12 7v5.2l3.2 2" /></>,
   doc: <><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" /><path d="M14 3v5h5" /></>,
+  /* The financial screens turn on locked and unlocked fields, so the two must read as the same
+     padlock in two states rather than as two different pictures — same body, same shackle anchor,
+     only the shackle's other leg moves. */
+  lock: <><rect x="4.5" y="10.5" width="15" height="10" rx="2" /><path d="M8 10.5V7.2a4 4 0 0 1 8 0v3.3" /><path d="M12 14.5v2.2" /></>,
+  unlock: <><rect x="4.5" y="10.5" width="15" height="10" rx="2" /><path d="M8 10.5V7.2a4 4 0 0 1 7.6-1.8" /><path d="M12 14.5v2.2" /></>,
+  save: <><path d="M5 3h11l3 3v13a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z" /><path d="M7.5 3v5.5h7V3M7.5 21v-6h9v6" /></>,
+  printer: <><path d="M7 9V3h10v6" /><rect x="3.5" y="9" width="17" height="7" rx="2" /><path d="M7 14h10v7H7z" /></>,
+  folder: <path d="M3 7.5A1.5 1.5 0 0 1 4.5 6h4.2a1.5 1.5 0 0 1 1.1.5l1.3 1.4a1.5 1.5 0 0 0 1.1.5h6.3A1.5 1.5 0 0 1 20 9.9v8.6a1.5 1.5 0 0 1-1.5 1.5h-14A1.5 1.5 0 0 1 3 18.5z" />,
+  scale: <><path d="M12 4v16M7 20h10M12 6.5 5 9m7-2.5L19 9" /><path d="M2.5 14 5 9l2.5 5a2.5 2.5 0 0 1-5 0zM16.5 14 19 9l2.5 5a2.5 2.5 0 0 1-5 0z" /></>,
+  wrench: <path d="M15.5 3.5a5.5 5.5 0 0 0-5 7.7L3.8 17.9a1.8 1.8 0 0 0 2.5 2.5l6.7-6.7a5.5 5.5 0 0 0 6.8-7.3l-3 3-2.6-2.6 3-3a5.5 5.5 0 0 0-1.7-.3z" />,
+  arrowLeft: <path d="M19 12H5m0 0 6-6m-6 6 6 6" />,
+  undo: <><path d="M4 9h11a5 5 0 0 1 0 10h-6" /><path d="M8 5 4 9l4 4" /></>,
 } as const;
 
 interface Props {
