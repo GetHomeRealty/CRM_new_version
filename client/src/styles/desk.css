@@ -1206,3 +1206,12 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
   .topbar{padding:11px 14px}
   .topbar .title{font-size:16px}
 }
+
+/* Search affordance for an input whose magnifier used to live inside its placeholder text — where
+   it was part of the value a screen reader announces, disappeared the moment anyone typed, and
+   rendered as a different picture on every platform. As a background it is decoration: always
+   there, never read aloud, never in the way of the text. */
+.inp.with-search{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='1.9' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.6-3.6'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:11px 50%;padding-left:34px}
+/* One chevron, rotated, rather than two glyphs pointing opposite ways — the open and closed states
+   then animate between each other instead of swapping pictures. */
+.flip{transform:rotate(180deg);transition:transform .18s ease}

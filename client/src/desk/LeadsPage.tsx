@@ -9,6 +9,7 @@ import {
 import { apiErrorMessage } from '../lib/apiError';
 import { useToast } from './toast';
 import { useAuth } from '../context/AuthContext';
+import Icon from '../ui/Icon';
 import ConfirmDialog, { useConfirm } from './ConfirmDialog';
 import LeadEditorModal, { label } from './LeadEditorModal';
 import type {
@@ -77,7 +78,7 @@ function SourceCell({ lead }: { lead: Lead }) {
       <span className={`pill ${SOURCE_PILL[src] ?? ''}`}>{label(src)}</span>
       {(form || page) && (
         <div className="muted lead-form-name" title={[page, form].filter(Boolean).join(' · ')}>
-          {form ? `📋 ${form}` : `📄 ${page}`}
+          {form ? <><Icon name="clipboard" size={12} /> {form}</> : <><Icon name="doc" size={12} /> {page}</>}
         </div>
       )}
     </>
@@ -276,35 +277,35 @@ export default function LeadsPage() {
             </button>
             <button className="lead-counter as-btn" type="button" title="Leads with no logged call"
               onClick={() => { setFilter('recent', ''); toast(`${stats.noCalls} lead(s) have no logged call.`, 'info'); }}>
-              📞 No Calls <strong>{stats.noCalls}</strong>
+              <Icon name="phone" size={13} /> No Calls <strong>{stats.noCalls}</strong>
             </button>
             <button className={`lead-counter as-btn${filters.leadSource === 'website' ? ' on' : ''}`} type="button" title="Leads from the website"
               onClick={() => setFilter('leadSource', filters.leadSource === 'website' ? '' : 'website')}>
-              🌐 Website Enquiries <strong>{stats.bySource.website}</strong>
+              <Icon name="globe" size={13} /> Website Enquiries <strong>{stats.bySource.website}</strong>
             </button>
             <button className={`lead-counter as-btn${filters.leadSource === 'meta' ? ' on' : ''}`} type="button" title="Leads from Meta (Facebook / Instagram)"
               onClick={() => setFilter('leadSource', filters.leadSource === 'meta' ? '' : 'meta')}>
-              📘 Meta <strong>{stats.bySource.meta}</strong>
+              <Icon name="globe" size={13} /> Meta <strong>{stats.bySource.meta}</strong>
             </button>
             <button className={`lead-counter as-btn${filters.leadSource === 'google ads' ? ' on' : ''}`} type="button" title="Leads from Google Ads"
               onClick={() => setFilter('leadSource', filters.leadSource === 'google ads' ? '' : 'google ads')}>
-              🔎 Google <strong>{stats.bySource.google}</strong>
+              <Icon name="search" size={13} /> Google <strong>{stats.bySource.google}</strong>
             </button>
           </div>
           <div className="toolbar-row">
             {/* Import and Export sit together — the two ways leads move in and out of the list.
                 Export is always available; with nothing ticked it falls back to the current filters. */}
             <div className="btn-pair">
-              {canEdit && <button className="btn ghost" type="button" onClick={() => setImportOpen(true)}>⬆ Import Leads</button>}
+              {canEdit && <button className="btn ghost" type="button" onClick={() => setImportOpen(true)}><Icon name="upload" size={14} /> Import Leads</button>}
               <button className="btn ghost" type="button" onClick={doExport}
                 title={selected.size ? `Export the ${selected.size} selected lead(s)` : 'Export every lead matching the current filters'}>
-                ⬇ Export {selected.size ? `Selected (${selected.size})` : 'Leads'}
+                <Icon name="download" size={14} /> Export {selected.size ? `Selected (${selected.size})` : 'Leads'}
               </button>
             </div>
             <button className="btn ghost" type="button" onClick={() => { setTagsOpen(true); void loadTags(); }}>
-              🏷 Tags ({tagData.counts.length})
+              <Icon name="tag" size={14} /> Tags ({tagData.counts.length})
             </button>
-            <button className="btn ghost" type="button" onClick={() => setBinOpen(true)}>🗑 Recently Deleted</button>
+            <button className="btn ghost" type="button" onClick={() => setBinOpen(true)}><Icon name="trash" size={14} /> Recently Deleted</button>
             {canEdit && (
               <button className="btn primary" type="button" onClick={() => { setEditing(null); setEditorOpen(true); }}>
                 + Add Lead
@@ -382,9 +383,9 @@ export default function LeadsPage() {
         <div className="lead-bulkbar">
           <span><strong>{selected.size}</strong> selected</span>
           <div className="toolbar-row">
-            <button className="btn ghost sm" type="button" onClick={doExport}>⬇ Export Selected</button>
-            {canEdit && <button className="btn ghost sm" type="button" onClick={() => setTagSelectedOpen(true)}>🏷 Tag Selected</button>}
-            {canEdit && <button className="btn ghost sm" type="button" onClick={doBulkDelete}>🗑 Delete Selected</button>}
+            <button className="btn ghost sm" type="button" onClick={doExport}><Icon name="download" size={13} /> Export Selected</button>
+            {canEdit && <button className="btn ghost sm" type="button" onClick={() => setTagSelectedOpen(true)}><Icon name="tag" size={13} /> Tag Selected</button>}
+            {canEdit && <button className="btn ghost sm" type="button" onClick={doBulkDelete}><Icon name="trash" size={13} /> Delete Selected</button>}
             <button className="btn ghost sm" type="button" onClick={() => setSelected(new Set())}>Clear</button>
           </div>
         </div>
@@ -447,25 +448,25 @@ export default function LeadsPage() {
                   </td>
                   <td>{l.assigned_to_name ?? <span className="muted">Unassigned</span>}</td>
                   <td className="lead-activity-cell">
-                    <span title="Logged calls">📞 {l.call_count}</span>
-                    <span title="Pending of total tasks">✔ {l.pending_task_count}/{l.task_count}</span>
+                    <span title="Logged calls"><Icon name="phone" size={12} /> {l.call_count}</span>
+                    <span title="Pending of total tasks"><Icon name="check" size={12} /> {l.pending_task_count}/{l.task_count}</span>
                   </td>
                   <td>{shortDate(l.created_at)}</td>
                   {/* Icon-only actions: four labelled buttons per row cost more width than the
                       rest of the table put together. `title` + `aria-label` keep the action
                       discoverable on hover and to screen readers. */}
                   <td className="lead-actions">
-                    <button className="icon-btn" type="button" title="View" aria-label="View" onClick={() => navigate(crmPath(`lead/${l.id}`))}>👁</button>
-                    {canEdit && <button className="icon-btn" type="button" title="Edit" aria-label="Edit" onClick={() => { setEditing(l); setEditorOpen(true); }}>✏️</button>}
+                    <button className="icon-btn" type="button" title="View" aria-label="View" onClick={() => navigate(crmPath(`lead/${l.id}`))}><Icon name="eye" size={15} /></button>
+                    {canEdit && <button className="icon-btn" type="button" title="Edit" aria-label="Edit" onClick={() => { setEditing(l); setEditorOpen(true); }}><Icon name="edit" size={15} /></button>}
                     {canEdit && (
                       <button className="icon-btn" type="button"
                         title={l.lead_status === 'closed' ? 'Reopen' : 'Close'}
                         aria-label={l.lead_status === 'closed' ? 'Reopen' : 'Close'}
                         onClick={() => void toggleClosed(l)}>
-                        {l.lead_status === 'closed' ? '↺' : '✓'}
+                        {l.lead_status === 'closed' ? <Icon name="refresh" size={15} /> : <Icon name="check" size={15} />}
                       </button>
                     )}
-                    {canEdit && !isBrokerageLead(l) && <button className="icon-btn danger" type="button" title="Delete" aria-label="Delete" onClick={() => doDelete(l)}>🗑️</button>}
+                    {canEdit && !isBrokerageLead(l) && <button className="icon-btn danger" type="button" title="Delete" aria-label="Delete" onClick={() => doDelete(l)}><Icon name="trash" size={15} /></button>}
                   </td>
                 </tr>
               ))}
@@ -565,7 +566,7 @@ function ImportModal({ onClose, onDone, tags }: { onClose: () => void; onDone: (
   return (
     <div className="overlay open" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="modal">
-        <button className="close" type="button" onClick={onClose} aria-label="Close">✕</button>
+        <button className="close" type="button" onClick={onClose} aria-label="Close"><Icon name="close" size={15} /></button>
         <div className="modal-h">Import Leads</div>
         <p className="help">
           Paste CSV, or pick a .csv file. The first row must be a header. Recognised columns:
@@ -649,7 +650,7 @@ function TagsModal({ data, canEdit, onClose, onChanged, onFilter }: {
   return (
     <div className="overlay open" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="modal" style={{ maxWidth: 520 }}>
-        <button className="close" type="button" onClick={onClose} aria-label="Close">✕</button>
+        <button className="close" type="button" onClick={onClose} aria-label="Close"><Icon name="close" size={15} /></button>
         <div className="modal-h">Lead Tags</div>
 
         {canEdit && (
@@ -695,7 +696,7 @@ function TagSelectedModal({ count, tags, onClose, onApply }: {
   return (
     <div className="overlay open" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="modal" style={{ maxWidth: 440 }}>
-        <button className="close" type="button" onClick={onClose} aria-label="Close">✕</button>
+        <button className="close" type="button" onClick={onClose} aria-label="Close"><Icon name="close" size={15} /></button>
         <div className="modal-h">Tag {count} selected lead{count === 1 ? '' : 's'}</div>
         <div className="field">
           <label>Tag</label>
@@ -749,7 +750,7 @@ function RecycleModal({ canEdit, onClose, onChanged }: { canEdit: boolean; onClo
   return (
     <div className="overlay open" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="modal lg">
-        <button className="close" type="button" onClick={onClose} aria-label="Close">✕</button>
+        <button className="close" type="button" onClick={onClose} aria-label="Close"><Icon name="close" size={15} /></button>
         <div className="modal-h">Recently Deleted Leads ({rows.length})</div>
         <p className="help">Deleted leads are kept here so they can be restored. Deleting permanently also removes their notes, tasks, showings and calls.</p>
         {loading ? <p className="help">Loading…</p> : rows.length === 0 ? <p className="help">Nothing here.</p> : (

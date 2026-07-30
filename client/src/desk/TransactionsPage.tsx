@@ -6,6 +6,7 @@ import { formatPrice, typeClass, typeLabel, TRANSACTION_TYPES } from './format';
 import { useToast } from './toast';
 import { apiErrorMessage } from '../lib/apiError';
 import { useAuth } from '../context/AuthContext';
+import Icon from '../ui/Icon';
 import { exportCompleteXlsx, ALL_TRANSACTIONS } from '../lib/bulkApi';
 import { queueExport } from '../lib/exportCentreApi';
 import AddTransactionModal from './AddTransactionModal';
@@ -185,7 +186,7 @@ export default function TransactionsPage() {
       {/* Deletion requests to review (admins/managers). */}
       {isAdminOrAbove && pendingDeletions.length > 0 && (
         <div className="card" style={{ borderLeft: '4px solid var(--bad)', background: '#fef2f2', marginBottom: 14 }}>
-          <strong style={{ color: '#991b1b' }}>🗑 {pendingDeletions.length} transaction deletion request{pendingDeletions.length === 1 ? '' : 's'} to review</strong>
+          <strong style={{ color: '#991b1b' }}><Icon name="trash" size={13} /> {pendingDeletions.length} transaction deletion request{pendingDeletions.length === 1 ? '' : 's'} to review</strong>
           <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
             {pendingDeletions.map((t) => (
               <div key={t.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap', fontSize: 12.5, color: '#7f1d1d', borderTop: '1px solid #fecaca', paddingTop: 6 }}>
@@ -202,7 +203,7 @@ export default function TransactionsPage() {
 
       {/* Toolbar */}
       <div className="toolbar"><div className="toolbar-row">
-        <input className="inp" placeholder="🔍 Search property, trade #, agent" value={filters.q} onChange={(e) => setF('q', e.target.value)} />
+        <input className="inp with-search" placeholder="Search property, trade #, agent" value={filters.q} onChange={(e) => setF('q', e.target.value)} />
         <select value={filters.year} onChange={(e) => setF('year', e.target.value)} title="Year (by closing date)">
           <option value="">All years (by closing date)</option>
           {years.map((y) => <option key={y} value={y}>{y}</option>)}
@@ -222,14 +223,14 @@ export default function TransactionsPage() {
           <option value="">All statuses</option><option>Open</option><option>Active</option><option>Closed</option><option>Sold</option><option>Leased</option><option>Mutual Release</option><option>DFT</option><option>Void</option><option>Suspended</option><option>Terminated</option><option>Expired</option>
         </select>
         <button className={`btn ${showRibbon || activeRibbonCount ? 'primary' : 'ghost'} sm`} onClick={() => setShowRibbon((s) => !s)}>
-          ⚙ Add Filter{activeRibbonCount ? ` (${activeRibbonCount})` : ''} {showRibbon ? '▲' : '▾'}
+          <Icon name="filter" size={13} /> Add Filter{activeRibbonCount ? ` (${activeRibbonCount})` : ''} {showRibbon ? <Icon name="chevronDown" size={12} className="flip" /> : <Icon name="chevronDown" size={12} />}
         </button>
         <button className="btn ghost sm" disabled={downloadingAll || loading} onClick={downloadEverything}
           title="Download every transaction — one row each, with team split, clients, lawyer, financial, adjustments and conditions">
-          {downloadingAll ? '⏳ Preparing…' : '⇩ Download All Transactions'}
+          {downloadingAll ? <><Icon name="clock" size={13} /> Preparing…</> : <><Icon name="download" size={13} /> Download All Transactions</>}
         </button>
-        <button className="btn ghost sm" onClick={() => navigate(deskPath('transactions/downloads'))} title="Past and queued exports">⇩ Download Centre</button>
-        {canEdit && <button className="btn ghost sm" onClick={() => navigate(deskPath('transactions/import'))} title="Create many transactions from a spreadsheet">⭳ Bulk Import</button>}
+        <button className="btn ghost sm" onClick={() => navigate(deskPath('transactions/downloads'))} title="Past and queued exports"><Icon name="download" size={13} /> Download Centre</button>
+        {canEdit && <button className="btn ghost sm" onClick={() => navigate(deskPath('transactions/import'))} title="Create many transactions from a spreadsheet"><Icon name="upload" size={13} /> Bulk Import</button>}
         {canEdit && <button className="btn primary sm" onClick={() => setAddOpen(true)}>+ Add Transaction</button>}
       </div>
 
@@ -256,7 +257,7 @@ export default function TransactionsPage() {
             <label style={{ fontSize: 11, color: 'var(--muted)' }}>Brokerage
               <input value={filters.brokerage} onChange={(e) => setF('brokerage', e.target.value)} placeholder="Brokerage name" style={{ display: 'block', marginTop: 2, minWidth: 160 }} />
             </label>
-            {activeRibbonCount > 0 && <button className="btn ghost sm" onClick={clearRibbon}>✕ Clear filters</button>}
+            {activeRibbonCount > 0 && <button className="btn ghost sm" onClick={clearRibbon}><Icon name="close" size={13} /> Clear filters</button>}
           </div>
         )}
       </div>
@@ -318,14 +319,14 @@ export default function TransactionsPage() {
                     <button className="btn ghost sm" onClick={() => navigate(`${deskPath(`transactions/${t.id}`)}?mode=${canEdit ? 'edit' : 'view'}`)}>{canEdit ? 'Edit' : 'View'}</button>
                     {/* Per-transaction chat with an unread-message badge. */}
                     <button className="btn ghost sm" onClick={() => setChatTxn(t)} style={{ position: 'relative' }} title="Open chat">
-                      💬
+                      <Icon name="message" size={14} />
                       {(t.unread_messages ?? 0) > 0 && (
                         <span style={{ position: 'absolute', top: -6, right: -6, minWidth: 16, height: 16, padding: '0 4px', borderRadius: 999, background: 'var(--bad)', color: '#fff', fontSize: 10, fontWeight: 700, lineHeight: '16px', textAlign: 'center' }}>
                           {(t.unread_messages ?? 0) > 99 ? '99+' : t.unread_messages}
                         </span>
                       )}
                     </button>
-                    {canEdit && <button className="btn ghost sm" onClick={() => onDelete(t)}>🗑️</button>}
+                    {canEdit && <button className="btn ghost sm" onClick={() => onDelete(t)}><Icon name="trash" size={14} /></button>}
                   </div>
                 </td>
               </tr>
