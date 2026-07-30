@@ -3,6 +3,7 @@ import { jsonField, toDateString, toDateTimeString, toIso8601String } from '../c
 import { normalizeCommissionTxn } from './commission.loader';
 import type { CommissionService } from './commission.service';
 
+import { isAgent } from '../core/authz';
 const isPrecon = (type: string): boolean => type === 'Preconstruction';
 
 // Deterministic ordering (Laravel's own order for these is index-plan-dependent
@@ -98,7 +99,7 @@ function statusList(t: LoadedTxn): string[] {
 
 async function myTeamAccess(t: LoadedTxn, ctx: ResourceCtx): Promise<string | null> {
   const user = ctx.user;
-  if (!user || user.role !== 'agent') return null;
+  if (!user || !isAgent(user)) return null;
   if (t.agent === user.name) return 'full';
   let member: { access: string } | null | undefined;
   if (t.team_members !== undefined) {

@@ -258,7 +258,7 @@ export class TransactionsService {
 
   /** Agents may only access transactions they own or are split into (admins: no-op). */
   private async authorizeAgentAccess(user: ResourceUser | null, t: { id: number; agent: string | null }): Promise<void> {
-    if (!user || user.role !== 'agent') return;
+    if (!user || !isAgent(user)) return;
     const name = user.name;
     // Unassigned transactions (no agent) are admin-only, even if team rows exist.
     const allowed =

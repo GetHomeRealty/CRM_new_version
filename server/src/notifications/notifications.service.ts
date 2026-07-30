@@ -47,7 +47,7 @@ export class NotificationsService {
 
   /** Agent bell: transactions where an admin reviewed the agent's documents. */
   async docNotifications(user: ResourceUser | null): Promise<Feed> {
-    if (!user || user.role !== 'agent') return { count: 0, items: [] };
+    if (!user || !isAgent(user)) return { count: 0, items: [] };
     const name = user.name;
 
     const txns = await this.prisma.transactions.findMany({

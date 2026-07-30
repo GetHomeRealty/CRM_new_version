@@ -5,7 +5,7 @@ import { AuditService } from '../audit/audit.service';
 import { toDateTimeString } from '../common/serialize';
 import type { AuthUserRecord } from '../auth/auth.types';
 
-import { isAdminOrAbove, isSuperAdmin } from '../core/authz';
+import { isAdminOrAbove, isAgent, isSuperAdmin } from '../core/authz';
 const SECTION = 'Approvals';
 
 /** Transaction deletion approval workflow: agent → admin forwards → super admin approves/rejects. */
@@ -17,7 +17,7 @@ export class DeleteRequestsService {
   ) {}
 
   async store(user: AuthUserRecord, txnId: number, reason: string): Promise<Record<string, unknown>> {
-    if (user.role !== 'agent') throw new ForbiddenException({ message: 'Only agents raise deletion requests.' });
+    if (!isAgent(user)) throw new ForbiddenException({ message: 'Only agents raise deletion requests.' });
     const t = await this.prisma.transactions.findFirst({ where: { id: txnId, deleted_at: null } });
     if (!t) throw new NotFoundException({ message: `No query results for model [App\\Models\\Transaction] ${txnId}.` });
     if (t.agent !== user.name) throw new ForbiddenException({ message: 'You can only request deletion of your own transactions.' });

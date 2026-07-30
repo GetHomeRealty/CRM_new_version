@@ -23,6 +23,7 @@ import { RegisterDto } from './dto/register.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import type { AuthPayload, AuthUserRecord } from './auth.types';
 
+import { setCompanyId } from '../core/tenant-context';
 @Controller()
 export class AuthController {
   constructor(
@@ -66,6 +67,9 @@ export class AuthController {
   async register(@Body() dto: RegisterDto, @Req() req: Request): Promise<{ user: AuthPayload }> {
     const user = await this.auth.register(dto.name, dto.email, dto.password, dto.password_confirmation);
     req.session.userId = user.id; // Auth::login + session regenerate
+    // Bootstrap registration creates the very first account, so there is no guard and no tenant in
+    // context — same as login, and the payload reads tenant-owned rows.
+    setCompanyId(user.company_id);
     return { user: await this.auth.payloadFor(user) };
   }
 
@@ -79,6 +83,10 @@ export class AuthController {
       // Keep the "remember me" session alive for 60 days.
       req.session.cookie.maxAge = 60 * 24 * 60 * 60 * 1000;
     }
+    // Sign-in is the one authenticated action AuthGuard never sees, so nothing has named the tenant
+    // yet — and the payload below reads the subscription and this person's module assignments, both
+    // of which are tenant-owned. Naming it here is what every other request gets from the guard.
+    setCompanyId(user.company_id);
     return { user: await this.auth.payloadFor(user) };
   }
 

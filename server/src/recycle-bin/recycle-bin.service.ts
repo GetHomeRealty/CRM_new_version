@@ -9,6 +9,7 @@ import { parseJson, round2, toDateString, toDateTimeString } from '../common/ser
 import type { AuthUserRecord } from '../auth/auth.types';
 import { STORAGE_ROOT } from '../config/storage';
 
+import { isSuperAdmin } from '../core/authz';
 type Actor = AuthUserRecord | null;
 
 const KIND_LABELS: Record<string, string> = {
@@ -32,7 +33,7 @@ export class RecycleBinService {
   ) {}
 
   private guard(user: Actor): void {
-    if (!user || user.role !== 'admin') throw new ForbiddenException({ message: 'Only a Super Admin can access the Recycle Bin.' });
+    if (!isSuperAdmin(user)) throw new ForbiddenException({ message: 'Only a Super Admin can access the Recycle Bin.' });
   }
 
   private async logAction(user: Actor, field: string, action: string): Promise<void> {
