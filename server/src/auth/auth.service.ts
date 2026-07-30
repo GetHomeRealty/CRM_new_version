@@ -61,12 +61,22 @@ export class AuthService {
     return { ...this.buildPayload(user), modules, licence };
   }
 
-  /** Load a user (with permission overrides) by id — used by the auth guard. */
-  loadUser(id: number): Promise<AuthUserRecord | null> {
-    return this.prisma.users.findUnique({
+  /**
+   * Load a user (with permission overrides and module assignments) by id — used by the auth guard.
+   *
+   * An inactive account resolves to null, which the guard turns into the same 401 as no session at
+   * all. Without this, `login` was the only place status was ever checked: deactivating someone
+   * stopped them signing in again but did nothing to the session they already had, so an account
+   * closed on Friday kept working until its cookie expired. The rule is spelled exactly as `login`
+   * spells it — a null status means active — so the two cannot disagree about who is shut out.
+   */
+  async loadUser(id: number): Promise<AuthUserRecord | null> {
+    const user = await this.prisma.users.findUnique({
       where: { id },
-      include: { user_permissions: true },
+      include: { user_permissions: true, user_modules: true },
     });
+    if (!user) return null;
+    return (user.status ?? 'Active') === 'Inactive' ? null : user;
   }
 
   /**

@@ -42,9 +42,15 @@ describe('§12 auditDomain rules', () => {
     expect(auditDomain({ category: 'Settings' })).toBe('common');
   });
 
-  it('marks the shared modules common, so they appear in both trails', () => {
-    for (const c of ['Users', 'Marketing Inventory', 'Inventory', 'MLS']) {
-      expect(auditDomain({ category: c })).toBe('common');
+  it('marks a genuinely shared module common, so it appears in both trails', () => {
+    // Users is the only one left: a change to an account is not CRM history or Desk history, it is
+    // both, and filing it under one would lose half of an administrator's trail.
+    expect(auditDomain({ category: 'Users' })).toBe('common');
+  });
+
+  it('files the modules that moved to the Transaction Desk there', () => {
+    for (const c of ['Marketing Inventory', 'Inventory', 'MLS', 'Favorites']) {
+      expect(auditDomain({ category: c })).toBe('desk');
     }
   });
 
@@ -91,13 +97,20 @@ describe('§12 area category lists', () => {
     expect(desk).not.toContain('Meta');
   });
 
-  it('offers the shared modules to both', () => {
+  it('offers the genuinely shared modules to both', () => {
     for (const area of ['crm', 'desk'] as const) {
-      const labels = screenLabelsForArea(SCREENS, area);
-      expect(labels).toContain('Users');
-      expect(labels).toContain('Inventory');
-      expect(labels).toContain('MLS');
+      expect(screenLabelsForArea(SCREENS, area)).toContain('Users');
     }
+  });
+
+  it('stops offering the CRM three modules it no longer has', () => {
+    // Inventory, MLS and Favorites moved to the Transaction Desk by request. A filter category that
+    // can never match anything on this side is an empty result waiting to look like a bug.
+    const crm = screenLabelsForArea(SCREENS, 'crm');
+    for (const gone of ['Inventory', 'MLS', 'Favorites']) expect(crm).not.toContain(gone);
+
+    const desk = screenLabelsForArea(SCREENS, 'desk');
+    for (const kept of ['Inventory', 'MLS', 'Favorites']) expect(desk).toContain(kept);
   });
 });
 

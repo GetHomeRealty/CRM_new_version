@@ -1,7 +1,16 @@
-import type { user_permissions, users } from '@prisma/client';
+import type { user_modules, user_permissions, users } from '@prisma/client';
 
-/** A user row loaded together with its per-user permission overrides. */
-export type AuthUserRecord = users & { user_permissions: user_permissions[] };
+/**
+ * A user row loaded together with its per-user permission overrides and module assignments.
+ *
+ * The module rows ride along because `ScreenGuard` needs them on every request, and the guard
+ * reading them off a user the auth guard has already loaded costs nothing, where a second query
+ * would cost one per request.
+ */
+export type AuthUserRecord = users & {
+  user_permissions: user_permissions[];
+  user_modules?: user_modules[];
+};
 
 /**
  * The authenticated-user payload returned by /api/login, /api/register and

@@ -174,10 +174,34 @@ describe('changing an assignment', () => {
       const { user, assign } = await seed(tx, { crm: true, desk: true });
       await assign(['crm', 'desk']);
       expect(await svc(tx).setAssigned(user.id, [])).toEqual([]);
-      // Zero rows means "unassigned", which the reader treats as both — so an empty assignment is
-      // recorded by the absence of rows and read back as open. Documented here because it is the one
-      // place the fail-open default is visible as a limitation rather than a safety net.
+      // "None" has to be sayable. It is written down as disabled rows rather than by deleting them,
+      // because no rows at all is the open default — so an administrator who unticked every module
+      // used to grant both, which is the exact opposite of what they did.
+      expect(await svc(tx).assigned(user.id)).toEqual([]);
+      expect(await svc(tx).forUser(user.id)).toEqual([]);
+      expect(await tx.user_modules.count({ where: { user_id: user.id } })).toBe(2);
+    });
+  });
+
+  it('still treats a user nobody has decided about as having both', async () => {
+    await inRollback(async (tx) => {
+      const { user } = await seed(tx, { crm: true, desk: true });
+      // The distinction the disabled rows exist to preserve: no rows is "not yet decided" and stays
+      // open; two disabled rows is "decided: none" and is honoured.
+      expect(await tx.user_modules.count({ where: { user_id: user.id } })).toBe(0);
       expect(await svc(tx).assigned(user.id)).toEqual(['crm', 'desk']);
+    });
+  });
+
+  it('brings a module back after it was turned off', async () => {
+    await inRollback(async (tx) => {
+      const { user } = await seed(tx, { crm: true, desk: true });
+      const s = svc(tx);
+      await s.setAssigned(user.id, []);
+      expect(await s.assigned(user.id)).toEqual([]);
+      // Re-enabling flips the disabled row rather than tripping over the unique constraint.
+      expect(await s.setAssigned(user.id, ['desk'])).toEqual(['desk']);
+      expect(await s.assigned(user.id)).toEqual(['desk']);
     });
   });
 

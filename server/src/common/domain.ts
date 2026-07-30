@@ -8,10 +8,10 @@
  * vocabulary for the same idea would mean every query, guard and migration had to know which of
  * the two it was reading. One spelling used everywhere is what makes the separation reliable.
  *
- * `common` is the third value, for the modules that belong to neither area: Users, MLS and
- * Inventory. Records marked common are visible from both areas, because hiding a user
- * change from one half of the application would lose an administrator's audit history rather
- * than separate it.
+ * `common` is the third value, for the modules that belong to neither area — Users, now that MLS
+ * and Inventory have moved to the Transaction Desk. Records marked common are visible from both
+ * areas, because hiding a user change from one half of the application would lose an
+ * administrator's audit history rather than separate it.
  *
  * `null` means not yet classified. It is not a fourth domain — it is the honest state for history
  * that pre-dates the split and cannot be attributed. Unclassified records are shown in BOTH areas,
@@ -66,11 +66,20 @@ export const SCREEN_DOMAIN: Record<string, Domain> = {
   triggers: 'common',
   settings: 'common',
 
-  // Shared modules.
+  // Inventory, MLS and Favorites were shared and are now the Transaction Desk's alone, by request.
+  // They live here as 'desk' to match the client's SCREEN_AREA: the two maps decide the same thing
+  // on opposite sides of the wire, and once ScreenGuard enforces module access from this one, a
+  // screen listed here as shared would be reachable from a CRM that no longer offers it.
+  //
+  // This also narrows the audit trail's category list — the CRM's filter stops offering three
+  // screens that can no longer produce a CRM entry, and 20260730170000 moved the two rows already
+  // filed under the old classification so that nothing is left pointing at a category that is gone.
+  mls: 'desk',
+  favorites: 'desk',
+  inventory: 'desk',
+
+  // Genuinely shared.
   users: 'common',
-  mls: 'common',
-  favorites: 'common',
-  inventory: 'common',
 };
 
 /**
@@ -84,7 +93,8 @@ export const SCREEN_DOMAIN: Record<string, Domain> = {
  *   a transaction link          → desk   (a link to a deal IS the area)
  *   Lead / Campaigns / Meta     → crm
  *   Settings, by its section    → crm | desk | common
- *   Users / MLS / Inventory      → common (shared modules; shown in both trails)
+ *   MLS / Inventory / Favorites → desk   (moved there with the screens themselves)
+ *   Users                       → common (genuinely shared; shown in both trails)
  *
  * Returns null when nothing applies, which leaves the row unclassified and therefore visible from
  * both areas — the safe direction, since the alternative is hiding it from both.
@@ -106,8 +116,11 @@ export function auditDomain(input: { category?: string | null; section?: string 
     Lead: 'crm', Leads: 'crm', Campaigns: 'crm', Meta: 'crm', 'Client Reviews': 'crm',
     Transactions: 'desk', Invoice: 'desk', Invoices: 'desk', Reports: 'desk', Analytics: 'desk',
     'Recycle Bin': 'desk',
-    Users: 'common', 'Marketing Inventory': 'common', Inventory: 'common',
-    MLS: 'common', Favorites: 'common',
+    // These follow SCREEN_DOMAIN, which moved them to the Transaction Desk. The two rows already
+    // filed as common were moved with them by 20260730170000, so this function still explains every
+    // stored domain — the property that makes the trail checkable at all.
+    'Marketing Inventory': 'desk', Inventory: 'desk', MLS: 'desk', Favorites: 'desk',
+    Users: 'common',
   };
   return byCategory[category] ?? null;
 }

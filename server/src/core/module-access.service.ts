@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import type { subscriptions } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AREAS, type Area } from '../common/domain';
 
@@ -43,13 +44,31 @@ export class ModuleAccessService {
   private readonly companyId = 1;
 
   /**
+   * The licence, briefly remembered.
+   *
+   * `ScreenGuard` asks on every request that names a screen, and a subscription changes when someone
+   * signs a contract — never, on the timescale of a web request. Ten seconds is short enough that
+   * nobody notices a licence change and long enough that a burst of requests costs one query.
+   *
+   * Expiry is still evaluated fresh against the clock on every read, so a licence cannot outlive its
+   * end date by sitting in this cache.
+   */
+  private cached: { row: subscriptions | null; at: number } | null = null;
+  private static readonly CACHE_MS = 10_000;
+
+  /**
    * What the company has bought.
    *
    * No row at all means fully licensed: the table is new, and a deployment upgraded before anyone
    * filled it in must keep working. An expired or suspended subscription licenses nothing.
    */
   async licence(): Promise<Licence> {
-    const row = await this.prisma.subscriptions.findUnique({ where: { company_id: this.companyId } });
+    const fresh = this.cached && Date.now() - this.cached.at < ModuleAccessService.CACHE_MS;
+    if (!fresh) {
+      const row = await this.prisma.subscriptions.findUnique({ where: { company_id: this.companyId } });
+      this.cached = { row, at: Date.now() };
+    }
+    const row = this.cached!.row;
     if (!row) {
       return { crm: true, desk: true, plan: null, status: 'active', expires: null, valid: true };
     }
@@ -67,16 +86,33 @@ export class ModuleAccessService {
     };
   }
 
-  /** The modules assigned to one person, ignoring what the company is licensed for. */
+  /**
+   * The modules assigned to one person, ignoring what the company is licensed for.
+   *
+   * Reads EVERY row, not just the active ones, because the difference between "nobody has decided
+   * yet" and "somebody decided: none" is the difference between the two rows and no rows. Filtering
+   * to active in the query would collapse them and make an administrator who deliberately removed
+   * every module look identical to a user nobody had got to yet — and that default is both.
+   */
   async assigned(userId: number): Promise<Area[]> {
     const rows = await this.prisma.user_modules.findMany({
-      where: { user_id: userId, status: 'active' },
-      select: { module_name: true },
+      where: { user_id: userId },
+      select: { module_name: true, status: true },
     });
-    // No rows means nobody has decided yet — treat that as both, so a user created before this table
-    // existed, or by a caller that does not know about it, is not locked out of the application.
+    return this.assignedFrom(rows);
+  }
+
+  /**
+   * The same answer from rows already in hand.
+   *
+   * `AuthGuard` loads a user's module rows with the user, so the per-request check does not need a
+   * query of its own.
+   */
+  assignedFrom(rows: { module_name: string; status: string }[]): Area[] {
+    // No rows at all means nobody has decided — treat that as both, so a user created before this
+    // table existed, or by a caller that does not know about it, is not locked out.
     if (rows.length === 0) return [...AREAS];
-    return AREAS.filter((a) => rows.some((r) => r.module_name === a));
+    return AREAS.filter((a) => rows.some((r) => r.module_name === a && r.status === 'active'));
   }
 
   /** What this person can actually open: licensed AND assigned. */
@@ -99,22 +135,22 @@ export class ModuleAccessService {
    *
    * That is safe here because each statement is atomic and the sequence is idempotent: a failure
    * part-way leaves a subset of the intended rows, and saving again converges on the right answer.
-   * Nothing reads a half-applied assignment as meaningful — the reader treats missing rows as
-   * "unassigned", which is the open default.
+   *
+   * A module the caller did not ask for is written as a 'disabled' row rather than deleted. Deleting
+   * it would erase the fact that anyone decided, and since no rows at all is read as the open
+   * default, an administrator who unticked every module would grant both — the exact opposite of
+   * what they did. Writing the decision down is what makes "none" sayable at all.
    */
   async setAssigned(userId: number, modules: Area[], db: Pick<PrismaService, 'user_modules'> = this.prisma): Promise<Area[]> {
     const wanted = AREAS.filter((a) => modules.includes(a));
     const now = new Date();
 
-    // Rows for modules no longer wanted go entirely, rather than being marked disabled: a stale
-    // 'disabled' row and no row at all mean the same thing, and keeping both spellings around
-    // invites code that checks one and not the other.
-    await db.user_modules.deleteMany({ where: { user_id: userId, module_name: { notIn: wanted } } });
-    for (const module_name of wanted) {
+    for (const module_name of AREAS) {
+      const status = wanted.includes(module_name) ? 'active' : 'disabled';
       await db.user_modules.upsert({
         where: { user_id_module_name: { user_id: userId, module_name } },
-        create: { user_id: userId, module_name, status: 'active', created_at: now, updated_at: now },
-        update: { status: 'active', updated_at: now },
+        create: { user_id: userId, module_name, status, created_at: now, updated_at: now },
+        update: { status, updated_at: now },
       });
     }
 
