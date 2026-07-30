@@ -31,6 +31,8 @@ import { Prisma, PrismaClient } from '@prisma/client';
  */
 
 const prisma = new PrismaClient();
+/** The brokerage every existing row belongs to. */
+const DEFAULT_TENANT = 1;
 const models = Prisma.dmmf.datamodel.models;
 
 /** The brokerage owns these directly. Each gets `company_id`. */
@@ -197,27 +199,73 @@ describe('no query crosses a tenant boundary', () => {
     return mod as { run<T>(companyId: number, fn: () => Promise<T>): Promise<T> };
   }
 
-  it('shows a tenant only its own rows, for every root table', async () => {
-    const ctx = tenantContext();
-    const [a, b] = [1, 2];
-    for (const model of ROOT) {
-      if (model === 'company_settings') continue;
-      const seen = await ctx.run(a, () => (prisma as never as Record<string, { findMany(x: unknown): Promise<{ company_id: number }[]> }>)[model].findMany({ select: { company_id: true } }));
-      const foreign = seen.filter((r) => r.company_id !== a);
-      expect({ model, foreign: foreign.length }).toEqual({ model, foreign: 0 });
-      expect(b).toBe(2); // the other tenant exists; this test asserts it is invisible, not absent
+  /**
+   * A second brokerage, its own lead, and everything rolled back afterwards.
+   *
+   * Seeding is not optional here. With one company in the database every isolation assertion passes
+   * for the wrong reason — there is nothing to leak, so "saw no foreign rows" means only that no
+   * foreign rows exist. A test that cannot fail is worse than no test, because it reports safety it
+   * never checked.
+   */
+  const ROLLBACK = '__rollback__';
+  async function withSecondTenant(fn: (tx: typeof prisma, other: { companyId: number; leadId: number }) => Promise<void>) {
+    try {
+      await prisma.$transaction(async (tx) => {
+        const now = new Date();
+        const company = await tx.company_settings.create({ data: { name: 'Other Brokerage Inc.' } });
+        const lead = await tx.leads.create({
+          data: { name: 'not yours', email: 'other@brokerage.test', company_id: company.id, created_at: now, updated_at: now },
+        });
+        await fn(tx as typeof prisma, { companyId: company.id, leadId: lead.id });
+        throw new Error(ROLLBACK);
+      });
+    } catch (e) {
+      if (!String((e as Error).message).includes(ROLLBACK)) throw e;
     }
+  }
+
+  it('hides another tenant rows from a findMany', async () => {
+    const ctx = tenantContext();
+    await withSecondTenant(async (tx, other) => {
+      const seen = await ctx.run(DEFAULT_TENANT, () => tx.leads.findMany({ select: { company_id: true } }));
+      expect(seen.filter((r) => r.company_id === other.companyId)).toEqual([]);
+    });
   });
 
-  it('refuses a findUnique on another tenantid', async () => {
+  it('hides another tenant rows from a count', async () => {
     const ctx = tenantContext();
-    // The one Prisma cannot narrow by extension: `where` takes unique fields only, so every one of
-    // the 104 call sites becomes findFirst or checks ownership after the fact. This asserts the
-    // outcome rather than the technique.
-    const other = await prisma.leads.findFirst({ where: { company_id: 2 } as never });
-    if (!other) throw new Error('seed a second tenant before this can mean anything');
-    const found = await ctx.run(1, () => prisma.leads.findUnique({ where: { id: other.id } }));
-    expect(found).toBeNull();
+    await withSecondTenant(async (tx, other) => {
+      // Counts are the quiet ones: a dashboard total that includes another brokerage looks like a
+      // number, not like a leak.
+      const mine = await ctx.run(DEFAULT_TENANT, () => tx.leads.count());
+      const theirs = await tx.leads.count({ where: { company_id: other.companyId } });
+      const all = await tx.leads.count();
+      expect(theirs).toBe(1);
+      expect(mine).toBe(all - theirs);
+    });
+  });
+
+  it('refuses a findUnique on another tenant id', async () => {
+    const ctx = tenantContext();
+    await withSecondTenant(async (tx, other) => {
+      // The one Prisma cannot narrow by extension: `where` takes unique fields only, so every one of
+      // the 104 call sites becomes findFirst or checks ownership after the fact. This asserts the
+      // outcome rather than the technique.
+      const found = await ctx.run(DEFAULT_TENANT, () => tx.leads.findUnique({ where: { id: other.leadId } }));
+      expect(found).toBeNull();
+    });
+  });
+
+  it('refuses to write into another tenant', async () => {
+    const ctx = tenantContext();
+    await withSecondTenant(async (tx, other) => {
+      // Reading across is the leak everyone thinks of; writing across is the one that corrupts.
+      await expect(
+        ctx.run(DEFAULT_TENANT, () => tx.leads.update({ where: { id: other.leadId }, data: { name: 'edited' } })),
+      ).rejects.toThrow();
+      const after = await tx.leads.findUnique({ where: { id: other.leadId } });
+      expect(after?.name).toBe('not yours');
+    });
   });
 
   it('makes every background job name its tenant', () => {

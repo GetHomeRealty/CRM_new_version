@@ -1,6 +1,7 @@
-import { Module } from '@nestjs/common';
+import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
+import { TenantContextMiddleware } from './core/tenant-context';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import configuration from './config/configuration';
 import { GLOBAL_LIMIT } from './config/rate-limits';
@@ -103,4 +104,15 @@ import { TwilioVoiceModule } from './twilio-voice/twilio-voice.module';
     { provide: APP_GUARD, useClass: ThrottlerGuard },
   ],
 })
-export class AppModule {}
+export class AppModule implements NestModule {
+  /**
+   * Opens a tenant context around every request.
+   *
+   * Registered here rather than in CoreModule because middleware has to wrap the whole request, and
+   * `AsyncLocalStorage` only holds for the callback it is given — a guard or an interceptor would
+   * unwind before the handler queried anything.
+   */
+  configure(consumer: MiddlewareConsumer): void {
+    consumer.apply(TenantContextMiddleware).forRoutes('*');
+  }
+}

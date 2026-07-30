@@ -34,6 +34,12 @@ model agents {
   active     Boolean   @default(true)
   created_at DateTime? @db.Timestamp(0)
   updated_at DateTime? @db.Timestamp(0)
+
+  /// The brokerage this row belongs to. See src/core/tenancy.spec.ts for why this table carries one.
+  company_id Int              @default(1)
+  company    company_settings @relation(fields: [company_id], references: [id], onUpdate: NoAction)
+
+  @@index([company_id])
 }
 
 /// `domain` marks which area an audit entry belongs to: 'crm', 'desk', or 'common' for the
@@ -166,6 +172,25 @@ model company_settings {
   deposit_heading  String?   @db.Text
   created_at       DateTime? @db.Timestamp(0)
   updated_at       DateTime? @db.Timestamp(0)
+
+  // Every table the brokerage owns directly.
+  users                  users[]
+  leads                  leads[]
+  transactions           transactions[]
+  customers              customers[]
+  campaigns              campaigns[]
+  agents                 agents[]
+  marketing_inventory    marketing_inventory[]
+  lead_tags              lead_tags[]
+  crm_email_settings     crm_email_settings[]
+  crm_referral_codes     crm_referral_codes[]
+  crm_email_log          crm_email_log[]
+  crm_broadcasts         crm_broadcasts[]
+  email_suppressions     email_suppressions[]
+  import_batches         import_batches[]
+  export_jobs            export_jobs[]
+  personal_access_tokens personal_access_tokens[]
+  meta_webhook_events    meta_webhook_events[]
 }
 
 model conditions {
@@ -196,6 +221,12 @@ model customers {
   created_at  DateTime?  @db.Timestamp(0)
   updated_at  DateTime?  @db.Timestamp(0)
   invoices    invoices[]
+
+  /// The brokerage this row belongs to. See src/core/tenancy.spec.ts for why this table carries one.
+  company_id Int              @default(1)
+  company    company_settings @relation(fields: [company_id], references: [id], onUpdate: NoAction)
+
+  @@index([company_id])
 }
 
 model documents {
@@ -291,6 +322,7 @@ model leads {
   // ---- provenance ----
   /**
    * /**
+   * /**
    * /** manual | import | facebook_meta
    */
   source               String?               @db.VarChar(32)
@@ -362,6 +394,10 @@ model leads {
   lead_emails          lead_emails[]
   inbound_emails       inbound_emails[]
 
+  /// The brokerage this row belongs to. See src/core/tenancy.spec.ts for why this table carries one.
+  company_id Int              @default(1)
+  company    company_settings @relation(fields: [company_id], references: [id], onUpdate: NoAction)
+
   @@index([email])
   @@index([lead_status])
   @@index([lead_source])
@@ -371,6 +407,7 @@ model leads {
   @@index([source])
   @@index([phone_normalized])
   @@index([meta_campaign_id])
+  @@index([company_id])
 }
 
 /**
@@ -501,6 +538,12 @@ model crm_email_settings {
   updated_by        String?   @db.VarChar(255)
   created_at        DateTime? @db.Timestamp(0)
   updated_at        DateTime? @db.Timestamp(0)
+
+  /// The brokerage this row belongs to. See src/core/tenancy.spec.ts for why this table carries one.
+  company_id Int              @default(1)
+  company    company_settings @relation(fields: [company_id], references: [id], onUpdate: NoAction)
+
+  @@index([company_id])
 }
 
 /**
@@ -515,6 +558,12 @@ model crm_referral_codes {
   max_usage   Int       @default(5)
   created_by  String?   @db.VarChar(255)
   created_at  DateTime? @db.Timestamp(0)
+
+  /// The brokerage this row belongs to. See src/core/tenancy.spec.ts for why this table carries one.
+  company_id Int              @default(1)
+  company    company_settings @relation(fields: [company_id], references: [id], onUpdate: NoAction)
+
+  @@index([company_id])
 }
 
 /**
@@ -538,8 +587,13 @@ model crm_email_log {
   sent_by    String?   @db.VarChar(255)
   created_at DateTime? @db.Timestamp(0)
 
+  /// The brokerage this row belongs to. See src/core/tenancy.spec.ts for why this table carries one.
+  company_id Int              @default(1)
+  company    company_settings @relation(fields: [company_id], references: [id], onUpdate: NoAction)
+
   @@index([kind])
   @@index([created_at])
+  @@index([company_id])
 }
 
 /**
@@ -557,7 +611,12 @@ model crm_broadcasts {
   sent_by_id Int?
   created_at DateTime? @db.Timestamp(0)
 
+  /// The brokerage this row belongs to. See src/core/tenancy.spec.ts for why this table carries one.
+  company_id Int              @default(1)
+  company    company_settings @relation(fields: [company_id], references: [id], onUpdate: NoAction)
+
   @@index([created_at])
+  @@index([company_id])
 }
 
 /**
@@ -658,9 +717,14 @@ model meta_webhook_events {
   received_at  DateTime  @db.Timestamp(0)
   processed_at DateTime? @db.Timestamp(0)
 
+  /// The brokerage this row belongs to. See src/core/tenancy.spec.ts for why this table carries one.
+  company_id Int?
+  company    company_settings? @relation(fields: [company_id], references: [id], onUpdate: NoAction)
+
   @@index([status])
   @@index([leadgen_id])
   @@index([received_at])
+  @@index([company_id])
 }
 
 /**
@@ -939,6 +1003,12 @@ model lead_tags {
   name       String    @unique @db.VarChar(64)
   created_by String?   @db.VarChar(255)
   created_at DateTime? @db.Timestamp(0)
+
+  /// The brokerage this row belongs to. See src/core/tenancy.spec.ts for why this table carries one.
+  company_id Int              @default(1)
+  company    company_settings @relation(fields: [company_id], references: [id], onUpdate: NoAction)
+
+  @@index([company_id])
 }
 
 /**
@@ -978,8 +1048,13 @@ model campaigns {
   updated_at    DateTime?             @db.Timestamp(0)
   recipients    campaign_recipients[]
 
+  /// The brokerage this row belongs to. See src/core/tenancy.spec.ts for why this table carries one.
+  company_id Int              @default(1)
+  company    company_settings @relation(fields: [company_id], references: [id], onUpdate: NoAction)
+
   @@index([status])
   @@index([created_at])
+  @@index([company_id])
 }
 
 /**
@@ -1011,8 +1086,13 @@ model marketing_inventory {
    */
   deleted_at    DateTime? @db.Timestamp(0)
 
+  /// The brokerage this row belongs to. See src/core/tenancy.spec.ts for why this table carries one.
+  company_id Int              @default(1)
+  company    company_settings @relation(fields: [company_id], references: [id], onUpdate: NoAction)
+
   @@index([deleted_at])
   @@index([type])
+  @@index([company_id])
 }
 
 /**
@@ -1118,6 +1198,12 @@ model email_suppressions {
   campaign_id Int?
   created_at  DateTime? @db.Timestamp(0)
   updated_at  DateTime? @db.Timestamp(0)
+
+  /// The brokerage this row belongs to. See src/core/tenancy.spec.ts for why this table carries one.
+  company_id Int              @default(1)
+  company    company_settings @relation(fields: [company_id], references: [id], onUpdate: NoAction)
+
+  @@index([company_id])
 }
 
 /**
@@ -1213,9 +1299,14 @@ model export_jobs {
   created_at        DateTime? @db.Timestamp(0)
   updated_at        DateTime? @db.Timestamp(0)
 
+  /// The brokerage this row belongs to. See src/core/tenancy.spec.ts for why this table carries one.
+  company_id Int              @default(1)
+  company    company_settings @relation(fields: [company_id], references: [id], onUpdate: NoAction)
+
   @@index([requested_by_id])
   @@index([status])
   @@index([requested_at])
+  @@index([company_id])
 }
 
 /**
@@ -1242,7 +1333,12 @@ model import_batches {
   created_at     DateTime? @db.Timestamp(0)
   updated_at     DateTime? @db.Timestamp(0)
 
+  /// The brokerage this row belongs to. See src/core/tenancy.spec.ts for why this table carries one.
+  company_id Int              @default(1)
+  company    company_settings @relation(fields: [company_id], references: [id], onUpdate: NoAction)
+
   @@index([uploaded_at])
+  @@index([company_id])
 }
 
 /**
@@ -1488,6 +1584,7 @@ model mail_accounts {
   // ---- IMAP inbound sync (optional; SMTP-only accounts leave these null) ----
   /**
    * /**
+   * /**
    * /** IMAP server for pulling received mail, e.g. imap.gmail.com. Null = no inbound sync.
    */
   imap_host       String?           @db.VarChar(255)
@@ -1590,8 +1687,13 @@ model personal_access_tokens {
   created_at     DateTime? @db.Timestamp(0)
   updated_at     DateTime? @db.Timestamp(0)
 
+  /// The brokerage this row belongs to. See src/core/tenancy.spec.ts for why this table carries one.
+  company_id Int              @default(1)
+  company    company_settings @relation(fields: [company_id], references: [id], onUpdate: NoAction)
+
   @@index([expires_at])
   @@index([tokenable_type, tokenable_id])
+  @@index([company_id])
 }
 
 model precon_terms {
@@ -1847,12 +1949,17 @@ model transactions {
   transaction_statuses        transaction_statuses[]
   trashed_row_items           trashed_row_items[]
 
+  /// The brokerage this row belongs to. See src/core/tenancy.spec.ts for why this table carries one.
+  company_id Int              @default(1)
+  company    company_settings @relation(fields: [company_id], references: [id], onUpdate: NoAction)
+
   @@index([agent])
   @@index([type])
   @@index([offer_date])
   @@index([closing_date])
   @@index([payment_type])
   @@index([lead_source])
+  @@index([company_id])
 }
 
 model trashed_row_items {
@@ -1912,6 +2019,12 @@ model users {
   transaction_message_reads transaction_message_reads[]
   user_permissions          user_permissions[]
   user_modules              user_modules[]
+
+  /// The brokerage this row belongs to. See src/core/tenancy.spec.ts for why this table carries one.
+  company_id Int              @default(1)
+  company    company_settings @relation(fields: [company_id], references: [id], onUpdate: NoAction)
+
+  @@index([company_id])
 }
 
 /// Which application modules a user may open.
