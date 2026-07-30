@@ -6,6 +6,7 @@ import type { AgentChangeItem, AgentChangeNotif, DocNotif, DocNotifItem } from '
 import ChangePasswordModal from './ChangePasswordModal';
 import UserAvatar from './UserAvatar';
 import ErrorBoundary from '../components/ErrorBoundary';
+import Icon from '../ui/Icon';
 import { AREA_LABEL, AREA_SHORT, AREA_TAB, DEFAULT_AREA, areaPath, screenInArea, type Area } from './area';
 import { AreaProvider } from './AreaContext';
 
@@ -52,41 +53,41 @@ interface NavChild {
 }
 
 const NAV: NavItem[] = [
-  { key: 'dashboard', label: 'Dashboard', ico: '\u{1F4CA}' },
-  { key: 'analytics', label: 'Analytics', ico: '\u{1F4C8}' },
-  { key: 'calendar', label: 'Calendar', ico: '\u{1F4C5}' },
-  { key: 'reviews', label: 'Client Reviews', ico: '\u{2B50}' },
-  { key: 'inventory', label: 'Inventory', ico: '\u{1F4E6}' },
+  { key: 'dashboard', label: 'Dashboard', ico: 'dashboard' },
+  { key: 'analytics', label: 'Analytics', ico: 'analytics' },
+  { key: 'calendar', label: 'Calendar', ico: 'calendar' },
+  { key: 'reviews', label: 'Client Reviews', ico: 'star' },
+  { key: 'inventory', label: 'Inventory', ico: 'package' },
   // CRM group: Inbox → Lead → Campaigns
-  { key: 'inbox', label: 'Inbox', ico: '\u{2709}' },
-  { key: 'lead', label: 'Lead', ico: '\u{1F9D1}' },
+  { key: 'inbox', label: 'Inbox', ico: 'inbox' },
+  { key: 'lead', label: 'Lead', ico: 'lead' },
   {
-    key: 'campaigns', label: 'Campaigns', ico: '\u{1F4E3}',
+    key: 'campaigns', label: 'Campaigns', ico: 'megaphone',
     children: [
-      { key: 'campaigns', label: 'Campaigns', ico: '\u{1F4E3}', screen: 'campaigns', path: 'campaigns',
+      { key: 'campaigns', label: 'Campaigns', ico: 'megaphone', screen: 'campaigns', path: 'campaigns',
         match: (_p, q) => new URLSearchParams(q).get('tab') !== 'templates' },
-      { key: 'campaign-templates', label: 'Templates', ico: '\u{1F4DD}', screen: 'campaigns', path: 'campaigns?tab=templates',
+      { key: 'campaign-templates', label: 'Templates', ico: 'file', screen: 'campaigns', path: 'campaigns?tab=templates',
         match: (_p, q) => new URLSearchParams(q).get('tab') === 'templates' },
     ],
   },
-  { key: 'meta', label: 'Meta', ico: '\u{1F310}' },
+  { key: 'meta', label: 'Meta', ico: 'globe' },
   {
-    key: 'mls', label: 'MLS', ico: '\u{1F3F7}',
+    key: 'mls', label: 'MLS', ico: 'tag',
     children: [
-      { key: 'mls', label: 'MLS', ico: '\u{1F3F7}', path: 'mls',
+      { key: 'mls', label: 'MLS', ico: 'tag', path: 'mls',
         match: (_p, q) => new URLSearchParams(q).get('tab') !== 'favorites' },
-      { key: 'favorites', label: 'Favorites', ico: '\u{2665}', path: 'mls?tab=favorites',
+      { key: 'favorites', label: 'Favorites', ico: 'heart', path: 'mls?tab=favorites',
         match: (_p, q) => new URLSearchParams(q).get('tab') === 'favorites' },
     ],
   },
   // Deal group: Transactions → Invoice → Reports
-  { key: 'transactions', label: 'Transactions', ico: '\u{1F4DA}' },
-  { key: 'invoice', label: 'Invoice', ico: '\u{1F9FE}' },
-  { key: 'reports', label: 'Reports', ico: '\u{1F4D1}' },
-  { key: 'audit', label: 'Audit Trail', ico: '\u{1F4DD}' },
-  { key: 'users', label: 'Users', ico: '\u{1F465}' },
+  { key: 'transactions', label: 'Transactions', ico: 'briefcase' },
+  { key: 'invoice', label: 'Invoice', ico: 'receipt' },
+  { key: 'reports', label: 'Reports', ico: 'report' },
+  { key: 'audit', label: 'Audit Trail', ico: 'clipboard' },
+  { key: 'users', label: 'Users', ico: 'users' },
   {
-    key: 'settings', label: 'Settings', ico: '\u{2699}',
+    key: 'settings', label: 'Settings', ico: 'settings',
     // Mirrors SettingsPage's own tabs, with the permissions those tabs already carried: the two
     // that came from the Super-Admin-only Email Settings screen stay Super Admin.
     //
@@ -95,19 +96,19 @@ const NAV: NavItem[] = [
     // was the cause of the bug where linking a CRM email account opened the Desk's integrations.
     // Company Settings appears in both, because it belongs to neither.
     children: [
-      { key: 'settings-desk', label: 'Transaction Desk', ico: '\u{1F4DA}', superAdmin: true, area: 'desk', path: 'settings?tab=desk',
+      { key: 'settings-desk', label: 'Transaction Desk', ico: 'briefcase', superAdmin: true, area: 'desk', path: 'settings?tab=desk',
         match: (_p, q) => (new URLSearchParams(q).get('tab') ?? 'desk') === 'desk' },
-      { key: 'settings-crm', label: 'CRM Settings', ico: '\u{2699}', superAdmin: true, area: 'crm', path: 'settings?tab=crm',
+      { key: 'settings-crm', label: 'CRM Settings', ico: 'settings', superAdmin: true, area: 'crm', path: 'settings?tab=crm',
         match: (_p, q) => (new URLSearchParams(q).get('tab') ?? 'crm') === 'crm' },
-      { key: 'settings-company', label: 'Company Settings', ico: '\u{1F3E2}', screen: 'settings', path: 'settings?tab=company',
+      { key: 'settings-company', label: 'Company Settings', ico: 'building', screen: 'settings', path: 'settings?tab=company',
         match: (_p, q) => new URLSearchParams(q).get('tab') === 'company' },
     ],
   },
   // Agent's own settings — profile, their email accounts, signature. Admins have the admin
   // Settings above instead, so this is shown to agents only.
-  { key: 'account', label: 'Settings', ico: '\u{2699}', agentOnly: true },
-  { key: 'triggers', label: 'Triggers', ico: '\u{26A1}' },
-  { key: 'recycle-bin', label: 'Recycle Bin', ico: '\u{1F5D1}', superAdmin: true },
+  { key: 'account', label: 'Settings', ico: 'settings', agentOnly: true },
+  { key: 'triggers', label: 'Triggers', ico: 'zap' },
+  { key: 'recycle-bin', label: 'Recycle Bin', ico: 'trash', superAdmin: true },
 ];
 
 const TITLES: Record<string, string> = Object.fromEntries(NAV.map((n): [string, string] => [n.key, n.label]));
@@ -284,7 +285,7 @@ export default function DeskLayout({ area = DEFAULT_AREA }: { area?: Area }) {
               if (!n.children) {
                 return (
                   <button key={n.key} className={seg === n.key ? 'active' : ''} onClick={() => go(n.key)}>
-                    <span className="ico">{n.ico}</span><span>{n.label}</span>
+                    <span className="ico"><Icon name={n.ico} size={17} /></span><span>{n.label}</span>
                   </button>
                 );
               }
@@ -298,7 +299,7 @@ export default function DeskLayout({ area = DEFAULT_AREA }: { area?: Area }) {
                     onClick={() => { toggleNav(n.key); if (!onModule) go(n.key); }}
                     aria-expanded={open}
                   >
-                    <span className="ico">{n.ico}</span>
+                    <span className="ico"><Icon name={n.ico} size={17} /></span>
                     <span>{n.label}</span>
                     <span className={`nav-caret ${open ? 'open' : ''}`}>{'▾'}</span>
                   </button>
@@ -310,7 +311,7 @@ export default function DeskLayout({ area = DEFAULT_AREA }: { area?: Area }) {
                         className={`nav-child ${active ? 'active' : ''}`}
                         onClick={() => navigate(areaPath(area, c.path ?? c.key))}
                       >
-                        <span className="ico">{c.ico ?? ''}</span><span>{c.label}</span>
+                        <span className="ico"><Icon name={c.ico ?? ''} size={16} /></span><span>{c.label}</span>
                       </button>
                     );
                   })}
@@ -318,7 +319,7 @@ export default function DeskLayout({ area = DEFAULT_AREA }: { area?: Area }) {
               );
             })}
             <button onClick={onLogout}>
-              <span className="ico">{'\u{23FB}'}</span><span>Logout</span>
+              <span className="ico"><Icon name="logout" size={17} /></span><span>Logout</span>
             </button>
           </nav>
         </aside>

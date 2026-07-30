@@ -18,7 +18,14 @@ html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family:
 #root{min-height:100vh}
 button{font-family:inherit;cursor:pointer}
 ::selection{background:var(--brand-light);color:var(--brand-dark)}
-:focus-visible{outline:none}
+/* A visible focus ring, restored.
+   This rule used to be `outline:none`, which removed the keyboard focus indicator from every control
+   in the application — the one thing a person navigating by keyboard has to tell them where they
+   are. `:focus-visible` only matches keyboard focus, so this costs mouse users nothing: it does not
+   ring a button because it was clicked. */
+:focus-visible{outline:2px solid var(--brand);outline-offset:2px;border-radius:var(--r-sm)}
+/* Inputs carry their own border, so a ring reads better than an outline sitting on top of it. */
+input:focus-visible,select:focus-visible,textarea:focus-visible{outline:none;border-color:var(--brand);box-shadow:var(--ring)}
 /* thin, rounded, modern scrollbars */
 *::-webkit-scrollbar{width:8px;height:8px}
 *::-webkit-scrollbar-track{background:transparent}
@@ -38,7 +45,11 @@ button{font-family:inherit;cursor:pointer}
 .logo-img{width:100%;max-width:100%;height:auto;max-height:110px;object-fit:contain;display:block}
 .nav{display:flex;flex-direction:column;gap:2px;margin-top:2px}
 .nav button{background:transparent;border:0;text-align:left;padding:9px 11px;border-radius:10px;color:var(--text-2);font-size:13px;font-weight:500;display:flex;align-items:center;gap:11px;width:100%;transition:background .15s ease, color .15s ease, transform .08s ease;position:relative}
-.nav button .ico{font-size:14px;width:18px;display:inline-grid;place-items:center;opacity:.7}
+/* Sized for an SVG rather than a glyph: the icons are stroked paths on a 24-unit grid that inherit
+   `currentColor`, so they take the row's colour on hover and when active instead of staying the one
+   colour an emoji is born with. */
+.nav button .ico{width:18px;height:18px;display:inline-grid;place-items:center;opacity:.62;transition:opacity .15s ease}
+.nav button:hover .ico{opacity:.9}
 .nav button:hover{background:var(--surface-3);color:var(--text)}
 .nav button.active{background:var(--brand-soft);color:var(--brand-dark);font-weight:600}
 .nav button.active::before{content:"";position:absolute;left:-2px;top:9px;bottom:9px;width:3px;border-radius:0 3px 3px 0;background:linear-gradient(180deg,var(--brand),var(--accent-2))}
@@ -213,7 +224,12 @@ input[type="number"],.numeric,.stat-card .val{font-variant-numeric:tabular-nums;
 .skeleton{background:linear-gradient(90deg,var(--surface-3) 25%,#e9ecf4 37%,var(--surface-3) 63%);background-size:400% 100%;animation:shimmer 1.4s ease infinite;border-radius:8px;color:transparent!important}
 @keyframes shimmer{from{background-position:100% 0}to{background-position:0 0}}
 /* Fluid auto-wrapping tile grid (works for any tile count, all screen sizes) */
-.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:14px;margin-bottom:16px}
+/* auto-FILL, not auto-fit. The dashboard stacks four separate .tiles grids (4, 5, 6 and 1 cards),
+   and auto-fit collapses the empty tracks so each group stretched its cards to fill the row — four
+   different card widths down one page, none of them lining up with the next. auto-fill keeps the
+   tracks, so every group measures its columns the same way and the whole dashboard sits on one
+   grid. Nothing about the grouping changes; only what the browser does with the leftover space. */
+.tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(196px,1fr));gap:14px;margin-bottom:16px}
 /* Status split under a stat card's number (Total Tasks, Todo List). */
 .tile-breakdown{display:flex;flex-wrap:wrap;gap:4px 10px}
 .tile-part{white-space:nowrap}
@@ -1093,3 +1109,88 @@ input[type="number"],.numeric,.stat-card .val{font-variant-numeric:tabular-nums;
 .row-actions{display:flex;align-items:center;gap:4px;flex-wrap:nowrap}
 .row-actions .icon-btn.danger{color:var(--bad)}
 .row-actions .icon-btn.danger:hover:not(:disabled){background:var(--bad-soft);border-color:var(--bad)}
+
+/* ============================================================================================
+   DESIGN SYSTEM — shared primitives
+   ============================================================================================
+   Added as classes rather than components so existing markup can adopt them one element at a
+   time. Nothing here changes behaviour: every rule is paint, layout or motion.
+   ============================================================================================ */
+
+/* ---- Skeleton loading ---------------------------------------------------------------------
+   A shimmer sized like the content it stands in for, so the page does not jump when the data
+   lands. Prefer this to a spinner wherever the shape of the result is known in advance. */
+.sk{background:linear-gradient(90deg,var(--surface-3) 25%,var(--line-2) 37%,var(--surface-3) 63%);background-size:400% 100%;animation:skShimmer 1.4s ease infinite;border-radius:var(--r-sm);display:block}
+.sk-line{height:11px;margin:7px 0}
+.sk-line.sm{width:40%}.sk-line.md{width:65%}.sk-line.lg{width:88%}
+.sk-title{height:17px;width:34%;margin:2px 0 12px}
+.sk-card{height:96px;border-radius:var(--r-md)}
+.sk-avatar{width:34px;height:34px;border-radius:50%}
+@keyframes skShimmer{0%{background-position:100% 50%}100%{background-position:0 50%}}
+
+/* ---- Empty states -------------------------------------------------------------------------
+   An empty table should say what would be here and how to make one, not leave a blank rectangle
+   that reads as a failure to load. */
+.empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:56px 24px;gap:6px}
+.empty-state .es-ico{width:52px;height:52px;border-radius:var(--r-xl);display:grid;place-items:center;background:var(--brand-soft);color:var(--brand);margin-bottom:8px}
+.empty-state .es-title{font-size:15px;font-weight:650;color:var(--text);letter-spacing:-0.015em}
+.empty-state .es-body{font-size:13px;color:var(--muted);max-width:390px;line-height:1.6}
+.empty-state .es-action{margin-top:14px}
+
+/* ---- Toasts -------------------------------------------------------------------------------- */
+.toast-stack{position:fixed;right:20px;bottom:20px;z-index:200;display:flex;flex-direction:column;gap:10px;pointer-events:none}
+.toast{pointer-events:auto;min-width:290px;max-width:420px;background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--muted);border-radius:var(--r-md);box-shadow:var(--shadow-lg);padding:13px 15px;display:flex;gap:11px;align-items:flex-start;animation:toastIn .26s cubic-bezier(.2,.9,.3,1) both}
+.toast.ok{border-left-color:var(--ok)}.toast.bad{border-left-color:var(--bad)}
+.toast.warn{border-left-color:var(--warn)}.toast.info{border-left-color:var(--info)}
+.toast .t-title{font-size:13px;font-weight:650;color:var(--text)}
+.toast .t-body{font-size:12.5px;color:var(--muted);margin-top:2px;line-height:1.5}
+@keyframes toastIn{from{opacity:0;transform:translateY(10px) scale(.97)}to{opacity:1;transform:none}}
+
+/* ---- Status pills --------------------------------------------------------------------------
+   One shape, six meanings. Colour alone is not the signal — each keeps a readable label, so the
+   state survives a monochrome print and a colour-blind reader. */
+.pill{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:650;padding:3px 9px;border-radius:999px;border:1px solid transparent;letter-spacing:-0.005em;white-space:nowrap;line-height:1.55}
+.pill.ok{background:var(--ok-soft);color:#065f46;border-color:var(--ok-ring)}
+.pill.bad{background:var(--bad-soft);color:#991b1b;border-color:var(--bad-ring)}
+.pill.warn{background:var(--warn-soft);color:#92400e;border-color:var(--warn-ring)}
+.pill.info{background:var(--info-soft);color:#1e40af;border-color:var(--info-ring)}
+.pill.brand{background:var(--brand-soft);color:var(--brand-dark);border-color:var(--brand-light)}
+.pill.neutral{background:var(--surface-3);color:var(--text-2);border-color:var(--line)}
+.pill .dot-i{width:5px;height:5px;border-radius:50%;background:currentColor;opacity:.75}
+
+/* ---- Tooltips ------------------------------------------------------------------------------
+   CSS-only, so nothing re-renders to show one. */
+[data-tip]{position:relative}
+[data-tip]::after{content:attr(data-tip);position:absolute;bottom:calc(100% + 7px);left:50%;transform:translateX(-50%) translateY(3px);background:#0f172a;color:#fff;font-size:11.5px;font-weight:500;padding:5px 9px;border-radius:7px;white-space:nowrap;opacity:0;pointer-events:none;transition:opacity .14s ease,transform .14s ease;z-index:120;box-shadow:var(--shadow)}
+[data-tip]:hover::after,[data-tip]:focus-visible::after{opacity:1;transform:translateX(-50%) translateY(0)}
+
+/* ---- Table refinements ---------------------------------------------------------------------
+   Sticky headers so the column names survive a long list, and a wrapper that scrolls sideways
+   instead of clipping — the leads table was cutting its last column off at the card edge. */
+.table-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+.list-table thead th{position:sticky;top:0;z-index:3}
+.list-table tbody tr{transition:background .13s ease}
+.list-table tbody tr:hover{background:var(--surface-2)}
+/* Dates, money and counts read as one unit — wrapping "2025-12-21" onto two lines made the
+   transaction rows twice as tall as they needed to be and much harder to scan. */
+.list-table td.nowrap,.list-table td.num,.list-table td.date{white-space:nowrap}
+.list-table td.num{font-variant-numeric:tabular-nums;text-align:right}
+
+/* ---- Motion & responsiveness ---------------------------------------------------------------
+   Honour a stated preference for less movement. Everything below is decoration; none of it
+   carries meaning, so removing it costs nothing but comfort. */
+@media (prefers-reduced-motion: reduce){
+  *,*::before,*::after{animation-duration:.001ms !important;animation-iteration-count:1 !important;transition-duration:.001ms !important;scroll-behavior:auto !important}
+}
+/* No 1100px block here on purpose. The application already collapses the sidebar to a 64px icon
+   rail at that width further up this file, and a second copy of the same breakpoint simply won the
+   cascade by being lower down — quietly widening the rail to 76px and breaking the regression check
+   that pins it. One breakpoint, one place. Only the phone case below is new. */
+@media (max-width: 720px){
+  .app{grid-template-columns:1fr}
+  .sidebar{display:none}
+  .content{padding:14px}
+  .tiles{grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
+  .topbar{padding:11px 14px}
+  .topbar .title{font-size:16px}
+}
