@@ -91,7 +91,7 @@ export default function MlsDetailPage() {
           {typeof p.PublicRemarks === 'string' && p.PublicRemarks && (
             <div className="card" style={{ padding: 16 }}>
               <h3 style={{ margin: '0 0 8px' }}>Description</h3>
-              <p style={{ margin: 0, whiteSpace: 'pre-line', color: 'var(--text-2, #475569)', fontSize: 14 }}>{p.PublicRemarks}</p>
+              <p style={{ margin: 0, whiteSpace: 'pre-line', color: 'var(--text-2, var(--text-3))', fontSize: 14 }}>{p.PublicRemarks}</p>
             </div>
           )}
 

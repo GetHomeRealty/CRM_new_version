@@ -135,12 +135,12 @@ export default function TwilioDialer({ lead, onClose, onLogged }: {
     <div className="overlay open" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
       style={{ position: 'fixed', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 4000 }}>
       <div className="modal" style={{ maxWidth: 420, margin: 0, background: 'var(--text)', color: '#e2e8f0', textAlign: 'center' }}>
-        <button className="close" style={{ color: '#94a3b8' }} onClick={onClose}>✕</button>
+        <button className="close" style={{ color: 'var(--muted-2)' }} onClick={onClose}>✕</button>
         <div style={{ padding: '8px 8px 4px' }}>
           <div style={{ width: 60, height: 60, borderRadius: '50%', background: phase === 'in-call' ? 'var(--ok-600)' : 'var(--bad)', display: 'grid', placeItems: 'center', margin: '6px auto 12px', fontSize: 26 }}>📞</div>
           <div style={{ fontSize: 18, fontWeight: 700 }}>Call {lead.name}</div>
-          <div style={{ fontSize: 13, color: '#94a3b8', marginTop: 2 }}>{lead.phone || 'No number'}</div>
-          <div style={{ fontSize: 13, marginTop: 10, color: phase === 'error' ? '#f87171' : phase === 'in-call' ? '#4ade80' : '#cbd5e1', fontWeight: 600 }}>{status}</div>
+          <div style={{ fontSize: 13, color: 'var(--muted-2)', marginTop: 2 }}>{lead.phone || 'No number'}</div>
+          <div style={{ fontSize: 13, marginTop: 10, color: phase === 'error' ? '#f87171' : phase === 'in-call' ? '#4ade80' : 'var(--line-strong)', fontWeight: 600 }}>{status}</div>
 
           {error && (
             <div style={{ background: 'rgba(220,38,38,.15)', border: '1px solid rgba(248,113,113,.4)', color: '#fca5a5', borderRadius: 8, padding: '8px 10px', fontSize: 12.5, marginTop: 12, textAlign: 'left' }}>{error}</div>

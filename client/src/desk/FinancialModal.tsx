@@ -101,7 +101,7 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
   };
   const approveFinReq = async () => { if (!pendingFinReq) return; setReqBusy(true); try { await approveEditRequest(pendingFinReq.id); toast('Approved — financial fields unlocked', 'ok'); await refreshTxn(); } catch { toast('Could not approve', 'bad'); } finally { setReqBusy(false); } };
   const rejectFinReq = async () => { if (!pendingFinReq) return; setReqBusy(true); try { await rejectEditRequest(pendingFinReq.id); toast('Request rejected', 'ok'); await refreshTxn(); } catch { toast('Could not reject', 'bad'); } finally { setReqBusy(false); } };
-  const finLockStyle: CSSProperties = { background: '#f3f4f6', cursor: 'not-allowed' };
+  const finLockStyle: CSSProperties = { background: 'var(--surface-3)', cursor: 'not-allowed' };
   // Edit pencil rendered next to a locked field's label (mirrors Agent Comm %).
   const finPencil = (): ReactNode => (finLock ? (
     <button type="button" className="row-rm" disabled={reqBusy || !!pendingFinReq}
@@ -141,7 +141,7 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
   }));
   // Agent Comm (%) is locked by default per member (pencil unlocks); Brok Comm (%) stays locked.
   const [agentUnlock, setAgentUnlock] = useState<Record<number, boolean>>({});
-  const lockField: CSSProperties = { background: '#f3f4f6', cursor: 'not-allowed' };
+  const lockField: CSSProperties = { background: 'var(--surface-3)', cursor: 'not-allowed' };
 
   // Each agent's registered default commission split (from their user profile).
   // Used to pre-fill Agent Comm (%) and to flag transaction-specific overrides.
@@ -461,12 +461,12 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
           <div className="g3">
             <div className="field"><label>Price {finPencil()}</label><MoneyInput value={price} onChange={(v) => setPrice(v)} onBlur={(e) => setPrice(parseNumber(e.target.value))} readOnly={finLock} style={finLock ? finLockStyle : undefined} /></div>
             <div className="field"><label>NET of HST</label><select value={netHst ? 'Yes' : 'No'} onChange={(e) => setNetHst(e.target.value === 'Yes')}><option>No</option><option>Yes</option></select></div>
-            <div className="field"><label>Deposit {finPencil()}</label><input value={txn.deposit ?? 0} readOnly style={{ background: '#f9fafb' }} /></div>
+            <div className="field"><label>Deposit {finPencil()}</label><input value={txn.deposit ?? 0} readOnly style={{ background: 'var(--surface-2)' }} /></div>
           </div>
         ) : listing ? (
           <div className={referral ? '' : 'g2'}>
             <div className="field"><label>Price {finPencil()}</label><MoneyInput value={price} onChange={(v) => setPrice(v)} onBlur={(e) => setPrice(parseNumber(e.target.value))} readOnly={finLock} style={finLock ? finLockStyle : undefined} /></div>
-            {!referral && <div className="field"><label>Deposit {finPencil()}</label><input value={txn.deposit ?? 0} readOnly style={{ background: '#f9fafb' }} /></div>}
+            {!referral && <div className="field"><label>Deposit {finPencil()}</label><input value={txn.deposit ?? 0} readOnly style={{ background: 'var(--surface-2)' }} /></div>}
           </div>
         ) : (
           /* Buying / Lease: Price, Deposit, Commission % and Commission Amount are the four
@@ -474,7 +474,7 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
              pairs. Referral has no deposit, so it drops to three columns. */
           <div className={referral ? 'g3' : 'g4'}>
             <div className="field"><label>Price {finPencil()}</label><MoneyInput value={price} onChange={(v) => setPrice(v)} onBlur={(e) => setPrice(parseNumber(e.target.value))} readOnly={finLock} style={finLock ? finLockStyle : undefined} /></div>
-            {!referral && <div className="field"><label>Deposit {finPencil()}</label><input value={txn.deposit ?? 0} readOnly style={{ background: '#f9fafb' }} /></div>}
+            {!referral && <div className="field"><label>Deposit {finPencil()}</label><input value={txn.deposit ?? 0} readOnly style={{ background: 'var(--surface-2)' }} /></div>}
             <div className="field"><label>Commission % {finPencil()}</label><input value={commPct} onChange={(e) => onPct(e.target.value)} placeholder="e.g. 5" readOnly={finLock} style={finLock ? { ...finLockStyle, ...pctStyle } : pctStyle} /></div>
             <div className="field"><label>Commission Amount {finPencil()}</label><MoneyInput value={commAmt} onChange={(v) => onAmt(v)} placeholder="0.00" readOnly={finLock} style={finLock ? finLockStyle : undefined} /></div>
           </div>
@@ -522,13 +522,13 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
                 return s + lineOf(r2(base * parseNumber(m.brok_pct) / 100)).total;
               }, 0);
               return (
-                <div key={k} style={{ background: '#f9fafb', border: '1px solid var(--line)', borderRadius: 8, padding: 12, marginBottom: 10 }}>
+                <div key={k} style={{ background: 'var(--surface-2)', border: '1px solid var(--line)', borderRadius: 8, padding: 12, marginBottom: 10 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
                     <strong>Term {k}</strong>
                     <button type="button" className="btn ghost sm" style={{ padding: '4px 8px', lineHeight: 1 }} title={locked ? 'Unlock to edit Commission %' : 'Lock Commission %'} onClick={() => toggleLock(k)}>{locked ? <Icon name="edit" size={13} /> : <Icon name="lock" size={13} />}</button>
                   </div>
                   <div className="g4">
-                    <div className="field" style={{ marginBottom: 0 }}><label>Commission %</label><input type="number" value={t.pct} readOnly={locked} style={locked ? { background: '#f3f4f6', cursor: 'not-allowed', ...pctStyle } : pctStyle} onChange={(e) => setTerm(idx, 'pct', e.target.value)} /></div>
+                    <div className="field" style={{ marginBottom: 0 }}><label>Commission %</label><input type="number" value={t.pct} readOnly={locked} style={locked ? { background: 'var(--surface-3)', cursor: 'not-allowed', ...pctStyle } : pctStyle} onChange={(e) => setTerm(idx, 'pct', e.target.value)} /></div>
                     <div className="field" style={{ marginBottom: 0 }}><label>Commission</label><input readOnly style={cs(tAmt)} value={formatCurrency(tAmt)} /></div>
                     <div className="field" style={{ marginBottom: 0 }}><label>HST</label><input readOnly style={cs(tHst)} value={formatCurrency(tHst)} /></div>
                     <div className="field" style={{ marginBottom: 0 }}><label>Total</label><input readOnly style={ts(tTotal)} value={formatCurrency(tTotal)} /></div>
@@ -641,7 +641,7 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
             </div>
             {commAdjMaster && (
               <div className="g2">
-                <div style={{ background: '#f9fafb', border: '1px solid var(--line)', borderRadius: 8, padding: 12 }}>
+                <div style={{ background: 'var(--surface-2)', border: '1px solid var(--line)', borderRadius: 8, padding: 12 }}>
                   <strong style={{ fontSize: 13 }}>Listing Commission Adjustment</strong>
                   <div className="field" style={{ marginTop: 10, marginBottom: lAdjEn ? 13 : 0 }}><label>Listing Comm Adjustment</label><select value={lAdjEn ? 'Yes' : 'No'} onChange={(e) => setLAdjEn(e.target.value === 'Yes')}><option>No</option><option>Yes</option></select></div>
                   {lAdjEn && (
@@ -651,7 +651,7 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
                     </div>
                   )}
                 </div>
-                <div style={{ background: '#f9fafb', border: '1px solid var(--line)', borderRadius: 8, padding: 12 }}>
+                <div style={{ background: 'var(--surface-2)', border: '1px solid var(--line)', borderRadius: 8, padding: 12 }}>
                   <strong style={{ fontSize: 13 }}>Co-op Commission Adjustment</strong>
                   <div className="field" style={{ marginTop: 10, marginBottom: cAdjEn ? 13 : 0 }}><label>Co-op Comm Adjustment</label><select value={cAdjEn ? 'Yes' : 'No'} onChange={(e) => setCAdjEn(e.target.value === 'Yes')}><option>No</option><option>Yes</option></select></div>
                   {cAdjEn && (
@@ -782,7 +782,7 @@ function AgentCommissionBlocks({ rows, setMember, minBrok, agentDefaults = {}, i
   // Agent Comm (%) is locked by default (click the pencil to edit); Brok Comm (%)
   // is always locked — it auto-fills as the complement of Agent Comm.
   const [unlocked, setUnlocked] = useState<Record<number, boolean>>({});
-  const lockField: CSSProperties = { background: '#f3f4f6', cursor: 'not-allowed' };
+  const lockField: CSSProperties = { background: 'var(--surface-3)', cursor: 'not-allowed' };
   const defOf = (name: string | undefined): number | null => {
     if (!name) return null;
     const d = agentDefaults[name];

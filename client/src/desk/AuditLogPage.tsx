@@ -20,7 +20,7 @@ const SCOPES: { value: string; label: string; help: string }[] = [
   { value: 'all', label: 'Everything', help: 'both areas and shared, for reconciling the two' },
 ];
 
-const cell: CSSProperties = { padding: '8px 10px', borderBottom: '1px solid #f3f4f6', fontSize: 12, verticalAlign: 'top' };
+const cell: CSSProperties = { padding: '8px 10px', borderBottom: '1px solid var(--surface-3)', fontSize: 12, verticalAlign: 'top' };
 const th: CSSProperties = { ...cell, color: 'var(--brand)', borderBottom: '2px solid var(--brand)', whiteSpace: 'nowrap', textAlign: 'left' };
 
 const fmt = (s: string | undefined) => {

@@ -40,7 +40,7 @@ export default function CommissionAnalytics() {
   }, [rows]);
 
   return (
-    <div className="analytics-dash" style={{ background: 'linear-gradient(135deg,#fff 0%,#f9fafb 100%)', border: '1px solid var(--line)', borderRadius: 'var(--r-lg)', padding: '14px 16px', marginBottom: 14, boxShadow: 'var(--shadow-sm)' }}>
+    <div className="analytics-dash" style={{ background: 'linear-gradient(135deg,#fff 0%,var(--surface-2) 100%)', border: '1px solid var(--line)', borderRadius: 'var(--r-lg)', padding: '14px 16px', marginBottom: 14, boxShadow: 'var(--shadow-sm)' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 10 }}>
         <div>
           <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.06em' }}>Analytics Dashboard</div>

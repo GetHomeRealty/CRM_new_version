@@ -53,7 +53,7 @@ export default function AnalyticsPage() {
         {months.length === 0 ? <div className="help">No dated transactions yet.</div> : months.map(([m, v]) => (
           <div key={m} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '5px 0' }}>
             <span style={{ width: 70, fontSize: 12, color: 'var(--muted)' }}>{m}</span>
-            <div style={{ flex: 1, background: '#f3f4f6', height: 16, borderRadius: 6, overflow: 'hidden' }}>
+            <div style={{ flex: 1, background: 'var(--surface-3)', height: 16, borderRadius: 6, overflow: 'hidden' }}>
               <div style={{ height: '100%', width: `${(v / maxMonth) * 100}%`, background: 'linear-gradient(90deg,#c8102e,#9c0c24)' }} />
             </div>
             <strong style={{ width: 110, textAlign: 'right', fontSize: 12 }}>{formatCurrency(v)}</strong>

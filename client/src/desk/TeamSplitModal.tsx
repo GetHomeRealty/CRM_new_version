@@ -157,7 +157,7 @@ export default function TeamSplitModal({ open, onClose, transactionId, primaryAg
         </div>
 
         {!isSplit ? (
-          <div style={{ padding: 16, background: '#f9fafb', border: '1px solid var(--line)', borderRadius: 8, marginBottom: 14 }}>
+          <div style={{ padding: 16, background: 'var(--surface-2)', border: '1px solid var(--line)', borderRadius: 8, marginBottom: 14 }}>
             <p style={{ margin: 0, fontSize: 13, color: 'var(--muted)' }}>
               The single agent assigned in Basic Info{primaryAgent ? <> (<strong>{primaryAgent}</strong>)</> : ''} will receive 100% of the commission.
             </p>
@@ -167,11 +167,11 @@ export default function TeamSplitModal({ open, onClose, transactionId, primaryAg
             {members.map((m, i) => (
               <div className="team-card" key={i}>
                 {i !== 0 && !lockAgents && <button className="row-rm" style={{ position: 'absolute', top: 8, right: 8 }} onClick={() => rm(i)}>🗑️</button>}
-                <strong style={{ fontSize: 13 }}>{i === 0 ? 'Primary Agent' : `Team Member ${i + 1}`}{i === 0 && <span className="pill" style={{ fontSize: 9, padding: '2px 6px', marginLeft: 6, background: '#f3f4f6', color: '#6b7280', border: '1px solid #e5e7eb' }}>🔒 Locked</span>}</strong>
+                <strong style={{ fontSize: 13 }}>{i === 0 ? 'Primary Agent' : `Team Member ${i + 1}`}{i === 0 && <span className="pill" style={{ fontSize: 9, padding: '2px 6px', marginLeft: 6, background: 'var(--surface-3)', color: '#6b7280', border: '1px solid var(--line)' }}>🔒 Locked</span>}</strong>
                 <div className="field" style={{ marginTop: 10 }}>
                   <label>Select Agent</label>
                   {i === 0
-                    ? <input value={primaryAgent || m.name} readOnly style={{ background: '#f9fafb', cursor: 'not-allowed' }} title="Primary Agent is set in Basic Info" />
+                    ? <input value={primaryAgent || m.name} readOnly style={{ background: 'var(--surface-2)', cursor: 'not-allowed' }} title="Primary Agent is set in Basic Info" />
                     : <input list={`agentList-${i}`} value={m.name} disabled={lockAgents} onChange={(e) => set(i, 'name', e.target.value)} placeholder="Search agent..." />}
                   {/* Exclude agents already chosen in other rows so a member can't be added twice. */}
                   <datalist id={`agentList-${i}`}>{(agents || []).filter((a) => a === m.name || !members.some((x, idx) => idx !== i && x.name === a)).map((a) => <option key={a} value={a} />)}</datalist>
@@ -182,9 +182,9 @@ export default function TeamSplitModal({ open, onClose, transactionId, primaryAg
                   {/* Agent % / Brokerage % come from the agent's registered split and are
                       only changed under Financial Information → Agent Commission. Read-only here. */}
                   <div className="field" style={{ marginBottom: 0 }}><label>Agent %</label>
-                    <input type="number" value={m.agent_pct ?? splitFor(i === 0 ? (primaryAgent || m.name) : m.name)} readOnly style={{ background: '#f9fafb', cursor: 'not-allowed' }} title="Editable under Financial Information → Agent Commission" /></div>
+                    <input type="number" value={m.agent_pct ?? splitFor(i === 0 ? (primaryAgent || m.name) : m.name)} readOnly style={{ background: 'var(--surface-2)', cursor: 'not-allowed' }} title="Editable under Financial Information → Agent Commission" /></div>
                   <div className="field" style={{ marginBottom: 0 }}><label>Brokerage %</label>
-                    <input type="number" value={m.brok_pct ?? (100 - splitFor(i === 0 ? (primaryAgent || m.name) : m.name))} readOnly style={{ background: '#f9fafb', cursor: 'not-allowed' }} title="Editable under Financial Information → Agent Commission" /></div>
+                    <input type="number" value={m.brok_pct ?? (100 - splitFor(i === 0 ? (primaryAgent || m.name) : m.name))} readOnly style={{ background: 'var(--surface-2)', cursor: 'not-allowed' }} title="Editable under Financial Information → Agent Commission" /></div>
                 </div>
                 {/* Portal access — 'Full' gives this member the same edit rights as the
                     primary agent; 'Docs only' limits them to uploading documents. The

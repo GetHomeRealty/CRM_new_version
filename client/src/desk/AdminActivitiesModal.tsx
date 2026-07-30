@@ -1,4 +1,5 @@
 import { useState, type CSSProperties } from 'react';
+import Icon from '../ui/Icon';
 import { updateTransaction } from '../lib/api';
 import { batchNo, t4aYear, isListingType, isPreconType } from './format';
 import { useToast } from './toast';
@@ -242,18 +243,18 @@ export default function AdminActivitiesModal({ open, onClose, transactionId, txn
   return (
     <div className="overlay open" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="modal lg">
-        <button className="close" onClick={onClose}>✕</button>
+        <button className="close" onClick={onClose}><Icon name="close" size={15} /></button>
         <div className="modal-h">Admin Activities</div>
 
         {dftNA && (
           <div className="card" style={{ borderLeft: '4px solid var(--bad)', background: 'var(--warn-bg)', marginBottom: 12 }}>
-            <strong style={{ color: 'var(--warn-ink-alt)' }}>🔒 DFT — Deal Fell Through.</strong>{' '}
+            <strong style={{ color: 'var(--warn-ink-alt)' }}><Icon name="lock" size={13} /> DFT — Deal Fell Through.</strong>{' '}
             <span style={{ fontSize: 12.5, color: 'var(--warn-ink-deep)' }}>All statuses default to N/A and are locked.</span>
           </div>
         )}
         {readOnly && !dftNA && (
           <div className="card" style={{ borderLeft: '4px solid #2563eb', background: 'var(--info-bg)', marginBottom: 12 }}>
-            <span style={{ fontSize: 12.5, color: 'var(--info-ink)' }}>🔒 View-only — click <strong>Edit</strong> on the transaction to make changes.</span>
+            <span style={{ fontSize: 12.5, color: 'var(--info-ink)' }}><Icon name="lock" size={13} /> View-only — click <strong>Edit</strong> on the transaction to make changes.</span>
           </div>
         )}
 
@@ -274,10 +275,10 @@ export default function AdminActivitiesModal({ open, onClose, transactionId, txn
                 <div className="modal-sub" style={{ marginTop: 0 }}>Term {k} — Invoice &amp; Commission Details</div>
                 <div className="help" style={{ marginTop: -4, marginBottom: 8 }}>Auto-filled from the linked term invoice — read-only.</div>
                 <div className="g4">
-                  <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Invoice Status</label><input value={ia.invoice_sent_status || '—'} readOnly style={{ background: '#f9fafb' }} /></div>
-                  <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Invoice Number</label><input value={ia.invoice_number || '—'} readOnly style={{ background: '#f9fafb' }} /></div>
-                  <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Commission Received Date</label><input value={ia.commission_received_date || '—'} readOnly style={{ background: '#f9fafb' }} /></div>
-                  <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Commission Received Via</label><input value={ia.commission_received_via || '—'} readOnly style={{ background: '#f9fafb' }} /></div>
+                  <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Invoice Status</label><input value={ia.invoice_sent_status || '—'} readOnly style={{ background: 'var(--surface-2)' }} /></div>
+                  <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Invoice Number</label><input value={ia.invoice_number || '—'} readOnly style={{ background: 'var(--surface-2)' }} /></div>
+                  <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Commission Received Date</label><input value={ia.commission_received_date || '—'} readOnly style={{ background: 'var(--surface-2)' }} /></div>
+                  <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Commission Received Via</label><input value={ia.commission_received_via || '—'} readOnly style={{ background: 'var(--surface-2)' }} /></div>
                 </div>
 
                 <div className="modal-sub modal-sub-ok">Term {k} — Agent Commission Paid</div>
@@ -298,8 +299,8 @@ export default function AdminActivitiesModal({ open, onClose, transactionId, txn
                         <div className="g4" key={i} style={{ alignItems: 'end', marginBottom: 6 }}>
                           <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Paid Type</label><select value={na(p.paid_type)} onChange={(e) => setTRow(k, n, 'payments', i, { paid_type: e.target.value })}><option>N/A</option><option>TDB-EFT</option><option>CTA-BA Transfer</option><option>Cheque</option></select></div>
                           <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Paid Date</label><input type="date" value={p.paid_date} onChange={(e) => setTRow(k, n, 'payments', i, { paid_date: e.target.value, batch_no: batchNo(e.target.value), t4a_year: t4aYear(e.target.value) })} /></div>
-                          <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Batch No.</label><input value={p.batch_no} readOnly style={{ background: '#f9fafb' }} /></div>
-                          <div style={{ display: 'flex', gap: 6, alignItems: 'end' }}><div className="field" style={{ marginBottom: 0, flex: 1 }}><label style={lbl}>T4A Year</label><input value={p.t4a_year} readOnly style={{ background: '#f9fafb' }} /></div><button className="row-rm" onClick={() => rmTRow(k, n, 'payments', i)}>🗑️</button></div>
+                          <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Batch No.</label><input value={p.batch_no} readOnly style={{ background: 'var(--surface-2)' }} /></div>
+                          <div style={{ display: 'flex', gap: 6, alignItems: 'end' }}><div className="field" style={{ marginBottom: 0, flex: 1 }}><label style={lbl}>T4A Year</label><input value={p.t4a_year} readOnly style={{ background: 'var(--surface-2)' }} /></div><button className="row-rm" onClick={() => rmTRow(k, n, 'payments', i)}><Icon name="trash" size={13} /></button></div>
                         </div>
                       ))}
                     </div>
@@ -319,7 +320,7 @@ export default function AdminActivitiesModal({ open, onClose, transactionId, txn
                         <div className="g3" key={i} style={{ alignItems: 'end', marginBottom: 6 }}>
                           <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>CTA to BA</label><select value={na(c.cta)} onChange={(e) => setTRow(k, n, 'cta', i, { cta: e.target.value })}><option>No</option><option>Yes</option><option>N/A</option></select></div>
                           <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Date</label><input type="date" value={c.date} onChange={(e) => setTRow(k, n, 'cta', i, { date: e.target.value, batch_no: batchNo(e.target.value) })} /></div>
-                          <div style={{ display: 'flex', gap: 6, alignItems: 'end' }}><div className="field" style={{ marginBottom: 0, flex: 1 }}><label style={lbl}>Batch No.</label><input value={c.batch_no} readOnly style={{ background: '#f9fafb' }} /></div><button className="row-rm" onClick={() => rmTRow(k, n, 'cta', i)}>🗑️</button></div>
+                          <div style={{ display: 'flex', gap: 6, alignItems: 'end' }}><div className="field" style={{ marginBottom: 0, flex: 1 }}><label style={lbl}>Batch No.</label><input value={c.batch_no} readOnly style={{ background: 'var(--surface-2)' }} /></div><button className="row-rm" onClick={() => rmTRow(k, n, 'cta', i)}><Icon name="trash" size={13} /></button></div>
                         </div>
                       ))}
                     </div>
@@ -338,12 +339,12 @@ export default function AdminActivitiesModal({ open, onClose, transactionId, txn
           <div className="modal-sub">Invoice &amp; Commission Details</div>
           <div className="help" style={{ marginTop: -4, marginBottom: 8 }}>Auto-filled from the linked invoice — read-only.</div>
           <div className="g2">
-            <div className="field"><label style={lbl}>Invoice Status</label><input value={invAdmin.invoice_sent_status || '—'} readOnly style={{ background: '#f9fafb' }} /></div>
-            <div className="field"><label style={lbl}>Invoice Number</label><input value={invAdmin.invoice_number || '—'} readOnly style={{ background: '#f9fafb' }} /></div>
+            <div className="field"><label style={lbl}>Invoice Status</label><input value={invAdmin.invoice_sent_status || '—'} readOnly style={{ background: 'var(--surface-2)' }} /></div>
+            <div className="field"><label style={lbl}>Invoice Number</label><input value={invAdmin.invoice_number || '—'} readOnly style={{ background: 'var(--surface-2)' }} /></div>
           </div>
           <div className="g2">
-            <div className="field"><label style={lbl}>Commission Received Date</label><input value={invAdmin.commission_received_date || '—'} readOnly style={{ background: '#f9fafb' }} /></div>
-            <div className="field"><label style={lbl}>Commission Received Via</label><input value={invAdmin.commission_received_via || '—'} readOnly style={{ background: '#f9fafb' }} /></div>
+            <div className="field"><label style={lbl}>Commission Received Date</label><input value={invAdmin.commission_received_date || '—'} readOnly style={{ background: 'var(--surface-2)' }} /></div>
+            <div className="field"><label style={lbl}>Commission Received Via</label><input value={invAdmin.commission_received_via || '—'} readOnly style={{ background: 'var(--surface-2)' }} /></div>
           </div>
         </>) : (<>
           {/* ---- Listing layout ---- */}
@@ -354,7 +355,7 @@ export default function AdminActivitiesModal({ open, onClose, transactionId, txn
                 <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Date</label><input type="date" value={d.date} onChange={(e) => setDeposit(i, { date: e.target.value })} /></div>
                 <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Received Via</label><select value={d.received_via} onChange={(e) => setDeposit(i, { received_via: e.target.value })}><option value="">Select</option>{[...VIA, 'CASH'].map((v) => <option key={v}>{v}</option>)}</select></div>
                 <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Receipt sent</label><select value={d.receipt_sent} onChange={(e) => setDeposit(i, { receipt_sent: e.target.value })}><option value="">Select</option><option>Yes</option><option>No</option></select></div>
-                <div style={{ textAlign: 'right' }}><button className="row-rm" onClick={() => rmDeposit(i)}>🗑️</button></div>
+                <div style={{ textAlign: 'right' }}><button className="row-rm" onClick={() => rmDeposit(i)}><Icon name="trash" size={13} /></button></div>
               </div>
             </div>
           ))}
@@ -388,7 +389,7 @@ export default function AdminActivitiesModal({ open, onClose, transactionId, txn
                 )}
                 <div className="field"><label style={lbl}>Paid Via</label><select value={form.paid_lawyer.via} onChange={(e) => setObj('paid_lawyer', { via: e.target.value })}><option value="">Select</option>{VIA.map((v) => <option key={v}>{v}</option>)}</select></div>
                 <div className="field"><label style={lbl}>Paid Date</label><input type="date" value={form.paid_lawyer.date} onChange={(e) => setObj('paid_lawyer', { date: e.target.value, batch: batchNo(e.target.value) })} /></div>
-                <div className="field"><label style={lbl}>Batch No.</label><input value={form.paid_lawyer.batch} readOnly style={{ background: '#f9fafb' }} /></div>
+                <div className="field"><label style={lbl}>Batch No.</label><input value={form.paid_lawyer.batch} readOnly style={{ background: 'var(--surface-2)' }} /></div>
               </div>
               {form.paid_lawyer.paid_status === 'Paid Partially' && (<>
                 {(form.paid_lawyer.payments || []).map((p, i) => (
@@ -398,7 +399,7 @@ export default function AdminActivitiesModal({ open, onClose, transactionId, txn
                       <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}><span style={{ color: 'var(--muted)' }}>$</span><MoneyInput value={p.amount} onChange={(v) => setPaidLawyerPayment(i, { amount: v })} placeholder="0.00" style={{ flex: 1 }} /></div>
                     </div>
                     <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Paid Via</label><select value={p.via} onChange={(e) => setPaidLawyerPayment(i, { via: e.target.value })}><option value="">Select</option>{VIA.map((v) => <option key={v}>{v}</option>)}</select></div>
-                    <div style={{ display: 'flex', gap: 6, alignItems: 'end' }}><div className="field" style={{ marginBottom: 0, flex: 1 }}><label style={lbl}>Paid Date</label><input type="date" value={p.date} onChange={(e) => setPaidLawyerPayment(i, { date: e.target.value })} /></div><button className="row-rm" onClick={() => rmPaidLawyerPayment(i)}>🗑️</button></div>
+                    <div style={{ display: 'flex', gap: 6, alignItems: 'end' }}><div className="field" style={{ marginBottom: 0, flex: 1 }}><label style={lbl}>Paid Date</label><input type="date" value={p.date} onChange={(e) => setPaidLawyerPayment(i, { date: e.target.value })} /></div><button className="row-rm" onClick={() => rmPaidLawyerPayment(i)}><Icon name="trash" size={13} /></button></div>
                   </div>
                 ))}
                 <button className="btn btn-blue sm" style={{ marginTop: 8 }} onClick={addPaidLawyerPayment}>+ Add Payment</button>
@@ -414,7 +415,7 @@ export default function AdminActivitiesModal({ open, onClose, transactionId, txn
             <div className="g3">
               <div className="field"><label style={lbl}>Paid Via</label><select value={form.paid_client.via} onChange={(e) => setObj('paid_client', { via: e.target.value })}><option value="">Select</option>{VIA.map((v) => <option key={v}>{v}</option>)}</select></div>
               <div className="field"><label style={lbl}>Paid Date</label><input type="date" value={form.paid_client.date} onChange={(e) => setObj('paid_client', { date: e.target.value, batch: batchNo(e.target.value) })} /></div>
-              <div className="field"><label style={lbl}>Batch No.</label><input value={form.paid_client.batch} readOnly style={{ background: '#f9fafb' }} /></div>
+              <div className="field"><label style={lbl}>Batch No.</label><input value={form.paid_client.batch} readOnly style={{ background: 'var(--surface-2)' }} /></div>
             </div>
           )}
 
@@ -425,7 +426,7 @@ export default function AdminActivitiesModal({ open, onClose, transactionId, txn
               <div className="field"><label style={lbl}>Co-op Brokerage GST/HST No</label><input value={form.coop_invoice.gst_hst} onChange={(e) => setObj('coop_invoice', { gst_hst: e.target.value.toUpperCase() })} placeholder="e.g. 123456789 RT0001" /></div>
               <div className="field"><label style={lbl}>Paid Via</label><select value={form.coop_invoice.via} onChange={(e) => setObj('coop_invoice', { via: e.target.value })}><option value="">Select</option>{VIA.map((v) => <option key={v}>{v}</option>)}</select></div>
               <div className="field"><label style={lbl}>Paid Date</label><input type="date" value={form.coop_invoice.date} onChange={(e) => setObj('coop_invoice', { date: e.target.value, batch: batchNo(e.target.value) })} /></div>
-              <div className="field"><label style={lbl}>Batch No.</label><input value={form.coop_invoice.batch} readOnly style={{ background: '#f9fafb' }} /></div>
+              <div className="field"><label style={lbl}>Batch No.</label><input value={form.coop_invoice.batch} readOnly style={{ background: 'var(--surface-2)' }} /></div>
             </div>
           )}
 
@@ -434,7 +435,7 @@ export default function AdminActivitiesModal({ open, onClose, transactionId, txn
           {form.ta_cta.enabled === 'Yes' && (
             <div className="g2">
               <div className="field"><label style={lbl}>Transfer Date</label><input type="date" value={form.ta_cta.date} onChange={(e) => setObj('ta_cta', { date: e.target.value, batch: batchNo(e.target.value) })} /></div>
-              <div className="field"><label style={lbl}>Batch No.</label><input value={form.ta_cta.batch} readOnly style={{ background: '#f9fafb' }} /></div>
+              <div className="field"><label style={lbl}>Batch No.</label><input value={form.ta_cta.batch} readOnly style={{ background: 'var(--surface-2)' }} /></div>
             </div>
           )}
           </>)}
@@ -460,12 +461,12 @@ export default function AdminActivitiesModal({ open, onClose, transactionId, txn
                   <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Paid Type</label>
                     <select value={na(p.paid_type)} onChange={(e) => setRow(n, 'payments', i, { paid_type: e.target.value })}><option>N/A</option><option>TDB-EFT</option><option>CTA-BA Transfer</option><option>Cheque</option></select></div>
                   <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Paid Status</label>
-                    <input value={paidStatusOf(n, p) || '—'} readOnly style={{ background: '#f9fafb', fontWeight: 600 }} title="Auto — Paid when Paid Type + Paid Date are set; N/A when the agent's commission is fully covered by advance/adjustments." /></div>
+                    <input value={paidStatusOf(n, p) || '—'} readOnly style={{ background: 'var(--surface-2)', fontWeight: 600 }} title="Auto — Paid when Paid Type + Paid Date are set; N/A when the agent's commission is fully covered by advance/adjustments." /></div>
                   <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Paid Date</label><input type="date" value={p.paid_date} onChange={(e) => onPayDate(n, i, e.target.value)} /></div>
-                  <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Batch No.</label><input value={p.batch_no} readOnly style={{ background: '#f9fafb' }} /></div>
+                  <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Batch No.</label><input value={p.batch_no} readOnly style={{ background: 'var(--surface-2)' }} /></div>
                   <div style={{ display: 'flex', gap: 6, alignItems: 'end' }}>
-                    <div className="field" style={{ marginBottom: 0, flex: 1 }}><label style={lbl}>T4A Year</label><input value={p.t4a_year} readOnly style={{ background: '#f9fafb' }} /></div>
-                    <button className="row-rm" onClick={() => rmRow(n, 'payments', i)}>🗑️</button>
+                    <div className="field" style={{ marginBottom: 0, flex: 1 }}><label style={lbl}>T4A Year</label><input value={p.t4a_year} readOnly style={{ background: 'var(--surface-2)' }} /></div>
+                    <button className="row-rm" onClick={() => rmRow(n, 'payments', i)}><Icon name="trash" size={13} /></button>
                   </div>
                 </div>
               ))}
@@ -488,8 +489,8 @@ export default function AdminActivitiesModal({ open, onClose, transactionId, txn
                     <select value={na(c.cta)} onChange={(e) => setRow(n, 'cta', i, { cta: e.target.value })}><option>No</option><option>Yes</option><option>N/A</option></select></div>
                   <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Date</label><input type="date" value={c.date} onChange={(e) => onCtaDate(n, i, e.target.value)} /></div>
                   <div style={{ display: 'flex', gap: 6, alignItems: 'end' }}>
-                    <div className="field" style={{ marginBottom: 0, flex: 1 }}><label style={lbl}>Batch No.</label><input value={c.batch_no} readOnly style={{ background: '#f9fafb' }} /></div>
-                    <button className="row-rm" onClick={() => rmRow(n, 'cta', i)}>🗑️</button>
+                    <div className="field" style={{ marginBottom: 0, flex: 1 }}><label style={lbl}>Batch No.</label><input value={c.batch_no} readOnly style={{ background: 'var(--surface-2)' }} /></div>
+                    <button className="row-rm" onClick={() => rmRow(n, 'cta', i)}><Icon name="trash" size={13} /></button>
                   </div>
                 </div>
               ))}
@@ -501,7 +502,7 @@ export default function AdminActivitiesModal({ open, onClose, transactionId, txn
         {form.notes.map((note, i) => (
           <div className="note-item" key={i}>
             <textarea rows={2} value={note.text} onChange={(e) => set('notes', form.notes.map((x, idx) => idx === i ? { ...x, text: e.target.value } : x))} placeholder="Enter note…" style={{ marginBottom: 6 }} />
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--muted)' }}><span>{noteStamp(note)} — {noteAuthor(note)}</span><button className="row-rm" onClick={() => rmNote(i)}>🗑️</button></div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--muted)' }}><span>{noteStamp(note)} — {noteAuthor(note)}</span><button className="row-rm" onClick={() => rmNote(i)}><Icon name="trash" size={13} /></button></div>
           </div>
         ))}
         <div style={{ textAlign: 'right', marginBottom: 10 }}>
@@ -516,7 +517,7 @@ export default function AdminActivitiesModal({ open, onClose, transactionId, txn
 
         <div className="actions">
           <button className="btn ghost" onClick={onClose}>Close</button>
-          {!readOnly && <button className="btn primary" onClick={save} disabled={saving || dftNA || savedOk}>{savedOk ? '✓ Saved' : (saving ? 'Saving…' : 'Save')}</button>}
+          {!readOnly && <button className="btn primary" onClick={save} disabled={saving || dftNA || savedOk}>{savedOk ? <><Icon name="check" size={13} /> Saved</> : (saving ? 'Saving…' : 'Save')}</button>}
         </div>
       </div>
       <ConfirmDialog confirm={confirm} onClose={closeConfirm} />

@@ -18,7 +18,7 @@ const BRAND = 'var(--brand-red)';
 const TERM_DAYS: Record<string, number> = { 'Due on Receipt': 0, 'Net 7': 7, 'Net 15': 15, 'Net 30': 30 };
 const STATUSES = ['Paid', 'Overdue', 'Void', 'Due']; // §12.2
 // Status colours: Due=blue, Overdue=red, Paid=green, Void=black.
-const STATUS_COLOR: Record<string, string> = { Due: 'var(--info)', Overdue: 'var(--bad)', Paid: 'var(--ok-600)', Void: '#111827', Unpaid: 'var(--info)', 'Partially Paid': 'var(--warn)', Draft: 'var(--muted)' };
+const STATUS_COLOR: Record<string, string> = { Due: 'var(--info)', Overdue: 'var(--bad)', Paid: 'var(--ok-600)', Void: 'var(--text)', Unpaid: 'var(--info)', 'Partially Paid': 'var(--warn)', Draft: 'var(--muted)' };
 const COMM_VIA = ['Bank Transfer', 'Cash', 'EFT', 'Interac e-Transfer', 'Cheque'];
 const AUTO_REMINDERS = [
   { mode: '2', label: 'Every 2 days (until Paid, excl. weekends/holidays)' },
@@ -311,7 +311,7 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
   const sideBtn: CSSProperties = { display: 'flex', alignItems: 'center', gap: 10, width: '100%', textAlign: 'left', padding: '10px 12px', borderRadius: 8, border: '1px solid transparent', background: 'transparent', cursor: 'pointer', fontSize: 13.5, color: 'var(--text)' };
   const dLabel: CSSProperties = { background: '#fafbfd', color: 'var(--muted)', textAlign: 'right', whiteSpace: 'nowrap', padding: '6px 10px', fontSize: 12, fontWeight: 600 };
   const cellInput: CSSProperties = { width: 160, textAlign: 'right' };
-  const docInput = (extra: CSSProperties): CSSProperties => ({ border: '1px solid #e6e8ef', borderRadius: 6, padding: '6px 8px', ...extra });
+  const docInput = (extra: CSSProperties): CSSProperties => ({ border: '1px solid var(--line)', borderRadius: 6, padding: '6px 8px', ...extra });
   const sectionLbl: CSSProperties = { fontSize: 11, fontWeight: 700, color: 'var(--text-2)', textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: 8, marginTop: 4 };
 
   return (
@@ -323,7 +323,7 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
             <strong style={{ fontSize: 15 }}>Invoice</strong>
             <button className="close" style={{ position: 'static' }} onClick={onClose}><Icon name="close" size={15} /></button>
           </div>
-          <button style={sideBtn} onClick={backToTransaction} onMouseEnter={(e) => e.currentTarget.style.background = '#f3f4f6'} onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}><Icon name="arrowLeft" size={13} /> Back to transaction</button>
+          <button style={sideBtn} onClick={backToTransaction} onMouseEnter={(e) => e.currentTarget.style.background = 'var(--surface-3)'} onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}><Icon name="arrowLeft" size={13} /> Back to transaction</button>
 
           <div style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--muted)', letterSpacing: '.05em', margin: '10px 0 2px 4px' }}>ACTIONS</div>
 
@@ -346,7 +346,7 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
           })()}
 
           {/* 2. Save Invoice */}
-          <button style={sideBtn} onClick={saveClick} disabled={saving} onMouseEnter={(e) => e.currentTarget.style.background = '#f3f4f6'} onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}><Icon name="save" size={13} /> {saving ? 'Saving…' : 'Save Invoice'}</button>
+          <button style={sideBtn} onClick={saveClick} disabled={saving} onMouseEnter={(e) => e.currentTarget.style.background = 'var(--surface-3)'} onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}><Icon name="save" size={13} /> {saving ? 'Saving…' : 'Save Invoice'}</button>
 
           {/* 3. Invoice Status */}
           <div style={{ position: 'relative' }}>
@@ -370,10 +370,10 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
           {form.status === 'Paid' && (
             <div style={{ border: '1px solid #bbf7d0', background: 'var(--ok-bg)', borderRadius: 8, padding: 10, margin: '2px 0 6px' }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--ok-ink)', marginBottom: 6 }}>Commission Received</div>
-              <label style={{ fontSize: 11, color: '#475569', display: 'block', marginBottom: 2 }}>Date</label>
-              <input type="date" value={form.commission_received_date} onChange={(e) => set('commission_received_date', e.target.value)} style={{ width: '100%', marginBottom: 8, border: '1px solid #e6e8ef', borderRadius: 6, padding: '6px 8px' }} />
-              <label style={{ fontSize: 11, color: '#475569', display: 'block', marginBottom: 2 }}>Received via</label>
-              <select value={form.commission_received_via} onChange={(e) => set('commission_received_via', e.target.value)} style={{ width: '100%', border: '1px solid #e6e8ef', borderRadius: 6, padding: '6px 8px' }}>
+              <label style={{ fontSize: 11, color: 'var(--text-3)', display: 'block', marginBottom: 2 }}>Date</label>
+              <input type="date" value={form.commission_received_date} onChange={(e) => set('commission_received_date', e.target.value)} style={{ width: '100%', marginBottom: 8, border: '1px solid var(--line)', borderRadius: 6, padding: '6px 8px' }} />
+              <label style={{ fontSize: 11, color: 'var(--text-3)', display: 'block', marginBottom: 2 }}>Received via</label>
+              <select value={form.commission_received_via} onChange={(e) => set('commission_received_via', e.target.value)} style={{ width: '100%', border: '1px solid var(--line)', borderRadius: 6, padding: '6px 8px' }}>
                 <option value="">Select</option>{COMM_VIA.map((v) => <option key={v}>{v}</option>)}
               </select>
               {paymentRecorded ? (
@@ -425,7 +425,7 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
           )}
 
           {/* 5. Print Invoice — always last */}
-          <button style={sideBtn} onClick={openPdf} onMouseEnter={(e) => e.currentTarget.style.background = '#f3f4f6'} onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}><Icon name="printer" size={13} /> Print Invoice</button>
+          <button style={sideBtn} onClick={openPdf} onMouseEnter={(e) => e.currentTarget.style.background = 'var(--surface-3)'} onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}><Icon name="printer" size={13} /> Print Invoice</button>
         </div>
 
         {/* RIGHT: INVOICE DOCUMENT */}
@@ -439,25 +439,25 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24, marginBottom: 18 }}>
             <div style={{ fontSize: 12.5, lineHeight: 1.8 }}>
               <div style={{ fontWeight: 700 }}>{settings?.name || 'GetHomeRealty Inc'}</div>
-              <div style={{ color: '#475569' }}>{settings?.address}</div>
-              <div style={{ color: '#475569' }}>Phone: {settings?.phone}</div>
-              <div style={{ color: '#475569' }}>Email: {settings?.email}</div>
+              <div style={{ color: 'var(--text-3)' }}>{settings?.address}</div>
+              <div style={{ color: 'var(--text-3)' }}>Phone: {settings?.phone}</div>
+              <div style={{ color: 'var(--text-3)' }}>Email: {settings?.email}</div>
               <div style={{ display: 'inline-block', marginTop: 12, border: `1px solid ${BRAND}`, color: BRAND, fontWeight: 700, padding: '8px 14px', borderRadius: 8 }}>
                 Balance Due : {formatCurrency(balanceDue)}
               </div>
             </div>
             <table style={{ borderCollapse: 'separate', borderSpacing: '0 6px', width: '100%' }}><tbody>
-              <tr><td style={dLabel}>Invoice Number:</td><td><input value={saved?.invoice_no || '(on save)'} readOnly style={docInput({ ...cellInput, background: '#f9fafb' })} /></td></tr>
+              <tr><td style={dLabel}>Invoice Number:</td><td><input value={saved?.invoice_no || '(on save)'} readOnly style={docInput({ ...cellInput, background: 'var(--surface-2)' })} /></td></tr>
               <tr><td style={dLabel}>Invoice Date:</td><td><input type="date" value={form.invoice_date} onChange={(e) => set('invoice_date', e.target.value)} style={docInput(cellInput)} /></td></tr>
-              <tr><td style={dLabel}>Due Date:</td><td><input type="date" value={form.due_date || ''} disabled={form.terms !== 'Custom'} onChange={(e) => set('due_date', e.target.value)} style={docInput({ ...cellInput, background: form.terms !== 'Custom' ? '#f9fafb' : '#fff' })} /></td></tr>
+              <tr><td style={dLabel}>Due Date:</td><td><input type="date" value={form.due_date || ''} disabled={form.terms !== 'Custom'} onChange={(e) => set('due_date', e.target.value)} style={docInput({ ...cellInput, background: form.terms !== 'Custom' ? 'var(--surface-2)' : '#fff' })} /></td></tr>
               <tr><td style={dLabel}>Trade No.:</td><td><input value={form.trade_number} onChange={(e) => set('trade_number', e.target.value)} style={docInput(cellInput)} /></td></tr>
               <tr><td style={dLabel}>Deal Name:</td><td><input value={form.property_reference} onChange={(e) => set('property_reference', e.target.value)} style={docInput(cellInput)} /></td></tr>
-              {form.purchase_price != null && <tr><td style={dLabel}>Purchase Price:</td><td><input value={form.purchase_price} readOnly style={docInput({ ...cellInput, background: '#f9fafb' })} /></td></tr>}
-              {form.transaction_type && <tr><td style={dLabel}>Transaction Type:</td><td><input value={typeLabel(form.transaction_type)} readOnly style={docInput({ ...cellInput, background: '#f9fafb' })} /></td></tr>}
+              {form.purchase_price != null && <tr><td style={dLabel}>Purchase Price:</td><td><input value={form.purchase_price} readOnly style={docInput({ ...cellInput, background: 'var(--surface-2)' })} /></td></tr>}
+              {form.transaction_type && <tr><td style={dLabel}>Transaction Type:</td><td><input value={typeLabel(form.transaction_type)} readOnly style={docInput({ ...cellInput, background: 'var(--surface-2)' })} /></td></tr>}
             </tbody></table>
           </div>
 
-          <div style={{ borderTop: '1px solid #eef0f5', paddingTop: 12, marginBottom: 14 }}>
+          <div style={{ borderTop: '1px solid var(--surface-3)', paddingTop: 12, marginBottom: 14 }}>
             <strong>Subject: </strong>
             <input value={form.subject} onChange={(e) => set('subject', e.target.value)} placeholder={`Co-op Commission for ${form.property_reference || ''}`} style={docInput({ width: '70%', marginLeft: 6 })} />
           </div>
@@ -483,42 +483,42 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
           {/* AGENT DETAILS — read-only, auto-fetched from the transaction */}
           <div style={{ ...sectionLbl, marginTop: 18 }}>AGENT DETAILS</div>
           <div style={{ marginBottom: 10 }}>
-            <div style={{ fontSize: 12.5, color: '#475569', marginBottom: 4 }}>Sales Person (Co-op Agent):</div>
-            <input value={form.coop_salesperson} readOnly style={docInput({ width: '100%', background: '#f9fafb' })} />
+            <div style={{ fontSize: 12.5, color: 'var(--text-3)', marginBottom: 4 }}>Sales Person (Co-op Agent):</div>
+            <input value={form.coop_salesperson} readOnly style={docInput({ width: '100%', background: 'var(--surface-2)' })} />
           </div>
           <div>
-            <div style={{ fontSize: 12.5, color: '#475569', marginBottom: 4 }}>Listing Agent / Sales Person:</div>
-            <input value={form.listing_agent} readOnly placeholder="From Listing Brokerage Information → Listing Agent Name(s)" style={docInput({ width: '100%', background: '#f9fafb' })} />
+            <div style={{ fontSize: 12.5, color: 'var(--text-3)', marginBottom: 4 }}>Listing Agent / Sales Person:</div>
+            <input value={form.listing_agent} readOnly placeholder="From Listing Brokerage Information → Listing Agent Name(s)" style={docInput({ width: '100%', background: 'var(--surface-2)' })} />
           </div>
 
           {/* Description / Amount table */}
           <table style={{ borderCollapse: 'collapse', width: '100%', marginTop: 18 }}>
             <thead><tr>
-              <th style={{ border: '1px solid #e6e8ef', background: '#f3f5f9', padding: '10px 12px', textAlign: 'left' }}>DESCRIPTION</th>
-              <th style={{ border: '1px solid #e6e8ef', background: '#f3f5f9', padding: '10px 12px', textAlign: 'left', width: 260 }}>AMOUNT (CAD)</th>
-              <th style={{ width: 36, border: '1px solid #e6e8ef', background: '#f3f5f9' }}></th>
+              <th style={{ border: '1px solid var(--line)', background: 'var(--surface-3)', padding: '10px 12px', textAlign: 'left' }}>DESCRIPTION</th>
+              <th style={{ border: '1px solid var(--line)', background: 'var(--surface-3)', padding: '10px 12px', textAlign: 'left', width: 260 }}>AMOUNT (CAD)</th>
+              <th style={{ width: 36, border: '1px solid var(--line)', background: 'var(--surface-3)' }}></th>
             </tr></thead>
             <tbody>
               {form.line_items.map((it, i) => (
                 <tr key={i}>
-                  <td style={{ border: '1px solid #e6e8ef', padding: '8px 12px' }}><input value={it.description} onChange={(e) => setItem(i, 'description', e.target.value)} style={docInput({ width: '100%', fontWeight: 600 })} /></td>
-                  <td style={{ border: '1px solid #e6e8ef', padding: '8px 12px' }}><input value={amountOf(it)} onChange={(e) => setAmount(i, e.target.value)} style={docInput({ width: '100%' })} /></td>
-                  <td style={{ border: '1px solid #e6e8ef', textAlign: 'center' }}>{form.line_items.length > 1 && <button className="row-rm" onClick={() => rmItem(i)}><Icon name="trash" size={13} /></button>}</td>
+                  <td style={{ border: '1px solid var(--line)', padding: '8px 12px' }}><input value={it.description} onChange={(e) => setItem(i, 'description', e.target.value)} style={docInput({ width: '100%', fontWeight: 600 })} /></td>
+                  <td style={{ border: '1px solid var(--line)', padding: '8px 12px' }}><input value={amountOf(it)} onChange={(e) => setAmount(i, e.target.value)} style={docInput({ width: '100%' })} /></td>
+                  <td style={{ border: '1px solid var(--line)', textAlign: 'center' }}>{form.line_items.length > 1 && <button className="row-rm" onClick={() => rmItem(i)}><Icon name="trash" size={13} /></button>}</td>
                 </tr>
               ))}
               <tr>
-                <td style={{ border: '1px solid #e6e8ef', padding: '8px 12px', fontWeight: 700 }}>
+                <td style={{ border: '1px solid var(--line)', padding: '8px 12px', fontWeight: 700 }}>
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                     HST
                     {settings?.hst_number && <span style={{ fontWeight: 400, color: 'var(--muted)', fontSize: 12 }}>(Number : {settings.hst_number})</span>}
                     <input value={form.tax_rate} readOnly={hstLocked} onChange={(e) => set('tax_rate', e.target.value)}
-                      style={{ width: 52, textAlign: 'right', padding: '3px 6px', border: '1px solid #e6e8ef', borderRadius: 6, background: hstLocked ? '#f3f4f6' : '#fff', cursor: hstLocked ? 'not-allowed' : 'text' }} />
+                      style={{ width: 52, textAlign: 'right', padding: '3px 6px', border: '1px solid var(--line)', borderRadius: 6, background: hstLocked ? 'var(--surface-3)' : '#fff', cursor: hstLocked ? 'not-allowed' : 'text' }} />
                     <span>%</span>
                     <button type="button" className="row-rm" title={hstLocked ? 'Unlock to edit HST %' : 'Lock HST % at default'} style={{ color: BRAND }} onClick={() => setHstLocked((v) => !v)}>{hstLocked ? <Icon name="lock" size={13} /> : <Icon name="unlock" size={13} />}</button>
                   </span>
                 </td>
-                <td style={{ border: '1px solid #e6e8ef', padding: '8px 12px' }}>{formatCurrency(tax)}</td>
-                <td style={{ border: '1px solid #e6e8ef' }}></td>
+                <td style={{ border: '1px solid var(--line)', padding: '8px 12px' }}>{formatCurrency(tax)}</td>
+                <td style={{ border: '1px solid var(--line)' }}></td>
               </tr>
             </tbody>
           </table>
@@ -527,8 +527,8 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
           {/* Totals */}
           <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 14 }}>
             <table style={{ minWidth: 340 }}><tbody>
-              <tr><td style={{ padding: '6px 14px', color: '#475569' }}>Sub Total</td><td style={{ padding: '6px 14px', textAlign: 'right', fontWeight: 700 }}>{formatCurrency(displaySubTotal)}</td></tr>
-              <tr><td style={{ padding: '6px 14px', color: '#475569' }}>Discount</td><td style={{ padding: '6px 14px', textAlign: 'right' }}><input value={form.discount} onChange={(e) => set('discount', e.target.value)} style={docInput({ width: 120, textAlign: 'right' })} /></td></tr>
+              <tr><td style={{ padding: '6px 14px', color: 'var(--text-3)' }}>Sub Total</td><td style={{ padding: '6px 14px', textAlign: 'right', fontWeight: 700 }}>{formatCurrency(displaySubTotal)}</td></tr>
+              <tr><td style={{ padding: '6px 14px', color: 'var(--text-3)' }}>Discount</td><td style={{ padding: '6px 14px', textAlign: 'right' }}><input value={form.discount} onChange={(e) => set('discount', e.target.value)} style={docInput({ width: 120, textAlign: 'right' })} /></td></tr>
               <tr><td style={{ padding: '8px 14px', fontWeight: 800, borderTop: '2px solid #0f172a', fontSize: 15 }}>GRAND TOTAL</td><td style={{ padding: '8px 14px', textAlign: 'right', fontWeight: 800, borderTop: '2px solid #0f172a', fontSize: 15 }}>{formatCurrency(grandTotal)}</td></tr>
               {amountPaid > 0 && <tr><td style={{ padding: '4px 14px', color: 'var(--ok-ink)' }}>Paid</td><td style={{ padding: '4px 14px', textAlign: 'right', color: 'var(--ok-ink)' }}>{formatCurrency(amountPaid)}</td></tr>}
               <tr><td style={{ padding: '4px 14px', fontWeight: 700, color: BRAND }}>Balance Due</td><td style={{ padding: '4px 14px', textAlign: 'right', fontWeight: 700, color: BRAND }}>{formatCurrency(balanceDue)}</td></tr>
@@ -536,7 +536,7 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
           </div>
 
           {/* Notes & Terms */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, marginTop: 18, borderTop: '1px solid #eef0f5', paddingTop: 16 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, marginTop: 18, borderTop: '1px solid var(--surface-3)', paddingTop: 16 }}>
             <div>
               <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>Customer Notes:</div>
               <textarea rows={3} value={form.customer_notes} onChange={(e) => set('customer_notes', e.target.value)} style={docInput({ width: '100%', resize: 'vertical' })} />
@@ -551,7 +551,7 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, marginTop: 18 }}>
             <div>
               <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>Deposit Instructions:</div>
-              <div style={{ background: '#f8fafc', border: '1px solid #e6e8ef', borderRadius: 8, padding: 14, fontSize: 12.5, color: 'var(--text-2)', lineHeight: 1.7 }}>
+              <div style={{ background: 'var(--surface-2)', border: '1px solid var(--line)', borderRadius: 8, padding: 14, fontSize: 12.5, color: 'var(--text-2)', lineHeight: 1.7 }}>
                 <div style={{ fontWeight: 700 }}>Beneficiary Bank Account Detail:</div>
                 <div>Beneficiary Name : {settings?.bank_beneficiary || '—'}</div>
                 <div>Bank Name: {settings?.bank_name || '—'}</div>
@@ -569,19 +569,19 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
               </button>
               {form.signature_path && (
                 <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <img src={form.signature_path} alt="signature" style={{ maxHeight: 70, border: '1px solid #e6e8ef', borderRadius: 6, padding: 4 }} />
+                  <img src={form.signature_path} alt="signature" style={{ maxHeight: 70, border: '1px solid var(--line)', borderRadius: 6, padding: 4 }} />
                   <button className="row-rm" title="Remove signature" onClick={() => set('signature_path', '')}><Icon name="trash" size={13} /></button>
                 </div>
               )}
-              <div style={{ marginTop: 28, borderTop: '1px dashed #94a3b8', paddingTop: 6, fontSize: 11, fontStyle: 'italic', color: '#94a3b8', textAlign: 'center' }}>Signature</div>
+              <div style={{ marginTop: 28, borderTop: '1px dashed var(--muted-2)', paddingTop: 6, fontSize: 11, fontStyle: 'italic', color: 'var(--muted-2)', textAlign: 'center' }}>Signature</div>
               <div style={{ marginTop: 10, fontSize: 12.5 }}>
-                <div style={{ fontStyle: 'italic', color: '#475569', marginBottom: 4 }}>(Broker Manager / Broker of Record):</div>
+                <div style={{ fontStyle: 'italic', color: 'var(--text-3)', marginBottom: 4 }}>(Broker Manager / Broker of Record):</div>
                 <input value={form.broker_name} onChange={(e) => set('broker_name', e.target.value)} style={docInput({ width: '100%', fontWeight: 700 })} />
               </div>
             </div>
           </div>
 
-          <div style={{ marginTop: 18, textAlign: 'center', fontStyle: 'italic', fontSize: 11.5, color: '#94a3b8', borderTop: '1px solid #eef0f5', paddingTop: 12 }}>
+          <div style={{ marginTop: 18, textAlign: 'center', fontStyle: 'italic', fontSize: 11.5, color: 'var(--muted-2)', borderTop: '1px solid var(--surface-3)', paddingTop: 12 }}>
             This is a system-generated invoice from {settings?.name || 'GetHomeRealty Inc'}.
           </div>
 

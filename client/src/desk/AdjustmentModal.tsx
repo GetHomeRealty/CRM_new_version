@@ -231,7 +231,7 @@ export default function AdjustmentModal({ open, onClose, transactionId, txn, onS
               <div style={{ display: 'grid', gridTemplateColumns: precon ? 'repeat(4,1fr)' : 'repeat(3,1fr)', gap: 14 }}>
                 <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Agent Name</label>{agentSelect(r.agent, (e) => setRow('adjustment_rows', i, { agent: e.target.value }), usedIn('adjustment_rows', i))}</div>
                 <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Amount</label><SignedAmount value={r.amount} onChange={(nv) => setRow('adjustment_rows', i, { amount: nv })} />{overNote(r.agent)}</div>
-                <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Status</label><input value={autoStatus(r) || '—'} readOnly style={{ background: '#f9fafb', fontWeight: 600 }} title="Auto — 'Yet to Adjust' once agent + amount are set; 'Closed' once this agent's commission is marked Paid in Admin Activities." /></div>
+                <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Status</label><input value={autoStatus(r) || '—'} readOnly style={{ background: 'var(--surface-2)', fontWeight: 600 }} title="Auto — 'Yet to Adjust' once agent + amount are set; 'Closed' once this agent's commission is marked Paid in Admin Activities." /></div>
                 {precon && termSelect(r.term, (e) => setRow('adjustment_rows', i, { term: e.target.value }))}
               </div>
               {(r.is_loan || loanBalanceFor(r.agent) != null) && (
@@ -267,7 +267,7 @@ export default function AdjustmentModal({ open, onClose, transactionId, txn, onS
                 <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Amount</label><MoneyInput value={r.amount} onChange={(v) => setRow('advance_rows', i, { amount: v })} placeholder="0.00" />{overNote(r.agent)}</div>
                 <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Paid Type</label><select value={r.paid_type || 'N/A'} onChange={(e) => setRow('advance_rows', i, { paid_type: e.target.value })}><option>N/A</option><option>TDB-EFT</option><option>Cheque</option><option>Wire</option></select></div>
                 <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Paid Date</label><input type="date" value={r.paid_date} onChange={(e) => setRow('advance_rows', i, { paid_date: e.target.value, batch_no: batchNo(e.target.value) })} /></div>
-                <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Batch No.</label><input value={r.batch_no} readOnly style={{ background: '#f9fafb' }} /></div>
+                <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Batch No.</label><input value={r.batch_no} readOnly style={{ background: 'var(--surface-2)' }} /></div>
                 {precon && termSelect(r.term, (e) => setRow('advance_rows', i, { term: e.target.value }))}
               </div>
               <div className="field" style={{ marginTop: 10, marginBottom: 0 }}><label style={lbl}>Remarks</label><textarea rows={1} value={r.remarks} onChange={(e) => setRow('advance_rows', i, { remarks: e.target.value })} /></div>
@@ -293,8 +293,8 @@ export default function AdjustmentModal({ open, onClose, transactionId, txn, onS
                 <div className="g4" style={{ marginTop: 10 }}>
                   <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Paid Type</label><select value={r.paid_type} onChange={(e) => setRow('client_rows', i, { paid_type: e.target.value })}><option>N/A</option><option>TDB-EFT</option><option>Cheque</option><option>Wire</option></select></div>
                   <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Paid Date</label><input type="date" value={r.paid_date} onChange={(e) => setRow('client_rows', i, { paid_date: e.target.value, batch_no: batchNo(e.target.value), paid_status: e.target.value ? 'Paid' : '' })} /></div>
-                  <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Batch No.</label><input value={r.batch_no} readOnly style={{ background: '#f9fafb' }} /></div>
-                  <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Paid Status</label><input value={r.paid_status} readOnly style={{ background: '#f9fafb' }} /></div>
+                  <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Batch No.</label><input value={r.batch_no} readOnly style={{ background: 'var(--surface-2)' }} /></div>
+                  <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Paid Status</label><input value={r.paid_status} readOnly style={{ background: 'var(--surface-2)' }} /></div>
                 </div>
               )}
               <div style={{ textAlign: 'right', marginTop: 6 }}><button className="row-rm" onClick={() => rmRow('client_rows', i)}>🗑️</button></div>
@@ -321,8 +321,8 @@ export default function AdjustmentModal({ open, onClose, transactionId, txn, onS
                   setExt({ pct: p, amount: amt });
                 }} placeholder="e.g. 1.5" /></div>
               <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Amount</label><MoneyInput value={form.ext.amount} onChange={(v) => setExt({ amount: v, pct: '' })} placeholder="0.00" /></div>
-              <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>HST</label><input value={formatCurrency(extHst)} readOnly style={{ background: '#f9fafb' }} /></div>
-              <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Total</label><input value={formatCurrency(extTotal)} readOnly style={{ background: '#f9fafb' }} /></div>
+              <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>HST</label><input value={formatCurrency(extHst)} readOnly style={{ background: 'var(--surface-2)' }} /></div>
+              <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Total</label><input value={formatCurrency(extTotal)} readOnly style={{ background: 'var(--surface-2)' }} /></div>
             </div>
             <div className="g2" style={{ marginTop: 10 }}>
               <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Referral Agent Invoice Received?</label><select value={form.ext.invoice_received} onChange={(e) => setExt({ invoice_received: e.target.value })}><option>No</option><option>Yes</option></select></div>
@@ -332,8 +332,8 @@ export default function AdjustmentModal({ open, onClose, transactionId, txn, onS
               <div className="g4" style={{ marginTop: 10 }}>
                 <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Paid Type</label><select value={form.ext.paid_type} onChange={(e) => setExt({ paid_type: e.target.value })}><option>N/A</option><option>TDB-EFT</option><option>Cheque</option><option>Wire</option></select></div>
                 <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Paid Date</label><input type="date" value={form.ext.paid_date} onChange={(e) => setExt({ paid_date: e.target.value, batch_no: batchNo(e.target.value), paid_status: e.target.value ? 'Paid' : '' })} /></div>
-                <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Batch No.</label><input value={form.ext.batch_no} readOnly style={{ background: '#f9fafb' }} /></div>
-                <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Paid Status</label><input value={form.ext.paid_status} readOnly style={{ background: '#f9fafb' }} /></div>
+                <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Batch No.</label><input value={form.ext.batch_no} readOnly style={{ background: 'var(--surface-2)' }} /></div>
+                <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Paid Status</label><input value={form.ext.paid_status} readOnly style={{ background: 'var(--surface-2)' }} /></div>
               </div>
             )}
           </div>

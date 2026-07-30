@@ -778,7 +778,7 @@ function EmailComposer({ lead, onClose, onSent }: { lead: LeadDetail; onClose: (
         </div>
         <div className="modal-body">
           {/* AI Email Generator */}
-          <div className="field" style={{ background: 'var(--surface-2, #f8fafc)', border: '1px solid var(--line)', borderRadius: 10, padding: 12 }}>
+          <div className="field" style={{ background: 'var(--surface-2, var(--surface-2))', border: '1px solid var(--line)', borderRadius: 10, padding: 12 }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>✨ AI Email Generator</label>
             <div style={{ display: 'flex', gap: 8, alignItems: 'stretch' }}>
               <textarea rows={2} style={{ flex: 1 }} value={aiPrompt} onChange={(e) => setAiPrompt(e.target.value)}

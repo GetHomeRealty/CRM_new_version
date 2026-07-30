@@ -398,7 +398,7 @@ export default function InventoryPage() {
                   const returned = hasBeenReturned(a.returnedDate);
                   const scheduled = isReturnScheduled(a.returnedDate);
                   return (
-                    <div key={idx} style={{ border: '1px solid var(--line)', borderRadius: 8, padding: 10, marginBottom: 8, background: 'var(--surface-2, #f8fafc)' }}>
+                    <div key={idx} style={{ border: '1px solid var(--line)', borderRadius: 8, padding: 10, marginBottom: 8, background: 'var(--surface-2, var(--surface-2))' }}>
                       <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                         <input list="inv-names" placeholder="Select or type a person" style={{ flex: 1 }} value={a.assignedTo} onChange={(e) => updateAssignment(idx, { assignedTo: e.target.value })} />
                         <input type="number" min={1} placeholder="Qty" style={{ width: 76 }} value={a.qty} onChange={(e) => updateAssignment(idx, { qty: e.target.value })} />
@@ -422,7 +422,7 @@ export default function InventoryPage() {
                 <textarea rows={2} placeholder="Optional notes" value={form.remarks} onChange={(e) => setForm({ ...form, remarks: e.target.value })} /></div>
 
               {/* Derived, read-only */}
-              <div style={{ gridColumn: '1 / -1', background: 'var(--surface-2, #f8fafc)', borderRadius: 8, padding: 12 }}>
+              <div style={{ gridColumn: '1 / -1', background: 'var(--surface-2, var(--surface-2))', borderRadius: 8, padding: 12 }}>
                 <Row label="Balance Count (count − assigned)" value={previewBalance} />
                 <Row label="Still Out (not yet returned)" value={previewOut} />
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginTop: 8 }}>

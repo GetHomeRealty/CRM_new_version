@@ -141,7 +141,7 @@ export default function CommercialLeaseCard({ cl, setCl, ro }: CommercialLeaseCa
       </select>
     </div>
   );
-  const ros = { readOnly: true, style: { background: '#f9fafb' } };
+  const ros = { readOnly: true, style: { background: 'var(--surface-2)' } };
 
   return (
     <div className="card">

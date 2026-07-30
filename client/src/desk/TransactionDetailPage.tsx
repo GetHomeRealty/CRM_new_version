@@ -822,16 +822,16 @@ export default function TransactionDetailPage() {
             <div key={s.label} style={{ display: 'flex', alignItems: 'flex-start', flex: idx < stages.length - 1 ? 1 : '0 0 auto' }}>
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', minWidth: 72 }}>
                 <div style={{ width: 26, height: 26, borderRadius: '50%', display: 'grid', placeItems: 'center', fontSize: 12, fontWeight: 700,
-                  background: s.pass ? 'var(--ok-600)' : (idx === curStage ? 'var(--brand)' : '#e5e7eb'),
+                  background: s.pass ? 'var(--ok-600)' : (idx === curStage ? 'var(--brand)' : 'var(--line)'),
                   color: s.pass || idx === curStage ? '#fff' : '#6b7280' }}>{s.pass ? <Icon name="check" size={13} /> : idx + 1}</div>
                 <div style={{ marginTop: 6, fontSize: 11, fontWeight: 600, textAlign: 'center', whiteSpace: 'nowrap',
                   color: s.pass ? 'var(--ok-ink)' : (idx === curStage ? 'var(--brand)' : '#9ca3af') }}>{s.label}</div>
               </div>
-              {idx < stages.length - 1 && <div style={{ flex: 1, height: 2, background: '#e5e7eb', marginTop: 13 }} />}
+              {idx < stages.length - 1 && <div style={{ flex: 1, height: 2, background: 'var(--line)', marginTop: 13 }} />}
             </div>
           ))}
         </div>
-        <div style={{ height: 6, borderRadius: 3, background: '#e5e7eb', marginTop: 12, overflow: 'hidden' }}>
+        <div style={{ height: 6, borderRadius: 3, background: 'var(--line)', marginTop: 12, overflow: 'hidden' }}>
           <div style={{ height: '100%', width: `${progressPct}%`, background: 'linear-gradient(90deg,#16a34a,var(--brand))' }} />
         </div>
       </div>
@@ -875,13 +875,13 @@ export default function TransactionDetailPage() {
                 <StatusMultiSelect options={statusOptions} selected={form.statuses} disabled={ro} onToggle={toggleStatus} />
               </Field>
               {OFFER_CLOSING_LISTING_TYPES.includes(form.type) && (
-                <Field label="Trade Number"><input value={form.trade_no} readOnly style={{ background: '#f9fafb' }} /></Field>
+                <Field label="Trade Number"><input value={form.trade_no} readOnly style={{ background: 'var(--surface-2)' }} /></Field>
               )}
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: referral ? '1fr 1.5fr 1fr' : '1fr 1.5fr 1fr 1fr', gap: 12, marginBottom: 12 }}>
               <Field label="Agent Name">
                 {isAgent
-                  ? <input value={form.agent} readOnly style={{ background: '#f9fafb', cursor: 'not-allowed' }} title="The agent who creates the transaction is its primary agent." />
+                  ? <input value={form.agent} readOnly style={{ background: 'var(--surface-2)', cursor: 'not-allowed' }} title="The agent who creates the transaction is its primary agent." />
                   : (<>
                     <input list="agentList" value={form.agent} disabled={ro} onChange={(e) => set('agent', e.target.value)} placeholder="Search Agent..." />
                     <datalist id="agentList">{agents.map((a) => <option key={a} value={a} />)}</datalist>
@@ -893,7 +893,7 @@ export default function TransactionDetailPage() {
             </div>
             {!OFFER_CLOSING_LISTING_TYPES.includes(form.type) && (
               <div className="g3">
-                <Field label="Trade Number"><input value={form.trade_no} readOnly style={{ background: '#f9fafb' }} /></Field>
+                <Field label="Trade Number"><input value={form.trade_no} readOnly style={{ background: 'var(--surface-2)' }} /></Field>
                 {listing && (<>
                   <Field label="Listing Contract Date"><input type="date" value={form.listing_contract_date} disabled={ro} onChange={(e) => set('listing_contract_date', e.target.value)} /></Field>
                   <Field label="Listing Expiry Date"><input type="date" value={form.listing_expiry_date} disabled={ro} onChange={(e) => set('listing_expiry_date', e.target.value)} /></Field>
@@ -1276,7 +1276,7 @@ function StatusMultiSelect({ options, selected, disabled, onToggle }: { options:
         disabled={disabled}
         onClick={() => setOpen((o) => !o)}
         style={{ width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8,
-          padding: '8px 10px', border: '1px solid var(--line)', borderRadius: 8, background: disabled ? '#f9fafb' : '#fff',
+          padding: '8px 10px', border: '1px solid var(--line)', borderRadius: 8, background: disabled ? 'var(--surface-2)' : '#fff',
           fontSize: 13, color: selected.length ? 'var(--text)' : 'var(--muted)', cursor: disabled ? 'default' : 'pointer', textAlign: 'left' }}
       >
         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>

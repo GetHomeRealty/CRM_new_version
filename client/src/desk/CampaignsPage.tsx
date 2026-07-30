@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import Icon from '../ui/Icon';
 import { useSearchParams } from 'react-router-dom';
 import {
   campaignOptions, listCampaigns, getCampaign, deleteCampaign,
@@ -220,8 +221,8 @@ export default function CampaignsPage() {
           {/* Actions belong to the campaigns view; the template library has its own. */}
           {tab === 'campaigns' && (
             <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              {canEdit && <button className="btn ghost" onClick={() => setImportOpen(true)}>⭳ Import Leads</button>}
-              {canEdit && <button className="btn ghost" onClick={() => setTagOpen(true)}>🏷 Tag Leads</button>}
+              {canEdit && <button className="btn ghost" onClick={() => setImportOpen(true)}><Icon name="upload" size={14} /> Import Leads</button>}
+              {canEdit && <button className="btn ghost" onClick={() => setTagOpen(true)}><Icon name="tag" size={14} /> Tag Leads</button>}
               {canEdit && <button className="btn primary" onClick={openBuilder}>+ Create Campaign</button>}
             </div>
           )}
@@ -309,16 +310,16 @@ export default function CampaignsPage() {
                 {c.template_name ?? 'Template'}{c.tags[0] ? ` · ${c.tags[0]}` : ''}
               </div>
               <div className="camp-stats">
-                <span title="sent to"><span className="camp-ico">👥</span><strong>{c.stats.total}</strong> sent to</span>
-                <span className="good" title="delivered"><span className="camp-ico">✅</span><strong>{c.stats.sent}</strong> delivered</span>
+                <span title="sent to"><span className="camp-ico"><Icon name="users" size={12} /></span><strong>{c.stats.total}</strong> sent to</span>
+                <span className="good" title="delivered"><span className="camp-ico"><Icon name="check" size={12} /></span><strong>{c.stats.sent}</strong> delivered</span>
                 <span className="info" title="opened"><span className="camp-ico">✉️</span><strong>{c.stats.opened}</strong> opened</span>
-                <span className="bad" title="bounced"><span className="camp-ico">⛔</span><strong>{c.stats.bounced}</strong> bounced</span>
-                <span className="warn" title="unsubscribed"><span className="camp-ico">🚫</span><strong>{c.stats.unsubscribed}</strong> unsub</span>
+                <span className="bad" title="bounced"><span className="camp-ico"><Icon name="alert" size={12} /></span><strong>{c.stats.bounced}</strong> bounced</span>
+                <span className="warn" title="unsubscribed"><span className="camp-ico"><Icon name="close" size={12} /></span><strong>{c.stats.unsubscribed}</strong> unsub</span>
               </div>
               <div className="camp-actions">
                 <button className="btn ghost sm" onClick={() => openDetail(c)}>View results</button>
                 <button className="btn ghost sm" onClick={async () => { try { setSentEmail(await getCampaign(c.id)); } catch { toast('Could not load the sent email', 'bad'); } }}>View email</button>
-                {canEdit && <button className="btn ghost sm" style={{ marginLeft: 'auto' }} onClick={() => setToDelete(c)}>🗑️</button>}
+                {canEdit && <button className="btn ghost sm" style={{ marginLeft: 'auto' }} onClick={() => setToDelete(c)}><Icon name="trash" size={13} /></button>}
               </div>
             </div>
           ))}
@@ -488,14 +489,14 @@ export default function CampaignsPage() {
               <div className={testResult.ok ? 'reminder-ok' : 'import-error'} style={{ marginTop: 4 }}>
                 {testResult.ok ? (
                   <div>
-                    <strong>✅ Sent successfully.</strong>
+                    <strong><Icon name="check" size={13} /> Sent successfully.</strong>
                     <div style={{ marginTop: 2, fontSize: 13 }}>
                       From <strong>{testResult.from}</strong>{testResult.account ? ` (account: ${testResult.account})` : ''}. Check the inbox — your SMTP credentials are valid.
                     </div>
                   </div>
                 ) : (
                   <div>
-                    <strong>❌ Could not send.</strong>
+                    <strong><Icon name="alert" size={13} /> Could not send.</strong>
                     <div style={{ marginTop: 2, fontSize: 13, wordBreak: 'break-word' }}>{testResult.error}</div>
                     {/535|BadCredentials|Username and Password/i.test(testResult.error ?? '') && (
                       <div style={{ marginTop: 4, fontSize: 12 }}>
@@ -557,7 +558,7 @@ function ImportLeadsModal({ onClose, onDone }: { onClose: () => void; onDone: ()
   return (
     <div className="overlay open" onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}>
       <div className="modal" style={{ maxWidth: 560 }}>
-        <button className="close" onClick={onClose} disabled={busy}>✕</button>
+        <button className="close" onClick={onClose} disabled={busy}><Icon name="close" size={15} /></button>
         <div className="modal-h">Import Leads</div>
         <div className="field">
           <label>Tag (optional)</label>
@@ -622,7 +623,7 @@ function TagLeadsModal({ options, onClose, onDone }: { options: CampaignOptions;
   return (
     <div className="overlay open" onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}>
       <div className="modal" style={{ maxWidth: 620 }}>
-        <button className="close" onClick={onClose} disabled={busy}>✕</button>
+        <button className="close" onClick={onClose} disabled={busy}><Icon name="close" size={15} /></button>
         <div className="modal-h">Tag Leads by Segment</div>
         <p className="muted" style={{ fontSize: 13 }}>Pick a segment, then apply a tag to every matching lead so you can target them later.</p>
         <div className="report-filters">

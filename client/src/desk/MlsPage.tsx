@@ -169,7 +169,7 @@ export default function MlsPage({ onShowFavorites }: { onShowFavorites?: () => v
                       <div style={{ fontWeight: 600 }}>{String(p.UnparsedAddress || 'No address')}</div>
                       <div className="muted" style={{ fontSize: 12 }}>{[p.City, p.StateOrProvince, p.PostalCode].filter(Boolean).join(', ')}</div>
                     </div>
-                    <div style={{ display: 'flex', gap: 14, marginTop: 10, fontSize: 13, color: 'var(--text-2, #475569)' }}>
+                    <div style={{ display: 'flex', gap: 14, marginTop: 10, fontSize: 13, color: 'var(--text-2, var(--text-3))' }}>
                       <span>🛏 {p.BedroomsTotal ?? 'N/A'} bd</span>
                       <span>🛁 {p.BathroomsTotalInteger ?? 'N/A'} ba</span>
                       <span>▢ {p.LivingArea ? money(p.LivingArea) : 'N/A'} sqft</span>

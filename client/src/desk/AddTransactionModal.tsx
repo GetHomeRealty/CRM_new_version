@@ -242,9 +242,9 @@ export default function AddTransactionModal({ open, onClose, onCreated }: AddTra
                   {addrSug.map((s, idx) => (
                     <div key={`${s.properties?.osm_type || ''}${s.properties?.osm_id || ''}-${idx}`}
                       onMouseDown={(e) => { e.preventDefault(); pickAddr(s); }}
-                      onMouseEnter={(e) => { e.currentTarget.style.background = '#f8fafc'; }}
+                      onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--surface-2)'; }}
                       onMouseLeave={(e) => { e.currentTarget.style.background = '#fff'; }}
-                      style={{ padding: '8px 12px', fontSize: 12.5, cursor: 'pointer', borderBottom: '1px solid #f1f5f9' }}>
+                      style={{ padding: '8px 12px', fontSize: 12.5, cursor: 'pointer', borderBottom: '1px solid var(--surface-3)' }}>
                       📍 {fmtAddress(s)}
                     </div>
                   ))}

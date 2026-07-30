@@ -392,7 +392,7 @@ function TemplateEditor({ template, accounts, onClose, onSaved, toast }: Templat
         </div>
 
         {preview && (
-          <div className="card" style={{ background: '#f8fafc', marginBottom: 12 }}>
+          <div className="card" style={{ background: 'var(--surface-2)', marginBottom: 12 }}>
             <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 4 }}>PREVIEW (sample values)</div>
             <div style={{ fontWeight: 700, marginBottom: 6 }}>Subject: {preview.subject}</div>
             <div style={{ background: '#fff', border: '1px solid var(--line)', borderRadius: 8, padding: 12 }} dangerouslySetInnerHTML={{ __html: preview.html || '' }} />

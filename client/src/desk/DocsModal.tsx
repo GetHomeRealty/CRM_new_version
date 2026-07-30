@@ -1,4 +1,5 @@
 import { useEffect, useState, type CSSProperties } from 'react';
+import Icon from '../ui/Icon';
 import {
   getDocuments, saveDocuments, uploadDocumentFile, deleteDocument, restoreDocument,
   uploadDocClientFile, deleteDocClientFile,
@@ -195,13 +196,13 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
   return (
     <div className="overlay open" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="modal xl" style={{ maxHeight: '92vh', overflowY: 'auto' }}>
-        <button className="close" onClick={onClose}>✕</button>
+        <button className="close" onClick={onClose}><Icon name="close" size={15} /></button>
         <div className="modal-h" style={{ marginBottom: 4 }}>Legal &amp; Documentation</div>
         <div style={{ fontSize: 12, color: 'var(--muted)', margin: '0 0 16px 12px' }}>Track receipt &amp; validation of every required document for this transaction.</div>
 
         {readOnly && (
           <div className="card" style={{ borderLeft: '4px solid #2563eb', background: 'var(--info-bg)', marginBottom: 12 }}>
-            <span style={{ fontSize: 12.5, color: 'var(--info-ink)' }}>🔒 View-only — click <strong>Edit</strong> on the transaction to change documents. (View &amp; download remain available.)</span>
+            <span style={{ fontSize: 12.5, color: 'var(--info-ink)' }}><Icon name="lock" size={13} /> View-only — click <strong>Edit</strong> on the transaction to change documents. (View &amp; download remain available.)</span>
           </div>
         )}
 
@@ -212,7 +213,7 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
               <strong style={{ fontSize: 12, color: 'var(--text-2)', textTransform: 'uppercase', letterSpacing: '.04em' }}>Documents Received</strong>
               <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--brand)' }}>{received} / {total} received ({pct}%)</span>
             </div>
-            <div style={{ background: '#f3f4f6', height: 10, borderRadius: 6, overflow: 'hidden' }}>
+            <div style={{ background: 'var(--surface-3)', height: 10, borderRadius: 6, overflow: 'hidden' }}>
               <div style={{ height: '100%', width: `${pct}%`, background: 'linear-gradient(90deg,#10b981,#059669)' }} />
             </div>
           </div>
@@ -221,7 +222,7 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
               <strong style={{ fontSize: 12, color: 'var(--text-2)', textTransform: 'uppercase', letterSpacing: '.04em' }}>Valid Documents</strong>
               <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--brand)' }}>{valid} / {total} valid ({pctValid}%)</span>
             </div>
-            <div style={{ background: '#f3f4f6', height: 10, borderRadius: 6, overflow: 'hidden' }}>
+            <div style={{ background: 'var(--surface-3)', height: 10, borderRadius: 6, overflow: 'hidden' }}>
               <div style={{ height: '100%', width: `${pctValid}%`, background: 'linear-gradient(90deg,#3b82f6,#2563eb)' }} />
             </div>
           </div>
@@ -239,7 +240,7 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
               <option>Yes</option>
               <option>No</option>
             </select>
-            {recoReady === 'Yes' && <span className="pill ok" style={{ fontSize: 11 }}>✓ Audit-ready</span>}
+            {recoReady === 'Yes' && <span className="pill ok" style={{ fontSize: 11 }}><Icon name="check" size={11} /> Audit-ready</span>}
             {recoReady === 'No' && <span className="pill bad" style={{ fontSize: 11 }}>Not audit-ready</span>}
           </div>
           {recoReady === 'No' && (
@@ -257,19 +258,19 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
             {docs.some((d) => d.has_file || (d.file_count || 0) > 0) && (
               <button type="button" className="btn ghost sm" title="Download every uploaded document for this transaction as a ZIP"
                 onClick={() => openFile(downloadAllDocuments, transactionId)}>
-                📦 Download all
+                <Icon name="package" size={13} /> Download all
               </button>
             )}
             {!agentMode && remindableDocs.length > 0 && (
               <button className="btn ghost sm" onClick={toggleAllReminders}
                 title="Select every pending or invalid document for automated email reminders">
-                🔔 {allRemindersOn ? 'Clear all reminders' : 'Remind all pending / invalid'}
+                <Icon name="bell" size={13} /> {allRemindersOn ? 'Clear all reminders' : 'Remind all pending / invalid'}
               </button>
             )}
             {!agentMode && flaggedReminderDocs.length > 0 && (
               <button className="btn ghost sm" onClick={sendRemindersNow} disabled={saving}
                 title="Email the agent now with every reminder-flagged document still outstanding">
-                📧 Send reminders now ({flaggedReminderDocs.length})
+                <Icon name="mail" size={13} /> Send reminders now ({flaggedReminderDocs.length})
               </button>
             )}
             <input placeholder="Document name" value={newTitle} onChange={(e) => setNewTitle(e.target.value)} style={{ width: 200 }} />
@@ -304,7 +305,7 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
                 {/* Title */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   {expandable
-                    ? <button className="row-rm" style={{ color: BRAND }} onClick={() => toggle(key)}>{open2 ? '▼' : '▶'}</button>
+                    ? <button className="row-rm" style={{ color: BRAND }} onClick={() => toggle(key)}>{open2 ? <Icon name="chevronDown" size={12} /> : <Icon name="chevronRight" size={12} />}</button>
                     : <span style={{ width: 14 }} />}
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontWeight: 600, color: BRAND, lineHeight: 1.3, wordBreak: 'break-word' }}>{d.title}</div>
@@ -314,7 +315,7 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
                         still-missing or reviewer-rejected (Invalid) doc is the agent's to chase. */}
                     {!agentMode && d.validation !== 'Valid' && (d.status !== 'Received' || d.validation === 'Invalid') && (
                       <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, color: notAccepted ? 'var(--muted-2)' : (d.reminder ? 'var(--warn-700)' : 'var(--muted)'), marginTop: 3, cursor: (readOnly || notAccepted) ? 'default' : 'pointer' }} title={notAccepted ? 'Reminders are off — this document was not accepted by the agent' : 'Include this document in automated pending-document email reminders'}>
-                        <input type="checkbox" checked={!!d.reminder && !notAccepted} disabled={readOnly || notAccepted} onChange={(e) => upd(i, 'reminder', e.target.checked)} /> 🔔 Reminder
+                        <input type="checkbox" checked={!!d.reminder && !notAccepted} disabled={readOnly || notAccepted} onChange={(e) => upd(i, 'reminder', e.target.checked)} /> <Icon name="bell" size={12} /> Reminder
                       </label>
                     )}
                     {/* Agent acceptance — only for manually-added ("+ Add") documents. */}
@@ -331,7 +332,7 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
                     {/* Admins see the agent's answer (manual docs only). */}
                     {d.manual && !d.is_condition && !agentMode && d.agent_accepted && (
                       <span className={`pill ${d.agent_accepted === 'Accepted' ? 'ok' : 'bad'}`} style={{ fontSize: 9, padding: '1px 6px', marginTop: 3, display: 'inline-block' }}>
-                        {d.agent_accepted === 'Accepted' ? '✔ Accepted by agent' : '✖ Not accepted by agent'}
+                        {d.agent_accepted === 'Accepted' ? <><Icon name="check" size={12} /> Accepted by agent</> : <><Icon name="close" size={12} /> Not accepted by agent</>}
                       </span>
                     )}
                   </div>
@@ -339,18 +340,18 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
                 {/* Upload — disabled while the agent hasn't accepted the document. */}
                 <div style={{ fontSize: 12.5, color: 'var(--muted)' }}>
                   {uploadBlocked ? (
-                    <span style={{ fontSize: 11, color: 'var(--muted-2)' }}>🚫 Upload disabled (not accepted)</span>
+                    <span style={{ fontSize: 11, color: 'var(--muted-2)' }}><Icon name="alert" size={11} /> Upload disabled (not accepted)</span>
                   ) : (<>
-                    {d.kind === 'multi' && <span>📎 Multiple files</span>}
-                    {d.kind === 'per_client' && <span>👥 Per-client uploads</span>}
+                    {d.kind === 'multi' && <span><Icon name="doc" size={11} /> Multiple files</span>}
+                    {d.kind === 'per_client' && <span><Icon name="users" size={11} /> Per-client uploads</span>}
                     {single && (d.has_file
-                      ? <span style={{ fontSize: 11.5, color: 'var(--ok-600)', fontWeight: 600 }}>✓ Uploaded</span>
+                      ? <span style={{ fontSize: 11.5, color: 'var(--ok-600)', fontWeight: 600 }}><Icon name="check" size={11} /> Uploaded</span>
                       : <input type="file" onChange={(e) => { onSingle(d, e.target.files?.[0]); e.target.value = ''; }} style={{ fontSize: 12 }} />)}
                   </>)}
                 </div>
                 {/* Status / Validation — agents may view but not change these. */}
                 {agentMode ? (
-                  <div style={{ ...sel, boxSizing: 'border-box', padding: '6px 8px', border: '1px solid var(--line)', borderRadius: 6, background: '#f9fafb', fontSize: 12.5, ...(d.status === 'Received' ? { color: 'var(--ok-600)', fontWeight: 700 } : { color: 'var(--muted)' }) }}>
+                  <div style={{ ...sel, boxSizing: 'border-box', padding: '6px 8px', border: '1px solid var(--line)', borderRadius: 6, background: 'var(--surface-2)', fontSize: 12.5, ...(d.status === 'Received' ? { color: 'var(--ok-600)', fontWeight: 700 } : { color: 'var(--muted)' }) }}>
                     {d.status === 'Received' ? 'Sent' : 'Pending'}
                   </div>
                 ) : (
@@ -362,7 +363,7 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
                 {d.status === 'Received'
                   ? <select
                       disabled={agentMode}
-                      style={{ ...sel, ...(d.validation === 'Valid' ? { color: 'var(--ok-600)', fontWeight: 700 } : d.validation === 'Invalid' ? { color: 'var(--bad)', fontWeight: 700 } : null), ...(agentMode ? { background: '#f9fafb' } : null) }}
+                      style={{ ...sel, ...(d.validation === 'Valid' ? { color: 'var(--ok-600)', fontWeight: 700 } : d.validation === 'Invalid' ? { color: 'var(--bad)', fontWeight: 700 } : null), ...(agentMode ? { background: 'var(--surface-2)' } : null) }}
                       value={!d.validation || d.validation === 'Pending' ? 'Pending' : d.validation}
                       onChange={(e) => {
                         const v = e.target.value;
@@ -380,8 +381,8 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
                     ? <span style={{ color: 'var(--muted)' }}>{d.file_count} file(s)</span>
                     : (d.has_file
                       ? <div style={{ display: 'flex', gap: 4, justifyContent: 'center' }}>
-                          <button type="button" className="btn ghost sm" title="View" onClick={() => openFile(viewDocumentFile, d.id!)}>👁</button>
-                          <button type="button" className="btn ghost sm" title="Download" onClick={() => openFile(downloadDocumentFile, d.id!)}>⬇</button>
+                          <button type="button" className="btn ghost sm" title="View" onClick={() => openFile(viewDocumentFile, d.id!)}><Icon name="eye" size={14} /></button>
+                          <button type="button" className="btn ghost sm" title="Download" onClick={() => openFile(downloadDocumentFile, d.id!)}><Icon name="download" size={14} /></button>
                         </div>
                       : <span style={{ color: 'var(--muted-2)' }}>—</span>)}
                 </div>
@@ -408,23 +409,23 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
                   {single && d.has_file && !uploadBlocked && d.validation !== 'Valid'
                     ? <label className="btn ghost sm" style={{ cursor: 'pointer' }}>Replace
                         <input type="file" style={{ display: 'none' }} onChange={(e) => { onSingle(d, e.target.files?.[0]); e.target.value = ''; }} /></label>
-                    : <span style={{ color: 'var(--muted-2)' }} title={d.validation === 'Valid' ? 'Valid — replacing is locked' : undefined}>{d.validation === 'Valid' && d.has_file ? '🔒' : '—'}</span>}
+                    : <span style={{ color: 'var(--muted-2)' }} title={d.validation === 'Valid' ? 'Valid — replacing is locked' : undefined}>{d.validation === 'Valid' && d.has_file ? <Icon name="lock" size={12} /> : '—'}</span>}
                 </div>
                 {/* Delete — admins only (hidden for agents); locked to Super Admin once Valid. */}
                 {!agentMode && (
                   <div style={{ textAlign: 'center' }}>
                     {((d.is_condition && !canDeleteConditionDocs) || validLocked(d))
-                      ? <span style={{ color: '#9ca3af', fontSize: 11 }} title={validLocked(d) ? 'Valid — only a Super Admin can delete' : undefined}>{validLocked(d) ? '🔒' : '—'}</span>
-                      : <button className="row-rm" disabled={readOnly} onClick={() => onDeleteRow(d, i)}>🗑️</button>}
+                      ? <span style={{ color: 'var(--muted-2)', fontSize: 11 }} title={validLocked(d) ? 'Valid — only a Super Admin can delete' : undefined}>{validLocked(d) ? '🔒' : '—'}</span>
+                      : <button className="row-rm" disabled={readOnly} onClick={() => onDeleteRow(d, i)}><Icon name="trash" size={13} /></button>}
                   </div>
                 )}
               </div>
 
               {/* Expanded: per-client or multi-file uploads */}
               {open2 && d.kind === 'per_client' && (
-                <div style={{ background: '#f8fafc', borderTop: '1px solid var(--line)', padding: 12 }}>
+                <div style={{ background: 'var(--surface-2)', borderTop: '1px solid var(--line)', padding: 12 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                    <strong style={{ fontSize: 12.5 }}>👥 {d.title} — by Client</strong>
+                    <strong style={{ fontSize: 12.5 }}><Icon name="users" size={12} /> {d.title} — by Client</strong>
                     <span style={{ fontSize: 11, color: 'var(--muted)' }}>Each upload is mapped to its respective client name.</span>
                   </div>
                   {clients.length === 0 && <div className="help">No clients on this transaction yet.</div>}
@@ -439,7 +440,7 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
                           <>
                             <div style={{ fontSize: 12, color: 'var(--muted)' }}>Fill and download this client's OREA Form 630.</div>
                             <div style={{ textAlign: 'right' }}>
-                              {txn && <button className="btn ghost sm" title="Open this client's Form 630" onClick={() => setF630Client(name)}>📄 Form 630</button>}
+                              {txn && <button className="btn ghost sm" title="Open this client's Form 630" onClick={() => setF630Client(name)}><Icon name="doc" size={13} /> Form 630</button>}
                             </div>
                           </>
                         ) : (
@@ -463,11 +464,11 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
                 </div>
               )}
               {open2 && d.kind === 'multi' && (
-                <div style={{ background: '#f8fafc', borderTop: '1px solid var(--line)', padding: 12 }}>
+                <div style={{ background: 'var(--surface-2)', borderTop: '1px solid var(--line)', padding: 12 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                     <strong style={{ fontSize: 12.5 }}>📎 {d.title} — files</strong>
                     {uploadBlocked
-                      ? <span style={{ fontSize: 11, color: 'var(--muted-2)' }}>🚫 Upload disabled (not accepted)</span>
+                      ? <span style={{ fontSize: 11, color: 'var(--muted-2)' }}><Icon name="alert" size={11} /> Upload disabled (not accepted)</span>
                       : <label className="btn primary sm" style={{ cursor: 'pointer' }}>+ Add File
                           <input type="file" style={{ display: 'none' }} onChange={(e) => { onMulti(d, e.target.files?.[0]); e.target.value = ''; }} /></label>}
                   </div>
@@ -489,7 +490,7 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
                 <div style={{ background: 'var(--brand-soft)', borderTop: '1px solid var(--line)', padding: 10 }}>
                   <label style={{ fontSize: 11, color: 'var(--muted)', fontWeight: 600, display: 'block', marginBottom: 4 }}>⚠ Reason for Invalid</label>
                   {/* Agents may read the reason & attachment but not change them. */}
-                  <textarea rows={2} value={d.remarks || ''} readOnly={agentMode} onChange={(e) => upd(i, 'remarks', e.target.value)} placeholder="Describe why this document is invalid…" style={{ background: agentMode ? '#f9fafb' : '#fff', width: '100%' }} />
+                  <textarea rows={2} value={d.remarks || ''} readOnly={agentMode} onChange={(e) => upd(i, 'remarks', e.target.value)} placeholder="Describe why this document is invalid…" style={{ background: agentMode ? 'var(--surface-2)' : '#fff', width: '100%' }} />
                   <label style={{ fontSize: 11, color: 'var(--muted)', fontWeight: 600, display: 'block', margin: '8px 0 4px' }}>Attachment</label>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                     {!agentMode && <input type="file" onChange={(e) => { onValidationFile(d, e.target.files?.[0]); e.target.value = ''; }} style={{ fontSize: 12 }} />}

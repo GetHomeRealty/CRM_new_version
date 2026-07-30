@@ -111,7 +111,7 @@ export default function FavoritesPage() {
                   <div style={{ fontWeight: 600 }}>{String(s.UnparsedAddress || 'No address')}</div>
                   <div className="muted" style={{ fontSize: 12 }}>{[s.City, s.StateOrProvince, s.PostalCode].filter(Boolean).join(', ')}</div>
                 </div>
-                <div style={{ display: 'flex', gap: 14, marginTop: 10, fontSize: 13, color: 'var(--text-2, #475569)' }}>
+                <div style={{ display: 'flex', gap: 14, marginTop: 10, fontSize: 13, color: 'var(--text-2, var(--text-3))' }}>
                   <span>🛏 {s.BedroomsTotal ?? 'N/A'} bd</span>
                   <span>🛁 {s.BathroomsTotalInteger ?? 'N/A'} ba</span>
                   <span>▢ {s.LivingArea ? money(s.LivingArea) : 'N/A'} sqft</span>

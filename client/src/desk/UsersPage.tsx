@@ -1,5 +1,6 @@
 import { AREAS, AREA_LABEL, type Area } from './area';
 import { useEffect, useRef, useState } from 'react';
+import Icon from '../ui/Icon';
 import { getUsers, getUsersCatalog, createUser, updateUser, deleteUser, getUserDealHistory, getAgentLoans, uploadUserPhoto } from '../lib/api';
 import { fileToBase64 } from '../lib/importApi';
 import { roleLabel, formatCurrency } from './format';
@@ -108,9 +109,9 @@ export default function UsersPage() {
                 <button className="btn ghost sm" onClick={() => setEditing(u)}>Edit</button>
                 <button className="btn ghost sm" style={{ marginLeft: 4 }} disabled={photoBusy === u.id}
                   title={`Set ${u.name}'s profile picture`} onClick={() => pickFor(u.id)}>
-                  {photoBusy === u.id ? '…' : '🖼'}
+                  {photoBusy === u.id ? '…' : <Icon name="eye" size={14} />}
                 </button>
-                {u.id !== me?.id && <button className="btn ghost sm" style={{ marginLeft: 4 }} onClick={() => onDelete(u)}>🗑️</button>}
+                {u.id !== me?.id && <button className="btn ghost sm" style={{ marginLeft: 4 }} onClick={() => onDelete(u)}><Icon name="trash" size={14} /></button>}
               </td>
             </tr>
           ))}
@@ -270,7 +271,7 @@ function UserModal({ catalog, existing, onClose, onSaved }: UserModalProps) {
   const loanBalance = Math.max(0, loanTotal - loanRepaid);
   // Already-saved loan entries are locked (amount/date/remarks); only newly added rows are editable.
   const savedLoanCount = (p.loan_entries || []).length;
-  const lockedLoan = { background: '#f3f4f6', cursor: 'not-allowed' };
+  const lockedLoan = { background: 'var(--surface-3)', cursor: 'not-allowed' };
 
   const [onboarding, setOnboarding] = useState<'onboard' | 'contract' | null>(null);
 
@@ -328,7 +329,7 @@ function UserModal({ catalog, existing, onClose, onSaved }: UserModalProps) {
   return (
     <div className="overlay open" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="modal lg" style={{ maxHeight: '92vh', overflowY: 'auto' }}>
-        <button className="close" onClick={onClose}>✕</button>
+        <button className="close" onClick={onClose}><Icon name="close" size={15} /></button>
         <div className="modal-h">{existing ? 'Edit User' : 'Add User'}</div>
 
         {/* Basic Information */}
@@ -432,7 +433,7 @@ function UserModal({ catalog, existing, onClose, onSaved }: UserModalProps) {
                 <option value="custom">Add custom split…</option>
               </select></div>
             <div className="field"><label>Agent % <span className="req">*</span></label><input type="number" min="0" max="100" value={form.agent_comm_pct} onChange={(e) => setAgentSplit(e.target.value)} /><span className="help">Agent + Brokerage = 100.</span></div>
-            <div className="field"><label>Brokerage %</label><input value={form.brok_comm_pct} readOnly style={{ background: '#f9fafb' }} /></div>
+            <div className="field"><label>Brokerage %</label><input value={form.brok_comm_pct} readOnly style={{ background: 'var(--surface-2)' }} /></div>
           </div>
 
           {/*
@@ -455,7 +456,7 @@ function UserModal({ catalog, existing, onClose, onSaved }: UserModalProps) {
               <input type="number" min="0" max="100" value={form.brokerage_lead_pct} onChange={(e) => setLeadAgentSplit(e.target.value)} />
               <span className="help">Agent + Brokerage = 100.</span></div>
             <div className="field"><label>Brokerage % (brokerage lead)</label>
-              <input value={form.brokerage_lead_brok_pct} readOnly style={{ background: '#f9fafb' }} /></div>
+              <input value={form.brokerage_lead_brok_pct} readOnly style={{ background: 'var(--surface-2)' }} /></div>
           </div>
 
           <div className="g3">
@@ -465,7 +466,7 @@ function UserModal({ catalog, existing, onClose, onSaved }: UserModalProps) {
             <div className="field" style={{ marginBottom: 0 }}><label>Agent % (new split)</label>
               <input type="number" min="0" max="100" value={form.upgrade_agent_pct} onChange={(e) => { const v = e.target.value; setForm((f) => ({ ...f, upgrade_agent_pct: v, upgrade_brok_pct: v === '' ? '' : Math.max(0, 100 - (parseFloat(v) || 0)) })); }} /></div>
             <div className="field" style={{ marginBottom: 0 }}><label>Brokerage % (new split)</label>
-              <input value={form.upgrade_brok_pct} readOnly style={{ background: '#f9fafb' }} /></div>
+              <input value={form.upgrade_brok_pct} readOnly style={{ background: 'var(--surface-2)' }} /></div>
           </div>
           <div className="field"><label>Address</label><textarea rows={2} value={form.address} onChange={(e) => set('address', e.target.value)} /></div>
 
@@ -474,10 +475,10 @@ function UserModal({ catalog, existing, onClose, onSaved }: UserModalProps) {
           <div className="g2">
             <div className="field" style={{ marginBottom: 0 }}><label>Loan</label>
               <select value={form.has_loan} onChange={(e) => set('has_loan', e.target.value)} disabled={loanBalance > 0} style={loanBalance > 0 ? lockedLoan : undefined} title={loanBalance > 0 ? "Can't be turned off while a loan balance is outstanding." : undefined}><option>No</option><option>Yes</option></select>
-              {loanBalance > 0 && <span className="help">🔒 Locked — an outstanding balance of {formatCurrency(loanBalance)} is yet to be adjusted.</span>}</div>
+              {loanBalance > 0 && <span className="help"><Icon name="lock" size={12} /> Locked — an outstanding balance of {formatCurrency(loanBalance)} is yet to be adjusted.</span>}</div>
           </div>
           {form.has_loan === 'Yes' && (
-            <div className="card" style={{ background: '#f9fafb' }}>
+            <div className="card" style={{ background: 'var(--surface-2)' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                 <strong style={{ fontSize: 13 }}>Loan Details</strong>
                 <span className="pill info" style={{ fontSize: 11 }}>Total: {formatCurrency(loanTotal)}</span>
@@ -496,7 +497,7 @@ function UserModal({ catalog, existing, onClose, onSaved }: UserModalProps) {
                   </>) : (<>
                     <div className="field" style={{ marginBottom: 0 }}><label>Amount</label><input value={e.amount} onChange={(ev) => setLoan(i, 'amount', ev.target.value)} placeholder="0.00" /></div>
                     <div className="field" style={{ marginBottom: 0 }}><label>Date</label><input type="date" value={e.date} onChange={(ev) => setLoan(i, 'date', ev.target.value)} /></div>
-                    <div style={{ display: 'flex', gap: 6, alignItems: 'end' }}><div className="field" style={{ marginBottom: 0, flex: 1 }}><label>Remarks</label><input value={e.remarks} onChange={(ev) => setLoan(i, 'remarks', ev.target.value)} /></div><button className="row-rm" onClick={() => rmLoan(i)}>🗑️</button></div>
+                    <div style={{ display: 'flex', gap: 6, alignItems: 'end' }}><div className="field" style={{ marginBottom: 0, flex: 1 }}><label>Remarks</label><input value={e.remarks} onChange={(ev) => setLoan(i, 'remarks', ev.target.value)} /></div><button className="row-rm" onClick={() => rmLoan(i)}><Icon name="trash" size={13} /></button></div>
                   </>)}
                 </div>
               ))}
@@ -528,7 +529,7 @@ function UserModal({ catalog, existing, onClose, onSaved }: UserModalProps) {
           {/* Previous Commission History — auto-derived: the agent's paid (Closed) deals
               done as primary agent under the previous split (up to Existing Split Deals Count). */}
           <div className="modal-sub">Previous Commission History</div>
-          <div className="card" style={{ background: '#f9fafb' }}>
+          <div className="card" style={{ background: 'var(--surface-2)' }}>
             {dealHistory.length === 0
               ? <div className="help" style={{ margin: 0 }}>No paid deals under the previous split yet. Closed deals where this agent is the primary agent appear here automatically.</div>
               : (<>
@@ -552,11 +553,11 @@ function UserModal({ catalog, existing, onClose, onSaved }: UserModalProps) {
 
         <div className="modal-sub" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <span>Screen Permissions</span>
-          {!isAdminRole && <button className="btn ghost sm" onClick={resetToRole}>↺ Reset to {roleLabel(form.role)} defaults</button>}
+          {!isAdminRole && <button className="btn ghost sm" onClick={resetToRole}><Icon name="refresh" size={13} /> Reset to {roleLabel(form.role)} defaults</button>}
         </div>
 
         {isAdminRole ? (
-          <div style={{ padding: 14, background: '#f9fafb', border: '1px solid var(--line)', borderRadius: 8 }}>
+          <div style={{ padding: 14, background: 'var(--surface-2)', border: '1px solid var(--line)', borderRadius: 8 }}>
             <p style={{ margin: 0, fontSize: 13, color: 'var(--muted)' }}>Administrators have <strong>full edit access to every screen</strong> and manage all users — permissions can't be restricted.</p>
           </div>
         ) : (
@@ -578,12 +579,12 @@ function UserModal({ catalog, existing, onClose, onSaved }: UserModalProps) {
           {isAgent && (
             <button className="btn ghost" disabled={!existing}
               title={existing ? 'Preview and send the onboarding guide' : 'Save the agent first'}
-              onClick={() => setOnboarding('onboard')}>📧 Send Onboard Email</button>
+              onClick={() => setOnboarding('onboard')}><Icon name="mail" size={13} /> Send Onboard Email</button>
           )}
           {isAgent && (
             <button className="btn ghost" disabled={!existing}
               title={existing ? 'Preview and send the contract agreement' : 'Save the agent first'}
-              onClick={() => setOnboarding('contract')}>📄 Send Contract Agreement</button>
+              onClick={() => setOnboarding('contract')}><Icon name="doc" size={13} /> Send Contract Agreement</button>
           )}
           <div style={{ flex: 1 }} />
           <button className="btn ghost" onClick={onClose}>Close</button>
