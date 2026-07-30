@@ -38,7 +38,8 @@ export class RecycleBinService {
   private async logAction(user: Actor, field: string, action: string): Promise<void> {
     const now = new Date();
     await this.prisma.audit_logs.create({
-      data: { category: 'Recycle Bin', who: user?.name ?? null, user_id: user?.id ?? null, section: 'Recycle Bin', field, action, source: 'Manual', created_at: now, updated_at: now },
+      // The Recycle Bin is a Transaction Desk screen, so its entries belong to that trail.
+      data: { category: 'Recycle Bin', domain: 'desk', who: user?.name ?? null, user_id: user?.id ?? null, section: 'Recycle Bin', field, action, source: 'Manual', created_at: now, updated_at: now },
     });
   }
 

@@ -1,3 +1,4 @@
+import { auditDomain } from '../common/domain';
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import type { AuthUserRecord } from '../auth/auth.types';
@@ -425,6 +426,7 @@ export class CrmSettingsService {
         data: {
           category: 'Settings', transaction_id: null, who: user.name, user_id: user.id ?? null,
           section: 'CRM Settings', action, source: 'Manual',
+          domain: auditDomain({ category: 'Settings', section: 'CRM Settings' }),
           new_value: subject.slice(0, 255),
           details: `${action}: ${subject}${details ? ` — ${details}` : ''}`,
           created_at: now, updated_at: now,

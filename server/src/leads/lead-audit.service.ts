@@ -1,3 +1,4 @@
+import { auditDomain } from '../common/domain';
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import type { AuthUserRecord } from '../auth/auth.types';
@@ -23,6 +24,9 @@ export class LeadAuditService {
         data: {
           category: 'Lead',
           transaction_id: null,
+          // Classified by the same rules as every other audit write. This writer bypasses AuditService,
+          // so without this line its rows land unclassified and show in both trails.
+          domain: auditDomain({ category: 'Lead' }),
           who: user.name,
           user_id: user.id ?? null,
           section: 'Leads',
