@@ -10,6 +10,8 @@ import { schedulersEnabled, schedulerSkipReason } from '../common/schedulers';
 import { EXPORT_ROOT } from '../config/storage';
 
 
+import { forEachTenant, run, runAsSystem } from '../core/tenant-context';
+import { allTenantIds } from '../core/tenants';
 /** What a job produces. */
 export type ExportAction =
   | 'transaction-complete-xlsx' | 'transaction-complete-csv'
@@ -73,14 +75,18 @@ export class ExportJobService implements OnModuleInit, OnModuleDestroy {
 
     // A job left mid-flight by a restart can never finish — fail it honestly rather than
     // leaving it "Processing" forever.
-    const orphaned = await this.prisma.export_jobs.updateMany({
+    // Reclaim and backlog pickup deliberately span every brokerage: a restart interrupts whatever
+    // was running regardless of whose export it was, and the queue belongs to this machine rather
+    // than to a tenant. Said with runAsSystem so the reason is recorded where the query is, instead
+    // of being left to a context that happens to be empty.
+    const orphaned = await runAsSystem(() => this.prisma.export_jobs.updateMany({
       where: { status: 'Processing' },
       data: { status: 'Failed', failure_reason: 'The server restarted while this export was being generated.', completed_at: new Date() },
-    });
+    }));
     if (orphaned.count) this.log.warn(`Marked ${orphaned.count} interrupted export job(s) as failed.`);
 
     // Anything still queued from before the restart can simply be run now.
-    const queued = await this.prisma.export_jobs.findMany({ where: { status: 'Queued' }, select: { id: true }, orderBy: { id: 'asc' } });
+    const queued = await runAsSystem(() => this.prisma.export_jobs.findMany({ where: { status: 'Queued' }, select: { id: true }, orderBy: { id: 'asc' } }));
     this.queue.push(...queued.map((j) => j.id));
     if (this.queue.length) void this.drain();
 
@@ -150,12 +156,31 @@ export class ExportJobService implements OnModuleInit, OnModuleDestroy {
     try {
       while (this.queue.length) {
         const id = this.queue.shift()!;
-        try { await this.run(id); }
+        // A queued job outlives the request that asked for it, so it carries its own tenant and the
+        // work runs inside that brokerage's context — the export must contain exactly what the
+        // person who asked for it could see, not whatever the worker happens to be able to read.
+        try { await this.runOwnedJob(id); }
         catch (err) { this.log.error(`Export job ${id} failed: ${err instanceof Error ? err.message : String(err)}`); }
       }
     } finally {
       this.draining = false;
     }
+  }
+
+  /**
+   * Run a queued job as the brokerage that owns it.
+   *
+   * Which tenant that is has to be read before the context exists, so the lookup is system and the
+   * work that follows is not.
+   */
+  private async runOwnedJob(id: number): Promise<void> {
+    const owner = await runAsSystem(() =>
+      this.prisma.export_jobs.findUnique({ where: { id }, select: { company_id: true } }));
+    if (!owner) {
+      this.log.warn(`Export job ${id} vanished before it could run.`);
+      return;
+    }
+    await run(owner.company_id, () => this.run(id));
   }
 
   /** Generate one job's file and record the outcome. */
@@ -308,8 +333,19 @@ export class ExportJobService implements OnModuleInit, OnModuleDestroy {
   }
 
   // ---------------------------------------------------------------- expiry
-  /** Remove expired files from disk and mark their jobs Expired. */
+  /**
+   * Remove expired files from disk and mark their jobs Expired, one brokerage at a time.
+   *
+   * Returns the total swept across all tenants, which is what the single-tenant version returned
+   * and what the caller logs.
+   */
   async sweepExpired(): Promise<number> {
+    const counts = await forEachTenant(() => allTenantIds(this.prisma), () => this.sweepExpiredForTenant());
+    return counts.reduce((a, b) => a + b, 0);
+  }
+
+  /** The sweep itself, scoped to whichever tenant is in context. */
+  async sweepExpiredForTenant(): Promise<number> {
     const due = await this.prisma.export_jobs.findMany({
       where: { status: { in: ['Completed', 'Partially Completed'] }, expires_at: { lt: new Date() } },
       select: { id: true },

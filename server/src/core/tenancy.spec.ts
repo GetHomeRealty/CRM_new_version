@@ -2,6 +2,7 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 import { Prisma, PrismaClient } from '@prisma/client';
 import { tenantExtension } from './tenant-extension';
+import { runAsSystem } from './tenant-context';
 
 /**
  * Tenant isolation — the contract, written before the migration that satisfies it.
@@ -229,9 +230,15 @@ describe('no query crosses a tenant boundary', () => {
     try {
       await scoped.$transaction(async (tx) => {
         const now = new Date();
-        const company = await tx.company_settings.create({ data: { name: 'Other Brokerage Inc.' } });
-        const lead = await tx.leads.create({
-          data: { name: 'not yours', email: 'other@brokerage.test', company_id: company.id, created_at: now, updated_at: now },
+        // Planting another brokerage's data is system-level setup, and now has to say so — with
+        // authorization failing closed, a query against a tenant table with no tenant is an error.
+        // That the seeding needs this is the point: it is the one thing here that is not a request.
+        const { company, lead } = await runAsSystem(async () => {
+          const company = await tx.company_settings.create({ data: { name: 'Other Brokerage Inc.' } });
+          const lead = await tx.leads.create({
+            data: { name: 'not yours', email: 'other@brokerage.test', company_id: company.id, created_at: now, updated_at: now },
+          });
+          return { company, lead };
         });
         await fn(tx as typeof prisma, { companyId: company.id, leadId: lead.id });
         throw new Error(ROLLBACK);
@@ -255,8 +262,10 @@ describe('no query crosses a tenant boundary', () => {
       // Counts are the quiet ones: a dashboard total that includes another brokerage looks like a
       // number, not like a leak.
       const mine = await ctx.run(DEFAULT_TENANT, () => tx.leads.count());
-      const theirs = await tx.leads.count({ where: { company_id: other.companyId } });
-      const all = await tx.leads.count();
+      // The test's own view across both brokerages — system, like any other question that is about
+      // the tenants rather than asked from inside one.
+      const theirs = await runAsSystem(() => tx.leads.count({ where: { company_id: other.companyId } }));
+      const all = await runAsSystem(() => tx.leads.count());
       expect(theirs).toBe(1);
       expect(mine).toBe(all - theirs);
     });
@@ -280,7 +289,7 @@ describe('no query crosses a tenant boundary', () => {
       await expect(
         ctx.run(DEFAULT_TENANT, () => tx.leads.update({ where: { id: other.leadId }, data: { name: 'edited' } })),
       ).rejects.toThrow();
-      const after = await tx.leads.findUnique({ where: { id: other.leadId } });
+      const after = await runAsSystem(() => tx.leads.findUnique({ where: { id: other.leadId } }));
       expect(after?.name).toBe('not yours');
     });
   });

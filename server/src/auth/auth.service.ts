@@ -6,6 +6,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { throwValidation } from '../common/laravel-exceptions';
 import { PermissionService } from './permission.service';
 import type { AuthPayload, AuthUserRecord } from './auth.types';
+import { runAsSystem } from '../core/tenant-context';
 
 import { isAdminOrAbove, isSuperAdmin } from '../core/authz';
 @Injectable()
@@ -74,10 +75,13 @@ export class AuthService {
    * spells it — a null status means active — so the two cannot disagree about who is shut out.
    */
   async loadUser(id: number): Promise<AuthUserRecord | null> {
-    const user = await this.prisma.users.findUnique({
+    // System, and it has to be. This runs on every request BEFORE anything knows which brokerage
+    // the caller belongs to — resolving the session's user is how the tenant is discovered in the
+    // first place. Scoping it would make authentication depend on its own result.
+    const user = await runAsSystem(() => this.prisma.users.findUnique({
       where: { id },
       include: { user_permissions: true, user_modules: true },
-    });
+    }));
     if (!user) return null;
     return (user.status ?? 'Active') === 'Inactive' ? null : user;
   }
@@ -100,10 +104,11 @@ export class AuthService {
 
   private async findAuthenticatable(login: string, password: string): Promise<AuthUserRecord | null> {
     for (const where of [{ username: login }, { email: login }]) {
-      const user = await this.prisma.users.findFirst({
+      // Signing in is the moment the tenant becomes knowable; it cannot already be known here.
+      const user = await runAsSystem(() => this.prisma.users.findFirst({
         where,
         include: { user_permissions: true },
-      });
+      }));
       if (user && bcrypt.compareSync(password, user.password)) return user;
     }
     return null;
@@ -114,7 +119,7 @@ export class AuthService {
    * first Admin). Mirrors AuthController::register.
    */
   async register(name: string, email: string, password: string, passwordConfirmation: string): Promise<AuthUserRecord> {
-    if ((await this.prisma.users.count()) > 0) {
+    if ((await runAsSystem(() => this.prisma.users.count())) > 0) {
       throw new ForbiddenException({
         message: 'Registration is closed. Ask an administrator to create your account.',
       });
@@ -122,7 +127,7 @@ export class AuthService {
     if (password !== passwordConfirmation) {
       throwValidation({ password: ['The password field confirmation does not match.'] });
     }
-    if (await this.prisma.users.findUnique({ where: { email } })) {
+    if (await runAsSystem(() => this.prisma.users.findUnique({ where: { email } }))) {
       throwValidation({ email: ['The email has already been taken.'] });
     }
 
@@ -157,6 +162,6 @@ export class AuthService {
   }
 
   usersExist(): Promise<boolean> {
-    return this.prisma.users.count().then((n) => n > 0);
+    return runAsSystem(() => this.prisma.users.count()).then((n) => n > 0);
   }
 }

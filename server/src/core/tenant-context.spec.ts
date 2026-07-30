@@ -135,3 +135,53 @@ describe('AuthGuard names the tenant for the request', () => {
     });
   });
 });
+
+/**
+ * Every deliberate escape from tenant isolation, pinned.
+ *
+ * `runAsSystem` reads across every brokerage. There are legitimate reasons for that and they are
+ * all infrastructure — but the list must be short, and it must be a decision to add to it rather
+ * than something that happens while nobody is looking. This test is the review gate: a new use
+ * fails the build until someone writes down why it belongs.
+ */
+describe('unscoped access stays deliberate and rare', () => {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { readFileSync, readdirSync, statSync } = require('fs');
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { join, sep } = require('path');
+
+  function sources(dir: string, out: string[] = []): string[] {
+    for (const e of readdirSync(dir)) {
+      const p = join(dir, e);
+      if (statSync(p).isDirectory()) sources(p, out);
+      else if (p.endsWith('.ts') && !p.endsWith('.spec.ts')) out.push(p);
+    }
+    return out;
+  }
+
+  /** file -> why it may read across tenants. Adding a row is the point at which someone thinks. */
+  const ALLOWED: Record<string, string> = {
+    'tenant-context.ts': 'defines the escape hatch itself, and forEachTenant uses it',
+    'auth.service.ts': 'resolving which user a session belongs to is how the tenant is discovered',
+    'role-permission.store.ts': 'loads the permission tables at start-up, before any request exists',
+    'export-job.service.ts': 'reclaims interrupted jobs and finds each job owner after a restart',
+  };
+
+  it('is used only where it has been justified', () => {
+    const root = join(__dirname, '..');
+    const users: string[] = [];
+    for (const f of sources(root)) {
+      const s = readFileSync(f, 'utf8');
+      // The import itself does not count — only a call.
+      if (/runAsSystem\s*\(/.test(s.replace(/import[^;]*;/g, ''))) users.push(String(f).split(sep).pop() as string);
+    }
+    expect([...new Set(users)].sort()).toEqual(Object.keys(ALLOWED).sort());
+  });
+
+  it('keeps every justification non-empty', () => {
+    for (const [file, why] of Object.entries(ALLOWED)) {
+      expect(why.length).toBeGreaterThan(20);
+      expect(file).toMatch(/\.ts$/);
+    }
+  });
+});

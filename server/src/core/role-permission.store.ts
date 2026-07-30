@@ -1,5 +1,6 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { runAsSystem } from './tenant-context';
 import { LEVELS, SCREENS, type Level, type PermissionMap } from '../auth/permission.service';
 
 /**
@@ -42,9 +43,9 @@ export class RolePermissionStore implements OnModuleInit {
   /** Re-read the grants. Call after writing roles or role_permissions. */
   async reload(): Promise<void> {
     try {
-      const rows = await this.prisma.role_permissions.findMany({
+      const rows = await runAsSystem(() => this.prisma.role_permissions.findMany({
         select: { roles: { select: { key: true } }, permissions: { select: { screen: true, level: true } } },
-      });
+      }));
       if (rows.length === 0) {
         // Nothing seeded. Leave whatever we had — the caller falls back to the code defaults.
         this.log.warn('No role permissions in the database; using the defaults compiled into the application.');
@@ -83,10 +84,10 @@ export class RolePermissionStore implements OnModuleInit {
 
   /** The roles the database knows about, in their configured order. */
   async roles(): Promise<{ key: string; label: string; is_system: boolean }[]> {
-    return this.prisma.roles.findMany({
+    return runAsSystem(() => this.prisma.roles.findMany({
       where: { company_id: 1 },
       orderBy: [{ sort: 'asc' }, { id: 'asc' }],
       select: { key: true, label: true, is_system: true },
-    });
+    }));
   }
 }

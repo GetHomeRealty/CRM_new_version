@@ -1,5 +1,5 @@
 import { Prisma } from '@prisma/client';
-import { currentCompanyId } from './tenant-context';
+import { currentCompanyId, isSystemContext } from './tenant-context';
 
 /**
  * Tenant isolation, applied to every query by the client itself.
@@ -12,11 +12,11 @@ import { currentCompanyId } from './tenant-context';
  * rather than by a list kept here, so a table added later is covered the moment it carries the
  * column, and cannot be forgotten by someone editing an allow-list they never knew about.
  *
- * NO TENANT IN CONTEXT MEANS NO FILTER, FOR NOW. Start-up work, the permission store's first load
- * and the four background jobs all run outside a request and legitimately read across the whole
- * database. Failing closed here today would break them on the first deploy. Phase 4 replaces this
- * with an explicit `runAsSystem()`, so unscoped access has to be asked for rather than assumed —
- * that flip belongs with the work that makes every job name its tenant, not before it.
+ * NO TENANT IN CONTEXT IS AN ERROR. A query against a tenant-owned table with nothing to scope it
+ * by is a bug, and returning every brokerage rows to whoever asked is the worst possible way to
+ * handle one. The three things that genuinely span tenants — resolving a session user, loading the
+ * permission tables at start-up, and a timer discovering which tenants it has work for — say so
+ * with `runAsSystem`, which is exported, named for what it is, and counted by a test.
  */
 
 /** Operations whose `where` accepts an ordinary field, so the filter can simply be added. */
@@ -84,9 +84,22 @@ export function tenantExtension(getClient: () => unknown = () => null) {
     query: {
       $allModels: {
         async $allOperations({ model, operation, args, query }) {
-          const companyId = currentCompanyId();
-          if (companyId === null || !model || !SCOPED.has(model)) {
+          if (!model || !SCOPED.has(model)) {
             return query(args);
+          }
+
+          const companyId = currentCompanyId();
+          if (companyId === null) {
+            // FAIL CLOSED. A query against a tenant-owned table with no tenant in context is a bug,
+            // and the safe answer to a bug is a loud one — the alternative is returning every
+            // brokerage's rows to whoever asked. Infrastructure that genuinely spans tenants says
+            // so with `runAsSystem`, which is exported, named, and counted by a test.
+            if (isSystemContext()) return query(args);
+            throw new Error(
+              `No tenant in context for ${model}.${operation}. A request gets one from AuthGuard; ` +
+                'background work must use forEachTenant, and infrastructure that genuinely spans ' +
+                'brokerages must say so with runAsSystem.',
+            );
           }
 
           const a = (args ?? {}) as Args;

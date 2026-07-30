@@ -25,6 +25,18 @@ import type { NextFunction, Request, Response } from 'express';
 interface TenantStore {
   /** Null between the start of a request and the point authentication identifies the caller. */
   companyId: number | null;
+  /**
+   * Deliberately unscoped work.
+   *
+   * A few things genuinely have to see across every brokerage, and they are all infrastructure
+   * rather than features: finding the user a session belongs to (which happens BEFORE anyone knows
+   * their tenant), loading the permission tables at start-up, and the sweep each background timer
+   * makes to find out which tenants it has work for.
+   *
+   * This flag is what separates those from a query that simply forgot. Once authorization fails
+   * closed, "no tenant" is an error — and the only way to read across tenants is to say so.
+   */
+  system?: boolean;
 }
 
 const storage = new AsyncLocalStorage<TenantStore>();
@@ -71,6 +83,46 @@ export function setCompanyId(companyId: number): void {
 /** The current tenant, or null when nothing has established one. */
 export function currentCompanyId(): number | null {
   return storage.getStore()?.companyId ?? null;
+}
+
+/**
+ * Run infrastructure work that legitimately spans every brokerage.
+ *
+ * Deliberately awkward to reach for: it is exported, named for what it is, and every use of it is
+ * counted by a test. Reading across tenants should require a decision, not an omission.
+ */
+export async function runAsSystem<T>(fn: () => Promise<T>): Promise<T> {
+  return storage.run({ companyId: null, system: true }, async () => await fn());
+}
+
+/** Is the code currently running doing so as system infrastructure? */
+export function isSystemContext(): boolean {
+  return storage.getStore()?.system === true;
+}
+
+/**
+ * Run `fn` once per tenant, each pass inside that tenant's own context.
+ *
+ * This is what a background job does instead of querying the whole table. A timer has no request
+ * to inherit a tenant from, so before this it simply saw everything — which was harmless while one
+ * brokerage existed and becomes one brokerage's reminders being sent about another's deals the
+ * moment a second one does.
+ *
+ * The tenant list itself is read as system, because finding out who the tenants are is exactly the
+ * kind of question that cannot be asked from inside a tenant.
+ */
+export async function forEachTenant<T>(
+  tenants: () => Promise<number[]>,
+  fn: (companyId: number) => Promise<T>,
+): Promise<T[]> {
+  const ids = await runAsSystem(tenants);
+  const out: T[] = [];
+  for (const id of ids) {
+    // Sequential on purpose: these are background sweeps, and one brokerage's slow mailbox should
+    // not be able to starve another's by running them all at once.
+    out.push(await run(id, () => fn(id)));
+  }
+  return out;
 }
 
 /**

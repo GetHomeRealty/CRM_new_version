@@ -6,6 +6,8 @@ import { schedulersEnabled, schedulerSkipReason } from '../common/schedulers';
 import { LaravelCryptService } from '../common/laravel-crypt.service';
 import { GoogleService } from '../google/google.service';
 
+import { forEachTenant } from '../core/tenant-context';
+import { allTenantIds } from '../core/tenants';
 /** How often the poller pulls new mail for every sync-enabled account. */
 /**
  * How often connected mailboxes are polled for new mail.
@@ -98,7 +100,17 @@ export class ImapSyncService implements OnModuleInit, OnModuleDestroy {
   }
 
   /** Sync every account that has inbound sync switched on. Never overlaps with itself. */
+  /**
+   * Poll every mailbox, one brokerage at a time.
+   *
+   * The pass itself is unchanged; it simply runs once per tenant, inside that tenant's
+   * context, so every query it makes is scoped the same way a request would be.
+   */
   async pollAll(): Promise<void> {
+    await forEachTenant(() => allTenantIds(this.prisma), () => this.pollAllForTenant());
+  }
+
+  async pollAllForTenant(): Promise<void> {
     if (this.polling) return;
     this.polling = true;
     try {
