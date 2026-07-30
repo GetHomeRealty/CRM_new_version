@@ -14,11 +14,11 @@ import MiniCalendar from './MiniCalendar';
 import SavedBadge from './SavedBadge';
 import type { CompanySettings, Invoice } from '../types';
 
-const BRAND = '#c8102e';
+const BRAND = 'var(--brand-red)';
 const TERM_DAYS: Record<string, number> = { 'Due on Receipt': 0, 'Net 7': 7, 'Net 15': 15, 'Net 30': 30 };
 const STATUSES = ['Paid', 'Overdue', 'Void', 'Due']; // §12.2
 // Status colours: Due=blue, Overdue=red, Paid=green, Void=black.
-const STATUS_COLOR: Record<string, string> = { Due: '#2563eb', Overdue: '#dc2626', Paid: '#16a34a', Void: '#111827', Unpaid: '#2563eb', 'Partially Paid': '#d97706', Draft: '#64748b' };
+const STATUS_COLOR: Record<string, string> = { Due: 'var(--info)', Overdue: 'var(--bad)', Paid: 'var(--ok-600)', Void: '#111827', Unpaid: 'var(--info)', 'Partially Paid': 'var(--warn)', Draft: 'var(--muted)' };
 const COMM_VIA = ['Bank Transfer', 'Cash', 'EFT', 'Interac e-Transfer', 'Cheque'];
 const AUTO_REMINDERS = [
   { mode: '2', label: 'Every 2 days (until Paid, excl. weekends/holidays)' },
@@ -309,10 +309,10 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
 
   // ---- styles ----
   const sideBtn: CSSProperties = { display: 'flex', alignItems: 'center', gap: 10, width: '100%', textAlign: 'left', padding: '10px 12px', borderRadius: 8, border: '1px solid transparent', background: 'transparent', cursor: 'pointer', fontSize: 13.5, color: 'var(--text)' };
-  const dLabel: CSSProperties = { background: '#fafbfd', color: '#64748b', textAlign: 'right', whiteSpace: 'nowrap', padding: '6px 10px', fontSize: 12, fontWeight: 600 };
+  const dLabel: CSSProperties = { background: '#fafbfd', color: 'var(--muted)', textAlign: 'right', whiteSpace: 'nowrap', padding: '6px 10px', fontSize: 12, fontWeight: 600 };
   const cellInput: CSSProperties = { width: 160, textAlign: 'right' };
   const docInput = (extra: CSSProperties): CSSProperties => ({ border: '1px solid #e6e8ef', borderRadius: 6, padding: '6px 8px', ...extra });
-  const sectionLbl: CSSProperties = { fontSize: 11, fontWeight: 700, color: '#334155', textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: 8, marginTop: 4 };
+  const sectionLbl: CSSProperties = { fontSize: 11, fontWeight: 700, color: 'var(--text-2)', textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: 8, marginTop: 4 };
 
   return (
     <div className="overlay open" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
@@ -329,7 +329,7 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
 
           {/* 1. Send → Sent → (on edit) Resend → (on resend) Sent. */}
           {paymentRecorded ? (
-            <div style={{ ...sideBtn, justifyContent: 'center', background: '#16a34a', color: '#fff', fontWeight: 700, margin: '2px 0', cursor: 'default' }}>
+            <div style={{ ...sideBtn, justifyContent: 'center', background: 'var(--ok-600)', color: '#fff', fontWeight: 700, margin: '2px 0', cursor: 'default' }}>
               <Icon name="check" size={13} /> Paid
             </div>
           ) : (() => {
@@ -338,7 +338,7 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
             const label = sending ? <><Icon name="mail" size={13} /> Sending…</> : (!isSent ? <><Icon name="mail" size={13} /> Send Email</> : (edited ? <><Icon name="refresh" size={13} /> Resend Email</> : <><Icon name="check" size={13} /> Sent</>));
             return (
               <button
-                style={{ ...sideBtn, justifyContent: 'center', background: sentIdle ? '#16a34a' : BRAND, color: '#fff', fontWeight: 700, margin: '2px 0', cursor: (sentIdle || sending) ? 'default' : 'pointer', opacity: (sentIdle || sending) ? 0.8 : 1 }}
+                style={{ ...sideBtn, justifyContent: 'center', background: sentIdle ? 'var(--ok-600)' : BRAND, color: '#fff', fontWeight: 700, margin: '2px 0', cursor: (sentIdle || sending) ? 'default' : 'pointer', opacity: (sentIdle || sending) ? 0.8 : 1 }}
                 disabled={sentIdle || sending}
                 onClick={sendMail}
               >{label}</button>
@@ -353,7 +353,7 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
             <button style={{ ...sideBtn, justifyContent: 'space-between' }} onClick={() => setMenu(menu === 'status' ? '' : 'status')}>
               <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}><Icon name="tag" size={13} /> Status</span>
               <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                {form.status && <span style={{ fontSize: 10, fontWeight: 700, color: '#fff', background: STATUS_COLOR[form.status] || '#64748b', borderRadius: 999, padding: '2px 8px' }}>{form.status}</span>}
+                {form.status && <span style={{ fontSize: 10, fontWeight: 700, color: '#fff', background: STATUS_COLOR[form.status] || 'var(--muted)', borderRadius: 999, padding: '2px 8px' }}>{form.status}</span>}
                 <span><Icon name="chevronDown" size={12} /></span>
               </span>
             </button>
@@ -368,8 +368,8 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
 
           {/* §12.2 — when Paid, capture Commission Received date + via right here */}
           {form.status === 'Paid' && (
-            <div style={{ border: '1px solid #bbf7d0', background: '#f0fdf4', borderRadius: 8, padding: 10, margin: '2px 0 6px' }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: '#166534', marginBottom: 6 }}>Commission Received</div>
+            <div style={{ border: '1px solid #bbf7d0', background: 'var(--ok-bg)', borderRadius: 8, padding: 10, margin: '2px 0 6px' }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--ok-ink)', marginBottom: 6 }}>Commission Received</div>
               <label style={{ fontSize: 11, color: '#475569', display: 'block', marginBottom: 2 }}>Date</label>
               <input type="date" value={form.commission_received_date} onChange={(e) => set('commission_received_date', e.target.value)} style={{ width: '100%', marginBottom: 8, border: '1px solid #e6e8ef', borderRadius: 6, padding: '6px 8px' }} />
               <label style={{ fontSize: 11, color: '#475569', display: 'block', marginBottom: 2 }}>Received via</label>
@@ -377,7 +377,7 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
                 <option value="">Select</option>{COMM_VIA.map((v) => <option key={v}>{v}</option>)}
               </select>
               {paymentRecorded ? (
-                <button className="btn sm" style={{ marginTop: 8, width: '100%', background: '#16a34a', borderColor: '#16a34a', color: '#fff', fontWeight: 700, cursor: 'default' }} disabled><Icon name="check" size={13} /> Payment Recorded</button>
+                <button className="btn sm" style={{ marginTop: 8, width: '100%', background: 'var(--ok-600)', borderColor: 'var(--ok-600)', color: '#fff', fontWeight: 700, cursor: 'default' }} disabled><Icon name="check" size={13} /> Payment Recorded</button>
               ) : (
                 <button className="btn primary sm" style={{ marginTop: 8, width: '100%' }} onClick={recordCommissionPayment} disabled={saving}>Record Payment</button>
               )}
@@ -401,7 +401,7 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
                 {AUTO_REMINDERS.map((o) => {
                   const active = (form.auto_reminder?.mode || '') === o.mode;
                   return (
-                    <button key={o.mode} style={{ ...sideBtn, padding: '7px 12px', fontSize: 12, background: active ? '#eef2ff' : 'transparent', color: active ? '#3730a3' : 'var(--text)', fontWeight: active ? 700 : 400 }} onClick={() => setAuto(o.mode)}>
+                    <button key={o.mode} style={{ ...sideBtn, padding: '7px 12px', fontSize: 12, background: active ? 'var(--brand-soft)' : 'transparent', color: active ? 'var(--brand-darker)' : 'var(--text)', fontWeight: active ? 700 : 400 }} onClick={() => setAuto(o.mode)}>
                       {active ? <><Icon name="check" size={12} /> </> : null}{o.label}
                     </button>
                   );
@@ -412,8 +412,8 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
 
           {/* Custom reminder calendar — shown when "Custom" is chosen and not yet settled */}
           {form.auto_reminder?.mode === 'custom' && !noReminders && (
-            <div style={{ border: '1px solid #c7d2fe', background: '#eef2ff', borderRadius: 8, padding: 10, margin: '2px 0 6px' }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: '#3730a3', marginBottom: 6 }}>Custom reminder dates</div>
+            <div style={{ border: '1px solid #c7d2fe', background: 'var(--brand-soft)', borderRadius: 8, padding: 10, margin: '2px 0 6px' }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--brand-darker)', marginBottom: 6 }}>Custom reminder dates</div>
               <MiniCalendar selected={form.auto_reminder.dates || []} onToggle={toggleCustomDate} />
               {(form.auto_reminder.dates || []).length > 0 && (
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 8 }}>
@@ -476,7 +476,7 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
             ))}
             <div><button className="btn" style={{ border: `1px solid ${BRAND}`, color: BRAND, background: '#fff', borderRadius: 8, padding: '6px 12px', fontSize: 13 }} onClick={addEmail}>+ Add Email</button></div>
           </div>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, marginTop: 10, color: '#334155' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, marginTop: 10, color: 'var(--text-2)' }}>
             <input type="checkbox" defaultChecked /> Billing Address = Shipping Address
           </label>
 
@@ -510,7 +510,7 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
                 <td style={{ border: '1px solid #e6e8ef', padding: '8px 12px', fontWeight: 700 }}>
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                     HST
-                    {settings?.hst_number && <span style={{ fontWeight: 400, color: '#64748b', fontSize: 12 }}>(Number : {settings.hst_number})</span>}
+                    {settings?.hst_number && <span style={{ fontWeight: 400, color: 'var(--muted)', fontSize: 12 }}>(Number : {settings.hst_number})</span>}
                     <input value={form.tax_rate} readOnly={hstLocked} onChange={(e) => set('tax_rate', e.target.value)}
                       style={{ width: 52, textAlign: 'right', padding: '3px 6px', border: '1px solid #e6e8ef', borderRadius: 6, background: hstLocked ? '#f3f4f6' : '#fff', cursor: hstLocked ? 'not-allowed' : 'text' }} />
                     <span>%</span>
@@ -530,7 +530,7 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
               <tr><td style={{ padding: '6px 14px', color: '#475569' }}>Sub Total</td><td style={{ padding: '6px 14px', textAlign: 'right', fontWeight: 700 }}>{formatCurrency(displaySubTotal)}</td></tr>
               <tr><td style={{ padding: '6px 14px', color: '#475569' }}>Discount</td><td style={{ padding: '6px 14px', textAlign: 'right' }}><input value={form.discount} onChange={(e) => set('discount', e.target.value)} style={docInput({ width: 120, textAlign: 'right' })} /></td></tr>
               <tr><td style={{ padding: '8px 14px', fontWeight: 800, borderTop: '2px solid #0f172a', fontSize: 15 }}>GRAND TOTAL</td><td style={{ padding: '8px 14px', textAlign: 'right', fontWeight: 800, borderTop: '2px solid #0f172a', fontSize: 15 }}>{formatCurrency(grandTotal)}</td></tr>
-              {amountPaid > 0 && <tr><td style={{ padding: '4px 14px', color: '#166534' }}>Paid</td><td style={{ padding: '4px 14px', textAlign: 'right', color: '#166534' }}>{formatCurrency(amountPaid)}</td></tr>}
+              {amountPaid > 0 && <tr><td style={{ padding: '4px 14px', color: 'var(--ok-ink)' }}>Paid</td><td style={{ padding: '4px 14px', textAlign: 'right', color: 'var(--ok-ink)' }}>{formatCurrency(amountPaid)}</td></tr>}
               <tr><td style={{ padding: '4px 14px', fontWeight: 700, color: BRAND }}>Balance Due</td><td style={{ padding: '4px 14px', textAlign: 'right', fontWeight: 700, color: BRAND }}>{formatCurrency(balanceDue)}</td></tr>
             </tbody></table>
           </div>
@@ -551,7 +551,7 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, marginTop: 18 }}>
             <div>
               <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>Deposit Instructions:</div>
-              <div style={{ background: '#f8fafc', border: '1px solid #e6e8ef', borderRadius: 8, padding: 14, fontSize: 12.5, color: '#334155', lineHeight: 1.7 }}>
+              <div style={{ background: '#f8fafc', border: '1px solid #e6e8ef', borderRadius: 8, padding: 14, fontSize: 12.5, color: 'var(--text-2)', lineHeight: 1.7 }}>
                 <div style={{ fontWeight: 700 }}>Beneficiary Bank Account Detail:</div>
                 <div>Beneficiary Name : {settings?.bank_beneficiary || '—'}</div>
                 <div>Bank Name: {settings?.bank_name || '—'}</div>

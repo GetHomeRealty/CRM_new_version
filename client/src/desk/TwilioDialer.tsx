@@ -134,10 +134,10 @@ export default function TwilioDialer({ lead, onClose, onLogged }: {
   return createPortal((
     <div className="overlay open" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
       style={{ position: 'fixed', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 4000 }}>
-      <div className="modal" style={{ maxWidth: 420, margin: 0, background: '#0f172a', color: '#e2e8f0', textAlign: 'center' }}>
+      <div className="modal" style={{ maxWidth: 420, margin: 0, background: 'var(--text)', color: '#e2e8f0', textAlign: 'center' }}>
         <button className="close" style={{ color: '#94a3b8' }} onClick={onClose}>✕</button>
         <div style={{ padding: '8px 8px 4px' }}>
-          <div style={{ width: 60, height: 60, borderRadius: '50%', background: phase === 'in-call' ? '#16a34a' : '#dc2626', display: 'grid', placeItems: 'center', margin: '6px auto 12px', fontSize: 26 }}>📞</div>
+          <div style={{ width: 60, height: 60, borderRadius: '50%', background: phase === 'in-call' ? 'var(--ok-600)' : 'var(--bad)', display: 'grid', placeItems: 'center', margin: '6px auto 12px', fontSize: 26 }}>📞</div>
           <div style={{ fontSize: 18, fontWeight: 700 }}>Call {lead.name}</div>
           <div style={{ fontSize: 13, color: '#94a3b8', marginTop: 2 }}>{lead.phone || 'No number'}</div>
           <div style={{ fontSize: 13, marginTop: 10, color: phase === 'error' ? '#f87171' : phase === 'in-call' ? '#4ade80' : '#cbd5e1', fontWeight: 600 }}>{status}</div>
@@ -149,11 +149,11 @@ export default function TwilioDialer({ lead, onClose, onLogged }: {
           <div style={{ display: 'flex', gap: 8, justifyContent: 'center', marginTop: 18 }}>
             {phase === 'in-call' ? (
               <>
-                <button className="btn sm" style={{ background: muted ? '#334155' : '#1e293b', color: '#e2e8f0', border: '1px solid #334155' }} onClick={toggleMute}>{muted ? '🔇 Unmute' : '🎙 Mute'}</button>
-                <button className="btn sm" style={{ background: '#dc2626', color: '#fff', border: 'none' }} onClick={hangup}>📵 Hang up</button>
+                <button className="btn sm" style={{ background: muted ? 'var(--text-2)' : '#1e293b', color: '#e2e8f0', border: '1px solid #334155' }} onClick={toggleMute}>{muted ? '🔇 Unmute' : '🎙 Mute'}</button>
+                <button className="btn sm" style={{ background: 'var(--bad)', color: '#fff', border: 'none' }} onClick={hangup}>📵 Hang up</button>
               </>
             ) : phase === 'connecting' ? (
-              <button className="btn sm" style={{ background: '#dc2626', color: '#fff', border: 'none' }} onClick={hangup}>Cancel</button>
+              <button className="btn sm" style={{ background: 'var(--bad)', color: '#fff', border: 'none' }} onClick={hangup}>Cancel</button>
             ) : phase === 'ended' ? (
               <button className="btn sm" onClick={onClose}>Close</button>
             ) : phase === 'error' ? (
@@ -164,7 +164,7 @@ export default function TwilioDialer({ lead, onClose, onLogged }: {
               </button>
             )}
           </div>
-          <div style={{ fontSize: 11, color: '#64748b', marginTop: 14 }}>Talk through your computer’s mic &amp; speakers. The call is recorded and logged.</div>
+          <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 14 }}>Talk through your computer’s mic &amp; speakers. The call is recorded and logged.</div>
         </div>
       </div>
     </div>

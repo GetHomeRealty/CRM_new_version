@@ -90,7 +90,7 @@ export default function InvoicePage() {
       <div className="tiles">
         <div className="stat-card"><div className="lbl">Invoices</div><div className="val">{invoices.length}</div></div>
         <div className="stat-card"><div className="lbl">Outstanding Balance</div><div className="val" style={{ color: 'var(--brand)' }}>{formatCurrency(totalOutstanding)}</div></div>
-        <div className="stat-card"><div className="lbl">Paid</div><div className="val" style={{ color: '#166534' }}>{invoices.filter((i) => i.status === 'Paid').length}</div></div>
+        <div className="stat-card"><div className="lbl">Paid</div><div className="val" style={{ color: 'var(--ok-ink)' }}>{invoices.filter((i) => i.status === 'Paid').length}</div></div>
       </div>
 
       <div className="toolbar"><div className="toolbar-row">

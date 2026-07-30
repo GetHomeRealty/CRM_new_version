@@ -13,8 +13,8 @@ export default function SavedBadge({ show, label = 'Saved' }: { show: boolean; l
         boxShadow: '0 16px 48px rgba(0,0,0,.28)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12,
         animation: 'savedPop .18s ease-out',
       }}>
-        <div style={{ width: 68, height: 68, borderRadius: '50%', background: '#16a34a', color: '#fff', display: 'grid', placeItems: 'center', fontSize: 38, fontWeight: 800, lineHeight: 1 }}>✓</div>
-        <div style={{ fontSize: 19, fontWeight: 700, color: '#166534' }}>{label}</div>
+        <div style={{ width: 68, height: 68, borderRadius: '50%', background: 'var(--ok-600)', color: '#fff', display: 'grid', placeItems: 'center', fontSize: 38, fontWeight: 800, lineHeight: 1 }}>✓</div>
+        <div style={{ fontSize: 19, fontWeight: 700, color: 'var(--ok-ink)' }}>{label}</div>
       </div>
     </div>,
     document.body,

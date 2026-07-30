@@ -85,7 +85,7 @@ export default function RecycleBinPage() {
   const actions = (type: TrashType, id: number | string, label: string, linked?: string[]) => (
     <span style={{ whiteSpace: 'nowrap' }}>
       <button className="btn primary sm" onClick={() => doRestore(type, id, label)} disabled={busy}>↺ Restore</button>
-      <button className="btn sm" style={{ marginLeft: 6, background: '#dc2626', color: '#fff' }} onClick={() => doForce(type, id, label, linked)} disabled={busy}>🗑 Delete forever</button>
+      <button className="btn sm" style={{ marginLeft: 6, background: 'var(--bad)', color: '#fff' }} onClick={() => doForce(type, id, label, linked)} disabled={busy}>🗑 Delete forever</button>
     </span>
   );
   const txnCell = (id: number | string | null | undefined, tradeNo: number | string | undefined, trashed: boolean | undefined): ReactNode => (id

@@ -49,9 +49,9 @@ export default function CommissionAnalytics() {
         <span className="pill ok" style={{ fontSize: 11 }}>{rows.length} deals tracked</span>
       </div>
       <div className="tiles" style={{ marginBottom: 0 }}>
-        <Tile bg="#f0fdf4" bd="#bbf7d0" fg="#166534" label="Paid" value={formatCurrency(stats.paidAmount)} sub={`${stats.paidCount} deal${stats.paidCount === 1 ? '' : 's'}`} />
-        <Tile bg="#fef3c7" bd="#fde68a" fg="#92400e" label="Pending" value={formatCurrency(stats.pendingAmount)} sub={`${stats.pendingCount} deal${stats.pendingCount === 1 ? '' : 's'}`} />
-        <Tile bg="#eff6ff" bd="#bfdbfe" fg="#1e3a8a" label="Total Pipeline" value={formatCurrency(stats.total)} sub="All commissions" />
+        <Tile bg="var(--ok-bg)" bd="var(--ok-ring-2)" fg="var(--ok-ink)" label="Paid" value={formatCurrency(stats.paidAmount)} sub={`${stats.paidCount} deal${stats.paidCount === 1 ? '' : 's'}`} />
+        <Tile bg="var(--warn-soft)" bd="var(--warn-ring)" fg="var(--warn-ink)" label="Pending" value={formatCurrency(stats.pendingAmount)} sub={`${stats.pendingCount} deal${stats.pendingCount === 1 ? '' : 's'}`} />
+        <Tile bg="var(--info-bg)" bd="var(--info-ring)" fg="var(--info-ink)" label="Total Pipeline" value={formatCurrency(stats.total)} sub="All commissions" />
         <div className="dash-tile" style={{ background: '#faf5ff', border: '1px solid #e9d5ff', borderRadius: 'var(--r-md)', padding: 12 }}>
           <div style={{ fontSize: 10, fontWeight: 700, color: '#5b21b6', textTransform: 'uppercase', letterSpacing: '.05em' }}>Paid %</div>
           <div style={{ fontSize: 20, fontWeight: 700, color: '#5b21b6', marginTop: 4 }}>{stats.paidPct}%</div>

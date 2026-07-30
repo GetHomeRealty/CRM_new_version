@@ -13,7 +13,7 @@ import Form630Modal from './Form630Modal';
 import ConfirmDialog, { useConfirm } from './ConfirmDialog';
 import type { DeskDocFile, DeskDocument, Transaction } from '../types';
 
-const BRAND = '#c8102e';
+const BRAND = 'var(--brand-red)';
 
 interface DocsModalProps {
   open: boolean;
@@ -200,8 +200,8 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
         <div style={{ fontSize: 12, color: 'var(--muted)', margin: '0 0 16px 12px' }}>Track receipt &amp; validation of every required document for this transaction.</div>
 
         {readOnly && (
-          <div className="card" style={{ borderLeft: '4px solid #2563eb', background: '#eff6ff', marginBottom: 12 }}>
-            <span style={{ fontSize: 12.5, color: '#1e3a8a' }}>🔒 View-only — click <strong>Edit</strong> on the transaction to change documents. (View &amp; download remain available.)</span>
+          <div className="card" style={{ borderLeft: '4px solid #2563eb', background: 'var(--info-bg)', marginBottom: 12 }}>
+            <span style={{ fontSize: 12.5, color: 'var(--info-ink)' }}>🔒 View-only — click <strong>Edit</strong> on the transaction to change documents. (View &amp; download remain available.)</span>
           </div>
         )}
 
@@ -313,7 +313,7 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
                     {/* No reminder option once a doc is submitted and awaiting validation — only a
                         still-missing or reviewer-rejected (Invalid) doc is the agent's to chase. */}
                     {!agentMode && d.validation !== 'Valid' && (d.status !== 'Received' || d.validation === 'Invalid') && (
-                      <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, color: notAccepted ? 'var(--muted-2)' : (d.reminder ? '#b45309' : 'var(--muted)'), marginTop: 3, cursor: (readOnly || notAccepted) ? 'default' : 'pointer' }} title={notAccepted ? 'Reminders are off — this document was not accepted by the agent' : 'Include this document in automated pending-document email reminders'}>
+                      <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, color: notAccepted ? 'var(--muted-2)' : (d.reminder ? 'var(--warn-700)' : 'var(--muted)'), marginTop: 3, cursor: (readOnly || notAccepted) ? 'default' : 'pointer' }} title={notAccepted ? 'Reminders are off — this document was not accepted by the agent' : 'Include this document in automated pending-document email reminders'}>
                         <input type="checkbox" checked={!!d.reminder && !notAccepted} disabled={readOnly || notAccepted} onChange={(e) => upd(i, 'reminder', e.target.checked)} /> 🔔 Reminder
                       </label>
                     )}
@@ -344,17 +344,17 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
                     {d.kind === 'multi' && <span>📎 Multiple files</span>}
                     {d.kind === 'per_client' && <span>👥 Per-client uploads</span>}
                     {single && (d.has_file
-                      ? <span style={{ fontSize: 11.5, color: '#16a34a', fontWeight: 600 }}>✓ Uploaded</span>
+                      ? <span style={{ fontSize: 11.5, color: 'var(--ok-600)', fontWeight: 600 }}>✓ Uploaded</span>
                       : <input type="file" onChange={(e) => { onSingle(d, e.target.files?.[0]); e.target.value = ''; }} style={{ fontSize: 12 }} />)}
                   </>)}
                 </div>
                 {/* Status / Validation — agents may view but not change these. */}
                 {agentMode ? (
-                  <div style={{ ...sel, boxSizing: 'border-box', padding: '6px 8px', border: '1px solid var(--line)', borderRadius: 6, background: '#f9fafb', fontSize: 12.5, ...(d.status === 'Received' ? { color: '#16a34a', fontWeight: 700 } : { color: 'var(--muted)' }) }}>
+                  <div style={{ ...sel, boxSizing: 'border-box', padding: '6px 8px', border: '1px solid var(--line)', borderRadius: 6, background: '#f9fafb', fontSize: 12.5, ...(d.status === 'Received' ? { color: 'var(--ok-600)', fontWeight: 700 } : { color: 'var(--muted)' }) }}>
                     {d.status === 'Received' ? 'Sent' : 'Pending'}
                   </div>
                 ) : (
-                  <select style={{ ...sel, ...(d.status === 'Received' ? { color: '#16a34a', fontWeight: 700 } : null) }}
+                  <select style={{ ...sel, ...(d.status === 'Received' ? { color: 'var(--ok-600)', fontWeight: 700 } : null) }}
                     value={d.status} onChange={(e) => upd(i, 'status', e.target.value)}>
                     <option>Pending</option><option>Received</option>
                   </select>
@@ -362,7 +362,7 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
                 {d.status === 'Received'
                   ? <select
                       disabled={agentMode}
-                      style={{ ...sel, ...(d.validation === 'Valid' ? { color: '#16a34a', fontWeight: 700 } : d.validation === 'Invalid' ? { color: '#dc2626', fontWeight: 700 } : null), ...(agentMode ? { background: '#f9fafb' } : null) }}
+                      style={{ ...sel, ...(d.validation === 'Valid' ? { color: 'var(--ok-600)', fontWeight: 700 } : d.validation === 'Invalid' ? { color: 'var(--bad)', fontWeight: 700 } : null), ...(agentMode ? { background: '#f9fafb' } : null) }}
                       value={!d.validation || d.validation === 'Pending' ? 'Pending' : d.validation}
                       onChange={(e) => {
                         const v = e.target.value;
@@ -391,10 +391,10 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
                     <div style={{ display: 'flex', gap: 10, justifyContent: 'center', fontSize: 12 }}>
                       {['Yes', 'No'].map((opt) => {
                         const selected = (d.drive_uploaded || 'No') === opt;
-                        const color = selected ? (opt === 'Yes' ? '#16a34a' : '#dc2626') : 'var(--muted-2)';
+                        const color = selected ? (opt === 'Yes' ? 'var(--ok-600)' : 'var(--bad)') : 'var(--muted-2)';
                         return (
                           <label key={opt} style={{ display: 'inline-flex', alignItems: 'center', gap: 3, cursor: readOnly ? 'default' : 'pointer', color, fontWeight: selected ? 700 : 400 }}>
-                            <input type="radio" name={`drive-${d.id ?? 'n' + i}`} checked={selected} disabled={readOnly} onChange={() => upd(i, 'drive_uploaded', opt)} style={{ accentColor: opt === 'Yes' ? '#16a34a' : '#dc2626' }} />{opt}
+                            <input type="radio" name={`drive-${d.id ?? 'n' + i}`} checked={selected} disabled={readOnly} onChange={() => upd(i, 'drive_uploaded', opt)} style={{ accentColor: opt === 'Yes' ? 'var(--ok-600)' : 'var(--bad)' }} />{opt}
                           </label>
                         );
                       })}
@@ -510,18 +510,18 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
 
         {/* Agent-flagged deletions — admins decide to restore or permanently delete. */}
         {canReviewDeleted && deletedDocs.length > 0 && (
-          <div className="card" style={{ borderLeft: '4px solid #d97706', background: '#fffbeb', marginTop: 12 }}>
-            <div className="modal-sub" style={{ marginTop: 0, color: '#92400e' }}>Deleted Documents — pending review ({deletedDocs.length})</div>
+          <div className="card" style={{ borderLeft: '4px solid #d97706', background: 'var(--warn-bg-2)', marginTop: 12 }}>
+            <div className="modal-sub" style={{ marginTop: 0, color: 'var(--warn-ink)' }}>Deleted Documents — pending review ({deletedDocs.length})</div>
             <div className="help" style={{ marginTop: -4, marginBottom: 8 }}>An agent removed these. Restore them to the checklist, or delete them permanently.</div>
             {deletedDocs.map((d) => (
               <div key={d.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, padding: '6px 8px', borderBottom: '1px solid #fde68a' }}>
                 <div style={{ minWidth: 0 }}>
-                  <div style={{ fontWeight: 600, color: '#78350f', wordBreak: 'break-word' }}>{d.title}</div>
-                  <div style={{ fontSize: 11, color: '#92400e' }}>Deleted by {d.deleted_by || 'agent'}{d.has_file || d.file_count ? ' · has file(s)' : ''}</div>
+                  <div style={{ fontWeight: 600, color: 'var(--warn-900)', wordBreak: 'break-word' }}>{d.title}</div>
+                  <div style={{ fontSize: 11, color: 'var(--warn-ink)' }}>Deleted by {d.deleted_by || 'agent'}{d.has_file || d.file_count ? ' · has file(s)' : ''}</div>
                 </div>
                 <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
                   <button className="btn ghost sm" onClick={() => onRestoreDeleted(d)}>↺ Restore</button>
-                  <button className="btn sm" style={{ background: '#dc2626', color: '#fff' }} onClick={() => onPurgeDeleted(d)}>🗑 Delete permanently</button>
+                  <button className="btn sm" style={{ background: 'var(--bad)', color: '#fff' }} onClick={() => onPurgeDeleted(d)}>🗑 Delete permanently</button>
                 </div>
               </div>
             ))}

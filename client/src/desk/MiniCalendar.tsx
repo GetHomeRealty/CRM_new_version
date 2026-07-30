@@ -50,7 +50,7 @@ export default function MiniCalendar({ selected = [], onToggle }: MiniCalendarPr
               style={{
                 fontSize: 11, padding: '4px 0', borderRadius: 5, cursor: 'pointer',
                 border: on ? '1px solid #16a34a' : '1px solid transparent',
-                background: on ? '#16a34a' : 'transparent',
+                background: on ? 'var(--ok-600)' : 'transparent',
                 color: on ? '#fff' : 'var(--text)', fontWeight: on ? 700 : 400,
               }}
             >

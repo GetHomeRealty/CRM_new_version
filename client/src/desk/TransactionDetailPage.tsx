@@ -684,10 +684,10 @@ export default function TransactionDetailPage() {
             <button className="btn ghost sm" onClick={() => setDepositOpen(true)}><Icon name="receipt" size={13} /> Deposit Receipt</button>
             {!hideStmtNos && <button className="btn ghost sm" onClick={() => setLawyerStmtOpen(true)}><Icon name="doc" size={13} /> Lawyer Statement</button>}
           </>) : (
-            !docsOnly && !isDocumentation && <button className="btn ghost sm" style={invoicePaid ? { color: '#166534', borderColor: '#bbf7d0', background: '#f0fdf4', fontWeight: 700 } : undefined} onClick={openInvoice}><Icon name="receipt" size={13} /> Invoice{invoicePaid ? ' Paid' : (invoiceSent ? ' sent' : '')}</button>
+            !docsOnly && !isDocumentation && <button className="btn ghost sm" style={invoicePaid ? { color: 'var(--ok-ink)', borderColor: 'var(--ok-ring-2)', background: 'var(--ok-bg)', fontWeight: 700 } : undefined} onClick={openInvoice}><Icon name="receipt" size={13} /> Invoice{invoicePaid ? ' Paid' : (invoiceSent ? ' sent' : '')}</button>
           ))}
           {!isAgent && !docsOnly && !hideTradeSheet && <button className="btn ghost sm" onClick={() => setTsOpen(true)}><Icon name="clipboard" size={13} /> Trade Sheet{tradeSheetSent ? ' sent' : ''}</button>}
-          {!isAgent && !docsOnly && !hideStmtNos && <button className="btn ghost sm" style={nosSent ? { color: '#166534', borderColor: '#bbf7d0', background: '#f0fdf4', fontWeight: 700 } : undefined} onClick={() => setNosOpen(true)}><Icon name="doc" size={13} /> Notice of Sale{nosSent ? ' Sent' : ''}</button>}
+          {!isAgent && !docsOnly && !hideStmtNos && <button className="btn ghost sm" style={nosSent ? { color: 'var(--ok-ink)', borderColor: 'var(--ok-ring-2)', background: 'var(--ok-bg)', fontWeight: 700 } : undefined} onClick={() => setNosOpen(true)}><Icon name="doc" size={13} /> Notice of Sale{nosSent ? ' Sent' : ''}</button>}
           <button className="btn ghost sm" onClick={() => setChatOpen(true)}><Icon name="message" size={13} /> Chat</button>
           <span style={{ width: 1, height: 18, background: 'var(--line)', margin: '0 4px' }} />
           {!canEdit
@@ -695,7 +695,7 @@ export default function TransactionDetailPage() {
             : isSplitViewer
             ? <span className="pill info" style={{ fontSize: 10 }} title="Shared with you via team split — view only"><Icon name="eye" size={11} /> Shared — view only</span>
             : stClosed && !isSuperAdmin
-            ? <span className="pill" style={{ fontSize: 10, background: '#fee2e2', color: '#9a3412', border: '1px solid #fecaca' }} title="This transaction is Closed — only a Super Admin can edit it."><Icon name="lock" size={11} /> Closed — Super Admin only</span>
+            ? <span className="pill" style={{ fontSize: 10, background: 'var(--bad-soft)', color: 'var(--warn-ink-alt)', border: '1px solid #fecaca' }} title="This transaction is Closed — only a Super Admin can edit it."><Icon name="lock" size={11} /> Closed — Super Admin only</span>
             : lockedForUser && !approvedReq
             ? (<>
                 <button className="btn primary sm" disabled style={{ opacity: 0.5, cursor: 'not-allowed' }} title="Locked (DFT) — edits need Super Admin approval"><Icon name="edit" size={13} /> Edit</button>
@@ -715,15 +715,15 @@ export default function TransactionDetailPage() {
                 <button className="btn primary sm" onClick={save} disabled={saving}>{saving ? 'Saving…' : <><Icon name="check" size={13} /> Done</>}</button>
               </>)}
           {/* Agents request deletion (their own deals); admins/super admins delete via the workflow banner. */}
-          {isFullAgent && !deleteReq && <button className="btn ghost sm" style={{ color: '#dc2626' }} onClick={onRequestDelete}><Icon name="trash" size={13} /> Request Deletion</button>}
+          {isFullAgent && !deleteReq && <button className="btn ghost sm" style={{ color: 'var(--bad)' }} onClick={onRequestDelete}><Icon name="trash" size={13} /> Request Deletion</button>}
         </div>
       </div>
 
       {/* Closed — fully locked: only a Super Admin may edit (no request workflow). */}
       {stClosed && (
-        <div className="card" style={{ borderLeft: '4px solid var(--bad)', background: '#fff7ed' }}>
-          <div style={{ fontWeight: 700, color: '#9a3412' }}><Icon name="lock" size={13} /> Closed — the transaction is locked.</div>
-          <div style={{ fontSize: 12.5, color: '#7c2d12', marginTop: 2 }}>
+        <div className="card" style={{ borderLeft: '4px solid var(--bad)', background: 'var(--warn-bg)' }}>
+          <div style={{ fontWeight: 700, color: 'var(--warn-ink-alt)' }}><Icon name="lock" size={13} /> Closed — the transaction is locked.</div>
+          <div style={{ fontSize: 12.5, color: 'var(--warn-ink-deep)', marginTop: 2 }}>
             {isSuperAdmin ? 'You have Super Admin access and can edit this transaction.' : 'No editing is permitted on a Closed transaction. Only a Super Admin can make changes.'}
           </div>
         </div>
@@ -731,9 +731,9 @@ export default function TransactionDetailPage() {
 
       {/* §5.1 — DFT edit-approval banner (Admins request; Super Admin approves). */}
       {stDFT && !stClosed && (
-        <div className="card" style={{ borderLeft: '4px solid var(--bad)', background: '#fff7ed' }}>
-          <div style={{ fontWeight: 700, color: '#9a3412' }}><Icon name="lock" size={13} /> DFT — direct edits are locked.</div>
-          <div style={{ fontSize: 12.5, color: '#7c2d12', marginTop: 2 }}>
+        <div className="card" style={{ borderLeft: '4px solid var(--bad)', background: 'var(--warn-bg)' }}>
+          <div style={{ fontWeight: 700, color: 'var(--warn-ink-alt)' }}><Icon name="lock" size={13} /> DFT — direct edits are locked.</div>
+          <div style={{ fontSize: 12.5, color: 'var(--warn-ink-deep)', marginTop: 2 }}>
             {isSuperAdmin ? 'You can edit directly, or review Admin edit requests below.' : 'Admins must request an edit; a Super Admin approves before changes can be saved.'}
           </div>
           {pendingReq && (
@@ -742,14 +742,14 @@ export default function TransactionDetailPage() {
               {isSuperAdmin && <><button className="btn primary sm" onClick={() => onApproveReq(pendingReq.id)}>Approve</button><button className="btn ghost sm" onClick={() => onRejectReq(pendingReq.id)}>Reject</button></>}
             </div>
           )}
-          {approvedReq && <div className="help" style={{ marginTop: 6, color: '#166534' }}><Icon name="check" size={12} /> Edit approved by {approvedReq.reviewed_by_name} — changes can now be saved.</div>}
+          {approvedReq && <div className="help" style={{ marginTop: 6, color: 'var(--ok-ink)' }}><Icon name="check" size={12} /> Edit approved by {approvedReq.reviewed_by_name} — changes can now be saved.</div>}
         </div>
       )}
 
       {/* Transaction deletion approval workflow banner. */}
       {deleteReq && (
-        <div className="card" style={{ borderLeft: '4px solid var(--bad)', background: '#fef2f2' }}>
-          <div style={{ fontWeight: 700, color: '#991b1b' }}><Icon name="trash" size={13} /> Deletion {deleteReq.status === 'forwarded' ? 'forwarded to Super Admin' : 'requested'}</div>
+        <div className="card" style={{ borderLeft: '4px solid var(--bad)', background: 'var(--bad-bg)' }}>
+          <div style={{ fontWeight: 700, color: 'var(--bad-ink)' }}><Icon name="trash" size={13} /> Deletion {deleteReq.status === 'forwarded' ? 'forwarded to Super Admin' : 'requested'}</div>
           <div style={{ fontSize: 12.5, color: '#7f1d1d', marginTop: 2 }}>
             Requested by {deleteReq.requested_by_name}{deleteReq.reason ? ` — “${deleteReq.reason}”` : ''}
             {deleteReq.status === 'forwarded' && deleteReq.forwarded_by_name ? ` · Forwarded by ${deleteReq.forwarded_by_name}${deleteReq.forward_reason ? ` — “${deleteReq.forward_reason}”` : ''}` : ''}
@@ -765,7 +765,7 @@ export default function TransactionDetailPage() {
             )}
             {/* Super Admin: approve (deletes) or reject at any stage. */}
             {isSuperAdmin && (<>
-              <button className="btn sm" style={{ background: '#dc2626', color: '#fff' }} onClick={onApproveDelete}>Approve &amp; Delete</button>
+              <button className="btn sm" style={{ background: 'var(--bad)', color: '#fff' }} onClick={onApproveDelete}>Approve &amp; Delete</button>
               <button className="btn ghost sm" onClick={onRejectDelete}>Reject</button>
             </>)}
             {isAgent && <span className="pill warn" style={{ fontSize: 10 }}>Your deletion request is {deleteReq.status === 'forwarded' ? 'with the Super Admin' : 'pending admin review'}</span>}
@@ -775,20 +775,20 @@ export default function TransactionDetailPage() {
 
       {/* Agent changes awaiting admin review (admins only). */}
       {isAdminOrAbove && agentChanges.length > 0 && (
-        <div className="card" style={{ borderLeft: '4px solid #d97706', background: '#fffbeb' }}>
+        <div className="card" style={{ borderLeft: '4px solid #d97706', background: 'var(--warn-bg-2)' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-            <div style={{ fontWeight: 700, color: '#92400e' }}><Icon name="bell" size={13} /> {agentChanges.length} change{agentChanges.length === 1 ? '' : 's'} by the agent — please review</div>
+            <div style={{ fontWeight: 700, color: 'var(--warn-ink)' }}><Icon name="bell" size={13} /> {agentChanges.length} change{agentChanges.length === 1 ? '' : 's'} by the agent — please review</div>
             <button className="btn primary sm" onClick={onReviewAgentChanges}><Icon name="check" size={13} /> Mark reviewed</button>
           </div>
           <div style={{ marginTop: 8, maxHeight: 220, overflowY: 'auto' }}>
             {agentChanges.map((c, idx) => (
-              <div key={c.id ?? idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, fontSize: 12.5, color: '#7c2d12', padding: '5px 0', borderTop: idx ? '1px solid #fde68a' : 'none' }}>
+              <div key={c.id ?? idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, fontSize: 12.5, color: 'var(--warn-ink-deep)', padding: '5px 0', borderTop: idx ? '1px solid #fde68a' : 'none' }}>
                 <div style={{ minWidth: 0 }}>
                   <strong>{c.section ? `${c.section} — ` : ''}{c.field || c.action}</strong>
-                  {(c.old_value || c.new_value) && <span> : <span style={{ color: '#991b1b' }}>{c.old_value || '—'}</span> → <span style={{ color: '#166534' }}>{c.new_value || '—'}</span></span>}
+                  {(c.old_value || c.new_value) && <span> : <span style={{ color: 'var(--bad-ink)' }}>{c.old_value || '—'}</span> → <span style={{ color: 'var(--ok-ink)' }}>{c.new_value || '—'}</span></span>}
                   <span style={{ color: 'var(--muted)' }}> · {c.who}{c.stamp ? ` · ${c.stamp}` : ''}</span>
                 </div>
-                {c.id && <button className="btn ghost sm" style={{ flexShrink: 0, color: '#991b1b' }} title="Reject this change and restore the old value" onClick={() => onRejectAgentChange(c.id!)}><Icon name="undo" size={13} /> Reject</button>}
+                {c.id && <button className="btn ghost sm" style={{ flexShrink: 0, color: 'var(--bad-ink)' }} title="Reject this change and restore the old value" onClick={() => onRejectAgentChange(c.id!)}><Icon name="undo" size={13} /> Reject</button>}
               </div>
             ))}
           </div>
@@ -797,12 +797,12 @@ export default function TransactionDetailPage() {
 
       {/* §5.2 — Active sale listing: reminder for pending core documents */}
       {stActive && coreDocReminders.length > 0 && (
-        <div className="card" style={{ borderLeft: '4px solid #d97706', background: '#fffbeb' }}>
-          <div style={{ fontWeight: 700, color: '#92400e' }}><Icon name="clock" size={13} /> Reminder — core listing documents pending</div>
-          <div style={{ fontSize: 12.5, color: '#78350f', marginTop: 2 }}>
+        <div className="card" style={{ borderLeft: '4px solid #d97706', background: 'var(--warn-bg-2)' }}>
+          <div style={{ fontWeight: 700, color: 'var(--warn-ink)' }}><Icon name="clock" size={13} /> Reminder — core listing documents pending</div>
+          <div style={{ fontSize: 12.5, color: 'var(--warn-900)', marginTop: 2 }}>
             The following must be received to complete the Active listing:
           </div>
-          <ul style={{ margin: '6px 0 0', paddingLeft: 20, fontSize: 12.5, color: '#78350f' }}>
+          <ul style={{ margin: '6px 0 0', paddingLeft: 20, fontSize: 12.5, color: 'var(--warn-900)' }}>
             {coreDocReminders.map((t) => <li key={t}>{t}</li>)}
           </ul>
           <div style={{ marginTop: 8 }}>
@@ -822,10 +822,10 @@ export default function TransactionDetailPage() {
             <div key={s.label} style={{ display: 'flex', alignItems: 'flex-start', flex: idx < stages.length - 1 ? 1 : '0 0 auto' }}>
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', minWidth: 72 }}>
                 <div style={{ width: 26, height: 26, borderRadius: '50%', display: 'grid', placeItems: 'center', fontSize: 12, fontWeight: 700,
-                  background: s.pass ? '#16a34a' : (idx === curStage ? 'var(--brand)' : '#e5e7eb'),
+                  background: s.pass ? 'var(--ok-600)' : (idx === curStage ? 'var(--brand)' : '#e5e7eb'),
                   color: s.pass || idx === curStage ? '#fff' : '#6b7280' }}>{s.pass ? <Icon name="check" size={13} /> : idx + 1}</div>
                 <div style={{ marginTop: 6, fontSize: 11, fontWeight: 600, textAlign: 'center', whiteSpace: 'nowrap',
-                  color: s.pass ? '#166534' : (idx === curStage ? 'var(--brand)' : '#9ca3af') }}>{s.label}</div>
+                  color: s.pass ? 'var(--ok-ink)' : (idx === curStage ? 'var(--brand)' : '#9ca3af') }}>{s.label}</div>
               </div>
               {idx < stages.length - 1 && <div style={{ flex: 1, height: 2, background: '#e5e7eb', marginTop: 13 }} />}
             </div>
@@ -846,7 +846,7 @@ export default function TransactionDetailPage() {
               <Field label={OFFER_CLOSING_LISTING_TYPES.includes(form.type) && form.mls_type !== 'exclusive' && !slMarkVerifiedHidden ? (
                 <span style={{ whiteSpace: 'nowrap' }}>Listing Type{' '}
                   <span role="button" onClick={(e) => { e.preventDefault(); e.stopPropagation(); if (!ro) set('mls_verified', !form.mls_verified); }}
-                    style={{ cursor: ro ? 'default' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10.5, fontWeight: 700, textTransform: 'none', padding: '2px 8px', borderRadius: 6, border: `1px solid ${form.mls_verified ? '#16a34a' : '#c8102e'}`, color: form.mls_verified ? '#16a34a' : '#c8102e', background: form.mls_verified ? '#f0fdf4' : '#fff1f2' }}>
+                    style={{ cursor: ro ? 'default' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10.5, fontWeight: 700, textTransform: 'none', padding: '2px 8px', borderRadius: 6, border: `1px solid ${form.mls_verified ? 'var(--ok-600)' : 'var(--brand-red)'}`, color: form.mls_verified ? 'var(--ok-600)' : 'var(--brand-red)', background: form.mls_verified ? 'var(--ok-bg)' : '#fff1f2' }}>
                     <span style={{ width: 10, height: 10, borderRadius: '50%', border: '1px solid currentColor', background: form.mls_verified ? 'currentColor' : 'transparent', display: 'inline-block', flexShrink: 0 }} />{form.mls_verified ? 'Verified' : 'Mark Verified'}
                   </span>
                 </span>

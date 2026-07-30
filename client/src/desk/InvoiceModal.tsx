@@ -4,7 +4,7 @@ import { printDoc } from './printDoc';
 import BrandMark from './BrandMark';
 import type { BrokerageLite, Transaction } from '../types';
 
-const BRAND = '#c8102e';
+const BRAND = 'var(--brand-red)';
 
 const COMPANY = {
   name: 'GetHomeRealty Inc',
@@ -31,9 +31,9 @@ export default function InvoiceModal({ open, onClose, txn }: { open: boolean; on
   const invNo = `INV-${String(txn.trade_no).padStart(6, '0')}`;
 
   const dCell = { border: '1px solid #e6e8ef', padding: '7px 10px', fontSize: 12 };
-  const dLabel = { ...dCell, background: '#fafbfd', color: '#64748b', textAlign: 'right' as const, whiteSpace: 'nowrap' as const };
+  const dLabel = { ...dCell, background: '#fafbfd', color: 'var(--muted)', textAlign: 'right' as const, whiteSpace: 'nowrap' as const };
   const dVal = { ...dCell, textAlign: 'right' as const };
-  const lblBlock = { fontSize: 11, fontWeight: 700, color: '#334155', textTransform: 'uppercase' as const, letterSpacing: '.03em', marginTop: 12 };
+  const lblBlock = { fontSize: 11, fontWeight: 700, color: 'var(--text-2)', textTransform: 'uppercase' as const, letterSpacing: '.03em', marginTop: 12 };
 
   return (
     <div className="overlay open" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
@@ -44,7 +44,7 @@ export default function InvoiceModal({ open, onClose, txn }: { open: boolean; on
           <button className="btn primary sm" onClick={() => printDoc(invNo, ref.current?.innerHTML || '')}>🖨 Print / Save PDF</button>
         </div>
 
-        <div ref={ref} style={{ fontSize: 13, color: '#0f172a' }}>
+        <div ref={ref} style={{ fontSize: 13, color: 'var(--text)' }}>
           {/* Letterhead */}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14 }}>
             <BrandMark color={BRAND} />
@@ -92,9 +92,9 @@ export default function InvoiceModal({ open, onClose, txn }: { open: boolean; on
           <div style={{ color: '#475569' }}>{brokerage.address || '-'}</div>
 
           <div style={lblBlock}>Agent Details</div>
-          <div style={{ color: '#64748b', fontSize: 11.5 }}>Sales Person (Co-op Agent):</div>
+          <div style={{ color: 'var(--muted)', fontSize: 11.5 }}>Sales Person (Co-op Agent):</div>
           <div style={{ marginBottom: 6 }}>{coopAgent}</div>
-          <div style={{ color: '#64748b', fontSize: 11.5 }}>Listing Agent / Sales Person:</div>
+          <div style={{ color: 'var(--muted)', fontSize: 11.5 }}>Listing Agent / Sales Person:</div>
           <div>{txn.agent || '-'}</div>
 
           {/* Line items */}
@@ -123,9 +123,9 @@ export default function InvoiceModal({ open, onClose, txn }: { open: boolean; on
           {/* Footer */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, marginTop: 20, borderTop: '1px solid #eef0f5', paddingTop: 14, fontSize: 11.5, color: '#475569' }}>
             <div>
-              <div style={{ fontWeight: 700, color: '#334155' }}>Customer Notes:</div>
+              <div style={{ fontWeight: 700, color: 'var(--text-2)' }}>Customer Notes:</div>
               <div style={{ marginBottom: 12 }}>Thank you for the payment. You just made our day.</div>
-              <div style={{ fontWeight: 700, color: '#334155' }}>Deposit Instructions:</div>
+              <div style={{ fontWeight: 700, color: 'var(--text-2)' }}>Deposit Instructions:</div>
               <div>Beneficiary Bank Account Detail:</div>
               <div>Beneficiary Name : GET HOME REALTY INC</div>
               <div>Bank Name: TD</div>
@@ -134,9 +134,9 @@ export default function InvoiceModal({ open, onClose, txn }: { open: boolean; on
               <div>Institution Number: 004</div>
             </div>
             <div>
-              <div style={{ fontWeight: 700, color: '#334155' }}>Terms &amp; Conditions:</div>
+              <div style={{ fontWeight: 700, color: 'var(--text-2)' }}>Terms &amp; Conditions:</div>
               <div style={{ marginBottom: 18 }}>-</div>
-              <div style={{ fontWeight: 700, color: '#334155' }}>Acknowledged by:</div>
+              <div style={{ fontWeight: 700, color: 'var(--text-2)' }}>Acknowledged by:</div>
               <div style={{ borderBottom: '1px dotted #94a3b8', height: 24, marginBottom: 4 }} />
               <div style={{ fontStyle: 'italic' }}>(Broker Manager / Broker of Record): <strong>{COMPANY.broker}</strong></div>
             </div>

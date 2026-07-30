@@ -65,7 +65,7 @@ export default function CrmDashboardPage() {
         <Tile label="Lead Sources" value={Object.keys(data.leads.by_source).length}
           sub={<TallyBreakdown by={data.leads.by_source} />} />
         <Tile label="Unread Mail" value={data.inbox.unread}
-          color={data.inbox.unread > 0 ? '#1d4ed8' : undefined}
+          color={data.inbox.unread > 0 ? 'var(--info-700)' : undefined}
           sub={<button className="prop-link" type="button" onClick={() => navigate(crmPath('inbox'))}>open the CRM inbox</button>} />
       </div>
 
@@ -78,7 +78,7 @@ export default function CrmDashboardPage() {
           ]} />
         } />
         <Tile label="Follow-ups Due" value={data.tasks.due_today}
-          color={data.tasks.due_today > 0 ? '#1d4ed8' : undefined}
+          color={data.tasks.due_today > 0 ? 'var(--info-700)' : undefined}
           sub={<Breakdown parts={[
             { n: data.tasks.due_today, label: 'due today', tone: 'info' },
             { n: data.tasks.overdue, label: 'overdue', tone: 'bad' },

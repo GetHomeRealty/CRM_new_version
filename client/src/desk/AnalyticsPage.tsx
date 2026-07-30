@@ -44,8 +44,8 @@ export default function AnalyticsPage() {
     <>
       <div className="stat-grid">
         <div className="stat-card"><div className="lbl">Total Commission (incl. HST)</div><div className="val">{formatCurrency(data.total)}</div></div>
-        <div className="stat-card"><div className="lbl">Paid</div><div className="val" style={{ color: '#166534' }}>{formatCurrency(data.paid)}</div></div>
-        <div className="stat-card"><div className="lbl">Pending</div><div className="val" style={{ color: '#92400e' }}>{formatCurrency(data.pending)}</div></div>
+        <div className="stat-card"><div className="lbl">Paid</div><div className="val" style={{ color: 'var(--ok-ink)' }}>{formatCurrency(data.paid)}</div></div>
+        <div className="stat-card"><div className="lbl">Pending</div><div className="val" style={{ color: 'var(--warn-ink)' }}>{formatCurrency(data.pending)}</div></div>
       </div>
 
       <div className="card">

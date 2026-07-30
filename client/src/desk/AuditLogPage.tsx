@@ -30,8 +30,8 @@ const fmt = (s: string | undefined) => {
 };
 const actionColor = (a: string | undefined) => {
   const t = (a || '').toLowerCase();
-  if (t.includes('remov') || t.includes('delet')) return '#991b1b';
-  if (t.includes('add') || t.includes('creat') || t.includes('upload') || t.includes('sent')) return '#166534';
+  if (t.includes('remov') || t.includes('delet')) return 'var(--bad-ink)';
+  if (t.includes('add') || t.includes('creat') || t.includes('upload') || t.includes('sent')) return 'var(--ok-ink)';
   return 'var(--text-2)';
 };
 
@@ -127,8 +127,8 @@ export default function AuditLogPage() {
                   <td style={cell}>{e.section || '—'}</td>
                   <td style={cell}>{e.field || '—'}</td>
                   <td style={{ ...cell, color: actionColor(e.action), fontWeight: 600 }}>{e.action}{e.details ? ` — ${e.details}` : ''}</td>
-                  <td style={{ ...cell, color: '#991b1b', background: e.old_value ? '#fff5f5' : 'transparent' }}>{e.old_value || ''}</td>
-                  <td style={{ ...cell, color: '#166534', background: e.new_value ? '#f0fdf4' : 'transparent' }}>{e.new_value || ''}</td>
+                  <td style={{ ...cell, color: 'var(--bad-ink)', background: e.old_value ? '#fff5f5' : 'transparent' }}>{e.old_value || ''}</td>
+                  <td style={{ ...cell, color: 'var(--ok-ink)', background: e.new_value ? 'var(--ok-bg)' : 'transparent' }}>{e.new_value || ''}</td>
                 </tr>
               ))}
             </tbody>

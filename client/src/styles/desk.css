@@ -11,6 +11,23 @@
   --shadow-xl:0 30px 70px -18px rgba(16,24,40,.30), 0 10px 24px -10px rgba(16,24,40,.12);
   --ring:0 0 0 3px var(--brand-ring);
   --r-sm:8px;--r:10px;--r-md:12px;--r-lg:14px;--r-xl:16px;--r-2xl:20px;
+
+  /* ---- status ramps -------------------------------------------------------------------------
+     Each status now runs bg -> soft -> ring -> base -> ink, so a banner, a pill and a piece of
+     emphasis text can be built from one family instead of from whichever hex was nearest to hand.
+     699 colour literals were written inline across the components, in 91 shades, and the four
+     "strong text on a tinted background" colours had no token at all — which is why the same
+     warning amber appeared as #92400e, #9a3412, #b45309 and #78350f on four different screens.
+
+     VALUES ARE THE EXISTING LITERALS, UNCHANGED. Adopting a token here repaints nothing; it only
+     gives the colour a name, so the next change to it happens in one place. Consolidating the
+     near-duplicates is a separate decision, because that one does move pixels. */
+  --ok-bg:#f0fdf4;--ok-ink:#166534;--ok-600:#16a34a;--ok-ring-2:#bbf7d0;
+  --warn-bg:#fff7ed;--warn-bg-2:#fffbeb;--warn-ink:#92400e;--warn-ink-alt:#9a3412;--warn-ink-deep:#7c2d12;--warn-700:#b45309;--warn-900:#78350f;
+  --bad-bg:#fef2f2;--bad-ink:#991b1b;--bad-700:#b91c1c;
+  --info-bg:#eff6ff;--info-ink:#1e3a8a;--info-700:#1d4ed8;
+  /* The brokerage's own red, from the logo. Nineteen components had it memorised. */
+  --brand-red:#c8102e;
 }
 *{box-sizing:border-box}
 html{scroll-behavior:smooth;scrollbar-width:thin;scrollbar-color:#cbd0dc transparent}

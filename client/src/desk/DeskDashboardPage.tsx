@@ -60,7 +60,7 @@ export default function DeskDashboardPage() {
         <Tile label="Commission Status" value={Object.keys(data.transactions.by_commission).length}
           sub={<TallyBreakdown by={data.transactions.by_commission} />} />
         <Tile label="Closings Ahead" value={data.closings.next_30_days}
-          color={data.closings.overdue > 0 ? '#b91c1c' : undefined}
+          color={data.closings.overdue > 0 ? 'var(--bad-700)' : undefined}
           sub={<Breakdown parts={[
             { n: data.closings.this_month, label: 'this month', tone: 'info' },
             { n: data.closings.next_30_days, label: 'next 30 days' },
@@ -70,7 +70,7 @@ export default function DeskDashboardPage() {
 
       <div className="tiles">
         <Tile label="Documents Outstanding" value={data.documents.pending}
-          color={data.documents.invalid > 0 ? '#b45309' : undefined}
+          color={data.documents.invalid > 0 ? 'var(--warn-700)' : undefined}
           sub={<Breakdown parts={[
             { n: data.documents.pending, label: 'pending', tone: 'info' },
             { n: data.documents.invalid, label: 'invalid', tone: 'bad' },
@@ -80,8 +80,8 @@ export default function DeskDashboardPage() {
           <Breakdown parts={[{ n: data.invoices.unpaid, label: 'unpaid', tone: 'bad' }]} />
         } />
         <Tile label="Billed" value={money(data.invoices.billed)} sub="invoiced in total" />
-        <Tile label="Collected" value={money(data.invoices.collected)} sub="received against invoices" color="#166534" />
-        <Tile label="Outstanding" value={money(data.invoices.outstanding)} sub="still to be collected" color="#92400e" />
+        <Tile label="Collected" value={money(data.invoices.collected)} sub="received against invoices" color="var(--ok-ink)" />
+        <Tile label="Outstanding" value={money(data.invoices.outstanding)} sub="still to be collected" color="var(--warn-ink)" />
       </div>
 
       {comm && (
@@ -89,11 +89,11 @@ export default function DeskDashboardPage() {
           <Tile label="Pipeline" value={money(comm.t4a.closed_total)}
             sub={`${comm.t4a.closed_count} closed deal${comm.t4a.closed_count === 1 ? '' : 's'}`} />
           <Tile label="Paid" value={money(comm.t4a.closed_paid)}
-            sub={`${comm.t4a.paid_count} deal${comm.t4a.paid_count === 1 ? '' : 's'}`} color="#166534" />
+            sub={`${comm.t4a.paid_count} deal${comm.t4a.paid_count === 1 ? '' : 's'}`} color="var(--ok-ink)" />
           <Tile label="Pending" value={money(comm.t4a.closed_pending)}
-            sub={`${comm.t4a.pending_count} deal${comm.t4a.pending_count === 1 ? '' : 's'}`} color="#92400e" />
+            sub={`${comm.t4a.pending_count} deal${comm.t4a.pending_count === 1 ? '' : 's'}`} color="var(--warn-ink)" />
           <Tile label="Upcoming Commissions" value={money(comm.t4a.upcoming_total)}
-            sub={`${comm.t4a.upcoming_count} open deal${comm.t4a.upcoming_count === 1 ? '' : 's'}`} color="#1d4ed8" />
+            sub={`${comm.t4a.upcoming_count} open deal${comm.t4a.upcoming_count === 1 ? '' : 's'}`} color="var(--info-700)" />
           <Tile label="Overall Commission"
             value={money(isAgent ? comm.t4a.overall_total : comm.gross.overall_total)}
             sub={isAgent ? 'your total T4A' : 'brokerage gross (incl. HST)'} />

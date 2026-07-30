@@ -133,8 +133,8 @@ export default function LawyerModal({ open, onClose, transactionId, txn, onSaved
         <button className="close" onClick={onClose}>✕</button>
         <div className="modal-h">Lawyer Details</div>
         {readOnly && !isAgent && (
-          <div className="card" style={{ borderLeft: '4px solid #2563eb', background: '#eff6ff', marginBottom: 12 }}>
-            <span style={{ fontSize: 12.5, color: '#1e3a8a' }}>🔒 View-only — click <strong>Edit</strong> on the transaction to make changes.</span>
+          <div className="card" style={{ borderLeft: '4px solid #2563eb', background: 'var(--info-bg)', marginBottom: 12 }}>
+            <span style={{ fontSize: 12.5, color: 'var(--info-ink)' }}>🔒 View-only — click <strong>Edit</strong> on the transaction to make changes.</span>
           </div>
         )}
         <fieldset disabled={readOnly} style={{ border: 0, margin: 0, padding: 0, minInlineSize: 0 }}>

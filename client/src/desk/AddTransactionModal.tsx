@@ -336,9 +336,9 @@ export default function AddTransactionModal({ open, onClose, onCreated }: AddTra
                   {teamMembers.length > 0 && (
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
                       {teamMembers.map((n) => (
-                        <span key={n} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: '#eef2ff', color: '#3730a3', borderRadius: 999, padding: '3px 10px', fontSize: 12 }}>
+                        <span key={n} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--brand-soft)', color: 'var(--brand-darker)', borderRadius: 999, padding: '3px 10px', fontSize: 12 }}>
                           {n}
-                          <button type="button" onClick={() => removeMember(n)} style={{ border: 0, background: 'transparent', cursor: 'pointer', color: '#3730a3', fontSize: 13, lineHeight: 1 }}>✕</button>
+                          <button type="button" onClick={() => removeMember(n)} style={{ border: 0, background: 'transparent', cursor: 'pointer', color: 'var(--brand-darker)', fontSize: 13, lineHeight: 1 }}>✕</button>
                         </span>
                       ))}
                     </div>
@@ -351,7 +351,7 @@ export default function AddTransactionModal({ open, onClose, onCreated }: AddTra
         )}
 
         {error && (
-          <div className="alert bad" style={{ marginTop: 12, padding: '10px 12px', borderRadius: 8, background: '#fef2f2', border: '1px solid #fecaca', color: '#b91c1c', fontSize: 13 }}>
+          <div className="alert bad" style={{ marginTop: 12, padding: '10px 12px', borderRadius: 8, background: 'var(--bad-bg)', border: '1px solid #fecaca', color: 'var(--bad-700)', fontSize: 13 }}>
             ⚠ {error}
           </div>
         )}

@@ -246,14 +246,14 @@ export default function AdminActivitiesModal({ open, onClose, transactionId, txn
         <div className="modal-h">Admin Activities</div>
 
         {dftNA && (
-          <div className="card" style={{ borderLeft: '4px solid var(--bad)', background: '#fff7ed', marginBottom: 12 }}>
-            <strong style={{ color: '#9a3412' }}>🔒 DFT — Deal Fell Through.</strong>{' '}
-            <span style={{ fontSize: 12.5, color: '#7c2d12' }}>All statuses default to N/A and are locked.</span>
+          <div className="card" style={{ borderLeft: '4px solid var(--bad)', background: 'var(--warn-bg)', marginBottom: 12 }}>
+            <strong style={{ color: 'var(--warn-ink-alt)' }}>🔒 DFT — Deal Fell Through.</strong>{' '}
+            <span style={{ fontSize: 12.5, color: 'var(--warn-ink-deep)' }}>All statuses default to N/A and are locked.</span>
           </div>
         )}
         {readOnly && !dftNA && (
-          <div className="card" style={{ borderLeft: '4px solid #2563eb', background: '#eff6ff', marginBottom: 12 }}>
-            <span style={{ fontSize: 12.5, color: '#1e3a8a' }}>🔒 View-only — click <strong>Edit</strong> on the transaction to make changes.</span>
+          <div className="card" style={{ borderLeft: '4px solid #2563eb', background: 'var(--info-bg)', marginBottom: 12 }}>
+            <span style={{ fontSize: 12.5, color: 'var(--info-ink)' }}>🔒 View-only — click <strong>Edit</strong> on the transaction to make changes.</span>
           </div>
         )}
 
@@ -285,11 +285,11 @@ export default function AdminActivitiesModal({ open, onClose, transactionId, txn
                 {visible.map((n) => {
                   const ag = t.agents[n] || { invoice_received: 'N/A', payments: [], cta: [] };
                   return (
-                    <div className="pay-item" key={n} style={{ background: '#f0fdf4', border: '1px solid #bbf7d0' }}>
+                    <div className="pay-item" key={n} style={{ background: 'var(--ok-bg)', border: '1px solid #bbf7d0' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10, marginBottom: 10 }}>
-                        <strong style={{ color: '#166534' }}>{n.toUpperCase()}</strong>
+                        <strong style={{ color: 'var(--ok-ink)' }}>{n.toUpperCase()}</strong>
                         <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-                          <label style={{ fontSize: 12, color: '#166534', margin: 0, fontWeight: 600 }}>Agent Invoice Received</label>
+                          <label style={{ fontSize: 12, color: 'var(--ok-ink)', margin: 0, fontWeight: 600 }}>Agent Invoice Received</label>
                           <select style={{ width: 'auto' }} value={na(ag.invoice_received)} onChange={(e) => setTAgentField(k, n, { invoice_received: e.target.value })}><option>N/A</option><option>Yes</option><option>No</option></select>
                           <button className="btn btn-blue sm" onClick={() => addTRow(k, n, 'payments', { paid_type: 'N/A', paid_date: '', batch_no: '', t4a_year: '' })}>+ Add Payment</button>
                         </div>
@@ -446,11 +446,11 @@ export default function AdminActivitiesModal({ open, onClose, transactionId, txn
         {agentNames.map((n) => {
           const a = form.agents[n];
           return (
-            <div className="pay-item" key={n} style={{ background: '#f0fdf4', border: '1px solid #bbf7d0' }}>
+            <div className="pay-item" key={n} style={{ background: 'var(--ok-bg)', border: '1px solid #bbf7d0' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10, marginBottom: 10 }}>
-                <strong style={{ color: '#166534' }}>{n.toUpperCase()}</strong>
+                <strong style={{ color: 'var(--ok-ink)' }}>{n.toUpperCase()}</strong>
                 <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-                  <label style={{ fontSize: 12, color: '#166534', margin: 0, fontWeight: 600 }}>Agent Invoice Received</label>
+                  <label style={{ fontSize: 12, color: 'var(--ok-ink)', margin: 0, fontWeight: 600 }}>Agent Invoice Received</label>
                   <select style={{ width: 'auto' }} value={na(a.invoice_received)} onChange={(e) => setAgent(n, 'invoice_received', e.target.value)}><option>N/A</option><option>Yes</option><option>No</option></select>
                   <button className="btn btn-blue sm" onClick={() => addRow(n, 'payments', { paid_type: 'N/A', paid_status: '', paid_date: '', batch_no: '', t4a_year: '' })}>+ Add Payment</button>
                 </div>

@@ -19,10 +19,10 @@ const lineOf = (wo: number): CommissionAmounts => ({ commission: r2(wo), hst: r2
 const lineLessTotal = (wo: number, deduct = 0): CommissionAmounts => ({ commission: r2(wo), hst: r2(wo * HST), total: r2(wo * (1 + HST) - deduct) });
 
 // Field colours: Commission/HST blue, Total green — any negative value shows red.
-const commColor = (v: number) => (v < 0 ? '#dc2626' : '#2563eb');
-const totalColor = (v: number) => (v < 0 ? '#dc2626' : '#16a34a');
+const commColor = (v: number) => (v < 0 ? 'var(--bad)' : 'var(--info)');
+const totalColor = (v: number) => (v < 0 ? 'var(--bad)' : 'var(--ok-600)');
 const cs = (v: number): CSSProperties => ({ fontWeight: 700, color: commColor(v) }); // Commission / HST style (bold, like Total)
-const pctStyle: CSSProperties = { fontWeight: 700, color: '#dc2626' }; // % fields: bold red
+const pctStyle: CSSProperties = { fontWeight: 700, color: 'var(--bad)' }; // % fields: bold red
 const ts = (v: number): CSSProperties => ({ fontWeight: 700, color: totalColor(v) }); // Total style
 
 // Itemize an agent's deduction breakdown (from agentAdjustments) into a label,
@@ -106,7 +106,7 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
   const finPencil = (): ReactNode => (finLock ? (
     <button type="button" className="row-rm" disabled={reqBusy || !!pendingFinReq}
       title={pendingFinReq ? 'Edit approval pending with Super Admin' : 'Locked — click to request Super Admin approval to edit'}
-      onClick={() => { setReason(''); setReasonOpen(true); }} style={{ marginLeft: 4, color: pendingFinReq ? '#d97706' : 'var(--brand)' }}>
+      onClick={() => { setReason(''); setReasonOpen(true); }} style={{ marginLeft: 4, color: pendingFinReq ? 'var(--warn)' : 'var(--brand)' }}>
       {pendingFinReq ? <Icon name="clock" size={14} /> : <><Icon name="lock" size={14} /><Icon name="edit" size={14} /></>}
     </button>
   ) : null);
@@ -379,14 +379,14 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
       {pendingLoanAgents.length > 0 && !loanAlertSeen && (
         <div className="overlay open" style={{ zIndex: 60 }} onMouseDown={(e) => { if (e.target === e.currentTarget) setLoanAlertSeen(true); }}>
           <div className="modal sm" onMouseDown={(e) => e.stopPropagation()}>
-            <div className="modal-h" style={{ color: '#92400e' }}><Icon name="dollar" size={14} /> Agent loan outstanding</div>
+            <div className="modal-h" style={{ color: 'var(--warn-ink)' }}><Icon name="dollar" size={14} /> Agent loan outstanding</div>
             <p style={{ fontSize: 13, color: 'var(--text-2)', margin: '4px 0 10px' }}>
               This deal is ready for payment and the following agent{pendingLoanAgents.length > 1 ? 's have' : ' has'} an outstanding loan balance:
             </p>
             <ul style={{ margin: '0 0 12px', paddingLeft: 18 }}>
               {pendingLoanAgents.map((a) => (
                 <li key={a.name} style={{ fontSize: 13, marginBottom: 4 }}>
-                  <strong>{a.name}</strong> — Balance Loan Amount <strong style={{ color: '#b45309' }}>{formatCurrency(a.balance)}</strong>
+                  <strong>{a.name}</strong> — Balance Loan Amount <strong style={{ color: 'var(--warn-700)' }}>{formatCurrency(a.balance)}</strong>
                 </li>
               ))}
             </ul>
@@ -405,8 +405,8 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
 
         {/* Locked-fields hint + pending state (the 🔒✏ pencils sit on each field). */}
         {finLock && (
-          <div className="card" style={{ borderLeft: '4px solid #d97706', background: '#fffbeb', marginBottom: 12, fontSize: 12.5, color: '#7c2d12' }}>
-            <strong style={{ color: '#92400e' }}><Icon name="lock" size={13} /> Price, Deposit &amp; Commission fields are locked.</strong>{' '}
+          <div className="card" style={{ borderLeft: '4px solid #d97706', background: 'var(--warn-bg-2)', marginBottom: 12, fontSize: 12.5, color: 'var(--warn-ink-deep)' }}>
+            <strong style={{ color: 'var(--warn-ink)' }}><Icon name="lock" size={13} /> Price, Deposit &amp; Commission fields are locked.</strong>{' '}
             {pendingFinReq
               ? <span>An edit request is <strong>awaiting Super Admin approval</strong>.</span>
               : <span>Click the <strong><Icon name="lock" size={12} /><Icon name="edit" size={12} /></strong> beside a field to request Super Admin approval to edit.</span>}
@@ -414,37 +414,37 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
         )}
         {/* Super Admin: approve/reject a pending financial edit request inline. */}
         {isSuperAdmin && pendingFinReq && (
-          <div className="card" style={{ borderLeft: '4px solid #2563eb', background: '#eff6ff', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 12.5, color: '#1e3a8a' }}><Icon name="edit" size={13} /> <strong>{pendingFinReq.requested_by_name || 'A user'}</strong> requested to edit financial fields{pendingFinReq.reason ? ` — “${pendingFinReq.reason}”` : ''}.</span>
+          <div className="card" style={{ borderLeft: '4px solid #2563eb', background: 'var(--info-bg)', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 12.5, color: 'var(--info-ink)' }}><Icon name="edit" size={13} /> <strong>{pendingFinReq.requested_by_name || 'A user'}</strong> requested to edit financial fields{pendingFinReq.reason ? ` — “${pendingFinReq.reason}”` : ''}.</span>
             <div style={{ flex: 1 }} />
             <button className="btn primary sm" onClick={approveFinReq} disabled={reqBusy}><Icon name="check" size={13} /> Approve</button>
             <button className="btn ghost sm" onClick={rejectFinReq} disabled={reqBusy}><Icon name="close" size={13} /> Reject</button>
           </div>
         )}
         {approvedFinReq && !isSuperAdmin && (
-          <div className="card" style={{ borderLeft: '4px solid #16a34a', background: '#f0fdf4', marginBottom: 12 }}>
-            <span style={{ fontSize: 12.5, color: '#166534' }}><Icon name="unlock" size={13} /> <strong>Approved</strong>{approvedFinReq.reviewed_by_name ? ` by ${approvedFinReq.reviewed_by_name}` : ''} — edit the fields and Save. The section re-locks after you save.</span>
+          <div className="card" style={{ borderLeft: '4px solid #16a34a', background: 'var(--ok-bg)', marginBottom: 12 }}>
+            <span style={{ fontSize: 12.5, color: 'var(--ok-ink)' }}><Icon name="unlock" size={13} /> <strong>Approved</strong>{approvedFinReq.reviewed_by_name ? ` by ${approvedFinReq.reviewed_by_name}` : ''} — edit the fields and Save. The section re-locks after you save.</span>
           </div>
         )}
 
         {dftNA && (
-          <div className="card" style={{ borderLeft: '4px solid var(--bad)', background: '#fff7ed', marginBottom: 12 }}>
-            <strong style={{ color: '#9a3412' }}><Icon name="lock" size={13} /> DFT — Deal Fell Through.</strong>{' '}
-            <span style={{ fontSize: 12.5, color: '#7c2d12' }}>Statuses default to N/A and are locked.</span>
+          <div className="card" style={{ borderLeft: '4px solid var(--bad)', background: 'var(--warn-bg)', marginBottom: 12 }}>
+            <strong style={{ color: 'var(--warn-ink-alt)' }}><Icon name="lock" size={13} /> DFT — Deal Fell Through.</strong>{' '}
+            <span style={{ fontSize: 12.5, color: 'var(--warn-ink-deep)' }}>Statuses default to N/A and are locked.</span>
           </div>
         )}
         {/* NOTE: the original JS referenced an undefined `finLocked` here (a typo that
             would throw when this branch rendered); corrected to `finLock`, the clearly
             intended flag — the view-only banner hides while the finLock banner shows. */}
         {readOnly && !dftNA && !isAgent && !finLock && (
-          <div className="card" style={{ borderLeft: '4px solid #2563eb', background: '#eff6ff', marginBottom: 12 }}>
-            <span style={{ fontSize: 12.5, color: '#1e3a8a' }}><Icon name="lock" size={13} /> View-only — click <strong>Edit</strong> on the transaction to make changes.</span>
+          <div className="card" style={{ borderLeft: '4px solid #2563eb', background: 'var(--info-bg)', marginBottom: 12 }}>
+            <span style={{ fontSize: 12.5, color: 'var(--info-ink)' }}><Icon name="lock" size={13} /> View-only — click <strong>Edit</strong> on the transaction to make changes.</span>
           </div>
         )}
         {(pendingLoanAgents.length > 0 || adjustedLoanAgents.length > 0) && (
-          <div className="card" style={{ borderLeft: '4px solid #d97706', background: '#fffbeb', marginBottom: 12 }}>
-            <strong style={{ color: '#92400e' }}><Icon name="dollar" size={13} /> Outstanding agent loan{loanAgents.length > 1 ? 's' : ''}.</strong>{' '}
-            <span style={{ fontSize: 12.5, color: '#78350f' }}>
+          <div className="card" style={{ borderLeft: '4px solid #d97706', background: 'var(--warn-bg-2)', marginBottom: 12 }}>
+            <strong style={{ color: 'var(--warn-ink)' }}><Icon name="dollar" size={13} /> Outstanding agent loan{loanAgents.length > 1 ? 's' : ''}.</strong>{' '}
+            <span style={{ fontSize: 12.5, color: 'var(--warn-900)' }}>
               {adjustedLoanAgents.map((a) => `${a.name} — ${formatCurrency(a.adjusted)} adjusted from this deal`).join(' · ')}
               {adjustedLoanAgents.length > 0 && pendingLoanAgents.length > 0 ? '. ' : ''}
               {pendingLoanAgents.length > 0 && (<>
@@ -939,8 +939,8 @@ function Box({ label, value, brand }: { label: string; value: string; brand?: bo
   const l = (label || '').toLowerCase();
   const neg = typeof value === 'string' && value.includes('-');
   let color: string | undefined;
-  if (l.includes('total') || l.includes('paid out')) color = neg ? '#dc2626' : '#16a34a';
-  else if (l.includes('commission') || l.includes('hst')) color = neg ? '#dc2626' : '#2563eb';
+  if (l.includes('total') || l.includes('paid out')) color = neg ? 'var(--bad)' : 'var(--ok-600)';
+  else if (l.includes('commission') || l.includes('hst')) color = neg ? 'var(--bad)' : 'var(--info)';
   return (
     <div className="field" style={{ marginBottom: 0 }}>
       <label>{label}</label>

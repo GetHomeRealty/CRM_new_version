@@ -514,12 +514,12 @@ function UserModal({ catalog, existing, onClose, onSaved }: UserModalProps) {
                     <div className="g3" key={i} style={{ alignItems: 'center', marginBottom: 6, fontSize: 12.5 }}>
                       <div style={{ fontWeight: 600 }}>{r.property || `Trade #${r.trade_no}`}</div>
                       <div style={{ color: 'var(--muted)' }}>{r.closing_date || '—'}</div>
-                      <div style={{ textAlign: 'right', fontWeight: 700, color: '#b45309' }}>{formatCurrency(r.amount)}</div>
+                      <div style={{ textAlign: 'right', fontWeight: 700, color: 'var(--warn-700)' }}>{formatCurrency(r.amount)}</div>
                     </div>
                   ))}
                   <div className="g3" style={{ alignItems: 'center', marginTop: 4, paddingTop: 6, borderTop: '1px solid var(--line)', fontSize: 12.5 }}>
                     <div style={{ fontWeight: 700 }}>Total repaid</div><div />
-                    <div style={{ textAlign: 'right', fontWeight: 700, color: '#b45309' }}>{formatCurrency(loanRepaid)}</div>
+                    <div style={{ textAlign: 'right', fontWeight: 700, color: 'var(--warn-700)' }}>{formatCurrency(loanRepaid)}</div>
                   </div>
                 </>)}
             </div>
@@ -538,8 +538,8 @@ function UserModal({ catalog, existing, onClose, onSaved }: UserModalProps) {
                 {dealHistory.map((e, i) => (
                   <div className="g4" key={i} style={{ alignItems: 'center', marginBottom: 6 }}>
                     <div style={{ fontSize: 13 }}>{e.brokerage}</div>
-                    <div style={{ fontSize: 13, fontWeight: 700, color: '#dc2626' }}>{e.agent_pct ?? '—'}{e.agent_pct != null ? '%' : ''}</div>
-                    <div style={{ fontSize: 13, fontWeight: 700, color: '#dc2626' }}>{e.brok_pct ?? '—'}{e.brok_pct != null ? '%' : ''}</div>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--bad)' }}>{e.agent_pct ?? '—'}{e.agent_pct != null ? '%' : ''}</div>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--bad)' }}>{e.brok_pct ?? '—'}{e.brok_pct != null ? '%' : ''}</div>
                     <div style={{ fontSize: 12.5 }}>
                       <div style={{ fontWeight: 600 }}>{e.property || '—'}</div>
                       {e.closing_date && <div style={{ color: 'var(--muted)', fontSize: 11 }}>{e.closing_date}</div>}

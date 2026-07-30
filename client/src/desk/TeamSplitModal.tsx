@@ -137,13 +137,13 @@ export default function TeamSplitModal({ open, onClose, transactionId, primaryAg
         <div className="modal-h">Team Split</div>
 
         {readOnly && !isAgent && (
-          <div className="card" style={{ borderLeft: '4px solid #2563eb', background: '#eff6ff', marginBottom: 12 }}>
-            <span style={{ fontSize: 12.5, color: '#1e3a8a' }}>🔒 View-only — click <strong>Edit</strong> on the transaction to make changes.</span>
+          <div className="card" style={{ borderLeft: '4px solid #2563eb', background: 'var(--info-bg)', marginBottom: 12 }}>
+            <span style={{ fontSize: 12.5, color: 'var(--info-ink)' }}>🔒 View-only — click <strong>Edit</strong> on the transaction to make changes.</span>
           </div>
         )}
         {!readOnly && lockAgents && (
-          <div className="card" style={{ borderLeft: '4px solid #d97706', background: '#fffbeb', marginBottom: 12 }}>
-            <span style={{ fontSize: 12.5, color: '#78350f' }}>🔒 Notice of Sale has been sent for signing — team-split agents can no longer be added, removed or renamed.</span>
+          <div className="card" style={{ borderLeft: '4px solid #d97706', background: 'var(--warn-bg-2)', marginBottom: 12 }}>
+            <span style={{ fontSize: 12.5, color: 'var(--warn-900)' }}>🔒 Notice of Sale has been sent for signing — team-split agents can no longer be added, removed or renamed.</span>
           </div>
         )}
 
@@ -226,9 +226,9 @@ export default function TeamSplitModal({ open, onClose, transactionId, primaryAg
             ))}
             {/* §Team Splits — once the split totals 100% (or agents are locked), no more agents can be added. */}
             {!lockAgents && total < 100 && <button className="btn primary sm" onClick={add} style={{ marginBottom: 12 }}>+ Add Team Member</button>}
-            <div style={{ background: total === 100 ? '#f0fdf4' : '#f0f9ff', border: `1px solid ${total > 100 ? '#fecaca' : (total === 100 ? '#bbf7d0' : '#bae6fd')}`, borderRadius: 10, padding: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div style={{ background: total === 100 ? 'var(--ok-bg)' : '#f0f9ff', border: `1px solid ${total > 100 ? 'var(--bad-ring)' : (total === 100 ? 'var(--ok-ring-2)' : '#bae6fd')}`, borderRadius: 10, padding: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <strong>Total Split:</strong>
-              <span style={{ fontSize: 22, fontWeight: 700, color: total > 100 ? 'var(--bad)' : (total === 100 ? 'var(--ok)' : '#1d4ed8') }}>{total.toFixed(2)}%</span>
+              <span style={{ fontSize: 22, fontWeight: 700, color: total > 100 ? 'var(--bad)' : (total === 100 ? 'var(--ok)' : 'var(--info-700)') }}>{total.toFixed(2)}%</span>
             </div>
             {total > 100 && <div style={{ color: 'var(--bad)', fontSize: 12, marginTop: 6, fontWeight: 600 }}>⚠ Total exceeds 100%. Please adjust.</div>}
           </>

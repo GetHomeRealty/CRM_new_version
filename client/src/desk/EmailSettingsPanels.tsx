@@ -89,7 +89,7 @@ export function AccountsTab({ toast }: { toast: ToastFn }) {
                     <div style={{ display: 'flex', gap: 4, flexWrap: 'nowrap', whiteSpace: 'nowrap' }}>
                       <button className="btn ghost sm" onClick={() => setEditing(a)}>Edit</button>
                       <button className="btn ghost sm" onClick={() => onTest(a)}>✉ Test</button>
-                      <button className="btn ghost sm" style={{ color: '#dc2626' }} onClick={() => onDelete(a)}>🗑️</button>
+                      <button className="btn ghost sm" style={{ color: 'var(--bad)' }} onClick={() => onDelete(a)}>🗑️</button>
                     </div>
                   </td>
                 </tr>

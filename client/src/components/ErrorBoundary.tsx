@@ -52,7 +52,7 @@ export default class ErrorBoundary extends Component<Props, State> {
 
     return (
       <div className="card" style={{ borderLeft: '4px solid var(--bad)', maxWidth: 720, margin: '24px auto' }}>
-        <h3 style={{ margin: '0 0 8px', color: '#991b1b', fontSize: 16 }}>
+        <h3 style={{ margin: '0 0 8px', color: 'var(--bad-ink)', fontSize: 16 }}>
           ⚠ {this.props.what ?? 'Something'} could not be displayed
         </h3>
         <p style={{ margin: '0 0 14px', color: 'var(--text-2)', fontSize: 13.5, lineHeight: 1.5 }}>

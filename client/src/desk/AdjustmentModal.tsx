@@ -170,7 +170,7 @@ export default function AdjustmentModal({ open, onClose, transactionId, txn, onS
     if (!name) return null;
     const cap = grossByAgent[name];
     if (cap == null || deductFor(name) <= cap + 0.005) return null;
-    return <div className="help" style={{ color: '#dc2626', margin: '4px 0 0' }}>⚠ Max adjustment allowed: {formatCurrency(cap)} (agent's Agent Commission total)</div>;
+    return <div className="help" style={{ color: 'var(--bad)', margin: '4px 0 0' }}>⚠ Max adjustment allowed: {formatCurrency(cap)} (agent's Agent Commission total)</div>;
   };
 
   const save = async () => {
@@ -214,8 +214,8 @@ export default function AdjustmentModal({ open, onClose, transactionId, txn, onS
         <div className="modal-h">Adjustment &amp; Advance Payment</div>
 
         {readOnly && (
-          <div className="card" style={{ borderLeft: '4px solid #2563eb', background: '#eff6ff', marginBottom: 12 }}>
-            <span style={{ fontSize: 12.5, color: '#1e3a8a' }}>🔒 Locked — adjustments, advance payments and referrals can’t be changed once the agent payment is complete (or while viewing). Click <strong>Edit</strong> if the transaction is still open.</span>
+          <div className="card" style={{ borderLeft: '4px solid #2563eb', background: 'var(--info-bg)', marginBottom: 12 }}>
+            <span style={{ fontSize: 12.5, color: 'var(--info-ink)' }}>🔒 Locked — adjustments, advance payments and referrals can’t be changed once the agent payment is complete (or while viewing). Click <strong>Edit</strong> if the transaction is still open.</span>
           </div>
         )}
 
@@ -244,7 +244,7 @@ export default function AdjustmentModal({ open, onClose, transactionId, txn, onS
                     <span className="pill info" style={{ fontSize: 11 }}>Outstanding loan: {formatCurrency(loanBalanceFor(r.agent))}</span>
                   )}
                   {r.is_loan && r.agent && loanBalanceFor(r.agent) != null && parseNumber(r.amount) > (loanBalanceFor(r.agent) ?? 0) + 0.005 && (
-                    <span className="help" style={{ color: '#dc2626', margin: 0 }}>⚠ Exceeds the agent's outstanding loan balance.</span>
+                    <span className="help" style={{ color: 'var(--bad)', margin: 0 }}>⚠ Exceeds the agent's outstanding loan balance.</span>
                   )}
                 </div>
               )}

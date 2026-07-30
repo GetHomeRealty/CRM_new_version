@@ -185,8 +185,8 @@ export default function TransactionsPage() {
     <>
       {/* Deletion requests to review (admins/managers). */}
       {isAdminOrAbove && pendingDeletions.length > 0 && (
-        <div className="card" style={{ borderLeft: '4px solid var(--bad)', background: '#fef2f2', marginBottom: 14 }}>
-          <strong style={{ color: '#991b1b' }}><Icon name="trash" size={13} /> {pendingDeletions.length} transaction deletion request{pendingDeletions.length === 1 ? '' : 's'} to review</strong>
+        <div className="card" style={{ borderLeft: '4px solid var(--bad)', background: 'var(--bad-bg)', marginBottom: 14 }}>
+          <strong style={{ color: 'var(--bad-ink)' }}><Icon name="trash" size={13} /> {pendingDeletions.length} transaction deletion request{pendingDeletions.length === 1 ? '' : 's'} to review</strong>
           <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
             {pendingDeletions.map((t) => (
               <div key={t.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap', fontSize: 12.5, color: '#7f1d1d', borderTop: '1px solid #fecaca', paddingTop: 6 }}>

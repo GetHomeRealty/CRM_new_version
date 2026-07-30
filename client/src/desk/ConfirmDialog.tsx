@@ -39,12 +39,12 @@ export default function ConfirmDialog({ confirm, onClose }: { confirm: ConfirmOp
         <div className="modal-h" style={{ color: 'var(--bad)' }}>{confirm.title}</div>
         <p style={{ fontSize: 13, marginTop: 4 }}>{confirm.message}</p>
         {confirm.linked && confirm.linked.length > 0 && (
-          <div style={{ background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 8, padding: '10px 12px', fontSize: 12.5, color: '#9a3412', marginTop: 8 }}>
+          <div style={{ background: 'var(--warn-bg)', border: '1px solid #fed7aa', borderRadius: 8, padding: '10px 12px', fontSize: 12.5, color: 'var(--warn-ink-alt)', marginTop: 8 }}>
             <strong>⚠ This may affect linked functionality:</strong>
             <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
               {confirm.linked.map((l, i) => <li key={i} style={{ marginBottom: 2 }}>{l}</li>)}
             </ul>
-            {confirm.note && <div style={{ marginTop: 8, color: '#7c2d12' }}>{confirm.note}</div>}
+            {confirm.note && <div style={{ marginTop: 8, color: 'var(--warn-ink-deep)' }}>{confirm.note}</div>}
           </div>
         )}
         <div className="actions">
