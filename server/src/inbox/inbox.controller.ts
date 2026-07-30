@@ -1,3 +1,4 @@
+import { AreaGuard } from '../core/area.guard';
 import { Body, Controller, ForbiddenException, Get, NotFoundException, Param, ParseIntPipe, Post, Put, Query, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '../auth/guards/auth.guard';
 import { CurrentUser } from '../auth/decorators';
@@ -18,7 +19,7 @@ import { AREA_LABEL, parseArea } from '../common/domain';
  * keeps older clients working.
  */
 @Controller('account/inbox')
-@UseGuards(AuthGuard)
+@UseGuards(AuthGuard, AreaGuard)
 export class InboxController {
   constructor(
     private readonly inbox: InboxService,

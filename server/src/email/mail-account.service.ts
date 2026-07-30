@@ -157,7 +157,15 @@ export class MailAccountService {
 
   async setDefaultForUser(userId: number, id: number): Promise<Record<string, unknown>> {
     const account = await this.ownOrThrow(userId, id);
-    await this.prisma.mail_accounts.update({ where: { id }, data: { is_default: true, is_active: true, updated_at: new Date() } });
+    // The primary account is the one whose mail the Inbox shows, so its inbound sync is switched on
+    // with it — an inbox pointed at an account nobody is polling would simply stop filling up. Only
+    // when the account has an IMAP host: there is nothing to poll otherwise, and setting the flag
+    // would make the Integrations screen claim a sync that cannot happen.
+    const enableInbound = !!account.imap_host && !account.inbound_enabled;
+    await this.prisma.mail_accounts.update({
+      where: { id },
+      data: { is_default: true, is_active: true, ...(enableInbound ? { inbound_enabled: true } : {}), updated_at: new Date() },
+    });
     // Scoped to the account's own area, so choosing a Transaction Desk primary leaves the CRM's
     // alone. Unscoped, this cleared every other account the user had and the other area was left
     // with no primary at all.

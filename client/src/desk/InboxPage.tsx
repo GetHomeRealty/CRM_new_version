@@ -94,7 +94,14 @@ export default function InboxPage() {
           <div>
             <h2 className="lead-title">Inbox</h2>
             <div className="lead-subtitle">
-              <span className="muted">Mail pulled from your connected accounts.</span>
+              {/* Which mailbox this is. The list is one account's mail, so saying nothing would make a
+                  shorter list read as lost mail rather than a narrower view. */}
+              {list?.mailbox
+                ? <span className="muted">
+                    Mail for <strong>{list.mailbox.address}</strong> — the primary account for this area.
+                    {list.mailbox.auto_sync ? ' Syncing automatically.' : ' Automatic sync is off for this account.'}
+                  </span>
+                : <span className="muted">Mail from every account connected to this area — mark one primary in Integrations to read just that mailbox.</span>}
               {list && list.unread > 0 && <span className="pill info">{list.unread} unread</span>}
             </div>
           </div>

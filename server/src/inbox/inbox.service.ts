@@ -7,29 +7,53 @@ import type { Area } from '../common/domain';
  * Reads a user's synced inbound mail. Every method is scoped to `userId`, so an inbox query can
  * only ever return that user's own messages — never another person's mailbox.
  *
- * Every method is ALSO scoped to an area. The CRM Inbox shows mail from accounts connected under
- * CRM Settings, the Transaction Desk Inbox shows mail from accounts connected under Transaction
- * Desk Settings, and neither shows the other's — the account's `scope` is what decides. Accounts
- * that pre-date the split carry no scope and appear on both sides, so no mail became unreachable
- * when the column was introduced; assigning one in Settings claims it for that area.
+ * Every method is ALSO scoped to one account: the **primary** account of the area being read. An area
+ * can hold several connected addresses, and the one marked primary in Integrations is the mailbox the
+ * inbox shows. That keeps the two areas apart as well, because a primary is chosen per area — the CRM
+ * reads the account made primary under CRM Settings and the Transaction Desk the one made primary
+ * under Transaction Desk Settings.
  *
- * The scoping is applied on the server for every read, not just the list: `get` and `markSeen`
- * take a message id, and without the same filter the Transaction Desk could read or alter a CRM
- * message simply by asking for its id.
+ * When an area has no primary yet it falls back to every account that area can see, so the inbox is
+ * never empty just because nobody has chosen one.
+ *
+ * The scoping is applied on the server for every read, not just the list: `get` and `markSeen` take a
+ * message id, and without the same filter one area could read or alter another's message simply by
+ * asking for its id.
  */
 @Injectable()
 export class InboxService {
   constructor(private readonly prisma: PrismaService) {}
 
   /**
-   * Which accounts this area may read from.
+   * The account whose mail this area's inbox shows: the one marked primary in Integrations.
    *
-   * NOTE the relation is `mail_account`, singular — the field name, not the model name.
-   * `null` cannot go inside an `in` list in Prisma, so "this area, or not yet assigned" has to be
-   * spelled as a union.
+   * The area's own primary first, an unassigned-scope primary only as a fallback — an account that
+   * pre-dates the split must not outrank a deliberate choice made inside the area. Null when the area
+   * has no primary at all.
    */
-  private accountScope(area: Area): Prisma.inbound_emailsWhereInput {
-    return { mail_account: { is: { OR: [{ scope: area }, { scope: null }] } } };
+  private async primaryAccount(userId: number, area: Area) {
+    const pick = { id: true, from_email: true, inbound_enabled: true, imap_host: true };
+    return (await this.prisma.mail_accounts.findFirst({ where: { user_id: userId, is_default: true, scope: area }, select: pick }))
+      ?? (await this.prisma.mail_accounts.findFirst({ where: { user_id: userId, is_default: true, scope: null }, select: pick }));
+  }
+
+  /**
+   * The message filter for one area.
+   *
+   * One account's mail, not every connected address: pouring them all into one list makes the inbox a
+   * place to search rather than a place to work, and marking one primary is how you say which mailbox
+   * you are reading. Switching the primary switches the inbox immediately — the other accounts keep
+   * syncing in the background, so their history is already there when you switch back.
+   *
+   * With no primary the area falls back to everything it can see, so the inbox is never empty merely
+   * because nobody has chosen one. NOTE the relation is `mail_account`, singular — the field name, not
+   * the model name; and `null` cannot go inside an `in` list in Prisma, so "this area, or not yet
+   * assigned" has to be spelled as a union.
+   *
+   * Takes the already-resolved primary so a single request does not look it up twice.
+   */
+  private scopeFor(primary: { id: number } | null, area: Area): Prisma.inbound_emailsWhereInput {
+    return primary ? { account_id: primary.id } : { mail_account: { is: { OR: [{ scope: area }, { scope: null }] } } };
   }
 
   /** The message list, newest first, without the heavy bodies. */
@@ -39,7 +63,8 @@ export class InboxService {
     // Typed as Prisma.inbound_emailsWhereInput on purpose: built as a bare object literal in
     // a variable, a wrong key slips past excess-property checking and only fails at runtime,
     // which is exactly how this filter shipped broken once.
-    const scoped: Prisma.inbound_emailsWhereInput = { user_id: userId, ...this.accountScope(area) };
+    const primary = await this.primaryAccount(userId, area);
+    const scoped: Prisma.inbound_emailsWhereInput = { user_id: userId, ...this.scopeFor(primary, area) };
     const where: Prisma.inbound_emailsWhereInput = {
       ...scoped,
       ...(opts.unread ? { seen: false } : {}),
@@ -73,6 +98,17 @@ export class InboxService {
       })),
       meta: { page, per_page: perPage, total, last_page: Math.max(1, Math.ceil(total / perPage)) },
       unread,
+      /**
+       * Which mailbox this is. The screen names it, because the list is one account's mail rather
+       * than everything connected — without saying so, a shorter list than yesterday reads as lost
+       * mail instead of a narrower view.
+       *
+       * `auto_sync` is false only when the primary has no IMAP host to poll; setting an account
+       * primary switches its inbound sync on.
+       */
+      mailbox: primary
+        ? { address: primary.from_email, is_primary: true, auto_sync: primary.inbound_enabled && !!primary.imap_host }
+        : null,
     };
   }
 
@@ -80,7 +116,9 @@ export class InboxService {
   async get(userId: number, area: Area, id: number): Promise<Record<string, unknown>> {
     // Area-scoped as well as user-scoped: asking the Transaction Desk for a CRM message's id
     // must not return it.
-    const row = await this.prisma.inbound_emails.findFirst({ where: { id, user_id: userId, ...this.accountScope(area) } });
+    const row = await this.prisma.inbound_emails.findFirst({
+      where: { id, user_id: userId, ...this.scopeFor(await this.primaryAccount(userId, area), area) },
+    });
     if (!row) throw new NotFoundException({ message: 'Message not found.' });
     if (!row.seen) await this.prisma.inbound_emails.update({ where: { id }, data: { seen: true } });
     const lead = row.lead_id
@@ -95,7 +133,10 @@ export class InboxService {
   }
 
   async markSeen(userId: number, area: Area, id: number, seen: boolean): Promise<{ seen: boolean }> {
-    const row = await this.prisma.inbound_emails.findFirst({ where: { id, user_id: userId, ...this.accountScope(area) }, select: { id: true } });
+    const row = await this.prisma.inbound_emails.findFirst({
+      where: { id, user_id: userId, ...this.scopeFor(await this.primaryAccount(userId, area), area) },
+      select: { id: true },
+    });
     if (!row) throw new NotFoundException({ message: 'Message not found.' });
     await this.prisma.inbound_emails.update({ where: { id }, data: { seen } });
     return { seen };

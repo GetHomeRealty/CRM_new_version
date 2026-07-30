@@ -106,6 +106,11 @@ export interface InboxList {
   data: InboxMessageRow[];
   meta: { page: number; per_page: number; total: number; last_page: number };
   unread: number;
+  /**
+   * The mailbox on screen — the account marked primary for this area. Null when none is marked, in
+   * which case the list falls back to every account the area can see.
+   */
+  mailbox: { address: string; is_primary: boolean; auto_sync: boolean } | null;
 }
 
 /**
