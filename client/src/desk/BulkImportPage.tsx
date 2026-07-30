@@ -1,3 +1,4 @@
+import { deskPath } from './area';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -64,7 +65,7 @@ export default function BulkImportPage() {
     <>
       <div className="card" style={{ marginBottom: 12 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-          <button className="btn ghost sm" onClick={() => nav('/app/transactions')}>← Transactions</button>
+          <button className="btn ghost sm" onClick={() => nav(deskPath('transactions'))}>← Transactions</button>
           <div>
             <h2 style={{ margin: 0 }}>Bulk Transaction Import</h2>
             <div className="muted" style={{ fontSize: 13 }}>
@@ -201,7 +202,7 @@ export default function BulkImportPage() {
           )}
           {result.issues.length > 0 && <IssueTable issues={result.issues} />}
           <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
-            <button className="btn" onClick={() => nav('/app/transactions')}>Go to Transactions</button>
+            <button className="btn" onClick={() => nav(deskPath('transactions'))}>Go to Transactions</button>
             {result.issues.length > 0 && (
               <button className="btn ghost" onClick={() => downloadImportErrors(result.batch_id).catch((e) => toast(apiErrorMessage(e, 'Download failed'), 'bad'))}>
                 Download Validation Report

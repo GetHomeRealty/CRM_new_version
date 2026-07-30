@@ -1,7 +1,24 @@
 import { useEffect, useState, type CSSProperties } from 'react';
 import { getAuditLogs } from '../lib/api';
 import { useToast } from './toast';
+import { useArea } from './AreaContext';
+import { AREA_LABEL, AREA_SHORT } from './area';
 import type { AuditEntry } from '../types';
+
+/**
+ * How much of this area's trail to show.
+ *
+ * "Shared" is Users, Company Settings and Inventory — the modules that belong to neither area. They
+ * are included by default, because a change to a user is not CRM history or Transaction history but
+ * both, and leaving them out of each trail would make those records unreachable. The dropdown is
+ * here so the strict single-area view is still one click away.
+ */
+const SCOPES: { value: string; label: string; help: string }[] = [
+  { value: 'default', label: 'This area + shared', help: 'this area’s activity plus changes to shared modules' },
+  { value: 'area', label: 'This area only', help: 'nothing but this area’s own activity' },
+  { value: 'shared', label: 'Shared only', help: 'Users, Company Settings and Inventory' },
+  { value: 'all', label: 'Everything', help: 'both areas and shared, for reconciling the two' },
+];
 
 const cell: CSSProperties = { padding: '8px 10px', borderBottom: '1px solid #f3f4f6', fontSize: 12, verticalAlign: 'top' };
 const th: CSSProperties = { ...cell, color: 'var(--brand)', borderBottom: '2px solid var(--brand)', whiteSpace: 'nowrap', textAlign: 'left' };
@@ -22,6 +39,8 @@ interface AuditMeta { current_page: number; last_page: number; total: number; }
 
 export default function AuditLogPage() {
   const toast = useToast();
+  const { area } = useArea();
+  const [scope, setScope] = useState('default');
   const [category, setCategory] = useState('');
   const [q, setQ] = useState('');
   const [from, setFrom] = useState('');
@@ -33,26 +52,33 @@ export default function AuditLogPage() {
   const [loading, setLoading] = useState(true);
 
   // Reset to page 1 whenever a filter changes.
-  useEffect(() => { setPage(1); }, [category, from, to]);
+  useEffect(() => { setPage(1); }, [category, from, to, scope, area]);
 
   useEffect(() => {
     const t = setTimeout(() => {
       setLoading(true);
-      getAuditLogs({ category: category || undefined, q: q || undefined, from: from || undefined, to: to || undefined, page })
+      getAuditLogs({ area, scope, category: category || undefined, q: q || undefined, from: from || undefined, to: to || undefined, page })
         .then((d) => { setRows(d.data || []); setMeta(d.meta || { current_page: 1, last_page: 1, total: 0 }); if (d.categories) setCategories(d.categories); })
         .catch(() => toast('Could not load audit trail', 'bad'))
         .finally(() => setLoading(false));
     }, 350);
     return () => clearTimeout(t);
-  }, [category, q, from, to, page]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [category, q, from, to, page, area, scope]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const catOptions = ['Transactions', ...categories.filter((c) => c !== 'Audit Trail')];
+  // Deduplicated: the server's category list already contains "Transactions", and prepending it
+  // to bring it to the front listed it twice in the dropdown — and gave React two children with
+  // the same key. A Set keeps insertion order, so it stays first and the later copy is dropped.
+  //
+  // It is only prepended in the Transaction Desk, whose list contains it; the CRM's category list
+  // has no Transactions, and offering it there would produce a filter that always returns nothing.
+  const catOptions = [...new Set([...(area === 'desk' ? ['Transactions'] : []), ...categories.filter((c) => c !== 'Audit Trail')])];
 
   return (
     <div className="card" style={{ margin: 0 }}>
-      <div className="modal-h" style={{ fontSize: 16 }}>Audit Trail</div>
+      <div className="modal-h" style={{ fontSize: 16 }}>{AREA_SHORT[area]} Audit Trail</div>
       <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 12 }}>
-        Cross-module history of every change across the system (most recent first).
+        Every change recorded in <strong>{AREA_LABEL[area]}</strong>, most recent first. The other
+        area keeps its own trail; shared modules appear in both.
       </div>
 
       <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -60,10 +86,14 @@ export default function AuditLogPage() {
           <option value="">All categories</option>
           {catOptions.map((c) => <option key={c} value={c}>{c}</option>)}
         </select>
+        <select value={scope} onChange={(e) => setScope(e.target.value)} style={{ maxWidth: 190 }}
+          title={SCOPES.find((s) => s.value === scope)?.help}>
+          {SCOPES.map((s) => <option key={s.value} value={s.value} title={s.help}>{s.label}</option>)}
+        </select>
         <input placeholder="Search user, field, value…" value={q} onChange={(e) => setQ(e.target.value)} style={{ flex: 1, minWidth: 200 }} />
         <label style={{ fontSize: 12, color: 'var(--muted)' }}>From <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} /></label>
         <label style={{ fontSize: 12, color: 'var(--muted)' }}>To <input type="date" value={to} onChange={(e) => setTo(e.target.value)} /></label>
-        {(category || q || from || to) && <button className="btn ghost sm" onClick={() => { setCategory(''); setQ(''); setFrom(''); setTo(''); }}>Clear</button>}
+        {(category || q || from || to || scope !== 'default') && <button className="btn ghost sm" onClick={() => { setCategory(''); setQ(''); setFrom(''); setTo(''); setScope('default'); }}>Clear</button>}
         <span style={{ fontSize: 12, color: 'var(--muted)' }}>{meta.total} entries</span>
       </div>
 

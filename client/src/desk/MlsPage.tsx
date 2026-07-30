@@ -1,3 +1,4 @@
+import { useArea } from './AreaContext';
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useToast } from './toast';
@@ -27,6 +28,7 @@ const stPill = (s?: string) => (s === 'Active' ? 'ok' : s === 'Sold' || s === 'C
  * on its own.
  */
 export default function MlsPage({ onShowFavorites }: { onShowFavorites?: () => void } = {}) {
+  const { link } = useArea();
   const navigate = useNavigate();
   const toast = useToast();
 
@@ -124,7 +126,7 @@ export default function MlsPage({ onShowFavorites }: { onShowFavorites?: () => v
           <h2 style={{ margin: 0 }}>MLS Listings</h2>
           <div className="muted" style={{ fontSize: 13 }}>{loading ? 'Searching…' : `${total.toLocaleString('en-CA')} properties found`}</div>
         </div>
-        <button className="btn ghost sm" onClick={() => (onShowFavorites ? onShowFavorites() : navigate('/app/favorites'))}>♥ My Favorites</button>
+        <button className="btn ghost sm" onClick={() => (onShowFavorites ? onShowFavorites() : navigate(link('favorites')))}>♥ My Favorites</button>
       </div>
 
       {/* Filter bar */}
@@ -154,7 +156,7 @@ export default function MlsPage({ onShowFavorites }: { onShowFavorites?: () => v
               const key = String(p.ListingKey || '');
               const fav = favs.has(key);
               return (
-                <div key={key} className="card" style={{ padding: 0, overflow: 'hidden', cursor: 'pointer' }} onClick={() => navigate(`/app/mls/${encodeURIComponent(key)}`)}>
+                <div key={key} className="card" style={{ padding: 0, overflow: 'hidden', cursor: 'pointer' }} onClick={() => navigate(link(`mls/${encodeURIComponent(key)}`))}>
                   <div style={{ padding: 14 }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
                       <div style={{ fontWeight: 700, fontSize: 18 }}>${money(p.ListPrice)}</div>

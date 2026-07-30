@@ -1,3 +1,4 @@
+import { deskPath } from './area';
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { getTransaction, updateTransaction, listAgents, generateTransactionInvoices, getCompanySettings, getCustomers, getBrokerageSuggestions, requestTransactionEdit, approveEditRequest, rejectEditRequest, reviewAgentChanges, rejectAgentChange, requestTransactionDeletion, forwardDeleteRequest, approveDeleteRequest, rejectDeleteRequest, getDocuments } from '../lib/api';
@@ -333,7 +334,7 @@ export default function TransactionDetailPage() {
       // Open the (new or existing) invoice in the same editor, in-context on this page.
       const invId = res.invoices?.[0]?.id;
       if (invId) { setInvEditorId(invId); getTransaction(id).then(applyUpdated).catch(() => {}); }
-      else navigate('/app/invoices');
+      else navigate(deskPath('invoice'));
     } catch (e) {
       toast(apiErrorMessage(e, 'Could not generate invoice'), 'bad');
     } finally { setGenerating(false); }
@@ -646,7 +647,7 @@ export default function TransactionDetailPage() {
   const onApproveDelete = async () => {
     if (!deleteReq) return;
     if (!window.confirm('Approve and permanently delete this transaction?')) return;
-    try { await approveDeleteRequest(deleteReq.id); toast('Transaction deleted', 'ok'); navigate('/app/transactions'); }
+    try { await approveDeleteRequest(deleteReq.id); toast('Transaction deleted', 'ok'); navigate(deskPath('transactions')); }
     catch (e) { toast(apiErrorMessage(e, 'Could not delete'), 'bad'); }
   };
   const onRejectDelete = async () => {
@@ -669,7 +670,7 @@ export default function TransactionDetailPage() {
   return (
     <>
       <div className="detail-head" style={{ position: 'sticky', top: 60, zIndex: 30 }}>
-        <button className="btn ghost sm" onClick={() => navigate('/app/transactions')}>← Back</button>
+        <button className="btn ghost sm" onClick={() => navigate(deskPath('transactions'))}>← Back</button>
         <div className="detail-title">
           <strong>{form.property || 'Untitled'}</strong>
           <span className={`pill ${typeClass(form.type)}`}>{typeLabel(form.type)}</span>

@@ -1,3 +1,4 @@
+import { areaPath } from '../common/domain';
 import { Controller, Get, Header, HttpCode, Logger, Post, Query, Req, Res } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { createHmac, timingSafeEqual } from 'node:crypto';
@@ -40,7 +41,7 @@ export class MetaPublicController {
   /** Where the browser lands after Meta redirects back. */
   private frontendReturn(outcome: string): string {
     const base = (process.env.FRONTEND_URL ?? 'http://localhost:5173').replace(/\/+$/, '');
-    return `${base}/app/meta?${outcome}`;
+    return `${base}${areaPath('crm', 'meta')}?${outcome}`;
   }
 
   /**
@@ -171,7 +172,7 @@ export class MetaPublicController {
 
     if (!parsed?.user_id) {
       this.log.warn('Meta data-deletion callback received with an invalid signed_request.');
-      return { url: `${base}/app/meta`, confirmation_code: 'invalid-request' };
+      return { url: `${base}${areaPath('crm', 'meta')}`, confirmation_code: 'invalid-request' };
     }
 
     const connection = await this.connections.findByFacebookUserId(parsed.user_id);
@@ -182,7 +183,7 @@ export class MetaPublicController {
 
     // A short, stable code Meta shows the user, and a URL where they can check the status.
     const code = createHash('sha256').update(`del:${parsed.user_id}`).digest('hex').slice(0, 16);
-    return { url: `${base}/app/meta?deletion=${code}`, confirmation_code: code };
+    return { url: `${base}${areaPath('crm', 'meta')}?deletion=${code}`, confirmation_code: code };
   }
 
   /**

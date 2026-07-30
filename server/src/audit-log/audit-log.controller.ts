@@ -9,7 +9,13 @@ import { AuditLogService, type AuditLogQuery } from './audit-log.service';
 export class AuditLogController {
   constructor(private readonly auditLogs: AuditLogService) {}
 
-  // Global audit trail — anyone with the Audit Trail screen (Super Admin always; Admin by default).
+  /**
+   * One area's audit trail — anyone with the Audit Trail screen (Super Admin always; Admin by
+   * default). The area arrives in the query string, so `/crm/audit` and `/desk/audit` each load
+   * their own trail and a direct link to either works.
+   *
+   * The screen permission is unchanged: splitting the trail in two does not widen who can read it.
+   */
   @Get()
   @Screen('audit', 'view')
   index(@Query() query: AuditLogQuery): Promise<Record<string, unknown>> {

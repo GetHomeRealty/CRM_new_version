@@ -1,7 +1,12 @@
 import { Navigate } from 'react-router-dom';
 import type { ReactNode } from 'react';
 import { useAuth } from '../context/AuthContext';
+import { AREAS, DEFAULT_AREA, areaPath, screenInArea, type Area } from './area';
 
+/**
+ * The order screens are offered in when deciding where to land someone. Unchanged — it is a
+ * preference list, not an area list, and it is filtered by area at the point of use.
+ */
 const ORDER = ['dashboard', 'transactions', 'invoice', 'reports', 'analytics', 'calendar', 'inventory', 'mls', 'users', 'reviews', 'favorites', 'inbox', 'lead', 'campaigns', 'meta', 'triggers', 'settings'];
 
 // Blocks a screen the user can't at least view. Pass `superAdmin` to restrict a
@@ -32,12 +37,23 @@ export function RequireScreen({ screen, superAdmin = false, orSuperAdmin = false
   return children;
 }
 
-// Sends the user to the first screen they're allowed to see.
-export function LandingRedirect() {
+/**
+ * Sends the user to the first screen they're allowed to see.
+ *
+ * Now area-aware, but it deliberately does not stop at the area boundary: if a user has no
+ * permission for anything in the area they arrived at, they are sent to the other area rather
+ * than told they have no access. Splitting the navigation must not lock out an agent who only
+ * ever had CRM permissions and happens to open the root URL.
+ */
+export function LandingRedirect({ area = DEFAULT_AREA }: { area?: Area }) {
   const { can } = useAuth();
-  const first = ORDER.find((s) => can(s, 'view'));
-  if (!first) {
-    return <div className="centered">You have no screen access yet. Ask an administrator to grant permissions.</div>;
-  }
-  return <Navigate to={`/app/${first}`} replace />;
+  const firstIn = (a: Area) => ORDER.find((s) => screenInArea(s, a) && can(s, 'view'));
+
+  const here = firstIn(area);
+  if (here) return <Navigate to={areaPath(area, here)} replace />;
+
+  const elsewhere = AREAS.filter((a) => a !== area).map((a) => ({ a, s: firstIn(a) })).find((x) => x.s);
+  if (elsewhere?.s) return <Navigate to={areaPath(elsewhere.a, elsewhere.s)} replace />;
+
+  return <div className="centered">You have no screen access yet. Ask an administrator to grant permissions.</div>;
 }

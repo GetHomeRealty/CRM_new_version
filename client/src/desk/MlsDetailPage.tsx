@@ -1,3 +1,4 @@
+import { useArea } from './AreaContext';
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useToast } from './toast';
@@ -9,6 +10,7 @@ import { PROPERTY_GROUPS, fmtValue, money, snapshotOf, downloadPropertyPdf } fro
 const stPill = (s?: string) => (s === 'Active' ? 'ok' : s === 'Sold' || s === 'Closed' ? 'bad' : s === 'Pending' ? 'warn' : 'info');
 
 export default function MlsDetailPage() {
+  const { link } = useArea();
   const { id = '' } = useParams();
   const navigate = useNavigate();
   const toast = useToast();
@@ -53,7 +55,7 @@ export default function MlsDetailPage() {
     return (
       <div className="card centered" style={{ padding: 40 }}>
         <h3 style={{ margin: 0 }}>{error || 'Property not found'}</h3>
-        <button className="btn ghost sm" style={{ marginTop: 10 }} onClick={() => navigate('/app/mls')}>Back to Listings</button>
+        <button className="btn ghost sm" style={{ marginTop: 10 }} onClick={() => navigate(link('mls'))}>Back to Listings</button>
       </div>
     );
   }
@@ -63,7 +65,7 @@ export default function MlsDetailPage() {
 
   return (
     <>
-      <button className="btn ghost sm" style={{ marginBottom: 12 }} onClick={() => navigate('/app/mls')}>← Back to Listings</button>
+      <button className="btn ghost sm" style={{ marginBottom: 12 }} onClick={() => navigate(link('mls'))}>← Back to Listings</button>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 2fr) minmax(220px, 1fr)', gap: 16, alignItems: 'start' }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>

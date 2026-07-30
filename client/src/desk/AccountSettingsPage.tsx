@@ -1,3 +1,5 @@
+import { useArea } from './AreaContext';
+import { crmPath } from './area';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -29,6 +31,7 @@ const PHOTO_MAX_MB = 4;
  * else's account from this screen.
  */
 export default function AccountSettingsPage() {
+  const { area, link } = useArea();
   const toast = useToast();
   const navigate = useNavigate();
   const { user } = useAuth();
@@ -134,7 +137,7 @@ export default function AccountSettingsPage() {
     }
     if (p.get('mail_connected')) toast('Email account connected.', 'ok');
     else toast(`Could not connect the email account: ${p.get('mail_error')}`, 'bad');
-    window.history.replaceState({}, '', '/app/account');
+    window.history.replaceState({}, '', link('account'));
     void load();
   }, [toast, load]);
 
@@ -287,7 +290,7 @@ export default function AccountSettingsPage() {
                 <div className="acct-actions">
                   {a.imap_host && a.inbound_enabled && (
                     <button className="btn ghost sm" type="button" disabled={busy === a.id}
-                      onClick={() => void act(a.id, () => syncMailAccount(a.id).then((r) => toast(r.message, r.error ? 'bad' : 'ok')), 'Sync finished.')}>
+                      onClick={() => void act(a.id, () => syncMailAccount(a.scope ?? area, a.id).then((r) => toast(r.message, r.error ? 'bad' : 'ok')), 'Sync finished.')}>
                       ↻ Sync now
                     </button>
                   )}
@@ -325,7 +328,7 @@ export default function AccountSettingsPage() {
               <span className={`pill ${integrations?.meta.connected ? 'ok' : ''}`}>
                 {integrations?.meta.connected ? 'Connected' : 'Not connected'}
               </span>
-              <button className="btn ghost sm" type="button" onClick={() => navigate('/app/meta')}>
+              <button className="btn ghost sm" type="button" onClick={() => navigate(crmPath('meta'))}>
                 {integrations?.meta.connected ? 'Open' : 'Connect'}
               </button>
             </div>
@@ -374,6 +377,7 @@ export default function AccountSettingsPage() {
  */
 function GoogleCalendarRow() {
   const toast = useToast();
+  const { link } = useArea();
   const [st, setSt] = useState<GoogleCalendarStatus | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -396,7 +400,7 @@ function GoogleCalendarRow() {
     }
     if (p.get('google_connected')) toast('Google Calendar connected.', 'ok');
     else toast(`Google connection failed: ${p.get('google_error')}`, 'bad');
-    window.history.replaceState({}, '', '/app/account');
+    window.history.replaceState({}, '', link('account'));
     load();
   }, [toast, load]);
 

@@ -6,6 +6,8 @@ import type { AgentChangeItem, AgentChangeNotif, DocNotif, DocNotifItem } from '
 import ChangePasswordModal from './ChangePasswordModal';
 import UserAvatar from './UserAvatar';
 import ErrorBoundary from '../components/ErrorBoundary';
+import { AREAS, AREA_LABEL, AREA_SHORT, AREA_TAB, DEFAULT_AREA, areaPath, screenInArea, type Area } from './area';
+import { AreaProvider } from './AreaContext';
 
 interface NavItem {
   key: string;
@@ -29,7 +31,11 @@ interface NavChild {
   key: string;
   label: string;
   ico?: string;
-  /** Where it navigates. Defaults to `/app/<key>`. */
+  /**
+   * Where it navigates, relative to the current area — `campaigns?tab=templates` becomes
+   * `/crm/campaigns?tab=templates`. Defaults to `key`. Relative rather than absolute so one
+   * declaration serves both areas and neither can point into the other by accident.
+   */
   path?: string;
   /** Whether this child is the one currently open. */
   match?: (pathname: string, search: string) => boolean;
@@ -41,6 +47,8 @@ interface NavChild {
    */
   screen?: string;
   superAdmin?: boolean;
+  /** Restricts the section to one area. The Settings tabs are per-area by nature. */
+  area?: Area;
 }
 
 const NAV: NavItem[] = [
@@ -55,9 +63,9 @@ const NAV: NavItem[] = [
   {
     key: 'campaigns', label: 'Campaigns', ico: '\u{1F4E3}',
     children: [
-      { key: 'campaigns', label: 'Campaigns', ico: '\u{1F4E3}', screen: 'campaigns', path: '/app/campaigns',
+      { key: 'campaigns', label: 'Campaigns', ico: '\u{1F4E3}', screen: 'campaigns', path: 'campaigns',
         match: (_p, q) => new URLSearchParams(q).get('tab') !== 'templates' },
-      { key: 'campaign-templates', label: 'Templates', ico: '\u{1F4DD}', screen: 'campaigns', path: '/app/campaigns?tab=templates',
+      { key: 'campaign-templates', label: 'Templates', ico: '\u{1F4DD}', screen: 'campaigns', path: 'campaigns?tab=templates',
         match: (_p, q) => new URLSearchParams(q).get('tab') === 'templates' },
     ],
   },
@@ -65,9 +73,9 @@ const NAV: NavItem[] = [
   {
     key: 'mls', label: 'MLS', ico: '\u{1F3F7}',
     children: [
-      { key: 'mls', label: 'MLS', ico: '\u{1F3F7}', path: '/app/mls',
+      { key: 'mls', label: 'MLS', ico: '\u{1F3F7}', path: 'mls',
         match: (_p, q) => new URLSearchParams(q).get('tab') !== 'favorites' },
-      { key: 'favorites', label: 'Favorites', ico: '\u{2665}', path: '/app/mls?tab=favorites',
+      { key: 'favorites', label: 'Favorites', ico: '\u{2665}', path: 'mls?tab=favorites',
         match: (_p, q) => new URLSearchParams(q).get('tab') === 'favorites' },
     ],
   },
@@ -81,12 +89,17 @@ const NAV: NavItem[] = [
     key: 'settings', label: 'Settings', ico: '\u{2699}',
     // Mirrors SettingsPage's own tabs, with the permissions those tabs already carried: the two
     // that came from the Super-Admin-only Email Settings screen stay Super Admin.
+    //
+    // The area-specific tab is shown only in its own area. Offering "CRM Settings" from inside
+    // the Transaction Desk is exactly the cross-wiring this separation exists to remove — and it
+    // was the cause of the bug where linking a CRM email account opened the Desk's integrations.
+    // Company Settings appears in both, because it belongs to neither.
     children: [
-      { key: 'settings-desk', label: 'Transaction Desk', ico: '\u{1F4DA}', superAdmin: true, path: '/app/settings?tab=desk',
+      { key: 'settings-desk', label: 'Transaction Desk', ico: '\u{1F4DA}', superAdmin: true, area: 'desk', path: 'settings?tab=desk',
         match: (_p, q) => (new URLSearchParams(q).get('tab') ?? 'desk') === 'desk' },
-      { key: 'settings-crm', label: 'CRM Settings', ico: '\u{2699}', superAdmin: true, path: '/app/settings?tab=crm',
-        match: (_p, q) => new URLSearchParams(q).get('tab') === 'crm' },
-      { key: 'settings-company', label: 'Company Settings', ico: '\u{1F3E2}', screen: 'settings', path: '/app/settings?tab=company',
+      { key: 'settings-crm', label: 'CRM Settings', ico: '\u{2699}', superAdmin: true, area: 'crm', path: 'settings?tab=crm',
+        match: (_p, q) => (new URLSearchParams(q).get('tab') ?? 'crm') === 'crm' },
+      { key: 'settings-company', label: 'Company Settings', ico: '\u{1F3E2}', screen: 'settings', path: 'settings?tab=company',
         match: (_p, q) => new URLSearchParams(q).get('tab') === 'company' },
     ],
   },
@@ -102,7 +115,7 @@ const TITLES: Record<string, string> = Object.fromEntries(NAV.map((n): [string, 
 // needs a heading when someone arrives on it directly.
 TITLES.favorites = 'Favorites';
 
-export default function DeskLayout() {
+export default function DeskLayout({ area = DEFAULT_AREA }: { area?: Area }) {
   const { logout, user, can, isAdminOrAbove, isSuperAdmin } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
@@ -143,20 +156,29 @@ export default function DeskLayout() {
     return () => document.removeEventListener('mousedown', onDoc);
   }, [bellOpen, docBellOpen]);
 
-  const openNotif = (item: AgentChangeItem) => { setBellOpen(false); navigate(`/app/transactions/${item.id}`); };
+  // Both notifications are about transactions, so they always open in the Transaction Desk
+  // regardless of which area the bell was rung in.
+  const openNotif = (item: AgentChangeItem) => { setBellOpen(false); navigate(areaPath('desk', `transactions/${item.id}`)); };
   const openDocNotif = (item: DocNotifItem) => {
     setDocBellOpen(false);
     // Redirect to the transaction and open Legal & Documentation (where the review is).
-    navigate(`/app/transactions/${item.id}?open=docs`);
+    navigate(`${areaPath('desk', `transactions/${item.id}`)}?open=docs`);
     markDocNotificationsSeen(item.id).then(loadDocNotif).catch(() => {});
   };
 
-  const visibleNav = NAV.filter((n) => (n.agentOnly ? isAgent : n.superAdmin ? isSuperAdmin : can(n.key, 'view')))
-    // Drop sections the user has no permission for, and flatten an entry back to a plain link
-    // when only one is left — an expander that reveals a single item is just a slower click.
+  const visibleNav = NAV
+    // Only this area's modules. Permission is unchanged by the split — a screen the user could
+    // open before is still openable, it is simply listed under the area it belongs to.
+    .filter((n) => screenInArea(n.key, area))
+    .filter((n) => (n.agentOnly ? isAgent : n.superAdmin ? isSuperAdmin : can(n.key, 'view')))
+    // Drop sections the user has no permission for or that belong to the other area, and flatten
+    // an entry back to a plain link when only one is left — an expander that reveals a single
+    // item is just a slower click.
     .map((n) => {
       if (!n.children) return n;
-      const kids = n.children.filter((c) => (c.superAdmin ? isSuperAdmin : can(c.screen ?? c.key, 'view')));
+      const kids = n.children
+        .filter((c) => !c.area || c.area === area)
+        .filter((c) => (c.superAdmin ? isSuperAdmin : can(c.screen ?? c.key, 'view')));
       return kids.length > 1 ? { ...n, children: kids } : { ...n, children: undefined };
     });
 
@@ -168,10 +190,60 @@ export default function DeskLayout() {
   const [openNav, setOpenNav] = useState<Record<string, boolean>>({});
   const toggleNav = (key: string) => setOpenNav((o) => ({ ...o, [key]: !(o[key] ?? false) }));
 
-  const seg = location.pathname.split('/')[2] || 'transactions';
-  const title = location.pathname.includes('/transactions/') ? 'Transaction Detail' : (TITLES[seg] || 'Transactions');
+  // ['', area, screen, …] — the area occupies the first segment, so the screen is still index 2.
+  const seg = location.pathname.split('/')[2] || '';
+  const title = location.pathname.includes('/transactions/') ? 'Transaction Detail' : (TITLES[seg] || AREA_SHORT[area]);
 
-  const go = (key: string) => navigate(`/app/${key}`);
+  const go = (key: string) => navigate(areaPath(area, key));
+
+  /**
+   * The trail after the area: the module, then the record when there is one.
+   *
+   * Derived from the path rather than kept in state, so it cannot fall out of step with the URL —
+   * and so a deep link that skips the list still shows the whole trail. The module label comes from
+   * the same TITLES map the heading uses, so the two always agree.
+   */
+  const rest = location.pathname.split('/').filter(Boolean).slice(2);
+  const crumbs: { label: string; to?: string }[] = [];
+  if (seg) {
+    crumbs.push({ label: TITLES[seg] ?? seg.replace(/-/g, ' ').replace(/\w/g, (c) => c.toUpperCase()), to: areaPath(area, seg) });
+    if (rest.length) {
+      // A numeric segment is a record id; anything else is a named sub-screen (import, downloads).
+      const last = rest[rest.length - 1];
+      crumbs.push({ label: /^\d+$/.test(last) ? `#${last}` : last.replace(/-/g, ' ').replace(/\w/g, (c) => c.toUpperCase()) });
+    }
+  }
+
+  /**
+   * Switching areas keeps you on the same screen when that screen exists on the other side —
+   * moving from the CRM's Calendar to the Desk's Calendar is the useful behaviour. When it does
+   * not exist there, the area's own landing decides, rather than dropping the user on a stub.
+   */
+  const switchArea = (next: Area) => {
+    if (next === area) return;
+    navigate(seg && screenInArea(seg, next) ? `${areaPath(next, seg)}${location.search}` : areaPath(next));
+  };
+
+  /**
+   * The area switcher, rendered in two places with only one visible at a time — beside the
+   * navigation it governs on a wide screen, and in the topbar once the sidebar collapses to its
+   * icon rail. One definition, so the two placements cannot drift apart in behaviour.
+   */
+  const areaSwitch = (place: 'in-sidebar' | 'in-topbar') => (
+    <div className={`area-switch ${place}`} role="group" aria-label="Application area">
+      {AREAS.map((a) => (
+        <button
+          key={a}
+          className={`area-btn ${a === area ? 'active' : ''}`}
+          aria-current={a === area ? 'page' : undefined}
+          title={AREA_LABEL[a]}
+          onClick={() => switchArea(a)}
+        >
+          {AREA_TAB[a]}
+        </button>
+      ))}
+    </div>
+  );
 
   const onLogout = async () => {
     try { await logout(); } catch { /* ignore */ }
@@ -181,7 +253,7 @@ export default function DeskLayout() {
 
   return (
     <>
-      <div className="titlebar"><span className="dot">G</span> Get Home Realty — Transaction Desk</div>
+      <div className="titlebar"><span className="dot">G</span> Get Home Realty — {AREA_SHORT[area]}</div>
       <div className="app">
         <aside className="sidebar">
           <div className="logo">
@@ -193,6 +265,15 @@ export default function DeskLayout() {
               onError={(e) => { const i = e.currentTarget; if (i.src !== `${window.location.origin}/logo.svg`) i.src = '/logo.svg'; }}
             />
           </div>
+          {/*
+            Which half of the application you are in, and the way to the other one.
+
+            Above the navigation rather than tucked in the topbar because it changes the meaning of
+            every entry below it: the same "Calendar" is a different calendar in each area, and a
+            switcher placed away from the list it governs invites the reading that the list is all
+            there is.
+          */}
+          {areaSwitch('in-sidebar')}
           <nav className="nav">
             {visibleNav.map((n) => {
               if (!n.children) {
@@ -222,7 +303,7 @@ export default function DeskLayout() {
                       <button
                         key={c.key}
                         className={`nav-child ${active ? 'active' : ''}`}
-                        onClick={() => navigate(c.path ?? `/app/${c.key}`)}
+                        onClick={() => navigate(areaPath(area, c.path ?? c.key))}
                       >
                         <span className="ico">{c.ico ?? ''}</span><span>{c.label}</span>
                       </button>
@@ -238,6 +319,32 @@ export default function DeskLayout() {
         </aside>
         <main className="main">
           <div className="topbar">
+            {/* Below 1100px the sidebar becomes a 64px icon rail — and with its own scrollbar there
+                are barely 20px of usable width, too little for two legible labels. The switcher
+                moves up here instead, where the labels fit in full. Exactly one of the two is
+                displayed; the stylesheet decides which. */}
+            {areaSwitch('in-topbar')}
+            {/*
+              Area → module → (record). Section 15 asks for breadcrumbs, and with two areas the
+              first crumb is doing real work: it names which half of the application you are in,
+              which the screen title alone no longer tells you — "Calendar" is a different calendar
+              on each side.
+
+              The area crumb is a link back to that area's landing; the module crumb is a link when
+              you are deeper than the module itself. The last crumb is never a link, because a link
+              to where you already are is a dead control.
+            */}
+            <nav className="crumbs" aria-label="Breadcrumb">
+              <button type="button" onClick={() => navigate(areaPath(area))}>{AREA_SHORT[area]}</button>
+              {crumbs.map((c, i) => (
+                <span key={c.label} className="crumb">
+                  <span className="crumb-sep" aria-hidden="true">›</span>
+                  {i < crumbs.length - 1 && c.to
+                    ? <button type="button" onClick={() => navigate(c.to!)}>{c.label}</button>
+                    : <span aria-current="page">{c.label}</span>}
+                </span>
+              ))}
+            </nav>
             <div className="title">{title}</div>
             <div className="right">
               {isAdminOrAbove && (
@@ -311,11 +418,16 @@ export default function DeskLayout() {
             reload, rather than leaving an empty frame.
           */}
           <div className="content">
-            <ErrorBoundary key={location.pathname} what="This page">
-              <Suspense fallback={<div className="empty-cell">Loading…</div>}>
-                <Outlet />
-              </Suspense>
-            </ErrorBoundary>
+            {/* The area is published to the screens themselves, so a shared page (Settings,
+                Calendar, the Audit Trail) knows which half it is being shown in without
+                re-deriving it from the URL and risking a different answer than the sidebar. */}
+            <AreaProvider area={area}>
+              <ErrorBoundary key={location.pathname} what="This page">
+                <Suspense fallback={<div className="empty-cell">Loading…</div>}>
+                  <Outlet />
+                </Suspense>
+              </ErrorBoundary>
+            </AreaProvider>
           </div>
         </main>
       </div>

@@ -1,3 +1,4 @@
+import type { Area } from '../common/domain';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { GoogleCalendarSyncService } from '../google/google-calendar-sync.service';
@@ -55,9 +56,23 @@ export class CalendarService {
     return { user_id: user.id ?? -1 };
   }
 
+  /**
+   * Which events one area's calendar shows.
+   *
+   * The CRM Calendar shows what came from the calendar connected under CRM Settings; the
+   * Transaction Desk Calendar shows what came from its own. Events with no area pre-date the split
+   * and appear in both, so nothing disappeared from anyone's calendar when the column arrived —
+   * the next Google pull claims and stamps them.
+   *
+   * Spelled as a union because Prisma rejects `null` inside an `in` list.
+   */
+  private areaWhere(area: Area): Record<string, unknown> {
+    return { OR: [{ domain: area }, { domain: null }] };
+  }
+
   // ------------------------------------------------------------------ read
-  async list(user: AuthUserRecord, q: EventQuery = {}): Promise<Record<string, unknown>[]> {
-    const where: Record<string, unknown> = { deleted_at: null, ...this.scopeWhere(user) };
+  async list(user: AuthUserRecord, area: Area, q: EventQuery = {}): Promise<Record<string, unknown>[]> {
+    const where: Record<string, unknown> = { deleted_at: null, ...this.scopeWhere(user), ...this.areaWhere(area) };
     if (q.from || q.to) {
       where.date = {
         ...(q.from ? { gte: this.toDate(q.from) } : {}),
@@ -77,9 +92,9 @@ export class CalendarService {
     return rows.map((r) => this.present(r));
   }
 
-  async get(id: number, user: AuthUserRecord): Promise<Record<string, unknown>> {
+  async get(id: number, user: AuthUserRecord, area: Area): Promise<Record<string, unknown>> {
     const row = await this.prisma.calendar_events.findFirst({
-      where: { id, deleted_at: null, ...this.scopeWhere(user) },
+      where: { id, deleted_at: null, ...this.scopeWhere(user), ...this.areaWhere(area) },
       include: { transactions: { select: { id: true, trade_no: true, property: true } } },
     });
     if (!row) throw new NotFoundException({ message: 'Event not found.' });
@@ -87,7 +102,7 @@ export class CalendarService {
   }
 
   // ----------------------------------------------------------------- write
-  async create(input: EventInput, user: AuthUserRecord): Promise<Record<string, unknown>> {
+  async create(input: EventInput, user: AuthUserRecord, area: Area): Promise<Record<string, unknown>> {
     const data = await this.validate(input, true);
     const now = new Date();
     const row = await this.prisma.calendar_events.create({
@@ -97,6 +112,8 @@ export class CalendarService {
         date: data.date as Date,
         time: data.time as string,
         user_id: user.id ?? null,
+        // The area it was created in. Also what decides which Google calendar it is mirrored to.
+        domain: area,
         created_by: user.name,
         created_at: now,
         updated_at: now,
@@ -110,8 +127,8 @@ export class CalendarService {
     return this.present(row);
   }
 
-  async update(id: number, input: EventInput, user: AuthUserRecord): Promise<Record<string, unknown>> {
-    const existing = await this.prisma.calendar_events.findFirst({ where: { id, deleted_at: null, ...this.scopeWhere(user) } });
+  async update(id: number, input: EventInput, user: AuthUserRecord, area: Area): Promise<Record<string, unknown>> {
+    const existing = await this.prisma.calendar_events.findFirst({ where: { id, deleted_at: null, ...this.scopeWhere(user), ...this.areaWhere(area) } });
     if (!existing) throw new NotFoundException({ message: 'Event not found.' });
 
     const data = await this.validate(input, false);
@@ -125,8 +142,8 @@ export class CalendarService {
   }
 
   /** Soft delete, so an appointment can be recovered the same way other records are. */
-  async remove(id: number, user: AuthUserRecord): Promise<{ deleted: boolean }> {
-    const existing = await this.prisma.calendar_events.findFirst({ where: { id, deleted_at: null, ...this.scopeWhere(user) } });
+  async remove(id: number, user: AuthUserRecord, area: Area): Promise<{ deleted: boolean }> {
+    const existing = await this.prisma.calendar_events.findFirst({ where: { id, deleted_at: null, ...this.scopeWhere(user), ...this.areaWhere(area) } });
     if (!existing) throw new NotFoundException({ message: 'Event not found.' });
     await this.prisma.calendar_events.update({ where: { id }, data: { deleted_at: new Date(), updated_at: new Date() } });
     await this.logToTransaction(existing.transaction_id, user, 'Event deleted', existing.title, existing.date, existing.time);

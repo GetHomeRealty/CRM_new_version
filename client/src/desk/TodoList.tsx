@@ -1,3 +1,4 @@
+import { useArea } from './AreaContext';
 import { useCallback, useEffect, useState } from 'react';
 import { createTodo, deleteTodo, listTodos, updateTodo } from '../lib/todosApi';
 import { apiErrorMessage } from '../lib/apiError';
@@ -31,6 +32,7 @@ const title = (v: string): string => v.charAt(0).toUpperCase() + v.slice(1);
  * the Dashboard only renders this for someone who can see the Calendar.
  */
 export default function TodoList({ onCounts }: { onCounts?: (c: TodoCounts) => void } = {}) {
+  const { area } = useArea();
   const toast = useToast();
   const { can } = useAuth();
   const canEdit = can('calendar', 'edit');
@@ -53,7 +55,7 @@ export default function TodoList({ onCounts }: { onCounts?: (c: TodoCounts) => v
   const load = useCallback(async (quiet = false) => {
     if (!quiet) setLoading(true);
     try {
-      const res = await listTodos(filters);
+      const res = await listTodos(area, filters);
       setTodos(res.data);
       setCounts(res.counts);
       // The summary card above reads the same numbers, so it cannot drift out of step with the
@@ -64,7 +66,8 @@ export default function TodoList({ onCounts }: { onCounts?: (c: TodoCounts) => v
     } finally {
       setLoading(false);
     }
-  }, [filters, toast, onCounts]);
+    // `area` is a dependency: the CRM's list and the Transaction Desk's are different lists.
+  }, [filters, toast, onCounts, area]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -85,7 +88,7 @@ export default function TodoList({ onCounts }: { onCounts?: (c: TodoCounts) => v
     title: 'Delete this todo?',
     message: t.title,
     onConfirm: async () => {
-      await run(t.id, () => deleteTodo(t.id), 'Todo deleted.');
+      await run(t.id, () => deleteTodo(area, t.id), 'Todo deleted.');
       closeConfirm();
     },
   });
@@ -157,7 +160,7 @@ export default function TodoList({ onCounts }: { onCounts?: (c: TodoCounts) => v
                   aria-label={t.status === 'completed' ? `Reopen ${t.title}` : `Complete ${t.title}`}
                   title={t.status === 'completed' ? 'Mark as pending' : 'Mark as complete'}
                   onClick={() => void run(t.id,
-                    () => updateTodo(t.id, { status: t.status === 'completed' ? 'pending' : 'completed' }),
+                    () => updateTodo(area, t.id, { status: t.status === 'completed' ? 'pending' : 'completed' }),
                     t.status === 'completed' ? 'Todo reopened.' : 'Todo completed.')}
                 >
                   {t.status === 'completed' ? '✓' : ''}
@@ -182,12 +185,12 @@ export default function TodoList({ onCounts }: { onCounts?: (c: TodoCounts) => v
                   <div className="todo-actions">
                     {t.status === 'pending' ? (
                       <button className="btn ghost sm todo-cancel" type="button" disabled={busy === t.id}
-                        onClick={() => void run(t.id, () => updateTodo(t.id, { status: 'cancelled' }), 'Todo cancelled.')}>
+                        onClick={() => void run(t.id, () => updateTodo(area, t.id, { status: 'cancelled' }), 'Todo cancelled.')}>
                         Cancel
                       </button>
                     ) : (
                       <button className="btn ghost sm" type="button" disabled={busy === t.id}
-                        onClick={() => void run(t.id, () => updateTodo(t.id, { status: 'pending' }), 'Todo reopened.')}>
+                        onClick={() => void run(t.id, () => updateTodo(area, t.id, { status: 'pending' }), 'Todo reopened.')}>
                         Reopen
                       </button>
                     )}
@@ -221,6 +224,9 @@ export default function TodoList({ onCounts }: { onCounts?: (c: TodoCounts) => v
 }
 
 function TodoEditor({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
+  // The editor is its own component, so it reads the area itself — a new task belongs to the area
+  // whose dashboard it was added from.
+  const { area } = useArea();
   const toast = useToast();
   const [form, setForm] = useState({ title: '', description: '', priority: 'medium' as TodoPriority, due_date: '' });
   const [saving, setSaving] = useState(false);
@@ -229,7 +235,7 @@ function TodoEditor({ onClose, onSaved }: { onClose: () => void; onSaved: () => 
     e.preventDefault();
     setSaving(true);
     try {
-      await createTodo({
+      await createTodo(area, {
         title: form.title.trim(),
         description: form.description.trim(),
         priority: form.priority,

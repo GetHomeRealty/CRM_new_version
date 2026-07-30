@@ -1,3 +1,4 @@
+import { useArea } from './AreaContext';
 import { useEffect, useState } from 'react';
 import { createEvent, updateEvent } from '../lib/calendarApi';
 import { listTransactions } from '../lib/api';
@@ -74,6 +75,9 @@ export default function EventEditorModal({ event, defaultDate, options, onClose,
   onClose: () => void;
   onSaved: () => void;
 }) {
+  // The event is created in, and saved to, the area whose calendar is on screen — which also
+  // decides which connected Google calendar it is mirrored to.
+  const { area } = useArea();
   const toast = useToast();
   const [form, setForm] = useState<Form>(() => toForm(event, defaultDate));
   const [errors, setErrors] = useState<Record<string, string[]>>({});
@@ -109,8 +113,8 @@ export default function EventEditorModal({ event, defaultDate, options, onClose,
       transaction_id: form.transaction_id ? Number(form.transaction_id) : null,
     };
     try {
-      if (event) await updateEvent(event.id, body);
-      else await createEvent(body);
+      if (event) await updateEvent(area, event.id, body);
+      else await createEvent(area, body);
       toast(event ? 'Event updated' : 'Event created', 'ok');
       onSaved();
     } catch (ex) {

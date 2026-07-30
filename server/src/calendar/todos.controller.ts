@@ -1,3 +1,4 @@
+import { parseArea } from '../common/domain';
 import { Body, Controller, Delete, Get, HttpCode, Param, ParseIntPipe, Post, Put, Query, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '../auth/guards/auth.guard';
 import { ScreenGuard } from '../auth/guards/screen.guard';
@@ -23,26 +24,26 @@ export class TodosController {
 
   @Get()
   @Screen('calendar', 'view')
-  list(@CurrentUser() user: AuthUserRecord, @Query() q: TodoQuery): Promise<unknown> {
-    return this.todos.list(user, q ?? {});
+  list(@CurrentUser() user: AuthUserRecord, @Query() q: TodoQuery & { area?: string }): Promise<unknown> {
+    return this.todos.list(user, parseArea(q?.area), q ?? {});
   }
 
   @Post()
   @HttpCode(201)
   @Screen('calendar', 'edit')
-  create(@CurrentUser() user: AuthUserRecord, @Body() body: TodoInput): Promise<unknown> {
-    return this.todos.create(body ?? {}, user);
+  create(@CurrentUser() user: AuthUserRecord, @Body() body: TodoInput, @Query('area') area?: string): Promise<unknown> {
+    return this.todos.create(body ?? {}, user, parseArea(area));
   }
 
   @Put(':id')
   @Screen('calendar', 'edit')
-  update(@CurrentUser() user: AuthUserRecord, @Param('id', ParseIntPipe) id: number, @Body() body: TodoInput): Promise<unknown> {
-    return this.todos.update(id, body ?? {}, user);
+  update(@CurrentUser() user: AuthUserRecord, @Param('id', ParseIntPipe) id: number, @Body() body: TodoInput, @Query('area') area?: string): Promise<unknown> {
+    return this.todos.update(id, body ?? {}, user, parseArea(area));
   }
 
   @Delete(':id')
   @Screen('calendar', 'edit')
-  remove(@CurrentUser() user: AuthUserRecord, @Param('id', ParseIntPipe) id: number): Promise<unknown> {
-    return this.todos.remove(id, user);
+  remove(@CurrentUser() user: AuthUserRecord, @Param('id', ParseIntPipe) id: number, @Query('area') area?: string): Promise<unknown> {
+    return this.todos.remove(id, user, parseArea(area));
   }
 }

@@ -1,3 +1,4 @@
+import { deskPath } from './area';
 import { useEffect, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -90,7 +91,7 @@ export default function RecycleBinPage() {
   const txnCell = (id: number | string | null | undefined, tradeNo: number | string | undefined, trashed: boolean | undefined): ReactNode => (id
     ? (trashed
       ? <span className="pill warn" style={{ fontSize: 10 }} title="Transaction is also in the bin — restore it to recover this too">Trade #{tradeNo} (deleted)</span>
-      : <button className="btn ghost sm" onClick={() => navigate(`/app/transactions/${id}`)}>Trade #{tradeNo} ↗</button>)
+      : <button className="btn ghost sm" onClick={() => navigate(deskPath(`transactions/${id}`))}>Trade #{tradeNo} ↗</button>)
     : '—');
 
   const TABS: [string, string, number][] = [

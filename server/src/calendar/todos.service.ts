@@ -1,3 +1,4 @@
+import type { Area } from '../common/domain';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -36,8 +37,20 @@ export class TodosService {
     return { user_id: user.id ?? -1 };
   }
 
-  async list(user: AuthUserRecord, q: TodoQuery = {}): Promise<Record<string, unknown>> {
-    const and: Prisma.todosWhereInput[] = [{ deleted_at: null }, this.scope(user)];
+  /**
+   * Which list an area's To-Do panel shows.
+   *
+   * A CRM task must not appear in the Transaction Management list and vice versa. Tasks with no
+   * area pre-date the split; they appear in both rather than being guessed at, because an
+   * unassigned task hidden from the half of the application its owner works in is a task that gets
+   * missed. Section 11's "shared task" is exactly this state.
+   */
+  private areaWhere(area: Area): Prisma.todosWhereInput {
+    return { OR: [{ domain: area }, { domain: null }] };
+  }
+
+  async list(user: AuthUserRecord, area: Area, q: TodoQuery = {}): Promise<Record<string, unknown>> {
+    const and: Prisma.todosWhereInput[] = [{ deleted_at: null }, this.scope(user), this.areaWhere(area)];
 
     const search = str(q.search);
     if (search) {
@@ -59,7 +72,9 @@ export class TodosService {
 
     // Counts ignore the search and dropdown filters so the tallies describe the whole list,
     // not whatever is on screen — otherwise "Pending (0)" would appear while filtering.
-    const base: Prisma.todosWhereInput = { AND: [{ deleted_at: null }, this.scope(user)] };
+    // Area-scoped as well, or the CRM's "3 pending" would be counting Transaction Desk tasks that
+    // its own list never shows — a tally that cannot be worked down.
+    const base: Prisma.todosWhereInput = { AND: [{ deleted_at: null }, this.scope(user), this.areaWhere(area)] };
     const [pending, completed, cancelled, overdue] = await Promise.all([
       this.prisma.todos.count({ where: { AND: [base, { status: 'pending' }] } }),
       this.prisma.todos.count({ where: { AND: [base, { status: 'completed' }] } }),
@@ -75,7 +90,7 @@ export class TodosService {
     };
   }
 
-  async create(input: TodoInput, user: AuthUserRecord): Promise<Record<string, unknown>> {
+  async create(input: TodoInput, user: AuthUserRecord, area: Area): Promise<Record<string, unknown>> {
     const data = this.validate(input, true);
     const now = new Date();
     const row = await this.prisma.todos.create({
@@ -83,6 +98,8 @@ export class TodosService {
         ...data,
         title: data.title as string,
         user_id: user.id ?? null,
+        // Belongs to the area it was added in, so it stays on that list.
+        domain: area,
         created_by: user.name,
         created_at: now,
         updated_at: now,
@@ -91,8 +108,8 @@ export class TodosService {
     return this.present(row);
   }
 
-  async update(id: number, input: TodoInput, user: AuthUserRecord): Promise<Record<string, unknown>> {
-    const existing = await this.prisma.todos.findFirst({ where: { id, deleted_at: null, ...this.scope(user) } });
+  async update(id: number, input: TodoInput, user: AuthUserRecord, area: Area): Promise<Record<string, unknown>> {
+    const existing = await this.prisma.todos.findFirst({ where: { id, deleted_at: null, AND: [this.scope(user), this.areaWhere(area)] } });
     if (!existing) throw new NotFoundException({ message: 'Todo not found.' });
 
     const data = this.validate(input, false);
@@ -107,8 +124,8 @@ export class TodosService {
   }
 
   /** Soft delete, so a checklist item removed by mistake is still recoverable in the database. */
-  async remove(id: number, user: AuthUserRecord): Promise<{ deleted: boolean }> {
-    const existing = await this.prisma.todos.findFirst({ where: { id, deleted_at: null, ...this.scope(user) } });
+  async remove(id: number, user: AuthUserRecord, area: Area): Promise<{ deleted: boolean }> {
+    const existing = await this.prisma.todos.findFirst({ where: { id, deleted_at: null, AND: [this.scope(user), this.areaWhere(area)] } });
     if (!existing) throw new NotFoundException({ message: 'Todo not found.' });
     await this.prisma.todos.update({ where: { id }, data: { deleted_at: new Date(), updated_at: new Date() } });
     return { deleted: true };

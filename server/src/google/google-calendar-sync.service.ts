@@ -54,7 +54,10 @@ export class GoogleCalendarSyncService {
 
       let pulled = 0;
       for (const ev of res.events) {
-        if (await this.applyGoogleEvent(userId, ev)) pulled++;
+        // The connection's scope IS the event's area: something pulled from the calendar connected
+        // under CRM Settings is a CRM event, and one pulled from the Transaction Desk's is a
+        // Transaction Desk event.
+        if (await this.applyGoogleEvent(userId, ev, scope)) pulled++;
       }
       await this.connections.touchSync(userId, res.nextSyncToken, scope);
       return { pulled, error: null };
@@ -65,11 +68,26 @@ export class GoogleCalendarSyncService {
     }
   }
 
-  /** Upsert one Google event into calendar_events. Returns true when a row was written. */
-  private async applyGoogleEvent(userId: number, ev: GoogleEvent): Promise<boolean> {
-    const existing = await this.prisma.calendar_events.findFirst({ where: { google_calendar_id: ev.id, user_id: userId }, select: { id: true } });
+  /**
+   * Upsert one Google event into calendar_events. Returns true when a row was written.
+   *
+   * `area` is the scope of the connection it came from, and it is part of the identity of the row:
+   * the same meeting can genuinely exist in both connected Google accounts — 22 of the events in
+   * this database do — so matching on the Google id alone would make a pull from one calendar
+   * overwrite the other area's copy and silently move it across the boundary. The pair
+   * (google id, area) is what identifies a row.
+   */
+  private async applyGoogleEvent(userId: number, ev: GoogleEvent, area: IntegrationScope): Promise<boolean> {
+    const existing = await this.prisma.calendar_events.findFirst({
+      // `domain: null` is included so an event that pre-dates the split is claimed and stamped by
+      // the next pull rather than being duplicated alongside itself.
+      where: { google_calendar_id: ev.id, user_id: userId, OR: [{ domain: area }, { domain: null }] },
+      select: { id: true },
+    });
 
-    // A cancelled Google event removes its CRM copy rather than leaving a ghost.
+    // A cancelled Google event removes its local copy rather than leaving a ghost. Only this
+    // area's copy: the other calendar still lists it, so removing that one too would delete an
+    // event the other area can still see on Google.
     if (ev.status === 'cancelled') {
       if (existing) await this.prisma.calendar_events.update({ where: { id: existing.id }, data: { deleted_at: new Date(), updated_at: new Date() } });
       return false;
@@ -90,6 +108,9 @@ export class GoogleCalendarSyncService {
       google_calendar_id: ev.id,
       last_synced_to_google: new Date(),
       user_id: userId,
+      // Which area's calendar this belongs to. Written on update as well as create, so the events
+      // that pre-date the split are classified the first time they are seen again.
+      domain: area,
       updated_at: new Date(),
     };
     if (existing) await this.prisma.calendar_events.update({ where: { id: existing.id }, data });
@@ -98,20 +119,29 @@ export class GoogleCalendarSyncService {
   }
 
   /**
-   * Mirror a CRM event to Google, best-effort. Called after an event is created. Silent when the
-   * user has no Google connection, and never throws into the caller — a calendar save must not
-   * fail because Google was briefly unreachable.
+   * Mirror a locally created event to Google, best-effort. Called after an event is created. Silent
+   * when the user has no Google connection for that area, and never throws into the caller — a
+   * calendar save must not fail because Google was briefly unreachable.
+   *
+   * The event is read FIRST so its area can choose the connection. Both connection lookups default
+   * to `crm`, so before this every event pushed to the CRM's Google calendar — a Transaction Desk
+   * appointment appeared in the CRM's calendar and nowhere else, which is precisely the mixing this
+   * separation removes.
    */
   async pushEvent(userId: number | null, eventId: number): Promise<void> {
     if (!userId) return;
-    const token = await this.connections.accessToken(userId).catch(() => null);
-    if (!token) return;
-    const conn = await this.connections.find(userId);
-    if (!conn) return;
 
     const ev = await this.prisma.calendar_events.findFirst({ where: { id: eventId, user_id: userId } });
     // Don't echo an event that came FROM Google back to Google.
     if (!ev || ev.google_calendar_id) return;
+
+    // An unclassified event goes to the CRM connection, which is where every event went before the
+    // split — the same choice `areaFor` makes for the old URLs, for the same reason.
+    const area: IntegrationScope = ev.domain === 'desk' ? 'desk' : 'crm';
+    const token = await this.connections.accessToken(userId, area).catch(() => null);
+    if (!token) return;
+    const conn = await this.connections.find(userId, area);
+    if (!conn) return;
 
     try {
       const start = new Date(`${ev.date.toISOString().slice(0, 10)}T${(ev.time || '09:00').slice(0, 5)}:00`);

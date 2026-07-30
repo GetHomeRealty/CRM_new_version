@@ -6,6 +6,8 @@
  * work. The consent screen the user sees is Google's own — this app only ever redirects to it.
  */
 
+import { areaPath } from '../common/domain';
+
 const env = (name: string): string => (process.env[name] ?? '').trim();
 
 export const clientId = (): string => env('GOOGLE_CLIENT_ID');
@@ -32,7 +34,7 @@ export const redirectUri = (origin: string): string => {
 /** Where the browser lands back in the SPA after the round-trip. */
 export const frontendReturn = (outcome: string): string => {
   const base = (process.env.FRONTEND_URL ?? 'http://localhost:5173').replace(/\/+$/, '');
-  return `${base}/app/account?${outcome}`;
+  return `${base}${areaPath('desk', 'account')}?${outcome}`;
 };
 
 /**

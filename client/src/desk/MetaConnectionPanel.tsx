@@ -1,3 +1,4 @@
+import { crmPath } from './area';
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -178,7 +179,7 @@ export default function MetaConnectionPanel({ compact = false }: { compact?: boo
           {busy === 'test' ? 'Testing…' : 'Test Connection'}
         </button>
         {compact && (
-          <button className="btn ghost sm" type="button" onClick={() => navigate('/app/meta')}>Open Meta screen</button>
+          <button className="btn ghost sm" type="button" onClick={() => navigate(crmPath('meta'))}>Open Meta screen</button>
         )}
       </div>
 

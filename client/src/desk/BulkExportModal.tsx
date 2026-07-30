@@ -1,3 +1,4 @@
+import { deskPath } from './area';
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -73,7 +74,7 @@ export default function BulkExportModal({ mode, transactionIds, onClose }: {
       const job = await queueExport(action, selection);
       toast(`Export ${job.export_id} queued — track it in the Download Centre`, 'ok');
       onClose();
-      nav('/app/transactions/downloads');
+      nav(deskPath('transactions/downloads'));
     } catch (e) {
       toast(apiErrorMessage(e, 'Could not queue the export'), 'bad');
       setBusy('');

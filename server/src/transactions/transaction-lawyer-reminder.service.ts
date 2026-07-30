@@ -1,3 +1,4 @@
+import { areaPath } from '../common/domain';
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { MailerService } from '../email/mailer.service';
@@ -84,7 +85,7 @@ export class TransactionLawyerReminderService {
       `<h2 style="color:#b45309;margin:0 0 6px">Lawyer details needed</h2>` +
       `<p style="margin:0 0 16px;color:#374151">${esc(message)}</p>` +
       `<p style="margin:0 0 16px;color:#374151">Transaction <strong>#${esc(tradeNo)}</strong>${property ? ` — ${esc(property)}` : ''}.</p>` +
-      `<a href="${esc(base)}/app/transactions/${id}?mode=edit" style="display:inline-block;background:#b45309;color:#fff;text-decoration:none;padding:10px 18px;border-radius:8px;font-weight:600">Update lawyer details</a>` +
+      `<a href="${esc(base)}${areaPath('desk', `transactions/${id}`)}?mode=edit" style="display:inline-block;background:#b45309;color:#fff;text-decoration:none;padding:10px 18px;border-radius:8px;font-weight:600">Update lawyer details</a>` +
       `<p style="margin:18px 0 0;color:#9ca3af;font-size:12px">Get Home Realty · Transaction Desk</p>` +
       `</div>`;
     try {

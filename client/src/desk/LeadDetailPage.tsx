@@ -1,3 +1,4 @@
+import { crmPath } from './area';
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
@@ -91,7 +92,7 @@ export default function LeadDetailPage() {
       <div className="card stub">
         <h2>Lead not found</h2>
         <p>It may have been deleted, or it belongs to another agent.</p>
-        <button className="btn ghost" type="button" onClick={() => navigate('/app/lead')}>Back to Leads</button>
+        <button className="btn ghost" type="button" onClick={() => navigate(crmPath('lead'))}>Back to Leads</button>
       </div>
     );
   }
@@ -103,7 +104,7 @@ export default function LeadDetailPage() {
       <div className="toolbar">
         <div className="toolbar-row" style={{ justifyContent: 'space-between' }}>
           <div>
-            <button className="btn ghost sm" type="button" onClick={() => navigate('/app/lead')}>← Back to Leads</button>
+            <button className="btn ghost sm" type="button" onClick={() => navigate(crmPath('lead'))}>← Back to Leads</button>
             <h2 className="lead-title">{lead.name}</h2>
             <div className="lead-subtitle">
               {lead.lead_status && <span className="pill info">{label(lead.lead_status)}</span>}
@@ -1012,7 +1013,7 @@ function FollowUpModal({ lead, onClose, onSaved }: { lead: LeadDetail; onClose: 
         notes: form.notes.trim(),
         lead_id: lead.id,
       };
-      await createEvent(payload);
+      await createEvent('crm', payload);
       onSaved();
     } catch (ex) {
       toast(apiErrorMessage(ex, 'Could not create the follow-up'), 'bad');

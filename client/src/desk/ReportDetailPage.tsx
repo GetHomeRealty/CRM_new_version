@@ -1,3 +1,4 @@
+import { deskPath } from './area';
 import { useEffect, useMemo, useState, useCallback, Fragment } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { reportColumns, reportFilterOptions, runReport, exportReport, reportDocuments } from '../lib/reportsApi';
@@ -105,7 +106,7 @@ export default function ReportDetailPage() {
   };
 
   if (loading) return <div className="centered">Loading report…</div>;
-  if (error && !meta) return <div className="card"><button className="btn ghost sm" onClick={() => nav('/app/reports')}>← Reports</button><div style={{ color: 'var(--bad)', marginTop: 10 }}>{error}</div></div>;
+  if (error && !meta) return <div className="card"><button className="btn ghost sm" onClick={() => nav(deskPath('reports'))}>← Reports</button><div style={{ color: 'var(--bad)', marginTop: 10 }}>{error}</div></div>;
   if (!meta) return null;
 
   const cols = result?.columns ?? meta.columns.filter((c) => c.default);
@@ -146,7 +147,7 @@ export default function ReportDetailPage() {
       {/* header */}
       <div className="card" style={{ marginBottom: 12 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-          <button className="btn ghost sm" onClick={() => nav('/app/reports')}>← Reports</button>
+          <button className="btn ghost sm" onClick={() => nav(deskPath('reports'))}>← Reports</button>
           <div className="modal-h" style={{ fontSize: 14, margin: 0, flex: 1 }}>{meta.name}</div>
         </div>
         <div className="modal-sub" style={{ marginTop: 4 }}>{meta.description}</div>

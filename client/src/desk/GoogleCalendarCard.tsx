@@ -1,3 +1,4 @@
+import { crmPath, deskPath } from './area';
 import { useCallback, useEffect, useState } from 'react';
 import {
   googleCalendarStatus, googleCalendarConnect, googleCalendarSync, googleCalendarDisconnect,
@@ -15,7 +16,7 @@ import { useToast } from './toast';
  * return has to follow the scope.
  */
 const returnPath = (scope: IntegrationScope): string =>
-  (scope === 'desk' ? '/app/settings?tab=desk&section=integrations' : '/app/settings?tab=crm');
+  (scope === 'desk' ? `${deskPath('settings')}?tab=desk&section=integrations` : `${crmPath('settings')}?tab=crm`);
 
 /** The multicolour Google "G", inline so the card stays self-contained. */
 const GoogleG = ({ size = 20 }: { size?: number }) => (

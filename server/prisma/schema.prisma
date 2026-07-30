@@ -36,9 +36,13 @@ model agents {
   updated_at DateTime? @db.Timestamp(0)
 }
 
+/// `domain` marks which area an audit entry belongs to: 'crm', 'desk', or 'common' for the
+/// shared modules (Users, Client Reviews, MLS, Inventory). NULL means not yet classified and is
+/// shown in both areas, so no historical record is hidden by the separation.
 model audit_logs {
   id             Int           @id @default(autoincrement())
   category       String?       @db.VarChar(255)
+  domain         String?       @db.VarChar(8)
   transaction_id Int?
   who            String?       @db.VarChar(255)
   user_id        Int?
@@ -55,6 +59,7 @@ model audit_logs {
   transactions   transactions? @relation(fields: [transaction_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
 
   @@index([category])
+  @@index([domain])
   @@index([transaction_id])
 }
 
@@ -285,6 +290,7 @@ model leads {
   assigned_to          Int?
   // ---- provenance ----
   /**
+   * /**
    * /** manual | import | facebook_meta
    */
   source               String?               @db.VarChar(32)
@@ -577,11 +583,13 @@ model todos {
   created_at   DateTime? @db.Timestamp(0)
   updated_at   DateTime? @db.Timestamp(0)
   deleted_at   DateTime? @db.Timestamp(0)
+  domain       String?   @db.VarChar(8)
 
   @@index([status])
   @@index([user_id])
   @@index([due_date])
   @@index([deleted_at])
+  @@index([domain])
 }
 
 /**
@@ -1120,6 +1128,9 @@ model email_suppressions {
  * `google_calendar_id` / `last_synced_to_google` mirror the source schema so a future Google
  * Calendar sync has somewhere to record itself; nothing writes them yet.
  */
+/// `domain` marks which area an event belongs to — see audit_logs. Events synced from a Google
+/// calendar take the domain of the connection that produced them; those that pre-date the split
+/// stay NULL and appear in both calendars rather than vanishing from one.
 model calendar_events {
   id                    Int           @id @default(autoincrement())
   title                 String        @db.VarChar(255)
@@ -1149,6 +1160,7 @@ model calendar_events {
   lead_id               Int?
   user_id               Int?
   created_by            String?       @db.VarChar(255)
+  domain                String?       @db.VarChar(8)
   google_calendar_id    String?       @db.VarChar(255)
   last_synced_to_google DateTime?     @db.Timestamp(0)
   created_at            DateTime?     @db.Timestamp(0)
@@ -1161,6 +1173,7 @@ model calendar_events {
   @@index([transaction_id])
   @@index([lead_id])
   @@index([status])
+  @@index([domain])
 }
 
 /**
@@ -1474,6 +1487,7 @@ model mail_accounts {
   scope           String?           @db.VarChar(8)
   // ---- IMAP inbound sync (optional; SMTP-only accounts leave these null) ----
   /**
+   * /**
    * /** IMAP server for pulling received mail, e.g. imap.gmail.com. Null = no inbound sync.
    */
   imap_host       String?           @db.VarChar(255)

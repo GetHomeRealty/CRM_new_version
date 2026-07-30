@@ -1,3 +1,5 @@
+import { useArea } from './AreaContext';
+import { crmPath } from './area';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -15,6 +17,7 @@ const stamp = (iso: string): string => iso.replace('T', ' ').slice(0, 16);
  * this screen reads what has already been pulled.
  */
 export default function InboxPage() {
+  const { area, link } = useArea();
   const toast = useToast();
   const navigate = useNavigate();
   const [list, setList] = useState<InboxList | null>(null);
@@ -27,7 +30,7 @@ export default function InboxPage() {
   const load = useCallback(async () => {
     if (!loadedOnce.current) setLoading(true);
     try {
-      setList(await listInbox({ unread: unreadOnly, page }));
+      setList(await listInbox(area, { unread: unreadOnly, page }));
     } catch (ex) {
       toast(apiErrorMessage(ex, 'Could not load your inbox'), 'bad');
     } finally {
@@ -67,7 +70,7 @@ export default function InboxPage() {
 
   const openMessage = async (row: InboxMessageRow) => {
     try {
-      setOpen(await getInboxMessage(row.id));
+      setOpen(await getInboxMessage(area, row.id));
       // Reading marks it seen server-side; refresh the list so the unread state matches.
       if (!row.seen) void load();
     } catch (ex) {
@@ -76,7 +79,7 @@ export default function InboxPage() {
   };
 
   const toggleSeen = async (row: InboxMessageRow) => {
-    try { await markInboxSeen(row.id, !row.seen); void load(); }
+    try { await markInboxSeen(area, row.id, !row.seen); void load(); }
     catch (ex) { toast(apiErrorMessage(ex, 'That did not work'), 'bad'); }
   };
 
@@ -100,7 +103,7 @@ export default function InboxPage() {
               onClick={() => { setUnreadOnly((v) => !v); setPage(1); }}>
               {unreadOnly ? 'Showing unread' : 'All mail'}
             </button>
-            <button className="btn ghost" type="button" onClick={() => navigate('/app/account')}>⚙ Email accounts</button>
+            <button className="btn ghost" type="button" onClick={() => navigate(link('account'))}>⚙ Email accounts</button>
           </div>
         </div>
       </div>
@@ -109,7 +112,7 @@ export default function InboxPage() {
         {rows.length === 0 ? (
           <div className="acct-empty">
             <p className="help">No mail here yet.</p>
-            <p className="help">Connect an email account with IMAP under <a onClick={() => navigate('/app/account')} style={{ cursor: 'pointer', textDecoration: 'underline' }}>My Settings</a> and it will sync automatically.</p>
+            <p className="help">Connect an email account with IMAP under <a onClick={() => navigate(link('account'))} style={{ cursor: 'pointer', textDecoration: 'underline' }}>My Settings</a> and it will sync automatically.</p>
           </div>
         ) : (
           <ul className="inbox-list">
@@ -155,7 +158,7 @@ export default function InboxPage() {
               <div><strong>{open.from_name || open.from_email}</strong>{open.from_name && open.from_email ? <span className="muted"> · {open.from_email}</span> : null}</div>
               <div className="muted">{stamp(open.received_at)}{open.to_email ? ` · to ${open.to_email}` : ''}</div>
               {open.lead_id && (
-                <button className="btn ghost sm" type="button" onClick={() => navigate(`/app/lead/${open.lead_id}`)}>
+                <button className="btn ghost sm" type="button" onClick={() => navigate(crmPath(`lead/${open.lead_id}`))}>
                   Open lead: {open.lead_name}
                 </button>
               )}

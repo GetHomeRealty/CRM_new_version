@@ -1,3 +1,4 @@
+import { deskPath } from './area';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { exportHistory, downloadExport, deleteExport, sweepExports } from '../lib/exportCentreApi';
@@ -96,7 +97,7 @@ export default function DownloadCentrePage() {
     <>
       <div className="card" style={{ marginBottom: 12 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-          <button className="btn ghost sm" onClick={() => nav('/app/transactions')}>← Transactions</button>
+          <button className="btn ghost sm" onClick={() => nav(deskPath('transactions'))}>← Transactions</button>
           <div>
             <h2 style={{ margin: 0 }}>Export &amp; Download Centre</h2>
             <div className="muted" style={{ fontSize: 13 }}>

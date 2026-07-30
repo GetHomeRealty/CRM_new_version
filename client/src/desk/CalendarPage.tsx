@@ -1,3 +1,5 @@
+import { useArea } from './AreaContext';
+import { deskPath } from './area';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { listEvents, deleteEvent, calendarOptions, listHolidays } from '../lib/calendarApi';
@@ -73,6 +75,7 @@ function monthGrid(anchor: Date): { date: Date; inMonth: boolean }[] {
 }
 
 export default function CalendarPage() {
+  const { area } = useArea();
   const toast = useToast();
   const navigate = useNavigate();
   const { can } = useAuth();
@@ -96,11 +99,13 @@ export default function CalendarPage() {
 
   const load = useCallback(() => {
     if (!loadedOnce.current) setLoading(true);
-    listEvents()
+    listEvents(area)
       .then(setEvents)
       .catch((e) => toast(apiErrorMessage(e, 'Could not load the calendar'), 'bad'))
       .finally(() => { loadedOnce.current = true; setLoading(false); });
-  }, [toast]);
+    // `area` is a dependency: switching from the CRM's calendar to the Transaction Desk's has to
+    // refetch, or the new area would keep showing the previous one's events.
+  }, [toast, area]);
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => { calendarOptions().then(setOptions).catch(() => { /* form falls back to defaults */ }); }, []);
@@ -157,7 +162,7 @@ export default function CalendarPage() {
   const remove = async () => {
     if (!toDelete) return;
     try {
-      await deleteEvent(toDelete.id);
+      await deleteEvent(area, toDelete.id);
       toast('Event deleted', 'ok');
       load();
     } catch (e) {
@@ -251,14 +256,14 @@ export default function CalendarPage() {
             <div className="modal-h" style={{ fontSize: 14 }}>Today&apos;s Events<span className="sec-count">{todayEvents.length}</span></div>
             {todayEvents.length === 0
               ? <div className="help">No events today.</div>
-              : todayEvents.map((e) => <EventRow key={e.id} e={e} canEdit={canEdit} onEdit={() => setEditing(e)} onDelete={() => setToDelete(e)} onDeal={() => navigate(`/app/transactions/${e.transaction_id}?mode=view`)} />)}
+              : todayEvents.map((e) => <EventRow key={e.id} e={e} canEdit={canEdit} onEdit={() => setEditing(e)} onDelete={() => setToDelete(e)} onDeal={() => navigate(`${deskPath(`transactions/${e.transaction_id}`)}?mode=view`)} />)}
           </div>
 
           <div className="card">
             <div className="modal-h" style={{ fontSize: 14 }}>Upcoming Events<span className="sec-count">{upcoming.length}</span></div>
             {upcoming.length === 0
               ? <div className="help">Nothing upcoming.</div>
-              : upcoming.map((e) => <EventRow key={e.id} e={e} showDate canEdit={canEdit} onEdit={() => setEditing(e)} onDelete={() => setToDelete(e)} onDeal={() => navigate(`/app/transactions/${e.transaction_id}?mode=view`)} />)}
+              : upcoming.map((e) => <EventRow key={e.id} e={e} showDate canEdit={canEdit} onEdit={() => setEditing(e)} onDelete={() => setToDelete(e)} onDeal={() => navigate(`${deskPath(`transactions/${e.transaction_id}`)}?mode=view`)} />)}
           </div>
 
           {/* Holidays & festivals for the month being viewed. */}

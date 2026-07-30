@@ -5,6 +5,9 @@ import type { AuthUserRecord } from '../auth/auth.types';
 import { CrmSettingsService } from '../crm-settings/crm-settings.service';
 import { MailAccountService, parseScope } from '../email/mail-account.service';
 import { MailerService } from '../email/mailer.service';
+import { emailLimitFor } from '../email/agent-email-limit';
+import { PrismaService } from '../prisma/prisma.service';
+import { parseArea } from '../common/domain';
 
 const str = (v: unknown): string => String(v ?? '').trim();
 
@@ -25,6 +28,7 @@ export class AccountController {
     private readonly settings: CrmSettingsService,
     private readonly accounts: MailAccountService,
     private readonly mailer: MailerService,
+    private readonly prisma: PrismaService,
   ) {}
 
   // ---------------------------------------------------- personal information
@@ -66,6 +70,18 @@ export class AccountController {
   @Get('mail-accounts')
   mailAccounts(@CurrentUser() user: AuthUserRecord, @Query('scope') scope?: string): Promise<unknown> {
     return this.accounts.indexForUser(user.id ?? -1, parseScope(scope));
+  }
+
+  /**
+   * How many accounts this user may connect in one area, and how many they already have.
+   *
+   * The rule is the server's — the frontend asks rather than deriving it from the role, so the
+   * screen and the validation can never disagree about who may add another address. The Add button
+   * uses this to explain itself before it is pressed; the POST above enforces it regardless.
+   */
+  @Get('mail-accounts/limit')
+  mailAccountLimit(@CurrentUser() user: AuthUserRecord, @Query('scope') scope?: string): Promise<unknown> {
+    return emailLimitFor(this.prisma, user.id ?? -1, parseArea(scope));
   }
 
   @Post('mail-accounts')

@@ -1,3 +1,4 @@
+import { parseArea } from '../common/domain';
 import { BadRequestException, Body, Controller, Delete, Get, HttpCode, Param, ParseIntPipe, Post, Put, Query, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '../auth/guards/auth.guard';
 import { ScreenGuard } from '../auth/guards/screen.guard';
@@ -59,31 +60,33 @@ export class CalendarController {
       transaction_id: Number(q.transaction_id) > 0 ? Number(q.transaction_id) : undefined,
       lead_id: Number(q.lead_id) > 0 ? Number(q.lead_id) : undefined,
     };
-    return this.calendar.list(user, query);
+    // The area comes from the query string, so a link can address one calendar directly. An
+    // absent or unrecognised value falls back to the Transaction Desk, keeping older callers working.
+    return this.calendar.list(user, parseArea(q.area), query);
   }
 
   @Get('events/:id')
   @Screen('calendar', 'view')
-  get(@CurrentUser() user: AuthUserRecord, @Param('id', ParseIntPipe) id: number): Promise<unknown> {
-    return this.calendar.get(id, user);
+  get(@CurrentUser() user: AuthUserRecord, @Param('id', ParseIntPipe) id: number, @Query('area') area?: string): Promise<unknown> {
+    return this.calendar.get(id, user, parseArea(area));
   }
 
   @Post('events')
   @HttpCode(201)
   @Screen('calendar', 'edit')
-  create(@CurrentUser() user: AuthUserRecord, @Body() body: EventInput): Promise<unknown> {
-    return this.calendar.create(body ?? {}, user);
+  create(@CurrentUser() user: AuthUserRecord, @Body() body: EventInput, @Query('area') area?: string): Promise<unknown> {
+    return this.calendar.create(body ?? {}, user, parseArea(area));
   }
 
   @Put('events/:id')
   @Screen('calendar', 'edit')
-  update(@CurrentUser() user: AuthUserRecord, @Param('id', ParseIntPipe) id: number, @Body() body: EventInput): Promise<unknown> {
-    return this.calendar.update(id, body ?? {}, user);
+  update(@CurrentUser() user: AuthUserRecord, @Param('id', ParseIntPipe) id: number, @Body() body: EventInput, @Query('area') area?: string): Promise<unknown> {
+    return this.calendar.update(id, body ?? {}, user, parseArea(area));
   }
 
   @Delete('events/:id')
   @Screen('calendar', 'edit')
-  remove(@CurrentUser() user: AuthUserRecord, @Param('id', ParseIntPipe) id: number): Promise<unknown> {
-    return this.calendar.remove(id, user);
+  remove(@CurrentUser() user: AuthUserRecord, @Param('id', ParseIntPipe) id: number, @Query('area') area?: string): Promise<unknown> {
+    return this.calendar.remove(id, user, parseArea(area));
   }
 }

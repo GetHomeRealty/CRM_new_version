@@ -1,3 +1,4 @@
+import { DEFAULT_AREA, areaPath } from '../desk/area';
 import { useEffect, useState, type ChangeEvent, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
@@ -40,7 +41,7 @@ export default function Register() {
     setSubmitting(true);
     try {
       await register(form);
-      navigate('/app/transactions');
+      navigate(areaPath(DEFAULT_AREA));
     } catch (err) {
       // Laravel returns 422 with { errors: { field: [msg] } }
       setErrors(apiFieldErrors(err) ?? { general: ['Registration failed.'] });

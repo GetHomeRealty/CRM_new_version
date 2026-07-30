@@ -1,3 +1,4 @@
+import { useArea } from './AreaContext';
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useToast } from './toast';
@@ -14,6 +15,7 @@ const SORT_OPTIONS = [
 const stPill = (s?: string) => (s === 'Active' ? 'ok' : s === 'Sold' || s === 'Closed' ? 'bad' : s === 'Pending' ? 'warn' : 'info');
 
 export default function FavoritesPage() {
+  const { link } = useArea();
   const navigate = useNavigate();
   const toast = useToast();
   const [favorites, setFavorites] = useState<Favorite[]>([]);
@@ -78,7 +80,7 @@ export default function FavoritesPage() {
           <h2 style={{ margin: 0 }}>Favorites</h2>
           <div className="muted" style={{ fontSize: 13 }}>Your saved MLS listings</div>
         </div>
-        <button className="btn ghost sm" onClick={() => navigate('/app/mls')}>Browse MLS</button>
+        <button className="btn ghost sm" onClick={() => navigate(link('mls'))}>Browse MLS</button>
       </div>
 
       {favorites.length > 0 && (
@@ -92,7 +94,7 @@ export default function FavoritesPage() {
         <div className="card centered" style={{ padding: 40 }}>
           <h3 style={{ margin: 0 }}>{search ? 'No matching favorites' : 'No favorite properties yet'}</h3>
           <p className="muted" style={{ marginTop: 6 }}>{search ? 'Try a different search.' : 'Save properties from MLS listings to see them here.'}</p>
-          <button className="btn primary" style={{ marginTop: 10 }} onClick={() => navigate('/app/mls')}>Browse MLS Listings</button>
+          <button className="btn primary" style={{ marginTop: 10 }} onClick={() => navigate(link('mls'))}>Browse MLS Listings</button>
         </div>
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 12 }}>
@@ -101,11 +103,11 @@ export default function FavoritesPage() {
             const key = f.listing_key;
             return (
               <div key={key} className="card" style={{ padding: 14 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8, cursor: 'pointer' }} onClick={() => navigate(`/app/mls/${encodeURIComponent(key)}`)}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8, cursor: 'pointer' }} onClick={() => navigate(link(`mls/${encodeURIComponent(key)}`))}>
                   <div style={{ fontWeight: 700, fontSize: 18 }}>${money(s.ListPrice)}</div>
                   <span className={`pill ${stPill(s.StandardStatus)}`}>{s.StandardStatus || 'Unknown'}</span>
                 </div>
-                <div style={{ marginTop: 8, fontSize: 13, cursor: 'pointer' }} onClick={() => navigate(`/app/mls/${encodeURIComponent(key)}`)}>
+                <div style={{ marginTop: 8, fontSize: 13, cursor: 'pointer' }} onClick={() => navigate(link(`mls/${encodeURIComponent(key)}`))}>
                   <div style={{ fontWeight: 600 }}>{String(s.UnparsedAddress || 'No address')}</div>
                   <div className="muted" style={{ fontSize: 12 }}>{[s.City, s.StateOrProvince, s.PostalCode].filter(Boolean).join(', ')}</div>
                 </div>
@@ -115,7 +117,7 @@ export default function FavoritesPage() {
                   <span>▢ {s.LivingArea ? money(s.LivingArea) : 'N/A'} sqft</span>
                 </div>
                 <div style={{ display: 'flex', gap: 6, marginTop: 12 }}>
-                  <button className="btn ghost sm" style={{ flex: 1 }} onClick={() => navigate(`/app/mls/${encodeURIComponent(key)}`)}>View</button>
+                  <button className="btn ghost sm" style={{ flex: 1 }} onClick={() => navigate(link(`mls/${encodeURIComponent(key)}`))}>View</button>
                   <button className="btn ghost sm" disabled={pdfBusy === key} onClick={() => pdf(key)} title="Download PDF">{pdfBusy === key ? '…' : '⬇'}</button>
                   <button className="btn ghost sm" style={{ color: 'var(--bad)' }} title="Remove from favorites" onClick={() => remove(key)}>♥</button>
                 </div>

@@ -1,3 +1,4 @@
+import { auditDomain } from '../common/domain';
 import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -117,6 +118,8 @@ export class AuditService {
     await db.audit_logs.create({
       data: {
         transaction_id: txnId,
+        // A transaction link is a Transaction Desk record by definition.
+        domain: auditDomain({ transactionId: txnId }),
         who: user?.name ?? 'System',
         user_id: user?.id ?? null,
         section: a.section ?? null,
@@ -139,6 +142,10 @@ export class AuditService {
       data: {
         category,
         transaction_id: null,
+        // Classified by the same rules the backfill migration used, so new entries land in the same
+        // trail their history did. Null when nothing applies — visible from both areas, never hidden
+        // from both.
+        domain: auditDomain({ category, section: a.section ?? null }),
         who: user?.name ?? 'System',
         user_id: user?.id ?? null,
         section: a.section ?? null,

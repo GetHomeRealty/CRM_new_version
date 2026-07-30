@@ -1,3 +1,4 @@
+import { areaPath } from '../common/domain';
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { MailerService } from '../email/mailer.service';
@@ -59,7 +60,7 @@ export class LeadNotificationService {
     if (!to) return;
 
     const base = (process.env.FRONTEND_URL ?? 'http://localhost:5173').replace(/\/+$/, '');
-    const link = `${base}/app/lead/${lead.id}`;
+    const link = `${base}${areaPath('crm', `lead/${lead.id}`)}`;
     const rows: string[] = [];
     const add = (label: string, value: unknown) => {
       const v = String(value ?? '').trim();

@@ -1,3 +1,4 @@
+import { assertCanConnectEmail } from './agent-email-limit';
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma, type mail_accounts } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -93,6 +94,10 @@ export class MailAccountService {
   }
 
   async storeForUser(userId: number, body: Record<string, unknown>, scope?: IntegrationScope): Promise<Record<string, unknown>> {
+    // An agent may hold one account per area. Enforced here, on the server, because hiding the
+    // Add button only stops the people who use the button.
+    if (scope) await assertCanConnectEmail(this.prisma, userId, scope);
+
     const data = this.validate(body, false);
     if ((data.password ?? '') === '') delete data.password;
     else data.password = this.crypt.encryptString(String(data.password));
@@ -103,11 +108,14 @@ export class MailAccountService {
       // the split, so it is stamped at creation rather than left to be assigned later.
       data: { ...(data as Prisma.mail_accountsCreateInput), user_id: userId, scope: scope ?? null, created_at: now, updated_at: now },
     });
-    // The user's first account becomes their default automatically, so there is always a sender.
-    const count = await this.prisma.mail_accounts.count({ where: { user_id: userId } });
+    // The first account IN THIS AREA becomes that area's primary, so each side always has a
+    // sender. Counting the user's accounts across both areas left the second area without a
+    // primary: the count was already 2, so nothing was promoted and sending there fell back to
+    // the brokerage address.
+    const count = await this.prisma.mail_accounts.count({ where: { user_id: userId, scope: account.scope } });
     if (account.is_default || count === 1) {
       await this.prisma.mail_accounts.update({ where: { id: account.id }, data: { is_default: true } });
-      await this.makeSoleDefault(account.id, userId);
+      await this.makeSoleDefault(account.id, userId, account.scope);
     }
     return this.resource((await this.find(account.id))!);
   }
@@ -120,7 +128,10 @@ export class MailAccountService {
 
     await this.prisma.mail_accounts.update({ where: { id }, data: { ...(data as Prisma.mail_accountsUpdateInput), updated_at: new Date() } });
     const fresh = (await this.find(id))!;
-    if (fresh.is_default) await this.makeSoleDefault(id, userId);
+    if (fresh.is_default) await this.makeSoleDefault(id, userId, fresh.scope);
+    // An account switched off must not stay the primary: it would be chosen as the sender and
+    // every send through it would fail. Hand the role to another working account in the same area.
+    if (fresh.is_default && !fresh.is_active) await this.reassignPrimary(userId, fresh.scope, fresh.id);
     return this.resource((await this.find(id))!);
   }
 
@@ -135,16 +146,46 @@ export class MailAccountService {
   }
 
   async destroyForUser(userId: number, id: number): Promise<{ message: string }> {
-    await this.ownOrThrow(userId, id);
+    const account = await this.ownOrThrow(userId, id);
     await this.prisma.mail_accounts.delete({ where: { id } });
+    // Disconnecting the primary must not leave the area without one — that is the defined
+    // fallback: the oldest remaining active account in the same area takes over. Deleting a
+    // non-primary account changes nothing.
+    if (account.is_default) await this.reassignPrimary(userId, account.scope, id);
     return { message: 'Mail account deleted' };
   }
 
   async setDefaultForUser(userId: number, id: number): Promise<Record<string, unknown>> {
-    await this.ownOrThrow(userId, id);
+    const account = await this.ownOrThrow(userId, id);
     await this.prisma.mail_accounts.update({ where: { id }, data: { is_default: true, is_active: true, updated_at: new Date() } });
-    await this.makeSoleDefault(id, userId);
+    // Scoped to the account's own area, so choosing a Transaction Desk primary leaves the CRM's
+    // alone. Unscoped, this cleared every other account the user had and the other area was left
+    // with no primary at all.
+    await this.makeSoleDefault(id, userId, account.scope);
     return this.resource((await this.find(id))!);
+  }
+
+  /**
+   * Give one area a primary again after the current one went away.
+   *
+   * The oldest remaining active account wins — a stable, explicable rule rather than "whichever
+   * the database returned first". If nothing active remains, the area is simply left without a
+   * primary; sending then falls back to the brokerage account as it always did, which is better
+   * than promoting an account that is switched off.
+   */
+  private async reassignPrimary(userId: number, scope: string | null, excludeId: number): Promise<void> {
+    const already = await this.prisma.mail_accounts.findFirst({
+      where: { user_id: userId, scope, is_default: true, id: { not: excludeId } },
+      select: { id: true },
+    });
+    if (already) return;
+    const next = await this.prisma.mail_accounts.findFirst({
+      where: { user_id: userId, scope, is_active: true, id: { not: excludeId } },
+      orderBy: { id: 'asc' },
+      select: { id: true },
+    });
+    if (!next) return;
+    await this.prisma.mail_accounts.update({ where: { id: next.id }, data: { is_default: true, updated_at: new Date() } });
   }
 
   /** The account a test send should go through, confirmed to belong to the user. */
@@ -166,7 +207,7 @@ export class MailAccountService {
 
     const now = new Date();
     const account = await this.prisma.mail_accounts.create({ data: { ...(data as Prisma.mail_accountsCreateInput), created_at: now, updated_at: now } });
-    if (account.is_default) await this.makeSoleDefault(account.id);
+    if (account.is_default) await this.makeSoleDefault(account.id, null, account.scope);
     return this.resource((await this.find(account.id))!);
   }
 
@@ -180,7 +221,7 @@ export class MailAccountService {
 
     await this.prisma.mail_accounts.update({ where: { id }, data: { ...(data as Prisma.mail_accountsUpdateInput), updated_at: new Date() } });
     const fresh = (await this.find(id))!;
-    if (fresh.is_default) await this.makeSoleDefault(id);
+    if (fresh.is_default) await this.makeSoleDefault(id, null, fresh.scope);
     return this.resource((await this.find(id))!);
   }
 
@@ -195,7 +236,7 @@ export class MailAccountService {
     const existing = await this.find(id);
     if (!existing) throw this.missing(id);
     await this.prisma.mail_accounts.update({ where: { id }, data: { is_default: true, is_active: true, updated_at: new Date() } });
-    await this.makeSoleDefault(id);
+    await this.makeSoleDefault(id, null, existing.scope);
     return this.resource((await this.find(id))!);
   }
 
@@ -204,14 +245,21 @@ export class MailAccountService {
   }
 
   /**
-   * Ensure exactly one row carries is_default = true WITHIN its scope. A user's default is chosen
-   * among their own accounts; the brokerage default (user_id = null) among the brokerage's. One
-   * scope's default never clears another's, so a user setting their default cannot disturb the
-   * brokerage fallback.
+   * Ensure exactly one row carries is_default = true within one owner AND one area.
+   *
+   * Both halves matter. The owner keeps a user's choice from disturbing the brokerage fallback
+   * (user_id = null). The area is what makes "primary" mean what section 6 asks: the CRM and the
+   * Transaction Desk each have their own primary, and picking one on either side must leave the
+   * other untouched. Without the area in this filter, setting a Transaction Desk primary cleared
+   * the CRM's — and since the *read* is scoped, the CRM was then left with none and quietly fell
+   * back to the brokerage address.
+   *
+   * `scope` is passed as-is, including null: accounts that pre-date the split form their own group
+   * and are not disturbed by a choice made inside an area.
    */
-  private async makeSoleDefault(id: number, userId: number | null = null): Promise<void> {
+  private async makeSoleDefault(id: number, userId: number | null = null, scope: string | null = null): Promise<void> {
     await this.prisma.mail_accounts.updateMany({
-      where: { id: { not: id }, is_default: true, user_id: userId },
+      where: { id: { not: id }, is_default: true, user_id: userId, scope },
       data: { is_default: false },
     });
   }

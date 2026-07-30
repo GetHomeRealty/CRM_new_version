@@ -1,3 +1,4 @@
+import { deskPath } from './area';
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { listReports } from '../lib/reportsApi';
@@ -45,7 +46,7 @@ export default function ReportsPage() {
                   <div className="report-card-name">{r.name}</div>
                   <div className="report-card-desc">{r.description}</div>
                 </div>
-                <button className="btn primary sm" onClick={() => nav(`/app/reports/${r.type}`)}>Open Report →</button>
+                <button className="btn primary sm" onClick={() => nav(deskPath(`reports/${r.type}`))}>Open Report →</button>
               </div>
             ))}
           </div>

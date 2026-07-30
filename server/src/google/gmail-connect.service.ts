@@ -1,3 +1,4 @@
+import { assertCanConnectEmail } from '../email/agent-email-limit';
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { LaravelCryptService } from '../common/laravel-crypt.service';
@@ -47,6 +48,12 @@ export class GmailConnectService {
       // consent. Ask the user to revoke and reconnect so a fresh refresh token is issued.
       throw new Error('Google did not return a refresh token. Remove this app under your Google account access settings, then connect again.');
     }
+
+    // An agent may hold one account per area. Checked here and not only on the manual form,
+    // because connecting through Google reaches this point without touching that form — and it is
+    // checked AFTER the reconnect branch above, so re-authorising an account the agent already has
+    // is never refused.
+    await assertCanConnectEmail(this.prisma, userId, scope);
 
     // First personal account a user connects becomes their default sender.
     const hasDefault = await this.prisma.mail_accounts.findFirst({ where: { user_id: userId, scope, is_default: true }, select: { id: true } });

@@ -1,3 +1,4 @@
+import { deskPath } from './area';
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getInvoice, createInvoice, updateInvoice, recordInvoiceReminder, recordInvoicePayment, sendInvoice } from '../lib/api';
@@ -196,7 +197,7 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
   const backToTransaction = () => {
     if (onBack) { onBack(); return; } // opened in-context on the transaction page → just close
     const tid = saved?.transaction_id || form.transaction_id;
-    if (tid) navigate(`/app/transactions/${tid}`); else onClose();
+    if (tid) navigate(deskPath(`transactions/${tid}`)); else onClose();
   };
   // Render the invoice document to a PDF (base64) so it can be attached to the email.
   const buildInvoicePdf = async (id: number, known: Invoice | null = null): Promise<{ pdf?: string; filename?: string }> => {

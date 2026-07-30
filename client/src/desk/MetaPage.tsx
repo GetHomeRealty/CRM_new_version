@@ -1,3 +1,4 @@
+import { crmPath } from './area';
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
@@ -165,7 +166,7 @@ export default function MetaPage() {
           <div>
             <h2 className="meta-title">Meta</h2>
             <p className="help" style={{ marginTop: 2 }}>
-              Facebook and Instagram lead ads. Synced leads land in <button className="prop-link" type="button" onClick={() => navigate('/app/lead')}>Lead</button> with the source “Meta”.
+              Facebook and Instagram lead ads. Synced leads land in <button className="prop-link" type="button" onClick={() => navigate(crmPath('lead'))}>Lead</button> with the source “Meta”.
             </p>
           </div>
           <div className="toolbar-row">
@@ -304,7 +305,7 @@ export default function MetaPage() {
                     <td className="muted">{l.message || l.property || '—'}</td>
                     <td>{l.lead_status ? <span className="pill info">{l.lead_status}</span> : '—'}</td>
                     <td>{stamp(l.created_at)}</td>
-                    <td><button className="btn ghost sm" type="button" onClick={() => navigate(`/app/lead/${l.id}`)}>Open</button></td>
+                    <td><button className="btn ghost sm" type="button" onClick={() => navigate(crmPath(`lead/${l.id}`))}>Open</button></td>
                   </tr>
                 ))}
               </tbody>

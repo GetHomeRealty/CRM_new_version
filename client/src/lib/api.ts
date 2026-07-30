@@ -1,6 +1,6 @@
 import type { AxiosRequestConfig } from 'axios';
 import api from './axios';
-import type { EmailTemplateAttachment, AgentChangeNotif, AgentCommissionMap, AgentLoanMap, AuditLogPage, BrokerageSuggestion, ChatMessage, ClientIdentification, CompanySettings, DashboardCommissions, DealHistoryEntry, DeletionLogEntry, DocNotif, DocumentsResponse, EmailTemplate, EmailTemplatesResponse, GenerateInvoicesResult, Invoice, LawyerSuggestion, MailAccount, ManagedUser, NoticeOfSaleData, SendResult, TemplatePreview, TestMailResult, Transaction, TrashedDocument, TrashedInvoice, TrashedPayment, TrashedResponse, TrashedRowItem, TrashedTransaction, UsersCatalog } from '../types';
+import type { EmailTemplateAttachment, AgentChangeNotif, AgentCommissionMap, AgentLoanMap, AuditLogPage, BrokerageSuggestion, ChatMessage, ClientIdentification, CompanySettings, DashboardCommissions, DealHistoryEntry, DeletionLogEntry, DocNotif, DocumentsResponse, EmailTemplate, EmailTemplatesResponse, GenerateInvoicesResult, Invoice, LawyerSuggestion, MailAccount, ManagedUser, NoticeOfSaleData, SendResult, TemplatePreview, TestMailResult, Transaction, TrashedDocument, TrashedInvoice, TrashedPayment, TrashedResponse, TrashedRowItem, TrashedTransaction, UsersCatalog, CrmDashboard, DeskDashboard } from '../types';
 
 /** Route parameter identifiers (Laravel accepts numeric or string ids). */
 type Id = number | string;
@@ -110,6 +110,16 @@ export const listTransactionsPage = (query: TransactionQuery): Promise<Transacti
 
 export const getDashboardCommissions = (): Promise<DashboardCommissions> =>
   api.get<DashboardCommissions>('/api/dashboard/commissions').then((r) => r.data);
+
+/**
+ * The two dashboards, as two calls. Each reads only its own area's tables on the server, so neither
+ * one pays for the other's queries — which is the point of section 10.
+ */
+export const getCrmDashboard = (): Promise<CrmDashboard> =>
+  api.get<CrmDashboard>('/api/dashboard/crm').then((r) => r.data);
+
+export const getDeskDashboard = (): Promise<DeskDashboard> =>
+  api.get<DeskDashboard>('/api/dashboard/desk').then((r) => r.data);
 
 export const getTransaction = (id: Id): Promise<Transaction> =>
   api.get<{ data: Transaction }>(`/api/transactions/${id}`).then((r) => r.data.data);

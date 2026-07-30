@@ -1,8 +1,9 @@
+import { AREA_LABEL, crmPath, deskPath } from './area';
 import { useCallback, useEffect, useState } from 'react';
 import {
   listMyMailAccounts, setMyDefaultMailAccount, deleteMyMailAccount, testMyMailAccount,
-  syncMailAccount,
-  type AccountMailAccount, type IntegrationScope,
+  syncMailAccount, mailAccountLimit,
+  type AccountMailAccount, type EmailAccountLimit, type IntegrationScope,
 } from '../lib/accountApi';
 import { apiErrorMessage } from '../lib/apiError';
 import { useToast } from './toast';
@@ -27,8 +28,18 @@ export default function EmailIntegrationCard({ scope = 'crm' }: { scope?: Integr
   const [accounts, setAccounts] = useState<AccountMailAccount[] | null>(null);
   const [editing, setEditing] = useState<AccountMailAccount | 'new' | null>(null);
   const [busy, setBusy] = useState<number | ''>('');
+  /**
+   * The per-area allowance, read from the server. Null while it is still loading — the Add button
+   * stays enabled in that moment rather than flickering to "limit reached", because the POST
+   * enforces the rule anyway and a button that briefly lies is worse than one that is briefly
+   * optimistic.
+   */
+  const [limit, setLimit] = useState<EmailAccountLimit | null>(null);
 
-  const load = useCallback(() => { listMyMailAccounts(scope).then(setAccounts).catch(() => setAccounts([])); }, [scope]);
+  const load = useCallback(() => {
+    listMyMailAccounts(scope).then(setAccounts).catch(() => setAccounts([]));
+    mailAccountLimit(scope).then(setLimit).catch(() => setLimit(null));
+  }, [scope]);
   useEffect(() => { load(); }, [load]);
 
   // Surface the outcome of a Gmail OAuth connect that returned to this page, then clean the URL.
@@ -38,7 +49,7 @@ export default function EmailIntegrationCard({ scope = 'crm' }: { scope?: Integr
     else if (p.get('mail_error')) toast(`Could not connect the email account: ${p.get('mail_error')}`, 'bad');
     if (p.get('mail_connected') || p.get('mail_error')) {
       // Back to the area the connect was started from — not always Transaction Desk.
-      window.history.replaceState({}, '', scope === 'desk' ? '/app/settings?tab=desk&section=integrations' : '/app/settings?tab=crm');
+      window.history.replaceState({}, '', scope === 'desk' ? `${deskPath('settings')}?tab=desk&section=integrations` : `${crmPath('settings')}?tab=crm`);
       load();
     }
   }, [toast, load, scope]);
@@ -53,9 +64,13 @@ export default function EmailIntegrationCard({ scope = 'crm' }: { scope?: Integr
   const active = (accounts ?? []).filter((a) => a.is_active);
   const def = (accounts ?? []).find((a) => a.is_default);
   const connected = active.length > 0;
+  const atLimit = limit ? !limit.canAdd : false;
   const subtitle = !accounts ? 'Checking…'
     : connected
-      ? `${active.length} account${active.length === 1 ? '' : 's'} connected${def ? ` · default ${def.from_email}` : ' · no default set'}`
+      // "Primary" rather than "default": it is the account this area sends from, and section 6
+      // asks for it to be named clearly. Saying nothing is set is worth doing loudly — that is
+      // exactly the state where mail quietly leaves from the brokerage address instead.
+      ? `${active.length} account${active.length === 1 ? '' : 's'} connected${def ? ` · primary ${def.from_email}` : ' · no primary set'}`
       : 'Connect your own email to send and receive from your address — Gmail or any SMTP. Until then, mail goes out through the brokerage account.';
 
   return (
@@ -78,7 +93,7 @@ export default function EmailIntegrationCard({ scope = 'crm' }: { scope?: Integr
               <div className="acct-info">
                 <div>
                   <strong>{a.from_email}</strong>
-                  {a.is_default && <span className="pill ok" style={{ marginLeft: 6 }}>Default</span>}
+                  {a.is_default && <span className="pill ok" style={{ marginLeft: 6 }} title={`Mail for ${AREA_LABEL[scope]} is sent from this address by default`}>Primary</span>}
                   {!a.is_active && <span className="pill bad" style={{ marginLeft: 6 }}>Inactive</span>}
                 </div>
                 <div className="muted">
@@ -91,11 +106,12 @@ export default function EmailIntegrationCard({ scope = 'crm' }: { scope?: Integr
               <div className="acct-actions">
                 {a.imap_host && a.inbound_enabled && (
                   <button className="btn ghost sm" type="button" disabled={busy === a.id}
-                    onClick={() => void act(a.id, () => syncMailAccount(a.id).then((r) => toast(r.message, r.error ? 'bad' : 'ok')), 'Sync finished.')}>↻ Sync</button>
+                    onClick={() => void act(a.id, () => syncMailAccount(scope, a.id).then((r) => toast(r.message, r.error ? 'bad' : 'ok')), 'Sync finished.')}>↻ Sync</button>
                 )}
                 {!a.is_default && (
                   <button className="btn ghost sm" type="button" disabled={busy === a.id}
-                    onClick={() => void act(a.id, () => setMyDefaultMailAccount(a.id), 'Set as your default.')}>Set default</button>
+                    onClick={() => void act(a.id, () => setMyDefaultMailAccount(a.id), 'Set as the primary account for this area.')}
+                    title={`Send ${AREA_LABEL[scope]} mail from this address`}>Make primary</button>
                 )}
                 <button className="btn ghost sm" type="button" disabled={busy === a.id}
                   onClick={() => void act(a.id, () => testMyMailAccount(a.id).then((r) => toast(r.message, 'ok')), 'Test sent.')}>Test</button>
@@ -108,8 +124,19 @@ export default function EmailIntegrationCard({ scope = 'crm' }: { scope?: Integr
         </ul>
       )}
 
-      <div className="intg-card-actions">
-        <button className="btn primary sm" type="button" onClick={() => setEditing('new')}>+ Connect email account</button>
+      <div className="intg-card-actions" style={{ flexWrap: 'wrap', gap: 8 }}>
+        {/* Disabled AND explained. Section 7 is explicit that hiding the button is not the
+            control — the server refuses the request regardless — so this exists to say why
+            rather than to enforce anything. */}
+        <button className="btn primary sm" type="button" disabled={atLimit}
+          onClick={() => setEditing('new')}>+ Connect email account</button>
+        {atLimit && (
+          <span className="help" style={{ flex: '1 1 100%' }}>
+            Your role allows one {AREA_LABEL[scope]} email account. Disconnect the one above to
+            connect a different address. Your account in the other area is separate and is not
+            affected.
+          </span>
+        )}
       </div>
 
       {editing && (

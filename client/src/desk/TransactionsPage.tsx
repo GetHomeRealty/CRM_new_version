@@ -1,3 +1,4 @@
+import { deskPath } from './area';
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { listTransactionsPage, deleteTransaction, requestTransactionDeletion, type TransactionQuery } from '../lib/api';
@@ -89,7 +90,7 @@ export default function TransactionsPage() {
       if (total > 25) {
         const job = await queueExport('transaction-complete-xlsx', ALL_TRANSACTIONS);
         toast(`Preparing ${total} transactions (${job.export_id}) — collecting it in the Download Centre`, 'ok');
-        navigate('/app/transactions/downloads');
+        navigate(deskPath('transactions/downloads'));
       } else {
         await exportCompleteXlsx(ALL_TRANSACTIONS);
         toast('Download started', 'ok');
@@ -192,7 +193,7 @@ export default function TransactionsPage() {
                   <strong>{t.property || 'Untitled'}</strong> <span style={{ color: 'var(--muted)' }}>· Trade #{t.trade_no}</span>
                   <div>Requested by {t.delete_request?.requested_by_name || 'agent'}{t.delete_request?.reason ? ` — “${t.delete_request.reason}”` : ''} <span className={`pill ${t.delete_request?.status === 'forwarded' ? 'warn' : 'info'}`} style={{ fontSize: 10 }}>{t.delete_request?.status === 'forwarded' ? 'with Super Admin' : 'pending'}</span></div>
                 </div>
-                <button className="btn primary sm" onClick={() => navigate(`/app/transactions/${t.id}`)}>Verify &amp; decide →</button>
+                <button className="btn primary sm" onClick={() => navigate(deskPath(`transactions/${t.id}`))}>Verify &amp; decide →</button>
               </div>
             ))}
           </div>
@@ -227,8 +228,8 @@ export default function TransactionsPage() {
           title="Download every transaction — one row each, with team split, clients, lawyer, financial, adjustments and conditions">
           {downloadingAll ? '⏳ Preparing…' : '⇩ Download All Transactions'}
         </button>
-        <button className="btn ghost sm" onClick={() => navigate('/app/transactions/downloads')} title="Past and queued exports">⇩ Download Centre</button>
-        {canEdit && <button className="btn ghost sm" onClick={() => navigate('/app/transactions/import')} title="Create many transactions from a spreadsheet">⭳ Bulk Import</button>}
+        <button className="btn ghost sm" onClick={() => navigate(deskPath('transactions/downloads'))} title="Past and queued exports">⇩ Download Centre</button>
+        {canEdit && <button className="btn ghost sm" onClick={() => navigate(deskPath('transactions/import'))} title="Create many transactions from a spreadsheet">⭳ Bulk Import</button>}
         {canEdit && <button className="btn primary sm" onClick={() => setAddOpen(true)}>+ Add Transaction</button>}
       </div>
 
@@ -308,13 +309,13 @@ export default function TransactionsPage() {
                 <td>#{t.trade_no}</td>
                 <td>{t.offer_date || ''}</td>
                 <td>{t.closing_date || ''}</td>
-                <td><a className="prop-link" onClick={() => navigate(`/app/transactions/${t.id}?mode=view`)}>{t.property}</a></td>
+                <td><a className="prop-link" onClick={() => navigate(`${deskPath(`transactions/${t.id}`)}?mode=view`)}>{t.property}</a></td>
                 <td>{t.agent || 'Unassigned'}</td>
                 <td>{formatPrice(t.price)}</td>
                 <td><span className={`pill ${stPill(primary)}`}>{primary}</span></td>
                 <td>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'nowrap', whiteSpace: 'nowrap' }}>
-                    <button className="btn ghost sm" onClick={() => navigate(`/app/transactions/${t.id}?mode=${canEdit ? 'edit' : 'view'}`)}>{canEdit ? 'Edit' : 'View'}</button>
+                    <button className="btn ghost sm" onClick={() => navigate(`${deskPath(`transactions/${t.id}`)}?mode=${canEdit ? 'edit' : 'view'}`)}>{canEdit ? 'Edit' : 'View'}</button>
                     {/* Per-transaction chat with an unread-message badge. */}
                     <button className="btn ghost sm" onClick={() => setChatTxn(t)} style={{ position: 'relative' }} title="Open chat">
                       💬
@@ -347,7 +348,7 @@ export default function TransactionsPage() {
         </div>
       )}
 
-      <AddTransactionModal open={addOpen} onClose={() => setAddOpen(false)} onCreated={(t) => { load(); navigate(`/app/transactions/${t.id}?mode=edit`); }} />
+      <AddTransactionModal open={addOpen} onClose={() => setAddOpen(false)} onCreated={(t) => { load(); navigate(`${deskPath(`transactions/${t.id}`)}?mode=edit`); }} />
 
       {/* Opening the chat marks it read on the backend — clear the badge on close. */}
       {chatTxn && (

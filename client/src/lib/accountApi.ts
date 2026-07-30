@@ -1,3 +1,4 @@
+import type { Area } from '../desk/area';
 import api from './axios';
 
 /** A user's own Settings — profile, mail accounts, email preferences, integrations. */
@@ -70,6 +71,15 @@ export const saveAccountEmailPrefs = (emailSettings: Partial<AccountEmailPrefs>)
 export type IntegrationScope = 'crm' | 'desk';
 
 /** Omit the scope to list every account (the personal Settings screen). */
+/**
+ * How many email accounts this user may connect in one area — the server's rule, not a guess from
+ * the role. Section 7 requires the limit on both sides, and asking keeps the button's explanation
+ * and the POST's validation from ever disagreeing.
+ */
+export interface EmailAccountLimit { max: number | null; used: number; canAdd: boolean }
+export const mailAccountLimit = (scope: IntegrationScope): Promise<EmailAccountLimit> =>
+  api.get<EmailAccountLimit>('/api/account/mail-accounts/limit', { params: { scope } }).then((r) => r.data);
+
 export const listMyMailAccounts = (scope?: IntegrationScope): Promise<AccountMailAccount[]> =>
   api.get<AccountMailAccount[]>('/api/account/mail-accounts', { params: scope ? { scope } : undefined })
     .then((r) => r.data);
@@ -98,23 +108,29 @@ export interface InboxList {
   unread: number;
 }
 
-export const listInbox = (opts: { unread?: boolean; lead?: number; page?: number } = {}): Promise<InboxList> => {
-  const params: Record<string, string | number> = {};
+/**
+ * The inbox is per-area: the CRM's shows mail from accounts connected under CRM Settings, the
+ * Transaction Desk's from accounts connected under Transaction Desk Settings. Every call carries
+ * the area, because the server — not the caller — decides which accounts are in scope, and a read
+ * that forgot to say would silently fall back to the Transaction Desk's mail.
+ */
+export const listInbox = (area: Area, opts: { unread?: boolean; lead?: number; page?: number } = {}): Promise<InboxList> => {
+  const params: Record<string, string | number> = { area };
   if (opts.unread) params.unread = 1;
   if (opts.lead) params.lead = opts.lead;
   if (opts.page) params.page = opts.page;
   return api.get<InboxList>('/api/account/inbox', { params }).then((r) => r.data);
 };
 
-export const getInboxMessage = (id: number): Promise<InboxMessage> =>
-  api.get<InboxMessage>(`/api/account/inbox/${id}`).then((r) => r.data);
+export const getInboxMessage = (area: Area, id: number): Promise<InboxMessage> =>
+  api.get<InboxMessage>(`/api/account/inbox/${id}`, { params: { area } }).then((r) => r.data);
 
-export const markInboxSeen = (id: number, seen: boolean): Promise<{ seen: boolean }> =>
-  api.put<{ seen: boolean }>(`/api/account/inbox/${id}/seen`, { seen }).then((r) => r.data);
+export const markInboxSeen = (area: Area, id: number, seen: boolean): Promise<{ seen: boolean }> =>
+  api.put<{ seen: boolean }>(`/api/account/inbox/${id}/seen`, { seen }, { params: { area } }).then((r) => r.data);
 
 export interface SyncResult { fetched: number; matched: number; error: string | null; message: string }
-export const syncMailAccount = (accountId: number): Promise<SyncResult> =>
-  api.post<SyncResult>(`/api/account/inbox/sync/${accountId}`, {}).then((r) => r.data);
+export const syncMailAccount = (area: Area, accountId: number): Promise<SyncResult> =>
+  api.post<SyncResult>(`/api/account/inbox/sync/${accountId}`, {}, { params: { area } }).then((r) => r.data);
 
 // ---- Google Calendar (real OAuth) ----
 export interface GoogleCalendarStatus {

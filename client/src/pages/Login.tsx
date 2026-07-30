@@ -1,3 +1,4 @@
+import { DEFAULT_AREA, areaPath } from '../desk/area';
 import { useState, type ChangeEvent, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
@@ -20,7 +21,7 @@ export default function Login() {
     setSubmitting(true);
     try {
       await login(form.username, form.password);
-      navigate('/app/transactions');
+      navigate(areaPath(DEFAULT_AREA));
     } catch (err) {
       setError(apiErrorMessage(err, 'Login failed. Check your credentials.'));
     } finally {

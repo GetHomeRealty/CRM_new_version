@@ -1,3 +1,4 @@
+import { crmPath } from './area';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -422,7 +423,7 @@ export default function LeadsPage() {
                     <input type="checkbox" checked={selected.has(l.id)} onChange={() => toggle(l.id)} aria-label={`Select ${l.name}`} />
                   </td>
                   <td>
-                    <button className="prop-link" type="button" onClick={() => navigate(`/app/lead/${l.id}`)}>{l.name}</button>
+                    <button className="prop-link" type="button" onClick={() => navigate(crmPath(`lead/${l.id}`))}>{l.name}</button>
                     {l.unsubscribed && <span className="pill bad lead-unsub" title="Opted out of email — excluded from campaigns">Unsubscribed</span>}
                   </td>
                   <td className="lead-contact">
@@ -454,7 +455,7 @@ export default function LeadsPage() {
                       rest of the table put together. `title` + `aria-label` keep the action
                       discoverable on hover and to screen readers. */}
                   <td className="lead-actions">
-                    <button className="icon-btn" type="button" title="View" aria-label="View" onClick={() => navigate(`/app/lead/${l.id}`)}>👁</button>
+                    <button className="icon-btn" type="button" title="View" aria-label="View" onClick={() => navigate(crmPath(`lead/${l.id}`))}>👁</button>
                     {canEdit && <button className="icon-btn" type="button" title="Edit" aria-label="Edit" onClick={() => { setEditing(l); setEditorOpen(true); }}>✏️</button>}
                     {canEdit && (
                       <button className="icon-btn" type="button"

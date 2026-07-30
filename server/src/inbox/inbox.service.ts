@@ -1,30 +1,47 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import type { Area } from '../common/domain';
 
 /**
  * Reads a user's synced inbound mail. Every method is scoped to `userId`, so an inbox query can
  * only ever return that user's own messages — never another person's mailbox.
+ *
+ * Every method is ALSO scoped to an area. The CRM Inbox shows mail from accounts connected under
+ * CRM Settings, the Transaction Desk Inbox shows mail from accounts connected under Transaction
+ * Desk Settings, and neither shows the other's — the account's `scope` is what decides. Accounts
+ * that pre-date the split carry no scope and appear on both sides, so no mail became unreachable
+ * when the column was introduced; assigning one in Settings claims it for that area.
+ *
+ * The scoping is applied on the server for every read, not just the list: `get` and `markSeen`
+ * take a message id, and without the same filter the Transaction Desk could read or alter a CRM
+ * message simply by asking for its id.
  */
 @Injectable()
 export class InboxService {
   constructor(private readonly prisma: PrismaService) {}
 
+  /**
+   * Which accounts this area may read from.
+   *
+   * NOTE the relation is `mail_account`, singular — the field name, not the model name.
+   * `null` cannot go inside an `in` list in Prisma, so "this area, or not yet assigned" has to be
+   * spelled as a union.
+   */
+  private accountScope(area: Area): Prisma.inbound_emailsWhereInput {
+    return { mail_account: { is: { OR: [{ scope: area }, { scope: null }] } } };
+  }
+
   /** The message list, newest first, without the heavy bodies. */
-  async list(userId: number, opts: { unread?: boolean; leadId?: number; page?: number } = {}): Promise<Record<string, unknown>> {
+  async list(userId: number, area: Area, opts: { unread?: boolean; leadId?: number; page?: number } = {}): Promise<Record<string, unknown>> {
     const perPage = 30;
     const page = Math.max(1, opts.page ?? 1);
-    // The Inbox is the CRM's mailbox, so it shows mail from CRM-side accounts only. Accounts
-    // with no area yet are included too, so nothing disappears before they are assigned;
-    // mail from an account assigned to Transaction Desk is excluded.
-    //
-    // NOTE the relation is `mail_account`, singular — the field name, not the model name.
     // Typed as Prisma.inbound_emailsWhereInput on purpose: built as a bare object literal in
     // a variable, a wrong key slips past excess-property checking and only fails at runtime,
     // which is exactly how this filter shipped broken once.
+    const scoped: Prisma.inbound_emailsWhereInput = { user_id: userId, ...this.accountScope(area) };
     const where: Prisma.inbound_emailsWhereInput = {
-      user_id: userId,
-      mail_account: { is: { OR: [{ scope: 'crm' }, { scope: null }] } },
+      ...scoped,
       ...(opts.unread ? { seen: false } : {}),
       ...(opts.leadId ? { lead_id: opts.leadId } : {}),
     };
@@ -37,7 +54,10 @@ export class InboxService {
         },
       }),
       this.prisma.inbound_emails.count({ where }),
-      this.prisma.inbound_emails.count({ where: { user_id: userId, seen: false } }),
+      // The unread badge counts this area's unread mail only. It used to count every unread
+      // message the user had, so the CRM's badge included Transaction Desk mail the list would
+      // never show — a number that could not be cleared by reading anything on screen.
+      this.prisma.inbound_emails.count({ where: { ...scoped, seen: false } }),
     ]);
     // Attach the matched lead's name so the list can link to it.
     const leadIds = [...new Set(rows.map((r) => r.lead_id).filter((v): v is number => v != null))];
@@ -57,8 +77,10 @@ export class InboxService {
   }
 
   /** One message with its full body. Reading it marks it seen. */
-  async get(userId: number, id: number): Promise<Record<string, unknown>> {
-    const row = await this.prisma.inbound_emails.findFirst({ where: { id, user_id: userId } });
+  async get(userId: number, area: Area, id: number): Promise<Record<string, unknown>> {
+    // Area-scoped as well as user-scoped: asking the Transaction Desk for a CRM message's id
+    // must not return it.
+    const row = await this.prisma.inbound_emails.findFirst({ where: { id, user_id: userId, ...this.accountScope(area) } });
     if (!row) throw new NotFoundException({ message: 'Message not found.' });
     if (!row.seen) await this.prisma.inbound_emails.update({ where: { id }, data: { seen: true } });
     const lead = row.lead_id
@@ -72,8 +94,8 @@ export class InboxService {
     };
   }
 
-  async markSeen(userId: number, id: number, seen: boolean): Promise<{ seen: boolean }> {
-    const row = await this.prisma.inbound_emails.findFirst({ where: { id, user_id: userId }, select: { id: true } });
+  async markSeen(userId: number, area: Area, id: number, seen: boolean): Promise<{ seen: boolean }> {
+    const row = await this.prisma.inbound_emails.findFirst({ where: { id, user_id: userId, ...this.accountScope(area) }, select: { id: true } });
     if (!row) throw new NotFoundException({ message: 'Message not found.' });
     await this.prisma.inbound_emails.update({ where: { id }, data: { seen } });
     return { seen };
