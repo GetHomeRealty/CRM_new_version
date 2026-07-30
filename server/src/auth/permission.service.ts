@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { isSuperAdmin } from '../core/authz';
 
 /**
  * Screen-level access control — a faithful port of Laravel's
@@ -164,7 +165,9 @@ export class PermissionService {
 
   /** Effective permissions for a user: role defaults + overrides. Admin = all edit. */
   effectiveFor(role: string, overrides: PermissionOverride[] = []): PermissionMap {
-    if (role === 'admin') {
+    // The one role that is above the permission map rather than described by it. Asked of the
+    // engine so this file is not a second place that knows which role that is.
+    if (isSuperAdmin({ role })) {
       return this.fill('edit');
     }
 

@@ -6,6 +6,7 @@ import { normalizeCommissionTxn } from '../transactions/commission.loader';
 import { parseJsonObject, round2 } from '../common/serialize';
 import type { ResourceUser } from '../transactions/transaction.resource';
 
+import { isAgent } from '../core/authz';
 const num = (v: unknown): number => {
   const n = Number(v);
   return Number.isFinite(n) ? n : 0;
@@ -36,11 +37,10 @@ export class DashboardService {
   ) {}
 
   async commissions(user: ResourceUser | null): Promise<DashboardCommissions> {
-    const isAgent = !!user && user.role === 'agent';
     const name = user?.name ?? null;
 
     const where: Prisma.transactionsWhereInput = { deleted_at: null };
-    if (isAgent && name) {
+    if (isAgent(user) && name) {
       where.OR = [{ agent: name }, { team_members: { some: { name } } }];
     }
 
@@ -71,7 +71,7 @@ export class DashboardService {
       const adminActivities = parseJsonObject(t.admin_activities);
 
       const t4aByName = await this.t4aByMember(input);
-      const members: Record<string, number> = isAgent
+      const members: Record<string, number> = isAgent(user)
         ? { [name as string]: t4aByName[name as string] ?? 0 }
         : t4aByName;
 
@@ -99,7 +99,7 @@ export class DashboardService {
     const closedCount = paidCount + pendingCount;
 
     return {
-      role: isAgent ? 'agent' : 'admin',
+      role: isAgent(user) ? 'agent' : 'admin',
       t4a: {
         closed_total: round2(closedTotal),
         closed_paid: round2(paidTotal),

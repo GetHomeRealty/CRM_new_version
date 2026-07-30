@@ -10,6 +10,7 @@ import { toIso8601String } from '../common/serialize';
 import type { AuthUserRecord } from '../auth/auth.types';
 import { STORAGE_ROOT } from '../config/storage';
 
+import { isAgent } from '../core/authz';
 const FIELDS = ['full_legal_name', 'address', 'dob', 'occupation', 'id_type', 'id_number', 'issuing_jurisdiction', 'country', 'expiry_date'] as const;
 type Actor = AuthUserRecord | null;
 type FileEntry = { client_name?: string | null; file_path?: string | null };
@@ -25,7 +26,7 @@ export class ClientIdentificationService {
   private async guard(user: Actor, txnId: number): Promise<{ id: number; agent: string | null }> {
     const t = await this.prisma.transactions.findFirst({ where: { id: txnId, deleted_at: null } });
     if (!t) throw new NotFoundException({ message: `No query results for model [App\\Models\\Transaction] ${txnId}.` });
-    if (user && user.role === 'agent') {
+    if (user && isAgent(user)) {
       const member = await this.prisma.team_members.findFirst({ where: { transaction_id: txnId, name: user.name } });
       if (t.agent !== user.name && !member) throw new ForbiddenException({ message: 'You do not have access to this transaction.' });
     }

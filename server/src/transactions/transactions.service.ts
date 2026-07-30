@@ -6,6 +6,7 @@ import { isListingType } from '../reference/transaction.constants';
 import { parseJsonObject } from '../common/serialize';
 import { filterClauses } from './transaction-filters';
 import type { ListTransactionsDto } from './dto/list-transactions.dto';
+import { isAgent } from '../core/authz';
 import {
   transactionResource,
   txnIndexInclude,
@@ -53,7 +54,7 @@ export class TransactionsService {
   async index(user: ResourceUser | null, query: ListTransactionsDto = {}): Promise<TransactionListResult> {
     const where: Prisma.transactionsWhereInput = { deleted_at: null };
     const and: Prisma.transactionsWhereInput[] = [];
-    if (user && user.role === 'agent') {
+    if (user && isAgent(user)) {
       // Kept as its own AND term rather than `where.OR`, so a filter that needs an OR of its own
       // (status, payout) cannot overwrite the visibility rule and widen what an agent can see.
       and.push({
@@ -130,7 +131,7 @@ export class TransactionsService {
    */
   private async matchingYears(_scope: Prisma.transactionsWhereInput, user: ResourceUser | null): Promise<string[]> {
     const where: Prisma.transactionsWhereInput = { deleted_at: null, closing_date: { not: null } };
-    if (user && user.role === 'agent') {
+    if (user && isAgent(user)) {
       where.OR = [
         { agent: user.name },
         { AND: [{ agent: { not: null } }, { agent: { not: '' } }, { team_members: { some: { name: user.name } } }] },
@@ -152,7 +153,7 @@ export class TransactionsService {
       deleted_at: null,
       transaction_delete_requests: { some: { status: { in: ['pending', 'forwarded'] } } },
     };
-    if (user && user.role === 'agent') {
+    if (user && isAgent(user)) {
       where.OR = [
         { agent: user.name },
         { AND: [{ agent: { not: null } }, { agent: { not: '' } }, { team_members: { some: { name: user.name } } }] },
@@ -199,7 +200,7 @@ export class TransactionsService {
         select: { transaction_id: true, last_read_at: true },
       }),
       // Only agents have a team access value; for everyone else the resource returns null anyway.
-      user.role === 'agent'
+      isAgent(user)
         ? this.prisma.team_members.findMany({
             where: { transaction_id: { in: ids }, name: user.name },
             select: { transaction_id: true, access: true },

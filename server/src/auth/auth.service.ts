@@ -7,6 +7,7 @@ import { throwValidation } from '../common/laravel-exceptions';
 import { PermissionService } from './permission.service';
 import type { AuthPayload, AuthUserRecord } from './auth.types';
 
+import { isAdminOrAbove, isSuperAdmin } from '../core/authz';
 @Injectable()
 export class AuthService {
   private readonly rounds: number;
@@ -35,9 +36,11 @@ export class AuthService {
       email: user.email,
       role: user.role,
       role_label: this.permissions.label(role),
-      is_admin: user.role === 'admin',
-      is_super_admin: user.role === 'admin',
-      is_admin_or_above: user.role === 'admin' || user.role === 'manager',
+      // The client shows and hides on these three. They come from the engine so the interface and
+      // the API can never disagree about who counts as an administrator.
+      is_admin: isSuperAdmin(user),
+      is_super_admin: isSuperAdmin(user),
+      is_admin_or_above: isAdminOrAbove(user),
       permissions: this.permissions.effectiveFor(role, user.user_permissions),
       // Filled in by `payloadFor`. Both modules is the same answer the application gave before
       // licensing existed, so a caller that cannot await still behaves as it always did.

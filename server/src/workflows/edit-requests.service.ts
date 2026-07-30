@@ -5,9 +5,8 @@ import { AuditService } from '../audit/audit.service';
 import { toDateTimeString } from '../common/serialize';
 import type { AuthUserRecord } from '../auth/auth.types';
 
-const isSuperAdmin = (u: AuthUserRecord): boolean => u.role === 'admin';
-const isAdminOrAbove = (u: AuthUserRecord): boolean => u.role === 'admin' || u.role === 'manager';
 
+import { isAdminOrAbove, isSuperAdmin } from '../core/authz';
 /** §5.1 edit-approval workflow for DFT / Closed transactions. */
 @Injectable()
 export class EditRequestsService {

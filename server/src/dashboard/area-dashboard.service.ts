@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import type { AuthUserRecord } from '../auth/auth.types';
 
+import { isAgent } from '../core/authz';
 /**
  * The two dashboards, as two separate reads.
  *
@@ -23,7 +24,6 @@ import type { AuthUserRecord } from '../auth/auth.types';
  */
 
 /** Agents see only their own records; managers and administrators see the brokerage's. */
-const isAgent = (user: AuthUserRecord | null): boolean => user?.role === 'agent';
 
 export interface CrmDashboard {
   leads: { total: number; by_status: Record<string, number>; by_source: Record<string, number>; new_this_week: number };

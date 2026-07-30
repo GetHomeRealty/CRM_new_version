@@ -3,8 +3,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { toDateTimeString } from '../common/serialize';
 import type { ResourceUser } from '../transactions/transaction.resource';
 
-const isAdminOrAbove = (u: ResourceUser | null): boolean => !!u && (u.role === 'admin' || u.role === 'manager');
 
+import { isAdminOrAbove, isAgent } from '../core/authz';
 interface Feed {
   count: number;
   items: Record<string, unknown>[];
@@ -82,7 +82,7 @@ export class NotificationsService {
   async markDocNotificationsSeen(user: ResourceUser | null, txnId: number): Promise<{ ok: boolean }> {
     const t = await this.prisma.transactions.findFirst({ where: { id: txnId, deleted_at: null } });
     if (!t) throw new NotFoundException({ message: `No query results for model [App\\Models\\Transaction] ${txnId}.` });
-    if (user && user.role === 'agent') {
+    if (user && isAgent(user)) {
       const allowed =
         t.agent === user.name ||
         (await this.prisma.team_members.findFirst({ where: { transaction_id: txnId, name: user.name } })) !== null;

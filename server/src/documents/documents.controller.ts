@@ -12,6 +12,7 @@ import { DocumentsService } from './documents.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { STORAGE_ROOT } from '../config/storage';
 
+import { isAgent } from '../core/authz';
 type Res0 = Record<string, unknown>;
 const u = (x: AuthUserRecord | undefined): AuthUserRecord | null => x ?? null;
 const MB20 = 20480 * 1024;
@@ -50,7 +51,7 @@ export class DocumentsController {
     const txn = await this.prisma.transactions.findFirst({ where: { id: txnId, deleted_at: null } });
     if (!txn) throw new NotFoundException({ message: `No query results for model [App\\Models\\Transaction] ${txnId}.` });
     // Agent access guard mirrors the service.
-    if (user && user.role === 'agent') {
+    if (user && isAgent(user)) {
       const member = await this.prisma.team_members.findFirst({ where: { transaction_id: txnId, name: user.name } });
       if (txn.agent !== user.name && !member) throw new NotFoundException({ message: 'You do not have access to this transaction.' });
     }

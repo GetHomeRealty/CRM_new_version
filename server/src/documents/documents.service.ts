@@ -15,6 +15,7 @@ import { parseJson, toDateString } from '../common/serialize';
 import type { AuthUserRecord } from '../auth/auth.types';
 import { STORAGE_ROOT } from '../config/storage';
 
+import { assertCan, can, isAgent } from '../core/authz';
 const SECTION = 'Legal & Documents';
 type Actor = AuthUserRecord | null;
 type FileEntry = { client_name?: string | null; file_name?: string | null; file_path?: string | null };
@@ -42,14 +43,14 @@ export class DocumentsService {
   }
 
   private async guardAgent(user: Actor, txn: { id: number; agent: string | null }): Promise<void> {
-    if (user && user.role === 'agent') {
+    if (user && isAgent(user)) {
       const name = user.name;
       const isMember = (await this.prisma.team_members.findFirst({ where: { transaction_id: txn.id, name } })) !== null;
       if (txn.agent !== name && !isMember) throw new ForbiddenException({ message: 'You do not have access to this transaction.' });
     }
   }
 
-  private actorSource(user: Actor): string { return user && user.role === 'agent' ? 'Agent' : 'Manual'; }
+  private actorSource(user: Actor): string { return isAgent(user) ? 'Agent' : 'Manual'; }
 
   private async docs(txnId: number, extra: Prisma.documentsWhereInput = {}): Promise<DocRow[]> {
     return this.prisma.documents.findMany({ where: { transaction_id: txnId, deleted_at: null, ...extra }, orderBy: { position: 'asc' } });
@@ -172,7 +173,7 @@ export class DocumentsService {
     const data = this.validateBulk(body);
     const rows = data.documents as Record<string, unknown>[];
 
-    if (user && user.role === 'agent') {
+    if (user && isAgent(user)) {
       let pos = await this.maxPosition(txnId);
       for (const row of rows) {
         if (row.id) {
@@ -277,7 +278,7 @@ export class DocumentsService {
   }
 
   private guardValidLocked(user: Actor, d: DocRow): void {
-    if (d.validation === 'Valid' && !(user && user.role === 'admin')) throw new ForbiddenException({ message: 'This document is marked Valid — only a Super Admin can replace or delete it.' });
+    if (d.validation === 'Valid' && !can(user, 'documents.override-valid')) throw new ForbiddenException({ message: 'This document is marked Valid — only a Super Admin can replace or delete it.' });
   }
 
   private async storeFile(txnId: number, file: UploadedFile): Promise<string> {
@@ -303,7 +304,7 @@ export class DocumentsService {
     this.guardValidLocked(user, document);
     this.requireFile(file);
 
-    if (user && user.role === 'agent' && document.file_path) {
+    if (isAgent(user) && document.file_path) {
       const pos = (await this.maxPosition(txnId)) + 1;
       await this.createDoc(txnId, { title: document.title, mandatory: false, status: 'Received', validation: 'Pending', position: pos, file_name: file!.originalname, file_path: await this.storeFile(txnId, file!) });
       await this.audit.record(txnId, this.actor(user), { section: SECTION, field: document.title, action: 'Document version added (previous kept)', new: file!.originalname, source: 'Agent' });
@@ -397,7 +398,7 @@ export class DocumentsService {
   async destroy(user: Actor, docId: number): Promise<{ message: string }> {
     const document = await this.prisma.documents.findFirst({ where: { id: docId, deleted_at: null } });
     if (!document) throw new NotFoundException({ message: `No query results for model [App\\Models\\Document] ${docId}.` });
-    if (user && user.role === 'agent') throw new ForbiddenException({ message: 'Only an administrator can delete documents.' });
+    if (user && isAgent(user)) throw new ForbiddenException({ message: 'Only an administrator can delete documents.' });
     this.guardValidLocked(user, document);
     const txn = await this.prisma.transactions.findUnique({ where: { id: document.transaction_id } });
     if (txn) await this.audit.record(txn.id, this.actor(user), { section: SECTION, field: document.title, action: 'Document deleted' });
@@ -407,7 +408,7 @@ export class DocumentsService {
   }
 
   async restore(user: Actor, docId: number): Promise<{ message: string }> {
-    if (!(user && (user.role === 'admin' || user.role === 'manager'))) throw new ForbiddenException({ message: 'Administrator access required.' });
+    assertCan(user, 'documents.administer');
     const document = await this.prisma.documents.findFirst({ where: { id: docId, deleted_at: null } });
     if (!document) throw new NotFoundException({ message: `No query results for model [App\\Models\\Document] ${docId}.` });
     await this.prisma.documents.update({ where: { id: docId }, data: { pending_delete: false, deleted_by: null, updated_at: new Date() } });
@@ -423,7 +424,7 @@ export class DocumentsService {
 
   async sendReminders(user: Actor, txnId: number): Promise<Record<string, unknown>> {
     const txn = await this.txnOr404(txnId);
-    if (user && user.role === 'agent') throw new ForbiddenException({ message: 'Only an administrator can send document reminders.' });
+    if (user && isAgent(user)) throw new ForbiddenException({ message: 'Only an administrator can send document reminders.' });
 
     const all = await this.docs(txnId, { reminder: true, pending_delete: false });
     const docs = all.filter((d) => d.status !== 'Received' || d.validation === 'Invalid');

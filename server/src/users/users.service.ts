@@ -10,6 +10,7 @@ import { parseJson, phpJsonNormalize, toDateString } from '../common/serialize';
 import { AuditService } from '../audit/audit.service';
 import type { AuthUserRecord } from '../auth/auth.types';
 
+import { isSuperAdmin } from '../core/authz';
 type UserWithPerms = users & { user_permissions: user_permissions[]; user_modules: user_modules[] };
 
 @Injectable()
@@ -95,7 +96,8 @@ export class UsersService {
     const user = await this.prisma.users.findUnique({ where: { id } });
     if (!user) throw new NotFoundException({ message: `No query results for model [App\\Models\\User] ${id}.` });
     if (actor && user.id === actor.id) throw new UnprocessableEntityException({ message: 'You cannot delete your own account.' });
-    if (user.role === 'admin') {
+    // "The last administrator" means the last of the top tier, whatever that tier is called.
+    if (isSuperAdmin(user)) {
       const admins = await this.prisma.users.count({ where: { role: 'admin' } });
       if (admins <= 1) throw new UnprocessableEntityException({ message: 'Cannot delete the last administrator.' });
     }
@@ -194,7 +196,7 @@ export class UsersService {
       // the moment someone saved.
       modules: u.user_modules.filter((m) => m.status === 'active').map((m) => m.module_name),
       profile: phpJsonNormalize(parseJson(u.profile) ?? []),
-      is_admin: u.role === 'admin',
+      is_admin: isSuperAdmin(u),
       permissions: this.permissions.effectiveFor(u.role, overrides.map((p) => ({ screen: p.screen, level: p.level }))),
       overrides: overrides.length ? Object.fromEntries(overrides.map((p) => [p.screen, p.level])) : [],
     };

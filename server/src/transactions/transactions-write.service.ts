@@ -18,10 +18,9 @@ import {
 } from './transaction.resource';
 import type { AuthUserRecord } from '../auth/auth.types';
 
+import { isAdminOrAbove, isAgent, isSuperAdmin } from '../core/authz';
 type Tx = Prisma.TransactionClient;
 
-const isSuperAdmin = (u: AuthUserRecord | null): boolean => !!u && u.role === 'admin';
-const isAdminOrAbove = (u: AuthUserRecord | null): boolean => !!u && (u.role === 'admin' || u.role === 'manager');
 const REVERT_BOOL = new Set(['comm_adjust_enabled', 'listing_adj_enabled', 'coop_adj_enabled', 'precon_net_of_hst', 'mls_verified', 'conditional_offer', 'inter_board_enabled']);
 const REVERT_DATE = new Set(['offer_date', 'closing_date', 'listing_contract_date', 'listing_expiry_date']);
 const isListingFinancial = (type: string): boolean => isListingType(type) || type === 'Business Sale';
@@ -96,7 +95,7 @@ export class TransactionsWriteService {
     if (!isListing) {
       for (const f of ['comm_type', 'comm_value', 'price', 'offer_date', 'closing_date']) this.req(body, f);
     }
-    const creatorAgent = user && user.role === 'agent' ? user.name : null;
+    const creatorAgent = user && isAgent(user) ? user.name : null;
     const commType = isListing ? '%' : String(body.comm_type ?? '%');
     const commValue = isListing ? 0 : toFloat(body.comm_value ?? 0);
 
@@ -266,7 +265,7 @@ export class TransactionsWriteService {
 
     const actor: ActingUser | null = user ? { id: user.id, name: user.name } : null;
 
-    if (user && user.role === 'agent') {
+    if (user && isAgent(user)) {
       const isOwner = t.agent === user.name;
       const isFullMember = (await this.prisma.team_members.findFirst({ where: { transaction_id: txnId, name: user.name, access: 'full' } })) !== null;
       if (!isOwner && !isFullMember) throw new ForbiddenException({ message: 'You do not have edit access to this transaction.' });
@@ -346,7 +345,7 @@ export class TransactionsWriteService {
       });
     }
 
-    const source = user && user.role === 'agent' ? 'Agent' : 'Manual';
+    const source = isAgent(user) ? 'Agent' : 'Manual';
     await this.audit.recordChanges(txnId, actor, before, await this.audit.snapshot(txnId), source);
 
     // Re-check lawyer details after the edit — only re-emails when the missing set actually changed.
@@ -708,7 +707,7 @@ export class TransactionsWriteService {
 
   // ---- destroy + agent-change review -------------------------------------
   async destroy(user: AuthUserRecord | null, txnId: number): Promise<{ message: string }> {
-    if (user && user.role === 'agent') {
+    if (user && isAgent(user)) {
       throw new ForbiddenException({ message: 'Agents cannot delete transactions. Request deletion instead.' });
     }
     const t = await this.prisma.transactions.findFirst({ where: { id: txnId, deleted_at: null } });

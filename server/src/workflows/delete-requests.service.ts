@@ -5,8 +5,7 @@ import { AuditService } from '../audit/audit.service';
 import { toDateTimeString } from '../common/serialize';
 import type { AuthUserRecord } from '../auth/auth.types';
 
-const isSuperAdmin = (u: AuthUserRecord): boolean => u.role === 'admin';
-const isAdminOrAbove = (u: AuthUserRecord): boolean => u.role === 'admin' || u.role === 'manager';
+import { isAdminOrAbove, isSuperAdmin } from '../core/authz';
 const SECTION = 'Approvals';
 
 /** Transaction deletion approval workflow: agent → admin forwards → super admin approves/rejects. */
