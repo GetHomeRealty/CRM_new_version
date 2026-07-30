@@ -11,20 +11,180 @@ export interface MailEvent {
   default_body_html: string;
 }
 
+/**
+ * The onboarding guide, kept to the wording of the letter Recruitment actually sends — the five
+ * steps in their order, the bracketed note about the sample resignation letter, the confirmation
+ * line, and the recruitment signature block.
+ *
+ * Written with inline styles because mail clients drop a <style> block, and as one string per
+ * paragraph so a wording change stays a one-line diff.
+ *
+ * Only the parts that differ per agent or per brokerage are variables. The signature is the
+ * brokerage's fixed letterhead: it is deliberately literal, and Settings &rarr; Templates is where
+ * it changes if the office moves or the tagline does.
+ */
+const RED = '#c8102e';
+const ONBOARD_EMAIL_BODY: string =
+  '<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.6;color:#111827">'
+  + `<p style="margin:0 0 12px"><strong>Dear {{ agent_name }},</strong></p>`
+  + `<p style="margin:0 0 16px;color:${RED}">Welcome to {{ company_name }}! We&rsquo;re excited to have you join our team of experienced professionals. To ensure a smooth and efficient transition, we&rsquo;ve outlined a simple step-by-step onboarding process for you:</p>`
+
+  + '<p style="margin:0 0 4px"><strong>Step 1: Submit Your Resignation Letter</strong></p>'
+  + '<ul style="margin:0 0 14px;padding-left:22px">'
+  + '<li>Please submit your resignation letter to your current brokerage. [please find sample resignation letter attached to this mail]</li>'
+  + '<li>Send the resignation email copy to our Broker of Record {{ broker_of_record }} (<a href="mailto:{{ broker_email }}" style="color:#1d4ed8">{{ broker_email }}</a>)</li>'
+  + '</ul>'
+
+  + '<p style="margin:0 0 4px"><strong>Step 2: Transfer Process Initiation</strong></p>'
+  + '<ul style="margin:0 0 14px;padding-left:22px">'
+  + '<li>Once we receive a copy of your resignation email, TREB Membership, and RECO registration details our Broker of Record will initiate the transfer process.</li>'
+  + '</ul>'
+
+  + '<p style="margin:0 0 4px"><strong>Step 3: Transfer Confirmation &amp; Setup</strong></p>'
+  + '<ul style="margin:0 0 14px;padding-left:22px">'
+  + '<li>Once the transfer is completed, we will notify you immediately.</li>'
+  + '</ul>'
+
+  + '<p style="margin:0 0 4px"><strong>Step 4: Providing your Basic Details</strong></p>'
+  + '<ul style="margin:0 0 14px;padding-left:22px">'
+  + '<li>Please provide your professional headshot.</li>'
+  + '<li>Along with this, provide your PREC / SP bank account details for upcoming commission payouts to our accounts team at <a href="mailto:{{ accounts_email }}" style="color:#1d4ed8">{{ accounts_email }}</a></li>'
+  + '</ul>'
+
+  + '<p style="margin:0 0 4px"><strong>Step 5: Business Cards</strong></p>'
+  + '<ul style="margin:0 0 16px;padding-left:22px">'
+  + '<li>Please have a look at the attached sample headshots &amp; kindly indicate your style-preference &mdash; you will be issued your personalized business cards accordingly.</li>'
+  + '</ul>'
+
+  + '<p style="margin:0 0 12px">Should you have any further questions during this process, feel free to reach out. We&rsquo;re here to support you every step of the way and look forward to your success with {{ company_name }}.</p>'
+  // The count is a variable, not the literal "4" of the original letter: the documents live on the
+  // template and an office that adds or removes one must not be left asking the agent to confirm a
+  // number of files that were never sent. It renders empty below two, so the sentence still reads.
+  + '<p style="margin:0 0 12px"><em>Kindly confirm having received this onboarding email, along with the {{ attachment_count }} attached documents.</em></p>'
+  + '<p style="margin:0 0 16px">Thank you again for choosing us as your new brokerage!</p>'
+
+  + '<p style="margin:0;color:#6b7280">--</p>'
+  + `<p style="margin:0 0 14px">Appreciatively,<br><strong style="color:${RED}">Department of Recruitment</strong></p>`
+
+  // Logo beside the details, divided by the rule, as the letter has it. A table because it is the
+  // one layout primitive every mail client agrees on, and `{{ logo_img }}` rather than an <img>
+  // here because the tag has to disappear entirely when no logo is uploaded — an alt-text box
+  // where the brand should be is worse than a signature that starts at the rule.
+  + '<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse">'
+  + '<tr>'
+  + '<td style="vertical-align:middle;padding:0 18px 0 0">{{ logo_img }}</td>'
+  + '<td style="vertical-align:middle;border-left:3px solid #1f3b73;padding:0 0 0 14px;font-size:12.5px;line-height:1.55;color:#111827">'
+  + '<p style="margin:0"><strong>O:</strong>(905) 565-9933</p>'
+  + '<p style="margin:0"><strong>E:</strong> <a href="mailto:Recruitment@GetHomeRealty.ca" style="color:#1d4ed8">Recruitment@GetHomeRealty.ca</a></p>'
+  + '<p style="margin:0 0 10px"><strong>A:</strong> #405-218 Export Blvd, Mississauga ON L6R 0M8 CANADA</p>'
+  + '<p style="margin:0"><strong>Get Home Realty Inc., Brokerage &ndash; &ldquo;A Tradition of Trust&rdquo;</strong></p>'
+  + '<p style="margin:0 0 10px"><em>Canada&rsquo;s Leading Independent Brokerage - Celebrating 10 years of success</em></p>'
+  + '<p style="margin:0 0 8px"><strong>Best Commission Split&nbsp; |&nbsp; Low Fees&nbsp; |&nbsp; Superior Support</strong></p>'
+  + '<p style="margin:0"><a href="https://www.gethomerealty.ca" style="color:#1d4ed8"><strong>www.gethomerealty.ca</strong></a></p>'
+  + '</td>'
+  + '</tr>'
+  + '</table>'
+  + '</div>';
+
+/**
+ * The Independent Contractor Agreement, in the wording of the signed document, with the agent's own
+ * particulars filled in — name, address, agent type, and the commission structure recorded on their
+ * profile. It is the agreement itself rather than a covering note about one, so what the agent is
+ * asked to sign can be read and corrected before it is sent.
+ *
+ * Only the two commission lines differ between the versions in circulation (a flat split, or the
+ * tiered "first N deals" one, each optionally with a brokerage-lead split), so they arrive as
+ * `{{ commission_terms }}` built from the agent's record. Everything else is the same in every copy
+ * and is written out here.
+ *
+ * Blanks stay blank: a detail missing from the profile renders as a ruled line, exactly as the paper
+ * form does, rather than as an empty gap that reads as though the term does not apply.
+ */
+const CONTRACT_AGREEMENT_BODY: string =
+  '<div style="font-family:Arial,Helvetica,sans-serif;font-size:13.5px;line-height:1.6;color:#111827">'
+  + `<p style="margin:0 0 16px;text-align:center;font-size:18px;font-weight:700;color:${RED};letter-spacing:.3px">INDEPENDENT CONTRACTOR AGREEMENT</p>`
+  + '<p style="margin:0 0 12px">This Agreement is entered into on {{ agreement_day }} day of {{ agreement_month }}, {{ agreement_year }} by and between:</p>'
+  + '<p style="margin:0 0 8px">1. <strong>{{ company_name }} BROKERAGE</strong> (the &lsquo;Brokerage&rsquo;), having an office at {{ company_address }}.</p>'
+  + '<p style="margin:0 0 8px">2. <strong>{{ agent_name }}</strong> [Agent&rsquo;s Full Name], residing at {{ agent_address }} [Agent&rsquo;s Address]</p>'
+  + '<p style="margin:0 0 14px"><strong>Agent Type:</strong> {{ agent_type }}</p>'
+
+  + '<p style="margin:0 0 4px"><strong>Key Terms:</strong></p>'
+  + '<ul style="margin:0 0 14px;padding-left:22px">'
+  + '<li>This is an independent contractor relationship. Agent is responsible for all taxes and no employee benefits provided.</li>'
+  + '<li>Agent to comply with RECO, REBBA 2002, and Brokerage policies.</li>'
+  + '<li>Agent to conduct all business under the Brokerage name and covers personal expenses unless otherwise agreed.</li>'
+  + '<li>Brokerage Provides Agent Marketing Materials &amp; Video Services, and a $299 Sale Listing Media Fee covering photography, walkthrough video and a virtual tour. This fee will be deducted from the agent&rsquo;s commission upon closing the transaction (either).</li>'
+  + '<li>Brokerage provides access to shared office, admin support, compliance tools, trainings and optional leads.</li>'
+  + '</ul>'
+
+  + '<p style="margin:0 0 4px"><strong>Commission Structure:</strong></p>'
+  + '<ul style="margin:0 0 14px;padding-left:22px">'
+  + '{{ commission_terms }}'
+  + '<li>Minimum Brokerage Commission: $499+HST (Sale Listing), $250+HST (Lease Listing), $200+HST (Buy/Lease).</li>'
+  + '<li>Agent is entitled to 1000 Free Business Cards on Joining.</li>'
+  + '<li>No Monthly or Annual Brokerage Fee. (any future changes, if applicable, will be communicated in advance).</li>'
+  + '<li>Commissions subject to HST and documentation compliance.</li>'
+  + '</ul>'
+
+  + '<p style="margin:0 0 2px">Other Remarks: <span style="color:#9ca3af">______________________________________________________________</span></p>'
+  + `<p style="margin:0 0 14px;font-size:12px;font-style:italic;color:${RED}">Any further changes or updates in rules, policies, or implementations will be communicated to agents directly by the brokerage through official emails or other authorized communication channels.</p>`
+
+  + '<p style="margin:0 0 4px"><strong>Termination:</strong></p>'
+  + '<ul style="margin:0 0 14px;padding-left:22px">'
+  + '<li>Either party may terminate the agreement Immediately with cause.</li>'
+  + '<li>Immediate termination possible for cause (e.g., license suspension, ethics breach).</li>'
+  + '<li>All brokerage property must be returned upon termination.</li>'
+  + '</ul>'
+
+  + '<p style="margin:0 0 4px"><strong>Non-Solicitation &amp; Confidentiality:</strong></p>'
+  + '<ul style="margin:0 0 14px;padding-left:22px">'
+  + '<li>Agent must not solicit clients or recruit staff for 6 months post-termination.</li>'
+  + '<li>Any Confidential information must not be disclosed for 6 months post-termination.</li>'
+  + '</ul>'
+
+  + '<p style="margin:0 0 4px"><strong>Legal &amp; Administrative:</strong></p>'
+  + '<ul style="margin:0 0 16px;padding-left:22px">'
+  + '<li>Disputes resolved under Ontario Arbitration Act, 1991.</li>'
+  + '<li>Governed by Ontario laws.</li>'
+  + '<li>Agreement supersedes prior understandings.</li>'
+  + '</ul>'
+
+  + '<p style="margin:0 0 12px">IN WITNESS WHEREOF, the parties have executed this Agreement on the date first written above.</p>'
+
+  // Signature blocks side by side, as they are on the page. A table because a mail client will not
+  // hold two columns any other way.
+  + '<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%;border-collapse:collapse;font-size:12.5px">'
+  + '<tr>'
+  + '<td style="width:50%;vertical-align:top;border:1px solid #d1d5db;padding:10px 12px">'
+  + '<p style="margin:0 0 10px"><strong>{{ company_name }} BROKERAGE</strong></p>'
+  + '<p style="margin:0 0 10px">Signature: <span style="color:#9ca3af">___________________________</span></p>'
+  + '<p style="margin:0 0 10px">Name: Sai Venkata Ramesh Gollu (<em>Broker Manager</em>)</p>'
+  + '<p style="margin:0">Date: <span style="color:#9ca3af">_____________________</span></p>'
+  + '</td>'
+  + '<td style="width:50%;vertical-align:top;border:1px solid #d1d5db;padding:10px 12px">'
+  + '<p style="margin:0 0 10px"><strong>AGENT</strong></p>'
+  + '<p style="margin:0 0 10px">Signature: <span style="color:#9ca3af">___________________________</span></p>'
+  + '<p style="margin:0 0 10px">Name: {{ agent_name }}</p>'
+  + '<p style="margin:0">Date: <span style="color:#9ca3af">_____________________</span></p>'
+  + '</td>'
+  + '</tr>'
+  + '</table>'
+  + '</div>';
+
 export const MAIL_EVENTS: Record<string, MailEvent> = {
   'user.onboard_email': {
     module: 'Onboarding',
     label: 'Agent — Onboarding Guide',
-    variables: ['agent_name', 'agent_email', 'company_name', 'broker_of_record', 'broker_email', 'accounts_email', 'onboard_date', 'current_date'],
+    variables: ['agent_name', 'agent_email', 'company_name', 'broker_of_record', 'broker_email', 'accounts_email', 'attachment_count', 'logo_img', 'onboard_date', 'current_date'],
     default_subject: 'Welcome, {{ agent_name }}! Here’s your onboarding guide to {{ company_name }}',
-    default_body_html: '<p>Dear {{ agent_name }},</p><p>Welcome to {{ company_name }}! We&rsquo;re excited to have you join our team of experienced professionals. To ensure a smooth and efficient transition, we&rsquo;ve outlined a simple step-by-step onboarding process for you:</p><h3>Step 1: Submit Your Resignation Letter</h3><ul><li>Please submit your resignation letter to your current brokerage (a sample is attached to this email).</li><li>Send the resignation email copy to our Broker of Record {{ broker_of_record }} at {{ broker_email }}.</li></ul><h3>Step 2: Transfer Process Initiation</h3><ul><li>Once we receive a copy of your resignation email, TREB Membership, and RECO registration details, our Broker of Record will initiate the transfer process.</li></ul><h3>Step 3: Transfer Confirmation &amp; Setup</h3><ul><li>Once the transfer is completed, we will notify you immediately.</li></ul><h3>Step 4: Providing Your Basic Details</h3><ul><li>Please provide your professional headshot.</li><li>Along with this, provide your PREC / SP bank account details for upcoming commission payouts to our accounts team at {{ accounts_email }}.</li></ul><h3>Step 5: Business Cards</h3><ul><li>Please have a look at the attached sample headshots and indicate your style preference &mdash; you will be issued your personalized business cards accordingly.</li></ul><p>Should you have any further questions during this process, feel free to reach out. We&rsquo;re here to support you every step of the way and look forward to your success with {{ company_name }}.</p><p><em>Kindly confirm having received this onboarding email, along with the attached documents.</em></p><p>Thank you again for choosing us as your new brokerage!</p><p>Appreciatively,<br>Department of Recruitment<br>{{ company_name }}</p>',
+    default_body_html: ONBOARD_EMAIL_BODY,
   },
   'user.contract_agreement': {
     module: 'Onboarding',
     label: 'Agent — Contract Agreement',
-    variables: ['agent_name', 'agent_email', 'company_name', 'broker_of_record', 'contract_date', 'onboard_date', 'current_date'],
+    variables: ['agent_name', 'agent_email', 'agent_address', 'agent_type', 'company_name', 'company_address', 'commission_terms', 'agreement_day', 'agreement_month', 'agreement_year', 'broker_of_record', 'contract_date', 'onboard_date', 'current_date'],
     default_subject: 'Your Independent Contractor Agreement with {{ company_name }}',
-    default_body_html: '<p>Dear {{ agent_name }},</p><p>Please find attached your Independent Contractor Agreement with {{ company_name }}, dated {{ contract_date }}.</p><p>Kindly review it in full, then sign and return a copy to us. The agreement covers your commission structure, the minimum brokerage commission, termination terms, and the non-solicitation and confidentiality provisions.</p><p>If anything in it is unclear, reply to this email before signing and we will walk you through it.</p><p>Regards,<br>{{ company_name }}</p>',
+    default_body_html: CONTRACT_AGREEMENT_BODY,
   },
   'invoice.send': {
     module: 'Invoice',
@@ -96,6 +256,26 @@ export const MAIL_EVENTS: Record<string, MailEvent> = {
     default_subject: 'Client review request — {{ transaction_number }}',
     default_body_html: '<p>Hello {{ agent_name }},</p><p>Please request client reviews for transaction {{ transaction_number }}.</p><p>Regards,<br>{{ company_name }}</p>',
   },
+};
+
+/**
+ * SHA-256 of template bodies this app shipped in the past.
+ *
+ * A row still holding one of these has never had its wording edited by anyone, so a correction to
+ * the shipped text can safely replace it. `updated_at` cannot answer that question on its own: it
+ * also moves when a template is merely switched on or given a sender, which was enough to freeze the
+ * contract agreement on superseded wording with nobody having touched a word of it.
+ *
+ * Add an entry whenever a `default_body_html` above is rewritten, so the version being replaced stays
+ * recognisable in databases that have not seen the new one yet.
+ */
+export const SUPERSEDED_BODY_HASHES: Record<string, string[]> = {
+  // The paraphrase of the recruitment letter, shipped until 2026-07-30, when the letter's own
+  // wording, signature block and logo replaced it.
+  'user.onboard_email': ['2e89930be4e11d4fdb33552fdec7b0894b18eda3359ac68b01e88cff17a04c3e'],
+  // The covering note that referred to an attached agreement, shipped until 2026-07-30, when the
+  // agreement itself — filled in from the agent's profile — replaced it.
+  'user.contract_agreement': ['152ec34e4ebccf846b57799efb8ebcf34b78f2a6d53f56c1331536a1bda6b767'],
 };
 
 export const variablesFor = (key: string): string[] => MAIL_EVENTS[key]?.variables ?? [];

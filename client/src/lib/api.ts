@@ -22,11 +22,16 @@ export interface OnboardingPreview {
   to: string;
   variables: string[];
   attachments: { id: number; filename: string; size: number }[];
+  /**
+   * The document generated from this message and attached to the send — the agreement itself, for a
+   * contract. Its size is not known until it is rendered, so only the name comes back.
+   */
+  generated_document: string | null;
   sender: string | null;
   /** Anything that would make the send fail or arrive incomplete. */
   warning: string | null;
   /** Which warning it is, so the screen can decide when it stops applying. */
-  warning_kind: 'no_recipient' | 'template_off' | 'no_attachment' | null;
+  warning_kind: 'no_recipient' | 'template_off' | null;
 }
 
 /** The message as it would arrive for this agent — read-only, nothing is sent. */
@@ -250,6 +255,23 @@ export const viewDocClientFile = (docId: Id, index: number): Promise<void> => fe
 export const downloadDocClientFile = (docId: Id, index: number): Promise<void> => fetchFileBlob(`/api/documents/${docId}/files/${index}`);
 export const viewDocValidationFile = (docId: Id): Promise<void> => fetchFileBlob(`/api/documents/${docId}/validation-file?inline=1`, { inline: true });
 export const downloadAllDocuments = (txnId: Id): Promise<void> => fetchFileBlob(`/api/transactions/${txnId}/documents/download-all`);
+
+/**
+ * The bytes of one file that goes out with the onboarding email or contract agreement, so the review
+ * screen can show it in place rather than in another tab. Returns the blob instead of opening it,
+ * unlike the viewers above; it still has to come through the authenticated instance, because a plain
+ * cross-origin link carries no session.
+ */
+export const fetchOnboardingAttachment = (kind: 'onboard' | 'contract', attachmentId: Id): Promise<Blob> =>
+  api.get<Blob>(`/api/onboarding/${kind}/attachments/${attachmentId}`, { responseType: 'blob' }).then((r) => r.data);
+
+/**
+ * The document that will be attached, rendered from the message as it currently stands — so the copy
+ * read here is the copy the agent receives, including an edit made a moment ago. The body is sent
+ * with the request, which is why this is a POST; nothing is stored and nothing is sent.
+ */
+export const fetchOnboardingDocument = (userId: Id, kind: 'onboard' | 'contract', html: string): Promise<Blob> =>
+  api.post<Blob>(`/api/users/${userId}/onboarding/${kind}/document`, { html }, { responseType: 'blob' }).then((r) => r.data);
 
 // --- Document notifications (agent upload → admin; admin review → agent) ---
 export const getDocNotifications = (): Promise<DocNotif> => api.get<DocNotif>('/api/doc-notifications').then((r) => r.data);

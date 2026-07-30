@@ -9,6 +9,20 @@ import { MailAccountService } from './mail-account.service';
 const e = (s: string): string => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
+/**
+ * A file sent with a message.
+ *
+ * `cid` marks it as part of the body rather than something to download: the HTML refers to it as
+ * `src="cid:<id>"` and the image travels inside the message. That is the only way an image renders
+ * in a mail client without a URL the recipient can reach, which a brand logo cannot rely on.
+ */
+export interface MailAttachment {
+  data: string;
+  name?: string;
+  mime?: string;
+  cid?: string;
+}
+
 /** Sends emails through a MailAccount's SMTP settings (port of TemplateMailService). */
 @Injectable()
 export class MailerService {
@@ -72,7 +86,7 @@ export class MailerService {
    * registry. Campaigns personalise and inject tracking per recipient, so the body is
    * built by the caller rather than resolved from an event key.
    */
-  async sendDirect(to: string, subject: string, html: string, accountId?: number | null, attachments: { data: string; name?: string; mime?: string }[] = [], userId?: number | null): Promise<void> {
+  async sendDirect(to: string, subject: string, html: string, accountId?: number | null, attachments: MailAttachment[] = [], userId?: number | null): Promise<void> {
     const account = await this.resolveSender(accountId ?? null, userId ?? null);
     await this.dispatch(account, to, subject, html, [], attachments);
   }
@@ -122,7 +136,7 @@ export class MailerService {
     await this.dispatch(account, to, subject, body);
   }
 
-  private async dispatch(account: mail_accounts, to: string | string[], subject: string, body: string, cc: string[] = [], attachments: { data: string; name?: string; mime?: string }[] = []): Promise<void> {
+  private async dispatch(account: mail_accounts, to: string | string[], subject: string, body: string, cc: string[] = [], attachments: MailAttachment[] = []): Promise<void> {
     const transport = account.encryption === 'oauth'
       // Google OAuth account: `password` holds the encrypted refresh token. Nodemailer mints a
       // fresh access token from it (via the app's client id/secret) for each send with XOAUTH2.
@@ -167,7 +181,13 @@ export class MailerService {
       cc: redirect ? undefined : (cc.length ? cc : undefined),
       subject: redirect ? `[redirected from ${realTo}] ${subject}` : subject,
       html: body,
-      attachments: attachments.map((a) => ({ filename: a.name ?? 'attachment.pdf', content: Buffer.from(a.data.replace(/^data:[^;]+;base64,/, ''), 'base64'), contentType: a.mime ?? 'application/pdf' })),
+      attachments: attachments.map((a) => ({
+        filename: a.name ?? 'attachment.pdf',
+        content: Buffer.from(a.data.replace(/^data:[^;]+;base64,/, ''), 'base64'),
+        contentType: a.mime ?? 'application/pdf',
+        // Part of the body, not something to download — see MailAttachment.
+        ...(a.cid ? { cid: a.cid, contentDisposition: 'inline' as const } : {}),
+      })),
     });
   }
 }
