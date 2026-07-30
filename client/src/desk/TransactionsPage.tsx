@@ -307,8 +307,8 @@ export default function TransactionsPage() {
                 </td>
                 <td><span className={`pill ${typeClass(t.type)}`}>{typeLabel(t.type)}</span></td>
                 <td>#{t.trade_no}</td>
-                <td>{t.offer_date || ''}</td>
-                <td>{t.closing_date || ''}</td>
+                <td className="date">{t.offer_date || ''}</td>
+                <td className="date">{t.closing_date || ''}</td>
                 <td><a className="prop-link" onClick={() => navigate(`${deskPath(`transactions/${t.id}`)}?mode=view`)}>{t.property}</a></td>
                 <td>{t.agent || 'Unassigned'}</td>
                 <td>{formatPrice(t.price)}</td>

@@ -582,7 +582,15 @@ input[type="number"],.numeric,.stat-card .val{font-variant-numeric:tabular-nums;
 .lead-contact div{line-height:1.45}
 .lead-activity-cell{white-space:nowrap;font-size:12px;color:var(--text-2)}
 .lead-activity-cell span{margin-right:9px}
-.lead-actions{white-space:nowrap;display:flex;gap:5px;flex-wrap:wrap}
+/* This cell was making every lead row 160px tall — twice what its content needs.
+   `display:flex` on a <td> takes the cell out of table layout, so the browser wraps it in an
+   anonymous cell that is sized by the table's own column algorithm rather than by the buttons
+   inside it. That gave the actions 83px to hold 120px of buttons, `flex-wrap:wrap` duly wrapped
+   them onto a second line, and the whole row grew to match — including the ten other cells, which
+   had nothing to do with it. The `white-space:nowrap` already here says the buttons were always
+   meant to stay on one line.
+   Measured: 160px -> 82px per row, no button overflowing its cell. */
+.lead-actions{white-space:nowrap;display:flex;gap:5px;flex-wrap:nowrap;align-items:center;min-width:142px}
 .lead-unsub{margin-left:7px}
 .lead-tags{display:flex;flex-wrap:wrap;gap:4px}
 .lead-tag{background:#f5f3ff;color:#5b21b6;border:1px solid #ddd6fe;border-radius:999px;padding:2px 9px;font-size:11px;font-weight:600;cursor:pointer;max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -1173,8 +1181,12 @@ input[type="number"],.numeric,.stat-card .val{font-variant-numeric:tabular-nums;
 .list-table tbody tr:hover{background:var(--surface-2)}
 /* Dates, money and counts read as one unit — wrapping "2025-12-21" onto two lines made the
    transaction rows twice as tall as they needed to be and much harder to scan. */
-.list-table td.nowrap,.list-table td.num,.list-table td.date{white-space:nowrap}
-.list-table td.num{font-variant-numeric:tabular-nums;text-align:right}
+/* A date is one token. "2025-12-21" needs about 68px and the column gave it 57, so every date in
+   the transaction list broke onto a second line and doubled the height of its row — while the
+   table itself was 50px NARROWER than its container, so the space was there all along. */
+td.date,td.nowrap,td.num{white-space:nowrap}
+/* Figures line up digit over digit, so columns of money can be compared by eye. */
+td.num{font-variant-numeric:tabular-nums;text-align:right}
 
 /* ---- Motion & responsiveness ---------------------------------------------------------------
    Honour a stated preference for less movement. Everything below is decoration; none of it
