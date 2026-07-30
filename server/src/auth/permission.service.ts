@@ -57,6 +57,20 @@ export type PermissionMap = Record<string, string>;
 
 @Injectable()
 export class PermissionService {
+  /**
+   * The database-backed defaults, when they are available.
+   *
+   * Optional and injected lazily so this service keeps working — and keeps being constructible in a
+   * test — when the store is absent. The compiled `roleDefaults` below stays as the fallback, which
+   * is what makes an empty or unreachable table harmless rather than a lockout.
+   */
+  private store: { defaultsFor(role: string): PermissionMap | null } | null = null;
+
+  /** Called once by the Core Platform layer at start-up. */
+  useStore(store: { defaultsFor(role: string): PermissionMap | null }): void {
+    this.store = store;
+  }
+
   label(role: string): string {
     return ROLE_LABELS[role] ?? role.charAt(0).toUpperCase() + role.slice(1);
   }
@@ -73,8 +87,20 @@ export class PermissionService {
     return out;
   }
 
-  /** Default permission map for a role: screen => level. */
+  /**
+   * Default permission map for a role: screen => level.
+   *
+   * The database is consulted first; the switch below is the fallback and the origin of the seeded
+   * data, so the two agree by construction. A test asserts they still do.
+   */
   roleDefaults(role: string): PermissionMap {
+    const stored = this.store?.defaultsFor(role);
+    if (stored) return stored;
+    return this.compiledDefaults(role);
+  }
+
+  /** The defaults as written into the application. Seeded into `role_permissions` by migration. */
+  private compiledDefaults(role: string): PermissionMap {
     switch (role) {
       case 'admin':
         return this.fill('edit');

@@ -27,6 +27,14 @@ export interface AuthUser {
   is_super_admin: boolean;
   is_admin_or_above: boolean;
   permissions: Permissions;
+  /**
+   * The modules this person may open — bought by the company AND assigned to them. Navigation is
+   * built from this, so a module nobody purchased and one nobody was given look identical from here:
+   * absent. Optional so a response from an older server still parses.
+   */
+  modules?: ('crm' | 'desk')[];
+  /** What the company bought, for explaining why a module is missing rather than just hiding it. */
+  licence?: { crm: boolean; desk: boolean; plan: string | null; status: string; expires: string | null; valid: boolean };
 }
 
 /** Body sent to POST /api/register (bootstrap first-admin registration). */
@@ -48,4 +56,6 @@ export interface AuthContextValue {
   can: (screen: string, level?: ScreenLevel) => boolean;
   isSuperAdmin: boolean;
   isAdminOrAbove: boolean;
+  /** The areas this login may open, already resolved against the licence and the assignment. */
+  modules: ('crm' | 'desk')[];
 }

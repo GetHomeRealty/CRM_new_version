@@ -1,3 +1,4 @@
+import { AREAS, type Area } from '../desk/area';
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import api, { getCsrfCookie } from '../lib/axios';
 import type { AuthContextValue, AuthUser, RegisterPayload, ScreenLevel } from '../types';
@@ -51,9 +52,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // Role tiers (relabel-in-place): Super Admin (stored 'admin') > Admin ('manager') > Agent.
   const isSuperAdmin = !!user?.is_super_admin;
+  /**
+   * The areas this login may open. Falls back to both when the server said nothing — an older API, or
+   * a deployment that has not been told about licensing, must not leave someone with no navigation.
+   */
+  const modules: Area[] = AREAS.filter((a) => (user?.modules ? user.modules.includes(a) : true));
   const isAdminOrAbove = !!user?.is_admin_or_above;
 
-  const value: AuthContextValue = { user, loading, login, register, logout, setUser, can, isSuperAdmin, isAdminOrAbove };
+  const value: AuthContextValue = { user, loading, login, register, logout, setUser, can, isSuperAdmin, isAdminOrAbove, modules };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

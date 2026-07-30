@@ -1,3 +1,4 @@
+import { AreaGuard } from '../core/area.guard';
 import { Controller, Get, Query, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '../auth/guards/auth.guard';
 import { ScreenGuard } from '../auth/guards/screen.guard';
@@ -5,7 +6,7 @@ import { Screen } from '../auth/decorators';
 import { AuditLogService, type AuditLogQuery } from './audit-log.service';
 
 @Controller('audit-logs')
-@UseGuards(AuthGuard, ScreenGuard)
+@UseGuards(AuthGuard, ScreenGuard, AreaGuard)
 export class AuditLogController {
   constructor(private readonly auditLogs: AuditLogService) {}
 

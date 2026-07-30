@@ -1,3 +1,4 @@
+import { ModuleAccessService } from '../core/module-access.service';
 import { ForbiddenException, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import bcrypt from 'bcryptjs';
@@ -13,12 +14,19 @@ export class AuthService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly permissions: PermissionService,
+    private readonly moduleAccess: ModuleAccessService,
     config: ConfigService,
   ) {
     this.rounds = config.get<number>('bcryptRounds') ?? 12;
   }
 
-  /** Shape the public user payload — a copy of AuthController::payload(). */
+  /**
+   * Shape the public user payload — a copy of AuthController::payload().
+   *
+   * `modules` and `licence` are added asynchronously by `payloadWithModules`; this synchronous form is
+   * kept because several callers build a payload where awaiting is not possible, and they are not
+   * asking about module access.
+   */
   buildPayload(user: AuthUserRecord): AuthPayload {
     const role = user.role || 'agent';
     return {
@@ -31,7 +39,26 @@ export class AuthService {
       is_super_admin: user.role === 'admin',
       is_admin_or_above: user.role === 'admin' || user.role === 'manager',
       permissions: this.permissions.effectiveFor(role, user.user_permissions),
+      // Filled in by `payloadFor`. Both modules is the same answer the application gave before
+      // licensing existed, so a caller that cannot await still behaves as it always did.
+      modules: ['crm', 'desk'],
+      licence: { crm: true, desk: true, plan: null, status: 'active', expires: null, valid: true },
     };
+  }
+
+  /**
+   * The payload as the client should see it, with module access resolved.
+   *
+   * Separate from `buildPayload` because resolving access is two queries and several callers build a
+   * payload where awaiting is neither possible nor wanted. Every route that hands a user to the
+   * frontend uses this one.
+   */
+  async payloadFor(user: AuthUserRecord): Promise<AuthPayload> {
+    const [modules, licence] = await Promise.all([
+      this.moduleAccess.forUser(user.id),
+      this.moduleAccess.licence(),
+    ]);
+    return { ...this.buildPayload(user), modules, licence };
   }
 
   /** Load a user (with permission overrides) by id — used by the auth guard. */

@@ -1,6 +1,8 @@
+import { AREAS, type Area } from '../common/domain';
+import { ModuleAccessService } from '../core/module-access.service';
 import { Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
 import * as bcrypt from 'bcryptjs';
-import { Prisma, type users, type user_permissions } from '@prisma/client';
+import { Prisma, type users, type user_permissions, type user_modules } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { PermissionService, LEVELS, ROLES, SCREENS } from '../auth/permission.service';
 import { throwValidation, type FieldErrors } from '../common/laravel-exceptions';
@@ -8,19 +10,20 @@ import { parseJson, phpJsonNormalize, toDateString } from '../common/serialize';
 import { AuditService } from '../audit/audit.service';
 import type { AuthUserRecord } from '../auth/auth.types';
 
-type UserWithPerms = users & { user_permissions: user_permissions[] };
+type UserWithPerms = users & { user_permissions: user_permissions[]; user_modules: user_modules[] };
 
 @Injectable()
 export class UsersService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly permissions: PermissionService,
+    private readonly moduleAccess: ModuleAccessService,
     private readonly audit: AuditService,
   ) {}
 
   /** All users ordered by name, each with effective permissions + overrides. */
   async index(): Promise<Record<string, unknown>[]> {
-    const rows = await this.prisma.users.findMany({ include: { user_permissions: { orderBy: { id: 'asc' } } } });
+    const rows = await this.prisma.users.findMany({ include: { user_permissions: { orderBy: { id: 'asc' } }, user_modules: true } });
     rows.sort((a, b) => a.name.localeCompare(b.name, 'en', { sensitivity: 'base' }) || a.id - b.id);
     return rows.map((u) => this.payload(u));
   }
@@ -36,12 +39,18 @@ export class UsersService {
         password: await bcrypt.hash(data.password as string, 10),
         role: data.role as string,
         status: (data.status ?? 'Active') as string,
+        department: (data.department ?? null) as string | null,
+        designation: (data.designation ?? null) as string | null,
         profile: data.profile !== undefined ? JSON.stringify(data.profile) : null,
         created_at: now,
         updated_at: now,
       },
     });
     await this.syncPermissions(user.id, user.role, (data.permissions ?? {}) as Record<string, unknown>);
+    // Which modules this person may open. Omitted means both — the same access a user created before
+    // module assignment existed would have had, so an older client or an API caller that does not
+    // know about modules cannot accidentally create someone who can open nothing.
+    await this.moduleAccess.setAssigned(user.id, this.wantedModules(body));
     await this.audit.logModule(actor ? { id: actor.id, name: actor.name } : null, 'Users', {
       section: 'User Management', field: user.name, action: 'User created',
       details: `${user.email} · ${this.permissions.label(user.role)}`,
@@ -55,6 +64,8 @@ export class UsersService {
     const data = await this.validate(body, existing);
 
     const update: Prisma.usersUpdateInput = {
+      department: (data.department ?? existing.department) as string | null,
+      designation: (data.designation ?? existing.designation) as string | null,
       name: data.name as string,
       username: (data.username ?? existing.username) as string | null,
       email: data.email as string,
@@ -69,6 +80,10 @@ export class UsersService {
     const user = await this.prisma.users.update({ where: { id }, data: update });
 
     await this.syncPermissions(user.id, user.role, (data.permissions ?? {}) as Record<string, unknown>);
+    // Only when the caller said something about modules. An absent key means "leave it alone" here,
+    // unlike on create — a PATCH-shaped save from a screen that does not edit modules must not wipe
+    // the assignment.
+    if (Array.isArray(body.modules)) await this.moduleAccess.setAssigned(user.id, this.wantedModules(body));
     await this.audit.logModule(actor ? { id: actor.id, name: actor.name } : null, 'Users', {
       section: 'User Management', field: user.name, action: 'User updated',
       details: `${user.email} · ${this.permissions.label(user.role)} · ${user.status}`,
@@ -133,7 +148,7 @@ export class UsersService {
   }
 
   private async load(id: number): Promise<UserWithPerms> {
-    return (await this.prisma.users.findUnique({ where: { id }, include: { user_permissions: { orderBy: { id: 'asc' } } } })) as UserWithPerms;
+    return (await this.prisma.users.findUnique({ where: { id }, include: { user_permissions: { orderBy: { id: 'asc' } }, user_modules: true } })) as UserWithPerms;
   }
 
   /** Persist only the overrides that differ from the role default. */
@@ -150,6 +165,19 @@ export class UsersService {
     }
   }
 
+  /**
+   * The modules a save is asking for.
+   *
+   * An absent `modules` key means "unchanged" on update and "both" on create — a caller that does not
+   * know about module assignment must not silently strip it. An explicitly empty list is honoured:
+   * that is someone deliberately saying this person opens nothing.
+   */
+  private wantedModules(body: Record<string, unknown>): Area[] {
+    const raw = body.modules;
+    if (!Array.isArray(raw)) return [...AREAS];
+    return AREAS.filter((a) => raw.includes(a));
+  }
+
   private payload(u: UserWithPerms): Record<string, unknown> {
     const overrides = u.user_permissions;
     return {
@@ -159,6 +187,12 @@ export class UsersService {
       email: u.email,
       role: u.role,
       status: u.status ?? 'Active',
+      department: u.department,
+      designation: u.designation,
+      // Assigned modules, not effective ones: this screen edits the assignment, and showing it
+      // filtered by the licence would make an unlicensed module look un-assigned and lose the setting
+      // the moment someone saved.
+      modules: u.user_modules.filter((m) => m.status === 'active').map((m) => m.module_name),
       profile: phpJsonNormalize(parseJson(u.profile) ?? []),
       is_admin: u.role === 'admin',
       permissions: this.permissions.effectiveFor(u.role, overrides.map((p) => ({ screen: p.screen, level: p.level }))),

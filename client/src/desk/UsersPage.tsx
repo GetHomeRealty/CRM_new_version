@@ -1,3 +1,4 @@
+import { AREAS, AREA_LABEL, type Area } from './area';
 import { useEffect, useRef, useState } from 'react';
 import { getUsers, getUsersCatalog, createUser, updateUser, deleteUser, getUserDealHistory, getAgentLoans, uploadUserPhoto } from '../lib/api';
 import { fileToBase64 } from '../lib/importApi';
@@ -15,6 +16,7 @@ import type {
   ManagedUser, Permissions, ScreenLevel, UserProfile, UsersCatalog,
 } from '../types';
 import OnboardingEmailModal from './OnboardingEmailModal';
+import { useArea } from './AreaContext';
 
 export default function UsersPage() {
   const toast = useToast();
@@ -154,6 +156,12 @@ interface UserForm {
   agent_comm_pct: number | string;
   brok_comm_pct: number | string;
   lease_comm_pct: number | string;
+  department: string;
+  designation: string;
+  modules: Area[];
+  brokerage_lead_structure: string;
+  brokerage_lead_pct: number | string;
+  brokerage_lead_brok_pct: number | string;
   completed_deals: number | string;
   upgrade_agent_pct: number | string;
   upgrade_brok_pct: number | string;
@@ -172,6 +180,18 @@ interface UserModalProps {
 
 function UserModal({ catalog, existing, onClose, onSaved }: UserModalProps) {
   const toast = useToast();
+  /**
+   * Agent Details, Loan and Previous Commission History are Transaction Desk concerns — commission
+   * splits, loan balances and paid-deal history. They are shown on the Desk side only, so the CRM's
+   * user form is about the person rather than their compensation.
+   *
+   * `showAgentFinance` gates the display AND the validation together. Gating only the display would
+   * leave the save handler demanding a Date of Onboard that is not on screen — a dead end with no
+   * field to fill in.
+   */
+  const { area } = useArea();
+  const { user: actingUser } = useAuth();
+  const licence = actingUser?.licence;
   const { screens, roles, levels, role_defaults } = catalog;
   const p: UserProfile = existing?.profile || {};
   const [form, setForm] = useState<UserForm>(() => ({
@@ -182,8 +202,14 @@ function UserModal({ catalog, existing, onClose, onSaved }: UserModalProps) {
     mobile: p.mobile || '', gender: p.gender || '',
     onboard_date: p.onboard_date || '', personal_email: p.personal_email || '', org_email: p.org_email || '',
     experience: (p.experience && p.experience !== 'N/A') ? p.experience : '', prev_brokerage: p.prev_brokerage || '',
+    department: (existing?.department as string | null) ?? '', designation: (existing?.designation as string | null) ?? '',
+    // Both when the record predates module assignment — the access such a user actually has today.
+    modules: Array.isArray(existing?.modules) ? (existing.modules as Area[]) : [...AREAS],
     commission_structure: p.commission_structure || '', agent_comm_pct: p.agent_comm_pct ?? 0, brok_comm_pct: p.brok_comm_pct ?? 0,
-    lease_comm_pct: p.lease_comm_pct ?? 95, completed_deals: p.completed_deals ?? 0,
+    lease_comm_pct: p.lease_comm_pct ?? 95,
+    brokerage_lead_structure: p.brokerage_lead_structure || '',
+    brokerage_lead_pct: p.brokerage_lead_pct ?? '', brokerage_lead_brok_pct: p.brokerage_lead_brok_pct ?? '',
+    completed_deals: p.completed_deals ?? 0,
     upgrade_agent_pct: p.upgrade_agent_pct ?? '', upgrade_brok_pct: p.upgrade_brok_pct ?? '',
     commission_history: p.commission_history || [],
     has_loan: p.has_loan || 'No', loan_entries: p.loan_entries || [], address: p.address || '',
@@ -214,6 +240,8 @@ function UserModal({ catalog, existing, onClose, onSaved }: UserModalProps) {
   const resetToRole = () => setPerms({ ...role_defaults[form.role] });
   const isAdminRole = form.role === 'admin';
   const isAgent = form.role === 'agent';
+  // Only for an agent, and only on the Transaction Desk side.
+  const showAgentFinance = isAgent && area === 'desk';
 
   // Selecting a preset split (e.g. "90-10%") auto-fills Agent % / Brokerage %.
   // "Add custom split…" leaves both empty for manual entry.
@@ -223,6 +251,16 @@ function UserModal({ catalog, existing, onClose, onSaved }: UserModalProps) {
     else setForm((f) => ({ ...f, commission_structure: v, agent_comm_pct: '', brok_comm_pct: '' }));
   };
   const setAgentSplit = (v: string) => setForm((f) => ({ ...f, agent_comm_pct: v, brok_comm_pct: v === '' ? '' : Math.max(0, 100 - (parseFloat(v) || 0)) }));
+
+  // The same two handlers for the brokerage-lead split. Deliberately a copy of the pair above rather
+  // than a shared helper: they differ only in which three keys they write, and threading field names
+  // through a generic version made the call sites harder to read than the duplication.
+  const onLeadStructure = (v: string) => {
+    const m = v.match(/^(\d+)-(\d+)/);
+    if (m) setForm((f) => ({ ...f, brokerage_lead_structure: v, brokerage_lead_pct: m[1], brokerage_lead_brok_pct: m[2] }));
+    else setForm((f) => ({ ...f, brokerage_lead_structure: v, brokerage_lead_pct: '', brokerage_lead_brok_pct: '' }));
+  };
+  const setLeadAgentSplit = (v: string) => setForm((f) => ({ ...f, brokerage_lead_pct: v, brokerage_lead_brok_pct: v === '' ? '' : Math.max(0, 100 - (parseFloat(v) || 0)) }));
 
   // Loan entries
   const addLoan = () => set('loan_entries', [...form.loan_entries, { amount: '', date: todayStr(), remarks: '' }]);
@@ -245,8 +283,9 @@ function UserModal({ catalog, existing, onClose, onSaved }: UserModalProps) {
     if (!String(form.mobile).trim()) { toast('Mobile Number is required', 'bad'); return; }
     if (!form.gender) { toast('Gender is required', 'bad'); return; }
     if (!form.status) { toast('Status is required', 'bad'); return; }
-    // Mandatory Agent Details (only shown for the Agent role).
-    if (isAgent) {
+    // Mandatory Agent Details — only when the section is actually on screen. Required fields that
+    // cannot be seen cannot be filled in.
+    if (showAgentFinance) {
       if (!form.onboard_date) { toast('Date of Onboard is required', 'bad'); return; }
       if (!form.experience) { toast('Please select Fresher / Experienced', 'bad'); return; }
       if (form.experience === 'Experienced' && !String(form.prev_brokerage).trim()) { toast('Previous Brokerage Name is required for an experienced agent', 'bad'); return; }
@@ -256,13 +295,18 @@ function UserModal({ catalog, existing, onClose, onSaved }: UserModalProps) {
     }
     const payload: Record<string, unknown> = {
       name: form.name.trim(), username: form.username.trim() || null, email: form.email.trim(), role: form.role,
+      department: form.department.trim() || null, designation: form.designation.trim() || null,
+      modules: form.modules,
       status: form.status, permissions: isAdminRole ? {} : perms,
       profile: {
         mobile: form.mobile, gender: form.gender,
         onboard_date: form.onboard_date || null, personal_email: form.personal_email, org_email: form.org_email,
         experience: form.experience, prev_brokerage: form.experience === 'Experienced' ? form.prev_brokerage : '',
         commission_structure: form.commission_structure, agent_comm_pct: form.agent_comm_pct, brok_comm_pct: form.brok_comm_pct,
-        lease_comm_pct: form.lease_comm_pct, completed_deals: form.completed_deals,
+        lease_comm_pct: form.lease_comm_pct,
+        brokerage_lead_structure: form.brokerage_lead_structure,
+        brokerage_lead_pct: form.brokerage_lead_pct, brokerage_lead_brok_pct: form.brokerage_lead_brok_pct,
+        completed_deals: form.completed_deals,
         upgrade_agent_pct: form.upgrade_agent_pct, upgrade_brok_pct: form.upgrade_brok_pct,
         commission_history: form.commission_history,
         has_loan: form.has_loan, loan_amount: loanTotal, loan_entries: form.loan_entries, address: form.address,
@@ -309,10 +353,62 @@ function UserModal({ catalog, existing, onClose, onSaved }: UserModalProps) {
           <div className="field"><label>Status <span className="req">*</span></label>
             <select value={form.status} onChange={(e) => set('status', e.target.value)}><option>Active</option><option>Inactive</option></select>
             <span className="help">Inactive users cannot login to the system.</span></div>
+          <div className="field"><label>Department</label>
+            <input value={form.department} onChange={(e) => set('department', e.target.value)} placeholder="e.g. Sales, Accounts" /></div>
+          <div className="field"><label>Designation</label>
+            <input value={form.designation} onChange={(e) => set('designation', e.target.value)} placeholder="e.g. Broker of Record" /></div>
         </div>
 
-        {/* Agent Details */}
-        {isAgent && (<>
+        {/*
+          Which parts of the application this person opens. Separate from the screen permissions
+          below: a module decides whether an area exists for them at all, the permissions decide what
+          they may do inside it. Both still apply.
+
+          A module the company has not bought is shown but marked, because the assignment is worth
+          keeping — resubscribing should restore the arrangement rather than a blank slate.
+        */}
+        <div className="modal-sub">Module Access</div>
+        <div className="g3">
+          {AREAS.map((a) => {
+            const licensed = licence ? (a === 'crm' ? licence.crm : licence.desk) : true;
+            return (
+              <label key={a} className="field" style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 0 }}>
+                <input type="checkbox" style={{ width: 16, height: 16, marginTop: 2 }}
+                  checked={form.modules.includes(a)}
+                  onChange={(e) => setForm((f) => ({
+                    ...f,
+                    modules: e.target.checked ? [...AREAS].filter((x) => x === a || f.modules.includes(x)) : f.modules.filter((x) => x !== a),
+                  }))} />
+                <span>
+                  <span style={{ fontWeight: 600 }}>{AREA_LABEL[a]}</span>
+                  {!licensed && <span className="pill bad" style={{ marginLeft: 6, fontSize: 10 }}>Not subscribed</span>}
+                </span>
+              </label>
+            );
+          })}
+        </div>
+        <div className="g3" style={{ marginTop: 0 }}>
+          <span className="help" style={{ gridColumn: '1 / -1' }}>
+            {form.modules.length === 0
+              ? 'With no module selected this person can sign in but has nothing to open.'
+              : 'Screen permissions below still decide what they can do inside each module.'}
+          </span></div>
+
+        {/*
+          Said only where it matters: a NEW agent created from the CRM is saved with no commission
+          structure, because the section that sets it is not on this side. Editing an existing agent
+          keeps whatever is already on file, so there is nothing to warn about there.
+        */}
+        {isAgent && area === 'crm' && !existing && (
+          <p className="help" style={{ margin: '10px 0 0' }}>
+            Commission split, loan and deal history are set in <strong>Transaction Management</strong> →
+            Users. This agent can be created here and will have no commission structure until that is
+            filled in.
+          </p>
+        )}
+
+        {/* Agent Details, Loan and Previous Commission History — Transaction Desk only. */}
+        {showAgentFinance && (<>
           <div className="modal-sub">Agent Details</div>
           <div className="g3">
             <div className="field"><label>Date of Onboard (Joining / Contract Date) <span className="req">*</span></label><input type="date" value={form.onboard_date} onChange={(e) => set('onboard_date', e.target.value)} /></div>
@@ -338,6 +434,30 @@ function UserModal({ catalog, existing, onClose, onSaved }: UserModalProps) {
             <div className="field"><label>Agent % <span className="req">*</span></label><input type="number" min="0" max="100" value={form.agent_comm_pct} onChange={(e) => setAgentSplit(e.target.value)} /><span className="help">Agent + Brokerage = 100.</span></div>
             <div className="field"><label>Brokerage %</label><input value={form.brok_comm_pct} readOnly style={{ background: '#f9fafb' }} /></div>
           </div>
+
+          {/*
+            The split that applies when the BROKERAGE supplies the lead, rather than the agent
+            bringing it in. Entered as the agent's share with the brokerage's derived beside it, the
+            same shape as the row above — a lone percentage in a money field leaves whose share it is
+            to guesswork.
+
+            Left blank means no separate arrangement: nothing here changes any calculation on its own.
+          */}
+          <div className="g3">
+            <div className="field"><label>Brokerage Lead Split (Split %)</label>
+              <select value={form.brokerage_lead_structure} onChange={(e) => onLeadStructure(e.target.value)}>
+                <option value="">Same as above</option>
+                {COMM_PRESETS.map((c) => <option key={c} value={c}>{c}</option>)}
+                <option value="custom">Add custom split…</option>
+              </select>
+              <span className="help">Applies when the brokerage provides the lead.</span></div>
+            <div className="field"><label>Agent % (brokerage lead)</label>
+              <input type="number" min="0" max="100" value={form.brokerage_lead_pct} onChange={(e) => setLeadAgentSplit(e.target.value)} />
+              <span className="help">Agent + Brokerage = 100.</span></div>
+            <div className="field"><label>Brokerage % (brokerage lead)</label>
+              <input value={form.brokerage_lead_brok_pct} readOnly style={{ background: '#f9fafb' }} /></div>
+          </div>
+
           <div className="g3">
             <div className="field" style={{ marginBottom: 0 }}><label>Existing Split Deals Count</label>
               <input type="number" min="0" value={form.completed_deals} onChange={(e) => set('completed_deals', e.target.value)} />

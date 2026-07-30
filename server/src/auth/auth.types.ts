@@ -17,4 +17,12 @@ export interface AuthPayload {
   is_super_admin: boolean;
   is_admin_or_above: boolean;
   permissions: Record<string, string>;
+  /**
+   * The modules this person may open — licensed to the company AND assigned to them. The frontend
+   * builds its navigation from this, so a module nobody bought and a module nobody was given look the
+   * same from the outside: absent.
+   */
+  modules: ('crm' | 'desk')[];
+  /** What the company bought, for the screens that explain why a module is missing. */
+  licence: { crm: boolean; desk: boolean; plan: string | null; status: string; expires: string | null; valid: boolean };
 }

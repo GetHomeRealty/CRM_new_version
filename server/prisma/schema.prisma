@@ -1896,6 +1896,13 @@ model users {
    */
   phone                     String?                     @db.VarChar(64)
   status                    String                      @default("Active") @db.VarChar(255)
+  /**
+   * Where this person sits in the organisation. Free text rather than a lookup: the brokerage has
+   * no department or designation list to choose from, and inventing one would be a second thing to
+   * maintain for the sake of a label.
+   */
+  department                String?                     @db.VarChar(120)
+  designation               String?                     @db.VarChar(120)
   profile                   String?                     @db.Text
   email_verified_at         DateTime?                   @db.Timestamp(0)
   password                  String                      @db.VarChar(255)
@@ -1904,4 +1911,104 @@ model users {
   updated_at                DateTime?                   @db.Timestamp(0)
   transaction_message_reads transaction_message_reads[]
   user_permissions          user_permissions[]
+  user_modules              user_modules[]
+}
+
+/// Which application modules a user may open.
+///
+/// One row per user per module. Access is the pair of this and the company's subscription: a module
+/// must be both LICENSED to the company and ASSIGNED to the person. Neither alone is enough, and the
+/// two are deliberately separate questions — cancelling a subscription should not erase who was
+/// assigned what, so that resubscribing restores the previous arrangement rather than a blank slate.
+///
+/// Every existing user was given both modules by the migration that created this table, so nobody's
+/// access changed when it arrived.
+model user_modules {
+  id          Int       @id @default(autoincrement())
+  user_id     Int
+  /// 'crm' | 'desk' — the same two words as `mail_accounts.scope` and the domain identifier.
+  module_name String    @db.VarChar(16)
+  /// 'active' | 'disabled'. A disabled row remembers the assignment without granting it.
+  status      String    @default("active") @db.VarChar(16)
+  created_at  DateTime? @db.Timestamp(0)
+  updated_at  DateTime? @db.Timestamp(0)
+  users       users     @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  /// One row per user per module — assigning twice is the same fact, not two.
+  @@unique([user_id, module_name])
+  @@index([module_name])
+}
+
+/// What the company has bought.
+///
+/// `company_id` refers to `company_settings.id`, which is the only company this deployment has (id 1).
+/// The column exists so the shape is right for selling to more than one brokerage later; it is NOT
+/// multi-tenancy, and no other table is scoped by it. Adding that is a separate, much larger change.
+model subscriptions {
+  id                  Int       @id @default(autoincrement())
+  company_id          Int       @unique
+  crm_enabled         Boolean   @default(true)
+  transaction_enabled Boolean   @default(true)
+  plan                String?   @db.VarChar(64)
+  expiry_date         DateTime? @db.Date
+  /// 'active' | 'expired' | 'suspended'.
+  status              String    @default("active") @db.VarChar(16)
+  created_at          DateTime? @db.Timestamp(0)
+  updated_at          DateTime? @db.Timestamp(0)
+}
+
+/// A named role. Seeded from the six roles the application already had.
+///
+/// `key` is the value stored in `users.role` — unchanged, so no user row was touched. `label` is what
+/// the interface shows, and `is_system` marks the roles the application itself depends on, which must
+/// not be deleted.
+model roles {
+  id               Int                @id @default(autoincrement())
+  company_id       Int                @default(1)
+  key              String             @db.VarChar(32)
+  label            String             @db.VarChar(64)
+  is_system        Boolean            @default(false)
+  /// Display order, so the roles list does not reorder itself when a row is edited.
+  sort             Int                @default(0)
+  created_at       DateTime?          @db.Timestamp(0)
+  updated_at       DateTime?          @db.Timestamp(0)
+  role_permissions role_permissions[]
+
+  @@unique([company_id, key])
+}
+
+/// One grantable permission: a screen at a level.
+///
+/// The application's access model is screen + level (none < view < edit), so a permission is the pair
+/// — `lead.view`, `lead.edit`. `none` is not a permission, it is the absence of one. Granting `edit`
+/// grants `view` as well, because the levels are ranked; both rows are stored so a query never has to
+/// know the ranking.
+///
+/// `module` groups them for the editor: 'crm', 'desk', or 'core' for what belongs to neither.
+model permissions {
+  id               Int                @id @default(autoincrement())
+  module           String             @db.VarChar(16)
+  /// `<screen>.<level>`, e.g. `transactions.edit`.
+  permission_name  String             @unique @db.VarChar(64)
+  screen           String             @db.VarChar(32)
+  level            String             @db.VarChar(8)
+  created_at       DateTime?          @db.Timestamp(0)
+  updated_at       DateTime?          @db.Timestamp(0)
+  role_permissions role_permissions[]
+
+  @@index([module])
+  @@index([screen])
+}
+
+/// Which permissions a role grants. Seeded to reproduce the previous defaults exactly.
+model role_permissions {
+  id            Int         @id @default(autoincrement())
+  role_id       Int
+  permission_id Int
+  created_at    DateTime?   @db.Timestamp(0)
+  roles         roles       @relation(fields: [role_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  permissions   permissions @relation(fields: [permission_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@unique([role_id, permission_id])
+  @@index([permission_id])
 }

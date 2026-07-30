@@ -19,6 +19,17 @@ export interface UserProfile {
   agent_comm_pct?: number | string;
   brok_comm_pct?: number | string;
   lease_comm_pct?: number | string;
+  /**
+   * The split that applies when the BROKERAGE supplies the lead. Mirrors the shape of
+   * `commission_structure` / `agent_comm_pct` / `brok_comm_pct` exactly — a chosen preset (or
+   * `custom`) plus the two percentages — so anything that later reads a split finds the same three
+   * fields it already knows.
+   *
+   * Empty means no separate arrangement: the usual commission structure applies.
+   */
+  brokerage_lead_structure?: string;
+  brokerage_lead_pct?: number | string;
+  brokerage_lead_brok_pct?: number | string;
   completed_deals?: number | string;
   upgrade_agent_pct?: number | string;
   upgrade_brok_pct?: number | string;
@@ -37,6 +48,10 @@ export interface ManagedUser {
   email: string;
   role: Role;
   status?: string;
+  department?: string | null;
+  designation?: string | null;
+  /** Modules assigned to this person — what the Users screen edits, before the licence is applied. */
+  modules?: ('crm' | 'desk')[];
   is_admin?: boolean;
   permissions?: Permissions;
   profile?: UserProfile;

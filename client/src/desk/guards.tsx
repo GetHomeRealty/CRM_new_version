@@ -1,7 +1,7 @@
 import { Navigate } from 'react-router-dom';
 import type { ReactNode } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { AREAS, DEFAULT_AREA, areaPath, screenInArea, type Area } from './area';
+import { DEFAULT_AREA, areaPath, screenInArea, type Area } from './area';
 
 /**
  * The order screens are offered in when deciding where to land someone. Unchanged — it is a
@@ -46,14 +46,22 @@ export function RequireScreen({ screen, superAdmin = false, orSuperAdmin = false
  * ever had CRM permissions and happens to open the root URL.
  */
 export function LandingRedirect({ area = DEFAULT_AREA }: { area?: Area }) {
-  const { can } = useAuth();
+  const { can, modules } = useAuth();
   const firstIn = (a: Area) => ORDER.find((s) => screenInArea(s, a) && can(s, 'view'));
 
-  const here = firstIn(area);
+  // Only somewhere this login may actually be. Landing in an area the company has not bought, or that
+  // nobody assigned, would be a redirect straight into a refusal.
+  const here = modules.includes(area) ? firstIn(area) : undefined;
   if (here) return <Navigate to={areaPath(area, here)} replace />;
 
-  const elsewhere = AREAS.filter((a) => a !== area).map((a) => ({ a, s: firstIn(a) })).find((x) => x.s);
+  const elsewhere = modules.filter((a) => a !== area).map((a) => ({ a, s: firstIn(a) })).find((x) => x.s);
   if (elsewhere?.s) return <Navigate to={areaPath(elsewhere.a, elsewhere.s)} replace />;
 
-  return <div className="centered">You have no screen access yet. Ask an administrator to grant permissions.</div>;
+  return (
+    <div className="centered">
+      {modules.length === 0
+        ? 'No modules are enabled for your account. Ask an administrator to assign one under Settings → Users.'
+        : 'You have no screen access yet. Ask an administrator to grant permissions.'}
+    </div>
+  );
 }

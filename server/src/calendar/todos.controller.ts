@@ -1,3 +1,4 @@
+import { AreaGuard } from '../core/area.guard';
 import { parseArea } from '../common/domain';
 import { Body, Controller, Delete, Get, HttpCode, Param, ParseIntPipe, Post, Put, Query, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '../auth/guards/auth.guard';
@@ -11,7 +12,7 @@ import { TodosService, TODO_PRIORITIES, TODO_STATUSES, type TodoInput, type Todo
  * screen permission. Reading needs view; adding, editing and deleting need edit.
  */
 @Controller('calendar/todos')
-@UseGuards(AuthGuard, ScreenGuard)
+@UseGuards(AuthGuard, ScreenGuard, AreaGuard)
 export class TodosController {
   constructor(private readonly todos: TodosService) {}
 

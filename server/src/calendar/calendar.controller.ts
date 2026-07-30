@@ -1,3 +1,4 @@
+import { AreaGuard } from '../core/area.guard';
 import { parseArea } from '../common/domain';
 import { BadRequestException, Body, Controller, Delete, Get, HttpCode, Param, ParseIntPipe, Post, Put, Query, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '../auth/guards/auth.guard';
@@ -12,7 +13,7 @@ import {
 
 /** Calendar events. Reading needs `calendar` view; creating/editing needs `calendar` edit. */
 @Controller('calendar')
-@UseGuards(AuthGuard, ScreenGuard)
+@UseGuards(AuthGuard, ScreenGuard, AreaGuard)
 export class CalendarController {
   constructor(private readonly calendar: CalendarService) {}
 
