@@ -48,7 +48,7 @@ async function scene(tx: PrismaService) {
   return { owner, other, admin, txn };
 }
 
-const asUser = (u: { id: number; name: string; role: string | null }) => ({ id: u.id, name: u.name, role: u.role });
+const asUser = (u: { id: number; name: string; role: string | null }) => ({ id: u.id, name: u.name, role: u.role ?? 'agent' });
 
 describe('an agent reaches their own work and nobody else\'s', () => {
   afterAll(async () => { await prisma.$disconnect(); });

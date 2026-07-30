@@ -9,6 +9,7 @@ import { TemplatesTab } from './EmailSettingsPanels';
 import CrmSettingsPanel from './CrmSettingsPanel';
 import CompanySettingsPage from './CompanySettingsPage';
 import RolesPanel from './RolesPanel';
+import LicencePanel from './LicencePanel';
 import Icon from '../ui/Icon';
 
 /**
@@ -154,7 +155,7 @@ export default function SettingsPage() {
       )}
       {tab === 'crm' && <CrmSettingsPanel />}
       {tab === 'company' && <CompanySettingsPage />}
-      {tab === 'roles' && <RolesPanel />}
+      {tab === 'roles' && <><LicencePanel /><RolesPanel /></>}
     </>
   );
 }

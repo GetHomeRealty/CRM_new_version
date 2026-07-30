@@ -16,6 +16,7 @@ import type { AuthUserRecord } from '../auth/auth.types';
 import { STORAGE_ROOT } from '../config/storage';
 
 import { assertCan, can, isAgent } from '../core/authz';
+import { ResourceAccessService } from '../core/resource-access.service';
 const SECTION = 'Legal & Documents';
 type Actor = AuthUserRecord | null;
 type FileEntry = { client_name?: string | null; file_name?: string | null; file_path?: string | null };
@@ -26,6 +27,7 @@ const isListingStatusFamily = (type: string | null): boolean => isListingType(ty
 @Injectable()
 export class DocumentsService {
   constructor(
+    private readonly access: ResourceAccessService,
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly defaults: DocumentDefaultsService,
@@ -355,7 +357,12 @@ export class DocumentsService {
   }
 
   async deleteDocFile(user: Actor, txnId: number, docId: number, index: number): Promise<Record<string, unknown>> {
-    await this.txnOr404(txnId);
+    // The transaction is loaded here anyway; four sibling methods guard on it and these three
+    // did not, so an agent with the transactions permission could alter the documents on any
+    // deal in the brokerage by its id. Found by probing every write route as an agent who owns
+    // nothing.
+    const txn = await this.txnOr404(txnId);
+    await this.guardAgent(user, txn);
     const document = await this.findDocForTxn(txnId, docId);
     this.guardValidLocked(user, document);
     const files = (parseJson<FileEntry[]>(document.files) ?? []) as FileEntry[];
@@ -372,7 +379,12 @@ export class DocumentsService {
   }
 
   async uploadValidationFile(user: Actor, txnId: number, docId: number, file: UploadedFile | undefined): Promise<Record<string, unknown>> {
-    await this.txnOr404(txnId);
+    // The transaction is loaded here anyway; four sibling methods guard on it and these three
+    // did not, so an agent with the transactions permission could alter the documents on any
+    // deal in the brokerage by its id. Found by probing every write route as an agent who owns
+    // nothing.
+    const txn = await this.txnOr404(txnId);
+    await this.guardAgent(user, txn);
     const document = await this.findDocForTxn(txnId, docId);
     this.requireFile(file);
     if (document.validation_file_path) await this.deleteFile(document.validation_file_path);
@@ -383,7 +395,12 @@ export class DocumentsService {
   }
 
   async deleteValidationFile(user: Actor, txnId: number, docId: number): Promise<Record<string, unknown>> {
-    await this.txnOr404(txnId);
+    // The transaction is loaded here anyway; four sibling methods guard on it and these three
+    // did not, so an agent with the transactions permission could alter the documents on any
+    // deal in the brokerage by its id. Found by probing every write route as an agent who owns
+    // nothing.
+    const txn = await this.txnOr404(txnId);
+    await this.guardAgent(user, txn);
     const document = await this.findDocForTxn(txnId, docId);
     const removed = document.validation_file_name;
     if (document.validation_file_path) await this.deleteFile(document.validation_file_path);
@@ -475,17 +492,33 @@ export class DocumentsService {
 
   // ---- download helpers (return the on-disk file) ----
 
-  async fileFor(docId: number): Promise<{ absPath: string; name: string }> {
+  /**
+   * Find a document and check the caller may have it.
+   *
+   * The three download routes used to take an id and stream whatever it pointed at, with no user
+   * in scope at all — so any signed-in agent could fetch the contracts and identification on any
+   * deal in the brokerage by walking the ids. Ownership is checked here, once, because all three
+   * come through this method and a check added to only one of them is the same bug with fewer
+   * routes.
+   */
+  private async ownedDocument(docId: number, user: Actor) {
     const d = await this.prisma.documents.findFirst({ where: { id: docId, deleted_at: null } });
-    if (!d || !d.file_path) throw new NotFoundException({ message: '' });
+    if (!d) throw new NotFoundException({ message: '' });
+    await this.access.assertTransaction(user, d.transaction_id);
+    return d;
+  }
+
+  async fileFor(docId: number, user: Actor = null): Promise<{ absPath: string; name: string }> {
+    const d = await this.ownedDocument(docId, user);
+    if (!d.file_path) throw new NotFoundException({ message: '' });
     const abs = path.join(STORAGE_ROOT, d.file_path);
     await this.assertExists(abs);
     return { absPath: abs, name: d.file_name ?? 'download' };
   }
 
-  async docFileFor(docId: number, index: number): Promise<{ absPath: string; name: string }> {
-    const d = await this.prisma.documents.findFirst({ where: { id: docId, deleted_at: null } });
-    const files = d ? (parseJson<FileEntry[]>(d.files) ?? []) : [];
+  async docFileFor(docId: number, index: number, user: Actor = null): Promise<{ absPath: string; name: string }> {
+    const d = await this.ownedDocument(docId, user);
+    const files = parseJson<FileEntry[]>(d.files) ?? [];
     const f = files[index];
     if (!f || !f.file_path) throw new NotFoundException({ message: '' });
     const abs = path.join(STORAGE_ROOT, f.file_path);
@@ -493,9 +526,9 @@ export class DocumentsService {
     return { absPath: abs, name: f.file_name ?? 'download' };
   }
 
-  async validationFileFor(docId: number): Promise<{ absPath: string; name: string }> {
-    const d = await this.prisma.documents.findFirst({ where: { id: docId, deleted_at: null } });
-    if (!d || !d.validation_file_path) throw new NotFoundException({ message: '' });
+  async validationFileFor(docId: number, user: Actor = null): Promise<{ absPath: string; name: string }> {
+    const d = await this.ownedDocument(docId, user);
+    if (!d.validation_file_path) throw new NotFoundException({ message: '' });
     const abs = path.join(STORAGE_ROOT, d.validation_file_path);
     await this.assertExists(abs);
     return { absPath: abs, name: d.validation_file_name ?? 'download' };

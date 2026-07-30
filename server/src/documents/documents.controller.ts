@@ -29,20 +29,20 @@ export class DocumentsController {
   }
 
   @Get('documents/:document/file')
-  async downloadFile(@Param('document', ParseIntPipe) id: number, @Query('inline') inline: string, @Res() res: Response): Promise<void> {
-    const { absPath, name } = await this.docs.fileFor(id);
+  async downloadFile(@CurrentUser() user: AuthUserRecord | undefined, @Param('document', ParseIntPipe) id: number, @Query('inline') inline: string, @Res() res: Response): Promise<void> {
+    const { absPath, name } = await this.docs.fileFor(id, u(user));
     this.stream(res, absPath, name, this.isInline(inline));
   }
 
   @Get('documents/:document/files/:index')
-  async downloadDocFile(@Param('document', ParseIntPipe) id: number, @Param('index', ParseIntPipe) index: number, @Query('inline') inline: string, @Res() res: Response): Promise<void> {
-    const { absPath, name } = await this.docs.docFileFor(id, index);
+  async downloadDocFile(@CurrentUser() user: AuthUserRecord | undefined, @Param('document', ParseIntPipe) id: number, @Param('index', ParseIntPipe) index: number, @Query('inline') inline: string, @Res() res: Response): Promise<void> {
+    const { absPath, name } = await this.docs.docFileFor(id, index, u(user));
     this.stream(res, absPath, name, this.isInline(inline));
   }
 
   @Get('documents/:document/validation-file')
-  async downloadValidationFile(@Param('document', ParseIntPipe) id: number, @Res() res: Response): Promise<void> {
-    const { absPath, name } = await this.docs.validationFileFor(id);
+  async downloadValidationFile(@CurrentUser() user: AuthUserRecord | undefined, @Param('document', ParseIntPipe) id: number, @Res() res: Response): Promise<void> {
+    const { absPath, name } = await this.docs.validationFileFor(id, u(user));
     this.stream(res, absPath, name, false);
   }
 
