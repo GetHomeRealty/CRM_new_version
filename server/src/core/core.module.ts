@@ -2,6 +2,8 @@ import { Global, Module } from '@nestjs/common';
 import { ModuleAccessService } from './module-access.service';
 import { AreaGuard } from './area.guard';
 import { RolePermissionStore } from './role-permission.store';
+import { RolesService } from './roles.service';
+import { AuditModule } from '../audit/audit.module';
 
 /**
  * The Core Platform layer.
@@ -17,7 +19,8 @@ import { RolePermissionStore } from './role-permission.store';
  */
 @Global()
 @Module({
-  providers: [ModuleAccessService, AreaGuard, RolePermissionStore],
-  exports: [ModuleAccessService, AreaGuard, RolePermissionStore],
+  imports: [AuditModule],
+  providers: [ModuleAccessService, AreaGuard, RolePermissionStore, RolesService],
+  exports: [ModuleAccessService, AreaGuard, RolePermissionStore, RolesService],
 })
 export class CoreModule {}
