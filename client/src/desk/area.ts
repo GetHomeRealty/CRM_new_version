@@ -56,6 +56,9 @@ export const SCREEN_AREA: Record<string, ScreenArea> = {
   lead: 'crm',
   campaigns: 'crm',
   meta: 'crm',
+  // Client Reviews, by request. It has no screen behind it yet — no route, no controller, no page —
+  // so this decides which sidebar offers it when one is built.
+  reviews: 'crm',
 
   // Transaction Management
   transactions: 'desk',
@@ -65,6 +68,16 @@ export const SCREEN_AREA: Record<string, ScreenArea> = {
   // despite the general-sounding name.
   analytics: 'desk',
   'recycle-bin': 'desk',
+  // Inventory was a shared module and is now the Transaction Desk's alone, by request. It is
+  // therefore not listed in the CRM and `/crm/inventory` redirects to `/desk/inventory` — the
+  // records themselves are untouched, and every existing link still resolves.
+  inventory: 'desk',
+  // MLS likewise, by request — and Favorites goes with it. Favorites is a section OF MLS (it is a
+  // child of the MLS entry in the sidebar) and every button on that page opens an MLS listing, so
+  // leaving it in the CRM would strand a screen whose every action ejects you to the Transaction
+  // Desk. Both redirect there instead, and nobody's saved favourites are affected.
+  mls: 'desk',
+  favorites: 'desk',
 
   // Present in both, with each area getting its own view.
   //
@@ -81,10 +94,6 @@ export const SCREEN_AREA: Record<string, ScreenArea> = {
 
   // Present in both, showing the same shared records either way.
   users: 'both',
-  mls: 'both',
-  favorites: 'both',
-  inventory: 'both',
-  reviews: 'both',
   account: 'both',
 };
 

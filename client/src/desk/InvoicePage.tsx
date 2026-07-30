@@ -120,11 +120,30 @@ export default function InvoicePage() {
               <td>{formatCurrency(i.balance_due)}</td>
               <td><span className={`pill ${STATUS_PILL[i.display_status || ''] || 'info'}`}>{i.display_status}</span></td>
               <td><span className={`pill ${i.source === 'transaction' ? 'warn' : 'info'}`} style={{ fontSize: 10 }}>{i.source === 'transaction' ? 'Transaction' : 'Manual'}</span></td>
+              {/*
+                Icons rather than labels, so four actions fit on one line and the column stops
+                wrapping onto a second row.
+
+                Every one carries a `title` and an `aria-label`. Dropping the words leaves the icon as
+                the only clue, and a row of unlabelled glyphs beside a Delete is exactly where someone
+                clicks the wrong thing — the tooltip and the screen-reader name are what keep it
+                usable. Delete stays red, and still opens the confirmation it always did.
+              */}
               <td>
-                <button className="btn ghost sm" onClick={() => setEditorId(i.id)}>👁 View</button>
-                {canEdit && <button className="btn ghost sm" style={{ marginLeft: 4 }} onClick={() => setEditorId(i.id)}>Edit</button>}
-                <button className="btn ghost sm" style={{ marginLeft: 4 }} onClick={() => openPdf(i)}>🖨 PDF</button>
-                {canEdit && <button className="btn ghost sm" style={{ marginLeft: 4, color: '#dc2626' }} onClick={() => { setDelTarget(i); setDelReason(''); }}>🗑 Delete</button>}
+                <div className="row-actions">
+                  <button className="icon-btn" title="View invoice" aria-label="View invoice"
+                    onClick={() => setEditorId(i.id)}>👁</button>
+                  {canEdit && (
+                    <button className="icon-btn" title="Edit invoice" aria-label="Edit invoice"
+                      onClick={() => setEditorId(i.id)}>✎</button>
+                  )}
+                  <button className="icon-btn" title="Open the printable PDF" aria-label="Open the printable PDF"
+                    onClick={() => openPdf(i)}>🖨</button>
+                  {canEdit && (
+                    <button className="icon-btn danger" title="Delete invoice" aria-label="Delete invoice"
+                      onClick={() => { setDelTarget(i); setDelReason(''); }}>🗑</button>
+                  )}
+                </div>
               </td>
             </tr>
           ))}

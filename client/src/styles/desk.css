@@ -1017,6 +1017,16 @@ input[type="number"],.numeric,.stat-card .val{font-variant-numeric:tabular-nums;
 .onb-preview ul,.onb-preview ol{margin:0 0 10px;padding-left:22px}
 .onb-preview a{color:var(--info)}
 
+/* An attachment being read before it is sent, opened in place under the list rather than in another
+   browser tab — the message and the document it refers to belong on screen together. The white
+   background is the document's own: a PDF or a headshot is not part of the app's theme. */
+.onb-viewer{border:1px solid var(--line);border-radius:10px;overflow:hidden;margin:0 0 10px;background:#fff}
+.onb-viewer-h{display:flex;align-items:center;gap:8px;padding:6px 8px 6px 12px;border-bottom:1px solid var(--line);background:var(--surface-2);font-size:12.5px}
+.onb-viewer-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+.onb-viewer-h .btn{margin-left:auto;flex:0 0 auto}
+.onb-viewer iframe{display:block;width:100%;height:520px;border:0}
+.onb-viewer img{display:block;max-width:100%;margin:0 auto}
+
 /* A modal opened from inside another one. Without this the overlay beneath shows through at the
    same corner and its close button reads as a second ✕ on the modal in front. */
 .overlay.stacked{z-index:60;background:rgba(15,23,42,.74)}
@@ -1070,3 +1080,16 @@ input[type="number"],.numeric,.stat-card .val{font-variant-numeric:tabular-nums;
 .crumbs [aria-current="page"]{color:var(--text-2);font-weight:600;max-width:200px;overflow:hidden;text-overflow:ellipsis}
 /* The topbar has the area switcher to accommodate below 1100px; the trail is the first thing to go. */
 @media(max-width:1100px){.crumbs{display:none}}
+
+/* ------------------------------------------------- table row actions
+   A row of icon buttons in a table's Actions column. Four labelled buttons wrapped onto a second
+   line and made every row taller; icons keep them on one line.
+
+   `nowrap` is the point of the rule — without it the column collapses the buttons under each other
+   again at narrow widths, which is the layout this replaced.
+
+   The danger tint is scoped here rather than added to `.icon-btn.danger` globally, so the template
+   cards that already use that class keep the appearance they have. */
+.row-actions{display:flex;align-items:center;gap:4px;flex-wrap:nowrap}
+.row-actions .icon-btn.danger{color:var(--bad)}
+.row-actions .icon-btn.danger:hover:not(:disabled){background:var(--bad-soft);border-color:var(--bad)}

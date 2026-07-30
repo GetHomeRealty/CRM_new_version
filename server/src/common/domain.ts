@@ -8,8 +8,8 @@
  * vocabulary for the same idea would mean every query, guard and migration had to know which of
  * the two it was reading. One spelling used everywhere is what makes the separation reliable.
  *
- * `common` is the third value, for the modules that belong to neither area: Users, Client Reviews,
- * MLS and Inventory. Records marked common are visible from both areas, because hiding a user
+ * `common` is the third value, for the modules that belong to neither area: Users, MLS and
+ * Inventory. Records marked common are visible from both areas, because hiding a user
  * change from one half of the application would lose an administrator's audit history rather
  * than separate it.
  *
@@ -48,11 +48,15 @@ export const SCREEN_DOMAIN: Record<string, Domain> = {
   lead: 'crm',
   campaigns: 'crm',
   meta: 'crm',
+  // Kept in step with the client's SCREEN_AREA: Client Reviews is a CRM module, so the Transaction
+  // Desk's audit filter should not offer a category that can never match anything on its side.
+  reviews: 'crm',
 
   transactions: 'desk',
   invoice: 'desk',
   reports: 'desk',
   analytics: 'desk',
+  'recycle-bin': 'desk',
 
   // Present in both, each with its own view.
   inbox: 'common',
@@ -67,7 +71,6 @@ export const SCREEN_DOMAIN: Record<string, Domain> = {
   mls: 'common',
   favorites: 'common',
   inventory: 'common',
-  reviews: 'common',
 };
 
 /**
@@ -81,7 +84,7 @@ export const SCREEN_DOMAIN: Record<string, Domain> = {
  *   a transaction link          → desk   (a link to a deal IS the area)
  *   Lead / Campaigns / Meta     → crm
  *   Settings, by its section    → crm | desk | common
- *   Users / Inventory / Reviews → common (shared modules; shown in both trails)
+ *   Users / MLS / Inventory      → common (shared modules; shown in both trails)
  *
  * Returns null when nothing applies, which leaves the row unclassified and therefore visible from
  * both areas — the safe direction, since the alternative is hiding it from both.
@@ -100,10 +103,11 @@ export function auditDomain(input: { category?: string | null; section?: string 
   }
 
   const byCategory: Record<string, Domain> = {
-    Lead: 'crm', Leads: 'crm', Campaigns: 'crm', Meta: 'crm',
+    Lead: 'crm', Leads: 'crm', Campaigns: 'crm', Meta: 'crm', 'Client Reviews': 'crm',
     Transactions: 'desk', Invoice: 'desk', Invoices: 'desk', Reports: 'desk', Analytics: 'desk',
+    'Recycle Bin': 'desk',
     Users: 'common', 'Marketing Inventory': 'common', Inventory: 'common',
-    'Client Reviews': 'common', MLS: 'common', Favorites: 'common',
+    MLS: 'common', Favorites: 'common',
   };
   return byCategory[category] ?? null;
 }

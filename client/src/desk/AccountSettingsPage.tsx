@@ -319,20 +319,30 @@ export default function AccountSettingsPage() {
         <div className="intg" style={{ marginTop: 14 }}>
           <GoogleCalendarRow />
 
-          <div className="intg-row">
-            <div>
-              <strong>Facebook Meta — Lead Ads</strong>
-              <div className="muted">{integrations?.meta.detail ?? 'Link your own Meta account to sync your lead forms.'}</div>
+          {/*
+            Meta Lead Ads is a CRM integration: it feeds lead forms into the Leads module and has
+            nothing to do with a transaction. Shown on this screen only from the CRM side, so the
+            Transaction Desk does not offer a connection it has no use for.
+
+            Hidden, not removed — the card is unchanged and still here under the CRM, along with the
+            connection itself. Nothing is disconnected by this.
+          */}
+          {area === 'crm' && (
+            <div className="intg-row">
+              <div>
+                <strong>Facebook Meta — Lead Ads</strong>
+                <div className="muted">{integrations?.meta.detail ?? 'Link your own Meta account to sync your lead forms.'}</div>
+              </div>
+              <div className="acct-actions">
+                <span className={`pill ${integrations?.meta.connected ? 'ok' : ''}`}>
+                  {integrations?.meta.connected ? 'Connected' : 'Not connected'}
+                </span>
+                <button className="btn ghost sm" type="button" onClick={() => navigate(crmPath('meta'))}>
+                  {integrations?.meta.connected ? 'Open' : 'Connect'}
+                </button>
+              </div>
             </div>
-            <div className="acct-actions">
-              <span className={`pill ${integrations?.meta.connected ? 'ok' : ''}`}>
-                {integrations?.meta.connected ? 'Connected' : 'Not connected'}
-              </span>
-              <button className="btn ghost sm" type="button" onClick={() => navigate(crmPath('meta'))}>
-                {integrations?.meta.connected ? 'Open' : 'Connect'}
-              </button>
-            </div>
-          </div>
+          )}
         </div>
       </div>
 

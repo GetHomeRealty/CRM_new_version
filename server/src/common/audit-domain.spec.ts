@@ -1,5 +1,5 @@
 import { PrismaClient } from '@prisma/client';
-import { auditDomain, screenLabelsForArea } from './domain';
+import { auditDomain, screenLabelsForArea, SCREEN_DOMAIN } from './domain';
 import { SCREENS } from '../auth/permission.service';
 
 /**
@@ -22,7 +22,9 @@ describe('§12 auditDomain rules', () => {
   });
 
   it('places the CRM modules in the CRM', () => {
-    for (const c of ['Lead', 'Leads', 'Campaigns', 'Meta']) expect(auditDomain({ category: c })).toBe('crm');
+    // Client Reviews joined them when it was removed from the Transaction Desk — and it must stay in
+    // step with SCREEN_DOMAIN, or its entries would land in a trail whose filter cannot select them.
+    for (const c of ['Lead', 'Leads', 'Campaigns', 'Meta', 'Client Reviews']) expect(auditDomain({ category: c })).toBe('crm');
   });
 
   it('places the transaction modules in the Transaction Desk', () => {
@@ -41,7 +43,7 @@ describe('§12 auditDomain rules', () => {
   });
 
   it('marks the shared modules common, so they appear in both trails', () => {
-    for (const c of ['Users', 'Marketing Inventory', 'Inventory', 'Client Reviews', 'MLS']) {
+    for (const c of ['Users', 'Marketing Inventory', 'Inventory', 'MLS']) {
       expect(auditDomain({ category: c })).toBe('common');
     }
   });
@@ -50,6 +52,21 @@ describe('§12 auditDomain rules', () => {
     // Null is visible from BOTH areas. Guessing an area would hide the row from the other one.
     expect(auditDomain({ category: 'Something Nobody Has Written Yet' })).toBeNull();
     expect(auditDomain({})).toBeNull();
+  });
+});
+
+describe('the classifier and the screen map agree', () => {
+  it('classifies each screen the same way SCREEN_DOMAIN places it', () => {
+    // Divergence here is the bug this file exists to prevent: a category the filter does not offer,
+    // holding records the trail still shows.
+    const byLabel: Record<string, string> = {
+      Lead: 'lead', Campaigns: 'campaigns', Meta: 'meta', 'Client Reviews': 'reviews',
+      Transactions: 'transactions', Invoice: 'invoice', Reports: 'reports', Analytics: 'analytics',
+      Users: 'users', Inventory: 'inventory', MLS: 'mls', Favorites: 'favorites',
+    };
+    for (const [label, key] of Object.entries(byLabel)) {
+      expect({ label, domain: auditDomain({ category: label }) }).toEqual({ label, domain: SCREEN_DOMAIN[key] });
+    }
   });
 });
 

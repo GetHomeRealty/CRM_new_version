@@ -1,3 +1,4 @@
+import { useArea } from './AreaContext';
 import { useEffect, useRef, useState } from 'react';
 import { getCompanySettings, updateCompanySettings, uploadCompanyLogo, deleteCompanyLogo, companyLogoUrl } from '../lib/api';
 import { fileToBase64 } from '../lib/importApi';
@@ -24,6 +25,9 @@ export default function CompanySettingsPage() {
   const toast = useToast();
   const { can } = useAuth();
   const canEdit = can('settings', 'edit');
+  // Which sections are shown: the bank, reminder and invoicing sections belong to the Transaction
+  // Desk. The profile and logo are shared and appear on both sides.
+  const { area } = useArea();
   const [form, setForm] = useState<CompanySettings | null>(null);
   const [saving, setSaving] = useState(false);
   const [logoBusy, setLogoBusy] = useState('');
@@ -126,27 +130,39 @@ export default function CompanySettingsPage() {
       </div>
 
       <div className="card"><div className="modal-h" style={{ fontSize: 14 }}>Company Profile</div>{grid(FIELDS_A)}</div>
-      <div className="card"><div className="modal-h" style={{ fontSize: 14 }}>Bank / Deposit Instructions</div>{grid(FIELDS_BANK)}</div>
-      <div className="card">
-        <div className="modal-h" style={{ fontSize: 14 }}>Automatic Reminders</div>
-        <div className="g3">
-          <div className="field">
-            <label>Lawyer detail reminder — every (days)</label>
-            <input type="number" min={0} max={365} value={String(form.lawyer_reminder_days ?? 3)} disabled={!canEdit}
-              onChange={(e) => set('lawyer_reminder_days', e.target.value)} />
-            <span className="help">Agents are re-emailed this often while buyer/seller lawyer details are missing on a Buying/Lease deal. Set to 0 to turn recurring reminders off.</span>
+
+      {/*
+        Bank / Deposit Instructions, Automatic Reminders and Invoicing Defaults are Transaction Desk
+        settings: they configure deposit receipts, the lawyer-detail reminder that chases a deal, and
+        invoice numbering and tax. Company Settings itself is shared, so only these three sections are
+        held back from the CRM — the profile and logo above stay on both sides.
+
+        Hidden, not dropped from the payload. `save` sends the whole form as it was loaded, so these
+        values go back unchanged when the CRM saves; nothing is cleared by editing from that side.
+      */}
+      {area === 'desk' && (<>
+        <div className="card"><div className="modal-h" style={{ fontSize: 14 }}>Bank / Deposit Instructions</div>{grid(FIELDS_BANK)}</div>
+        <div className="card">
+          <div className="modal-h" style={{ fontSize: 14 }}>Automatic Reminders</div>
+          <div className="g3">
+            <div className="field">
+              <label>Lawyer detail reminder — every (days)</label>
+              <input type="number" min={0} max={365} value={String(form.lawyer_reminder_days ?? 3)} disabled={!canEdit}
+                onChange={(e) => set('lawyer_reminder_days', e.target.value)} />
+              <span className="help">Agents are re-emailed this often while buyer/seller lawyer details are missing on a Buying/Lease deal. Set to 0 to turn recurring reminders off.</span>
+            </div>
           </div>
         </div>
-      </div>
 
-      <div className="card">
-        <div className="modal-h" style={{ fontSize: 14 }}>Invoicing Defaults</div>
-        {grid(FIELDS_INV)}
-        <div className="g2">
-          <div className="field"><label>Thank-you Note</label><textarea rows={2} value={String(form.thank_you_note ?? '')} disabled={!canEdit} onChange={(e) => set('thank_you_note', e.target.value)} /></div>
-          <div className="field"><label>Deposit Heading</label><textarea rows={2} value={String(form.deposit_heading ?? '')} disabled={!canEdit} onChange={(e) => set('deposit_heading', e.target.value)} /></div>
+        <div className="card">
+          <div className="modal-h" style={{ fontSize: 14 }}>Invoicing Defaults</div>
+          {grid(FIELDS_INV)}
+          <div className="g2">
+            <div className="field"><label>Thank-you Note</label><textarea rows={2} value={String(form.thank_you_note ?? '')} disabled={!canEdit} onChange={(e) => set('thank_you_note', e.target.value)} /></div>
+            <div className="field"><label>Deposit Heading</label><textarea rows={2} value={String(form.deposit_heading ?? '')} disabled={!canEdit} onChange={(e) => set('deposit_heading', e.target.value)} /></div>
+          </div>
         </div>
-      </div>
+      </>)}
     </>
   );
 }
