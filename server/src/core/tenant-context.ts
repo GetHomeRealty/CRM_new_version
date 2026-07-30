@@ -43,9 +43,18 @@ export function enter<T>(fn: () => T): T {
   return storage.run({ companyId: null }, fn);
 }
 
-/** Run something as a named tenant. For background jobs, scripts and tests, which have no request. */
-export function run<T>(companyId: number, fn: () => Promise<T>): Promise<T> {
-  return storage.run({ companyId }, fn);
+/**
+ * Run something as a named tenant. For background jobs, scripts and tests, which have no request.
+ *
+ * The `await` inside is load-bearing, not a style choice. A Prisma promise is LAZY — building the
+ * query does nothing until something awaits it — so `run(id, () => prisma.leads.findMany())` used to
+ * return an unstarted promise, let this scope exit, and then run the query with no tenant in
+ * context at all. It filtered nothing, silently, and the caller could not tell.
+ *
+ * Awaiting here keeps the query's execution inside the scope, whatever shape of callback is passed.
+ */
+export async function run<T>(companyId: number, fn: () => Promise<T>): Promise<T> {
+  return storage.run({ companyId }, async () => await fn());
 }
 
 /**

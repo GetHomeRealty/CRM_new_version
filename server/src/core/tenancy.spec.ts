@@ -1,6 +1,7 @@
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { Prisma, PrismaClient } from '@prisma/client';
+import { tenantExtension } from './tenant-extension';
 
 /**
  * Tenant isolation — the contract, written before the migration that satisfies it.
@@ -31,6 +32,15 @@ import { Prisma, PrismaClient } from '@prisma/client';
  */
 
 const prisma = new PrismaClient();
+/**
+ * The same client with tenant isolation applied — what the application actually runs against.
+ *
+ * A transaction started from an extended client is itself extended, so work inside `$transaction`
+ * is scoped exactly like work outside it. Whether a query is filtered turns on whether a tenant is
+ * in context, which is what lets the seeding below plant another brokerage's row (no context) and
+ * the assertions ask whether it can be seen (context set).
+ */
+const scoped = prisma.$extends(tenantExtension(() => scoped)) as unknown as PrismaClient;
 /** The brokerage every existing row belongs to. */
 const DEFAULT_TENANT = 1;
 const models = Prisma.dmmf.datamodel.models;
@@ -208,9 +218,16 @@ describe('no query crosses a tenant boundary', () => {
    * never checked.
    */
   const ROLLBACK = '__rollback__';
+  /**
+   * The seeding runs on the RAW client and the assertions on the EXTENDED one.
+   *
+   * That split is the whole test. Seeding through the scoped client could not create another
+   * brokerage's row in the first place — the extension would stamp it with the tenant in context —
+   * so the raw client plants the evidence and the scoped client is asked whether it can see it.
+   */
   async function withSecondTenant(fn: (tx: typeof prisma, other: { companyId: number; leadId: number }) => Promise<void>) {
     try {
-      await prisma.$transaction(async (tx) => {
+      await scoped.$transaction(async (tx) => {
         const now = new Date();
         const company = await tx.company_settings.create({ data: { name: 'Other Brokerage Inc.' } });
         const lead = await tx.leads.create({
