@@ -1,6 +1,6 @@
 import type { AxiosRequestConfig } from 'axios';
 import api from './axios';
-import type { EmailTemplateAttachment, AgentChangeNotif, AgentCommissionMap, AgentLoanMap, AuditLogPage, BrokerageSuggestion, ChatMessage, ClientIdentification, CompanySettings, DashboardCommissions, DealHistoryEntry, DeletionLogEntry, DocNotif, DocumentsResponse, EmailTemplate, EmailTemplatesResponse, GenerateInvoicesResult, Invoice, LawyerSuggestion, MailAccount, ManagedUser, NoticeOfSaleData, SendResult, TemplatePreview, TestMailResult, Transaction, TrashedDocument, TrashedInvoice, TrashedPayment, TrashedResponse, TrashedRowItem, TrashedTransaction, UsersCatalog, CrmDashboard, DeskDashboard } from '../types';
+import type { EmailTemplateAttachment, AgentChangeNotif, AgentCommissionMap, AgentLoanMap, AuditLogPage, BrokerageSuggestion, ChatMessage, ClientIdentification, CompanySettings, DashboardCommissions, DealHistoryEntry, DeletionLogEntry, DocNotif, DocumentsResponse, EmailTemplate, EmailTemplatesResponse, GenerateInvoicesResult, Invoice, LawyerSuggestion, MailAccount, ManagedRole, ManagedUser, NoticeOfSaleData, SendResult, TemplatePreview, TestMailResult, Transaction, TrashedDocument, TrashedInvoice, TrashedPayment, TrashedResponse, TrashedRowItem, TrashedTransaction, UsersCatalog, CrmDashboard, DeskDashboard } from '../types';
 
 /** Route parameter identifiers (Laravel accepts numeric or string ids). */
 type Id = number | string;
@@ -284,6 +284,16 @@ export const getUserDealHistory = (id: Id): Promise<DealHistoryEntry[]> => api.g
 export const createUser = (payload: unknown): Promise<ManagedUser> => api.post('/api/users', payload).then((r) => r.data);
 export const updateUser = (id: Id, payload: unknown): Promise<ManagedUser> => api.put(`/api/users/${id}`, payload).then((r) => r.data);
 export const deleteUser = (id: Id): Promise<unknown> => api.delete(`/api/users/${id}`).then((r) => r.data);
+
+// --- Roles & Permissions (Settings) ---
+export const getRoles = (): Promise<ManagedRole[]> => api.get('/api/roles').then((r) => r.data);
+export const createRole = (payload: { key: string; label: string; copy_from?: string }): Promise<ManagedRole> =>
+  api.post('/api/roles', payload).then((r) => r.data);
+export const updateRole = (id: Id, payload: { label?: string; is_active?: boolean }): Promise<ManagedRole> =>
+  api.patch(`/api/roles/${id}`, payload).then((r) => r.data);
+export const setRolePermissions = (id: Id, permissions: Record<string, string>): Promise<ManagedRole> =>
+  api.put(`/api/roles/${id}/permissions`, { permissions }).then((r) => r.data);
+export const deleteRole = (id: Id): Promise<{ message: string }> => api.delete(`/api/roles/${id}`).then((r) => r.data);
 
 // --- Invoice module ---
 export const getInvoices = (): Promise<Invoice[]> => api.get<Invoice[]>('/api/invoices').then((r) => r.data);

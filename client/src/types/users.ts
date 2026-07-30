@@ -87,3 +87,17 @@ export interface LoanRepayment {
   amount?: number | string;
   [key: string]: unknown;
 }
+
+/** A role as the Roles & Permissions screen sees it. */
+export interface ManagedRole {
+  id: number;
+  key: string;
+  label: string;
+  is_system: boolean;
+  is_active: boolean;
+  sort: number;
+  /** How many people hold it — what makes deleting or retiring it unsafe. */
+  users: number;
+  /** The effective screen -> level map, straight from the permission engine. */
+  permissions: Record<string, string>;
+}

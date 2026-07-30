@@ -1232,3 +1232,32 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
 /* One chevron, rotated, rather than two glyphs pointing opposite ways — the open and closed states
    then animate between each other instead of swapping pictures. */
 .flip{transform:rotate(180deg);transition:transform .18s ease}
+
+/* ---- Settings → Roles & Permissions --------------------------------------------------------
+   A list of roles beside what the selected one grants. Two columns on a desktop, stacked on a
+   narrow screen, because the grant grid needs the width more than the list does. */
+.roles-layout{display:grid;grid-template-columns:260px 1fr;gap:18px;align-items:start}
+.roles-list{display:flex;flex-direction:column;gap:4px;border-right:1px solid var(--line-2);padding-right:14px}
+.role-row{background:transparent;border:1px solid transparent;border-radius:var(--r);padding:9px 11px;text-align:left;display:flex;flex-direction:column;gap:3px;cursor:pointer;transition:background .14s,border-color .14s}
+.role-row:hover{background:var(--surface-3)}
+.role-row.on{background:var(--brand-soft);border-color:var(--brand-light)}
+.role-row.on .role-name{color:var(--brand-dark)}
+.role-name{font-size:13.5px;font-weight:600;color:var(--text);display:flex;align-items:center}
+.role-meta{display:flex;gap:8px;align-items:center;font-size:11px;color:var(--muted)}
+.role-key{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--surface-3);border-radius:5px;padding:1px 5px}
+.roles-detail{display:flex;flex-direction:column;gap:14px;min-width:0}
+.roles-detail-h{display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap}
+.roles-detail-actions{display:flex;gap:6px;flex-shrink:0}
+.roles-summary{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.roles-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(238px,1fr));gap:8px}
+.roles-screen{display:flex;justify-content:space-between;align-items:center;gap:10px;border:1px solid var(--line);border-radius:var(--r);padding:7px 10px;background:var(--surface)}
+.roles-screen span{font-size:13px}
+.roles-screen select{width:auto;min-width:92px}
+/* A refused action stays visible and says why, rather than disappearing — a missing control reads
+   as a bug, a disabled one with a reason reads as a rule. */
+.btn.ghost.danger{color:var(--bad)}
+.btn:disabled[data-tip]{cursor:not-allowed}
+@media(max-width:900px){
+  .roles-layout{grid-template-columns:1fr}
+  .roles-list{border-right:0;border-bottom:1px solid var(--line-2);padding-right:0;padding-bottom:12px}
+}

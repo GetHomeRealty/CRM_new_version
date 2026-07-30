@@ -8,6 +8,8 @@ import IntegrationsPanel from './IntegrationsPanel';
 import { TemplatesTab } from './EmailSettingsPanels';
 import CrmSettingsPanel from './CrmSettingsPanel';
 import CompanySettingsPage from './CompanySettingsPage';
+import RolesPanel from './RolesPanel';
+import Icon from '../ui/Icon';
 
 /**
  * Settings — the single home for every configuration screen.
@@ -46,15 +48,18 @@ interface TabDef {
  * position.
  */
 const TABS: TabDef[] = [
-  { key: 'desk', label: 'Transaction Desk Settings', ico: '\u{1F4DA}', superAdmin: true, area: 'desk' },
-  { key: 'crm', label: 'CRM Settings', ico: '\u{2699}', superAdmin: true, area: 'crm' },
-  { key: 'company', label: 'Company Settings', ico: '\u{1F3E2}', screen: 'settings' },
+  { key: 'desk', label: 'Transaction Desk Settings', ico: 'briefcase', superAdmin: true, area: 'desk' },
+  { key: 'crm', label: 'CRM Settings', ico: 'settings', superAdmin: true, area: 'crm' },
+  { key: 'company', label: 'Company Settings', ico: 'building', screen: 'settings' },
+  // Behind the Users screen rather than a Super Admin flag: changing what a role grants is the
+  // same authority as changing who holds it, and the endpoint enforces exactly that.
+  { key: 'roles', label: 'Roles & Permissions', ico: 'lock', screen: 'users' },
 ];
 
 /** The two sections inside Transaction Desk Settings. */
 const DESK_SECTIONS = [
-  { key: 'integrations', label: 'Integrations', ico: '\u{1F517}' },
-  { key: 'templates', label: 'Templates', ico: '\u{1F4DD}' },
+  { key: 'integrations', label: 'Integrations', ico: 'external' },
+  { key: 'templates', label: 'Templates', ico: 'file' },
 ] as const;
 
 /**
@@ -125,7 +130,7 @@ export default function SettingsPage() {
       <div className="toolbar settings-tabs"><div className="toolbar-row" style={{ flexWrap: 'wrap' }}>
         {visible.map((t) => (
           <button key={t.key} className={`btn sm ${tab === t.key ? 'primary' : 'ghost'}`} onClick={() => go(t.key)}>
-            {t.ico} {t.label}
+            <Icon name={t.ico} size={14} /> {t.label}
           </button>
         ))}
       </div></div>
@@ -138,7 +143,7 @@ export default function SettingsPage() {
             {DESK_SECTIONS.map((s) => (
               <button key={s.key} className={`btn sm ${sub === s.key ? 'primary' : 'ghost'}`}
                 onClick={() => go('desk', s.key)}>
-                {s.ico} {s.label}
+                <Icon name={s.ico} size={14} /> {s.label}
               </button>
             ))}
           </div></div>
@@ -149,6 +154,7 @@ export default function SettingsPage() {
       )}
       {tab === 'crm' && <CrmSettingsPanel />}
       {tab === 'company' && <CompanySettingsPage />}
+      {tab === 'roles' && <RolesPanel />}
     </>
   );
 }
