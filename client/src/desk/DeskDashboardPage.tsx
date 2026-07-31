@@ -66,9 +66,7 @@ export default function DeskDashboardPage() {
             { n: data.closings.next_30_days, label: 'next 30 days' },
             { n: data.closings.overdue, label: 'past closing, unpaid', tone: 'bad' },
           ]} />} />
-      </div>
-
-      <div className="tiles">
+        {/* Beside Closings Ahead: both answer "what is about to need attention on a deal". */}
         <Tile label="Documents Outstanding" value={data.documents.pending}
           color={data.documents.invalid > 0 ? 'var(--warn-700)' : undefined}
           sub={<Breakdown parts={[
@@ -76,12 +74,29 @@ export default function DeskDashboardPage() {
             { n: data.documents.invalid, label: 'invalid', tone: 'bad' },
             { n: data.documents.mandatory_missing, label: 'mandatory missing', tone: 'bad' },
           ]} />} />
+      </div>
+
+      <div className="tiles">
         <Tile label="Invoices" value={data.invoices.total} sub={
           <Breakdown parts={[{ n: data.invoices.unpaid, label: 'unpaid', tone: 'bad' }]} />
         } />
         <Tile label="Billed" value={money(data.invoices.billed)} sub="invoiced in total" />
         <Tile label="Collected" value={money(data.invoices.collected)} sub="received against invoices" color="var(--ok-ink)" />
         <Tile label="Outstanding" value={money(data.invoices.outstanding)} sub="still to be collected" color="var(--warn-ink)" />
+        {/* Calendar and to-dos sit beside Outstanding rather than on a row of their own — two tiles
+            alone left a near-empty band under the commission figures. */}
+        <Tile label="Desk Calendar" value={data.calendar.upcoming} sub={
+          <Breakdown parts={[
+            { n: data.calendar.today, label: 'today', tone: 'info' },
+            { n: data.calendar.upcoming, label: 'next 30 days' },
+          ]} />
+        } />
+        <Tile label="Todo List" value={todoTotal ?? data.todos.total} sub={
+          <Breakdown parts={[
+            { n: data.todos.pending, label: 'pending', tone: 'info' },
+            { n: data.todos.overdue, label: 'overdue', tone: 'bad' },
+          ]} />
+        } />
       </div>
 
       {comm && (
@@ -107,21 +122,6 @@ export default function DeskDashboardPage() {
           )}
         </div>
       )}
-
-      <div className="tiles">
-        <Tile label="Desk Calendar" value={data.calendar.upcoming} sub={
-          <Breakdown parts={[
-            { n: data.calendar.today, label: 'today', tone: 'info' },
-            { n: data.calendar.upcoming, label: 'next 30 days' },
-          ]} />
-        } />
-        <Tile label="Todo List" value={todoTotal ?? data.todos.total} sub={
-          <Breakdown parts={[
-            { n: data.todos.pending, label: 'pending', tone: 'info' },
-            { n: data.todos.overdue, label: 'overdue', tone: 'bad' },
-          ]} />
-        } />
-      </div>
 
       {/* The Transaction Desk's own list. Tasks added here belong to this area and do not appear on
           the CRM's list — section 11. */}
