@@ -334,13 +334,27 @@ export async function transactionResource(t: LoadedTxn, ctx: ResourceCtx): Promi
       details: a.details,
       stamp: toDateTimeString(a.created_at),
     }));
+    /*
+     * What an administrator is asked to REVIEW — which is not the same as what they are told about.
+     *
+     * Three kinds of agent activity are deliberately absent: team splits, lawyer details, and
+     * anything the agent did to a document. Uploading a file is not a change to be approved or
+     * rejected; it is work arriving, and the office is told about it through the notification bell
+     * instead. Rejecting one was never possible in any case — `revertAgentChange` can only put back
+     * a Status or a Contact, so a document row offered a Reject button that always answered "this
+     * change can't be auto-reverted".
+     *
+     * Nothing is hidden by this: every upload is still written to the audit trail and still listed
+     * under Legal & Documents.
+     */
     out.agent_changes = logs
       .filter(
         (a) =>
           a.source === 'Agent' &&
           !a.handled &&
           !(a.field ?? '').toLowerCase().includes('team member') &&
-          !(a.field ?? '').toLowerCase().includes('lawyer'),
+          !(a.field ?? '').toLowerCase().includes('lawyer') &&
+          !(a.action ?? '').toLowerCase().startsWith('document'),
       )
       .map((a) => ({
         id: a.id,

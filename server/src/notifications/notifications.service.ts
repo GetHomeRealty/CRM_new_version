@@ -78,7 +78,20 @@ export class NotificationsService {
     return this.finalize(items);
   }
 
-  /** Agent clears the document-review notifications for one transaction. */
+  /**
+   * Clear one transaction's document notifications for whoever is asking.
+   *
+   * The two sides notify each other about the same documents from opposite directions, so this
+   * clears whichever of the two the caller was actually shown:
+   *
+   *   agent  → the admin reviewed my documents      (`DocReview`)
+   *   admin  → an agent uploaded documents          (`Agent`, a Document… action)
+   *
+   * The admin half matters because an upload is no longer a reviewable change: with no review card
+   * there is no "Mark reviewed" button to press, and without this the bell would stay unread for
+   * ever. Only document rows are cleared — an agent's edit to a real field is still waiting to be
+   * reviewed and must keep its unread mark.
+   */
   async markDocNotificationsSeen(user: ResourceUser | null, txnId: number): Promise<{ ok: boolean }> {
     const t = await this.prisma.transactions.findFirst({ where: { id: txnId, deleted_at: null } });
     if (!t) throw new NotFoundException({ message: `No query results for model [App\\Models\\Transaction] ${txnId}.` });
@@ -89,7 +102,9 @@ export class NotificationsService {
       if (!allowed) throw new ForbiddenException({ message: 'You do not have access to this transaction.' });
     }
     await this.prisma.audit_logs.updateMany({
-      where: { transaction_id: txnId, source: 'DocReview', handled: false },
+      where: isAdminOrAbove(user)
+        ? { transaction_id: txnId, source: 'Agent', handled: false, action: { startsWith: 'Document' } }
+        : { transaction_id: txnId, source: 'DocReview', handled: false },
       data: { handled: true, updated_at: new Date() },
     });
     return { ok: true };
