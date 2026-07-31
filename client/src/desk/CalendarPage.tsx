@@ -192,8 +192,11 @@ export default function CalendarPage() {
       </div>
 
       <div className="cal-layout">
+        {/* The calendar column: the month grid with its two lists tucked directly underneath, so
+            they read as part of the calendar rather than as a separate band across the page. */}
+        <div className="cal-main">
         {/* Large month grid — the main view. Each day shows its holidays/festivals by name and its
-            events as chips; the sidebar on the right lists today's and upcoming events in full. */}
+            events as chips; the sidebar on the right lists today's events in full. */}
         <div className="card cal-grid-card">
           <div className="cal-monthbar">
             <button className="btn ghost sm" onClick={() => shiftMonth(-1)} aria-label="Previous month">‹</button>
@@ -249,37 +252,58 @@ export default function CalendarPage() {
           </div>
         </div>
 
-        {/* Two cards: Today's Events and Upcoming Events. Each event row carries its own Edit /
-            Delete, so there is no separate selected-day card. */}
+          {/*
+            Upcoming Events and Holidays & Festivals, immediately under the grid and side by side.
+
+            Kept inside the calendar column so they are the width of the calendar rather than of the
+            page, and so nothing sits between them and the month they describe. Stacked in the 320px
+            sidebar they made the page as tall as the two lists combined; here they take half that
+            height, and each scrolls inside its own card, so the page is a fixed length however busy
+            the month is.
+          */}
+          <div className="cal-below">
+            <div className="card">
+              <div className="modal-h" style={{ fontSize: 14 }}>Upcoming Events<span className="sec-count">{upcoming.length}</span></div>
+              {upcoming.length === 0
+                ? <div className="help">Nothing upcoming.</div>
+                : (
+                  <div className="cal-scroll">
+                    {upcoming.map((e) => <EventRow key={e.id} e={e} showDate canEdit={canEdit} onEdit={() => setEditing(e)} onDelete={() => setToDelete(e)} onDeal={() => navigate(`${deskPath(`transactions/${e.transaction_id}`)}?mode=view`)} />)}
+                  </div>
+                )}
+            </div>
+
+            {/* Holidays & festivals for the month being viewed. */}
+            <div className="card">
+              <div className="modal-h" style={{ fontSize: 14 }}>Holidays &amp; Festivals<span className="sec-count">{monthHolidays.length}</span></div>
+              {monthHolidays.length === 0
+                ? <div className="help">None this month.</div>
+                : (
+                  <div className="cal-scroll">
+                    {monthHolidays.map((h) => (
+                      <div key={`${h.date}-${h.name}`} className="cal-hol-row" title={holidayTitle(h)}>
+                        <span className={`cal-hol-swatch${h.kind === 'festival' ? ' festival' : ''}`} />
+                        <div style={{ minWidth: 0, flex: 1 }}>
+                          <div style={{ fontSize: 13, fontWeight: 600 }}>{h.name}{h.approximate ? ' ◐' : ''}</div>
+                          <div className="muted" style={{ fontSize: 12 }}>{longDate(h.date)}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+            </div>
+          </div>
+        </div>
+
+        {/* Only today's events sit beside the grid: it is the shortest of the three lists and the
+            one being read against the day that is already highlighted. Each event row carries its
+            own Edit / Delete, so there is no separate selected-day card. */}
         <div className="cal-side">
           <div className="card">
             <div className="modal-h" style={{ fontSize: 14 }}>Today&apos;s Events<span className="sec-count">{todayEvents.length}</span></div>
             {todayEvents.length === 0
               ? <div className="help">No events today.</div>
               : todayEvents.map((e) => <EventRow key={e.id} e={e} canEdit={canEdit} onEdit={() => setEditing(e)} onDelete={() => setToDelete(e)} onDeal={() => navigate(`${deskPath(`transactions/${e.transaction_id}`)}?mode=view`)} />)}
-          </div>
-
-          <div className="card">
-            <div className="modal-h" style={{ fontSize: 14 }}>Upcoming Events<span className="sec-count">{upcoming.length}</span></div>
-            {upcoming.length === 0
-              ? <div className="help">Nothing upcoming.</div>
-              : upcoming.map((e) => <EventRow key={e.id} e={e} showDate canEdit={canEdit} onEdit={() => setEditing(e)} onDelete={() => setToDelete(e)} onDeal={() => navigate(`${deskPath(`transactions/${e.transaction_id}`)}?mode=view`)} />)}
-          </div>
-
-          {/* Holidays & festivals for the month being viewed. */}
-          <div className="card">
-            <div className="modal-h" style={{ fontSize: 14 }}>Holidays &amp; Festivals<span className="sec-count">{monthHolidays.length}</span></div>
-            {monthHolidays.length === 0
-              ? <div className="help">None this month.</div>
-              : monthHolidays.map((h) => (
-                <div key={`${h.date}-${h.name}`} className="cal-hol-row" title={holidayTitle(h)}>
-                  <span className={`cal-hol-swatch${h.kind === 'festival' ? ' festival' : ''}`} />
-                  <div style={{ minWidth: 0, flex: 1 }}>
-                    <div style={{ fontSize: 13, fontWeight: 600 }}>{h.name}{h.approximate ? ' ◐' : ''}</div>
-                    <div className="muted" style={{ fontSize: 12 }}>{longDate(h.date)}</div>
-                  </div>
-                </div>
-              ))}
           </div>
         </div>
       </div>
