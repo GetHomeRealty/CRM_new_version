@@ -258,6 +258,22 @@ export class UsersService {
     }
 
     // Uniqueness (DB) — only when the field passed its format rules (Rule::unique ignore self).
+    //
+    // NAME IS UNIQUE HERE BECAUSE IT IS A JOIN KEY, not for tidiness. Transactions record their
+    // agent as a NAME, team members are stored by NAME, and the application resolves people from
+    // those strings all over: commission splits (`users.findFirst({ where: { name } })`), agent
+    // loan positions, the email routing for documents, notices of sale and quick sends, and the
+    // dashboard/notification scoping that decides which deals an agent may see.
+    //
+    // Two active accounts sharing a name therefore does not degrade gracefully — it silently
+    // resolves to ONE OF THEM, chosen by the query planner. That has been observed in this
+    // database: two users called "Akhil" with commission percentages of 0 and 90, where which one
+    // a deal paid depended on the plan and could change after a VACUUM or a restore with no code
+    // change at all. Agent loan positions overwrite each other last-wins, and name-scoped
+    // visibility matches both people's deals.
+    if (errors.name === undefined && !empty(val('name')) && (await this.nameTaken(String(val('name')), existing?.id ?? null))) {
+      push('name', 'Another active user already has this name. Names identify agents on transactions, so they must be distinct.');
+    }
     if (errors.username === undefined && !empty(val('username')) && (await this.usernameTaken(String(val('username')), existing?.id ?? null))) {
       push('username', 'The username has already been taken.');
     }
@@ -283,6 +299,20 @@ export class UsersService {
 
   private isAssocOrArray(v: unknown): boolean {
     return typeof v === 'object' && v !== null;
+  }
+
+  /**
+   * Only ACTIVE users collide. A deactivated account keeps its name in the record — every closed
+   * deal it appears on still reads correctly — and blocking a new hire from using a departed
+   * colleague's name would be an odd rule with no safety value, because nothing resolves splits or
+   * routes mail to an inactive account.
+   */
+  private async nameTaken(name: string, ignoreId: number | null): Promise<boolean> {
+    const row = await this.prisma.users.findFirst({
+      where: { name, status: 'Active', ...(ignoreId ? { id: { not: ignoreId } } : {}) },
+      select: { id: true },
+    });
+    return row !== null;
   }
 
   private async usernameTaken(username: string, ignoreId: number | null): Promise<boolean> {

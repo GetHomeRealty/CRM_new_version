@@ -49,8 +49,12 @@ export async function parityRoles(prisma: PrismaClient): Promise<{ label: string
     select: { id: true, name: true, role: true, company_id: true },
     orderBy: { id: 'asc' },
   });
+  // Keyed by USER ID, not by name. Keying on the name made a rename look like a parity failure:
+  // renaming a duplicated account reported `admin:Akhil` missing and `admin:Akhilesh` appearing,
+  // while every figure underneath was byte-identical. A gate that cries wolf over a label gets
+  // ignored, which would defeat the point of having one.
   return users.map((u) => ({
-    label: `${u.role}:${u.name}`,
+    label: `${u.role}#${u.id}`,
     user: { id: u.id, name: u.name, role: u.role, company_id: u.company_id } as unknown as ResourceUser,
   }));
 }

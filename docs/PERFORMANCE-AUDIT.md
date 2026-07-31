@@ -63,10 +63,14 @@ above are the reason. The findings below are about the server, the database, and
 > and silently zeroed that agent's commission: a **$21,865.50** error the parity gate caught to the
 > cent. The cache now reuses the identical query per distinct name rather than guessing.
 >
-> **The duplicate name remains a live hazard, independent of this change.** Commission splits are
-> resolved BY NAME, so two people sharing one is ambiguous by construction, and which of them a deal
-> pays is currently decided by the query planner — it could change after a VACUUM, a restore, or a
-> plan change, with no code change at all. Worth fixing at the data level.
+> **The duplicate name is now fixed.** A name is a join key here — commission splits, agent loan
+> positions, document and notice email routing, and name-scoped visibility all resolve people from
+> those strings — so two active accounts sharing one resolved to whichever the planner offered.
+> Three changes: the admin account (id 1, the row the lookup was NOT returning, so no figure could
+> move) was renamed to its own username; `name` now carries the same uniqueness rule as `username`
+> and `email`, rejected at the API with a message that says why; and `/api/health/workers` reports
+> any collision that predates the rule. Parity re-verified across the rename with the harness keyed
+> by user id rather than by name: all 234 values identical.
 >
 > Gated by `scripts/dashboard-parity.ts` (capture/verify, exact equality, no tolerance) and pinned
 > by `dashboard-parity.spec.ts`. Verified over 187,828 numeric values across 4,000 transactions

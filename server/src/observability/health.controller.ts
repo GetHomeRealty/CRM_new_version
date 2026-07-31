@@ -149,6 +149,36 @@ export class HealthController {
       result.jobs = { ok: false, detail: (e as Error).message.slice(0, 160) };
     }
 
+    // Duplicate agent names.
+    //
+    // A name is a join key here: transactions record their agent as a name, team members are stored
+    // by name, and commission splits, agent loan positions, document/notice email routing and
+    // name-scoped visibility all resolve people from those strings. Two ACTIVE accounts sharing one
+    // resolves to whichever the query planner offers — observed in this database, and capable of
+    // changing after a VACUUM or a restore with no code change.
+    //
+    // New collisions are now rejected at the point of entry, so this exists to surface any that
+    // predate that rule. It reports rather than fails: it is a data problem needing a human
+    // decision about which account is which, not a reason to take a server out of rotation.
+    try {
+      const dupes = await runAsSystem(() => this.prisma.users.groupBy({
+        by: ['name'],
+        where: { status: 'Active' },
+        _count: { name: true },
+        having: { name: { _count: { gt: 1 } } },
+      }));
+      result.duplicate_agent_names = {
+        ok: dupes.length === 0,
+        count: dupes.length,
+        names: dupes.map((d) => d.name).slice(0, 10),
+        detail: dupes.length === 0
+          ? 'every active user has a distinct name'
+          : `${dupes.length} name(s) shared by more than one active user — commission splits and agent visibility resolve by name and cannot tell them apart`,
+      };
+    } catch (e) {
+      result.duplicate_agent_names = { ok: false, detail: (e as Error).message.slice(0, 160) };
+    }
+
     // Mailbox synchronisation. Reported per enabled account, because one broken mailbox among five
     // is invisible in any aggregate — and it is somebody's whole inbox.
     try {
