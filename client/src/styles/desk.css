@@ -524,6 +524,26 @@ input[type="number"],.numeric,.stat-card .val{font-variant-numeric:tabular-nums;
 @media (prefers-color-scheme:dark){:root:where(:not([data-theme="light"])) .rvc-card{--rvc-bar:#3987e5}}
 :root[data-theme="dark"] .rvc-card{--rvc-bar:#3987e5}
 
+/* Period control, and the month-by-month strip.
+
+   Vertical bars here rather than the horizontal ones used for the ranked lists: months are an
+   ordered sequence and read left to right, where a rank has no order but its own. Each month is a
+   button — clicking it is how you scope the two charts below to it. */
+.rvc-period{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+.rvc-period-label{font-size:13px}
+.rvc-period select{font-size:12.5px;padding:5px 8px}
+.rvc-months{margin-bottom:12px}
+.rvc-month-row{display:flex;align-items:flex-end;gap:6px;margin-top:8px;min-height:78px}
+.rvc-month{flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:3px;background:none;border:0;padding:4px 2px;border-radius:7px;cursor:pointer}
+.rvc-month:hover{background:var(--surface-2)}
+.rvc-month.on{background:var(--info-bg)}
+.rvc-month-bar{display:block;width:100%;max-width:26px;min-height:2px;border-radius:4px 4px 0 0;background:var(--rvc-bar,#2a78d6)}
+.rvc-month-n{font-size:10.5px;font-weight:700;color:var(--muted)}
+.rvc-month-label{font-size:10px;color:var(--muted);white-space:nowrap}
+@media (prefers-color-scheme:dark){:root:where(:not([data-theme="light"])) .rvc-months{--rvc-bar:#3987e5}}
+:root[data-theme="dark"] .rvc-months{--rvc-bar:#3987e5}
+.rvc-months{--rvc-bar:#2a78d6}
+
 .rvc-list{display:flex;flex-direction:column;gap:6px}
 .rvc-row{display:flex;align-items:center;gap:9px;font-size:12.5px}
 .rvc-label{flex:0 0 40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text)}

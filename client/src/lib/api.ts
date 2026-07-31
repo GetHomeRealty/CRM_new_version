@@ -236,6 +236,11 @@ export const getReviewStats = (): Promise<ReviewStats> =>
 
 export interface ReviewErrors {
   sampled: number;
+  /** True when the period held more rows than the safety cap, so the figures are partial. */
+  truncated: boolean;
+  window: { from: string; to: string; label: string; month: string | null };
+  /** Every month in the twelve-month window, oldest first, quiet months included. */
+  by_month: { month: string; label: string; count: number }[];
   by_field: { name: string; count: number }[];
   by_reason: { name: string; count: number }[];
   first_response: { average_hours: number | null; median_hours: number | null; sampled: number };
@@ -243,9 +248,9 @@ export interface ReviewErrors {
   scope: 'own' | 'brokerage';
 }
 
-/** What keeps going wrong, and how long it takes to put right. */
-export const getReviewErrors = (): Promise<ReviewErrors> =>
-  api.get<ReviewErrors>('/api/dashboard/review-errors').then((r) => r.data);
+/** What keeps going wrong over a period. `month` is `YYYY-MM`; omit it for the last 12 months. */
+export const getReviewErrors = (month?: string): Promise<ReviewErrors> =>
+  api.get<ReviewErrors>('/api/dashboard/review-errors', { params: month ? { month } : {} }).then((r) => r.data);
 
 // --- Review threads: the conversation on one review item, and its evidence ---
 export interface ReviewMessage {

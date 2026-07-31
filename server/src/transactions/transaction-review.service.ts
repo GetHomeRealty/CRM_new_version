@@ -43,6 +43,16 @@ export const REVERT_UNSUPPORTED = 'This field cannot be automatically reverted. 
  */
 export const OVERDUE_HOURS = 24;
 
+/**
+ * A runaway guard on the error charts, not a reporting window.
+ *
+ * The window is twelve months; this only stops a brokerage with an extraordinary volume from
+ * pulling an unbounded result into memory to compute ten bars. When it bites the response says so,
+ * because a chart quietly drawn from part of its own period is worse than one that admits it.
+ */
+const ERROR_ROW_CAP = 20_000;
+const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+
 export interface ReviewFilters {
   resolution?: string;
   decision?: string;
@@ -512,27 +522,36 @@ export class TransactionReviewService {
    * Also the two performance figures: how long before the agent answered, and how long the whole
    * correction took.
    */
-  async recurringErrors(user: AuthUserRecord | null): Promise<Record<string, unknown>> {
+  async recurringErrors(user: AuthUserRecord | null, opts: { month?: string } = {}): Promise<Record<string, unknown>> {
     const mine = user && isAgent(user) ? { agent_name: user.name ?? '' } : {};
+    const window = this.errorWindow(opts.month);
 
     const rows = await this.prisma.transaction_reviews.findMany({
-      where: { ...mine, decision: 'Rejected' },
+      where: { ...mine, decision: 'Rejected', created_at: { gte: window.from, lt: window.to } },
       select: {
         field_label: true, reason: true, created_at: true, corrected_at: true,
         resolved_at: true, first_response_at: true, agent_name: true,
       },
       orderBy: { created_at: 'desc' },
-      // Bounded on purpose: this drives a chart of what is going wrong NOW, and the whole table
-      // would have to be read to include a complaint from three years ago.
-      take: 1000,
+      // Bounded by TIME, not by a row count: a fixed number of rows is not a period anybody can
+      // reason about, and "the last 1000" means something different for a busy month than a quiet
+      // one. The cap below is only a runaway guard, and the response says when it bit.
+      take: ERROR_ROW_CAP + 1,
     });
+    const truncated = rows.length > ERROR_ROW_CAP;
+    if (truncated) rows.length = ERROR_ROW_CAP;
 
     const byField = new Map<string, number>();
     const byReason = new Map<string, { label: string; count: number }>();
+    const byMonth = new Map<string, number>();
     const responses: number[] = [];
     const corrections: number[] = [];
 
     for (const r of rows) {
+      if (r.created_at) {
+        const key = `${r.created_at.getFullYear()}-${String(r.created_at.getMonth() + 1).padStart(2, '0')}`;
+        byMonth.set(key, (byMonth.get(key) ?? 0) + 1);
+      }
       const field = (r.field_label ?? '—').trim() || '—';
       byField.set(field, (byField.get(field) ?? 0) + 1);
 
@@ -572,12 +591,52 @@ export class TransactionReviewService {
 
     return {
       sampled: rows.length,
+      truncated,
+      window: { from: window.from.toISOString().slice(0, 10), to: window.toLabel, label: window.label, month: window.month },
+      // Every month in the window, oldest first and including the quiet ones — a month missing from
+      // a list reads as "no data yet" rather than "nothing went wrong", and those are different.
+      by_month: window.months.map((m) => ({ month: m.key, label: m.label, count: byMonth.get(m.key) ?? 0 })),
       by_field: top(byField, (n) => n, (k) => k),
       by_reason: top(byReason, (v) => v.count, (_k, v) => v.label),
       first_response: { average_hours: average(responses), median_hours: median(responses), sampled: responses.length },
       correction_time: { average_hours: average(corrections), median_hours: median(corrections), sampled: corrections.length },
       scope: user && isAgent(user) ? 'own' : 'brokerage',
     };
+  }
+
+  /**
+   * The period the error charts cover: one named month, or the twelve months ending today.
+   *
+   * The month list always spans the full twelve months even when one month is selected, so the
+   * picker offers every month rather than only the one already chosen — a selector that hides its
+   * own options is a dead end.
+   */
+  private errorWindow(month?: string) {
+    const now = new Date();
+    const named = /^\d{4}-(0[1-9]|1[0-2])$/.test(String(month ?? '')) ? String(month) : null;
+
+    const months: { key: string; label: string }[] = [];
+    // Twelve entries ending with the current month, oldest first.
+    for (let i = 11; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      months.push({
+        key: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`,
+        label: `${MONTH_NAMES[d.getMonth()]} ${d.getFullYear()}`,
+      });
+    }
+
+    if (named) {
+      const [y, m] = named.split('-').map(Number);
+      const from = new Date(y, m - 1, 1);
+      const to = new Date(y, m, 1);
+      return { from, to, toLabel: to.toISOString().slice(0, 10), label: `${MONTH_NAMES[m - 1]} ${y}`, month: named, months };
+    }
+
+    // A full year back to the first of that month, so the window is whole months rather than a
+    // ragged 365 days that starts mid-month and makes the first bar look like a quiet month.
+    const from = new Date(now.getFullYear(), now.getMonth() - 11, 1);
+    const to = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+    return { from, to, toLabel: to.toISOString().slice(0, 10), label: 'Last 12 months', month: null, months };
   }
 
   /**

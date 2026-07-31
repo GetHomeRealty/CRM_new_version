@@ -175,6 +175,44 @@ describe('recurring errors', () => {
     });
   });
 
+  it('covers a year of months, quiet ones included, and can be scoped to one', async () => {
+    await inRollback(async (tx) => {
+      const txnId = await makeTxn(tx);
+      const now = new Date();
+      const thisMonth = new Date(now.getFullYear(), now.getMonth(), 15);
+      const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 15);
+      const key = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+
+      await makeReview(tx, txnId, { created_at: thisMonth, field_label: 'Purchase Price' });
+      await makeReview(tx, txnId, { created_at: thisMonth, field_label: 'Purchase Price' });
+      await makeReview(tx, txnId, { created_at: lastMonth, field_label: 'Closing Date' });
+      // Older than the window: must not be counted at all.
+      await makeReview(tx, txnId, { created_at: new Date(now.getFullYear() - 2, 0, 15), field_label: 'Ancient' });
+
+      const year = await reviewsFor(tx).recurringErrors(ADMIN) as {
+        sampled: number; window: { label: string; month: string | null };
+        by_month: { month: string; count: number }[]; by_field: { name: string }[];
+      };
+      expect(year.window.label).toBe('Last 12 months');
+      expect(year.sampled).toBe(3);
+      expect(year.by_month).toHaveLength(12);
+      expect(year.by_month.find((m) => m.month === key(thisMonth))?.count).toBe(2);
+      expect(year.by_month.find((m) => m.month === key(lastMonth))?.count).toBe(1);
+      // A quiet month is present with a zero rather than missing — "no data yet" and "nothing went
+      // wrong" are different answers.
+      expect(year.by_month.filter((m) => m.count === 0).length).toBe(10);
+      expect(year.by_field.some((f) => f.name === 'Ancient')).toBe(false);
+
+      const one = await reviewsFor(tx).recurringErrors(ADMIN, { month: key(lastMonth) }) as {
+        sampled: number; window: { month: string | null }; by_month: unknown[];
+      };
+      expect(one.sampled).toBe(1);
+      expect(one.window.month).toBe(key(lastMonth));
+      // The picker keeps every month on offer even while one is selected.
+      expect(one.by_month).toHaveLength(12);
+    });
+  });
+
   it('reports first-response and correction time, median beside mean', async () => {
     await inRollback(async (tx) => {
       const txnId = await makeTxn(tx);

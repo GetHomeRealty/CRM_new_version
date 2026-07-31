@@ -1,4 +1,4 @@
-import { Controller, Get, UseGuards } from '@nestjs/common';
+import { Controller, Get, Query, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '../auth/guards/auth.guard';
 import { CurrentUser } from '../auth/decorators';
 import type { AuthUserRecord } from '../auth/auth.types';
@@ -51,7 +51,11 @@ export class DashboardController {
 
   /** What keeps going wrong, and how long it takes to put right — the charts and the metrics. */
   @Get('review-errors')
-  reviewErrors(@CurrentUser() user: AuthUserRecord | undefined): Promise<Record<string, unknown>> {
-    return this.reviews_.recurringErrors(user ?? null);
+  reviewErrors(
+    @CurrentUser() user: AuthUserRecord | undefined,
+    /** `YYYY-MM` narrows it to one month; absent means the twelve months ending today. */
+    @Query('month') month?: string,
+  ): Promise<Record<string, unknown>> {
+    return this.reviews_.recurringErrors(user ?? null, { month });
   }
 }

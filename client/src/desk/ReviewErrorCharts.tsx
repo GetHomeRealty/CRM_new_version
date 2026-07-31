@@ -45,18 +45,65 @@ function BarList({ rows, empty }: { rows: { name: string; count: number }[]; emp
 export default function ReviewErrorCharts() {
   const [data, setData] = useState<ReviewErrors | null>(null);
   const [failed, setFailed] = useState(false);
+  /** '' is the whole twelve months; otherwise a YYYY-MM. */
+  const [month, setMonth] = useState('');
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    getReviewErrors().then(setData).catch(() => setFailed(true));
-  }, []);
+    setLoading(true);
+    getReviewErrors(month || undefined)
+      .then(setData)
+      .catch(() => setFailed(true))
+      .finally(() => setLoading(false));
+  }, [month]);
 
   if (failed || !data) return null;
-  // Nothing has been rejected: there is no pattern to show, and two empty charts say less than
-  // nothing at all.
-  if (data.sampled === 0) return null;
+  // Nothing at all in a whole year: there is no pattern to show, and two empty charts say less than
+  // nothing. A chosen month with no rejections is different — that is an answer, so it is kept.
+  if (data.sampled === 0 && !month && data.by_month.every((m) => m.count === 0)) return null;
+
+  const busiest = Math.max(...data.by_month.map((m) => m.count), 1);
 
   return (
     <>
+      {/* The period, and the way into a single month. The month list carries its own counts, so a
+          quiet month is visible as quiet rather than missing. */}
+      <div className="rvc-period">
+        <span className="rvc-period-label">Review errors · <strong>{data.window.label}</strong></span>
+        <select value={month} onChange={(e) => setMonth(e.target.value)} disabled={loading}>
+          <option value="">Last 12 months</option>
+          {[...data.by_month].reverse().map((m) => (
+            <option key={m.month} value={m.month}>{m.label} ({m.count})</option>
+          ))}
+        </select>
+        {month && <button type="button" className="btn ghost sm" onClick={() => setMonth('')}>Back to the year</button>}
+        {loading && <span className="muted" style={{ fontSize: 11.5 }}>Loading…</span>}
+        {data.truncated && (
+          <span className="pill warn" style={{ fontSize: 10 }} title="More rejections in this period than the chart reads; the figures are partial.">partial</span>
+        )}
+      </div>
+
+      {/* Month by month across the window — shown even when one month is selected, so the month
+          being looked at is always in the context of the year around it. */}
+      <div className="card rvc-months">
+        <div className="modal-h" style={{ fontSize: 13.5 }}><Icon name="analytics" size={12} /> Rejections by month</div>
+        <div className="rvc-month-row">
+          {data.by_month.map((m) => (
+            <button
+              key={m.month}
+              type="button"
+              className={`rvc-month${m.month === data.window.month ? ' on' : ''}`}
+              title={`${m.label} — ${m.count} rejection${m.count === 1 ? '' : 's'}`}
+              onClick={() => setMonth(m.month === month ? '' : m.month)}
+            >
+              <span className="rvc-month-bar" style={{ height: `${Math.max(2, (m.count / busiest) * 100)}%` }} />
+              <span className="rvc-month-n">{m.count}</span>
+              <span className="rvc-month-label">{m.label.slice(0, 3)}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
       <div className="tiles">
         <Tile label="First Response" value={hours(data.first_response.median_hours)}
           sub={data.first_response.sampled ? `median · avg ${hours(data.first_response.average_hours)} · ${data.first_response.sampled} answered` : 'nothing answered yet'} />
@@ -68,7 +115,7 @@ export default function ReviewErrorCharts() {
         <div className="card rvc-card">
           <div className="modal-h" style={{ fontSize: 13.5 }}><Icon name="alert" size={12} /> Most rejected fields</div>
           <p className="help" style={{ marginTop: 0 }}>
-            Rejections by field, most first{data.scope === 'own' ? ', on your deals' : ''} — over the last {data.sampled} decisions.
+            Rejections by field, most first{data.scope === 'own' ? ', on your deals' : ''} — {data.window.label.toLowerCase()}, {data.sampled} rejection{data.sampled === 1 ? '' : 's'}.
           </p>
           <BarList rows={data.by_field} empty="Nothing has been rejected yet." />
         </div>
