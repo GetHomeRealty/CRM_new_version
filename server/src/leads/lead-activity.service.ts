@@ -13,6 +13,7 @@ import { MESSAGE_STATUS, isMessageStatus, mapProviderStatus, fromNumber, publicU
 import { TwilioService } from '../sms/twilio.service';
 import { MailerService } from '../email/mailer.service';
 
+import { ResourceAccessService } from '../core/resource-access.service';
 const str = (v: unknown): string => String(v ?? '').trim();
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const TIME_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
@@ -139,6 +140,7 @@ async function draftEmailWithAi(cfg: EmailAiConfig, system: string, userText: st
 @Injectable()
 export class LeadActivityService {
   constructor(
+    private readonly access: ResourceAccessService,
     private readonly prisma: PrismaService,
     private readonly audit: LeadAuditService,
     private readonly twilio: TwilioService,
@@ -164,6 +166,7 @@ export class LeadActivityService {
 
   // ----------------------------------------------------------------- notes
   async addNote(leadId: number, body: Record<string, unknown>, user: AuthUserRecord): Promise<Record<string, unknown>> {
+    await this.access.assertLead(user, leadId);
     const lead = await this.requireLead(leadId);
     const content = str(body.content);
     if (!content) throw new BadRequestException({ message: 'The note cannot be empty.' });
@@ -181,6 +184,7 @@ export class LeadActivityService {
   }
 
   async updateNote(leadId: number, noteId: number, body: Record<string, unknown>, user: AuthUserRecord): Promise<Record<string, unknown>> {
+    await this.access.assertLead(user, leadId);
     const existing = await this.prisma.lead_notes.findFirst({ where: { id: noteId, lead_id: leadId } });
     if (!existing) throw new NotFoundException({ message: 'Note not found.' });
 
@@ -198,6 +202,7 @@ export class LeadActivityService {
   }
 
   async removeNote(leadId: number, noteId: number, user: AuthUserRecord): Promise<{ deleted: boolean }> {
+    await this.access.assertLead(user, leadId);
     const existing = await this.prisma.lead_notes.findFirst({ where: { id: noteId, lead_id: leadId } });
     if (!existing) throw new NotFoundException({ message: 'Note not found.' });
     await this.prisma.lead_notes.delete({ where: { id: noteId } });
@@ -207,6 +212,7 @@ export class LeadActivityService {
 
   // ----------------------------------------------------------------- tasks
   async addTask(leadId: number, body: Record<string, unknown>, user: AuthUserRecord): Promise<Record<string, unknown>> {
+    await this.access.assertLead(user, leadId);
     const lead = await this.requireLead(leadId);
     const title = str(body.title);
     if (!title) throw new BadRequestException({ message: 'A task title is required.' });
@@ -231,6 +237,7 @@ export class LeadActivityService {
   }
 
   async updateTask(leadId: number, taskId: number, body: Record<string, unknown>, user: AuthUserRecord): Promise<Record<string, unknown>> {
+    await this.access.assertLead(user, leadId);
     const existing = await this.prisma.lead_tasks.findFirst({ where: { id: taskId, lead_id: leadId } });
     if (!existing) throw new NotFoundException({ message: 'Task not found.' });
 
@@ -260,6 +267,7 @@ export class LeadActivityService {
   }
 
   async removeTask(leadId: number, taskId: number, user: AuthUserRecord): Promise<{ deleted: boolean }> {
+    await this.access.assertLead(user, leadId);
     const existing = await this.prisma.lead_tasks.findFirst({ where: { id: taskId, lead_id: leadId } });
     if (!existing) throw new NotFoundException({ message: 'Task not found.' });
     await this.prisma.lead_tasks.delete({ where: { id: taskId } });
@@ -269,6 +277,7 @@ export class LeadActivityService {
 
   // -------------------------------------------------------------- showings
   async addShowing(leadId: number, body: Record<string, unknown>, user: AuthUserRecord): Promise<Record<string, unknown>> {
+    await this.access.assertLead(user, leadId);
     const lead = await this.requireLead(leadId);
     const date = this.toDate(body.showing_date, 'showing date');
     const time = str(body.time) || '12:00';
@@ -290,6 +299,7 @@ export class LeadActivityService {
   }
 
   async updateShowing(leadId: number, showingId: number, body: Record<string, unknown>, user: AuthUserRecord): Promise<Record<string, unknown>> {
+    await this.access.assertLead(user, leadId);
     const existing = await this.prisma.lead_showings.findFirst({ where: { id: showingId, lead_id: leadId } });
     if (!existing) throw new NotFoundException({ message: 'Showing not found.' });
 
@@ -314,6 +324,7 @@ export class LeadActivityService {
   }
 
   async removeShowing(leadId: number, showingId: number, user: AuthUserRecord): Promise<{ deleted: boolean }> {
+    await this.access.assertLead(user, leadId);
     const existing = await this.prisma.lead_showings.findFirst({ where: { id: showingId, lead_id: leadId } });
     if (!existing) throw new NotFoundException({ message: 'Showing not found.' });
     await this.prisma.lead_showings.delete({ where: { id: showingId } });
@@ -327,6 +338,7 @@ export class LeadActivityService {
    * by the agent after the call rather than captured automatically.
    */
   async addCall(leadId: number, body: Record<string, unknown>, user: AuthUserRecord): Promise<Record<string, unknown>> {
+    await this.access.assertLead(user, leadId);
     const lead = await this.requireLead(leadId);
 
     const raw = str(body.called_at);
@@ -361,6 +373,7 @@ export class LeadActivityService {
    * something to update; if Twilio refuses the call the row is marked `failed` so the log is honest.
    */
   async initiateCall(leadId: number, user: AuthUserRecord): Promise<Record<string, unknown>> {
+    await this.access.assertLead(user, leadId);
     if (!this.twilio.voiceConfigured()) {
       throw new BadRequestException({ message: 'Voice calling is not configured on the server. Set the TWILIO_* environment variables to enable click-to-call.' });
     }
@@ -403,6 +416,7 @@ export class LeadActivityService {
    * audio happens in the browser via the Voice SDK; this only sets up the record + validates.
    */
   async prepareBrowserCall(leadId: number, user: AuthUserRecord): Promise<{ callId: number; to: string; leadName: string }> {
+    await this.access.assertLead(user, leadId);
     const lead = await this.prisma.leads.findFirst({ where: { id: leadId, deleted_at: null }, select: { id: true, name: true, phone: true } });
     if (!lead) throw new NotFoundException({ message: 'Lead not found.' });
 
@@ -417,6 +431,7 @@ export class LeadActivityService {
   }
 
   async removeCall(leadId: number, callId: number, user: AuthUserRecord): Promise<{ deleted: boolean }> {
+    await this.access.assertLead(user, leadId);
     const existing = await this.prisma.lead_calls.findFirst({ where: { id: callId, lead_id: leadId } });
     if (!existing) throw new NotFoundException({ message: 'Call not found.' });
     await this.prisma.lead_calls.delete({ where: { id: callId } });
@@ -440,6 +455,7 @@ export class LeadActivityService {
    * the reason when it did not. A history that only records successes is worse than none.
    */
   async sendEmail(leadId: number, body: Record<string, unknown>, user: AuthUserRecord): Promise<Record<string, unknown>> {
+    await this.access.assertLead(user, leadId);
     const lead = await this.prisma.leads.findFirst({
       where: { id: leadId, deleted_at: null },
       select: { id: true, name: true, email: true, unsubscribed: true },
@@ -507,6 +523,7 @@ export class LeadActivityService {
    * hole. Anything not on the list is refused rather than silently relabelled.
    */
   async addRecording(leadId: number, callId: number, body: Record<string, unknown>, user: AuthUserRecord): Promise<Record<string, unknown>> {
+    await this.access.assertLead(user, leadId);
     const call = await this.prisma.lead_calls.findFirst({ where: { id: callId, lead_id: leadId } });
     if (!call) throw new NotFoundException({ message: 'Call not found.' });
 
@@ -547,7 +564,8 @@ export class LeadActivityService {
   }
 
   /** The stored bytes, for the download/playback endpoint. */
-  async getRecording(leadId: number, callId: number): Promise<{ filename: string; content_type: string; data: Uint8Array }> {
+  async getRecording(leadId: number, callId: number, user: AuthUserRecord): Promise<{ filename: string; content_type: string; data: Uint8Array }> {
+    await this.access.assertLead(user, leadId);
     const call = await this.prisma.lead_calls.findFirst({ where: { id: callId, lead_id: leadId }, select: { id: true } });
     if (!call) throw new NotFoundException({ message: 'Call not found.' });
     const rec = await this.prisma.lead_call_recordings.findUnique({ where: { call_id: callId } });
@@ -556,6 +574,7 @@ export class LeadActivityService {
   }
 
   async removeRecording(leadId: number, callId: number, user: AuthUserRecord): Promise<{ deleted: boolean }> {
+    await this.access.assertLead(user, leadId);
     const call = await this.prisma.lead_calls.findFirst({ where: { id: callId, lead_id: leadId }, select: { id: true } });
     if (!call) throw new NotFoundException({ message: 'Call not found.' });
     const rec = await this.prisma.lead_call_recordings.findUnique({ where: { call_id: callId }, select: { id: true } });
@@ -575,6 +594,7 @@ export class LeadActivityService {
    * same way.
    */
   async addMessage(leadId: number, body: Record<string, unknown>, user: AuthUserRecord): Promise<Record<string, unknown>> {
+    await this.access.assertLead(user, leadId);
     const lead = await this.requireLead(leadId);
 
     const text = str(body.body);
@@ -635,6 +655,7 @@ export class LeadActivityService {
    * saw it, and failed when the number bounced. An inbound message has no status to change.
    */
   async updateMessage(leadId: number, messageId: number, body: Record<string, unknown>, user: AuthUserRecord): Promise<Record<string, unknown>> {
+    await this.access.assertLead(user, leadId);
     const existing = await this.prisma.lead_messages.findFirst({ where: { id: messageId, lead_id: leadId } });
     if (!existing) throw new NotFoundException({ message: 'Message not found.' });
     if (existing.direction !== 'outbound') {
@@ -652,6 +673,7 @@ export class LeadActivityService {
   }
 
   async removeMessage(leadId: number, messageId: number, user: AuthUserRecord): Promise<{ deleted: boolean }> {
+    await this.access.assertLead(user, leadId);
     const existing = await this.prisma.lead_messages.findFirst({ where: { id: messageId, lead_id: leadId } });
     if (!existing) throw new NotFoundException({ message: 'Message not found.' });
     await this.prisma.lead_messages.delete({ where: { id: messageId } });
@@ -704,6 +726,7 @@ export class LeadActivityService {
    * only drafts; nothing is sent here.
    */
   async generateEmail(leadId: number, prompt: string, user: AuthUserRecord): Promise<{ subject: string; html: string }> {
+    await this.access.assertLead(user, leadId);
     const cfg = resolveEmailAi();
     if (!cfg) {
       throw new ServiceUnavailableException({

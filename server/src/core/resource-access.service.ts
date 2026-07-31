@@ -51,4 +51,30 @@ export class ResourceAccessService {
       throw new ForbiddenException({ message: 'You do not have access to this transaction.' });
     }
   }
+
+  /**
+   * Throw unless this person may work this lead.
+   *
+   * The same rule the lead list uses: an agent reaches a lead they own or one assigned to them, and
+   * both of those people can work it together — an assignment is how a lead is handed over. The
+   * brokerage is not scoped.
+   *
+   * This exists because the lead's own endpoints applied that rule and everything hanging off it did
+   * not: notes, tasks, showings, calls and email all took a lead id and trusted it, so an agent could
+   * log a call against a colleague's lead, or read the number back, without ever being able to see
+   * the lead itself.
+   */
+  async assertLead(user: { id?: number; name?: string | null; role?: string | null } | null, leadId: number): Promise<void> {
+    const lead = await this.prisma.leads.findFirst({
+      where: { id: leadId, deleted_at: null },
+      select: { id: true, owner_user_id: true, assigned_to: true },
+    });
+    if (!lead) throw new NotFoundException({ message: 'Lead not found.' });
+    if (!user || !isAgent(user)) return;
+
+    const id = user.id ?? -1;
+    if (lead.owner_user_id !== id && lead.assigned_to !== id) {
+      throw new ForbiddenException({ message: 'You do not have access to this lead.' });
+    }
+  }
 }

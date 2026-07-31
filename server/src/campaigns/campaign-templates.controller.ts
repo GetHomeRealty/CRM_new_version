@@ -28,14 +28,14 @@ export class CampaignTemplatesController {
 
   @Get()
   @Screen('campaigns', 'view')
-  list(@Query('category') category?: string): Promise<unknown> {
-    return this.templates.list(category);
+  list(@CurrentUser() user: AuthUserRecord, @Query('category') category?: string): Promise<unknown> {
+    return this.templates.list(category, user);
   }
 
   @Get(':id')
   @Screen('campaigns', 'view')
-  get(@Param('id', ParseIntPipe) id: number): Promise<unknown> {
-    return this.templates.get(id);
+  get(@CurrentUser() user: AuthUserRecord, @Param('id', ParseIntPipe) id: number): Promise<unknown> {
+    return this.templates.get(id, user);
   }
 
   @Post()
@@ -47,14 +47,14 @@ export class CampaignTemplatesController {
 
   @Put(':id')
   @Screen('campaigns', 'edit')
-  update(@Param('id', ParseIntPipe) id: number, @Body() body: TemplateInput): Promise<unknown> {
-    return this.templates.update(id, body ?? {});
+  update(@CurrentUser() user: AuthUserRecord, @Param('id', ParseIntPipe) id: number, @Body() body: TemplateInput): Promise<unknown> {
+    return this.templates.update(id, body ?? {}, user);
   }
 
   @Delete(':id')
   @Screen('campaigns', 'edit')
-  remove(@Param('id', ParseIntPipe) id: number): Promise<unknown> {
-    return this.templates.remove(id);
+  remove(@CurrentUser() user: AuthUserRecord, @Param('id', ParseIntPipe) id: number): Promise<unknown> {
+    return this.templates.remove(id, user);
   }
 
   // ----------------------------------------------------------- attachments

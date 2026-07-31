@@ -5,6 +5,7 @@ import { LeadAuditService } from './lead-audit.service';
 import { LeadNotificationService } from './lead-notification.service';
 import { normalizePhone } from '../meta/meta-lead-mapper';
 import type { AuthUserRecord } from '../auth/auth.types';
+import { isAgent } from '../core/authz';
 import {
   EMAIL_SHAPE, LEADS_PER_PAGE, MAX_PER_PAGE, MAX_IMPORT_ROWS, NONE_FILTER_VALUE,
   RECENT_LEAD_DAYS, WEBSITE_ENQUIRY_SOURCES, DASHBOARD_LEAD_SOURCES,
@@ -58,14 +59,27 @@ export class LeadsService {
    * The deal core — transactions, invoices, reports, commissions — is deliberately NOT scoped
    * this way; those stay shared across the brokerage. Only the personal CRM modules are private.
    */
+  /**
+   * What this person may see.
+   *
+   * An agent sees the leads they own and the leads someone has assigned them — both, because an
+   * assignment is how a lead is handed over and the two people involved have to be able to work it
+   * together.
+   *
+   * The brokerage is NOT scoped. This used to apply to everyone, which meant a lead an agent
+   * created was invisible to the administrators of the brokerage it belongs to — the one party who
+   * must always be able to see it. It was hidden today only because every existing lead happens to
+   * be owned by the administrator.
+   */
   private scopeWhere(user: AuthUserRecord): Prisma.leadsWhereInput {
+    if (!this.isAgent(user)) return {};
     const id = user.id ?? -1;
     return { OR: [{ assigned_to: id }, { owner_user_id: id }] };
   }
 
-  /** The identity lock (email/phone/source/assignment, and delete) is an agent-only restriction. */
+  /** The identity lock (name/email/phone/source/assignment, and delete) is an agent-only restriction. */
   private isAgent(user: AuthUserRecord): boolean {
-    return (user.role ?? 'agent') === 'agent';
+    return isAgent(user);
   }
 
   // ------------------------------------------------------------------ read
@@ -286,6 +300,9 @@ export class LeadsService {
 
   /** Fields locked on a brokerage-assigned lead, in the words the agent would recognise. */
   private static readonly LOCKED_FIELDS: Record<string, string> = {
+    // The name is who the lead IS. An agent working someone else's lead may record everything about
+    // the conversation and change nothing about the identity.
+    name: 'name',
     email: 'email address',
     phone: 'phone number',
     lead_source: 'lead source',

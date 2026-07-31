@@ -309,11 +309,14 @@ export class LeadsController {
   @Get(':id/calls/:callId/recording')
   @Screen('lead', 'view')
   async playRecording(
+    @CurrentUser() user: AuthUserRecord,
     @Param('id', ParseIntPipe) id: number,
     @Param('callId', ParseIntPipe) callId: number,
     @Res() res: Response,
   ): Promise<void> {
-    const file = await this.activity.getRecording(id, callId);
+    // A recording is the audio of a conversation with somebody's lead. This route served it by id
+    // with no caller at all, so nothing could check whose lead it was.
+    const file = await this.activity.getRecording(id, callId, user);
     res.setHeader('Content-Type', file.content_type);
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Content-Disposition', `inline; filename="${file.filename.replace(/"/g, '')}"`);

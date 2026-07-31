@@ -1,9 +1,10 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CampaignAudienceService } from './campaign-audience.service';
 import { CAMPAIGN_CATEGORIES } from './campaign.constants';
 import type { AuthUserRecord } from '../auth/auth.types';
 
+import { isAgent } from '../core/authz';
 const str = (v: unknown): string => String(v ?? '').trim();
 const isCategory = (v: string): boolean => CAMPAIGN_CATEGORIES.some((c) => c.value === v);
 
@@ -29,8 +30,44 @@ export interface TemplateInput {
 export class CampaignTemplatesService {
   constructor(private readonly prisma: PrismaService, private readonly audience: CampaignAudienceService) {}
 
-  async list(category?: string): Promise<Record<string, unknown>[]> {
-    const where: Record<string, unknown> = { deleted_at: null };
+  /**
+   * Who may see which templates.
+   *
+   * A template with no `user_id` is one of the six the application ships with — everybody's, and
+   * nobody's to change. Anything else belongs to the person who wrote it: an agent building a
+   * campaign for their own leads sees the built-ins and their own work, and never a colleague's or
+   * the brokerage's, which are not theirs to borrow or to break.
+   *
+   * The brokerage is not scoped. Administrators run the campaign programme and have to be able to
+   * see what is being sent under the company's name.
+   */
+  private visibleWhere(user: AuthUserRecord): Record<string, unknown> {
+    if (!isAgent(user)) return {};
+    return { OR: [{ user_id: null }, { user_id: user.id ?? -1 }] };
+  }
+
+  /**
+   * Refuse to change a template that is not this person's to change.
+   *
+   * The six built-ins are locked for agents: they are the starting point every agent gets, and one
+   * agent editing them would change what every other agent sees. An agent's own template is fully
+   * theirs — editable, deletable, and invisible to everyone else.
+   */
+  private assertEditable(t: { id: number; user_id: number | null; name: string }, user: AuthUserRecord): void {
+    if (!isAgent(user)) return;
+    if (t.user_id === null) {
+      throw new ForbiddenException({
+        message: `"${t.name}" is one of the built-in templates. Duplicate it to make a version you can change.`,
+      });
+    }
+    if (t.user_id !== (user.id ?? -1)) {
+      throw new ForbiddenException({ message: 'This template belongs to somebody else.' });
+    }
+  }
+
+
+  async list(category: string | undefined, user: AuthUserRecord): Promise<Record<string, unknown>[]> {
+    const where: Record<string, unknown> = { deleted_at: null, ...this.visibleWhere(user) };
     const cat = str(category);
     if (cat && cat !== 'all' && isCategory(cat)) where.category = cat;
 
@@ -42,9 +79,9 @@ export class CampaignTemplatesService {
     return rows.map((t) => this.present(t));
   }
 
-  async get(id: number): Promise<Record<string, unknown>> {
+  async get(id: number, user: AuthUserRecord): Promise<Record<string, unknown>> {
     const t = await this.prisma.campaign_templates.findFirst({
-      where: { id, deleted_at: null },
+      where: { id, deleted_at: null, ...this.visibleWhere(user) },
       include: { attachments: { select: { id: true, filename: true, content_type: true, size: true } } },
     });
     if (!t) throw new NotFoundException({ message: 'Template not found.' });
@@ -70,9 +107,10 @@ export class CampaignTemplatesService {
     return this.present(t);
   }
 
-  async update(id: number, input: TemplateInput): Promise<Record<string, unknown>> {
-    const existing = await this.prisma.campaign_templates.findFirst({ where: { id, deleted_at: null } });
+  async update(id: number, input: TemplateInput, user: AuthUserRecord): Promise<Record<string, unknown>> {
+    const existing = await this.prisma.campaign_templates.findFirst({ where: { id, deleted_at: null, ...this.visibleWhere(user) } });
     if (!existing) throw new NotFoundException({ message: 'Template not found.' });
+    this.assertEditable(existing, user);
 
     const data = this.validate(input, false);
     const t = await this.prisma.campaign_templates.update({
@@ -87,9 +125,10 @@ export class CampaignTemplatesService {
    * Soft delete. Campaigns store a snapshot of the subject and body they sent, so removing a
    * template never rewrites the history of a campaign that used it.
    */
-  async remove(id: number): Promise<{ deleted: boolean; used_by: number }> {
-    const existing = await this.prisma.campaign_templates.findFirst({ where: { id, deleted_at: null } });
+  async remove(id: number, user: AuthUserRecord): Promise<{ deleted: boolean; used_by: number }> {
+    const existing = await this.prisma.campaign_templates.findFirst({ where: { id, deleted_at: null, ...this.visibleWhere(user) } });
     if (!existing) throw new NotFoundException({ message: 'Template not found.' });
+    this.assertEditable(existing, user);
     const usedBy = await this.prisma.campaigns.count({ where: { template_id: id } });
     await this.prisma.campaign_templates.update({ where: { id }, data: { deleted_at: new Date(), updated_at: new Date() } });
     return { deleted: true, used_by: usedBy };
