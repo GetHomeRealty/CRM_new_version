@@ -6,6 +6,7 @@ import { GoogleModule } from '../google/google.module';
 import { InboxController } from './inbox.controller';
 import { InboxService } from './inbox.service';
 import { ImapSyncService } from './imap-sync.service';
+import { MailRetentionService } from './mail-retention.service';
 
 /**
  * Inbound email: the IMAP poller (ImapSyncService) and the per-user reader (InboxService),
@@ -15,7 +16,7 @@ import { ImapSyncService } from './imap-sync.service';
 @Module({
   imports: [AuthModule, PrismaModule, GoogleModule],
   controllers: [InboxController],
-  providers: [InboxService, ImapSyncService, LaravelCryptService],
-  exports: [ImapSyncService],
+  providers: [InboxService, ImapSyncService, MailRetentionService, LaravelCryptService],
+  exports: [ImapSyncService, MailRetentionService],
 })
 export class InboxModule {}
