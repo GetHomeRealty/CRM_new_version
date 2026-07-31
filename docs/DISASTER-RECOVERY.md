@@ -38,20 +38,46 @@ npm run backup -- --out D:/backups --keep 30
 | `--out` | `../backups` (or `BACKUP_ROOT`) | Where sets are written |
 | `--keep` | `14` (or `BACKUP_KEEP`) | Sets retained; older ones are pruned |
 
-Measured on production data (496 leads, 7 transactions, 41 documents): **2.0 seconds**, 25.9 MB
-database + 10.5 MB storage.
+Measured on production data (496 leads, 7 transactions, 41 documents): **3.3 seconds**, 53.8 MB
+database + 10.4 MB storage.
+
+That database figure was **25.9 MB when this runbook was first written and doubled within a week**,
+entirely from `inbound_emails`. Treat these numbers as a reading taken on a date, not a constant —
+and see gap 6.
 
 ### Scheduling it
 
 The application does **not** schedule its own backups, on purpose — a backup process that dies with
 the application is not a backup process. Use the operating system.
 
-**Windows (Task Scheduler)** — daily at 02:00:
+**Windows** — one command, from an **elevated** prompt:
 
+```powershell
+cd server
+pwsh -File scripts/schedule-backup.ps1 -Out E:\backups\transactiondesk -Keep 30
 ```
-schtasks /create /tn "TransactionDesk Backup" /tr ^
-  "node C:\path\to\server\scripts\backup.mjs --out D:\backups --keep 30" ^
-  /sc daily /st 02:00 /ru SYSTEM
+
+Registering a scheduled task requires administrator rights; the script says so and exits 3 rather
+than surfacing a bare "Access is denied". It is idempotent — run it again after changing `-Out` or
+`-Keep` and it replaces the task instead of adding a second one.
+
+It registers `scripts/backup-nightly.ps1` daily at 02:00, which takes the backup, restores it into a
+scratch database every Sunday to prove it is not corrupt, and writes `last-success.json`.
+
+Two things to know about how it is registered:
+
+- **Not as SYSTEM**, which the earlier version of this document suggested. SYSTEM cannot see mapped
+  drives or UNC paths under the operator's credentials, so a backup to a network target fails
+  silently under SYSTEM while working perfectly when tested by hand. It runs as the registering
+  account with logon type S4U — no stored password, runs whether or not that user is signed in.
+- **`-StartWhenAvailable`** is set, so a machine that was switched off at 02:00 runs the backup at
+  next boot rather than skipping the night.
+
+Check it:
+
+```powershell
+pwsh -File scripts/schedule-backup.ps1 -Status              # is the task registered, did it run
+pwsh -File scripts/backup-nightly.ps1 -Status -Out E:\...   # did a backup actually succeed
 ```
 
 **Linux (cron)**:
@@ -59,6 +85,24 @@ schtasks /create /tn "TransactionDesk Backup" /tr ^
 ```
 0 2 * * *  cd /srv/app/server && /usr/bin/node scripts/backup.mjs --out /var/backups/td --keep 30
 ```
+
+### Knowing it stopped
+
+A scheduled backup rarely fails loudly. It stops running, and the failure is that *nothing
+happened* — and nothing can detect an event that did not occur. So the check is for **staleness**,
+not for errors:
+
+```powershell
+pwsh -File scripts/backup-nightly.ps1 -Status -Out E:\backups\transactiondesk
+```
+
+`last-success.json` is rewritten **only** after a successful run. The command exits `0` if the last
+success is under 25 hours old, `1` if it is stale, and `2` if no backup has ever succeeded — so it
+can be a monitoring check as it stands, not just something a person reads. A stale heartbeat means
+the backup is broken whether it errored, never fired, or the machine was off, which is the point:
+all three are the same emergency.
+
+Point whatever monitoring you have at that exit code. Until something does, this is still gap 5.
 
 **Off-machine copy is not optional.** A backup on the same disk as the database survives a mistake,
 not a fire. Sync `--out` to object storage or another host.
@@ -170,5 +214,13 @@ Stated plainly, because a runbook that overstates what exists is worse than none
    when it is gigabytes.
 4. **Backups are not encrypted at rest.** They contain client identification and commission
    figures. If they leave this machine, encrypt them.
-5. **Nothing alerts on failure.** A scheduled backup that stops running is silent. Whatever runs it
-   should report failure somewhere a person will see.
+5. **Nothing alerts on failure — partly closed.** `backup-nightly.ps1 -Status` now exits non-zero on
+   a stale or never-successful backup, so the *check* exists. Nothing is running that check on a
+   schedule yet. Until a monitor calls it, a dead backup is still silent.
+6. **The mail mirror dominates the backup, and it only grows.** `inbound_emails` stores every
+   message body, HTML included, and is **77 MB of an 80 MB database — 96% of it**. There is no
+   retention policy on it. Backup size, dump time and restore time are therefore governed almost
+   entirely by mail volume, and the RTO below will drift as the mailbox fills. A retention window on
+   `inbound_emails` (or moving bodies out of the row) is the single highest-leverage change
+   available to backup and restore times. Nothing is wrong with the data — the unique index on
+   `(account_id, uid)` prevents re-ingestion, so this is real mail, not duplicates.
