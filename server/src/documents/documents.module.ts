@@ -6,10 +6,11 @@ import { DocumentsController } from './documents.controller';
 import { DocumentsService } from './documents.service';
 import { DocumentDefaultsService } from './document-defaults.service';
 import { DocsValidationService } from './docs-validation.service';
+import { DocumentMailService } from './document-mail.service';
 
 @Module({
   imports: [AuthModule, EmailModule, SettingsModule],
   controllers: [DocumentsController],
-  providers: [DocumentsService, DocumentDefaultsService, DocsValidationService],
+  providers: [DocumentsService, DocumentDefaultsService, DocsValidationService, DocumentMailService],
 })
 export class DocumentsModule {}

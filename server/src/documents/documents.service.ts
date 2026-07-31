@@ -7,6 +7,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AuditService, type ActingUser } from '../audit/audit.service';
 import { DocumentDefaultsService, documentKind } from './document-defaults.service';
 import { DocsValidationService } from './docs-validation.service';
+import { DocumentMailService } from './document-mail.service';
 import { MailerService } from '../email/mailer.service';
 import { CompanySettingsService } from '../settings/company-settings.service';
 import { throwValidation, type FieldErrors } from '../common/laravel-exceptions';
@@ -34,6 +35,7 @@ export class DocumentsService {
     private readonly docsValidation: DocsValidationService,
     private readonly mailer: MailerService,
     private readonly settings: CompanySettingsService,
+    private readonly mail: DocumentMailService,
   ) {}
 
   private actor(u: Actor): ActingUser | null { return u ? { id: u.id, name: u.name } : null; }
@@ -261,6 +263,9 @@ export class DocumentsService {
       const parts = [`${validCount} valid`];
       if (invalid.length) parts.push(`${invalid.length} invalid (${invalid.slice(0, 3).map((d) => d.title).join(', ')})`);
       await this.audit.record(txnId, this.actor(user), { section: SECTION, field: 'Document Review', action: 'Documents reviewed', source: 'DocReview', details: parts.join(' · ') });
+      // The agent is told the result of the review that just saved: what passed, and what did not
+      // and why. Best-effort — see DocumentMailService.
+      await this.mail.sendReviewOutcome(txnId);
     }
 
     await this.docsValidation.sync(txnId, this.actor(user));
@@ -308,9 +313,11 @@ export class DocumentsService {
 
     if (isAgent(user) && document.file_path) {
       const pos = (await this.maxPosition(txnId)) + 1;
-      await this.createDoc(txnId, { title: document.title, mandatory: false, status: 'Received', validation: 'Pending', position: pos, file_name: file!.originalname, file_path: await this.storeFile(txnId, file!) });
+      const stored = await this.storeFile(txnId, file!);
+      await this.createDoc(txnId, { title: document.title, mandatory: false, status: 'Received', validation: 'Pending', position: pos, file_name: file!.originalname, file_path: stored });
       await this.audit.record(txnId, this.actor(user), { section: SECTION, field: document.title, action: 'Document version added (previous kept)', new: file!.originalname, source: 'Agent' });
       await this.docsValidation.sync(txnId, this.actor(user));
+      await this.notifyDealsDesk(user, txnId, document.title, file!.originalname, stored);
       return this.payload(txnId);
     }
 
@@ -320,7 +327,17 @@ export class DocumentsService {
     await this.prisma.documents.update({ where: { id: document.id }, data: { file_name: file!.originalname, file_path: p, status: 'Received', updated_at: new Date() } });
     await this.audit.record(txnId, this.actor(user), { section: SECTION, field: document.title, action: replaced ? 'Document replaced' : 'Document uploaded', new: file!.originalname, source: this.actorSource(user) });
     await this.docsValidation.sync(txnId, this.actor(user));
+    await this.notifyDealsDesk(user, txnId, document.title, file!.originalname, p);
     return this.payload(txnId);
+  }
+
+  /**
+   * Copy an agent's upload to the deals desk. Only an agent's — a document the office uploads itself
+   * needs no notice, and sending one would mail the desk its own work.
+   */
+  private async notifyDealsDesk(user: Actor, txnId: number, title: string, fileName: string, relPath: string): Promise<void> {
+    if (!isAgent(user)) return;
+    await this.mail.notifyUpload(txnId, user?.name ?? null, title, fileName, relPath);
   }
 
   async uploadDocFile(user: Actor, txnId: number, docId: number, file: UploadedFile | undefined, clientName: string | null): Promise<Record<string, unknown>> {
@@ -336,11 +353,13 @@ export class DocumentsService {
       for (const f of files) if ((f.client_name ?? null) === clientName && f.file_path) await this.deleteFile(f.file_path);
       files = files.filter((f) => (f.client_name ?? null) !== clientName);
     }
-    files.push({ client_name: clientName, file_name: file!.originalname, file_path: await this.storeFile(txnId, file!) });
+    const stored = await this.storeFile(txnId, file!);
+    files.push({ client_name: clientName, file_name: file!.originalname, file_path: stored });
     const status = await this.docStatusFromFiles(txnId, document, files);
     await this.prisma.documents.update({ where: { id: document.id }, data: { files: JSON.stringify(files), status, updated_at: new Date() } });
     await this.audit.record(txnId, this.actor(user), { section: SECTION, field: document.title + (clientName ? ` (${clientName})` : ''), action: 'Document uploaded', new: file!.originalname, source: this.actorSource(user) });
     await this.docsValidation.sync(txnId, this.actor(user));
+    await this.notifyDealsDesk(user, txnId, document.title + (clientName ? ` (${clientName})` : ''), file!.originalname, stored);
     return this.payload(txnId);
   }
 

@@ -207,6 +207,32 @@ export const MAIL_EVENTS: Record<string, MailEvent> = {
     default_subject: 'Overdue: Invoice {{ invoice_number }}',
     default_body_html: '<p>Dear {{ customer_name }},</p><p>Our records show invoice <strong>{{ invoice_number }}</strong> for <strong>{{ invoice_total }}</strong> was due on {{ due_date }} and remains unpaid.</p><p>Please arrange payment at your earliest convenience.</p><p>Regards,<br>{{ company_name }}</p>',
   },
+  /**
+   * The outcome of an administrator's review of an agent's change. Editable in
+   * Settings → Templates → Transactions like any other event.
+   */
+  'transaction.review_decision': {
+    module: 'Transactions',
+    label: 'Transactions — Review Decision',
+    variables: ['agent_name', 'deal_number', 'property_address', 'decision', 'field_label', 'old_value', 'new_value', 'reason', 'reviewer', 'decided_at', 'revert_note', 'transaction_button', 'company_name', 'current_date'],
+    default_subject: '{{ decision }}: {{ field_label }} — {{ property_address }} ({{ deal_number }})',
+    default_body_html:
+      '<p>Hello {{ agent_name }},</p>'
+      + '<p>Your change on <strong>{{ property_address }}</strong> ({{ deal_number }}) has been <strong>{{ decision }}</strong> by {{ reviewer }}.</p>'
+      + '<table style="border-collapse:collapse;font-size:14px;margin:10px 0">'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Field</td><td style="padding:4px 0;font-weight:600">{{ field_label }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Was</td><td style="padding:4px 0">{{ old_value }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Changed to</td><td style="padding:4px 0;font-weight:600">{{ new_value }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Decision</td><td style="padding:4px 0;font-weight:600">{{ decision }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Reason</td><td style="padding:4px 0">{{ reason }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Reviewed by</td><td style="padding:4px 0">{{ reviewer }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">When</td><td style="padding:4px 0">{{ decided_at }}</td></tr>'
+      + '</table>'
+      + '<p style="color:#4b5563">{{ revert_note }}</p>'
+      + '{{ transaction_button }}'
+      + '<p>You can reply on the transaction’s chat — the whole team sees the conversation there.</p>'
+      + '<p>Regards,<br>{{ company_name }}</p>',
+  },
   'notice_of_sale.send': {
     module: 'Notice of Sale',
     label: 'Notice of Sale — Send for Signature',
@@ -234,6 +260,44 @@ export const MAIL_EVENTS: Record<string, MailEvent> = {
       + '{{ documents_table }}'
       + '<p>{{ instructions }}</p>'
       + '<p>Regards,<br>{{ company_name }}</p>',
+  },
+  /**
+   * The outcome of a document review, sent to the agent when an administrator saves their
+   * verification. `documents_table` carries the result of every document — the ones that passed
+   * first, then the ones that did not with the reason each was rejected for.
+   */
+  'document.review_result': {
+    module: 'Documents',
+    label: 'Documents — Review Outcome',
+    variables: ['agent_name', 'deal_number', 'property_address', 'valid_count', 'invalid_count', 'documents_table', 'instructions', 'company_name', 'current_date'],
+    default_subject: 'Document review — {{ property_address }} ({{ deal_number }})',
+    default_body_html:
+      '<p>Hello {{ agent_name }},</p>'
+      + '<p>Your documents for <strong>{{ property_address }}</strong> ({{ deal_number }}) have been reviewed.</p>'
+      + '{{ documents_table }}'
+      + '<p>{{ instructions }}</p>'
+      + '<p>Regards,<br>{{ company_name }}</p>',
+  },
+  /**
+   * Sent the moment an agent uploads a document, with the file itself attached, so the deals desk
+   * has the paperwork without having to open the transaction to find it.
+   */
+  'document.agent_upload': {
+    module: 'Documents',
+    label: 'Documents — Agent Upload Notice',
+    variables: ['agent_name', 'deal_number', 'property_address', 'document_name', 'file_name', 'company_name', 'current_date'],
+    default_subject: 'Document uploaded — {{ document_name }} · {{ property_address }} ({{ deal_number }})',
+    default_body_html:
+      '<p><strong>{{ agent_name }}</strong> uploaded a document to {{ deal_number }}.</p>'
+      + '<table style="border-collapse:collapse;font-size:14px;margin:10px 0">'
+      + '<tr><td style="padding:3px 14px 3px 0;color:#6b7280">Deal</td><td style="padding:3px 0;font-weight:600">{{ deal_number }}</td></tr>'
+      + '<tr><td style="padding:3px 14px 3px 0;color:#6b7280">Property</td><td style="padding:3px 0;font-weight:600">{{ property_address }}</td></tr>'
+      + '<tr><td style="padding:3px 14px 3px 0;color:#6b7280">Document</td><td style="padding:3px 0;font-weight:600">{{ document_name }}</td></tr>'
+      + '<tr><td style="padding:3px 14px 3px 0;color:#6b7280">File</td><td style="padding:3px 0;font-weight:600">{{ file_name }}</td></tr>'
+      + '<tr><td style="padding:3px 14px 3px 0;color:#6b7280">Uploaded by</td><td style="padding:3px 0;font-weight:600">{{ agent_name }}</td></tr>'
+      + '</table>'
+      + '<p>The file is attached to this email.</p>'
+      + '<p>{{ company_name }}</p>',
   },
   'deposit_receipt.send': {
     module: 'Deposit Receipt',
