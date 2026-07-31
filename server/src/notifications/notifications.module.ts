@@ -2,9 +2,11 @@ import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
 import { NotificationsController } from './notifications.controller';
 import { NotificationsService } from './notifications.service';
+import { TransactionsModule } from '../transactions/transactions.module';
 
 @Module({
-  imports: [AuthModule],
+  // TransactionsModule exports TransactionReviewService, which owns the agent's review feed.
+  imports: [AuthModule, TransactionsModule],
   controllers: [NotificationsController],
   providers: [NotificationsService],
 })

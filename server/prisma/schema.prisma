@@ -2030,6 +2030,61 @@ model transaction_messages {
   @@index([company_id])
 }
 
+/// One decision an administrator made about one agent change, kept for good.
+///
+/// Every column that describes the change is a SNAPSHOT taken at the moment of the decision —
+/// field_label, old_value, new_value, agent_name. The transaction it came from will keep moving
+/// afterwards, and a review that re-read the live row would quietly rewrite its own history.
+///
+/// Rows are never deleted or edited, with one exception: `resolution_status` and the corrected/
+/// resolved columns advance as the same issue is put right (Open -> Corrected -> Resolved), which is
+/// what turns a pile of disconnected rejections into a lifecycle somebody can follow.
+model transaction_reviews {
+  id             Int    @id @default(autoincrement())
+  transaction_id Int
+  /// The audit row this decision was about. Null for a whole-batch "Mark reviewed".
+  audit_log_id   Int?
+  /// 'Reviewed' or 'Rejected'.
+  decision       String @db.VarChar(16)
+  /// Why it was rejected — required on a rejection. Doubles as the optional note on a review.
+  reason         String? @db.Text
+
+  // ---- snapshot of the change, as it stood when the decision was made ----
+  field_label String? @db.VarChar(255)
+  old_value   String? @db.Text
+  new_value   String? @db.Text
+  agent_name  String? @db.VarChar(255)
+  actor_name  String? @db.VarChar(255)
+
+  /// Whether the old value was put back automatically, and what happened either way.
+  auto_reverted      Boolean @default(false)
+  auto_revert_result String? @db.VarChar(255)
+
+  /// 'Open', 'Corrected' or 'Resolved'.
+  resolution_status String    @default("Open") @db.VarChar(16)
+  corrected_at      DateTime? @db.Timestamp(0)
+  corrected_by      String?   @db.VarChar(255)
+  resolved_at       DateTime? @db.Timestamp(0)
+  resolved_by       String?   @db.VarChar(255)
+
+  /// Set when the agent has seen it, which is what clears their notification.
+  agent_seen_at DateTime? @db.Timestamp(0)
+  created_at    DateTime? @db.Timestamp(0)
+  updated_at    DateTime? @db.Timestamp(0)
+
+  transactions transactions @relation(fields: [transaction_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@index([transaction_id])
+  @@index([created_at])
+  @@index([resolution_status])
+  @@index([transaction_id, resolution_status])
+
+  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
+  company_id Int @default(1)
+
+  @@index([company_id])
+}
+
 model transaction_snapshots {
   id             Int          @id @default(autoincrement())
   transaction_id Int
@@ -2168,6 +2223,7 @@ model transactions {
   transaction_edit_requests   transaction_edit_requests[]
   transaction_message_reads   transaction_message_reads[]
   transaction_messages        transaction_messages[]
+  transaction_reviews         transaction_reviews[]
   transaction_snapshots       transaction_snapshots[]
   transaction_statuses        transaction_statuses[]
   trashed_row_items           trashed_row_items[]

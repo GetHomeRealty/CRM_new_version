@@ -8,6 +8,7 @@ import { parseJsonObject, phpEmpty, phpFloat, phpJsonNormalize, round2, toFloat 
 import { isInvoiceableType, isListingType, SECURED_DEAL_TYPES } from '../reference/transaction.constants';
 import { TradeNumberService } from './trade-number.service';
 import { TransactionLawyerReminderService } from './transaction-lawyer-reminder.service';
+import { TransactionReviewService } from './transaction-review.service';
 import { TransactionInvoiceService } from '../invoices/transaction-invoice.service';
 import { parseJson } from '../common/serialize';
 import {
@@ -83,6 +84,7 @@ export class TransactionsWriteService {
     private readonly tradeNumbers: TradeNumberService,
     private readonly txnInvoices: TransactionInvoiceService,
     private readonly lawyerReminder: TransactionLawyerReminderService,
+    private readonly reviews: TransactionReviewService,
   ) {}
 
   /** Create a transaction (port of TransactionController::store). */
@@ -346,7 +348,14 @@ export class TransactionsWriteService {
     }
 
     const source = isAgent(user) ? 'Agent' : 'Manual';
-    await this.audit.recordChanges(txnId, actor, before, await this.audit.snapshot(txnId), source);
+    const changed = await this.audit.recordChanges(txnId, actor, before, await this.audit.snapshot(txnId), source);
+
+    // An agent editing a field that was rejected is the correction half of the review lifecycle: the
+    // original rejection moves to Corrected rather than a second, unrelated record being opened.
+    // Only an agent's own save counts — the office editing the same field is not the agent fixing it.
+    if (source === 'Agent' && changed.length) {
+      await this.reviews.markCorrected(txnId, actor?.name ?? null, changed);
+    }
 
     // Re-check lawyer details after the edit — only re-emails when the missing set actually changed.
     void this.lawyerReminder.maybeRemind(txnId);
@@ -733,29 +742,57 @@ export class TransactionsWriteService {
     return { message: 'Transaction deleted' };
   }
 
-  async reviewAgentChanges(user: AuthUserRecord | null, txnId: number): Promise<{ data: Record<string, unknown> }> {
+  /** `note` is optional — "Verified against APS", or nothing at all. */
+  async reviewAgentChanges(user: AuthUserRecord | null, txnId: number, note: string | null = null): Promise<{ data: Record<string, unknown> }> {
     if (!isAdminOrAbove(user)) throw new ForbiddenException({ message: 'Administrator access required.' });
     await this.assertExists(txnId);
+    const txn = await this.prisma.transactions.findUnique({ where: { id: txnId }, select: { agent: true } });
     await this.prisma.audit_logs.updateMany({ where: { transaction_id: txnId, source: 'Agent', handled: false }, data: { handled: true, updated_at: new Date() } });
     await this.prisma.transactions.update({ where: { id: txnId }, data: { agent_review_at: new Date() } });
+    // Written after the changes are marked handled, so the record describes a review that happened.
+    await this.reviews.recordReviewed(txnId, user, note, txn?.agent ?? null);
     return this.loadResource(txnId, user);
   }
 
-  async rejectAgentChange(user: AuthUserRecord | null, txnId: number, auditId: number): Promise<{ data: Record<string, unknown> }> {
+  /**
+   * Reject one of the agent's changes, with the reason the administrator gave.
+   *
+   * A rejection is never refused for being un-revertable. Putting the old value back is something
+   * this can do for a Status or a Contact and cannot do for most fields; either way the decision,
+   * the reason and the notification stand, and the record says which of the two happened. The old
+   * behaviour threw instead, so a rejection of any other field was lost entirely — the agent was
+   * never told, and nothing was written down.
+   */
+  async rejectAgentChange(user: AuthUserRecord | null, txnId: number, auditId: number, reason: string): Promise<{ data: Record<string, unknown> }> {
     if (!isAdminOrAbove(user)) throw new ForbiddenException({ message: 'Administrator access required.' });
     await this.assertExists(txnId);
     const log = await this.prisma.audit_logs.findFirst({ where: { id: auditId, transaction_id: txnId, source: 'Agent', handled: false } });
     if (!log) throw new NotFoundException({ message: 'Change not found.' });
 
     const reverted = await this.revertAgentChange(txnId, log);
-    if (!reverted) {
-      throw new UnprocessableEntityException({ message: 'This change can’t be auto-reverted — edit the field manually, then Mark reviewed.' });
-    }
     const actor: ActingUser | null = user ? { id: user.id, name: user.name } : null;
     await this.prisma.audit_logs.update({ where: { id: log.id }, data: { handled: true, updated_at: new Date() } });
     await this.audit.record(txnId, actor, {
-      section: log.section, field: log.field, action: 'Agent change rejected (reverted)',
-      source: 'Manual', old: log.new_value, new: log.old_value,
+      section: log.section,
+      field: log.field,
+      action: reverted ? 'Agent change rejected (reverted)' : 'Agent change rejected (value kept — agent to correct)',
+      source: 'Manual',
+      old: log.new_value,
+      new: reverted ? log.old_value : log.new_value,
+      details: reason,
+    });
+
+    await this.reviews.recordRejection({
+      txnId,
+      actor: user,
+      auditLogId: log.id,
+      reason,
+      // The label the agent will recognise, and the one a later correction is matched against.
+      fieldLabel: log.field ?? log.section,
+      oldValue: log.old_value,
+      newValue: log.new_value,
+      agentName: log.who ?? null,
+      autoReverted: reverted,
     });
     return this.loadResource(txnId, user);
   }

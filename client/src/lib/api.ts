@@ -158,10 +158,63 @@ export const approveEditRequest = (reqId: Id): Promise<unknown> =>
   api.post(`/api/edit-requests/${reqId}/approve`).then((r) => r.data);
 export const rejectEditRequest = (reqId: Id): Promise<unknown> =>
   api.post(`/api/edit-requests/${reqId}/reject`).then((r) => r.data);
-export const reviewAgentChanges = (id: Id): Promise<Transaction> =>
-  api.post<{ data: Transaction }>(`/api/transactions/${id}/review-agent-changes`).then((r) => r.data.data);
-export const rejectAgentChange = (id: Id, auditId: Id): Promise<Transaction> =>
-  api.post<{ data: Transaction }>(`/api/transactions/${id}/reject-agent-change`, { audit_id: auditId }).then((r) => r.data.data);
+/** `note` is optional — what was checked, kept on the review record. */
+export const reviewAgentChanges = (id: Id, note?: string): Promise<Transaction> =>
+  api.post<{ data: Transaction }>(`/api/transactions/${id}/review-agent-changes`, { note: note ?? '' }).then((r) => r.data.data);
+/** `reason` is required — the server refuses a rejection without one. */
+export const rejectAgentChange = (id: Id, auditId: Id, reason: string): Promise<Transaction> =>
+  api.post<{ data: Transaction }>(`/api/transactions/${id}/reject-agent-change`, { audit_id: auditId, reason }).then((r) => r.data.data);
+
+// --- Review history (loaded on its own, so the transaction screen is not made heavier by it) ---
+export interface TransactionReview {
+  id: number;
+  audit_log_id: number | null;
+  decision: 'Reviewed' | 'Rejected';
+  reason: string | null;
+  field_label: string | null;
+  old_value: string | null;
+  new_value: string | null;
+  agent_name: string | null;
+  actor_name: string | null;
+  auto_reverted: boolean;
+  auto_revert_result: string | null;
+  resolution_status: 'Open' | 'Corrected' | 'Resolved';
+  corrected_at: string | null;
+  corrected_by: string | null;
+  resolved_at: string | null;
+  resolved_by: string | null;
+  created_at: string | null;
+}
+
+export interface ReviewHistoryPage {
+  data: TransactionReview[];
+  meta: { total: number; page: number; per_page: number; last_page: number; open_count: number; can_decide: boolean };
+}
+
+export interface ReviewHistoryQuery {
+  resolution?: string;
+  decision?: string;
+  reviewer?: string;
+  agent?: string;
+  field?: string;
+  from?: string;
+  to?: string;
+  page?: number;
+  per_page?: number;
+}
+
+export const listTransactionReviews = (id: Id, query: ReviewHistoryQuery = {}): Promise<ReviewHistoryPage> => {
+  const params: Record<string, string | number> = {};
+  for (const [k, v] of Object.entries(query)) if (v !== undefined && v !== '') params[k] = v as string | number;
+  return api.get<ReviewHistoryPage>(`/api/transactions/${id}/reviews`, { params }).then((r) => r.data);
+};
+
+/** Opening the deal clears the agent's review notifications for it. */
+export const markTransactionReviewsSeen = (id: Id): Promise<unknown> =>
+  api.post(`/api/transactions/${id}/reviews/seen`).then((r) => r.data);
+
+export const getReviewNotifications = (): Promise<DocNotif> =>
+  api.get<DocNotif>('/api/review-notifications').then((r) => r.data);
 export const getAgentChangeNotifications = (): Promise<AgentChangeNotif> =>
   api.get<AgentChangeNotif>('/api/agent-change-notifications').then((r) => r.data);
 export const postTransactionMessage = (id: Id, body: string): Promise<ChatMessage[]> =>

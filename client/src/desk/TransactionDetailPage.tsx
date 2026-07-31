@@ -2,7 +2,8 @@ import { deskPath } from './area';
 import Icon from '../ui/Icon';
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { getTransaction, updateTransaction, listAgents, generateTransactionInvoices, getCompanySettings, getCustomers, getBrokerageSuggestions, requestTransactionEdit, approveEditRequest, rejectEditRequest, reviewAgentChanges, rejectAgentChange, requestTransactionDeletion, forwardDeleteRequest, approveDeleteRequest, rejectDeleteRequest, getDocuments } from '../lib/api';
+import { getTransaction, updateTransaction, listAgents, generateTransactionInvoices, getCompanySettings, getCustomers, getBrokerageSuggestions, requestTransactionEdit, approveEditRequest, rejectEditRequest, reviewAgentChanges, rejectAgentChange, requestTransactionDeletion, forwardDeleteRequest, approveDeleteRequest, rejectDeleteRequest, getDocuments, markTransactionReviewsSeen } from '../lib/api';
+import ReviewHistoryPanel from './ReviewHistoryPanel';
 import { typeClass, typeLabel, isListingType, isListingFinancialType, isListingStatusFamily, isPreconType, isCommercialLeaseType, isInvoiceableType, emailLooksValid, parseNumber, TRANSACTION_TYPES, statusOptionsFor, normalizeStatus, defaultStatusFor } from './format';
 import { useToast } from './toast';
 import { apiErrorMessage } from '../lib/apiError';
@@ -183,6 +184,16 @@ export default function TransactionDetailPage() {
   const toast = useToast();
   const { can, isSuperAdmin, isAdminOrAbove, user } = useAuth();
   const isAgent = user?.role === 'agent';
+
+  /**
+   * Opening the deal is what clears the agent's review notifications for it — the point of the bell
+   * is to get them here, so arriving is the acknowledgement. Best-effort: a failed call leaves the
+   * mark for next time rather than interrupting the page.
+   */
+  useEffect(() => {
+    if (!isAgent || !id) return;
+    markTransactionReviewsSeen(id).catch(() => {});
+  }, [isAgent, id]);
   // Documentation role: full access to Legal & Documentation only; every other section
   // (Basic Info, Team Split, Financial, Adjustment, Admin Activities) is view-only, and
   // the Invoice module is hidden.
@@ -659,13 +670,36 @@ export default function TransactionDetailPage() {
 
   // Per-transaction banner: agent-made changes an admin hasn't reviewed yet.
   const agentChanges = txn?.agent_changes || [];
-  const onReviewAgentChanges = async () => {
-    try { const updated = await reviewAgentChanges(id); applyUpdated(updated); toast('Marked as reviewed', 'ok'); }
-    catch (e) { toast(apiErrorMessage(e, 'Could not update'), 'bad'); }
-  };
-  const onRejectAgentChange = async (auditId: number) => {
-    try { const updated = await rejectAgentChange(id, auditId); applyUpdated(updated); toast('Change rejected — old value restored', 'ok'); }
-    catch (e) { toast(apiErrorMessage(e, 'Could not reject'), 'bad'); }
+  /**
+   * A decision is never taken without something being written down beside it: a rejection must carry
+   * a reason, and a review may carry a note. Both open the same small dialog, which is also what
+   * stops a Reject being one stray click away from an agent hearing "no" with no explanation.
+   */
+  const onReviewAgentChanges = () => setDecision({ kind: 'review', auditId: null, text: '' });
+  const onRejectAgentChange = (auditId: number) => setDecision({ kind: 'reject', auditId, text: '' });
+  const [decision, setDecision] = useState<{ kind: 'review' | 'reject'; auditId: number | null; text: string } | null>(null);
+  const [deciding, setDeciding] = useState(false);
+  const [reviewsKey, setReviewsKey] = useState(0);
+
+  const submitDecision = async () => {
+    if (!decision) return;
+    const text = decision.text.trim();
+    if (decision.kind === 'reject' && !text) return; // the button is disabled; this is the belt to its braces
+    setDeciding(true);
+    try {
+      const updated = decision.kind === 'reject'
+        ? await rejectAgentChange(id, decision.auditId!, text)
+        : await reviewAgentChanges(id, text);
+      applyUpdated(updated);
+      setDecision(null);
+      // The history is loaded separately, so it has to be told that it just changed.
+      setReviewsKey((k) => k + 1);
+      toast(decision.kind === 'reject' ? 'Rejected — the agent has been notified' : 'Marked as reviewed', 'ok');
+    } catch (e) {
+      toast(apiErrorMessage(e, decision.kind === 'reject' ? 'Could not reject' : 'Could not update'), 'bad');
+    } finally {
+      setDeciding(false);
+    }
   };
 
   return (
@@ -788,12 +822,55 @@ export default function TransactionDetailPage() {
                   {(c.old_value || c.new_value) && <span> : <span style={{ color: 'var(--bad-ink)' }}>{c.old_value || '—'}</span> → <span style={{ color: 'var(--ok-ink)' }}>{c.new_value || '—'}</span></span>}
                   <span style={{ color: 'var(--muted)' }}> · {c.who}{c.stamp ? ` · ${c.stamp}` : ''}</span>
                 </div>
-                {c.id && <button className="btn ghost sm" style={{ flexShrink: 0, color: 'var(--bad-ink)' }} title="Reject this change and restore the old value" onClick={() => onRejectAgentChange(c.id!)}><Icon name="undo" size={13} /> Reject</button>}
+                {c.id && <button className="btn ghost sm" style={{ flexShrink: 0, color: 'var(--bad-ink)' }} title="Reject this change, with a reason the agent will be sent" onClick={() => onRejectAgentChange(c.id!)}><Icon name="undo" size={13} /> Reject</button>}
               </div>
             ))}
           </div>
         </div>
       )}
+
+      {/*
+        The decision dialog. A rejection cannot be submitted without a reason — the button stays
+        disabled — because the reason is the whole message the agent receives; a rejection without
+        one tells them something is wrong and nothing about what.
+      */}
+      {decision && (
+        <div className="overlay open" onMouseDown={(e) => { if (e.target === e.currentTarget && !deciding) setDecision(null); }}>
+          <div className="modal">
+            <button className="close" onClick={() => !deciding && setDecision(null)}>✕</button>
+            <div className="modal-h">{decision.kind === 'reject' ? 'Reject this change' : 'Mark reviewed'}</div>
+            <p className="help" style={{ marginTop: 0 }}>
+              {decision.kind === 'reject'
+                ? 'The agent is sent this reason by email and sees it on the transaction. It is kept in the review history for good.'
+                : 'An optional note — what you checked, for the record. Anything the agent has already corrected is approved at the same time.'}
+            </p>
+            <div className="field">
+              <label>{decision.kind === 'reject' ? <>Reason <span className="req">*</span></> : 'Note'}</label>
+              <textarea
+                rows={3}
+                autoFocus
+                value={decision.text}
+                disabled={deciding}
+                placeholder={decision.kind === 'reject' ? 'Purchase price doesn’t match the APS.' : 'Verified against APS.'}
+                onChange={(e) => setDecision((d) => (d ? { ...d, text: e.target.value } : d))}
+              />
+            </div>
+            <div className="actions">
+              <button className="btn ghost" disabled={deciding} onClick={() => setDecision(null)}>Cancel</button>
+              <button
+                className="btn primary"
+                disabled={deciding || (decision.kind === 'reject' && decision.text.trim() === '')}
+                onClick={() => void submitDecision()}
+              >
+                {deciding ? 'Saving…' : decision.kind === 'reject' ? 'Reject change' : 'Mark reviewed'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* The permanent record of every decision on this deal — office and assigned agent alike. */}
+      <ReviewHistoryPanel key={reviewsKey} txnId={Number(id)} />
 
       {/* §5.2 — Active sale listing: reminder for pending core documents */}
       {stActive && coreDocReminders.length > 0 && (

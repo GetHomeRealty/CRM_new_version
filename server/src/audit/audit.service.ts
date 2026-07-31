@@ -176,17 +176,26 @@ export class AuditService {
     return [...s].length > 2000 ? [...s].slice(0, 2000).join('') + '…' : s;
   }
 
-  /** Diff two snapshots and record one entry per changed field. */
+  /**
+   * Diff two snapshots and record one entry per changed field.
+   *
+   * Returns the field labels it wrote, so a caller can act on what actually changed without
+   * re-reading the rows it just created — the review lifecycle uses this to notice that a rejected
+   * field has been corrected. Callers that ignore the return value behave exactly as before.
+   */
   async recordChanges(
     txnId: number,
     user: ActingUser | null,
     before: Record<string, SnapEntry>,
     after: Record<string, SnapEntry>,
     source = 'Manual',
-  ): Promise<void> {
+  ): Promise<string[]> {
+    const labels: string[] = [];
     for (const change of this.diff(before, after)) {
       await this.record(txnId, user, { ...change, source });
+      if (change.field) labels.push(change.field);
     }
+    return labels;
   }
 
   /** Flat snapshot of the whole transaction keyed by "section US field" for diffing. */

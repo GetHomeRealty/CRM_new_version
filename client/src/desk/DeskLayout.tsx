@@ -1,7 +1,7 @@
 import { Suspense, useEffect, useRef, useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { companyLogoUrl, getAgentChangeNotifications, getDocNotifications, markDocNotificationsSeen } from '../lib/api';
+import { companyLogoUrl, getAgentChangeNotifications, getDocNotifications, getReviewNotifications, markDocNotificationsSeen } from '../lib/api';
 import type { AgentChangeItem, AgentChangeNotif, DocNotif, DocNotifItem } from '../types';
 import ChangePasswordModal from './ChangePasswordModal';
 import UserAvatar from './UserAvatar';
@@ -142,8 +142,21 @@ export default function DeskLayout({ area = DEFAULT_AREA }: { area?: Area }) {
     return () => clearInterval(t);
   }, [isAdminOrAbove, location.pathname]);
 
-  // Poll document-review notifications (agents only); refresh on navigation.
-  const loadDocNotif = () => getDocNotifications().then(setDocNotif).catch(() => {});
+  /**
+   * The agent's bell: document reviews and change reviews, in one list.
+   *
+   * Two feeds rather than one endpoint, merged here — they are about different things and neither
+   * should be able to break the other, but an agent has one bell and does not care which of our
+   * tables an answer came from. Newest first, and a failure of either leaves the other showing.
+   */
+  const loadDocNotif = () => Promise.allSettled([getDocNotifications(), getReviewNotifications()])
+    .then(([docs, reviews]) => {
+      const a = docs.status === 'fulfilled' ? docs.value : { count: 0, items: [] };
+      const b = reviews.status === 'fulfilled' ? reviews.value : { count: 0, items: [] };
+      const items = [...a.items, ...b.items].sort((x, y) => String(y.at ?? '').localeCompare(String(x.at ?? '')));
+      setDocNotif({ count: a.count + b.count, items });
+    })
+    .catch(() => {});
   useEffect(() => {
     if (!isAgent) return undefined;
     loadDocNotif();
@@ -163,7 +176,20 @@ export default function DeskLayout({ area = DEFAULT_AREA }: { area?: Area }) {
 
   // Both notifications are about transactions, so they always open in the Transaction Desk
   // regardless of which area the bell was rung in.
-  const openNotif = (item: AgentChangeItem) => { setBellOpen(false); navigate(areaPath('desk', `transactions/${item.id}`)); };
+  /**
+   * Opening the deal is what marks its document notifications seen.
+   *
+   * An agent's upload is announced here but is not a reviewable change, so there is no "Mark
+   * reviewed" button behind it to clear the mark — the server clears the document rows for this
+   * transaction instead, and leaves any real field change still waiting to be reviewed.
+   */
+  const openNotif = (item: AgentChangeItem) => {
+    setBellOpen(false);
+    navigate(areaPath('desk', `transactions/${item.id}`));
+    markDocNotificationsSeen(item.id)
+      .then(() => getAgentChangeNotifications().then(setNotif))
+      .catch(() => {});
+  };
   const openDocNotif = (item: DocNotifItem) => {
     setDocBellOpen(false);
     // Redirect to the transaction and open Legal & Documentation (where the review is).

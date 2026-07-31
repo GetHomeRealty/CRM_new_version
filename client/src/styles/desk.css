@@ -451,7 +451,43 @@ input[type="number"],.numeric,.stat-card .val{font-variant-numeric:tabular-nums;
 .ev-call{background:#ffedd5;color:#9a3412}
 .ev-task{background:#e5e7eb;color:#374151}
 
+/* Review history — one deal's record of every decision the office made about an agent's change.
+   Rows rather than a table: a reason is a sentence, and a sentence in a table cell either wraps
+   badly or forces the columns beside it to be unreadably narrow. */
+.rev-head{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.rev-toggle{display:flex;align-items:center;gap:8px;background:none;border:0;padding:0;cursor:pointer;font-size:14px;font-weight:700;color:var(--text)}
+.rev-filters{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0 4px}
+.rev-filters select,.rev-filters input{font-size:12.5px;padding:5px 8px;max-width:150px}
+.rev-list{display:flex;flex-direction:column;gap:10px;margin-top:10px;max-height:460px;overflow-y:auto;padding-right:4px}
+.rev-row{border:1px solid var(--line);border-left:3px solid var(--line-strong);border-radius:9px;padding:9px 11px;background:var(--surface-2)}
+.rev-row-top{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.rev-field{font-size:13px;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.rev-when{margin-left:auto;font-size:11.5px;color:var(--muted);white-space:nowrap}
+.rev-values{margin-top:5px;font-size:12.5px;display:flex;gap:7px;align-items:baseline;flex-wrap:wrap}
+.rev-old{color:var(--bad-ink);text-decoration:line-through}
+.rev-arrow{color:var(--muted)}
+.rev-new{color:var(--ok-ink);font-weight:600}
+.rev-reason{margin-top:5px;font-size:12.5px;line-height:1.5}
+.rev-note{margin-top:4px;font-size:12px;color:var(--muted);font-style:italic}
+.rev-meta{margin-top:6px;font-size:11.5px;color:var(--muted);display:flex;gap:5px;flex-wrap:wrap}
+.rev-pager{display:flex;align-items:center;justify-content:center;gap:10px;margin-top:10px}
+
 .cal-side{display:flex;flex-direction:column;gap:12px}
+
+/* The calendar column: month grid, then its two lists directly beneath. The 10px gap is smaller
+   than the layout's own 12px so the lists read as belonging to the grid above them. */
+.cal-main{display:flex;flex-direction:column;gap:10px;min-width:0}
+
+/* Upcoming Events and Holidays & Festivals, under the month grid rather than stacked beside it.
+   `auto-fit` gives them a column each and one full-width column when there is no room for two, so
+   the pair never squeezes into unreadable strips. The minimum is lower than it would be across the
+   whole page because this column excludes the 320px sidebar. */
+.cal-below{display:grid;grid-template-columns:repeat(auto-fit,minmax(270px,1fr));gap:10px;align-items:start}
+.cal-below .card{padding:12px 14px}
+/* The lists scroll inside their card. Without this the page length is decided by whichever month
+   happens to be busiest, and the calendar it belongs to scrolls off the top. The negative margin
+   keeps the scrollbar off the text without narrowing the rows. */
+.cal-scroll{max-height:340px;overflow-y:auto;margin-right:-6px;padding-right:6px}
 .cal-item{display:flex;gap:9px;padding:9px 0;border-top:1px dashed var(--line)}
 .cal-item:first-of-type{border-top:0}
 .cal-bar{width:3px;border-radius:3px;flex:none}
