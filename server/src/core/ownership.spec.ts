@@ -6,17 +6,22 @@ import { ResourceAccessService } from './resource-access.service';
 /**
  * Lead and template ownership, as the brokerage described it.
  *
- *   A lead is the agent's who owns it. Assigning it to somebody makes it visible to BOTH, and both
- *   can work it — but only the owner may delete it, and only the owner may change who the lead IS:
+ *   A lead is CONFIDENTIAL to the agent who owns it. No manager, broker or administrator may read
+ *   another person's book, and one agent never sees another's lead until it is assigned to them —
+ *   at which point both work it together. Only the owner may delete it or change who the lead IS:
  *   name, email, phone, source, assignment. Everything else — notes, tasks, calls, status — is fair
  *   game for either of them, because that is the work.
+ *
+ *   The administrator sees the brokerage's leads because the BROKERAGE OWNS THEM: the intake from
+ *   Meta, Google and imports is recorded against the administrator's account. That is ownership, not
+ *   exemption, and the distinction is what the third test below exists to hold.
  *
  *   A campaign template with no owner is one of the six built-ins: everybody starts from them and
  *   nobody may change them. Anything an agent writes is theirs to edit and delete, and invisible to
  *   every other agent and to the brokerage's own templates.
  *
- * The brokerage is not scoped by either rule. It is the party that has to be able to see the whole
- * pipeline and everything being sent under its name.
+ * Templates are the one place the brokerage is not scoped: it is accountable for what goes out
+ * under the company's name. Leads are the opposite, and deliberately so.
  */
 
 const prisma = new PrismaClient();
@@ -74,14 +79,53 @@ describe('a lead belongs to its owner, and an assignment is shared', () => {
     });
   });
 
-  it('shows every lead to the brokerage, including one an agent created', async () => {
+  it("hides an agent's lead from the brokerage as well", async () => {
     await inRollback(async (tx) => {
       const { owner, admin } = await people(tx);
       const l = await lead(tx, owner.id, null);
       const access = new ResourceAccessService(tx);
-      // This is the case that used to fail: the scope applied to everyone, so a lead an agent made
-      // was invisible to the administrators of the brokerage it belongs to.
-      await expect(access.assertLead(as(admin), l.id)).resolves.toBeUndefined();
+      // An agent's book is confidential. There is no role that reads it — being an administrator is
+      // not a way in, and neither is being a manager.
+      await expect(access.assertLead(as(admin), l.id)).rejects.toThrow(ForbiddenException);
+    });
+  });
+
+  it("hides an agent's lead from a manager", async () => {
+    await inRollback(async (tx) => {
+      const now = new Date();
+      const { owner } = await people(tx);
+      const manager = await tx.users.create({
+        data: { name: `manager ${++seq}`, email: `mgr-${Date.now()}-${seq}@x.test`, password: 'x', role: 'manager', company_id: 1, created_at: now, updated_at: now },
+      });
+      const l = await lead(tx, owner.id, null);
+      const access = new ResourceAccessService(tx);
+      await expect(access.assertLead(as(manager), l.id)).rejects.toThrow(ForbiddenException);
+    });
+  });
+
+  it('shows the brokerage its OWN leads, which is ownership rather than exemption', async () => {
+    await inRollback(async (tx) => {
+      const { owner, admin } = await people(tx);
+      // Brokerage intake: Meta, Google and imports are recorded against the administrator.
+      const intake = await lead(tx, admin.id, null);
+      const access = new ResourceAccessService(tx);
+      await expect(access.assertLead(as(admin), intake.id)).resolves.toBeUndefined();
+      // And the agent still cannot see it until it is handed over.
+      await expect(access.assertLead(as(owner), intake.id)).rejects.toThrow(ForbiddenException);
+    });
+  });
+
+  it('gives unattributed intake to the top tier rather than to nobody', async () => {
+    await inRollback(async (tx) => {
+      const { owner, admin } = await people(tx);
+      const now = new Date();
+      const orphan = await tx.leads.create({
+        data: { name: 'Unattributed', email: `orph-${Date.now()}-${++seq}@x.test`, owner_user_id: null, company_id: 1, created_at: now, updated_at: now },
+      });
+      const access = new ResourceAccessService(tx);
+      // An import that forgets to stamp an owner must surface somewhere instead of vanishing.
+      await expect(access.assertLead(as(admin), orphan.id)).resolves.toBeUndefined();
+      await expect(access.assertLead(as(owner), orphan.id)).rejects.toThrow(ForbiddenException);
     });
   });
 });

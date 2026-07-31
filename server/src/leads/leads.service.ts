@@ -5,7 +5,7 @@ import { LeadAuditService } from './lead-audit.service';
 import { LeadNotificationService } from './lead-notification.service';
 import { normalizePhone } from '../meta/meta-lead-mapper';
 import type { AuthUserRecord } from '../auth/auth.types';
-import { isAgent } from '../core/authz';
+import { isAgent, isSuperAdmin } from '../core/authz';
 import {
   EMAIL_SHAPE, LEADS_PER_PAGE, MAX_PER_PAGE, MAX_IMPORT_ROWS, NONE_FILTER_VALUE,
   RECENT_LEAD_DAYS, WEBSITE_ENQUIRY_SOURCES, DASHBOARD_LEAD_SOURCES,
@@ -60,21 +60,27 @@ export class LeadsService {
    * this way; those stay shared across the brokerage. Only the personal CRM modules are private.
    */
   /**
-   * What this person may see.
+   * What this person may see. An agent's book is confidential.
    *
-   * An agent sees the leads they own and the leads someone has assigned them — both, because an
-   * assignment is how a lead is handed over and the two people involved have to be able to work it
-   * together.
+   * Everybody — agent, manager, broker, administrator alike — sees the leads they own and the leads
+   * someone has assigned them. Nobody sees anyone else's. A manager does not get to read their
+   * agents' pipelines, and one agent never sees another's until the lead is handed over, at which
+   * point both work it together.
    *
-   * The brokerage is NOT scoped. This used to apply to everyone, which meant a lead an agent
-   * created was invisible to the administrators of the brokerage it belongs to — the one party who
-   * must always be able to see it. It was hidden today only because every existing lead happens to
-   * be owned by the administrator.
+   * The administrator still sees the brokerage's own leads because the BROKERAGE OWNS THEM — the
+   * intake from Meta, Google and imports is recorded against the administrator's account, not
+   * because administrators are exempt from this rule. That distinction is the whole point: there is
+   * no role here that can read a colleague's book, only an owner and the people they hand a lead to.
+   *
+   * A lead with no owner at all is brokerage intake that has not been attributed yet. It goes to the
+   * top tier rather than to nobody, so an import that forgets to stamp an owner surfaces somewhere
+   * instead of vanishing.
    */
   private scopeWhere(user: AuthUserRecord): Prisma.leadsWhereInput {
-    if (!this.isAgent(user)) return {};
     const id = user.id ?? -1;
-    return { OR: [{ assigned_to: id }, { owner_user_id: id }] };
+    const mine: Prisma.leadsWhereInput[] = [{ assigned_to: id }, { owner_user_id: id }];
+    if (isSuperAdmin(user)) mine.push({ owner_user_id: null });
+    return { OR: mine };
   }
 
   /** The identity lock (name/email/phone/source/assignment, and delete) is an agent-only restriction. */

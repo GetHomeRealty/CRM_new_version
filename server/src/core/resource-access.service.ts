@@ -1,6 +1,6 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { isAgent } from './authz';
+import { isAgent, isSuperAdmin } from './authz';
 
 /**
  * Ownership — the authorization question the tenant filter cannot answer.
@@ -70,10 +70,15 @@ export class ResourceAccessService {
       select: { id: true, owner_user_id: true, assigned_to: true },
     });
     if (!lead) throw new NotFoundException({ message: 'Lead not found.' });
-    if (!user || !isAgent(user)) return;
+    if (!user) return;
 
+    // No role is exempt. A manager cannot read an agent's book, and an agent cannot read another's
+    // until it is assigned to them. The administrator sees the brokerage's leads because the
+    // brokerage owns them, and unattributed intake so that it lands somewhere.
     const id = user.id ?? -1;
-    if (lead.owner_user_id !== id && lead.assigned_to !== id) {
+    const mine = lead.owner_user_id === id || lead.assigned_to === id;
+    const unattributedIntake = lead.owner_user_id === null && isSuperAdmin(user);
+    if (!mine && !unattributedIntake) {
       throw new ForbiddenException({ message: 'You do not have access to this lead.' });
     }
   }
