@@ -5,6 +5,7 @@ import { ModuleAccessService } from './module-access.service';
 import { ScreenGuard } from '../auth/guards/screen.guard';
 import { AuthService } from '../auth/auth.service';
 import { PermissionService } from '../auth/permission.service';
+import { AccountLockoutService } from '../auth/account-lockout.service';
 import { SCREEN_META } from '../auth/decorators';
 
 /**
@@ -46,7 +47,7 @@ describe('a deactivated account cannot keep using the session it already had', (
 
   /** The real AuthService, with only the config it reads stubbed. */
   const authWith = (tx: PrismaService) =>
-    new AuthService(tx, new PermissionService(), new ModuleAccessService(tx), { get: () => 12 } as never);
+    new AuthService(tx, new PermissionService(), new ModuleAccessService(tx), new AccountLockoutService(), { get: () => 12 } as never);
 
   it('refuses to load an inactive user', async () => {
     await inRollback(async (tx) => {

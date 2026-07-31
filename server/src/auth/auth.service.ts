@@ -7,6 +7,7 @@ import { throwValidation } from '../common/laravel-exceptions';
 import { PermissionService } from './permission.service';
 import type { AuthPayload, AuthUserRecord } from './auth.types';
 import { runAsSystem } from '../core/tenant-context';
+import { AccountLockoutService } from './account-lockout.service';
 
 import { isAdminOrAbove, isSuperAdmin } from '../core/authz';
 @Injectable()
@@ -17,6 +18,7 @@ export class AuthService {
     private readonly prisma: PrismaService,
     private readonly permissions: PermissionService,
     private readonly moduleAccess: ModuleAccessService,
+    private readonly lockout: AccountLockoutService,
     config: ConfigService,
   ) {
     this.rounds = config.get<number>('bcryptRounds') ?? 12;
@@ -92,10 +94,22 @@ export class AuthService {
    * Throws a Laravel-style 422 on failure.
    */
   async login(login: string, password: string): Promise<AuthUserRecord> {
+    // Per-account brake, checked BEFORE the password is verified so a locked account costs an
+    // attacker nothing to discover and costs us no bcrypt work. This is what makes online guessing
+    // futile; the per-IP throttle cannot, because a brokerage office is a single address and the
+    // limit that stops an attacker there also stops the eleventh colleague arriving at 9 a.m.
+    this.lockout.assertNotLocked(login);
+
     const user = await this.findAuthenticatable(login, password);
     if (!user) {
+      // Counted only for wrong credentials — the actual guessing signal. An inactive account
+      // (below) is a correct password against a disabled user and is not an attack.
+      this.lockout.recordFailure(login);
       throwValidation({ username: ['The provided credentials are incorrect.'] });
     }
+    // A correct password clears the history, so somebody who mistypes twice and then succeeds is
+    // never carrying failures into their next sign-in.
+    this.lockout.clear(login);
     if ((user.status ?? 'Active') === 'Inactive') {
       throwValidation({ username: ['This account is inactive. Please contact an administrator.'] });
     }

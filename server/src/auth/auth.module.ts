@@ -1,6 +1,7 @@
 import { Module, type OnModuleInit } from '@nestjs/common';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
+import { AccountLockoutService } from './account-lockout.service';
 import { PermissionService } from './permission.service';
 import { AuthGuard } from './guards/auth.guard';
 import { AdminGuard } from './guards/admin.guard';
@@ -14,8 +15,8 @@ import { RolePermissionStore } from '../core/role-permission.store';
  */
 @Module({
   controllers: [AuthController],
-  providers: [AuthService, PermissionService, AuthGuard, AdminGuard, ScreenGuard],
-  exports: [AuthService, PermissionService, AuthGuard, AdminGuard, ScreenGuard],
+  providers: [AuthService, AccountLockoutService, PermissionService, AuthGuard, AdminGuard, ScreenGuard],
+  exports: [AuthService, AccountLockoutService, PermissionService, AuthGuard, AdminGuard, ScreenGuard],
 })
 export class AuthModule implements OnModuleInit {
   constructor(

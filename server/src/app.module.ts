@@ -2,7 +2,8 @@ import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { TenantContextMiddleware } from './core/tenant-context';
-import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { ThrottlerModule } from '@nestjs/throttler';
+import { IdentityThrottlerGuard } from './core/identity-throttler.guard';
 import configuration from './config/configuration';
 import { GLOBAL_LIMIT } from './config/rate-limits';
 import { PrismaModule } from './prisma/prisma.module';
@@ -52,9 +53,11 @@ import { TwilioVoiceModule } from './twilio-voice/twilio-voice.module';
       isGlobal: true,
       load: [configuration],
     }),
-    // Rate limiting, keyed by client IP — the real one, because `trust proxy` is set in main.ts;
-    // without that every request would look like it came from nginx and the whole site would
-    // share a single bucket.
+    // Rate limiting. Keyed by SIGNED-IN USER where there is one, falling back to client IP — the
+    // real one, because `trust proxy` is set in main.ts; without that every request would look like
+    // it came from nginx and the whole site would share a single bucket. See
+    // core/identity-throttler.guard.ts for why an IP-keyed bucket was the wrong shape here: an
+    // office shares one address, so it made the ceiling depend on how many colleagues were working.
     //
     // Exactly ONE bucket belongs here. Every throttler listed applies to every route, so the
     // stricter sign-in limit is an endpoint-level override rather than a second entry — see
@@ -109,7 +112,7 @@ import { TwilioVoiceModule } from './twilio-voice/twilio-voice.module';
     // Rate limiting for every route. Provider callbacks that legitimately burst — Twilio status
     // webhooks during a bulk send, Meta lead deliveries — opt out with @SkipThrottle on their
     // controllers, since throttling those drops real data rather than turning away an attacker.
-    { provide: APP_GUARD, useClass: ThrottlerGuard },
+    { provide: APP_GUARD, useClass: IdentityThrottlerGuard },
   ],
 })
 export class AppModule implements NestModule {
