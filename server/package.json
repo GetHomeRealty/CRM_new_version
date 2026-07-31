@@ -1,7 +1,7 @@
 {
   "name": "transaction-desk-server",
   "version": "0.0.1",
-  "description": "Transaction Desk API \u2014 NestJS port of the Laravel 12 backend (PostgreSQL + Prisma). Behaviour-preserving.",
+  "description": "Transaction Desk API — NestJS port of the Laravel 12 backend (PostgreSQL + Prisma). Behaviour-preserving.",
   "private": true,
   "type": "commonjs",
   "engines": {
@@ -72,5 +72,13 @@
     "ts-node": "^10.9.2",
     "tsconfig-paths": "^4.2.0",
     "typescript": "^5.7.2"
+  },
+  "overrides": {
+    "multer": "^2.2.0",
+    "lodash": "^4.18.1",
+    "brace-expansion": "^5.0.9",
+    "qs": "^6.15.3",
+    "file-type": "^22.0.1",
+    "body-parser": "^1.20.6"
   }
 }
