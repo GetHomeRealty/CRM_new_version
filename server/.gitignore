@@ -8,3 +8,4 @@
 .env
 # Keep .env.example tracked.
 prisma/schema.mysql.prisma
+scripts/.dashboard-parity.json

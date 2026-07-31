@@ -12,6 +12,25 @@ const num = (v: unknown): number => {
   return Number.isFinite(n) ? n : 0;
 };
 
+/**
+ * Transactions per page while summing commissions. Large enough that the round trips are
+ * insignificant, small enough that the resident set stays flat regardless of brokerage size.
+ */
+const TXN_PAGE_SIZE = 200;
+
+/**
+ * The relations this endpoint reads. Declared once and used both for the query and for the row
+ * type, so the two cannot drift — `normalizeCommissionTxn` needs the team members and precon terms,
+ * and the paid/pending split needs the statuses.
+ */
+const COMMISSION_INCLUDE = {
+  transaction_statuses: true,
+  team_members: { include: { team_member_terms: true } },
+  precon_terms: true,
+} as const;
+
+type TxnForCommissions = Prisma.transactionsGetPayload<{ include: typeof COMMISSION_INCLUDE }>;
+
 export interface DashboardCommissions {
   role: 'agent' | 'admin';
   t4a: {
@@ -44,15 +63,12 @@ export class DashboardService {
       where.OR = [{ agent: name }, { team_members: { some: { name } } }];
     }
 
-    const txns = await this.prisma.transactions.findMany({
-      where,
-      orderBy: { id: 'asc' }, // match Laravel's PK-order iteration for identical fp sums
-      include: {
-        transaction_statuses: true,
-        team_members: { include: { team_member_terms: true } },
-        precon_terms: true,
-      },
-    });
+    // Every agent profile, once, instead of one lookup per member per transaction.
+    //
+    // `breakdown()` resolves each member's commission split from `users.profile`, and without a
+    // cache that is a query PER MEMBER PER TRANSACTION — the dominant cost of this endpoint and a
+    // textbook N×M. The cache parameter already existed; nothing passed one.
+    const profiles = await this.userProfiles();
 
     let paidTotal = 0;
     let pendingTotal = 0;
@@ -64,13 +80,22 @@ export class DashboardService {
     let externalRef = 0;
     let clientRef = 0;
 
-    for (const t of txns) {
+    // Streamed in pages rather than fetched whole.
+    //
+    // The previous single findMany had no bound: measured, it grew perfectly linearly to 1,184 ms
+    // and a 24.6 MB object graph at 8,000 transactions — on the screen everyone lands on, with
+    // every one of those graphs alive in the heap at once under concurrency.
+    //
+    // Paging by ascending id keeps the iteration order BYTE-FOR-BYTE what it was, which is the
+    // whole game here: floating-point addition is not associative, so the order these are summed in
+    // decides the last decimal place. The comment this replaces said as much, and it was right.
+    for await (const t of this.eachTransaction(where)) {
       const input = normalizeCommissionTxn(t);
       const summary = this.commission.summarize(input);
       const isClosed = t.transaction_statuses.some((s) => s.status === 'Closed');
       const adminActivities = parseJsonObject(t.admin_activities);
 
-      const t4aByName = await this.t4aByMember(input);
+      const t4aByName = await this.t4aByMember(input, profiles);
       const members: Record<string, number> = isAgent(user)
         ? { [name as string]: t4aByName[name as string] ?? 0 }
         : t4aByName;
@@ -116,9 +141,82 @@ export class DashboardService {
     };
   }
 
+  /**
+   * Commission profiles keyed by name, resolved with the SAME query the uncached path uses —
+   * once per distinct person instead of once per member per transaction.
+   *
+   * THIS DELIBERATELY DOES NOT BATCH INTO A SINGLE `findMany`, and the reason is worth keeping.
+   * `agentDefaultSplit` resolves a split with `users.findFirst({ where: { name } })`. Two active
+   * accounts in this brokerage are both called "Akhil", with `agent_comm_pct` of 0 and 90. A
+   * `findMany` plus a rule for picking a winner requires knowing which row `findFirst` would have
+   * returned — and `findFirst` without `orderBy` has NO DEFINED ORDER. Measured here it returns the
+   * higher id, not the lower; an obvious "first by id wins" cache picked the 0% row and silently
+   * zeroed that agent's commission. The parity gate caught it, to the cent.
+   *
+   * Reusing the identical query per name cannot drift from the uncached path, whatever the database
+   * decides to return. It costs one query per distinct person — six here, forty in a large office —
+   * against one per member per transaction before.
+   *
+   * The cache must also be COMPLETE for the names it will be asked about, because a miss is treated
+   * as an empty profile and does NOT fall back to a query: a partially-filled map would quietly
+   * substitute the default 90/95 split for somebody's real one.
+   *
+   * The duplicate name itself is a latent hazard this only works around — see the note in
+   * `docs/PERFORMANCE-AUDIT.md`. Splits are looked up by NAME, so two people sharing one is
+   * ambiguous by construction, and which of them a deal pays is currently decided by the query
+   * planner.
+   */
+  private async userProfiles(): Promise<Map<string, Record<string, unknown>>> {
+    const [agents, members] = await Promise.all([
+      this.prisma.transactions.findMany({ where: { agent: { not: null } }, select: { agent: true }, distinct: ['agent'] }),
+      this.prisma.team_members.findMany({ select: { name: true }, distinct: ['name'] }),
+    ]);
+
+    const names = [...new Set([
+      ...agents.map((a) => a.agent),
+      ...members.map((m) => m.name),
+    ])].filter((n): n is string => typeof n === 'string' && n.length > 0);
+
+    const out = new Map<string, Record<string, unknown>>();
+    for (const name of names) {
+      const u = await this.prisma.users.findFirst({ where: { name }, select: { profile: true } });
+      out.set(name, parseJsonObject(u?.profile));
+    }
+    return out;
+  }
+
+  /**
+   * Walk the matching transactions in ascending id order, a page at a time.
+   *
+   * Cursor paging rather than offset: `skip` re-walks every row before the offset, so the last page
+   * of a large table costs the most. The cursor turns each page into an index seek.
+   *
+   * The page size is a memory/round-trip trade, not a correctness one — the sequence of rows handed
+   * to the caller is identical to the unbounded query, which is what keeps the arithmetic identical.
+   */
+  private async *eachTransaction(where: Prisma.transactionsWhereInput): AsyncGenerator<TxnForCommissions> {
+    let cursor: number | undefined;
+    for (;;) {
+      const page: TxnForCommissions[] = await this.prisma.transactions.findMany({
+        where,
+        orderBy: { id: 'asc' },
+        take: TXN_PAGE_SIZE,
+        ...(cursor === undefined ? {} : { skip: 1, cursor: { id: cursor } }),
+        include: COMMISSION_INCLUDE,
+      });
+      if (page.length === 0) return;
+      for (const t of page) yield t;
+      if (page.length < TXN_PAGE_SIZE) return;
+      cursor = page[page.length - 1].id;
+    }
+  }
+
   /** Member name → total agent T4A (HST-inclusive) across every commission variant. */
-  private async t4aByMember(input: ReturnType<typeof normalizeCommissionTxn>): Promise<Record<string, number>> {
-    const bd = await this.commission.breakdown(input);
+  private async t4aByMember(
+    input: ReturnType<typeof normalizeCommissionTxn>,
+    profiles: Map<string, Record<string, unknown>>,
+  ): Promise<Record<string, number>> {
+    const bd = await this.commission.breakdown(input, profiles);
     const out: Record<string, number> = {};
     const add = (line: Record<string, unknown>): void => {
       const lineName = line['name'] as string | null | undefined;

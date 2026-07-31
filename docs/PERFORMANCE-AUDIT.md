@@ -43,6 +43,35 @@ above are the reason. The findings below are about the server, the database, and
 
 **Severity: critical.** This is the landing screen.
 
+> **RESOLVED, and my projection below was wrong.** I estimated "sub-50 ms at any brokerage size,
+> 20–25× faster, and it stops growing" on the assumption the totals could be aggregated in SQL.
+> They cannot. Every figure runs through the commission engine — variants, per-member splits, HST,
+> adjustments — so moving it to SQL would mean reimplementing commission arithmetic in SQL, which is
+> exactly the risk this finding warned against.
+>
+> What was safely achievable, measured at 12,000 transactions: **3,328 ms → 2,217 ms** and peak heap
+> **311 MB → 161 MB**. Roughly 1.5× faster and half the memory, still linear — because the engine
+> must run once per transaction and that is the floor for this design.
+>
+> The dominant cost was not the query. `breakdown()` resolved each member's split with
+> `users.findFirst` — one query PER MEMBER PER TRANSACTION. It already accepted a profile cache;
+> nothing passed one.
+>
+> **A latent bug surfaced by doing this.** That lookup has no `orderBy`, and two active accounts
+> here are both named "Akhil" with `agent_comm_pct` of 0 and 90. `findFirst` returns whichever the
+> planner offers — measured, the *higher* id. Caching "first by id wins" therefore picked the 0% row
+> and silently zeroed that agent's commission: a **$21,865.50** error the parity gate caught to the
+> cent. The cache now reuses the identical query per distinct name rather than guessing.
+>
+> **The duplicate name remains a live hazard, independent of this change.** Commission splits are
+> resolved BY NAME, so two people sharing one is ambiguous by construction, and which of them a deal
+> pays is currently decided by the query planner — it could change after a VACUUM, a restore, or a
+> plan change, with no code change at all. Worth fixing at the data level.
+>
+> Gated by `scripts/dashboard-parity.ts` (capture/verify, exact equality, no tolerance) and pinned
+> by `dashboard-parity.spec.ts`. Verified over 187,828 numeric values across 4,000 transactions
+> covering every commission variant, and over the live data before deploy.
+
 ### Evidence
 
 `server/src/dashboard/dashboard.service.ts:47` issues one `findMany` with no `take`, pulling
