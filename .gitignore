@@ -22,3 +22,7 @@
 Homestead.json
 Homestead.yaml
 Thumbs.db
+
+# Backup sets: database dumps and copies of every uploaded file. Large, and they contain
+# client identification and commission figures — never in version control.
+backups/
