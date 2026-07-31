@@ -295,6 +295,12 @@ export const setRolePermissions = (id: Id, permissions: Record<string, string>):
   api.put(`/api/roles/${id}/permissions`, { permissions }).then((r) => r.data);
 export const deleteRole = (id: Id): Promise<{ message: string }> => api.delete(`/api/roles/${id}`).then((r) => r.data);
 
+// --- Lead books (Super Admin) ---
+export interface LeadBook { user_id: number; name: string; role: string; leads: number }
+export const getLeadBooks = (): Promise<LeadBook[]> => api.get('/api/leads/books').then((r) => r.data);
+export const transferLeadBook = (fromUserId: Id, toUserId: Id): Promise<{ moved: number; from: string; to: string }> =>
+  api.post('/api/leads/transfer-ownership', { from_user_id: fromUserId, to_user_id: toUserId }).then((r) => r.data);
+
 // --- Invoice module ---
 export const getInvoices = (): Promise<Invoice[]> => api.get<Invoice[]>('/api/invoices').then((r) => r.data);
 export const getInvoice = (id: Id): Promise<Invoice> => api.get<Invoice>(`/api/invoices/${id}`).then((r) => r.data);

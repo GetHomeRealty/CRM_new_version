@@ -9,6 +9,7 @@ import type { AuthUserRecord } from '../auth/auth.types';
 import { LeadsService, type LeadInput, type LeadQuery } from './leads.service';
 import { LeadActivityService } from './lead-activity.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { LeadTransferService } from './lead-transfer.service';
 import {
   CALL_OUTCOME, CLIENT_TYPE, GENDERS, LANGUAGES, LEAD_CONVERSION, LEAD_RESPONSE, LEAD_SOURCE,
   LEAD_STATUS, LEAD_TYPE, NONE_FILTER_VALUE, PROPERTY_TYPES, RELIGIONS, SHOWING_STATUS,
@@ -30,10 +31,34 @@ const ids = (v: unknown): number[] => (Array.isArray(v) ? v.map(Number).filter((
 @UseGuards(AuthGuard, ScreenGuard)
 export class LeadsController {
   constructor(
+    private readonly transfer: LeadTransferService,
     private readonly leads: LeadsService,
     private readonly activity: LeadActivityService,
     private readonly prisma: PrismaService,
   ) {}
+
+  /**
+   * Who owns how many leads. Counts only — never a name, a number or a lead.
+   *
+   * Declared before the `:id` routes below, or Nest would match "books" as a lead id.
+   */
+  @Get('books')
+  booksOwned(@CurrentUser() u: AuthUserRecord): Promise<unknown> {
+    return this.transfer.books(u);
+  }
+
+  /**
+   * Move a person's whole book to somebody else.
+   *
+   * The one way an administrator can reach leads that are not theirs, so it is Super Admin only,
+   * returns nothing but a count, and is written to the audit trail with both names. Recovering a
+   * departed agent's book must be possible; doing it quietly must not be.
+   */
+  @Post('transfer-ownership')
+  @HttpCode(200)
+  transferOwnership(@CurrentUser() u: AuthUserRecord, @Body() body: { from_user_id?: number; to_user_id?: number }): Promise<unknown> {
+    return this.transfer.transfer(u, Number(body?.from_user_id), Number(body?.to_user_id));
+  }
 
   /** Vocabularies for the lead form and filter panel, plus the assignee list. */
   @Get('options')
