@@ -2073,17 +2073,85 @@ model transaction_reviews {
   sla_stage       Int       @default(0)
   sla_notified_at DateTime? @db.Timestamp(0)
 
+  /// When the agent first answered — a reply on the thread, or the correction itself, whichever
+  /// came first. Written once and never moved, so "how long before anyone responded" stays a fact
+  /// about what happened rather than about the last thing that happened.
+  first_response_at DateTime? @db.Timestamp(0)
+
   /// Set when the agent has seen it, which is what clears their notification.
   agent_seen_at DateTime? @db.Timestamp(0)
   created_at    DateTime? @db.Timestamp(0)
   updated_at    DateTime? @db.Timestamp(0)
 
-  transactions transactions @relation(fields: [transaction_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  transactions transactions                    @relation(fields: [transaction_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  messages     transaction_review_messages[]
+  attachments  transaction_review_attachments[]
 
   @@index([transaction_id])
   @@index([created_at])
   @@index([resolution_status])
   @@index([transaction_id, resolution_status])
+
+  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
+  company_id Int @default(1)
+
+  @@index([company_id])
+}
+
+/// One message in the conversation about a single review item.
+///
+/// Threaded per REVIEW rather than per transaction: the deal's chat is where the team talks about
+/// the deal, and "which of these four rejections are you answering?" is a question a flat thread
+/// cannot answer. The two coexist — a decision still posts to the deal chat, and the detail is
+/// argued out here, against the item it belongs to.
+model transaction_review_messages {
+  id             Int     @id @default(autoincrement())
+  review_id      Int
+  transaction_id Int
+  user_id        Int?
+  author         String? @db.VarChar(255)
+  /// The author's role when they wrote it, so a thread still reads correctly after somebody's role
+  /// changes or they leave.
+  author_role    String? @db.VarChar(32)
+  body           String  @db.Text
+
+  created_at DateTime? @db.Timestamp(0)
+  updated_at DateTime? @db.Timestamp(0)
+
+  review      transaction_reviews             @relation(fields: [review_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  attachments transaction_review_attachments[]
+
+  @@index([review_id])
+  @@index([transaction_id])
+
+  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
+  company_id Int @default(1)
+
+  @@index([company_id])
+}
+
+/// A file or screenshot attached to a review decision or to one of its messages.
+///
+/// Held as bytes rather than on disk, like the email template attachments: a review is permanent
+/// and its evidence has to be too, so the file travelling with the row in a backup is worth more
+/// than the disk space it costs. Exactly one of `review_id` / `message_id` carries the link.
+model transaction_review_attachments {
+  id           Int     @id @default(autoincrement())
+  review_id    Int?
+  message_id   Int?
+  filename     String  @db.VarChar(255)
+  content_type String  @db.VarChar(128)
+  size         Int
+  data         Bytes
+  uploaded_by  String? @db.VarChar(255)
+
+  created_at DateTime? @db.Timestamp(0)
+
+  review  transaction_reviews?         @relation(fields: [review_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  message transaction_review_messages? @relation(fields: [message_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@index([review_id])
+  @@index([message_id])
 
   /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
   company_id Int @default(1)

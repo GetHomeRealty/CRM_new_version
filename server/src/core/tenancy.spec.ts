@@ -103,6 +103,8 @@ const DERIVED: Record<string, string> = {
   transaction_statuses: 'transactions', transaction_messages: 'transactions',
   transaction_message_reads: 'transactions', transaction_snapshots: 'transactions',
   transaction_reviews: 'transactions',
+  transaction_review_messages: 'transaction_reviews',
+  transaction_review_attachments: 'transaction_review_messages',
   transaction_edit_requests: 'transactions', transaction_delete_requests: 'transactions',
   client_identifications: 'transactions', document_reminders: 'transactions',
   inter_board_listings: 'transactions', trashed_row_items: 'transactions',

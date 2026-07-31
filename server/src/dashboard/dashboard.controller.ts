@@ -48,4 +48,10 @@ export class DashboardController {
   reviews(@CurrentUser() user: AuthUserRecord | undefined): Promise<Record<string, unknown>> {
     return this.reviews_.stats(user ?? null);
   }
+
+  /** What keeps going wrong, and how long it takes to put right — the charts and the metrics. */
+  @Get('review-errors')
+  reviewErrors(@CurrentUser() user: AuthUserRecord | undefined): Promise<Record<string, unknown>> {
+    return this.reviews_.recurringErrors(user ?? null);
+  }
 }

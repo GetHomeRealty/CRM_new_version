@@ -8,6 +8,7 @@ import { useAuth } from '../context/AuthContext';
 import { apiErrorMessage } from '../lib/apiError';
 import TodoList from './TodoList';
 import ReviewWidgets from './ReviewWidgets';
+import ReviewErrorCharts from './ReviewErrorCharts';
 import { Breakdown, TallyBreakdown, Tile } from './DashboardTiles';
 import type { DashboardCommissions, DeskDashboard } from '../types';
 
@@ -124,8 +125,9 @@ export default function DeskDashboardPage() {
         </div>
       )}
 
-      {/* Review figures, fetched after the dashboard rather than with it. */}
+      {/* Review figures and the recurring-error charts, each fetched after the dashboard. */}
       <ReviewWidgets />
+      <ReviewErrorCharts />
 
       {/* The Transaction Desk's own list. Tasks added here belong to this area and do not appear on
           the CRM's list — section 11. */}

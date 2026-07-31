@@ -472,6 +472,23 @@ input[type="number"],.numeric,.stat-card .val{font-variant-numeric:tabular-nums;
 .rev-meta{margin-top:6px;font-size:11.5px;color:var(--muted);display:flex;gap:5px;flex-wrap:wrap}
 .rev-pager{display:flex;align-items:center;justify-content:center;gap:10px;margin-top:10px}
 
+/* The discussion on one review item. Indented under the record it belongs to, so it reads as part
+   of that item rather than as a second conversation about the deal. */
+.rev-thread-toggle{background:none;border:0;padding:0;margin-left:auto;cursor:pointer;color:var(--info);font-size:11.5px;display:inline-flex;align-items:center;gap:3px}
+.rev-thread{margin-top:8px;padding:8px 0 0 10px;border-left:2px solid var(--line);display:flex;flex-direction:column;gap:8px}
+.rev-msg{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:7px 9px}
+.rev-msg.mine{background:var(--info-bg)}
+.rev-msg-head{display:flex;align-items:center;gap:6px;font-size:11.5px}
+.rev-msg-role{font-size:10px;text-transform:uppercase;letter-spacing:.3px;color:var(--muted)}
+.rev-msg-when{margin-left:auto;color:var(--muted)}
+.rev-msg-body{font-size:12.5px;line-height:1.5;margin-top:3px;white-space:pre-wrap}
+.rev-msg-files{display:flex;flex-wrap:wrap;gap:5px;margin-top:5px}
+.rev-msg-file{display:inline-flex;align-items:center;gap:4px;font-size:11px;padding:3px 7px;border:1px solid var(--line);border-radius:6px;background:var(--surface-2);cursor:pointer}
+.rev-file-x{background:none;border:0;cursor:pointer;color:var(--bad-ink);padding:0 0 0 3px;font-size:11px}
+.rev-reply{display:flex;flex-direction:column;gap:6px}
+.rev-reply textarea{font-size:12.5px;padding:7px 9px}
+.rev-reply-actions{display:flex;gap:6px;justify-content:flex-end}
+
 /* Dashboard widgets: who is holding the most open items, most first. A bar rather than a number
    alone because the comparison is the point — one agent with nine and five with one each is a
    different situation from six with two. */
@@ -490,6 +507,31 @@ input[type="number"],.numeric,.stat-card .val{font-variant-numeric:tabular-nums;
 .rev-badge.open{background:var(--bad-bg);color:var(--bad-ink)}
 .rev-badge.corrected{background:var(--warn-bg-2);color:var(--warn-ink)}
 .rev-badge.resolved{background:var(--ok-bg);color:var(--ok-ink)}
+
+/*
+  Recurring-error charts.
+
+  One series per chart, so one hue — colouring each bar differently would claim the bars are
+  different kinds of thing when they are the same measure at different sizes. The blue is the
+  validated step for each surface (light #2a78d6, dark #3987e5; both pass the lightness band,
+  chroma floor and 3:1 contrast against their own surface).
+
+  The value is printed at the end of every bar, which is what lets the chart drop its axis
+  altogether: with ten rows and a number on each, a scale underneath would be read by nobody.
+*/
+.rvc-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px;margin-bottom:16px}
+.rvc-card{--rvc-bar:#2a78d6}
+@media (prefers-color-scheme:dark){:root:where(:not([data-theme="light"])) .rvc-card{--rvc-bar:#3987e5}}
+:root[data-theme="dark"] .rvc-card{--rvc-bar:#3987e5}
+
+.rvc-list{display:flex;flex-direction:column;gap:6px}
+.rvc-row{display:flex;align-items:center;gap:9px;font-size:12.5px}
+.rvc-label{flex:0 0 40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text)}
+.rvc-track{flex:1;min-width:0}
+/* 4px rounded data-end, anchored flat to the baseline it grows from. */
+.rvc-bar{display:block;height:10px;border-radius:0 4px 4px 0;background:var(--rvc-bar);min-width:3px}
+.rvc-value{flex:0 0 30px;text-align:right;font-weight:700;color:var(--muted)}
+.rvc-row:hover .rvc-bar{filter:brightness(1.08)}
 
 /* The bulk bar above the agent-changes list. */
 .rev-bulk{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px solid #fde68a}

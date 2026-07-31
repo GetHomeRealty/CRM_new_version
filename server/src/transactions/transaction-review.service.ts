@@ -191,13 +191,18 @@ export class TransactionReviewService {
     if (labels.length === 0) return 0;
 
     const now = new Date();
+    const where = { transaction_id: txnId, decision: 'Rejected', resolution_status: 'Open', field_label: { in: labels } };
+
+    // Fixing it IS a response, and for most agents it is the only one they make. Written before the
+    // status moves, and only where nothing was recorded yet, so a reply that came first keeps its
+    // earlier time — the metric is "how long before anyone answered", not "the last time they did".
+    await this.prisma.transaction_reviews.updateMany({
+      where: { ...where, first_response_at: null },
+      data: { first_response_at: now },
+    });
+
     const done = await this.prisma.transaction_reviews.updateMany({
-      where: {
-        transaction_id: txnId,
-        decision: 'Rejected',
-        resolution_status: 'Open',
-        field_label: { in: labels },
-      },
+      where,
       data: { resolution_status: 'Corrected', corrected_at: now, corrected_by: actorName, updated_at: now },
     });
     return done.count;
@@ -492,6 +497,85 @@ export class TransactionReviewService {
       resolved_sampled: spans.length,
       by_agent: rank(byAgent, 'agent_name'),
       by_staff: rank(byStaff, 'actor_name'),
+      scope: user && isAgent(user) ? 'own' : 'brokerage',
+    };
+  }
+
+  /**
+   * What keeps going wrong: the fields rejected most often, and the reasons given most often.
+   *
+   * Reasons are grouped on their normalised text — trimmed, lowercased, punctuation-stripped — so
+   * "Doesn't match the APS." and "doesnt match APS" count as the same complaint. Without that the
+   * chart is a list of near-identical sentences with a count of one each, which tells nobody
+   * anything. The most-used original wording is shown as the label.
+   *
+   * Also the two performance figures: how long before the agent answered, and how long the whole
+   * correction took.
+   */
+  async recurringErrors(user: AuthUserRecord | null): Promise<Record<string, unknown>> {
+    const mine = user && isAgent(user) ? { agent_name: user.name ?? '' } : {};
+
+    const rows = await this.prisma.transaction_reviews.findMany({
+      where: { ...mine, decision: 'Rejected' },
+      select: {
+        field_label: true, reason: true, created_at: true, corrected_at: true,
+        resolved_at: true, first_response_at: true, agent_name: true,
+      },
+      orderBy: { created_at: 'desc' },
+      // Bounded on purpose: this drives a chart of what is going wrong NOW, and the whole table
+      // would have to be read to include a complaint from three years ago.
+      take: 1000,
+    });
+
+    const byField = new Map<string, number>();
+    const byReason = new Map<string, { label: string; count: number }>();
+    const responses: number[] = [];
+    const corrections: number[] = [];
+
+    for (const r of rows) {
+      const field = (r.field_label ?? '—').trim() || '—';
+      byField.set(field, (byField.get(field) ?? 0) + 1);
+
+      const raw = (r.reason ?? '').trim();
+      if (raw) {
+        const key = raw.toLowerCase().replace(/[^a-z0-9 ]+/g, '').replace(/\s+/g, ' ').trim();
+        const hit = byReason.get(key);
+        if (hit) hit.count += 1;
+        else byReason.set(key, { label: raw, count: 1 });
+      }
+
+      if (r.created_at && r.first_response_at) {
+        responses.push((r.first_response_at.getTime() - r.created_at.getTime()) / 3600_000);
+      }
+      const finished = r.corrected_at ?? r.resolved_at;
+      if (r.created_at && finished) {
+        corrections.push((finished.getTime() - r.created_at.getTime()) / 3600_000);
+      }
+    }
+
+    const top = <T>(m: Map<string, T>, value: (v: T) => number, label: (k: string, v: T) => string) =>
+      [...m.entries()]
+        .map(([k, v]) => ({ name: label(k, v), count: value(v) }))
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 10);
+
+    const average = (xs: number[]): number | null =>
+      xs.length ? Math.round((xs.reduce((a, b) => a + b, 0) / xs.length) * 10) / 10 : null;
+    // Reported beside the mean because one deal left open over a holiday drags an average a long
+    // way, and the median is what the office actually recognises as typical.
+    const median = (xs: number[]): number | null => {
+      if (!xs.length) return null;
+      const s = [...xs].sort((a, b) => a - b);
+      const mid = Math.floor(s.length / 2);
+      return Math.round((s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2) * 10) / 10;
+    };
+
+    return {
+      sampled: rows.length,
+      by_field: top(byField, (n) => n, (k) => k),
+      by_reason: top(byReason, (v) => v.count, (_k, v) => v.label),
+      first_response: { average_hours: average(responses), median_hours: median(responses), sampled: responses.length },
+      correction_time: { average_hours: average(corrections), median_hours: median(corrections), sampled: corrections.length },
       scope: user && isAgent(user) ? 'own' : 'brokerage',
     };
   }

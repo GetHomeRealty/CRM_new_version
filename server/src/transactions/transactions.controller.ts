@@ -1,4 +1,5 @@
-import { Body, Controller, Delete, Get, HttpCode, Param, ParseIntPipe, Post, Put, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Param, ParseIntPipe, Post, Put, Query, Res, UseGuards } from '@nestjs/common';
+import type { Response } from 'express';
 import { AuthGuard } from '../auth/guards/auth.guard';
 import { ScreenGuard } from '../auth/guards/screen.guard';
 import { CurrentUser, Screen } from '../auth/decorators';
@@ -6,6 +7,8 @@ import type { AuthUserRecord } from '../auth/auth.types';
 import { TransactionsService, type TransactionListResult } from './transactions.service';
 import { TransactionsWriteService } from './transactions-write.service';
 import { TransactionReviewService, type ReviewFilters } from './transaction-review.service';
+import { ReviewThreadService, type PostedAttachment } from './review-thread.service';
+import { ReviewExportService } from './review-export.service';
 import type { ResourceUser } from './transaction.resource';
 import { ListTransactionsDto } from './dto/list-transactions.dto';
 
@@ -19,6 +22,8 @@ export class TransactionsController {
     private readonly transactions: TransactionsService,
     private readonly write: TransactionsWriteService,
     private readonly reviewService: TransactionReviewService,
+    private readonly thread: ReviewThreadService,
+    private readonly reviewExport: ReviewExportService,
   ) {}
 
   @Post()
@@ -115,6 +120,58 @@ export class TransactionsController {
       : this.reviewService.bulkReject(user ?? null, ids, text, async (auditId, reason) => {
         await this.write.rejectAgentChange(user ?? null, id, auditId, reason);
       }).then((r) => ({ ...r }));
+  }
+
+  /** The review history as a spreadsheet or a document, honouring the screen's filters. */
+  @Get(':transaction/reviews/export.:ext')
+  async exportReviews(
+    @CurrentUser() user: AuthUserRecord | undefined,
+    @Param('transaction', ParseIntPipe) id: number,
+    @Param('ext') ext: string,
+    @Query() query: ReviewFilters,
+    @Res() res: Response,
+  ): Promise<void> {
+    const wantsPdf = String(ext).toLowerCase() === 'pdf';
+    const file = wantsPdf
+      ? await this.reviewExport.pdf(user ?? null, id, query ?? {})
+      : await this.reviewExport.xlsx(user ?? null, id, query ?? {});
+    res.setHeader('Content-Type', wantsPdf
+      ? 'application/pdf'
+      : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${file.filename.replace(/"/g, '')}"`);
+    res.end(file.buffer);
+  }
+
+  /** The conversation on one review item — readable by the office and the deal's agent. */
+  @Get('reviews/:review/messages')
+  reviewMessages(
+    @CurrentUser() user: AuthUserRecord | undefined,
+    @Param('review', ParseIntPipe) reviewId: number,
+  ): Promise<Record<string, unknown>[]> {
+    return this.thread.list(user ?? null, reviewId);
+  }
+
+  @Post('reviews/:review/messages')
+  @HttpCode(200)
+  postReviewMessage(
+    @CurrentUser() user: AuthUserRecord | undefined,
+    @Param('review', ParseIntPipe) reviewId: number,
+    @Body() body: { body?: string; attachments?: PostedAttachment[] },
+  ): Promise<Record<string, unknown>[]> {
+    return this.thread.post(user ?? null, reviewId, String(body?.body ?? ''), body?.attachments ?? []);
+  }
+
+  /** One attached file. Always downloaded — a stored file must not execute in this origin. */
+  @Get('reviews/attachments/:attachment')
+  async reviewAttachment(
+    @CurrentUser() user: AuthUserRecord | undefined,
+    @Param('attachment', ParseIntPipe) attachmentId: number,
+    @Res() res: Response,
+  ): Promise<void> {
+    const file = await this.thread.attachment(user ?? null, attachmentId);
+    res.setHeader('Content-Type', file.contentType);
+    res.setHeader('Content-Disposition', `attachment; filename="${file.filename.replace(/"/g, '')}"`);
+    res.end(file.data);
   }
 
   /** Opening the deal clears the agent's review notifications for it. */

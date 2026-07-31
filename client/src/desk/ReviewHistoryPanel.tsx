@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
-import { listTransactionReviews, type ReviewHistoryQuery, type TransactionReview } from '../lib/api';
+import { exportReviewHistory, listTransactionReviews, type ReviewHistoryQuery, type TransactionReview } from '../lib/api';
+import ReviewThread from './ReviewThread';
 import { apiErrorMessage } from '../lib/apiError';
 import { useToast } from './toast';
 import Icon from '../ui/Icon';
@@ -32,6 +33,9 @@ export default function ReviewHistoryPanel({ txnId }: { txnId: number }) {
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState(true);
   const [showFilters, setShowFilters] = useState(false);
+  const [exporting, setExporting] = useState('');
+  /** Which item's discussion is open. One at a time — a page of open threads is unreadable. */
+  const [openThread, setOpenThread] = useState<number | null>(null);
 
   const load = useCallback(async (q: ReviewHistoryQuery) => {
     setLoading(true);
@@ -50,6 +54,19 @@ export default function ReviewHistoryPanel({ txnId }: { txnId: number }) {
   useEffect(() => { void load(query); }, [load, query]);
 
   const set = (k: keyof ReviewHistoryQuery, v: string) => setQuery((q) => ({ ...q, [k]: v, page: 1 }));
+
+  /** Export what is on screen, filters and all — but every page of it, not just this one. */
+  const exportAs = async (format: 'xlsx' | 'pdf') => {
+    setExporting(format);
+    try {
+      const { page: _page, per_page: _perPage, ...filters } = query;
+      await exportReviewHistory(txnId, format, filters);
+    } catch (e) {
+      toast(apiErrorMessage(e, 'Could not export the review history'), 'bad');
+    } finally {
+      setExporting('');
+    }
+  };
   const filtered = Object.entries(query).some(([k, v]) => k !== 'page' && v !== '' && v !== undefined);
 
   // Nothing has ever been reviewed and nothing is being filtered for — say so once, quietly, rather
@@ -73,9 +90,21 @@ export default function ReviewHistoryPanel({ txnId }: { txnId: number }) {
           <span className="muted" style={{ fontSize: 11 }}>{open ? '▾' : '▸'}</span>
         </button>
         {open && (
-          <button type="button" className="btn ghost sm" onClick={() => setShowFilters((v) => !v)}>
-            <Icon name="filter" size={12} /> {showFilters ? 'Hide filters' : 'Filters'}
-          </button>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            <button type="button" className="btn ghost sm" onClick={() => setShowFilters((v) => !v)}>
+              <Icon name="filter" size={12} /> {showFilters ? 'Hide filters' : 'Filters'}
+            </button>
+            {/* Exports carry the filters the panel currently has applied — a report that disagrees
+                with the screen it was taken from is worse than no report. */}
+            <button type="button" className="btn ghost sm" disabled={exporting !== ''}
+              onClick={() => void exportAs('xlsx')}>
+              <Icon name="download" size={12} /> {exporting === 'xlsx' ? 'Preparing…' : 'Excel'}
+            </button>
+            <button type="button" className="btn ghost sm" disabled={exporting !== ''}
+              onClick={() => void exportAs('pdf')}>
+              <Icon name="download" size={12} /> {exporting === 'pdf' ? 'Preparing…' : 'PDF'}
+            </button>
+          </div>
         )}
       </div>
 
@@ -140,7 +169,13 @@ export default function ReviewHistoryPanel({ txnId }: { txnId: number }) {
                   {r.agent_name && <span>· Agent <strong>{r.agent_name}</strong></span>}
                   {r.corrected_at && <span>· Corrected by <strong>{r.corrected_by ?? '—'}</strong> on {stamp(r.corrected_at)}</span>}
                   {r.resolved_at && <span>· Resolved by <strong>{r.resolved_by ?? '—'}</strong> on {stamp(r.resolved_at)}</span>}
+                  <button type="button" className="rev-thread-toggle" onClick={() => setOpenThread((t) => (t === r.id ? null : r.id))}>
+                    <Icon name="message" size={11} /> {openThread === r.id ? 'Hide discussion' : 'Discuss'}
+                  </button>
                 </div>
+
+                {/* The conversation about this item specifically — see ReviewThread. */}
+                {openThread === r.id && <ReviewThread reviewId={r.id} />}
               </div>
             ))}
           </div>

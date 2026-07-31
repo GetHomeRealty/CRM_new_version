@@ -234,6 +234,51 @@ export interface ReviewStats {
 export const getReviewStats = (): Promise<ReviewStats> =>
   api.get<ReviewStats>('/api/dashboard/reviews').then((r) => r.data);
 
+export interface ReviewErrors {
+  sampled: number;
+  by_field: { name: string; count: number }[];
+  by_reason: { name: string; count: number }[];
+  first_response: { average_hours: number | null; median_hours: number | null; sampled: number };
+  correction_time: { average_hours: number | null; median_hours: number | null; sampled: number };
+  scope: 'own' | 'brokerage';
+}
+
+/** What keeps going wrong, and how long it takes to put right. */
+export const getReviewErrors = (): Promise<ReviewErrors> =>
+  api.get<ReviewErrors>('/api/dashboard/review-errors').then((r) => r.data);
+
+// --- Review threads: the conversation on one review item, and its evidence ---
+export interface ReviewMessage {
+  id: number;
+  author: string | null;
+  author_role: string | null;
+  body: string;
+  created_at: string | null;
+  attachments: { id: number; filename: string; content_type: string; size: number }[];
+}
+
+export const listReviewMessages = (reviewId: Id): Promise<ReviewMessage[]> =>
+  api.get<ReviewMessage[]>(`/api/transactions/reviews/${reviewId}/messages`).then((r) => r.data);
+
+export const postReviewMessage = (
+  reviewId: Id,
+  body: string,
+  attachments: { filename: string; content_type?: string; data: string }[] = [],
+): Promise<ReviewMessage[]> =>
+  api.post<ReviewMessage[]>(`/api/transactions/reviews/${reviewId}/messages`, { body, attachments }).then((r) => r.data);
+
+/** Download one attached file through the authenticated instance. */
+export const downloadReviewAttachment = (attachmentId: Id): Promise<void> =>
+  fetchFileBlob(`/api/transactions/reviews/attachments/${attachmentId}`);
+
+/** The history as a spreadsheet or a document, honouring the panel's filters. */
+export const exportReviewHistory = (id: Id, format: 'xlsx' | 'pdf', query: ReviewHistoryQuery = {}): Promise<void> => {
+  const params = new URLSearchParams();
+  for (const [k, v] of Object.entries(query)) if (v !== undefined && v !== '') params.set(k, String(v));
+  const qs = params.toString();
+  return fetchFileBlob(`/api/transactions/${id}/reviews/export.${format}${qs ? `?${qs}` : ''}`);
+};
+
 export interface OpenReviewItem {
   id: number;
   field_label: string | null;
