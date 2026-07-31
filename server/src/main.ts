@@ -12,11 +12,17 @@ import { STORAGE_ROOT, checkStorageRoot } from './config/storage';
 import { laravelValidationExceptionFactory } from './common/laravel-exceptions';
 import { installShutdownHandlers } from './common/shutdown';
 
+import { StructuredLogger } from './observability/log';
 async function bootstrap(): Promise<void> {
   // `rawBody` keeps the exact bytes of each request alongside the parsed body. The Meta webhook
   // needs them: its HMAC signature is computed over the raw payload, and re-serialising the
   // parsed JSON changes the bytes and breaks verification.
-  const app = await NestFactory.create<NestExpressApplication>(AppModule, { rawBody: true });
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
+    rawBody: true,
+    // Every `new Logger(...)` already in the codebase emits structured lines from here on, without
+    // any of those 27 files being touched.
+    logger: new StructuredLogger(),
+  });
   // Pure, deterministic from env — identical to what ConfigModule loaded for DI.
   const appCfg = configuration();
 

@@ -165,6 +165,7 @@ describe('unscoped access stays deliberate and rare', () => {
     'auth.service.ts': 'resolving which user a session belongs to is how the tenant is discovered',
     'role-permission.store.ts': 'loads the permission tables at start-up, before any request exists',
     'export-job.service.ts': 'reclaims interrupted jobs and finds each job owner after a restart',
+    'health.controller.ts': 'the readiness probe asks whether the SERVER can serve, not about any tenant data',
   };
 
   it('is used only where it has been justified', () => {

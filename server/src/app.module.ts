@@ -1,6 +1,6 @@
 import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { APP_GUARD } from '@nestjs/core';
+import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { TenantContextMiddleware } from './core/tenant-context';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import configuration from './config/configuration';
@@ -8,6 +8,9 @@ import { GLOBAL_LIMIT } from './config/rate-limits';
 import { PrismaModule } from './prisma/prisma.module';
 import { CoreModule } from './core/core.module';
 import { AppController } from './app.controller';
+import { HealthController } from './observability/health.controller';
+import { RequestLogInterceptor } from './observability/request-log.interceptor';
+import { ErrorLogFilter } from './observability/error-log.filter';
 import { AuditModule } from './audit/audit.module';
 import { AuthModule } from './auth/auth.module';
 import { CsrfGuard } from './auth/guards/csrf.guard';
@@ -94,8 +97,13 @@ import { TwilioVoiceModule } from './twilio-voice/twilio-voice.module';
     FavoritesModule,
     TwilioVoiceModule,
   ],
-  controllers: [AppController],
+  controllers: [AppController, HealthController],
   providers: [
+    // One structured line per request, with a correlation id every other line inherits.
+    { provide: APP_INTERCEPTOR, useClass: RequestLogInterceptor },
+    // Records unhandled errors and then hands them straight back to Nest — the response shape on
+    // the wire is unchanged, because the client reads it.
+    { provide: APP_FILTER, useClass: ErrorLogFilter },
     // Global CSRF protection (Sanctum double-submit); safe methods are exempt.
     { provide: APP_GUARD, useClass: CsrfGuard },
     // Rate limiting for every route. Provider callbacks that legitimately burst — Twilio status
