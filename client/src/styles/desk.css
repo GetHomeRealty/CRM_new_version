@@ -472,6 +472,29 @@ input[type="number"],.numeric,.stat-card .val{font-variant-numeric:tabular-nums;
 .rev-meta{margin-top:6px;font-size:11.5px;color:var(--muted);display:flex;gap:5px;flex-wrap:wrap}
 .rev-pager{display:flex;align-items:center;justify-content:center;gap:10px;margin-top:10px}
 
+/* Dashboard widgets: who is holding the most open items, most first. A bar rather than a number
+   alone because the comparison is the point — one agent with nine and five with one each is a
+   different situation from six with two. */
+.rev-widgets{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;margin-bottom:16px}
+.rev-rank{display:flex;flex-direction:column;gap:6px}
+.rev-rank-row{display:flex;align-items:center;gap:8px;font-size:12.5px}
+.rev-rank-name{flex:0 0 38%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rev-rank-bar{flex:1;height:7px;border-radius:4px;background:var(--surface-3);overflow:hidden}
+.rev-rank-bar i{display:block;height:100%;border-radius:4px;background:var(--brand)}
+.rev-rank-n{flex:0 0 26px;text-align:right;font-weight:700;color:var(--muted)}
+
+/* Review counters on a transaction row. Deliberately tiny — a deal with nothing outstanding shows
+   nothing at all, so the badge only ever appears when it means something. */
+.rev-badges{display:inline-flex;gap:4px;align-items:center;margin-left:6px;vertical-align:middle}
+.rev-badge{font-size:9.5px;font-weight:800;line-height:1;padding:3px 5px;border-radius:5px;white-space:nowrap}
+.rev-badge.open{background:var(--bad-bg);color:var(--bad-ink)}
+.rev-badge.corrected{background:var(--warn-bg-2);color:var(--warn-ink)}
+.rev-badge.resolved{background:var(--ok-bg);color:var(--ok-ink)}
+
+/* The bulk bar above the agent-changes list. */
+.rev-bulk{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px solid #fde68a}
+.rev-bulk .muted{font-size:11.5px}
+
 .cal-side{display:flex;flex-direction:column;gap:12px}
 
 /* The calendar column: month grid, then its two lists directly beneath. The 10px gap is smaller

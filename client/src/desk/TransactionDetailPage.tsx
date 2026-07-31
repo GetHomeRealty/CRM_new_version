@@ -2,7 +2,7 @@ import { deskPath } from './area';
 import Icon from '../ui/Icon';
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { getTransaction, updateTransaction, listAgents, generateTransactionInvoices, getCompanySettings, getCustomers, getBrokerageSuggestions, requestTransactionEdit, approveEditRequest, rejectEditRequest, reviewAgentChanges, rejectAgentChange, requestTransactionDeletion, forwardDeleteRequest, approveDeleteRequest, rejectDeleteRequest, getDocuments, markTransactionReviewsSeen } from '../lib/api';
+import { getTransaction, updateTransaction, listAgents, generateTransactionInvoices, getCompanySettings, getCustomers, getBrokerageSuggestions, requestTransactionEdit, approveEditRequest, rejectEditRequest, reviewAgentChanges, rejectAgentChange, requestTransactionDeletion, forwardDeleteRequest, approveDeleteRequest, rejectDeleteRequest, getDocuments, markTransactionReviewsSeen, bulkReviewAction, type OpenReviewItem } from '../lib/api';
 import ReviewHistoryPanel from './ReviewHistoryPanel';
 import { typeClass, typeLabel, isListingType, isListingFinancialType, isListingStatusFamily, isPreconType, isCommercialLeaseType, isInvoiceableType, emailLooksValid, parseNumber, TRANSACTION_TYPES, statusOptionsFor, normalizeStatus, defaultStatusFor } from './format';
 import { useToast } from './toast';
@@ -508,24 +508,41 @@ export default function TransactionDetailPage() {
    * Manual save — now a "save and leave edit mode" shortcut over the same payload the
    * auto-save writes. Cancels any pending debounce so the two can't race.
    */
-  const save = async () => {
+  /**
+   * Save, and handle the one refusal that is not a mistake.
+   *
+   * Closing a deal with an unanswered rejection on it is blocked, because closing is the moment the
+   * paperwork is declared final and an open review item says it is not. The block is overridable —
+   * an office that settled the point another way must not be stuck — but the override is a
+   * deliberate act with a reason, and it is written to the audit trail.
+   */
+  const save = async (overrideReason?: string) => {
     const problem = validateForm(form);
     if (problem) { toast(problem, 'bad'); return; }
     if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
     const payload = buildPayload(form);
+    if (overrideReason) payload.review_override_reason = overrideReason;
     setSaving(true);
     try {
       const updated = await updateTransaction(id, payload);
       applyUpdated(updated);
       setMode('view');
       setAutoState('saved'); setAutoMsg('');
+      setCloseBlock(null);
       toast('Transaction saved', 'ok');
     } catch (err) {
-      toast(apiErrorMessage(err, 'Could not save'), 'bad');
+      const body = (err as { response?: { data?: { unresolved_reviews?: unknown[]; message?: string } } })?.response?.data;
+      if (Array.isArray(body?.unresolved_reviews)) {
+        // Not an error to shrug at: show what is outstanding and ask for a reason to proceed.
+        setCloseBlock({ items: body.unresolved_reviews as OpenReviewItem[], message: body.message ?? '', reason: '' });
+      } else {
+        toast(apiErrorMessage(err, 'Could not save'), 'bad');
+      }
     } finally {
       setSaving(false);
     }
   };
+  const [closeBlock, setCloseBlock] = useState<{ items: OpenReviewItem[]; message: string; reason: string } | null>(null);
 
   const stPill = (s: string) => s === 'Open' ? 'info' : (s === 'Closed' ? 'ok' : (s === 'Void' ? 'bad' : 'warn'));
   const brokLabel = listing ? 'Co-Op' : 'Listing';
@@ -677,26 +694,46 @@ export default function TransactionDetailPage() {
    */
   const onReviewAgentChanges = () => setDecision({ kind: 'review', auditId: null, text: '' });
   const onRejectAgentChange = (auditId: number) => setDecision({ kind: 'reject', auditId, text: '' });
-  const [decision, setDecision] = useState<{ kind: 'review' | 'reject'; auditId: number | null; text: string } | null>(null);
+  /**
+   * Rejecting several at once under one reason.
+   *
+   * An administrator turning down five fields is usually making a single judgement — "none of this
+   * matches the APS" — and asking for it five times produces five copies of the same sentence or
+   * five worse ones. Each item still becomes its own record with its own lifecycle.
+   */
+  const onRejectSelected = () => setDecision({ kind: 'reject-many', auditId: null, text: '' });
+  const [picked, setPicked] = useState<number[]>([]);
+  const togglePicked = (auditId: number) =>
+    setPicked((p) => (p.includes(auditId) ? p.filter((n) => n !== auditId) : [...p, auditId]));
+
+  const [decision, setDecision] = useState<{ kind: 'review' | 'reject' | 'reject-many'; auditId: number | null; text: string } | null>(null);
   const [deciding, setDeciding] = useState(false);
   const [reviewsKey, setReviewsKey] = useState(0);
 
   const submitDecision = async () => {
     if (!decision) return;
     const text = decision.text.trim();
-    if (decision.kind === 'reject' && !text) return; // the button is disabled; this is the belt to its braces
+    if (decision.kind !== 'review' && !text) return; // the button is disabled; this is the belt to its braces
     setDeciding(true);
     try {
-      const updated = decision.kind === 'reject'
-        ? await rejectAgentChange(id, decision.auditId!, text)
-        : await reviewAgentChanges(id, text);
-      applyUpdated(updated);
+      if (decision.kind === 'reject-many') {
+        const r = await bulkReviewAction(id, 'reject', picked, text);
+        setPicked([]);
+        // Rejecting changes the transaction, so it is re-read rather than patched.
+        applyUpdated(await getTransaction(id));
+        toast(`${r.rejected ?? 0} rejected — the agent has been notified`, 'ok');
+      } else {
+        const updated = decision.kind === 'reject'
+          ? await rejectAgentChange(id, decision.auditId!, text)
+          : await reviewAgentChanges(id, text);
+        applyUpdated(updated);
+        toast(decision.kind === 'reject' ? 'Rejected — the agent has been notified' : 'Marked as reviewed', 'ok');
+      }
       setDecision(null);
       // The history is loaded separately, so it has to be told that it just changed.
       setReviewsKey((k) => k + 1);
-      toast(decision.kind === 'reject' ? 'Rejected — the agent has been notified' : 'Marked as reviewed', 'ok');
     } catch (e) {
-      toast(apiErrorMessage(e, decision.kind === 'reject' ? 'Could not reject' : 'Could not update'), 'bad');
+      toast(apiErrorMessage(e, decision.kind === 'review' ? 'Could not update' : 'Could not reject'), 'bad');
     } finally {
       setDeciding(false);
     }
@@ -746,7 +783,7 @@ export default function TransactionDetailPage() {
                     to view mode. */}
                 <span className={`pill ${autoPill}`} style={{ fontSize: 10 }}
                   title={autoMsg || 'Every field on this page saves by itself a moment after you stop typing.'}>{autoText}</span>
-                <button className="btn primary sm" onClick={save} disabled={saving}>{saving ? 'Saving…' : <><Icon name="check" size={13} /> Done</>}</button>
+                <button className="btn primary sm" onClick={() => void save()} disabled={saving}>{saving ? 'Saving…' : <><Icon name="check" size={13} /> Done</>}</button>
               </>)}
           {/* Agents request deletion (their own deals); admins/super admins delete via the workflow banner. */}
           {isFullAgent && !deleteReq && <button className="btn ghost sm" style={{ color: 'var(--bad)' }} onClick={onRequestDelete}><Icon name="trash" size={13} /> Request Deletion</button>}
@@ -817,6 +854,10 @@ export default function TransactionDetailPage() {
           <div style={{ marginTop: 8, maxHeight: 220, overflowY: 'auto' }}>
             {agentChanges.map((c, idx) => (
               <div key={c.id ?? idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, fontSize: 12.5, color: 'var(--warn-ink-deep)', padding: '5px 0', borderTop: idx ? '1px solid #fde68a' : 'none' }}>
+                {c.id && (
+                  <input type="checkbox" style={{ flexShrink: 0 }} checked={picked.includes(c.id)}
+                    title="Select for a bulk rejection" onChange={() => togglePicked(c.id!)} />
+                )}
                 <div style={{ minWidth: 0 }}>
                   <strong>{c.section ? `${c.section} — ` : ''}{c.field || c.action}</strong>
                   {(c.old_value || c.new_value) && <span> : <span style={{ color: 'var(--bad-ink)' }}>{c.old_value || '—'}</span> → <span style={{ color: 'var(--ok-ink)' }}>{c.new_value || '—'}</span></span>}
@@ -826,6 +867,17 @@ export default function TransactionDetailPage() {
               </div>
             ))}
           </div>
+          {/* Bulk rejection: one reason, one record each. Appears only once something is ticked. */}
+          {picked.length > 0 && (
+            <div className="rev-bulk">
+              <strong style={{ fontSize: 12.5, color: 'var(--warn-ink)' }}>{picked.length} selected</strong>
+              <button className="btn sm" style={{ background: 'var(--bad)', color: '#fff' }} onClick={onRejectSelected}>
+                <Icon name="undo" size={12} /> Reject selected with one reason
+              </button>
+              <button className="btn ghost sm" onClick={() => setPicked([])}>Clear</button>
+              <span className="muted">Each becomes its own record and its own lifecycle.</span>
+            </div>
+          )}
         </div>
       )}
 
@@ -838,20 +890,20 @@ export default function TransactionDetailPage() {
         <div className="overlay open" onMouseDown={(e) => { if (e.target === e.currentTarget && !deciding) setDecision(null); }}>
           <div className="modal">
             <button className="close" onClick={() => !deciding && setDecision(null)}>✕</button>
-            <div className="modal-h">{decision.kind === 'reject' ? 'Reject this change' : 'Mark reviewed'}</div>
+            <div className="modal-h">{decision.kind === 'review' ? 'Mark reviewed' : decision.kind === 'reject-many' ? `Reject ${picked.length} changes` : 'Reject this change'}</div>
             <p className="help" style={{ marginTop: 0 }}>
-              {decision.kind === 'reject'
+              {decision.kind !== 'review'
                 ? 'The agent is sent this reason by email and sees it on the transaction. It is kept in the review history for good.'
                 : 'An optional note — what you checked, for the record. Anything the agent has already corrected is approved at the same time.'}
             </p>
             <div className="field">
-              <label>{decision.kind === 'reject' ? <>Reason <span className="req">*</span></> : 'Note'}</label>
+              <label>{decision.kind === 'review' ? 'Note' : <>Reason <span className="req">*</span></>}</label>
               <textarea
                 rows={3}
                 autoFocus
                 value={decision.text}
                 disabled={deciding}
-                placeholder={decision.kind === 'reject' ? 'Purchase price doesn’t match the APS.' : 'Verified against APS.'}
+                placeholder={decision.kind === 'review' ? 'Verified against APS.' : 'Purchase price doesn’t match the APS.'}
                 onChange={(e) => setDecision((d) => (d ? { ...d, text: e.target.value } : d))}
               />
             </div>
@@ -859,10 +911,47 @@ export default function TransactionDetailPage() {
               <button className="btn ghost" disabled={deciding} onClick={() => setDecision(null)}>Cancel</button>
               <button
                 className="btn primary"
-                disabled={deciding || (decision.kind === 'reject' && decision.text.trim() === '')}
+                disabled={deciding || (decision.kind !== 'review' && decision.text.trim() === '')}
                 onClick={() => void submitDecision()}
               >
-                {deciding ? 'Saving…' : decision.kind === 'reject' ? 'Reject change' : 'Mark reviewed'}
+                {deciding ? 'Saving…' : decision.kind === 'review' ? 'Mark reviewed' : decision.kind === 'reject-many' ? `Reject ${picked.length} changes` : 'Reject change'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/*
+        Closing was refused because review items are still outstanding. The list is shown rather
+        than a bare message, so the decision to override is made while looking at what is being
+        overridden.
+      */}
+      {closeBlock && (
+        <div className="overlay open" onMouseDown={(e) => { if (e.target === e.currentTarget && !saving) setCloseBlock(null); }}>
+          <div className="modal">
+            <button className="close" onClick={() => !saving && setCloseBlock(null)}>✕</button>
+            <div className="modal-h">Unresolved review items</div>
+            <p className="help" style={{ marginTop: 0 }}>{closeBlock.message}</p>
+            <ul className="tmpl-files" style={{ maxHeight: 200, overflowY: 'auto' }}>
+              {closeBlock.items.map((i) => (
+                <li key={i.id}>
+                  <span className={`pill ${i.resolution_status === 'Corrected' ? 'warn' : 'bad'}`} style={{ fontSize: 10 }}>{i.resolution_status}</span>
+                  <span style={{ minWidth: 0 }}><strong>{i.field_label ?? 'A change'}</strong>{i.reason ? ` — ${i.reason}` : ''}</span>
+                </li>
+              ))}
+            </ul>
+            <div className="field">
+              <label>Reason for closing anyway <span className="req">*</span></label>
+              <textarea rows={2} autoFocus value={closeBlock.reason} disabled={saving}
+                placeholder="Settled with the agent by phone; the APS was amended."
+                onChange={(e) => setCloseBlock((c) => (c ? { ...c, reason: e.target.value } : c))} />
+              <span className="help">Recorded on the audit trail against this transaction.</span>
+            </div>
+            <div className="actions">
+              <button className="btn ghost" disabled={saving} onClick={() => setCloseBlock(null)}>Cancel</button>
+              <button className="btn primary" disabled={saving || closeBlock.reason.trim() === ''}
+                onClick={() => void save(closeBlock.reason.trim())}>
+                {saving ? 'Saving…' : 'Close anyway'}
               </button>
             </div>
           </div>

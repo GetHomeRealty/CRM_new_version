@@ -2067,6 +2067,12 @@ model transaction_reviews {
   resolved_at       DateTime? @db.Timestamp(0)
   resolved_by       String?   @db.VarChar(255)
 
+  /// How far the reminder ladder has climbed for this item: 0 none, 1 after a day, 2 after three,
+  /// 3 after a week (which also escalates to the office). Stored so a reminder is sent once per
+  /// rung rather than every time the sweep runs.
+  sla_stage       Int       @default(0)
+  sla_notified_at DateTime? @db.Timestamp(0)
+
   /// Set when the agent has seen it, which is what clears their notification.
   agent_seen_at DateTime? @db.Timestamp(0)
   created_at    DateTime? @db.Timestamp(0)

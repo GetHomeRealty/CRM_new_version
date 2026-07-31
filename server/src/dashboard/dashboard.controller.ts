@@ -4,6 +4,7 @@ import { CurrentUser } from '../auth/decorators';
 import type { AuthUserRecord } from '../auth/auth.types';
 import { DashboardService, type DashboardCommissions } from './dashboard.service';
 import { AreaDashboardService, type CrmDashboard, type DeskDashboard } from './area-dashboard.service';
+import { TransactionReviewService } from '../transactions/transaction-review.service';
 
 @Controller('dashboard')
 @UseGuards(AuthGuard)
@@ -11,6 +12,7 @@ export class DashboardController {
   constructor(
     private readonly dashboard: DashboardService,
     private readonly areas: AreaDashboardService,
+    private readonly reviews_: TransactionReviewService,
   ) {}
 
   /**
@@ -33,5 +35,17 @@ export class DashboardController {
   @Get('commissions')
   commissions(@CurrentUser() user: AuthUserRecord | undefined): Promise<DashboardCommissions> {
     return this.dashboard.commissions(user ? { id: user.id, role: user.role, name: user.name } : null);
+  }
+
+  /**
+   * Review figures for the dashboard widgets — its own endpoint rather than part of `/desk`.
+   *
+   * The desk dashboard is already the heaviest read in the application; adding five aggregates over
+   * a table that grows with every decision would make every visit pay for them, including the
+   * visits that never scroll far enough to see them.
+   */
+  @Get('reviews')
+  reviews(@CurrentUser() user: AuthUserRecord | undefined): Promise<Record<string, unknown>> {
+    return this.reviews_.stats(user ?? null);
   }
 }

@@ -96,6 +96,8 @@ export interface TransactionPage {
     ids: number[];
     years: string[];
     pending_deletions: Transaction[];
+    /** Review counters for the rows on this page, keyed by transaction id. Absent on older APIs. */
+    review_counts?: Record<number, { open: number; corrected: number; resolved: number }>;
   };
 }
 
@@ -215,6 +217,43 @@ export const markTransactionReviewsSeen = (id: Id): Promise<unknown> =>
 
 export const getReviewNotifications = (): Promise<DocNotif> =>
   api.get<DocNotif>('/api/review-notifications').then((r) => r.data);
+
+export interface ReviewStats {
+  open: number;
+  corrected: number;
+  overdue: number;
+  overdue_after_hours: number;
+  average_resolution_hours: number | null;
+  resolved_sampled: number;
+  by_agent: { name: string; count: number }[];
+  by_staff: { name: string; count: number }[];
+  scope: 'own' | 'brokerage';
+}
+
+/** Dashboard figures. Its own endpoint — the desk dashboard does not pay for them. */
+export const getReviewStats = (): Promise<ReviewStats> =>
+  api.get<ReviewStats>('/api/dashboard/reviews').then((r) => r.data);
+
+export interface OpenReviewItem {
+  id: number;
+  field_label: string | null;
+  reason: string | null;
+  resolution_status: string;
+  created_at: string | null;
+}
+
+/** What is still unresolved on a deal — read before offering to close it. */
+export const getOpenReviews = (id: Id): Promise<{ data: OpenReviewItem[]; meta: { total: number; open: number; corrected: number; blocks_closing: boolean } }> =>
+  api.get(`/api/transactions/${id}/reviews/open`).then((r) => r.data);
+
+/** Reject several changes under one reason, or approve several corrections at once. */
+export const bulkReviewAction = (
+  id: Id,
+  action: 'reject' | 'approve',
+  ids: number[],
+  text: string,
+): Promise<{ rejected?: number; resolved?: number; skipped?: unknown }> =>
+  api.post(`/api/transactions/${id}/reviews/bulk`, { action, ids, reason: text, note: text }).then((r) => r.data);
 export const getAgentChangeNotifications = (): Promise<AgentChangeNotif> =>
   api.get<AgentChangeNotif>('/api/agent-change-notifications').then((r) => r.data);
 export const postTransactionMessage = (id: Id, body: string): Promise<ChatMessage[]> =>

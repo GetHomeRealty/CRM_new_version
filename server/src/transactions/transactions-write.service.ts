@@ -294,6 +294,41 @@ export class TransactionsWriteService {
       await this.prisma.transaction_edit_requests.update({ where: { id: approved.id }, data: { status: 'applied', updated_at: new Date() } });
     }
 
+    /*
+     * A deal cannot be closed while a rejected change is still outstanding.
+     *
+     * Closing is the moment the paperwork is declared final, and an unanswered rejection means it
+     * is not. The block is deliberately overridable — an office that has settled the point another
+     * way must not be stuck — but the override is a deliberate act with a reason, and it is written
+     * to the audit trail, so "we closed it anyway" is a sentence somebody signed rather than a
+     * silence. An override with no reason is refused.
+     */
+    const closingNow = Array.isArray(data.statuses)
+      && (data.statuses as unknown[]).map(String).includes('Closed')
+      && !statuses.includes('Closed');
+    if (closingNow) {
+      const outstanding = await this.reviews.openItems(txnId);
+      if (outstanding.length) {
+        const override = String((body.review_override_reason ?? '') as string).trim();
+        if (!override) {
+          throw new UnprocessableEntityException({
+            message: `This transaction has ${outstanding.length} unresolved review item${outstanding.length === 1 ? '' : 's'} and cannot be closed until they are resolved. An administrator may close it anyway by giving a reason.`,
+            errors: { review_override_reason: ['A reason is required to close with unresolved review items.'] },
+            unresolved_reviews: outstanding,
+          });
+        }
+        await this.audit.record(txnId, actor, {
+          section: 'Status',
+          field: 'Closed with unresolved review items',
+          action: 'Review requirement overridden',
+          source: 'Manual',
+          old: `${outstanding.length} unresolved`,
+          new: 'Closed',
+          details: override,
+        });
+      }
+    }
+
     const before = await this.audit.snapshot(txnId);
 
     await this.prisma.$transaction(async (tx) => {

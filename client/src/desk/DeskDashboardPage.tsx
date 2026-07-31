@@ -7,6 +7,7 @@ import { useToast } from './toast';
 import { useAuth } from '../context/AuthContext';
 import { apiErrorMessage } from '../lib/apiError';
 import TodoList from './TodoList';
+import ReviewWidgets from './ReviewWidgets';
 import { Breakdown, TallyBreakdown, Tile } from './DashboardTiles';
 import type { DashboardCommissions, DeskDashboard } from '../types';
 
@@ -122,6 +123,9 @@ export default function DeskDashboardPage() {
           )}
         </div>
       )}
+
+      {/* Review figures, fetched after the dashboard rather than with it. */}
+      <ReviewWidgets />
 
       {/* The Transaction Desk's own list. Tasks added here belong to this area and do not appear on
           the CRM's list — section 11. */}

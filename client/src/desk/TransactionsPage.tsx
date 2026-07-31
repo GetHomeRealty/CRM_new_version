@@ -51,6 +51,26 @@ const EMPTY_FILTERS: Filters = {
 };
 const RIBBON_KEYS: (keyof Filters)[] = ['offerFrom', 'offerTo', 'closingFrom', 'closingTo', 'payout', 'client', 'brokerage'];
 
+/**
+ * Review state for one deal, at a glance.
+ *
+ * Only ever shown when there is something to say: a deal with no review history renders nothing, so
+ * the badge column does not become visual noise across a list where most rows are unremarkable.
+ * "All resolved" is worth a mark of its own — it means somebody checked and the answer was yes.
+ */
+function ReviewBadges({ counts }: { counts?: { open: number; corrected: number; resolved: number } }) {
+  if (!counts) return null;
+  const { open, corrected, resolved } = counts;
+  if (open === 0 && corrected === 0 && resolved === 0) return null;
+  return (
+    <span className="rev-badges">
+      {open > 0 && <span className="rev-badge open" title={`${open} open review item${open === 1 ? '' : 's'}`}>{open} open</span>}
+      {corrected > 0 && <span className="rev-badge corrected" title={`${corrected} corrected, awaiting approval`}>{corrected} corrected</span>}
+      {open === 0 && corrected === 0 && resolved > 0 && <span className="rev-badge resolved" title={`${resolved} resolved`}>all resolved</span>}
+    </span>
+  );
+}
+
 export default function TransactionsPage() {
   const navigate = useNavigate();
   const toast = useToast();
@@ -68,6 +88,8 @@ export default function TransactionsPage() {
   const [matchingIds, setMatchingIds] = useState<number[]>([]);
   const [years, setYears] = useState<string[]>([]);
   const [pendingDeletions, setPendingDeletions] = useState<Transaction[]>([]);
+  /** Review counters for the rows on this page, keyed by transaction id. */
+  const [reviewCounts, setReviewCounts] = useState<Record<number, { open: number; corrected: number; resolved: number }>>({});
   const [addOpen, setAddOpen] = useState(false);
   const [chatTxn, setChatTxn] = useState<Transaction | null>(null); // transaction whose chat is open
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
@@ -119,6 +141,7 @@ export default function TransactionsPage() {
         setMatchingIds(res.meta.ids);
         setYears(res.meta.years);
         setPendingDeletions(res.meta.pending_deletions);
+        setReviewCounts(res.meta.review_counts ?? {});
         // A filter (or a deletion) can shrink the set past the page you were on.
         if (toPage > res.meta.last_page) setPage(res.meta.last_page);
       })
@@ -310,7 +333,10 @@ export default function TransactionsPage() {
                 <td>#{t.trade_no}</td>
                 <td className="date">{t.offer_date || ''}</td>
                 <td className="date">{t.closing_date || ''}</td>
-                <td><a className="prop-link" onClick={() => navigate(`${deskPath(`transactions/${t.id}`)}?mode=view`)}>{t.property}</a></td>
+                <td>
+                  <a className="prop-link" onClick={() => navigate(`${deskPath(`transactions/${t.id}`)}?mode=view`)}>{t.property}</a>
+                  <ReviewBadges counts={reviewCounts[t.id]} />
+                </td>
                 <td>{t.agent || 'Unassigned'}</td>
                 <td>{formatPrice(t.price)}</td>
                 <td><span className={`pill ${stPill(primary)}`}>{primary}</span></td>

@@ -34,6 +34,15 @@ export type Resolution = (typeof RESOLUTIONS)[number];
 export const REVERT_OK = 'Auto reverted successfully.';
 export const REVERT_UNSUPPORTED = 'This field cannot be automatically reverted. Please update the transaction and resubmit.';
 
+/**
+ * When an open rejection starts counting as overdue.
+ *
+ * The same 24 hours as the first rung of the reminder ladder, so the dashboard's "overdue" figure
+ * and the agent's first nudge describe the same moment. Two different thresholds would mean the
+ * office chasing items the system had not yet mentioned.
+ */
+export const OVERDUE_HOURS = 24;
+
 export interface ReviewFilters {
   resolution?: string;
   decision?: string;
@@ -282,6 +291,96 @@ export class TransactionReviewService {
     }, redirectTo() ?? to);
   }
 
+  // ------------------------------------------------------------------ bulk
+
+  /**
+   * Reject several of an agent's changes under one reason.
+   *
+   * One reason for the batch rather than one each: an administrator rejecting five fields at once is
+   * making a single judgement ("none of this matches the APS"), and asking them to retype it five
+   * times produces five copies of the same sentence or five worse ones. Each item still becomes its
+   * own record with its own lifecycle — the reason is shared, the issues are not.
+   *
+   * Returns what happened per id, so a change somebody else handled in the meantime is reported
+   * rather than silently dropped.
+   */
+  async bulkReject(
+    user: AuthUserRecord | null,
+    auditIds: number[],
+    reason: string,
+    rejectOne: (auditId: number, reason: string) => Promise<void>,
+  ): Promise<{ rejected: number; skipped: { audit_id: number; reason: string }[] }> {
+    this.assertMayDecide(user);
+    if (!String(reason ?? '').trim()) {
+      throw new BadRequestException({
+        message: 'A reason is required to reject a change.',
+        errors: { reason: ['Say why these are being rejected.'] },
+      });
+    }
+
+    const skipped: { audit_id: number; reason: string }[] = [];
+    let rejected = 0;
+    for (const id of [...new Set(auditIds)]) {
+      try {
+        await rejectOne(id, reason);
+        rejected++;
+      } catch (err) {
+        skipped.push({ audit_id: id, reason: err instanceof Error ? err.message : String(err) });
+      }
+    }
+    return { rejected, skipped };
+  }
+
+  /**
+   * Approve corrections in bulk: named records move from Corrected to Resolved.
+   *
+   * Only Corrected ones. An Open item has not been fixed yet and approving it would close an issue
+   * nobody addressed; a Resolved one is already closed. Both are reported back rather than quietly
+   * counted as successes.
+   */
+  async bulkResolve(user: AuthUserRecord | null, txnId: number, reviewIds: number[], note: string | null): Promise<{ resolved: number; skipped: number }> {
+    this.assertMayDecide(user);
+    const ids = [...new Set(reviewIds)].filter((n) => Number.isFinite(n));
+    if (ids.length === 0) return { resolved: 0, skipped: 0 };
+
+    const rows = await this.prisma.transaction_reviews.findMany({
+      where: { id: { in: ids }, transaction_id: txnId },
+      select: { id: true, resolution_status: true, field_label: true },
+    });
+    const eligible = rows.filter((r) => r.resolution_status === 'Corrected');
+    const trimmed = String(note ?? '').trim();
+    const now = new Date();
+
+    if (eligible.length) {
+      await this.prisma.transaction_reviews.updateMany({
+        where: { id: { in: eligible.map((r) => r.id) } },
+        data: {
+          resolution_status: 'Resolved',
+          resolved_at: now,
+          resolved_by: user?.name ?? null,
+          auto_revert_result: trimmed ? `Approved after correction. ${trimmed}` : 'Approved after correction.',
+          updated_at: now,
+        },
+      });
+
+      try {
+        const names = eligible.map((r) => r.field_label ?? 'a change').join(', ');
+        await this.messages.post(
+          txnId,
+          user ? { id: user.id, role: user.role, name: user.name } : null,
+          [`${eligible.length} correction${eligible.length === 1 ? '' : 's'} approved: ${names}.`, trimmed].filter(Boolean).join('\n'),
+        );
+      } catch (err) {
+        this.log.error(`Bulk approve on ${txnId}: could not post to the chat — ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    return { resolved: eligible.length, skipped: ids.length - eligible.length };
+  }
+
+  private assertMayDecide(user: AuthUserRecord | null): void {
+    if (!isAdminOrAbove(user)) throw new ForbiddenException({ message: 'Administrator access required.' });
+  }
+
   // ------------------------------------------------------------------ reading
 
   /**
@@ -334,6 +433,118 @@ export class TransactionReviewService {
         can_decide: isAdminOrAbove(user),
       },
     };
+  }
+
+  /**
+   * The figures behind the dashboard widgets.
+   *
+   * An agent sees their own; everyone above sees the brokerage. Counted in the database rather than
+   * by pulling rows and reducing in JavaScript — this grows with every decision ever made, and the
+   * answer is five numbers.
+   */
+  async stats(user: AuthUserRecord | null): Promise<Record<string, unknown>> {
+    const mine = user && isAgent(user) ? { agent_name: user.name ?? '' } : {};
+    const overdueBefore = new Date(Date.now() - OVERDUE_HOURS * 3600_000);
+
+    const [open, corrected, overdue, byAgent, byStaff, resolvedRows] = await Promise.all([
+      this.prisma.transaction_reviews.count({ where: { ...mine, resolution_status: 'Open' } }),
+      this.prisma.transaction_reviews.count({ where: { ...mine, resolution_status: 'Corrected' } }),
+      this.prisma.transaction_reviews.count({ where: { ...mine, resolution_status: 'Open', created_at: { lt: overdueBefore } } }),
+      this.prisma.transaction_reviews.groupBy({
+        by: ['agent_name'],
+        where: { ...mine, resolution_status: { in: ['Open', 'Corrected'] } },
+        _count: { _all: true },
+      }),
+      this.prisma.transaction_reviews.groupBy({
+        by: ['actor_name'],
+        where: { ...mine, decision: 'Rejected' },
+        _count: { _all: true },
+      }),
+      // Only what actually completed a lifecycle can time one.
+      this.prisma.transaction_reviews.findMany({
+        where: { ...mine, decision: 'Rejected', resolution_status: 'Resolved', resolved_at: { not: null }, created_at: { not: null } },
+        select: { created_at: true, resolved_at: true },
+        orderBy: { resolved_at: 'desc' },
+        take: 200,
+      }),
+    ]);
+
+    const spans = resolvedRows
+      .map((r) => (r.resolved_at!.getTime() - r.created_at!.getTime()) / 3600_000)
+      .filter((h) => h >= 0);
+    const averageHours = spans.length ? spans.reduce((a, b) => a + b, 0) / spans.length : null;
+
+    const rank = (rows: { _count: { _all: number } }[], key: 'agent_name' | 'actor_name') =>
+      rows
+        .map((r) => ({ name: (r as unknown as Record<string, string | null>)[key] ?? '—', count: r._count._all }))
+        .filter((r) => r.count > 0)
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 8);
+
+    return {
+      open,
+      corrected,
+      overdue,
+      overdue_after_hours: OVERDUE_HOURS,
+      // Averaged over the last 200 resolved items: a figure from three years ago describes an
+      // office that no longer exists, and the whole table would have to be read to include it.
+      average_resolution_hours: averageHours === null ? null : Math.round(averageHours * 10) / 10,
+      resolved_sampled: spans.length,
+      by_agent: rank(byAgent, 'agent_name'),
+      by_staff: rank(byStaff, 'actor_name'),
+      scope: user && isAgent(user) ? 'own' : 'brokerage',
+    };
+  }
+
+  /**
+   * Per-transaction counters for the deal list, for the ids on the page only.
+   *
+   * One grouped query for the whole page rather than one per row: the list already paginates, and a
+   * counter per row is how a list screen quietly becomes N+1 queries.
+   */
+  async countsFor(txnIds: number[]): Promise<Record<number, { open: number; corrected: number; resolved: number }>> {
+    const ids = [...new Set(txnIds)].filter((n) => Number.isFinite(n));
+    if (ids.length === 0) return {};
+
+    const rows = await this.prisma.transaction_reviews.groupBy({
+      by: ['transaction_id', 'resolution_status'],
+      where: { transaction_id: { in: ids } },
+      _count: { _all: true },
+    });
+
+    const out: Record<number, { open: number; corrected: number; resolved: number }> = {};
+    for (const r of rows) {
+      const bucket = (out[r.transaction_id] ??= { open: 0, corrected: 0, resolved: 0 });
+      if (r.resolution_status === 'Open') bucket.open += r._count._all;
+      else if (r.resolution_status === 'Corrected') bucket.corrected += r._count._all;
+      else bucket.resolved += r._count._all;
+    }
+    return out;
+  }
+
+  /** The same list behind an access check, for the screen to read before offering to close. */
+  async openSummary(user: AuthUserRecord | null, txnId: number): Promise<Record<string, unknown>> {
+    await this.assertMayRead(user, txnId);
+    const items = await this.openItems(txnId);
+    return {
+      data: items,
+      meta: {
+        total: items.length,
+        open: items.filter((i) => i.resolution_status === 'Open').length,
+        corrected: items.filter((i) => i.resolution_status === 'Corrected').length,
+        blocks_closing: items.length > 0,
+      },
+    };
+  }
+
+  /** What is still unresolved on a deal — the question asked before it can be closed. */
+  async openItems(txnId: number): Promise<{ id: number; field_label: string | null; reason: string | null; resolution_status: string; created_at: string | null }[]> {
+    const rows = await this.prisma.transaction_reviews.findMany({
+      where: { transaction_id: txnId, decision: 'Rejected', resolution_status: { in: ['Open', 'Corrected'] } },
+      orderBy: [{ created_at: 'asc' }],
+      select: { id: true, field_label: true, reason: true, resolution_status: true, created_at: true },
+    });
+    return rows.map((r) => ({ ...r, created_at: toDateTimeString(r.created_at) }));
   }
 
   /** Everything the agent has not seen yet, for their notification bell. */

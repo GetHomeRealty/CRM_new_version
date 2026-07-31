@@ -2,6 +2,7 @@ import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/commo
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CommissionService } from './commission.service';
+import { TransactionReviewService } from './transaction-review.service';
 import { isListingType } from '../reference/transaction.constants';
 import { parseJsonObject } from '../common/serialize';
 import { filterClauses } from './transaction-filters';
@@ -30,6 +31,8 @@ export interface TransactionListResult {
     years: string[];
     /** Open deletion requests across all pages, for the reviewer banner. */
     pending_deletions: Record<string, unknown>[];
+    /** Review counters for the rows on this page, keyed by transaction id. */
+    review_counts: Record<number, { open: number; corrected: number; resolved: number }>;
   };
 }
 
@@ -41,6 +44,7 @@ export class TransactionsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly commission: CommissionService,
+    private readonly reviews: TransactionReviewService,
   ) {}
 
   /**
@@ -103,10 +107,13 @@ export class TransactionsService {
     // year dropdown, "select all N matching", and the deletion-requests banner. Paging the rows
     // without supplying these would quietly shrink all three to whatever page you were on.
     const scope: Prisma.transactionsWhereInput = { AND: [{ deleted_at: null }, ...(and.length ? and : [])] };
-    const [ids, years, pending] = await Promise.all([
+    const [ids, years, pending, reviewCounts] = await Promise.all([
       this.prisma.transactions.findMany({ where, orderBy: { created_at: 'desc' }, select: { id: true } }),
       this.matchingYears(scope, user),
       this.pendingDeletions(user),
+      // One grouped query for the rows on this page. A counter fetched per row is how a list screen
+      // quietly becomes N+1 queries.
+      this.reviews.countsFor(rows.map((r) => r.id)),
     ]);
 
     return {
@@ -119,6 +126,8 @@ export class TransactionsService {
         ids: ids.map((r) => r.id),
         years,
         pending_deletions: pending,
+        // Keyed by transaction id; a deal with no review history is simply absent.
+        review_counts: reviewCounts,
       },
     };
   }

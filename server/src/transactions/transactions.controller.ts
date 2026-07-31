@@ -88,6 +88,35 @@ export class TransactionsController {
     return this.reviewService.list(user ?? null, id, query ?? {});
   }
 
+  /** What is still unresolved on a deal — read before closing it. */
+  @Get(':transaction/reviews/open')
+  openReviews(
+    @CurrentUser() user: AuthUserRecord | undefined,
+    @Param('transaction', ParseIntPipe) id: number,
+  ): Promise<Record<string, unknown>> {
+    return this.reviewService.openSummary(user ?? null, id);
+  }
+
+  /**
+   * Reject several changes under one reason, or approve several corrections at once.
+   * `action` is 'reject' or 'approve'.
+   */
+  @Post(':transaction/reviews/bulk')
+  @HttpCode(200)
+  bulkReviews(
+    @CurrentUser() user: AuthUserRecord | undefined,
+    @Param('transaction', ParseIntPipe) id: number,
+    @Body() body: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    const ids = Array.isArray(body?.ids) ? body.ids.map(Number).filter(Number.isFinite) : [];
+    const text = String(body?.reason ?? body?.note ?? '');
+    return String(body?.action) === 'approve'
+      ? this.reviewService.bulkResolve(user ?? null, id, ids, text).then((r) => ({ ...r }))
+      : this.reviewService.bulkReject(user ?? null, ids, text, async (auditId, reason) => {
+        await this.write.rejectAgentChange(user ?? null, id, auditId, reason);
+      }).then((r) => ({ ...r }));
+  }
+
   /** Opening the deal clears the agent's review notifications for it. */
   @Post(':transaction/reviews/seen')
   @HttpCode(200)

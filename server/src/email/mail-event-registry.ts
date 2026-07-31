@@ -233,6 +233,42 @@ export const MAIL_EVENTS: Record<string, MailEvent> = {
       + '<p>You can reply on the transaction’s chat — the whole team sees the conversation there.</p>'
       + '<p>Regards,<br>{{ company_name }}</p>',
   },
+  /** Chases an agent whose rejected change is still open — a day, three days, a week. */
+  'transaction.review_reminder': {
+    module: 'Transactions',
+    label: 'Transactions — Review Reminder',
+    variables: ['agent_name', 'deal_number', 'property_address', 'field_label', 'reason', 'reviewer', 'open_for', 'rejected_at', 'transaction_button', 'company_name', 'current_date'],
+    default_subject: 'Still outstanding: {{ field_label }} — {{ property_address }} ({{ deal_number }})',
+    default_body_html:
+      '<p>Hello {{ agent_name }},</p>'
+      + '<p>A change on <strong>{{ property_address }}</strong> ({{ deal_number }}) was rejected {{ open_for }} ago and is still outstanding.</p>'
+      + '<table style="border-collapse:collapse;font-size:14px;margin:10px 0">'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Field</td><td style="padding:4px 0;font-weight:600">{{ field_label }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Reason</td><td style="padding:4px 0">{{ reason }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Rejected</td><td style="padding:4px 0">{{ rejected_at }} by {{ reviewer }}</td></tr>'
+      + '</table>'
+      + '<p>Correcting the field on the transaction is what closes this — the office is notified automatically once you do.</p>'
+      + '{{ transaction_button }}'
+      + '<p>Regards,<br>{{ company_name }}</p>',
+  },
+  /** The same item, to the office, once it has been open a week. */
+  'transaction.review_escalation': {
+    module: 'Transactions',
+    label: 'Transactions — Review Escalation',
+    variables: ['agent_name', 'deal_number', 'property_address', 'field_label', 'reason', 'reviewer', 'open_for', 'rejected_at', 'transaction_button', 'company_name', 'current_date'],
+    default_subject: 'Escalation: {{ field_label }} open {{ open_for }} — {{ property_address }} ({{ deal_number }})',
+    default_body_html:
+      '<p>A rejected change has been outstanding for {{ open_for }} and the agent has not corrected it.</p>'
+      + '<table style="border-collapse:collapse;font-size:14px;margin:10px 0">'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Deal</td><td style="padding:4px 0;font-weight:600">{{ deal_number }} — {{ property_address }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Agent</td><td style="padding:4px 0;font-weight:600">{{ agent_name }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Field</td><td style="padding:4px 0;font-weight:600">{{ field_label }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Reason given</td><td style="padding:4px 0">{{ reason }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Rejected</td><td style="padding:4px 0">{{ rejected_at }} by {{ reviewer }}</td></tr>'
+      + '</table>'
+      + '{{ transaction_button }}'
+      + '<p>{{ company_name }}</p>',
+  },
   'notice_of_sale.send': {
     module: 'Notice of Sale',
     label: 'Notice of Sale — Send for Signature',
