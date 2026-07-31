@@ -5,6 +5,7 @@ import { schedulersEnabled, schedulerSkipReason } from '../common/schedulers';
 
 import { forEachTenant } from '../core/tenant-context';
 import { allTenantIds } from '../core/tenants';
+import { registerWorker, trackedTick } from '../observability/worker-health';
 /**
  * Pulls Meta lead-ad submissions on a timer, so leads arrive without anyone pressing Sync.
  *
@@ -47,7 +48,8 @@ export class MetaSyncSchedulerService implements OnModuleInit, OnModuleDestroy {
 
     this.first = setTimeout(() => { void this.pollAll(); }, FIRST_POLL_DELAY_MS);
     this.first.unref?.();
-    this.timer = setInterval(() => { void this.pollAll(); }, POLL_INTERVAL_MS);
+    registerWorker('meta-sync', POLL_INTERVAL_MS);
+    this.timer = setInterval(trackedTick('meta-sync', () => this.pollAll()), POLL_INTERVAL_MS);
     this.timer.unref?.();
     this.log.log(`Meta auto-sync every ${POLL_INTERVAL_MS / 1000}s (first pass in ${FIRST_POLL_DELAY_MS / 1000}s)`);
   }

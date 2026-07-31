@@ -166,6 +166,8 @@ describe('unscoped access stays deliberate and rare', () => {
     'role-permission.store.ts': 'loads the permission tables at start-up, before any request exists',
     'export-job.service.ts': 'reclaims interrupted jobs and finds each job owner after a restart',
     'health.controller.ts': 'the readiness probe asks whether the SERVER can serve, not about any tenant data',
+    'mail-retention.service.ts': 'the nightly retention sweep applies one policy to every brokerage mailbox, on a timer, with no request and so no tenant in context',
+    'lead-import-job.service.ts': 'a queued import outlives the request that created it, so the tenant comes from the job row rather than from a request that has already returned',
   };
 
   it('is used only where it has been justified', () => {

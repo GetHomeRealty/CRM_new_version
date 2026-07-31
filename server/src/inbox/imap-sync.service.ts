@@ -8,6 +8,7 @@ import { GoogleService } from '../google/google.service';
 
 import { forEachTenant } from '../core/tenant-context';
 import { allTenantIds } from '../core/tenants';
+import { registerWorker, trackedTick } from '../observability/worker-health';
 /** How often the poller pulls new mail for every sync-enabled account. */
 /**
  * How often connected mailboxes are polled for new mail.
@@ -89,7 +90,8 @@ export class ImapSyncService implements OnModuleInit, OnModuleDestroy {
     this.first = setTimeout(() => { void this.pollAll(); }, FIRST_POLL_DELAY_MS);
     if (typeof this.first.unref === 'function') this.first.unref();
 
-    this.timer = setInterval(() => { void this.pollAll(); }, POLL_INTERVAL_MS);
+    registerWorker('imap-sync', POLL_INTERVAL_MS);
+    this.timer = setInterval(trackedTick('imap-sync', () => this.pollAll()), POLL_INTERVAL_MS);
     if (typeof this.timer.unref === 'function') this.timer.unref();
     this.log.log(`IMAP polling every ${POLL_INTERVAL_MS / 1000}s (first pass in ${FIRST_POLL_DELAY_MS / 1000}s)`);
   }

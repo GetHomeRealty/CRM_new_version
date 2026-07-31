@@ -12,6 +12,7 @@ import { EXPORT_ROOT } from '../config/storage';
 
 import { forEachTenant, run, runAsSystem } from '../core/tenant-context';
 import { allTenantIds } from '../core/tenants';
+import { registerWorker, trackedTick } from '../observability/worker-health';
 /** What a job produces. */
 export type ExportAction =
   | 'transaction-complete-xlsx' | 'transaction-complete-csv'
@@ -90,7 +91,8 @@ export class ExportJobService implements OnModuleInit, OnModuleDestroy {
     this.queue.push(...queued.map((j) => j.id));
     if (this.queue.length) void this.drain();
 
-    this.sweeper = setInterval(() => { void this.sweepExpired(); }, SWEEP_INTERVAL_MS);
+    registerWorker('export-sweeper', SWEEP_INTERVAL_MS);
+    this.sweeper = setInterval(trackedTick('export-sweeper', () => this.sweepExpired()), SWEEP_INTERVAL_MS);
     this.sweeper.unref?.();
     void this.sweepExpired();
   }

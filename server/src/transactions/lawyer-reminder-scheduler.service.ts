@@ -7,6 +7,7 @@ import { tracksBothLawyers } from './lawyer-details';
 
 import { forEachTenant } from '../core/tenant-context';
 import { allTenantIds } from '../core/tenants';
+import { registerWorker, trackedTick } from '../observability/worker-health';
 /** How often the sweep wakes up. It only *sends* when a deal's interval has actually elapsed. */
 const POLL_INTERVAL_MS = 60 * 60 * 1000; // hourly
 const DEFAULT_INTERVAL_DAYS = 3;
@@ -38,7 +39,8 @@ export class LawyerReminderSchedulerService implements OnModuleInit, OnModuleDes
       this.log.log(`Lawyer-detail reminders not scheduled (${process.env.LAWYER_REMINDER_DISABLED === '1' ? 'LAWYER_REMINDER_DISABLED=1' : schedulerSkipReason()}).`);
       return;
     }
-    this.timer = setInterval(() => { void this.sweep(); }, POLL_INTERVAL_MS);
+    registerWorker('lawyer-reminders', POLL_INTERVAL_MS);
+    this.timer = setInterval(trackedTick('lawyer-reminders', () => this.sweep()), POLL_INTERVAL_MS);
     if (typeof this.timer.unref === 'function') this.timer.unref();
   }
 
