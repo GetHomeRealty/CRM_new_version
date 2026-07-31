@@ -1,5 +1,5 @@
 import pdfMake from 'pdfmake';
-import type { Content, ContentTable, TDocumentDefinitions, TableCell } from 'pdfmake/interfaces';
+import type { Content, ContentCanvas, ContentTable, TDocumentDefinitions, TableCell } from 'pdfmake/interfaces';
 
 /**
  * The contract agreement as a PDF, rendered from the same HTML the review screen shows.
@@ -56,6 +56,46 @@ function decode(text: string): string {
     }
     return ENTITIES[code.toLowerCase()] ?? whole;
   });
+}
+
+/**
+ * The marks the paper agreement is set with — a tick against every term, an arrowhead against every
+ * section heading.
+ *
+ * Drawn rather than typed. The glyphs the form uses (✓, ➢) are absent from the standard PDF fonts,
+ * so a literal character would arrive as a blank or a substitute, and the alternative — embedding a
+ * Unicode font — would put a megabyte of typeface into the repository to print two shapes.
+ */
+const MARK_COLOR = '#111827';
+
+const checkMark = (): ContentCanvas => ({
+  canvas: [{
+    type: 'polyline',
+    lineWidth: 1.05,
+    lineColor: MARK_COLOR,
+    points: [{ x: 0, y: 3.1 }, { x: 1.9, y: 5.1 }, { x: 5.6, y: 0.3 }],
+  }],
+});
+
+const arrowHead = (): ContentCanvas => ({
+  canvas: [{
+    type: 'polyline',
+    closePath: true,
+    color: MARK_COLOR,
+    points: [{ x: 0, y: 0 }, { x: 4.4, y: 2.4 }, { x: 0, y: 4.8 }],
+  }],
+});
+
+/** Put a drawn mark beside a block, the way the form sets its lists and headings. */
+function marked(mark: ContentCanvas, body: Content, indent: number, top = 2.2): Content {
+  return {
+    columns: [
+      { width: 8, stack: [{ ...mark, margin: [0, top, 0, 0] as [number, number, number, number] }] },
+      { width: '*', stack: [body] },
+    ],
+    columnGap: 4,
+    margin: [indent, 0, 0, 0],
+  };
 }
 
 /** Inline formatting carried down the tree — pdfmake wants it on each text run. */
@@ -122,6 +162,9 @@ function convert(html: string): Content[] {
 
   const top = (): (typeof stack)[0] => stack[stack.length - 1];
 
+  /** True while anything is being written inside a table cell, where section markers do not belong. */
+  const insideTable = (): boolean => stack.some((f) => f.name === 'table');
+
   /** Close the current run of inline text into the frame's children as one paragraph. */
   const flush = (frame = top()): void => {
     if (!frame.runs.length) return;
@@ -129,7 +172,21 @@ function convert(html: string): Content[] {
     frame.runs = [];
     const onlyWhitespace = runs.every((r) => typeof r === 'object' && 'text' in r && !String(r.text).trim());
     if (onlyWhitespace) return;
-    frame.children.push({ text: runs, margin: [0, 0, 0, 3.5], alignment: frame.marks.alignment });
+
+    const paragraph: Content = { text: runs, margin: [0, 0, 0, 3.5], alignment: frame.marks.alignment };
+
+    // A section heading on the paper form carries an arrowhead: "➢ Key Terms:". They are the
+    // paragraphs that open in bold — "Agent Type:", "Commission Structure:", "Termination:" — which
+    // is what tells them apart from a numbered party or a sentence that merely contains bold. The
+    // centred title and the names inside the signature boxes are bold too, hence both exclusions.
+    const first = runs[0];
+    const opensBold = typeof first === 'object' && first !== null && 'text' in first
+      && (first as { bold?: boolean }).bold === true && String((first as { text: unknown }).text).trim().length > 0;
+    if (opensBold && frame.marks.alignment !== 'center' && !insideTable()) {
+      frame.children.push(marked(arrowHead(), paragraph, 2));
+      return;
+    }
+    frame.children.push(paragraph);
   };
 
   for (const token of tokens) {
@@ -195,10 +252,17 @@ function closeFrame(
 
   flush(frame);
 
-  if (frame.name === 'ul' || frame.name === 'ol') {
-    const items = frame.children.length ? frame.children : [''];
-    const margin: [number, number, number, number] = [0, 0, 0, 4];
-    parent.children.push(frame.name === 'ul' ? { ul: items, margin } : { ol: items, margin });
+  if (frame.name === 'ul') {
+    // Ticked, one per term, indented under the heading they belong to — pdfmake's own `ul` can only
+    // offer a disc, square or circle, and the form is set with check marks.
+    parent.children.push({
+      stack: frame.children.map((item) => marked(checkMark(), item, 14, 1.4)),
+      margin: [0, 0, 0, 4],
+    });
+    return;
+  }
+  if (frame.name === 'ol') {
+    parent.children.push({ ol: frame.children.length ? frame.children : [''], margin: [0, 0, 0, 4] });
     return;
   }
   if (frame.name === 'td' || frame.name === 'th' || frame.name === 'li') {
@@ -240,9 +304,23 @@ function closeFrame(
 export async function renderContractPdf(html: string, logo: string | null): Promise<Buffer> {
   configure();
 
+  const body = convert(html);
+
+  // The form rules off under its title. Applied to the first block when that block is the centred
+  // heading, rather than to anything that happens to be centred further down.
+  const heading = body[0];
+  const isTitle = typeof heading === 'object' && heading !== null && 'alignment' in heading
+    && (heading as { alignment?: string }).alignment === 'center';
+  if (isTitle) {
+    body.splice(1, 0, {
+      canvas: [{ type: 'line', x1: 0, y1: 0, x2: 527, y2: 0, lineWidth: 1.1, lineColor: '#1f3b73' }],
+      margin: [0, 1, 0, 8],
+    });
+  }
+
   const content: Content[] = [];
-  if (logo) content.push({ image: logo, width: 118, alignment: 'center', margin: [0, 0, 0, 6] });
-  content.push(...convert(html));
+  if (logo) content.push({ image: logo, width: 118, alignment: 'center', margin: [0, 0, 0, 5] });
+  content.push(...body);
 
   // Set close to the paper form: a contract that fits one page is one an agent reads and signs, and
   // two pages of loose type is worse to handle than the density this saves.
@@ -251,12 +329,17 @@ export async function renderContractPdf(html: string, logo: string | null): Prom
     pageMargins: [34, 26, 34, 34],
     defaultStyle: { font: 'Helvetica', fontSize: 8.4, lineHeight: 1.14, color: '#111827' },
     content,
+    // Page number centred, and the brand mark in the bottom-right corner where the form carries it —
+    // on the closing page only, which is where it sits on paper.
     footer: (page, total) => ({
-      text: `Page ${page} of ${total}`,
-      alignment: 'center',
-      fontSize: 7.5,
-      color: '#9ca3af',
-      margin: [0, 14, 0, 0],
+      columns: [
+        { width: '*', text: '' },
+        { width: 'auto', text: `Page ${page} of ${total}`, fontSize: 7.5, color: '#9ca3af' },
+        logo && page === total
+          ? { width: '*', stack: [{ image: logo, width: 62, alignment: 'right', margin: [0, -6, 0, 0] as [number, number, number, number] }] }
+          : { width: '*', text: '' },
+      ],
+      margin: [34, 10, 34, 0],
     }),
   };
 
