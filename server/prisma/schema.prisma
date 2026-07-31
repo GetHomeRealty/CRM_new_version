@@ -2159,6 +2159,56 @@ model transaction_review_attachments {
   @@index([company_id])
 }
 
+/// One reminder the scheduler sent, tried to send, or decided not to send.
+///
+/// Doubles as the in-app notification: an `in-app` row that nobody has seen yet IS the bell entry,
+/// and opening the transaction stamps `seen_at`. Keeping the two in one table means the history an
+/// administrator reads and the badge an agent sees can never disagree about what was sent.
+///
+/// `scheduled_for` is the DAY the reminder was due, not the moment it went out. That is what makes
+/// duplicate protection possible: the unique index below is what stops a scheduler that runs twice,
+/// or a retry after a crash, from chasing the same agent twice for the same occurrence.
+model transaction_reminders {
+  id             Int    @id @default(autoincrement())
+  transaction_id Int
+  /// 'listing_expiry' | 'lawyer'
+  kind           String @db.VarChar(24)
+  /// For lawyer reminders, what was missing when it was sent: 'buyer' | 'seller' | 'both'.
+  variant        String? @db.VarChar(16)
+
+  /// The day this occurrence belonged to — the key duplicate protection is built on.
+  scheduled_for  DateTime @db.Date
+  /// Days between that day and the closing/expiry date it is about.
+  days_remaining Int?
+
+  recipient       String? @db.VarChar(255)
+  /// 'email' | 'in-app'
+  delivery_method String  @db.VarChar(16)
+  /// 'Sent' | 'Failed' | 'Skipped'
+  delivery_status String  @db.VarChar(16)
+  /// Why it failed, or why it was skipped.
+  detail          String? @db.Text
+  subject         String? @db.VarChar(255)
+
+  /// Set when the agent opened the transaction, which is what clears the bell entry.
+  seen_at    DateTime? @db.Timestamp(0)
+  created_at DateTime? @db.Timestamp(0)
+
+  transactions transactions @relation(fields: [transaction_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  /// One reminder per occurrence per channel. The scheduler relies on this rather than on its own
+  /// bookkeeping, so a second run on the same day is harmless by construction.
+  @@unique([transaction_id, kind, scheduled_for, delivery_method])
+  @@index([transaction_id])
+  @@index([kind, scheduled_for])
+  @@index([recipient, seen_at])
+
+  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
+  company_id Int @default(1)
+
+  @@index([company_id])
+}
+
 model transaction_snapshots {
   id             Int          @id @default(autoincrement())
   transaction_id Int
@@ -2297,6 +2347,7 @@ model transactions {
   transaction_edit_requests   transaction_edit_requests[]
   transaction_message_reads   transaction_message_reads[]
   transaction_messages        transaction_messages[]
+  transaction_reminders       transaction_reminders[]
   transaction_reviews         transaction_reviews[]
   transaction_snapshots       transaction_snapshots[]
   transaction_statuses        transaction_statuses[]
@@ -2310,6 +2361,9 @@ model transactions {
   @@index([type])
   @@index([offer_date])
   @@index([closing_date])
+  // The listing-expiry sweep asks for listings expiring in the next few days; without this it
+  // reads every transaction in the table every night to find them.
+  @@index([listing_expiry_date])
   @@index([payment_type])
   @@index([lead_source])
   @@index([company_id])

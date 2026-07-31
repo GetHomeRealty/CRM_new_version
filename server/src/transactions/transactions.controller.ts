@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, HttpCode, Param, ParseIntPipe, Post, Put, Query, Res, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, ForbiddenException, Get, HttpCode, Param, ParseIntPipe, Post, Put, Query, Res, UseGuards } from '@nestjs/common';
 import type { Response } from 'express';
 import { AuthGuard } from '../auth/guards/auth.guard';
 import { ScreenGuard } from '../auth/guards/screen.guard';
@@ -9,6 +9,8 @@ import { TransactionsWriteService } from './transactions-write.service';
 import { TransactionReviewService, type ReviewFilters } from './transaction-review.service';
 import { ReviewThreadService, type PostedAttachment } from './review-thread.service';
 import { ReviewExportService } from './review-export.service';
+import { ReminderSweepService } from './reminder-sweep.service';
+import { isAdminOrAbove } from '../core/authz';
 import type { ResourceUser } from './transaction.resource';
 import { ListTransactionsDto } from './dto/list-transactions.dto';
 
@@ -24,6 +26,7 @@ export class TransactionsController {
     private readonly reviewService: TransactionReviewService,
     private readonly thread: ReviewThreadService,
     private readonly reviewExport: ReviewExportService,
+    private readonly reminders: ReminderSweepService,
   ) {}
 
   @Post()
@@ -172,6 +175,25 @@ export class TransactionsController {
     res.setHeader('Content-Type', file.contentType);
     res.setHeader('Content-Disposition', `attachment; filename="${file.filename.replace(/"/g, '')}"`);
     res.end(file.data);
+  }
+
+  /**
+   * Reminder history — every reminder sent, failed or skipped. Administrators only: it names every
+   * agent who has been chased, which is not an agent's business.
+   */
+  @Get('reminders/history')
+  @Screen('transactions', 'view')
+  @UseGuards(AuthGuard, ScreenGuard)
+  reminderHistory(
+    @CurrentUser() user: AuthUserRecord | undefined,
+    @Query() query: { transaction_id?: string; page?: string; per_page?: string },
+  ): Promise<Record<string, unknown>> {
+    if (!isAdminOrAbove(user ?? null)) throw new ForbiddenException({ message: 'Administrator access required.' });
+    return this.reminders.history(
+      query?.transaction_id ? Number(query.transaction_id) : null,
+      Number(query?.page) || 1,
+      Number(query?.per_page) || 50,
+    );
   }
 
   /** Opening the deal clears the agent's review notifications for it. */

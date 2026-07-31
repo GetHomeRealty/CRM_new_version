@@ -1,0 +1,62 @@
+import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { PrismaService } from '../prisma/prisma.service';
+import { schedulersEnabled, schedulerSkipReason } from '../common/schedulers';
+import { forEachTenant } from '../core/tenant-context';
+import { allTenantIds } from '../core/tenants';
+import { registerWorker, trackedTick } from '../observability/worker-health';
+import { ReminderSweepService } from './reminder-sweep.service';
+
+/**
+ * The nightly job behind the listing-expiry and lawyer-detail reminders.
+ *
+ * WAKES HOURLY, WORKS ONCE A DAY. The sweep itself is idempotent — every reminder is claimed by a
+ * unique row keyed on the day — so waking often costs nothing and buys the one thing a strict
+ * once-a-day timer cannot: a server that was restarted, redeployed or asleep at the appointed hour
+ * still sends the day's reminders when it comes back, instead of skipping them until tomorrow.
+ *
+ * Only one process may run it: these send real email, so a second instance would deliver a duplicate
+ * of every reminder. Disable on all but one with REMINDER_SWEEP_DISABLED=1.
+ */
+const POLL_INTERVAL_MS = 60 * 60 * 1000;
+
+@Injectable()
+export class ReminderSchedulerService implements OnModuleInit, OnModuleDestroy {
+  private readonly log = new Logger(ReminderSchedulerService.name);
+  private timer: ReturnType<typeof setInterval> | null = null;
+  private running = false;
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly sweep: ReminderSweepService,
+  ) {}
+
+  onModuleInit(): void {
+    if (!schedulersEnabled() || process.env.REMINDER_SWEEP_DISABLED === '1') {
+      this.log.log(`Listing and lawyer reminders not scheduled (${process.env.REMINDER_SWEEP_DISABLED === '1' ? 'REMINDER_SWEEP_DISABLED=1' : schedulerSkipReason()}).`);
+      return;
+    }
+    registerWorker('reminder-sweep', POLL_INTERVAL_MS);
+    this.timer = setInterval(trackedTick('reminder-sweep', () => this.run()), POLL_INTERVAL_MS);
+    if (typeof this.timer.unref === 'function') this.timer.unref();
+    // One pass shortly after start, so a deployment on the morning of an expiry does not cost that
+    // day's reminders. Delayed rather than immediate to keep it clear of the boot path.
+    setTimeout(() => void this.run(), 60_000).unref?.();
+  }
+
+  onModuleDestroy(): void {
+    if (this.timer) clearInterval(this.timer);
+  }
+
+  /** One pass per brokerage, inside that tenant's context, as the other sweeps do. */
+  async run(): Promise<void> {
+    if (this.running) return;
+    this.running = true;
+    try {
+      await forEachTenant(() => allTenantIds(this.prisma), async () => { await this.sweep.sweep(); });
+    } catch (err) {
+      this.log.error(`Reminder sweep failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      this.running = false;
+    }
+  }
+}

@@ -9,6 +9,7 @@ import { isInvoiceableType, isListingType, SECURED_DEAL_TYPES } from '../referen
 import { TradeNumberService } from './trade-number.service';
 import { TransactionLawyerReminderService } from './transaction-lawyer-reminder.service';
 import { TransactionReviewService } from './transaction-review.service';
+import { ReminderSweepService } from './reminder-sweep.service';
 import { TransactionInvoiceService } from '../invoices/transaction-invoice.service';
 import { parseJson } from '../common/serialize';
 import {
@@ -85,6 +86,7 @@ export class TransactionsWriteService {
     private readonly txnInvoices: TransactionInvoiceService,
     private readonly lawyerReminder: TransactionLawyerReminderService,
     private readonly reviews: TransactionReviewService,
+    private readonly reminders: ReminderSweepService,
   ) {}
 
   /** Create a transaction (port of TransactionController::store). */
@@ -329,6 +331,13 @@ export class TransactionsWriteService {
       }
     }
 
+    // The two dates every reminder schedule hangs off, read before the save so a move can be
+    // noticed afterwards and the schedule recalculated.
+    const datesBefore = await this.prisma.transactions.findUnique({
+      where: { id: txnId },
+      select: { closing_date: true, listing_expiry_date: true },
+    });
+
     const before = await this.audit.snapshot(txnId);
 
     await this.prisma.$transaction(async (tx) => {
@@ -394,6 +403,22 @@ export class TransactionsWriteService {
 
     // Re-check lawyer details after the edit — only re-emails when the missing set actually changed.
     void this.lawyerReminder.maybeRemind(txnId);
+
+    // A moved closing or expiry date means the reminder cadence is computed against a different
+    // day from now on. Nothing is scheduled ahead — the sweep derives it nightly — so the schedule
+    // recalculates by construction; this records that it happened and releases today's claim, so a
+    // date brought forward can be chased today rather than tomorrow.
+    const datesAfter = await this.prisma.transactions.findUnique({
+      where: { id: txnId },
+      select: { closing_date: true, listing_expiry_date: true },
+    });
+    for (const field of ['closing_date', 'listing_expiry_date'] as const) {
+      const was = datesBefore?.[field] ?? null;
+      const now = datesAfter?.[field] ?? null;
+      if (was?.getTime() !== now?.getTime()) {
+        void this.reminders.dateChanged(txnId, field, was, now);
+      }
+    }
 
     const full = (await this.prisma.transactions.findUnique({ where: { id: txnId }, include: txnShowInclude })) as LoadedTxn;
     const ctx = { user: user ? ({ id: user.id, role: user.role, name: user.name } as ResourceUser) : null, commission: this.commission, prisma: this.prisma };

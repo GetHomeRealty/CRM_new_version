@@ -1,15 +1,11 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { schedulersEnabled, schedulerSkipReason } from '../common/schedulers';
 import { parseJsonObject } from '../common/serialize';
 import { TransactionLawyerReminderService } from './transaction-lawyer-reminder.service';
 import { tracksBothLawyers } from './lawyer-details';
 
 import { forEachTenant } from '../core/tenant-context';
 import { allTenantIds } from '../core/tenants';
-import { registerWorker, trackedTick } from '../observability/worker-health';
-/** How often the sweep wakes up. It only *sends* when a deal's interval has actually elapsed. */
-const POLL_INTERVAL_MS = 60 * 60 * 1000; // hourly
 const DEFAULT_INTERVAL_DAYS = 3;
 
 /**
@@ -33,15 +29,15 @@ export class LawyerReminderSchedulerService implements OnModuleInit, OnModuleDes
   ) {}
 
   onModuleInit(): void {
-    // Only one process may sweep: these send real email, so a second instance would deliver a
-    // duplicate of every reminder to the agent it is chasing.
-    if (!schedulersEnabled() || process.env.LAWYER_REMINDER_DISABLED === '1') {
-      this.log.log(`Lawyer-detail reminders not scheduled (${process.env.LAWYER_REMINDER_DISABLED === '1' ? 'LAWYER_REMINDER_DISABLED=1' : schedulerSkipReason()}).`);
-      return;
-    }
-    registerWorker('lawyer-reminders', POLL_INTERVAL_MS);
-    this.timer = setInterval(trackedTick('lawyer-reminders', () => this.sweep()), POLL_INTERVAL_MS);
-    if (typeof this.timer.unref === 'function') this.timer.unref();
+    /*
+     * Superseded by ReminderSchedulerService, which chases lawyer details on the phase schedule the
+     * brokerage asked for: weekly from 30 days out, twice a week from 15, three times a week from 7.
+     * Running both would chase the same agent twice on the same day through two different cadences.
+     *
+     * The class is kept, not deleted: `sweep()` is still the recurring pass and is still correct, so
+     * it remains callable by hand or by a test. What has gone is the timer that ran it.
+     */
+    this.log.log('Recurring lawyer-detail reminders now run in the reminder sweep; this scheduler is idle.');
   }
 
   onModuleDestroy(): void {

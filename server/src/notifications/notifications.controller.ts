@@ -4,6 +4,7 @@ import { CurrentUser } from '../auth/decorators';
 import type { AuthUserRecord } from '../auth/auth.types';
 import { NotificationsService } from './notifications.service';
 import { TransactionReviewService } from '../transactions/transaction-review.service';
+import { ReminderSweepService } from '../transactions/reminder-sweep.service';
 import type { ResourceUser } from '../transactions/transaction.resource';
 
 const toResourceUser = (u: AuthUserRecord | undefined): ResourceUser | null =>
@@ -15,6 +16,7 @@ export class NotificationsController {
   constructor(
     private readonly notifications: NotificationsService,
     private readonly reviews: TransactionReviewService,
+    private readonly reminders: ReminderSweepService,
   ) {}
 
   @Get('agent-change-notifications')
@@ -25,6 +27,22 @@ export class NotificationsController {
   @Get('doc-notifications')
   docs(@CurrentUser() user: AuthUserRecord | undefined) {
     return this.notifications.docNotifications(toResourceUser(user));
+  }
+
+  /** Listing-expiry and lawyer-detail reminders the agent has not seen. */
+  @Get('reminder-notifications')
+  reminderNotifications(@CurrentUser() user: AuthUserRecord | undefined) {
+    return this.reminders.notifications(user?.name ?? null);
+  }
+
+  /** Opening the deal marks that day's reminder read. */
+  @Post('transactions/:transaction/reminders/seen')
+  @HttpCode(200)
+  markRemindersSeen(
+    @CurrentUser() user: AuthUserRecord | undefined,
+    @Param('transaction', ParseIntPipe) id: number,
+  ): Promise<{ ok: boolean }> {
+    return this.reminders.markSeen(user?.name ?? null, id);
   }
 
   /**

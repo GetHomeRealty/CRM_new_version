@@ -269,6 +269,84 @@ export const MAIL_EVENTS: Record<string, MailEvent> = {
       + '{{ transaction_button }}'
       + '<p>{{ company_name }}</p>',
   },
+  /** Daily countdown to a listing's expiry date, from ten days out. */
+  'transaction.listing_expiry_reminder': {
+    module: 'Transactions',
+    label: 'Transactions — Listing Expiry Reminder',
+    variables: ['agent_name', 'deal_number', 'property_address', 'listing_type', 'expiry_date', 'days_remaining', 'expiry_phrase', 'transaction_button', 'company_name', 'current_date'],
+    default_subject: 'Listing {{ expiry_phrase }} — {{ property_address }} ({{ deal_number }})',
+    default_body_html:
+      '<p>Hello {{ agent_name }},</p>'
+      + '<p>Your listing on <strong>{{ property_address }}</strong> <strong>{{ expiry_phrase }}</strong>.</p>'
+      + '<table style="border-collapse:collapse;font-size:14px;margin:10px 0">'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Transaction</td><td style="padding:4px 0;font-weight:600">{{ deal_number }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Property</td><td style="padding:4px 0;font-weight:600">{{ property_address }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Listing type</td><td style="padding:4px 0">{{ listing_type }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Expiry date</td><td style="padding:4px 0;font-weight:600">{{ expiry_date }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Days remaining</td><td style="padding:4px 0;font-weight:600">{{ days_remaining }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Agent</td><td style="padding:4px 0">{{ agent_name }}</td></tr>'
+      + '</table>'
+      + '<p>Renew or extend the listing before the date passes — once it does, the status changes to Expired automatically.</p>'
+      + '{{ transaction_button }}'
+      + '<p>Regards,<br>{{ company_name }}</p>',
+  },
+  /** Buyer lawyer details outstanding. */
+  'transaction.lawyer_buyer_reminder': {
+    module: 'Transactions',
+    label: 'Transactions — Buyer Lawyer Reminder',
+    variables: ['agent_name', 'deal_number', 'property_address', 'closing_date', 'days_remaining', 'closing_phrase', 'missing_details', 'transaction_button', 'company_name', 'current_date'],
+    default_subject: 'Buyer Lawyer Details Required — {{ property_address }} ({{ deal_number }})',
+    default_body_html:
+      '<p>Hello {{ agent_name }},</p>'
+      + '<p>Please upload the Buyer Lawyer Details for Transaction <strong>{{ deal_number }}</strong>.</p>'
+      + '<table style="border-collapse:collapse;font-size:14px;margin:10px 0">'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Transaction</td><td style="padding:4px 0;font-weight:600">{{ deal_number }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Property</td><td style="padding:4px 0;font-weight:600">{{ property_address }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Closing date</td><td style="padding:4px 0;font-weight:600">{{ closing_date }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Time remaining</td><td style="padding:4px 0;font-weight:600">{{ closing_phrase }} ({{ days_remaining }} days)</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Still needed</td><td style="padding:4px 0;font-weight:600">{{ missing_details }}</td></tr>'
+      + '</table>'
+      + '{{ transaction_button }}'
+      + '<p>Regards,<br>{{ company_name }}</p>',
+  },
+  /** Seller lawyer details outstanding. */
+  'transaction.lawyer_seller_reminder': {
+    module: 'Transactions',
+    label: 'Transactions — Seller Lawyer Reminder',
+    variables: ['agent_name', 'deal_number', 'property_address', 'closing_date', 'days_remaining', 'closing_phrase', 'missing_details', 'transaction_button', 'company_name', 'current_date'],
+    default_subject: 'Seller Lawyer Details Required — {{ property_address }} ({{ deal_number }})',
+    default_body_html:
+      '<p>Hello {{ agent_name }},</p>'
+      + '<p>Please upload the Seller Lawyer Details for Transaction <strong>{{ deal_number }}</strong>.</p>'
+      + '<table style="border-collapse:collapse;font-size:14px;margin:10px 0">'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Transaction</td><td style="padding:4px 0;font-weight:600">{{ deal_number }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Property</td><td style="padding:4px 0;font-weight:600">{{ property_address }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Closing date</td><td style="padding:4px 0;font-weight:600">{{ closing_date }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Time remaining</td><td style="padding:4px 0;font-weight:600">{{ closing_phrase }} ({{ days_remaining }} days)</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Still needed</td><td style="padding:4px 0;font-weight:600">{{ missing_details }}</td></tr>'
+      + '</table>'
+      + '{{ transaction_button }}'
+      + '<p>Regards,<br>{{ company_name }}</p>',
+  },
+  /** Both sides outstanding. */
+  'transaction.lawyer_both_reminder': {
+    module: 'Transactions',
+    label: 'Transactions — Buyer & Seller Lawyer Reminder',
+    variables: ['agent_name', 'deal_number', 'property_address', 'closing_date', 'days_remaining', 'closing_phrase', 'missing_details', 'transaction_button', 'company_name', 'current_date'],
+    default_subject: 'Buyer & Seller Lawyer Details Required — {{ property_address }} ({{ deal_number }})',
+    default_body_html:
+      '<p>Hello {{ agent_name }},</p>'
+      + '<p>Please upload both the Buyer Lawyer Details and the Seller Lawyer Details for Transaction <strong>{{ deal_number }}</strong>.</p>'
+      + '<table style="border-collapse:collapse;font-size:14px;margin:10px 0">'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Transaction</td><td style="padding:4px 0;font-weight:600">{{ deal_number }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Property</td><td style="padding:4px 0;font-weight:600">{{ property_address }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Closing date</td><td style="padding:4px 0;font-weight:600">{{ closing_date }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Time remaining</td><td style="padding:4px 0;font-weight:600">{{ closing_phrase }} ({{ days_remaining }} days)</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Still needed</td><td style="padding:4px 0;font-weight:600">{{ missing_details }}</td></tr>'
+      + '</table>'
+      + '{{ transaction_button }}'
+      + '<p>Regards,<br>{{ company_name }}</p>',
+  },
   'notice_of_sale.send': {
     module: 'Notice of Sale',
     label: 'Notice of Sale — Send for Signature',
