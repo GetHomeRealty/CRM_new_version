@@ -8,6 +8,7 @@ import { CampaignAudienceService } from './campaign-audience.service';
 import { CampaignTemplatesController } from './campaign-templates.controller';
 import { CampaignTemplatesService } from './campaign-templates.service';
 import { MailDeliverabilityService } from './mail-deliverability.service';
+import { LeadsModule } from '../leads/leads.module';
 
 /**
  * Controller order matters: Express matches in registration order, and CampaignsController owns
@@ -17,7 +18,9 @@ import { MailDeliverabilityService } from './mail-deliverability.service';
  * silently break every pixel in every sent email.
  */
 @Module({
-  imports: [AuthModule, EmailModule],
+  // LeadsModule for the shared import engine and queue — Campaigns imports leads through the
+  // same path as the Leads screen so the two cannot drift apart again.
+  imports: [AuthModule, EmailModule, LeadsModule],
   controllers: [CampaignTrackingController, CampaignTemplatesController, CampaignsController],
   providers: [CampaignsService, CampaignAudienceService, CampaignTemplatesService, MailDeliverabilityService],
 })

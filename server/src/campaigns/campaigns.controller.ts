@@ -6,6 +6,7 @@ import { CurrentUser, Screen } from '../auth/decorators';
 import type { AuthUserRecord } from '../auth/auth.types';
 import { CampaignsService } from './campaigns.service';
 import { CampaignAudienceService, type AudienceFilter } from './campaign-audience.service';
+import { LeadImportJobService } from '../leads/lead-import-job.service';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   LEAD_STATUS, LEAD_TYPE, LEAD_SOURCE, CLIENT_TYPE, TAG_OPTIONS,
@@ -21,6 +22,7 @@ export class CampaignsController {
   constructor(
     private readonly campaigns: CampaignsService,
     private readonly audience: CampaignAudienceService,
+    private readonly imports: LeadImportJobService,
     private readonly prisma: PrismaService,
   ) {}
 
@@ -165,11 +167,25 @@ export class CampaignsController {
     return { tags: await this.campaigns.leadTags(user) };
   }
 
+  /**
+   * Queue a CSV import and return immediately.
+   *
+   * Shares the queue and the engine with `POST /api/leads/import` rather than keeping a second
+   * implementation. The two had already diverged — this one had no in-file de-duplication and no
+   * row cap — so the same file behaved differently depending on which screen it was dropped on.
+   */
   @Post('leads/import')
-  @HttpCode(200)
+  @HttpCode(202)
   @Screen('campaigns', 'edit')
   importLeads(@CurrentUser() user: AuthUserRecord, @Body() body: Record<string, unknown>): Promise<unknown> {
-    return this.campaigns.importLeads(str(body.csv), str(body.tag), user);
+    return this.imports.enqueue(str(body.csv), str(body.tag), 'campaigns', user);
+  }
+
+  /** Progress for one import. */
+  @Get('leads/import/:jobId')
+  @Screen('campaigns', 'view')
+  importStatus(@Param('jobId') jobId: string): Promise<unknown> {
+    return this.imports.status(jobId);
   }
 
   /** Preview or apply a tag across a lead segment. */

@@ -3,9 +3,11 @@ import Icon from '../ui/Icon';
 import { useSearchParams } from 'react-router-dom';
 import {
   campaignOptions, listCampaigns, getCampaign, deleteCampaign,
-  previewAudience, sendCampaign, trackingHealth, importLeads, previewSegment, tagSegment, sendTestEmail,
+  previewAudience, sendCampaign, trackingHealth, previewSegment, tagSegment, sendTestEmail,
 } from '../lib/campaignsApi';
 import { apiErrorMessage } from '../lib/apiError';
+import { runLeadImport, type ImportJob } from '../lib/leadImportApi';
+import ImportProgress from '../components/ImportProgress';
 import { useToast } from './toast';
 import { useAuth } from '../context/AuthContext';
 import ConfirmDialog from './ConfirmDialog';
@@ -534,7 +536,11 @@ function ImportLeadsModal({ onClose, onDone }: { onClose: () => void; onDone: ()
   const [csv, setCsv] = useState('');
   const [tag, setTag] = useState('');
   const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState<ImportJob | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  // Read by the poll loop, which outlives a render — a state flag would be captured stale.
+  const closedRef = useRef(false);
+  useEffect(() => () => { closedRef.current = true; }, []);
 
   const pick = (f: File | null) => {
     if (!f) return;
@@ -548,9 +554,18 @@ function ImportLeadsModal({ onClose, onDone }: { onClose: () => void; onDone: ()
   const run = async () => {
     if (!csv.trim()) return toast('Paste CSV data or choose a file first', 'bad');
     setBusy(true);
+    setProgress(null);
     try {
-      const r = await importLeads(csv, tag.trim());
-      toast(`${r.imported} lead(s) added${r.tagged ? `, ${r.tagged} existing tagged` : ''}${r.invalid ? `, ${r.invalid} skipped` : ''}`, 'ok');
+      // The same server-side queue the Leads screen uses, so a file imported from either place
+      // behaves identically — these two screens previously had separate implementations.
+      const job = await runLeadImport(csv, tag.trim(), {
+        source: 'campaigns',
+        onProgress: setProgress,
+        cancelled: () => closedRef.current,
+      });
+      if (closedRef.current) return;
+      if (job.status === 'Failed') { toast(job.message, 'bad'); setBusy(false); return; }
+      toast(job.message, 'ok');
       onDone();
     } catch (e) { toast(apiErrorMessage(e, 'Import failed'), 'bad'); setBusy(false); }
   };
@@ -576,8 +591,11 @@ function ImportLeadsModal({ onClose, onDone }: { onClose: () => void; onDone: ()
             status, type, source, clienttype. Rows without a valid email are skipped; existing addresses are tagged, not duplicated.
           </div>
         </div>
+        {progress && <ImportProgress job={progress} />}
         <div className="actions">
-          <button className="btn ghost" onClick={onClose} disabled={busy}>Cancel</button>
+          {/* Not disabled while importing: the work is on the server, so closing only stops this
+              tab watching it rather than trapping somebody in a modal for minutes. */}
+          <button className="btn ghost" onClick={onClose}>{busy ? 'Close — the import keeps running' : 'Cancel'}</button>
           <button className="btn primary" onClick={run} disabled={busy || !csv.trim()}>{busy ? 'Importing…' : 'Import'}</button>
         </div>
       </div>

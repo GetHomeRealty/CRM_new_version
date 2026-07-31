@@ -4,7 +4,7 @@ import { MailerService } from '../email/mailer.service';
 import { CampaignAudienceService, type AudienceFilter } from './campaign-audience.service';
 import { CampaignTemplatesService } from './campaign-templates.service';
 import { MailDeliverabilityService } from './mail-deliverability.service';
-import { MAX_RECIPIENTS, SEND_DELAY_MS, EMAIL_SHAPE } from './campaign.constants';
+import { MAX_RECIPIENTS, SEND_DELAY_MS } from './campaign.constants';
 import type { AuthUserRecord } from '../auth/auth.types';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -352,52 +352,11 @@ export class CampaignsService {
     return [...set].sort((a, b) => a.localeCompare(b));
   }
 
-  /**
-   * Import leads from CSV. Rows without a valid email are skipped; an address that already
-   * exists is tagged rather than duplicated.
-   */
-  async importLeads(csv: string, tag: string, user: AuthUserRecord): Promise<{ imported: number; tagged: number; invalid: number }> {
-    const rows = this.parseCsv(csv);
-    if (!rows.length) throw new BadRequestException({ message: 'No rows found. Include a header row with name, email, phone.' });
-
-    let imported = 0, tagged = 0, invalid = 0;
-    const now = new Date();
-    for (const row of rows) {
-      const email = String(row.email ?? '').trim();
-      if (!EMAIL_SHAPE.test(email)) { invalid++; continue; }
-
-      const existing = await this.prisma.leads.findFirst({ where: { email: { equals: email, mode: 'insensitive' } } });
-      if (existing) {
-        if (tag) {
-          const tags = parseJsonArray(existing.tags);
-          if (!tags.includes(tag)) {
-            await this.prisma.leads.update({ where: { id: existing.id }, data: { tags: JSON.stringify([...tags, tag]), updated_at: now } });
-            tagged++;
-          }
-        }
-        continue;
-      }
-
-      await this.prisma.leads.create({
-        data: {
-          name: String(row.name ?? '').trim() || email.split('@')[0],
-          email,
-          phone: String(row.phone ?? '').trim() || null,
-          lead_status: String(row.leadstatus ?? row.status ?? '').trim() || null,
-          lead_type: String(row.leadtype ?? row.type ?? '').trim() || null,
-          lead_source: String(row.leadsource ?? row.source ?? '').trim() || null,
-          client_type: String(row.clienttype ?? '').trim() || null,
-          tags: JSON.stringify(tag ? [tag] : []),
-          created_by: user.name,
-          owner_user_id: user.id ?? null,
-          created_at: now,
-          updated_at: now,
-        },
-      });
-      imported++;
-    }
-    return { imported, tagged, invalid };
-  }
+  // CSV lead import used to live here, as a second implementation of what `leads.service.ts` also
+  // did — and the two had drifted: this one had no in-file de-duplication and no row cap, so the
+  // same file behaved differently depending on which screen it was dropped on. Both now go through
+  // `LeadImportEngine` and `LeadImportJobService`, which look up against an index, write in
+  // batched transactions, and run off the request thread with progress a client can poll.
 
   /** Add or remove a tag across every lead matching a segment. */
   async tagSegment(filter: AudienceFilter, tag: string, mode: 'add' | 'remove', user: AuthUserRecord): Promise<{ count: number; message: string }> {
@@ -424,28 +383,6 @@ export class CampaignsService {
     return this.prisma.leads.count({ where: this.audience.buildAudienceWhere(filter, user) });
   }
 
-  /** Minimal RFC4180 CSV reader → lowercase-keyed rows. */
-  private parseCsv(text: string): Record<string, string>[] {
-    const rows: string[][] = [];
-    let field = '', row: string[] = [], quoted = false;
-    const src = String(text ?? '').replace(/^﻿/, '');
-    for (let i = 0; i < src.length; i++) {
-      const c = src[i];
-      if (quoted) {
-        if (c === '"') { if (src[i + 1] === '"') { field += '"'; i++; } else quoted = false; }
-        else field += c;
-      } else if (c === '"') quoted = true;
-      else if (c === ',') { row.push(field); field = ''; }
-      else if (c === '\n') { row.push(field); rows.push(row); row = []; field = ''; }
-      else if (c !== '\r') field += c;
-    }
-    if (field !== '' || row.length) { row.push(field); rows.push(row); }
-    if (rows.length < 2) return [];
-    const headers = rows[0].map((h) => h.trim().toLowerCase().replace(/[\s_-]/g, ''));
-    return rows.slice(1)
-      .filter((r) => r.some((c) => c.trim() !== ''))
-      .map((r) => Object.fromEntries(headers.map((h, i) => [h, (r[i] ?? '').trim()])));
-  }
 
   // ---------------------------------------------------------------- output
   private summary(c: Record<string, unknown>): Record<string, unknown> {

@@ -2,11 +2,13 @@ import { crmPath } from './area';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  bulkDeleteLeads, createLeadTag, deleteLead, deleteLeadTag, exportLeads, importLeadsCsv,
+  bulkDeleteLeads, createLeadTag, deleteLead, deleteLeadTag, exportLeads,
   leadOptions, listDeletedLeads, listLeadTags, listLeads, purgeLead, restoreLead, tagLeads,
   updateLead,
 } from '../lib/leadsApi';
 import { apiErrorMessage } from '../lib/apiError';
+import { runLeadImport, type ImportJob } from '../lib/leadImportApi';
+import ImportProgress from '../components/ImportProgress';
 import { useToast } from './toast';
 import { useAuth } from '../context/AuthContext';
 import Icon from '../ui/Icon';
@@ -543,7 +545,11 @@ function ImportModal({ onClose, onDone, tags }: { onClose: () => void; onDone: (
   const [csv, setCsv] = useState('');
   const [tag, setTag] = useState('');
   const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState<ImportJob | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  // Read by the poll loop, which outlives a render — a state flag would be captured stale.
+  const closedRef = useRef(false);
+  useEffect(() => () => { closedRef.current = true; }, []);
 
   const readFile = async (file: File) => {
     setCsv(await file.text());
@@ -552,9 +558,19 @@ function ImportModal({ onClose, onDone, tags }: { onClose: () => void; onDone: (
 
   const run = async () => {
     setBusy(true);
+    setProgress(null);
     try {
-      const res = await importLeadsCsv(csv, tag.trim());
-      toast(`${res.message} ${res.duplicate} already on file, ${res.invalid} skipped.`, 'ok');
+      // Queued server-side and polled, so a large file is not held open in one request. `cancelled`
+      // stops this modal asking once it has closed — it does not stop the import, which finishes
+      // on the server either way.
+      const job = await runLeadImport(csv, tag.trim(), {
+        source: 'leads',
+        onProgress: setProgress,
+        cancelled: () => closedRef.current,
+      });
+      if (closedRef.current) return;
+      if (job.status === 'Failed') { toast(job.message, 'bad'); return; }
+      toast(job.message, 'ok');
       onDone();
     } catch (ex) {
       toast(apiErrorMessage(ex, 'Could not import the leads'), 'bad');
@@ -588,8 +604,14 @@ function ImportModal({ onClose, onDone, tags }: { onClose: () => void; onDone: (
           <input list="import-tags" value={tag} onChange={(e) => setTag(e.target.value)} placeholder="e.g. Expo-2026" />
           <datalist id="import-tags">{tags.map((t) => <option key={t} value={t} />)}</datalist>
         </div>
+        {progress && <ImportProgress job={progress} />}
         <div className="actions">
-          <button className="btn ghost" type="button" onClick={onClose} disabled={busy}>Cancel</button>
+          {/* Deliberately NOT disabled while importing. The work is on the server now, so closing
+              only stops this tab watching it — there is no reason to trap somebody in a modal for
+              several minutes. */}
+          <button className="btn ghost" type="button" onClick={onClose}>
+            {busy ? 'Close — the import keeps running' : 'Cancel'}
+          </button>
           <button className="btn primary" type="button" onClick={() => void run()} disabled={busy || csv.trim() === ''}>
             {busy ? 'Importing…' : 'Import'}
           </button>

@@ -10,6 +10,7 @@ import { LeadsService, type LeadInput, type LeadQuery } from './leads.service';
 import { LeadActivityService } from './lead-activity.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { LeadTransferService } from './lead-transfer.service';
+import { LeadImportJobService } from './lead-import-job.service';
 import {
   CALL_OUTCOME, CLIENT_TYPE, GENDERS, LANGUAGES, LEAD_CONVERSION, LEAD_RESPONSE, LEAD_SOURCE,
   LEAD_STATUS, LEAD_TYPE, NONE_FILTER_VALUE, PROPERTY_TYPES, RELIGIONS, SHOWING_STATUS,
@@ -34,6 +35,7 @@ export class LeadsController {
     private readonly transfer: LeadTransferService,
     private readonly leads: LeadsService,
     private readonly activity: LeadActivityService,
+    private readonly imports: LeadImportJobService,
     private readonly prisma: PrismaService,
   ) {}
 
@@ -156,11 +158,32 @@ export class LeadsController {
   }
 
   // --------------------------------------------------------- bulk actions
+  /**
+   * Queue a CSV import and return immediately.
+   *
+   * This used to do the whole import inline, which for a large file meant holding the request open
+   * past a proxy timeout and answering 504 over a half-finished import. The response is now a job
+   * to poll — see `GET import/:jobId`.
+   */
   @Post('import')
-  @HttpCode(200)
+  @HttpCode(202)
   @Screen('lead', 'edit')
   import(@CurrentUser() user: AuthUserRecord, @Body() body: Record<string, unknown>): Promise<unknown> {
-    return this.leads.import(str(body.csv), str(body.tag), user);
+    return this.imports.enqueue(str(body.csv), str(body.tag), 'leads', user);
+  }
+
+  /** Progress for one import. Polled by the screen that started it. */
+  @Get('import/:jobId')
+  @Screen('lead', 'view')
+  importStatus(@Param('jobId') jobId: string): Promise<unknown> {
+    return this.imports.status(jobId);
+  }
+
+  /** The caller's recent imports, so a refreshed page can pick a running one back up. */
+  @Get('imports/recent')
+  @Screen('lead', 'view')
+  recentImports(@CurrentUser() user: AuthUserRecord): Promise<unknown> {
+    return this.imports.recent(user);
   }
 
   /** Rows for a CSV export — either the checked leads, or everything matching the filters. */

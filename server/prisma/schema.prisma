@@ -214,6 +214,7 @@ model company_settings {
   email_suppressions     email_suppressions[]
   import_batches         import_batches[]
   export_jobs            export_jobs[]
+  lead_import_jobs       lead_import_jobs[]
   personal_access_tokens personal_access_tokens[]
   meta_webhook_events    meta_webhook_events[]
 }
@@ -2367,5 +2368,57 @@ model role_permissions {
   /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
   company_id Int @default(1)
 
+  @@index([company_id])
+}
+
+/// A CSV lead import, run in the background rather than inside the request that asked for it.
+///
+/// Importing was previously done inline: one HTTP request held open while every row was looked up
+/// and written one at a time. Measured against 40,000 existing leads, a 5,000-row file spent about
+/// 132 seconds in lookups alone — longer than a default reverse-proxy timeout, so the browser saw
+/// a 504 over a half-finished import that had no transaction and no way to resume. This row is
+/// what makes the work survivable: it owns the progress counters, so a client can poll instead of
+/// waiting, and a restart can tell what was in flight.
+model lead_import_jobs {
+  id     Int    @id @default(autoincrement())
+  /// Public identifier. Opaque so a job cannot be guessed from a sequential id.
+  job_id String @unique @db.VarChar(64)
+  /// Queued | Processing | Completed | Failed
+  status String @default("Queued") @db.VarChar(24)
+  /// Which screen asked — 'campaigns' or 'leads'. They apply the same rules but report differently.
+  source String @default("leads") @db.VarChar(24)
+  tag    String? @db.VarChar(190)
+
+  /// The uploaded CSV, held only until the job finishes and then cleared.
+  ///
+  /// In the row rather than on disk on purpose: it is covered by the same transaction and the same
+  /// backup as the job, so there is no orphaned file to reconcile if the process dies mid-import.
+  /// Clearing it on completion is what stops this table inheriting the unbounded-growth problem
+  /// that `inbound_emails` has.
+  payload String? @db.Text
+
+  total_rows     Int @default(0)
+  /// Rows consumed so far. Updated once per batch, which is what "2,500 of 5,000" reads from.
+  processed_rows Int @default(0)
+  imported       Int @default(0)
+  tagged         Int @default(0)
+  duplicate      Int @default(0)
+  invalid        Int @default(0)
+
+  failure_reason  String?   @db.Text
+  requested_by    String?   @db.VarChar(255)
+  requested_by_id Int?
+  requested_at    DateTime? @db.Timestamp(0)
+  started_at      DateTime? @db.Timestamp(0)
+  completed_at    DateTime? @db.Timestamp(0)
+  created_at      DateTime? @db.Timestamp(0)
+  updated_at      DateTime? @db.Timestamp(0)
+
+  /// The brokerage this row belongs to. See src/core/tenancy.spec.ts for why this table carries one.
+  company_id Int              @default(1)
+  company    company_settings @relation(fields: [company_id], references: [id], onUpdate: NoAction)
+
+  @@index([status])
+  @@index([requested_by_id])
   @@index([company_id])
 }

@@ -69,6 +69,11 @@ const ROOT = [
   // it likes, which is not something a tenant filter can follow.)
   'import_batches',
   'export_jobs',
+  // Same shape as export_jobs: requested_by_id is a bare integer with no foreign key, so there is
+  // no relation for isolation to travel along. It also outlives the request that created it — the
+  // work runs on a queue — so the tenant has to be recorded on the row rather than inferred from
+  // whoever happens to be asking later.
+  'lead_import_jobs',
   'personal_access_tokens',
   'roles', // already has it
   'subscriptions', // already has it
