@@ -41,7 +41,9 @@ export class ScreenGuard implements CanActivate {
 
     const user = context.switchToHttp().getRequest<Request>().authUser;
 
-    const area = SCREEN_DOMAIN[meta.screen];
+    // The route's own declaration wins over the screen's default classification, so a `common`
+    // screen with one endpoint per area still gets its module checked.
+    const area = meta.area ?? SCREEN_DOMAIN[meta.screen];
     // 'common' screens belong to both areas, and an unknown screen is not one this map has an
     // opinion about. Neither is gated — inventing a module for a screen nobody classified would
     // lock people out of it on the strength of a missing entry.

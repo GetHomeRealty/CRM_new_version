@@ -92,6 +92,8 @@ const DERIVED: Record<string, string> = {
   todos: 'users', meta_connections: 'users', meta_sync_history: 'users', meta_lead_forms: 'users',
   favorites: 'users', campaign_templates: 'users', calendar_events: 'users', mail_accounts: 'users',
   sessions: 'users', user_permissions: 'users', user_modules: 'users',
+  // A browser belongs to the person who subscribed it, and is reached no other way.
+  push_subscriptions: 'users',
 
   // via leads
   lead_notes: 'leads', lead_tasks: 'leads', lead_showings: 'leads', lead_calls: 'leads',
@@ -104,6 +106,8 @@ const DERIVED: Record<string, string> = {
   transaction_message_reads: 'transactions', transaction_snapshots: 'transactions',
   transaction_reviews: 'transactions',
   transaction_reminders: 'transactions',
+  // Appointment reminders hang off the event they remind you about, which hangs off its user.
+  calendar_event_reminders: 'calendar_events',
   transaction_review_messages: 'transaction_reviews',
   transaction_review_attachments: 'transaction_review_messages',
   transaction_edit_requests: 'transactions', transaction_delete_requests: 'transactions',

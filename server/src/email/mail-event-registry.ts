@@ -290,6 +290,33 @@ export const MAIL_EVENTS: Record<string, MailEvent> = {
       + '{{ transaction_button }}'
       + '<p>Regards,<br>{{ company_name }}</p>',
   },
+  /**
+   * An appointment is coming up.
+   *
+   * Sent to the person whose calendar it is, at the lead times in `REMINDER_LEAD_MINUTES`, and only
+   * when they ticked "Remind me". The checkbox stored a flag that nothing on the server ever read,
+   * so an agent could tick it for a showing and hear nothing.
+   */
+  'calendar.event_reminder': {
+    module: 'Calendar',
+    label: 'Calendar — Appointment Reminder',
+    variables: ['user_name', 'event_title', 'event_type', 'event_date', 'event_time', 'event_end_time', 'when_phrase', 'location', 'attendees', 'contact_phone', 'contact_email', 'notes', 'deal_number', 'property_address', 'company_name', 'current_date'],
+    default_subject: '{{ when_phrase }}: {{ event_title }} at {{ event_time }}',
+    default_body_html:
+      '<p>Hello {{ user_name }},</p>'
+      + '<p>A reminder that <strong>{{ event_title }}</strong> is {{ when_phrase }}.</p>'
+      + '<table style="border-collapse:collapse;font-size:14px;margin:10px 0">'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">What</td><td style="padding:4px 0;font-weight:600">{{ event_title }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Type</td><td style="padding:4px 0">{{ event_type }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">When</td><td style="padding:4px 0;font-weight:600">{{ event_date }} at {{ event_time }}{{ event_end_time }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Where</td><td style="padding:4px 0">{{ location }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">With</td><td style="padding:4px 0">{{ attendees }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Contact</td><td style="padding:4px 0">{{ contact_phone }} {{ contact_email }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Deal</td><td style="padding:4px 0">{{ deal_number }} {{ property_address }}</td></tr>'
+      + '</table>'
+      + '<p>{{ notes }}</p>'
+      + '<p>Regards,<br>{{ company_name }}</p>',
+  },
   /** Buyer lawyer details outstanding. */
   'transaction.lawyer_buyer_reminder': {
     module: 'Transactions',

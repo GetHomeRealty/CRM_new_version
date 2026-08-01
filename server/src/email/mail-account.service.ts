@@ -89,7 +89,18 @@ export class MailAccountService {
     const rows = await this.prisma.mail_accounts.findMany({
       where: { user_id: userId, ...(scope ? { scope } : {}) },
     });
-    rows.sort((a, b) => Number(b.is_default) - Number(a.is_default) || a.name.localeCompare(b.name, 'en', { sensitivity: 'base' }) || a.id - b.id);
+    // Ordered by area, then name — deliberately NOT by which one is the default.
+    //
+    // Sorting defaults to the top meant the list re-ordered itself the instant you chose one: the
+    // row you had just clicked jumped up, another slid into the space it left, and that row's
+    // button still read "Set default". The press looked like it had done nothing, when what had
+    // actually happened was that the answer moved out from under the cursor. A user's accounts are
+    // a handful of rows; keeping them still is worth far more than floating the default to the top.
+    const areaRank = (s: string | null) => (s === 'crm' ? 0 : s === 'desk' ? 1 : 2);
+    rows.sort((a, b) =>
+      areaRank(a.scope) - areaRank(b.scope)
+      || a.name.localeCompare(b.name, 'en', { sensitivity: 'base' })
+      || a.id - b.id);
     return rows.map((a) => this.resource(a));
   }
 
@@ -244,7 +255,15 @@ export class MailAccountService {
     const existing = await this.find(id);
     if (!existing) throw this.missing(id);
     await this.prisma.mail_accounts.update({ where: { id }, data: { is_default: true, is_active: true, updated_at: new Date() } });
-    await this.makeSoleDefault(id, null, existing.scope);
+    // `existing.user_id`, not a hardcoded null.
+    //
+    // `makeSoleDefault` filters on the owner, so passing null only ever cleared the brokerage's own
+    // accounts. Point this endpoint at an account belonging to a USER and the previous default was
+    // left standing: the area ended up with two primaries at once, and every screen that resolves
+    // the primary with `find(a => a.is_default)` kept naming the old one — so pressing the button
+    // appeared to do nothing at all. Brokerage accounts still carry user_id null, so the admin
+    // Email Settings screen behaves exactly as before.
+    await this.makeSoleDefault(id, existing.user_id, existing.scope);
     return this.resource((await this.find(id))!);
   }
 

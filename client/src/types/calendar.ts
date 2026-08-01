@@ -1,6 +1,8 @@
 /** Calendar event types (mirrors the server's calendar.constants). */
-export type EventType = 'viewing' | 'meeting' | 'open-house' | 'follow-up' | 'call' | 'showing' | 'task';
-export type EventStatus = 'scheduled' | 'completed' | 'cancelled' | 'rescheduled';
+export type EventType =
+  | 'viewing' | 'meeting' | 'open-house' | 'follow-up' | 'call' | 'showing'
+  | 'inspection' | 'closing' | 'task';
+export type EventStatus = 'scheduled' | 'completed' | 'cancelled' | 'no-show' | 'rescheduled';
 
 /** One appointment as returned by the API. */
 export interface CalendarEvent {
@@ -10,6 +12,14 @@ export interface CalendarEvent {
   date: string;
   /** 24-hour HH:MM */
   time: string;
+  /** Optional 24-hour HH:MM end. Null means a one-hour slot for conflict checking. */
+  end_time: string | null;
+  /** Bumped on every save. Sent back when editing so a stale write is refused, not applied. */
+  version: number;
+  /** The series this belongs to — the id of its first occurrence. Null for a one-off. */
+  recurrence_id: number | null;
+  /** The rule, carried by the first occurrence only. */
+  recur_freq: string | null;
   type: EventType;
   status: EventStatus;
   location: string | null;
@@ -35,6 +45,17 @@ export interface CalendarEventInput {
   title: string;
   date: string;
   time: string;
+  /** Optional end. Null or omitted means a one-hour slot. */
+  end_time?: string | null;
+  /** Save despite overlapping another appointment — back-to-back showings are legitimate. */
+  allow_overlap?: boolean;
+  /** The version the editor was opened on. */
+  version?: number;
+  /** Repeat rule, on create only. Omitted or 'none' makes a single appointment. */
+  recur_freq?: 'none' | 'daily' | 'weekly' | 'monthly';
+  recur_interval?: number;
+  recur_until?: string | null;
+  recur_count?: number | null;
   type: EventType;
   status: EventStatus;
   location?: string;

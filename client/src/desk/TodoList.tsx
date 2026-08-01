@@ -251,32 +251,40 @@ function TodoEditor({ onClose, onSaved }: { onClose: () => void; onSaved: () => 
   };
 
   return (
-    <div className="overlay open" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+    // Escape closes it, like every other dismissable layer. Without this the modal could only be
+    // left through Cancel, and its overlay swallows clicks on everything behind — a keyboard user
+    // reaching it had no way out at all.
+    <div className="overlay open"
+      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      onKeyDown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); onClose(); } }}
+      role="dialog" aria-modal="true" aria-labelledby="todo-add-heading">
       <div className="modal" style={{ maxWidth: 460 }}>
         <button className="close" type="button" onClick={onClose} aria-label="Close">✕</button>
-        <div className="modal-h">Add Todo</div>
+        <div className="modal-h" id="todo-add-heading">Add Todo</div>
+        {/* Each label carries htmlFor and each control an id. They were adjacent but unassociated,
+            so a screen reader announced four unnamed boxes. */}
         <form onSubmit={submit}>
           <div className="field">
-            <label>Title *</label>
-            <input value={form.title} autoFocus required
+            <label htmlFor="todo-title">Title *</label>
+            <input id="todo-title" name="title" value={form.title} autoFocus required
               onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))} />
           </div>
           <div className="field">
-            <label>Description</label>
-            <textarea rows={2} value={form.description}
+            <label htmlFor="todo-description">Description</label>
+            <textarea id="todo-description" name="description" rows={2} value={form.description}
               onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} />
           </div>
           <div className="g2">
             <div className="field">
-              <label>Priority</label>
-              <select value={form.priority}
+              <label htmlFor="todo-priority">Priority</label>
+              <select id="todo-priority" name="priority" value={form.priority}
                 onChange={(e) => setForm((f) => ({ ...f, priority: e.target.value as TodoPriority }))}>
                 {PRIORITIES.map((p) => <option key={p} value={p}>{title(p)}</option>)}
               </select>
             </div>
             <div className="field">
-              <label>Due date</label>
-              <input type="date" value={form.due_date}
+              <label htmlFor="todo-due-date">Due date</label>
+              <input id="todo-due-date" name="due_date" type="date" value={form.due_date}
                 onChange={(e) => setForm((f) => ({ ...f, due_date: e.target.value }))} />
             </div>
           </div>

@@ -5,7 +5,8 @@ import { LeadAuditService } from './lead-audit.service';
 import { LeadNotificationService } from './lead-notification.service';
 import { normalizePhone } from '../meta/meta-lead-mapper';
 import type { AuthUserRecord } from '../auth/auth.types';
-import { isAgent, isSuperAdmin } from '../core/authz';
+import { isAgent } from '../core/authz';
+import { leadScopeWhere } from '../common/lead-scope';
 import {
   EMAIL_SHAPE, LEADS_PER_PAGE, MAX_PER_PAGE, MAX_IMPORT_ROWS, NONE_FILTER_VALUE,
   RECENT_LEAD_DAYS, WEBSITE_ENQUIRY_SOURCES, DASHBOARD_LEAD_SOURCES,
@@ -75,12 +76,13 @@ export class LeadsService {
    * A lead with no owner at all is brokerage intake that has not been attributed yet. It goes to the
    * top tier rather than to nobody, so an import that forgets to stamp an owner surfaces somewhere
    * instead of vanishing.
+   *
+   * Now shared with the CRM dashboard, which used to restate it from memory and got it wrong in
+   * both directions. The rule is unchanged; it simply lives in one file so a tile and the screen it
+   * summarises cannot drift apart again.
    */
   private scopeWhere(user: AuthUserRecord): Prisma.leadsWhereInput {
-    const id = user.id ?? -1;
-    const mine: Prisma.leadsWhereInput[] = [{ assigned_to: id }, { owner_user_id: id }];
-    if (isSuperAdmin(user)) mine.push({ owner_user_id: null });
-    return { OR: mine };
+    return leadScopeWhere(user);
   }
 
   /** The identity lock (name/email/phone/source/assignment, and delete) is an agent-only restriction. */

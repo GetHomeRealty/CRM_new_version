@@ -1,8 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { getCrmDashboard } from '../lib/api';
 import { listAllLeadTasks, listAllLeadShowings } from '../lib/leadsApi';
-import { crmPath } from './area';
 import { useToast } from './toast';
 import { useAuth } from '../context/AuthContext';
 import { apiErrorMessage } from '../lib/apiError';
@@ -10,6 +8,7 @@ import TodoList from './TodoList';
 import { Breakdown, TallyBreakdown, Tile } from './DashboardTiles';
 import { LeadShowingsPanel, LeadTasksPanel } from './LeadPanels';
 import type { CrmDashboard, LeadShowingRow, LeadTaskRow } from '../types';
+import type { TodoCounts } from '../types/todo';
 
 /**
  * The Customer Relationship Management dashboard.
@@ -25,7 +24,6 @@ import type { CrmDashboard, LeadShowingRow, LeadTaskRow } from '../types';
  */
 export default function CrmDashboardPage() {
   const toast = useToast();
-  const navigate = useNavigate();
   const { can } = useAuth();
   const canSeeLeads = can('lead', 'view');
 
@@ -48,12 +46,29 @@ export default function CrmDashboardPage() {
     listAllLeadShowings().then(setShowings).catch(() => setShowings([]));
   }, [canSeeLeads]);
 
-  // Reported up by the To-Do list so the card and the list are always the same numbers.
-  const [todoTotal, setTodoTotal] = useState<number | null>(null);
-  const takeTodoCounts = useCallback((c: { total: number }) => setTodoTotal(c.total), []);
+  // Reported up by the To-Do list so the card and the list are always the same numbers. The whole
+  // count object is kept, not just the total: the tile shows a breakdown, and taking the headline
+  // from here while leaving the parts on the page-load payload is exactly how the two drifted.
+  const [todoCounts, setTodoCounts] = useState<TodoCounts | null>(null);
+  const takeTodoCounts = useCallback((c: TodoCounts) => setTodoCounts(c), []);
 
   if (loading) return <div className="centered">Loading dashboard…</div>;
-  if (!data) return <div className="card stub"><h2>Nothing to show</h2><p className="help">The CRM dashboard could not be loaded. Try Refresh.</p></div>;
+  if (!data) {
+    return (
+      <div className="card stub">
+        <h2>Nothing to show</h2>
+        <p className="help">The CRM dashboard could not be loaded.</p>
+        {/* The message used to end "Try Refresh" while the only Refresh button on the screen
+            belonged to the To-Do list — which this error state replaces. It named a control that
+            was not there to press. */}
+        <button className="btn primary sm" type="button" onClick={() => window.location.reload()}>↻ Refresh</button>
+      </div>
+    );
+  }
+
+  // Live counts once the list has reported; the page-load payload until then.
+  const todos = todoCounts ?? data.todos;
+  const followUpsDue = data.tasks.due_today + data.tasks.overdue;
 
   return (
     <>
@@ -64,9 +79,14 @@ export default function CrmDashboardPage() {
           sub={<TallyBreakdown by={data.leads.by_status} />} />
         <Tile label="Lead Sources" value={Object.keys(data.leads.by_source).length}
           sub={<TallyBreakdown by={data.leads.by_source} />} />
+        {/* A card, like every other tile on this row — the sub-line describes the number rather
+            than being a link out. It was the one tile carrying a button, which made it read as a
+            control rather than a figure. */}
         <Tile label="Unread Mail" value={data.inbox.unread}
           color={data.inbox.unread > 0 ? 'var(--info-700)' : undefined}
-          sub={<button className="prop-link" type="button" onClick={() => navigate(crmPath('inbox'))}>open the CRM inbox</button>} />
+          sub={<span className="tile-breakdown"><span className="tile-part info">
+            {data.inbox.unread > 0 ? 'waiting in the CRM inbox' : 'nothing unread'}
+          </span></span>} />
       </div>
 
       <div className="tiles">
@@ -77,8 +97,11 @@ export default function CrmDashboardPage() {
             { n: data.tasks.cancelled, label: 'cancelled', tone: 'bad' },
           ]} />
         } />
-        <Tile label="Follow-ups Due" value={data.tasks.due_today}
-          color={data.tasks.due_today > 0 ? 'var(--info-700)' : undefined}
+        {/* Overdue counts as due. The headline was `due_today` alone, so a user with one task due
+            today and two a week late read "1" — the two that most needed chasing were the ones the
+            number left out. */}
+        <Tile label="Follow-ups Due" value={followUpsDue}
+          color={followUpsDue > 0 ? 'var(--info-700)' : undefined}
           sub={<Breakdown parts={[
             { n: data.tasks.due_today, label: 'due today', tone: 'info' },
             { n: data.tasks.overdue, label: 'overdue', tone: 'bad' },
@@ -96,10 +119,13 @@ export default function CrmDashboardPage() {
             { n: data.calendar.upcoming, label: 'next 30 days' },
           ]} />
         } />
-        <Tile label="Todo List" value={todoTotal ?? data.todos.total} sub={
+        {/* Headline and breakdown from ONE object. They used to come from two: the headline from
+            the live list, the parts from the page-load payload — so adding a to-do gave "1" beside
+            "0 pending" until the page was reloaded. */}
+        <Tile label="Todo List" value={todos.total} sub={
           <Breakdown parts={[
-            { n: data.todos.pending, label: 'pending', tone: 'info' },
-            { n: data.todos.overdue, label: 'overdue', tone: 'bad' },
+            { n: todos.pending, label: 'pending', tone: 'info' },
+            { n: todos.overdue, label: 'overdue', tone: 'bad' },
           ]} />
         } />
       </div>

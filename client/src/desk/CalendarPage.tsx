@@ -1,13 +1,15 @@
 import { useArea } from './AreaContext';
 import { deskPath } from './area';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { listEvents, deleteEvent, calendarOptions, listHolidays } from '../lib/calendarApi';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { listEvents, deleteEvent, updateEvent, calendarOptions, listHolidays } from '../lib/calendarApi';
 import { apiErrorMessage } from '../lib/apiError';
 import { useToast } from './toast';
 import { useAuth } from '../context/AuthContext';
 import EventEditorModal from './EventEditorModal';
 import ConfirmDialog from './ConfirmDialog';
+import CalendarAnalyticsPanel from './CalendarAnalyticsPanel';
+import PushRemindersToggle from './PushRemindersToggle';
 import type { CalendarEvent, CalendarOptions, Holiday } from '../types';
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -37,11 +39,15 @@ const clock = (t: string): string => {
 const typePill = (t: string): string => {
   switch (t) {
     case 'viewing': return 'ev-viewing';
-    case 'showing': return 'ev-viewing';
+    // Its own colour. A showing and a viewing are different appointments to a brokerage, and
+    // sharing one swatch made a day of both unreadable at a glance.
+    case 'showing': return 'ev-showing';
     case 'meeting': return 'ev-meeting';
     case 'open-house': return 'ev-openhouse';
     case 'follow-up': return 'ev-followup';
     case 'call': return 'ev-call';
+    case 'inspection': return 'ev-inspection';
+    case 'closing': return 'ev-closing';
     default: return 'ev-task';
   }
 };
@@ -56,9 +62,29 @@ const holidayTitle = (h: Holiday): string => {
     : `${h.name} — ${kind}.`;
 };
 const statusPill = (s: string): string =>
-  s === 'completed' ? 'ok' : s === 'cancelled' ? 'bad' : s === 'rescheduled' ? 'warn' : 'info';
+  s === 'completed' ? 'ok'
+  // A no-show reads as bad, like a cancellation — it cost the agent a journey.
+  : s === 'cancelled' || s === 'no-show' ? 'bad'
+  : s === 'rescheduled' ? 'warn' : 'info';
 
 /** Every day shown in the month grid, padded to whole weeks. */
+/**
+ * `YYYY-MM` from the URL, or the current month.
+ *
+ * Deliberately forgiving — a hand-edited or truncated value falls back to today rather than
+ * rendering an Invalid Date grid.
+ */
+function monthFromParam(v: string | null): Date {
+  const m = /^(\d{4})-(\d{2})$/.exec(v ?? '');
+  if (m) {
+    const year = Number(m[1]);
+    const month = Number(m[2]);
+    if (year >= 1900 && year <= 2200 && month >= 1 && month <= 12) return new Date(year, month - 1, 1);
+  }
+  const now = new Date();
+  return new Date(now.getFullYear(), now.getMonth(), 1);
+}
+
 function monthGrid(anchor: Date): { date: Date; inMonth: boolean }[] {
   const first = new Date(anchor.getFullYear(), anchor.getMonth(), 1);
   const start = new Date(first);
@@ -84,7 +110,24 @@ export default function CalendarPage() {
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [options, setOptions] = useState<CalendarOptions | null>(null);
   const [loading, setLoading] = useState(true);
-  const [anchor, setAnchor] = useState(new Date());
+  /**
+   * The month on screen, kept in the URL as `?month=YYYY-MM`.
+   *
+   * It was component state, so a refresh, a bookmark or a link pasted to a colleague all landed
+   * back on today — you could not send somebody "next month's showings". Held here it survives a
+   * reload, and Back/Forward step through the months you visited.
+   */
+  const [params, setParams] = useSearchParams();
+  const anchor = monthFromParam(params.get('month'));
+  const setAnchor = (next: Date | ((prev: Date) => Date)) => {
+    const d = typeof next === 'function' ? (next as (p: Date) => Date)(anchor) : next;
+    const value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    setParams((prev) => {
+      const p = new URLSearchParams(prev);
+      p.set('month', value);
+      return p;
+    }, { replace: false });
+  };
   const [selected, setSelected] = useState(iso(new Date()));
   const [editing, setEditing] = useState<CalendarEvent | 'new' | null>(null);
   const [toDelete, setToDelete] = useState<CalendarEvent | null>(null);
@@ -97,15 +140,33 @@ export default function CalendarPage() {
    */
   const loadedOnce = useRef(false);
 
+  // The span the grid is showing, including the trailing days of the neighbouring months. Computed
+  // before `load` because the fetch is scoped to it.
+  const cells = monthGrid(anchor);
+  const gridFrom = cells.length ? iso(cells[0].date) : '';
+  const gridTo = cells.length ? iso(cells[cells.length - 1].date) : '';
+
+  /**
+   * Fetch only the month on screen.
+   *
+   * This used to ask for every event the user had ever had and narrow it in the browser, and
+   * changing month fired no request at all — so the first visit paid for the whole history and the
+   * cost grew for ever. The busiest calendar here was already 223 KB across five months of Google
+   * sync. The holidays panel beside it was doing the right thing all along; this now matches it.
+   *
+   * A month either side is included so an event on the trailing days of the grid is still shown.
+   */
   const load = useCallback(() => {
+    if (!gridFrom || !gridTo) return;
     if (!loadedOnce.current) setLoading(true);
-    listEvents(area)
+    listEvents(area, { from: gridFrom, to: gridTo })
       .then(setEvents)
       .catch((e) => toast(apiErrorMessage(e, 'Could not load the calendar'), 'bad'))
       .finally(() => { loadedOnce.current = true; setLoading(false); });
     // `area` is a dependency: switching from the CRM's calendar to the Transaction Desk's has to
-    // refetch, or the new area would keep showing the previous one's events.
-  }, [toast, area]);
+    // refetch, or the new area would keep showing the previous one's events. So is the visible
+    // span — moving to another month is now a fetch rather than a filter.
+  }, [toast, area, gridFrom, gridTo]);
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => { calendarOptions().then(setOptions).catch(() => { /* form falls back to defaults */ }); }, []);
@@ -121,12 +182,9 @@ export default function CalendarPage() {
     return map;
   }, [events]);
 
-  const cells = monthGrid(anchor);
-
-  // Fetch holidays for exactly the span the grid shows — which includes the trailing days of the
-  // neighbouring months, so a December view still picks up New Year's Day.
-  const gridFrom = cells.length ? iso(cells[0].date) : '';
-  const gridTo = cells.length ? iso(cells[cells.length - 1].date) : '';
+  // Holidays are fetched for exactly the span the grid shows — which includes the trailing days of
+  // the neighbouring months, so a December view still picks up New Year's Day. `gridFrom`/`gridTo`
+  // are declared above, next to `load`, because the events fetch now uses the same span.
   useEffect(() => {
     if (!gridFrom || !gridTo) return;
     let cancelled = false;
@@ -159,10 +217,43 @@ export default function CalendarPage() {
   );
 
   // ConfirmDialog closes itself after onConfirm, so this only does the work.
+  // Which occurrences a delete applies to. Only asked when the event is part of a series.
+  const [deleteScope, setDeleteScope] = useState<'this' | 'series'>('this');
+
+  /**
+   * Dragging an appointment to another day.
+   *
+   * `dragging` is the event under the cursor and `dragOver` the cell it is above, so the grid can
+   * show where it would land. Both are cleared on drop and on dragend — a drag abandoned outside
+   * the window otherwise leaves a cell highlighted for ever.
+   */
+  const [dragging, setDragging] = useState<CalendarEvent | null>(null);
+  const [dragOver, setDragOver] = useState<string | null>(null);
+
+  const moveTo = async (e: CalendarEvent, day: string) => {
+    if (e.date === day) return;
+    try {
+      // The version goes with it, so a drag is refused rather than applied if somebody else moved
+      // the same appointment while this browser was holding an older copy. A dragged occurrence of
+      // a repeat moves on its own — 'this', never the series: dragging one box cannot reasonably
+      // mean "move every Tuesday for the next six months".
+      await updateEvent(area, e.id, { date: day, version: e.version }, 'this');
+      toast(`"${e.title}" moved to ${longDate(day)}`, 'ok');
+      load();
+    } catch (ex) {
+      const status = (ex as { response?: { status?: number } }).response?.status;
+      // 409 is somebody else's save; 400 is an overlap. Both are worth the exact words, because a
+      // drag that silently springs back looks like the calendar is broken.
+      if (status === 409) toast('Somebody else changed that appointment. Refreshing.', 'bad');
+      else toast(apiErrorMessage(ex, 'Could not move the appointment'), 'bad');
+      load();
+    }
+  };
+
   const remove = async () => {
     if (!toDelete) return;
     try {
-      await deleteEvent(area, toDelete.id);
+      await deleteEvent(area, toDelete.id, toDelete.recurrence_id ? deleteScope : 'this');
       toast('Event deleted', 'ok');
       load();
     } catch (e) {
@@ -214,9 +305,20 @@ export default function CalendarPage() {
               return (
                 <div
                   key={key}
-                  className={`cal-cell${inMonth ? '' : ' out'}${key === selected ? ' sel' : ''}${key === today ? ' today' : ''}`}
+                  className={`cal-cell${inMonth ? '' : ' out'}${key === selected ? ' sel' : ''}${key === today ? ' today' : ''}${dragOver === key ? ' drop-target' : ''}`}
                   onClick={() => setSelected(key)}
                   onDoubleClick={() => canEdit && setEditing('new')}
+                  // preventDefault is what makes a cell a valid drop target at all; without it the
+                  // browser refuses the drop and the drag just snaps back.
+                  onDragOver={(ev) => { if (dragging) { ev.preventDefault(); setDragOver(key); } }}
+                  onDragLeave={() => setDragOver((d) => (d === key ? null : d))}
+                  onDrop={(ev) => {
+                    ev.preventDefault();
+                    const moving = dragging;
+                    setDragOver(null);
+                    setDragging(null);
+                    if (moving) void moveTo(moving, key);
+                  }}
                   role="button"
                   tabIndex={0}
                 >
@@ -232,8 +334,18 @@ export default function CalendarPage() {
                     <button
                       key={e.id}
                       type="button"
-                      className={`cal-chip ${typePill(e.type)}`}
-                      title={`${clock(e.time)} · ${e.title}`}
+                      className={`cal-chip ${typePill(e.type)}${dragging?.id === e.id ? ' dragging' : ''}`}
+                      title={canEdit ? `${clock(e.time)} · ${e.title} — drag to another day to reschedule` : `${clock(e.time)} · ${e.title}`}
+                      // Only when the user may edit: offering a drag that the server will refuse
+                      // teaches people the calendar is unreliable.
+                      draggable={canEdit}
+                      onDragStart={(ev) => {
+                        setDragging(e);
+                        ev.dataTransfer.effectAllowed = 'move';
+                        // Firefox will not start a drag unless something is on the transfer.
+                        ev.dataTransfer.setData('text/plain', String(e.id));
+                      }}
+                      onDragEnd={() => { setDragging(null); setDragOver(null); }}
                       onClick={(ev) => { ev.stopPropagation(); canEdit ? setEditing(e) : setSelected(key); }}
                     >
                       {clock(e.time)} {e.title}
@@ -308,6 +420,12 @@ export default function CalendarPage() {
         </div>
       </div>
 
+      {/* Below the calendar, collapsed. It answers an occasional question and must not push the
+          month grid down the page for the common visit, which is somebody checking tomorrow. */}
+      <PushRemindersToggle />
+
+      <CalendarAnalyticsPanel />
+
       {editing && (
         <EventEditorModal
           event={editing === 'new' ? null : editing}
@@ -320,11 +438,27 @@ export default function CalendarPage() {
 
       <ConfirmDialog
         confirm={toDelete ? {
-          title: 'Delete this event?',
-          message: `"${toDelete.title}" on ${longDate(toDelete.date)} will be removed from the calendar.`,
+          title: toDelete.recurrence_id ? 'Delete a repeating appointment' : 'Delete this event?',
+          // A repeat needs the choice spelled out before it is made: "delete" on a standing
+          // arrangement is ambiguous, and guessing wrong removes months of somebody's diary.
+          message: toDelete.recurrence_id
+            ? `"${toDelete.title}" on ${longDate(toDelete.date)} repeats. Choose what to remove — appointments before this date are never touched.`
+            : `"${toDelete.title}" on ${longDate(toDelete.date)} will be removed from the calendar.`,
+          body: toDelete.recurrence_id ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 8 }}>
+              <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontWeight: 400 }}>
+                <input type="radio" name="del-scope" checked={deleteScope === 'this'} onChange={() => setDeleteScope('this')} />
+                Just this one — {longDate(toDelete.date)}
+              </label>
+              <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontWeight: 400 }}>
+                <input type="radio" name="del-scope" checked={deleteScope === 'series'} onChange={() => setDeleteScope('series')} />
+                This one and everything after it
+              </label>
+            </div>
+          ) : null,
           onConfirm: remove,
         } : null}
-        onClose={() => setToDelete(null)}
+        onClose={() => { setToDelete(null); setDeleteScope('this'); }}
       />
     </>
   );

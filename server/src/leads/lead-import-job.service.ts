@@ -4,6 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { runAsSystem } from '../core/tenant-context';
 import { schedulersEnabled, schedulerSkipReason } from '../common/schedulers';
 import { IMPORT_BATCH_SIZE, LeadImportEngine, emptyTally } from './lead-import.engine';
+import { isSuperAdmin } from '../core/authz';
 import type { AuthUserRecord } from '../auth/auth.types';
 
 /** Above this the file is refused outright rather than accepted and run for an hour. */
@@ -172,7 +173,15 @@ export class LeadImportJobService implements OnModuleInit {
 
     try {
       const rows = this.engine.parseCsv(job.payload);
-      const ctx = { tag: job.tag ?? '', userName: job.requested_by, userId: job.requested_by_id };
+      // The requester's rank, read once per job: the engine needs it to decide which existing
+      // leads are theirs to tag. Cheap, and it keeps the rule identical to the Leads module's.
+      const requester = job.requested_by_id
+        ? await runAsSystem(() => this.prisma.users.findUnique({ where: { id: job.requested_by_id! }, select: { role: true } }))
+        : null;
+      const ctx = {
+        tag: job.tag ?? '', userName: job.requested_by, userId: job.requested_by_id,
+        userIsSuperAdmin: isSuperAdmin({ role: requester?.role ?? '' }),
+      };
       // Spans batches, so a duplicate address either side of a boundary is still caught.
       const seen = new Set<string>();
 

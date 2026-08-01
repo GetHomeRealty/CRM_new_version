@@ -4,6 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import type { AuthUserRecord } from '../auth/auth.types';
 
 import { isAgent } from '../core/authz';
+import { leadTaskScopeWhere, liveLeadWhere } from '../common/lead-scope';
 /**
  * The two dashboards, as two separate reads.
  *
@@ -68,6 +69,14 @@ export class AreaDashboardService {
     return { OR: [{ domain: area }, { domain: null }] };
   }
 
+  /**
+   * A cancelled appointment is not upcoming.
+   *
+   * The calendar counters filtered by date and area but not by status, so cancelling a viewing left
+   * it in both "today" and "next 30 days" — the tile went UP when an appointment was called off.
+   */
+  private readonly liveEvent = { status: { not: 'cancelled' } };
+
   /** Turn a groupBy result into a plain label→count map. */
   private tally<T extends string>(rows: { _count: { _all: number } }[], key: (r: never) => string): Record<T, number> {
     const out = {} as Record<T, number>;
@@ -81,12 +90,18 @@ export class AreaDashboardService {
   // ------------------------------------------------------------------- CRM
   async crm(user: AuthUserRecord | null): Promise<CrmDashboard> {
     const userId = user?.id ?? -1;
-    // Leads are assigned, so an agent's dashboard counts the ones assigned to them. Mirrors how the
-    // Leads screen already scopes, so the two never disagree.
-    const leadWhere: Prisma.leadsWhereInput = isAgent(user) ? { assigned_to: userId } : {};
-    const taskWhere: Prisma.lead_tasksWhereInput = isAgent(user)
-      ? { OR: [{ assigned_to: userId }, { user_id: userId }] }
-      : {};
+    // Both borrowed from the Leads module rather than restated here. This file used to spell the
+    // rule itself and got it wrong in both directions — an agent was scoped by `assigned_to` alone
+    // so leads they owned went uncounted, everyone else was given no filter at all so an
+    // administrator's tile read the whole brokerage while their Leads screen read their own book,
+    // and neither path excluded soft-deleted leads, so every lead figure counted deleted rows for
+    // ever. A tile must answer exactly what the screen it summarises answers.
+    const leadWhere: Prisma.leadsWhereInput = liveLeadWhere(user);
+    const taskWhere: Prisma.lead_tasksWhereInput = leadTaskScopeWhere(user);
+    // A campaign is private to whoever created it, for EVERY role — the Campaigns module's own
+    // rule. These two aggregates carried no filter, so an agent who owns nothing still read the
+    // brokerage's campaign count and its total sent/opened volumes off their dashboard.
+    const campaignWhere: Prisma.campaignsWhereInput = { created_by_id: userId };
     const today = this.startOfToday();
     const personal = { user_id: userId, deleted_at: null };
 
@@ -110,8 +125,8 @@ export class AreaDashboardService {
       this.prisma.lead_tasks.count({ where: { ...taskWhere, status: 'pending', due_date: today } }),
       this.prisma.lead_tasks.count({ where: { ...taskWhere, status: 'pending', due_date: { lt: today } } }),
 
-      this.prisma.campaigns.aggregate({ _sum: { sent: true, opened: true, failed: true } }),
-      this.prisma.campaigns.count(),
+      this.prisma.campaigns.aggregate({ where: campaignWhere, _sum: { sent: true, opened: true, failed: true } }),
+      this.prisma.campaigns.count({ where: campaignWhere }),
 
       // The CRM's own mailbox: mail from accounts connected under CRM Settings.
       this.prisma.inbound_emails.count({
@@ -119,9 +134,9 @@ export class AreaDashboardService {
       }),
 
       this.prisma.calendar_events.count({
-        where: { ...personal, ...this.areaOr('crm'), date: { gte: today, lt: this.daysFromToday(30) } },
+        where: { ...personal, ...this.areaOr('crm'), ...this.liveEvent, date: { gte: today, lt: this.daysFromToday(30) } },
       }),
-      this.prisma.calendar_events.count({ where: { ...personal, ...this.areaOr('crm'), date: today } }),
+      this.prisma.calendar_events.count({ where: { ...personal, ...this.areaOr('crm'), ...this.liveEvent, date: today } }),
 
       this.prisma.todos.count({ where: { ...personal, ...this.areaOr('crm') } }),
       this.prisma.todos.count({ where: { ...personal, ...this.areaOr('crm'), status: 'pending' } }),
@@ -188,9 +203,9 @@ export class AreaDashboardService {
       this.prisma.invoices.aggregate({ _sum: { total: true, amount_paid: true, balance_due: true }, where: { deleted_at: null } }),
 
       this.prisma.calendar_events.count({
-        where: { ...personal, ...this.areaOr('desk'), date: { gte: today, lt: this.daysFromToday(30) } },
+        where: { ...personal, ...this.areaOr('desk'), ...this.liveEvent, date: { gte: today, lt: this.daysFromToday(30) } },
       }),
-      this.prisma.calendar_events.count({ where: { ...personal, ...this.areaOr('desk'), date: today } }),
+      this.prisma.calendar_events.count({ where: { ...personal, ...this.areaOr('desk'), ...this.liveEvent, date: today } }),
 
       this.prisma.todos.count({ where: { ...personal, ...this.areaOr('desk') } }),
       this.prisma.todos.count({ where: { ...personal, ...this.areaOr('desk'), status: 'pending' } }),

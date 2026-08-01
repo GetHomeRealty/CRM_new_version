@@ -136,6 +136,46 @@ export class GoogleService {
     return json.id ?? null;
   }
 
+  /**
+   * Update an event already on the user's Google Calendar.
+   *
+   * PATCH rather than PUT, so fields this application does not model — attendees, conferencing,
+   * recurrence, colour — are left as the user set them in Google rather than being erased by an
+   * update that only knows about five columns.
+   */
+  async patchEvent(accessToken: string, calendarId: string, eventId: string, event: Record<string, unknown>): Promise<boolean> {
+    const res = await fetch(
+      `${CALENDAR_API}/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`,
+      {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(event),
+      },
+    );
+    // Already gone from Google: nothing to update and nothing wrong. Treated as success so the
+    // caller does not retry an event that no longer exists.
+    if (res.status === 404 || res.status === 410) return false;
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new Error(`Google Calendar update failed (HTTP ${res.status}). ${body.slice(0, 160)}`);
+    }
+    return true;
+  }
+
+  /** Remove an event from the user's Google Calendar. Already-deleted counts as done. */
+  async deleteEvent(accessToken: string, calendarId: string, eventId: string): Promise<boolean> {
+    const res = await fetch(
+      `${CALENDAR_API}/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`,
+      { method: 'DELETE', headers: { Authorization: `Bearer ${accessToken}` } },
+    );
+    if (res.status === 404 || res.status === 410) return false;
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new Error(`Google Calendar delete failed (HTTP ${res.status}). ${body.slice(0, 160)}`);
+    }
+    return true;
+  }
+
   /** Best-effort revoke on disconnect; failure is logged, not surfaced. */
   async revoke(token: string): Promise<void> {
     try {

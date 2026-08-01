@@ -5,6 +5,8 @@ import { createPortal } from 'react-dom';
 export interface ConfirmOptions {
   title: ReactNode;
   message: ReactNode;
+  /** Extra controls between the message and the warning — e.g. choosing which occurrences to remove. */
+  body?: ReactNode;
   linked?: ReactNode[];
   note?: ReactNode;
   onConfirm?: () => void;
@@ -38,6 +40,7 @@ export default function ConfirmDialog({ confirm, onClose }: { confirm: ConfirmOp
         <button className="close" onClick={onClose}>✕</button>
         <div className="modal-h" style={{ color: 'var(--bad)' }}>{confirm.title}</div>
         <p style={{ fontSize: 13, marginTop: 4 }}>{confirm.message}</p>
+        {confirm.body}
         {confirm.linked && confirm.linked.length > 0 && (
           <div style={{ background: 'var(--warn-bg)', border: '1px solid #fed7aa', borderRadius: 8, padding: '10px 12px', fontSize: 12.5, color: 'var(--warn-ink-alt)', marginTop: 8 }}>
             <strong>⚠ This may affect linked functionality:</strong>

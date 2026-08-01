@@ -1,5 +1,5 @@
 import type { Area } from '../common/domain';
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import type { AuthUserRecord } from '../auth/auth.types';
@@ -11,10 +11,27 @@ export const TODO_PRIORITIES = ['low', 'medium', 'high'] as const;
 const isStatus = (v: string): boolean => (TODO_STATUSES as readonly string[]).includes(v);
 const isPriority = (v: string): boolean => (TODO_PRIORITIES as readonly string[]).includes(v);
 
-const str = (v: unknown): string => String(v ?? '').trim();
+/**
+ * Trim, and drop the characters Postgres cannot store.
+ *
+ * A NUL byte in any text field reached the driver and came back as an unhandled 500 —
+ * `22021: invalid byte sequence for encoding "UTF8": 0x00` — with the Prisma call in the response
+ * log. Every other bad input on this endpoint is answered with a tidy 400, so this one crashed by
+ * omission rather than by design. Stripped rather than rejected because a NUL is never something a
+ * person typed: it arrives from a bad paste or a malformed client, and there is nothing to tell
+ * them to correct. A title that was *only* control characters ends up empty and fails the
+ * already-present "A title is required." check.
+ */
+const str = (v: unknown): string =>
+  String(v ?? '')
+    // C0 controls except tab, newline and carriage return, plus DEL — all unprintable.
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '')
+    .trim();
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 export interface TodoInput {
+  /** The version the editor was opened on. Sent back so a stale save is refused, not applied. */
+  version?: unknown;
   title?: unknown;
   description?: unknown;
   status?: unknown;
@@ -112,6 +129,20 @@ export class TodosService {
     const existing = await this.prisma.todos.findFirst({ where: { id, deleted_at: null, AND: [this.scope(user), this.areaWhere(area)] } });
     if (!existing) throw new NotFoundException({ message: 'Todo not found.' });
 
+    // Same optimistic lock the calendar's events carry: a save that was composed against an older
+    // version is refused rather than quietly overwriting whoever saved in between. Omitting the
+    // version still saves, so older callers keep working.
+    if (input.version !== undefined && input.version !== null && input.version !== '') {
+      const sent = Number(input.version);
+      if (!Number.isInteger(sent) || sent < 1) throw new BadRequestException({ message: 'That version is not valid.' });
+      if (sent !== existing.version) {
+        throw new ConflictException({
+          message: 'Somebody else changed this to-do while you were editing it. Reload to see their version, then apply your change again.',
+          conflict: { current_version: existing.version, your_version: sent },
+        });
+      }
+    }
+
     const data = this.validate(input, false);
     // Stamp (or clear) the completion time whenever the status moves in or out of "completed",
     // so the timestamp can never disagree with the status.
@@ -119,7 +150,7 @@ export class TodosService {
       data.completed_at = data.status === 'completed' ? new Date() : null;
     }
 
-    const row = await this.prisma.todos.update({ where: { id }, data: { ...data, updated_at: new Date() } });
+    const row = await this.prisma.todos.update({ where: { id }, data: { ...data, version: { increment: 1 }, updated_at: new Date() } });
     return this.present(row);
   }
 
@@ -196,6 +227,7 @@ export class TodosService {
     const due = r.due_date instanceof Date ? r.due_date.toISOString().slice(0, 10) : null;
     return {
       id: r.id,
+      version: r.version ?? 1,
       title: r.title,
       description: r.description,
       status: r.status,

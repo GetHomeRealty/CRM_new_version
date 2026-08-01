@@ -99,10 +99,11 @@ export class GoogleCalendarSyncService {
     const date = new Date(Date.UTC(start.getFullYear(), start.getMonth(), start.getDate()));
     const time = `${String(start.getHours()).padStart(2, '0')}:${String(start.getMinutes()).padStart(2, '0')}`;
 
-    const data = {
+    // What Google actually knows about. Safe to write on every pull, because Google is the source
+    // of truth for all of it.
+    const fromGoogle = {
       title: (ev.summary ?? '(no title)').slice(0, 255),
       date, time,
-      type: 'meeting', status: 'scheduled',
       location: ev.location ? ev.location.slice(0, 255) : null,
       description: ev.description ?? null,
       google_calendar_id: ev.id,
@@ -113,8 +114,24 @@ export class GoogleCalendarSyncService {
       domain: area,
       updated_at: new Date(),
     };
-    if (existing) await this.prisma.calendar_events.update({ where: { id: existing.id }, data });
-    else await this.prisma.calendar_events.create({ data: { ...data, created_by: 'Google Calendar', created_at: new Date() } });
+
+    if (existing) {
+      // `type` and `status` are deliberately NOT in this update.
+      //
+      // They are the brokerage's own vocabulary — Open House, Showing, Viewing; Completed,
+      // Cancelled, Rescheduled — and Google has no equivalent to supply. They used to be written
+      // here as a hardcoded `meeting`/`scheduled` on every pull, which meant an agent who marked a
+      // showing Completed found it Scheduled again a few minutes later, on a schedule, silently.
+      // Nearly every event in this database arrives from Google, so that reverted almost the whole
+      // calendar's status history. Writing a field a sync cannot know can only ever destroy
+      // information, so this branch leaves both alone.
+      await this.prisma.calendar_events.update({ where: { id: existing.id }, data: fromGoogle });
+    } else {
+      // On first arrival there is nothing to preserve, so the defaults apply.
+      await this.prisma.calendar_events.create({
+        data: { ...fromGoogle, type: 'meeting', status: 'scheduled', created_by: 'Google Calendar', created_at: new Date() },
+      });
+    }
     return true;
   }
 
@@ -135,30 +152,91 @@ export class GoogleCalendarSyncService {
     // Don't echo an event that came FROM Google back to Google.
     if (!ev || ev.google_calendar_id) return;
 
-    // An unclassified event goes to the CRM connection, which is where every event went before the
-    // split — the same choice `areaFor` makes for the old URLs, for the same reason.
-    const area: IntegrationScope = ev.domain === 'desk' ? 'desk' : 'crm';
-    const token = await this.connections.accessToken(userId, area).catch(() => null);
-    if (!token) return;
-    const conn = await this.connections.find(userId, area);
+    const conn = await this.connectionFor(userId, ev.domain);
     if (!conn) return;
 
     try {
-      const start = new Date(`${ev.date.toISOString().slice(0, 10)}T${(ev.time || '09:00').slice(0, 5)}:00`);
-      const end = new Date(start.getTime() + 60 * 60 * 1000);
-      const tz = process.env.TZ || 'America/Toronto';
-      const googleId = await this.google.insertEvent(token, conn.calendar_id, {
-        summary: ev.title,
-        description: ev.description ?? undefined,
-        location: ev.location ?? undefined,
-        start: { dateTime: start.toISOString(), timeZone: tz },
-        end: { dateTime: end.toISOString(), timeZone: tz },
-      });
+      const googleId = await this.google.insertEvent(conn.token, conn.calendarId, this.googlePayload(ev));
       if (googleId) {
         await this.prisma.calendar_events.update({ where: { id: ev.id }, data: { google_calendar_id: googleId, last_synced_to_google: new Date() } });
       }
     } catch (ex) {
       this.log.warn(`Push to Google Calendar failed for event #${eventId}: ${(ex as Error).message}`);
     }
+  }
+
+  /**
+   * Mirror an edit out to Google. Called after an event is updated.
+   *
+   * Without this, the mirror only ever ran once: a viewing moved from 2pm to 5pm, or renamed, or
+   * given a new address, kept its original details on the agent's phone and on any calendar shared
+   * with a client. The push and the pull were a one-way street in both directions at once — the app
+   * could not send a change out, and the next pull wrote Google's stale copy back over the local
+   * one. Same best-effort contract as `pushEvent`: Google being unreachable must never fail a save.
+   */
+  async updateEvent(userId: number | null, eventId: number): Promise<void> {
+    if (!userId) return;
+    const ev = await this.prisma.calendar_events.findFirst({ where: { id: eventId, user_id: userId } });
+    // Nothing to update if it was never mirrored. `pushEvent` covers first publication.
+    if (!ev?.google_calendar_id) return;
+
+    const conn = await this.connectionFor(userId, ev.domain);
+    if (!conn) return;
+
+    try {
+      const ok = await this.google.patchEvent(conn.token, conn.calendarId, ev.google_calendar_id, this.googlePayload(ev));
+      if (ok) await this.prisma.calendar_events.update({ where: { id: ev.id }, data: { last_synced_to_google: new Date() } });
+    } catch (ex) {
+      this.log.warn(`Update to Google Calendar failed for event #${eventId}: ${(ex as Error).message}`);
+    }
+  }
+
+  /**
+   * Remove an event from Google after it is deleted here.
+   *
+   * Read before the local delete happens, because a soft-deleted row is still the only place the
+   * Google id is recorded — so the caller passes the details in rather than looking them up again.
+   */
+  async removeEvent(userId: number | null, googleEventId: string | null, domain: string | null): Promise<void> {
+    if (!userId || !googleEventId) return;
+    const conn = await this.connectionFor(userId, domain);
+    if (!conn) return;
+    try {
+      await this.google.deleteEvent(conn.token, conn.calendarId, googleEventId);
+    } catch (ex) {
+      this.log.warn(`Delete from Google Calendar failed for event ${googleEventId}: ${(ex as Error).message}`);
+    }
+  }
+
+  /**
+   * The connection an event belongs to.
+   *
+   * An unclassified event goes to the CRM connection, which is where every event went before the
+   * split — the same choice `areaFor` makes for the old URLs, for the same reason.
+   */
+  private async connectionFor(userId: number, domain: string | null): Promise<{ token: string; calendarId: string } | null> {
+    const area: IntegrationScope = domain === 'desk' ? 'desk' : 'crm';
+    const token = await this.connections.accessToken(userId, area).catch(() => null);
+    if (!token) return null;
+    const conn = await this.connections.find(userId, area);
+    return conn ? { token, calendarId: conn.calendar_id } : null;
+  }
+
+  /** One event, in Google's shape — used by insert and patch alike so the two cannot drift. */
+  private googlePayload(ev: { title: string; date: Date; time: string | null; end_time: string | null; description: string | null; location: string | null; status: string }): Record<string, unknown> {
+    const day = ev.date.toISOString().slice(0, 10);
+    const start = new Date(`${day}T${(ev.time || '09:00').slice(0, 5)}:00`);
+    // A real end time when the event has one; otherwise the hour this has always assumed.
+    const end = ev.end_time ? new Date(`${day}T${ev.end_time.slice(0, 5)}:00`) : new Date(start.getTime() + 60 * 60 * 1000);
+    const tz = process.env.TZ || 'America/Toronto';
+    return {
+      summary: ev.title,
+      description: ev.description ?? undefined,
+      location: ev.location ?? undefined,
+      start: { dateTime: start.toISOString(), timeZone: tz },
+      end: { dateTime: end.toISOString(), timeZone: tz },
+      // A cancelled appointment shows as cancelled in Google rather than sitting there as if live.
+      ...(ev.status === 'cancelled' ? { status: 'cancelled' } : {}),
+    };
   }
 }

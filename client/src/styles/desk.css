@@ -443,13 +443,54 @@ input[type="number"],.numeric,.stat-card .val{font-variant-numeric:tabular-nums;
 .cal-hol-swatch{width:8px;height:8px;border-radius:999px;background:#b91c1c;margin-top:5px;flex:none}
 .cal-hol-swatch.festival{background:#7c3aed}
 
-/* event type colours */
-.ev-viewing{background:#dbeafe;color:#1d4ed8}
-.ev-meeting{background:#dcfce7;color:#166534}
-.ev-openhouse{background:#fef3c7;color:#92400e}
-.ev-followup{background:#fae8ff;color:#86198f}
-.ev-call{background:#ffedd5;color:#9a3412}
-.ev-task{background:#e5e7eb;color:#374151}
+/* Dragging an appointment to another day.
+   The chip fades so the cursor's copy is what you follow, and the target cell is outlined rather
+   than filled — a filled cell hides the appointments already in it, which are exactly what you
+   need to see before dropping. */
+.cal-chip[draggable="true"]{cursor:grab}
+.cal-chip[draggable="true"]:active{cursor:grabbing}
+.cal-chip.dragging{opacity:.4}
+.cal-cell.drop-target{outline:2px solid var(--pri,#4f46e5);outline-offset:-2px;background:color-mix(in srgb,var(--pri,#4f46e5) 7%,transparent)}
+
+/* Event type colours.
+   One hue per kind of appointment, so a month grid is readable without opening anything. Showing
+   shared Viewing's blue and is now teal; Inspection and Closing are new kinds and needed their own.
+   Closing is the strongest of the set on purpose — it is the appointment a brokerage cannot afford
+   to miss. Each pair is a 700-weight ink on its own 100-weight ground, which clears 4.5:1. */
+.ev-viewing{background:var(--ev-viewing-bg,#dbeafe);color:var(--ev-viewing-fg,#1d4ed8)}
+.ev-showing{background:var(--ev-showing-bg,#ccfbf1);color:var(--ev-showing-fg,#0f766e)}
+.ev-meeting{background:var(--ev-meeting-bg,#dcfce7);color:var(--ev-meeting-fg,#166534)}
+.ev-openhouse{background:var(--ev-openhouse-bg,#fef3c7);color:var(--ev-openhouse-fg,#92400e)}
+.ev-followup{background:var(--ev-followup-bg,#fae8ff);color:var(--ev-followup-fg,#86198f)}
+.ev-call{background:var(--ev-call-bg,#ffedd5);color:var(--ev-call-fg,#9a3412)}
+.ev-inspection{background:var(--ev-inspection-bg,#e0e7ff);color:var(--ev-inspection-fg,#4338ca)}
+.ev-closing{background:var(--ev-closing-bg,#fee2e2);color:var(--ev-closing-fg,#b91c1c)}
+.ev-task{background:var(--ev-task-bg,#e5e7eb);color:var(--ev-task-fg,#374151)}
+
+/* Dark mode is chosen, not flipped: each pair is re-picked against the dark surface rather than
+   inverted, which would wash the lighter hues out. Both scopes, so the theme toggle wins too. */
+@media (prefers-color-scheme:dark){:root:where(:not([data-theme="light"])){
+  --ev-viewing-bg:#1e3a5f;--ev-viewing-fg:#93c5fd;
+  --ev-showing-bg:#134e4a;--ev-showing-fg:#5eead4;
+  --ev-meeting-bg:#14532d;--ev-meeting-fg:#86efac;
+  --ev-openhouse-bg:#4a3208;--ev-openhouse-fg:#fcd34d;
+  --ev-followup-bg:#4a1d4a;--ev-followup-fg:#f0abfc;
+  --ev-call-bg:#4a2508;--ev-call-fg:#fdba74;
+  --ev-inspection-bg:#2e2a5e;--ev-inspection-fg:#a5b4fc;
+  --ev-closing-bg:#5c1a1a;--ev-closing-fg:#fca5a5;
+  --ev-task-bg:#33383f;--ev-task-fg:#d1d5db;
+}}
+:root[data-theme="dark"]{
+  --ev-viewing-bg:#1e3a5f;--ev-viewing-fg:#93c5fd;
+  --ev-showing-bg:#134e4a;--ev-showing-fg:#5eead4;
+  --ev-meeting-bg:#14532d;--ev-meeting-fg:#86efac;
+  --ev-openhouse-bg:#4a3208;--ev-openhouse-fg:#fcd34d;
+  --ev-followup-bg:#4a1d4a;--ev-followup-fg:#f0abfc;
+  --ev-call-bg:#4a2508;--ev-call-fg:#fdba74;
+  --ev-inspection-bg:#2e2a5e;--ev-inspection-fg:#a5b4fc;
+  --ev-closing-bg:#5c1a1a;--ev-closing-fg:#fca5a5;
+  --ev-task-bg:#33383f;--ev-task-fg:#d1d5db;
+}
 
 /* Review history — one deal's record of every decision the office made about an agent's change.
    Rows rather than a table: a reason is a sentence, and a sentence in a table cell either wraps
@@ -1408,3 +1449,7 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
 .books-transfer{display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;border-top:1px solid var(--line-2);padding-top:14px}
 .books-transfer .field{min-width:210px}
 .books-transfer > svg{margin-bottom:9px;color:var(--muted)}
+
+/* Browser reminders for this device — a one-line switch, not a settings page. */
+.push-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.push-card .muted{max-width:62ch}

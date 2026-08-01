@@ -1,12 +1,12 @@
 import { useArea } from './AreaContext';
-import { crmPath } from './area';
+import { crmPath, AREA_LABEL, AREA_SHORT, type Area } from './area';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   deleteMyMailAccount, getAccountProfile, getAccountSettings, listMyMailAccounts,
-  saveAccountEmailPrefs, saveAccountProfile, setMyDefaultMailAccount, syncMailAccount, testMyMailAccount,
+  saveAccountProfile, setMyDefaultMailAccount, syncMailAccount, testMyMailAccount,
   googleCalendarStatus, googleCalendarConnect, googleCalendarSync, googleCalendarDisconnect,
-  type AccountEmailPrefs, type AccountIntegrations, type AccountMailAccount,
+  type AccountIntegrations, type AccountMailAccount,
   type GoogleCalendarStatus,
 } from '../lib/accountApi';
 import { getMyPhoto, uploadMyPhoto, deleteMyPhoto } from '../lib/api';
@@ -16,11 +16,6 @@ import { useAuth } from '../context/AuthContext';
 import { useToast } from './toast';
 import MailAccountModal from './MailAccountModal';
 import UserAvatar, { bumpPhotoVersion } from './UserAvatar';
-
-const EMPTY_PREFS: AccountEmailPrefs = {
-  signature: '', replyTemplate: '', autoSync: false,
-  autoResponder: { enabled: false, message: '' }, forwardingAddress: '',
-};
 
 const PHOTO_ACCEPT = '.png,.jpg,.jpeg,.gif,.webp';
 const PHOTO_MAX_MB = 4;
@@ -48,9 +43,7 @@ export default function AccountSettingsPage() {
   const [savingProfile, setSavingProfile] = useState(false);
 
   const [accounts, setAccounts] = useState<AccountMailAccount[]>([]);
-  const [prefs, setPrefs] = useState<AccountEmailPrefs>(EMPTY_PREFS);
   const [integrations, setIntegrations] = useState<AccountIntegrations | null>(null);
-  const [savingPrefs, setSavingPrefs] = useState(false);
   const [editing, setEditing] = useState<AccountMailAccount | 'new' | null>(null);
   const [busy, setBusy] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -65,13 +58,20 @@ export default function AccountSettingsPage() {
   const load = useCallback(async () => {
     if (!loadedOnce.current) setLoading(true);
     const [p, s, a, ph] = await Promise.allSettled([
-      getAccountProfile(), getAccountSettings(), listMyMailAccounts(), getMyPhoto(),
+      // Scoped to the area whose Settings you are on.
+      //
+      // This asked for every account the user had, so the Transaction Desk's Settings listed the
+      // CRM's mailboxes alongside its own and the CRM's listed the Desk's. The two areas are
+      // meant to be separate — the server has always taken a scope for exactly this, and the
+      // Integrations card next door already passes one. Only this screen did not.
+      getAccountProfile(), getAccountSettings(), listMyMailAccounts(area), getMyPhoto(),
     ]);
 
     if (p.status === 'fulfilled') { setName(p.value.name); setUsername(p.value.username); setPhone(p.value.phone); }
     // A failed photo read is not worth a warning — the avatar just shows the initial.
     if (ph.status === 'fulfilled') { setHasPhoto(ph.value.has_photo); setPhotoV(ph.value.photo_version ?? 0); }
-    if (s.status === 'fulfilled') { setPrefs({ ...EMPTY_PREFS, ...s.value.emailSettings }); setIntegrations(s.value.integrations); }
+    // `getAccountSettings` is still needed here — the Integration card below reads `integrations`.
+    if (s.status === 'fulfilled') setIntegrations(s.value.integrations);
     if (a.status === 'fulfilled') setAccounts(a.value);
 
     const failed = [
@@ -83,7 +83,9 @@ export default function AccountSettingsPage() {
 
     loadedOnce.current = true;
     setLoading(false);
-  }, []);
+    // `area` is a dependency: moving between CRM Settings and Transaction Desk Settings has to
+    // refetch, or the previous area's mailboxes would stay on screen.
+  }, [area]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -153,18 +155,6 @@ export default function AccountSettingsPage() {
       toast(apiErrorMessage(ex, 'Could not save your details'), 'bad');
     } finally {
       setSavingProfile(false);
-    }
-  };
-
-  const savePrefs = async () => {
-    setSavingPrefs(true);
-    try {
-      await saveAccountEmailPrefs({ signature: prefs.signature, replyTemplate: prefs.replyTemplate, autoSync: prefs.autoSync });
-      toast('Email preferences saved.', 'ok');
-    } catch (ex) {
-      toast(apiErrorMessage(ex, 'Could not save your preferences'), 'bad');
-    } finally {
-      setSavingPrefs(false);
     }
   };
 
@@ -258,11 +248,15 @@ export default function AccountSettingsPage() {
           <strong>Mail Configuration</strong>
           <button className="btn primary sm" type="button" onClick={() => setEditing('new')}>+ Add Email Account</button>
         </div>
-        <p className="help">Connect your own email to send lead emails and campaigns from your own address. Until you add one, your mail goes out through the brokerage account.</p>
+        <p className="help">
+          The email accounts {AREA_LABEL[area]} sends from. Each area keeps its own — accounts you
+          connect here are not used by the other side, and are not listed there.
+          Until you add one, your mail goes out through the brokerage account.
+        </p>
 
         {accounts.length === 0 ? (
           <div className="acct-empty">
-            <p className="help">No email accounts connected yet.</p>
+            <p className="help">No email accounts connected for {AREA_LABEL[area]} yet.</p>
             <p className="help">Add your first email account to get started.</p>
           </div>
         ) : (
@@ -272,7 +266,13 @@ export default function AccountSettingsPage() {
                 <div className="acct-info">
                   <div>
                     <strong>{a.name}</strong>
-                    {a.is_default && <span className="pill ok" style={{ marginLeft: 6 }}>Default</span>}
+                    {/* The area, on every row.
+                        This list shows the CRM's accounts and the Transaction Desk's together, and
+                        each area has its own default — so two rows legitimately read "Default" at
+                        once. Without saying which area a row belongs to, that looks like a fault,
+                        and pressing "Set default" looked like it did nothing: the list re-sorts
+                        defaults to the top, so the row moved, and where the same address is
+                        connected to both areas the two rows were indistinguishable. */}
                     {!a.is_active && <span className="pill bad" style={{ marginLeft: 6 }}>Inactive</span>}
                   </div>
                   <div className="muted">{a.from_email} · {a.host}:{a.port}{a.encryption ? ` · ${a.encryption.toUpperCase()}` : ''}</div>
@@ -294,9 +294,27 @@ export default function AccountSettingsPage() {
                       ↻ Sync now
                     </button>
                   )}
-                  {!a.is_default && (
+                  {/* The button turns into its own answer.
+                      The state used to be shown as a pill beside the address, far from the control
+                      that changed it — and because the list re-sorts defaults to the top, the row
+                      moved at the same moment, so the press appeared to do nothing. Swapping the
+                      button for the word "Default" in the same slot means the change happens where
+                      you are looking. */}
+                  {a.is_default ? (
+                    <span className="pill ok" style={{ whiteSpace: 'nowrap' }}
+                      title={`${AREA_LABEL[(a.scope ?? area) as Area]} mail is sent from this address`}>
+                      ★ Default
+                    </span>
+                  ) : (
                     <button className="btn ghost sm" type="button" disabled={busy === a.id}
-                      onClick={() => void act(a.id, () => setMyDefaultMailAccount(a.id), 'Set as your default.')}>Set default</button>
+                      title={`Send ${AREA_LABEL[(a.scope ?? area) as Area]} mail from this address`}
+                      onClick={() => void act(
+                        a.id,
+                        () => setMyDefaultMailAccount(a.id),
+                        `${a.from_email} is now the default for ${AREA_SHORT[(a.scope ?? area) as Area]}.`,
+                      )}>
+                      Set default
+                    </button>
                   )}
                   <button className="btn ghost sm" type="button" disabled={busy === a.id}
                     onClick={() => void act(a.id, () => testMyMailAccount(a.id).then((r) => toast(r.message, 'ok')), 'Test sent.')}>Test</button>
@@ -346,31 +364,18 @@ export default function AccountSettingsPage() {
         </div>
       </div>
 
-      {/* ---- Email Preferences ---- */}
-      <div className="card">
-        <div className="modal-sub">Email Preferences</div>
-        <div className="field">
-          <label>Email Signature</label>
-          <textarea rows={4} value={prefs.signature} maxLength={5000}
-            onChange={(e) => setPrefs((p) => ({ ...p, signature: e.target.value }))}
-            placeholder="Your name, title, phone — appended to outbound emails" />
-        </div>
-        <div className="field">
-          <label>Default Reply Template</label>
-          <textarea rows={3} value={prefs.replyTemplate} maxLength={5000}
-            onChange={(e) => setPrefs((p) => ({ ...p, replyTemplate: e.target.value }))}
-            placeholder="Optional default opening for replies" />
-        </div>
-        <div className="toolbar-row">
-          <button className="btn primary" type="button" disabled={savingPrefs} onClick={() => void savePrefs()}>
-            {savingPrefs ? 'Saving…' : 'Save Email Preferences'}
-          </button>
-        </div>
-      </div>
+      {/* Email Preferences used to sit here — removed by request.
+          The signature and reply template are unchanged and still edited in CRM Settings →
+          Email Preferences, which also carries the auto-responder this card never had. Nothing was
+          dropped from the database or the API; this screen simply stopped being a second, thinner
+          place to edit the same two fields. */}
 
       {editing && (
         <MailAccountModal
           account={editing === 'new' ? null : editing}
+          // Without this the new account is stored with no area at all, and then appears on
+          // neither screen — connected, invisible, and unusable.
+          scope={area}
           onClose={() => setEditing(null)}
           onSaved={() => { setEditing(null); void load(); }}
         />

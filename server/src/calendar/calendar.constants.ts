@@ -11,11 +11,22 @@ export const EVENT_TYPES = [
   'follow-up',
   'call',
   'showing',
+  /** A home or building inspection — its own kind, not a generic meeting. */
+  'inspection',
+  /** A closing appointment. Distinct from a viewing, and the one nobody may miss. */
+  'closing',
   'task',
 ] as const;
 
 /** Lifecycle of an appointment. */
-export const EVENT_STATUSES = ['scheduled', 'completed', 'cancelled', 'rescheduled'] as const;
+/**
+ * Lifecycle of an appointment.
+ *
+ * `no-show` is distinct from `cancelled` on purpose, and the distinction is the whole point of
+ * measuring it: cancelled means somebody called ahead, no-show means an agent drove to a property
+ * and stood outside it. Folding the second into the first hides the cost.
+ */
+export const EVENT_STATUSES = ['scheduled', 'completed', 'cancelled', 'no-show', 'rescheduled'] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];
 export type EventStatus = (typeof EVENT_STATUSES)[number];
@@ -28,6 +39,8 @@ export const EVENT_TYPE_LABELS: Record<string, string> = {
   'follow-up': 'Follow-up',
   call: 'Call',
   showing: 'Showing',
+  inspection: 'Inspection',
+  closing: 'Closing',
   task: 'Task',
 };
 

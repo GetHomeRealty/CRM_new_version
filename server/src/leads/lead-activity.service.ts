@@ -14,6 +14,9 @@ import { TwilioService } from '../sms/twilio.service';
 import { MailerService } from '../email/mailer.service';
 
 import { ResourceAccessService } from '../core/resource-access.service';
+// Extracted to ../common/ai-provider so the Calendar can use the same provider layer rather than
+// growing a second copy of it. Behaviour is unchanged.
+import { draftEmailWithAi, resolveEmailAi } from '../common/ai-provider';
 const str = (v: unknown): string => String(v ?? '').trim();
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const TIME_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
@@ -32,103 +35,6 @@ function toE164(raw: string | null | undefined): string {
 function normalizeCallStatus(raw: string): string | null {
   const s = String(raw ?? '').trim().toLowerCase();
   return ['queued', 'initiated', 'ringing', 'in-progress', 'completed', 'busy', 'no-answer', 'canceled', 'failed'].includes(s) ? s : null;
-}
-
-type EmailAiProvider = 'anthropic' | 'openai' | 'gemini';
-interface EmailAiConfig { provider: EmailAiProvider; key: string; model: string; }
-
-/**
- * Which AI provider drafts emails. AI_EMAIL_PROVIDER pins one explicitly; otherwise the first
- * provider with a key set wins (Anthropic → OpenAI → Gemini). Returns null when none is configured,
- * so the caller can 503 with a clear message. GOOGLE_API_KEY is accepted as an alias for Gemini.
- */
-function resolveEmailAi(): EmailAiConfig | null {
-  const env = (n: string) => (process.env[n] ?? '').trim();
-  const keys: Record<EmailAiProvider, string> = {
-    anthropic: env('ANTHROPIC_API_KEY'),
-    openai: env('OPENAI_API_KEY'),
-    gemini: env('GEMINI_API_KEY') || env('GOOGLE_API_KEY'),
-  };
-  const model = (p: EmailAiProvider): string => {
-    const override = env('AI_EMAIL_MODEL');
-    if (p === 'anthropic') return override || env('ID_EXTRACTION_MODEL') || 'claude-sonnet-5';
-    if (p === 'openai') return env('OPENAI_MODEL') || override || 'gpt-4o-mini';
-    return env('GEMINI_MODEL') || override || 'gemini-1.5-flash';
-  };
-
-  const pinned = env('AI_EMAIL_PROVIDER').toLowerCase();
-  const order: EmailAiProvider[] = pinned === 'anthropic' || pinned === 'openai' || pinned === 'gemini'
-    ? [pinned] : ['anthropic', 'openai', 'gemini'];
-  for (const p of order) {
-    if (keys[p]) return { provider: p, key: keys[p], model: model(p) };
-  }
-  return null;
-}
-
-/**
- * Calls the configured provider and returns the raw model text (expected to be a JSON object with
- * `subject`/`html`). Each provider is asked for JSON directly. Network failures surface as 503;
- * an HTTP error surfaces with the status and a short snippet of the provider's body so a bad key or
- * exhausted quota is diagnosable — the API key itself is never included.
- */
-async function draftEmailWithAi(cfg: EmailAiConfig, system: string, userText: string): Promise<string> {
-  const timeout = AbortSignal.timeout(45000);
-  let res: Response;
-  try {
-    if (cfg.provider === 'anthropic') {
-      res = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: { 'x-api-key': cfg.key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-        body: JSON.stringify({ model: cfg.model, max_tokens: 4000, system, messages: [{ role: 'user', content: userText }] }),
-        signal: timeout,
-      });
-    } else if (cfg.provider === 'openai') {
-      res = await fetch('https://api.openai.com/v1/chat/completions', {
-        method: 'POST',
-        headers: { authorization: `Bearer ${cfg.key}`, 'content-type': 'application/json' },
-        body: JSON.stringify({
-          model: cfg.model, max_tokens: 4000, response_format: { type: 'json_object' },
-          messages: [{ role: 'system', content: system }, { role: 'user', content: userText }],
-        }),
-        signal: timeout,
-      });
-    } else {
-      // Gemini: system prompt goes in system_instruction; JSON forced via responseMimeType.
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(cfg.model)}:generateContent?key=${encodeURIComponent(cfg.key)}`;
-      res = await fetch(url, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          system_instruction: { parts: [{ text: system }] },
-          contents: [{ role: 'user', parts: [{ text: userText }] }],
-          // The `-latest` aliases now resolve to a Gemini 2.5+ "thinking" model whose reasoning
-          // tokens are drawn from this same output budget. A small budget can be spent entirely on
-          // thinking, truncating the email JSON before it closes — which surfaces to the agent as
-          // "did not return a usable email". A generous ceiling leaves ample room for both the
-          // hidden reasoning and the actual email; we cap length via the prompt, not this number.
-          generationConfig: { responseMimeType: 'application/json', maxOutputTokens: 8192 },
-        }),
-        signal: timeout,
-      });
-    }
-  } catch (ex) {
-    throw new ServiceUnavailableException({ message: `Could not reach the AI service (${cfg.provider}): ${(ex as Error).message}` });
-  }
-
-  if (!res.ok) {
-    const snippet = (await res.text().catch(() => '')).slice(0, 300);
-    throw new BadRequestException({ message: `The AI service (${cfg.provider}) returned HTTP ${res.status}. ${snippet}`.trim() });
-  }
-
-  const data = (await res.json()) as Record<string, unknown>;
-  if (cfg.provider === 'anthropic') {
-    return ((data.content as { text?: string }[] | undefined)?.[0]?.text ?? '').trim();
-  }
-  if (cfg.provider === 'openai') {
-    return ((data.choices as { message?: { content?: string } }[] | undefined)?.[0]?.message?.content ?? '').trim();
-  }
-  const parts = (data.candidates as { content?: { parts?: { text?: string }[] } }[] | undefined)?.[0]?.content?.parts;
-  return (parts?.map((x) => x.text ?? '').join('') ?? '').trim();
 }
 
 /**

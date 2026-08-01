@@ -5,6 +5,7 @@ import { AuthGuard } from '../auth/guards/auth.guard';
 import { AdminGuard } from '../auth/guards/admin.guard';
 import { CurrentUser } from '../auth/decorators';
 import type { AuthUserRecord } from '../auth/auth.types';
+import { isAgent } from '../core/authz';
 import { CompanySettingsService } from './company-settings.service';
 import { UpdateCompanySettingsDto } from './dto/update-company-settings.dto';
 
@@ -12,11 +13,31 @@ import { UpdateCompanySettingsDto } from './dto/update-company-settings.dto';
 export class CompanySettingsController {
   constructor(private readonly settings: CompanySettingsService) {}
 
-  /** Readable by any authenticated staff (printed on invoices). */
+  /**
+   * Readable by any authenticated staff — but an agent does not get the bank account.
+   *
+   * The branding half of this row (name, address, phone, logo, currency, tax rate) is needed by
+   * every screen, so the endpoint stays open. The banking half is not: it is printed only on the
+   * Invoice, Trade Sheet, Notice of Sale, Deposit Receipt and Lawyer Statement, and every one of
+   * those buttons already sits behind `!isAgent` in TransactionDetailPage. So the UI never asks an
+   * agent to see these numbers, while the API handed all of them — beneficiary, bank, transit,
+   * institution, account and the HST registration — to anyone with a session. A brokerage's
+   * operating account number is the raw material of payment-redirection fraud; it should not be one
+   * fetch away from any agent login.
+   *
+   * Stripped rather than 403'd, because the same request legitimately carries the branding an agent
+   * genuinely needs. Writes were already administrator-only.
+   */
   @Get()
   @UseGuards(AuthGuard)
-  async show(): Promise<Record<string, unknown>> {
-    return this.settings.serialize(await this.settings.current());
+  async show(@CurrentUser() user: AuthUserRecord | undefined): Promise<Record<string, unknown>> {
+    const row = this.settings.serialize(await this.settings.current());
+    if (!isAgent(user)) return row;
+
+    const withheld = ['bank_beneficiary', 'bank_name', 'transit_no', 'account_no', 'institution_no', 'hst_number'];
+    const safe: Record<string, unknown> = { ...row };
+    for (const key of withheld) delete safe[key];
+    return safe;
   }
 
   /** Administrators only. */

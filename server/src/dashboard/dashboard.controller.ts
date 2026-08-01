@@ -1,13 +1,23 @@
 import { Controller, Get, Query, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '../auth/guards/auth.guard';
-import { CurrentUser } from '../auth/decorators';
+import { CurrentUser, Screen } from '../auth/decorators';
+import { ScreenGuard } from '../auth/guards/screen.guard';
 import type { AuthUserRecord } from '../auth/auth.types';
 import { DashboardService, type DashboardCommissions } from './dashboard.service';
 import { AreaDashboardService, type CrmDashboard, type DeskDashboard } from './area-dashboard.service';
 import { TransactionReviewService } from '../transactions/transaction-review.service';
 
+/**
+ * Every route here is behind `ScreenGuard` as well as `AuthGuard`.
+ *
+ * It was authentication only, which meant the `dashboard` screen permission was enforced in the
+ * browser and nowhere else: a user whose permission was set to `none` saw an empty page and could
+ * still read the whole payload from the console. The `/crm` and `/desk` routes additionally name
+ * their area, because Dashboard is a `common` screen and without that the module check has nothing
+ * to test — a user assigned only the Transaction Desk could read the CRM's figures.
+ */
 @Controller('dashboard')
-@UseGuards(AuthGuard)
+@UseGuards(AuthGuard, ScreenGuard)
 export class DashboardController {
   constructor(
     private readonly dashboard: DashboardService,
@@ -23,16 +33,19 @@ export class DashboardController {
    * lead tasks or campaigns.
    */
   @Get('crm')
+  @Screen('dashboard', 'view', 'crm')
   crm(@CurrentUser() user: AuthUserRecord | undefined): Promise<CrmDashboard> {
     return this.areas.crm(user ?? null);
   }
 
   @Get('desk')
+  @Screen('dashboard', 'view', 'desk')
   desk(@CurrentUser() user: AuthUserRecord | undefined): Promise<DeskDashboard> {
     return this.areas.desk(user ?? null);
   }
 
   @Get('commissions')
+  @Screen('dashboard', 'view')
   commissions(@CurrentUser() user: AuthUserRecord | undefined): Promise<DashboardCommissions> {
     return this.dashboard.commissions(user ? { id: user.id, role: user.role, name: user.name } : null);
   }
@@ -45,12 +58,14 @@ export class DashboardController {
    * visits that never scroll far enough to see them.
    */
   @Get('reviews')
+  @Screen('dashboard', 'view')
   reviews(@CurrentUser() user: AuthUserRecord | undefined): Promise<Record<string, unknown>> {
     return this.reviews_.stats(user ?? null);
   }
 
   /** What keeps going wrong, and how long it takes to put right — the charts and the metrics. */
   @Get('review-errors')
+  @Screen('dashboard', 'view')
   reviewErrors(
     @CurrentUser() user: AuthUserRecord | undefined,
     /** `YYYY-MM` narrows it to one month; absent means the twelve months ending today. */

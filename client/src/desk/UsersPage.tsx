@@ -28,6 +28,7 @@ export default function UsersPage() {
   const [editing, setEditing] = useState<Partial<ManagedUser> | null>(null); // user object or {} for new
   // Profile pictures: administrators may set one for any user, not just themselves.
   const [photoBusy, setPhotoBusy] = useState<number | null>(null);
+  const [viewing, setViewing] = useState<ManagedUser | null>(null);
   const [photoV, setPhotoV] = useState<Record<number, number>>({});
   const photoInput = useRef<HTMLInputElement>(null);
   const photoTarget = useRef<number | null>(null);
@@ -107,9 +108,18 @@ export default function UsersPage() {
               <td><span className="help" style={{ margin: 0 }}>{u.is_admin ? 'Full access (all screens)' : accessSummary(u.permissions)}</span></td>
               <td>
                 <button className="btn ghost sm" onClick={() => setEditing(u)}>Edit</button>
+                {/* The eye now does what an eye means.
+                    It used to open a file picker to set the user's profile picture — an icon that
+                    reads as "view" wired to an upload, so pressing it produced a file dialog and
+                    nothing that looked like user details. The picture upload has kept its function
+                    and moved to its own button beside this one. */}
+                <button className="btn ghost sm" style={{ marginLeft: 4 }}
+                  title={`View ${u.name}'s details`} onClick={() => setViewing(u)}>
+                  <Icon name="eye" size={14} />
+                </button>
                 <button className="btn ghost sm" style={{ marginLeft: 4 }} disabled={photoBusy === u.id}
                   title={`Set ${u.name}'s profile picture`} onClick={() => pickFor(u.id)}>
-                  {photoBusy === u.id ? '…' : <Icon name="eye" size={14} />}
+                  {photoBusy === u.id ? '…' : <Icon name="upload" size={14} />}
                 </button>
                 {u.id !== me?.id && <button className="btn ghost sm" style={{ marginLeft: 4 }} onClick={() => onDelete(u)}><Icon name="trash" size={14} /></button>}
               </td>
@@ -117,6 +127,17 @@ export default function UsersPage() {
           ))}
         </tbody>
       </table>
+
+      {viewing && (
+        <UserDetailsModal
+          user={viewing}
+          catalog={catalog}
+          isMe={viewing.id === me?.id}
+          photoVersion={photoV[viewing.id]}
+          onClose={() => setViewing(null)}
+          onEdit={() => { const u = viewing; setViewing(null); setEditing(u); }}
+        />
+      )}
 
       {editing && catalog && (
         <UserModal
@@ -132,6 +153,124 @@ export default function UsersPage() {
         />
       )}
     </>
+  );
+}
+
+/**
+ * A user's details, read-only.
+ *
+ * The Actions column's eye opened a file picker; there was no way to look at a user without
+ * entering the editor and risking a change. This shows what the Users screen already holds — no
+ * extra request — and hands off to Edit for anything that needs changing.
+ *
+ * Deliberately omits the commission percentages, loans and deal history the editor carries. Those
+ * are somebody's pay, and a glance at "who is this person" should not put them on screen.
+ */
+function UserDetailsModal({ user, catalog, isMe, photoVersion, onClose, onEdit }: {
+  user: ManagedUser;
+  catalog: UsersCatalog | null;
+  isMe: boolean;
+  photoVersion?: number;
+  onClose: () => void;
+  onEdit: () => void;
+}) {
+  const p: UserProfile = (user.profile ?? {}) as UserProfile;
+  const dash = (v: unknown) => { const s = String(v ?? '').trim(); return s === '' ? '—' : s; };
+
+  // Escape, listened for on the document rather than on the overlay.
+  //
+  // A React `onKeyDown` on the overlay only fires when focus is already inside it, and this dialog
+  // has nothing to focus — no form, no autoFocus. So the key never arrived, the dialog stayed put,
+  // and its overlay swallowed every click behind it: the only way out was the ✕. Bound here, it
+  // works whether or not anything inside has focus.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  const Row = ({ label, value }: { label: string; value: React.ReactNode }) => (
+    <div className="field" style={{ marginBottom: 8 }}>
+      <label style={{ fontSize: 11, color: 'var(--muted)' }}>{label}</label>
+      <div>{value}</div>
+    </div>
+  );
+
+  // Screen access, spelled out. `is_admin` short-circuits the map on the server, so say so rather
+  // than rendering an empty grid.
+  const perms = user.permissions ?? {};
+  const granted = (catalog?.screens ?? [])
+    .map((s) => ({ label: s.label, level: perms[s.key] ?? 'none' }))
+    .filter((s) => s.level !== 'none');
+
+  return (
+    <div className="overlay open"
+      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      onKeyDown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); onClose(); } }}
+      role="dialog" aria-modal="true" aria-labelledby="user-details-heading">
+      <div className="modal" style={{ maxWidth: 620 }}>
+        <button className="close" type="button" onClick={onClose} aria-label="Close">✕</button>
+        <div className="modal-h" id="user-details-heading">User Details</div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 }}>
+          <UserAvatar userId={user.id} name={user.name} size={56} version={photoVersion} />
+          <div>
+            <div style={{ fontWeight: 700, fontSize: 16 }}>
+              {user.name}
+              {isMe && <span className="pill ok" style={{ fontSize: 9, marginLeft: 6 }}>You</span>}
+            </div>
+            <div className="muted" style={{ fontSize: 12.5 }}>{user.email}</div>
+            <div style={{ marginTop: 4 }}>
+              <span className="pill info">{roleLabel(user.role)}</span>
+              {user.status && (
+                <span className={`pill ${String(user.status).toLowerCase() === 'active' ? 'ok' : 'bad'}`} style={{ marginLeft: 6 }}>
+                  {user.status}
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className="modal-sub">Account</div>
+        <div className="g2">
+          <Row label="Username" value={dash(user.username)} />
+          <Row label="Mobile" value={dash(p.mobile)} />
+          <Row label="Department" value={dash(user.department)} />
+          <Row label="Designation" value={dash(user.designation)} />
+          <Row label="Personal email" value={dash(p.personal_email)} />
+          <Row label="Onboarded" value={dash(p.onboard_date)} />
+        </div>
+
+        <div className="modal-sub">Modules</div>
+        <div style={{ marginBottom: 10 }}>
+          {AREAS.filter((a) => (user.modules ?? []).includes(a)).length === 0
+            ? <span className="muted">No modules assigned.</span>
+            : AREAS.filter((a) => (user.modules ?? []).includes(a as Area))
+              .map((a) => <span key={a} className="pill info" style={{ marginRight: 6 }}>{AREA_LABEL[a as Area]}</span>)}
+        </div>
+
+        <div className="modal-sub">Screen access</div>
+        {user.is_admin ? (
+          <p className="help">Full access to every screen.</p>
+        ) : granted.length === 0 ? (
+          <p className="help">No screens granted.</p>
+        ) : (
+          <div className="g2">
+            {granted.map((s) => (
+              <div key={s.label} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, padding: '3px 0' }}>
+                <span style={{ fontSize: 12.5 }}>{s.label}</span>
+                <span className={`pill ${s.level === 'edit' ? 'ok' : ''}`} style={{ fontSize: 10 }}>{s.level}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="actions">
+          <button className="btn ghost" type="button" onClick={onClose}>Close</button>
+          <button className="btn primary" type="button" onClick={onEdit}>Edit User</button>
+        </div>
+      </div>
+    </div>
   );
 }
 
