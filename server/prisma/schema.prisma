@@ -2190,6 +2190,15 @@ model transaction_reminders {
   detail          String? @db.Text
   subject         String? @db.VarChar(255)
 
+  /// How many delivery attempts this row has had, and when the next one is due.
+  ///
+  /// Only ever set on an email row that failed for a TRANSIENT reason. A permanent failure — a
+  /// rejected address, a refused password — leaves `next_retry_at` null, because asking a mail
+  /// server the same rejected question every hour is how a sender ends up blocklisted.
+  attempts        Int       @default(1)
+  next_retry_at   DateTime? @db.Timestamp(0)
+  last_attempt_at DateTime? @db.Timestamp(0)
+
   /// Set when the agent opened the transaction, which is what clears the bell entry.
   seen_at    DateTime? @db.Timestamp(0)
   created_at DateTime? @db.Timestamp(0)
@@ -2202,6 +2211,7 @@ model transaction_reminders {
   @@index([transaction_id])
   @@index([kind, scheduled_for])
   @@index([recipient, seen_at])
+  @@index([next_retry_at])
 
   /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
   company_id Int @default(1)

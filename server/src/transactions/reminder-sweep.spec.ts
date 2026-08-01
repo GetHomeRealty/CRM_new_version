@@ -324,9 +324,13 @@ describe('history and the bell', () => {
 
       const email = await tx.transaction_reminders.findFirst({ where: { transaction_id: txnId, delivery_method: 'email' } });
       expect(email?.delivery_status).toBe('Failed');
-      expect(email?.detail).toBe('smtp down');
+      expect(email?.detail).toContain('smtp down');
+      // A failure nobody can classify is treated as permanent, so it is recorded and left alone
+      // rather than asked again every hour — see reminder-retry.spec.ts for the transient case.
+      expect(email?.detail).toContain('not retried');
+      expect(email?.next_retry_at).toBeNull();
 
-      // The failure is history, not a queue: today's occurrence is done either way.
+      // The occurrence itself is claimed either way: today is done.
       expect((await sweep.sweep(today)).failed).toBe(0);
     });
   });

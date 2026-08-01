@@ -23,6 +23,31 @@ export interface MailAttachment {
   cid?: string;
 }
 
+/** Total attempts per send, and the waits between them. Two retries, ~8s worst case. */
+const SEND_ATTEMPTS = 3;
+const RETRY_BACKOFF_MS = [2000, 6000];
+
+/**
+ * Whether a delivery failure is worth trying again.
+ *
+ * SMTP says this itself: a 4xx reply means "not now, ask again" and a 5xx means "no". Nodemailer
+ * surfaces the code as `responseCode`, and network faults arrive as an errno instead. Anything not
+ * recognised is treated as PERMANENT — retrying an unknown failure three times a night against a
+ * real mail server is the kind of well-meaning loop that gets a sender blocklisted.
+ */
+export function isTransient(err: unknown): boolean {
+  const e = err as { responseCode?: number; code?: string; message?: string } | undefined;
+  if (!e) return false;
+
+  if (typeof e.responseCode === 'number') return e.responseCode >= 400 && e.responseCode < 500;
+
+  const code = String(e.code ?? '');
+  if (['ETIMEDOUT', 'ECONNRESET', 'ECONNREFUSED', 'ESOCKET', 'EAI_AGAIN', 'EPIPE', 'ECONNECTION', 'EDNS'].includes(code)) return true;
+
+  // Some transports report the class in the text and nothing else.
+  return /\b(421|450|451|452)\b|timed? ?out|temporar|try again|greylist|too many|rate limit/i.test(String(e.message ?? ''));
+}
+
 /** Sends emails through a MailAccount's SMTP settings (port of TemplateMailService). */
 @Injectable()
 export class MailerService {
@@ -175,7 +200,7 @@ export class MailerService {
       this.log.warn(`MAIL_REDIRECT_TO is set — diverting mail for ${realTo} to ${redirect}.`);
     }
 
-    await transport.sendMail({
+    const message = {
       from: account.from_name ? { name: account.from_name, address: account.from_email } : account.from_email,
       to: redirect || to,
       cc: redirect ? undefined : (cc.length ? cc : undefined),
@@ -188,6 +213,34 @@ export class MailerService {
         // Part of the body, not something to download — see MailAttachment.
         ...(a.cid ? { cid: a.cid, contentDisposition: 'inline' as const } : {}),
       })),
-    });
+    };
+
+    /*
+     * Retry the transient failures, and only those.
+     *
+     * A dropped connection, a timeout or a 4xx "try again later" (greylisting, a rate limit, a
+     * mailbox briefly busy) succeeds on a second attempt often enough to be worth waiting for. A
+     * rejected recipient or a refused password does not: retrying those wastes the caller's time and
+     * can look like an attack to the far end, so they are raised immediately and unchanged.
+     *
+     * Deliberately short. Some callers are inside a request — an invoice being emailed from the
+     * screen — and a person is waiting, so this adds at most ~8 seconds before giving up rather
+     * than the minutes a background queue could afford.
+     */
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= SEND_ATTEMPTS; attempt++) {
+      try {
+        await transport.sendMail(message);
+        if (attempt > 1) this.log.log(`Delivery to ${realTo} succeeded on attempt ${attempt}.`);
+        return;
+      } catch (err) {
+        lastError = err;
+        if (attempt === SEND_ATTEMPTS || !isTransient(err)) break;
+        const wait = RETRY_BACKOFF_MS[attempt - 1];
+        this.log.warn(`Delivery to ${realTo} failed (${(err as Error)?.message ?? err}); retrying in ${wait / 1000}s.`);
+        await new Promise((r) => setTimeout(r, wait));
+      }
+    }
+    throw lastError;
   }
 }

@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { MailerService } from '../email/mailer.service';
+import { MailerService, isTransient } from '../email/mailer.service';
 import { CompanySettingsService } from '../settings/company-settings.service';
 import { AuditService } from '../audit/audit.service';
 import { areaPath } from '../common/domain';
@@ -34,6 +34,18 @@ import {
 const SYSTEM_ACTOR = null;
 const AUDIT_SECTION = 'Reminders';
 
+/**
+ * How hard a failed delivery is chased, and how long the gaps are.
+ *
+ * Four attempts over about seven hours, doubling each time: enough to ride out a mail server that
+ * is down for an evening, few enough that a permanent problem is visible in the history rather than
+ * buried under a hundred identical retries. The per-sweep cap keeps one bad night from turning the
+ * next pass into a long send.
+ */
+const MAX_DELIVERY_ATTEMPTS = 4;
+const RETRY_DELAYS_MS = [60 * 60 * 1000, 2 * 60 * 60 * 1000, 4 * 60 * 60 * 1000];
+const MAX_RETRIES_PER_SWEEP = 100;
+
 /** Diverts every message when set, so a test environment cannot mail a real agent. */
 const redirectTo = (): string | null => {
   const v = (process.env.MAIL_REDIRECT_TO ?? '').trim();
@@ -46,6 +58,10 @@ export interface SweepResult {
   lawyerReminders: number;
   skipped: number;
   failed: number;
+  /** Failed deliveries attempted again this pass. */
+  retried: number;
+  /** Of those, the ones that got through. */
+  recovered: number;
 }
 
 @Injectable()
@@ -61,7 +77,10 @@ export class ReminderSweepService {
 
   /** One night's work. `today` is injectable so the schedule can be tested across a whole run-up. */
   async sweep(today: Date = new Date()): Promise<SweepResult> {
-    const result: SweepResult = { expiryReminders: 0, expired: 0, lawyerReminders: 0, skipped: 0, failed: 0 };
+    const result: SweepResult = { expiryReminders: 0, expired: 0, lawyerReminders: 0, skipped: 0, failed: 0, retried: 0, recovered: 0 };
+    // Retries first: a reminder that failed last night is more urgent than tonight's new ones, and
+    // clearing the backlog before adding to it keeps a bad evening from compounding.
+    await this.retryFailed(today, result);
     await this.listingExpiry(today, result);
     await this.autoExpire(today, result);
     await this.lawyerDetails(today, result);
@@ -69,7 +88,8 @@ export class ReminderSweepService {
     if (result.expiryReminders || result.expired || result.lawyerReminders || result.failed) {
       this.log.log(
         `Reminders: ${result.expiryReminders} expiry, ${result.lawyerReminders} lawyer, `
-        + `${result.expired} auto-expired, ${result.skipped} skipped, ${result.failed} failed.`,
+        + `${result.expired} auto-expired, ${result.skipped} skipped, ${result.failed} failed, `
+        + `${result.retried} retried (${result.recovered} recovered).`,
       );
     }
     return result;
@@ -236,6 +256,184 @@ export class ReminderSweepService {
     }
   }
 
+  // ---------------------------------------------------------------- retries
+
+  /**
+   * Send again what failed for a reason worth trying again.
+   *
+   * Only rows the mailer classified as transient carry a `next_retry_at`, so a rejected address or a
+   * refused password is never asked twice — retrying a permanent rejection every hour is how a
+   * sender gets blocklisted, and it would bury the real failures in the history.
+   *
+   * The message is REBUILT from the transaction rather than replayed from what was stored. Two days
+   * on, "expires in 4 days" is wrong and the missing lawyer may already have been filled in; a queue
+   * that replays yesterday's text would chase people for work they have done. If the reason to send
+   * has gone away entirely the row is closed as Skipped, which is the honest record.
+   */
+  private async retryFailed(today: Date, result: SweepResult): Promise<void> {
+    const due = await this.prisma.transaction_reminders.findMany({
+      where: {
+        delivery_method: 'email',
+        delivery_status: 'Failed',
+        next_retry_at: { not: null, lte: new Date() },
+        attempts: { lt: MAX_DELIVERY_ATTEMPTS },
+      },
+      orderBy: { next_retry_at: 'asc' },
+      take: MAX_RETRIES_PER_SWEEP,
+      include: {
+        transactions: {
+          select: {
+            id: true, trade_no: true, property: true, agent: true, type: true, deleted_at: true,
+            closing_date: true, listing_expiry_date: true,
+            buyer_lawyer_name: true, seller_lawyer_name: true,
+            transaction_statuses: { select: { status: true } },
+          },
+        },
+      },
+    });
+
+    for (const row of due) {
+      const t = row.transactions;
+      result.retried++;
+
+      const rebuilt = t && !t.deleted_at ? this.rebuild(row.kind, t, today) : null;
+      if (!rebuilt) {
+        // The deal is gone, closed, or no longer missing anything: there is nothing left to send.
+        await this.closeRetry(row.id, 'Skipped', 'No longer applicable — the reminder condition has cleared.');
+        result.skipped++;
+        continue;
+      }
+
+      const address = await this.addressFor(t!.agent);
+      if (!address) {
+        await this.closeRetry(row.id, 'Skipped', 'No email address on file for the assigned agent.');
+        result.skipped++;
+        continue;
+      }
+
+      const company = (await this.settings.current()).name;
+      const base = (process.env.FRONTEND_URL ?? '').trim().replace(/\/+$/, '');
+      const link = base ? `${base}${areaPath('desk', `transactions/${t!.id}`)}` : '';
+
+      try {
+        await this.mailer.send(rebuilt.event, {
+          ...rebuilt.vars,
+          company_name: company,
+          transaction_button: link
+            ? `<p style="margin:18px 0"><a href="${link}" style="background:#1f3b73;color:#fff;text-decoration:none;padding:10px 18px;border-radius:8px;font-weight:700;display:inline-block">Open the transaction</a></p>`
+            : '',
+        }, redirectTo() ?? address);
+
+        await this.prisma.transaction_reminders.update({
+          where: { id: row.id },
+          data: {
+            delivery_status: 'Sent',
+            recipient: address,
+            subject: rebuilt.summary.slice(0, 255),
+            detail: `Delivered on attempt ${row.attempts + 1}.`,
+            attempts: row.attempts + 1,
+            last_attempt_at: new Date(),
+            next_retry_at: null,
+          },
+        });
+        result.recovered++;
+        await this.auditReminder(t!.id, row.kind, 'Reminder sent', rebuilt.summary, `Delivered on attempt ${row.attempts + 1} to ${address}.`);
+      } catch (err) {
+        await this.recordFailure(row.id, row.attempts + 1, err, t!.id, row.kind, rebuilt.summary);
+        result.failed++;
+      }
+    }
+  }
+
+  /**
+   * Today's version of a reminder that failed earlier, or null if there is no longer one to send.
+   *
+   * This is the same decision the nightly passes make, asked again now — which is what keeps a
+   * retry truthful rather than a replay.
+   */
+  private rebuild(
+    kind: string,
+    t: {
+      id: number; trade_no: string | null; property: string | null; agent: string | null; type: string | null;
+      closing_date: Date | null; listing_expiry_date: Date | null;
+      buyer_lawyer_name: string | null; seller_lawyer_name: string | null;
+      transaction_statuses: { status: string }[];
+    },
+    today: Date,
+  ): { event: string; vars: Record<string, string>; summary: string } | null {
+    if (kind === 'listing_expiry') {
+      if (!t.listing_expiry_date || !this.isActive(t.transaction_statuses)) return null;
+      const { due, daysRemaining } = expiryReminderFor(today, calendarDay(t.listing_expiry_date));
+      if (!due) return null;
+      return {
+        event: 'transaction.listing_expiry_reminder',
+        vars: {
+          deal_number: t.trade_no ?? String(t.id),
+          property_address: t.property ?? '—',
+          listing_type: t.type ?? '—',
+          expiry_date: toDateString(t.listing_expiry_date) ?? '',
+          days_remaining: String(daysRemaining),
+          expiry_phrase: expiryPhrase(daysRemaining),
+          agent_name: t.agent ?? 'there',
+        },
+        summary: `Listing ${expiryPhrase(daysRemaining)} — ${t.property ?? t.trade_no ?? ''}`.trim(),
+      };
+    }
+
+    if (!t.closing_date || !tracksBothLawyers(t.type) || this.isSettled(t.transaction_statuses)) return null;
+    const variant = lawyerVariant(missingLawyerParties(t));
+    if (!variant) return null; // filled in since — nothing to chase
+    const { daysRemaining } = lawyerReminderFor(today, calendarDay(t.closing_date));
+    if (daysRemaining < 0) return null; // the closing has been and gone
+    return {
+      event: LAWYER_TEMPLATE[variant],
+      vars: {
+        deal_number: t.trade_no ?? String(t.id),
+        property_address: t.property ?? '—',
+        closing_date: toDateString(t.closing_date) ?? '',
+        days_remaining: String(daysRemaining),
+        closing_phrase: closingPhrase(daysRemaining),
+        missing_details: variant === 'both' ? 'Buyer and Seller Lawyer Details' : variant === 'buyer' ? 'Buyer Lawyer Details' : 'Seller Lawyer Details',
+        agent_name: t.agent ?? 'there',
+      },
+      summary: `${variant === 'both' ? 'Buyer & seller' : variant === 'buyer' ? 'Buyer' : 'Seller'} lawyer details needed — ${closingPhrase(daysRemaining)}`,
+    };
+  }
+
+  /** Close a retry without sending — the condition it existed for has gone. */
+  private async closeRetry(id: number, status: string, detail: string): Promise<void> {
+    await this.prisma.transaction_reminders.update({
+      where: { id },
+      data: { delivery_status: status, detail, next_retry_at: null, last_attempt_at: new Date() },
+    });
+  }
+
+  /**
+   * Record a failed attempt, and schedule the next one if the reason is worth retrying.
+   *
+   * Backoff doubles — an hour, two, four — so a mail server that is down for the evening is asked
+   * a handful of times rather than every hour all night. After the last attempt the row simply
+   * stays Failed with the reason on it, which is what the history is for.
+   */
+  private async recordFailure(id: number, attempt: number, err: unknown, txnId: number, kind: string, summary: string): Promise<void> {
+    const reason = err instanceof Error ? err.message : String(err);
+    const retryable = isTransient(err) && attempt < MAX_DELIVERY_ATTEMPTS;
+    const next = retryable ? new Date(Date.now() + RETRY_DELAYS_MS[Math.min(attempt - 1, RETRY_DELAYS_MS.length - 1)]) : null;
+
+    await this.prisma.transaction_reminders.update({
+      where: { id },
+      data: {
+        delivery_status: 'Failed',
+        detail: retryable ? `${reason} — attempt ${attempt}, trying again later.` : `${reason} — attempt ${attempt}, not retried.`,
+        attempts: attempt,
+        last_attempt_at: new Date(),
+        next_retry_at: next,
+      },
+    });
+    await this.auditReminder(txnId, kind, 'Reminder failed', summary, `Attempt ${attempt}: ${reason}${retryable ? ' (will retry)' : ''}`);
+    this.log.error(`Reminder ${id} attempt ${attempt} failed: ${reason}${retryable ? ' — will retry' : ''}`);
+  }
+
   // ---------------------------------------------------------------- delivery
 
   /**
@@ -300,13 +498,18 @@ export class ReminderSweepService {
       await this.auditReminder(job.txnId, job.kind, 'Reminder sent', job.summary, `Emailed ${address}.`);
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
+      // Claim the row first so the occurrence is still recorded, then let recordFailure decide
+      // whether the reason is worth another attempt and when.
       await this.claim(job.txnId, job.kind, job.day, 'email', {
         variant: job.variant, daysRemaining: job.daysRemaining, recipient: address,
         status: 'Failed', subject: job.summary, detail: reason,
       });
+      const row = await this.prisma.transaction_reminders.findFirst({
+        where: { transaction_id: job.txnId, kind: job.kind, scheduled_for: job.day, delivery_method: 'email' },
+        select: { id: true },
+      });
+      if (row) await this.recordFailure(row.id, 1, err, job.txnId, job.kind, job.summary);
       job.result.failed++;
-      await this.auditReminder(job.txnId, job.kind, 'Reminder failed', job.summary, reason);
-      this.log.error(`Reminder for transaction ${job.txnId} failed: ${reason}`);
     }
   }
 
