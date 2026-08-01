@@ -3,9 +3,9 @@
 Get Home Realty's **Transaction Desk**: a real-estate brokerage back-office system for
 managing transactions, commissions, legal documents, invoices and team collaboration.
 
-- **Backend:** Laravel 12 REST API (PHP 8.2+), MySQL, Sanctum cookie auth.
-- **Frontend:** React 19 + Vite 7 single-page app (`client/`), React Router 7, Axios.
-- **Local stack:** XAMPP (Apache/MySQL) with PHP at `c:\xampp\php\php.exe`.
+- **Backend:** NestJS 10 REST API (TypeScript), PostgreSQL via Prisma 6, cookie sessions.
+- **Frontend:** React 19 + TypeScript SPA built with Vite 7 (`client/`), React Router 7, Axios.
+- **Local stack:** Node.js ≥ 20.19 and a PostgreSQL instance.
 
 ---
 
@@ -34,26 +34,27 @@ managing transactions, commissions, legal documents, invoices and team collabora
   Browser ─────► │  React SPA (client/)    │  Vite dev :5173 / built to public
                  │  React Router + Axios   │
                  └───────────┬────────────┘
-                             │ /api/* (cookie auth, Sanctum)
+                             │ /api/* (cookie auth)
                  ┌───────────▼────────────┐
-                 │  Laravel 12 API         │  artisan serve :8000
+                 │  NestJS 10 API          │  :8000
                  │  Controllers → Services │
-                 │  Eloquent Models        │
+                 │  Prisma models          │
                  └───────────┬────────────┘
                              │
-                     ┌───────▼───────┐
-                     │  MySQL (myapp) │
-                     └───────────────┘
+                   ┌─────────▼─────────┐
+                   │  PostgreSQL (myapp)│
+                   └───────────────────┘
 ```
 
 - **Backend-authoritative business logic.** Commission math, invoice totals, trade
   numbers, document validation and permissions are all computed server-side. The SPA
   renders state; it never becomes the source of truth for money or access.
-- **Resource layer.** `TransactionResource` (and the invoice/document payloads) shape
-  every response, including per-user derived fields such as `my_team_access` and
-  `unread_messages`.
-- **Auth.** Sanctum SPA cookie sessions. The React app calls `/api/*` with credentials;
-  role/permission checks run in middleware and in-controller.
+- **Serialization layer.** `server/src/common/serialize.ts` shapes every response
+  (transaction, invoice and document payloads), including per-user derived fields such as
+  `my_team_access` and `unread_messages`.
+- **Auth.** Server-side cookie sessions (`express-session`), persisted in PostgreSQL via
+  `connect-pg-simple` so they survive restarts. The React app calls `/api/*` with
+  credentials; role/permission checks run in guards and in-controller.
 
 ---
 
@@ -61,24 +62,31 @@ managing transactions, commissions, legal documents, invoices and team collabora
 
 ```
 myapp/
-├── app/
-│   ├── Http/
-│   │   ├── Controllers/        REST controllers (Transaction, Document, Invoice, …)
-│   │   ├── Requests/           Form-request validation (Store/Update Transaction, …)
-│   │   ├── Resources/          API response shaping (TransactionResource)
-│   │   └── Middleware/         admin / screen permission middleware
-│   ├── Models/                 Eloquent models (Transaction, Document, Invoice, …)
-│   └── Services/               Business logic (Commission, Invoice, Permission, Audit)
-├── database/migrations/        Schema (chronological)
-├── routes/api.php              All API routes
+├── server/                     NestJS API
+│   ├── src/
+│   │   ├── main.ts             Bootstrap: sessions, CORS, helmet, validation, /api prefix
+│   │   ├── app.module.ts       Root module — every feature module is registered here
+│   │   ├── transactions/       One folder per domain: controller + service + dto/
+│   │   ├── documents/          … documents, invoices, leads, calendar, campaigns,
+│   │   ├── invoices/              email, inbox, fintrac, meta, mls, reports, sms, …
+│   │   ├── auth/               Guards, permissions, session handling
+│   │   ├── common/             Serialization, Laravel-compat crypt + error shapes
+│   │   ├── config/             Typed config, production validation, storage root
+│   │   └── observability/      Health endpoints, structured logging, metrics
+│   ├── prisma/
+│   │   ├── schema.prisma       PostgreSQL schema (source of truth)
+│   │   └── migrations/         Schema history (chronological, forward-only)
+│   └── scripts/                Backup, restore, monitor, ETL, verification scripts
 ├── client/                     React SPA
 │   └── src/
 │       ├── desk/               Feature pages + modals (the app UI)
 │       ├── context/            AuthContext
 │       ├── components/         ProtectedRoute, etc.
-│       ├── lib/api.js          Axios API client (all endpoints)
+│       ├── lib/api.ts          Axios API client (all endpoints)
 │       └── styles/desk.css     App styling
-├── serve-dev.ps1               Dev API server with auto-migrate + restart (see §13)
+├── storage/app/                Uploaded files — documents, identification, logos, photos
+├── docs/                       Deployment, operations, disaster recovery, audits
+├── start-app.ps1               Dev launcher for both halves (Windows)
 └── DOCUMENTATION.md            This file
 ```
 
@@ -87,44 +95,57 @@ myapp/
 ## 3. Getting Started
 
 ### Prerequisites
-- PHP 8.2+ (bundled with XAMPP at `c:\xampp\php\php.exe`), Composer
-- MySQL (XAMPP) with a database named `myapp`
-- Node.js (for the Vite client)
+- Node.js **≥ 20.19** (22 LTS recommended)
+- PostgreSQL, with a database named `myapp`
 
 ### First-time setup
 ```bash
-composer install
-cp .env.example .env            # configure DB (myapp) + APP_URL
-php artisan key:generate
-php artisan migrate --force
-npm --prefix client install
-npm --prefix client run build
+cd server
+npm ci
+cp .env.example .env            # set DATABASE_URL, APP_KEY, SESSION_SECRET, TZ
+npm run prisma:generate
+npm run prisma:deploy
+cd ../client
+npm ci
 ```
+
+`server/.env.example` documents every setting inline. `APP_KEY` must be carried forward from
+an existing deployment — it decrypts stored IMAP passwords and Google refresh tokens.
 
 The first registered account becomes the bootstrap **Super Admin** (`POST /api/register`
 is only open until the first admin exists).
 
-### Running in development (Windows / PowerShell)
-
-Run the **API** with the auto-reloading watcher and the **client** with Vite:
+### Running in development
 
 ```powershell
-pwsh -File serve-dev.ps1                 # API on http://127.0.0.1:8000 (auto-migrate + restart)
-npm --prefix client run dev              # Vite on http://localhost:5173
+pwsh -File start-app.ps1                 # starts both halves, then health-checks them
+pwsh -File stop-app.ps1                  # stops them
 ```
 
-Open **http://localhost:5173**. `serve-dev.ps1` watches `database/migrations` and, when a
-migration is added/changed, runs `php artisan migrate --force` and restarts the server —
-so newly-created tables are always visible to the running app (see §13).
+Or run each half yourself:
+
+```bash
+cd server && npm run start:dev           # API on http://localhost:8000 (watch mode)
+cd client && npm run dev                 # Vite on http://localhost:5173
+```
+
+Open **http://localhost:5173**.
 
 ### Useful commands
 ```bash
-php artisan migrate --force              # apply migrations
-php artisan migrate:status               # list migrations
-php artisan optimize:clear               # clear config/route/view caches
-php -l <file.php>                        # PHP lint
-npm --prefix client run build            # build the SPA
+# server/
+npm run prisma:status                    # pending migrations (read-only)
+npm run prisma:deploy                    # apply migrations — forward-only
+npm run typecheck                        # tsc --noEmit
+npm test                                 # Jest suite
+npm run build                            # compile to dist/
+
+# client/
+npm run build                            # typecheck, then production build
 ```
+
+> **Never run `prisma migrate dev` against a database you care about.** It resets on drift.
+> `npm run prisma:migrate` is guarded and refuses non-local databases.
 
 ---
 
@@ -318,8 +339,9 @@ Notable recent columns: `documents.reminder`, `documents.agent_accepted`,
 
 ## 10. API Reference
 
-All routes are under `/api` and (except the public auth endpoints) require
-`auth:sanctum`. Full definitions: [`routes/api.php`](routes/api.php).
+All routes are under `/api` (set as a global prefix in `main.ts`) and, except the public auth
+endpoints, require an authenticated session. Full definitions live in the per-module
+controllers under [`server/src/`](server/src/).
 
 ### Public
 | Method | Path | Purpose |
@@ -399,21 +421,22 @@ reminders, send; customers CRUD.
 ## 13. Developer Notes & Conventions
 
 - **Shell:** PowerShell is primary on this machine; a Bash tool exists for POSIX scripts.
-  PHP is `c:\xampp\php\php.exe`.
-- **Dev server & migrations (important):** a plain `php artisan serve` process started
-  *before* a migration will not see the new table (`SQLSTATE[42S02] Base table or view not
-  found`) until restarted. Use **`serve-dev.ps1`**, which auto-migrates and restarts on
-  migration changes. Do **not** use it in production — run migrations deliberately on deploy.
+- **Dev server & migrations:** `npm run start:dev` watches and restarts on source changes,
+  but **not** on migrations — after `npm run prisma:deploy`, run `npm run prisma:generate`
+  so the Prisma client types match the new schema, then let it restart.
 - **Backend-authoritative:** never trust the client for money or access. Add commission /
-  permission / validation logic in Services and Resources, not the SPA.
-- **Validation whitelisting:** Form Requests (`Store/UpdateTransactionRequest`) strip
-  un-listed fields — when you add a persisted field to a nested payload (e.g. `team.*.access`,
-  `documents.*.agent_accepted`), add its validation rule or it will be silently dropped.
-- **Migrations are additive** and dated `YYYY_MM_DD_NNNNNN`. Add fillable + casts to the
-  model, surface the field in the relevant Resource/payload, and (for nested payloads)
-  whitelist it in the Form Request.
-- **After changing code:** `php -l` the PHP file, and `npm --prefix client run build` for
-  the SPA. Client changes hot-reload under Vite; a hard refresh (Ctrl+Shift+R) picks up a
-  fresh build.
+  permission / validation logic in the service layer, not the SPA.
+- **Validation whitelisting:** the global `ValidationPipe` runs with `whitelist: true`, so a
+  field with no rule on its DTO is stripped silently. When you add a persisted field to a
+  nested payload (e.g. `team.*.access`, `documents.*.agent_accepted`), add its validation
+  rule or it will never arrive.
+- **Migrations are forward-only** and dated `YYYYMMDDHHMMSS`. Add the column to
+  `schema.prisma`, generate the migration, re-run `prisma:generate`, then surface the field
+  in the relevant payload and DTO.
+- **Error shape:** validation failures return `422 { message, errors }` — the shape the SPA
+  already parses. `common/laravel-exceptions.ts` produces it; don't bypass it.
+- **After changing code:** `npm run typecheck` and `npm test` in `server/`;
+  `npm run build` in `client/`. Client changes hot-reload under Vite; a hard refresh
+  (Ctrl+Shift+R) picks up a fresh build.
 - **Roles reminder:** stored `admin` = Super Admin, `manager` = Admin, `agent` = Agent.
 ```

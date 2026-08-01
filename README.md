@@ -1,59 +1,131 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# Transaction Desk
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+Get Home Realty's back-office system for managing real-estate transactions, commissions, legal
+documents, invoices and team collaboration.
 
-## About Laravel
+```
+client/    React 19 + TypeScript SPA (Vite)
+server/    NestJS 10 API (TypeScript, Prisma, PostgreSQL)
+storage/   Uploaded files — documents, identification, logos, photos, exports
+docs/      Operations, deployment, disaster recovery, audits
+```
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+---
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
+## Stack
 
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
+| Layer | Technology |
+|---|---|
+| Frontend | React **19**, TypeScript 5.9, Vite 7, React Router 7, Axios |
+| Backend | **NestJS 10** on Express, TypeScript 5.9 |
+| Database | **PostgreSQL** via **Prisma 6** |
+| Sessions | `express-session` + `connect-pg-simple` (stored in Postgres) |
+| Runtime | **Node.js ≥ 20.19** (22 LTS recommended) |
+| Tests | Jest + supertest — 44 suites, 554 tests |
 
-## Learning Laravel
+Integrations: Twilio (SMS + Voice), Meta lead ads, Google Calendar, IMAP/SMTP mail, web push.
+All are optional and degrade gracefully when unconfigured.
 
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework. You can also check out [Laravel Learn](https://laravel.com/learn), where you will be guided through building a modern Laravel application.
+---
 
-If you don't feel like reading, [Laracasts](https://laracasts.com) can help. Laracasts contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
+## Quick start
 
-## Laravel Sponsors
+Requires Node ≥ 20.19 and a running PostgreSQL instance.
 
-We would like to extend our thanks to the following sponsors for funding Laravel development. If you are interested in becoming a sponsor, please visit the [Laravel Partners program](https://partners.laravel.com).
+```bash
+# API
+cd server
+npm ci
+cp .env.example .env          # set DATABASE_URL, APP_KEY, SESSION_SECRET, TZ
+npm run prisma:generate
+npm run prisma:deploy
+npm run start:dev             # http://localhost:8000
 
-### Premium Partners
+# SPA (second terminal)
+cd client
+npm ci
+npm run dev                   # http://localhost:5173
+```
 
-- **[Vehikl](https://vehikl.com)**
-- **[Tighten Co.](https://tighten.co)**
-- **[Kirschbaum Development Group](https://kirschbaumdevelopment.com)**
-- **[64 Robots](https://64robots.com)**
-- **[Curotec](https://www.curotec.com/services/technologies/laravel)**
-- **[DevSquad](https://devsquad.com/hire-laravel-developers)**
-- **[Redberry](https://redberry.international/laravel-development)**
-- **[Active Logic](https://activelogic.com)**
+Open **http://localhost:5173**.
 
-## Contributing
+On Windows, `start-app.ps1` launches both halves at once and `stop-app.ps1` stops them.
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+The first registered account becomes the bootstrap **Super Admin** — `POST /api/register` stays
+open only until that account exists.
 
-## Code of Conduct
+---
 
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
+## Common commands
 
-## Security Vulnerabilities
+```bash
+# server/
+npm run start:dev        # watch mode
+npm run build            # compile to dist/
+npm run typecheck        # tsc --noEmit
+npm test                 # full Jest suite
+npm run prisma:status    # pending migrations (read-only)
+npm run prisma:deploy    # apply migrations — use this, never `migrate dev`, in production
+npm run backup           # database dump + storage tree
+npm run backup:verify    # restore the newest set into a scratch database
 
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
+# client/
+npm run dev              # Vite dev server
+npm run build            # typecheck, then production build to dist/
+```
 
-## License
+---
 
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+## Health
+
+| Endpoint | Answers |
+|---|---|
+| `/api/health` | Is the process alive? Touches nothing. |
+| `/api/health/ready` | Can it serve? Real database round trip, storage write, permission tables. |
+| `/api/health/metrics` | Throughput, latency percentiles, error rate. |
+| `/api/health/workers` | Background timers, export queue, per-mailbox sync age. |
+
+Point uptime monitoring at `/ready`, not `/health` — a process that cannot reach its database is
+alive and useless.
+
+---
+
+## Documentation
+
+| | |
+|---|---|
+| [`DOCUMENTATION.md`](DOCUMENTATION.md) | Architecture, domain model, commission model, API reference |
+| [`docs/VPS-DEPLOYMENT.md`](docs/VPS-DEPLOYMENT.md) | Hosting on a Linux VPS, start to finish |
+| [`docs/OPERATIONS.md`](docs/OPERATIONS.md) | Running it day to day, monitoring, deploys |
+| [`docs/DISASTER-RECOVERY.md`](docs/DISASTER-RECOVERY.md) | Backup and restore |
+| [`docs/MLS_AND_ENV.md`](docs/MLS_AND_ENV.md) | MLS feed and environment variables |
+| [`docs/PERFORMANCE-AUDIT.md`](docs/PERFORMANCE-AUDIT.md) | Measured performance and reliability |
+| [`docs/UAT.md`](docs/UAT.md) | Acceptance testing |
+
+---
+
+## Conventions
+
+- **Backend-authoritative.** Commission math, invoice totals, trade numbers, document validation
+  and permissions are computed server-side. The SPA renders state; it is never the source of truth
+  for money or access.
+- **Migrations are forward-only.** `prisma migrate deploy`. Never `migrate dev` against a database
+  you care about — it resets on drift.
+- **Validation whitelists.** `ValidationPipe` runs with `whitelist: true`, so a field with no DTO
+  rule is stripped silently. Adding a persisted field means adding its rule.
+
+---
+
+## History
+
+This project was originally built on **Laravel 12 (PHP) + MySQL** with a React SPA. It was migrated
+to the current stack on 2026-07-20; the PHP application was removed in that commit and no PHP
+remains.
+
+Two things survive the migration and are intentional:
+
+- **`storage/`** keeps the Laravel directory layout because it holds live uploaded files. The
+  NestJS backend reads and writes it, and `STORAGE_ROOT` points at `storage/app`.
+- **`server/src/common/laravel-*.ts`** is TypeScript that reproduces Laravel's encryption format and
+  its `422 {message, errors}` validation shape, so credentials encrypted by the old stack still
+  decrypt and the SPA's error handling is unchanged.

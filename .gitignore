@@ -3,26 +3,24 @@
 .env
 .env.backup
 .env.production
-.phpactor.json
-.phpunit.result.cache
+# client/.env.production is committed on purpose: it holds no secrets, and keeping it in the
+# repository makes a production build correct on any machine instead of depending on someone
+# creating the file first. Keep this exception.
+!client/.env.production
 /.fleet
 /.idea
 /.nova
-/.phpunit.cache
 /.vscode
 /.zed
-/auth.json
 /node_modules
-/public/build
-/public/hot
-/public/storage
-/storage/*.key
-/storage/pail
-/vendor
-Homestead.json
-Homestead.yaml
 Thumbs.db
 
 # Backup sets: database dumps and copies of every uploaded file. Large, and they contain
 # client identification and commission figures — never in version control.
 backups/
+
+# Dead Laravel leftovers that may still sit on an old working copy: compiled Blade view
+# caches and the PHP log. Nothing in the NestJS backend reads them (it uses storage/app
+# only). Ignored so they can never be committed by accident; safe to delete locally.
+storage/framework/
+storage/logs/

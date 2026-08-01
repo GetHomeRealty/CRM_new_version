@@ -1,5 +1,5 @@
 # stop-app.ps1 — stops the dev servers started by start-app.ps1.
-# Leaves MySQL (XAMPP) alone — manage that from the XAMPP Control Panel.
+# Leaves PostgreSQL alone — manage that through its Windows service.
 #
 # Usage:  pwsh -File stop-app.ps1
 
@@ -17,7 +17,7 @@ function Stop-Port([int]$Port, [string]$Label) {
 }
 
 Write-Host ''
-Stop-Port 8000 'Laravel API'
+Stop-Port 8000 'NestJS API'
 Stop-Port 5173 'React app (Vite)'
 Write-Host ''
-Write-Host 'Done. (MySQL left running — stop it from XAMPP if needed.)' -ForegroundColor DarkGray
+Write-Host 'Done. (PostgreSQL left running — stop the service if needed.)' -ForegroundColor DarkGray
