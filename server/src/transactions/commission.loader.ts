@@ -53,9 +53,13 @@ export function normalizeCommissionTxn(t: TxnWithCommission): CommissionTxn {
     comm_paid_status: t.comm_paid_status,
     comm_status: t.comm_status,
     agent: t.agent,
+    // Preferred over the name when present — see PersonResolver. Null on rows written before the
+    // column existed, and on rows whose name matched more than one account, which keep the fallback.
+    agent_user_id: t.agent_user_id ?? null,
     adjustments: parseJson<Record<string, unknown>>(t.adjustments),
     teamMembers: (t.team_members ?? []).map((m) => ({
       name: m.name,
+      user_id: m.user_id ?? null,
       split: num(m.split),
       agent_pct: num(m.agent_pct),
       brok_pct: num(m.brok_pct),

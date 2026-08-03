@@ -2,25 +2,26 @@ import { PrismaClient } from '@prisma/client';
 import { ForbiddenException, UnprocessableEntityException } from '@nestjs/common';
 import type { PrismaService } from '../prisma/prisma.service';
 import { LeadTransferService } from '../leads/lead-transfer.service';
+import { META_LEAD_SOURCE } from '../leads/lead.constants';
 import { ResourceAccessService } from './resource-access.service';
 
 /**
- * Moving a book of leads.
+ * Lead Books — handing out the brokerage's own unassigned leads.
  *
- * An agent's leads are confidential, so when an agent leaves their book is invisible to everybody —
- * including the administrator — and no screen can reassign it, because the reassignment control
- * sits on a lead nobody can open. This is the way back in, and the point of these tests is that it
- * is a narrow one:
+ * WHAT THESE DEFEND, and it is mostly a set of refusals. The screen used to move one person's whole
+ * book to another and list every agent beside a count of what they held. Both were ruled out on
+ * 2026-08-02: an agent's leads are not available here, and how many leads a named agent holds is
+ * not something this screen reports.
  *
- *   it is keyed on the OWNER, so nobody has to name or read a lead to move a book
- *   it returns a count and nothing else
- *   it is Super Admin only
- *   it is written to the audit trail every time
+ * So the tests below are largely about what CANNOT be reached:
  *
- * The last test is the honest one. An administrator who transfers a working agent's book to
- * themselves CAN then read it — no arrangement makes that impossible while also letting them
- * recover a departed agent's work. What the design guarantees is that the route cannot be taken
- * quietly.
+ *   an agent's own leads are not eligible and are never moved
+ *   a lead merely assigned to an agent is not eligible either
+ *   a Meta lead is never eligible, wherever it sits
+ *   no per-agent figure appears anywhere in the response
+ *
+ * and then the narrow thing that remains: unassigned brokerage leads may be handed to somebody, by
+ * a Super Admin, on the record.
  */
 
 const prisma = new PrismaClient();
@@ -41,125 +42,243 @@ async function inRollback(fn: (tx: PrismaService) => Promise<void>) {
 const audits: { action: string; subject: string; details: string }[] = [];
 const auditStub = { record: async (_u: unknown, action: string, subject: string, details = '') => { audits.push({ action, subject, details }); } } as never;
 
-async function scene(tx: PrismaService, leadCount = 3) {
+const as = (u: { id: number; name: string; role: string | null }) => ({ id: u.id, name: u.name, role: u.role ?? 'agent' }) as never;
+
+async function scene(tx: PrismaService, poolLeads = 3) {
   const now = new Date();
   const n = ++seq;
   const mk = (role: string, tag: string, status = 'Active') => tx.users.create({
     data: { name: `${tag} ${n}`, email: `${tag}-${Date.now()}-${n}@x.test`, password: 'x', role, status, company_id: 1, created_at: now, updated_at: now },
   });
-  const leaver = await mk('agent', 'leaver');
+  const agent = await mk('agent', 'agent');
   const successor = await mk('agent', 'successor');
   const admin = await mk('admin', 'admin');
-  for (let i = 0; i < leadCount; i++) {
+
+  // Unassigned brokerage leads: no owner, no assignee. The only kind this screen may touch.
+  for (let i = 0; i < poolLeads; i++) {
     await tx.leads.create({
-      data: { name: `Lead ${i}`, email: `l-${Date.now()}-${n}-${i}@x.test`, owner_user_id: leaver.id, company_id: 1, created_at: now, updated_at: now },
+      data: { name: `Pool ${i}`, email: `pool-${Date.now()}-${n}-${i}@x.test`, company_id: 1, created_at: now, updated_at: now },
     });
   }
-  return { leaver, successor, admin };
+  return { agent, successor, admin };
 }
 
-const as = (u: { id: number; name: string; role: string | null }) => ({ id: u.id, name: u.name, role: u.role ?? 'agent' }) as never;
+/** A lead sitting in somebody's book, which Lead Books must never see. */
+async function ownedLead(tx: PrismaService, userId: number, over: Record<string, unknown> = {}) {
+  const now = new Date();
+  return tx.leads.create({
+    data: {
+      name: `Owned ${++seq}`, email: `owned-${Date.now()}-${seq}@x.test`,
+      owner_user_id: userId, assigned_to: userId, company_id: 1, created_at: now, updated_at: now, ...over,
+    },
+  });
+}
 
-describe('a departed agent\'s book can be recovered', () => {
+describe('unassigned brokerage leads can be handed out', () => {
   beforeEach(() => { audits.length = 0; });
   afterAll(async () => { await prisma.$disconnect(); });
 
-  it('moves every lead to the successor', async () => {
+  it('gives the pool to the chosen person, as owner and assignee', async () => {
     await inRollback(async (tx) => {
-      const { leaver, successor, admin } = await scene(tx, 3);
-      const svc = new LeadTransferService(tx, auditStub);
-      const result = await svc.transfer(as(admin), leaver.id, successor.id);
+      const { successor, admin } = await scene(tx, 3);
+      const result = await new LeadTransferService(tx, auditStub).transfer(as(admin), successor.id);
+
       expect(result.moved).toBe(3);
-      expect(await tx.leads.count({ where: { owner_user_id: leaver.id, deleted_at: null } })).toBe(0);
-      expect(await tx.leads.count({ where: { owner_user_id: successor.id, deleted_at: null } })).toBe(3);
+      expect(result.remaining).toBe(0);
+      expect(await tx.leads.count({ where: { owner_user_id: successor.id, assigned_to: successor.id, deleted_at: null } })).toBe(3);
     });
   });
 
-  it('makes them reachable by the successor and unreachable by the person who left', async () => {
+  it('makes them reachable by the person who received them', async () => {
     await inRollback(async (tx) => {
-      const { leaver, successor, admin } = await scene(tx, 1);
-      const lead = await tx.leads.findFirst({ where: { owner_user_id: leaver.id }, select: { id: true } });
-      const access = new ResourceAccessService(tx);
-      await new LeadTransferService(tx, auditStub).transfer(as(admin), leaver.id, successor.id);
+      const { successor, admin } = await scene(tx, 1);
+      const lead = await tx.leads.findFirst({ where: { owner_user_id: null, assigned_to: null }, select: { id: true } });
+      await new LeadTransferService(tx, auditStub).transfer(as(admin), successor.id);
 
-      await expect(access.assertLead(as(successor), lead!.id)).resolves.toBeUndefined();
-      await expect(access.assertLead(as(leaver), lead!.id)).rejects.toThrow(ForbiddenException);
+      await expect(new ResourceAccessService(tx).assertLead(as(successor), lead!.id)).resolves.toBeUndefined();
     });
   });
 
-  it('reports only a count, never the leads themselves', async () => {
+  it('hands over only as many as asked for, oldest first', async () => {
     await inRollback(async (tx) => {
-      const { leaver, successor, admin } = await scene(tx, 2);
-      const result = await new LeadTransferService(tx, auditStub).transfer(as(admin), leaver.id, successor.id);
-      // Nothing about who the leads are may come back through this door.
-      expect(Object.keys(result).sort()).toEqual(['from', 'moved', 'to']);
+      const { successor, admin } = await scene(tx, 5);
+      const oldest = await tx.leads.findMany({
+        where: { owner_user_id: null, assigned_to: null }, select: { id: true }, orderBy: { id: 'asc' }, take: 2,
+      });
+
+      const result = await new LeadTransferService(tx, auditStub).transfer(as(admin), successor.id, 2);
+
+      expect(result.moved).toBe(2);
+      expect(result.remaining).toBe(3);
+      const moved = await tx.leads.findMany({ where: { owner_user_id: successor.id }, select: { id: true }, orderBy: { id: 'asc' } });
+      expect(moved.map((m) => m.id)).toEqual(oldest.map((o) => o.id));
     });
   });
 
-  it('shows who holds a book without showing whose leads they are', async () => {
+  it('reports only counts, never the leads themselves', async () => {
     await inRollback(async (tx) => {
-      const { leaver, admin } = await scene(tx, 4);
-      const books = await new LeadTransferService(tx, auditStub).books(as(admin));
-      const theirs = books.find((b) => b.user_id === leaver.id);
-      expect(theirs?.leads).toBe(4);
-      // Counts and names of PEOPLE — never a lead name, email or phone.
-      expect(Object.keys(theirs ?? {}).sort()).toEqual(['leads', 'name', 'role', 'user_id']);
+      const { successor, admin } = await scene(tx, 2);
+      const result = await new LeadTransferService(tx, auditStub).transfer(as(admin), successor.id);
+      expect(Object.keys(result).sort()).toEqual(['moved', 'remaining', 'to']);
+    });
+  });
+
+  it('refuses when there is nothing waiting, rather than reporting a silent success', async () => {
+    await inRollback(async (tx) => {
+      const { agent, successor, admin } = await scene(tx, 0);
+      await ownedLead(tx, agent.id);   // exists, but is not the brokerage's to give
+
+      await expect(new LeadTransferService(tx, auditStub).transfer(as(admin), successor.id))
+        .rejects.toThrow(UnprocessableEntityException);
+    });
+  });
+});
+
+describe('an agent\'s own leads are out of reach', () => {
+  beforeEach(() => { audits.length = 0; });
+
+  it('never counts a lead somebody owns as available', async () => {
+    await inRollback(async (tx) => {
+      const { agent, admin } = await scene(tx, 2);
+      await ownedLead(tx, agent.id);
+      await ownedLead(tx, agent.id);
+      await ownedLead(tx, agent.id);
+
+      // Three in a book, two in the pool. Only the pool is the brokerage's to hand out.
+      expect((await new LeadTransferService(tx, auditStub).books(as(admin))).available).toBe(2);
+    });
+  });
+
+  it('leaves an agent\'s leads exactly where they are when the pool is handed over', async () => {
+    await inRollback(async (tx) => {
+      const { agent, successor, admin } = await scene(tx, 1);
+      const theirs = await ownedLead(tx, agent.id);
+
+      const result = await new LeadTransferService(tx, auditStub).transfer(as(admin), successor.id);
+
+      expect(result.moved).toBe(1);
+      const after = await tx.leads.findUnique({ where: { id: theirs.id } });
+      expect(after?.owner_user_id).toBe(agent.id);
+      expect(after?.assigned_to).toBe(agent.id);
+    });
+  });
+
+  it('will not take a lead that is unowned but assigned to somebody', async () => {
+    await inRollback(async (tx) => {
+      const { agent, successor, admin } = await scene(tx, 0);
+      // No owner, but it is on a named person's list. Taking it would be the same intrusion by
+      // another route.
+      const assigned = await ownedLead(tx, agent.id, { owner_user_id: null });
+
+      await expect(new LeadTransferService(tx, auditStub).transfer(as(admin), successor.id))
+        .rejects.toThrow(UnprocessableEntityException);
+      expect((await tx.leads.findUnique({ where: { id: assigned.id } }))?.assigned_to).toBe(agent.id);
+    });
+  });
+
+  it('will not take a Meta lead even when it has no owner at all', async () => {
+    await inRollback(async (tx) => {
+      const { successor, admin } = await scene(tx, 0);
+      const now = new Date();
+      const meta = await tx.leads.create({
+        data: {
+          name: `Meta ${++seq}`, email: `meta-${Date.now()}-${seq}@x.test`,
+          source: META_LEAD_SOURCE, company_id: 1, created_at: now, updated_at: now,
+        },
+      });
+
+      expect((await new LeadTransferService(tx, auditStub).books(as(admin))).available).toBe(0);
+      await expect(new LeadTransferService(tx, auditStub).transfer(as(admin), successor.id))
+        .rejects.toThrow(UnprocessableEntityException);
+      expect((await tx.leads.findUnique({ where: { id: meta.id } }))?.owner_user_id).toBeNull();
+    });
+  });
+});
+
+describe('no agent-level statistics leave this screen', () => {
+  it('returns a pool size and a list of names, and nothing per person', async () => {
+    await inRollback(async (tx) => {
+      const { agent, admin } = await scene(tx, 2);
+      await ownedLead(tx, agent.id);
+      await ownedLead(tx, agent.id);
+      await ownedLead(tx, agent.id);
+      await ownedLead(tx, agent.id);
+
+      const pool = await new LeadTransferService(tx, auditStub).books(as(admin));
+
+      expect(Object.keys(pool).sort()).toEqual(['available', 'recipients']);
+      // A recipient is somebody a lead can be given to — a name and a role, never a figure.
+      for (const r of pool.recipients) {
+        expect(Object.keys(r).sort()).toEqual(['name', 'role', 'user_id']);
+      }
+
+      // The pool itself is only the two unowned leads — the agent's four are not counted anywhere.
+      expect(pool.available).toBe(2);
+    });
+  });
+
+  /**
+   * The property stated as a property, rather than as a shape.
+   *
+   * Giving an agent four more leads must change NOTHING in this response. A field added later
+   * called `total`, `assigned` or `book_size` would pass a key check written today and fail this,
+   * which is the point — the guarantee is "reveals nothing about anybody's book", not "has these
+   * particular keys".
+   */
+  it('answers identically however many leads an agent is holding', async () => {
+    await inRollback(async (tx) => {
+      const { agent, admin } = await scene(tx, 2);
+      const svc = new LeadTransferService(tx, auditStub);
+
+      const before = await svc.books(as(admin));
+      for (let i = 0; i < 4; i++) await ownedLead(tx, agent.id);
+      const after = await svc.books(as(admin));
+
+      expect(after).toEqual(before);
     });
   });
 });
 
 describe('the door is narrow', () => {
   beforeEach(() => { audits.length = 0; });
-  afterAll(async () => { await prisma.$disconnect(); });
 
   it('is refused to an agent and to a manager', async () => {
     await inRollback(async (tx) => {
-      const { leaver, successor } = await scene(tx, 1);
+      const { agent, successor } = await scene(tx, 1);
       const now = new Date();
       const manager = await tx.users.create({
         data: { name: `mgr ${++seq}`, email: `mgr-${Date.now()}-${seq}@x.test`, password: 'x', role: 'manager', company_id: 1, created_at: now, updated_at: now },
       });
       const svc = new LeadTransferService(tx, auditStub);
-      await expect(svc.transfer(as(leaver), leaver.id, successor.id)).rejects.toThrow(ForbiddenException);
-      await expect(svc.transfer(as(manager), leaver.id, successor.id)).rejects.toThrow(ForbiddenException);
-      // And the counts screen is just as closed.
+      await expect(svc.transfer(as(agent), successor.id)).rejects.toThrow(ForbiddenException);
+      await expect(svc.transfer(as(manager), successor.id)).rejects.toThrow(ForbiddenException);
+      // And the pool screen is just as closed.
       await expect(svc.books(as(manager))).rejects.toThrow(ForbiddenException);
     });
   });
 
-  it('refuses to move a book onto an inactive account', async () => {
+  it('refuses to hand leads to an inactive account', async () => {
     await inRollback(async (tx) => {
-      const { leaver, admin } = await scene(tx, 1);
+      const { admin } = await scene(tx, 1);
       const now = new Date();
       const gone = await tx.users.create({
         data: { name: `gone ${++seq}`, email: `gone-${Date.now()}-${seq}@x.test`, password: 'x', role: 'agent', status: 'Inactive', company_id: 1, created_at: now, updated_at: now },
       });
-      // Otherwise the book would be invisible again the moment it landed.
-      await expect(new LeadTransferService(tx, auditStub).transfer(as(admin), leaver.id, gone.id))
-        .rejects.toThrow(UnprocessableEntityException);
-    });
-  });
-
-  it('refuses to move a book to itself', async () => {
-    await inRollback(async (tx) => {
-      const { leaver, admin } = await scene(tx, 1);
-      await expect(new LeadTransferService(tx, auditStub).transfer(as(admin), leaver.id, leaver.id))
+      // Otherwise they would be invisible again the moment they landed.
+      await expect(new LeadTransferService(tx, auditStub).transfer(as(admin), gone.id))
         .rejects.toThrow(UnprocessableEntityException);
     });
   });
 
   it('cannot be done quietly', async () => {
     await inRollback(async (tx) => {
-      const { leaver, successor, admin } = await scene(tx, 2);
-      await new LeadTransferService(tx, auditStub).transfer(as(admin), leaver.id, successor.id);
+      const { successor, admin } = await scene(tx, 2);
+      await new LeadTransferService(tx, auditStub).transfer(as(admin), successor.id);
 
-      // This is the whole guarantee. An administrator can take a book — including a working
-      // agent's — but the taking is on the record, with both names and a count.
       expect(audits).toHaveLength(1);
-      expect(audits[0].action).toBe('Lead ownership transferred');
-      expect(audits[0].subject).toContain(leaver.name);
+      expect(audits[0].action).toBe('Brokerage leads assigned');
       expect(audits[0].subject).toContain(successor.name);
-      expect(audits[0].details).toContain('2 leads moved');
+      expect(audits[0].details).toContain('2 unassigned brokerage leads');
     });
   });
 });

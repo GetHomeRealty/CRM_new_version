@@ -1,6 +1,6 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { isAgent, isSuperAdmin } from './authz';
+import { isAdminOrAbove, isAgent, isSuperAdmin } from './authz';
 
 /**
  * Ownership — the authorization question the tenant filter cannot answer.
@@ -69,7 +69,23 @@ export class ResourceAccessService {
       where: { id: leadId, deleted_at: null },
       select: { id: true, owner_user_id: true, assigned_to: true },
     });
-    if (!lead) throw new NotFoundException({ message: 'Lead not found.' });
+    /*
+     * ONE ANSWER FOR BOTH QUESTIONS. A lead that does not exist and a lead that is somebody else's
+     * are indistinguishable from outside — the same 404, the same wording.
+     *
+     * They used to differ: 404 for missing, 403 for existing-but-forbidden. That turned every
+     * activity endpoint into a way to ask "is lead 4,182 real?" and get a truthful answer, one id at
+     * a time, from an account with no right to know. `LeadsService.get` already refused to make that
+     * distinction — it filters by scope in the query, so a colleague's lead simply is not found —
+     * and this is the same rule said the same way, so the two cannot disagree about what a caller
+     * may learn.
+     *
+     * The cost is a slightly less helpful message for the legitimate case where somebody genuinely
+     * has lost access to a lead they expected. That is the right trade: the alternative discloses
+     * the existence and id range of every lead in the brokerage to everyone who can sign in.
+     */
+    const notFound = new NotFoundException({ message: 'Lead not found.' });
+    if (!lead) throw notFound;
     if (!user) return;
 
     // No role is exempt. A manager cannot read an agent's book, and an agent cannot read another's
@@ -78,8 +94,70 @@ export class ResourceAccessService {
     const id = user.id ?? -1;
     const mine = lead.owner_user_id === id || lead.assigned_to === id;
     const unattributedIntake = lead.owner_user_id === null && isSuperAdmin(user);
-    if (!mine && !unattributedIntake) {
-      throw new ForbiddenException({ message: 'You do not have access to this lead.' });
-    }
+    if (!mine && !unattributedIntake) throw notFound;
+  }
+
+  /**
+   * WHY ONLY NOTES CARRY AN AUTHOR RULE.
+   *
+   * All five kinds of lead activity — notes, tasks, showings, calls and messages — record who
+   * created them. Only notes restrict who may change them, and the distinction is about what each
+   * record IS rather than about being consistent:
+   *
+   *   NOTES are testimony. "Client seemed hesitant about the price" is one person's reading of a
+   *     conversation, published under their name. Another agent rewriting it does not correct a
+   *     record, they put words in somebody's mouth. Author-only to edit; author or administrator to
+   *     delete.
+   *
+   *   TASKS and SHOWINGS are shared work. Whoever is working the lead needs to complete, reschedule
+   *     or drop them, whoever set them up — that is the point of handing a lead over. Restricting
+   *     them to their creator would break the collaboration an assignment exists to enable.
+   *
+   *   CALLS and MESSAGES are shared FACTS: a conversation happened, at a time, with an outcome.
+   *     Anyone on the lead may correct or remove one. The protection they need is different — not
+   *     "who may delete this" but "the deletion must not be silent" — because under CASL a call log
+   *     is evidence of contact. Both therefore write what was deleted, and its author, into the
+   *     audit trail. See `removeCall` and `removeMessage`.
+   *
+   * Applying the author rule to all five would have been the tidier-looking change and the wrong
+   * one; the useful question is what each record is for.
+   */
+
+  /**
+   * Throw unless this person may change a note somebody else wrote.
+   *
+   * A note is a record of what a particular person observed, signed with their name and shown with
+   * it. Anyone who could reach the lead could previously edit or delete anyone else's — so an
+   * assignee could rewrite the administrator's observation, under the administrator's name, and the
+   * audit trail recorded that a note changed without keeping what it had said.
+   *
+   * The rule splits editing from deleting, because they are different acts:
+   *
+   *   EDIT   — the author only. Rewriting another person's words while their name stays on them is
+   *            misattribution, and no rank makes that right.
+   *   DELETE — the author, or an administrator. Removing a note is moderation, which is a real need
+   *            (an address posted in the wrong place, something written about the wrong lead), and
+   *            it leaves the record honest rather than altered.
+   *
+   * `user_id` is null on notes written before it was recorded. Those fall back to matching on the
+   * author's name, which is what the screen has always displayed.
+   */
+  assertNoteAuthor(
+    user: { id?: number; name?: string | null; role?: string | null } | null,
+    note: { user_id: number | null; created_by: string | null },
+    action: 'edit' | 'delete',
+  ): void {
+    if (!user) return;
+    const byId = note.user_id !== null && note.user_id === (user.id ?? -1);
+    const byName = note.user_id === null && !!note.created_by && note.created_by === (user.name ?? '');
+    if (byId || byName) return;
+
+    if (action === 'delete' && isAdminOrAbove(user)) return;
+
+    throw new ForbiddenException({
+      message: action === 'edit'
+        ? `This note was written by ${note.created_by ?? 'someone else'}, so it cannot be edited here. Add your own note instead.`
+        : `This note was written by ${note.created_by ?? 'someone else'}. Only its author or an administrator can delete it.`,
+    });
   }
 }

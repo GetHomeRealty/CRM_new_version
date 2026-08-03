@@ -1,34 +1,36 @@
 import { useCallback, useEffect, useState } from 'react';
-import { getLeadBooks, transferLeadBook, type LeadBook } from '../lib/api';
+import { getLeadBooks, transferLeadBook, type LeadBookPool } from '../lib/api';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from './toast';
 import Icon from '../ui/Icon';
 
 /**
- * Moving a book of leads when somebody leaves.
+ * The brokerage's own unassigned leads, and handing them to somebody.
  *
- * Leads are confidential to the person who owns them, which means a departing agent's book is
- * invisible to everybody — including whoever has to deal with it — and there is no lead screen that
- * can reassign it, because the control would sit on a record nobody can open.
+ * WHAT IT DELIBERATELY DOES NOT SHOW. This screen used to list every person in the brokerage beside
+ * a count of the leads they held, and let an administrator move one person's whole book to another.
+ * Both were ruled out on 2026-08-02: an agent's leads — owned or assigned — are not available here,
+ * and how many any named agent holds is a report on their book that this screen is not for.
  *
- * So the transfer is keyed on the PERSON, not on leads. Nobody opens, names or reads a lead to move
- * a book; the screen shows how many each person holds and nothing whatsoever about who they are.
+ * So there is no "from". Eligible leads have no holder at all, which is what makes them the
+ * brokerage's to hand out: unattributed intake, and the brokerage leads a departing agent's account
+ * returns to the pool when it is deactivated. Their personal Meta leads never appear here.
  *
- * The confirmation says what it is doing in plain words, and says that it is recorded. That is not
- * decoration: this is the one route by which somebody can reach leads that are not theirs, and the
- * design does not pretend otherwise — it makes the route impossible to take quietly.
+ * The confirmation says what it is doing in plain words, and says that it is recorded — this reaches
+ * leads nobody personally holds, but it is still an administrator moving work about, and the design
+ * does not make that quiet.
  */
 export default function LeadBooksPanel() {
   const { isSuperAdmin } = useAuth();
   const toast = useToast();
-  const [books, setBooks] = useState<LeadBook[] | null>(null);
-  const [from, setFrom] = useState('');
+  const [pool, setPool] = useState<LeadBookPool | null>(null);
   const [to, setTo] = useState('');
+  const [count, setCount] = useState('');
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);
 
   const load = useCallback(async () => {
-    try { setBooks(await getLeadBooks()); } catch { setBooks([]); }
+    try { setPool(await getLeadBooks()); } catch { setPool({ available: 0, recipients: [] }); }
   }, []);
 
   useEffect(() => { if (isSuperAdmin) void load(); }, [isSuperAdmin, load]);
@@ -36,23 +38,25 @@ export default function LeadBooksPanel() {
   // Not an error, and not worth explaining to somebody who will never use it.
   if (!isSuperAdmin) return null;
 
-  const holder = (id: string) => (books ?? []).find((b) => String(b.user_id) === id);
-  const source = holder(from);
-  const target = holder(to);
-  const ready = !!source && !!target && from !== to && (source.leads > 0);
+  const target = (pool?.recipients ?? []).find((r) => String(r.user_id) === to);
+  const available = pool?.available ?? 0;
+  // Blank means all of them. A number above what is there is treated as all of them too, rather
+  // than refused — asking for fifty when forty exist plainly means "give me what you have".
+  const wanted = Math.min(Number(count) > 0 ? Math.floor(Number(count)) : available, available);
+  const ready = !!target && available > 0 && wanted > 0;
 
   async function run() {
-    if (!source || !target) return;
+    if (!target) return;
     setBusy(true);
     try {
-      const r = await transferLeadBook(source.user_id, target.user_id);
-      toast(`${r.moved} lead${r.moved === 1 ? '' : 's'} moved from ${r.from} to ${r.to}.`, 'ok');
+      const r = await transferLeadBook(target.user_id, Number(count) > 0 ? Math.floor(Number(count)) : undefined);
+      toast(`${r.moved} brokerage lead${r.moved === 1 ? '' : 's'} handed to ${r.to}. ${r.remaining} left in the pool.`, 'ok');
       setConfirming(false);
-      setFrom(''); setTo('');
+      setTo(''); setCount('');
       await load();
     } catch (e) {
       const msg = (e as { response?: { data?: { message?: string } } })?.response?.data?.message;
-      toast(msg || 'Could not move this book.', 'bad');
+      toast(msg || 'Could not hand these leads over.', 'bad');
     } finally {
       setBusy(false);
     }
@@ -64,78 +68,80 @@ export default function LeadBooksPanel() {
         <div>
           <h3 style={{ margin: 0 }}>Lead books</h3>
           <p className="help" style={{ margin: '3px 0 0' }}>
-            Leads belong to the person who owns them and nobody else can open them — so when someone
-            leaves, their book has to be moved here. This screen shows how many leads each person
-            holds and nothing about who those leads are.
+            The brokerage&rsquo;s own leads that nobody is working yet — walk-ins, unattributed
+            enquiries, and the leads returned to the brokerage when an agent&rsquo;s account is
+            deactivated. Hand them to whoever picks the work up.
+            {' '}Leads that belong to an agent are <strong>not shown here and cannot be moved</strong>,
+            and neither is anything about how many leads any agent holds.
           </p>
         </div>
       </div>
 
-      {books === null ? (
+      {pool === null ? (
         <div><div className="sk sk-line lg" /><div className="sk sk-line md" /></div>
       ) : (
         <>
           <div className="books-grid">
-            {books.map((b) => (
-              <div className={`book-row ${b.leads === 0 ? 'empty' : ''}`} key={b.user_id}>
-                <span className="book-name">{b.name}</span>
-                <span className="pill neutral">{b.role}</span>
-                <strong className="book-count">{b.leads}</strong>
-              </div>
-            ))}
+            <div className={`book-row ${available === 0 ? 'empty' : ''}`}>
+              <span className="book-name">Unassigned brokerage leads</span>
+              <strong className="book-count">{available}</strong>
+            </div>
           </div>
 
-          <div className="books-transfer">
-            <label className="field" style={{ marginBottom: 0 }}>
-              <span>Move the book of</span>
-              <select value={from} onChange={(e) => setFrom(e.target.value)} disabled={busy}>
-                <option value="">Choose a person…</option>
-                {books.filter((b) => b.leads > 0).map((b) => (
-                  <option key={b.user_id} value={b.user_id}>{b.name} — {b.leads} lead{b.leads === 1 ? '' : 's'}</option>
-                ))}
-              </select>
-            </label>
-            <Icon name="chevronRight" size={16} />
-            <label className="field" style={{ marginBottom: 0 }}>
-              <span>to</span>
-              <select value={to} onChange={(e) => setTo(e.target.value)} disabled={busy}>
-                <option value="">Choose a person…</option>
-                {books.filter((b) => String(b.user_id) !== from).map((b) => (
-                  <option key={b.user_id} value={b.user_id}>{b.name}</option>
-                ))}
-              </select>
-            </label>
-            <button className="btn primary" disabled={!ready || busy} onClick={() => setConfirming(true)}>
-              Move book
-            </button>
-          </div>
+          {available === 0 ? (
+            <p className="help" style={{ marginTop: 8 }}>
+              Nothing waiting. Leads appear here when they arrive without an owner, or when an
+              agent&rsquo;s account is deactivated and their brokerage leads return to the pool.
+            </p>
+          ) : (
+            <div className="books-transfer">
+              <label className="field" style={{ marginBottom: 0 }}>
+                <span>How many</span>
+                <input type="number" min={1} max={available} value={count} disabled={busy}
+                  placeholder={`All ${available}`} onChange={(e) => setCount(e.target.value)} />
+              </label>
+              <Icon name="chevronRight" size={16} />
+              <label className="field" style={{ marginBottom: 0 }}>
+                <span>to</span>
+                <select value={to} onChange={(e) => setTo(e.target.value)} disabled={busy}>
+                  <option value="">Choose a person…</option>
+                  {(pool.recipients ?? []).map((r) => (
+                    <option key={r.user_id} value={r.user_id}>{r.name}</option>
+                  ))}
+                </select>
+              </label>
+              <button className="btn primary" disabled={!ready || busy} onClick={() => setConfirming(true)}>
+                Hand over
+              </button>
+            </div>
+          )}
         </>
       )}
 
-      {confirming && source && target && (
+      {confirming && target && (
         <div className="overlay open" onClick={() => !busy && setConfirming(false)}>
           <div className="modal" style={{ maxWidth: 480 }} onClick={(e) => e.stopPropagation()}>
             <div className="modal-h">
-              Move {source.name}&rsquo;s book?
+              Hand leads to {target.name}?
               <button className="close" onClick={() => setConfirming(false)} disabled={busy}>
                 <Icon name="close" size={15} />
               </button>
             </div>
             <div className="modal-b">
               <p style={{ margin: '0 0 10px' }}>
-                All <strong>{source.leads}</strong> of {source.name}&rsquo;s leads become{' '}
-                <strong>{target.name}&rsquo;s</strong>. {source.name} will no longer be able to open any of them,
-                and {target.name} will.
+                <strong>{wanted}</strong> unassigned brokerage lead{wanted === 1 ? '' : 's'} become{' '}
+                <strong>{target.name}&rsquo;s</strong> to work. Oldest first, so the
+                longest-waiting enquiry goes over first.
               </p>
               <p className="help" style={{ margin: 0 }}>
-                This is the only way to reach leads that are not your own, so it is written to the audit
-                trail with both names and the number moved.
+                Only leads nobody holds are eligible — no agent loses anything. Recorded in the audit
+                trail with the name and the number moved.
               </p>
             </div>
             <div className="modal-f">
               <button className="btn ghost" onClick={() => setConfirming(false)} disabled={busy}>Cancel</button>
               <button className="btn primary" onClick={() => void run()} disabled={busy}>
-                {busy ? 'Moving…' : `Move ${source.leads} lead${source.leads === 1 ? '' : 's'}`}
+                {busy ? 'Handing over…' : `Hand over ${wanted} lead${wanted === 1 ? '' : 's'}`}
               </button>
             </div>
           </div>

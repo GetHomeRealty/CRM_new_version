@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { PersonResolver } from '../core/person-resolver.service';
 import { MailerService, isTransient } from '../email/mailer.service';
 import { CompanySettingsService } from '../settings/company-settings.service';
 import { AuditService } from '../audit/audit.service';
@@ -70,6 +71,7 @@ export class ReminderSweepService {
 
   constructor(
     private readonly prisma: PrismaService,
+    private readonly people: PersonResolver,
     private readonly mailer: MailerService,
     private readonly settings: CompanySettingsService,
     private readonly audit: AuditService,
@@ -564,7 +566,10 @@ export class ReminderSweepService {
   private async addressFor(agentName: string | null): Promise<string | null> {
     const name = (agentName ?? '').trim();
     if (!name) return null;
-    const user = await this.prisma.users.findFirst({ where: { name, status: 'Active' }, select: { email: true } });
+    // Through PersonResolver so two people sharing a name resolve the same way everywhere, and
+    // deterministically: Active wins, ties break on the lowest id. This was a findFirst with no
+    // orderBy, so the planner decided which colleague got the mail.
+    const user = await this.people.resolve(null, name, { activeOnly: true });
     return (user?.email ?? '').trim() || null;
   }
 

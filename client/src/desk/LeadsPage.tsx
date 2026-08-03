@@ -212,10 +212,26 @@ export default function LeadsPage() {
   // --------------------------------------------------------------- actions
   const doExport = async () => {
     try {
-      const rows = await exportLeads([...selected], filters);
+      const { data: rows, meta } = await exportLeads([...selected], filters);
       if (!rows.length) { toast('Nothing to export.', 'info'); return; }
       downloadCsv(rows, `leads-${new Date().toISOString().slice(0, 10)}.csv`);
-      toast(`Exported ${rows.length} lead${rows.length === 1 ? '' : 's'}.`, 'ok');
+      /*
+       * Say so when the file is short.
+       *
+       * The server caps an export, and this used to report the capped number as a plain success —
+       * so a brokerage with 12,000 leads downloaded 5,000 and was told "Exported 5000 leads." on
+       * the file people use for migrations and for answering a client's request for their own
+       * data. A truncated export has to announce itself, and has to say what to do about it.
+       */
+      if (meta.truncated) {
+        toast(
+          `Exported the first ${meta.returned.toLocaleString()} of ${meta.total.toLocaleString()} leads — `
+          + `an export is capped at ${meta.limit.toLocaleString()} rows. Narrow the filters and export in parts to get them all.`,
+          'warn',
+        );
+      } else {
+        toast(`Exported ${rows.length} lead${rows.length === 1 ? '' : 's'}.`, 'ok');
+      }
     } catch (ex) {
       toast(apiErrorMessage(ex, 'Could not export leads'), 'bad');
     }
@@ -747,13 +763,20 @@ function RecycleModal({ canEdit, onClose, onChanged }: { canEdit: boolean; onClo
   const [rows, setRows] = useState<DeletedLead[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<number | null>(null);
+  // Paged, because this list used to stop at 200 rows without saying so — on the one screen
+  // somebody opens precisely because something has already gone missing.
+  const [page, setPage] = useState(1);
+  const [meta, setMeta] = useState<{ page: number; last_page: number; total: number } | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
-    try { setRows((await listDeletedLeads()).data); }
-    catch (ex) { toast(apiErrorMessage(ex, 'Could not load deleted leads'), 'bad'); }
+    try {
+      const res = await listDeletedLeads({ page });
+      setRows(res.data);
+      setMeta(res.meta);
+    } catch (ex) { toast(apiErrorMessage(ex, 'Could not load deleted leads'), 'bad'); }
     finally { setLoading(false); }
-  }, [toast]);
+  }, [toast, page]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -794,6 +817,17 @@ function RecycleModal({ canEdit, onClose, onChanged }: { canEdit: boolean; onClo
                 ))}
               </tbody>
             </table>
+            {meta && meta.last_page > 1 && (
+              <div className="lead-pager">
+                <span className="muted">Page {meta.page} of {meta.last_page} · {meta.total} deleted</span>
+                <div className="toolbar-row">
+                  <button className="btn ghost sm" type="button" disabled={page <= 1 || loading}
+                    onClick={() => setPage((p) => Math.max(1, p - 1))}>Previous</button>
+                  <button className="btn ghost sm" type="button" disabled={page >= meta.last_page || loading}
+                    onClick={() => setPage((p) => p + 1)}>Next</button>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>

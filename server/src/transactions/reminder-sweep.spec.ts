@@ -2,6 +2,7 @@ import { PrismaClient } from '@prisma/client';
 import type { PrismaService } from '../prisma/prisma.service';
 import { ReminderSweepService } from './reminder-sweep.service';
 import { AuditService } from '../audit/audit.service';
+import { PersonResolver } from '../core/person-resolver.service';
 
 /**
  * The nightly sweep against the real schema, inside transactions that are rolled back.
@@ -37,10 +38,31 @@ const stubs = () => {
 };
 
 const sweepFor = (tx: PrismaService, s: ReturnType<typeof stubs>) =>
-  new ReminderSweepService(tx, s.mailer as never, s.settings as never, new AuditService(tx));
+  new ReminderSweepService(tx, new PersonResolver(tx), s.mailer as never, s.settings as never, new AuditService(tx));
 
 const day = (d: Date, n: number): Date => new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
 const midnight = (d: Date): Date => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+
+/**
+ * The "today" these tests reason from — fixed, not the wall clock.
+ *
+ * WHY IT IS PINNED. Every assertion here is a day countdown: a listing five days out must produce
+ * `days_remaining` of 5 and then 4. Deriving that from `new Date()` makes the expected values a
+ * function of when the suite happens to run, which is how
+ * `chases again the next day — a new occurrence, a new reminder` came to fail intermittently and
+ * then stop, with no change to `src/transactions/` between the two.
+ *
+ * The trigger was never identified — a midnight boundary, DST and a timezone-dependent write of the
+ * `@db.Date` column were each tested and ruled out. What is certain is that a countdown asserted
+ * against a moving clock cannot be relied on, whatever the trigger turns out to be. Pinning removes
+ * the whole class: month ends, DST changes, the date rolling over mid-run, and a CI box in another
+ * zone all stop mattering.
+ *
+ * Chosen deliberately: a Tuesday in mid-June, far from any month end and from both DST transitions,
+ * at midday so nothing here is ever within hours of a date boundary. `sweep()` takes the date as a
+ * parameter, so nothing about the product is being faked — only the question the test asks.
+ */
+const anchor = (): Date => new Date(2026, 5, 16, 12, 0, 0, 0);
 
 /** An agent with an address, so the email path actually runs. */
 async function makeAgent(tx: PrismaService): Promise<string> {
@@ -73,7 +95,7 @@ describe('listing expiry reminders', () => {
     await inRollback(async (tx) => {
       const s = stubs();
       const agent = await makeAgent(tx);
-      const today = new Date();
+      const today = anchor();
       const txnId = await makeTxn(tx, { agent, listing_expiry_date: day(today, 9) }, ['Active']);
 
       const result = await sweepFor(tx, s).sweep(today);
@@ -91,7 +113,7 @@ describe('listing expiry reminders', () => {
     await inRollback(async (tx) => {
       const s = stubs();
       const agent = await makeAgent(tx);
-      const today = new Date();
+      const today = anchor();
       const txnId = await makeTxn(tx, { agent, listing_expiry_date: day(today, 5) }, ['Active']);
       const sweep = sweepFor(tx, s);
 
@@ -108,7 +130,7 @@ describe('listing expiry reminders', () => {
     await inRollback(async (tx) => {
       const s = stubs();
       const agent = await makeAgent(tx);
-      const today = new Date();
+      const today = anchor();
       const txnId = await makeTxn(tx, { agent, listing_expiry_date: day(today, 5) }, ['Active']);
       const sweep = sweepFor(tx, s);
 
@@ -125,7 +147,7 @@ describe('listing expiry reminders', () => {
     await inRollback(async (tx) => {
       const s = stubs();
       const agent = await makeAgent(tx);
-      const today = new Date();
+      const today = anchor();
       await makeTxn(tx, { agent, listing_expiry_date: day(today, 5) }, ['Sold']);
 
       expect((await sweepFor(tx, s).sweep(today)).expiryReminders).toBe(0);
@@ -138,7 +160,7 @@ describe('automatic expiry', () => {
   it('moves an Active listing to Expired once the date has passed, and audits it', async () => {
     await inRollback(async (tx) => {
       const s = stubs();
-      const today = new Date();
+      const today = anchor();
       const txnId = await makeTxn(tx, { agent: 'Nobody', listing_expiry_date: day(today, -1) }, ['Active']);
 
       expect((await sweepFor(tx, s).sweep(today)).expired).toBe(1);
@@ -156,7 +178,7 @@ describe('automatic expiry', () => {
   it('never overwrites a status somebody else set', async () => {
     await inRollback(async (tx) => {
       const s = stubs();
-      const today = new Date();
+      const today = anchor();
       const sweep = sweepFor(tx, s);
 
       for (const status of ['Sold', 'Leased', 'Closed', 'Suspended', 'Terminated', 'Mutual Release', 'Void', 'DFT']) {
@@ -171,7 +193,7 @@ describe('automatic expiry', () => {
   it('leaves a listing alone on its expiry day — it is live until the day is over', async () => {
     await inRollback(async (tx) => {
       const s = stubs();
-      const today = new Date();
+      const today = anchor();
       const txnId = await makeTxn(tx, { agent: 'Nobody', listing_expiry_date: midnight(today) }, ['Active']);
 
       expect((await sweepFor(tx, s).sweep(today)).expired).toBe(0);
@@ -184,7 +206,7 @@ describe('automatic expiry', () => {
 describe('lawyer-detail reminders', () => {
   /** A Monday inside the last phase, so a reminder is always due on the test's "today". */
   const mondayNear = (): { today: Date; closing: Date } => {
-    const base = new Date();
+    const base = anchor();
     const today = new Date(base.getFullYear(), base.getMonth(), base.getDate());
     while (today.getDay() !== 1) today.setDate(today.getDate() + 1);
     return { today, closing: day(today, 5) };
@@ -292,7 +314,7 @@ describe('history and the bell', () => {
     await inRollback(async (tx) => {
       const s = stubs();
       const agent = await makeAgent(tx);
-      const today = new Date();
+      const today = anchor();
       const txnId = await makeTxn(tx, { agent, listing_expiry_date: day(today, 3) }, ['Active']);
       const sweep = sweepFor(tx, s);
       await sweep.sweep(today);
@@ -315,7 +337,7 @@ describe('history and the bell', () => {
       const s = stubs();
       s.mailer.send = async () => { throw new Error('smtp down'); };
       const agent = await makeAgent(tx);
-      const today = new Date();
+      const today = anchor();
       const txnId = await makeTxn(tx, { agent, listing_expiry_date: day(today, 4) }, ['Active']);
       const sweep = sweepFor(tx, s);
 
@@ -338,7 +360,7 @@ describe('history and the bell', () => {
   it('says so when the agent has no address, rather than failing silently', async () => {
     await inRollback(async (tx) => {
       const s = stubs();
-      const today = new Date();
+      const today = anchor();
       const txnId = await makeTxn(tx, { agent: 'Nobody On File', listing_expiry_date: day(today, 6) }, ['Active']);
 
       await sweepFor(tx, s).sweep(today);
@@ -355,7 +377,7 @@ describe('when a date moves', () => {
     await inRollback(async (tx) => {
       const s = stubs();
       const agent = await makeAgent(tx);
-      const today = new Date();
+      const today = anchor();
       const txnId = await makeTxn(tx, { agent, listing_expiry_date: day(today, 20) }, ['Active']);
       const sweep = sweepFor(tx, s);
 

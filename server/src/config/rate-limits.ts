@@ -100,3 +100,30 @@ export const ACCOUNT_LOGIN_LIMIT: Limit = {
   ttl: seconds(int(process.env.AUTH_ACCOUNT_LIMIT_WINDOW_SECONDS, 900)),
   limit: int(process.env.AUTH_ACCOUNT_LIMIT_MAX, 8),
 };
+
+/**
+ * Manual "Sync Now" on the Meta screen, per user.
+ *
+ * WHY THIS ONE NEEDS ITS OWN BUCKET. Every other endpoint costs this application a little
+ * database work. This one fans out to Meta: one Graph request per connected lead form, plus a
+ * cursor walk of up to `META_MAX_LEADS_PER_FORM` per form. Graph rate limits are enforced **per
+ * app**, not per user — so one person holding down Sync spends a budget that every other agent in
+ * the brokerage draws from, and the symptom lands on them as failed syncs they did nothing to
+ * cause.
+ *
+ * Six a minute is one every ten seconds, which is far more than a human has any reason to press:
+ * the scheduler already polls every fifteen minutes, so a second press within ten seconds cannot
+ * return anything the first did not. It exists to stop a stuck client or an impatient hand, not to
+ * ration normal use.
+ *
+ * HONEST LIMITATION: this is keyed per user, like every bucket here, so it bounds one person
+ * rather than the brokerage. Twenty agents at six a minute is still 120 calls a minute against one
+ * app budget. Bounding the app as a whole needs a shared counter rather than a per-identity one,
+ * which is a different mechanism; this closes the runaway case, which is the one actually observed.
+ *
+ * Env: META_SYNC_RATE_LIMIT_MAX / META_SYNC_RATE_LIMIT_WINDOW_SECONDS
+ */
+export const META_SYNC_LIMIT: Limit = {
+  ttl: seconds(int(process.env.META_SYNC_RATE_LIMIT_WINDOW_SECONDS, 60)),
+  limit: int(process.env.META_SYNC_RATE_LIMIT_MAX, 6),
+};

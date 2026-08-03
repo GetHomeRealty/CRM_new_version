@@ -425,10 +425,46 @@ model leads {
   company    company_settings @relation(fields: [company_id], references: [id], onUpdate: NoAction)
 
   @@index([email])
+  /// UNIQUE PER BOOK — enforced by the database, and NOT expressible here.
+  ///
+  ///   CREATE UNIQUE INDEX "leads_company_owner_email_key"
+  ///     ON "leads" ("company_id", COALESCE("owner_user_id", 0), LOWER("email"));
+  ///
+  /// in migrations/20260802140000_lead_email_unique_per_owner. Prisma has no syntax for a
+  /// functional index, so this comment is the only place the schema can record it.
+  ///
+  /// WHY PER BOOK AND NOT GLOBAL. One person may genuinely be a lead more than once. They click
+  /// brokerage A's ad on Monday and brokerage B's on Thursday; they reach agent 1 by referral and
+  /// later fill in agent 2's landing page. Each of those is a real, separately-consented
+  /// relationship, and a book belongs to its agent. The previous index was global on lower(email),
+  /// so the second arrival was silently rejected as a duplicate — a paid click discarded with
+  /// nothing on any screen to say so. What must still be refused is the same address twice in the
+  /// SAME book, which splits one person's history and double-sends every campaign.
+  ///
+  /// COALESCE, not a plain three-column unique: Postgres treats NULLs as distinct, and
+  /// `owner_user_id IS NULL` is exactly what unattributed brokerage intake looks like — the
+  /// highest-volume source there is. Without it, unowned rows would be exempt from the constraint.
+  ///
+  /// Real behaviour depends on this index existing:
+  ///   - `LeadImportEngine` writes with `createMany({ skipDuplicates: true })`, which is
+  ///     `ON CONFLICT DO NOTHING` and de-duplicates NOTHING without a unique constraint. Rebuild
+  ///     from this schema alone and every re-imported file starts creating duplicates, silently.
+  ///   - `LeadsService.create` catches the P2002 it raises and turns it into a validation error;
+  ///     without the index the race it guards is simply lost.
+  ///
+  /// `leads-email-uniqueness.spec.ts` asserts it exists in the connected database and proves both
+  /// halves by behaviour, so a schema-only rebuild fails a test rather than production.
+  ///
+  /// `leads_company_email_lower_idx` (company_id, lower(email)) covers the other question the
+  /// module asks — "is this address anywhere in the brokerage?" — which the old global unique index
+  /// used to answer and this one cannot.
   @@index([lead_status])
   @@index([lead_source])
   @@index([unsubscribed])
   @@index([assigned_to])
+  /// Half of the lead scope filter (assigned_to = me OR owner_user_id = me). Unindexed, the OR
+  /// could not use the assigned_to index either and every list read scanned the table.
+  @@index([owner_user_id])
   @@index([deleted_at])
   @@index([source])
   @@index([phone_normalized])
@@ -645,7 +681,19 @@ model crm_broadcasts {
    * info | warning | success
    */
   type       String    @default("info") @db.VarChar(16)
+  /// How many staff have actually received it so far. Written as delivery progresses.
   recipients Int       @default(0)
+  /// sending | completed | partial | failed. A broadcast is delivered off the request thread, so
+  /// the row exists — and says `sending` — before anybody has been emailed.
+  status     String    @default("completed") @db.VarChar(16)
+  /// How many addresses the send is working through in total, so progress means something.
+  attempted  Int       @default(0)
+  /// Addresses the mail server refused.
+  failed     Int       @default(0)
+  /// The first failure, in words the person who sent it can act on.
+  error      String?   @db.Text
+  /// When the last recipient was dealt with. Null while it is still going out.
+  completed_at DateTime? @db.Timestamp(0)
   sent_by    String?   @db.VarChar(255)
   sent_by_id Int?
   created_at DateTime? @db.Timestamp(0)
@@ -715,6 +763,11 @@ model meta_connections {
    * When the long-lived token stops working — drives the reconnect warning.
    */
   token_expires_at    DateTime?    @db.Timestamp(0)
+  /**
+   * When the agent was last told their connection needs reconnecting, so a dead token produces one
+   * email rather than one every fifteen minutes for ever.
+   */
+  reconnect_notified_at DateTime?  @db.Timestamp(0)
   /**
    * Comma-separated permissions Meta actually granted, for the missing-permission notice.
    */
@@ -843,6 +896,18 @@ model meta_lead_forms {
   company_id Int @default(1)
 
   @@unique([user_id, form_id, page_id])
+  /// ONE FORM, ONE AGENT — enforced by `meta_lead_forms_page_form_key`, a partial unique index on
+  /// (company_id, page_id, form_id) WHERE is_active, created in
+  /// migrations/20260802180000_meta_one_form_one_agent. Partial indexes cannot be expressed in
+  /// Prisma, so this comment is where the schema records it.
+  ///
+  /// Each agent connects their own Meta account, their own Page and their own lead forms, and
+  /// receives their own leads; nothing is shared. Without the constraint two agents could both
+  /// connect the same form, and the webhook resolved the owner with `findFirst` — so one silently
+  /// received every lead and the other received none, while their screen showed it as connected.
+  ///
+  /// Scoped to `is_active` on purpose: a form somebody connected and later turned off must be free
+  /// for whoever is running it now.
   @@index([page_id])
   @@index([is_active])
   @@index([company_id])
@@ -983,7 +1048,23 @@ model lead_call_recordings {
    */
   content_type String     @db.VarChar(128)
   size         Int
-  data         Bytes
+  /**
+   * The bytes, for recordings written before they moved to disk.
+   *
+   * Nullable now, and null on everything created since. Rows that still carry it are served from
+   * it — nothing was migrated automatically, because a migration that silently fails to copy a file
+   * loses a recording of a client conversation. `scripts/migrate-recordings.cjs` moves them across
+   * deliberately, verifying a checksum before it clears the column.
+   */
+  data         Bytes?
+  /**
+   * Path under RECORDING_STORAGE_DIR, POSIX-style and relative — e.g. `2026/08/<random>.m4a`.
+   *
+   * Relative so the storage root can move between environments without rewriting rows. Exactly one
+   * of `data` and `storage_path` is set; see RecordingStorageService for why the bytes left the
+   * database (backup and restore time, not query performance).
+   */
+  storage_path String?    @db.VarChar(512)
   created_by   String?    @db.VarChar(255)
   created_at   DateTime?  @db.Timestamp(0)
   call         lead_calls @relation(fields: [call_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
@@ -1129,10 +1210,22 @@ model campaigns {
   sent          Int                   @default(0)
   failed        Int                   @default(0)
   opened        Int                   @default(0)
+  /// Distinct recipients who clicked at least one link.
+  clicked       Int                   @default(0)
   unsubscribed  Int                   @default(0)
   bounced       Int                   @default(0)
+  /// Where this campaign's tracking links point. Persisted so a resumed send builds the same
+  /// URLs as the messages already delivered.
+  tracking_base_url String?           @db.VarChar(500)
   created_by    String?               @db.VarChar(255)
   created_by_id Int?
+  /**
+   * When this campaign should go out, or null for send-now.
+   *
+   * An absolute instant, always stored UTC. A local wall-clock string would drift by an hour
+   * across the two DST transitions the brokerage sits through every year.
+   */
+  scheduled_for DateTime?             @db.Timestamp(3)
   sent_at       DateTime?             @db.Timestamp(0)
   created_at    DateTime?             @db.Timestamp(0)
   updated_at    DateTime?             @db.Timestamp(0)
@@ -1145,6 +1238,8 @@ model campaigns {
   @@index([status])
   @@index([created_at])
   @@index([company_id])
+  campaign_links      campaign_links[]
+  campaign_clicks     campaign_clicks[]
 }
 
 /**
@@ -1273,6 +1368,11 @@ model campaign_recipients {
   /**
    * pending | sent | failed
    */
+  /// Resolved personalisation values, as JSON — kept so a resumed send addresses the remaining
+  /// recipients exactly as the first half were addressed, even if the lead has changed since.
+  vars            String?   @db.Text
+  /// When this recipient first clicked any link. Null means they never did.
+  clicked_at      DateTime? @db.Timestamp(0)
   status          String    @default("pending") @db.VarChar(16)
   error           String?   @db.Text
   opened          Boolean   @default(false)
@@ -1280,8 +1380,18 @@ model campaign_recipients {
   unsubscribed    Boolean   @default(false)
   unsubscribed_at DateTime? @db.Timestamp(0)
   bounced         Boolean   @default(false)
+  /// hard | soft | unknown. A hard bounce means the mailbox is gone and the address is suppressed;
+  /// a soft one is a transient refusal that gets retried. `unknown` is a fault at our end (bad
+  /// SMTP credentials, no connection) and says nothing about the address.
+  bounce_type     String?   @db.VarChar(8)
+  /// Delivery attempts made for this recipient. Only a soft bounce increments it.
+  retry_count     Int       @default(0)
+  /// When a soft-bounced recipient may be attempted again. Null means "as soon as the send
+  /// reaches it" — the state every recipient starts in.
+  next_retry_at   DateTime? @db.Timestamp(3)
   created_at      DateTime? @db.Timestamp(0)
   updated_at      DateTime? @db.Timestamp(0)
+  campaign_clicks campaign_clicks[]
   campaigns       campaigns @relation(fields: [campaign_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
   leads           leads?    @relation(fields: [lead_id], references: [id], onDelete: SetNull, onUpdate: Restrict)
 
@@ -1292,6 +1402,9 @@ model campaign_recipients {
   @@index([lead_id])
   @@index([email])
   @@index([company_id])
+  /// The retry sweep asks "which deferred recipients are due?" once a minute. Without this it
+  /// scans every recipient row the brokerage has ever created to answer it.
+  @@index([status, next_retry_at])
 }
 
 /**
@@ -1300,6 +1413,9 @@ model campaign_recipients {
 model email_suppressions {
   id          Int       @id @default(autoincrement())
   email       String    @unique @db.VarChar(255)
+  /// unsubscribe | hard_bounce. Why this address may no longer be mailed — the question
+  /// compliance actually asks, and the difference between a person who opted out and a mailbox
+  /// that no longer exists.
   reason      String?   @db.VarChar(64)
   campaign_id Int?
   created_at  DateTime? @db.Timestamp(0)
@@ -1407,6 +1523,40 @@ model calendar_events {
  * reaches both. The endpoint is issued by the push service and identifies the device; the two keys
  * encrypt the payload so the push service cannot read the appointment it is carrying.
  */
+/**
+ * Which push notifications a person wants. One row per (user, category), and a row exists only
+ * once someone has expressed a preference.
+ *
+ * ABSENCE MEANS ENABLED. That is deliberate: the alternative — seeding a row per user per
+ * category, or defaulting to off — would either need a backfill that silently goes stale as
+ * categories are added, or would switch off notifications people already rely on the moment this
+ * shipped. Opting out is an explicit act and leaves an explicit row; everything else keeps
+ * behaving exactly as it did.
+ *
+ * Deliberately NOT scoped by area. A subscription carries a scope because a browser asks for one
+ * area's reminders, but "I don't want listing-expiry pushes" is a statement about the person, not
+ * about which screen they were on when they said it.
+ */
+model notification_preferences {
+  id         Int       @id @default(autoincrement())
+  user_id    Int
+  /// Category key from NOTIFICATION_CATEGORIES — validated in the service, not by the database,
+  /// so adding a category needs no migration.
+  category   String    @db.VarChar(64)
+  enabled    Boolean   @default(true)
+  created_at DateTime?
+  updated_at DateTime?
+
+  users      users     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
+  company_id Int @default(1)
+
+  @@unique([user_id, category])
+  @@index([user_id])
+  @@index([company_id])
+}
+
 model push_subscriptions {
   id           Int       @id @default(autoincrement())
   user_id      Int
@@ -1980,6 +2130,10 @@ model team_members {
   id                Int                 @id @default(autoincrement())
   transaction_id    Int
   name              String              @db.VarChar(255)
+  /// The user this member IS, resolved once instead of by name on every read. See migration
+  /// 20260803010000_person_user_ids. Nullable: a row whose name matched more than one account, or
+  /// none, keeps working through the name fallback exactly as it always did.
+  user_id           Int?
   split             Decimal             @default(0.0000) @db.Decimal(8, 4)
   agent_pct         Decimal             @default(90.0000) @db.Decimal(8, 4)
   brok_pct          Decimal             @default(10.0000) @db.Decimal(8, 4)
@@ -2305,6 +2459,13 @@ model transactions {
   type                        String                        @db.VarChar(255)
   property                    String?                       @db.VarChar(255)
   agent                       String?                       @db.VarChar(255)
+  /// The user `agent` names, resolved once instead of by name on every read.
+  ///
+  /// `agent` stays: it is what the screens display and what older rows carry. This is what the
+  /// commission and email lookups prefer, because a name is editable and not unique over time —
+  /// see migration 20260803010000_person_user_ids and finding U-C1. Nullable, so a row whose name
+  /// matched more than one account, or none, keeps resolving by name exactly as it always did.
+  agent_user_id               Int?
   agent_review_at             DateTime?                     @db.Timestamp(0)
   price                       Decimal                       @default(0.00) @db.Decimal(15, 2)
   deposit                     Decimal                       @default(0.00) @db.Decimal(15, 2)
@@ -2492,11 +2653,18 @@ model users {
 
   /// The brokerage this row belongs to. See src/core/tenancy.spec.ts for why this table carries one.
   push_subscriptions push_subscriptions[]
+  notification_preferences notification_preferences[]
 
   company_id Int              @default(1)
   company    company_settings @relation(fields: [company_id], references: [id], onUpdate: NoAction)
 
   @@index([company_id])
+
+  /// CASE-INSENSITIVE UNIQUENESS on `email` and `username` is enforced by two functional indexes
+  /// Prisma cannot express here — `users_email_lower_key` and `users_username_lower_key`, added by
+  /// migration `20260803000000_users_ci_unique`. The `@unique` attributes above are case-SENSITIVE,
+  /// which let `PRIYA@X.CA` and `priya@x.ca` both exist as separate accounts. Do not drop either
+  /// index believing `@unique` covers it — `users-validation.spec.ts` fails if they go missing.
 }
 
 /// Which application modules a user may open.
@@ -2658,4 +2826,94 @@ model lead_import_jobs {
   @@index([status])
   @@index([requested_by_id])
   @@index([company_id])
+}
+
+/**
+ * A link that appeared in a campaign, recorded at send time.
+ *
+ * The destination lives here rather than in the tracking URL. Putting it in the query string would
+ * make the redirect endpoint an open redirect — anyone could hand out
+ * `…/track/click?u=https://evil.example` carrying the brokerage's domain and reputation. The
+ * tracking URL therefore names a row id, and the server only ever redirects to a URL it wrote
+ * itself.
+ */
+model campaign_links {
+  id          Int       @id @default(autoincrement())
+  campaign_id Int
+  /// Long by nature — MLS and mapping links carry substantial query strings.
+  url         String    @db.Text
+  /// Total clicks, including the same person clicking twice.
+  clicks      Int       @default(0)
+  created_at  DateTime? @db.Timestamp(0)
+
+  campaigns       campaigns         @relation(fields: [campaign_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  campaign_clicks campaign_clicks[]
+
+  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
+  company_id Int @default(1)
+
+  @@index([campaign_id])
+  @@index([company_id])
+}
+
+/**
+ * One row per recipient per link, not per click.
+ *
+ * Kept distinct from `campaign_links.clicks` on purpose: one person clicking the same listing five
+ * times is five clicks but one interested party, and reporting the former as engagement overstates
+ * how many people are actually in play.
+ */
+model campaign_clicks {
+  id           Int      @id @default(autoincrement())
+  campaign_id  Int
+  recipient_id Int
+  link_id      Int
+  clicked_at   DateTime @db.Timestamp(0)
+
+  campaigns           campaigns           @relation(fields: [campaign_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  campaign_recipients campaign_recipients @relation(fields: [recipient_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  campaign_links      campaign_links      @relation(fields: [link_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
+  company_id Int @default(1)
+
+  @@unique([recipient_id, link_id])
+  @@index([campaign_id])
+  @@index([company_id])
+}
+
+/// Redeemed OAuth `state` nonces, so a captured callback URL cannot be replayed.
+///
+/// In the database rather than in memory on purpose. The in-memory Set this replaces was emptied
+/// wholesale once it passed 5,000 entries, which made every previously-redeemed nonce replayable
+/// again inside its ten-minute window; it was also empty after a restart and not shared between
+/// instances. A unique index makes the redeem atomic instead: the insert either wins or it is a
+/// replay, with no read-then-write gap for two simultaneous callbacks to slip through.
+///
+/// Rows are useful only until `expires_at` and are swept opportunistically on redeem.
+model meta_oauth_nonces {
+  id         Int      @id @default(autoincrement())
+  nonce      String   @unique @db.VarChar(64)
+  expires_at DateTime @db.Timestamp(0)
+
+  @@index([expires_at])
+}
+
+/// Graph calls spent in one time window, shared by everybody.
+///
+/// Meta enforces its rate limits per APP, not per user, so a per-identity throttle bounds one
+/// person and not the brokerage: twenty agents at six manual syncs a minute is still 120 calls a
+/// minute against one allowance. This is the counter that makes the ceiling collective.
+///
+/// One row per window, incremented atomically by an upsert with a conditional update, so two
+/// requests arriving together cannot both read "under budget" and both proceed.
+model meta_api_budget {
+  id           Int      @id @default(autoincrement())
+  /// Start of the window, as epoch MILLISECONDS. Deliberately not a timestamp: a
+  /// `timestamp without time zone` is written by the raw driver in local time and read back by
+  /// Prisma as UTC, so one window resolved to two different rows and the counter never incremented.
+  window_start BigInt   @unique
+  calls        Int      @default(0)
+
+  @@index([window_start])
 }

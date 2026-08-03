@@ -427,6 +427,23 @@ export const createUser = (payload: unknown): Promise<ManagedUser> => api.post('
 export const updateUser = (id: Id, payload: unknown): Promise<ManagedUser> => api.put(`/api/users/${id}`, payload).then((r) => r.data);
 export const deleteUser = (id: Id): Promise<unknown> => api.delete(`/api/users/${id}`).then((r) => r.data);
 
+// --- Offboarding (Super Admin) ---
+// What somebody still holds before their account is switched off. Counts only, never lead content.
+export interface OffboardingEffect {
+  key: 'meta' | 'brokerage-leads' | 'personal-leads';
+  label: string;
+  detail: string;
+  count: number | null;
+}
+export interface OffboardingChecklist {
+  user: { id: number; name: string; status: string };
+  meta: { connected: boolean; forms: number };
+  leads: { total: number; personal: number; brokerage: number };
+  effects: OffboardingEffect[];
+}
+export const getOffboarding = (id: Id): Promise<OffboardingChecklist> =>
+  api.get(`/api/users/${id}/offboarding`).then((r) => r.data);
+
 // --- Roles & Permissions (Settings) ---
 export const getRoles = (): Promise<ManagedRole[]> => api.get('/api/roles').then((r) => r.data);
 export const createRole = (payload: { key: string; label: string; copy_from?: string }): Promise<ManagedRole> =>
@@ -438,10 +455,21 @@ export const setRolePermissions = (id: Id, permissions: Record<string, string>):
 export const deleteRole = (id: Id): Promise<{ message: string }> => api.delete(`/api/roles/${id}`).then((r) => r.data);
 
 // --- Lead books (Super Admin) ---
-export interface LeadBook { user_id: number; name: string; role: string; leads: number }
-export const getLeadBooks = (): Promise<LeadBook[]> => api.get('/api/leads/books').then((r) => r.data);
-export const transferLeadBook = (fromUserId: Id, toUserId: Id): Promise<{ moved: number; from: string; to: string }> =>
-  api.post('/api/leads/transfer-ownership', { from_user_id: fromUserId, to_user_id: toUserId }).then((r) => r.data);
+/**
+ * Lead Books works only with brokerage leads that belong to nobody.
+ *
+ * There is deliberately no per-agent breakdown here any more: how many leads a named agent holds is
+ * a report on their book, which this screen is not for.
+ */
+export interface LeadBookRecipient { user_id: number; name: string; role: string }
+export interface LeadBookPool {
+  /** Unassigned brokerage leads available to hand out. */
+  available: number;
+  recipients: LeadBookRecipient[];
+}
+export const getLeadBooks = (): Promise<LeadBookPool> => api.get('/api/leads/books').then((r) => r.data);
+export const transferLeadBook = (toUserId: Id, count?: number): Promise<{ moved: number; to: string; remaining: number }> =>
+  api.post('/api/leads/transfer-ownership', { to_user_id: toUserId, ...(count ? { count } : {}) }).then((r) => r.data);
 
 // --- Invoice module ---
 export const getInvoices = (): Promise<Invoice[]> => api.get<Invoice[]>('/api/invoices').then((r) => r.data);

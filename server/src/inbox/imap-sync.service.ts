@@ -34,6 +34,33 @@ export interface SyncResult {
   error: string | null;
 }
 
+/**
+ * Which of the UIDs a SEARCH returned to pull on this pass.
+ *
+ * Extracted so it can be tested directly: the bug it replaces lost mail silently, and a silent
+ * loss is not something a passing suite should ever be able to hide again.
+ *
+ * Strictly newer than `lastUid`, ascending, capped at `max` — and the cap keeps the OLDEST of
+ * them. That last part is the whole point. Taking the newest, as this once did, meant `last_uid`
+ * jumped to the top of the mailbox and every message under the window was skipped for good.
+ * Oldest-first drains a backlog a batch per poll instead of discarding it.
+ */
+export function selectSyncBatch(found: number[] | false | null | undefined, lastUid: number | null, max: number): number[] {
+  return countNewUids(found, lastUid).sort((a, b) => a - b).slice(0, max);
+}
+
+/**
+ * Every UID newer than `lastUid`, unsorted and uncapped — what the batch was taken from.
+ *
+ * `false` is in the input type because ImapFlow's `search()` returns it when the mailbox rejects
+ * the query, which is why `||` is used below rather than `??`: nullish coalescing would let
+ * `false` straight through.
+ */
+export function countNewUids(found: number[] | false | null | undefined, lastUid: number | null): number[] {
+  const floor = lastUid ?? 0;
+  return (found || []).filter((u) => u > floor);
+}
+
 type AccountRow = {
   id: number; user_id: number | null; username: string | null; from_email: string;
   password: string | null; encryption: string | null; imap_host: string | null; imap_port: number | null;
@@ -259,23 +286,38 @@ export class ImapSyncService implements OnModuleInit, OnModuleDestroy {
           ? { uid: `${account.last_uid + 1}:*` }
           : { since: new Date(Date.now() - FIRST_SYNC_DAYS * 86400000) };
         const found = await client.search(search, { uid: true });
-        const uids = (found || [])
-          .filter((u) => u > (account.last_uid ?? 0))
-          .sort((a, b) => a - b);
-        // Cap to the most recent, so a long-neglected mailbox can't stall a single poll.
-        const recent = uids.slice(-MAX_PER_SYNC);
+        // Oldest-first and capped — see selectSyncBatch for why the direction matters.
+        const newCount = countNewUids(found, account.last_uid).length;
+        const batch = selectSyncBatch(found, account.last_uid, MAX_PER_SYNC);
+        if (newCount > batch.length) {
+          this.log.log(
+            `Account #${account.id}: ${newCount} new messages, taking the oldest ${batch.length} `
+            + `this pass; the remainder follows on the next poll.`,
+          );
+        }
 
-        for (const uid of recent) {
-          maxUid = Math.max(maxUid, uid);
+        for (const uid of batch) {
           // Deduped on (account, uid): a re-poll that re-sees a message skips it, and never
           // re-downloads its body.
           const already = await this.prisma.inbound_emails.findUnique({
             where: { account_id_uid: { account_id: account.id, uid } }, select: { id: true },
           });
-          if (already) continue;
+          if (already) { maxUid = Math.max(maxUid, uid); continue; }
 
           const record = await this.fetchOne(client, uid);
-          if (!record) continue;
+          if (!record) {
+            /*
+             * The server listed this UID in SEARCH but returned nothing for it — almost always a
+             * message deleted or moved between the two calls, so there is nothing left to fetch and
+             * advancing past it loses nothing. Logged rather than passed over in silence, because
+             * the alternative reading (the fetch genuinely failed) would mean a real message is
+             * being stepped over, and that must never be invisible. A real transport error throws
+             * instead, and the catch below records it without advancing last_uid at all.
+             */
+            this.log.warn(`Account #${account.id}: UID ${uid} was listed but could not be fetched — skipping (likely deleted on the server).`);
+            maxUid = Math.max(maxUid, uid);
+            continue;
+          }
 
           const leadId = await this.matchLead(account.user_id, record.from_email);
           if (leadId) matched++;
@@ -302,6 +344,15 @@ export class ImapSyncService implements OnModuleInit, OnModuleDestroy {
             if ((ex as { code?: string }).code !== 'P2002') throw ex;
             if (leadId) matched--;   // it was not this run that matched it
           }
+
+          /*
+           * Only now, with the row committed (or confirmed already present), does the window move.
+           * It used to advance at the top of the loop, before the message had been fetched or
+           * stored, so anything that dropped out in between was stepped over and never retried.
+           * A throw above skips this entirely and leaves last_uid where it was, so the whole batch
+           * is re-attempted on the next poll — re-fetching is cheap and deduped, losing mail is not.
+           */
+          maxUid = Math.max(maxUid, uid);
         }
       } finally {
         lock.release();

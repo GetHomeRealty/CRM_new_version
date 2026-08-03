@@ -9,6 +9,17 @@ const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
  * verifies an `x-hub-signature-256` HMAC over the raw body before it acts on anything.
  */
 const CSRF_EXEMPT_PATHS = new Set([
+  /*
+   * Unsubscribe, POSTed from the confirmation page in a recipient's browser or by a mail client
+   * honouring List-Unsubscribe=One-Click. There is no session behind either, so a CSRF token
+   * cannot exist — and CASL requires the opt-out to work regardless.
+   *
+   * Safe to exempt: the only authority it accepts is the 192-bit per-recipient token, which is
+   * unguessable and bound to its campaign. The worst a forged request achieves is unsubscribing
+   * somebody whose token the attacker already knows — and anyone holding that token could simply
+   * follow the link. There is nothing here to escalate to.
+   */
+  '/api/campaigns/unsubscribe',
   '/api/meta/webhook',
   // Meta calls this when a user deletes the app from their Facebook account. Authenticated by
   // the app-secret-signed `signed_request` in the body, which is verified before anything runs.

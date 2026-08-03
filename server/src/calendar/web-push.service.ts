@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import webpush from 'web-push';
 import { PrismaService } from '../prisma/prisma.service';
+import { NotificationPreferenceService } from '../notifications/notification-preference.service';
 
 /**
  * Push notifications to a browser, for appointment reminders.
@@ -46,7 +47,10 @@ export interface PushResult {
 export class WebPushService {
   private readonly log = new Logger(WebPushService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly prefs: NotificationPreferenceService,
+  ) {}
 
   /**
    * The public key a browser needs to subscribe. Safe to hand out — it is half a keypair, and the
@@ -118,10 +122,17 @@ export class WebPushService {
    *
    * Never throws. A reminder must not fail because a phone was unreachable — the email is the
    * record, and this is the extra. The counts come back so the caller can note what happened.
+   *
+   * `category` is the Notification Preferences key this push belongs to. It is checked here, at
+   * the one place every push leaves the application, rather than at each call site: a gate a new
+   * sender has to remember to apply is a gate that eventually gets forgotten, and the failure is
+   * silent — the user's setting simply stops being honoured. Omitting it sends unconditionally,
+   * which keeps the argument optional for callers that are not user-facing reminders.
    */
-  async sendToUser(userId: number, payload: PushPayload, scope?: string | null): Promise<PushResult> {
+  async sendToUser(userId: number, payload: PushPayload, scope?: string | null, category?: string): Promise<PushResult> {
     const result: PushResult = { sent: 0, failed: 0, removed: 0 };
     if (!this.configured()) return result;
+    if (category && !(await this.prefs.isEnabled(userId, category))) return result;
 
     const subs = await this.prisma.push_subscriptions.findMany({
       // A subscription with no scope predates the choice and gets everything, matching how

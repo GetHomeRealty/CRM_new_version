@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Icon from '../ui/Icon';
 import { useSearchParams } from 'react-router-dom';
 import {
-  campaignOptions, listCampaigns, getCampaign, deleteCampaign,
+  campaignOptions, listCampaigns, getCampaign, deleteCampaign, cancelScheduledCampaign,
   previewAudience, sendCampaign, trackingHealth, previewSegment, tagSegment, sendTestEmail,
 } from '../lib/campaignsApi';
 import { apiErrorMessage } from '../lib/apiError';
@@ -12,14 +12,40 @@ import { useToast } from './toast';
 import { useAuth } from '../context/AuthContext';
 import ConfirmDialog from './ConfirmDialog';
 import CampaignTemplates from './CampaignTemplates';
+import SuppressionsPanel from './SuppressionsPanel';
 import type {
   AudienceFilter, AudiencePreview, CampaignDetail, CampaignOptions,
   CampaignRecipientRow, CampaignSummary, TrackingHealth,
 } from '../types';
 
 const ANY = 'any';
-const emptyForm = { name: '', template_id: '', categoryFilter: 'all', leadStatus: ANY, leadType: ANY, leadSource: ANY, clientType: ANY, tag: ANY };
+const emptyForm = {
+  name: '', template_id: '', categoryFilter: 'all', leadStatus: ANY, leadType: ANY, leadSource: ANY, clientType: ANY, tag: ANY,
+  /** 'now' or 'later'. */
+  sendMode: 'now',
+  /** `datetime-local` value — local wall-clock, converted to an absolute instant on send. */
+  sendAt: '',
+};
 type Form = typeof emptyForm;
+
+/** The reader's own timezone, named. Shown next to every scheduled time so it is unambiguous. */
+const LOCAL_TZ = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+/**
+ * A `datetime-local` value for `d`, in the browser's timezone.
+ *
+ * `toISOString` would give UTC, which the input reads as local — a Toronto user picking 9am would
+ * see it come back as 5am. Subtracting the offset first makes the ISO text carry local wall-clock,
+ * which is exactly what the input expects.
+ */
+const toLocalInput = (d: Date): string =>
+  new Date(d.getTime() - d.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
+
+/** The earliest time the picker will accept: a minute from now, since the send resolution is a minute. */
+const earliestSend = () => toLocalInput(new Date(Date.now() + 60_000));
+
+/** The three sections of this module, held in `?tab=`. */
+type Tab = 'campaigns' | 'templates' | 'suppressions';
 
 /** "any" is the UI's placeholder; the API expects an omitted filter. */
 const toFilter = (f: Pick<Form, 'leadStatus' | 'leadType' | 'leadSource' | 'clientType' | 'tag'>): AudienceFilter => ({
@@ -30,8 +56,22 @@ const toFilter = (f: Pick<Form, 'leadStatus' | 'leadType' | 'leadSource' | 'clie
   tag: f.tag === ANY ? '' : f.tag,
 });
 
-const statusPill = (s: string) => (s === 'completed' ? 'ok' : s === 'failed' ? 'bad' : s === 'sending' ? 'warn' : '');
+const statusPill = (s: string) =>
+  (s === 'completed' ? 'ok' : s === 'failed' ? 'bad' : s === 'partial' ? 'warn' : s === 'sending' ? 'warn' : s === 'scheduled' ? 'info' : '');
+
+/** Every timestamp from the API is an absolute instant; `toLocaleString` puts it in the reader's timezone. */
 const when = (v: string | null) => (v ? new Date(v).toLocaleString() : '—');
+
+/** "in 3 hours" / "2 minutes ago" — the part of a scheduled time somebody actually reads. */
+function relative(iso: string | null): string {
+  if (!iso) return '';
+  const ms = new Date(iso).getTime() - Date.now();
+  const mins = Math.round(Math.abs(ms) / 60_000);
+  const unit = mins < 60 ? `${mins} minute${mins === 1 ? '' : 's'}`
+    : mins < 1440 ? `${Math.round(mins / 60)} hour${Math.round(mins / 60) === 1 ? '' : 's'}`
+      : `${Math.round(mins / 1440)} day${Math.round(mins / 1440) === 1 ? '' : 's'}`;
+  return ms >= 0 ? `in ${unit}` : `${unit} ago`;
+}
 
 export default function CampaignsPage() {
   const toast = useToast();
@@ -48,8 +88,9 @@ export default function CampaignsPage() {
    * be linked to; `replace` is used so switching does not stack history entries.
    */
   const [params, setParams] = useSearchParams();
-  const tab: 'campaigns' | 'templates' = params.get('tab') === 'templates' ? 'templates' : 'campaigns';
-  const setTab = (next: 'campaigns' | 'templates') => {
+  const rawTab = params.get('tab');
+  const tab: Tab = rawTab === 'templates' || rawTab === 'suppressions' ? rawTab : 'campaigns';
+  const setTab = (next: Tab) => {
     const p = new URLSearchParams(params);
     if (next === 'campaigns') p.delete('tab'); else p.set('tab', next);
     setParams(p, { replace: true });
@@ -68,6 +109,7 @@ export default function CampaignsPage() {
   const [detailView, setDetailView] = useState<'all' | 'opened' | 'unsubscribed' | 'bounced'>('all');
   const [sentEmail, setSentEmail] = useState<CampaignDetail | null>(null);
   const [toDelete, setToDelete] = useState<CampaignSummary | null>(null);
+  const [toCancel, setToCancel] = useState<CampaignSummary | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [tagOpen, setTagOpen] = useState(false);
 
@@ -110,6 +152,21 @@ export default function CampaignsPage() {
     trackingHealth().then(setTracking).catch(() => { /* banner is informational */ });
   }, []);
 
+  /*
+   * Keep the list moving while something is in flight.
+   *
+   * A scheduled campaign becomes due, and a sending one works through its recipients (and its
+   * bounce retries), entirely on the server — without this the screen would still be showing
+   * "scheduled, in 2 minutes" an hour after it went out. Only armed when there is actually
+   * something to watch, so an idle screen makes no requests.
+   */
+  const watching = campaigns.some((c) => c.status === 'scheduled' || c.status === 'sending');
+  useEffect(() => {
+    if (!watching || tab !== 'campaigns') return undefined;
+    const t = setInterval(load, 30_000);
+    return () => clearInterval(t);
+  }, [watching, tab, load]);
+
   const refreshOptions = () => { campaignOptions().then(setOptions).catch(() => {}); };
 
   // live audience count as the filters change
@@ -133,6 +190,16 @@ export default function CampaignsPage() {
   const perLead = (template?.variables ?? []).filter((v) => leadSourced.has(v));
   const visibleTemplates = (options?.templates ?? []).filter((t) => form.categoryFilter === 'all' || t.category === form.categoryFilter);
 
+  /**
+   * Queued sends and everything else, kept apart.
+   *
+   * A scheduled campaign has no results yet — the card's delivered/opened/bounced counts would all
+   * read zero, which looks like a campaign that failed rather than one that has not run. It gets
+   * its own section above, showing the one fact that matters: when it goes.
+   */
+  const scheduled = useMemo(() => campaigns.filter((c) => c.status === 'scheduled'), [campaigns]);
+  const history = useMemo(() => campaigns.filter((c) => c.status !== 'scheduled'), [campaigns]);
+
   const openBuilder = () => { setForm(emptyForm); setAudience(null); setBuilder(true); refreshOptions(); };
 
   /** "Send" on a template card — jump to the campaign builder with that template preselected. */
@@ -148,6 +215,20 @@ export default function CampaignsPage() {
     if (!form.name.trim()) return toast('Name your campaign', 'bad');
     if (!form.template_id) return toast('Select a template', 'bad');
     if (!audience?.count) return toast('No recipients match this audience', 'bad');
+
+    const scheduling = form.sendMode === 'later';
+    if (scheduling && !form.sendAt) return toast('Pick the date and time to send at', 'bad');
+    /*
+     * `datetime-local` gives local wall-clock with no zone; `new Date` reads it in the browser's
+     * timezone, and `toISOString` turns that into the absolute instant the server stores. The
+     * round trip is what keeps "9am Tuesday" meaning 9am here rather than 9am UTC.
+     */
+    const at = scheduling ? new Date(form.sendAt) : null;
+    if (at && Number.isNaN(at.getTime())) return toast('That send time could not be read', 'bad');
+    // A minute of slack: the server treats a time that has just passed as "now", so this only
+    // catches somebody genuinely picking yesterday.
+    if (at && at.getTime() < Date.now() - 60_000) return toast('Pick a time in the future', 'bad');
+
     setSending(true);
     try {
       const c = await sendCampaign({
@@ -155,13 +236,36 @@ export default function CampaignsPage() {
         template_id: Number(form.template_id),
         ...toFilter(form),
         tags: form.tag === ANY ? [] : [form.tag],
+        scheduled_for: at ? at.toISOString() : null,
       });
-      toast(`Campaign sent — ${c.stats.sent} delivered, ${c.stats.bounced} bounced`, c.stats.sent ? 'ok' : 'bad');
+      if (c.status === 'scheduled') {
+        toast(`Campaign scheduled for ${when(c.scheduled_for)} — ${c.stats.total} recipient${c.stats.total === 1 ? '' : 's'}`, 'ok');
+      } else {
+        toast(`Campaign sent — ${c.stats.sent} delivered, ${c.stats.bounced} bounced`, c.stats.sent ? 'ok' : 'bad');
+      }
       setBuilder(false);
       load();
     } catch (e) {
-      toast(apiErrorMessage(e, 'The campaign could not be sent'), 'bad');
+      toast(apiErrorMessage(e, scheduling ? 'The campaign could not be scheduled' : 'The campaign could not be sent'), 'bad');
     } finally { setSending(false); }
+  };
+
+  /**
+   * Call off a campaign before it goes out.
+   *
+   * Only offered while it is still `scheduled` — once delivery starts some recipients already have
+   * it, and the server refuses for the same reason. Cancelling leaves the campaign as a draft with
+   * its audience and copy intact rather than deleting it.
+   */
+  const cancelSchedule = async () => {
+    if (!toCancel) return;
+    try {
+      await cancelScheduledCampaign(toCancel.id);
+      toast(`"${toCancel.name}" cancelled — it will not be sent.`, 'ok');
+      load();
+    } catch (e) {
+      toast(apiErrorMessage(e, 'Could not cancel the campaign'), 'bad');
+    }
   };
 
   const openDetail = async (c: CampaignSummary, view: typeof detailView = 'all') => {
@@ -178,8 +282,14 @@ export default function CampaignsPage() {
   /** CSV report: campaign summary followed by every recipient's outcome. */
   const downloadReport = (c: CampaignDetail) => {
     const esc = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    // Hard and soft are separate columns' worth of meaning in one field: one address is dead and
+    // suppressed, the other is still being tried. A compliance export that says only "Bounced"
+    // cannot tell them apart afterwards.
     const rowStatus = (r: CampaignRecipientRow) =>
-      r.bounced ? 'Bounced' : r.unsubscribed ? 'Unsubscribed' : r.opened ? 'Opened' : r.status === 'sent' ? 'Delivered' : r.status;
+      r.bounce_type === 'hard' ? 'Hard bounce (suppressed)'
+        : r.bounce_type === 'soft' ? (r.status === 'pending' ? 'Soft bounce — retrying' : 'Soft bounce — gave up')
+          : r.bounce_type === 'unknown' ? 'Send error (our mail account)'
+            : r.unsubscribed ? 'Unsubscribed' : r.opened ? 'Opened' : r.status === 'sent' ? 'Delivered' : r.status;
     const summary = [
       ['Campaign', c.name], ['Subject', c.subject], ['Status', c.status], ['Sent at', c.sent_at ?? ''],
       ['Recipients', c.stats.total], ['Delivered', c.stats.sent], ['Opened', c.stats.opened],
@@ -245,6 +355,7 @@ export default function CampaignsPage() {
       </div></div>
 
       {tab === 'templates' && <CampaignTemplates options={options} onChanged={refreshOptions} onUse={useTemplate} />}
+      {tab === 'suppressions' && <SuppressionsPanel />}
 
       {/* Open tracking dies silently when the public URL is unreachable — surface it, and let
           the result be re-checked on demand rather than only at page load. */}
@@ -294,15 +405,52 @@ export default function CampaignsPage() {
         </div>
       )}
 
+      {/*
+        Scheduled campaigns, above the rest.
+        A queued send is the one thing on this screen that is about to happen without anybody
+        touching it, so it belongs where it is seen — not sorted in among months of history where
+        the window to call it off would be missed. Times are rendered in the reader's own
+        timezone and the zone is named, because "9:00" is only unambiguous once it says whose.
+      */}
+      {tab === 'campaigns' && scheduled.length > 0 && (
+        <div className="card" style={{ marginBottom: 12 }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
+            <strong><Icon name="clock" size={14} /> Scheduled</strong>
+            <span className="muted" style={{ fontSize: 12 }}>
+              {scheduled.length} campaign{scheduled.length === 1 ? '' : 's'} waiting to go out · times shown in {LOCAL_TZ}
+            </span>
+          </div>
+          <div className="camp-list" style={{ marginTop: 8 }}>
+            {scheduled.map((c) => (
+              <div key={c.id} className="camp-row">
+                <div style={{ minWidth: 0 }}>
+                  <button className="camp-name" onClick={() => openDetail(c)}>{c.name}</button>
+                  <div className="muted" style={{ fontSize: 12 }}>
+                    {c.template_name ?? 'Template'} · {c.stats.total} recipient{c.stats.total === 1 ? '' : 's'}
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <div style={{ textAlign: 'right' }}>
+                    <div style={{ fontSize: 13, fontWeight: 600 }}>{when(c.scheduled_for)}</div>
+                    <div className="muted" style={{ fontSize: 12 }}>{relative(c.scheduled_for)}</div>
+                  </div>
+                  {canEdit && <button className="btn ghost sm" onClick={() => setToCancel(c)}>Cancel</button>}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {tab === 'campaigns' && (campaigns.length === 0 ? (
         <div className="card centered" style={{ padding: 40 }}>
           <h3 style={{ margin: 0 }}>No campaigns yet</h3>
           <p className="muted" style={{ fontSize: 13 }}>Create your first campaign to email a template to a group of leads.</p>
           {canEdit && <button className="btn primary" onClick={openBuilder}>+ Create Campaign</button>}
         </div>
-      ) : (
+      ) : history.length === 0 ? null : (
         <div className="camp-grid">
-          {campaigns.map((c) => (
+          {history.map((c) => (
             <div key={c.id} className="card camp-card">
               <div className="camp-card-top">
                 <button className="camp-name" onClick={() => openDetail(c)}>{c.name}</button>
@@ -386,13 +534,54 @@ export default function CampaignsPage() {
               </div>
             </div>
 
+            {/*
+              When to send.
+              Copy gets written when the agent has time, which is rarely when it should go out —
+              Tuesday morning beats Friday evening, and nobody is at their desk for either.
+              The picker is local wall-clock and the timezone is named beneath it, because a send
+              time that does not say whose clock it is on is a send time nobody can trust.
+            */}
+            <div className="camp-section">
+              <strong>When to send</strong>
+              <div style={{ display: 'flex', gap: 14, alignItems: 'center', flexWrap: 'wrap', marginTop: 8 }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+                  <input type="radio" name="sendMode" checked={form.sendMode === 'now'}
+                    onChange={() => setForm((f) => ({ ...f, sendMode: 'now' }))} />
+                  Send now
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+                  <input type="radio" name="sendMode" checked={form.sendMode === 'later'}
+                    onChange={() => setForm((f) => ({ ...f, sendMode: 'later', sendAt: f.sendAt || earliestSend() }))} />
+                  Schedule for later
+                </label>
+              </div>
+              {form.sendMode === 'later' && (
+                <div style={{ marginTop: 8 }}>
+                  <input
+                    type="datetime-local"
+                    value={form.sendAt}
+                    min={earliestSend()}
+                    onChange={(e) => setF('sendAt', e.target.value)}
+                    style={{ maxWidth: 260 }}
+                  />
+                  <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                    Your local time ({LOCAL_TZ}){form.sendAt && !Number.isNaN(new Date(form.sendAt).getTime())
+                      ? ` — goes out ${relative(new Date(form.sendAt).toISOString())}` : ''}.
+                    {' '}The audience is fixed now, and the message is sent exactly as written here even if the
+                    template changes before then. Checked every minute, so the send may be up to a minute late.
+                  </div>
+                </div>
+              )}
+            </div>
+
             <div className="actions">
               <button className="btn ghost" onClick={() => setBuilder(false)} disabled={sending}>Cancel</button>
               <button className="btn primary" onClick={send} disabled={sending || !audience?.count}>
-                {sending ? 'Sending…' : `Send to ${audience?.count ?? 0}`}
+                {sending ? (form.sendMode === 'later' ? 'Scheduling…' : 'Sending…')
+                  : form.sendMode === 'later' ? `Schedule for ${audience?.count ?? 0}` : `Send to ${audience?.count ?? 0}`}
               </button>
             </div>
-            {sending && <p className="muted" style={{ fontSize: 12, textAlign: 'center' }}>Sending in sequence to respect mail limits — keep this open until it finishes.</p>}
+            {sending && form.sendMode === 'now' && <p className="muted" style={{ fontSize: 12, textAlign: 'center' }}>Sending in sequence to respect mail limits — keep this open until it finishes.</p>}
           </div>
         </div>
       )}
@@ -435,9 +624,26 @@ export default function CampaignsPage() {
                     <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
                       {x.opened && <span className="pill info">Opened</span>}
                       {x.unsubscribed && <span className="pill warn">Unsub</span>}
-                      <span className={`pill ${x.status === 'sent' && !x.bounced ? 'ok' : x.bounced ? 'bad' : ''}`}>
-                        {x.bounced ? 'Bounced' : x.status === 'sent' ? 'Sent' : 'Pending'}
-                      </span>
+                      {/*
+                        The three failures read very differently and must not share one label.
+                        A hard bounce is a dead mailbox and the address is now suppressed; a soft
+                        one is queued for another attempt; "unknown" is our own mail server and
+                        says nothing about the recipient. Calling all three "Bounced" is what once
+                        made an expired SMTP password look like a dead list.
+                      */}
+                      {x.bounce_type === 'hard' ? <span className="pill bad" title="The mailbox does not exist. This address has been added to the suppression list.">Hard bounce</span>
+                        : x.bounce_type === 'soft' && x.status === 'pending' ? (
+                          <span className="pill warn" title={x.next_retry_at ? `Next attempt ${when(x.next_retry_at)}` : 'Queued for another attempt'}>
+                            Retrying{x.retry_count ? ` (${x.retry_count})` : ''}
+                          </span>
+                        )
+                          : x.bounce_type === 'soft' ? <span className="pill bad" title="The receiving server kept deferring us. The address is not suppressed.">Deferred — gave up</span>
+                            : x.bounce_type === 'unknown' ? <span className="pill bad" title="A problem with our mail account or connection, not with this address.">Send error</span>
+                              : (
+                                <span className={`pill ${x.status === 'sent' ? 'ok' : ''}`}>
+                                  {x.status === 'sent' ? 'Sent' : x.status === 'failed' ? 'Failed' : 'Pending'}
+                                </span>
+                              )}
                     </div>
                   </div>
                 ))}
@@ -525,6 +731,15 @@ export default function CampaignsPage() {
           onConfirm: remove,
         } : null}
         onClose={() => setToDelete(null)}
+      />
+
+      <ConfirmDialog
+        confirm={toCancel ? {
+          title: 'Cancel this scheduled campaign?',
+          message: `"${toCancel.name}" was due to go out ${when(toCancel.scheduled_for)} to ${toCancel.stats.total} recipient${toCancel.stats.total === 1 ? '' : 's'}. It will not be sent. The campaign is kept as a draft, so nothing you wrote is lost.`,
+          onConfirm: cancelSchedule,
+        } : null}
+        onClose={() => setToCancel(null)}
       />
     </>
   );

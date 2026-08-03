@@ -184,7 +184,10 @@ export class EventReminderService {
         // lock screen instead of stacking two reminders for the same viewing.
         tag: `event-${ev.id}`,
         url: '/crm/calendar',
-      }, ev.domain);
+        // Muting "Calendar reminders" in Settings suppresses the push and nothing else — the
+        // email above has already gone, and it is the record. Somebody who does not want their
+        // phone buzzing at 7am still gets told about the appointment.
+      }, ev.domain, 'calendar_reminders');
       if (pushed.sent > 0) {
         result.pushed += pushed.sent;
         await this.prisma.calendar_event_reminders.update({

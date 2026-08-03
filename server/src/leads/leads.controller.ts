@@ -50,16 +50,19 @@ export class LeadsController {
   }
 
   /**
-   * Move a person's whole book to somebody else.
+   * Hand unassigned brokerage leads to somebody.
    *
-   * The one way an administrator can reach leads that are not theirs, so it is Super Admin only,
-   * returns nothing but a count, and is written to the audit trail with both names. Recovering a
-   * departed agent's book must be possible; doing it quietly must not be.
+   * Super Admin only, returns nothing but counts, and is written to the audit trail with the
+   * recipient's name. It reaches only leads that belong to nobody — an agent's own or assigned
+   * leads are not eligible and cannot be moved through here.
+   *
+   * `from_user_id` is deliberately not read any more. It was how the old "move A's book to B"
+   * worked, and an old client still sending it must not quietly get the previous behaviour.
    */
   @Post('transfer-ownership')
   @HttpCode(200)
-  transferOwnership(@CurrentUser() u: AuthUserRecord, @Body() body: { from_user_id?: number; to_user_id?: number }): Promise<unknown> {
-    return this.transfer.transfer(u, Number(body?.from_user_id), Number(body?.to_user_id));
+  transferOwnership(@CurrentUser() u: AuthUserRecord, @Body() body: { to_user_id?: number; count?: number }): Promise<unknown> {
+    return this.transfer.transfer(u, Number(body?.to_user_id), body?.count === undefined ? undefined : Number(body.count));
   }
 
   /** Vocabularies for the lead form and filter panel, plus the assignee list. */
@@ -95,8 +98,8 @@ export class LeadsController {
   // ------------------------------------------------------------------ tags
   @Get('tags')
   @Screen('lead', 'view')
-  tags(): Promise<unknown> {
-    return this.leads.tags();
+  tags(@CurrentUser() user: AuthUserRecord): Promise<unknown> {
+    return this.leads.tags(user);
   }
 
   @Post('tags')
@@ -126,22 +129,35 @@ export class LeadsController {
    */
   @Get('tasks')
   @Screen('lead', 'view')
-  allTasks(@CurrentUser() user: AuthUserRecord): Promise<unknown> {
-    return this.leads.allTasks(user);
+  allTasks(
+    @CurrentUser() user: AuthUserRecord,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+    @Query('status') status?: string,
+  ): Promise<unknown> {
+    return this.leads.allTasks(user, { page, limit, status });
   }
 
-  /** Every lead showing the caller can see, for the Dashboard. Registered before `:id`. */
+  /** Lead showings the caller can see, a page at a time. Registered before `:id`. */
   @Get('showings')
   @Screen('lead', 'view')
-  allShowings(@CurrentUser() user: AuthUserRecord): Promise<unknown> {
-    return this.leads.allShowings(user);
+  allShowings(
+    @CurrentUser() user: AuthUserRecord,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ): Promise<unknown> {
+    return this.leads.allShowings(user, { page, limit });
   }
 
   // ------------------------------------------------------ recently deleted
   @Get('deleted')
   @Screen('lead', 'view')
-  listDeleted(@CurrentUser() user: AuthUserRecord): Promise<unknown> {
-    return this.leads.listDeleted(user);
+  listDeleted(
+    @CurrentUser() user: AuthUserRecord,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ): Promise<unknown> {
+    return this.leads.listDeleted(user, { page, limit });
   }
 
   @Post('deleted/:id/restore')

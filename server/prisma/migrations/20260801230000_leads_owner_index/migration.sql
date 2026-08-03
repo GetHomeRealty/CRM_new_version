@@ -1,0 +1,25 @@
+-- Index leads.owner_user_id.
+--
+-- Every read of the Leads module is scoped by `(assigned_to = me OR owner_user_id = me)`.
+-- `assigned_to` was indexed and `owner_user_id` was not, and one unindexed side of an OR is enough
+-- to cost the whole thing: Postgres cannot combine the branches, so it fell back to scanning the
+-- table on every list load, for every agent, plus the same predicate again for the counters.
+--
+-- Measured on production data (512 leads) before the change:
+--     Seq Scan on leads  (actual rows=512)  Filter: (assigned_to = 1 OR owner_user_id = 1)
+-- and after, with this one index in place:
+--     BitmapOr -> Bitmap Index Scan on leads_assigned_to_idx
+--              -> Bitmap Index Scan on leads_owner_user_id_idx
+--
+-- At 512 rows the planner still prefers the scan, correctly — a small table is cheaper read whole.
+-- The point is that an index path now EXISTS, so the plan switches on its own as the table grows,
+-- which at the stated scale of hundreds of agents it will.
+--
+-- Plain CREATE INDEX rather than CONCURRENTLY: Prisma runs each migration file inside a
+-- transaction and CONCURRENTLY cannot run in one. On a table this size the build is milliseconds
+-- and the write lock is not worth engineering around. If `leads` ever grows to where that stops
+-- being true, build the index by hand with CONCURRENTLY outside Prisma and mark the migration
+-- applied — do not simply switch the keyword here, because the migration will fail.
+
+-- CreateIndex
+CREATE INDEX IF NOT EXISTS "leads_owner_user_id_idx" ON "leads"("owner_user_id");

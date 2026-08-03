@@ -121,7 +121,10 @@ export default function MetaPage() {
   const disconnect = () => askDelete({
     title: 'Disconnect Meta?',
     message: 'New leads will stop arriving. Leads already synced stay in the Lead module.',
-    note: 'The stored Facebook access tokens are erased immediately.',
+    // Worth stating plainly: releasing the forms is what lets a successor pick them up, so it is
+    // the desired behaviour when somebody leaves — and a surprise to anyone disconnecting briefly.
+    note: 'The stored Facebook access tokens are erased immediately, and your connected lead forms '
+      + 'are released — another agent can connect them while you are disconnected.',
     onConfirm: async () => {
       await run('disconnect', async () => {
         await disconnectMeta();

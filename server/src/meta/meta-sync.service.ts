@@ -1,11 +1,15 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { LeadAuditService } from '../leads/lead-audit.service';
 import { LeadNotificationService } from '../leads/lead-notification.service';
 import { MetaConnectionService } from './meta-connection.service';
-import { MetaGraphService, GraphError, type GraphLead } from './meta-graph.service';
+import { MetaGraphService, GraphError, isAuthFailure, type GraphLead } from './meta-graph.service';
+import { MetaApiBudgetService } from './meta-api-budget.service';
+import { MetaAlertService } from './meta-alert.service';
 import { mapMetaLead, normalizePhone, type MappedMetaLead } from './meta-lead-mapper';
-import { MAX_LEADS_PER_FORM } from './meta.constants';
+import { MAX_LEADS_PER_FORM, META_RAW_MAX_CHARS, META_RAW_RETENTION_DAYS, WEBHOOK_QUIET_ALERT_MS } from './meta.constants';
+import { isSuperAdmin } from '../core/authz';
 import type { AuthUserRecord } from '../auth/auth.types';
 
 const str = (v: unknown): string => String(v ?? '').trim();
@@ -42,11 +46,59 @@ export class MetaSyncService {
     private readonly graph: MetaGraphService,
     private readonly audit: LeadAuditService,
     private readonly notifications: LeadNotificationService,
+    private readonly budget: MetaApiBudgetService,
+    private readonly alerts: MetaAlertService,
   ) {}
 
   /** Exposed for tests and for re-mapping a stored payload. */
   mapLead(fieldData: GraphLead['field_data']): MappedMetaLead {
     return mapMetaLead(fieldData);
+  }
+
+  /**
+   * The raw Graph payload as it is stored, capped.
+   *
+   * It was stored whole and unbounded. `meta_raw` is kept so an import can be re-examined or
+   * re-mapped when a form's questions change — that needs the answers, not every byte Meta sent —
+   * and it duplicates data already in the mapped columns, so one pathological submission was able
+   * to carry an unbounded row for no diagnostic gain.
+   *
+   * Truncation is MARKED rather than silent. A clipped payload that still looks like JSON is worse
+   * than no payload: somebody re-mapping from it would read partial answers as complete ones.
+   */
+  private rawForStorage(lead: GraphLead): string {
+    const full = JSON.stringify(lead);
+    if (full.length <= META_RAW_MAX_CHARS) return full;
+    return JSON.stringify({
+      _truncated: true,
+      _original_length: full.length,
+      _note: `Stored payload capped at ${META_RAW_MAX_CHARS} characters. The mapped columns hold the answers.`,
+      _payload: full.slice(0, META_RAW_MAX_CHARS),
+    });
+  }
+
+  /**
+   * Forget raw payloads past the retention window.
+   *
+   * The mapped columns are the record; `meta_raw` is a working copy of what arrived, and it holds
+   * everything a person typed into somebody's ad — the fullest personal-data footprint this module
+   * keeps. Holding it for ever with no policy is the part that would be hard to defend. Clearing
+   * the column leaves the lead itself untouched.
+   *
+   * Returns how many rows were cleared. Runs from the sync scheduler rather than its own timer,
+   * because it is housekeeping and does not need to be prompt.
+   */
+  async pruneRawPayloads(): Promise<number> {
+    if (META_RAW_RETENTION_DAYS <= 0) return 0;
+    const cutoff = new Date(Date.now() - META_RAW_RETENTION_DAYS * 86_400_000);
+    const r = await this.prisma.leads.updateMany({
+      where: { meta_raw: { not: null }, meta_imported_at: { lt: cutoff } },
+      data: { meta_raw: null },
+    });
+    if (r.count) {
+      this.log.log(`Cleared the stored Meta payload on ${r.count} lead(s) older than ${META_RAW_RETENTION_DAYS} days.`);
+    }
+    return r.count;
   }
 
   /**
@@ -61,19 +113,47 @@ export class MetaSyncService {
   }
 
   /**
+   * Leads this importing agent already works — the only records a Meta submission may match.
+   *
+   * THE SCOPE IS THE WHOLE POINT. These lookups used to span the entire brokerage, and the update
+   * that follows wrote into whatever they found. So a submission on AGENT A's ad that happened to
+   * share an email with AGENT B's lead enriched B's record — rewriting its `source`, its
+   * `lead_source`, its `message` and its Meta identifiers with data from a campaign B had nothing to
+   * do with — while agent A, who paid for the click, received no lead at all and saw it counted as a
+   * "duplicate".
+   *
+   * That is a cross-book write into a record the writer cannot read, and it contradicts the
+   * uniqueness rule this application settled on: the same person MAY be a lead of two different
+   * agents, precisely because they can arrive through anybody's ad. Meta ads are that scenario.
+   *
+   * Matching is therefore confined to the importer's own book — owned by them, or assigned to them,
+   * which is the same set the Leads module treats as theirs. Anything outside it is a different
+   * agent's relationship with the same person, and the correct outcome is a new lead of their own.
+   */
+  private ownBook(userId: number): Prisma.leadsWhereInput {
+    return { OR: [{ owner_user_id: userId }, { assigned_to: userId }] };
+  }
+
+  /**
    * Find an existing lead for this submission, in the order the brief requires:
    * Meta lead id → email → normalized phone. Returns the row and which rule matched.
+   *
+   * `facebook_lead_id` is deliberately NOT scoped: it is globally unique, so a match is the same
+   * submission arriving twice rather than a different person, and the row it finds is by definition
+   * the one this delivery already created. Scoping it would let a retry create a second copy.
    */
-  private async findExisting(facebookLeadId: string, mapped: MappedMetaLead): Promise<{ id: number; rule: string } | null> {
+  private async findExisting(facebookLeadId: string, mapped: MappedMetaLead, userId: number): Promise<{ id: number; rule: string } | null> {
     const byMetaId = await this.prisma.leads.findFirst({
       where: { facebook_lead_id: facebookLeadId },
       select: { id: true },
     });
     if (byMetaId) return { id: byMetaId.id, rule: 'meta lead id' };
 
+    const mine = this.ownBook(userId);
+
     if (mapped.email && EMAIL_SHAPE.test(mapped.email)) {
       const byEmail = await this.prisma.leads.findFirst({
-        where: { email: { equals: mapped.email, mode: 'insensitive' }, deleted_at: null },
+        where: { email: { equals: mapped.email, mode: 'insensitive' }, deleted_at: null, ...mine },
         select: { id: true },
       });
       if (byEmail) return { id: byEmail.id, rule: 'email address' };
@@ -81,12 +161,28 @@ export class MetaSyncService {
 
     if (mapped.phone_normalized) {
       const byPhone = await this.prisma.leads.findFirst({
-        where: { phone_normalized: mapped.phone_normalized, deleted_at: null },
+        where: { phone_normalized: mapped.phone_normalized, deleted_at: null, ...mine },
         select: { id: true },
       });
       if (byPhone) return { id: byPhone.id, rule: 'phone number' };
     }
     return null;
+  }
+
+  /**
+   * A lead of this agent's that was soft-deleted and holds the address this submission needs.
+   *
+   * `findExisting` filters out deleted rows on purpose — a deleted lead is not one to enrich — but
+   * the `lower(email)` unique index still holds the address, so creating the new row raises P2002
+   * and the submission was lost outright. A person who enquires again after their lead was tidied
+   * away is exactly the enquiry a brokerage most wants, and it was the one guaranteed to fail.
+   */
+  private async deletedHolder(email: string, userId: number): Promise<{ id: number } | null> {
+    if (!email) return null;
+    return this.prisma.leads.findFirst({
+      where: { email: { equals: email, mode: 'insensitive' }, deleted_at: { not: null }, ...this.ownBook(userId) },
+      select: { id: true },
+    });
   }
 
   /**
@@ -104,7 +200,7 @@ export class MetaSyncService {
     const createdAt = lead.created_time ? new Date(lead.created_time) : new Date();
     const now = new Date();
 
-    const existing = await this.findExisting(facebookLeadId, mapped);
+    const existing = await this.findExisting(facebookLeadId, mapped, ctx.userId);
 
     const metaFields = {
       facebook_lead_id: facebookLeadId,
@@ -115,7 +211,7 @@ export class MetaSyncService {
       ...attribution,
       meta_created_at: createdAt,
       meta_imported_at: now,
-      meta_raw: JSON.stringify(lead),
+      meta_raw: this.rawForStorage(lead),
       message: mapped.message,
       budget: mapped.budget,
       timeline: mapped.timeline,
@@ -148,10 +244,43 @@ export class MetaSyncService {
       ? mapped.email
       : `no-email-${facebookLeadId}@meta.invalid`;
 
+    /*
+     * The person may be returning to a lead this agent deleted. Restore it and attach the new
+     * submission, rather than raising a unique-constraint error and losing the enquiry.
+     *
+     * Restoring is the right answer rather than "create a second one": the address is the same
+     * person, the row still holds whatever history was recorded before, and the deletion was a
+     * filing decision that a fresh enquiry supersedes. The outcome is reported as `imported`,
+     * because from the brokerage's point of view a lead has arrived.
+     */
+    const buried = await this.deletedHolder(email, ctx.userId);
+    if (buried) {
+      const restored = await this.prisma.leads.update({
+        where: { id: buried.id },
+        data: {
+          ...metaFields,
+          deleted_at: null,
+          deleted_by: null,
+          source: 'facebook_meta',
+          lead_source: 'meta',
+          name: mapped.name,
+          first_name: mapped.first_name ?? undefined,
+          last_name: mapped.last_name ?? undefined,
+          phone: mapped.phone ?? undefined,
+          phone_normalized: mapped.phone_normalized ?? undefined,
+          location: mapped.location ?? undefined,
+          property: mapped.property ?? undefined,
+        },
+      });
+      this.log.log(`Meta lead ${facebookLeadId} restored lead #${buried.id}, which had been deleted.`);
+      void this.notifications.notifyNewLead(restored);
+      return { outcome: 'imported', leadId: restored.id, rule: 'restored a deleted lead with the same address' };
+    }
+
     const row = await this.prisma.leads.create({
       data: {
         ...metaFields,
-        name: mapped.name.slice(0, 255),
+        name: mapped.name,
         first_name: mapped.first_name,
         last_name: mapped.last_name,
         email,
@@ -210,13 +339,50 @@ export class MetaSyncService {
     const forms = await this.prisma.meta_lead_forms.findMany({ where: { user_id: userId, is_active: true } });
     if (!forms.length) { result.errors.push('No lead forms are connected yet.'); return result; }
 
+    /*
+     * Spend from the budget everybody shares, before fanning out.
+     *
+     * `META_SYNC_LIMIT` bounds how often ONE person may press Sync; this bounds what the whole
+     * brokerage may spend, because Meta's limits are per app. Charged per form about to be read,
+     * up front, so a refusal costs nothing rather than stopping half way through a run.
+     *
+     * The scheduled pass is charged too. Exempting it would mean the automatic traffic — the larger
+     * and more predictable half — was invisible to the ceiling meant to bound total usage.
+     */
+    const budget = await this.budget.consume(forms.length);
+    if (!budget.allowed) {
+      const minutes = Math.ceil(budget.resetInSeconds / 60);
+      result.errors.push(
+        `The brokerage has used its Meta API allowance for now (${budget.spent} of ${budget.limit} calls). `
+        + `Lead collection resumes automatically in about ${minutes} minute(s) — no leads are lost, `
+        + 'Meta holds them until they are collected.',
+      );
+      this.log.warn(`Meta sync for ${user.name} deferred: shared budget spent (${budget.spent}/${budget.limit}).`);
+      await this.recordHistory(userId, trigger, startedAt, result);
+      return result;
+    }
+
     for (const form of forms) {
       const page = conn.pages.find((p) => p.page_id === form.page_id);
       if (!page) { result.errors.push(`Page ${form.page_id} is no longer available on this connection.`); continue; }
 
       try {
-        const leads = await this.graph.formLeads(form.form_id, page.token, MAX_LEADS_PER_FORM);
+        const { leads, truncated } = await this.graph.formLeads(form.form_id, page.token, MAX_LEADS_PER_FORM);
         result.forms++;
+        /*
+         * Say so when the ceiling stopped us mid-form.
+         *
+         * Reported as an error line rather than a log entry, because it is the one outcome an
+         * operator has to act on: the remaining submissions are not coming on the next run either,
+         * since every run reads the same newest-first window. Raising META_MAX_LEADS_PER_FORM and
+         * syncing again is the fix, and the message has to say that.
+         */
+        if (truncated) {
+          result.errors.push(
+            `${form.form_name ?? form.form_id}: stopped after ${MAX_LEADS_PER_FORM} lead(s) — this form has more. `
+            + 'Raise META_MAX_LEADS_PER_FORM and sync again to bring in the rest.',
+          );
+        }
         for (const lead of leads) {
           try {
             const { outcome } = await this.upsertLead(lead, {
@@ -237,6 +403,21 @@ export class MetaSyncService {
         const message = err instanceof GraphError ? this.explain(err) : (err instanceof Error ? err.message : String(err));
         result.errors.push(`${form.form_name ?? form.form_id}: ${message}`);
         await this.connections.recordError(userId, message);
+
+        /*
+         * A dead token is not a per-form problem, and retrying the remaining forms is pointless —
+         * every one of them will fail the same way, each costing another Graph call against the
+         * shared budget and another identical error line.
+         *
+         * More importantly this is terminal until a human acts. Marking it here is what turns
+         * "lead sync quietly stopped" into "your Meta connection needs reconnecting", which is the
+         * whole difference between the two for a brokerage paying for the clicks.
+         */
+        if (err instanceof GraphError && isAuthFailure(err)) {
+          await this.tokenDied(userId, user.name, message);
+          result.errors.push('Lead collection is paused for this account until Meta is reconnected.');
+          break;
+        }
       }
     }
 
@@ -248,6 +429,32 @@ export class MetaSyncService {
         `${result.imported} imported, ${result.updated} updated, ${result.duplicates} merged into existing leads, ${result.forms} form(s) read`);
     }
     return result;
+  }
+
+  /**
+   * The token is gone. Record it, and tell the person once.
+   *
+   * `token_expires_at` is set to now rather than a new flag being invented, because that is
+   * factually what Meta just told us and every existing consumer already reads it — `status()`
+   * derives `needs_reconnect` from it, so the screen becomes correct with no other change. A
+   * REVOKED token is the case that made this necessary: somebody removes the app from their
+   * Facebook account and the stored expiry is still weeks away, so nothing looked wrong while
+   * nothing worked.
+   *
+   * The email goes out at most once per `META_RECONNECT_NOTICE_HOURS`. Without that guard the
+   * scheduler would send one every fifteen minutes for ever, which is how a real alert becomes
+   * something people filter.
+   */
+  private async tokenDied(userId: number, userName: string, message: string): Promise<void> {
+    const due = await this.connections.markTokenDead(userId);
+    this.log.warn(`Meta token for ${userName} (#${userId}) is no longer valid: ${message}`);
+    if (!due) return;
+    try {
+      await this.alerts.reconnectRequired(userId, message);
+    } catch (e) {
+      // A failed email must not lose the fact that the token is dead — that is already recorded.
+      this.log.error(`Could not send the Meta reconnect notice to user #${userId}: ${(e as Error).message}`);
+    }
   }
 
   /** Turn a Graph failure into something an agent can act on. */
@@ -311,15 +518,73 @@ export class MetaSyncService {
         data: { status, lead_id: leadId, error: error ?? null, processed_at: new Date() },
       }).then(() => ({ status, leadId }));
 
-    const form = await this.prisma.meta_lead_forms.findFirst({ where: { form_id: formId, page_id: pageId, is_active: true } });
-    if (!form) return finish('ignored', null, 'That lead form is not connected here.');
+    /*
+     * ONE FORM BELONGS TO ONE AGENT, so this resolves to exactly one owner.
+     *
+     * Each agent connects their own Meta account, their own Page and their own lead forms, and
+     * receives their own leads. Nothing is shared. `meta_lead_forms_page_form_key` enforces that at
+     * the database — a form already connected by somebody else is refused at the point of
+     * connecting, with a message naming who holds it, rather than being allowed and then routed
+     * ambiguously.
+     *
+     * That constraint is why this is now a safe lookup. It used to be `findFirst` over a set that
+     * could genuinely hold several rows, which meant one agent silently received every lead from a
+     * shared form and the other received none while their screen showed it connected.
+     *
+     * The `> 1` branch below cannot be reached through the API; it exists because rows predating the
+     * constraint could still be in an older database, and answering that with an arbitrary pick
+     * would recreate the original defect. Refusing loudly is the honest failure.
+     */
+    const forms = await this.prisma.meta_lead_forms.findMany({
+      where: { form_id: formId, page_id: pageId, is_active: true },
+      orderBy: { id: 'asc' },
+      take: 2,
+    });
+    if (!forms.length) return finish('ignored', null, 'That lead form is not connected here.');
+    if (forms.length > 1) {
+      const owners = forms.map((f) => f.user_id).join(', ');
+      this.log.error(`Meta form ${formId} on page ${pageId} is connected by more than one user (${owners}) — refusing to guess whose lead this is.`);
+      return finish('failed', null,
+        `This lead form is connected by more than one agent (users ${owners}), so there is no single owner for the lead. `
+        + 'Each agent must connect their own form: disconnect it from all but one account and sync again.');
+    }
 
+    const form = forms[0];
     const conn = await this.connections.find(form.user_id);
     const page = conn?.pages.find((p) => p.page_id === pageId);
     if (!conn || !page) return finish('failed', null, `No active Meta connection for page ${pageId}.`);
 
+    const owner = await this.prisma.users.findUnique({
+      where: { id: form.user_id },
+      select: { id: true, name: true, status: true },
+    });
+
+    /*
+     * A LEAD IS NOT DELIVERED TO AN ACCOUNT THAT HAS BEEN SWITCHED OFF.
+     *
+     * The form still belongs to this agent — that is the rule, and a form is never reassigned
+     * behind anybody's back — but their account is inactive, so a lead written against them would
+     * be visible to nobody: they cannot sign in, and a book belongs to one person. It would sit in
+     * the database looking imported while no screen in the application could reach it.
+     *
+     * Recorded as `failed` with a reason rather than `ignored`, because this is a state somebody
+     * has to resolve: it surfaces on the webhook health view instead of passing silently. The
+     * submission itself is not lost — Meta keeps it retrievable, and reconnecting the form to
+     * whoever is running it now collects it.
+     *
+     * This is why disconnecting Meta comes FIRST when an agent leaves, ahead of deactivating them
+     * (see `OffboardingService`): done in that order, the form is already free and the successor
+     * receives this lead instead of it landing here.
+     */
+    if (owner && (owner.status ?? 'Active') !== 'Active') {
+      this.log.warn(`Meta webhook lead for form ${formId} refused: ${owner.name}'s account is ${owner.status}.`);
+      return finish('failed', null,
+        `This lead form belongs to ${owner.name}, whose account is ${owner.status}, so the lead has `
+        + 'no owner who could see it. Disconnect Meta on that account and connect the form to '
+        + 'whoever is running it now — this submission can then be collected from Meta.');
+    }
+
     try {
-      const owner = await this.prisma.users.findUnique({ where: { id: form.user_id }, select: { id: true, name: true } });
       const lead = await this.graph.lead(leadgenId, page.token);
       const { outcome, leadId, rule } = await this.upsertLead(lead, {
         userId: form.user_id, userName: owner?.name ?? 'Meta', pageId, pageName: page.name,
@@ -366,17 +631,76 @@ export class MetaSyncService {
   }
 
   /** Recent deliveries plus a health summary for the settings panel. */
-  async webhookHealth(limit = 20): Promise<Record<string, unknown>> {
-    const [rows, total, failed, lastRow] = await Promise.all([
-      this.prisma.meta_webhook_events.findMany({ orderBy: { id: 'desc' }, take: Math.min(100, limit) }),
-      this.prisma.meta_webhook_events.count(),
-      this.prisma.meta_webhook_events.count({ where: { status: 'failed' } }),
-      this.prisma.meta_webhook_events.findFirst({ orderBy: { id: 'desc' } }),
+  /**
+   * Recent webhook deliveries for the caller's own forms, and whether Meta is still reaching us.
+   *
+   * SCOPED, WHICH IT WAS NOT. This took no user id and returned every row to anybody with
+   * `meta:view` — `leadgen_id`, `form_id`, `page_id` and the resulting `lead_id` for every agent in
+   * the brokerage. It was the only unscoped read in the module, in a module whose entire premise is
+   * that an agent sees their own leads and nobody else's.
+   *
+   * Scoping is by `form_id`, which is the right key rather than a convenient one: a Meta form id is
+   * globally unique, so "events for my forms" is exactly "events that were or would have been
+   * mine". Forms the agent has since disconnected are included deliberately — their delivery
+   * history is still theirs, and losing it the moment a form is switched off would hide the very
+   * period somebody is trying to diagnose.
+   *
+   * A Super Admin sees everything, including deliveries for forms nobody has connected. That is the
+   * one view where an unroutable delivery is visible at all, and diagnosing "Meta says it sent it,
+   * where did it go?" is impossible without it.
+   */
+  async webhookHealth(user: AuthUserRecord, limit = 20): Promise<Record<string, unknown>> {
+    const take = Math.min(100, Math.max(1, limit));
+    const everything = isSuperAdmin(user);
+
+    let where: Prisma.meta_webhook_eventsWhereInput = {};
+    if (!everything) {
+      const forms = await this.prisma.meta_lead_forms.findMany({
+        where: { user_id: user.id ?? 0 },
+        select: { form_id: true },
+      });
+      const ids = [...new Set(forms.map((f) => f.form_id))];
+      // No forms, no deliveries — and `in: []` matches nothing, which is the answer we want.
+      where = { form_id: { in: ids } };
+    }
+
+    const [rows, total, failed, lastRow, connectedForms] = await Promise.all([
+      this.prisma.meta_webhook_events.findMany({ where, orderBy: { id: 'desc' }, take }),
+      this.prisma.meta_webhook_events.count({ where }),
+      this.prisma.meta_webhook_events.count({ where: { ...where, status: 'failed' } }),
+      this.prisma.meta_webhook_events.findFirst({ where, orderBy: { id: 'desc' } }),
+      this.prisma.meta_lead_forms.count({
+        where: { is_active: true, ...(everything ? {} : { user_id: user.id ?? 0 }) },
+      }),
     ]);
+
+    /*
+     * The signal worth having: forms are connected but nothing has arrived for a long time.
+     *
+     * A webhook stops silently — a lapsed subscription, a redeployed host, an expired tunnel — and
+     * the only symptom is leads that never appear, which looks identical to a quiet week. Polling
+     * covers the gap, so this is a warning rather than an alarm, but "connected and silent" is the
+     * shape of the failure and nothing was reporting it.
+     */
+    const lastAt = lastRow?.received_at ?? null;
+    const quietFor = lastAt ? Date.now() - lastAt.getTime() : null;
+    const stalled = connectedForms > 0 && (quietFor === null || quietFor > WEBHOOK_QUIET_ALERT_MS);
+
     return {
       total,
       failed,
-      last_received_at: lastRow?.received_at.toISOString() ?? null,
+      connected_forms: connectedForms,
+      last_received_at: lastAt?.toISOString() ?? null,
+      quiet_for_hours: quietFor === null ? null : Math.floor(quietFor / 3_600_000),
+      stalled,
+      stalled_reason: stalled
+        ? (lastAt
+          ? `No webhook delivery for ${Math.floor((quietFor ?? 0) / 3_600_000)} hours while ${connectedForms} form(s) are connected. `
+            + 'Scheduled polling is still collecting leads, but check the Meta subscription and that '
+            + 'META_PUBLIC_URL still points at this deployment.'
+          : `${connectedForms} form(s) are connected but no webhook delivery has ever been received. `
+            + 'Check the subscription and that META_PUBLIC_URL is reachable from Meta.')
+        : null,
       events: rows.map((e) => ({
         id: e.id, leadgen_id: e.leadgen_id, form_id: e.form_id, page_id: e.page_id,
         status: e.status, error: e.error, lead_id: e.lead_id, attempts: e.attempts,

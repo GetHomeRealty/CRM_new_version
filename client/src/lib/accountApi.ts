@@ -52,6 +52,32 @@ export interface AccountIntegrations {
   mail_redirect: { active: boolean; detail: string };
 }
 
+/**
+ * One switchable push notification.
+ *
+ * `readiness` is here because most of these categories do not have a push sender yet — only the
+ * calendar's reminders do. The screen says so rather than presenting seven identical toggles, six
+ * of which would appear to do nothing. `current_channel` is how the user is told today.
+ */
+export interface NotificationCategory {
+  key: string;
+  label: string;
+  description: string;
+  readiness: 'live' | 'pending';
+  /** Named as the server sends it — this payload is not snake_cased like the ORM-backed ones. */
+  currentChannel: string;
+  enabled: boolean;
+}
+
+export const getNotificationPreferences = (): Promise<{ categories: NotificationCategory[] }> =>
+  api.get('/api/account/notification-preferences').then((r) => r.data);
+
+/** Saves the whole screen: a `{ category: enabled }` map. */
+export const saveNotificationPreferences = (
+  prefs: Record<string, boolean>,
+): Promise<{ categories: NotificationCategory[] }> =>
+  api.put('/api/account/notification-preferences', prefs).then((r) => r.data);
+
 export const getAccountProfile = (): Promise<AccountProfile> =>
   api.get<AccountProfile>('/api/account/profile').then((r) => r.data);
 

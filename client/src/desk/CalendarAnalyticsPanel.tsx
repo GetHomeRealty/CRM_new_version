@@ -24,18 +24,33 @@ const RANGES: { label: string; days: number }[] = [
 
 const iso = (d: Date): string => d.toISOString().slice(0, 10);
 
-/** One row of the bar list. `of` is the largest value, so bars are relative to the busiest. */
-function Bar({ label, n, of, tone }: { label: string; n: number; of: number; tone?: string }) {
+/**
+ * One row of the bar list. `of` is the largest value, so bars are relative to the busiest.
+ *
+ * `display` overrides the trailing figure when the raw number is not what a person wants to read —
+ * 135 occupied minutes is clearer as "2h 15m". A zero row is dimmed rather than hidden, because an
+ * empty hour in the middle of a day is the thing worth seeing.
+ */
+function Bar({ label, n, of, tone, display }: { label: string; n: number; of: number; tone?: string; display?: string }) {
   const pct = of > 0 ? Math.round((n / of) * 100) : 0;
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '2px 0' }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '2px 0', opacity: n === 0 ? 0.45 : 1 }}>
       <span style={{ fontSize: 12, width: 92, flex: 'none', color: 'var(--muted)' }}>{label}</span>
       <span style={{ flex: 1, height: 8, background: 'var(--line)', borderRadius: 4, overflow: 'hidden' }}>
         <span style={{ display: 'block', width: `${pct}%`, height: '100%', borderRadius: 4, background: tone ?? 'var(--pri, #4f46e5)' }} />
       </span>
-      <strong style={{ fontSize: 12, width: 28, textAlign: 'right' }}>{n}</strong>
+      <strong style={{ fontSize: 12, width: 46, textAlign: 'right' }}>{display ?? n}</strong>
     </div>
   );
+}
+
+/** 135 → "2h 15m". Minutes alone stop being readable somewhere around ninety. */
+function duration(min: number): string {
+  if (min === 0) return '—';
+  if (min < 60) return `${min}m`;
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  return m ? `${h}h ${m}m` : `${h}h`;
 }
 
 export default function CalendarAnalyticsPanel() {
@@ -63,6 +78,7 @@ export default function CalendarAnalyticsPanel() {
   const r = data?.rates;
   const maxDay = Math.max(1, ...(data?.by_weekday ?? []).map((d) => d.total));
   const maxHour = Math.max(1, ...(data?.by_hour ?? []).map((h) => h.total));
+  const maxBusy = Math.max(1, ...(data?.by_hour_busy ?? []).map((h) => h.minutes));
   const maxType = Math.max(1, ...(data?.by_type ?? []).map((x) => x.total));
 
   return (
@@ -136,6 +152,7 @@ export default function CalendarAnalyticsPanel() {
                   <p className="help">
                     Busiest overall: <strong>{data.busiest.weekday}</strong>
                     {data.busiest.hour && <> · most common start <strong>{data.busiest.hour}</strong></>}
+                    {data.busiest.busy_hour && <> · fullest hour <strong>{data.busiest.busy_hour}</strong> ({duration(data.busiest.busy_minutes)})</>}
                     {data.busiest.date && <> · fullest day <strong>{data.busiest.date}</strong> ({data.busiest.date_count})</>}
                   </p>
                 )}
@@ -161,7 +178,28 @@ export default function CalendarAnalyticsPanel() {
             {data.by_hour.length > 0 && (
               <div style={{ marginTop: 12 }}>
                 <div className="modal-sub">Time of day</div>
+                <p className="help" style={{ margin: '0 0 4px' }}>
+                  How many appointments <strong>start</strong> in each hour. Empty hours are shown so
+                  the gaps in a day are visible.
+                </p>
                 {data.by_hour.map((h) => <Bar key={h.hour} label={h.hour} n={h.total} of={maxHour} />)}
+              </div>
+            )}
+
+            {/* A different question from the chart above: a three-hour viewing and a fifteen-minute
+                call are one tick each there, and wildly different here. */}
+            {data.by_hour_busy.length > 0 && (
+              <div style={{ marginTop: 12 }}>
+                <div className="modal-sub">Busy hours</div>
+                <p className="help" style={{ margin: '0 0 4px' }}>
+                  How much of each hour is actually <strong>occupied</strong>. An appointment with no
+                  end time counts as one hour, the same assumption the clash check makes.
+                  {maxBusy > 60 && ' Over 60m means overlapping appointments in that hour.'}
+                </p>
+                {data.by_hour_busy.map((h) => (
+                  <Bar key={h.hour} label={h.hour} n={h.minutes} of={maxBusy}
+                    tone="var(--ok, #16a34a)" display={duration(h.minutes)} />
+                ))}
               </div>
             )}
           </>

@@ -3,6 +3,7 @@ import type { PrismaService } from '../prisma/prisma.service';
 import { ReminderSweepService } from './reminder-sweep.service';
 import { AuditService } from '../audit/audit.service';
 import { isTransient } from '../email/mailer.service';
+import { PersonResolver } from '../core/person-resolver.service';
 
 /**
  * Automatic retry for failed reminder deliveries.
@@ -38,7 +39,7 @@ const stubs = (fail?: () => Error) => {
 };
 
 const sweepFor = (tx: PrismaService, s: ReturnType<typeof stubs>) =>
-  new ReminderSweepService(tx, s.mailer as never, s.settings as never, new AuditService(tx));
+  new ReminderSweepService(tx, new PersonResolver(tx), s.mailer as never, s.settings as never, new AuditService(tx));
 
 const day = (d: Date, n: number): Date => new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
 

@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client';
 import { decryptToken, encryptToken, tokenHint, tokenStorageIsSecure } from './meta-crypto';
 import { MetaStateService } from './meta-state.service';
 import { MetaSyncService } from './meta-sync.service';
@@ -59,41 +60,109 @@ describe('meta token encryption', () => {
 });
 
 describe('meta OAuth state', () => {
-  const state = new MetaStateService();
+  /**
+   * A stand-in for the nonce table that behaves like the real one in the way that matters: the
+   * insert is what rejects a repeat, and only expired rows are ever removed. The real unique index
+   * is exercised separately, against the database, in `meta-medium-findings.spec.ts`.
+   */
+  const makePrisma = () => {
+    const rows = new Map<string, Date>();
+    return {
+      rows,
+      meta_oauth_nonces: {
+        create: async ({ data }: { data: { nonce: string; expires_at: Date } }) => {
+          if (rows.has(data.nonce)) {
+            throw Object.assign(new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+              code: 'P2002', clientVersion: 'test',
+            }), {});
+          }
+          rows.set(data.nonce, data.expires_at);
+          return data;
+        },
+        deleteMany: async ({ where }: { where: { expires_at: { lt: Date } } }) => {
+          let count = 0;
+          for (const [n, exp] of rows) if (exp < where.expires_at.lt) { rows.delete(n); count += 1; }
+          return { count };
+        },
+      },
+    };
+  };
+
+  let prisma = makePrisma();
+  let state = new MetaStateService(prisma as never);
+  beforeEach(() => { prisma = makePrisma(); state = new MetaStateService(prisma as never); });
   beforeAll(() => { process.env.APP_KEY = 'state-signing-key'; });
 
-  it('round-trips the user id', () => {
-    expect(state.verify(state.issue(42))).toBe(42);
+  it('round-trips the user id', async () => {
+    expect(await state.verify(state.issue(42))).toBe(42);
   });
 
-  it('rejects a forged state (someone else\'s user id spliced in)', () => {
+  it('rejects a forged state (someone else\'s user id spliced in)', async () => {
     const issued = state.issue(42);
     const [, ts, nonce, sig] = issued.split('.');
-    expect(state.verify(`99.${ts}.${nonce}.${sig}`)).toBeNull();
+    expect(await state.verify(`99.${ts}.${nonce}.${sig}`)).toBeNull();
   });
 
-  it('rejects a replay of a state already used', () => {
+  it('rejects a replay of a state already used', async () => {
     const issued = state.issue(7);
-    expect(state.verify(issued)).toBe(7);
-    expect(state.verify(issued)).toBeNull();
+    expect(await state.verify(issued)).toBe(7);
+    expect(await state.verify(issued)).toBeNull();
   });
 
-  it('rejects an expired state', () => {
+  it('rejects an expired state', async () => {
     const old = Date.now() - MetaStateService.TTL_MS - 1000;
     const spy = jest.spyOn(Date, 'now').mockReturnValue(old);
     const issued = state.issue(5);
     spy.mockRestore();
-    expect(state.verify(issued)).toBeNull();
+    expect(await state.verify(issued)).toBeNull();
   });
 
-  it('rejects malformed input without throwing', () => {
-    for (const bad of ['', 'x', 'a.b.c', 'a.b.c.d.e']) expect(state.verify(bad)).toBeNull();
+  it('rejects malformed input without throwing', async () => {
+    for (const bad of ['', 'x', 'a.b.c', 'a.b.c.d.e']) expect(await state.verify(bad)).toBeNull();
+  });
+
+  /**
+   * The defect this replaced: the old in-memory Set called `.clear()` once it passed 5,000
+   * entries, so every nonce redeemed before that point became replayable again inside its
+   * ten-minute window.
+   */
+  it('does not forget a redeemed nonce when the store is swept', async () => {
+    const issued = state.issue(11);
+    expect(await state.verify(issued)).toBe(11);
+
+    // Redeem 5,001 more, which is what used to trigger the wholesale clear.
+    for (let i = 0; i < 5_001; i += 1) await state.verify(state.issue(12));
+
+    expect(await state.verify(issued)).toBeNull();
+  });
+
+  it('only sweeps nonces that have already expired', async () => {
+    await state.verify(state.issue(3));
+    expect(prisma.rows.size).toBe(1);
+    // Everything still live, so the sweep on the next redeem must not remove it.
+    await state.verify(state.issue(4));
+    expect(prisma.rows.size).toBe(2);
+  });
+
+  it('refuses to sign at all when no key is configured, rather than using a known default', () => {
+    const app = process.env.APP_KEY;
+    const session = process.env.SESSION_SECRET;
+    delete process.env.APP_KEY;
+    delete process.env.SESSION_SECRET;
+    try {
+      // Previously fell back to the literal 'meta-state', which is the same as no signature:
+      // anyone could mint a state naming any user id.
+      expect(() => state.issue(1)).toThrow(/APP_KEY/);
+    } finally {
+      if (app !== undefined) process.env.APP_KEY = app;
+      if (session !== undefined) process.env.SESSION_SECRET = session;
+    }
   });
 });
 
 describe('meta lead field mapping', () => {
   // Only mapLead is exercised, so the collaborators are never touched.
-  const sync = new MetaSyncService(null as never, null as never, null as never, null as never, null as never);
+  const sync = new MetaSyncService(null as never, null as never, null as never, null as never, null as never, null as never, null as never);
 
   it('maps the standard lead-form fields', () => {
     const m = sync.mapLead([

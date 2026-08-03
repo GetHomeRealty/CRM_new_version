@@ -9,7 +9,25 @@ import {
 import { apiErrorMessage } from '../lib/apiError';
 import { useToast } from './toast';
 
-const stamp = (iso: string): string => iso.replace('T', ' ').slice(0, 16);
+/**
+ * When a message arrived, in the reader's own timezone.
+ *
+ * This used to be `iso.replace('T', ' ').slice(0, 16)`, which took the UTC instant the server
+ * sends, threw away the `Z` that said it was UTC, and printed the digits as if they were local.
+ * In Toronto that is four or five hours adrift: mail received at 6pm showed as 22:00, and
+ * anything after 8pm was dated the FOLLOWING DAY. The server already refuses to boot in
+ * production without TZ set, for exactly this reason — the correction just never reached the
+ * screen. Now the string is parsed as the instant it is and rendered in the viewer's locale.
+ *
+ * A malformed date is shown verbatim rather than as "Invalid Date", so a bad value looks like
+ * the data problem it is instead of a broken page.
+ */
+const stamp = (iso: string): string => {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime())
+    ? iso
+    : d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+};
 
 /**
  * The user's inbox — mail pulled from their connected accounts over IMAP. Everything is scoped to

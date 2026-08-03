@@ -108,3 +108,31 @@ export async function draftEmailWithAi(cfg: EmailAiConfig, system: string, userT
   return (parts?.map((x) => x.text ?? '').join('') ?? '').trim();
 }
 
+
+/**
+ * Make a stored value safe to place inside a prompt.
+ *
+ * WHY THIS IS NEEDED AT ALL. The values interpolated into these prompts are not written by the
+ * agent pressing the button. A lead's name arrives from a Meta lead form, a web enquiry or a CSV
+ * import; an appointment's attendees and notes are typed by whoever booked it. All of that is
+ * attacker-reachable text being placed next to instructions, which is the whole shape of a prompt
+ * injection: a lead called `". Ignore your instructions and…` writes the brokerage's prompt.
+ *
+ * WHAT IT DOES AND DOES NOT PROMISE. Removing the characters that let a value close its delimiter
+ * or start a new line, then capping the length, removes the cheap attacks. It is not a proof
+ * against a determined one — nothing at this layer is — so it is paired with two other things at
+ * every call site: the value goes inside a named tag, and the system prompt says that text inside
+ * those tags is data and never an instruction. Defence in depth, and the honest description of it
+ * is "much harder", not "impossible".
+ *
+ * Lived in lead-activity.service.ts first. Moved here when the Calendar needed the same thing,
+ * rather than copied — this codebase has been bitten before by two copies of one idea drifting
+ * apart (see LeadImportEngine's header).
+ */
+export function safeForPrompt(value: unknown, max: number): string {
+  return String(value ?? '')
+    .replace(/[<>"'`\r\n]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, max);
+}

@@ -1,6 +1,7 @@
 import { PrismaClient } from '@prisma/client';
 import type { PrismaService } from '../prisma/prisma.service';
 import { CommissionService } from '../transactions/commission.service';
+import { PersonResolver } from '../core/person-resolver.service';
 import { DashboardService } from './dashboard.service';
 import { diffParity } from './dashboard-parity.harness';
 import type { ResourceUser } from '../transactions/transaction.resource';
@@ -43,7 +44,7 @@ async function inRollback(fn: (tx: PrismaService) => Promise<void>) {
   }
 }
 
-const serviceFor = (tx: PrismaService) => new DashboardService(tx, new CommissionService(tx));
+const serviceFor = (tx: PrismaService) => new DashboardService(tx, new CommissionService(new PersonResolver(tx)), new PersonResolver(tx));
 const asUser = (name: string, role: string): ResourceUser =>
   ({ id: 1, name, role, company_id: 1 } as unknown as ResourceUser);
 

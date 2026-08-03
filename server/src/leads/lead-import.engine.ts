@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { CLIENT_TYPE, IMPORT_FIELD_LIMITS, LEAD_SOURCE, LEAD_STATUS, LEAD_TYPE } from './lead.constants';
 
 /**
  * The CSV lead import, done in batches against an index.
@@ -151,32 +152,57 @@ export class LeadImportEngine {
     if (!candidates.length) return tally;
 
     // ---- 2. ONE indexed lookup for the whole batch --------------------------------------------
-    // Raw SQL because Prisma cannot express `lower(email) IN (...)`; its `mode: 'insensitive'`
-    // compiles to ILIKE, which is exactly what could not use the index. Parameterised, so the
-    // addresses are values and never concatenated into the statement.
+    /*
+     * Scoped to the importer's own book, because that is what uniqueness now means.
+     *
+     * `leads_company_owner_email_key` is UNIQUE on `(company_id, COALESCE(owner_user_id, 0),
+     * lower(email))`, not on the address alone: the same person may be a lead of another brokerage,
+     * and of another agent in this one, because they can arrive through anybody's ad, campaign or
+     * referral. This lookup used to ask "does this address exist ANYWHERE", which under the old
+     * global index was also the question that decided whether the row could be created — so an
+     * agent importing a list that overlapped a colleague's was told "already existed" for leads
+     * they had never had, and the rows were never created for them at all.
+     *
+     * SCOPED TO THE LEADS THIS PERSON ALREADY WORKS, which is wider than "rows they own". A lead
+     * somebody else owns but has ASSIGNED to them is theirs to work — that is the Leads module's
+     * rule everywhere else — and creating a second copy of it would split one person's history
+     * across two records, the exact harm the constraint exists to prevent. So the SQL matches the
+     * same set `mine()` does, rather than the narrower set the unique index alone would imply.
+     *
+     * `IS NOT DISTINCT FROM` rather than `=` so a null importer matches null rows; SQL equality
+     * treats NULL as unknown and would match nothing.
+     *
+     * Raw SQL because Prisma cannot express `lower(email) IN (...)`; its `mode: 'insensitive'`
+     * compiles to ILIKE, which cannot use the index. Parameterised, so the addresses are values and
+     * never concatenated into the statement.
+     */
     const keys = candidates.map((c) => c.key);
+    const userId = ctx.userId;
+    // Unattributed intake belongs to the top tier, so a super-admin's import must see it here or it
+    // would create a duplicate of the very rows it is meant to recognise.
+    const claimsUnowned = ctx.userIsSuperAdmin === true || userId == null;
     const existing = await this.prisma.$queryRaw<
       { id: number; email: string; tags: string | null; owner_user_id: number | null; assigned_to: number | null }[]
     >`
-      SELECT id, email, tags, owner_user_id, assigned_to FROM leads WHERE lower(email) IN (${Prisma.join(keys)})
+      SELECT id, email, tags, owner_user_id, assigned_to
+        FROM leads
+       WHERE lower(email) IN (${Prisma.join(keys)})
+         AND (
+              owner_user_id IS NOT DISTINCT FROM ${userId}
+           OR assigned_to   IS NOT DISTINCT FROM ${userId}
+           OR (${claimsUnowned} AND owner_user_id IS NULL)
+         )
     `;
 
     /**
      * Whose lead is it?
      *
-     * `email` is UNIQUE across the brokerage, so an address that already exists belongs to exactly
-     * one person and cannot be imported again by anyone else. The lookup, though, was unscoped: it
-     * matched every lead in the brokerage and then TAGGED the ones it found. An agent uploading a
-     * list that overlapped the office's got told "40 tagged" while writing that tag onto forty
-     * leads they cannot see, cannot open and cannot put in a campaign — the audience count stayed
-     * at nought and the tag never even appeared in their tag list.
-     *
-     * So an existing lead only counts as this user's duplicate if it is theirs. Everything else is
-     * still counted as an existing address — that is true, and the unique index means it will not
-     * be created either — but it is left untouched.
+     * The SQL above already restricts the rows to this set; this restates it in TypeScript so the
+     * tagging decision is legible at the point it is made, and so the two can be compared when one
+     * of them is changed.
      */
     const mine = (e: { owner_user_id: number | null; assigned_to: number | null }): boolean => {
-      if (ctx.userId == null) return false;
+      if (ctx.userId == null) return e.owner_user_id === null;
       if (e.owner_user_id === ctx.userId || e.assigned_to === ctx.userId) return true;
       // Matches the Leads module: unattributed intake belongs to the top tier.
       return ctx.userIsSuperAdmin === true && e.owner_user_id === null;
@@ -204,14 +230,43 @@ export class LeadImportEngine {
         for (const n of names) { const v = str(c.row[n]); if (v) return v; }
         return null;
       };
+      /*
+       * Fit the value to the column before `createMany` sees it.
+       *
+       * Postgres raises on the first over-length value and takes the whole batch with it — and it
+       * does not name the column ("Column: (not available)"), so the operator was told a 500-row
+       * batch failed and never which cell caused it. A spreadsheet with one 300-character name
+       * therefore discarded 499 perfectly good leads. Truncating is the right trade here: the file
+       * is somebody's existing contact list, and losing the tail of one name is recoverable in a
+       * way that losing the batch is not.
+       */
+      const fit = (field: keyof typeof IMPORT_FIELD_LIMITS, value: string | null): string | null =>
+        (value === null ? null : value.slice(0, IMPORT_FIELD_LIMITS[field]));
+
+      /*
+       * Vocabularies, matched the way the rest of the module matches them.
+       *
+       * These columns feed the filter dropdowns and the campaign audience builder, both of which
+       * compare against a fixed list. The import wrote whatever the spreadsheet said, so a file
+       * with "Hot Lead" in the status column produced leads that no filter and no campaign segment
+       * could ever select — present in the database, invisible to every screen that matters.
+       * A recognised value (in any casing) is normalised; anything else is left empty, which is
+       * what the field means when nobody has said.
+       */
+      const vocab = (value: string | null, allowed: readonly string[]): string | null => {
+        if (!value) return null;
+        const hit = allowed.find((a) => a.toLowerCase() === value.toLowerCase());
+        return hit ?? null;
+      };
+
       toCreate.push({
-        name: pick('name', 'fullname', 'firstname', 'leadname') ?? c.email.split('@')[0],
+        name: fit('name', pick('name', 'fullname', 'firstname', 'leadname')) ?? c.email.split('@')[0].slice(0, 255),
         email: c.email,
-        phone: pick('phone', 'phonenumber', 'mobile', 'contact'),
-        lead_status: pick('leadstatus', 'status'),
-        lead_type: pick('leadtype', 'type'),
-        lead_source: pick('leadsource', 'source'),
-        client_type: pick('clienttype'),
+        phone: fit('phone', pick('phone', 'phonenumber', 'mobile', 'contact')),
+        lead_status: vocab(pick('leadstatus', 'status'), LEAD_STATUS),
+        lead_type: vocab(pick('leadtype', 'type'), LEAD_TYPE),
+        lead_source: vocab(pick('leadsource', 'source'), LEAD_SOURCE),
+        client_type: vocab(pick('clienttype'), CLIENT_TYPE),
         tags: JSON.stringify(ctx.tag ? [ctx.tag] : []),
         created_by: ctx.userName,
         owner_user_id: ctx.userId,
@@ -225,8 +280,11 @@ export class LeadImportEngine {
     // a failure loses at most this batch and the job records where it stopped.
     await this.inTransaction(async (tx) => {
       if (toCreate.length) {
-        // skipDuplicates covers the race where the same address is created between the lookup
-        // above and this write — by a concurrent import, or by an agent adding the lead by hand.
+        // skipDuplicates covers the race where the same address lands in the SAME BOOK between the
+        // lookup above and this write — a concurrent import by the same person, or them adding the
+        // lead by hand in another tab. It resolves against `leads_company_owner_email_key`, so a
+        // colleague or another brokerage creating the same address in the meantime is not a
+        // conflict and does not suppress this row.
         const created = await tx.leads.createMany({ data: toCreate, skipDuplicates: true });
         tally.imported += created.count;
         // Anything skipped was created by someone else in the gap; count it as a duplicate rather

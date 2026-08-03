@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Delete, Get, HttpCode, Param, ParseIntPipe, Patch, Post, Put, Req, Res, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, Get, HttpCode, Param, ParseIntPipe, Patch, Post, Put, Query, Req, Res, UseGuards } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { AuthGuard } from '../auth/guards/auth.guard';
 import { AdminGuard } from '../auth/guards/admin.guard';
@@ -6,6 +6,7 @@ import { CurrentUser } from '../auth/decorators';
 import type { AuthUserRecord } from '../auth/auth.types';
 import { UsersService } from './users.service';
 import { UserOnboardingService, type AdHocAttachment, type OnboardingKind, type OnboardingPreview } from './user-onboarding.service';
+import { OffboardingService, type OffboardingChecklist } from './offboarding.service';
 
 /** Attachment types safe to render in the browser rather than download. */
 const INLINE_TYPES = new Set(['application/pdf', 'image/png', 'image/jpeg', 'image/gif', 'image/webp']);
@@ -29,6 +30,7 @@ export class UsersController {
   constructor(
     private readonly users: UsersService,
     private readonly onboarding: UserOnboardingService,
+    private readonly offboardingService: OffboardingService,
   ) {}
 
   // ---- Onboarding email + contract agreement --------------------------------
@@ -110,9 +112,23 @@ export class UsersController {
     return this.users.dealHistory(id);
   }
 
+  /**
+   * What this person still holds, asked before switching their account off.
+   *
+   * Counts only, Super Admin only — see `OffboardingService`. Read-only: it reports, and never
+   * disconnects or moves anything on the caller's behalf.
+   */
+  @Get('users/:user/offboarding')
+  offboarding(
+    @CurrentUser() user: AuthUserRecord | undefined,
+    @Param('user', ParseIntPipe) id: number,
+  ): Promise<OffboardingChecklist> {
+    return this.offboardingService.checklist(user ?? null, id);
+  }
+
   @Get('users')
-  index(): Promise<Record<string, unknown>[]> {
-    return this.users.index();
+  index(@Query('page') page?: string, @Query('limit') limit?: string): Promise<Record<string, unknown>[]> {
+    return this.users.index({ page, limit });
   }
 
   @Post('users')

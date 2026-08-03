@@ -137,6 +137,38 @@ export class CampaignAudienceService {
   }
 
   /** Append the open pixel and unsubscribe link so opens are recorded and opt-out works. */
+  /**
+   * Rewrite every real link in the body so clicks are recorded.
+   *
+   * `links` maps a destination URL to the id it was stored under at send time. Only URLs already
+   * in that map are rewritten: anything unrecognised is left exactly as the author wrote it, so a
+   * link the send path did not register still works rather than becoming a dead tracking URL.
+   *
+   * Deliberately skips `mailto:`, `tel:` and in-document anchors — routing those through an HTTP
+   * redirect would break them — and skips the unsubscribe link, which must stay direct so opting
+   * out never depends on the tracking endpoint being healthy.
+   */
+  rewriteLinks(html: string, opts: { baseUrl: string; campaignId: number; token: string; links: Map<string, number> }): string {
+    const base = opts.baseUrl.replace(/\/+$/, '');
+    if (!base || !opts.links.size) return html;
+    return html.replace(/href\s*=\s*"([^"]+)"/gi, (whole, url: string) => {
+      const id = opts.links.get(url);
+      if (id === undefined) return whole;
+      const q = `c=${encodeURIComponent(String(opts.campaignId))}&t=${encodeURIComponent(opts.token)}&l=${id}`;
+      return `href="${base}/api/campaigns/track/click?${q}"`;
+    });
+  }
+
+  /** Every http(s) link in a body, in document order, deduplicated — what gets registered. */
+  extractLinks(html: string): string[] {
+    const out = new Set<string>();
+    for (const m of html.matchAll(/href\s*=\s*"([^"]+)"/gi)) {
+      const url = m[1].trim();
+      if (/^https?:\/\//i.test(url)) out.add(url);
+    }
+    return [...out];
+  }
+
   injectTracking(html: string, opts: { baseUrl: string; campaignId: number; token: string }): string {
     const base = opts.baseUrl.replace(/\/+$/, '');
     const q = `c=${encodeURIComponent(String(opts.campaignId))}&t=${encodeURIComponent(opts.token)}`;

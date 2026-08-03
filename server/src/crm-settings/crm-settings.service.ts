@@ -8,6 +8,7 @@ import {
   EMAIL_SHAPE, LANGUAGES, NOTIFICATION_KEYS, THEMES, TIME_ZONES, TRIGGER_KEYS,
 } from './crm-settings.constants';
 import { MailerService } from '../email/mailer.service';
+import { TENANT_ID } from '../core/tenant';
 import { MailAccountService } from '../email/mail-account.service';
 
 const str = (v: unknown): string => String(v ?? '').trim();
@@ -169,7 +170,7 @@ export class CrmSettingsService {
 
   // -------------------------------------------------------- email settings
   async getEmailSettings(): Promise<Record<string, unknown>> {
-    const row = await this.prisma.crm_email_settings.findFirst({ orderBy: { id: 'asc' } });
+    const row = await this.prisma.crm_email_settings.findFirst({ where: { company_id: TENANT_ID }, orderBy: { id: 'asc' } });
     return {
       smtpHost: row?.smtp_host ?? '',
       smtpPort: row?.smtp_port ?? '587',
@@ -210,9 +211,9 @@ export class CrmSettingsService {
       updated_at: now,
     };
 
-    const existing = await this.prisma.crm_email_settings.findFirst({ orderBy: { id: 'asc' } });
+    const existing = await this.prisma.crm_email_settings.findFirst({ where: { company_id: TENANT_ID }, orderBy: { id: 'asc' } });
     if (existing) await this.prisma.crm_email_settings.update({ where: { id: existing.id }, data });
-    else await this.prisma.crm_email_settings.create({ data: { ...data, created_at: now } });
+    else await this.prisma.crm_email_settings.create({ data: { ...data, company_id: TENANT_ID, created_at: now } });
 
     await this.audit(user, 'CRM email settings updated', 'Email settings',
       `Auto-send ${data.auto_send_enabled ? 'on' : 'off'}; triggers: ${Object.entries(toggles).filter(([, v]) => v).map(([k]) => k).join(', ') || 'none'}`);
@@ -265,6 +266,32 @@ export class CrmSettingsService {
     if (phone.length > 64) add('phone', 'Must be 64 characters or fewer.');
 
     const id = user.id ?? -1;
+
+    /*
+     * A NAME ANOTHER ACCOUNT HOLDS IS REFUSED — active or deactivated.
+     *
+     * This form validated length, username and email and let the name through, so it was a second
+     * door into the finding the Users audit opened with: two accounts sharing a name, and
+     * `findFirst({ where: { name } })` resolving a commission profile to whichever row the planner
+     * reached first. Measured during the CRM › Settings audit — an Admin renamed themselves to a
+     * working agent's name and got a 200 and "Personal information updated successfully".
+     *
+     * DEACTIVATED ROWS COUNT, and that is the whole point rather than an oversight: a departed
+     * agent's row keeps its name, keeps its commission split, and is exactly the row that gets
+     * resolved by mistake. `users.service.ts` states the same rule at the other entry point; this
+     * repeats the query rather than importing it, because reaching into the Users service from here
+     * would couple two modules to save four lines.
+     */
+    if (name) {
+      const namesake = await this.prisma.users.findFirst({
+        where: { name, id: { not: id } },
+        select: { id: true },
+      });
+      if (namesake) {
+        add('name', 'Another account already has this name. Names identify people on transactions and commission statements, so they cannot be shared.');
+      }
+    }
+
     if (username) {
       const clash = await this.prisma.users.findFirst({ where: { username, id: { not: id } }, select: { id: true } });
       if (clash) add('username', 'That username is already taken.');
@@ -318,40 +345,101 @@ export class CrmSettingsService {
       });
     }
 
-    // Delivered one at a time rather than as a single message with everyone in To: recipients
-    // must not see each other's addresses, and one bad address must not lose the whole send.
-    const failures: string[] = [];
-    for (const address of to) {
-      try {
-        await this.mailer.sendDirect(address, this.broadcastSubject(type), this.broadcastHtml(message, type), sender.id, [], user.id ?? null);
-      } catch (err) {
-        failures.push(`${address}: ${err instanceof Error ? err.message : String(err)}`);
-        this.log.warn(`Broadcast to ${address} failed: ${err instanceof Error ? err.message : String(err)}`);
-      }
+    // Nobody to send to is worth refusing while the person is still looking at the screen — it is
+    // a configuration problem, not a delivery outcome, and there is nothing to report progress on.
+    if (to.length === 0) {
+      throw new BadRequestException({ message: 'No active user has an email address, so there was nobody to send to.' });
     }
 
-    const delivered = to.length - failures.length;
+    /*
+     * PERSIST, RETURN, THEN DELIVER.
+     *
+     * This loop used to run inside the HTTP request: one SMTP round trip per active user, awaited
+     * in turn. The Campaigns module removed exactly this shape and recorded why — at a few hundred
+     * recipients it runs past most browser patience and past the 300 s `proxy_read_timeout` in the
+     * deployment guide, and ANY interruption (closed tab, timeout, deploy) stops the loop midway
+     * with some people emailed, some not, and the count written only if it reached the end. This
+     * brokerage has hundreds of agents, so the old version was a timeout waiting for its first real
+     * use.
+     *
+     * The row is written first with `status: 'sending'`, the caller gets it immediately, and
+     * delivery runs detached, updating the row as it goes so the Broadcasts list can show progress.
+     */
     const row = await this.prisma.crm_broadcasts.create({
-      data: { message, type, recipients: delivered, sent_by: user.name, sent_by_id: user.id ?? null, created_at: new Date() },
+      data: {
+        message, type,
+        status: 'sending', attempted: to.length, recipients: 0, failed: 0,
+        sent_by: user.name, sent_by_id: user.id ?? null, created_at: new Date(),
+      },
     });
 
-    await this.audit(user, 'CRM broadcast sent', `${delivered} of ${to.length} recipient(s)`, message.slice(0, 160));
+    await this.audit(user, 'CRM broadcast sent', `${to.length} recipient(s)`, message.slice(0, 160));
 
-    // Reported honestly. A broadcast that reached nobody used to return the same cheerful
-    // message as one that reached everyone, which is how this went unnoticed.
-    if (delivered === 0) {
-      throw new BadRequestException({
-        message: to.length === 0
-          ? 'No active user has an email address, so there was nobody to send to.'
-          : `The broadcast could not be delivered to any of the ${to.length} recipients. First error — ${failures[0]}`,
-      });
-    }
+    // `void` is deliberate: nothing awaits this, and `deliverBroadcast` never throws.
+    void this.deliverBroadcast(row.id, to, message, type, sender.id, user.id ?? null);
+
     return {
-      id: row.id, recipients: delivered, type,
-      message: failures.length
-        ? `Broadcast sent to ${delivered} of ${to.length} users. ${failures.length} failed — check the mail account under Integrations.`
-        : `Broadcast emailed to ${delivered} active user${delivered === 1 ? '' : 's'}.`,
+      id: row.id, recipients: 0, attempted: to.length, status: 'sending', type,
+      message: `Broadcast queued for ${to.length} active user${to.length === 1 ? '' : 's'}. It is going out now — the Broadcasts list shows progress.`,
     };
+  }
+
+  /**
+   * Deliver a broadcast, one recipient at a time, off the request thread.
+   *
+   * Never throws — it is called with `void`, so an escaping error would be an unhandled rejection
+   * that takes the process down. Everything is written to the broadcast row instead, which is what
+   * the screen reads.
+   *
+   * One message per person rather than one message with everyone in `To:` — staff must not see each
+   * other's addresses, and one bad address must not lose the whole send.
+   */
+  private async deliverBroadcast(
+    id: number, to: string[], message: string, type: string, senderId: number, userId: number | null,
+  ): Promise<void> {
+    let delivered = 0;
+    let failed = 0;
+    let firstError: string | null = null;
+
+    try {
+      for (const address of to) {
+        try {
+          await this.mailer.sendDirect(address, this.broadcastSubject(type), this.broadcastHtml(message, type), senderId, [], userId);
+          delivered++;
+        } catch (err) {
+          failed++;
+          const reason = err instanceof Error ? err.message : String(err);
+          firstError ??= `${address}: ${reason}`;
+          this.log.warn(`Broadcast #${id} to ${address} failed: ${reason}`);
+        }
+        // Progress the screen can poll. One small write per recipient is nothing beside an SMTP
+        // round trip, and it is the difference between a visible send and a black box.
+        await this.prisma.crm_broadcasts
+          .update({ where: { id }, data: { recipients: delivered, failed } })
+          .catch(() => undefined);
+      }
+
+      await this.prisma.crm_broadcasts.update({
+        where: { id },
+        data: {
+          recipients: delivered, failed,
+          status: delivered === 0 ? 'failed' : failed > 0 ? 'partial' : 'completed',
+          error: firstError,
+          completed_at: new Date(),
+        },
+      });
+      this.log.log(`Broadcast #${id}: ${delivered} delivered, ${failed} failed of ${to.length}.`);
+    } catch (err) {
+      // A send that died mid-flight must not be left saying "sending" for ever, and must not take
+      // the process with it. The counters already hold how far it reached.
+      this.log.error(`Broadcast #${id} aborted: ${err instanceof Error ? err.message : String(err)}`);
+      await this.prisma.crm_broadcasts
+        .update({
+          where: { id },
+          data: { status: 'partial', recipients: delivered, failed, error: firstError, completed_at: new Date() },
+        })
+        .catch(() => undefined);
+    }
   }
 
   /** Subject line per broadcast type, so it is recognisable in an inbox. */
@@ -378,6 +466,11 @@ export class CrmSettingsService {
     const rows = await this.prisma.crm_broadcasts.findMany({ orderBy: { id: 'desc' }, take: Math.min(200, limit) });
     return rows.map((b) => ({
       id: b.id, message: b.message, type: b.type, recipients: b.recipients,
+      // Delivery happens after the request returns, so the list is where anyone finds out how it
+      // went. Without these a broadcast still going out is indistinguishable from one that
+      // reached nobody — both would read "0 recipients".
+      status: b.status, attempted: b.attempted, failed: b.failed, error: b.error,
+      completed_at: b.completed_at?.toISOString() ?? null,
       sent_by: b.sent_by, created_at: b.created_at?.toISOString() ?? null,
     }));
   }

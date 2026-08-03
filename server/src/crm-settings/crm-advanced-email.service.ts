@@ -2,7 +2,11 @@ import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { randomBytes } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { MailerService } from '../email/mailer.service';
+import { TENANT_ID } from '../core/tenant';
 import { DEFAULT_TRIGGERS, EMAIL_SHAPE, MAX_BULK_RECIPIENTS, type TriggerKey } from './crm-settings.constants';
+// The same rule the Leads screen applies, so this path cannot reach further than the screens
+// beside it. Restating it here would be a second copy free to drift.
+import { leadScopeWhere } from '../common/lead-scope';
 import type { AuthUserRecord } from '../auth/auth.types';
 
 const str = (v: unknown): string => String(v ?? '').trim();
@@ -47,7 +51,7 @@ export class CrmAdvancedEmailService {
 
   /** Port of the CRM's `isTriggerEnabled` — reads the saved switches, defaulting to on. */
   async isTriggerEnabled(key: TriggerKey): Promise<boolean> {
-    const row = await this.prisma.crm_email_settings.findFirst({ orderBy: { id: 'asc' } });
+    const row = await this.prisma.crm_email_settings.findFirst({ where: { company_id: TENANT_ID }, orderBy: { id: 'asc' } });
     if (!row) return DEFAULT_TRIGGERS[key] ?? true;
     try {
       const toggles = { ...DEFAULT_TRIGGERS, ...(JSON.parse(row.template_toggles ?? '{}') as Record<string, boolean>) };
@@ -59,7 +63,7 @@ export class CrmAdvancedEmailService {
 
   /** Whether automatic sending is on at all — the CRM's `autoSendEnabled`. */
   async autoSendEnabled(): Promise<boolean> {
-    const row = await this.prisma.crm_email_settings.findFirst({ orderBy: { id: 'asc' } });
+    const row = await this.prisma.crm_email_settings.findFirst({ where: { company_id: TENANT_ID }, orderBy: { id: 'asc' } });
     return row ? row.auto_send_enabled : true;
   }
 
@@ -242,10 +246,102 @@ ${offer?.description ? `<p>${esc(offer.description)}</p>` : ''}
     return { success: false, message: `${kind.charAt(0).toUpperCase() + kind.slice(1)} email trigger is disabled` };
   }
 
-  /** Send one message, honouring the global redirect, and log the attempt either way. */
+  /**
+   * The lead this address belongs to, if the caller is allowed to reach them.
+   *
+   * THE RECIPIENT USED TO COME STRAIGHT FROM THE REQUEST BODY. `leadEmail` was validated for shape
+   * and handed to the mailer — no lead lookup, no ownership check — so anyone who could reach these
+   * endpoints could send arbitrary HTML, with an arbitrary subject, from the brokerage's own
+   * authenticated domain, to any address on earth. That is a phishing platform with the brokerage's
+   * SPF and DKIM alignment behind it, and the fact that default permissions confine it to Super
+   * Admin narrows who can do it without changing what it is.
+   *
+   * Every recipient now has to be somebody the brokerage actually has a relationship with, and one
+   * the caller is entitled to contact — the same `leadScopeWhere` rule the Leads screen applies, so
+   * this path cannot reach further than the screens it sits beside.
+   *
+   * The refusals are deliberately worded the same way whether the lead does not exist or belongs to
+   * a colleague. Distinguishing them would turn this into the address-enumeration oracle that the
+   * duplicate-email message already had to be fixed for.
+   */
+  private async resolveRecipient(email: string, user: AuthUserRecord): Promise<{ id: number; name: string } | null> {
+    const address = email.trim().toLowerCase();
+    return this.prisma.leads.findFirst({
+      where: {
+        email: { equals: address, mode: 'insensitive' },
+        deleted_at: null,
+        ...leadScopeWhere(user),
+      },
+      select: { id: true, name: true },
+    });
+  }
+
+  /**
+   * Whether this address has told the brokerage to stop, and why.
+   *
+   * Two records answer that, and both have to be consulted because they are written by different
+   * paths: `email_suppressions` is the global opt-out list (an unsubscribe click, or a hard bounce),
+   * and `leads.unsubscribed` is the flag the audience queries read. An address may carry one without
+   * the other — a lead flagged before the suppression list existed, or a suppression for somebody
+   * who is not a lead at all — so a check that consulted only one would let real opt-outs through.
+   *
+   * Matched case-insensitively: an unsubscribe recorded as `Bob@x.com` must still stop a send
+   * addressed to `bob@x.com`.
+   */
+  private async optedOut(email: string): Promise<string | null> {
+    const address = email.trim().toLowerCase();
+    const [suppression, lead] = await Promise.all([
+      this.prisma.email_suppressions.findUnique({ where: { email: address }, select: { reason: true } }),
+      this.prisma.leads.findFirst({
+        where: { email: { equals: address, mode: 'insensitive' }, unsubscribed: true, deleted_at: null },
+        select: { id: true },
+      }),
+    ]);
+    if (suppression) {
+      return suppression.reason === 'hard_bounce'
+        ? 'mail to this address has permanently bounced, so it is on the suppression list'
+        : 'this address is on the suppression list because they unsubscribed';
+    }
+    if (lead) return 'this lead has unsubscribed';
+    return null;
+  }
+
+  /**
+   * Send one message, honouring the global redirect, and log the attempt either way.
+   *
+   * NOTHING GOES OUT WITHOUT THE OPT-OUT CHECK. These endpoints take the recipient from the request
+   * body rather than from a lead, which is how they came over from the CRM — and it meant every one
+   * of them reached the mailer without ever asking whether the person had told us to stop. The
+   * Campaigns module filters every audience through `email_suppressions`, and
+   * `LeadActivityService.sendEmail` refuses an unsubscribed lead for the reason its comment gives:
+   * under CASL a one-off message is not exempt because it was typed by hand. This path honoured
+   * neither, so the same address that a campaign correctly skipped could be mailed from here.
+   *
+   * A refusal is recorded in `crm_email_log` exactly like a send. The log is the evidence that the
+   * opt-out was honoured, and an opt-out nobody can prove was honoured is most of the problem CASL
+   * puts on the sender.
+   */
   private async dispatch(kind: string, leadName: string, leadEmail: string, subject: string, html: string, user: AuthUserRecord): Promise<SendOutcome> {
     const email = str(leadEmail);
     if (!EMAIL_SHAPE.test(email)) throw new BadRequestException({ message: 'Enter a valid recipient email address.' });
+
+    // The recipient has to be one of the caller's own leads. See `resolveRecipient` — this is what
+    // stops the endpoint being a mail relay wearing a CRM's clothes.
+    const recipient = await this.resolveRecipient(email, user);
+    if (!recipient) {
+      const message = 'Not sent — this address is not one of your leads. Add them as a lead first, or ask an administrator to reassign the lead to you.';
+      this.log.warn(`CRM ${kind} email to ${email} refused: not a lead ${user.name ?? 'the caller'} may contact.`);
+      await this.record(kind, leadName, email, subject, false, message, user, null);
+      return { success: false, message };
+    }
+
+    const refusal = await this.optedOut(email);
+    if (refusal) {
+      const message = `Not sent — ${refusal}. Removing an address from the suppression list is done under Campaigns → Suppression List, and only when they have asked to be put back.`;
+      this.log.warn(`CRM ${kind} email to ${email} refused: ${refusal}.`);
+      await this.record(kind, leadName, email, subject, false, message, user, null);
+      return { success: false, message };
+    }
 
     const redirect = MailerService.redirectTarget();
     try {

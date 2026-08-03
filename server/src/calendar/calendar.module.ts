@@ -8,17 +8,20 @@ import { TodosService } from './todos.service';
 import { EventReminderService } from './event-reminder.service';
 import { CalendarAnalyticsService } from './calendar-analytics.service';
 import { EventSuggestionsService } from './event-suggestions.service';
+import { AiDisclosureService } from '../common/ai-disclosure.service';
 import { WebPushService } from './web-push.service';
 import { EventReminderSchedulerService } from './event-reminder-scheduler.service';
 import { EmailModule } from '../email/email.module';
 import { SettingsModule } from '../settings/settings.module';
+import { NotificationPreferenceModule } from '../notifications/notification-preference.module';
 
 // AuditService comes from the global AuditModule.
 // TodosController is registered first so `calendar/todos` is matched before CalendarController's
 // routes — its own paths are all under `calendar/events`, but ordering keeps that guaranteed.
 @Module({
-  imports: [AuthModule, GoogleModule, EmailModule, SettingsModule],
+  // NotificationPreferenceModule exports the service WebPushService asks before sending.
+  imports: [AuthModule, GoogleModule, EmailModule, SettingsModule, NotificationPreferenceModule],
   controllers: [TodosController, CalendarController],
-  providers: [CalendarService, TodosService, CalendarAnalyticsService, EventSuggestionsService, WebPushService, EventReminderService, EventReminderSchedulerService],
+  providers: [AiDisclosureService, CalendarService, TodosService, CalendarAnalyticsService, EventSuggestionsService, WebPushService, EventReminderService, EventReminderSchedulerService],
 })
 export class CalendarModule {}

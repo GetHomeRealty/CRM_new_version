@@ -1,10 +1,15 @@
 /node_modules
 /dist
-# Incremental build state. It is not derived from /dist, so deleting dist alone leaves this
-# claiming everything is up to date and `nest build` silently emits nothing — delete both.
+# Incremental build state. It now lives at dist/.tsbuildinfo (see tsBuildInfoFile in
+# tsconfig.json) precisely so that deleting dist takes it with it — the arrangement where it sat
+# out here survived `deleteOutDir` and made the compiler emit nothing while exiting 0.
+# The pattern stays for any cache left behind by an older checkout.
 *.tsbuildinfo
 /coverage
 *.log
+# Call recording audio (RECORDING_STORAGE_DIR). Client conversations — never in version
+# control, and the default path sits inside the working tree so it needs saying explicitly.
+/storage
 .env
 # Keep .env.example tracked.
 prisma/schema.mysql.prisma

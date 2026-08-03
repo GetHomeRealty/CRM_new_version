@@ -5,6 +5,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { runAsSystem } from '../core/tenant-context';
 import { STORAGE_ROOT } from '../config/storage';
 import { metrics } from './metrics';
+import { auditHealth } from './audit-health';
 import { workerSnapshot } from './worker-health';
 
 /**
@@ -122,6 +123,15 @@ export class HealthController {
         cpu_percent_avg: Math.round(((cpu.user + cpu.system) / 1000 / (uptimeS * 1000)) * 100),
         event_loop_lag_ms: await eventLoopLag(),
       },
+      /**
+       * Audit writes that failed.
+       *
+       * Surfaced here because audit writes are best-effort by design: they never fail a user's
+       * action, so nothing else in the system would ever report that the compliance trail has
+       * gaps. `failures` above zero means the audit log cannot be relied on as a complete record
+       * until it is reconciled.
+       */
+      audit: auditHealth(),
       schedulers: workerSnapshot().map((w) => ({
         name: w.name,
         healthy: w.healthy,

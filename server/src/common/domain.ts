@@ -121,6 +121,16 @@ export function auditDomain(input: { category?: string | null; section?: string 
     // stored domain — the property that makes the trail checkable at all.
     'Marketing Inventory': 'desk', Inventory: 'desk', MLS: 'desk', Favorites: 'desk',
     Users: 'common',
+    /*
+     * A record that something was sent to an AI provider belongs to neither area, like Users.
+     *
+     * The three features that make such a disclosure sit in different places — leads (CRM),
+     * calendar (both) and FINTRAC identity extraction (Desk) — but the question these rows answer
+     * is a single one asked from outside both: what has this brokerage sent to AI vendors, and
+     * about whom. Filing them by the module that happened to make the call would scatter the answer
+     * across two trails. `common` puts them in both, which is where a privacy officer will look.
+     */
+    AI: 'common',
   };
   return byCategory[category] ?? null;
 }

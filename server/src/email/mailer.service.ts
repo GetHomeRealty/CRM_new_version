@@ -111,9 +111,16 @@ export class MailerService {
    * registry. Campaigns personalise and inject tracking per recipient, so the body is
    * built by the caller rather than resolved from an event key.
    */
-  async sendDirect(to: string, subject: string, html: string, accountId?: number | null, attachments: MailAttachment[] = [], userId?: number | null): Promise<void> {
+  /**
+   * `headers` carries List-Unsubscribe for campaign mail.
+   *
+   * Gmail and Outlook both expect bulk senders to advertise a machine-readable opt-out, and they
+   * weigh its absence against inbox placement — so omitting it makes legitimate campaign mail more
+   * likely to land in spam, which then looks like a deliverability problem with the list.
+   */
+  async sendDirect(to: string, subject: string, html: string, accountId?: number | null, attachments: MailAttachment[] = [], userId?: number | null, headers?: Record<string, string>): Promise<void> {
     const account = await this.resolveSender(accountId ?? null, userId ?? null);
-    await this.dispatch(account, to, subject, html, [], attachments);
+    await this.dispatch(account, to, subject, html, [], attachments, headers);
   }
 
   /**
@@ -161,7 +168,7 @@ export class MailerService {
     await this.dispatch(account, to, subject, body);
   }
 
-  private async dispatch(account: mail_accounts, to: string | string[], subject: string, body: string, cc: string[] = [], attachments: MailAttachment[] = []): Promise<void> {
+  private async dispatch(account: mail_accounts, to: string | string[], subject: string, body: string, cc: string[] = [], attachments: MailAttachment[] = [], headers?: Record<string, string>): Promise<void> {
     const transport = account.encryption === 'oauth'
       // Google OAuth account: `password` holds the encrypted refresh token. Nodemailer mints a
       // fresh access token from it (via the app's client id/secret) for each send with XOAUTH2.
@@ -201,6 +208,9 @@ export class MailerService {
     }
 
     const message = {
+      // Extra RFC headers — List-Unsubscribe for campaign mail. Spread first so nothing here can
+      // overwrite from/to/subject.
+      ...(headers && Object.keys(headers).length ? { headers } : {}),
       from: account.from_name ? { name: account.from_name, address: account.from_email } : account.from_email,
       to: redirect || to,
       cc: redirect ? undefined : (cc.length ? cc : undefined),

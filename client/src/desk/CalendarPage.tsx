@@ -131,6 +131,8 @@ export default function CalendarPage() {
   const [selected, setSelected] = useState(iso(new Date()));
   const [editing, setEditing] = useState<CalendarEvent | 'new' | null>(null);
   const [toDelete, setToDelete] = useState<CalendarEvent | null>(null);
+  /** The day whose full list is open, or null. Set only by the cell's "+N more" button. */
+  const [dayView, setDayView] = useState<string | null>(null);
   const [holidays, setHolidays] = useState<Holiday[]>([]);
 
   /**
@@ -351,7 +353,24 @@ export default function CalendarPage() {
                       {clock(e.time)} {e.title}
                     </button>
                   ))}
-                  {dayList.length > 3 && <span className="cal-more">+{dayList.length - 3} more</span>}
+                  {/*
+                    A cell shows three chips; the rest were counted and then unreachable — the
+                    label was a plain <span> with no handler, so a day with six appointments hid
+                    three of them with no way to see them at all.
+
+                    stopPropagation because the cell itself selects the day on click, and the
+                    button must not also do that behind the popup.
+                  */}
+                  {dayList.length > 3 && (
+                    <button
+                      type="button"
+                      className="cal-more"
+                      title={`Show all ${dayList.length} appointments on ${longDate(key)}`}
+                      onClick={(ev) => { ev.stopPropagation(); setDayView(key); }}
+                    >
+                      +{dayList.length - 3} more
+                    </button>
+                  )}
                 </div>
               );
             })}
@@ -425,6 +444,38 @@ export default function CalendarPage() {
       <PushRemindersToggle />
 
       <CalendarAnalyticsPanel />
+
+      {/*
+        Every appointment on one day, opened from "+N more".
+
+        Rows are the same `EventRow` the Today's card uses, given the same `canEdit`, so Edit and
+        Delete behave identically and nothing here can do anything the rest of the screen cannot.
+        Editing or deleting from the list closes it and hands off to the existing modals, rather
+        than stacking a second dialog on top.
+      */}
+      {dayView && (
+        <div className="overlay open" onMouseDown={(e) => { if (e.target === e.currentTarget) setDayView(null); }}>
+          <div className="modal" style={{ maxWidth: 520, maxHeight: '80vh', overflowY: 'auto' }}>
+            <button className="close" onClick={() => setDayView(null)}>✕</button>
+            <div className="modal-h" style={{ fontSize: 14 }}>
+              {longDate(dayView)}
+              <span className="sec-count">{(byDate.get(dayView) ?? []).length}</span>
+            </div>
+            {(byDate.get(dayView) ?? []).length === 0
+              ? <div className="help">Nothing on this day any more.</div>
+              : (byDate.get(dayView) ?? []).map((e) => (
+                <EventRow
+                  key={e.id}
+                  e={e}
+                  canEdit={canEdit}
+                  onEdit={() => { setDayView(null); setEditing(e); }}
+                  onDelete={() => { setDayView(null); setToDelete(e); }}
+                  onDeal={() => navigate(`${deskPath(`transactions/${e.transaction_id}`)}?mode=view`)}
+                />
+              ))}
+          </div>
+        </div>
+      )}
 
       {editing && (
         <EventEditorModal

@@ -200,6 +200,39 @@ export class CampaignsController {
     return this.campaigns.tagSegment(filter, tag, body.mode === 'remove' ? 'remove' : 'add', user);
   }
 
+  // NOTE: declared before `@Get(':id')`. Express matches in order, so `/campaigns/suppressions`
+  // would otherwise be read as a campaign id — ParseIntPipe then rejects "suppressions" and the
+  // screen gets a 400 for a route that exists. Same trap the Leads controller documents.
+  // ------------------------------------------------------------- suppression list
+  /**
+   * Brokerage-wide, not scoped to the caller: a suppression is the recipient's decision about the
+   * brokerage, and an agent must not be able to route around a colleague's opt-out by not seeing it.
+   */
+  @Get('suppressions')
+  @Screen('campaigns', 'view')
+  suppressions(
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+    @Query('search') search?: string,
+  ): Promise<unknown> {
+    return this.campaigns.listSuppressions({ page, limit, search });
+  }
+
+  /** Resuming mail to someone who opted out. Edit rights, and logged. */
+  @Delete('suppressions/:email')
+  @Screen('campaigns', 'edit')
+  removeSuppression(@CurrentUser() user: AuthUserRecord, @Param('email') email: string): Promise<unknown> {
+    return this.campaigns.removeSuppression(decodeURIComponent(email), user);
+  }
+
+  /** Call off a campaign that has not gone out yet. */
+  @Post(':id/cancel')
+  @HttpCode(200)
+  @Screen('campaigns', 'edit')
+  cancelScheduled(@CurrentUser() user: AuthUserRecord, @Param('id', ParseIntPipe) id: number): Promise<unknown> {
+    return this.campaigns.cancelScheduled(id, user);
+  }
+
   @Get(':id')
   @Screen('campaigns', 'view')
   get(@CurrentUser() user: AuthUserRecord, @Param('id', ParseIntPipe) id: number): Promise<unknown> {

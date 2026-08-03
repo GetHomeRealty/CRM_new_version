@@ -3,6 +3,7 @@ import type { PrismaService } from '../prisma/prisma.service';
 import { TransactionReviewService } from './transaction-review.service';
 import { ReviewSlaService } from './review-sla.service';
 import type { AuthUserRecord } from '../auth/auth.types';
+import { PersonResolver } from '../core/person-resolver.service';
 
 /**
  * The enhancements around the review lifecycle: the reminder ladder, bulk decisions, the dashboard
@@ -44,9 +45,9 @@ const stubs = () => {
 };
 
 const reviewsFor = (tx: PrismaService, s: ReturnType<typeof stubs>) =>
-  new TransactionReviewService(tx, s.mailer as never, s.settings as never, s.messages as never);
+  new TransactionReviewService(tx, new PersonResolver(tx), s.mailer as never, s.settings as never, s.messages as never);
 const slaFor = (tx: PrismaService, s: ReturnType<typeof stubs>) =>
-  new ReviewSlaService(tx, s.mailer as never, s.settings as never);
+  new ReviewSlaService(tx, new PersonResolver(tx), s.mailer as never, s.settings as never);
 
 async function makeTxn(tx: PrismaService, agent = 'Test Agent'): Promise<number> {
   seq += 1;

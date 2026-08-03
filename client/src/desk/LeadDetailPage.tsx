@@ -4,8 +4,10 @@ import { useNavigate, useParams } from 'react-router-dom';
 import {
   addCallRecording, addLeadCall, addLeadMessage, addLeadNote, addLeadShowing, addLeadTask,
   callRecordingUrl, deleteCallRecording, generateLeadEmail, getLead, leadOptions, placeLeadCall, sendLeadEmail, smsGatewayStatus, updateLeadMessage, voiceCallStatus,
-  updateLeadNote, updateLeadShowing, updateLeadTask, deleteLeadShowing,
+  updateLeadNote, updateLeadShowing, updateLeadTask,
+  deleteLeadShowing, deleteLeadNote, deleteLeadTask, deleteLeadCall, deleteLeadMessage,
 } from '../lib/leadsApi';
+import ConfirmDialog, { useConfirm } from './ConfirmDialog';
 import { apiErrorMessage } from '../lib/apiError';
 import TwilioDialer from './TwilioDialer';
 import { useToast } from './toast';
@@ -74,6 +76,19 @@ export default function LeadDetailPage() {
 
   useEffect(() => { void load(); }, [load]);
   useEffect(() => { leadOptions().then(setOptions).catch(() => setOptions(null)); }, []);
+
+  /*
+   * One confirmation dialog for the whole page, passed down as `ask`.
+   *
+   * Every destructive control on this screen goes through it. They previously did not exist at all
+   * for notes, tasks, calls and messages — the API could delete them and nothing on screen could,
+   * so a note typed against the wrong lead was permanent as far as the user was concerned — and the
+   * one that did exist (showings) used `window.confirm` while the rest of the application uses this
+   * component. Two dialog idioms on one screen, and a delete of a call recording with no
+   * confirmation at all.
+   */
+  const { confirm, askDelete, closeConfirm } = useConfirm();
+  const ask: Ask = (title, message, onConfirm) => askDelete({ title, message, onConfirm });
 
   /** Wrap a write so every panel refreshes from the server rather than guessing. */
   const run = async (fn: () => Promise<unknown>, ok: string) => {
@@ -216,11 +231,11 @@ export default function LeadDetailPage() {
         </div>
 
         <div>
-          <CommunicationPanel lead={lead} canEdit={canEdit} run={run} onSent={() => void load(true)} />
-          <NotesPanel lead={lead} canEdit={canEdit} run={run} />
-          <TasksPanel lead={lead} options={options} canEdit={canEdit} run={run} />
-          <ShowingsPanel lead={lead} canEdit={canEdit} run={run} />
-          <CallsPanel lead={lead} options={options} canEdit={canEdit} run={run} />
+          <CommunicationPanel lead={lead} canEdit={canEdit} run={run} ask={ask} onSent={() => void load(true)} />
+          <NotesPanel lead={lead} canEdit={canEdit} run={run} ask={ask} />
+          <TasksPanel lead={lead} options={options} canEdit={canEdit} run={run} ask={ask} />
+          <ShowingsPanel lead={lead} canEdit={canEdit} run={run} ask={ask} />
+          <CallsPanel lead={lead} options={options} canEdit={canEdit} run={run} ask={ask} />
         </div>
       </div>
 
@@ -242,6 +257,9 @@ export default function LeadDetailPage() {
           onSaved={() => { setFollowUpOpen(false); toast('Follow-up added to the calendar.', 'ok'); }}
         />
       )}
+
+      {/* One dialog for every destructive control on the page, driven by `ask`. */}
+      <ConfirmDialog confirm={confirm} onClose={closeConfirm} />
     </>
   );
 }
@@ -256,6 +274,8 @@ function Row({ k, v }: { k: string; v: string | null | undefined }) {
 }
 
 type Run = (fn: () => Promise<unknown>, ok: string) => Promise<void>;
+/** Confirm a destructive action before it happens. Wired to the page's single ConfirmDialog. */
+type Ask = (title: string, message: string, onConfirm: () => void) => void;
 
 /*
  * The activity panels below — Notes, Tasks, Showings, Call Log and the SMS conversation — are
@@ -265,7 +285,7 @@ type Run = (fn: () => Promise<unknown>, ok: string) => Promise<void>;
  */
 
 // ------------------------------------------------------------------- notes
-function NotesPanel({ lead, canEdit, run }: { lead: LeadDetail; canEdit: boolean; run: Run }) {
+function NotesPanel({ lead, canEdit, run, ask }: { lead: LeadDetail; canEdit: boolean; run: Run; ask: Ask }) {
   const [text, setText] = useState('');
   return (
     <div className="card">
@@ -292,6 +312,17 @@ function NotesPanel({ lead, canEdit, run }: { lead: LeadDetail; canEdit: boolean
                       onClick={() => void run(() => updateLeadNote(lead.id, n.id, { pinned: !n.pinned }), n.pinned ? 'Note unpinned.' : 'Note pinned.')}>
                       {n.pinned ? 'Unpin' : 'Pin'}
                     </button>
+                    {/* The server refuses this unless you wrote the note, or you are an
+                        administrator. The button is shown regardless rather than hidden by a guess
+                        at the rule: the refusal explains itself, and a hidden control cannot. */}
+                    <button className="btn ghost sm" type="button" title="Delete this note"
+                      onClick={() => ask(
+                        'Delete this note?',
+                        `"${n.content.slice(0, 120)}${n.content.length > 120 ? '…' : ''}" will be removed. Only its author or an administrator can delete a note, and the deletion is recorded in the audit trail with its content.`,
+                        () => void run(() => deleteLeadNote(lead.id, n.id), 'Note deleted.'),
+                      )}>
+                      Delete
+                    </button>
                   </>
                 )}
               </div>
@@ -304,7 +335,7 @@ function NotesPanel({ lead, canEdit, run }: { lead: LeadDetail; canEdit: boolean
 }
 
 // ------------------------------------------------------------------- tasks
-function TasksPanel({ lead, options, canEdit, run }: { lead: LeadDetail; options: LeadOptions | null; canEdit: boolean; run: Run }) {
+function TasksPanel({ lead, options, canEdit, run, ask }: { lead: LeadDetail; options: LeadOptions | null; canEdit: boolean; run: Run; ask: Ask }) {
   const [title, setTitle] = useState('');
   const [due, setDue] = useState(today());
   const [priority, setPriority] = useState('medium');
@@ -382,6 +413,16 @@ function TasksPanel({ lead, options, canEdit, run }: { lead: LeadDetail; options
                         )}
                       </>
                     )}
+                    {/* For something logged against the wrong lead. Cancelling keeps the record;
+                        this removes it, which is why it asks first. */}
+                    <button className="btn ghost sm" type="button" title="Delete this task"
+                      onClick={() => ask(
+                        'Delete this task?',
+                        `"${t.title}" will be removed from this lead. If the work simply is not going ahead, Cancel keeps it on the record instead.`,
+                        () => void run(() => deleteLeadTask(lead.id, t.id), 'Task deleted.'),
+                      )}>
+                      Delete
+                    </button>
                   </>
                 )}
               </div>
@@ -394,7 +435,7 @@ function TasksPanel({ lead, options, canEdit, run }: { lead: LeadDetail; options
 }
 
 // ---------------------------------------------------------------- showings
-function ShowingsPanel({ lead, canEdit, run }: { lead: LeadDetail; canEdit: boolean; run: Run }) {
+function ShowingsPanel({ lead, canEdit, run, ask }: { lead: LeadDetail; canEdit: boolean; run: Run; ask: Ask }) {
   const [date, setDate] = useState(today());
   const [time, setTime] = useState('12:00');
   const [property, setProperty] = useState('');
@@ -451,7 +492,11 @@ function ShowingsPanel({ lead, canEdit, run }: { lead: LeadDetail; canEdit: bool
                       </button>
                     )}
                     <button className="btn ghost sm" type="button" style={{ color: 'var(--bad)' }}
-                      onClick={() => { if (window.confirm('Delete this showing? This cannot be undone.')) void run(() => deleteLeadShowing(lead.id, s.id), 'Showing deleted.'); }}>
+                      onClick={() => ask(
+                        'Delete this showing?',
+                        `${s.property || 'This showing'} on ${s.showing_date}${s.time ? ` at ${s.time}` : ''} will be removed from the lead. This cannot be undone.`,
+                        () => void run(() => deleteLeadShowing(lead.id, s.id), 'Showing deleted.'),
+                      )}>
                       Delete
                     </button>
                   </>
@@ -500,8 +545,8 @@ const dialable = (phone: string | null): string => (phone ?? '').replace(/[^\d+]
  * and only the record is kept — with the status set by hand. The panel says which mode it is in
  * rather than leaving the agent to guess whether a message actually went.
  */
-function CommunicationPanel({ lead, canEdit, run, onSent }: {
-  lead: LeadDetail; canEdit: boolean; run: Run; onSent: () => void;
+function CommunicationPanel({ lead, canEdit, run, ask, onSent }: {
+  lead: LeadDetail; canEdit: boolean; run: Run; ask: Ask; onSent: () => void;
 }) {
   const toast = useToast();
   const [composing, setComposing] = useState(false);
@@ -666,6 +711,16 @@ function CommunicationPanel({ lead, canEdit, run, onSent }: {
                 <div className="lead-sms-bubble">{m.body}</div>
                 <div className="lead-sms-meta">
                   <span className="muted">{stamp(m.sent_at)}{m.created_by ? ` · ${m.created_by}` : ''}</span>
+                  {canEdit && (
+                    <button className="btn ghost sm" type="button" title="Delete this message"
+                      onClick={() => ask(
+                        'Delete this message?',
+                        'It will be removed from the conversation on this lead. The message itself was sent from a phone and cannot be unsent.',
+                        () => void run(() => deleteLeadMessage(lead.id, m.id), 'Message deleted.'),
+                      )}>
+                      Delete
+                    </button>
+                  )}
                   {m.status && <span className={`pill ${STATUS_PILL[m.status]}`}>{STATUS_LABEL[m.status]}</span>}
                   {/* With a gateway connected the status is the provider's, so it is not editable
                       — except Read, which no SMS provider ever reports and only a person knows. */}
@@ -861,7 +916,7 @@ const fileSize = (bytes: number): string =>
  * The <audio> element streams from the API behind the same session cookie; the bytes are never
  * part of a lead payload.
  */
-function Recording({ lead, call, canEdit, run }: { lead: LeadDetail; call: LeadCall; canEdit: boolean; run: Run }) {
+function Recording({ lead, call, canEdit, run, ask }: { lead: LeadDetail; call: LeadCall; canEdit: boolean; run: Run; ask: Ask }) {
   const toast = useToast();
   const [busy, setBusy] = useState(false);
   const inputId = `rec-${call.id}`;
@@ -903,7 +958,11 @@ function Recording({ lead, call, canEdit, run }: { lead: LeadDetail; call: LeadC
           <a className="btn ghost sm" href={callRecordingUrl(lead.id, call.id)} download={call.recording.filename}>Download</a>
           {canEdit && (
             <button className="btn ghost sm" type="button"
-              onClick={() => void run(() => deleteCallRecording(lead.id, call.id), 'Recording removed.')}>
+              onClick={() => ask(
+                'Delete this recording?',
+                'The audio of this conversation will be permanently removed. The call itself stays on the lead.',
+                () => void run(() => deleteCallRecording(lead.id, call.id), 'Recording removed.'),
+              )}>
               Remove
             </button>
           )}
@@ -929,7 +988,7 @@ const TYPE_BY_EXTENSION: Record<string, string> = {
 };
 
 // ------------------------------------------------------------------- calls
-function CallsPanel({ lead, options, canEdit, run }: { lead: LeadDetail; options: LeadOptions | null; canEdit: boolean; run: Run }) {
+function CallsPanel({ lead, options, canEdit, run, ask }: { lead: LeadDetail; options: LeadOptions | null; canEdit: boolean; run: Run; ask: Ask }) {
   const [outcome, setOutcome] = useState('connected');
   const [duration, setDuration] = useState('');
   const [notes, setNotes] = useState('');
@@ -969,10 +1028,20 @@ function CallsPanel({ lead, options, canEdit, run }: { lead: LeadDetail; options
               <div className="lead-feed-body">
                 <strong>{c.outcome ? label(c.outcome) : 'Call'}</strong>
                 {c.notes && <div className="muted">{c.notes}</div>}
-                <Recording lead={lead} call={c} canEdit={canEdit} run={run} />
+                <Recording lead={lead} call={c} canEdit={canEdit} run={run} ask={ask} />
               </div>
               <div className="lead-feed-meta">
                 <span className="muted">{stamp(c.called_at)}{c.duration != null ? ` · ${mmss(c.duration)}` : ''}{c.created_by ? ` · ${c.created_by}` : ''}</span>
+                {canEdit && (
+                  <button className="btn ghost sm" type="button" title="Delete this call log"
+                    onClick={() => ask(
+                      'Delete this call log?',
+                      `The record of this call${c.outcome ? ` (${label(c.outcome)})` : ''} on ${stamp(c.called_at)} will be removed, along with any recording attached to it.`,
+                      () => void run(() => deleteLeadCall(lead.id, c.id), 'Call log deleted.'),
+                    )}>
+                    Delete
+                  </button>
+                )}
               </div>
             </li>
           ))}

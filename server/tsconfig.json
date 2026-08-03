@@ -22,6 +22,22 @@
     // output to dist/src/... and break `start:prod` (node dist/main.js) with no error.
     "rootDir": "./src",
     "incremental": true,
+    /*
+     * The incremental cache lives INSIDE dist/, so it dies with it.
+     *
+     * nest-cli.json sets `deleteOutDir: true`, so every `nest build` and every `nest start` wipes
+     * dist/ first. With the default cache location (./tsconfig.build.tsbuildinfo, beside this file)
+     * the cache SURVIVED that wipe — TypeScript then read it, concluded every file was already up
+     * to date, emitted nothing, and exited 0. The result is an empty dist/ from a command that
+     * reported success, and `Cannot find module dist/main` from the next `npm start`.
+     *
+     * `build-guard.cjs` already catches this for `npm run build` by deleting the cache first, but
+     * it cannot cover `nest start`, `nest start --watch`, or anyone invoking the compiler directly
+     * — and those are the commands a developer runs all day. Putting the cache under the directory
+     * that gets deleted makes the two consistent by construction: if the output is gone, the
+     * record of having produced it is gone too, so the compiler always rebuilds what is missing.
+     */
+    "tsBuildInfoFile": "./dist/.tsbuildinfo",
     "skipLibCheck": true,
     "resolveJsonModule": true,
 

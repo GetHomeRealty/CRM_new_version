@@ -1,5 +1,7 @@
 import { PrismaClient } from '@prisma/client';
+import type { ConfigService } from '@nestjs/config';
 import type { PrismaService } from '../prisma/prisma.service';
+import { LaravelCryptService } from '../common/laravel-crypt.service';
 import { MailAccountService } from './mail-account.service';
 
 /**
@@ -24,7 +26,12 @@ async function inRollback(fn: (tx: PrismaService) => Promise<void>) {
 }
 
 const tag = (): string => { seq += 1; return `${Date.now()}-${seq}`; };
-const svc = (tx: PrismaService) => new MailAccountService(tx);
+// The real crypt service, reading APP_KEY from the environment exactly as the app does — these
+// tests store and read account passwords, so a stub would exercise a different code path than
+// production. The config stub returns nothing so it falls through to process.env, which is the
+// same fallback the service already has.
+const crypt = new LaravelCryptService({ get: () => undefined } as unknown as ConfigService);
+const svc = (tx: PrismaService) => new MailAccountService(tx, crypt);
 
 async function makeUser(tx: PrismaService): Promise<number> {
   const now = new Date();

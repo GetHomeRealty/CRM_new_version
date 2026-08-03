@@ -5,12 +5,13 @@ import { LeadAuditService } from './lead-audit.service';
 import { LeadNotificationService } from './lead-notification.service';
 import { normalizePhone } from '../meta/meta-lead-mapper';
 import type { AuthUserRecord } from '../auth/auth.types';
-import { isAgent } from '../core/authz';
+import { can, isSuperAdmin } from '../core/authz';
 import { leadScopeWhere } from '../common/lead-scope';
+import { throwValidation } from '../common/laravel-exceptions';
 import {
-  EMAIL_SHAPE, LEADS_PER_PAGE, MAX_PER_PAGE, MAX_IMPORT_ROWS, NONE_FILTER_VALUE,
+  EMAIL_SHAPE, FEED_PER_PAGE, LEADS_PER_PAGE, MAX_PER_PAGE, MAX_EXPORT_ROWS, NONE_FILTER_VALUE,
   RECENT_LEAD_DAYS, WEBSITE_ENQUIRY_SOURCES, DASHBOARD_LEAD_SOURCES,
-  isClientType, isConversion, isGender, isLeadResponse, isLeadSource, isLeadStatus, isLeadType,
+  isClientType, isConversion, isGender, isLeadResponse, isLeadSource, isLeadStatus, isLeadType, isTaskStatus,
 } from './lead.constants';
 
 const str = (v: unknown): string => String(v ?? '').trim();
@@ -30,6 +31,17 @@ export interface LeadInput {
   property_preferences?: unknown;
   property_address?: unknown; property_price?: unknown; bedrooms?: unknown;
   bathrooms?: unknown; square_footage?: unknown; key_features?: unknown;
+}
+
+/**
+ * A CSV export, with an honest account of what it contains.
+ *
+ * `truncated` is the field that matters: the caller cannot otherwise tell a complete export of
+ * 5,000 leads from the first 5,000 of 12,000.
+ */
+export interface LeadExport {
+  data: Record<string, unknown>[];
+  meta: { total: number; returned: number; limit: number; truncated: boolean };
 }
 
 /** Filters accepted by the list endpoint. */
@@ -85,9 +97,27 @@ export class LeadsService {
     return leadScopeWhere(user);
   }
 
-  /** The identity lock (name/email/phone/source/assignment, and delete) is an agent-only restriction. */
-  private isAgent(user: AuthUserRecord): boolean {
-    return isAgent(user);
+  /**
+   * Whether this user may rewrite the identity of a lead the brokerage handed them, and delete it.
+   *
+   * Was `role === 'agent'`, which is the mistake `core/authz.ts` opens by warning against: asking
+   * about the person rather than the action gets the wrong answer the day a role is added. Three
+   * had been — `crm`, `accounting` and `documentation` were all silently exempt from the lock, and
+   * a CRM-role user could rewrite the email address of a lead the brokerage owned.
+   */
+  private mayRewriteIdentity(user: AuthUserRecord): boolean {
+    return can(user, 'leads.rewrite-identity');
+  }
+
+  /**
+   * Whether this user can already open a given lead — the same rule `leadScopeWhere` applies, asked
+   * of a row already in hand rather than expressed as a query. Used to decide how much a validation
+   * message may say about a lead the caller may not read.
+   */
+  private canSee(lead: { owner_user_id: number | null; assigned_to: number | null }, user: AuthUserRecord): boolean {
+    const id = user.id ?? -1;
+    if (lead.owner_user_id === id || lead.assigned_to === id) return true;
+    return lead.owner_user_id === null && isSuperAdmin(user);
   }
 
   // ------------------------------------------------------------------ read
@@ -149,25 +179,59 @@ export class LeadsService {
   }
 
   /**
-   * Every lead task the signed-in user is allowed to see, for the Dashboard.
+   * Lead tasks the signed-in user is allowed to see, a page at a time, for the Dashboard.
    *
    * Scoped through the lead exactly like the lists are, so an agent sees tasks on their own leads
-   * and nobody else's. Ordered the way an agent works the list: still-open tasks first, then by
-   * due date, so whatever is overdue sits at the top.
+   * and nobody else's.
+   *
+   * WHY THIS IS PAGINATED NOW. It returned every task in one response. Measured against a
+   * brokerage-sized database — 40,000 leads, one agent's book of 9,852 — that was **1.67 MB of
+   * JSON in a single request**, and it grows for as long as the brokerage uses the product, because
+   * tasks accumulate on a book and nothing here ever dropped the old ones. The database was never
+   * the problem (147 ms); the wire was, and an agent opening the dashboard on a phone paid for all
+   * of it before seeing a row.
+   *
+   * ORDERING MOVED INTO SQL, which pagination forced and which was worth doing anyway. It used to
+   * fetch everything and then `.sort()` in JavaScript to float open tasks to the top — correct only
+   * because the whole set was present. Sorting a page in memory would reorder that page alone, so
+   * the rule ("still open first, then by due date, so anything overdue sits at the top") is now
+   * expressed as an ordering the database applies to the whole set before the page is cut.
    */
-  async allTasks(user: AuthUserRecord): Promise<Record<string, unknown>[]> {
-    const rows = await this.prisma.lead_tasks.findMany({
-      where: { leads: { deleted_at: null, ...this.scopeWhere(user) } },
-      include: { leads: { select: { id: true, name: true } } },
-      orderBy: [{ due_date: 'asc' }, { id: 'asc' }],
-    });
+  async allTasks(user: AuthUserRecord, q: { page?: unknown; limit?: unknown; status?: unknown } = {}): Promise<Record<string, unknown>> {
+    const page = Math.max(1, Number(q.page ?? 1) || 1);
+    const limit = Math.min(MAX_PER_PAGE, Math.max(1, Number(q.limit ?? FEED_PER_PAGE) || FEED_PER_PAGE));
+    const status = str(q.status);
+
+    const where: Prisma.lead_tasksWhereInput = {
+      leads: { deleted_at: null, ...this.scopeWhere(user) },
+      ...(status && isTaskStatus(status) ? { status } : {}),
+    };
+
+    const [rows, total, open, overdue] = await Promise.all([
+      this.prisma.lead_tasks.findMany({
+        where,
+        include: { leads: { select: { id: true, name: true } } },
+        /*
+         * `status` DESCENDING puts the groups in the order the panel wants — pending, completed,
+         * cancelled — because that is their reverse alphabetical order. It is a coincidence of the
+         * vocabulary rather than a rule, so `lead-task-feed.spec.ts` asserts it and will fail the
+         * day a status is added that lands in the wrong place. The alternative, a CASE expression,
+         * cannot be written in Prisma's `orderBy`, and dropping to raw SQL would lose the relation
+         * filter that does the scoping — a worse trade for the same result.
+         */
+        orderBy: [{ status: 'desc' }, { due_date: 'asc' }, { id: 'asc' }],
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+      this.prisma.lead_tasks.count({ where }),
+      this.prisma.lead_tasks.count({ where: { ...where, status: 'pending' } }),
+      this.prisma.lead_tasks.count({ where: { ...where, status: 'pending', due_date: { lt: new Date() } } }),
+    ]);
 
     const assignees = await this.assigneeNames(rows.map((t) => t.assigned_to));
-    const openFirst = (s: string): number => (s === 'pending' ? 0 : s === 'cancelled' ? 2 : 1);
 
-    return rows
-      .sort((a, b) => openFirst(a.status) - openFirst(b.status))
-      .map((t) => ({
+    return {
+      data: rows.map((t) => ({
         id: t.id,
         lead_id: t.lead_id,
         lead_name: t.leads.name,
@@ -180,35 +244,62 @@ export class LeadsService {
         assigned_to_name: t.assigned_to ? assignees.get(t.assigned_to) ?? null : null,
         created_by: t.created_by,
         created_at: t.created_at?.toISOString() ?? null,
-      }));
+      })),
+      meta: { page, per_page: limit, total, last_page: Math.max(1, Math.ceil(total / limit)) },
+      // Counted across the whole set, not the page. The panel's heading says "N open of M", and
+      // computing that from one page of fifty would be a different, wrong number.
+      summary: { total, open, overdue },
+    };
   }
 
   /**
-   * Every lead showing the caller can see, for the Dashboard. Scoped through the lead exactly like
-   * the lists, so an agent sees showings on their own leads and nobody else's. Ordered by date so
-   * the soonest sits at the top.
+   * Lead showings the caller can see, a page at a time, for the Dashboard.
+   *
+   * Scoped through the lead exactly like the lists, so an agent sees showings on their own leads
+   * and nobody else's. Ordered by date, soonest first. Paginated for the same reason as `allTasks`
+   * — this one measured 673 kB in a single response on a real book, and it grows the same way.
    */
-  async allShowings(user: AuthUserRecord): Promise<Record<string, unknown>[]> {
+  async allShowings(user: AuthUserRecord, q: { page?: unknown; limit?: unknown } = {}): Promise<Record<string, unknown>> {
+    const page = Math.max(1, Number(q.page ?? 1) || 1);
+    const limit = Math.min(MAX_PER_PAGE, Math.max(1, Number(q.limit ?? FEED_PER_PAGE) || FEED_PER_PAGE));
+
     // Only today and upcoming — past showings drop off the dashboard so it reads as a to-do list.
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
-    const rows = await this.prisma.lead_showings.findMany({
-      where: { showing_date: { gte: todayStart }, leads: { deleted_at: null, ...this.scopeWhere(user) } },
-      include: { leads: { select: { id: true, name: true } } },
-      orderBy: [{ showing_date: 'asc' }, { time: 'asc' }],
-    });
-    return rows.map((s) => ({
-      id: s.id,
-      lead_id: s.lead_id,
-      lead_name: s.leads.name,
-      showing_date: s.showing_date.toISOString().slice(0, 10),
-      time: s.time,
-      property: s.property,
-      notes: s.notes,
-      status: s.status,
-      created_by: s.created_by,
-      created_at: s.created_at?.toISOString() ?? null,
-    }));
+    const where: Prisma.lead_showingsWhereInput = {
+      showing_date: { gte: todayStart },
+      leads: { deleted_at: null, ...this.scopeWhere(user) },
+    };
+
+    const [rows, total, scheduled] = await Promise.all([
+      this.prisma.lead_showings.findMany({
+        where,
+        include: { leads: { select: { id: true, name: true } } },
+        orderBy: [{ showing_date: 'asc' }, { time: 'asc' }, { id: 'asc' }],
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+      this.prisma.lead_showings.count({ where }),
+      this.prisma.lead_showings.count({ where: { ...where, status: 'scheduled' } }),
+    ]);
+
+    return {
+      data: rows.map((s) => ({
+        id: s.id,
+        lead_id: s.lead_id,
+        lead_name: s.leads.name,
+        showing_date: s.showing_date.toISOString().slice(0, 10),
+        time: s.time,
+        property: s.property,
+        notes: s.notes,
+        status: s.status,
+        created_by: s.created_by,
+        created_at: s.created_at?.toISOString() ?? null,
+      })),
+      meta: { page, per_page: limit, total, last_page: Math.max(1, Math.ceil(total / limit)) },
+      // Counted across the whole set: the panel heading says "N upcoming of M".
+      summary: { total, upcoming: scheduled },
+    };
   }
 
   async get(id: number, user: AuthUserRecord): Promise<Record<string, unknown>> {
@@ -269,9 +360,42 @@ export class LeadsService {
     };
   }
 
+  /**
+   * Turn a unique-constraint violation on the email address into the validation error it actually is.
+   *
+   * The database holds `leads_email_lower_key` — UNIQUE on `lower(email)` — and it counts
+   * soft-deleted rows, which the application check deliberately does not. Two ordinary things
+   * therefore reached it and came back as `500 Internal server error`:
+   *
+   *   1. Deleting a lead by mistake and re-adding the person. The check saw no live clash; the
+   *      index saw the row sitting in Recently Deleted.
+   *   2. Double-clicking Save. Both requests passed the check, the second lost the insert race —
+   *      so the user was told the server had failed on a lead that had in fact been created.
+   *
+   * Rethrown as the module's 422 shape, and the recycle-bin case says so, because "already in use"
+   * and "in the bin, restore it instead" call for completely different actions.
+   */
+  private async rethrowEmailClash(err: unknown, email: string, ownerId: number | null): Promise<never> {
+    const isUniqueViolation = err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002';
+    if (!isUniqueViolation) throw err;
+
+    // Scoped to the same book the index is scoped to, or the message would blame a deleted lead in
+    // somebody else's recycle bin for a clash that has nothing to do with them.
+    const deleted = await this.prisma.leads.findFirst({
+      where: { email: { equals: email, mode: 'insensitive' }, owner_user_id: ownerId, deleted_at: { not: null } },
+      select: { id: true },
+    });
+    throwValidation({
+      email: [deleted
+        ? 'A lead with that email address is in your Recently Deleted. Restore it from there rather than creating a second record.'
+        : 'That email address has just been added to this book by another request. Refresh and search for it before creating a new one.'],
+    });
+    throw err; // unreachable — throwValidation always throws; present so the return type is `never`
+  }
+
   // ----------------------------------------------------------------- write
   async create(input: LeadInput, user: AuthUserRecord): Promise<Record<string, unknown>> {
-    const data = await this.validate(input, true);
+    const data = await this.validate(input, true, undefined, user);
     const now = new Date();
     const row = await this.prisma.leads.create({
       data: {
@@ -287,7 +411,7 @@ export class LeadsService {
         updated_at: now,
       },
       include: { _count: { select: { lead_calls: true, lead_tasks: true } } },
-    });
+    }).catch((err: unknown) => this.rethrowEmailClash(err, data.email as string, user.id ?? null));
     await this.audit.record(user, 'Lead created', row.name, `${row.email}${row.phone ? ` · ${row.phone}` : ''}`);
     // Best-effort inbound-lead email (Meta / Google Ads / Website only); never blocks creation.
     void this.notifications.notifyNewLead(row);
@@ -303,7 +427,7 @@ export class LeadsService {
    * — is not theirs to rewrite. A lead an agent created themselves is fully theirs.
    */
   private isBrokerageAssigned(existing: { owner_user_id: number | null }, user: AuthUserRecord): boolean {
-    return this.isAgent(user) && existing.owner_user_id !== (user.id ?? -1);
+    return !this.mayRewriteIdentity(user) && existing.owner_user_id !== (user.id ?? -1);
   }
 
   /** Fields locked on a brokerage-assigned lead, in the words the agent would recognise. */
@@ -321,7 +445,7 @@ export class LeadsService {
     const existing = await this.prisma.leads.findFirst({ where: { id, deleted_at: null, ...this.scopeWhere(user) } });
     if (!existing) throw new NotFoundException({ message: 'Lead not found.' });
 
-    const data = await this.validate(input, false, id);
+    const data = await this.validate(input, false, id, user, existing.owner_user_id);
 
     /*
      * On a brokerage-assigned lead an agent may change everything except the four identity
@@ -345,7 +469,7 @@ export class LeadsService {
       where: { id },
       data: { ...data, updated_at: new Date() },
       include: { _count: { select: { lead_calls: true, lead_tasks: true } } },
-    });
+    }).catch((err: unknown) => this.rethrowEmailClash(err, str(data.email) || str(existing.email), existing.owner_user_id));
 
     // Record the fields that actually changed, so the trail is readable.
     const changed = Object.keys(data).filter((k) => String((existing as Record<string, unknown>)[k] ?? '') !== String((row as Record<string, unknown>)[k] ?? ''));
@@ -378,7 +502,7 @@ export class LeadsService {
         // An agent's bulk delete silently skips brokerage-assigned leads rather than failing the
         // whole batch — the single-delete path reports the block explicitly; here they are simply
         // not eligible, the same way a lead they cannot see is not.
-        ...(this.isAgent(user) ? { owner_user_id: user.id ?? -1 } : {}),
+        ...(this.mayRewriteIdentity(user) ? {} : { owner_user_id: user.id ?? -1 }),
       },
       select: { id: true, name: true },
     });
@@ -396,10 +520,30 @@ export class LeadsService {
   }
 
   // ------------------------------------------------------- recently deleted
-  async listDeleted(user: AuthUserRecord): Promise<Record<string, unknown>> {
+  /**
+   * The recycle bin, paginated.
+   *
+   * This used to be a bare `take: 200` with no paging and nothing on screen saying so. Past two
+   * hundred deletions the oldest simply stopped appearing — still in the database, still
+   * restorable by an administrator with SQL, but unreachable by the person whose leads they were
+   * and with no indication anything was missing. A silent cap on a recovery screen is the wrong
+   * way round: this is where somebody looks precisely because something has already gone wrong.
+   *
+   * Same shape as the live list — `page`/`limit` in, `meta` out — so the two screens paginate
+   * identically. `count` is kept alongside `meta.total` because the existing client reads it.
+   */
+  async listDeleted(user: AuthUserRecord, q: { page?: unknown; limit?: unknown } = {}): Promise<Record<string, unknown>> {
     const where: Prisma.leadsWhereInput = { deleted_at: { not: null }, ...this.scopeWhere(user) };
+    const page = Math.max(1, Number(q.page ?? 1) || 1);
+    const limit = Math.min(MAX_PER_PAGE, Math.max(1, Number(q.limit ?? LEADS_PER_PAGE) || LEADS_PER_PAGE));
+
     const [rows, count] = await Promise.all([
-      this.prisma.leads.findMany({ where, orderBy: { deleted_at: 'desc' }, take: 200 }),
+      this.prisma.leads.findMany({
+        // Tie-broken by id: two leads deleted in the same second would otherwise be free to swap
+        // places between requests, so a row could appear on two pages or on neither.
+        where, orderBy: [{ deleted_at: 'desc' }, { id: 'desc' }],
+        skip: (page - 1) * limit, take: limit,
+      }),
       this.prisma.leads.count({ where }),
     ]);
     return {
@@ -410,6 +554,7 @@ export class LeadsService {
         deleted_at: r.deleted_at?.toISOString() ?? null,
         deleted_by: r.deleted_by,
       })),
+      meta: { page, per_page: limit, total: count, last_page: Math.max(1, Math.ceil(count / limit)) },
     };
   }
 
@@ -447,14 +592,29 @@ export class LeadsService {
   // a client can poll. Campaigns imports through the same pair rather than keeping its own copy.
 
 
-  /** Rows for the CSV export, honouring the same filters as the list. */
-  async exportRows(user: AuthUserRecord, q: LeadQuery, ids: number[]): Promise<Record<string, unknown>[]> {
+  /**
+   * Rows for the CSV export, honouring the same filters as the list.
+   *
+   * SAYS WHAT IT LEFT OUT. The cap has always been here; what was missing was any way to know it
+   * had been reached. The endpoint returned a bare array, so a brokerage with 12,000 leads got
+   * 5,000 rows and a cheerful "Exported 5000 leads." — on the file people use for migrations, mail
+   * merges and answering a client's request for their own data. The same mistake this module
+   * already fixed on the recycle bin, where the note reads "a silent cap on a recovery screen is
+   * the wrong way round".
+   *
+   * `total` is counted before the page is taken, so `truncated` is a fact rather than an inference
+   * from a full page.
+   */
+  async exportRows(user: AuthUserRecord, q: LeadQuery, ids: number[]): Promise<LeadExport> {
     const where: Prisma.leadsWhereInput = ids.length
       ? { AND: [{ id: { in: ids }, deleted_at: null }, this.scopeWhere(user)] }
       : this.buildWhere(user, q);
-    const rows = await this.prisma.leads.findMany({ where, orderBy: [{ created_at: 'desc' }, { id: 'desc' }], take: MAX_IMPORT_ROWS });
+    const [total, rows] = await Promise.all([
+      this.prisma.leads.count({ where }),
+      this.prisma.leads.findMany({ where, orderBy: [{ created_at: 'desc' }, { id: 'desc' }], take: MAX_EXPORT_ROWS }),
+    ]);
     const assignees = await this.assigneeNames(rows.map((r) => r.assigned_to));
-    return rows.map((r) => ({
+    const data = rows.map((r) => ({
       Name: r.name,
       Email: r.email,
       Phone: r.phone ?? '',
@@ -470,13 +630,30 @@ export class LeadsService {
       Unsubscribed: r.unsubscribed ? 'Yes' : 'No',
       Created: r.created_at ? r.created_at.toISOString().slice(0, 10) : '',
     }));
+
+    return {
+      data,
+      meta: { total, returned: data.length, limit: MAX_EXPORT_ROWS, truncated: total > data.length },
+    };
   }
 
   // ------------------------------------------------------------------ tags
-  /** Every known tag: the registry unioned with tags actually present on leads. */
-  async tags(): Promise<{ tags: string[]; counts: { name: string; count: number }[] }> {
+  /**
+   * Every tag this person can act on: the shared registry, plus the tags on their own leads, with
+   * counts taken from their own book only.
+   *
+   * THE COUNTS ARE THE PRIVATE PART. `lead_tags` is a deliberate shared vocabulary — the point of a
+   * registry is that the whole brokerage spells "First-Time Buyer" the same way, and a name on that
+   * list discloses nothing. How many leads sit behind it does: an unscoped count answered
+   * "how big is that agent's pipeline in this segment", one tag at a time, and the scan that
+   * produced it read every lead row in the brokerage into memory to do so.
+   *
+   * So the scan is scoped like every other read in this module, and a registered tag the caller has
+   * not used still appears — at zero, which is the truth from where they are standing.
+   */
+  async tags(user: AuthUserRecord): Promise<{ tags: string[]; counts: { name: string; count: number }[] }> {
     const [rows, registered] = await Promise.all([
-      this.prisma.leads.findMany({ where: { deleted_at: null }, select: { tags: true } }),
+      this.prisma.leads.findMany({ where: { deleted_at: null, ...this.scopeWhere(user) }, select: { tags: true } }),
       this.prisma.lead_tags.findMany({ select: { name: true } }),
     ]);
     const counts = new Map<string, number>();
@@ -499,23 +676,54 @@ export class LeadsService {
   }
 
   /**
-   * Delete a tag from the registry and pull it off every lead. Returns the affected lead ids
-   * so the deletion can be undone from the UI.
+   * Take a tag off the caller's own leads, and out of the shared registry.
+   *
+   * THIS USED TO WRITE ACROSS EVERY BOOK IN THE BROKERAGE. The scan had no scope filter, so any
+   * user with `lead` edit — which is every agent — could strip a tag from leads they cannot see,
+   * cannot open and cannot list, and the response handed back the ids of those leads as the undo
+   * payload. Campaign audiences are built from tags, so it silently changed who other agents'
+   * campaigns would reach, and the owner had no local explanation for their segmentation
+   * disappearing.
+   *
+   * Scoped now, on both halves: the caller's own leads lose the tag, everyone else's keep it, and
+   * only ids the caller could already read come back. The registry entry is shared, so removing it
+   * removes it for everyone — that is what a shared vocabulary means, and it is recorded in the
+   * audit trail with the name.
+   *
+   * One `updateMany` per distinct tag set inside a transaction, rather than a query per lead: the
+   * loop was also the reason a failure halfway through left the tag on some leads and not others,
+   * with the returned undo list then describing a state that never existed.
    */
   async deleteTag(name: string, user: AuthUserRecord): Promise<{ tag: string; removed: number; lead_ids: number[] }> {
     const tag = str(name);
     if (!tag) throw new BadRequestException({ message: 'A tag name is required.' });
-    const rows = await this.prisma.leads.findMany({ where: { deleted_at: null }, select: { id: true, tags: true } });
+    const rows = await this.prisma.leads.findMany({
+      where: { deleted_at: null, ...this.scopeWhere(user) },
+      select: { id: true, tags: true },
+    });
+
     const now = new Date();
     const affected: number[] = [];
+    // Grouped by the tag set each lead is left with, so leads sharing a set collapse to one
+    // statement — typically one or two for a whole book.
+    const byResult = new Map<string, number[]>();
     for (const r of rows) {
       const tags = parseJsonArray(r.tags);
       if (!tags.includes(tag)) continue;
-      await this.prisma.leads.update({ where: { id: r.id }, data: { tags: JSON.stringify(tags.filter((t) => t !== tag)), updated_at: now } });
+      const next = JSON.stringify(tags.filter((t) => t !== tag));
+      const ids = byResult.get(next);
+      if (ids) ids.push(r.id); else byResult.set(next, [r.id]);
       affected.push(r.id);
     }
-    await this.prisma.lead_tags.deleteMany({ where: { name: tag } });
-    await this.audit.record(user, 'Lead tag deleted', tag, `Removed from ${affected.length} lead(s)`);
+
+    await this.prisma.$transaction(async (tx) => {
+      for (const [tags, ids] of byResult) {
+        await tx.leads.updateMany({ where: { id: { in: ids } }, data: { tags, updated_at: now } });
+      }
+      await tx.lead_tags.deleteMany({ where: { name: tag } });
+    });
+
+    await this.audit.record(user, 'Lead tag deleted', tag, `Removed from ${affected.length} of your lead(s); the tag is no longer offered to anyone`);
     return { tag, removed: affected.length, lead_ids: affected };
   }
 
@@ -606,7 +814,14 @@ export class LeadsService {
    * Validate and normalise a lead payload. On create the core identity fields are required;
    * on update only the supplied fields are checked, so a partial patch is safe.
    */
-  private async validate(input: LeadInput, requireCore: boolean, selfId?: number): Promise<Record<string, unknown>> {
+  private async validate(
+    input: LeadInput,
+    requireCore: boolean,
+    selfId?: number,
+    user?: AuthUserRecord,
+    /** The owner the row will have. Undefined on a create, where it is the caller. */
+    existingOwnerId?: number | null,
+  ): Promise<Record<string, unknown>> {
     const errors: Record<string, string[]> = {};
     const add = (f: string, m: string) => { (errors[f] ??= []).push(m); };
     const out: Record<string, unknown> = {};
@@ -625,14 +840,47 @@ export class LeadsService {
       else if (!EMAIL_SHAPE.test(email)) add('email', 'Enter a valid email address.');
       else if (email.length > 255) add('email', 'The email must be 255 characters or fewer.');
       else {
-        // A duplicate address would silently split one person's history across two records,
-        // and campaign sends dedupe by address anyway.
+        /*
+         * A duplicate is a duplicate WITHIN ONE BOOK, not across the brokerage.
+         *
+         * The same person legitimately becomes a lead more than once: they click brokerage A's ad
+         * on Monday and brokerage B's on Thursday, or they reach agent 1 by referral and later fill
+         * in agent 2's landing page. Both relationships are real and separately consented, and the
+         * CRM's whole model is that a book belongs to its agent — so neither of those may be
+         * refused. The old check was brokerage-wide, matching a global unique index, and it turned
+         * a paid click into a lead nobody ever received.
+         *
+         * What must still be refused is the same address twice in the SAME person's book: that
+         * splits one person's history across two records and double-sends every campaign. So the
+         * lookup is scoped to whoever will own the new row — matching
+         * `leads_company_owner_email_key`, which is `(company_id, COALESCE(owner_user_id, 0),
+         * lower(email))`.
+         *
+         * `ownerId` is the creator on a create. On an update it is the row's existing owner, because
+         * an edit does not change who owns it — `owner_user_id` is not an editable field.
+         */
+        const ownerId = existingOwnerId !== undefined ? existingOwnerId : user?.id ?? null;
         const clash = await this.prisma.leads.findFirst({
-          where: { email: { equals: email, mode: 'insensitive' }, deleted_at: null, ...(selfId ? { id: { not: selfId } } : {}) },
-          select: { id: true, name: true },
+          where: {
+            email: { equals: email, mode: 'insensitive' },
+            deleted_at: null,
+            owner_user_id: ownerId,
+            ...(selfId ? { id: { not: selfId } } : {}),
+          },
+          select: { id: true, name: true, owner_user_id: true, assigned_to: true },
         });
-        if (clash) add('email', `${clash.name} already uses that email address (lead #${clash.id}).`);
-        else out.email = email;
+        if (clash) {
+          /*
+           * Naming the clashing lead is safe here in a way it was not before: the row is in the
+           * caller's own book by construction. `canSee` is still consulted rather than assumed,
+           * because an administrator acting on unattributed intake is the one case where owning a
+           * row and being able to open it are decided by different rules.
+           */
+          const visible = user ? this.canSee(clash, user) : false;
+          add('email', visible
+            ? `${clash.name} already uses that email address (lead #${clash.id}).`
+            : 'That email address is already on a lead in this book.');
+        } else out.email = email;
       }
     }
 
@@ -743,14 +991,21 @@ export class LeadsService {
       }
     }
 
-    if (Object.keys(errors).length) {
-      const first = Object.values(errors)[0][0];
-      const count = Object.values(errors).reduce((a, v) => a + v.length, 0);
-      throw new BadRequestException({
-        message: count > 1 ? `${first} (and ${count - 1} more error${count - 1 === 1 ? '' : 's'})` : first,
-        errors,
-      });
-    }
+    /*
+     * 422, not 400.
+     *
+     * This threw BadRequestException, which made Leads the one module answering 400 for a failure
+     * every other part of the API answers 422 for — the shape and status that
+     * `common/laravel-exceptions.ts` defines and the global ValidationPipe produces everywhere
+     * else. Nobody noticed because the client reads `data.errors` without looking at the status,
+     * so the screens behaved correctly either way; the cost was an API inconsistent with its own
+     * contract, which any integration or monitoring rule keying on 422 would silently miss.
+     *
+     * `throwValidation` also produces the summary line ("first error (and N more errors)") that
+     * was previously assembled by hand here, so the message is now built the same way as the rest
+     * of the API rather than merely resembling it.
+     */
+    if (Object.keys(errors).length) throwValidation(errors);
     return out;
   }
 

@@ -240,6 +240,26 @@ export default function AccountSettingsPage() {
         </div>
       </div>
 
+      {/* ---- Notification Preferences ----
+          A link rather than the controls themselves. Agents do not see the admin Settings group
+          in the sidebar, where this otherwise lives, so without an entry here the screen would be
+          reachable only by typing the URL. */}
+      <div className="card">
+        <div className="modal-sub">Notifications</div>
+        <div className="acct-head">
+          <div>
+            <strong>Notification Preferences</strong>
+            <div className="muted">
+              Choose which push notifications reach your phone and desktop. Emails and in-app
+              notifications are not affected.
+            </div>
+          </div>
+          <button className="btn ghost sm" type="button" onClick={() => navigate(link('notifications'))}>
+            Manage
+          </button>
+        </div>
+      </div>
+
       {/* ---- Integration — Mail / Calendar / Meta ---- */}
       <div className="card">
         <div className="modal-sub">Integration — Mail / Calendar / Meta</div>

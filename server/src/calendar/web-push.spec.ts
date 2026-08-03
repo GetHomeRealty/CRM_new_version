@@ -1,6 +1,7 @@
 import { PrismaClient } from '@prisma/client';
 import type { PrismaService } from '../prisma/prisma.service';
 import { WebPushService } from './web-push.service';
+import { NotificationPreferenceService } from '../notifications/notification-preference.service';
 import webpush from 'web-push';
 
 /**
@@ -50,7 +51,11 @@ beforeAll(() => {
 beforeEach(() => { sendSpy = jest.spyOn(webpush, 'sendNotification'); });
 afterEach(() => { sendSpy.mockRestore(); });
 
-const svc = (tx: PrismaService) => new WebPushService(tx);
+// The real preference service, on the same rolled-back transaction, so these tests exercise the
+// production path rather than a stub: with no preference rows written, every category is enabled
+// and sending behaves exactly as it did before preferences existed. The suppression case has its
+// own coverage in notification-preference.spec.ts.
+const svc = (tx: PrismaService) => new WebPushService(tx, new NotificationPreferenceService(tx));
 const rows = (tx: PrismaService, userId: number) => tx.push_subscriptions.findMany({ where: { user_id: userId } });
 
 describe('subscribing a browser', () => {

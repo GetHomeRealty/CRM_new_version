@@ -94,6 +94,7 @@ const DERIVED: Record<string, string> = {
   sessions: 'users', user_permissions: 'users', user_modules: 'users',
   // A browser belongs to the person who subscribed it, and is reached no other way.
   push_subscriptions: 'users',
+  notification_preferences: 'users',
 
   // via leads
   lead_notes: 'leads', lead_tasks: 'leads', lead_showings: 'leads', lead_calls: 'leads',
@@ -118,6 +119,9 @@ const DERIVED: Record<string, string> = {
   invoices: 'transactions', invoice_line_items: 'invoices', invoice_payments: 'invoices',
   // via campaigns / templates / mail
   campaign_recipients: 'campaigns', campaign_template_attachments: 'campaign_templates',
+  // Click tracking: the link belongs to the campaign it appeared in, and a click to both the
+  // campaign and the recipient. Reached only through the campaign, so isolation travels that way.
+  campaign_links: 'campaigns', campaign_clicks: 'campaigns',
   email_templates: 'mail_accounts', email_template_attachments: 'email_templates',
   inbound_emails: 'mail_accounts', meta_pages: 'meta_connections',
   // via roles
@@ -135,6 +139,16 @@ const GLOBAL: Record<string, string> = {
   user_sessions: 'the express-session store, keyed by sid with an opaque payload',
   permissions: 'the vocabulary of screen x level. Roles are per-company; the words they are built from are not',
   password_reset_tokens: 'keyed by email, and one person works at one brokerage, so email identifies the tenant',
+  meta_api_budget:
+    'Graph calls spent per time window. The thing being rationed is one Meta APP allowance shared by '
+    + 'everybody, so the counter has to be shared too — scoping it per tenant would hand each '
+    + 'brokerage a full budget against a ceiling they collectively share, which is the opposite of '
+    + 'what it is for. No tenant data: a window and an integer',
+  meta_oauth_nonces:
+    'redeemed OAuth state nonces, keyed by a random string with no payload. The tenant is carried by '
+    + 'the signed state itself, which names the user; this table only answers "has this nonce been '
+    + 'used before?", and that answer must be the same for everybody — scoping it per tenant would '
+    + 'let the same nonce be redeemed once in each brokerage, which is the replay it exists to stop',
 };
 
 describe('every table is classified, so a new one cannot arrive unfiltered', () => {

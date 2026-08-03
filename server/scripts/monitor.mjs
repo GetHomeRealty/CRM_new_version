@@ -142,6 +142,25 @@ async function checkSchedulers() {
   };
 }
 
+/**
+ * Audit writes that failed.
+ *
+ * Audit writes are best-effort — they never fail the user's action — so a broken compliance trail
+ * produces no 5xx, no stuck job and no user complaint. Nothing else here would ever notice, which
+ * is exactly why it needs its own check: the point of the audit log is that its silence means
+ * "nothing happened", and that stops being true the moment a write fails unseen.
+ */
+async function checkAudit() {
+  const { audit } = await workers();
+  if (!audit) return { ok: true, detail: 'not reported (older server build)' };
+  if (!audit.failures) return { ok: true, detail: 'no failed audit writes' };
+  return {
+    ok: false,
+    detail: `${audit.failures} audit write(s) FAILED since start — the trail is incomplete. `
+      + `Last: ${audit.last_action ?? 'unknown action'} at ${audit.last_failed_at} — ${audit.last_error ?? 'no detail'}`,
+  };
+}
+
 async function checkJobs() {
   const { jobs } = await workers();
   if (!jobs) return { ok: true, detail: 'not reported' };
@@ -192,6 +211,7 @@ const CHECKS = {
   resources:  checkResources,
   schedulers: checkSchedulers,
   jobs:       checkJobs,
+  audit:      checkAudit,
   mail_sync:  checkMailSync,
   backup:     checkBackup,
   disk:       checkDisk,

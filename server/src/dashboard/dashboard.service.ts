@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CommissionService } from '../transactions/commission.service';
+import { PersonResolver } from '../core/person-resolver.service';
 import { normalizeCommissionTxn } from '../transactions/commission.loader';
 import { parseJsonObject, round2 } from '../common/serialize';
 import type { ResourceUser } from '../transactions/transaction.resource';
@@ -53,6 +54,7 @@ export class DashboardService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly commission: CommissionService,
+    private readonly people: PersonResolver,
   ) {}
 
   async commissions(user: ResourceUser | null): Promise<DashboardCommissions> {
@@ -145,26 +147,28 @@ export class DashboardService {
    * Commission profiles keyed by name, resolved with the SAME query the uncached path uses —
    * once per distinct person instead of once per member per transaction.
    *
-   * THIS DELIBERATELY DOES NOT BATCH INTO A SINGLE `findMany`, and the reason is worth keeping.
-   * `agentDefaultSplit` resolves a split with `users.findFirst({ where: { name } })`. Two active
-   * accounts in this brokerage are both called "Akhil", with `agent_comm_pct` of 0 and 90. A
-   * `findMany` plus a rule for picking a winner requires knowing which row `findFirst` would have
-   * returned — and `findFirst` without `orderBy` has NO DEFINED ORDER. Measured here it returns the
-   * higher id, not the lower; an obvious "first by id wins" cache picked the 0% row and silently
-   * zeroed that agent's commission. The parity gate caught it, to the cent.
+   * IT NOW BATCHES, AND THE REASON IT PREVIOUSLY COULD NOT IS THE THING THAT CHANGED.
    *
-   * Reusing the identical query per name cannot drift from the uncached path, whatever the database
-   * decides to return. It costs one query per distinct person — six here, forty in a large office —
-   * against one per member per transaction before.
+   * This used to run one `findFirst({ where: { name } })` per name, deliberately, because that is
+   * what the uncached path did and `findFirst` without an `orderBy` has NO DEFINED ORDER. Two
+   * active accounts in this brokerage are both called "Akhil", with `agent_comm_pct` of 0 and 90;
+   * an obvious "first by id wins" cache picked the 0% row and silently zeroed that agent's
+   * commission — a $21,865.50 error the parity gate caught, to the cent. Matching the query exactly
+   * was the only way to be sure the cache agreed with the uncached path.
    *
-   * The cache must also be COMPLETE for the names it will be asked about, because a miss is treated
+   * `PersonResolver` removes that constraint by making the rule explicit rather than leaving it to
+   * the planner: an Active row wins, ties break on the lowest id, everywhere. Both paths now go
+   * through it, so they cannot disagree — and one query replaces one per distinct person.
+   *
+   * The cache must still be COMPLETE for the names it will be asked about, because a miss is treated
    * as an empty profile and does NOT fall back to a query: a partially-filled map would quietly
    * substitute the default 90/95 split for somebody's real one.
    *
-   * The duplicate name itself is a latent hazard this only works around — see the note in
-   * `docs/PERFORMANCE-AUDIT.md`. Splits are looked up by NAME, so two people sharing one is
-   * ambiguous by construction, and which of them a deal pays is currently decided by the query
-   * planner.
+   * The duplicate name remains a hazard this only makes deterministic, not correct — two people
+   * sharing a name is ambiguous by construction. What fixes it properly is the id: `agent_user_id`
+   * and `team_members.user_id` are preferred wherever a row has them (migration
+   * 20260803010000_person_user_ids), and the Users module now refuses to create a second account
+   * with an existing name.
    */
   private async userProfiles(): Promise<Map<string, Record<string, unknown>>> {
     const [agents, members] = await Promise.all([
@@ -177,11 +181,18 @@ export class DashboardService {
       ...members.map((m) => m.name),
     ])].filter((n): n is string => typeof n === 'string' && n.length > 0);
 
+    /*
+     * One query for the lot, resolved the same way the uncached path resolves.
+     *
+     * This was a `findFirst` per name with no `orderBy`, so which of two namesakes won was the
+     * query planner's choice — and could change after a VACUUM or a restore with no code change.
+     * `PersonResolver` applies one deterministic rule everywhere: an Active row wins, ties go to the
+     * lowest id. The parity gate below is what proves the cached and uncached paths still agree to
+     * the cent, which is the property that matters here.
+     */
+    const resolved = await this.people.resolveManyByName(names);
     const out = new Map<string, Record<string, unknown>>();
-    for (const name of names) {
-      const u = await this.prisma.users.findFirst({ where: { name }, select: { profile: true } });
-      out.set(name, parseJsonObject(u?.profile));
-    }
+    for (const name of names) out.set(name, parseJsonObject(resolved.get(name)?.profile));
     return out;
   }
 

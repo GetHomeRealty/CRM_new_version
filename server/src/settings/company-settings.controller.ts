@@ -2,10 +2,10 @@ import { Body, Controller, Delete, Get, HttpCode, Post, Put, Req, Res, UseGuards
 import type { Request, Response } from 'express';
 import { createReadStream } from 'fs';
 import { AuthGuard } from '../auth/guards/auth.guard';
-import { AdminGuard } from '../auth/guards/admin.guard';
-import { CurrentUser } from '../auth/decorators';
+import { ScreenGuard } from '../auth/guards/screen.guard';
+import { CurrentUser, Screen } from '../auth/decorators';
 import type { AuthUserRecord } from '../auth/auth.types';
-import { isAgent } from '../core/authz';
+import { can } from '../core/authz';
 import { CompanySettingsService } from './company-settings.service';
 import { UpdateCompanySettingsDto } from './dto/update-company-settings.dto';
 
@@ -14,25 +14,29 @@ export class CompanySettingsController {
   constructor(private readonly settings: CompanySettingsService) {}
 
   /**
-   * Readable by any authenticated staff — but an agent does not get the bank account.
+   * Readable by any authenticated staff — but the bank account is not part of "readable".
    *
    * The branding half of this row (name, address, phone, logo, currency, tax rate) is needed by
-   * every screen, so the endpoint stays open. The banking half is not: it is printed only on the
-   * Invoice, Trade Sheet, Notice of Sale, Deposit Receipt and Lawyer Statement, and every one of
-   * those buttons already sits behind `!isAgent` in TransactionDetailPage. So the UI never asks an
-   * agent to see these numbers, while the API handed all of them — beneficiary, bank, transit,
-   * institution, account and the HST registration — to anyone with a session. A brokerage's
-   * operating account number is the raw material of payment-redirection fraud; it should not be one
-   * fetch away from any agent login.
+   * every screen, so the endpoint stays open. The banking half is printed only on the Invoice,
+   * Trade Sheet, Notice of Sale, Deposit Receipt and Lawyer Statement, and is withheld from anyone
+   * who cannot produce those.
    *
-   * Stripped rather than 403'd, because the same request legitimately carries the branding an agent
-   * genuinely needs. Writes were already administrator-only.
+   * THIS ASKS A CAPABILITY, NOT A ROLE. It used to strip for `isAgent(user)`, which answered "is
+   * this person an agent?" when the question is "may this person see the operating account?" —
+   * so `crm`, a role with `transactions: 'none'` and `invoice: 'none'`, received the brokerage's
+   * account and transit numbers on request. A brokerage's operating account is the raw material of
+   * payment-redirection fraud; it should not be one fetch away from a login that cannot open a
+   * single screen displaying it. See `company.read-banking` in authz.ts for why the line sits where
+   * it does.
+   *
+   * Stripped rather than 403'd, because the same request legitimately carries the branding the
+   * caller genuinely needs.
    */
   @Get()
   @UseGuards(AuthGuard)
   async show(@CurrentUser() user: AuthUserRecord | undefined): Promise<Record<string, unknown>> {
     const row = this.settings.serialize(await this.settings.current());
-    if (!isAgent(user)) return row;
+    if (can(user, 'company.read-banking')) return row;
 
     const withheld = ['bank_beneficiary', 'bank_name', 'transit_no', 'account_no', 'institution_no', 'hst_number'];
     const safe: Record<string, unknown> = { ...row };
@@ -40,9 +44,24 @@ export class CompanySettingsController {
     return safe;
   }
 
-  /** Administrators only. */
+  /**
+   * Gated on the `settings` screen at `edit` — the permission the Roles & Permissions screen
+   * actually grants.
+   *
+   * WHY THIS CHANGED, AND WHY IT CHANGES NOTHING BY DEFAULT. These three writes were on
+   * `AdminGuard` (`isSuperAdmin`) while `CompanySettingsPage` decided whether to render an editable
+   * form from `can('settings','edit')`. Two authorities for one action, and the product ships a
+   * screen whose whole purpose is to grant the one the server ignored: granting `settings: edit` to
+   * the Admin role returned 200, `/api/user` reported it, the form enabled, Save appeared — and
+   * every save came back 403 saying the caller was not an administrator.
+   *
+   * The default permission map is unchanged by this: `admin` holds `settings: 'edit'` and every
+   * other role holds `view` or `none`, so exactly the same people can write today as could before.
+   * What is different is that the grant now means what the screen says it means.
+   */
   @Put()
-  @UseGuards(AuthGuard, AdminGuard)
+  @UseGuards(AuthGuard, ScreenGuard)
+  @Screen('settings', 'edit')
   async update(
     @CurrentUser() user: AuthUserRecord | undefined,
     @Body() dto: UpdateCompanySettingsDto,
@@ -91,7 +110,8 @@ export class CompanySettingsController {
   /** Upload a new logo. Sent base64-encoded in JSON, as the other uploads in this API are. */
   @Post('logo')
   @HttpCode(200)
-  @UseGuards(AuthGuard, AdminGuard)
+  @UseGuards(AuthGuard, ScreenGuard)
+  @Screen('settings', 'edit')
   async uploadLogo(
     @CurrentUser() user: AuthUserRecord | undefined,
     @Body() body: Record<string, unknown>,
@@ -103,7 +123,8 @@ export class CompanySettingsController {
 
   /** Remove the logo; every surface falls back to the text wordmark. */
   @Delete('logo')
-  @UseGuards(AuthGuard, AdminGuard)
+  @UseGuards(AuthGuard, ScreenGuard)
+  @Screen('settings', 'edit')
   async deleteLogo(@CurrentUser() user: AuthUserRecord | undefined): Promise<Record<string, unknown>> {
     const actor = user ? { id: user.id, name: user.name } : null;
     return this.settings.serialize(await this.settings.removeLogo(actor));

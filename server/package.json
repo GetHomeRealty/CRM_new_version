@@ -8,7 +8,9 @@
     "node": ">=20.19"
   },
   "scripts": {
+    "prebuild": "node scripts/build-guard.cjs --clean",
     "build": "nest build",
+    "postbuild": "node scripts/build-guard.cjs --verify",
     "start": "nest start",
     "start:dev": "nest start --watch",
     "start:prod": "node dist/main.js",

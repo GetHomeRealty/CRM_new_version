@@ -6,6 +6,7 @@ import {
   refreshMetaPages, syncMetaLeads, toggleMetaForm, metaSyncHistory, metaWebhookHealth,
 } from '../lib/metaApi';
 import { apiErrorMessage } from '../lib/apiError';
+import ConfirmDialog, { useConfirm } from './ConfirmDialog';
 import { useToast } from './toast';
 import { useAuth } from '../context/AuthContext';
 import type {
@@ -22,6 +23,16 @@ const stamp = (iso: string | null): string => (iso ? iso.replace('T', ' ').slice
  */
 export default function MetaConnectionPanel({ compact = false }: { compact?: boolean }) {
   const toast = useToast();
+  /*
+   * Disconnect asks first, here as well as on the full Meta screen.
+   *
+   * It is the same destructive action in both places — it erases the stored access tokens, releases
+   * the agent's lead-form claims so another agent can take them over, and needs a full Meta
+   * re-consent to undo — but this copy fired on a single click while the other asked. The same
+   * button behaving differently depending on which screen you happen to be on is how somebody
+   * disconnects a live integration by accident.
+   */
+  const { confirm, askDelete, closeConfirm } = useConfirm();
   const navigate = useNavigate();
   const { can } = useAuth();
   const canEdit = can('meta', 'edit');
@@ -94,7 +105,10 @@ export default function MetaConnectionPanel({ compact = false }: { compact?: boo
       )}
       {status?.token_expired && (
         <div className="import-error" style={{ marginBottom: 10 }}>
-          <strong>The Facebook token has expired.</strong> Lead sync has stopped. Reconnect to resume.
+          <strong>The Facebook token has expired.</strong> Lead sync has stopped, and automatic
+          polling is paused until you reconnect — there is nothing to retry against a dead token.
+          {' '}Enquiries submitted meanwhile are not lost: Facebook holds them and they are collected
+          once you reconnect. Your connected lead forms are kept.
         </div>
       )}
       {status?.is_connected && !status.token_expired && status.needs_reconnect && (
@@ -163,9 +177,18 @@ export default function MetaConnectionPanel({ compact = false }: { compact?: boo
               Refresh Pages
             </button>
             <button className="btn ghost sm" type="button" disabled={busy !== ''}
-              onClick={() => void run('disconnect', async () => {
-                await disconnectMeta(); setPages([]); setForms([]); await loadStatus();
-              }, 'Meta disconnected.')}>
+              onClick={() => askDelete({
+                title: 'Disconnect Meta?',
+                message: 'New leads will stop arriving. Leads already synced stay in the Lead module.',
+                note: 'The stored Facebook access tokens are erased immediately, and your connected lead forms '
+                  + 'are released — another agent can connect them while you are disconnected. '
+                  + 'Reconnecting needs a fresh Meta sign-in.',
+                onConfirm: () => {
+                  void run('disconnect', async () => {
+                    await disconnectMeta(); setPages([]); setForms([]); await loadStatus();
+                  }, 'Meta disconnected.').then(closeConfirm);
+                },
+              })}>
               Disconnect
             </button>
           </>
@@ -249,9 +272,18 @@ export default function MetaConnectionPanel({ compact = false }: { compact?: boo
       {!compact && webhook && (
         <>
           <div className="modal-sub">Webhook Health</div>
+          {/* A webhook stops silently, and "no deliveries" looks exactly like "a quiet week".
+              Polling still collects the leads, so this warns rather than alarms. */}
+          {webhook.stalled && webhook.stalled_reason && (
+            <div className="meta-alert warn" style={{ padding: '10px 12px', marginBottom: 8 }}>
+              <strong>Connected, but nothing is arriving</strong>
+              <p>{webhook.stalled_reason}</p>
+            </div>
+          )}
           <p className="help">
             {webhook.total} delivery(ies) received{webhook.failed > 0 ? `, ${webhook.failed} failed` : ''} ·
             last {stamp(webhook.last_received_at)}
+            {webhook.connected_forms > 0 ? ` · ${webhook.connected_forms} form(s) connected` : ''}
           </p>
           {webhook.events.length > 0 && (
             <ul className="crm-feed">
@@ -268,6 +300,7 @@ export default function MetaConnectionPanel({ compact = false }: { compact?: boo
           )}
         </>
       )}
+      <ConfirmDialog confirm={confirm} onClose={closeConfirm} />
     </div>
   );
 }

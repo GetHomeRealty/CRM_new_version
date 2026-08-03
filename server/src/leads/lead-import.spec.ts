@@ -95,9 +95,14 @@ describe('lead import engine', () => {
   it('matches an existing address regardless of case', async () => {
     // This is what the old ILIKE bought, and what `lower(email) IN (...)` has to preserve — the
     // whole change would be worthless if it silently started creating duplicates for "Ada@" vs "ada@".
+    //
+    // The seeded lead is OWNED BY THE IMPORTER, because that is what makes it a duplicate at all:
+    // uniqueness is per book now, so an address in somebody else's book is not this importer's
+    // duplicate and is deliberately re-created for them. Case-insensitivity is what this test is
+    // about, and it is tested where it still applies.
     await inRollback(async (tx) => {
       const u = uniq();
-      await tx.leads.create({ data: { name: 'Ada', email: `ADA-${u}@X.TEST`, company_id: 1, created_at: new Date(), updated_at: new Date() } });
+      await tx.leads.create({ data: { name: 'Ada', email: `ADA-${u}@X.TEST`, owner_user_id: IMPORTER_ID, company_id: 1, created_at: new Date(), updated_at: new Date() } });
 
       const rows = engineFor(tx).parseCsv(csvOf([{ name: 'ada', email: `ada-${u}@x.test` }]));
       const tally = await engineFor(tx).runBatch(rows, ctx, new Set());
@@ -243,28 +248,64 @@ describe('lead import engine', () => {
     });
   });
 
-  it('does not tag a lead that belongs to somebody else', async () => {
-    // An agent uploading a list that overlaps the office's used to be told "N tagged" while the
-    // tag was written onto leads they cannot see, open, or put in a campaign.
+  it('gives the importer their own copy of an address a colleague already holds, and leaves theirs alone', async () => {
+    /*
+     * Two things this has to get right, and they used to be one thing.
+     *
+     * NEVER touch the other person's lead. An agent uploading a list that overlapped the office's
+     * was once told "N tagged" while the tag was written onto leads they cannot see, open, or put
+     * in a campaign. That part is unchanged and still asserted below.
+     *
+     * BUT the import must now CREATE their copy rather than refuse it. Uniqueness moved to
+     * `(company_id, owner_user_id, lower(email))` because the same person legitimately reaches more
+     * than one agent — their referral, their landing page, their ad. Under the old global index the
+     * row was reported as "already existed" and never created, so an agent importing their own
+     * contact list silently received none of the people a colleague happened to have first.
+     */
     await inRollback(async (tx) => {
       const u = uniq();
       const now = new Date();
       const email = `theirs-${u}@x.test`;
-      await tx.leads.create({
+      const theirs = await tx.leads.create({
         data: { name: 'Someone else\'s lead', email, tags: '[]', owner_user_id: 999001, company_id: 1, created_at: now, updated_at: now },
       });
 
       const rows = engineFor(tx).parseCsv(csvOf([{ email }]));
       const tally = await engineFor(tx).runBatch(rows, { tag: 'my-campaign', userName: 'Agent', userId: 999002 }, new Set());
 
-      // Still an existing address — the unique index means it cannot be created either — but the
-      // other person's lead is left exactly as it was.
+      expect(tally.imported).toBe(1);   // the importer gets their own copy
+      expect(tally.duplicate).toBe(0);  // it is not a duplicate of anything in THEIR book
+      expect(tally.tagged).toBe(0);     // and nothing of anyone else's was written to
+
+      const mine = await tx.leads.findFirst({ where: { email, owner_user_id: 999002 } });
+      expect(mine).toBeTruthy();
+      expect(JSON.parse(mine?.tags ?? '[]')).toEqual(['my-campaign']);
+
+      // The colleague's record is byte-for-byte as it was.
+      const after = await tx.leads.findUnique({ where: { id: theirs.id }, select: { tags: true, updated_at: true } });
+      expect(JSON.parse(after?.tags ?? '[]')).toEqual([]);
+      expect(after?.updated_at?.getTime()).toBe(theirs.updated_at?.getTime());
+    });
+  });
+
+  it('refuses a second copy in the importer’s OWN book', async () => {
+    // The half of uniqueness that survives: one person must not appear twice on one desk, which
+    // splits their history and double-sends every campaign.
+    await inRollback(async (tx) => {
+      const u = uniq();
+      const now = new Date();
+      const email = `mine-${u}@x.test`;
+      await tx.leads.create({
+        data: { name: 'Already mine', email, tags: '[]', owner_user_id: 999002, company_id: 1, created_at: now, updated_at: now },
+      });
+
+      const rows = engineFor(tx).parseCsv(csvOf([{ email }]));
+      const tally = await engineFor(tx).runBatch(rows, { tag: 'my-campaign', userName: 'Agent', userId: 999002 }, new Set());
+
       expect(tally.duplicate).toBe(1);
       expect(tally.imported).toBe(0);
-      expect(tally.tagged).toBe(0);
-
-      const after = await tx.leads.findFirst({ where: { email }, select: { tags: true } });
-      expect(JSON.parse(after?.tags ?? '[]')).toEqual([]);
+      expect(tally.tagged).toBe(1);
+      expect(await tx.leads.count({ where: { email } })).toBe(1);
     });
   });
 

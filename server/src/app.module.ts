@@ -24,6 +24,7 @@ import { DashboardModule } from './dashboard/dashboard.module';
 import { SettingsModule } from './settings/settings.module';
 import { WorkflowsModule } from './workflows/workflows.module';
 import { NotificationsModule } from './notifications/notifications.module';
+import { NotificationPreferenceModule } from './notifications/notification-preference.module';
 import { InvoicesModule } from './invoices/invoices.module';
 import { AuditLogModule } from './audit-log/audit-log.module';
 import { UsersModule } from './users/users.module';
@@ -77,6 +78,7 @@ import { TwilioVoiceModule } from './twilio-voice/twilio-voice.module';
     SettingsModule,
     WorkflowsModule,
     NotificationsModule,
+    NotificationPreferenceModule,
     InvoicesModule,
     AuditLogModule,
     UsersModule,

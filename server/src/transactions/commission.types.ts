@@ -1,6 +1,8 @@
 /** Normalized inputs for CommissionService (all Decimals converted to numbers). */
 
 export interface CommMember {
+  /** The user this member is, when known. Preferred over the name. */
+  user_id?: number | null;
   name: string;
   split: number;
   agent_pct: number;
@@ -44,6 +46,8 @@ export interface CommissionTxn {
   comm_paid_status: string | null;
   comm_status: string | null;
   agent: string | null;
+  /** The user `agent` names, when the row has been resolved. Preferred over the name. */
+  agent_user_id: number | null;
   /** Parsed `adjustments` JSON blob (or null). */
   adjustments: Record<string, unknown> | null;
   teamMembers: CommMember[];
