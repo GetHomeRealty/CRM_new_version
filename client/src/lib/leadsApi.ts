@@ -36,16 +36,45 @@ export const deleteLead = (id: number): Promise<void> =>
 export const bulkDeleteLeads = (leadIds: number[]): Promise<{ deleted: number }> =>
   api.post<{ deleted: number }>('/api/leads/bulk-delete', { lead_ids: leadIds }).then((r) => r.data);
 
-/** Rows for a CSV export — the checked leads, or everything matching the filters. */
-export const exportLeads = (leadIds: number[], filters: Partial<LeadFilters>): Promise<Record<string, string>[]> =>
-  api.post<Record<string, string>[]>('/api/leads/export', { lead_ids: leadIds, filters }).then((r) => r.data);
+/**
+ * Rows for a CSV export — the checked leads, or everything matching the filters.
+ *
+ * `meta.truncated` says whether the server had more to give. It used to return a bare array, so a
+ * capped export was indistinguishable from a complete one and the screen reported the truncated
+ * count as a success.
+ */
+export interface LeadExportResult {
+  data: Record<string, string>[];
+  meta: { total: number; returned: number; limit: number; truncated: boolean };
+}
+
+export const exportLeads = (leadIds: number[], filters: Partial<LeadFilters>): Promise<LeadExportResult> =>
+  api.post<LeadExportResult>('/api/leads/export', { lead_ids: leadIds, filters }).then((r) => r.data);
 
 export const importLeadsCsv = (csv: string, tag: string): Promise<LeadImportResult> =>
   api.post<LeadImportResult>('/api/leads/import', { csv, tag }).then((r) => r.data);
 
 // ---- recently deleted ----
-export const listDeletedLeads = (): Promise<{ count: number; data: DeletedLead[] }> =>
-  api.get<{ count: number; data: DeletedLead[] }>('/api/leads/deleted').then((r) => r.data);
+export interface DeletedLeadPage {
+  count: number;
+  data: DeletedLead[];
+  meta: { page: number; per_page: number; total: number; last_page: number };
+}
+
+/**
+ * The recycle bin, a page at a time.
+ *
+ * `meta` matters here more than on the live list: this screen used to return at most 200 rows with
+ * no indication there were more, so past that point somebody's deleted lead was simply not on the
+ * screen they had opened specifically to find it.
+ */
+export const listDeletedLeads = (opts: { page?: number; limit?: number } = {}): Promise<DeletedLeadPage> => {
+  const q = new URLSearchParams();
+  if (opts.page) q.set('page', String(opts.page));
+  if (opts.limit) q.set('limit', String(opts.limit));
+  const qs = q.toString();
+  return api.get<DeletedLeadPage>(`/api/leads/deleted${qs ? `?${qs}` : ''}`).then((r) => r.data);
+};
 
 export const restoreLead = (id: number): Promise<void> =>
   api.post(`/api/leads/deleted/${id}/restore`).then(() => undefined);
@@ -54,13 +83,79 @@ export const purgeLead = (id: number): Promise<void> =>
   api.delete(`/api/leads/deleted/${id}`).then(() => undefined);
 
 // ---- tags ----
-/** Every lead task the caller can see, across all their leads — used by the Dashboard. */
-export const listAllLeadTasks = (): Promise<LeadTaskRow[]> =>
-  api.get<LeadTaskRow[]>('/api/leads/tasks').then((r) => r.data);
+/**
+ * A page of lead tasks across the caller's leads — the Dashboard panel.
+ *
+ * `summary` is counted across the WHOLE set, not the page, because the panel heading reads
+ * "N open of M" and computing that from twenty-five rows would be a different, wrong number.
+ * These feeds were unpaginated and reached 1.67 MB in a single response on a real book.
+ */
+export interface LeadFeedPage<T> {
+  data: T[];
+  meta: { page: number; per_page: number; total: number; last_page: number };
+  summary: Record<string, number>;
+}
 
-/** Every showing across the caller's leads, for the Dashboard. */
-export const listAllLeadShowings = (): Promise<LeadShowingRow[]> =>
-  api.get<LeadShowingRow[]>('/api/leads/showings').then((r) => r.data);
+/**
+ * Coerce a feed response into a whole `LeadFeedPage`, whatever arrived.
+ *
+ * WHY THIS IS HERE. These two endpoints used to return a bare array and now return
+ * `{ data, meta, summary }`. The panels read all three, so against the older shape every one of
+ * them was `undefined` — and `const { open } = feed.summary` threw, which the error boundary turned
+ * into a blank CRM Dashboard. A whole screen was lost because one aggregate was missing.
+ *
+ * An API server left running across the change serves the old shape from memory, which is exactly
+ * when somebody is looking at the screen. But the deeper point is that a panel should not be able
+ * to take the page down over a field it does not own, so the shape is settled once, here, rather
+ * than defended in each panel.
+ *
+ * The derived values are CORRECT rather than placeholders: a bare array was the complete,
+ * unpaginated set, so counting it gives the same answer the server would. They are computed with
+ * the same definitions the server uses — see `allTasks`/`allShowings` — so the number does not
+ * change depending on which shape came back.
+ */
+function toFeedPage<T>(raw: unknown, summarise: (rows: T[]) => Record<string, number>): LeadFeedPage<T> {
+  const whole = (data: T[]): LeadFeedPage<T> => ({
+    data,
+    meta: { page: 1, per_page: data.length, total: data.length, last_page: 1 },
+    summary: summarise(data),
+  });
+
+  if (Array.isArray(raw)) return whole(raw as T[]);
+
+  const page = (raw ?? {}) as Partial<LeadFeedPage<T>>;
+  const data = Array.isArray(page.data) ? page.data : [];
+  return {
+    data,
+    meta: page.meta ?? whole(data).meta,
+    summary: page.summary ?? summarise(data),
+  };
+}
+
+/** Open, overdue and total — the same definitions `allTasks` counts with. */
+const taskSummary = (rows: LeadTaskRow[]): Record<string, number> => {
+  const today = new Date().toISOString().slice(0, 10);
+  return {
+    total: rows.length,
+    open: rows.filter((t) => t.status === 'pending').length,
+    overdue: rows.filter((t) => t.status === 'pending' && t.due_date < today).length,
+  };
+};
+
+/** Upcoming and total — the same definitions `allShowings` counts with. */
+const showingSummary = (rows: LeadShowingRow[]): Record<string, number> => ({
+  total: rows.length,
+  upcoming: rows.filter((s) => s.status === 'scheduled').length,
+});
+
+export const listAllLeadTasks = (page = 1, limit?: number): Promise<LeadFeedPage<LeadTaskRow>> =>
+  api.get<unknown>('/api/leads/tasks', { params: { page, limit } })
+    .then((r) => toFeedPage<LeadTaskRow>(r.data, taskSummary));
+
+/** A page of upcoming showings across the caller's leads, for the Dashboard. */
+export const listAllLeadShowings = (page = 1, limit?: number): Promise<LeadFeedPage<LeadShowingRow>> =>
+  api.get<unknown>('/api/leads/showings', { params: { page, limit } })
+    .then((r) => toFeedPage<LeadShowingRow>(r.data, showingSummary));
 
 export const listLeadTags = (): Promise<LeadTagCounts> =>
   api.get<LeadTagCounts>('/api/leads/tags').then((r) => r.data);

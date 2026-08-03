@@ -1,6 +1,7 @@
 import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import type { Prisma, transaction_reviews } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { PersonResolver } from '../core/person-resolver.service';
 import { MailerService } from '../email/mailer.service';
 import { CompanySettingsService } from '../settings/company-settings.service';
 import { MessagesService } from './messages.service';
@@ -77,6 +78,7 @@ export class TransactionReviewService {
 
   constructor(
     private readonly prisma: PrismaService,
+    private readonly people: PersonResolver,
     private readonly mailer: MailerService,
     private readonly settings: CompanySettingsService,
     private readonly messages: MessagesService,
@@ -275,7 +277,10 @@ export class TransactionReviewService {
 
     const name = (review.agent_name ?? txn.agent ?? '').trim();
     if (!name) return;
-    const user = await this.prisma.users.findFirst({ where: { name, status: 'Active' }, select: { email: true } });
+    // Through PersonResolver so two people sharing a name resolve the same way everywhere, and
+    // deterministically: Active wins, ties break on the lowest id. This was a findFirst with no
+    // orderBy, so the planner decided which colleague got the mail.
+    const user = await this.people.resolve(null, name, { activeOnly: true });
     const to = (user?.email ?? '').trim();
     if (!to) {
       this.log.warn(`Review ${review.id}: no email on file for "${name}" — nothing sent.`);

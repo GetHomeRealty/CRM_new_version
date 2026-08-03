@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { MetaGraphService, type GraphPage } from './meta-graph.service';
 import { decryptToken, encryptToken } from './meta-crypto';
+import { META_RECONNECT_NOTICE_MS } from './meta.constants';
 
 export interface ConnectionWithPages {
   id: number;
@@ -96,6 +97,23 @@ export class MetaConnectionService {
    * Disconnect. The row is deactivated rather than deleted so the audit trail keeps a record,
    * but the tokens are wiped immediately — a disconnected integration must not keep a working
    * credential on disk.
+   *
+   * THE FORMS HAVE TO BE RELEASED TOO, and this is the part that was missing. `meta_lead_forms`
+   * does not hang off `meta_pages` by a foreign key — `page_id` is a plain column — so deleting the
+   * pages leaves every form row still `is_active`, still holding its claim under
+   * `meta_lead_forms_page_form_key`. The account looked disconnected on screen while the forms
+   * stayed locked to it.
+   *
+   * What that cost: a form is claimed by one agent, and the claim is released by deactivation —
+   * that is the whole reason the unique index is partial (`WHERE is_active`). With the claim never
+   * released, an agent who left took their forms with them permanently. Their successor connecting
+   * the same form was refused, naming a colleague who no longer works here, and the only remedies
+   * were a database edit or building a new form in Meta and losing the ad attached to it.
+   *
+   * Deactivating rather than deleting, for the same reason as the connection row: `syncUser` and
+   * the scheduler both filter on `is_active`, so this stops the polling, and if the same agent
+   * reconnects later the upsert in `meta.controller.ts` flips their own rows back on and their
+   * sync history survives.
    */
   async disconnect(userId: number): Promise<{ disconnected: boolean }> {
     const row = await this.prisma.meta_connections.findUnique({ where: { user_id: userId }, select: { id: true } });
@@ -103,12 +121,62 @@ export class MetaConnectionService {
     const now = new Date();
     await this.prisma.$transaction([
       this.prisma.meta_pages.deleteMany({ where: { connection_id: row.id } }),
+      this.prisma.meta_lead_forms.updateMany({
+        where: { user_id: userId, is_active: true },
+        data: { is_active: false, updated_at: now },
+      }),
       this.prisma.meta_connections.update({
         where: { id: row.id },
         data: { is_active: false, disconnected_at: now, access_token: '', updated_at: now },
       }),
     ]);
     return { disconnected: true };
+  }
+
+  /**
+   * Record that the stored token is no longer usable. Returns whether the agent is due an email.
+   *
+   * `token_expires_at` is set to now rather than a new "dead" flag being invented: that is exactly
+   * what Meta has just told us, and `status()` already derives `needs_reconnect` from it, so the
+   * screen becomes correct without another field to keep in step. The case that made this necessary
+   * is a REVOKED token — somebody removes the app from their Facebook account — where the stored
+   * expiry is still weeks away and so nothing looked wrong while nothing worked.
+   *
+   * The connection stays `is_active`. It is not disconnected: the forms remain claimed by this
+   * agent, and reconnecting restores service without anybody re-choosing pages and forms. Deleting
+   * their setup because a token aged out would be a far worse answer than pausing.
+   */
+  async markTokenDead(userId: number): Promise<boolean> {
+    const row = await this.prisma.meta_connections.findUnique({
+      where: { user_id: userId },
+      select: { id: true, reconnect_notified_at: true },
+    });
+    if (!row) return false;
+
+    const now = new Date();
+    const last = row.reconnect_notified_at?.getTime() ?? 0;
+    const due = now.getTime() - last >= META_RECONNECT_NOTICE_MS;
+
+    /*
+     * Stamped a couple of seconds in the PAST, not at `now`.
+     *
+     * `token_expires_at` is `Timestamp(0)`, which ROUNDS to the nearest second rather than
+     * truncating — so writing 12:00:00.700 stores 12:00:01, a moment in the future. Everything that
+     * asks "has this expired?" with `> now` then answered no, and the scheduler went on polling the
+     * very token this call exists to retire. Two seconds is comfortably past the ±0.5 s rounding
+     * and still an honest statement: Meta rejected it, so it was already dead when we asked.
+     */
+    const deadAt = new Date(now.getTime() - 2000);
+
+    await this.prisma.meta_connections.update({
+      where: { id: row.id },
+      data: {
+        token_expires_at: deadAt,
+        updated_at: now,
+        ...(due ? { reconnect_notified_at: now } : {}),
+      },
+    });
+    return due;
   }
 
   async touchSync(userId: number): Promise<void> {

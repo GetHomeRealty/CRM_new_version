@@ -4,6 +4,7 @@ import { ReviewThreadService } from './review-thread.service';
 import { TransactionReviewService } from './transaction-review.service';
 import { ReviewExportService } from './review-export.service';
 import type { AuthUserRecord } from '../auth/auth.types';
+import { PersonResolver } from '../core/person-resolver.service';
 
 /**
  * Threads, attachments, the recurring-error figures and the two exports.
@@ -40,7 +41,7 @@ const stubs = () => ({
 const threadFor = (tx: PrismaService) => new ReviewThreadService(tx);
 const reviewsFor = (tx: PrismaService) => {
   const s = stubs();
-  return new TransactionReviewService(tx, s.mailer as never, s.settings as never, s.messages as never);
+  return new TransactionReviewService(tx, new PersonResolver(tx), s.mailer as never, s.settings as never, s.messages as never);
 };
 
 async function makeTxn(tx: PrismaService, agent = 'Test Agent'): Promise<number> {

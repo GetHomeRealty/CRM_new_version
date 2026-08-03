@@ -168,6 +168,7 @@ describe('unscoped access stays deliberate and rare', () => {
     'health.controller.ts': 'the readiness probe asks whether the SERVER can serve, not about any tenant data',
     'mail-retention.service.ts': 'the nightly retention sweep applies one policy to every brokerage mailbox, on a timer, with no request and so no tenant in context',
     'lead-import-job.service.ts': 'a queued import outlives the request that created it, so the tenant comes from the job row rather than from a request that has already returned',
+    'campaigns.service.ts': 'the open pixel and the unsubscribe link are fetched from inside a recipient\'s email, so there is no session and no AuthGuard to name a tenant — the authority is the 192-bit per-recipient token, which is unguessable and pinned to its campaign, so the lookup cannot be steered into another brokerage by choosing an input. Without this, every CASL opt-out failed and every open was silently discarded',
   };
 
   it('is used only where it has been justified', () => {

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { getCrmDashboard } from '../lib/api';
-import { listAllLeadTasks, listAllLeadShowings } from '../lib/leadsApi';
+import { listAllLeadTasks, listAllLeadShowings, type LeadFeedPage } from '../lib/leadsApi';
 import { useToast } from './toast';
 import { useAuth } from '../context/AuthContext';
 import { apiErrorMessage } from '../lib/apiError';
@@ -29,8 +29,17 @@ export default function CrmDashboardPage() {
 
   const [data, setData] = useState<CrmDashboard | null>(null);
   const [loading, setLoading] = useState(true);
-  const [tasks, setTasks] = useState<LeadTaskRow[]>([]);
-  const [showings, setShowings] = useState<LeadShowingRow[]>([]);
+  /*
+   * The two feeds are paged now, so each carries its page number, its total and its own summary.
+   *
+   * The summary is the part worth keeping separate: the panel headings read "N open of M" and
+   * "N upcoming of M", and those counts come from the server across the whole set. Deriving them
+   * from the twenty-five rows currently on screen would quietly turn them into a different number.
+   */
+  const [tasks, setTasks] = useState<LeadFeedPage<LeadTaskRow> | null>(null);
+  const [taskPage, setTaskPage] = useState(1);
+  const [showings, setShowings] = useState<LeadFeedPage<LeadShowingRow> | null>(null);
+  const [showingPage, setShowingPage] = useState(1);
 
   useEffect(() => {
     getCrmDashboard()
@@ -42,9 +51,13 @@ export default function CrmDashboardPage() {
 
   useEffect(() => {
     if (!canSeeLeads) return;
-    listAllLeadTasks().then(setTasks).catch(() => setTasks([]));
-    listAllLeadShowings().then(setShowings).catch(() => setShowings([]));
-  }, [canSeeLeads]);
+    listAllLeadTasks(taskPage).then(setTasks).catch(() => setTasks(null));
+  }, [canSeeLeads, taskPage]);
+
+  useEffect(() => {
+    if (!canSeeLeads) return;
+    listAllLeadShowings(showingPage).then(setShowings).catch(() => setShowings(null));
+  }, [canSeeLeads, showingPage]);
 
   // Reported up by the To-Do list so the card and the list are always the same numbers. The whole
   // count object is kept, not just the total: the tile shows a breakdown, and taking the headline
@@ -130,8 +143,8 @@ export default function CrmDashboardPage() {
         } />
       </div>
 
-      {canSeeLeads && <LeadTasksPanel tasks={tasks} />}
-      {canSeeLeads && <LeadShowingsPanel showings={showings} />}
+      {canSeeLeads && <LeadTasksPanel feed={tasks} onPage={setTaskPage} />}
+      {canSeeLeads && <LeadShowingsPanel feed={showings} onPage={setShowingPage} />}
 
       {/* The CRM's own list. Tasks added here belong to the CRM and do not appear on the
           Transaction Desk's list — section 11. */}

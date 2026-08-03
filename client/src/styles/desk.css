@@ -403,7 +403,10 @@ input[type="number"],.numeric,.stat-card .val{font-variant-numeric:tabular-nums;
 /* Events inside the month grid read larger and bolder than the type badges elsewhere, which keep
    the plain .cal-chip size — hence scoping to .cal-chips rather than restyling .cal-chip. */
 .cal-chips .cal-chip{font-size:12.5px;font-weight:700;line-height:1.4;padding:2px 6px}
-.cal-more{font-size:11px;font-weight:600;color:var(--muted);padding-left:5px}
+/* Was a span; it is a button now so the hidden events can be opened. The reset keeps it looking
+   exactly as it did — the only visible change is that it responds to a pointer. */
+.cal-more{font-size:11px;font-weight:600;color:var(--muted);padding-left:5px;background:none;border:0;display:block;text-align:left;width:100%;cursor:pointer;font-family:inherit}
+.cal-more:hover{color:var(--text);text-decoration:underline}
 
 /* "Pick a date" grid: compact day cells, no event titles — days with events are highlighted and
    the events are read in the cards on the right. */
@@ -1453,3 +1456,17 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
 /* Browser reminders for this device — a one-line switch, not a settings page. */
 .push-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 .push-card .muted{max-width:62ch}
+
+/* ------------------------------------------------------- Offboarding -- */
+/* Shown on the user form the moment Status is switched to Inactive: what the person
+   still holds, while the administrator can still act on it. Informs, never blocks. */
+.field.offboarding{border-left:3px solid var(--line-strong);border-radius:8px;padding:11px 13px;background:var(--surface-2, rgba(15,23,42,.03))}
+.field.offboarding.warn{border-left-color:#f59e0b;background:var(--warn-soft)}
+.field.offboarding.ok{border-left-color:var(--ok, #16a34a)}
+.field.offboarding label{margin-bottom:4px}
+.field.offboarding ul{list-style:disc;font-size:12.5px;line-height:1.5}
+.field.offboarding li strong{font-size:12.5px}
+
+/* The field a failed save is about. Paired with a scroll-into-view and focus, so the message and
+   the thing it is about are on screen together — the toast alone named fields the user could not see. */
+.field-bad{border-color:var(--bad,#dc2626) !important;box-shadow:0 0 0 3px rgba(220,38,38,.12)}

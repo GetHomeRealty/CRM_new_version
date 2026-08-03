@@ -77,6 +77,29 @@ describe('the capabilities restate the decisions they came from', () => {
     'users.manage-photo': ['admin', 'manager'],
     'users.administer': ['admin'],
     'data.read-all': ['admin', 'manager'],
+    /*
+     * Everyone below manager is locked out of rewriting a brokerage-assigned lead's identity —
+     * including `crm`, `accounting` and `documentation`, which the old `role === 'agent'` check
+     * silently exempted. Listing every holder here is the point: the bug was that three roles were
+     * on the wrong side of a rule nobody had written down.
+     */
+    'leads.rewrite-identity': ['admin', 'manager'],
+    /*
+     * The brokerage's own banking details.
+     *
+     * `accounting` and `documentation` are IN, and that is deliberate rather than a loose
+     * threshold: the five documents that print these numbers — Invoice, Trade Sheet, Notice of
+     * Sale, Deposit Receipt, Lawyer Statement — are opened from TransactionDetailPage, which
+     * `documentation` reaches on `transactions: 'edit'` and `accounting` reaches for invoicing.
+     * Excluding either would break the roles whose job is to produce those documents.
+     *
+     * `crm` is OUT, which is the finding this replaced: the old `isAgent(user)` check stripped the
+     * numbers for agents only, so a role with `transactions: 'none'` and `invoice: 'none'` was
+     * handed the operating account and transit numbers on request.
+     *
+     * `agent` stays OUT, unchanged — an agent works transactions but is not shown brokerage banking.
+     */
+    'company.read-banking': ['admin', 'manager', 'accounting', 'documentation'],
   };
 
   it.each(Object.keys(EXPECTED) as Capability[])('%s is held by exactly the right roles', (cap) => {

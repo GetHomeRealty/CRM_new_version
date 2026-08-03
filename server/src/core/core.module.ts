@@ -4,6 +4,7 @@ import { AreaGuard } from './area.guard';
 import { RolePermissionStore } from './role-permission.store';
 import { RolesService } from './roles.service';
 import { ResourceAccessService } from './resource-access.service';
+import { PersonResolver } from './person-resolver.service';
 import { AuditModule } from '../audit/audit.module';
 
 /**
@@ -21,7 +22,7 @@ import { AuditModule } from '../audit/audit.module';
 @Global()
 @Module({
   imports: [AuditModule],
-  providers: [ModuleAccessService, AreaGuard, RolePermissionStore, RolesService, ResourceAccessService],
-  exports: [ModuleAccessService, AreaGuard, RolePermissionStore, RolesService, ResourceAccessService],
+  providers: [PersonResolver, ModuleAccessService, AreaGuard, RolePermissionStore, RolesService, ResourceAccessService],
+  exports: [PersonResolver, ModuleAccessService, AreaGuard, RolePermissionStore, RolesService, ResourceAccessService],
 })
 export class CoreModule {}

@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import type { Area } from '../common/domain';
+import { AREA_LABEL, type Area } from '../common/domain';
 
 /**
  * Reads a user's synced inbound mail. Every method is scoped to `userId`, so an inbox query can
@@ -112,6 +112,34 @@ export class InboxService {
     };
   }
 
+  /**
+   * Explain a message that could not be found, then throw.
+   *
+   * The bare "Message not found." was actively misleading. `area` defaults to the Transaction Desk
+   * when the query string omits it, so a caller who listed the CRM inbox and then wrote to a
+   * message id without repeating `?area=crm` was told the message did not exist — about a message
+   * the API had handed them moments earlier. It reads as data loss and sends people looking in the
+   * wrong place entirely.
+   *
+   * Checking the user's OTHER areas leaks nothing: the lookup is still bounded by `user_id`, so it
+   * can only ever describe a message that already belongs to the caller. If it genuinely is not
+   * theirs, the message is unchanged.
+   */
+  private async missingError(userId: number, area: Area, id: number): Promise<NotFoundException> {
+    const elsewhere = await this.prisma.inbound_emails.findFirst({
+      where: { id, user_id: userId },
+      select: { mail_account: { select: { scope: true } } },
+    });
+    const other = elsewhere?.mail_account?.scope;
+    if (other && other !== area) {
+      return new NotFoundException({
+        message: `That message is in your ${AREA_LABEL[other === 'crm' ? 'crm' : 'desk']} inbox, `
+          + `not ${AREA_LABEL[area]}. Add ?area=${other} to reach it.`,
+      });
+    }
+    return new NotFoundException({ message: 'Message not found.' });
+  }
+
   /** One message with its full body. Reading it marks it seen. */
   async get(userId: number, area: Area, id: number): Promise<Record<string, unknown>> {
     // Area-scoped as well as user-scoped: asking the Transaction Desk for a CRM message's id
@@ -119,7 +147,7 @@ export class InboxService {
     const row = await this.prisma.inbound_emails.findFirst({
       where: { id, user_id: userId, ...this.scopeFor(await this.primaryAccount(userId, area), area) },
     });
-    if (!row) throw new NotFoundException({ message: 'Message not found.' });
+    if (!row) throw await this.missingError(userId, area, id);
     if (!row.seen) await this.prisma.inbound_emails.update({ where: { id }, data: { seen: true } });
     const lead = row.lead_id
       ? await this.prisma.leads.findUnique({ where: { id: row.lead_id }, select: { id: true, name: true } })
@@ -137,7 +165,7 @@ export class InboxService {
       where: { id, user_id: userId, ...this.scopeFor(await this.primaryAccount(userId, area), area) },
       select: { id: true },
     });
-    if (!row) throw new NotFoundException({ message: 'Message not found.' });
+    if (!row) throw await this.missingError(userId, area, id);
     await this.prisma.inbound_emails.update({ where: { id }, data: { seen } });
     return { seen };
   }

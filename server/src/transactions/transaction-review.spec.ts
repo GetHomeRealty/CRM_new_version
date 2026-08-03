@@ -2,6 +2,7 @@ import { PrismaClient } from '@prisma/client';
 import type { PrismaService } from '../prisma/prisma.service';
 import { TransactionReviewService, REVERT_OK, REVERT_UNSUPPORTED } from './transaction-review.service';
 import type { AuthUserRecord } from '../auth/auth.types';
+import { PersonResolver } from '../core/person-resolver.service';
 
 /**
  * The review lifecycle, against the real schema, inside transactions that are rolled back.
@@ -48,6 +49,7 @@ const stubs = () => {
 const serviceFor = (tx: PrismaService, s: ReturnType<typeof stubs>) =>
   new TransactionReviewService(
     tx,
+    new PersonResolver(tx),
     s.mailer as never,
     s.settings as never,
     s.messages as never,

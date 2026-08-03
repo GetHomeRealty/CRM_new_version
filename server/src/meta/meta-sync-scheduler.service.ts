@@ -81,8 +81,22 @@ export class MetaSyncSchedulerService implements OnModuleInit, OnModuleDestroy {
     if (this.running) return; // a slow round must not overlap the next tick
     this.running = true;
     try {
+      /*
+       * Connections whose token Meta has already told us is finished are skipped.
+       *
+       * `token_expires_at` is set to the moment of the failure when a sync hits a 190, so this
+       * filter is "the token is known dead", not a guess about age. Without it the poll retried a
+       * dead token every fifteen minutes for ever — one Graph call per connected form each time,
+       * charged to the shared app budget, producing an identical error line nobody was reading.
+       *
+       * The agent has been emailed and the screen says Reconnect. Until somebody acts there is
+       * nothing here to retry, and retrying costs the agents whose tokens still work.
+       */
       const connections = await this.prisma.meta_connections.findMany({
-        where: { is_active: true },
+        where: {
+          is_active: true,
+          OR: [{ token_expires_at: null }, { token_expires_at: { gt: new Date() } }],
+        },
         select: { user_id: true },
       });
       if (!connections.length) return;
@@ -90,10 +104,41 @@ export class MetaSyncSchedulerService implements OnModuleInit, OnModuleDestroy {
       for (const c of connections) {
         const user = await this.prisma.users.findUnique({
           where: { id: c.user_id },
-          select: { id: true, name: true, email: true, role: true },
+          select: { id: true, name: true, email: true, role: true, status: true },
         });
-        // A connection whose owner was deleted or deactivated has nothing to sync against.
+        // A connection whose owner was deleted has nothing to sync against.
         if (!user) continue;
+
+        /*
+         * NOR HAS ONE WHOSE OWNER IS DEACTIVATED — which this claimed to handle and did not.
+         * `findUnique` returns a deactivated account exactly as it returns an active one, so the
+         * poll ran on, importing leads into a book that had just been made unreachable: the owner
+         * cannot sign in, and lead visibility is per person, so an administrator cannot see them
+         * either. The brokerage kept paying for the clicks and nobody ever saw the enquiries.
+         *
+         * Skipping rather than disconnecting, deliberately. This is reversible — reactivate the
+         * account and the next tick resumes, with the tokens and the form claims untouched —
+         * whereas disconnecting destroys the tokens and releases the forms, which is right for a
+         * departure and wrong for a suspension.
+         *
+         * A NET RATHER THAN THE MECHANISM. Deactivating an account now disconnects Meta outright
+         * (`OffboardingService.depart`), so through the UI this should never fire. It covers
+         * connections predating that change, and the case where the disconnect could not complete
+         * — `depart` deliberately does not abort a deactivation when the Meta call fails, because
+         * cutting off access must not wait on Meta.
+         *
+         * What this does not do is retrieve leads that arrive while paused. Meta keeps them
+         * retrievable for a limited window, so the form should be connected by whoever takes over
+         * the advertising.
+         */
+        if ((user.status ?? 'Active') !== 'Active') {
+          this.log.warn(
+            `Meta auto-sync skipped for ${user.name}: their account is ${user.status}. `
+            + 'Leads for this form are not being collected. Disconnect Meta on that account and '
+            + 'connect the form to whoever is running it now.',
+          );
+          continue;
+        }
 
         try {
           const r = await this.sync.syncUser(user as never, 'scheduled');
@@ -107,6 +152,19 @@ export class MetaSyncSchedulerService implements OnModuleInit, OnModuleDestroy {
           // is already recorded against the connection by syncUser.
           this.log.warn(`Meta auto-sync failed for user #${c.user_id}: ${(ex as Error).message}`);
         }
+      }
+
+      /*
+       * Forget raw Graph payloads past their retention window.
+       *
+       * Runs here rather than on its own timer because it is housekeeping that does not need to be
+       * prompt, and this pass already holds the `running` guard so two sweeps cannot overlap. Its
+       * own failure must not affect the sync that just succeeded.
+       */
+      try {
+        await this.sync.pruneRawPayloads();
+      } catch (ex) {
+        this.log.warn(`Meta payload retention sweep failed: ${(ex as Error).message}`);
       }
     } finally {
       this.running = false;

@@ -10,8 +10,10 @@ import { EventSuggestionsService } from './event-suggestions.service';
  * which is a worse trade than one bracket access in a spec.
  */
 
+// Both collaborators are stubbed away: `parse` touches neither, and constructing the service is
+// only a way to reach a private method that has no business being public.
 const parse = (raw: string) =>
-  (new EventSuggestionsService({} as never) as unknown as { parse(r: string): unknown[] })['parse'](raw);
+  (new EventSuggestionsService({} as never, {} as never) as unknown as { parse(r: string): unknown[] })['parse'](raw);
 
 describe('reading the model\'s reply', () => {
   it('takes a clean JSON object', () => {

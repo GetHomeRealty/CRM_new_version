@@ -62,7 +62,7 @@ export class MetaPublicController {
     const code = str(q.code);
     if (!code) return fail('missing_code');
     // A bad state means forged, expired or replayed — never fall back to "trust the caller".
-    const userId = this.state.verify(str(q.state));
+    const userId = await this.state.verify(str(q.state));
     if (!userId) return fail('invalid_state');
 
     if (!isConfigured()) return fail('not_configured');

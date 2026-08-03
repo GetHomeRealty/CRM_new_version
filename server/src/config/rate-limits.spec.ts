@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { ACCOUNT_LOGIN_LIMIT, ANON_LIMIT, AUTH_LIMIT, GLOBAL_LIMIT } from './rate-limits';
+import { ACCOUNT_LOGIN_LIMIT, ANON_LIMIT, AUTH_LIMIT, GLOBAL_LIMIT, META_SYNC_LIMIT } from './rate-limits';
 
 /**
  * Guards the one mistake that turns rate limiting into an outage.
@@ -31,6 +31,27 @@ describe('rate limit configuration', () => {
     const auth = read('../auth/auth.controller.ts');
     // login, register and password change.
     expect(auth.match(/@Throttle\(\{ default: AUTH_LIMIT \}\)/g)).toHaveLength(3);
+  });
+
+  /**
+   * Manual Meta sync is the one endpoint whose cost is paid somewhere else. Each call fans out to
+   * Graph — one request per connected form — and Graph's limits are per APP, so a person holding
+   * down Sync spends a budget every other agent draws from, and they see the failures.
+   */
+  it('gives the Meta sync endpoint its own bucket, because its cost is charged to the whole app', () => {
+    const meta = read('../meta/meta.controller.ts');
+    const sync = /@Post\('sync'\)[\s\S]{0,200}?async syncNow/.exec(meta);
+    expect(sync).not.toBeNull();
+    expect(sync?.[0]).toContain('@Throttle({ default: META_SYNC_LIMIT })');
+  });
+
+  it('keeps manual sync far tighter than the general bucket, and still ample for a person', () => {
+    // The scheduler already polls every 15 minutes, so pressing Sync twice inside ten seconds
+    // cannot return anything the first press did not.
+    expect(META_SYNC_LIMIT.limit).toBeLessThan(GLOBAL_LIMIT.limit);
+    expect(META_SYNC_LIMIT.limit).toBeGreaterThanOrEqual(3);
+    expect(META_SYNC_LIMIT.limit).toBeLessThanOrEqual(30);
+    expect(META_SYNC_LIMIT.ttl).toBe(60_000);
   });
 
   it('keeps the global bucket generous enough for normal use', () => {
@@ -101,6 +122,8 @@ describe('rate limit configuration', () => {
       'AUTH_RATE_LIMIT_WINDOW_SECONDS',
       'AUTH_ACCOUNT_LIMIT_MAX',
       'AUTH_ACCOUNT_LIMIT_WINDOW_SECONDS',
+      'META_SYNC_RATE_LIMIT_MAX',
+      'META_SYNC_RATE_LIMIT_WINDOW_SECONDS',
     ]) expect(src).toContain(`process.env.${key}`);
   });
 

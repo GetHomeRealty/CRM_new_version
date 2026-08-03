@@ -26,11 +26,11 @@ async function inRollback(fn: (tx: PrismaService) => Promise<void>) {
 const tag = (): string => { seq += 1; return `${Date.now()}-${seq}`; };
 const svc = (tx: PrismaService) => new CalendarAnalyticsService(tx);
 
-async function makeUser(tx: PrismaService): Promise<AuthUserRecord> {
+async function makeUser(tx: PrismaService, role = 'agent'): Promise<AuthUserRecord> {
   const now = new Date();
   const t = tag();
   const u = await tx.users.create({
-    data: { name: `An User ${t}`, email: `an-${t}@example.test`, role: 'agent', status: 'Active', password: 'x', company_id: 1, created_at: now, updated_at: now },
+    data: { name: `An User ${t}`, email: `an-${t}@example.test`, role, status: 'Active', password: 'x', company_id: 1, created_at: now, updated_at: now },
   });
   return u as unknown as AuthUserRecord;
 }
@@ -123,10 +123,128 @@ describe('when the work happens', () => {
       await makeEvent(tx, u.id!, '2026-06-10', { time: '14:00' });
 
       const a = await svc(tx).summary(u, 'crm', ...RANGE);
-      expect(a.by_hour).toEqual([{ hour: '09:00', total: 2 }, { hour: '14:00', total: 1 }]);
+      /*
+       * The empty hours between are listed, which they were not before. Two appointments at nine
+       * and one at two used to render as two adjacent bars — a solid morning, when the day is in
+       * fact scattered. Same reasoning as listing every weekday including the empty ones.
+       */
+      expect(a.by_hour).toEqual([
+        { hour: '09:00', total: 2 },
+        { hour: '10:00', total: 0 },
+        { hour: '11:00', total: 0 },
+        { hour: '12:00', total: 0 },
+        { hour: '13:00', total: 0 },
+        { hour: '14:00', total: 1 },
+      ]);
       expect(a.busiest.hour).toBe('09:00');
       expect(a.busiest.date).toBe('2026-06-09');
       expect(a.busiest.date_count).toBe(2);
+    });
+  });
+
+  it('does not pad beyond the first and last hour that has something', async () => {
+    await inRollback(async (tx) => {
+      const u = await makeUser(tx);
+      await makeEvent(tx, u.id!, '2026-06-09', { time: '09:00' });
+
+      // Bounded by the day's own shape, not 00:00–23:00 — twenty-four bars of which one matters is
+      // a different kind of unreadable.
+      const a = await svc(tx).summary(u, 'crm', ...RANGE);
+      expect(a.by_hour).toEqual([{ hour: '09:00', total: 1 }]);
+    });
+  });
+});
+
+describe('how busy each hour actually is', () => {
+  it('spreads one appointment across every hour it covers', async () => {
+    await inRollback(async (tx) => {
+      const u = await makeUser(tx);
+      await makeEvent(tx, u.id!, '2026-06-09', { time: '09:00', end_time: '12:00' });
+
+      const a = await svc(tx).summary(u, 'crm', ...RANGE);
+      expect(a.by_hour_busy).toEqual([
+        { hour: '09:00', minutes: 60 },
+        { hour: '10:00', minutes: 60 },
+        { hour: '11:00', minutes: 60 },
+      ]);
+      // One appointment, so the start chart shows a single tick — that is the difference.
+      expect(a.by_hour).toEqual([{ hour: '09:00', total: 1 }]);
+    });
+  });
+
+  it('counts a part hour as the part it uses', async () => {
+    await inRollback(async (tx) => {
+      const u = await makeUser(tx);
+      await makeEvent(tx, u.id!, '2026-06-09', { time: '09:00', end_time: '09:15' });
+      await makeEvent(tx, u.id!, '2026-06-09', { time: '09:30', end_time: '10:20' });
+
+      const a = await svc(tx).summary(u, 'crm', ...RANGE);
+      // 15 + 30 within the nine o'clock hour, then 20 spilling into ten.
+      expect(a.by_hour_busy).toEqual([
+        { hour: '09:00', minutes: 45 },
+        { hour: '10:00', minutes: 20 },
+      ]);
+    });
+  });
+
+  it('treats a missing end time as one hour, the same as the clash check does', async () => {
+    await inRollback(async (tx) => {
+      const u = await makeUser(tx);
+      await makeEvent(tx, u.id!, '2026-06-09', { time: '09:00', end_time: null });
+
+      const a = await svc(tx).summary(u, 'crm', ...RANGE);
+      expect(a.by_hour_busy).toEqual([{ hour: '09:00', minutes: 60 }]);
+    });
+  });
+
+  it('does not silently contribute nothing when the end is not after the start', async () => {
+    await inRollback(async (tx) => {
+      const u = await makeUser(tx);
+      // A typo, or an appointment running past midnight. Either way, zero would be a lie.
+      await makeEvent(tx, u.id!, '2026-06-09', { time: '14:00', end_time: '13:00' });
+
+      const a = await svc(tx).summary(u, 'crm', ...RANGE);
+      expect(a.by_hour_busy).toEqual([{ hour: '14:00', minutes: 60 }]);
+    });
+  });
+
+  it('clips at midnight rather than wrapping onto the next day', async () => {
+    await inRollback(async (tx) => {
+      const u = await makeUser(tx);
+      await makeEvent(tx, u.id!, '2026-06-09', { time: '23:00', end_time: null });
+
+      const a = await svc(tx).summary(u, 'crm', ...RANGE);
+      // Those minutes would belong to tomorrow, and tomorrow is a different bar.
+      expect(a.by_hour_busy).toEqual([{ hour: '23:00', minutes: 60 }]);
+      expect(a.by_hour_busy.some((h) => h.hour === '00:00')).toBe(false);
+    });
+  });
+
+  it('shows overlapping appointments as more than an hour in one hour', async () => {
+    await inRollback(async (tx) => {
+      const u = await makeUser(tx);
+      await makeEvent(tx, u.id!, '2026-06-09', { time: '09:00', end_time: '10:00' });
+      await makeEvent(tx, u.id!, '2026-06-09', { time: '09:00', end_time: '10:00' });
+
+      // Double-booked is a real state and the number should say so rather than cap at 60.
+      const a = await svc(tx).summary(u, 'crm', ...RANGE);
+      expect(a.by_hour_busy).toEqual([{ hour: '09:00', minutes: 120 }]);
+    });
+  });
+
+  it('names the fullest hour by time occupied, which need not be the busiest by count', async () => {
+    await inRollback(async (tx) => {
+      const u = await makeUser(tx);
+      // Three short calls at nine; one long viewing at eleven.
+      await makeEvent(tx, u.id!, '2026-06-09', { time: '09:00', end_time: '09:10' });
+      await makeEvent(tx, u.id!, '2026-06-09', { time: '09:20', end_time: '09:30' });
+      await makeEvent(tx, u.id!, '2026-06-09', { time: '09:40', end_time: '09:50' });
+      await makeEvent(tx, u.id!, '2026-06-09', { time: '11:00', end_time: '12:00' });
+
+      const a = await svc(tx).summary(u, 'crm', ...RANGE);
+      expect(a.busiest.hour).toBe('09:00');        // most appointments start here
+      expect(a.busiest.busy_hour).toBe('11:00');   // but this hour is the full one
+      expect(a.busiest.busy_minutes).toBe(60);
     });
   });
 
@@ -176,6 +294,35 @@ describe('what it refuses to count', () => {
       await makeEvent(tx, theirs.id!, '2026-06-17');
 
       expect((await svc(tx).summary(mine, 'crm', ...RANGE)).totals.total).toBe(1);
+    });
+  });
+
+  /**
+   * NO ROLE IS AN EXCEPTION, and this is the test that says so.
+   *
+   * A calendar is private to the person whose calendar it is — not to a role, not to a rank.
+   * Confirmed by the business on 2026-08-02 when a team/brokerage reporting view was proposed and
+   * declined: nobody may see another agent's appointments, explicitly including an admin and a
+   * Super Admin.
+   *
+   * The scope is `user_id` with no role branch anywhere in the module, so this holds today. It is
+   * pinned here because the pressure to add "just an oversight view for managers" is exactly the
+   * kind of change that arrives later looking reasonable, and a rank check is one line.
+   */
+  it.each(['agent', 'manager', 'admin'])('shows nothing of another diary to a %s either', async (role) => {
+    await inRollback(async (tx) => {
+      const viewer = await makeUser(tx, role);
+      const other = await makeUser(tx);
+      await makeEvent(tx, other.id!, '2026-06-16', { time: '09:00', end_time: '17:00' });
+      await makeEvent(tx, other.id!, '2026-06-17');
+
+      const a = await svc(tx).summary(viewer, 'crm', ...RANGE);
+      expect(a.totals.total).toBe(0);
+      // Not a count, not an hour, not a shape of somebody's day.
+      expect(a.by_hour).toEqual([]);
+      expect(a.by_hour_busy).toEqual([]);
+      expect(a.busiest.weekday).toBeNull();
+      expect(a.busiest.busy_hour).toBeNull();
     });
   });
 

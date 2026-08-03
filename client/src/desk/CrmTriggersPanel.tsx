@@ -5,12 +5,23 @@ import { apiErrorMessage } from '../lib/apiError';
 import type { CrmSettings, CrmTriggerTemplates } from '../types/crmSettings';
 
 /**
- * CRM trigger templates — the message sent by each automatic CRM email, with its own switch.
+ * CRM trigger switches — which of the CRM emails may be sent, and from where.
  *
- * These used to sit near the bottom of CRM Settings, below the mail accounts, referral codes and
- * broadcast form, which is a long way from anything that reads like an automation. They belong
- * with the other triggers, so this is the self-contained panel the Triggers screen mounts. The
- * data, the endpoints and the validation are unchanged — only where it is edited has moved.
+ * THESE ARE NOT AUTOMATIC, AND THIS SCREEN NO LONGER SAYS THEY ARE. It described "the message used
+ * for each automatic CRM email" and offered a "Days Before" schedule; the CRM › Settings audit
+ * established that no scheduler reads any of it. Every background job in the application is a
+ * `setInterval` registered in a service — event reminders, campaign resume, IMAP sync, mail
+ * retention, Meta sync, export sweep, lawyer reminders — and not one touches
+ * `crm_settings.templates`, `template_toggles` or `auto_send_enabled`. The switches gate the manual
+ * send on CRM Settings › Send a CRM Email and nothing else.
+ *
+ * The "Days Before" field is gone rather than disabled: it configured a schedule that does not
+ * exist, so leaving it visible-but-inert would still promise the automation. The stored value is
+ * untouched and the server still validates it, so nothing is lost if the sweep is built later.
+ *
+ * The message body was ALSO never used — `CrmAdvancedEmailService` builds each body from a
+ * hardcoded template literal. Saying so on the screen is the honest version until one of the two is
+ * made true. See docs/audit/CRM-SETTINGS-AUDIT.md, finding S-H3.
  */
 
 const title = (v: string): string =>
@@ -51,8 +62,13 @@ export default function CrmTriggersPanel() {
     <div className="card">
       <div className="modal-h">CRM Triggers</div>
       <p className="help">
-        The message used for each automatic CRM email, with its own on/off switch. A trigger that
-        is switched off sends nothing.
+        Which CRM emails may be sent, each with its own on/off switch. A trigger that is switched
+        off sends nothing.
+      </p>
+      <p className="help" style={{ marginTop: 0 }}>
+        <strong>These are sent by hand, not on a schedule.</strong> Switching one on makes it
+        available under CRM Settings → Send a CRM Email; nothing goes out on its own. The message
+        below is a note for whoever sends it — the wording of the email itself is fixed.
       </p>
 
       {(Object.keys(templates) as (keyof CrmTriggerTemplates)[]).map((key) => {
@@ -65,17 +81,14 @@ export default function CrmTriggersPanel() {
             </label>
             <div className="g2">
               <div className="field">
-                <label>Message</label>
+                <label>Note</label>
                 <input value={t.template} onChange={(e) => patch(key, { template: e.target.value })} />
               </div>
-              {/* Only some triggers fire ahead of a date, so the field appears only where it applies. */}
-              {t.daysBefore !== undefined && (
-                <div className="field">
-                  <label>Days Before</label>
-                  <input type="number" min={0} max={365} value={t.daysBefore}
-                    onChange={(e) => patch(key, { daysBefore: Number(e.target.value) })} />
-                </div>
-              )}
+              {/*
+                "Days Before" used to sit here. It configured a schedule with nothing behind it —
+                see the note at the top of this file — so it is not offered. The stored value is
+                left alone and still round-trips through the API.
+              */}
             </div>
           </div>
         );

@@ -8,6 +8,8 @@ import { LeadTransferService } from './lead-transfer.service';
 import { LeadNotificationService } from './lead-notification.service';
 import { LeadImportEngine } from './lead-import.engine';
 import { LeadImportJobService } from './lead-import-job.service';
+import { RecordingStorageService } from './recording-storage.service';
+import { AiDisclosureService } from '../common/ai-disclosure.service';
 import { SmsModule } from '../sms/sms.module';
 import { EmailModule } from '../email/email.module';
 
@@ -18,10 +20,10 @@ import { EmailModule } from '../email/email.module';
 @Module({
   imports: [AuthModule, SmsModule, EmailModule],
   controllers: [LeadsController],
-  providers: [LeadsService, LeadActivityService, LeadAuditService, LeadNotificationService, LeadTransferService, LeadImportEngine, LeadImportJobService],
+  providers: [LeadsService, LeadActivityService, LeadAuditService, LeadNotificationService, LeadTransferService, LeadImportEngine, LeadImportJobService, RecordingStorageService, AiDisclosureService],
   // Campaigns imports leads through the same engine and the same queue. Exporting them is what
   // stops the two screens drifting apart again — they previously had separate implementations,
   // and only one of them de-duplicated within the uploaded file.
-  exports: [LeadsService, LeadNotificationService, LeadImportEngine, LeadImportJobService],
+  exports: [LeadsService, LeadTransferService, LeadNotificationService, LeadImportEngine, LeadImportJobService, RecordingStorageService, AiDisclosureService],
 })
 export class LeadsModule {}

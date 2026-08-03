@@ -1,6 +1,7 @@
 import { ForbiddenException, Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { PersonResolver } from '../core/person-resolver.service';
 import { AuditService, type ActingUser } from '../audit/audit.service';
 import { CommissionService } from './commission.service';
 import { normalizeCommissionTxn } from './commission.loader';
@@ -80,6 +81,7 @@ const asObject = (v: unknown): Record<string, unknown> => (v && typeof v === 'ob
 export class TransactionsWriteService {
   constructor(
     private readonly prisma: PrismaService,
+    private readonly people: PersonResolver,
     private readonly audit: AuditService,
     private readonly commission: CommissionService,
     private readonly tradeNumbers: TradeNumberService,
@@ -138,6 +140,11 @@ export class TransactionsWriteService {
           type,
           property: (body.property ?? null) as string | null,
           agent: agentName,
+          // Recorded beside the name, so nothing downstream has to resolve a person from a string
+          // that may be edited or reused. See `PersonResolver` and migration
+          // 20260803010000_person_user_ids. Null when the name matches no account, which is the
+          // same position rows written before this were in.
+          agent_user_id: (await this.people.resolve(null, agentName))?.id ?? null,
           price: isListing ? 0 : ((body.price ?? 0) as number),
           deposit: isListing ? 0 : ((body.deposit ?? 0) as number),
           offer_date: isListing ? null : toDate(body.offer_date),
@@ -464,11 +471,13 @@ export class TransactionsWriteService {
     }
   }
 
-  private async agentSplitFromProfile(db: Tx | PrismaService, name: string | null, type: string): Promise<{ agent: number; brok: number }> {
+  private async agentSplitFromProfile(db: Tx | PrismaService, name: string | null, type: string, userId?: number | null): Promise<{ agent: number; brok: number }> {
     const isLease = /lease/i.test(type);
     let agent = isLease ? 95 : 90;
     if (name) {
-      const u = await db.users.findFirst({ where: { name }, select: { profile: true } });
+      // Through the resolver, on the SAME client, so a split written earlier in this transaction is
+      // visible and two people sharing a name resolve the same way they do everywhere else.
+      const u = await this.people.resolve(userId, name, { client: db });
       const p = parseJsonObject(u?.profile);
       const v = p[isLease ? 'lease_comm_pct' : 'agent_comm_pct'];
       if (v !== null && v !== undefined && v !== '') agent = phpFloat(v);
@@ -478,7 +487,7 @@ export class TransactionsWriteService {
 
   private async applySplitUpgrade(tx: Tx, agentName: string | null): Promise<void> {
     if (!agentName) return;
-    const user = await tx.users.findFirst({ where: { name: agentName } });
+    const user = await this.people.resolve(null, agentName, { client: tx });
     if (!user) return;
     const profile = parseJsonObject(user.profile);
     if (profile.split_upgraded) return;
@@ -504,6 +513,9 @@ export class TransactionsWriteService {
     let i = 0;
     for (const m of team) {
       const name = String(m.name ?? '');
+      // Resolved once for the row: the same person answers both "whose split is this?" and "who is
+      // this member?", so looking them up twice invites the two to disagree.
+      const person = await this.people.resolve(null, name, { client: tx });
       const hasAgentPct = m.agent_pct !== undefined && m.agent_pct !== null && m.agent_pct !== '';
       let agentPct: number;
       let brokPct: number;
@@ -511,7 +523,7 @@ export class TransactionsWriteService {
         agentPct = phpFloat(m.agent_pct);
         brokPct = m.brok_pct !== undefined && m.brok_pct !== null && m.brok_pct !== '' ? phpFloat(m.brok_pct) : round2(100 - agentPct);
       } else {
-        const split = await this.agentSplitFromProfile(tx, name, type);
+        const split = await this.agentSplitFromProfile(tx, name, type, person?.id ?? null);
         agentPct = split.agent;
         brokPct = split.brok;
       }
@@ -521,6 +533,8 @@ export class TransactionsWriteService {
         data: {
           transaction_id: txnId,
           name,
+          // As above: the id beside the name, so a split is not resolved from an editable string.
+          user_id: person?.id ?? null,
           split: (m.split ?? 0) as number,
           agent_pct: agentPct,
           brok_pct: brokPct,

@@ -33,6 +33,20 @@ function appKeyProblem(appKey: string): string | null {
   return null;
 }
 
+/**
+ * Hostnames that are handed out fresh on every restart.
+ *
+ * A quick tunnel is the right tool for showing somebody a webhook working on a laptop and the wrong
+ * one for a production callback: the URL is registered with Meta once and the tunnel stops answering
+ * on it the next time it starts. Campaigns carries the same list for its tracking pixel.
+ */
+const EPHEMERAL_TUNNEL = /trycloudflare\.com|ngrok(-free)?\.(io|app|dev)|loca\.lt|serveo\.net/i;
+
+/** Whether the Meta integration is configured at all — nothing below applies when it is not. */
+const metaConfigured = (): boolean =>
+  !!(process.env.META_APP_ID ?? process.env.FACEBOOK_APP_ID ?? '').trim()
+  && !!(process.env.META_APP_SECRET ?? process.env.FACEBOOK_APP_SECRET ?? '').trim();
+
 export function productionConfigProblems(cfg: AppConfig): string[] {
   const problems: string[] = [];
 
@@ -80,6 +94,57 @@ export function productionConfigProblems(cfg: AppConfig): string[] {
     problems.push(`FRONTEND_URL "${frontend}" has a trailing slash; the URLs built from it would contain "//".`);
   }
 
+  /*
+   * Meta lead ads. Only checked when the integration is configured at all — a brokerage not running
+   * Facebook ads should not be blocked from booting over it.
+   *
+   * META_PUBLIC_URL is the address Meta redirects the OAuth callback to AND the host it delivers
+   * lead webhooks to. Both break the moment it stops resolving, and both break SILENTLY: nobody can
+   * connect, and leads simply stop arriving. Development runs this over a Cloudflare quick tunnel,
+   * which issues a NEW hostname every restart — so a value that worked yesterday is dead today and
+   * the only symptom is an integration that has gone quiet. Campaigns already detects exactly this
+   * for its own public URL and warns on screen; this is the same check, made blocking, because a
+   * production server has no business booting with an ephemeral tunnel as its Meta callback.
+   */
+  if (metaConfigured()) {
+    const meta = (process.env.META_PUBLIC_URL ?? process.env.META_REDIRECT_URI ?? '').trim();
+    if (!meta) {
+      problems.push(
+        'META_APP_ID/META_APP_SECRET are set but META_PUBLIC_URL is not. The OAuth redirect and the '
+        + 'lead webhook would fall back to whatever Host header the request carried, which Meta will '
+        + 'reject and which a webhook cannot reach at all.',
+      );
+    } else if (!/^https:\/\//i.test(meta)) {
+      problems.push(`META_PUBLIC_URL "${meta}" is not https. Meta refuses a non-HTTPS redirect URI outright.`);
+    } else if (/localhost|127\.0\.0\.1/i.test(meta)) {
+      problems.push(`META_PUBLIC_URL "${meta}" points at this machine, which Meta cannot reach.`);
+    } else if (EPHEMERAL_TUNNEL.test(meta)) {
+      problems.push(
+        `META_PUBLIC_URL "${meta}" is a temporary tunnel. Its hostname changes on every restart, so `
+        + 'the OAuth redirect stops matching the Meta app and lead webhooks stop being delivered — '
+        + 'both silently. Use a stable public HTTPS host and register it in the Meta app.',
+      );
+    } else if (meta.endsWith('/')) {
+      problems.push(`META_PUBLIC_URL "${meta}" has a trailing slash; the callback URL built from it would contain "//".`);
+    }
+
+    // Tokens are a credential for reading a client's lead ads for ~60 days. Without APP_KEY they are
+    // stored with a `plain:` marker instead of encrypted — visible to anyone who can read the table
+    // or a backup of it.
+    if (!(process.env.APP_KEY ?? '').trim()) {
+      problems.push('APP_KEY is not set, so Meta access tokens would be stored unencrypted.');
+    }
+
+    // The webhook's HMAC falls back to the app secret, which works; an explicit verify token does
+    // not fall back to anything, and without it the subscription handshake can never complete.
+    if (!(process.env.META_WEBHOOK_VERIFY_TOKEN ?? process.env.FACEBOOK_WEBHOOK_VERIFY_TOKEN ?? '').trim()) {
+      problems.push(
+        'META_WEBHOOK_VERIFY_TOKEN is not set. The webhook subscription handshake will be refused, '
+        + 'so lead deliveries never start and every lead waits for the polling interval instead.',
+      );
+    }
+  }
+
   // Several modules build a calendar date from the server's LOCAL time — Inventory's `todayKey`,
   // the all-day event dates in the calendar sync and iCal feed, Meta's week-start figure. That is
   // deliberate (the comment on todayKey says so) and correct on an Eastern machine, which is what
@@ -92,6 +157,33 @@ export function productionConfigProblems(cfg: AppConfig): string[] {
       'TZ is not set. Parts of the application build dates from the server\'s local time, so a '
       + 'UTC host records anything entered after 8pm as the following day. Set TZ=America/Toronto.',
     );
+  }
+
+  /*
+   * Campaign tracking links.
+   *
+   * Checked at boot because it cannot be corrected afterwards: the pixel and unsubscribe URLs are
+   * baked into each message as it is built, so a campaign sent with a wrong or missing value
+   * carries dead links in every copy, in recipients' inboxes, permanently. An unreachable
+   * unsubscribe link is also a CASL problem rather than a cosmetic one.
+   *
+   * Empty is allowed — campaigns simply record no opens and the module warns on its own screen —
+   * but a localhost or non-HTTPS value is not, because that is a misconfiguration masquerading as
+   * a setting.
+   */
+  const campaignUrl = (process.env.CAMPAIGN_PUBLIC_URL ?? '').trim();
+  if (campaignUrl) {
+    if (/localhost|127\.0\.0\.1/i.test(campaignUrl)) {
+      problems.push(
+        `CAMPAIGN_PUBLIC_URL is "${campaignUrl}". It is written into the tracking pixel and the `
+        + 'unsubscribe link of every campaign email, so a development value means recipients cannot '
+        + 'unsubscribe at all — and the emails already sent keep that link for ever.',
+      );
+    } else if (!campaignUrl.startsWith('https://')) {
+      problems.push(`CAMPAIGN_PUBLIC_URL "${campaignUrl}" is not https. Mail clients block insecure images, so opens would never record.`);
+    } else if (campaignUrl.endsWith('/')) {
+      problems.push(`CAMPAIGN_PUBLIC_URL "${campaignUrl}" has a trailing slash; the links built from it would contain "//".`);
+    }
   }
 
   const origins = cfg.corsOrigins;

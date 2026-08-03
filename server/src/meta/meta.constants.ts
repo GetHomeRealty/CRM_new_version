@@ -34,8 +34,49 @@ export const LEAD_FIELDS = 'id,created_time,field_data';
 /** With campaign / ad-set / ad attribution — needs ads permissions, so requested opportunistically. */
 export const LEAD_FIELDS_WITH_ADS = 'id,created_time,field_data,campaign_id,campaign_name,adset_id,adset_name,ad_id,ad_name,platform';
 
-/** Cap on leads pulled per form in one sync, so a huge backlog can't stall the request. */
-export const MAX_LEADS_PER_FORM = 500;
+/**
+ * Cap on leads pulled per form in one sync.
+ *
+ * Now a ceiling on a PAGINATED walk rather than a single page size — `formLeads` follows Graph's
+ * `paging.next` cursor until it reaches this many or runs out. It used to be passed as the page
+ * limit with no cursor followed at all, so a Page connected with an existing backlog imported the
+ * newest 500 and never saw the rest, on that sync or any later one, with nothing reporting the
+ * truncation.
+ */
+export const MAX_LEADS_PER_FORM = Math.max(1, Number(process.env.META_MAX_LEADS_PER_FORM ?? 5000));
+
+/** How many leads to ask for per Graph request while walking the cursor. Meta's own maximum is 100. */
+export const LEADS_PAGE_SIZE = 100;
+
+/** How long any single Graph request may take before it is abandoned. */
+export const GRAPH_TIMEOUT_MS = Math.max(1000, Number(process.env.META_GRAPH_TIMEOUT_MS ?? 30_000));
+
+/**
+ * The longest value each mapped Meta answer may be, matching the column it lands in.
+ *
+ * Lead-form answers are free text of any length; the columns are not. Without these, an over-long
+ * answer made Postgres reject the row, the sync counted the submission as `skipped`, and a paid
+ * lead was lost to a log line. Confirmed for email, phone, location and budget.
+ *
+ * The raw answer is still preserved in full on `meta_raw`, so truncation shortens what is
+ * searchable rather than discarding anything.
+ */
+export const META_FIELD_LIMITS = {
+  name: 255,
+  first_name: 128,
+  last_name: 128,
+  email: 255,
+  phone: 64,
+  phone_normalized: 32,
+  location: 255,
+  property: 255,
+  budget: 128,
+  timeline: 128,
+  property_type: 128,
+  // TEXT columns — capped only so one runaway answer cannot bloat a row.
+  message: 20_000,
+  custom_fields: 20_000,
+} as const;
 
 export const env = (name: string): string => (process.env[name] ?? '').trim();
 
@@ -88,3 +129,78 @@ export const FIELD_MAP: Record<string, string> = {
   location: 'location', city: 'location', area: 'location',
   property: 'property', property_interest: 'property',
 };
+
+/**
+ * How long a connected form may go without a webhook delivery before the health view says so.
+ *
+ * A webhook stops silently — a lapsed subscription, a redeployed host, an expired tunnel — and the
+ * only symptom is leads that never appear, which is indistinguishable from a quiet week. Scheduled
+ * polling covers the gap, which is why this is a warning and not an alarm; 24 hours is long enough
+ * that an ordinary quiet night never trips it.
+ */
+export const WEBHOOK_QUIET_ALERT_MS = Math.max(1, Number(process.env.META_WEBHOOK_QUIET_HOURS ?? 24)) * 3_600_000;
+
+/**
+ * Cap on the stored raw Graph payload per lead.
+ *
+ * `meta_raw` exists so an import can be re-examined or re-mapped when a form's questions change,
+ * which needs the answers rather than every byte Meta sent. It was stored whole and unbounded, and
+ * it duplicates data already sitting in the mapped columns. Truncating keeps the diagnostic value
+ * without letting one pathological submission carry an unbounded row.
+ *
+ * Truncation is marked in the stored value rather than silent, so nobody reads a clipped payload as
+ * a complete one.
+ */
+export const META_RAW_MAX_CHARS = Math.max(1_000, Number(process.env.META_RAW_MAX_CHARS ?? 20_000));
+
+/**
+ * How long the raw payload is kept before it is cleared from the lead.
+ *
+ * The mapped columns are the record; `meta_raw` is a working copy of what arrived, and it holds
+ * everything the person typed into somebody's ad — the fullest personal-data footprint the module
+ * stores. Keeping it for ever, with no policy, is the part that would be hard to defend under
+ * PIPEDA. Ninety days is well past any window in which a mis-mapped import would still be worth
+ * re-examining.
+ *
+ * Set META_RAW_RETENTION_DAYS=0 to keep payloads indefinitely.
+ */
+export const META_RAW_RETENTION_DAYS = Math.max(0, Number(process.env.META_RAW_RETENTION_DAYS ?? 90));
+
+/**
+ * The window the shared Graph budget is counted in, and how much may be spent in it.
+ *
+ * COLLECTIVE, unlike `META_SYNC_LIMIT`, which is per user. Meta enforces its limits per app, so a
+ * per-person ceiling bounds one person and not the brokerage — twenty agents each within their own
+ * allowance still add up. See `MetaApiBudgetService`.
+ *
+ * One unit is one lead form a sync will read. The default of 600 an hour is deliberately generous
+ * against normal use — the scheduler polls every fifteen minutes, so a brokerage with forty
+ * connected forms spends 160 an hour automatically — while still stopping the case this exists for:
+ * a room full of agents pressing Sync at once.
+ *
+ * Env: META_BUDGET_PER_WINDOW / META_BUDGET_WINDOW_MINUTES
+ */
+export const META_BUDGET_WINDOW_MS = Math.max(1, Number(process.env.META_BUDGET_WINDOW_MINUTES ?? 60)) * 60_000;
+export const META_BUDGET_PER_WINDOW = Math.max(1, Number(process.env.META_BUDGET_PER_WINDOW ?? 600));
+
+/**
+ * How often an agent may be told their Meta connection needs reconnecting.
+ *
+ * The scheduler runs every fifteen minutes and a dead token fails every time, so without this the
+ * same alert would arrive ninety-six times a day — which is how a real warning becomes something
+ * people filter to a folder and stop reading. One a day is enough to be noticed and not enough to
+ * be ignored.
+ *
+ * Env: META_RECONNECT_NOTICE_HOURS
+ */
+export const META_RECONNECT_NOTICE_MS = Math.max(1, Number(process.env.META_RECONNECT_NOTICE_HOURS ?? 24)) * 3_600_000;
+
+/**
+ * Graph error codes that mean the stored token is finished, as distinct from a transient failure.
+ *
+ * 190 is the documented "access token has expired, been revoked, or is otherwise invalid". 102 and
+ * 463 arrive as subcodes on session problems, and 467 is an invalidated token. Everything else —
+ * rate limits (4, 17, 32), permissions (10, 200), bad requests (100) — is either retryable or a
+ * different problem, and must NOT pause lead collection.
+ */
+export const AUTH_FAILURE_CODES = new Set([102, 190, 463, 467]);

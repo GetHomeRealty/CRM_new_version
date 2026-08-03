@@ -2,6 +2,7 @@ import { auditDomain } from '../common/domain';
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import type { AuthUserRecord } from '../auth/auth.types';
+import { recordAuditFailure } from '../observability/audit-health';
 
 /**
  * Writes Lead activity into the global audit trail.
@@ -39,7 +40,20 @@ export class LeadAuditService {
         },
       });
     } catch (err) {
-      this.log.warn(`Lead audit write failed (${action}): ${err instanceof Error ? err.message : String(err)}`);
+      /*
+       * Still best-effort — a lead change must not be rolled back because the trail could not be
+       * written — but no longer silent.
+       *
+       * This was a `log.warn` and nothing more, which meant a broken audit trail looked exactly
+       * like a working one from outside. For a compliance record that is the wrong failure mode:
+       * it made the absence of an entry meaningless, because "it did not happen" and "it happened
+       * and we failed to record it" became indistinguishable.
+       *
+       * ERROR rather than WARN so it reaches error-rate alerting, and counted so the monitor sees
+       * it on /api/health/workers without anyone having to grep for a string.
+       */
+      recordAuditFailure(action, err);
+      this.log.error(`Lead audit write failed (${action}) — the audit trail is INCOMPLETE: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 }

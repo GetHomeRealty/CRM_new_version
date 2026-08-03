@@ -43,8 +43,18 @@ export interface CalendarAnalytics {
   rates: { completion: number | null; no_show: number | null; cancellation: number | null; settled: number };
   by_type: { type: string; label: string; total: number; completed: number; no_show: number }[];
   by_weekday: { day: string; total: number }[];
+  /** How many appointments START in each hour. Empty hours between the first and last are included. */
   by_hour: { hour: string; total: number }[];
-  busiest: { weekday: string | null; hour: string | null; date: string | null; date_count: number };
+  /** How many MINUTES each hour is occupied for — workload, not headcount. */
+  by_hour_busy: { hour: string; minutes: number }[];
+  busiest: {
+    weekday: string | null;
+    hour: string | null;
+    busy_hour: string | null;
+    busy_minutes: number;
+    date: string | null;
+    date_count: number;
+  };
 }
 
 export const calendarAnalytics = (area: Area, from?: string, to?: string): Promise<CalendarAnalytics> =>

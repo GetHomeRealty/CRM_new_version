@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
+import { EmailModule } from '../email/email.module';
 import { MetaController } from './meta.controller';
 import { MetaPublicController } from './meta-public.controller';
 import { MetaConnectionService } from './meta-connection.service';
@@ -7,6 +8,8 @@ import { MetaGraphService } from './meta-graph.service';
 import { MetaSyncService } from './meta-sync.service';
 import { MetaSyncSchedulerService } from './meta-sync-scheduler.service';
 import { MetaStateService } from './meta-state.service';
+import { MetaApiBudgetService } from './meta-api-budget.service';
+import { MetaAlertService } from './meta-alert.service';
 import { LeadAuditService } from '../leads/lead-audit.service';
 import { LeadsModule } from '../leads/leads.module';
 
@@ -19,9 +22,9 @@ import { LeadsModule } from '../leads/leads.module';
  * guarded controller Facebook's own callbacks would be rejected as unauthenticated.
  */
 @Module({
-  imports: [AuthModule, LeadsModule],
+  imports: [AuthModule, LeadsModule, EmailModule],
   controllers: [MetaPublicController, MetaController],
-  providers: [MetaConnectionService, MetaGraphService, MetaSyncService, MetaSyncSchedulerService, MetaStateService, LeadAuditService],
+  providers: [MetaConnectionService, MetaGraphService, MetaSyncService, MetaSyncSchedulerService, MetaStateService, LeadAuditService, MetaApiBudgetService, MetaAlertService],
   exports: [MetaSyncService, MetaConnectionService],
 })
 export class MetaModule {}

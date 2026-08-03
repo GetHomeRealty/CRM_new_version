@@ -229,6 +229,18 @@ export default function TransactionDetailPage() {
   const [confirm, setConfirm] = useState<ConfirmOptions | null>(null); // delete-confirmation popup
   const [coreDocReminders, setCoreDocReminders] = useState<string[]>([]); // §5.2 Active: pending core listing docs
 
+  // Close-guard and review-decision state. Declared up here with the rest of the state rather
+  // than beside the handlers that use it further down, and it has to stay here: the
+  // `if (!form) return …` guard below returns on the loading render, so anything declared past
+  // it runs on some renders and not others. React counts hooks per render and rejects that
+  // outright — "Rendered more hooks than during the previous render" — which took the whole
+  // page down as soon as the transaction finished loading. Every hook belongs above the guard.
+  const [closeBlock, setCloseBlock] = useState<{ items: OpenReviewItem[]; message: string; reason: string } | null>(null);
+  const [picked, setPicked] = useState<number[]>([]);
+  const [decision, setDecision] = useState<{ kind: 'review' | 'reject' | 'reject-many'; auditId: number | null; text: string } | null>(null);
+  const [deciding, setDeciding] = useState(false);
+  const [reviewsKey, setReviewsKey] = useState(0);
+
   useEffect(() => {
     // applyUpdated (not a bare setForm) so the auto-save baseline is captured with the
     // freshly loaded values — otherwise the first render looks dirty and re-saves.
@@ -542,7 +554,6 @@ export default function TransactionDetailPage() {
       setSaving(false);
     }
   };
-  const [closeBlock, setCloseBlock] = useState<{ items: OpenReviewItem[]; message: string; reason: string } | null>(null);
 
   const stPill = (s: string) => s === 'Open' ? 'info' : (s === 'Closed' ? 'ok' : (s === 'Void' ? 'bad' : 'warn'));
   const brokLabel = listing ? 'Co-Op' : 'Listing';
@@ -702,13 +713,8 @@ export default function TransactionDetailPage() {
    * five worse ones. Each item still becomes its own record with its own lifecycle.
    */
   const onRejectSelected = () => setDecision({ kind: 'reject-many', auditId: null, text: '' });
-  const [picked, setPicked] = useState<number[]>([]);
   const togglePicked = (auditId: number) =>
     setPicked((p) => (p.includes(auditId) ? p.filter((n) => n !== auditId) : [...p, auditId]));
-
-  const [decision, setDecision] = useState<{ kind: 'review' | 'reject' | 'reject-many'; auditId: number | null; text: string } | null>(null);
-  const [deciding, setDeciding] = useState(false);
-  const [reviewsKey, setReviewsKey] = useState(0);
 
   const submitDecision = async () => {
     if (!decision) return;

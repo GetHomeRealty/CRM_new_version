@@ -39,8 +39,18 @@ export class CrmSettingsController {
     return this.settings.getSettings(user);
   }
 
+  /**
+   * `edit`, not `view` — these write, and for anyone in `CRM_ADMIN_ROLES` they write the SHARED
+   * GLOBAL row (`scopeId` returns null for them), including the email settings that decide which
+   * automatic sends are enabled.
+   *
+   * They were gated on `view`, which is precisely the level the Admin role is given so that it
+   * cannot change settings: `permission.service.ts` sets `manager` to `settings: 'view'` on purpose,
+   * and an Admin was writing brokerage-wide CRM configuration through it anyway. A write has to ask
+   * for write.
+   */
   @Put()
-  @Screen('settings', 'view')
+  @Screen('settings', 'edit')
   save(@CurrentUser() user: AuthUserRecord, @Body() body: Record<string, unknown>): Promise<unknown> {
     return this.settings.saveSettings(user, body ?? {});
   }
@@ -48,7 +58,7 @@ export class CrmSettingsController {
   /** The CRM exposed POST as an alias of PUT on /api/settings; kept so behaviour matches. */
   @Post()
   @HttpCode(200)
-  @Screen('settings', 'view')
+  @Screen('settings', 'edit')
   savePost(@CurrentUser() user: AuthUserRecord, @Body() body: Record<string, unknown>): Promise<unknown> {
     return this.settings.saveSettings(user, body ?? {});
   }
@@ -60,6 +70,14 @@ export class CrmSettingsController {
     return this.settings.getProfile(user);
   }
 
+  /**
+   * Left on `view`, deliberately, unlike the two writes above.
+   *
+   * This one writes a single row — `users` WHERE id = the caller — so the authority it needs is
+   * "are you yourself", which the session already establishes, and the screen permission is doing
+   * visibility rather than authority. Raising it to `edit` would stop an Admin editing their own
+   * name and phone number, which is not what the finding was about.
+   */
   @Put('profile')
   @Screen('settings', 'view')
   saveProfile(@CurrentUser() user: AuthUserRecord, @Body() body: Record<string, unknown>): Promise<unknown> {

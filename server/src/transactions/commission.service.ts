@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
+import { PersonResolver } from '../core/person-resolver.service';
 import { parseJsonObject, phpFloat, round2 } from '../common/serialize';
 import { isListingType } from '../reference/transaction.constants';
 import type { CommMember, CommissionSummary, CommissionTxn, Triple } from './commission.types';
@@ -15,7 +15,7 @@ const isListingFinancial = (type: string): boolean => isListingType(type) || typ
  */
 @Injectable()
 export class CommissionService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly people: PersonResolver) {}
 
   private readonly r = round2;
   /** PHP is_numeric($v) ? (float)$v : 0 (used for adjustment amounts). */
@@ -337,8 +337,11 @@ export class CommissionService {
   private async resolveMembers(t: CommissionTxn, profileCache?: Map<string, Record<string, unknown>>): Promise<CommMember[]> {
     const members = t.teamMembers;
     if (members.length === 0 && t.agent) {
-      const split = await this.agentDefaultSplit(t.agent, t.type, profileCache);
-      return [{ name: t.agent, split: 100, agent_pct: split.agent, brok_pct: split.brok, scope: 'Entire', terms: [] }];
+      // The id when the row has one, the name when it does not — see `PersonResolver`. This is the
+      // path U-C1 was measured on: with a deactivated namesake it resolved to the wrong person's
+      // percentage, and this is what stops it.
+      const split = await this.agentDefaultSplit(t.agent, t.type, profileCache, t.agent_user_id);
+      return [{ name: t.agent, user_id: t.agent_user_id, split: 100, agent_pct: split.agent, brok_pct: split.brok, scope: 'Entire', terms: [] }];
     }
     // Members exist, but nobody has been given a share yet — `team_members.split` defaults to 0,
     // and selecting agents on the Add Transaction screen adds them with no split. Every agent line
@@ -352,13 +355,20 @@ export class CommissionService {
     return members;
   }
 
-  private async agentDefaultSplit(name: string | null, type: string | null, profileCache?: Map<string, Record<string, unknown>>): Promise<{ agent: number; brok: number }> {
+  /**
+   * The split for one person, by id where the record has one.
+   *
+   * `userId` is preferred over `name` because a name is editable and not unique over time — see
+   * `PersonResolver`. The name is still accepted and still works, which is what keeps rows written
+   * before the id column resolving exactly as they did.
+   */
+  private async agentDefaultSplit(name: string | null, type: string | null, profileCache?: Map<string, Record<string, unknown>>, userId?: number | null): Promise<{ agent: number; brok: number }> {
     const isLease = /lease/i.test(type ?? '');
     let agent = isLease ? 95 : 90;
     if (name) {
       const p = profileCache
         ? (profileCache.get(name) ?? {})
-        : parseJsonObject((await this.prisma.users.findFirst({ where: { name }, select: { profile: true } }))?.profile);
+        : parseJsonObject((await this.people.resolve(userId, name))?.profile);
       const v = p[isLease ? 'lease_comm_pct' : 'agent_comm_pct'];
       if (v !== null && v !== undefined && v !== '') agent = phpFloat(v);
     }

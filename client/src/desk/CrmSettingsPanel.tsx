@@ -328,11 +328,21 @@ export default function CrmSettingsPanel() {
             {err('adminEmail')}
           </div>
         </div>
-        <Toggle label="Automatic sending" hint="Master switch for the triggers below"
+        {/*
+          Was "Automatic sending — master switch for the triggers below", which promised a schedule
+          that does not exist: no background job reads `auto_send_enabled` or `template_toggles`.
+          What the switch really does is decide whether the CRM emails may be sent at all, by hand,
+          from "Send a CRM Email" below. See docs/audit/CRM-SETTINGS-AUDIT.md, finding S-H3.
+        */}
+        <Toggle label="Allow CRM emails" hint="Master switch — turn off to block every send below"
           checked={emailSettings.autoSendEnabled}
           onChange={(v) => setEmailSettings({ ...emailSettings, autoSendEnabled: v })} />
 
         <div className="modal-sub">Email Triggers</div>
+        <p className="help" style={{ marginTop: 0 }}>
+          Each switch decides whether that email may be sent from “Send a CRM Email” below.
+          <strong> Nothing here sends on a schedule</strong> — every CRM email is sent by hand.
+        </p>
         <div className="g3">
           {emailSettings.trigger_keys.map((key) => (
             <Toggle key={key} label={TRIGGER_LABELS[key] ?? title(key)}

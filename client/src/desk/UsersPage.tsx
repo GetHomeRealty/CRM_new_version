@@ -1,7 +1,7 @@
 import { AREAS, AREA_LABEL, type Area } from './area';
 import { useEffect, useRef, useState } from 'react';
 import Icon from '../ui/Icon';
-import { getUsers, getUsersCatalog, createUser, updateUser, deleteUser, getUserDealHistory, getAgentLoans, uploadUserPhoto } from '../lib/api';
+import { getUsers, getUsersCatalog, createUser, updateUser, deleteUser, getUserDealHistory, getAgentLoans, uploadUserPhoto, getOffboarding, type OffboardingChecklist } from '../lib/api';
 import { fileToBase64 } from '../lib/importApi';
 import { roleLabel, formatCurrency } from './format';
 import { useToast } from './toast';
@@ -57,11 +57,24 @@ export default function UsersPage() {
     }
   };
 
+  /**
+   * One failure, one message.
+   *
+   * React runs mount effects twice in development, so a failing load produced two identical
+   * "Could not load users" toasts stacked on top of each other — observed while auditing. The guard
+   * is on the FAILURE rather than the fetch, because a deliberate reload after saving should still
+   * be able to report a new problem; it is cleared as soon as a load succeeds.
+   */
+  const reportedFailure = useRef(false);
   const load = () => {
     setLoading(true);
     Promise.all([getUsers(), getUsersCatalog()])
-      .then(([u, c]) => { setUsers(u); setCatalog(c); })
-      .catch(() => toast('Could not load users', 'bad'))
+      .then(([u, c]) => { setUsers(u); setCatalog(c); reportedFailure.current = false; })
+      .catch(() => {
+        if (reportedFailure.current) return;
+        reportedFailure.current = true;
+        toast('Could not load users', 'bad');
+      })
       .finally(() => setLoading(false));
   };
   useEffect(load, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -414,15 +427,60 @@ function UserModal({ catalog, existing, onClose, onSaved }: UserModalProps) {
 
   const [onboarding, setOnboarding] = useState<'onboard' | 'contract' | null>(null);
 
+  /*
+   * What this person still holds, shown the moment Status is switched to Inactive.
+   *
+   * The order that matters when somebody leaves is: disconnect their Meta account, transfer their
+   * leads, THEN deactivate. Done the other way round the leads become invisible to everybody — a
+   * book belongs to one person, and that person can no longer sign in — so this puts the
+   * outstanding items in front of the administrator while they can still act on them, rather than
+   * after the save when the book has already gone dark.
+   *
+   * It informs and never blocks. Cutting off access has to stay immediate; an agent who leaves
+   * badly is exactly the case where an administrator cannot be made to tidy up first.
+   */
+  const [offboarding, setOffboarding] = useState<OffboardingChecklist | null>(null);
+  /** The field a failed save is about — scrolled to, focused and outlined. */
+  const [badField, setBadField] = useState<string | null>(null);
+  const deactivating = !!existing && (existing.status ?? 'Active') === 'Active' && form.status === 'Inactive';
+
+  useEffect(() => {
+    if (!deactivating || !existing) { setOffboarding(null); return; }
+    let live = true;
+    // Only a Super Admin may read this; for anyone else it 403s and the block simply stays hidden.
+    getOffboarding(existing.id).then((c) => { if (live) setOffboarding(c); }).catch(() => { if (live) setOffboarding(null); });
+    return () => { live = false; };
+  }, [deactivating, existing]);
+
+  /**
+   * Take the user to the field a failed save is about.
+   *
+   * The toast on its own was not enough. This modal is long, and submitting an empty form left the
+   * view down at the Screen Permissions grid while the toast complained about Name and Email at the
+   * very top — naming two fields the user could not see, with nothing highlighted. Scrolling to the
+   * field and focusing it puts the caret exactly where the fix has to be typed.
+   */
+  const focusField = (field: string): void => {
+    setBadField(field);
+    requestAnimationFrame(() => {
+      const el = document.querySelector<HTMLElement>('[data-field="' + field + '"]');
+      el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      el?.focus?.();
+    });
+  };
+  const fail = (field: string, message: string): void => { focusField(field); toast(message, 'bad'); };
+
   const save = async () => {
-    if (!form.name.trim() || !form.email.trim()) { toast('Name and email are required', 'bad'); return; }
-    if (!existing && !form.username.trim()) { toast('Username is required', 'bad'); return; }
-    if (!existing && !form.password) { toast('Password is required for a new user', 'bad'); return; }
-    if (form.password && form.password !== form.password_confirmation) { toast('Passwords do not match', 'bad'); return; }
+    setBadField(null);
+    if (!form.name.trim()) { fail('name', 'Name is required'); return; }
+    if (!form.email.trim()) { fail('email', 'Email is required'); return; }
+    if (!existing && !form.username.trim()) { fail('username', 'Username is required'); return; }
+    if (!existing && !form.password) { fail('password', 'Password is required for a new user'); return; }
+    if (form.password && form.password !== form.password_confirmation) { fail('password_confirmation', 'Passwords do not match'); return; }
     // Mandatory Basic Information fields.
-    if (!String(form.mobile).trim()) { toast('Mobile Number is required', 'bad'); return; }
-    if (!form.gender) { toast('Gender is required', 'bad'); return; }
-    if (!form.status) { toast('Status is required', 'bad'); return; }
+    if (!String(form.mobile).trim()) { fail('mobile', 'Mobile Number is required'); return; }
+    if (!form.gender) { fail('gender', 'Gender is required'); return; }
+    if (!form.status) { fail('status', 'Status is required'); return; }
     // Mandatory Agent Details — only when the section is actually on screen. Required fields that
     // cannot be seen cannot be filled in.
     if (showAgentFinance) {
@@ -474,14 +532,14 @@ function UserModal({ catalog, existing, onClose, onSaved }: UserModalProps) {
         {/* Basic Information */}
         <div className="modal-sub" style={{ marginTop: 0 }}>Basic Information</div>
         <div className="g3">
-          <div className="field"><label>Name <span className="req">*</span></label><input value={form.name} onChange={(e) => set('name', e.target.value)} /></div>
-          <div className="field"><label>Username <span className="req">*</span></label><input value={form.username} onChange={(e) => set('username', e.target.value)} /></div>
-          <div className="field"><label>Email <span className="req">*</span></label><input type="email" value={form.email} onChange={(e) => set('email', e.target.value)} /></div>
+          <div className="field"><label>Name <span className="req">*</span></label><input data-field="name" className={badField === 'name' ? 'field-bad' : undefined} value={form.name} onChange={(e) => set('name', e.target.value)} /></div>
+          <div className="field"><label>Username <span className="req">*</span></label><input data-field="username" className={badField === 'username' ? 'field-bad' : undefined} value={form.username} onChange={(e) => set('username', e.target.value)} /></div>
+          <div className="field"><label>Email <span className="req">*</span></label><input data-field="email" className={badField === 'email' ? 'field-bad' : undefined} type="email" value={form.email} onChange={(e) => set('email', e.target.value)} /></div>
         </div>
         <div className="g3">
-          <div className="field"><label>Mobile Number <span className="req">*</span></label><input type="tel" autoComplete="off" value={form.mobile} onChange={(e) => set('mobile', e.target.value)} /></div>
+          <div className="field"><label>Mobile Number <span className="req">*</span></label><input data-field="mobile" className={badField === 'mobile' ? 'field-bad' : undefined} type="tel" autoComplete="off" value={form.mobile} onChange={(e) => set('mobile', e.target.value)} /></div>
           <div className="field"><label>Gender <span className="req">*</span></label>
-            <select value={form.gender} onChange={(e) => set('gender', e.target.value)}><option value="">Select gender</option><option>Male</option><option>Female</option><option>Other</option></select></div>
+            <select data-field="gender" className={badField === 'gender' ? 'field-bad' : undefined} value={form.gender} onChange={(e) => set('gender', e.target.value)}><option value="">Select gender</option><option>Male</option><option>Female</option><option>Other</option></select></div>
           <div className="field"><label>Role <span className="req">*</span></label>
             <select value={form.role} onChange={(e) => onRole(e.target.value)}>{roles.map((r) => <option key={r} value={r}>{roleLabel(r)}</option>)}</select></div>
         </div>
@@ -491,8 +549,25 @@ function UserModal({ catalog, existing, onClose, onSaved }: UserModalProps) {
           <div className="field"><label>Confirm Password</label>
             <PasswordInput value={form.password_confirmation} onChange={(e) => set('password_confirmation', e.target.value)} autoComplete="new-password" /></div>
           <div className="field"><label>Status <span className="req">*</span></label>
-            <select value={form.status} onChange={(e) => set('status', e.target.value)}><option>Active</option><option>Inactive</option></select>
+            <select data-field="status" className={badField === 'status' ? 'field-bad' : undefined} value={form.status} onChange={(e) => set('status', e.target.value)}><option>Active</option><option>Inactive</option></select>
             <span className="help">Inactive users cannot login to the system.</span></div>
+          {offboarding && (
+            <div className="field offboarding warn" style={{ gridColumn: '1 / -1' }}>
+              <label>Saving will deactivate {offboarding.user.name} and do the following</label>
+              <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
+                {offboarding.effects.map((e) => (
+                  <li key={e.key} style={{ marginBottom: 4, opacity: e.count === 0 ? 0.55 : 1 }}>
+                    <strong>{e.label}</strong>
+                    <div className="help" style={{ marginTop: 2 }}>{e.detail}</div>
+                  </li>
+                ))}
+              </ul>
+              <span className="help" style={{ marginTop: 6, display: 'block' }}>
+                Reactivating them later restores their own leads, but not their Meta connection —
+                they sign in to Meta again so a fresh authorisation is granted.
+              </span>
+            </div>
+          )}
           <div className="field"><label>Department</label>
             <input value={form.department} onChange={(e) => set('department', e.target.value)} placeholder="e.g. Sales, Accounts" /></div>
           <div className="field"><label>Designation</label>
@@ -701,14 +776,38 @@ function UserModal({ catalog, existing, onClose, onSaved }: UserModalProps) {
           </div>
         ) : (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(230px,1fr))', gap: 8 }}>
-            {screens.map((s) => (
-              <div key={s.key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', border: '1px solid var(--line)', borderRadius: 8, padding: '7px 10px', background: '#fff' }}>
-                <span style={{ fontSize: 13 }}>{s.label}</span>
-                <select value={perms[s.key] || 'none'} onChange={(e) => setScreen(s.key, e.target.value as ScreenLevel)} style={{ width: 'auto', minWidth: 90 }}>
-                  {levels.map((l) => <option key={l} value={l}>{l}</option>)}
-                </select>
-              </div>
-            ))}
+            {screens.map((s) => {
+              /*
+               * User management is Super Admin only, and no permission level here changes that.
+               *
+               * The API for this module is guarded by `AdminGuard` — it never consults the screen
+               * permission. So granting "Users: edit" here used to produce a page that rendered,
+               * showed an enabled "+ Add User" button, and answered 403 to every request. The
+               * administrator believed they had delegated something and had not.
+               *
+               * The control is disabled rather than removed, because the row still governs
+               * Settings → Roles & Permissions, which DOES honour it. Saying which part it affects
+               * is more useful than hiding it and leaving the difference invisible.
+               */
+              const superAdminOnly = s.key === 'users';
+              return (
+                <div key={s.key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', border: '1px solid var(--line)', borderRadius: 8, padding: '7px 10px', background: '#fff', opacity: superAdminOnly ? 0.7 : 1 }}>
+                  <span style={{ fontSize: 13 }}>
+                    {s.label}
+                    {superAdminOnly && (
+                      <span className="help" style={{ margin: 0, display: 'block', fontSize: 11 }}>
+                        Roles &amp; Permissions only — managing users is Super Admin only
+                      </span>
+                    )}
+                  </span>
+                  <select value={perms[s.key] || 'none'} onChange={(e) => setScreen(s.key, e.target.value as ScreenLevel)}
+                    style={{ width: 'auto', minWidth: 90 }}
+                    title={superAdminOnly ? 'This grants access to Roles & Permissions. The Users screen itself stays Super Admin only.' : undefined}>
+                    {levels.map((l) => <option key={l} value={l}>{l}</option>)}
+                  </select>
+                </div>
+              );
+            })}
           </div>
         )}
 

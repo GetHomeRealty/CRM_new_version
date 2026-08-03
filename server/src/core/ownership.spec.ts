@@ -1,5 +1,5 @@
 import { PrismaClient } from '@prisma/client';
-import { ForbiddenException } from '@nestjs/common';
+import { NotFoundException } from '@nestjs/common';
 import type { PrismaService } from '../prisma/prisma.service';
 import { ResourceAccessService } from './resource-access.service';
 
@@ -70,12 +70,20 @@ describe('a lead belongs to its owner, and an assignment is shared', () => {
     });
   });
 
+  /*
+   * NOT FOUND, NOT FORBIDDEN — and the difference is the point.
+   *
+   * These used to throw ForbiddenException, which told the caller the lead was real. Repeated
+   * across an id range that is a way to count and locate every lead in the brokerage from an
+   * account with no right to see any of them. A refusal that distinguishes "yours to see" from
+   * "exists" is a refusal that answers the question anyway.
+   */
   it('hides it from an agent who is neither', async () => {
     await inRollback(async (tx) => {
       const { owner, colleague } = await people(tx);
       const l = await lead(tx, owner.id, null);
       const access = new ResourceAccessService(tx);
-      await expect(access.assertLead(as(colleague), l.id)).rejects.toThrow(ForbiddenException);
+      await expect(access.assertLead(as(colleague), l.id)).rejects.toThrow(NotFoundException);
     });
   });
 
@@ -86,7 +94,7 @@ describe('a lead belongs to its owner, and an assignment is shared', () => {
       const access = new ResourceAccessService(tx);
       // An agent's book is confidential. There is no role that reads it — being an administrator is
       // not a way in, and neither is being a manager.
-      await expect(access.assertLead(as(admin), l.id)).rejects.toThrow(ForbiddenException);
+      await expect(access.assertLead(as(admin), l.id)).rejects.toThrow(NotFoundException);
     });
   });
 
@@ -99,7 +107,7 @@ describe('a lead belongs to its owner, and an assignment is shared', () => {
       });
       const l = await lead(tx, owner.id, null);
       const access = new ResourceAccessService(tx);
-      await expect(access.assertLead(as(manager), l.id)).rejects.toThrow(ForbiddenException);
+      await expect(access.assertLead(as(manager), l.id)).rejects.toThrow(NotFoundException);
     });
   });
 
@@ -111,7 +119,26 @@ describe('a lead belongs to its owner, and an assignment is shared', () => {
       const access = new ResourceAccessService(tx);
       await expect(access.assertLead(as(admin), intake.id)).resolves.toBeUndefined();
       // And the agent still cannot see it until it is handed over.
-      await expect(access.assertLead(as(owner), intake.id)).rejects.toThrow(ForbiddenException);
+      await expect(access.assertLead(as(owner), intake.id)).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  it('answers "is there a lead 4182?" the same way whether or not there is', async () => {
+    await inRollback(async (tx) => {
+      const { owner, colleague } = await people(tx);
+      const real = await lead(tx, owner.id, null);
+      const access = new ResourceAccessService(tx);
+
+      // The security property, asserted directly: a lead that exists but is not yours and a lead
+      // that does not exist have to be indistinguishable — same class, same message. Anything less
+      // and the status code is an enumeration oracle.
+      const forbidden = await access.assertLead(as(colleague), real.id).catch((e: Error) => e);
+      const missing = await access.assertLead(as(colleague), 2_000_000_003).catch((e: Error) => e);
+
+      expect(forbidden).toBeInstanceOf(NotFoundException);
+      expect(missing).toBeInstanceOf(NotFoundException);
+      expect((forbidden as NotFoundException).getResponse())
+        .toEqual((missing as NotFoundException).getResponse());
     });
   });
 
@@ -125,7 +152,7 @@ describe('a lead belongs to its owner, and an assignment is shared', () => {
       const access = new ResourceAccessService(tx);
       // An import that forgets to stamp an owner must surface somewhere instead of vanishing.
       await expect(access.assertLead(as(admin), orphan.id)).resolves.toBeUndefined();
-      await expect(access.assertLead(as(owner), orphan.id)).rejects.toThrow(ForbiddenException);
+      await expect(access.assertLead(as(owner), orphan.id)).rejects.toThrow(NotFoundException);
     });
   });
 });

@@ -1,7 +1,9 @@
 import {
   BadRequestException, Body, Controller, Delete, Get, HttpCode, Post, Query, Req, UseGuards,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import type { Request } from 'express';
+import { META_SYNC_LIMIT } from '../config/rate-limits';
 import { AuthGuard } from '../auth/guards/auth.guard';
 import { ScreenGuard } from '../auth/guards/screen.guard';
 import { CurrentUser, Screen } from '../auth/decorators';
@@ -64,7 +66,13 @@ export class MetaController {
       connected_forms: forms,
       token_expires_at: expiresAt?.toISOString() ?? null,
       token_days_left: daysLeft,
-      token_expired: daysLeft !== null && daysLeft < 0,
+      /*
+       * Compared against the instant, not against whole days. `daysLeft` floors to 0 for anything
+       * inside the last twenty-four hours, so a token that failed a moment ago read as "0 days
+       * left" rather than expired — and that is exactly the state a sync writes when Meta answers
+       * 190, since `markTokenDead` stamps the expiry as now.
+       */
+      token_expired: expiresAt !== null && expiresAt.getTime() <= Date.now(),
       needs_reconnect: (daysLeft !== null && daysLeft <= 7) || missingPermissions.length > 0,
       granted_scopes: granted,
       missing_permissions: missingPermissions,
@@ -172,6 +180,34 @@ export class MetaController {
       throw new BadRequestException({ message: 'That page is not part of your Meta connection.' });
     }
 
+    /*
+     * A lead form belongs to one agent. Nothing is shared.
+     *
+     * Each agent connects their own Meta account, their own Page and their own forms, and receives
+     * their own leads — so a form already connected by somebody else is a misconfiguration, refused
+     * here with the holder named rather than allowed and then routed ambiguously. Allowing it is
+     * what produced the original defect: the webhook picked one of the two arbitrarily, so one agent
+     * silently received every lead and the other received none while their screen showed the form as
+     * connected.
+     *
+     * Only `is_active` rows block. A form somebody previously connected and turned off is free to be
+     * taken up by whoever is running it now.
+     */
+    if (connect) {
+      const heldByAnother = await this.prisma.meta_lead_forms.findFirst({
+        where: { form_id: formId, page_id: pageId, is_active: true, user_id: { not: user.id ?? 0 } },
+        select: { user_id: true },
+      });
+      if (heldByAnother) {
+        const holder = await this.prisma.users.findUnique({ where: { id: heldByAnother.user_id }, select: { name: true } });
+        throw new BadRequestException({
+          message: `This lead form is already connected by ${holder?.name ?? 'another agent'}. `
+            + 'A form belongs to one agent, so each receives only their own leads — ask them to disconnect it first, '
+            + 'or connect a form of your own.',
+        });
+      }
+    }
+
     const now = new Date();
     await this.prisma.meta_lead_forms.upsert({
       where: { user_id_form_id_page_id: { user_id: user.id ?? 0, form_id: formId, page_id: pageId } },
@@ -186,6 +222,8 @@ export class MetaController {
 
   @Post('sync')
   @HttpCode(200)
+  // Fans out to Graph, whose limits are per APP — see META_SYNC_LIMIT.
+  @Throttle({ default: META_SYNC_LIMIT })
   @Screen('meta', 'edit')
   async syncNow(@CurrentUser() user: AuthUserRecord): Promise<Record<string, unknown>> {
     const r = await this.wrap(() => this.sync.syncUser(user));
@@ -247,8 +285,8 @@ export class MetaController {
   /** Recent webhook deliveries and whether they were processed. */
   @Get('webhook-health')
   @Screen('meta', 'view')
-  webhookHealth(@Query('limit') limit?: string): Promise<unknown> {
-    return this.sync.webhookHealth(Number(limit) || 20);
+  webhookHealth(@CurrentUser() user: AuthUserRecord, @Query('limit') limit?: string): Promise<unknown> {
+    return this.sync.webhookHealth(user, Number(limit) || 20);
   }
 
   @Get('leads')

@@ -48,6 +48,15 @@ interface NavChild {
    */
   screen?: string;
   superAdmin?: boolean;
+  /**
+   * Shown to every signed-in user, with no permission check.
+   *
+   * For sections that are a person's own settings rather than a part of the module they sit
+   * under — there is no admin right that should decide whether somebody may mute their own
+   * phone. Only for genuinely self-scoped screens: the server scopes these to the caller, so
+   * the sidebar entry grants nothing the API would not already allow.
+   */
+  personal?: boolean;
   /** Restricts the section to one area. The Settings tabs are per-area by nature. */
   area?: Area;
 }
@@ -64,10 +73,17 @@ const NAV: NavItem[] = [
   {
     key: 'campaigns', label: 'Campaigns', ico: 'megaphone',
     children: [
+      // Each section owns its own `?tab=` value, so the match is an equality test rather than
+      // "anything but templates" — with a third section that predicate lit Campaigns up while
+      // the Suppression List was open.
       { key: 'campaigns', label: 'Campaigns', ico: 'megaphone', screen: 'campaigns', path: 'campaigns',
-        match: (_p, q) => new URLSearchParams(q).get('tab') !== 'templates' },
+        match: (_p, q) => !['templates', 'suppressions'].includes(new URLSearchParams(q).get('tab') ?? '') },
       { key: 'campaign-templates', label: 'Templates', ico: 'file', screen: 'campaigns', path: 'campaigns?tab=templates',
         match: (_p, q) => new URLSearchParams(q).get('tab') === 'templates' },
+      // Brokerage-wide and read-only for an agent without campaign edit rights, so it is gated on
+      // the same `campaigns` view permission as the rest of the module.
+      { key: 'campaign-suppressions', label: 'Suppression List', ico: 'lock', screen: 'campaigns', path: 'campaigns?tab=suppressions',
+        match: (_p, q) => new URLSearchParams(q).get('tab') === 'suppressions' },
     ],
   },
   { key: 'meta', label: 'Meta', ico: 'globe' },
@@ -85,7 +101,10 @@ const NAV: NavItem[] = [
   { key: 'invoice', label: 'Invoice', ico: 'receipt' },
   { key: 'reports', label: 'Reports', ico: 'report' },
   { key: 'audit', label: 'Audit Trail', ico: 'clipboard' },
-  { key: 'users', label: 'Users', ico: 'users' },
+  // `superAdmin` rather than the `users` screen permission, because that is what the API enforces:
+  // `/api/users` is guarded by AdminGuard and never consults the grid. Driving the nav from the
+  // permission produced a visible Users item that opened a page answering 403 to every request.
+  { key: 'users', label: 'Users', ico: 'users', superAdmin: true },
   {
     key: 'settings', label: 'Settings', ico: 'settings',
     // Mirrors SettingsPage's own tabs, with the permissions those tabs already carried: the two
@@ -106,6 +125,11 @@ const NAV: NavItem[] = [
       // changing who holds it, which is the Users screen's edit right.
       { key: 'settings-roles', label: 'Roles & Permissions', ico: 'lock', screen: 'users', path: 'settings?tab=roles',
         match: (_p, q) => new URLSearchParams(q).get('tab') === 'roles' },
+      // The one entry here that is not an administrator's setting: it is the viewer's own push
+      // choices, which is why it carries `personal` instead of a screen permission. Agents do not
+      // see this group at all, so their route in is the card on their own Settings page.
+      { key: 'notifications', label: 'Notification Preferences', ico: 'bell', personal: true, path: 'notifications',
+        match: (p) => p.endsWith('/notifications') },
     ],
   },
   // Agent's own settings — profile, their email accounts, signature. Admins have the admin
@@ -119,6 +143,9 @@ const TITLES: Record<string, string> = Object.fromEntries(NAV.map((n): [string, 
 // Favorites is a section of MLS now, so it has no sidebar entry — but the route still exists and
 // needs a heading when someone arrives on it directly.
 TITLES.favorites = 'Favorites';
+// Reached from the Settings group for admins and from the agent's own Settings page, so it has no
+// top-level entry of its own to take a heading from.
+TITLES.notifications = 'Notification Preferences';
 
 export default function DeskLayout({ area = DEFAULT_AREA }: { area?: Area }) {
   const { logout, user, can, isAdminOrAbove, isSuperAdmin, modules } = useAuth();
@@ -209,7 +236,7 @@ export default function DeskLayout({ area = DEFAULT_AREA }: { area?: Area }) {
       if (!n.children) return n;
       const kids = n.children
         .filter((c) => !c.area || c.area === area)
-        .filter((c) => (c.superAdmin ? isSuperAdmin : can(c.screen ?? c.key, 'view')));
+        .filter((c) => (c.personal ? true : c.superAdmin ? isSuperAdmin : can(c.screen ?? c.key, 'view')));
       return kids.length > 1 ? { ...n, children: kids } : { ...n, children: undefined };
     });
 

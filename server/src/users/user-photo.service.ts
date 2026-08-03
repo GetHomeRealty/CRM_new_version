@@ -36,6 +36,32 @@ const PHOTO_TYPES: Record<string, string> = {
 
 export interface PhotoFile { abs: string; mime: string; size: number; mtime: number }
 
+/**
+ * What the bytes actually are, as opposed to what the filename claims.
+ *
+ * The extension was the only check, so `evil.png` containing `<script>alert(1)</script>` was
+ * accepted with a 200 and stored — confirmed during the Users audit. It was not exploitable:
+ * helmet sets `nosniff`, the file is served as `image/png`, and the stored name is randomised. But
+ * "not exploitable through the paths we happen to have today" is a weaker guarantee than "it is an
+ * image", and the second one costs four signature checks.
+ *
+ * Returns the mime the content implies, or null when it is not one of the four formats allowed.
+ */
+function sniffImage(buf: Buffer): string | null {
+  const at = (i: number, ...bytes: number[]): boolean => bytes.every((b, k) => buf[i + k] === b);
+
+  // PNG: 89 50 4E 47 0D 0A 1A 0A
+  if (buf.length >= 8 && at(0, 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a)) return 'image/png';
+  // JPEG: FF D8 FF — every variant (JFIF, Exif, raw) begins with it.
+  if (buf.length >= 3 && at(0, 0xff, 0xd8, 0xff)) return 'image/jpeg';
+  // GIF: "GIF87a" or "GIF89a"
+  if (buf.length >= 6 && at(0, 0x47, 0x49, 0x46, 0x38) && (buf[4] === 0x37 || buf[4] === 0x39) && buf[5] === 0x61) return 'image/gif';
+  // WEBP: "RIFF" .... "WEBP" — the size field sits between the two markers.
+  if (buf.length >= 12 && at(0, 0x52, 0x49, 0x46, 0x46) && at(8, 0x57, 0x45, 0x42, 0x50)) return 'image/webp';
+
+  return null;
+}
+
 @Injectable()
 export class UserPhotoService {
   constructor(
@@ -68,6 +94,29 @@ export class UserPhotoService {
     if (buffer.length > MAX_PHOTO_BYTES) {
       throw new BadRequestException({
         message: `The image is ${(buffer.length / 1024 / 1024).toFixed(1)} MB — the limit is ${MAX_PHOTO_BYTES / 1024 / 1024} MB.`,
+      });
+    }
+
+    /*
+     * The content has to agree with the extension.
+     *
+     * Checked after the size cap, so a huge non-image is refused for being oversized rather than
+     * sniffed first — and before anything is written, so nothing that is not an image reaches disk.
+     *
+     * A JPEG named `.jpg` and one named `.jpeg` are the same thing, so the comparison is on the
+     * resolved mime rather than on the extension string.
+     */
+    const actual = sniffImage(buffer);
+    if (!actual) {
+      throw new BadRequestException({
+        message: `That file is not a ${Object.keys(PHOTO_TYPES).join(', ')} image. `
+          + 'It may have been renamed, or saved in a format that is not a picture.',
+      });
+    }
+    if (actual !== mime) {
+      throw new BadRequestException({
+        message: `The file is named "${fileName}" but its contents are ${actual}. `
+          + 'Rename it with the extension that matches, or save it in the format the name claims.',
       });
     }
 

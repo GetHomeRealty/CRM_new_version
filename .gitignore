@@ -24,3 +24,8 @@ backups/
 # only). Ignored so they can never be committed by accident; safe to delete locally.
 storage/framework/
 storage/logs/
+
+# Playwright run artefacts — regenerated on every run.
+test-results/
+e2e/test-results/
+e2e/playwright-report/

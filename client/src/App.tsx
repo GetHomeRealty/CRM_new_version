@@ -44,6 +44,7 @@ const LeadsPage = lazy(() => import('./desk/LeadsPage'));
 const LeadDetailPage = lazy(() => import('./desk/LeadDetailPage'));
 const MetaPage = lazy(() => import('./desk/MetaPage'));
 const AccountSettingsPage = lazy(() => import('./desk/AccountSettingsPage'));
+const NotificationPreferencesPage = lazy(() => import('./desk/NotificationPreferencesPage'));
 const InboxPage = lazy(() => import('./desk/InboxPage'));
 const AuditLogPage = lazy(() => import('./desk/AuditLogPage'));
 const RecycleBinPage = lazy(() => import('./desk/RecycleBinPage'));
@@ -87,7 +88,12 @@ const SCREENS: ScreenRoutes[] = [
   // navigation must not quietly take that away.
   { screen: 'favorites', paths: [''], element: () => <FavoritesPage /> },
   { screen: 'reports', paths: ['', ':reportType'], element: (p) => (p === '' ? <ReportsPage /> : <ReportDetailPage />) },
-  { screen: 'users', paths: [''], element: () => <UsersPage /> },
+  // `superAdmin`, matching what the API enforces. `/api/users` is guarded by AdminGuard and never
+  // consults the `users` screen permission, so gating this route on that permission let somebody
+  // with "Users: view" open a page that answered 403 to every request — an enabled "+ Add User"
+  // button over an empty table and two "Could not load users" toasts. The permission still governs
+  // Settings → Roles & Permissions, which does honour it.
+  { screen: 'users', paths: [''], element: () => <UsersPage />, superAdmin: true },
   // `orSuperAdmin`: Settings also hosts what used to be the Super-Admin-only Email Settings
   // screen, so a Super Admin must still get in even if their `settings` permission was revoked.
   // Each tab re-checks for itself.
@@ -105,6 +111,10 @@ const SCREENS: ScreenRoutes[] = [
   // Inbox is a personal mailbox (the user's own IMAP accounts), not the admin-permissioned
   // `inbox` screen.
   { screen: 'account', paths: [''], element: () => <AccountSettingsPage />, open: true },
+  // Open like the other personal screens: these are the signed-in user's own notification
+  // choices, so everyone from agent to super-admin reaches their own and nobody reaches
+  // anyone else's. There is no admin permission that would make sense to gate it on.
+  { screen: 'notifications', paths: [''], element: () => <NotificationPreferencesPage />, open: true },
   { screen: 'inbox', paths: [''], element: () => <InboxPage />, open: true },
   { screen: 'recycle-bin', paths: [''], element: () => <RecycleBinPage />, superAdmin: true },
 ];

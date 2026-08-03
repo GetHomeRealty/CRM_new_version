@@ -1,7 +1,7 @@
 import api from './axios';
 import type {
   AudienceFilter, AudiencePreview, CampaignDetail, CampaignOptions,
-  CampaignSummary, TrackingHealth,
+  CampaignSummary, SuppressionPage, TrackingHealth,
 } from '../types';
 
 /** Campaigns API. */
@@ -22,9 +22,40 @@ export const deleteCampaign = (id: number): Promise<void> =>
 export const previewAudience = (filter: AudienceFilter): Promise<AudiencePreview> =>
   api.post<AudiencePreview>('/api/campaigns/preview', filter).then((r) => r.data);
 
-/** Create the campaign and send it to the resolved audience. */
-export const sendCampaign = (body: AudienceFilter & { name: string; template_id: number; tags?: string[] }): Promise<CampaignSummary> =>
+/**
+ * Create the campaign and send it to the resolved audience.
+ *
+ * `scheduled_for` is an ISO instant. Omitted or in the past means send now — the server treats a
+ * time that has just passed as "now" rather than refusing it, so a 9:00 send confirmed at 9:00:04
+ * goes out instead of erroring about a moment that has gone.
+ */
+export const sendCampaign = (
+  body: AudienceFilter & { name: string; template_id: number; tags?: string[]; scheduled_for?: string | null },
+): Promise<CampaignSummary> =>
   api.post<CampaignSummary>('/api/campaigns', body).then((r) => r.data);
+
+/** Call off a campaign that has not gone out yet. Only possible while it is still `scheduled`. */
+export const cancelScheduledCampaign = (id: number): Promise<{ cancelled: boolean }> =>
+  api.post<{ cancelled: boolean }>(`/api/campaigns/${id}/cancel`, {}).then((r) => r.data);
+
+// ---- suppression list ----
+/**
+ * Addresses the brokerage may no longer email. Brokerage-wide, not per agent: a suppression is the
+ * recipient's decision about the brokerage, so every agent sees the same list.
+ */
+export const listSuppressions = (q: { page?: number; limit?: number; search?: string } = {}): Promise<SuppressionPage> =>
+  api.get<SuppressionPage>('/api/campaigns/suppressions', {
+    params: { page: q.page ?? 1, limit: q.limit ?? 50, search: q.search || undefined },
+  }).then((r) => r.data);
+
+/**
+ * Resume mail to a suppressed address.
+ *
+ * The address is a path segment, so it is encoded — an unencoded `+` in a Gmail alias would
+ * otherwise arrive as a space and delete nothing, or delete the wrong row.
+ */
+export const removeSuppression = (email: string): Promise<{ removed: boolean }> =>
+  api.delete<{ removed: boolean }>(`/api/campaigns/suppressions/${encodeURIComponent(email)}`).then((r) => r.data);
 
 export const trackingHealth = (): Promise<TrackingHealth> =>
   api.get<TrackingHealth>('/api/campaigns/tracking-health').then((r) => r.data);

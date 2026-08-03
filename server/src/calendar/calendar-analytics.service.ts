@@ -12,9 +12,14 @@ import { EVENT_TYPE_LABELS } from './calendar.constants';
  * send somebody so they can count them.
  *
  * SCOPED LIKE THE CALENDAR ITSELF. A calendar is private to its owner, for every role, so these
- * figures are the signed-in user's own. There is no brokerage-wide view here on purpose: it would
- * be a report on individual agents' days, which is a different thing needing a different decision
- * about who may see it.
+ * figures are the signed-in user's own.
+ *
+ * THERE IS NO BROKERAGE-WIDE VIEW, AND THAT IS NOW A DECISION RATHER THAN AN OMISSION. One was
+ * proposed on 2026-08-02 — a per-person workload report, counts and occupied hours only, no titles
+ * or client names — and was declined outright: nobody sees another agent's appointments, explicitly
+ * including an admin and a Super Admin. Recorded as B-A3 in docs/BACKLOG.md and pinned for every
+ * role in `calendar-analytics.spec.ts`, because a rank check is a one-line change that will
+ * eventually be proposed again.
  */
 
 /** Sunday-first, matching the month grid. */
@@ -41,8 +46,20 @@ export interface CalendarAnalytics {
   };
   by_type: { type: string; label: string; total: number; completed: number; no_show: number }[];
   by_weekday: { day: string; total: number }[];
+  /** How many appointments START in each hour. Empty hours between the first and last included. */
   by_hour: { hour: string; total: number }[];
-  busiest: { weekday: string | null; hour: string | null; date: string | null; date_count: number };
+  /** How many MINUTES each hour is occupied for — the workload question, not the count question. */
+  by_hour_busy: { hour: string; minutes: number }[];
+  busiest: {
+    weekday: string | null;
+    /** The hour most appointments start in. */
+    hour: string | null;
+    /** The hour with the most occupied minutes, which is often a different one. */
+    busy_hour: string | null;
+    busy_minutes: number;
+    date: string | null;
+    date_count: number;
+  };
 }
 
 @Injectable()
@@ -57,13 +74,15 @@ export class CalendarAnalyticsService {
         OR: [{ domain: area }, { domain: null }],
         date: { gte: this.day(from), lte: this.day(to) },
       },
-      select: { date: true, time: true, type: true, status: true },
+      select: { date: true, time: true, end_time: true, type: true, status: true },
     });
 
     const totals = { total: rows.length, scheduled: 0, completed: 0, cancelled: 0, no_show: 0, rescheduled: 0 };
     const byType = new Map<string, { total: number; completed: number; no_show: number }>();
     const byWeekday = new Array(7).fill(0) as number[];
     const byHour = new Map<number, number>();
+    /** Minutes occupied in each hour, which is a different question from how many things start in it. */
+    const busyByHour = new Map<number, number>();
     const byDate = new Map<string, number>();
 
     for (const r of rows) {
@@ -84,8 +103,11 @@ export class CalendarAnalyticsService {
       // it locally would shift a Sunday appointment onto Saturday west of Greenwich.
       byWeekday[r.date.getUTCDay()] += 1;
 
-      const hour = Number(String(r.time ?? '00:00').slice(0, 2));
-      if (Number.isFinite(hour)) byHour.set(hour, (byHour.get(hour) ?? 0) + 1);
+      const startMin = this.minutes(r.time);
+      if (startMin !== null) {
+        byHour.set(Math.floor(startMin / 60), (byHour.get(Math.floor(startMin / 60)) ?? 0) + 1);
+        this.addBusyMinutes(busyByHour, startMin, this.minutes(r.end_time));
+      }
 
       const day = r.date.toISOString().slice(0, 10);
       byDate.set(day, (byDate.get(day) ?? 0) + 1);
@@ -100,6 +122,7 @@ export class CalendarAnalyticsService {
     const busiestWeekday = byWeekday.some((n) => n > 0)
       ? WEEKDAYS[byWeekday.indexOf(Math.max(...byWeekday))] : null;
     const hourEntries = [...byHour.entries()].sort((a, b) => b[1] - a[1] || a[0] - b[0]);
+    const busyEntries = [...busyByHour.entries()].sort((a, b) => b[1] - a[1] || a[0] - b[0]);
     const dateEntries = [...byDate.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
 
     return {
@@ -117,12 +140,16 @@ export class CalendarAnalyticsService {
       // Every weekday is listed, including the empty ones: "nothing on Sundays" is a finding, and a
       // missing bar is not.
       by_weekday: WEEKDAYS.map((day, i) => ({ day, total: byWeekday[i] })),
-      by_hour: [...byHour.entries()]
-        .sort((a, b) => a[0] - b[0])
-        .map(([h, total]) => ({ hour: `${String(h).padStart(2, '0')}:00`, total })),
+      // Empty hours included, for the same reason every weekday is: a gap is a finding.
+      by_hour: this.fillHours(byHour, (h, total) => ({ hour: this.label(h), total })),
+      by_hour_busy: this.fillHours(busyByHour, (h, minutes) => ({ hour: this.label(h), minutes })),
       busiest: {
         weekday: busiestWeekday,
-        hour: hourEntries.length ? `${String(hourEntries[0][0]).padStart(2, '0')}:00` : null,
+        hour: hourEntries.length ? this.label(hourEntries[0][0]) : null,
+        // The fullest hour by occupied time, which is often not the hour most things start in —
+        // a single long viewing outweighs three short calls.
+        busy_hour: busyEntries.length ? this.label(busyEntries[0][0]) : null,
+        busy_minutes: busyEntries.length ? busyEntries[0][1] : 0,
         date: dateEntries.length ? dateEntries[0][0] : null,
         date_count: dateEntries.length ? dateEntries[0][1] : 0,
       },
@@ -132,5 +159,70 @@ export class CalendarAnalyticsService {
   /** yyyy-mm-dd → UTC midnight, so a day never shifts across a timezone. */
   private day(v: string): Date {
     return new Date(`${String(v).slice(0, 10)}T00:00:00.000Z`);
+  }
+
+  /** `09:00` from 9 — one place, so the two hour charts cannot label themselves differently. */
+  private label(hour: number): string {
+    return `${String(hour).padStart(2, '0')}:00`;
+  }
+
+  /** `HH:MM` → minutes past midnight, or null when the value is missing or malformed. */
+  private minutes(v: string | null): number | null {
+    const m = /^(\d{1,2}):(\d{2})/.exec(String(v ?? '').trim());
+    if (!m) return null;
+    const h = Number(m[1]);
+    const min = Number(m[2]);
+    if (h < 0 || h > 23 || min < 0 || min > 59) return null;
+    return h * 60 + min;
+  }
+
+  /**
+   * Spread one appointment's occupied minutes across the hours it actually covers.
+   *
+   * WHY THIS IS NOT THE SAME CHART as `by_hour`. That one counts how many appointments *start* in
+   * an hour, so a three-hour viewing and a fifteen-minute call are one tick each and a diary that
+   * is solidly full from nine to twelve looks identical to one with a single short call at nine.
+   * Minutes occupied is the question somebody actually has when they ask how busy they are.
+   *
+   * A MISSING `end_time` MEANS ONE HOUR. That is not an invention here — `calendar.service.ts`
+   * already treats an absent end as the one-hour block the Google push has always assumed, and the
+   * clash detector uses the same rule. Two answers to "how long is this appointment?" in one module
+   * would be worse than the assumption itself.
+   *
+   * An end at or before the start is treated as that same one-hour block: it is either a typo or an
+   * appointment crossing midnight, and neither should silently contribute zero. Anything running
+   * past midnight is clipped at the end of the day rather than wrapping onto hour 0, because those
+   * minutes belong to tomorrow.
+   */
+  private addBusyMinutes(into: Map<number, number>, startMin: number, endMin: number | null): void {
+    const DAY_END = 24 * 60;
+    const end = endMin !== null && endMin > startMin ? endMin : startMin + 60;
+    const stop = Math.min(end, DAY_END);
+
+    for (let hour = Math.floor(startMin / 60); hour * 60 < stop; hour += 1) {
+      const hourStart = hour * 60;
+      const overlap = Math.min(stop, hourStart + 60) - Math.max(startMin, hourStart);
+      if (overlap > 0) into.set(hour, (into.get(hour) ?? 0) + overlap);
+    }
+  }
+
+  /**
+   * Every hour from the first to the last that has something, including the empty ones.
+   *
+   * A gap is a finding. Hidden empty hours made a diary of 9, 12 and 3 read as three adjacent bars,
+   * which looks like a solid morning rather than the scattered day it is — the same reasoning that
+   * already lists all seven weekdays including the ones with nothing on them.
+   *
+   * Bounded by the first and last busy hour rather than running 00:00–23:00, because twenty-four
+   * bars of which six matter is a different kind of unreadable.
+   */
+  private fillHours<T>(counts: Map<number, number>, make: (hour: number, value: number) => T): T[] {
+    const hours = [...counts.keys()];
+    if (!hours.length) return [];
+    const first = Math.min(...hours);
+    const last = Math.max(...hours);
+    const out: T[] = [];
+    for (let h = first; h <= last; h += 1) out.push(make(h, counts.get(h) ?? 0));
+    return out;
   }
 }

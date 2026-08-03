@@ -59,7 +59,13 @@ export interface MetaWebhookEvent {
 export interface MetaWebhookHealth {
   total: number;
   failed: number;
+  /** Forms currently connected — the denominator for "connected but silent". */
+  connected_forms: number;
   last_received_at: string | null;
+  quiet_for_hours: number | null;
+  /** Forms are connected but nothing has arrived for a long time. */
+  stalled: boolean;
+  stalled_reason: string | null;
   events: MetaWebhookEvent[];
 }
 
