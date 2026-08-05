@@ -1,5 +1,5 @@
 import { AreaGuard } from '../core/area.guard';
-import { Body, Controller, ForbiddenException, Get, NotFoundException, Param, ParseIntPipe, Post, Put, Query, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, ForbiddenException, Get, NotFoundException, Param, ParseIntPipe, Post, Put, Query, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '../auth/guards/auth.guard';
 import { CurrentUser } from '../auth/decorators';
 import type { AuthUserRecord } from '../auth/auth.types';
@@ -35,9 +35,24 @@ export class InboxController {
     @Query('lead') lead?: string,
     @Query('page') page?: string,
   ): Promise<unknown> {
+    /*
+     * A FILTER THAT CANNOT BE HONOURED IS REFUSED, NOT DROPPED.
+     *
+     * `Number(lead) || undefined` turned `?lead=abc` into "no lead filter at all", so a request for
+     * one lead's correspondence answered with the WHOLE mailbox — more than was asked for, reported
+     * as though it were the answer. The Audit Trail had the same shape and the same fix.
+     *
+     * `page` is left as-is here and clamped in the service, where the offset is actually built.
+     */
+    if (lead !== undefined && lead !== '') {
+      const n = Number(lead);
+      if (!Number.isSafeInteger(n) || n < 1) {
+        throw new BadRequestException({ message: `"${lead}" is not a lead id.`, errors: { lead: ['Must be a whole number.'] } });
+      }
+    }
     return this.inbox.list(user.id ?? -1, parseArea(area), {
       unread: unread === '1' || unread === 'true',
-      leadId: Number(lead) || undefined,
+      leadId: lead ? Number(lead) : undefined,
       page: Number(page) || 1,
     });
   }
@@ -56,10 +71,33 @@ export class InboxController {
     @Query('area') area?: string,
   ): Promise<unknown> {
     const want = parseArea(area);
-    const account = await this.prisma.mail_accounts.findUnique({
-      where: { id: accountId },
+    /*
+     * SCOPED TO THE CALLER, AND THAT IS WHAT THIS LOOKUP WAS MISSING.
+     *
+     * It was `findUnique({ where: { id: accountId } })` — any account, anyone's — read only to
+     * decide the area. The sync itself was safe, because `ImapSyncService.syncForUser` filters
+     * `{ id, user_id }`. The refusal was not: the wrong-area branch below interpolates
+     * `account.from_email`, so ANY signed-in user could walk account ids from the other area and be
+     * told, one at a time, which addresses colleagues have connected.
+     *
+     * Measured 2026-08-05 with an account belonging to somebody else:
+     *   {"message":"zz-secret-…@private.test is connected under Customer Relationship Management
+     *    and cannot be synced from here."}
+     *
+     * Filtering by `user_id` here means the only address this endpoint can ever name is the
+     * caller's own — which is the whole point of that message, and costs nothing.
+     */
+    const account = await this.prisma.mail_accounts.findFirst({
+      where: { id: accountId, user_id: user.id ?? -1 },
       select: { id: true, user_id: true, scope: true, from_email: true },
     });
+    /*
+     * ONE ANSWER FOR "does not exist" AND "not yours", so the reply cannot be used to tell them
+     * apart — the same rule the Calendar and the Inbox's own message reads already follow. It also
+     * replaces a 500: `syncForUser` signals this with a bare `throw new Error('Mail account not
+     * found.')`, which Nest renders as an Internal Server Error, and that both reads as a bug to
+     * whoever hits it legitimately and separates ids that reached the service from ids that did not.
+     */
     if (!account) throw new NotFoundException({ message: 'That email account no longer exists.' });
     // A null scope pre-dates the split and is reachable from both areas, as everywhere else.
     if (account.scope && account.scope !== want) {

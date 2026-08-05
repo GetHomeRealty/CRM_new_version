@@ -1,4 +1,4 @@
-import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ImapFlow } from 'imapflow';
 import { simpleParser } from 'mailparser';
 import { PrismaService } from '../prisma/prisma.service';
@@ -176,11 +176,27 @@ export class ImapSyncService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  /** Sync one account, confirmed to belong to the user. Used by the manual "Sync now" button. */
+  /**
+   * Sync one account, confirmed to belong to the user. Used by the manual "Sync now" button.
+   *
+   * BOTH REFUSALS ARE TYPED, because both were bare `Error`s and therefore 500s.
+   *
+   * The first is the ownership check — the one that actually decides, since the controller's own
+   * lookup is a convenience. The second is reachable by an ordinary user with an SMTP-only account:
+   * pressing "Sync now" on it produced an Internal Server Error carrying a perfectly good
+   * explanation that nothing would ever render as one.
+   *
+   * `NotFound` rather than `Forbidden` for the ownership case, matching the Calendar and the
+   * message reads: the reply must not distinguish "not yours" from "does not exist".
+   */
   async syncForUser(userId: number, accountId: number): Promise<SyncResult> {
     const account = await this.prisma.mail_accounts.findFirst({ where: { id: accountId, user_id: userId } });
-    if (!account) throw new Error('Mail account not found.');
-    if (!account.imap_host) throw new Error('This account has no IMAP server configured, so there is nothing to sync.');
+    if (!account) throw new NotFoundException({ message: 'That email account no longer exists.' });
+    if (!account.imap_host) {
+      throw new BadRequestException({
+        message: 'This account has no IMAP server configured, so there is nothing to sync.',
+      });
+    }
     return this.syncAccount(account as AccountRow);
   }
 

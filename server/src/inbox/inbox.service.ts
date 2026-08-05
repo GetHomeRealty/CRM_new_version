@@ -20,6 +20,14 @@ import { AREA_LABEL, type Area } from '../common/domain';
  * message id, and without the same filter one area could read or alter another's message simply by
  * asking for its id.
  */
+/**
+ * The furthest page anybody may ask for. See `list`.
+ *
+ * A deep offset is not free: Postgres still walks and discards every row before it, so `?page=999999`
+ * is a full scan dressed as a page request.
+ */
+const MAX_PAGE = 20_000;
+
 @Injectable()
 export class InboxService {
   constructor(private readonly prisma: PrismaService) {}
@@ -59,7 +67,22 @@ export class InboxService {
   /** The message list, newest first, without the heavy bodies. */
   async list(userId: number, area: Area, opts: { unread?: boolean; leadId?: number; page?: number } = {}): Promise<Record<string, unknown>> {
     const perPage = 30;
-    const page = Math.max(1, opts.page ?? 1);
+    /*
+     * THE PAGE NUMBER IS A PAGE NUMBER.
+     *
+     * `Math.max(1, opts.page ?? 1)` let three shapes through, all measured 2026-08-05:
+     *
+     *   ?page=Infinity, ?page=1e20, ?page=1e999   → `skip: Infinity` reached Prisma → bare 500
+     *   ?page=2.7                                 → accepted, reported back as `page: 2.7`, and
+     *                                               `(2.7 - 1) * 30` is a fractional OFFSET
+     *   ?page=999999                              → accepted, `skip: 29,999,940`
+     *
+     * `Math.floor` before the clamp handles the fraction; `Math.min` handles the infinities, which
+     * `|| 1` does not because `Infinity` is truthy. The ceiling is a backstop against a stale
+     * bookmark or a client loop, not a page size — `last_page` in the reply is what a client should
+     * follow, and 20,000 pages is 600,000 messages.
+     */
+    const page = Math.min(MAX_PAGE, Math.max(1, Math.floor(Number(opts.page ?? 1)) || 1));
     // Typed as Prisma.inbound_emailsWhereInput on purpose: built as a bare object literal in
     // a variable, a wrong key slips past excess-property checking and only fails at runtime,
     // which is exactly how this filter shipped broken once.
