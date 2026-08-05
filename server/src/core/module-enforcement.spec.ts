@@ -25,7 +25,7 @@ async function inRollback<T>(fn: (tx: PrismaService) => Promise<T>): Promise<T> 
     await prisma.$transaction(async (tx) => {
       out = await fn(tx as unknown as PrismaService);
       throw new Error(ROLLBACK);
-    });
+    }, { timeout: 60000 });
   } catch (e) {
     if (!String((e as Error).message).includes(ROLLBACK)) throw e;
   }
