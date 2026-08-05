@@ -171,6 +171,13 @@ export interface GoogleCalendarStatus {
   last_sync: string | null;
   error: string | null;
   setup_hint: string | null;
+  /**
+   * Appointments this user has changed that Google has not received (CRM-GCAL-M01).
+   *
+   * Separate from `error`: the connection can look healthy right now and still owe Google a viewing
+   * that failed to push during an outage half an hour ago.
+   */
+  pending_sync: number;
 }
 
 export const googleCalendarStatus = (scope?: IntegrationScope): Promise<GoogleCalendarStatus> =>
@@ -182,6 +189,11 @@ export const googleCalendarConnect = (scope?: IntegrationScope): Promise<{ confi
 
 export const googleCalendarSync = (scope?: IntegrationScope): Promise<{ pulled: number; error: string | null; message: string }> =>
   api.post('/api/google/calendar/sync', {}, { params: scope ? { scope } : undefined }).then((r) => r.data);
+
+/** Try this user's outstanding pushes again, resetting the automatic attempt count. */
+export const googleCalendarRetrySync = (scope?: IntegrationScope): Promise<{
+  attempted: number; recovered: number; pending_sync: number; message: string;
+}> => api.post('/api/google/calendar/retry', {}, { params: scope ? { scope } : undefined }).then((r) => r.data);
 
 export const googleCalendarDisconnect = (scope?: IntegrationScope): Promise<{ disconnected: boolean }> =>
   api.post('/api/google/calendar/disconnect', {}, { params: scope ? { scope } : undefined }).then((r) => r.data);

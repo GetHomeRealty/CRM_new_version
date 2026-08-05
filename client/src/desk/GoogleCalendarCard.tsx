@@ -1,7 +1,7 @@
 import { crmPath, deskPath } from './area';
 import { useCallback, useEffect, useState } from 'react';
 import {
-  googleCalendarStatus, googleCalendarConnect, googleCalendarSync, googleCalendarDisconnect,
+  googleCalendarStatus, googleCalendarConnect, googleCalendarSync, googleCalendarDisconnect, googleCalendarRetrySync,
   type GoogleCalendarStatus, type IntegrationScope,
 } from '../lib/accountApi';
 import { apiErrorMessage } from '../lib/apiError';
@@ -103,6 +103,34 @@ export default function GoogleCalendarCard({ scope = 'crm' }: { scope?: Integrat
       </div>
 
       {st?.error && <div className="muted" style={{ color: 'var(--bad)', marginTop: 8 }}>{st.error}</div>}
+
+      {/*
+        * WHAT GOOGLE HAS NOT RECEIVED (CRM-GCAL-M01).
+        *
+        * A push that failed used to be caught, logged as a warning and dropped — no retry, nothing
+        * on the row, nothing here. An appointment moved while Google was briefly unreachable kept
+        * its old time on the agent's phone for ever, and the only way to find out was to look at
+        * the phone.
+        *
+        * Shown separately from `error` because the two are genuinely different: the connection can
+        * be healthy right now and still owe Google a viewing that failed during an outage earlier.
+        * A retry sweep is already working through these in the background; the button is for
+        * somebody who has just fixed the cause and does not want to wait — and for the events that
+        * have used up their five automatic attempts, which is exactly when a person is looking.
+        */}
+      {!!st?.pending_sync && (
+        <div className="muted" data-testid="gcal-pending-sync"
+          style={{ color: 'var(--warn-ink, var(--bad))', marginTop: 8, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <span>
+            {st.pending_sync} appointment{st.pending_sync === 1 ? '' : 's'} {st.pending_sync === 1 ? 'has' : 'have'} not
+            reached Google yet.
+          </span>
+          <button className="btn ghost sm" type="button" disabled={busy}
+            onClick={() => void run(() => googleCalendarRetrySync(scope), 'Retried.')}>
+            Retry now
+          </button>
+        </div>
+      )}
 
       <div className="intg-card-actions">
         {st?.connected ? (

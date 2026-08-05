@@ -27,6 +27,42 @@ export interface GoogleEvent {
  * is a single request and a dependency here would only add a supply-chain surface to code holding
  * credentials.
  */
+/**
+ * A token request Google refused, with its `error` code intact.
+ *
+ * See `isPermanentAuthFailure` for why the code matters more than the sentence beside it.
+ */
+export class GoogleAuthError extends Error {
+  constructor(readonly code: string, message: string) {
+    super(message);
+    this.name = 'GoogleAuthError';
+  }
+}
+
+/**
+ * The OAuth error codes that mean RECONNECTING is the only fix.
+ *
+ * `invalid_grant` is the one that matters: Google returns it when the user has revoked access in
+ * their Google account, when the refresh token has expired through six months of disuse, or when the
+ * password behind it changed. None of those recover on their own.
+ *
+ * `invalid_client` and `unauthorized_client` are ours rather than theirs — the app's credentials are
+ * wrong or its grant was withdrawn — but they are equally permanent from the connection's point of
+ * view, and leaving a connection "active" against them means retrying for ever.
+ *
+ * EVERYTHING ELSE IS TREATED AS TEMPORARY, deliberately. A 500, a 503, a rate limit and a socket
+ * timeout all fix themselves, and deactivating a working integration because Google had a bad
+ * minute would be a worse bug than the one this exists to fix: the agent would have to notice, and
+ * then re-consent, for nothing.
+ */
+const PERMANENT_AUTH_CODES = new Set(['invalid_grant', 'invalid_client', 'unauthorized_client']);
+
+export function isPermanentAuthFailure(err: unknown): boolean {
+  if (err instanceof GoogleAuthError) return PERMANENT_AUTH_CODES.has(err.code);
+  // A non-Google failure — DNS, a socket, our own bug — is never a reason to make somebody reconnect.
+  return false;
+}
+
 @Injectable()
 export class GoogleService {
   private readonly log = new Logger(GoogleService.name);
@@ -85,7 +121,20 @@ export class GoogleService {
     });
     const json = await res.json().catch(() => ({})) as TokenResponse & { error?: string; error_description?: string };
     if (!res.ok || !json.access_token) {
-      throw new Error(json.error_description || json.error || `Google token request failed (HTTP ${res.status}).`);
+      /*
+       * THE CODE IS CARRIED, NOT JUST THE PROSE.
+       *
+       * This threw `error_description || error`, and `error_description` wins whenever Google sends
+       * one — so the caller received "Token has been expired or revoked." with the machine-readable
+       * `invalid_grant` discarded. Deciding whether a failure is permanent by pattern-matching
+       * Google's English is the kind of check that breaks silently when they reword it.
+       *
+       * `GoogleAuthError` keeps both: `code` for the decision, `message` for the person reading it.
+       */
+      throw new GoogleAuthError(
+        json.error || `http_${res.status}`,
+        json.error_description || json.error || `Google token request failed (HTTP ${res.status}).`,
+      );
     }
     return json;
   }

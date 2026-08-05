@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { encryptToken, decryptToken } from '../meta/meta-crypto';
+import { isPermanentAuthFailure } from './google.service';
 import { GoogleService, type TokenResponse } from './google.service';
 import type { IntegrationScope } from '../email/mail-account.service';
 
@@ -74,9 +75,48 @@ export class GoogleConnectionService {
       });
       return refreshed.access_token;
     } catch (ex) {
-      await this.recordError(userId, `Could not refresh Google access — reconnect. ${(ex as Error).message}`, scope);
+      /*
+       * PERMANENT AND TEMPORARY ARE NOT THE SAME FAILURE (CRM-GCAL-M02).
+       *
+       * This recorded one message for both and left `is_active` true in either case. So a revoked
+       * grant — which only reconnecting fixes — read exactly like Google having a bad minute, and an
+       * agent was told to reconnect a working integration every time the network hiccuped.
+       *
+       * Now: `invalid_grant` and friends DEACTIVATE the connection, which is what stops the retry
+       * sweep from spending attempts on a credential that cannot come back and is what makes the
+       * screen able to say "reconnect" and mean it. Anything else — a 503, a rate limit, a socket
+       * timeout — leaves the connection ACTIVE and merely notes what happened, because the next
+       * attempt will very likely work and making somebody re-consent for that would be the worse bug.
+       */
+      if (isPermanentAuthFailure(ex)) {
+        await this.deactivate(
+          userId, scope,
+          'Google access was revoked or has expired. Reconnect Google Calendar to start syncing again.',
+        );
+      } else {
+        await this.recordError(
+          userId,
+          `Could not reach Google to refresh access — this is usually temporary and will be retried. ${(ex as Error).message}`,
+          scope,
+        );
+      }
       return null;
     }
+  }
+
+  /**
+   * Stop using a connection whose credential cannot recover, and say so.
+   *
+   * `is_active: false` is what `accessToken` already checks first, so nothing further is attempted
+   * for this user until they reconnect — no sweep attempts, no pushes, no pulls. The tokens are left
+   * in place rather than cleared: reconnecting overwrites them, and wiping them here would lose the
+   * calendar id and the sync token for no gain.
+   */
+  async deactivate(userId: number, scope: IntegrationScope, message: string): Promise<void> {
+    await this.prisma.google_connections.updateMany({
+      where: { user_id: userId, scope },
+      data: { is_active: false, connect_error: message.slice(0, 500), updated_at: new Date() },
+    });
   }
 
   async recordError(userId: number, message: string, scope: IntegrationScope = DEFAULT_SCOPE): Promise<void> {

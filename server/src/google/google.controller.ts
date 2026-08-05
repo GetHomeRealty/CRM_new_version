@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { Controller, Get, HttpCode, Post, Query, Req, UseGuards } from '@nestjs/common';
 import type { Request } from 'express';
 import { AuthGuard } from '../auth/guards/auth.guard';
 import { CurrentUser } from '../auth/decorators';
@@ -46,6 +46,14 @@ export class GoogleController {
       email: conn?.google_email ?? null,
       last_sync: conn?.last_sync ? conn.last_sync.toISOString() : null,
       error: conn?.connect_error ?? null,
+      /*
+       * How many of this person's appointments Google has not received (CRM-GCAL-M01).
+       *
+       * Reported beside `error` because they answer different questions and both matter: `error` is
+       * "the connection is unhappy", this is "and here is what it has cost you so far". A failed push
+       * used to be logged and forgotten, so the honest number was unknowable from anywhere.
+       */
+      pending_sync: await this.sync.pendingSyncCount(user.id ?? -1, parseScope(scope) ?? 'crm'),
       // Stated plainly so the UI can explain a disabled button rather than failing silently.
       setup_hint: isConfigured() ? null : 'Google sign-in is not set up on the server yet — it needs GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET.',
     };
@@ -71,6 +79,32 @@ export class GoogleController {
   async syncNow(@CurrentUser() user: AuthUserRecord, @Query('scope') scope?: string): Promise<Record<string, unknown>> {
     const result = await this.sync.pull(user.id ?? -1, parseScope(scope) ?? 'crm');
     return { ...result, message: result.error ? result.error : `Synced ${result.pulled} event${result.pulled === 1 ? '' : 's'} from Google.` };
+  }
+
+  /**
+   * The Retry button beside the failed-sync count.
+   *
+   * Manual as well as automatic, because the sweep gives up after five attempts and a person who has
+   * just fixed the cause — reconnected, or waited out a Google incident — should not have to wait
+   * for a schedule or be told to edit each appointment again to nudge it. `retryNow` resets the
+   * attempt count, which is the difference between this and simply waiting.
+   */
+  @Post('retry')
+  // 200, not Nest's default 201: this creates nothing, it retries something that already exists.
+  // The same house style as `CrmSettingsController.savePost`. `POST sync` beside it still answers
+  // 201 and is left alone — changing a response code the client already handles is not this fix.
+  @HttpCode(200)
+  async retrySync(@CurrentUser() user: AuthUserRecord, @Query('scope') scope?: string): Promise<Record<string, unknown>> {
+    const r = await this.sync.retryNow(user.id ?? -1, parseScope(scope) ?? 'crm');
+    const left = await this.sync.pendingSyncCount(user.id ?? -1, parseScope(scope) ?? 'crm');
+    return {
+      ...r, pending_sync: left,
+      message: r.attempted === 0
+        ? 'Everything is already up to date with Google.'
+        : left === 0
+          ? `All ${r.attempted} appointment${r.attempted === 1 ? '' : 's'} reached Google.`
+          : `${r.recovered} of ${r.attempted} reached Google. ${left} still outstanding — check the connection below.`,
+    };
   }
 
   @Post('disconnect')
