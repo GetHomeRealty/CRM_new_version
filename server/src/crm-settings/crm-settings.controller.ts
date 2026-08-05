@@ -1,10 +1,13 @@
 import { Body, Controller, Get, HttpCode, Post, Put, Query, UseGuards } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
+import { BROADCAST_LIMIT, SETTINGS_WRITE_LIMIT } from '../config/rate-limits';
 import { AuthGuard } from '../auth/guards/auth.guard';
 import { ScreenGuard } from '../auth/guards/screen.guard';
 import { CurrentUser, Screen } from '../auth/decorators';
 import type { AuthUserRecord } from '../auth/auth.types';
 import { CrmSettingsService } from './crm-settings.service';
 import { CrmAdvancedEmailService, type PromotionalOffer, type ReferralCode } from './crm-advanced-email.service';
+import { CrmTriggersService } from './crm-triggers.service';
 import { SEASONS, BROADCAST_TYPES } from './crm-settings.constants';
 
 const str = (v: unknown): string => String(v ?? '').trim();
@@ -23,6 +26,7 @@ export class CrmSettingsController {
   constructor(
     private readonly settings: CrmSettingsService,
     private readonly email: CrmAdvancedEmailService,
+    private readonly triggers: CrmTriggersService,
   ) {}
 
   /** Vocabularies for the forms, so the client never hardcodes a list the server validates. */
@@ -50,6 +54,7 @@ export class CrmSettingsController {
    * for write.
    */
   @Put()
+  @Throttle({ default: SETTINGS_WRITE_LIMIT })
   @Screen('settings', 'edit')
   save(@CurrentUser() user: AuthUserRecord, @Body() body: Record<string, unknown>): Promise<unknown> {
     return this.settings.saveSettings(user, body ?? {});
@@ -58,6 +63,7 @@ export class CrmSettingsController {
   /** The CRM exposed POST as an alias of PUT on /api/settings; kept so behaviour matches. */
   @Post()
   @HttpCode(200)
+  @Throttle({ default: SETTINGS_WRITE_LIMIT })
   @Screen('settings', 'edit')
   savePost(@CurrentUser() user: AuthUserRecord, @Body() body: Record<string, unknown>): Promise<unknown> {
     return this.settings.saveSettings(user, body ?? {});
@@ -92,6 +98,7 @@ export class CrmSettingsController {
   }
 
   @Put('email-settings')
+  @Throttle({ default: SETTINGS_WRITE_LIMIT })
   @Screen('settings', 'edit')
   saveEmailSettings(@CurrentUser() user: AuthUserRecord, @Body() body: Record<string, unknown>): Promise<unknown> {
     return this.settings.saveEmailSettings(user, body ?? {});
@@ -148,6 +155,32 @@ export class CrmSettingsController {
     }
   }
 
+  // ------------------------------------------------------------- triggers
+  /**
+   * A PERSON'S OWN CRM email triggers.
+   *
+   * Gated on `triggers`, not `settings` — the permission the route and the sidebar entry already
+   * ask for. They asked for `triggers` while this screen's data asked for `settings`, so agent,
+   * accounting, documentation and crm were all offered a Triggers item in the navigation and met a
+   * 403 behind it (CRM › Triggers audit, T-H1). One permission for one screen.
+   *
+   * Safe to widen because the rows are per-user: `crm_trigger_settings` is one row per person, and
+   * neither endpoint takes a user id from the caller. Whoever is signed in reads and writes their
+   * own switches and cannot reach anybody else's — an agent turning off promotional email changes
+   * what THEY send and nothing else.
+   */
+  @Get('triggers')
+  @Screen('triggers', 'view')
+  myTriggers(@CurrentUser() user: AuthUserRecord): Promise<unknown> {
+    return this.triggers.getForUser(user);
+  }
+
+  @Put('triggers')
+  @Screen('triggers', 'edit')
+  saveMyTriggers(@CurrentUser() user: AuthUserRecord, @Body() body: Record<string, unknown>): Promise<unknown> {
+    return this.triggers.saveForUser(user, body ?? {});
+  }
+
   @Get('referral-codes')
   @Screen('settings', 'view')
   referralCodes(): Promise<unknown> {
@@ -156,13 +189,19 @@ export class CrmSettingsController {
 
   @Get('email-log')
   @Screen('settings', 'view')
-  emailLog(@Query('limit') limit?: string): Promise<unknown> {
-    return this.email.listLog(Number(limit) || 100);
+  emailLog(@CurrentUser() user: AuthUserRecord, @Query('limit') limit?: string): Promise<unknown> {
+    return this.email.listLog(user, Number(limit) || 100);
   }
 
   // ------------------------------------------------------------ broadcasts
+  /**
+   * Its own rate limit, unlike everything else here: this is the one endpoint on the screen whose
+   * cost is one SMTP round trip per member of staff, and whose effect cannot be undone. The general
+   * 600-a-minute bucket is sized for a form that auto-saves. See `BROADCAST_LIMIT`.
+   */
   @Post('broadcasts')
   @HttpCode(201)
+  @Throttle({ default: BROADCAST_LIMIT })
   @Screen('settings', 'edit')
   broadcast(@CurrentUser() user: AuthUserRecord, @Body() body: Record<string, unknown>): Promise<unknown> {
     return this.settings.broadcast(user, body ?? {});
@@ -181,10 +220,26 @@ export class CrmSettingsController {
     return this.settings.integrations(user);
   }
 
-  /** The signature the user saved, appended to every advanced email they send. */
+  /**
+   * The signature appended to every advanced email this person sends: their own, falling back to
+   * the brokerage's.
+   *
+   * It read `getSettings(user)`, whose scope comes from the caller's ROLE — so an administrator got
+   * the shared global signature and their own was never consulted. That was invisible while
+   * `/api/account/settings` also wrote the global row; now that a person's own Settings page writes
+   * their own row (see `saveOwnSettings`), reading only the global one would mean an Admin could
+   * set a personal signature and watch every email go out with somebody else's.
+   *
+   * Own first, brokerage second, none third. An agent who has set nothing still signs with the
+   * brokerage default, which is what the fallback is for.
+   */
   private async signature(user: AuthUserRecord): Promise<string | undefined> {
-    const s = await this.settings.getSettings(user);
-    const email = s.emailSettings as { signature?: string } | undefined;
-    return email?.signature ? email.signature : undefined;
+    const own = await this.settings.getOwnSettings(user);
+    const mine = (own.emailSettings as { signature?: string } | undefined)?.signature;
+    if (mine) return mine;
+
+    const shared = await this.settings.getSettings(user);
+    const theirs = (shared.emailSettings as { signature?: string } | undefined)?.signature;
+    return theirs || undefined;
   }
 }

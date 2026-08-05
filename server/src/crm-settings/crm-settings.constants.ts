@@ -44,15 +44,25 @@ export const DEFAULT_TRIGGER_TEMPLATES = {
   referralCodes: { enabled: false, template: 'Here is your referral code!' },
 };
 
-/** CRM `emailSettings.emailTemplates` trigger switches. */
+/**
+ * CRM `emailSettings.emailTemplates` trigger switches — one per email this application can send.
+ *
+ * `birthday` and `anniversary` are gone. There is no send path for either: `CrmSettingsPanel`'s
+ * `actionFor` offers wedding, seasonal, promotional, referral and custom, and
+ * `CrmAdvancedEmailService` implements exactly those five. The two extras were switches whose help
+ * text ("decides whether that email may be sent from Send a CRM Email below") was false in both
+ * positions — switching them on made nothing available and switching them off blocked nothing.
+ *
+ * Rows that already carry the two keys keep them in their stored JSON; nothing reads them, and the
+ * next save drops them. Put them back the day something sends a birthday email.
+ */
 export const TRIGGER_KEYS = [
-  'birthday', 'anniversary', 'wedding', 'seasonal', 'promotional', 'referral', 'custom',
+  'wedding', 'seasonal', 'promotional', 'referral', 'custom',
 ] as const;
 export type TriggerKey = (typeof TRIGGER_KEYS)[number];
 
 export const DEFAULT_TRIGGERS: Record<string, boolean> = {
-  birthday: true, anniversary: true, wedding: true,
-  seasonal: true, promotional: true, referral: true, custom: true,
+  wedding: true, seasonal: true, promotional: true, referral: true, custom: true,
 };
 
 export const LANGUAGES = [

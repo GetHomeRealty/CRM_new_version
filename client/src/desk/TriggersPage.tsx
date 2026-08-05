@@ -24,8 +24,10 @@ export default function TriggersPage() {
       <div className="toolbar"><div className="toolbar-row" style={{ gap: 10, flexWrap: 'wrap' }}>
         <span style={{ fontSize: 13, fontWeight: 700 }}>{'⚡'} {AREA_LABEL[area]} Triggers</span>
         <span className="muted" style={{ fontSize: 12 }}>
+          {/* Was "Automatic emails sent on lead activity", which contradicted the panel directly
+              beneath it — nothing sends a CRM email on its own. The Desk's wording is unchanged. */}
           {area === 'crm'
-            ? 'Automatic emails sent on lead activity. The Transaction Desk keeps its own triggers.'
+            ? 'Which CRM emails may be sent by hand. The Transaction Desk keeps its own triggers.'
             : 'Automations that run on transaction activity. The CRM keeps its own triggers.'}
         </span>
       </div></div>

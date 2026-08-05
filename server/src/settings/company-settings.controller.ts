@@ -1,4 +1,6 @@
 import { Body, Controller, Delete, Get, HttpCode, Post, Put, Req, Res, UseGuards } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
+import { SETTINGS_WRITE_LIMIT } from '../config/rate-limits';
 import type { Request, Response } from 'express';
 import { createReadStream } from 'fs';
 import { AuthGuard } from '../auth/guards/auth.guard';
@@ -60,6 +62,7 @@ export class CompanySettingsController {
    * What is different is that the grant now means what the screen says it means.
    */
   @Put()
+  @Throttle({ default: SETTINGS_WRITE_LIMIT })
   @UseGuards(AuthGuard, ScreenGuard)
   @Screen('settings', 'edit')
   async update(

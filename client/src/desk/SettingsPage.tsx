@@ -51,7 +51,24 @@ interface TabDef {
  */
 const TABS: TabDef[] = [
   { key: 'desk', label: 'Transaction Desk Settings', ico: 'briefcase', superAdmin: true, area: 'desk' },
-  { key: 'crm', label: 'CRM Settings', ico: 'settings', superAdmin: true, area: 'crm' },
+  /*
+   * `screen: 'settings'`, NOT `superAdmin`. The API behind this tab is gated on
+   * `@Screen('settings', 'edit')`, and gating the tab on the role instead produced the inverse of
+   * the bug that gating change was made to fix: measured on 2026-08-04, granting the Admin role
+   * `settings: edit` through Roles & Permissions was honoured by every endpoint — `PUT
+   * /api/crm-settings` 200, `PUT /api/crm-settings/email-settings` 200, `POST
+   * /api/crm-settings/broadcasts` 201, which emails every member of staff — while no screen
+   * anywhere in the product showed them a single one of those controls. A grant the API obeys and
+   * the interface never mentions is worse than one that visibly fails, because nobody finds out
+   * what they handed over.
+   *
+   * `view` opens the tab, `edit` makes it writable — CrmSettingsPanel renders read-only without it,
+   * exactly as CompanySettingsPage already does. That is why widening this is safe: `view` reveals
+   * nothing new, because every read endpoint behind this tab is already `@Screen('settings',
+   * 'view')` and already answered 200 to an Admin who could not see the screen. Nothing here stores
+   * a password — `crm_email_settings` has no such column.
+   */
+  { key: 'crm', label: 'CRM Settings', ico: 'settings', screen: 'settings', area: 'crm' },
   { key: 'company', label: 'Company Settings', ico: 'building', screen: 'settings' },
   // Behind the Users screen rather than a Super Admin flag: changing what a role grants is the
   // same authority as changing who holds it, and the endpoint enforces exactly that.
@@ -90,6 +107,17 @@ export default function SettingsPage() {
     .filter((t) => (!t.superAdmin || isSuperAdmin) && (!t.screen || can(t.screen, 'view')));
   const requested = params.get('tab') ?? '';
   const [aliasTab, aliasSub] = ALIASES[requested] ?? [requested, undefined];
+  /*
+   * `'company'` as the last resort is unreachable in practice and deliberately kept simple.
+   *
+   * L7 recorded that a role without `settings` reaching this screen got an empty tab bar and no
+   * explanation. It does not: `RequireScreen` in `desk/guards.tsx` renders "🔒 No access — ask an
+   * administrator to grant you access under Users" before this component ever mounts, and the one
+   * account that gets past it via `orSuperAdmin` is a Super Admin, who `PermissionService.effectiveFor`
+   * gives every screen at `edit` regardless of what the role map says. So `visible` is never empty
+   * here. Verified in the browser on 2026-08-05, including by revoking `settings` from the admin
+   * role and confirming the Super Admin still sees all three tabs.
+   */
   const fallback = visible[0]?.key ?? 'company';
   // A tab that belongs to the other area is not silently swapped for this area's first tab —
   // that would answer a request for CRM Settings with the Transaction Desk's. It is sent to the
@@ -106,6 +134,30 @@ export default function SettingsPage() {
   // right section and the browser's Back button behaves.
   useEffect(() => { setTab(active); }, [active]);
   useEffect(() => { setSub(activeSub); }, [activeSub]);
+
+  /*
+   * A tab that does not exist is corrected in the URL, not just on screen.
+   *
+   * `?tab=doesnotexist` fell back to the first visible tab and left the address bar saying
+   * `doesnotexist` — so the page showed CRM Settings while the URL claimed something else, and
+   * bookmarking or sharing it carried the lie forward. Replaced rather than pushed, so it does not
+   * add a history entry the Back button has to walk through.
+   *
+   * ONLY a value that resolves to nothing is corrected. An ALIAS resolves to a real tab and is left
+   * exactly as it is: `?tab=templates` is a live bookmark and the OAuth return path, and rewriting
+   * it to `?tab=desk` would drop the sub-section it carries and land people on Integrations instead
+   * of Templates. A tab belonging to the other area is left alone too — that is a redirect to the
+   * area that owns it, further down, and answering it here would re-create the bug that redirect
+   * exists to fix.
+   */
+  const unknownTab = !!requested && !foreign && !visible.some((t) => t.key === aliasTab);
+  useEffect(() => {
+    if (!unknownTab) return;
+    const next = new URLSearchParams(params);
+    next.set('tab', active);
+    setParams(next, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [unknownTab, active]);
 
   // ?tab=crm reached from the Transaction Desk (an old bookmark, or the OAuth return for a CRM
   // calendar) belongs in the CRM's Settings. Sent there rather than quietly showing a different

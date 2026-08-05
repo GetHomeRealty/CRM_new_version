@@ -280,6 +280,40 @@ input[type="number"],.numeric,.stat-card .val{font-variant-numeric:tabular-nums;
   .btn{padding:8px 12px}
   .btn.sm{padding:6px 9px}
 }
+
+/* The topbar on a phone.
+   ----------------------
+   `.topbar` is a non-wrapping flex row — area switch, breadcrumbs, title, then a right-hand cluster
+   of bell, locale, avatar, name and Password. None of it could shrink and none of it could wrap, so
+   at 390px the row measured 547px and the WHOLE APPLICATION scrolled sideways: 547 on Settings, 567
+   on the CRM dashboard, 522 on Leads. Reported against CRM Settings because that is where it was
+   measured; it was never a Settings bug.
+
+   Nothing is removed that is not said twice over. The breadcrumb's first crumb is the area switch
+   sitting beside it and its last is the title. The locale is a fixed label, not a control. The name
+   is already the avatar's tooltip and its initial. The word "Password" sits next to a padlock on
+   the same button. Every CONTROL stays, at full tap size.
+
+   The title is what survives, not the breadcrumb — and that was the second attempt. Hiding the
+   title and letting the crumbs shrink measured `crumbsW: 0` on all three screens tested: the
+   breadcrumb was squeezed out of existence by the flex line and nothing named the screen at all.
+   Of the two, the title is the one worth the width. */
+@media(max-width:560px){
+  /* Wrap rather than overflow: if the row still cannot fit, it becomes two lines inside the shell
+     instead of pushing the document wider than the screen. */
+  .topbar{flex-wrap:wrap;row-gap:6px;column-gap:10px;padding:10px 14px}
+  .topbar .crumbs{display:none}
+  /* `min-width:0` is what actually lets a flex child shrink — without it the default `auto`
+     minimum keeps the title at its content width and nothing else can give. */
+  .topbar .title{min-width:0;flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .topbar .right{min-width:0;margin-left:auto;gap:8px}
+  .topbar-locale,.topbar-who,.topbar-pw-label{display:none}
+  /* Dropping the word "Password" leaves a padlock in a button sized by its padding — 27px square,
+     measured, which is a thumb target on a phone. Hiding a label must not shrink the thing you
+     press, so the topbar's controls get an explicit floor at this width. Caught by the test written
+     for this very fix. */
+  .topbar .right .btn,.topbar .right .icon-btn{min-width:36px;min-height:36px;display:inline-flex;align-items:center;justify-content:center}
+}
 /* Respect reduced-motion preference (accessibility) */
 @media (prefers-reduced-motion: reduce){
   *,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important;scroll-behavior:auto!important}

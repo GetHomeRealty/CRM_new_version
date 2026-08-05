@@ -43,11 +43,25 @@ export class AccountController {
   }
 
   // -------------------------------------------------------- email preferences
-  /** Signature, default reply template, auto-sync — the user's own, plus their integrations. */
+  /**
+   * Signature, default reply template, auto-sync — the user's own, plus their integrations.
+   *
+   * `getOwnSettings` / `saveOwnSettings`, NOT `getSettings` / `saveSettings`. Those two resolve
+   * their scope from the caller's ROLE, and for `admin`, `manager`, `administrator` and `developer`
+   * that resolves to `user_id = null` — the shared brokerage-wide row. This controller carries
+   * `AuthGuard` and nothing else, so it was a settings write with no settings permission on it:
+   * measured on 2026-08-04, an Admin holding `settings: 'view'` got 403 from
+   * `PUT /api/crm-settings` and 200 from `PUT /api/account/settings`, writing the global row the
+   * first route had just refused them. The self-scoped pair forces `user_id = user.id` regardless
+   * of role, which is what this screen has always claimed to do.
+   *
+   * Brokerage-wide CRM settings are still editable — under CRM Settings, behind
+   * `@Screen('settings', 'edit')`, which is the one place that asks for the authority.
+   */
   @Get('settings')
   async accountSettings(@CurrentUser() user: AuthUserRecord): Promise<unknown> {
     const [settings, integrations] = await Promise.all([
-      this.settings.getSettings(user),
+      this.settings.getOwnSettings(user),
       this.settings.integrations(user),
     ]);
     return { emailSettings: settings.emailSettings, integrations };
@@ -55,9 +69,9 @@ export class AccountController {
 
   @Put('settings')
   saveSettings(@CurrentUser() user: AuthUserRecord, @Body() body: Record<string, unknown>): Promise<unknown> {
-    // Only the email-preferences section is writable here; wrap it so saveSettings' "at least one
-    // section" guard is satisfied and nothing else can be touched from this screen.
-    return this.settings.saveSettings(user, { emailSettings: body?.emailSettings ?? body ?? {} });
+    // Only the email-preferences section is writable here; wrap it so the "at least one section"
+    // guard is satisfied and nothing else can be touched from this screen.
+    return this.settings.saveOwnSettings(user, { emailSettings: body?.emailSettings ?? body ?? {} });
   }
 
   // ---------------------------------------------------- personal mail accounts
