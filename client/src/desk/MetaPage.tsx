@@ -19,6 +19,7 @@ const OAUTH_ERRORS: Record<string, string> = {
   not_configured: 'Meta is not configured on this server yet.',
   missing_code: 'Facebook did not return an authorization code. Try again.',
   invalid_state: 'That sign-in link expired or was already used. Start the connection again.',
+  account_unavailable: 'Your CRM account is no longer active, so the connection was not saved.',
   connect_failed: 'Facebook accepted the sign-in but the connection could not be completed. Open Diagnostics for the reason.',
 };
 

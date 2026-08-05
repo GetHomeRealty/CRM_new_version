@@ -248,7 +248,11 @@ export class MetaController {
   async adAccounts(@CurrentUser() user: AuthUserRecord): Promise<Record<string, unknown>> {
     const conn = await this.connections.find(user.id ?? 0);
     if (!conn) throw new BadRequestException({ message: 'Meta is not connected.' });
-    const accounts = await this.graph.adAccounts(conn.token);
+    // M-M6: through `wrap`, like every other Graph call on this controller. These two were the only
+    // ones that were not, so an expired token or a missing `ads_read` grant surfaced here as a bare
+    // 500 rather than as Meta's own message with its code — the one thing that tells somebody
+    // whether to reconnect or to change the app's permissions.
+    const accounts = await this.wrap(() => this.graph.adAccounts(conn.token));
     return {
       accounts: accounts.map((a) => ({ id: a.id, name: a.name, active: a.account_status === 1 })),
       note: accounts.length === 0
@@ -268,7 +272,7 @@ export class MetaController {
       await this.connections.setAdAccount(user.id ?? 0, null, null);
       return { selected: null, message: 'Ad account cleared.' };
     }
-    const accounts = await this.graph.adAccounts(conn.token);
+    const accounts = await this.wrap(() => this.graph.adAccounts(conn.token));
     const match = accounts.find((a) => a.id === id);
     if (!match) throw new BadRequestException({ message: 'That ad account is not available on this connection.' });
     await this.connections.setAdAccount(user.id ?? 0, match.id, match.name);

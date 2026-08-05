@@ -89,6 +89,10 @@ const ROOT = [
 const DERIVED: Record<string, string> = {
   // via users
   audit_logs: 'users', google_connections: 'users', ical_feeds: 'users', crm_settings: 'users',
+  // One row per person, holding which CRM emails that person may send. Derived via `users` for the
+  // same reason `crm_settings` is: the brokerage does not own the row, the person does — reached
+  // only as "this user's triggers", never as "the brokerage's triggers".
+  crm_trigger_settings: 'users',
   todos: 'users', meta_connections: 'users', meta_sync_history: 'users', meta_lead_forms: 'users',
   favorites: 'users', campaign_templates: 'users', calendar_events: 'users', mail_accounts: 'users',
   sessions: 'users', user_permissions: 'users', user_modules: 'users',

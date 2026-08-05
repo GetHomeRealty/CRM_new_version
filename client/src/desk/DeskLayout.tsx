@@ -117,7 +117,11 @@ const NAV: NavItem[] = [
     children: [
       { key: 'settings-desk', label: 'Transaction Desk', ico: 'briefcase', superAdmin: true, area: 'desk', path: 'settings?tab=desk',
         match: (_p, q) => (new URLSearchParams(q).get('tab') ?? 'desk') === 'desk' },
-      { key: 'settings-crm', label: 'CRM Settings', ico: 'settings', superAdmin: true, area: 'crm', path: 'settings?tab=crm',
+      // `screen: 'settings'` to match the tab in SettingsPage and the API behind it. It was
+      // `superAdmin`, while every endpoint it opens gates on the `settings` permission — so a role
+      // granted `settings: edit` could write CRM settings and broadcast to all staff through the
+      // API with no navigation entry and no screen. See the comment on the tab itself.
+      { key: 'settings-crm', label: 'CRM Settings', ico: 'settings', screen: 'settings', area: 'crm', path: 'settings?tab=crm',
         match: (_p, q) => (new URLSearchParams(q).get('tab') ?? 'crm') === 'crm' },
       { key: 'settings-company', label: 'Company Settings', ico: 'building', screen: 'settings', path: 'settings?tab=company',
         match: (_p, q) => new URLSearchParams(q).get('tab') === 'company' },
@@ -456,10 +460,18 @@ export default function DeskLayout({ area = DEFAULT_AREA }: { area?: Area }) {
                   )}
                 </div>
               )}
-              <div style={{ fontSize: 13, color: '#374151' }}>{'\u{1F1E8}\u{1F1E6}'} English</div>
+              {/* The three classes below carry no styling of their own — they exist so the phone
+                  breakpoint can drop what is decorative and keep what is not. The topbar is a
+                  non-wrapping flex row, and at 390px its right-hand cluster alone is 301px wide, so
+                  the whole shell scrolled sideways on every screen in both areas. Each of these
+                  says something the row still says without it: the locale is fixed, the name is on
+                  the avatar's tooltip, and the padlock is the same control as the word. */}
+              <div className="topbar-locale" style={{ fontSize: 13, color: '#374151' }}>{'\u{1F1E8}\u{1F1E6}'} English</div>
               <UserAvatar userId={user?.id ?? null} name={user?.name} size={34} title={user?.name ?? undefined} />
-              <span style={{ fontSize: 12, color: 'var(--muted)' }}>{user?.name || 'Gethomerealty'}</span>
-              <button className="btn ghost sm" onClick={() => setPwOpen(true)} title="Change your password"><Icon name="lock" size={13} /> Password</button>
+              <span className="topbar-who" style={{ fontSize: 12, color: 'var(--muted)' }}>{user?.name || 'Gethomerealty'}</span>
+              <button className="btn ghost sm" onClick={() => setPwOpen(true)} title="Change your password">
+                <Icon name="lock" size={13} /> <span className="topbar-pw-label">Password</span>
+              </button>
             </div>
           </div>
           {/*

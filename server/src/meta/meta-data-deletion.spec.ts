@@ -59,8 +59,11 @@ function signedRequest(payload: Record<string, unknown>, secret = SECRET): strin
 
 const request = (signed: string): Request => ({ body: { signed_request: signed } } as unknown as Request);
 
+// Only the data-deletion path is exercised here, and it never reaches the OAuth callback's
+// collaborators — hence the nulls, AuthService among them.
 const controllerFor = (tx: PrismaService) => new MetaPublicController(
   new MetaConnectionService(tx, { fetchPages: async () => [] } as never),
+  null as never,
   null as never,
   null as never,
   null as never,

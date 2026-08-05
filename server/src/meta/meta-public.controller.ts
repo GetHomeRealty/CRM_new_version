@@ -9,6 +9,8 @@ import { MetaStateService } from './meta-state.service';
 import { REQUIRED_LIVE_PERMISSIONS, isConfigured, redirectUri, webhookSecret, webhookVerifyToken } from './meta.constants';
 import { createHash } from 'node:crypto';
 import { SkipThrottle } from '@nestjs/throttler';
+import { AuthService } from '../auth/auth.service';
+import { setCompanyId } from '../core/tenant-context';
 
 const str = (v: unknown): string => String(v ?? '').trim();
 
@@ -16,6 +18,9 @@ const str = (v: unknown): string => String(v ?? '').trim();
  * Public Meta endpoints. These are called by Facebook, not by the SPA, so they carry NO
  * AuthGuard and NO CSRF token — the OAuth callback is trusted via its signed `state`, and the
  * webhook via its `x-hub-signature-256` HMAC.
+ *
+ * No AuthGuard also means nothing names the tenant, and every Meta table is tenant-owned. Each
+ * handler that touches one has to establish the brokerage itself, from whatever it trusts.
  *
  * Registered BEFORE MetaController so `meta/callback` and `meta/webhook` are matched by these
  * literal routes rather than falling into the guarded controller.
@@ -36,6 +41,7 @@ export class MetaPublicController {
     private readonly graph: MetaGraphService,
     private readonly sync: MetaSyncService,
     private readonly state: MetaStateService,
+    private readonly auth: AuthService,
   ) {}
 
   /** Where the browser lands after Meta redirects back. */
@@ -64,6 +70,28 @@ export class MetaPublicController {
     // A bad state means forged, expired or replayed — never fall back to "trust the caller".
     const userId = await this.state.verify(str(q.state));
     if (!userId) return fail('invalid_state');
+
+    /**
+     * Name the tenant, because nothing else on this route will.
+     *
+     * `meta_connections` carries `company_id`, so the tenant extension refuses every query against
+     * it with no brokerage in context — which is precisely what this handler had. AuthGuard is what
+     * names the tenant on an ordinary request and it deliberately does not run here, so the connect
+     * failed on its first write with "No tenant in context" and the user was told only that Facebook
+     * had accepted the sign-in.
+     *
+     * The signed state is what proves who started the flow, so this is the first moment the
+     * brokerage is knowable — the same position sign-in is in, which names it in AuthController for
+     * the same reason. `loadUser` resolves it as system, as it must: finding the user is how the
+     * tenant is discovered.
+     *
+     * It returns null for an account that no longer exists or has been deactivated, and that has to
+     * stop here. A departed agent must not be able to finish binding a Facebook account to the CRM
+     * with a state parameter minted while they still had access.
+     */
+    const user = await this.auth.loadUser(userId);
+    if (!user) return fail('account_unavailable');
+    setCompanyId(user.company_id);
 
     if (!isConfigured()) return fail('not_configured');
 

@@ -202,10 +202,21 @@ export class LeadsController {
     return this.imports.recent(user);
   }
 
-  /** Rows for a CSV export — either the checked leads, or everything matching the filters. */
+  /**
+   * Rows for a CSV export — either the checked leads, or everything matching the filters.
+   *
+   * `edit`, not `view`. Reading a lead on screen and carrying the whole book out of the building as
+   * a file are different acts, and only the second survives someone leaving. The rows returned were
+   * always correctly scoped — measured across five roles during the CRM audit, export count matched
+   * list count exactly every time (36/36, 21/21, 0/0, 3/3, 24/24), so this is not closing a data
+   * leak. It is saying that a role trusted only to look is not thereby trusted to extract.
+   *
+   * `accounting` and `documentation` hold `lead: view` and lose export by this change; agent, crm,
+   * manager and admin hold `lead: edit` and keep it.
+   */
   @Post('export')
   @HttpCode(200)
-  @Screen('lead', 'view')
+  @Screen('lead', 'edit')
   export(@CurrentUser() user: AuthUserRecord, @Body() body: Record<string, unknown>): Promise<unknown> {
     return this.leads.exportRows(user, (body.filters ?? {}) as LeadQuery, ids(body.lead_ids));
   }

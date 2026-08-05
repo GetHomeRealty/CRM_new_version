@@ -207,6 +207,8 @@ model company_settings {
   crm_referral_codes     crm_referral_codes[]
   crm_email_log          crm_email_log[]
   crm_broadcasts         crm_broadcasts[]
+  crm_settings           crm_settings[]
+  crm_trigger_settings   crm_trigger_settings[]
   email_suppressions     email_suppressions[]
   import_batches         import_batches[]
   export_jobs            export_jobs[]
@@ -593,6 +595,13 @@ model crm_settings {
   /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
   company_id Int @default(1)
 
+  /// This table was the odd one out: its four sibling CRM tables carry both relations and it
+  /// carried neither, so a deleted user left their settings row behind for ever and `company_id`
+  /// pointed at a brokerage nothing guaranteed existed. `Cascade`, because a personal settings row
+  /// has no meaning without the person — the global row (user_id NULL) is unaffected.
+  user       users?           @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  company    company_settings @relation(fields: [company_id], references: [id], onUpdate: NoAction)
+
   @@index([company_id])
 }
 
@@ -617,6 +626,42 @@ model crm_email_settings {
   /// The brokerage this row belongs to. See src/core/tenancy.spec.ts for why this table carries one.
   company_id Int              @default(1)
   company    company_settings @relation(fields: [company_id], references: [id], onUpdate: NoAction)
+
+  @@index([company_id])
+}
+
+/**
+ * ONE PERSON'S CRM email triggers.
+ *
+ * Triggers used to be a single brokerage-wide row, so an agent switching off promotional email
+ * switched it off for everybody — and the Triggers screen, which shows only switches, wrote the
+ * shared SMTP fields back with them. Both problems disappear when the switches belong to the person
+ * making them: this table holds nothing but the toggles, and each row is one user's own.
+ *
+ * A user with no row here inherits `crm_email_settings.template_toggles`, which is the brokerage
+ * default an administrator sets under CRM Settings. So a new agent starts with the brokerage's
+ * choices and departs from them only where they say so — and only for themselves.
+ *
+ * The brokerage-wide `auto_send_enabled` still applies over the top: it is the kill switch, not a
+ * default, and no personal choice overrides it.
+ */
+model crm_trigger_settings {
+  id               Int       @id @default(autoincrement())
+  /// Whose triggers these are. One row per person; deleting the person removes it.
+  user_id          Int       @unique
+  /**
+   * { wedding, seasonal, promotional, referral, custom } — only the keys this person has an
+   * opinion about. A key that is absent falls through to the brokerage default.
+   */
+  template_toggles String?   @db.Text
+  updated_by       String?   @db.VarChar(255)
+  created_at       DateTime? @db.Timestamp(0)
+  updated_at       DateTime? @db.Timestamp(0)
+
+  /// The brokerage this row belongs to. See src/core/tenancy.spec.ts for why this table carries one.
+  company_id Int              @default(1)
+  company    company_settings @relation(fields: [company_id], references: [id], onUpdate: NoAction)
+  user       users            @relation(fields: [user_id], references: [id], onDelete: Cascade)
 
   @@index([company_id])
 }
@@ -1486,6 +1531,13 @@ model calendar_events {
   domain                String?       @db.VarChar(8)
   google_calendar_id    String?       @db.VarChar(255)
   last_synced_to_google DateTime?     @db.Timestamp(0)
+  /// Why the last push to Google failed, or null when there is nothing outstanding. Non-null is the
+  /// definition of "this event is owed to Google" — see migration 20260805220000_google_sync_retry.
+  google_sync_error         String?   @db.VarChar(500)
+  /// How many times the retry sweep has tried. Capped, so a permanently broken event stops asking.
+  google_sync_attempts      Int       @default(0)
+  /// When the sweep may try again. Backs off, so a Google outage is not hammered.
+  google_sync_next_retry_at DateTime? @db.Timestamp(0)
   created_at            DateTime?     @db.Timestamp(0)
   updated_at            DateTime?     @db.Timestamp(0)
   deleted_at            DateTime?     @db.Timestamp(0)
@@ -2043,6 +2095,11 @@ model inbound_emails {
   @@index([user_id])
   @@index([lead_id])
   @@index([company_id])
+  /// The list query: filter by owner (or by the area's primary account) and take the newest 30.
+  /// Without these the planner sorts the whole matching set on every page load — measured with
+  /// EXPLAIN on 2026-08-05. See migration 20260805200000_inbox_list_index.
+  @@index([user_id, received_at(sort: Desc)])
+  @@index([account_id, received_at(sort: Desc)])
 }
 
 model migrations {
@@ -2654,6 +2711,8 @@ model users {
   /// The brokerage this row belongs to. See src/core/tenancy.spec.ts for why this table carries one.
   push_subscriptions push_subscriptions[]
   notification_preferences notification_preferences[]
+  crm_settings             crm_settings[]
+  crm_trigger_settings     crm_trigger_settings[]
 
   company_id Int              @default(1)
   company    company_settings @relation(fields: [company_id], references: [id], onUpdate: NoAction)

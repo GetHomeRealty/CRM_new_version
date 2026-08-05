@@ -3,3 +3,8 @@ test-results/
 playwright-report/
 blob-report/
 .playwright/
+
+# Audit evidence: 104 screenshots, ~14 MB. The audit documents in docs/audit reference them by
+# filename; the images themselves live on the machine that produced them. Git keeps binaries in
+# history for ever, so they are deliberately kept out of it.
+audit-shots/
