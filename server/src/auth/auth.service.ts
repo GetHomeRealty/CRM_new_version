@@ -6,7 +6,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { throwValidation } from '../common/laravel-exceptions';
 import { PermissionService } from './permission.service';
 import type { AuthPayload, AuthUserRecord } from './auth.types';
-import { runAsSystem } from '../core/tenant-context';
+import { run, runAsSystem } from '../core/tenant-context';
+
 import { AccountLockoutService } from './account-lockout.service';
 
 import { isAdminOrAbove, isSuperAdmin } from '../core/authz';
@@ -132,27 +133,53 @@ export class AuthService {
    * Bootstrap registration â€” only allowed while there are zero users (creates the
    * first Admin). Mirrors AuthController::register.
    */
-  async register(name: string, email: string, password: string, passwordConfirmation: string): Promise<AuthUserRecord> {
+   /**
+   * Bootstrap registration — only allowed while there are zero users (creates the
+   * first Admin). Mirrors AuthController::register.
+   */
+  async register(
+    name: string,
+    email: string,
+    password: string,
+    passwordConfirmation: string,
+  ): Promise<AuthUserRecord> {
     if ((await runAsSystem(() => this.prisma.users.count())) > 0) {
       throw new ForbiddenException({
         message: 'Registration is closed. Ask an administrator to create your account.',
       });
     }
+
     if (password !== passwordConfirmation) {
-      throwValidation({ password: ['The password field confirmation does not match.'] });
-    }
-    if (await runAsSystem(() => this.prisma.users.findUnique({ where: { email } }))) {
-      throwValidation({ email: ['The email has already been taken.'] });
+      throwValidation({
+        password: ['The password field confirmation does not match.'],
+      });
     }
 
-    return this.prisma.users.create({
-      data: {
-        name,
-        email,
-        password: bcrypt.hashSync(password, this.rounds),
-        role: 'admin', // first user is the administrator
-      },
-      include: { user_permissions: true },
+    const existingUser = await runAsSystem(() =>
+      this.prisma.users.findUnique({
+        where: { email },
+      }),
+    );
+
+    if (existingUser) {
+      throwValidation({
+        email: ['The email has already been taken.'],
+      });
+    }
+
+    return run(1, async () => {
+      return this.prisma.users.create({
+        data: {
+          name,
+          email,
+          password: bcrypt.hashSync(password, this.rounds),
+          role: 'admin',
+          company_id: 1,
+        },
+        include: {
+          user_permissions: true,
+        },
+      });
     });
   }
 

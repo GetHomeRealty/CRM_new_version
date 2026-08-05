@@ -89,6 +89,13 @@ export function tenantExtension(getClient: () => unknown = () => null) {
           }
 
           const companyId = currentCompanyId();
+console.log("---------------------------------");
+console.log("TENANT EXTENSION");
+console.log("Model =", model);
+console.log("Operation =", operation);
+console.log("Company =", companyId);
+console.log("System =", isSystemContext());
+console.log("---------------------------------");
           if (companyId === null) {
             // FAIL CLOSED. A query against a tenant-owned table with no tenant in context is a bug,
             // and the safe answer to a bug is a loud one — the alternative is returning every

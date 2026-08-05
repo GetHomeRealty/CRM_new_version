@@ -65,8 +65,18 @@ export function enter<T>(fn: () => T): T {
  *
  * Awaiting here keeps the query's execution inside the scope, whatever shape of callback is passed.
  */
+
 export async function run<T>(companyId: number, fn: () => Promise<T>): Promise<T> {
-  return storage.run({ companyId }, async () => await fn());
+  console.log("=================================");
+  console.log("RUN() ENTER");
+  console.log("companyId =", companyId);
+
+  return storage.run({ companyId }, async () => {
+    console.log("Current Company =", currentCompanyId());
+    console.log("=================================");
+
+    return await fn();
+  });
 }
 
 /**
