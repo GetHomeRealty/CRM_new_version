@@ -38,7 +38,8 @@ export interface DeskDashboard {
   transactions: { total: number; by_validation: Record<string, number>; by_commission: Record<string, number> };
   closings: { next_30_days: number; overdue: number; this_month: number };
   documents: { pending: number; invalid: number; mandatory_missing: number };
-  invoices: { total: number; unpaid: number; billed: number; collected: number; outstanding: number };
+  /** `null` when the signed-in user does not hold the `invoice` screen — the tiles are omitted. */
+  invoices: { total: number; unpaid: number; billed: number; collected: number; outstanding: number } | null;
   calendar: { upcoming: number; today: number };
   todos: { total: number; pending: number; overdue: number };
 }

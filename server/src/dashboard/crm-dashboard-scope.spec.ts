@@ -1,6 +1,7 @@
 import { PrismaClient } from '@prisma/client';
 import type { PrismaService } from '../prisma/prisma.service';
 import { AreaDashboardService } from './area-dashboard.service';
+import { PermissionService } from '../auth/permission.service';
 import type { AuthUserRecord } from '../auth/auth.types';
 
 /**
@@ -42,7 +43,11 @@ async function makeLead(tx: PrismaService, over: Record<string, unknown> = {}): 
   });
 }
 
-const crmFor = (tx: PrismaService, user: AuthUserRecord) => new AreaDashboardService(tx).crm(user);
+//  joined the constructor when the desk dashboard learned to withhold invoice
+// figures (CRM-DASH-M01). The CRM half does not consult it, but the argument is still required —
+// and ts-jest does not typecheck, so this only failed once `tsc --noEmit` was run over the project.
+const crmFor = (tx: PrismaService, user: AuthUserRecord) =>
+  new AreaDashboardService(tx, new PermissionService()).crm(user);
 
 describe('CRM dashboard — lead counting', () => {
   it('leaves a deleted lead out of every lead figure', async () => {

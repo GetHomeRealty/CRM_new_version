@@ -107,9 +107,20 @@ export class PermissionService {
         return this.fill('edit');
       case 'manager':
         return { ...this.fill('edit'), users: 'none', settings: 'view', audit: 'view' };
-      // Accounting: works in Transactions (Legal & Docs) + Invoice; no admin screens.
+      /*
+       * Accounting: works in Transactions (Legal & Docs) + Invoice; no admin screens.
+       *
+       * `audit: 'none'` is explicit rather than inherited. It came from `fill('view')` and was
+       * never chosen — measured during the CRM audit, `GET /api/audit-logs` answered 200 to
+       * accounting while documentation and crm got 403. The audit trail is not a financial record:
+       * it carries user administration, permission grants and settings changes, so the role could
+       * read the history of actions on screens it cannot open and rights it does not hold.
+       *
+       * Listed here, next to `users` and `settings`, so the three admin surfaces this role is kept
+       * out of read as one decision instead of two decisions and an oversight.
+       */
       case 'accounting':
-        return { ...this.fill('view'), transactions: 'edit', invoice: 'edit', users: 'none', settings: 'none' };
+        return { ...this.fill('view'), transactions: 'edit', invoice: 'edit', users: 'none', settings: 'none', audit: 'none' };
       // Documentation: full Legal & Documentation access (other sections view-only,
       // enforced in the UI). Invoice module hidden.
       case 'documentation':
@@ -127,6 +138,22 @@ export class PermissionService {
           ...this.fill('view'),
           lead: 'edit',
           reviews: 'edit',
+          // Which CRM emails THIS PERSON sends. Triggers are per-user, so the grant cannot reach
+          // anyone else's account — see `crm_trigger_settings`. Before this, `triggers` was the
+          // permission that opened a screen whose API asked for `settings` instead, so four roles
+          // were offered a screen that refused them.
+          triggers: 'edit',
+          /*
+           * Marketing IS this role's job — it prepares campaigns for agents, sends mass
+           * communications and runs lead nurturing. It held `campaigns: 'view'` inherited from
+           * `fill('view')`, so measured during the CRM audit it was refused 403 on campaign create
+           * and test-send while an ordinary AGENT was allowed both. The role that exists to run
+           * campaigns was the one role that could not.
+           *
+           * Deliberately paired with `data.read-all`, which this role's rank already grants: a
+           * campaign for the brokerage is useless if the audience stops at the sender's own leads.
+           */
+          campaigns: 'edit',
           transactions: 'none',
           invoice: 'none',
           audit: 'none',
@@ -155,6 +182,10 @@ export class PermissionService {
           // never the brokerage's or another agent's.
           campaigns: 'edit',
           meta: 'edit',
+          // An agent decides which CRM emails they themselves send. Per-user, like the campaigns
+          // and Meta grants above it and for the same reason: `crm_trigger_settings` is one row per
+          // person, so this cannot change what any colleague or administrator sends.
+          triggers: 'edit',
           invoice: 'none',
           audit: 'none',
           users: 'none',

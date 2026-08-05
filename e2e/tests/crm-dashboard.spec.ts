@@ -33,8 +33,21 @@ for (const who of ['agent', 'admin', 'superAdmin'] as const) {
     await expect(page.getByText('Lead Tasks', { exact: false }).first()).toBeVisible({ timeout: 15_000 });
     await expect(page.getByText(BOUNDARY)).toHaveCount(0);
 
-    // A render crash still shows something, so assert on the error itself rather than the symptom.
-    expect(crashes.filter((m) => /destructure|undefined/i.test(m))).toEqual([]);
+    /*
+     * EVERY pageerror, not a filtered subset.
+     *
+     * This read `crashes.filter((m) => /destructure|undefined/i.test(m))`, matching the wording of
+     * the one crash that prompted the test. It would not have caught the failure that actually
+     * reached production: a backend deployed ahead of its frontend served the paginated
+     * `{ data, meta, summary }` object to a bundle still expecting a bare array, and the panel
+     * called `.filter()` on it — `tasks.filter is not a function`, which contains neither word. The
+     * test passed while the page was blank.
+     *
+     * Filtering by message is guessing at the next bug's wording. Measured: this page raises no
+     * pageerror at all for any of the three roles, so zero is the honest assertion and it is not a
+     * flaky one.
+     */
+    expect(crashes).toEqual([]);
   });
 }
 

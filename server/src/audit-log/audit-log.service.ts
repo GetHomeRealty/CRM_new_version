@@ -1,11 +1,37 @@
 import { parseArea, screenLabelsForArea, type Area } from '../common/domain';
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { SCREENS } from '../auth/permission.service';
 import { toDateTimeString } from '../common/serialize';
 
 const PER_PAGE = 50;
+
+/**
+ * The furthest page anybody may ask for. `Number(query.page)` went straight into `skip`, so
+ * `?page=Infinity` and `?page=1e20` both reached Prisma and came back as a bare 500 — measured
+ * 2026-08-05 against 127 rows.
+ *
+ * 20,000 pages is a million records at 50 a page, which is past the end of any real trail; the point
+ * is that the ceiling is a number rather than whatever the query string happened to contain.
+ */
+const MAX_PAGE = 20_000;
+
+/** A search term long enough to be a payload rather than a search. 100,000 characters was accepted. */
+const MAX_TERM = 200;
+
+/**
+ * Escape the wildcards Prisma's `contains` passes through to SQL `LIKE`.
+ *
+ * `?q=%` returned all 127 rows and `?q=_` did the same — neither is a search for a percent sign or
+ * an underscore, they are `LIKE '%%%'` and `LIKE '%_%'`. Nobody escalates anything with this: the
+ * caller already holds `audit: view` and reads the whole trail anyway. It is wrong in the ordinary
+ * way — somebody searching for "50%" or "old_value" gets an answer that does not mean what it says.
+ *
+ * Prisma parameterises the value, so the backslash is a LIKE escape and not a SQL one; Postgres uses
+ * backslash as the default LIKE escape character, which is why no explicit ESCAPE clause is needed.
+ */
+const escapeLike = (term: string): string => term.replace(/[\\%_]/g, (c) => `\\${c}`);
 
 export interface AuditLogQuery {
   category?: string;
@@ -74,23 +100,47 @@ export class AuditLogService {
       if (cat === 'Transactions') and.push({ transaction_id: { not: null } });
       else and.push({ category: cat });
     }
+    /*
+     * A FILTER THAT CANNOT BE HONOURED IS REFUSED, NOT QUIETLY DROPPED.
+     *
+     * `Number('abc')` is NaN, which Prisma renders as `user_id: null` — so `?user_id=abc` returned
+     * the ONE row with no user attached, under a heading saying it was that user's activity.
+     * Measured 2026-08-05: `total=1` against a baseline of 127, no error anywhere. `?user_id=1e999`
+     * is Infinity and did the same. A trail that answers a nonsense question with somebody else's
+     * rows is worse than one that answers nothing, because this is the screen people use to work out
+     * who did something.
+     */
     const uid = query.user_id;
-    if (uid) and.push({ user_id: Number(uid) });
+    if (uid) {
+      const n = Number(uid);
+      if (!Number.isSafeInteger(n)) {
+        throw new BadRequestException({ message: `"${uid}" is not a user id.`, errors: { user_id: ['Must be a whole number.'] } });
+      }
+      and.push({ user_id: n });
+    }
 
+    /*
+     * `new Date('garbage')` is an Invalid Date, which Prisma refuses — so `?from=garbage` and
+     * `?to=2026-99-99` were both bare 500s. Refused with the field named, like every other filter.
+     */
     const from = query.from;
-    if (from) and.push({ created_at: { gte: this.startOfDay(from) } });
+    if (from) and.push({ created_at: { gte: this.parseDay('from', from) } });
     const to = query.to;
-    if (to) and.push({ created_at: { lt: this.startOfNextDay(to) } });
+    if (to) and.push({ created_at: { lt: new Date(this.parseDay('to', to).getTime() + 24 * 60 * 60 * 1000) } });
 
-    const term = String(query.q ?? '').trim();
+    const term = String(query.q ?? '').trim().slice(0, MAX_TERM);
     if (term) {
       const cols: (keyof Prisma.audit_logsWhereInput)[] = ['who', 'section', 'field', 'old_value', 'new_value', 'action', 'details'];
+      const needle = escapeLike(term);
       // MySQL LIKE is case-insensitive (ci collation) — match that in Postgres.
-      and.push({ OR: cols.map((c) => ({ [c]: { contains: term, mode: 'insensitive' } })) as Prisma.audit_logsWhereInput[] });
+      and.push({ OR: cols.map((c) => ({ [c]: { contains: needle, mode: 'insensitive' } })) as Prisma.audit_logsWhereInput[] });
     }
 
     const where: Prisma.audit_logsWhereInput = { AND: and };
-    const page = Math.max(1, Number(query.page ?? 1) || 1);
+    // Clamped rather than refused: an out-of-range page is a stale bookmark or a fat finger, not an
+    // unanswerable question, and the response already reports `last_page` for the client to correct
+    // itself. `|| 1` handles NaN; `Math.min` handles Infinity, which `|| 1` does not.
+    const page = Math.min(MAX_PAGE, Math.max(1, Math.floor(Number(query.page ?? 1)) || 1));
 
     const [total, rows] = await Promise.all([
       this.prisma.audit_logs.count({ where }),
@@ -137,12 +187,22 @@ export class AuditLogService {
     };
   }
 
-  private startOfDay(d: string): Date {
-    return new Date(d.slice(0, 10) + 'T00:00:00.000Z');
-  }
-
-  private startOfNextDay(d: string): Date {
-    const t = this.startOfDay(d);
-    return new Date(t.getTime() + 24 * 60 * 60 * 1000);
+  /**
+   * Midnight UTC on the given day, or a 400 naming the field.
+   *
+   * The date is read as `YYYY-MM-DD` and interpreted in UTC, which is what the previous version did
+   * and what the column stores; what is new is that a value which cannot be a date says so instead
+   * of reaching Prisma. `2026-99-99` is caught by `Number.isNaN(getTime())` — JavaScript builds an
+   * Invalid Date rather than rolling the month over, for this shape.
+   */
+  private parseDay(field: 'from' | 'to', d: string): Date {
+    const t = new Date(`${String(d).slice(0, 10)}T00:00:00.000Z`);
+    if (Number.isNaN(t.getTime())) {
+      throw new BadRequestException({
+        message: `"${d}" is not a date. Use YYYY-MM-DD.`,
+        errors: { [field]: ['Use YYYY-MM-DD.'] },
+      });
+    }
+    return t;
   }
 }

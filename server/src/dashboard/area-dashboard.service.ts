@@ -5,6 +5,7 @@ import type { AuthUserRecord } from '../auth/auth.types';
 
 import { isAgent } from '../core/authz';
 import { leadTaskScopeWhere, liveLeadWhere } from '../common/lead-scope';
+import { PermissionService } from '../auth/permission.service';
 /**
  * The two dashboards, as two separate reads.
  *
@@ -39,14 +40,24 @@ export interface DeskDashboard {
   transactions: { total: number; by_validation: Record<string, number>; by_commission: Record<string, number> };
   closings: { next_30_days: number; overdue: number; this_month: number };
   documents: { pending: number; invalid: number; mandatory_missing: number };
-  invoices: { total: number; unpaid: number; billed: number; collected: number; outstanding: number };
+  /**
+   * `null` when the caller does not hold the `invoice` screen — see `desk()`.
+   *
+   * Null rather than zeros: an agent who holds `invoice: 'none'` has no invoice figures, and
+   * reporting `billed: 0` would tell them the brokerage has billed nothing, which is a different
+   * and worse untruth than the brokerage-wide numbers this replaced.
+   */
+  invoices: { total: number; unpaid: number; billed: number; collected: number; outstanding: number } | null;
   calendar: { upcoming: number; today: number };
   todos: { total: number; pending: number; overdue: number };
 }
 
 @Injectable()
 export class AreaDashboardService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly permissions: PermissionService,
+  ) {}
 
   private startOfToday(): Date {
     const d = new Date();
@@ -177,6 +188,15 @@ export class AreaDashboardService {
     const personal = { user_id: userId, deleted_at: null };
     const monthEnd = new Date(today.getFullYear(), today.getMonth() + 1, 0);
 
+    // Asked of the same service `ScreenGuard` asks, including per-user overrides — so granting one
+    // agent invoice access through Roles & Permissions shows them their own figures here too,
+    // rather than requiring a second rule to be remembered.
+    const mayReadInvoices = this.permissions.can(user?.role || 'agent', user?.user_permissions ?? [], 'invoice', 'view');
+    const invoiceWhere: Prisma.invoicesWhereInput = {
+      deleted_at: null,
+      ...(isAgent(user) ? { transactions: { is: live } } : {}),
+    };
+
     const [
       txnTotal, byValidation, byCommission,
       closingsSoon, closingsOverdue, closingsThisMonth,
@@ -198,9 +218,35 @@ export class AreaDashboardService {
       this.prisma.documents.count({ where: { validation: 'Invalid', transactions: { is: live } } }),
       this.prisma.documents.count({ where: { mandatory: true, status: 'Pending', transactions: { is: live } } }),
 
-      this.prisma.invoices.count({ where: { deleted_at: null } }),
-      this.prisma.invoices.count({ where: { deleted_at: null, status: { not: 'Paid' } } }),
-      this.prisma.invoices.aggregate({ _sum: { total: true, amount_paid: true, balance_due: true }, where: { deleted_at: null } }),
+      /*
+       * THE THREE QUERIES ON THIS SCREEN THAT WERE NOT SCOPED TO ANYBODY.
+       *
+       * They read `{ deleted_at: null }` and nothing else, while every other aggregate in this method
+       * is scoped — transactions by `agent`, documents through `transactions: { is: live }`, calendar
+       * and to-dos by `user_id`. Measured 2026-08-05 against the development database: the agent
+       * "Akhil" saw `transactions.total: 3` of the brokerage's 7 — correctly their own — and
+       * `invoices: { total: 5, billed: 123396, outstanding: 123396 }`, identical to the Super Admin's
+       * and identical to `SELECT sum(total) FROM invoices`.
+       *
+       * The agent role holds `invoice: 'none'`. So the one screen every agent opens first was
+       * printing the brokerage's billed and outstanding money, in four tiles, for a module the same
+       * person is refused everywhere else in the product. This class's own docstring said "every
+       * query is scoped to the signed-in user the same way its module already scopes" — which was
+       * true of eleven of the fourteen.
+       *
+       * Two changes, because one would not be enough on its own:
+       *   - WITHHELD from anyone without the `invoice` screen. That is the authority; the numbers are
+       *     not theirs to see at any scope.
+       *   - SCOPED to their own deals for an agent who does hold it, via the same `transactions:
+       *     { is: live }` join the document counts already use. A nullable relation with `is`
+       *     excludes invoices attached to no transaction, which is the wanted answer here: a
+       *     standalone invoice is brokerage billing, not one agent's.
+       */
+      mayReadInvoices ? this.prisma.invoices.count({ where: invoiceWhere }) : Promise.resolve(0),
+      mayReadInvoices ? this.prisma.invoices.count({ where: { ...invoiceWhere, status: { not: 'Paid' } } }) : Promise.resolve(0),
+      mayReadInvoices
+        ? this.prisma.invoices.aggregate({ _sum: { total: true, amount_paid: true, balance_due: true }, where: invoiceWhere })
+        : Promise.resolve({ _sum: { total: null, amount_paid: null, balance_due: null } }),
 
       this.prisma.calendar_events.count({
         where: { ...personal, ...this.areaOr('desk'), ...this.liveEvent, date: { gte: today, lt: this.daysFromToday(30) } },
@@ -222,13 +268,15 @@ export class AreaDashboardService {
       },
       closings: { next_30_days: closingsSoon, overdue: closingsOverdue, this_month: closingsThisMonth },
       documents: { pending: docsPending, invalid: docsInvalid, mandatory_missing: docsMandatoryMissing },
-      invoices: {
-        total: invoiceCount,
-        unpaid: invoiceUnpaid,
-        billed: dec(invoiceMoney._sum.total),
-        collected: dec(invoiceMoney._sum.amount_paid),
-        outstanding: dec(invoiceMoney._sum.balance_due),
-      },
+      invoices: mayReadInvoices
+        ? {
+          total: invoiceCount,
+          unpaid: invoiceUnpaid,
+          billed: dec(invoiceMoney._sum.total),
+          collected: dec(invoiceMoney._sum.amount_paid),
+          outstanding: dec(invoiceMoney._sum.balance_due),
+        }
+        : null,
       calendar: { upcoming: calUpcoming, today: calToday },
       todos: { total: todoTotal, pending: todoPending, overdue: todoOverdue },
     };

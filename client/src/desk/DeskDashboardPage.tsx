@@ -79,12 +79,26 @@ export default function DeskDashboardPage() {
       </div>
 
       <div className="tiles">
-        <Tile label="Invoices" value={data.invoices.total} sub={
-          <Breakdown parts={[{ n: data.invoices.unpaid, label: 'unpaid', tone: 'bad' }]} />
-        } />
-        <Tile label="Billed" value={money(data.invoices.billed)} sub="invoiced in total" />
-        <Tile label="Collected" value={money(data.invoices.collected)} sub="received against invoices" color="var(--ok-ink)" />
-        <Tile label="Outstanding" value={money(data.invoices.outstanding)} sub="still to be collected" color="var(--warn-ink)" />
+        {/*
+          * Four tiles that only appear for somebody who may read invoices.
+          *
+          * They used to render unconditionally off figures the API sent to everybody, so an agent —
+          * who holds `invoice: 'none'` — opened this screen to the brokerage's total billed and
+          * outstanding money. `/api/dashboard/desk` now sends `invoices: null` to anyone without the
+          * screen, and an agent who does hold it gets their own deals' invoices rather than the
+          * brokerage's.
+          *
+          * Absent rather than blanked: the four tiles are about a module this person cannot open, so
+          * a row of dashes would only raise a question with nowhere to go and answer it.
+          */}
+        {data.invoices && <>
+          <Tile label="Invoices" value={data.invoices.total} sub={
+            <Breakdown parts={[{ n: data.invoices.unpaid, label: 'unpaid', tone: 'bad' }]} />
+          } />
+          <Tile label="Billed" value={money(data.invoices.billed)} sub="invoiced in total" />
+          <Tile label="Collected" value={money(data.invoices.collected)} sub="received against invoices" color="var(--ok-ink)" />
+          <Tile label="Outstanding" value={money(data.invoices.outstanding)} sub="still to be collected" color="var(--warn-ink)" />
+        </>}
         {/* Calendar and to-dos sit beside Outstanding rather than on a row of their own — two tiles
             alone left a near-empty band under the commission figures. */}
         <Tile label="Desk Calendar" value={data.calendar.upcoming} sub={
