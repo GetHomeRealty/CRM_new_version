@@ -273,6 +273,7 @@ export class CalendarService {
     //
     // Absent `version` still saves, deliberately: a link, a script or an older client should not
     // start failing. Anything that sends one gets the protection.
+    let expectedVersion: number | null = null;
     if (input.version !== undefined && input.version !== null && input.version !== '') {
       const sent = Number(input.version);
       if (!Number.isInteger(sent) || sent < 1) {
@@ -284,6 +285,8 @@ export class CalendarService {
           conflict: { current_version: existing.version, your_version: sent, updated_at: existing.updated_at },
         });
       }
+      // Kept for the WRITE, which is where the check has to be repeated — see below.
+      expectedVersion = sent;
     }
 
     const data = await this.validate(input, false, user);
@@ -296,11 +299,51 @@ export class CalendarService {
       id, input.allow_overlap === true || input.allow_overlap === 'true',
     );
 
-    const row = await this.prisma.calendar_events.update({
+    /*
+     * THE VERSION IS CHECKED AGAIN HERE, IN THE WRITE ITSELF.
+     *
+     * The comparison above is a separate read, and under read-committed both of two simultaneous
+     * saves can finish it before either writes: both see version 1, both pass, both UPDATE, and the
+     * second silently erases the first. `increment` made the two saves *end on different versions*,
+     * which this method's previous comment offered as the mitigation — but that only makes the loss
+     * detectable afterwards. Nobody is told at the time, which is precisely what the 409 exists for.
+     *
+     * Measured 2026-08-05, two `update()` calls started together on one event at version 1: the row
+     * finished at **version 3**, so both writes applied. Repeated runs went either way — the
+     * non-determinism is the signature of the race rather than evidence against it.
+     *
+     * `updateMany` with `version` in the WHERE makes the check and the write one statement: Postgres
+     * takes a row lock, the loser re-evaluates the predicate against the committed row, matches
+     * nothing, and reports `count: 0`. No advisory lock and no transaction needed — the condition
+     * *is* the lock, which is why this is the standard shape for optimistic concurrency.
+     *
+     * A caller that sent no version keeps the unconditional update, exactly as before.
+     */
+    if (expectedVersion !== null) {
+      const claimed = await this.prisma.calendar_events.updateMany({
+        where: { id, version: expectedVersion },
+        data: { ...data, version: { increment: 1 }, updated_at: new Date() },
+      });
+      if (claimed.count === 0) {
+        // Somebody committed between the read above and this statement. Re-read so the reply carries
+        // the version they actually have to reconcile against, not the one this request started with.
+        const now = await this.prisma.calendar_events.findUnique({
+          where: { id }, select: { version: true, updated_at: true },
+        });
+        throw new ConflictException({
+          message: 'Somebody else changed this event while you were editing it. Reload to see their version, then apply your change again.',
+          conflict: { current_version: now?.version ?? null, your_version: expectedVersion, updated_at: now?.updated_at ?? null },
+        });
+      }
+    } else {
+      await this.prisma.calendar_events.update({
+        where: { id },
+        data: { ...data, version: { increment: 1 }, updated_at: new Date() },
+      });
+    }
+
+    const row = await this.prisma.calendar_events.findUniqueOrThrow({
       where: { id },
-      // `increment` rather than a read-then-write: the bump happens in the same statement, so two
-      // saves racing past the check above still end on different versions.
-      data: { ...data, version: { increment: 1 }, updated_at: new Date() },
       include: { transactions: { select: { id: true, trade_no: true, property: true } } },
     });
     await this.logToTransaction(row.transaction_id, user, 'Event updated', row.title, row.date, row.time);
@@ -351,7 +394,7 @@ export class CalendarService {
 
     await this.prisma.calendar_events.update({ where: { id }, data: { deleted_at: new Date(), updated_at: new Date() } });
     await this.logToTransaction(existing.transaction_id, user, 'Event deleted', existing.title, existing.date, existing.time);
-    void this.googleSync.removeEvent(user.id ?? null, googleId, domain);
+    void this.googleSync.removeEvent(user.id ?? null, googleId, domain, id);
 
     // Cancelling a standing arrangement drops this one and the ones still to come; the ones that
     // already happened stay, because they did.
@@ -370,7 +413,7 @@ export class CalendarService {
           data: { deleted_at: new Date(), updated_at: new Date() },
         });
         // Each mirrored copy has to go from Google too, or the phone keeps showing a cancelled run.
-        for (const r of later) void this.googleSync.removeEvent(user.id ?? null, r.google_calendar_id, r.domain);
+        for (const r of later) void this.googleSync.removeEvent(user.id ?? null, r.google_calendar_id, r.domain, r.id);
         seriesDeleted = later.length;
       }
     }

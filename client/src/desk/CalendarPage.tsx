@@ -455,7 +455,21 @@ export default function CalendarPage() {
       */}
       {dayView && (
         <div className="overlay open" onMouseDown={(e) => { if (e.target === e.currentTarget) setDayView(null); }}>
-          <div className="modal" style={{ maxWidth: 520, maxHeight: '80vh', overflowY: 'auto' }}>
+          {/*
+            * `min(520px, 100%)`, not `520`.
+            *
+            * A bare `maxWidth: 520` REPLACES the stylesheet's `max-width: 100%` rather than adding
+            * to it, and `.modal` also carries `width: 780px` — so the used width was
+            * `min(780, 520) = 520px` at every viewport. Measured at 390px on 2026-08-05: the dialog
+            * rendered **518px wide inside a 390px overlay**, which put the right-hand side of every
+            * appointment, including its Edit and Delete buttons, off the screen.
+            *
+            * That is this feature's own bug in a new place: "+N more" exists because a day's later
+            * appointments were unreachable from the grid, and on a phone the thing that revealed them
+            * was itself unreachable. Nobody would have found it on a desktop, which is where the
+            * cap was chosen.
+            */}
+          <div className="modal" style={{ maxWidth: 'min(520px, 100%)', maxHeight: '80vh', overflowY: 'auto' }}>
             <button className="close" onClick={() => setDayView(null)}>✕</button>
             <div className="modal-h" style={{ fontSize: 14 }}>
               {longDate(dayView)}
