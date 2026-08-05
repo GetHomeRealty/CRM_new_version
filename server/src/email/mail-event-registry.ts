@@ -485,9 +485,57 @@ export const SUPERSEDED_BODY_HASHES: Record<string, string[]> = {
 
 export const variablesFor = (key: string): string[] => MAIL_EVENTS[key]?.variables ?? [];
 
-/** Plain, safe {{ variable }} substitution — no eval. Unknown tokens → empty string. */
+/**
+ * The four merge variables whose value IS markup, and which must therefore not be escaped.
+ *
+ * This list is the whole risk of escaping by default, so it is enumerated rather than guessed at,
+ * and each entry names what builds it:
+ *
+ *   logo_img           `<img …>` for the brand logo — user-onboarding.service.ts `logoImg()`
+ *   documents_table    a `<tr>`-per-document table — document-mail.service.ts `outcomeTable()`
+ *                      and document-reminder.service.ts
+ *   pending_docs       a `<ul>` of outstanding documents — documents.service.ts
+ *   transaction_button a styled `<a>` wrapped in a `<p>` — reminder-sweep.service.ts
+ *
+ * Everything else is data — a name, an address, a date, a reason somebody typed — and is escaped.
+ *
+ * ADDING TO THIS LIST IS A SECURITY DECISION. A variable named here is trusted to be safe HTML, so
+ * whatever builds it owns that guarantee. Note that `logoImg()` already strips `[<>"&]` from the
+ * company name before interpolating it into the `alt` attribute — that is the shape a builder on
+ * this list has to have.
+ */
+const HTML_VARIABLES = new Set(['logo_img', 'documents_table', 'pending_docs', 'transaction_button']);
+
+/** The five characters that change the meaning of HTML. */
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+/**
+ * Plain, safe {{ variable }} substitution — no eval. Unknown tokens → empty string.
+ *
+ * VALUES ARE HTML-ESCAPED BY DEFAULT. They were not, and the consequence was not hypothetical: the
+ * company email address this application ships with is
+ * `info@GetHomeRealty.ca & Commissionpayouts@gethomerealty.ca`, whose bare `&` was already being
+ * emitted into HTML mail as an unterminated entity. Any brokerage named "Smith & Jones" hit the same
+ * thing on its first send, and a lead named `<script>…` — which `POST /api/leads` accepts and stores
+ * verbatim — reached client inboxes as markup. Found as S-M9 in the CRM › Settings audit and again
+ * as CRM-LEADS-M01.
+ *
+ * The subject line is rendered through here too, where escaping is equally right: a subject is
+ * plain text, and `&amp;` in a header is the correct encoding of an ampersand.
+ */
 export function renderTemplate(template: string, vars: Record<string, unknown>): string {
-  return template.replace(/\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}/g, (_m, key: string) =>
-    Object.prototype.hasOwnProperty.call(vars, key) && vars[key] !== null && vars[key] !== undefined ? String(vars[key]) : '',
-  );
+  return template.replace(/\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}/g, (_m, key: string) => {
+    if (!Object.prototype.hasOwnProperty.call(vars, key)) return '';
+    const value = vars[key];
+    if (value === null || value === undefined) return '';
+    const text = String(value);
+    return HTML_VARIABLES.has(key) ? text : escapeHtml(text);
+  });
 }

@@ -8,6 +8,9 @@ import { MailDeliverabilityService } from './mail-deliverability.service';
 import { classifyBounce, nextRetryAt, MAX_SOFT_RETRIES } from './bounce-classifier';
 import { MAX_RECIPIENTS, SEND_DELAY_MS } from './campaign.constants';
 import type { AuthUserRecord } from '../auth/auth.types';
+import { Prisma } from '@prisma/client';
+import { can } from '../core/authz';
+import { leadScopeWhere } from '../common/lead-scope';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -178,6 +181,17 @@ export class CampaignsService {
   async createAndSend(input: SendCampaignInput, user: AuthUserRecord): Promise<Record<string, unknown>> {
     const name = String(input.name ?? '').trim();
     if (!name) throw new BadRequestException({ message: 'Campaign name is required.' });
+    /*
+     * `campaigns.name` is VARCHAR(255). Without this the value reached Postgres and the driver
+     * error surfaced as a bare HTTP 500 — measured at 500 characters — while every other refusal on
+     * this endpoint returns a clean 400 naming the field. CRM-CAMP-M03.
+     */
+    if (name.length > 255) {
+      throw new BadRequestException({
+        message: 'The campaign name must be 255 characters or fewer.',
+        errors: { name: ['Must be 255 characters or fewer.'] },
+      });
+    }
 
     const templateId = Number(input.template_id);
     if (!Number.isInteger(templateId) || templateId <= 0) {
@@ -305,14 +319,51 @@ export class CampaignsService {
    * answered with a database query. CASL puts the burden of proof on the sender, so the record
    * being unreadable is most of the problem.
    *
-   * Brokerage-wide by design, not per agent. A suppression is the recipient's decision about the
-   * brokerage, and an agent must not be able to work around a colleague's opt-out by not seeing it.
+   * SCOPED TO THE VIEWER'S OWN LEADS, for everyone except the roles that run marketing.
+   *
+   * This was brokerage-wide, and the reasoning written here was that an agent "must not be able to
+   * work around a colleague's opt-out by not seeing it". That reasoning does not survive checking:
+   * `CampaignAudienceService.suppressedEmails` filters every send against the WHOLE table
+   * regardless of who is sending, so an address hidden from this list is still unmailable. Nothing
+   * about visibility affects enforcement.
+   *
+   * What visibility does affect is disclosure. Every row is a real person's email address, and the
+   * list showed every agent the addresses of every colleague's clients — the same boundary the lead
+   * list, the campaign audience and the export all hold. A brokerage-wide list was the one place it
+   * leaked.
+   *
+   * `campaigns.brokerage-audience` decides who still sees everything: the marketing and
+   * administrative roles whose job is the brokerage's whole audience. An agent sees the opt-outs of people who are their own
+   * leads, which is exactly the set they could have mailed.
    */
-  async listSuppressions(q: { page?: unknown; limit?: unknown; search?: unknown } = {}): Promise<Record<string, unknown>> {
+  async listSuppressions(
+    user: AuthUserRecord | null,
+    q: { page?: unknown; limit?: unknown; search?: unknown } = {},
+  ): Promise<Record<string, unknown>> {
     const page = Math.max(1, Number(q.page ?? 1) || 1);
     const limit = Math.min(200, Math.max(1, Number(q.limit ?? 50) || 50));
     const search = String(q.search ?? '').trim().toLowerCase();
-    const where = search ? { email: { contains: search, mode: 'insensitive' as const } } : {};
+
+    const searchWhere = search ? { email: { contains: search, mode: 'insensitive' as const } } : {};
+
+    /*
+     * The addresses this person's own leads use. Suppressions key on the address, not on a lead id
+     * — a person who opts out is opting the ADDRESS out — so the scope has to be expressed as the
+     * set of addresses they own rather than as a join.
+     */
+    let where: Prisma.email_suppressionsWhereInput = searchWhere;
+    if (!can(user, 'campaigns.brokerage-audience')) {
+      const own = await this.prisma.leads.findMany({
+        where: { deleted_at: null, ...leadScopeWhere(user) },
+        select: { email: true },
+      });
+      const addresses = [...new Set(own.map((l) => (l.email ?? '').trim().toLowerCase()).filter(Boolean))];
+      // No leads means no suppressions to show — an empty `in` would match everything.
+      if (!addresses.length) {
+        return { data: [], meta: { page, per_page: limit, total: 0, last_page: 1 } };
+      }
+      where = { ...searchWhere, email: { in: addresses, mode: 'insensitive' as const } };
+    }
 
     const [rows, total] = await Promise.all([
       this.prisma.email_suppressions.findMany({
@@ -440,6 +491,55 @@ export class CampaignsService {
     });
     if (!pending.length) return;
 
+    /*
+     * CONSENT IS RE-CHECKED HERE, IMMEDIATELY BEFORE DELIVERY — not only when the audience was built.
+     *
+     * A campaign's recipient rows are materialised when it is created or scheduled. For a scheduled
+     * campaign that can be days ahead of the send, and `resolveRecipients` — which applies the
+     * suppression list and the lead's own opt-out — ran once, back then. Anyone who unsubscribed in
+     * between was still `pending` and was still sent to. Under CASL the violation is sending AFTER
+     * consent is withdrawn, so the check has to happen at the moment of sending. Finding
+     * CRM-CAMP-H02.
+     *
+     * Both sources are consulted, because they are set independently: `email_suppressions` is the
+     * brokerage-wide do-not-email list (unsubscribes, hard bounces, manual additions), while
+     * `leads.unsubscribed` is the flag on the lead record. An address can be on either.
+     *
+     * Excluded rows are MARKED, not silently skipped: a recipient dropped for consent is recorded as
+     * such, so the campaign's own results explain the gap between "attempted" and "sent" rather than
+     * leaving somebody to wonder where the missing recipients went.
+     */
+    const addresses = pending.map((r) => r.email);
+    const [suppressed, optedOutLeads] = await Promise.all([
+      this.audience.suppressedEmails(addresses),
+      this.prisma.leads.findMany({
+        where: { unsubscribed: true, email: { in: addresses, mode: 'insensitive' } },
+        select: { email: true },
+      }),
+    ]);
+    for (const l of optedOutLeads) suppressed.add(String(l.email ?? '').toLowerCase());
+
+    const stillAllowed = pending.filter((r) => !suppressed.has(r.email.toLowerCase()));
+    const withdrawn = pending.filter((r) => suppressed.has(r.email.toLowerCase()));
+
+    if (withdrawn.length) {
+      const now = new Date();
+      this.log.warn(
+        `Campaign #${campaignId}: ${withdrawn.length} recipient(s) opted out after this campaign was built — not sent.`,
+      );
+      await this.prisma.campaign_recipients.updateMany({
+        where: { id: { in: withdrawn.map((r) => r.id) } },
+        data: {
+          status: 'failed',
+          unsubscribed: true,
+          error: 'Not sent — this address opted out after the campaign was created.',
+          updated_at: now,
+        },
+      });
+    }
+    // Everyone left is gone; nothing to deliver.
+    if (!stillAllowed.length) return;
+
     const user = { id: campaign.created_by_id ?? null, name: campaign.created_by ?? '' } as AuthUserRecord;
     const attachments = campaign.template_id
       ? await this.templates.attachmentsForSend(campaign.template_id)
@@ -451,14 +551,14 @@ export class CampaignsService {
       // Subject and content come from the CAMPAIGN row, not the template: a template edited since
       // the send began must not change what the second half of the campaign says.
       template: { subject: campaign.subject, content: campaign.content },
-      recipients: pending.map((r) => ({
+      recipients: stillAllowed.map((r) => ({
         leadId: r.lead_id ?? null,
         name: r.name ?? '',
         email: r.email,
         vars: parseVars(r.vars),
       })) as never,
-      rows: pending.map((r) => ({ id: r.id, retry_count: r.retry_count })),
-      tokens: pending.map((r) => r.token),
+      rows: stillAllowed.map((r) => ({ id: r.id, retry_count: r.retry_count })),
+      tokens: stillAllowed.map((r) => r.token),
       agentVars: await this.agentVarsFor(user),
       attachments,
       baseUrl: campaign.tracking_base_url ?? '',
@@ -561,6 +661,29 @@ export class CampaignsService {
       // opting out must not depend on the click endpoint being healthy.
       html = this.audience.rewriteLinks(html, { baseUrl, campaignId: campaign.id, token: tokens[i], links: linkIds });
       html = this.audience.injectTracking(html, { baseUrl, campaignId: campaign.id, token: tokens[i] });
+
+      /*
+       * CLAIM BEFORE SENDING. This is the fix for CRM-CAMP-M02.
+       *
+       * The order used to be send-then-mark, so a crash in between left the row `pending` and the
+       * resume sent to that person a SECOND time. The window was one database write wide, and a
+       * deploy during a large campaign — which runs for minutes because of the inter-send delay — is
+       * a realistic way to land in it.
+       *
+       * Marking `sending` first makes the crash detectable instead of invisible. `deliverPending`
+       * selects `status: 'pending'` only, so a claimed row is never picked up again: after a crash
+       * it stays `sending`, and the outcome is one message possibly not delivered rather than one
+       * definitely delivered twice.
+       *
+       * THAT IS THE TRADE, AND IT IS THE ONE THIS MODULE ALREADY SAYS IT WANTS — the `delivering`
+       * guard is documented as existing because "a second copy in somebody's inbox is the one
+       * failure this module treats as worse than not sending at all". Send-then-mark optimised for
+       * the opposite. A `sending` row is visible in the campaign's own results, so the ambiguity is
+       * reported rather than silently resolved in either direction.
+       *
+       * No migration: `status` is VARCHAR(16) and holds this alongside pending/sent/failed.
+       */
+      await this.markRecipient(row.id, { status: 'sending', error: null });
 
       try {
         // Pass the sending user's id so the campaign goes from THEIR own connected account (their

@@ -58,17 +58,57 @@ export class MailAccountService {
    *
    * Scoped, because `is_default` is per-user-and-area: with a default on each side an unscoped
    * lookup returns whichever row the database happens to yield first, so a Transaction Desk
-   * email could go out from the CRM mailbox. Prefers the area's default, then any active
-   * account in the area, then a brokerage account.
+   * email could go out from the CRM mailbox.
+   *
+   * THE BROKERAGE'S OWN ACCOUNTS COME FIRST. The first two lookups did not filter `user_id`, so
+   * "the account this area uses" could resolve to a COLLEAGUE'S personal mailbox — and in the QA
+   * fixture, where the only connected account belongs to an agent, that is exactly what happened:
+   * a brokerage-wide broadcast would have gone out from that agent's address. A shared send should
+   * come from the shared address; a personal one is the fallback, not the first answer. Callers
+   * wanting "this person's mailbox" ask `senderFor`, which is what that method is for.
    */
   async defaultSender(scope: IntegrationScope): Promise<mail_accounts | null> {
     const inScope = { is_active: true, scope };
     return (
-      (await this.prisma.mail_accounts.findFirst({ where: { ...inScope, is_default: true } }))
-      ?? (await this.prisma.mail_accounts.findFirst({ where: inScope, orderBy: { id: 'asc' } }))
+      // The area's shared account, then any shared account…
+      (await this.prisma.mail_accounts.findFirst({ where: { ...inScope, user_id: null, is_default: true } }))
+      ?? (await this.prisma.mail_accounts.findFirst({ where: { ...inScope, user_id: null }, orderBy: { id: 'asc' } }))
       ?? (await this.prisma.mail_accounts.findFirst({ where: { is_active: true, user_id: null, is_default: true } }))
       ?? (await this.prisma.mail_accounts.findFirst({ where: { is_active: true, user_id: null }, orderBy: { id: 'asc' } }))
+      // …and only then somebody's personal account in this area, because having no sender at all is
+      // worse than an unexpected one and a brokerage that has connected nothing else has said, by
+      // omission, that this is the address it sends from.
+      ?? (await this.prisma.mail_accounts.findFirst({ where: { ...inScope, is_default: true } }))
+      ?? (await this.prisma.mail_accounts.findFirst({ where: inScope, orderBy: { id: 'asc' } }))
     );
+  }
+
+  /**
+   * The account a NAMED PERSON's mail should leave from, within one area.
+   *
+   * `defaultSender` answers "which mailbox does this area use", which is right for a brokerage-wide
+   * announcement and wrong for a message one person is writing to one lead: it does not filter on
+   * `user_id`, so it can return a colleague's connected account. `MailerService.resolveSender`
+   * answers "which mailbox does this person use" and has the opposite gap — it never looks at
+   * `scope`, so a CRM email could leave from a Transaction Desk mailbox, which is the exact
+   * cross-wiring the `scope` column was added to prevent.
+   *
+   * This asks both questions at once: your own account in this area, then the area's shared one.
+   * Added because `CrmAdvancedEmailService` was calling `sendDirect` with neither an account nor a
+   * user and taking whichever active account the database yielded first — see the 2026-08-04 audit,
+   * finding L10.
+   */
+  async senderFor(userId: number | null, scope: IntegrationScope): Promise<mail_accounts | null> {
+    if (userId) {
+      const own = (await this.prisma.mail_accounts.findFirst({
+        where: { user_id: userId, scope, is_active: true, is_default: true },
+      }))
+        ?? (await this.prisma.mail_accounts.findFirst({
+          where: { user_id: userId, scope, is_active: true }, orderBy: { id: 'asc' },
+        }));
+      if (own) return own;
+    }
+    return this.defaultSender(scope);
   }
 
   // --------------------------------------------------- per-user accounts
