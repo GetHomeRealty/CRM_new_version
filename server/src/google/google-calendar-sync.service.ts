@@ -5,6 +5,9 @@ import { GoogleConnectionService } from './google-connection.service';
 import type { IntegrationScope } from '../email/mail-account.service';
 import { MAX_EVENTS_PER_SYNC, SYNC_WINDOW_FUTURE_DAYS, SYNC_WINDOW_PAST_DAYS } from './google.constants';
 import { schedulersEnabled, schedulerSkipReason } from '../common/schedulers';
+import { clusterTick } from '../redis/cluster-tick';
+import { RedisService } from '../redis/redis.service';
+import { CacheService } from '../redis/cache.service';
 import { forEachTenant } from '../core/tenant-context';
 import { allTenantIds } from '../core/tenants';
 import { registerWorker, trackedTick } from '../observability/worker-health';
@@ -46,6 +49,10 @@ export class GoogleCalendarSyncService implements OnModuleInit, OnModuleDestroy 
     private readonly prisma: PrismaService,
     private readonly google: GoogleService,
     private readonly connections: GoogleConnectionService,
+    // Optional so existing constructions — including this service's specs — keep working.
+    // Used only to decide whether THIS process should run a given pass; see `clusterTick`.
+    private readonly redis?: RedisService,
+    private readonly cache?: CacheService,
   ) {}
 
   onModuleInit(): void {
@@ -65,7 +72,12 @@ export class GoogleCalendarSyncService implements OnModuleInit, OnModuleDestroy 
     if (typeof this.first.unref === 'function') this.first.unref();
 
     registerWorker('google-calendar-retry', RETRY_INTERVAL_MS);
-    this.timer = setInterval(trackedTick('google-calendar-retry', () => this.sweep()), RETRY_INTERVAL_MS);
+    this.timer = setInterval(
+      this.redis && this.cache
+        ? clusterTick({ redis: this.redis, cache: this.cache }, 'google-calendar-retry', () => this.sweep())
+        : trackedTick('google-calendar-retry', () => this.sweep()),
+      RETRY_INTERVAL_MS,
+    );
     if (typeof this.timer.unref === 'function') this.timer.unref();
     this.log.log(`Google Calendar retry sweep every ${RETRY_INTERVAL_MS / 1000}s (first pass in ${FIRST_RETRY_DELAY_MS / 1000}s)`);
   }

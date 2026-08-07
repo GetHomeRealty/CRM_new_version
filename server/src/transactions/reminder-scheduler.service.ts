@@ -3,7 +3,10 @@ import { PrismaService } from '../prisma/prisma.service';
 import { schedulersEnabled, schedulerSkipReason } from '../common/schedulers';
 import { forEachTenant } from '../core/tenant-context';
 import { allTenantIds } from '../core/tenants';
-import { registerWorker, trackedTick } from '../observability/worker-health';
+import { registerWorker } from '../observability/worker-health';
+import { clusterTick } from '../redis/cluster-tick';
+import { RedisService } from '../redis/redis.service';
+import { CacheService } from '../redis/cache.service';
 import { ReminderSweepService } from './reminder-sweep.service';
 
 /**
@@ -28,6 +31,9 @@ export class ReminderSchedulerService implements OnModuleInit, OnModuleDestroy {
   constructor(
     private readonly prisma: PrismaService,
     private readonly sweep: ReminderSweepService,
+    // Only used to decide whether THIS process should run a given pass — see `clusterTick`.
+    private readonly redis: RedisService,
+    private readonly cache: CacheService,
   ) {}
 
   onModuleInit(): void {
@@ -36,7 +42,15 @@ export class ReminderSchedulerService implements OnModuleInit, OnModuleDestroy {
       return;
     }
     registerWorker('reminder-sweep', POLL_INTERVAL_MS);
-    this.timer = setInterval(trackedTick('reminder-sweep', () => this.run()), POLL_INTERVAL_MS);
+    /*
+     * `clusterTick`, not `trackedTick`: this sweep emails real clients, so two processes running it
+     * means two copies of every reminder arriving in somebody's inbox. With Redis, exactly one
+     * process wins each pass; without it, this behaves exactly as it always did.
+     */
+    this.timer = setInterval(
+      clusterTick({ redis: this.redis, cache: this.cache }, 'reminder-sweep', () => this.run()),
+      POLL_INTERVAL_MS,
+    );
     if (typeof this.timer.unref === 'function') this.timer.unref();
     // One pass shortly after start, so a deployment on the morning of an expiry does not cost that
     // day's reminders. Delayed rather than immediate to keep it clear of the boot path.

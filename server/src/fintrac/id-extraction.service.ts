@@ -55,12 +55,31 @@ export class IdExtractionService {
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-      body: JSON.stringify({ model, max_tokens: 1024, messages: [{ role: 'user', content: [media, { type: 'text', text: prompt }] }] }),
+      body: JSON.stringify({
+        model,
+        max_tokens: 1024,
+        /*
+         * Thinking OFF, deliberately.
+         *
+         * Current Claude models think by default when this field is omitted — and thinking tokens
+         * come out of the same `max_tokens` budget. At 1024 that budget can be spent reasoning
+         * before the JSON object closes, which arrives here as an unparseable fragment and degrades
+         * to all-null fields with no error anywhere. This is a fixed-shape extraction, not a
+         * reasoning task; the transcription does not need it.
+         */
+        thinking: { type: 'disabled' },
+        messages: [{ role: 'user', content: [media, { type: 'text', text: prompt }] }],
+      }),
       signal: AbortSignal.timeout(45000),
     });
     if (!res.ok) throw new Error('ID extraction provider returned HTTP ' + res.status);
-    const body = (await res.json()) as { content?: { text?: string }[] };
-    return body.content?.[0]?.text ?? '';
+    /*
+     * Find the text block rather than assuming it is content[0]. `content` is a list of typed
+     * blocks and the answer is not always first — a thinking block precedes it whenever thinking
+     * is on, and reading `[0].text` off one yields undefined, i.e. blank fields on a good response.
+     */
+    const body = (await res.json()) as { content?: { type?: string; text?: string }[] };
+    return body.content?.find((b) => b.type === 'text')?.text ?? '';
   }
 
   private decodeJson(raw: string): unknown {

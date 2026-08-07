@@ -85,7 +85,16 @@ export class AuditLogService {
     return [{ OR: [{ domain: area }, { domain: 'common' }, { domain: null }] }];
   }
 
-  async index(query: AuditLogQuery): Promise<Record<string, unknown>> {
+  /**
+   * The `where` for one filtered view of the trail — the ONLY place these rules are written.
+   *
+   * Extracted from `index` unchanged so that the listing and the export ask the same question. The
+   * brief for the export is explicit that the two must not be able to disagree, and the way to
+   * guarantee that is structural: one builder, two callers. A second copy would drift the first time
+   * a filter is added to one and not the other, and the symptom would be an export that quietly does
+   * not match the screen it was taken from.
+   */
+  buildWhere(query: AuditLogQuery): { where: Prisma.audit_logsWhereInput; area: Area; scope: AuditScope } {
     const area = parseArea(query.area);
     const scope: AuditScope = isScope(query.scope) ? query.scope : 'default';
 
@@ -136,7 +145,12 @@ export class AuditLogService {
       and.push({ OR: cols.map((c) => ({ [c]: { contains: needle, mode: 'insensitive' } })) as Prisma.audit_logsWhereInput[] });
     }
 
-    const where: Prisma.audit_logsWhereInput = { AND: and };
+    return { where: { AND: and }, area, scope };
+  }
+
+  async index(query: AuditLogQuery): Promise<Record<string, unknown>> {
+    const { where, area, scope } = this.buildWhere(query);
+
     // Clamped rather than refused: an out-of-range page is a stale bookmark or a fat finger, not an
     // unanswerable question, and the response already reports `last_page` for the client to correct
     // itself. `|| 1` handles NaN; `Math.min` handles Infinity, which `|| 1` does not.

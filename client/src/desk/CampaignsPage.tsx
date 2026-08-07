@@ -6,6 +6,7 @@ import {
   previewAudience, sendCampaign, trackingHealth, previewSegment, tagSegment, sendTestEmail,
 } from '../lib/campaignsApi';
 import { apiErrorMessage } from '../lib/apiError';
+import { csvCell } from '../lib/csv';
 import { runLeadImport, type ImportJob } from '../lib/leadImportApi';
 import ImportProgress from '../components/ImportProgress';
 import { useToast } from './toast';
@@ -147,6 +148,36 @@ export default function CampaignsPage() {
   }, [toast]);
 
   useEffect(() => { load(); }, [load]);
+
+  /**
+   * `?open=<id>` — where a Campaign Completed or Campaign Failed notification lands.
+   *
+   * A single campaign has no route of its own; the detail is this modal, opened from the list. So
+   * the notification links here and names the campaign, and this opens it once the rows have
+   * arrived — `campaigns` is the dependency because the id has to be matched against something.
+   *
+   * The parameter is consumed once and removed with `replace`, so the modal does not reopen every
+   * time the list refreshes, and the Back button does not walk the user through reopening it.
+   * `openedFromLink` guards against a second run while the same id is still in the URL.
+   */
+  const openedFromLink = useRef<number | null>(null);
+  useEffect(() => {
+    const raw = params.get('open');
+    const id = Number(raw);
+    if (!raw || !Number.isInteger(id) || id <= 0 || !campaigns.length) return;
+    if (openedFromLink.current === id) return;
+    openedFromLink.current = id;
+
+    const match = campaigns.find((c) => c.id === id);
+    // A campaign that is not in the list is one this person cannot see, or one that has been
+    // deleted since the notification was written. Say so plainly rather than opening nothing.
+    if (match) void openDetail(match);
+    else toast('That campaign is no longer available.', 'info');
+
+    const next = new URLSearchParams(params);
+    next.delete('open');
+    setParams(next, { replace: true });
+  }, [params, campaigns, setParams, toast]);   // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     campaignOptions().then(setOptions).catch(() => { /* builder falls back */ });
     trackingHealth().then(setTracking).catch(() => { /* banner is informational */ });
@@ -281,7 +312,10 @@ export default function CampaignsPage() {
 
   /** CSV report: campaign summary followed by every recipient's outcome. */
   const downloadReport = (c: CampaignDetail) => {
-    const esc = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    // `csvCell`, not a local quoter. Recipient names and addresses in this report come from the same
+    // untrusted intake as the lead list — Meta forms and CSV imports — and a cell beginning with `=`
+    // is a formula to every spreadsheet. See `lib/csv`.
+    const esc = csvCell;
     // Hard and soft are separate columns' worth of meaning in one field: one address is dead and
     // suppressed, the other is still being tried. A compliance export that says only "Bounced"
     // cannot tell them apart afterwards.
@@ -519,7 +553,6 @@ export default function CampaignsPage() {
               <strong>Audience (lead segment)</strong>
               <div className="report-filters" style={{ marginTop: 8 }}>
                 {filterSelect('Status', 'leadStatus', options.lead_status)}
-                {filterSelect('Type', 'leadType', options.lead_type)}
                 {filterSelect('Source', 'leadSource', options.lead_source)}
                 {filterSelect('Client type', 'clientType', options.client_type)}
                 {filterSelect('Tag', 'tag', [...new Set([...options.tag_options, ...options.tags])])}

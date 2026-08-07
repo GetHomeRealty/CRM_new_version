@@ -1,7 +1,6 @@
 import { ModuleAccessService } from '../core/module-access.service';
 import { ForbiddenException, Injectable, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import bcrypt from 'bcryptjs';
+import { PasswordHashService } from './password-hash.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { throwValidation } from '../common/laravel-exceptions';
 import { PermissionService } from './permission.service';
@@ -20,22 +19,19 @@ import { isAdminOrAbove, isSuperAdmin } from '../core/authz';
  * paths here did not, so the same password was accepted or rejected depending on which screen it
  * was typed into.
  */
-const PASSWORD_MAX_BYTES = 72;
+
 
 @Injectable()
 export class AuthService {
   private readonly log = new Logger(AuthService.name);
-  private readonly rounds: number;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly permissions: PermissionService,
     private readonly moduleAccess: ModuleAccessService,
     private readonly lockout: AccountLockoutService,
-    config: ConfigService,
-  ) {
-    this.rounds = config.get<number>('bcryptRounds') ?? 12;
-  }
+    private readonly passwords: PasswordHashService,
+  ) {}
 
   /**
    * Shape the public user payload — a copy of AuthController::payload().
@@ -140,29 +136,85 @@ export class AuthService {
    * credentials are incorrect", and because that is the wrong-password path it also counted toward
    * the lockout — so trying again a few times locked them out of their own account.
    *
-   * ON THE INDEX. Prisma's `mode: 'insensitive'` emits `ILIKE`, which does not use the functional
-   * index above; this is a sequential scan. That is a deliberate trade at this size — a brokerage
-   * has hundreds of users, not millions, and it happens once per sign-in. If `users` ever grows
-   * past that, replace this with a raw `lower(email) = lower($1)` so the index is used again.
+   * MATCHED WITH `lower(x) = lower($1)`, NOT WITH PRISMA'S `mode: 'insensitive'`. This is a security
+   * fix, not a tidy-up. `mode: 'insensitive'` compiles to **ILIKE**, and ILIKE's right-hand side is
+   * a PATTERN — so the string typed into the login box was being used as one. `%` and `_` were live
+   * wildcards.
+   *
+   * Demonstrated against real rows before this was changed: signing in as `ZZ%@probe.test` with a
+   * matching account's password SUCCEEDED. What that buys an attacker is a password spray that does
+   * not need to know who it is aimed at — an administrator hands out a standard temporary password,
+   * and `%` or `staff%@brokerage.ca` finds somebody it fits without the attacker knowing a single
+   * address. It also quietly breaks the contract every other part of this file assumes: that the
+   * account which signs in is the account that was named.
+   *
+   * Equality has no pattern semantics, so there is nothing to escape and nothing to get wrong.
+   *
+   * ON THE INDEX, which is the same change. `users_email_lower_key` and `users_username_lower_key`
+   * are functional indexes on `lower(...)`; ILIKE could not use either, so every sign-in was a
+   * sequential scan. This form matches them exactly.
    *
    * The tenant is not known here and cannot be: signing in is the moment it becomes knowable.
    */
   private async findAuthenticatable(login: string, password: string): Promise<AuthUserRecord | null> {
-    const candidates = [
-      { username: { equals: login, mode: 'insensitive' as const } },
-      { email: { equals: login, mode: 'insensitive' as const } },
-    ];
+    /*
+     * Username first, then email, preserving the original precedence — a username may itself be
+     * email-formatted, so one string can legitimately name two different rows. `LIMIT 2` because
+     * that is the most there can ever be: both columns are uniquely indexed on `lower(...)`.
+     *
+     * Parameterised by the tagged template, so the value is bound rather than interpolated.
+     */
+    const matches = await runAsSystem(() => this.prisma.$queryRaw<Array<{ id: number; by_username: boolean }>>`
+      SELECT id, lower(username) = lower(${login}) AS by_username
+      FROM users
+      WHERE lower(username) = lower(${login}) OR lower(email) = lower(${login})
+      ORDER BY by_username DESC NULLS LAST, id ASC
+      LIMIT 2
+    `);
 
-    for (const where of candidates) {
-      const user = await runAsSystem(() => this.prisma.users.findFirst({
-        where,
+    for (const match of matches) {
+      const user = await runAsSystem(() => this.prisma.users.findUnique({
+        where: { id: match.id },
         include: { user_permissions: true },
       }));
-      // `compareSync` against a null or empty hash throws rather than returning false, and a row
-      // with no password set is not a fantasy — it is what a half-finished import leaves behind.
-      if (user?.password && bcrypt.compareSync(password, user.password)) return user;
+      /*
+       * `verifyPassword` answers false for a null or empty hash rather than throwing — a row with no
+       * password set is not a fantasy, it is what a half-finished import leaves behind.
+       */
+      if (user && await this.passwords.verifyPassword(password, user.password)) {
+        await this.upgradeHashIfWeak(user, password);
+        return user;
+      }
     }
     return null;
+  }
+
+  /**
+   * Re-hash a correct password when it is stored more weakly than we now write.
+   *
+   * The cost is embedded in the hash, so a sign-in is the one moment we hold both the plaintext and
+   * the evidence that it is out of date. Nobody is asked to reset anything and no hash is reversed.
+   *
+   * BEST EFFORT, DELIBERATELY. The user has already proved who they are; a failed write here must
+   * not cost them the sign-in. It is logged and the next sign-in tries again.
+   *
+   * Runs as the system: this happens before a tenant is in context, exactly like the lookup above.
+   */
+  private async upgradeHashIfWeak(user: AuthUserRecord, password: string): Promise<void> {
+    if (!this.passwords.needsRehash(user.password)) return;
+    const was = this.passwords.costOf(user.password);
+    try {
+      const upgraded = await this.passwords.hashPassword(password);
+      await runAsSystem(() => this.prisma.users.update({
+        where: { id: user.id },
+        data: { password: upgraded },
+      }));
+      // The in-memory record is handed to the session payload; keep it consistent with the row.
+      user.password = upgraded;
+      this.log.log(`Upgraded the password hash for user #${user.id} from cost ${was} to ${this.passwords.getConfiguredCost()}.`);
+    } catch (err) {
+      this.log.warn(`Could not upgrade the password hash for user #${user.id}: ${(err as Error).message}`);
+    }
   }
 
   /**
@@ -203,7 +255,7 @@ export class AuthService {
       data: {
         name: name.trim(),
         email: email.trim(),
-        password: bcrypt.hashSync(password, this.rounds),
+        password: await this.passwords.hashPassword(password),
         role: 'admin', // the first user is the administrator
         company_id: 1,
         created_at: now,
@@ -220,7 +272,7 @@ export class AuthService {
     newPassword: string,
     newPasswordConfirmation: string,
   ): Promise<void> {
-    if (!bcrypt.compareSync(currentPassword, user.password)) {
+    if (!(await this.passwords.verifyPassword(currentPassword, user.password))) {
       throwValidation({ current_password: ['Your current password is incorrect.'] });
     }
     if (newPassword !== newPasswordConfirmation) {
@@ -229,13 +281,13 @@ export class AuthService {
     this.assertPasswordFits(newPassword);
     // Refusing a no-op keeps the record honest: "I changed it" should not be able to mean
     // "I retyped the same one", least of all on the screen people use after a suspected leak.
-    if (bcrypt.compareSync(newPassword, user.password)) {
+    if (await this.passwords.verifyPassword(newPassword, user.password)) {
       throwValidation({ password: ['The new password must be different from your current one.'] });
     }
 
     await this.prisma.users.update({
       where: { id: user.id },
-      data: { password: bcrypt.hashSync(newPassword, this.rounds), updated_at: new Date() },
+      data: { password: await this.passwords.hashPassword(newPassword), updated_at: new Date() },
     });
 
     /*
@@ -258,10 +310,10 @@ export class AuthService {
 
   /** bcrypt truncates past 72 bytes, so a longer password is not the password it appears to be. */
   private assertPasswordFits(password: string): void {
-    if (Buffer.byteLength(password, 'utf8') > PASSWORD_MAX_BYTES) {
+    if (!this.passwords.fits(password)) {
       throwValidation({
         password: [
-          `The password must not be longer than ${PASSWORD_MAX_BYTES} bytes — `
+          `The password must not be longer than ${PasswordHashService.MAX_PASSWORD_BYTES} bytes — `
           + 'anything past that is ignored when it is stored, so it would not really be part of your password.',
         ],
       });

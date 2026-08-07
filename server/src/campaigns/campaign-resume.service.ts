@@ -2,6 +2,9 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CampaignsService } from './campaigns.service';
 import { schedulersEnabled, schedulerSkipReason } from '../common/schedulers';
+import { clusterTick } from '../redis/cluster-tick';
+import { RedisService } from '../redis/redis.service';
+import { CacheService } from '../redis/cache.service';
 import { forEachTenant } from '../core/tenant-context';
 import { allTenantIds } from '../core/tenants';
 
@@ -47,6 +50,10 @@ export class CampaignResumeService implements OnModuleInit {
   constructor(
     private readonly prisma: PrismaService,
     private readonly campaigns: CampaignsService,
+    // Only used to decide whether THIS process should run a given pass — see `clusterTick`.
+    // Optional so existing constructions, including this service's own specs, keep working.
+    private readonly redis?: RedisService,
+    private readonly cache?: CacheService,
   ) {}
 
   onModuleInit(): void {
@@ -60,9 +67,22 @@ export class CampaignResumeService implements OnModuleInit {
     this.timer = setTimeout(() => { void this.resumeAll(); }, RESUME_DELAY_MS);
     if (typeof this.timer.unref === 'function') this.timer.unref();
 
-    // One timer for both sweeps, run in sequence rather than concurrently: they both end in a
-    // delivery pass, and two of those starting in the same tick is how a campaign gets sent twice.
-    this.scheduleTimer = setInterval(() => { void this.tick(); }, SCHEDULE_TICK_MS);
+    /*
+     * One timer for both sweeps, run in sequence rather than concurrently: they both end in a
+     * delivery pass, and two of those starting in the same tick is how a campaign gets sent twice.
+     *
+     * WRAPPED IN `clusterTick`, so across processes only the lock holder runs the pass. This is the
+     * efficiency half of the protection — three processes no longer spend a minute losing a race.
+     * It is NOT the correctness half: `clusterTick` deliberately runs when Redis is absent, so on a
+     * deployment without Redis every process still ticks. The guarantee that no recipient is mailed
+     * twice lives in the atomic claims in `CampaignsService` and holds with or without Redis.
+     */
+    this.scheduleTimer = setInterval(
+      this.redis && this.cache
+        ? clusterTick({ redis: this.redis, cache: this.cache }, 'campaign-resume', () => this.tick())
+        : () => { void this.tick(); },
+      SCHEDULE_TICK_MS,
+    );
     if (typeof this.scheduleTimer.unref === 'function') this.scheduleTimer.unref();
     this.log.log(`Scheduled campaigns and soft-bounce retries checked every ${SCHEDULE_TICK_MS / 1000}s.`);
   }
@@ -106,9 +126,18 @@ export class CampaignResumeService implements OnModuleInit {
       orderBy: { scheduled_for: 'asc' },
     });
     for (const c of due) {
-      this.log.log(`Sending scheduled campaign #${c.id} "${c.name}" (was due ${c.scheduled_for?.toISOString()}).`);
       try {
-        await this.campaigns.dispatchScheduled(c.id);
+        /*
+         * `dispatchScheduled` claims the row before doing anything, and reports whether this
+         * process won. The log line moved BELOW the claim on purpose: logging "Sending campaign
+         * #12" on four processes and delivering it once reads, in an incident, exactly like the
+         * duplicate-send bug this guards against.
+         */
+        if (!(await this.campaigns.dispatchScheduled(c.id))) {
+          this.log.debug(`Scheduled campaign #${c.id} was claimed by another process — skipping.`);
+          continue;
+        }
+        this.log.log(`Sent scheduled campaign #${c.id} "${c.name}" (was due ${c.scheduled_for?.toISOString()}).`);
       } catch (err) {
         this.log.error(
           `Scheduled campaign #${c.id} failed to start: ${err instanceof Error ? err.message : String(err)}`,

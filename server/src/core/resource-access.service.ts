@@ -53,6 +53,30 @@ export class ResourceAccessService {
   }
 
   /**
+   * The same question as `assertTransaction`, answered rather than thrown.
+   *
+   * WHY IT DELEGATES INSTEAD OF RE-STATING THE RULE. Mentions need to ask "may this person open this
+   * deal?" about somebody who is NOT the caller, and the answer must be identical to the one the
+   * chat itself enforces. Writing the condition out a second time is how the two drift — and the
+   * drift here is not a broken page, it is telling an outsider that a deal exists. Delegating costs
+   * an exception as control flow and buys the guarantee that there is exactly one rule.
+   *
+   * A missing transaction answers false, for the same reason `assertTransaction` 404s it: the answer
+   * must not depend on who is asking.
+   */
+  async canReachTransaction(
+    user: { id?: number; name?: string | null; role?: string | null } | null,
+    transactionId: number,
+  ): Promise<boolean> {
+    try {
+      await this.assertTransaction(user, transactionId);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * Throw unless this person may work this lead.
    *
    * The same rule the lead list uses: an agent reaches a lead they own or one assigned to them, and

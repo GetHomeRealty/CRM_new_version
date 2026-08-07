@@ -220,10 +220,40 @@ describe('changing an assignment', () => {
 describe('the live data is untouched by any of this', () => {
   afterAll(async () => { await prisma.$disconnect(); });
 
-  it('still has every real user assigned both modules', async () => {
+  it('has not leaked any assignment rows from the tests above', async () => {
+    /*
+     * WHAT THIS GUARDS, AND WHAT IT DELIBERATELY DOES NOT.
+     *
+     * It guards the thing this describe block is named for: the rolled-back tests above must not
+     * leave rows behind in the live database.
+     *
+     * It used to assert `assigned === users * 2` — that every real user holds both modules. That is
+     * NOT an invariant: an administrator may assign and remove modules, so one legitimate click in
+     * the UI made this fail, and the failure said "the tests corrupted your data" when nothing of
+     * the sort had happened. An assertion any authorised action can break is a false alarm
+     * generator, not a guard.
+     *
+     * What IS invariant: nobody holds more than one active row per module, and every assignment
+     * belongs to a user who exists. Both of those stay true however an administrator configures the
+     * brokerage, and both would break if a test leaked.
+     */
     const users = await prisma.users.count();
-    const assigned = await prisma.user_modules.count({ where: { status: 'active' } });
-    expect(assigned).toBe(users * 2);
+    const rows = await prisma.user_modules.findMany({
+      where: { status: 'active' },
+      select: { user_id: true, module_name: true },
+    });
+
+    // No duplicates: one active row per (user, module) at most.
+    const seen = new Set(rows.map((r) => `${r.user_id}:${r.module_name}`));
+    expect(seen.size).toBe(rows.length);
+
+    // No orphans: every assignment points at a real user.
+    const ids = [...new Set(rows.map((r) => r.user_id))];
+    const existing = await prisma.users.count({ where: { id: { in: ids } } });
+    expect(existing).toBe(ids.length);
+
+    // And nothing absurd: assignments cannot outnumber two per user.
+    expect(rows.length).toBeLessThanOrEqual(users * 2);
   });
 
   it('still licenses both modules for the company', async () => {

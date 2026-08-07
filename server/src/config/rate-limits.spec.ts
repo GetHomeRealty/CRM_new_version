@@ -29,8 +29,24 @@ describe('rate limit configuration', () => {
 
   it('applies the strict limit at the endpoints instead, where it can be scoped', () => {
     const auth = read('../auth/auth.controller.ts');
-    // login, register and password change.
-    expect(auth.match(/@Throttle\(\{ default: AUTH_LIMIT \}\)/g)).toHaveLength(3);
+    /*
+     * Five endpoints, and every one of them checks a secret:
+     *   login, register, password change — the original three; and
+     *   login/mfa, login/mfa/send      — the two-factor challenge and its resend.
+     *
+     * The challenge needs this as much as sign-in does. A six-digit code is a million possibilities,
+     * which is not many at HTTP speed; the per-code attempt ceiling in `MfaService` bounds one
+     * issued code, and this bounds how fast codes can be thrown at the endpoint at all. The resend
+     * is here because without a limit it is a free way to make this application send mail and SMS.
+     */
+    expect(auth.match(/@Throttle\(\{ default: AUTH_LIMIT \}\)/g)).toHaveLength(5);
+  });
+
+  it('rate-limits the two-factor management endpoints too', () => {
+    // Confirming enrolment and removing a method both check a secret; so does regenerating the
+    // recovery codes. All three are guessing surfaces on an account that is already signed in.
+    const mfa = read('../auth/mfa/mfa.controller.ts');
+    expect((mfa.match(/@Throttle\(\{ default: AUTH_LIMIT \}\)/g) ?? []).length).toBeGreaterThanOrEqual(5);
   });
 
   /**

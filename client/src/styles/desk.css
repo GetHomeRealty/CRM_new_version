@@ -796,8 +796,6 @@ input[type="number"],.numeric,.stat-card .val{font-variant-numeric:tabular-nums;
 .lead-sel-col{width:38px;text-align:center}
 .lead-sel-col input[type=checkbox]{padding:0;width:15px;min-width:15px;max-width:15px;height:15px;margin:0;cursor:pointer}
 .lead-contact div{line-height:1.45}
-.lead-activity-cell{white-space:nowrap;font-size:12px;color:var(--text-2)}
-.lead-activity-cell span{margin-right:9px}
 /* This cell was making every lead row 160px tall — twice what its content needs.
    `display:flex` on a <td> takes the cell out of table layout, so the browser wraps it in an
    anonymous cell that is sized by the table's own column algorithm rather than by the buttons

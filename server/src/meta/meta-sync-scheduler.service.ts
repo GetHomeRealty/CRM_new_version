@@ -2,6 +2,9 @@ import { Injectable, Logger, type OnModuleDestroy, type OnModuleInit } from '@ne
 import { PrismaService } from '../prisma/prisma.service';
 import { MetaSyncService } from './meta-sync.service';
 import { schedulersEnabled, schedulerSkipReason } from '../common/schedulers';
+import { clusterTick } from '../redis/cluster-tick';
+import { RedisService } from '../redis/redis.service';
+import { CacheService } from '../redis/cache.service';
 
 import { forEachTenant } from '../core/tenant-context';
 import { allTenantIds } from '../core/tenants';
@@ -36,6 +39,10 @@ export class MetaSyncSchedulerService implements OnModuleInit, OnModuleDestroy {
   constructor(
     private readonly prisma: PrismaService,
     private readonly sync: MetaSyncService,
+    // Optional so existing constructions — including this service's specs — keep working.
+    // Used only to decide whether THIS process should run a given pass; see `clusterTick`.
+    private readonly redis?: RedisService,
+    private readonly cache?: CacheService,
   ) {}
 
   onModuleInit(): void {
@@ -49,7 +56,12 @@ export class MetaSyncSchedulerService implements OnModuleInit, OnModuleDestroy {
     this.first = setTimeout(() => { void this.pollAll(); }, FIRST_POLL_DELAY_MS);
     this.first.unref?.();
     registerWorker('meta-sync', POLL_INTERVAL_MS);
-    this.timer = setInterval(trackedTick('meta-sync', () => this.pollAll()), POLL_INTERVAL_MS);
+    this.timer = setInterval(
+      this.redis && this.cache
+        ? clusterTick({ redis: this.redis, cache: this.cache }, 'meta-sync', () => this.pollAll())
+        : trackedTick('meta-sync', () => this.pollAll()),
+      POLL_INTERVAL_MS,
+    );
     this.timer.unref?.();
     this.log.log(`Meta auto-sync every ${POLL_INTERVAL_MS / 1000}s (first pass in ${FIRST_POLL_DELAY_MS / 1000}s)`);
   }

@@ -1,4 +1,4 @@
-import { crmPath, deskPath } from './area';
+import { crmPath, deskPath, AREA_SHORT } from './area';
 import { useCallback, useEffect, useState } from 'react';
 import {
   googleCalendarStatus, googleCalendarConnect, googleCalendarSync, googleCalendarDisconnect, googleCalendarRetrySync,
@@ -87,7 +87,19 @@ export default function GoogleCalendarCard({ scope = 'crm' }: { scope?: Integrat
   const subtitle = !st ? 'Checking…'
     : !st.configured ? (st.setup_hint || 'Google sign-in is not set up on the server yet.')
     : st.connected ? `Signed in as ${st.email ?? 'your Google account'}${st.last_sync ? ` · last synced ${fmtSync(st.last_sync)}` : ''}`
-    : 'Sign in with Google — your events sync both ways between Google Calendar and the CRM.';
+    /*
+     * NAMES THE AREA, because this component renders on both sides. The copy was hardcoded to
+     * "the CRM", so the Transaction Desk card — and the Desk card on Account Settings — told the
+     * user their events synced with the CRM. The one string in a scope-aware component that was
+     * not scope-aware.
+     *
+     * "Sync both ways" is accurate and stays: the pull is a real incremental sync
+     * (listEvents + a persisted syncToken) and the push covers insert, update, patch and delete.
+     * Deliberately says no more than that — Google owns title, date, time and description on a
+     * pull while type and status stay the CRM's, so any wording implying merged or reconciled
+     * edits would overstate what happens.
+     */
+    : `Sign in with Google — your events sync both ways between Google Calendar and the ${AREA_SHORT[scope]}.`;
 
   return (
     <div className="intg-card">

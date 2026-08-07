@@ -171,4 +171,95 @@ describe('CRM dashboard — lead task counting', () => {
   });
 });
 
+/**
+ * The cache must never turn a scoped answer into a shared one.
+ *
+ * The performance work that introduced it named this as the specific risk: a dashboard cache keyed
+ * on anything less than the asker would show one agent another agent's pipeline, which is the exact
+ * thing the lead-privacy rule exists to prevent. A leak here would not throw or look wrong — it
+ * would print a plausible number belonging to somebody else, and only under concurrency, which is
+ * why it is asserted rather than reasoned about.
+ *
+ * The fake below is the real `remember` contract — read through, or compute and store — with the
+ * keys kept so they can be inspected. It caches for the length of the test rather than 20 seconds;
+ * a lifetime nothing in the test waits out would make every assertion pass by accident.
+ */
+function fakeCache() {
+  const store = new Map<string, unknown>();
+  const keys: string[] = [];
+  let loads = 0;
+  return {
+    keys,
+    loads: () => loads,
+    service: {
+      remember: async <T>(ns: string, key: string, _ttl: number, loader: () => Promise<T>): Promise<T> => {
+        const full = `${ns}:${key}`;
+        keys.push(full);
+        if (store.has(full)) return store.get(full) as T;
+        loads += 1;
+        const value = await loader();
+        store.set(full, value);
+        return value;
+      },
+    },
+  };
+}
+
+describe('CRM dashboard — per-user caching', () => {
+  it('never serves one agent the other agent\'s figures, and caches each separately', async () => {
+    await inRollback(async (tx) => {
+      const alice = await makeUser(tx, 'agent');
+      const bob = await makeUser(tx, 'agent');
+      // Two books of different sizes, so a leak cannot hide behind a coincidence.
+      await makeLead(tx, { owner_user_id: alice.id, assigned_to: alice.id });
+      await makeLead(tx, { owner_user_id: alice.id, assigned_to: alice.id });
+      await makeLead(tx, { owner_user_id: alice.id, assigned_to: alice.id });
+      await makeLead(tx, { owner_user_id: bob.id, assigned_to: bob.id });
+
+      const cache = fakeCache();
+      const svc = new AreaDashboardService(tx, new PermissionService(), cache.service as never);
+
+      expect((await svc.crm(alice)).leads.total).toBe(3);
+      // Bob asking straight after Alice is the shape that a shared key would break.
+      expect((await svc.crm(bob)).leads.total).toBe(1);
+      // And Alice again, to prove her entry was not overwritten by Bob's.
+      expect((await svc.crm(alice)).leads.total).toBe(3);
+
+      // Two identities, two keys — and Alice's repeat was served without recomputing.
+      expect(new Set(cache.keys).size).toBe(2);
+      expect(cache.loads()).toBe(2);
+    });
+  });
+
+  /*
+   * The discriminator is `isSuperAdmin`, not `isAgent`, and that is not a detail.
+   *
+   * `leadScopeWhere` hands a lead to whoever is assigned it or owns it, so rank buys nobody a
+   * colleague's book — a manager and an agent with the same id would count the same leads. The one
+   * role that changes the answer is Super Admin, which additionally matches UNOWNED leads. So that
+   * is what has to be in the key, and this test is written against the promotion that actually
+   * moves a number rather than one that reads like it should.
+   */
+  it('keys on the one role that widens the scope, so a promotion is not served the narrower answer', async () => {
+    await inRollback(async (tx) => {
+      const someone = await makeUser(tx, 'agent');
+      await makeLead(tx, { owner_user_id: someone.id, assigned_to: someone.id });
+      // Unattributed intake: no owner, no assignee. Invisible to everyone below the top tier.
+      await makeLead(tx, { owner_user_id: null, assigned_to: null });
+
+      const cache = fakeCache();
+      const svc = new AreaDashboardService(tx, new PermissionService(), cache.service as never);
+
+      expect((await svc.crm(someone)).leads.total).toBe(1);
+
+      // The same id, now Super Admin — the unowned lead comes into view on the next request rather
+      // than whenever the narrower entry happens to expire.
+      const promoted = { ...someone, role: 'admin' } as AuthUserRecord;
+      expect((await svc.crm(promoted)).leads.total).toBe(2);
+
+      expect(new Set(cache.keys).size).toBe(2);
+    });
+  });
+});
+
 afterAll(async () => { await prisma.$disconnect(); });

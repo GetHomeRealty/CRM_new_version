@@ -578,6 +578,7 @@ function BroadcastForm({ onSent }: { onSent: () => Promise<void> }) {
         </div>
       ),
       note: 'Everyone with an active account and an email address will receive it.',
+      confirmLabel: 'Send',
       onConfirm: () => { closeConfirm(); void send(); },
     });
   };

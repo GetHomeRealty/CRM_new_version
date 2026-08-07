@@ -7,6 +7,8 @@ import { IdentityThrottlerGuard } from './core/identity-throttler.guard';
 import configuration from './config/configuration';
 import { GLOBAL_LIMIT } from './config/rate-limits';
 import { PrismaModule } from './prisma/prisma.module';
+import { RedisModule } from './redis/redis.module';
+import { QueueModule } from './queue/queue.module';
 import { CoreModule } from './core/core.module';
 import { AppController } from './app.controller';
 import { HealthController } from './observability/health.controller';
@@ -65,6 +67,8 @@ import { TwilioVoiceModule } from './twilio-voice/twilio-voice.module';
     // config/rate-limits.ts, which explains why and is regression-tested.
     ThrottlerModule.forRoot([GLOBAL_LIMIT]),
     PrismaModule,
+    RedisModule,
+    QueueModule,
     // The Core Platform layer both modules sit on.
     CoreModule,
     AuditModule,

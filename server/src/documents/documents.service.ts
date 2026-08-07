@@ -1,4 +1,5 @@
 import { ForbiddenException, Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
+import { NotificationDispatcher } from '../notifications/notification-dispatcher.service';
 import { promises as fs } from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
@@ -36,6 +37,8 @@ export class DocumentsService {
     private readonly mailer: MailerService,
     private readonly settings: CompanySettingsService,
     private readonly mail: DocumentMailService,
+    /** Optional so existing constructions keep working; always injected in the running app. */
+    private readonly dispatcher?: NotificationDispatcher,
   ) {}
 
   private actor(u: Actor): ActingUser | null { return u ? { id: u.id, name: u.name } : null; }
@@ -266,6 +269,34 @@ export class DocumentsService {
       // The agent is told the result of the review that just saved: what passed, and what did not
       // and why. Best-effort — see DocumentMailService.
       await this.mail.sendReviewOutcome(txnId);
+
+      /*
+       * PUSH, so the agent hears about a rejected document without opening their mailbox.
+       *
+       * Only the push channel: in-app is the `DocReview` audit row written directly above, which the
+       * Notification Centre reads, and the email is `sendReviewOutcome` on the line above. Asking
+       * the dispatcher for those as well would deliver each of them twice.
+       *
+       * Best-effort in the same way the email is — a review must not fail because a phone was
+       * unreachable.
+       */
+      if (this.dispatcher) {
+        const agent = await this.prisma.users.findFirst({
+          where: { name: txn.agent ?? '', status: 'Active' },
+          select: { id: true },
+          orderBy: { id: 'asc' },
+        });
+        if (agent) {
+          await this.dispatcher.dispatch({
+            category: 'document_review',
+            userId: agent.id,
+            title: 'Your documents were reviewed',
+            body: parts.join(' · '),
+            link: `/desk/transactions/${txnId}`,
+            channels: ['push'],
+          }).catch(() => {});
+        }
+      }
     }
 
     await this.docsValidation.sync(txnId, this.actor(user));

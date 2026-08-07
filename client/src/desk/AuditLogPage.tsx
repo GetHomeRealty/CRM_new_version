@@ -1,5 +1,5 @@
 import { useEffect, useState, type CSSProperties } from 'react';
-import { getAuditLogs } from '../lib/api';
+import { getAuditLogs, exportAuditLogs, saveBlob } from '../lib/api';
 import { useToast } from './toast';
 import { useArea } from './AreaContext';
 import { AREA_LABEL, AREA_SHORT } from './area';
@@ -50,20 +50,63 @@ export default function AuditLogPage() {
   const [meta, setMeta] = useState<AuditMeta>({ current_page: 1, last_page: 1, total: 0 });
   const [categories, setCategories] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
+  /** Which format is currently generating, so the button can say so and cannot be pressed twice. */
+  const [exporting, setExporting] = useState<'csv' | 'xlsx' | null>(null);
 
   // Reset to page 1 whenever a filter changes.
   useEffect(() => { setPage(1); }, [category, from, to, scope, area]);
 
+  /**
+   * The filters, in one place.
+   *
+   * Used by BOTH the listing request and the export, so the file and the screen cannot be asking
+   * different questions — the same reason the server keeps a single `buildWhere`.
+   */
+  const exportParams = {
+    area,
+    scope,
+    category: category || undefined,
+    q: q || undefined,
+    from: from || undefined,
+    to: to || undefined,
+  };
+
   useEffect(() => {
     const t = setTimeout(() => {
       setLoading(true);
-      getAuditLogs({ area, scope, category: category || undefined, q: q || undefined, from: from || undefined, to: to || undefined, page })
+      getAuditLogs({ ...exportParams, page })
         .then((d) => { setRows(d.data || []); setMeta(d.meta || { current_page: 1, last_page: 1, total: 0 }); if (d.categories) setCategories(d.categories); })
         .catch(() => toast('Could not load audit trail', 'bad'))
         .finally(() => setLoading(false));
     }, 350);
     return () => clearTimeout(t);
   }, [category, q, from, to, page, area, scope]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /**
+   * Download what is on screen.
+   *
+   * The filters passed are EXACTLY those the listing was loaded with — the same object, built once
+   * below — so the file cannot describe a different query from the one the person is looking at.
+   * The server re-applies them regardless; this only ensures the two agree by construction here too.
+   */
+  const doExport = async (format: 'csv' | 'xlsx') => {
+    setExporting(format);
+    try {
+      const { blob, filename, rows, truncated } = await exportAuditLogs(exportParams, format);
+      saveBlob(blob, filename);
+      toast(
+        truncated
+          ? `Exported the first ${rows.toLocaleString()} entries — narrow the filters for the rest.`
+          : `Exported ${rows.toLocaleString()} ${rows === 1 ? 'entry' : 'entries'}.`,
+        truncated ? 'bad' : 'ok',
+      );
+    } catch {
+      // Deliberately plain: the server's error may carry detail nobody signed in here needs.
+      toast('Could not export the audit trail. Try again.', 'bad');
+    } finally {
+      setExporting(null);
+    }
+  };
 
   // Deduplicated: the server's category list already contains "Transactions", and prepending it
   // to bring it to the front listed it twice in the dropdown — and gave React two children with
@@ -95,6 +138,26 @@ export default function AuditLogPage() {
         <label style={{ fontSize: 12, color: 'var(--muted)' }}>To <input type="date" value={to} onChange={(e) => setTo(e.target.value)} /></label>
         {(category || q || from || to || scope !== 'default') && <button className="btn ghost sm" onClick={() => { setCategory(''); setQ(''); setFrom(''); setTo(''); setScope('default'); }}>Clear</button>}
         <span style={{ fontSize: 12, color: 'var(--muted)' }}>{meta.total} entries</span>
+        {/* Export reflects the filters above, not the whole trail. Disabled while one is
+            generating so a second press cannot start a duplicate download. */}
+        <button
+          className="btn ghost sm"
+          type="button"
+          disabled={exporting !== null || loading}
+          title="Download the entries matching the filters above"
+          onClick={() => void doExport('csv')}
+        >
+          {exporting === 'csv' ? 'Exporting…' : '⭳ CSV'}
+        </button>
+        <button
+          className="btn ghost sm"
+          type="button"
+          disabled={exporting !== null || loading}
+          title="Download the entries matching the filters above"
+          onClick={() => void doExport('xlsx')}
+        >
+          {exporting === 'xlsx' ? 'Exporting…' : '⭳ Excel'}
+        </button>
       </div>
 
       <div style={{ maxHeight: '64vh', overflow: 'auto', border: '1px solid var(--line)', borderRadius: 'var(--r-md)' }}>

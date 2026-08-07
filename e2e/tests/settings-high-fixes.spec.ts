@@ -360,7 +360,16 @@ test.describe('H7 — the audit trail says which field changed and what it was',
       await apiSend(page, 'PUT', '/api/company-settings', { ...before, phone: next });
       const hits = await entriesFor(page, 'Phone');
       expect(hits.length, 'the change must be recorded against the field that changed').toBeGreaterThan(0);
-      expect(hits[0].old_value).toBe(String(before.phone));
+      /*
+       * `?? ''`, not `String(...)`. A field nobody has filled in is NULL, and `String(null)` is the
+       * four-character word "null" — a value the application would never write. The trail records
+       * an unset previous value as an empty string, so that is what this must expect.
+       *
+       * The test therefore passed only on a database where somebody had already set a phone number,
+       * and failed on a freshly seeded one. That is the wrong way round: a clean seed is the state
+       * a new environment starts in, so the suite was green exactly where it should have been red.
+       */
+      expect(hits[0].old_value).toBe(before.phone ?? '');
       expect(hits[0].new_value).toBe(next);
       expect(hits[0].action).toBe('Settings updated');
     } finally {
@@ -378,7 +387,8 @@ test.describe('H7 — the audit trail says which field changed and what it was',
       expect(hits.length).toBeGreaterThan(0);
       // Filterable and alertable without parsing a details sentence.
       expect(hits[0].action).toBe('Banking details changed');
-      expect(hits[0].old_value).toBe(String(before.account_no));
+      // Same reason as the phone assertion above: unset is '', never the string "null".
+      expect(hits[0].old_value).toBe(before.account_no ?? '');
       expect(hits[0].new_value).toBe(next);
     } finally {
       await apiSend(page, 'PUT', '/api/company-settings', before);

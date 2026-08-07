@@ -1,4 +1,6 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { CrmEventNotifier } from '../notifications/crm-events.service';
+import { CampaignAuditService } from './campaign-audit.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { MailerService, type MailAttachment } from '../email/mailer.service';
 import { CampaignAudienceService, type AudienceFilter } from './campaign-audience.service';
@@ -98,6 +100,10 @@ export class CampaignsService {
     private readonly templates: CampaignTemplatesService,
     private readonly deliverability: MailDeliverabilityService,
     private readonly mailer: MailerService,
+    /** Optional so existing constructions — including this service's specs — keep working. */
+    private readonly crmEvents?: CrmEventNotifier,
+    /** Also optional, for the same reason. Absent means no trail row, never a failed operation. */
+    private readonly audit?: CampaignAuditService,
   ) {}
 
   /**
@@ -155,10 +161,19 @@ export class CampaignsService {
   async remove(id: number, user: AuthUserRecord): Promise<{ success: boolean }> {
     // Scoped, so an agent cannot delete a campaign they did not create — nor learn that one
     // exists by getting a different error for it.
-    const c = await this.prisma.campaigns.findFirst({ where: { id, ...this.ownerScope(user) }, select: { id: true } });
+    const c = await this.prisma.campaigns.findFirst({
+      where: { id, ...this.ownerScope(user) },
+      // Name and counts read BEFORE the delete: the cascade takes the recipients with it, so
+      // afterwards there is nothing left to describe what was removed.
+      select: { id: true, name: true, status: true, sent: true },
+    });
     if (!c) throw new NotFoundException({ message: 'Campaign not found.' });
     // recipients cascade
     await this.prisma.campaigns.delete({ where: { id } });
+    await this.audit?.record(
+      user, 'Campaign deleted', c.name ?? `#${id}`,
+      `Was ${c.status ?? 'unknown'}${c.sent ? ` after ${c.sent} sent` : ''} — recipients removed with it`,
+    );
     return { success: true };
   }
 
@@ -293,6 +308,10 @@ export class CampaignsService {
         },
       });
       this.log.log(`Campaign "${name}" (#${campaign.id}) scheduled for ${scheduledFor.toISOString()} (${recipients.length} recipients).`);
+      await this.audit?.record(
+        user, 'Campaign scheduled', name,
+        `${recipients.length} recipient(s), to send ${scheduledFor.toISOString()}`,
+      );
       return this.summary(held);
     }
 
@@ -302,6 +321,18 @@ export class CampaignsService {
       // URL they were built with, and the rest of the same campaign has to match them.
       data: { status: 'sending', tracking_base_url: input.baseUrl, updated_at: new Date() },
     });
+    /*
+     * Recorded HERE — at the decision to send — rather than when delivery finishes.
+     *
+     * The trail's question is who authorised mail to these people, and the answer is settled at this
+     * line. Delivery runs detached and may take minutes, may partially fail, may be resumed by a
+     * different process after a restart; none of that changes who pressed send. Per-recipient
+     * outcomes are already on `campaign_recipients` for anyone asking what happened next.
+     */
+    await this.audit?.record(
+      user, 'Campaign sent', name,
+      `${recipients.length} recipient(s), subject "${template.subject}"`,
+    );
     void this.deliver({
       campaignId: campaign.id, name, recipients, rows: campaign.recipients, tokens,
       template, agentVars, attachments, baseUrl: input.baseUrl, userId: user.id ?? null,
@@ -407,6 +438,19 @@ export class CampaignsService {
     await this.prisma.email_suppressions.delete({ where: { email: address } });
     await this.prisma.$executeRaw`UPDATE "leads" SET "unsubscribed" = false, "unsubscribed_at" = NULL, "updated_at" = ${now} WHERE LOWER("email") = ${address}`;
     this.log.warn(`Suppression removed for ${address} by ${user.name ?? 'unknown'} — mail to this address will resume.`);
+    /*
+     * THE ROW THE COMMENT ABOVE ALREADY PROMISED. This method's own documentation said "deliberately
+     * narrow, and audited … the record of who did it is the point", and there was no writer — only a
+     * log line, which is not a record anybody can query a year later.
+     *
+     * This is the single most consequential action in the module: it resumes mail to somebody who
+     * asked for it to stop. Under CASL the question "who authorised that, and when" has a legal
+     * answer, and until now the system could not give one.
+     */
+    await this.audit?.record(
+      user, 'Suppression removed', address,
+      `Reason on the list was "${row.reason ?? 'unknown'}" — mail to this address resumes, and the matching leads were un-flagged`,
+    );
     return { removed: true };
   }
 
@@ -414,12 +458,39 @@ export class CampaignsService {
    * Send a campaign whose time has come. Reuses the resume path, which is already written to send
    * only the recipients still `pending` — for a scheduled campaign that is all of them.
    */
-  async dispatchScheduled(campaignId: number): Promise<void> {
-    await this.prisma.campaigns.update({
-      where: { id: campaignId },
+  /**
+   * Start a scheduled campaign — claiming it first, so only one worker can.
+   *
+   * THE CLAIM IS THE `WHERE` CLAUSE, and that is the whole mechanism. `UPDATE … WHERE id = ? AND
+   * status = 'scheduled'` is atomic in PostgreSQL: whichever transaction gets there first flips the
+   * row, and every other one matches zero rows and is told so by `count`. No lock table, no Redis,
+   * no coordination — the database was already the shared thing.
+   *
+   * WHY THIS IS NOT MERELY TIDY. The previous version updated `where: { id }` with no condition, so
+   * four application processes ticking at the same second all "succeeded" and all called `resume`.
+   * Measured against the real send path, that is four copies of a campaign in every recipient's
+   * inbox — a deliverability problem, a CASL problem, and the one failure this module elsewhere
+   * describes as worse than not sending at all.
+   *
+   * DELIBERATELY NOT DEPENDENT ON REDIS. `clusterTick` stops the other three processes running the
+   * sweep at all, which is better, but it is documented to RUN when Redis is absent rather than
+   * silently stopping every scheduled job on a deployment that has none. So a deployment that adds
+   * processes and forgets Redis would get the appearance of protection. For the one job that sends
+   * mail to clients, the guarantee has to live somewhere that is always present. It lives here.
+   *
+   * Returns whether this caller won the claim, so a loser is not reported as a failure.
+   */
+  async dispatchScheduled(campaignId: number): Promise<boolean> {
+    const claimed = await this.prisma.campaigns.updateMany({
+      where: { id: campaignId, status: 'scheduled' },
       data: { status: 'sending', updated_at: new Date() },
     });
+    // Zero means somebody else claimed it between our read and our write. That is a normal outcome
+    // in a multi-process deployment, not an error, and it must not be logged as one.
+    if (claimed.count === 0) return false;
+
     await this.resume(campaignId);
+    return true;
   }
 
   /**
@@ -431,7 +502,7 @@ export class CampaignsService {
   async cancelScheduled(campaignId: number, user: AuthUserRecord): Promise<{ cancelled: boolean }> {
     const c = await this.prisma.campaigns.findFirst({
       where: { id: campaignId, ...this.ownerScope(user) },
-      select: { id: true, status: true },
+      select: { id: true, status: true, name: true },
     });
     if (!c) throw new NotFoundException({ message: 'Campaign not found.' });
     if (c.status !== 'scheduled') {
@@ -445,6 +516,7 @@ export class CampaignsService {
       where: { id: campaignId },
       data: { status: 'draft', scheduled_for: null, updated_at: new Date() },
     });
+    await this.audit?.record(user, 'Campaign cancelled', c.name ?? `#${campaignId}`, 'Returned to draft before sending');
     return { cancelled: true };
   }
 
@@ -682,8 +754,22 @@ export class CampaignsService {
        * reported rather than silently resolved in either direction.
        *
        * No migration: `status` is VARCHAR(16) and holds this alongside pending/sent/failed.
+       *
+       * THE CLAIM IS NOW CONDITIONAL, and that is what makes it work across processes. Marking
+       * `sending` was always the right idea; doing it with `where: { id }` was not, because two
+       * workers both "succeeded" and both then sent. `WHERE id = ? AND status = 'pending'` means
+       * exactly one of them updates a row — PostgreSQL serialises the two updates on the row lock —
+       * and the loser is told by `count === 0` and skips.
+       *
+       * This is the guarantee that survives everything above it failing: even if the campaign-level
+       * claim were bypassed, even with no Redis and four processes in the same `resume`, a recipient
+       * can be claimed once. It is the last line, and it is the only one that is per-message.
        */
-      await this.markRecipient(row.id, { status: 'sending', error: null });
+      if (!(await this.claimRecipient(row.id))) {
+        // Another worker owns this recipient and will record its outcome. Not counted here as sent
+        // or failed: this pass did not send it, and inventing a number would misreport the campaign.
+        continue;
+      }
 
       try {
         // Pass the sending user's id so the campaign goes from THEIR own connected account (their
@@ -828,6 +914,34 @@ export class CampaignsService {
       `Campaign "${name}" (#${campaign.id}): ${sent} sent, ${failed} failed`
       + `${deferred ? `, ${deferred} deferred for retry` : ''} (this pass covered ${recipients.length}).`,
     );
+
+    /*
+     * TELL THE OWNER — but only once the campaign has genuinely finished.
+     *
+     * `deferred > 0` leaves the status `sending`, because those recipients are queued for the retry
+     * sweep rather than done with. Notifying there would report a final outcome for a campaign still
+     * in flight, and the person would later see different numbers with no explanation. So a deferred
+     * pass says nothing and the notification comes from the pass that actually settles it.
+     *
+     *   completed / partial → finished, something got through   → "campaign finished"
+     *   failed              → finished, nothing got through     → "could not be completed"
+     *
+     * Never allowed to affect the send: the messages have already gone.
+     */
+    if (deferred === 0) {
+      // The owner is read here rather than carried down: the `campaign` in scope at this point is a
+      // narrowed projection for the send loop and does not include who created it.
+      const owner = await this.prisma.campaigns
+        .findUnique({ where: { id: campaign.id }, select: { created_by_id: true } })
+        .catch(() => null);
+      const summary = { recipients: recipients.length, sent, failed };
+
+      if (sent === 0) {
+        void this.crmEvents?.campaignFailed({ id: campaign.id, name }, owner?.created_by_id, 'no-recipients-reached');
+      } else {
+        void this.crmEvents?.campaignCompleted({ id: campaign.id, name }, owner?.created_by_id, summary);
+      }
+    }
    } catch (err) {
     // A send that died mid-flight must not be left saying "sending" for ever, and must not take
     // the process with it. Record what happened; the counters already hold how far it reached.
@@ -838,6 +952,23 @@ export class CampaignsService {
     await this.prisma.campaigns
       .update({ where: { id: job.campaignId }, data: { status: 'partial', updated_at: new Date() } })
       .catch(() => undefined);
+
+    /*
+     * A send that died mid-flight. The owner is told plainly and the technical reason goes to the
+     * log above — a stack trace, an SMTP response or a provider error is not something a campaign
+     * owner can act on, and it must not be delivered to their inbox or their phone.
+     */
+    const aborted = await this.prisma.campaigns
+      .findUnique({ where: { id: job.campaignId }, select: { id: true, name: true, created_by_id: true } })
+      .catch(() => null);
+    if (aborted) {
+      void this.crmEvents?.campaignFailed(
+        { id: aborted.id, name: aborted.name },
+        aborted.created_by_id,
+        'delivery-aborted',
+        err instanceof Error ? err.message : String(err),
+      );
+    }
    } finally {
     this.delivering.delete(job.campaignId);
    }
@@ -885,6 +1016,26 @@ export class CampaignsService {
       where: { id },
       data: { ...data, updated_at: new Date() },
     });
+  }
+
+  /**
+   * Take ownership of one recipient, or discover that somebody else already has.
+   *
+   * `updateMany` rather than `update`, because only `updateMany` accepts a non-unique `where` — and
+   * the condition on `status` IS the lock. Two processes issuing this for the same row are
+   * serialised by PostgreSQL on that row: the first sees `count === 1`, the second re-evaluates the
+   * predicate against the committed row, finds `status = 'sending'`, matches nothing, and returns 0.
+   *
+   * Only `pending` is claimable. A row already `sending` belongs to another worker (or to a crashed
+   * one, which the module deliberately leaves visible rather than silently re-sending — see the
+   * claim comment in `deliver`). A row `sent` or `failed` is finished.
+   */
+  private async claimRecipient(id: number): Promise<boolean> {
+    const claimed = await this.prisma.campaign_recipients.updateMany({
+      where: { id, status: 'pending' },
+      data: { status: 'sending', error: null, updated_at: new Date() },
+    });
+    return claimed.count === 1;
   }
 
   /**

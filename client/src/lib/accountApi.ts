@@ -59,23 +59,46 @@ export interface AccountIntegrations {
  * calendar's reminders do. The screen says so rather than presenting seven identical toggles, six
  * of which would appear to do nothing. `current_channel` is how the user is told today.
  */
+/** The ways the application can reach somebody. */
+export type NotificationChannel = 'in_app' | 'email' | 'push';
+
+export const CHANNEL_LABEL: Record<NotificationChannel, string> = {
+  in_app: 'In-app',
+  email: 'Email',
+  push: 'Push',
+};
+
+/**
+ * Whether a (category, channel) pair actually has a sender.
+ *
+ *   live         something sends it and honours the choice now.
+ *   pending      the event happens and reaches you another way; no sender on this channel yet.
+ *   unsupported  the channel makes no sense for this event and is not offered.
+ */
+export type ChannelReadiness = 'live' | 'pending' | 'unsupported';
+
 export interface NotificationCategory {
   key: string;
   label: string;
   description: string;
-  readiness: 'live' | 'pending';
-  /** Named as the server sends it — this payload is not snake_cased like the ORM-backed ones. */
-  currentChannel: string;
-  enabled: boolean;
+  /** Readiness per channel — what the matrix renders each cell from. */
+  channels: Record<NotificationChannel, ChannelReadiness>;
+  /** This person's answer per channel. */
+  enabled: Record<NotificationChannel, boolean>;
 }
 
-export const getNotificationPreferences = (): Promise<{ categories: NotificationCategory[] }> =>
+export interface NotificationPreferences {
+  channels: NotificationChannel[];
+  categories: NotificationCategory[];
+}
+
+export const getNotificationPreferences = (): Promise<NotificationPreferences> =>
   api.get('/api/account/notification-preferences').then((r) => r.data);
 
-/** Saves the whole screen: a `{ category: enabled }` map. */
+/** Saves the whole matrix: a `{ category: { channel: enabled } }` map. */
 export const saveNotificationPreferences = (
-  prefs: Record<string, boolean>,
-): Promise<{ categories: NotificationCategory[] }> =>
+  prefs: Record<string, Record<string, boolean>>,
+): Promise<NotificationPreferences> =>
   api.put('/api/account/notification-preferences', prefs).then((r) => r.data);
 
 export const getAccountProfile = (): Promise<AccountProfile> =>

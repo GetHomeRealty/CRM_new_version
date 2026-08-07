@@ -5,6 +5,8 @@ import { OffboardingService } from './offboarding.service';
 import { MetaConnectionService } from '../meta/meta-connection.service';
 import { LeadTransferService } from '../leads/lead-transfer.service';
 import { PermissionService } from '../auth/permission.service';
+import { PasswordHashService } from '../auth/password-hash.service';
+import { ConfigService } from '@nestjs/config';
 import { ModuleAccessService } from '../core/module-access.service';
 import { superAdminRoles as superAdminRolesSync } from '../core/authz';
 import type { AuthUserRecord } from '../auth/auth.types';
@@ -41,6 +43,9 @@ const svc = (tx: PrismaService) => new UsersService(
   new ModuleAccessService(tx),
   noAudit,
   new OffboardingService(tx, new MetaConnectionService(tx, noGraph), new LeadTransferService(tx, noAudit)),
+  // Hashing moved behind PasswordHashService so admin-created passwords use the same configured
+  // cost as every other path. `ConfigService` with no value falls back to the same default.
+  new PasswordHashService(new ConfigService()),
 );
 
 /** A complete, valid create body. Individual tests override the one field under examination. */

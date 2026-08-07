@@ -3,9 +3,10 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import type { AuthUserRecord } from '../auth/auth.types';
 
-import { isAgent } from '../core/authz';
+import { isAgent, isSuperAdmin } from '../core/authz';
 import { leadTaskScopeWhere, liveLeadWhere } from '../common/lead-scope';
 import { PermissionService } from '../auth/permission.service';
+import { CacheService } from '../redis/cache.service';
 /**
  * The two dashboards, as two separate reads.
  *
@@ -57,6 +58,13 @@ export class AreaDashboardService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly permissions: PermissionService,
+    /*
+     * Optional, and it has to stay that way. `CacheService` degrades to "not cached" with no Redis,
+     * so the deployment that has none is unaffected — and the scope specs construct this service
+     * directly with two arguments to assert what an agent may count. Those tests are the reason the
+     * scope rules are trustworthy; a required dependency would have made them a mock-wiring exercise.
+     */
+    private readonly cache?: CacheService,
   ) {}
 
   private startOfToday(): Date {
@@ -99,7 +107,43 @@ export class AreaDashboardService {
   }
 
   // ------------------------------------------------------------------- CRM
+  /**
+   * The CRM dashboard, cached for `TTL.dashboard` seconds PER PERSON.
+   *
+   * WHY THE KEY IS NOT JUST THE USER ID. Almost every figure below is scoped by identity alone —
+   * `leadScopeWhere` gives a lead to whoever is assigned it or owns it, and NOBODY reads a
+   * colleague's book by virtue of their rank. For those, the user id is the whole of the scope.
+   *
+   * One rule is not identity-based: `isSuperAdmin` additionally matches leads with no owner, the
+   * unattributed intake that surfaces at the top tier rather than nowhere. That is the only way two
+   * requests from the same id can legitimately deserve different numbers, so it is the only thing
+   * that joins the id in the key. Promoting somebody then takes effect on their next request rather
+   * than at the end of a TTL.
+   *
+   * `isAgent` would be the wrong discriminator here and was the first thing tried: it reads as the
+   * scope rule but does not drive one on this screen, so a demotion from manager to agent would
+   * have changed the key while changing no figure, and a promotion to Super Admin — which does
+   * change the figures — would have kept it.
+   *
+   * An anonymous caller (`user` null) collapses to id `-1` in the queries below, so it must not
+   * share a key with a real person; it gets its own by construction.
+   *
+   * WHAT IS DELIBERATELY NOT CACHED: `desk()`. Its invoice section is present or `null` depending
+   * on a permission checked at request time, which makes it an authorization-shaped answer rather
+   * than a summary — and it is not what the fan-out measurement was about.
+   */
   async crm(user: AuthUserRecord | null): Promise<CrmDashboard> {
+    if (!this.cache) return this.crmUncached(user);
+    const scope = isSuperAdmin(user) ? 'sa' : 'own';
+    return this.cache.remember(
+      'dashboard',
+      `crm:${user?.id ?? -1}:${scope}`,
+      CacheService.TTL.dashboard,
+      () => this.crmUncached(user),
+    );
+  }
+
+  private async crmUncached(user: AuthUserRecord | null): Promise<CrmDashboard> {
     const userId = user?.id ?? -1;
     // Both borrowed from the Leads module rather than restated here. This file used to spell the
     // rule itself and got it wrong in both directions — an agent was scoped by `assigned_to` alone
@@ -116,23 +160,39 @@ export class AreaDashboardService {
     const today = this.startOfToday();
     const personal = { user_id: userId, deleted_at: null };
 
+    /*
+     * TWELVE QUERIES, NOT EIGHTEEN.
+     *
+     * Every dashboard load used to issue one `count()` per tile — four for leads, six for tasks,
+     * three for to-dos — and `Promise.all` made that look free. It is not: measured at a hundred
+     * concurrent users this endpoint delivered 17 req/s while a single-query endpoint on the same
+     * server delivered 532. The cost is not the latency any one user sees, it is that each request
+     * occupies eighteen pool connections and re-scans the same rows.
+     *
+     * Where several tiles are buckets of ONE column, `groupBy` answers them in one pass. Where a
+     * tile asks a genuinely different question — a date range, another table — it keeps its own
+     * query, because merging those would mean hand-written SQL and a second copy of the scope
+     * rules. The scope objects below are passed to Prisma unchanged, so `liveLeadWhere`,
+     * `leadTaskScopeWhere` and the per-user campaign filter remain the single definition of who may
+     * see what.
+     */
     const [
-      leadTotal, byStatus, bySource, newThisWeek,
-      taskTotal, taskPending, taskCompleted, taskCancelled, taskToday, taskOverdue,
+      byStatus, bySource, newThisWeek,
+      taskByStatus, taskToday, taskOverdue,
       campaignAgg, campaignCount,
       unread,
       calUpcoming, calToday,
-      todoTotal, todoPending, todoOverdue,
+      todoByStatus, todoOverdue,
     ] = await Promise.all([
-      this.prisma.leads.count({ where: leadWhere }),
+      // `leadTotal` is no longer its own count — it is the sum of these buckets, which include the
+      // null-status group, so the tile and the breakdown beneath it cannot disagree.
       this.prisma.leads.groupBy({ by: ['lead_status'], _count: { _all: true }, where: leadWhere }),
       this.prisma.leads.groupBy({ by: ['lead_source'], _count: { _all: true }, where: leadWhere }),
       this.prisma.leads.count({ where: { ...leadWhere, created_at: { gte: this.daysFromToday(-7) } } }),
 
-      this.prisma.lead_tasks.count({ where: taskWhere }),
-      this.prisma.lead_tasks.count({ where: { ...taskWhere, status: 'pending' } }),
-      this.prisma.lead_tasks.count({ where: { ...taskWhere, status: 'completed' } }),
-      this.prisma.lead_tasks.count({ where: { ...taskWhere, status: 'cancelled' } }),
+      // Four counts (total, pending, completed, cancelled) in one pass.
+      this.prisma.lead_tasks.groupBy({ by: ['status'], _count: { _all: true }, where: taskWhere }),
+      // These two stay: "due today" and "overdue" are date questions, not status buckets.
       this.prisma.lead_tasks.count({ where: { ...taskWhere, status: 'pending', due_date: today } }),
       this.prisma.lead_tasks.count({ where: { ...taskWhere, status: 'pending', due_date: { lt: today } } }),
 
@@ -149,10 +209,28 @@ export class AreaDashboardService {
       }),
       this.prisma.calendar_events.count({ where: { ...personal, ...this.areaOr('crm'), ...this.liveEvent, date: today } }),
 
-      this.prisma.todos.count({ where: { ...personal, ...this.areaOr('crm') } }),
-      this.prisma.todos.count({ where: { ...personal, ...this.areaOr('crm'), status: 'pending' } }),
+      // Total and pending in one pass; overdue is a date question and keeps its own.
+      this.prisma.todos.groupBy({ by: ['status'], _count: { _all: true }, where: { ...personal, ...this.areaOr('crm') } }),
       this.prisma.todos.count({ where: { ...personal, ...this.areaOr('crm'), status: 'pending', due_date: { lt: today } } }),
     ]);
+
+    /*
+     * The buckets, summed back into the totals the tiles expect.
+     *
+     * `groupBy` returns only the statuses that exist, so a bucket nobody holds must read 0 rather
+     * than undefined — these go straight to the screen.
+     */
+    const sum = (rows: { _count: { _all: number } }[]): number => rows.reduce((a, r) => a + r._count._all, 0);
+    const bucket = (rows: { status: string | null; _count: { _all: number } }[], k: string): number =>
+      rows.find((r) => r.status === k)?._count._all ?? 0;
+
+    const leadTotal = sum(byStatus);
+    const taskTotal = sum(taskByStatus);
+    const taskPending = bucket(taskByStatus, 'pending');
+    const taskCompleted = bucket(taskByStatus, 'completed');
+    const taskCancelled = bucket(taskByStatus, 'cancelled');
+    const todoTotal = sum(todoByStatus);
+    const todoPending = bucket(todoByStatus, 'pending');
 
     return {
       leads: {

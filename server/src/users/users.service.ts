@@ -1,7 +1,7 @@
 import { AREAS, type Area } from '../common/domain';
 import { ModuleAccessService } from '../core/module-access.service';
 import { Injectable, Logger, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
-import * as bcrypt from 'bcryptjs';
+import { PasswordHashService } from '../auth/password-hash.service';
 import { Prisma, type users, type user_permissions, type user_modules } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { PermissionService, LEVELS, ROLES, SCREENS } from '../auth/permission.service';
@@ -33,6 +33,7 @@ export class UsersService {
     private readonly moduleAccess: ModuleAccessService,
     private readonly audit: AuditService,
     private readonly offboarding: OffboardingService,
+    private readonly passwords: PasswordHashService,
   ) {}
 
   /**
@@ -70,7 +71,14 @@ export class UsersService {
         name: data.name as string,
         username: (data.username ?? null) as string | null,
         email: data.email as string,
-        password: await bcrypt.hash(data.password as string, 10),
+        /*
+         * Through `PasswordHashService`, at the CONFIGURED cost.
+         *
+         * This was `bcrypt.hash(password, 10)` — hardcoded, and lower than the 12 that registration
+         * and self-service changes used. Because public registration is closed, an administrator
+         * creates every account, so this was the cost essentially every password in the system had.
+         */
+        password: await this.passwords.hashPassword(data.password as string),
         role: data.role as string,
         status: (data.status ?? 'Active') as string,
         department: (data.department ?? null) as string | null,
@@ -110,7 +118,7 @@ export class UsersService {
         : existing.profile,
       updated_at: new Date(),
     };
-    if (data.password) update.password = await bcrypt.hash(data.password as string, 10);
+    if (data.password) update.password = await this.passwords.hashPassword(data.password as string);
     const passwordChanged = !!data.password;
 
     /*

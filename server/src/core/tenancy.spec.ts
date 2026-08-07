@@ -80,6 +80,10 @@ const ROOT = [
   // Arrives from Meta before anyone knows whose it is; resolved to a tenant when processed, so its
   // column is nullable and an unresolved row belongs to nobody rather than to whoever asks first.
   'meta_webhook_events',
+  // Whether a ROLE must hold a second factor. The brokerage sets this for its own staff, and it is
+  // reached as "this brokerage's policy", never through any one person — so it owns its tenant
+  // rather than deriving one.
+  'mfa_policies',
 ] as const;
 
 /**
@@ -99,6 +103,20 @@ const DERIVED: Record<string, string> = {
   // A browser belongs to the person who subscribed it, and is reached no other way.
   push_subscriptions: 'users',
   notification_preferences: 'users',
+  // In-app notifications the dispatcher delivers. One person's, reached no other way.
+  notifications: 'users',
+  /*
+   * Two-factor authentication. Every one of these belongs to a person, not to the brokerage: a
+   * factor is enrolled by its owner, a recovery code redeemed by its owner, a device trusted by its
+   * owner, a challenge answered by its owner. None is ever reached as "the brokerage's".
+   *
+   * They are also read during the login challenge, BEFORE a tenant is in context, so those reads go
+   * through `runAsSystem` exactly as `AuthService.loadUser` already does for `user_permissions`.
+   */
+  user_mfa_methods: 'users',
+  mfa_recovery_codes: 'users',
+  mfa_trusted_devices: 'users',
+  mfa_challenges: 'users',
 
   // via leads
   lead_notes: 'leads', lead_tasks: 'leads', lead_showings: 'leads', lead_calls: 'leads',

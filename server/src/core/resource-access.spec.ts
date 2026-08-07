@@ -2,6 +2,7 @@ import { PrismaClient } from '@prisma/client';
 import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import type { PrismaService } from '../prisma/prisma.service';
 import { ResourceAccessService } from './resource-access.service';
+import { MentionService } from '../transactions/mention.service';
 import { MessagesService } from '../transactions/messages.service';
 
 /**
@@ -121,7 +122,7 @@ describe('the chat thread is not readable by someone with no part in the deal', 
       await tx.transaction_messages.create({
         data: { transaction_id: txn.id, company_id: 1, body: 'commission dispute', created_at: new Date(), updated_at: new Date() },
       });
-      const messages = new MessagesService(tx, new ResourceAccessService(tx));
+      const messages = new MessagesService(tx, new ResourceAccessService(tx), new MentionService(tx, new ResourceAccessService(tx)));
 
       // The owner reads it; the stranger does not — and this is the assertion that was failing
       // against the running application before the check existed.
@@ -133,7 +134,7 @@ describe('the chat thread is not readable by someone with no part in the deal', 
   it('refuses to write into it', async () => {
     await inRollback(async (tx) => {
       const { other, txn } = await scene(tx);
-      const messages = new MessagesService(tx, new ResourceAccessService(tx));
+      const messages = new MessagesService(tx, new ResourceAccessService(tx), new MentionService(tx, new ResourceAccessService(tx)));
       await expect(messages.post(txn.id, asUser(other), 'let me in')).rejects.toThrow(ForbiddenException);
       // And nothing was written on the way to being refused.
       expect(await tx.transaction_messages.count({ where: { transaction_id: txn.id } })).toBe(0);
@@ -144,7 +145,7 @@ describe('the chat thread is not readable by someone with no part in the deal', 
     await inRollback(async (tx) => {
       const { owner, other, txn } = await scene(tx);
       await tx.team_members.create({ data: { transaction_id: txn.id, name: other.name, company_id: 1 } });
-      const messages = new MessagesService(tx, new ResourceAccessService(tx));
+      const messages = new MessagesService(tx, new ResourceAccessService(tx), new MentionService(tx, new ResourceAccessService(tx)));
       await expect(messages.post(txn.id, asUser(owner), 'hello')).resolves.toHaveLength(1);
       await expect(messages.post(txn.id, asUser(other), 'hello back')).resolves.toHaveLength(2);
     });

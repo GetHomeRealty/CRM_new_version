@@ -2,6 +2,8 @@ import { Controller, Get, Header, HttpCode } from '@nestjs/common';
 import * as fs from 'fs/promises';
 import { join } from 'path';
 import { PrismaService } from '../prisma/prisma.service';
+import { RedisService } from '../redis/redis.service';
+import { QueueService } from '../queue/queue.service';
 import { runAsSystem } from '../core/tenant-context';
 import { STORAGE_ROOT } from '../config/storage';
 import { metrics } from './metrics';
@@ -30,7 +32,11 @@ import { workerSnapshot } from './worker-health';
  */
 @Controller('health')
 export class HealthController {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly redis: RedisService,
+    private readonly queues: QueueService,
+  ) {}
 
   /** Liveness. Deliberately checks nothing external. */
   @Get()
@@ -81,6 +87,36 @@ export class HealthController {
       checks.authorization = { ok: roles > 0 && grants > 0, detail: `${roles} roles, ${grants} grants` };
     } catch (e) {
       checks.authorization = { ok: false, detail: (e as Error).message.slice(0, 160) };
+    }
+
+    /*
+     * Redis, and the queue that may or may not depend on it.
+     *
+     * REPORTED, NOT REQUIRED. Redis is optional here — an absent one means caching and distributed
+     * queues are off and everything runs from Postgres, which is a supported configuration rather
+     * than a fault. Marking it `ok: true` when it is not configured is deliberate: failing the
+     * readiness probe over an optional dependency would pull a perfectly healthy deployment out of
+     * the load balancer. A CONFIGURED Redis that is unreachable does count as degraded, because
+     * then something really is wrong.
+     */
+    const redis = await this.redis.health();
+    checks.redis = {
+      ok: redis.status !== 'down',
+      ms: redis.latency_ms,
+      detail: redis.status === 'skipped' ? 'not configured — caching and distributed queues are off' : redis.status,
+    };
+
+    try {
+      const stats = await this.queues.stats();
+      const dead = stats.reduce((n, q) => n + q.dead, 0);
+      checks.queues = {
+        // A dead-lettered job is work that silently is not happening, so it is worth surfacing here
+        // rather than only on the queue screen somebody has to remember to open.
+        ok: dead === 0,
+        detail: `${this.queues.driverKind}${this.queues.isWorker ? '' : ' (enqueue only)'}; ${dead} dead`,
+      };
+    } catch (e) {
+      checks.queues = { ok: false, detail: (e as Error).message.slice(0, 160) };
     }
 
     const ok = Object.values(checks).every((c) => c.ok);

@@ -4,6 +4,7 @@ import { MailerService, isTransient } from '../email/mailer.service';
 import { CompanySettingsService } from '../settings/company-settings.service';
 import { EVENT_TYPE_LABELS } from './calendar.constants';
 import { WebPushService } from './web-push.service';
+import { NotificationDispatcher } from '../notifications/notification-dispatcher.service';
 
 /**
  * Appointment reminders — the thing the "Remind me" checkbox promised and never did.
@@ -60,6 +61,12 @@ export class EventReminderService {
     private readonly mailer: MailerService,
     private readonly settings: CompanySettingsService,
     private readonly push: WebPushService,
+    /*
+     * Optional so every existing construction of this service — including four spec files — keeps
+     * working untouched. In the running application it is always injected; where it is absent the
+     * in-app notification is simply not written, exactly as the push guard below behaves.
+     */
+    private readonly dispatcher?: NotificationDispatcher,
   ) {}
 
   /**
@@ -86,7 +93,7 @@ export class EventReminderService {
       const floor = i + 1 < leads.length ? leads[i + 1] : 0;
       const horizon = new Date(now.getTime() + lead * 60 * 1000);
       const earliest = new Date(now.getTime() + floor * 60 * 1000);
-      const due = await this.dueEvents(earliest, horizon, now);
+      const due = await this.dueEvents(earliest, horizon, now, lead);
 
       for (const ev of due) {
         // The insert is the lock. `createMany` with skipDuplicates issues ON CONFLICT DO NOTHING,
@@ -121,7 +128,7 @@ export class EventReminderService {
    * `earliest` is the band's lower edge and `horizon` its upper; `now` is passed separately because
    * an appointment that has already begun is never due, whatever band it falls in.
    */
-  private async dueEvents(earliest: Date, horizon: Date, now: Date) {
+  private async dueEvents(earliest: Date, horizon: Date, now: Date, lead: number) {
     // `date` is a calendar day and `time` is a separate HH:MM string, so the day range is narrowed
     // in SQL and the exact start time is compared in JS — a two-day span at most.
     const from = new Date(Date.UTC(earliest.getUTCFullYear(), earliest.getUTCMonth(), earliest.getUTCDate()));
@@ -133,6 +140,25 @@ export class EventReminderService {
         enable_reminder: true,
         status: { notIn: ['cancelled', 'completed'] },
         date: { gte: from, lte: to },
+        /*
+         * ALREADY-REMINDED EVENTS ARE EXCLUDED, and this line is the fix rather than the cap.
+         *
+         * `MAX_PER_SWEEP` bounds the read, which is right. What was wrong is that the bound was
+         * applied to a set that INCLUDED every event already reminded for this lead time: the query
+         * had no relation to `calendar_event_reminders`, so an appointment handled two days ago was
+         * still returned, still ordered ahead of newer ones by `date asc`, and still consumed one of
+         * the two hundred slots. The claim below then skipped it as already owned.
+         *
+         * The consequence was silent starvation. Once two hundred already-processed events sat in
+         * the window, event two hundred and one was never reached — not this sweep, not the next
+         * one, because the ordering is deterministic and the set does not change. At 500 agents a
+         * two-day band holds far more than two hundred appointments, so most reminders would simply
+         * never be sent, with nothing reporting it.
+         *
+         * Excluding them makes the cap what it was always meant to be: a limit on how much NEW work
+         * one pass takes on, not a window that fills up with old work and stops.
+         */
+        reminders: { none: { lead_minutes: lead } },
       },
       include: {
         transactions: { select: { trade_no: true, property: true } },
@@ -140,6 +166,18 @@ export class EventReminderService {
       take: MAX_PER_SWEEP,
       orderBy: [{ date: 'asc' }, { time: 'asc' }],
     });
+
+    /*
+     * Say so when the cap bites. Reaching it is legitimate — the next sweep picks up where this one
+     * stopped, because what this one handles leaves the set — but a backlog that never clears is
+     * worth seeing rather than inferring from missing reminders.
+     */
+    if (rows.length === MAX_PER_SWEEP) {
+      this.log.warn(
+        `Appointment reminders: hit the ${MAX_PER_SWEEP}-event cap for the ${lead}-minute lead time. `
+        + 'The remainder is picked up next sweep; if this repeats, the sweep is not keeping up.',
+      );
+    }
 
     return rows.filter((r) => {
       const startsAt = this.startOf(r.date, r.time);
@@ -195,6 +233,33 @@ export class EventReminderService {
           data: { pushed_at: new Date(), push_count: pushed.sent },
         }).catch(() => {});
       }
+    }
+
+    /*
+     * The IN-APP copy, so the appointment also appears in the Notification Centre rather than only
+     * in a mailbox and on a lock screen. Same placement and same reasoning as the push above: after
+     * the email, outside its try, and unable to fail the reminder.
+     *
+     * Only the in-app channel is asked for here. Email and push have already been sent by the two
+     * blocks above, with their own delivery records and retry handling, and routing them through the
+     * dispatcher as well would send each twice.
+     *
+     * `dedupeKey` is the reminder row's own id, so a retried sweep cannot leave two copies of one
+     * appointment in somebody's list.
+     */
+    if (ev.user_id && this.dispatcher) {
+      const where2 = ev.location ? ` — ${ev.location}` : '';
+      await this.dispatcher.dispatch({
+        category: 'calendar_reminders',
+        userId: ev.user_id,
+        title: `${this.phrase(lead)}: ${ev.title}`,
+        body: `${ev.date.toISOString().slice(0, 10)} at ${ev.time}${ev.end_time ? `–${ev.end_time}` : ''}${where2}`,
+        link: '/crm/calendar',
+        dedupeKey: `calendar-reminder-${reminderId}`,
+        channels: ['in_app'],
+      }).catch(() => {
+        // Never allowed to affect the reminder: the email is the record and has already gone.
+      });
     }
   }
 

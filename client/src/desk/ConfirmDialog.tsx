@@ -9,6 +9,14 @@ export interface ConfirmOptions {
   body?: ReactNode;
   linked?: ReactNode[];
   note?: ReactNode;
+  /**
+   * Label on the confirm button. Defaults to 'Delete' — this dialog started as the delete
+   * confirmation and most callers still are one. Set it when the action being confirmed is
+   * irreversible but is not a delete, so the button names what will actually happen: a dialog
+   * whose only affirmative option reads "Delete" over the words "this sends the message to every
+   * member of staff" asks the reader to press the wrong verb to get the right outcome.
+   */
+  confirmLabel?: ReactNode;
   onConfirm?: () => void;
 }
 
@@ -53,7 +61,7 @@ export default function ConfirmDialog({ confirm, onClose }: { confirm: ConfirmOp
         <div className="actions">
           <button className="btn ghost" onClick={onClose}>Cancel</button>
           <button className="btn primary" style={{ background: 'var(--bad)', borderColor: 'var(--bad)' }}
-            onClick={() => { confirm.onConfirm?.(); onClose(); }}>Delete</button>
+            onClick={() => { confirm.onConfirm?.(); onClose(); }}>{confirm.confirmLabel ?? 'Delete'}</button>
         </div>
       </div>
     </div>,

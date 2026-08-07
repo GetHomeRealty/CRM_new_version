@@ -503,8 +503,10 @@ ${offer?.description ? `<p>${esc(offer.description)}</p>` : ''}
       return {
         success: true,
         redirected: redirect,
+        // Not "because MAIL_REDIRECT_TO is set" — outside production mail is diverted by default,
+        // so naming one possible cause would send somebody looking for a variable that is not there.
         message: redirect
-          ? `Email sent — redirected to ${redirect} because MAIL_REDIRECT_TO is set.`
+          ? `Email sent — redirected to ${redirect}, so it did not reach the real recipient.`
           : `${kind.charAt(0).toUpperCase() + kind.slice(1)} email sent successfully`,
       };
     } catch (err) {

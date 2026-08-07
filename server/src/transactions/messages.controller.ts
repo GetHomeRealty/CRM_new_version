@@ -1,10 +1,11 @@
-import { Body, Controller, Get, HttpCode, Param, ParseIntPipe, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Param, ParseIntPipe, Post, Query, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '../auth/guards/auth.guard';
 import { CurrentUser } from '../auth/decorators';
 import type { AuthUserRecord } from '../auth/auth.types';
 import { MessagesService, type ChatMessage } from './messages.service';
 import { PostMessageDto } from './dto/post-message.dto';
 import type { ResourceUser } from './transaction.resource';
+import { MentionService, type MentionCandidate } from './mention.service';
 
 const toResourceUser = (u: AuthUserRecord | undefined): ResourceUser | null =>
   u ? { id: u.id, role: u.role, name: u.name } : null;
@@ -12,7 +13,25 @@ const toResourceUser = (u: AuthUserRecord | undefined): ResourceUser | null =>
 @Controller('transactions')
 @UseGuards(AuthGuard)
 export class MessagesController {
-  constructor(private readonly messages: MessagesService) {}
+  constructor(
+    private readonly messages: MessagesService,
+    private readonly mentions: MentionService,
+  ) {}
+
+  /**
+   * People the author may mention on this deal — what the autocomplete offers after `@`.
+   *
+   * Scoped to those who can already open the transaction, so the list cannot be used to discover who
+   * else exists in the brokerage. `MentionService` applies the same access rule the chat itself does.
+   */
+  @Get(':transaction/mention-candidates')
+  candidates(
+    @CurrentUser() user: AuthUserRecord | undefined,
+    @Param('transaction', ParseIntPipe) id: number,
+    @Query('q') q?: string,
+  ): Promise<MentionCandidate[]> {
+    return this.mentions.candidates(toResourceUser(user), id, q);
+  }
 
   @Get(':transaction/messages')
   list(
@@ -29,6 +48,6 @@ export class MessagesController {
     @Param('transaction', ParseIntPipe) id: number,
     @Body() dto: PostMessageDto,
   ): Promise<ChatMessage[]> {
-    return this.messages.post(id, toResourceUser(user), dto.body);
+    return this.messages.post(id, toResourceUser(user), dto.body, dto.mentions ?? []);
   }
 }

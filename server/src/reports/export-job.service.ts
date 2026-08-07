@@ -5,6 +5,9 @@ import * as fs from 'fs/promises';
 import { createWriteStream } from 'fs';
 import { PrismaService } from '../prisma/prisma.service';
 import { BulkExportService, type BulkSelection } from './bulk-export.service';
+import { clusterTick } from '../redis/cluster-tick';
+import { RedisService } from '../redis/redis.service';
+import { CacheService } from '../redis/cache.service';
 import type { AuthUserRecord } from '../auth/auth.types';
 import { schedulersEnabled, schedulerSkipReason } from '../common/schedulers';
 import { EXPORT_ROOT } from '../config/storage';
@@ -58,7 +61,14 @@ export class ExportJobService implements OnModuleInit, OnModuleDestroy {
   private draining = false;
   private sweeper?: NodeJS.Timeout;
 
-  constructor(private readonly prisma: PrismaService, private readonly bulk: BulkExportService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly bulk: BulkExportService,
+    // Optional so existing constructions — including this service's specs — keep working.
+    // Used only to decide whether THIS process should run a given sweep; see `clusterTick`.
+    private readonly redis?: RedisService,
+    private readonly cache?: CacheService,
+  ) {}
 
   async onModuleInit(): Promise<void> {
     await fs.mkdir(EXPORT_ROOT, { recursive: true });
@@ -92,7 +102,12 @@ export class ExportJobService implements OnModuleInit, OnModuleDestroy {
     if (this.queue.length) void this.drain();
 
     registerWorker('export-sweeper', SWEEP_INTERVAL_MS);
-    this.sweeper = setInterval(trackedTick('export-sweeper', () => this.sweepExpired()), SWEEP_INTERVAL_MS);
+    this.sweeper = setInterval(
+      this.redis && this.cache
+        ? clusterTick({ redis: this.redis, cache: this.cache }, 'export-sweeper', () => this.sweepExpired())
+        : trackedTick('export-sweeper', () => this.sweepExpired()),
+      SWEEP_INTERVAL_MS,
+    );
     this.sweeper.unref?.();
     void this.sweepExpired();
   }

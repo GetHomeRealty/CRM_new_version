@@ -1,4 +1,5 @@
 import type { Dispatch, SetStateAction } from 'react';
+import type { LoginOutcome, MfaType } from '../lib/mfaApi';
 
 /**
  * Core authentication & authorization types. These mirror the exact payload the
@@ -49,7 +50,13 @@ export interface RegisterPayload {
 export interface AuthContextValue {
   user: AuthUser | null;
   loading: boolean;
-  login: (username: string, password: string, remember?: boolean) => Promise<AuthUser>;
+  /**
+   * Sign in. Resolves to EITHER a signed-in user or an outstanding two-factor challenge — the caller
+   * must check which, because a challenge means no session exists yet.
+   */
+  login: (username: string, password: string, remember?: boolean) => Promise<LoginOutcome>;
+  /** Answer the outstanding two-factor challenge and finish signing in. */
+  completeMfa: (method: MfaType | 'recovery', code: string, trustDevice?: boolean) => Promise<AuthUser>;
   register: (payload: RegisterPayload) => Promise<AuthUser>;
   logout: () => Promise<void>;
   setUser: Dispatch<SetStateAction<AuthUser | null>>;

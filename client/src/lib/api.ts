@@ -306,8 +306,20 @@ export const bulkReviewAction = (
   api.post(`/api/transactions/${id}/reviews/bulk`, { action, ids, reason: text, note: text }).then((r) => r.data);
 export const getAgentChangeNotifications = (): Promise<AgentChangeNotif> =>
   api.get<AgentChangeNotif>('/api/agent-change-notifications').then((r) => r.data);
-export const postTransactionMessage = (id: Id, body: string): Promise<ChatMessage[]> =>
-  api.post<ChatMessage[]>(`/api/transactions/${id}/messages`, { body }).then((r) => r.data);
+export const postTransactionMessage = (id: Id, body: string, mentions: number[] = []): Promise<ChatMessage[]> =>
+  api.post<ChatMessage[]>(`/api/transactions/${id}/messages`, { body, mentions }).then((r) => r.data);
+
+/**
+ * People the author may mention on this deal — what the autocomplete offers after `@`.
+ *
+ * Scoped server-side to those who can already open the transaction, so the list cannot be used to
+ * find out who else exists in the brokerage.
+ */
+export const getMentionCandidates = (
+  id: number | string,
+  q?: string,
+): Promise<Array<{ id: number; name: string }>> =>
+  api.get(`/api/transactions/${id}/mention-candidates`, { params: q ? { q } : {} }).then((r) => r.data);
 
 // --- Documents (Legal & Documentation) ---
 export const getDocuments = (txnId: Id): Promise<DocumentsResponse> =>
@@ -560,6 +572,52 @@ export const getDeletionLog = (): Promise<TrashedResponse<DeletionLogEntry>> => 
 // --- Global Audit Trail (admin) ---
 export const getAuditLogs = (params: Record<string, unknown> = {}): Promise<AuditLogPage> =>
   api.get<AuditLogPage>('/api/audit-logs', { params }).then((r) => r.data);
+
+/**
+ * Download the audit trail as a file, honouring exactly the filters on screen.
+ *
+ * The SAME `params` the listing was loaded with are sent, so the file matches what the person is
+ * looking at. The server re-applies them through the same builder — this is convenience, not
+ * authority: the export endpoint carries the same guards and screen permission as the listing.
+ *
+ * Returned as a blob rather than navigated to, so a failure surfaces as a catchable error with the
+ * session intact, instead of replacing the page with a JSON error body.
+ */
+export const exportAuditLogs = async (
+  params: Record<string, unknown>,
+  format: 'csv' | 'xlsx',
+): Promise<{ blob: Blob; filename: string; rows: number; truncated: boolean }> => {
+  const res = await api.get('/api/audit-logs/export', {
+    params: { ...params, format },
+    responseType: 'blob',
+  });
+
+  // Prefer the server's filename; fall back to something sensible if the header is unreadable
+  // (a proxy that strips it, say) rather than saving a file called "blob".
+  const disposition = String(res.headers['content-disposition'] ?? '');
+  const match = /filename="?([^";]+)"?/i.exec(disposition);
+  const filename = match?.[1] ?? `audit-export.${format}`;
+
+  return {
+    blob: res.data as Blob,
+    filename,
+    rows: Number(res.headers['x-export-rows'] ?? 0),
+    truncated: String(res.headers['x-export-truncated'] ?? '0') === '1',
+  };
+};
+
+/** Hand a blob to the browser as a download, then release the object URL. */
+export const saveBlob = (blob: Blob, filename: string): void => {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // Revoked on the next tick: revoking synchronously can cancel the download in some browsers.
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+};
 
 // --- Reference data ---
 export const listAgents = (): Promise<string[]> => api.get<string[]>('/api/agents').then((r) => r.data);

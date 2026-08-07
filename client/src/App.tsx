@@ -45,6 +45,7 @@ const LeadDetailPage = lazy(() => import('./desk/LeadDetailPage'));
 const MetaPage = lazy(() => import('./desk/MetaPage'));
 const AccountSettingsPage = lazy(() => import('./desk/AccountSettingsPage'));
 const NotificationPreferencesPage = lazy(() => import('./desk/NotificationPreferencesPage'));
+const NotificationCenterPage = lazy(() => import('./desk/NotificationCenterPage'));
 const InboxPage = lazy(() => import('./desk/InboxPage'));
 const AuditLogPage = lazy(() => import('./desk/AuditLogPage'));
 const RecycleBinPage = lazy(() => import('./desk/RecycleBinPage'));
@@ -115,6 +116,12 @@ const SCREENS: ScreenRoutes[] = [
   // choices, so everyone from agent to super-admin reaches their own and nobody reaches
   // anyone else's. There is no admin permission that would make sense to gate it on.
   { screen: 'notifications', paths: [''], element: () => <NotificationPreferencesPage />, open: true },
+  /*
+   * The Notification Centre — everything the person has been told, with history. Open like the
+   * other personal screens: it shows only the viewer's own notifications, scoped server-side, so
+   * there is no admin permission that would make sense to gate it on.
+   */
+  { screen: 'notification-center', paths: [''], element: () => <NotificationCenterPage />, open: true },
   { screen: 'inbox', paths: [''], element: () => <InboxPage />, open: true },
   { screen: 'recycle-bin', paths: [''], element: () => <RecycleBinPage />, superAdmin: true },
 ];

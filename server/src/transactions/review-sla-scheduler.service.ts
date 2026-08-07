@@ -1,6 +1,9 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { schedulersEnabled, schedulerSkipReason } from '../common/schedulers';
+import { clusterTick } from '../redis/cluster-tick';
+import { RedisService } from '../redis/redis.service';
+import { CacheService } from '../redis/cache.service';
 import { forEachTenant } from '../core/tenant-context';
 import { allTenantIds } from '../core/tenants';
 import { registerWorker, trackedTick } from '../observability/worker-health';
@@ -25,6 +28,10 @@ export class ReviewSlaSchedulerService implements OnModuleInit, OnModuleDestroy 
   constructor(
     private readonly prisma: PrismaService,
     private readonly sla: ReviewSlaService,
+    // Optional so existing constructions — including this service's specs — keep working.
+    // Used only to decide whether THIS process should run a given pass; see `clusterTick`.
+    private readonly redis?: RedisService,
+    private readonly cache?: CacheService,
   ) {}
 
   onModuleInit(): void {
@@ -33,7 +40,12 @@ export class ReviewSlaSchedulerService implements OnModuleInit, OnModuleDestroy 
       return;
     }
     registerWorker('review-sla', POLL_INTERVAL_MS);
-    this.timer = setInterval(trackedTick('review-sla', () => this.sweep()), POLL_INTERVAL_MS);
+    this.timer = setInterval(
+      this.redis && this.cache
+        ? clusterTick({ redis: this.redis, cache: this.cache }, 'review-sla', () => this.sweep())
+        : trackedTick('review-sla', () => this.sweep()),
+      POLL_INTERVAL_MS,
+    );
     if (typeof this.timer.unref === 'function') this.timer.unref();
   }
 

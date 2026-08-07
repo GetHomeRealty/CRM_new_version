@@ -5,9 +5,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   deleteMyMailAccount, getAccountProfile, getAccountSettings, listMyMailAccounts,
   saveAccountProfile, setMyDefaultMailAccount, syncMailAccount, testMyMailAccount,
-  googleCalendarStatus, googleCalendarConnect, googleCalendarSync, googleCalendarDisconnect,
   type AccountIntegrations, type AccountMailAccount,
-  type GoogleCalendarStatus,
 } from '../lib/accountApi';
 import { getMyPhoto, uploadMyPhoto, deleteMyPhoto } from '../lib/api';
 import { fileToBase64 } from '../lib/importApi';
@@ -16,6 +14,8 @@ import { useAuth } from '../context/AuthContext';
 import { useToast } from './toast';
 import MailAccountModal from './MailAccountModal';
 import UserAvatar, { bumpPhotoVersion } from './UserAvatar';
+import TwoFactorCard from './TwoFactorCard';
+import GoogleCalendarCard from './GoogleCalendarCard';
 
 const PHOTO_ACCEPT = '.png,.jpg,.jpeg,.gif,.webp';
 const PHOTO_MAX_MB = 4;
@@ -184,6 +184,9 @@ export default function AccountSettingsPage() {
       {loadWarning && (
         <div className="lead-lock-note" style={{ marginBottom: 12 }}>⚠ {loadWarning}</div>
       )}
+
+      {/* ---- Two-step verification ---- */}
+      <TwoFactorCard />
 
       {/* ---- Profile Picture ---- */}
       <div className="card">
@@ -355,7 +358,28 @@ export default function AccountSettingsPage() {
 
         {/* Calendar & social — grouped with mail under one Integrations section. */}
         <div className="intg" style={{ marginTop: 14 }}>
-          <GoogleCalendarRow />
+          {/*
+            TWO CARDS, ONE PER SCOPE — not one card and not a bespoke copy of it.
+
+            This screen used to render its own inline Google Calendar row, which took no `scope` at
+            all. CRM Settings and Transaction Desk Settings each render the shared
+            `GoogleCalendarCard` with their own scope, so they manage two genuinely separate
+            connections; this page could express neither. A user connected under CRM saw a card that
+            said "Google Calendar connected" and could not tell them for which area — and the copy
+            had drifted from the shared component besides.
+
+            `google_connections.scope` is what makes them separate, the same column pattern
+            `mail_accounts.scope` uses. Rendering both here, each labelled, is the only honest way to
+            show a personal settings page: connected to one is not connected to the other.
+          */}
+          <div className="intg-scope">
+            <h4 className="intg-scope-title">Customer Relationship Management</h4>
+            <GoogleCalendarCard scope="crm" />
+          </div>
+          <div className="intg-scope" style={{ marginTop: 10 }}>
+            <h4 className="intg-scope-title">Transaction Management</h4>
+            <GoogleCalendarCard scope="desk" />
+          </div>
 
           {/*
             Meta Lead Ads is a CRM integration: it feeds lead forms into the Leads module and has
@@ -404,88 +428,3 @@ export default function AccountSettingsPage() {
   );
 }
 
-/**
- * Google Calendar — real OAuth. "Connect" fetches Google's consent-screen URL and sends the
- * browser to it; Google shows the account picker and consent, then redirects back to
- * /app/account?google_connected=1. Works once the server has Google OAuth credentials; until
- * then the button explains it's not set up rather than failing.
- */
-function GoogleCalendarRow() {
-  const toast = useToast();
-  const { link } = useArea();
-  const [st, setSt] = useState<GoogleCalendarStatus | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  const load = useCallback(() => { googleCalendarStatus().then(setSt).catch(() => setSt(null)); }, []);
-  useEffect(() => { load(); }, [load]);
-
-  // Surface the outcome of the round-trip once, then clean the URL. If the connect was started from
-  // another page (e.g. Email Settings → Integrations), a stored hint sends the browser back there so
-  // the flow ends where it began.
-  useEffect(() => {
-    const p = new URLSearchParams(window.location.search);
-    const outcome = p.get('google_connected') ? 'google_connected=1'
-      : p.get('google_error') ? `google_error=${encodeURIComponent(p.get('google_error') ?? '')}` : '';
-    if (!outcome) return;
-    const back = sessionStorage.getItem('gcal_return');
-    if (back) {
-      sessionStorage.removeItem('gcal_return');
-      window.location.replace(back + (back.includes('?') ? '&' : '?') + outcome);
-      return;
-    }
-    if (p.get('google_connected')) toast('Google Calendar connected.', 'ok');
-    else toast(`Google connection failed: ${p.get('google_error')}`, 'bad');
-    window.history.replaceState({}, '', link('account'));
-    load();
-  }, [toast, load]);
-
-  const connect = async () => {
-    setBusy(true);
-    try {
-      const res = await googleCalendarConnect();
-      if (res.url) window.location.href = res.url;               // → Google's own consent screen
-      else toast(res.message || 'Google sign-in is not set up on the server.', 'bad');
-    } catch (ex) {
-      toast(apiErrorMessage(ex, 'Could not start Google sign-in'), 'bad');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const run = async (fn: () => Promise<{ message?: string; error?: string | null }>, ok: string) => {
-    setBusy(true);
-    try { const r = await fn(); toast(r.error ? (r.message || r.error) : (r.message || ok), r.error ? 'bad' : 'ok'); load(); }
-    catch (ex) { toast(apiErrorMessage(ex, 'That did not work'), 'bad'); }
-    finally { setBusy(false); }
-  };
-
-  const detail = !st ? 'Checking…'
-    : !st.configured ? (st.setup_hint || 'Google sign-in is not set up on the server yet.')
-    : st.connected ? `Connected as ${st.email ?? 'your Google account'}${st.last_sync ? ` · last synced ${st.last_sync.slice(0, 16).replace('T', ' ')}` : ''}`
-    : 'Connect your Google Calendar — sign in with Google and your events sync both ways.';
-
-  return (
-    <div className="intg-row">
-      <div>
-        <strong>Google Calendar</strong>
-        <div className="muted">{detail}</div>
-        {st?.error && <div className="muted" style={{ color: 'var(--bad)' }}>{st.error}</div>}
-      </div>
-      <div className="acct-actions">
-        <span className={`pill ${st?.connected ? 'ok' : ''}`}>{st?.connected ? 'Connected' : 'Not connected'}</span>
-        {st?.connected ? (
-          <>
-            <button className="btn ghost sm" type="button" disabled={busy}
-              onClick={() => void run(() => googleCalendarSync(), 'Synced.')}>↻ Sync now</button>
-            <button className="btn ghost sm" type="button" disabled={busy}
-              onClick={() => void run(() => googleCalendarDisconnect().then(() => ({ message: 'Disconnected.' })), 'Disconnected.')}>Disconnect</button>
-          </>
-        ) : (
-          <button className="btn primary sm" type="button" disabled={busy || (st ? !st.configured : true)} onClick={() => void connect()}>
-            {busy ? '…' : 'Connect Google Calendar'}
-          </button>
-        )}
-      </div>
-    </div>
-  );
-}

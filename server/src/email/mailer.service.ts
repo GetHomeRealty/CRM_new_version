@@ -59,10 +59,67 @@ export class MailerService {
     private readonly accounts: MailAccountService,
   ) {}
 
-  /** The address every outgoing message is diverted to, or null when sending normally. */
+  /**
+   * The address every outgoing message is diverted to, or null when sending normally.
+   *
+   * OUTSIDE PRODUCTION THIS DEFAULTS TO A SINK RATHER THAN TO "SEND IT". The previous default was
+   * `null` — send normally — and `MAIL_REDIRECT_TO` had to be remembered. It was not: on 2026-08-06
+   * a development server running against the development database delivered real `lead_task_due`
+   * notifications to real people, because a scheduler swept real rows and the mail path was live.
+   * Nothing was misconfigured; the safe setting was simply absent, which is the failure mode a
+   * default should absorb.
+   *
+   * Getting this wrong is asymmetric. A developer whose test mail lands in a sink notices in
+   * seconds and sets one variable. A client who receives a reminder about somebody else's lead
+   * cannot be un-emailed, and in this application the recipients are the brokerage's actual
+   * customers.
+   *
+   * THE ESCAPE HATCH IS EXPLICIT: `MAIL_ALLOW_REAL_SEND=1` restores real delivery outside
+   * production, for the occasions when the point of the exercise IS to watch a message arrive.
+   * Explicit, per-run and greppable, rather than a default nobody remembers.
+   *
+   * PRODUCTION IS UNTOUCHED. With `NODE_ENV=production` this returns exactly what it always did —
+   * whatever `MAIL_REDIRECT_TO` says, and `null` when it says nothing. Production mail behaviour
+   * does not change, and `assertProductionConfig` already refuses to start a production server whose
+   * environment is not what it claims.
+   */
+  static readonly DEV_SINK = 'dev-sink@localhost.invalid';
+
   static redirectTarget(): string | null {
-    const v = (process.env.MAIL_REDIRECT_TO ?? '').trim();
-    return v === '' ? null : v;
+    const explicit = (process.env.MAIL_REDIRECT_TO ?? '').trim();
+    if (explicit !== '') return explicit;
+
+    if (process.env.NODE_ENV === 'production') return null;
+    if (/^(1|true|yes|on)$/i.test((process.env.MAIL_ALLOW_REAL_SEND ?? '').trim())) return null;
+
+    // `.invalid` is reserved by RFC 2606 and can never resolve, so a message that somehow escapes
+    // this guard still cannot reach a person.
+    return MailerService.DEV_SINK;
+  }
+
+  /**
+   * One line at boot saying where mail is going, so the answer is never a guess.
+   *
+   * Silence about a safety default is how the default becomes a mystery: somebody spends an
+   * afternoon wondering why the email they are testing never arrives. Called from the module's
+   * `onModuleInit`.
+   */
+  announceRedirect(): void {
+    const target = MailerService.redirectTarget();
+    if (!target) {
+      if (process.env.NODE_ENV !== 'production') {
+        this.log.warn('MAIL_ALLOW_REAL_SEND is set — outgoing mail will reach REAL recipients from a non-production process.');
+      }
+      return;
+    }
+    if (target === MailerService.DEV_SINK) {
+      this.log.warn(
+        `Outgoing mail is diverted to ${target} because this is not a production process. `
+        + 'Set MAIL_REDIRECT_TO to send it somewhere you can read, or MAIL_ALLOW_REAL_SEND=1 to send for real.',
+      );
+    } else {
+      this.log.log(`Outgoing mail is diverted to ${target} (MAIL_REDIRECT_TO).`);
+    }
   }
 
   /** Resolve the template + sender for an event, render vars, and dispatch (TemplateMailService::send). */
@@ -198,13 +255,19 @@ export class MailerService {
           greetingTimeout: 30000,
         });
 
-    // Global safety valve. When MAIL_REDIRECT_TO is set every message goes there instead of the
-    // real recipient, and the intended addresses are carried in the subject so nothing is lost.
-    // Unset in production, so behaviour is unchanged; set it before running anything that sends.
-    const redirect = (process.env.MAIL_REDIRECT_TO ?? '').trim();
+    /*
+     * Global safety valve, and the ONLY place in the application that reaches a mail server — one
+     * `createTransport`, one `sendMail`. Whatever `redirectTarget()` decides therefore governs every
+     * outgoing message: campaigns, lead mail, notifications, reminders, all of it.
+     *
+     * Resolved through `redirectTarget()` rather than by reading the variable here, so the
+     * non-production default lives in one place instead of being restated at the point where getting
+     * it wrong sends the mail.
+     */
+    const redirect = MailerService.redirectTarget() ?? '';
     const realTo = Array.isArray(to) ? to.join(', ') : to;
     if (redirect) {
-      this.log.warn(`MAIL_REDIRECT_TO is set — diverting mail for ${realTo} to ${redirect}.`);
+      this.log.warn(`Mail for ${realTo} diverted to ${redirect}.`);
     }
 
     const message = {

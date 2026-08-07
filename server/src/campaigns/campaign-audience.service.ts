@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import * as crypto from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
-import { EMAIL_SHAPE, FILLABLE_TOKENS } from './campaign.constants';
+import { EMAIL_SHAPE, FILLABLE_TOKENS, MAX_RECIPIENTS } from './campaign.constants';
 import type { AuthUserRecord } from '../auth/auth.types';
 import { can } from '../core/authz';
 
@@ -87,11 +87,39 @@ export class CampaignAudienceService {
     return Object.keys(scope).length ? { AND: [where, scope] } : where;
   }
 
+  /**
+   * How many lead rows one audience resolution may read.
+   *
+   * A campaign is capped at `MAX_RECIPIENTS` (300), but the cap was checked AFTER the whole matching
+   * set had been loaded — so an agent with a 60,000-lead book built a 300-person campaign by pulling
+   * 60,000 full rows into memory and then throwing them away. Against the 2.5M-lead scale model that
+   * is the single largest unbounded read in the CRM.
+   *
+   * Fifty times the recipient cap is deliberately generous: deduplication and the suppression list
+   * only ever REMOVE recipients, so 15,000 leads can never yield fewer than 300 distinct valid
+   * addresses unless the audience is almost entirely duplicates — and an audience that broad is one
+   * the user is about to be told to narrow anyway.
+   */
+  private static readonly MAX_AUDIENCE_SCAN = MAX_RECIPIENTS * 50;
+
   /** Resolve the concrete recipient list: deduped, email-validated, suppression-filtered. */
   async resolveRecipients(a: AudienceFilter, user?: AuthUserRecord | null): Promise<CampaignRecipient[]> {
     const leads = await this.prisma.leads.findMany({
       where: this.buildAudienceWhere(a, user),
       orderBy: { id: 'asc' },
+      /*
+       * EXPLICIT COLUMNS, because `notes` is the reason this mattered. A lead row carries around
+       * forty columns including a free-text note that the scale model measured at 2.5 kB on one lead
+       * in forty; the ten below are every field this method actually reads. Selecting them cuts the
+       * bytes crossing the wire by roughly an order of magnitude and, more to the point, stops a
+       * campaign preview from holding a brokerage's entire correspondence history in memory.
+       */
+      select: {
+        id: true, name: true, email: true, location: true,
+        property_address: true, property_price: true,
+        bedrooms: true, bathrooms: true, square_footage: true, key_features: true,
+      },
+      take: CampaignAudienceService.MAX_AUDIENCE_SCAN,
     });
 
     const seen = new Set<string>();

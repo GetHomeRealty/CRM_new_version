@@ -34,7 +34,14 @@ async function inRollback(fn: (tx: PrismaService) => Promise<void>) {
 function service(tx: PrismaService): ImapSyncService {
   const crypt = { decryptString: (v: string) => v, encryptString: (v: string) => v } as never;
   const google = { accessToken: async () => null } as never;
-  return new ImapSyncService(tx, crypt, google);
+  /*
+   * Redis and the cache are on the SCHEDULING path, not the failure path this file exercises —
+   * they only decide whether this process should run a given poll. Stubbed as "no Redis", which is
+   * the configuration these tests run under anyway.
+   */
+  const redis = { enabled: () => false } as never;
+  const cache = { acquireLock: async () => false, releaseLock: async () => {} } as never;
+  return new ImapSyncService(tx, crypt, google, redis, cache);
 }
 
 /** An account whose IMAP host cannot be reached. */

@@ -72,7 +72,16 @@ async function main() {
   console.log('  company_settings … 1');
 
   // ---- people ---------------------------------------------------------------
-  const hash = bcrypt.hashSync(PASSWORD, 12);
+  /*
+   * The one bcrypt call outside `PasswordHashService`, and it cannot use it: this is a plain
+   * CommonJS script, so it can neither import a Nest provider nor resolve ConfigService.
+   *
+   * It reads the same environment variable instead, with the same default, so a brokerage that
+   * raises BCRYPT_ROUNDS does not end up with test fixtures hashed more weakly than the accounts
+   * they stand in for — which is the drift this whole change exists to remove.
+   */
+  const rounds = Number.parseInt(process.env.BCRYPT_ROUNDS ?? '', 10) || 12;
+  const hash = bcrypt.hashSync(PASSWORD, rounds);
   const users = {};
   for (const u of USERS) {
     const row = await prisma.users.upsert({

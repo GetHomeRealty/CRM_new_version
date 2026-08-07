@@ -2,6 +2,10 @@ import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/commo
 import { PrismaService } from '../prisma/prisma.service';
 import { runAsSystem } from '../core/tenant-context';
 import { schedulersEnabled, schedulerSkipReason } from '../common/schedulers';
+import { clusterTick } from '../redis/cluster-tick';
+import { RedisService } from '../redis/redis.service';
+import { CacheService } from '../redis/cache.service';
+import { registerWorker } from '../observability/worker-health';
 
 /** Once a day is often enough for a policy measured in months. */
 const SWEEP_INTERVAL_MS = 24 * 60 * 60 * 1000;
@@ -64,7 +68,13 @@ export class MailRetentionService implements OnModuleInit, OnModuleDestroy {
   private first: ReturnType<typeof setTimeout> | null = null;
   private running = false;
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    // Optional so existing constructions — including this service's specs — keep working.
+    // Used only to decide whether THIS process should run a given sweep; see `clusterTick`.
+    private readonly redis?: RedisService,
+    private readonly cache?: CacheService,
+  ) {}
 
   onModuleInit(): void {
     const policy = retentionPolicy();
@@ -79,7 +89,28 @@ export class MailRetentionService implements OnModuleInit, OnModuleDestroy {
 
     this.first = setTimeout(() => { void this.sweep(); }, FIRST_SWEEP_DELAY_MS);
     this.first.unref?.();
-    this.timer = setInterval(() => { void this.sweep(); }, SWEEP_INTERVAL_MS);
+
+    /*
+     * `clusterTick`, so that on a multi-process deployment one instance sweeps rather than all of
+     * them.
+     *
+     * THE STAKES ARE LOWER HERE THAN FOR CAMPAIGN MAIL, and saying so matters because it explains
+     * why this is tidiness rather than a blocker. Both operations are idempotent: the body strip is
+     * an `updateMany` whose `where` excludes rows already stripped, and the delete works from a
+     * fresh `findMany` each batch. Four processes sweeping produce the same end state as one — they
+     * simply do redundant work against a large table while the IMAP poller is writing to it.
+     *
+     * Without Redis this behaves exactly as before, because `clusterTick` runs the tick when no
+     * lock is available. Registering the worker also puts the sweep on `/api/health/workers`, where
+     * every other scheduler already reports.
+     */
+    registerWorker('mail-retention', SWEEP_INTERVAL_MS);
+    this.timer = setInterval(
+      this.redis && this.cache
+        ? clusterTick({ redis: this.redis, cache: this.cache }, 'mail-retention', () => this.sweep())
+        : () => { void this.sweep(); },
+      SWEEP_INTERVAL_MS,
+    );
     this.timer.unref?.();
     this.log.log(
       `Mail retention: ${policy.stripBodiesAfterDays ? `strip bodies after ${policy.stripBodiesAfterDays}d` : 'no body stripping'}, `

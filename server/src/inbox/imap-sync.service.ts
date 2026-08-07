@@ -8,7 +8,11 @@ import { GoogleService } from '../google/google.service';
 
 import { forEachTenant } from '../core/tenant-context';
 import { allTenantIds } from '../core/tenants';
-import { registerWorker, trackedTick } from '../observability/worker-health';
+import { registerWorker } from '../observability/worker-health';
+import { clusterTick } from '../redis/cluster-tick';
+import { RedisService } from '../redis/redis.service';
+import { CacheService } from '../redis/cache.service';
+import { NotificationDispatcher } from '../notifications/notification-dispatcher.service';
 /** How often the poller pulls new mail for every sync-enabled account. */
 /**
  * How often connected mailboxes are polled for new mail.
@@ -100,6 +104,11 @@ export class ImapSyncService implements OnModuleInit, OnModuleDestroy {
     private readonly prisma: PrismaService,
     private readonly crypt: LaravelCryptService,
     private readonly google: GoogleService,
+    // Only used to decide whether THIS process should run a given pass — see `clusterTick`.
+    private readonly redis: RedisService,
+    private readonly cache: CacheService,
+    /** Optional so existing constructions — including this service's specs — keep working. */
+    private readonly dispatcher?: NotificationDispatcher,
   ) {}
 
   onModuleInit(): void {
@@ -118,7 +127,14 @@ export class ImapSyncService implements OnModuleInit, OnModuleDestroy {
     if (typeof this.first.unref === 'function') this.first.unref();
 
     registerWorker('imap-sync', POLL_INTERVAL_MS);
-    this.timer = setInterval(trackedTick('imap-sync', () => this.pollAll()), POLL_INTERVAL_MS);
+    /*
+     * `clusterTick`, not `trackedTick`: two processes polling one mailbox race on the same messages.
+     * With Redis exactly one process polls per pass; without it, unchanged from before.
+     */
+    this.timer = setInterval(
+      clusterTick({ redis: this.redis, cache: this.cache }, 'imap-sync', () => this.pollAll()),
+      POLL_INTERVAL_MS,
+    );
     if (typeof this.timer.unref === 'function') this.timer.unref();
     this.log.log(`IMAP polling every ${POLL_INTERVAL_MS / 1000}s (first pass in ${FIRST_POLL_DELAY_MS / 1000}s)`);
   }
@@ -374,6 +390,36 @@ export class ImapSyncService implements OnModuleInit, OnModuleDestroy {
         lock.release();
       }
       await this.recordOutcome(account.id, null, maxUid);
+
+      /*
+       * ONE notification per poll, not one per message.
+       *
+       * A quiet mailbox that receives forty messages overnight would otherwise produce forty
+       * notifications, which is worse than none: the person stops reading them and the useful ones
+       * are lost in the noise. The summary is what somebody actually wants — "you have new mail" —
+       * and the Inbox screen is where the detail lives.
+       *
+       * Best-effort, outside everything that matters: mail has already been stored, and the sync
+       * must not be marked failed because a notification could not be delivered.
+       */
+      if (fetched > 0 && this.dispatcher && account.user_id) {
+        await this.dispatcher.dispatch({
+          category: 'inbox_new_mail',
+          userId: account.user_id,
+          title: fetched === 1 ? 'You have a new email' : `You have ${fetched} new emails`,
+          body: account.from_email || undefined,
+          link: '/crm/inbox',
+          /*
+           * Keyed to the account and the highest UID in this batch, so a poll that runs twice over
+           * the same window — a retry, or a second process before the cluster lock was added — does
+           * not leave two copies of the same news.
+           */
+          dedupeKey: `inbox-${account.id}-${maxUid}`,
+          // Email is `unsupported` for this category, so only these two are meaningful.
+          channels: ['in_app', 'push'],
+        }).catch(() => {});
+      }
+
       return { fetched, matched, error: null };
     } catch (ex) {
       const error = this.explain((ex as Error).message);

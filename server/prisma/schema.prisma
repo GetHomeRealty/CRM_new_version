@@ -215,6 +215,7 @@ model company_settings {
   lead_import_jobs       lead_import_jobs[]
   personal_access_tokens personal_access_tokens[]
   meta_webhook_events    meta_webhook_events[]
+  mfa_policies           mfa_policies[]
 }
 
 model conditions {
@@ -599,8 +600,8 @@ model crm_settings {
   /// carried neither, so a deleted user left their settings row behind for ever and `company_id`
   /// pointed at a brokerage nothing guaranteed existed. `Cascade`, because a personal settings row
   /// has no meaning without the person — the global row (user_id NULL) is unaffected.
-  user       users?           @relation(fields: [user_id], references: [id], onDelete: Cascade)
-  company    company_settings @relation(fields: [company_id], references: [id], onUpdate: NoAction)
+  user    users?           @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  company company_settings @relation(fields: [company_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@index([company_id])
 }
@@ -627,21 +628,21 @@ model crm_email_settings {
   company_id Int              @default(1)
   company    company_settings @relation(fields: [company_id], references: [id], onUpdate: NoAction)
 
+  // Declared so `migrate diff` stays empty: this index EXISTS in the database, created by a
+  // migration. An index the schema does not mention is one `migrate dev` offers to drop.
+  @@unique([company_id])
   @@index([company_id])
 }
 
 /**
  * ONE PERSON'S CRM email triggers.
- *
  * Triggers used to be a single brokerage-wide row, so an agent switching off promotional email
  * switched it off for everybody — and the Triggers screen, which shows only switches, wrote the
  * shared SMTP fields back with them. Both problems disappear when the switches belong to the person
  * making them: this table holds nothing but the toggles, and each row is one user's own.
- *
  * A user with no row here inherits `crm_email_settings.template_toggles`, which is the brokerage
  * default an administrator sets under CRM Settings. So a new agent starts with the brokerage's
  * choices and departs from them only where they say so — and only for themselves.
- *
  * The brokerage-wide `auto_send_enabled` still applies over the top: it is the kill switch, not a
  * default, and no personal choice overrides it.
  */
@@ -660,7 +661,7 @@ model crm_trigger_settings {
 
   /// The brokerage this row belongs to. See src/core/tenancy.spec.ts for why this table carries one.
   company_id Int              @default(1)
-  company    company_settings @relation(fields: [company_id], references: [id], onUpdate: NoAction)
+  company    company_settings @relation(fields: [company_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   user       users            @relation(fields: [user_id], references: [id], onDelete: Cascade)
 
   @@index([company_id])
@@ -720,28 +721,28 @@ model crm_email_log {
  * Broadcast messages sent to all users from CRM Settings → Notifications.
  */
 model crm_broadcasts {
-  id         Int       @id @default(autoincrement())
-  message    String    @db.Text
+  id           Int       @id @default(autoincrement())
+  message      String    @db.Text
   /**
    * info | warning | success
    */
-  type       String    @default("info") @db.VarChar(16)
+  type         String    @default("info") @db.VarChar(16)
   /// How many staff have actually received it so far. Written as delivery progresses.
-  recipients Int       @default(0)
+  recipients   Int       @default(0)
   /// sending | completed | partial | failed. A broadcast is delivered off the request thread, so
   /// the row exists — and says `sending` — before anybody has been emailed.
-  status     String    @default("completed") @db.VarChar(16)
+  status       String    @default("completed") @db.VarChar(16)
   /// How many addresses the send is working through in total, so progress means something.
-  attempted  Int       @default(0)
+  attempted    Int       @default(0)
   /// Addresses the mail server refused.
-  failed     Int       @default(0)
+  failed       Int       @default(0)
   /// The first failure, in words the person who sent it can act on.
-  error      String?   @db.Text
+  error        String?   @db.Text
   /// When the last recipient was dealt with. Null while it is still going out.
   completed_at DateTime? @db.Timestamp(0)
-  sent_by    String?   @db.VarChar(255)
-  sent_by_id Int?
-  created_at DateTime? @db.Timestamp(0)
+  sent_by      String?   @db.VarChar(255)
+  sent_by_id   Int?
+  created_at   DateTime? @db.Timestamp(0)
 
   /// The brokerage this row belongs to. See src/core/tenancy.spec.ts for why this table carries one.
   company_id Int              @default(1)
@@ -794,43 +795,43 @@ model todos {
  * rest with APP_KEY (see meta-crypto.ts), never returned to the browser.
  */
 model meta_connections {
-  id                  Int          @id @default(autoincrement())
-  user_id             Int          @unique
-  access_token        String       @db.Text
-  facebook_user_id    String?      @db.VarChar(64)
-  facebook_user_name  String?      @db.VarChar(255)
-  facebook_user_email String?      @db.VarChar(255)
-  is_active           Boolean      @default(true)
-  connected_at        DateTime?    @db.Timestamp(0)
-  last_sync           DateTime?    @db.Timestamp(0)
-  disconnected_at     DateTime?    @db.Timestamp(0)
+  id                    Int          @id @default(autoincrement())
+  user_id               Int          @unique
+  access_token          String       @db.Text
+  facebook_user_id      String?      @db.VarChar(64)
+  facebook_user_name    String?      @db.VarChar(255)
+  facebook_user_email   String?      @db.VarChar(255)
+  is_active             Boolean      @default(true)
+  connected_at          DateTime?    @db.Timestamp(0)
+  last_sync             DateTime?    @db.Timestamp(0)
+  disconnected_at       DateTime?    @db.Timestamp(0)
   /**
    * When the long-lived token stops working — drives the reconnect warning.
    */
-  token_expires_at    DateTime?    @db.Timestamp(0)
+  token_expires_at      DateTime?    @db.Timestamp(0)
   /**
    * When the agent was last told their connection needs reconnecting, so a dead token produces one
    * email rather than one every fifteen minutes for ever.
    */
-  reconnect_notified_at DateTime?  @db.Timestamp(0)
+  reconnect_notified_at DateTime?    @db.Timestamp(0)
   /**
    * Comma-separated permissions Meta actually granted, for the missing-permission notice.
    */
-  granted_scopes      String?      @db.Text
+  granted_scopes        String?      @db.Text
   /**
    * Ad account selected for campaign/ad-set/ad attribution, when ads_read was granted.
    */
-  ad_account_id       String?      @db.VarChar(64)
-  ad_account_name     String?      @db.VarChar(255)
+  ad_account_id         String?      @db.VarChar(64)
+  ad_account_name       String?      @db.VarChar(255)
   /**
    * Last Graph failure seen for this connection, surfaced in the UI.
    */
-  last_error          String?      @db.Text
-  last_error_at       DateTime?    @db.Timestamp(0)
-  last_webhook_at     DateTime?    @db.Timestamp(0)
-  created_at          DateTime?    @db.Timestamp(0)
-  updated_at          DateTime?    @db.Timestamp(0)
-  pages               meta_pages[]
+  last_error            String?      @db.Text
+  last_error_at         DateTime?    @db.Timestamp(0)
+  last_webhook_at       DateTime?    @db.Timestamp(0)
+  created_at            DateTime?    @db.Timestamp(0)
+  updated_at            DateTime?    @db.Timestamp(0)
+  pages                 meta_pages[]
 
   /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
   company_id Int @default(1)
@@ -1095,7 +1096,6 @@ model lead_call_recordings {
   size         Int
   /**
    * The bytes, for recordings written before they moved to disk.
-   *
    * Nullable now, and null on everything created since. Rows that still carry it are served from
    * it — nothing was migrated automatically, because a migration that silently fails to copy a file
    * loses a recording of a client conversation. `scripts/migrate-recordings.cjs` moves them across
@@ -1104,7 +1104,6 @@ model lead_call_recordings {
   data         Bytes?
   /**
    * Path under RECORDING_STORAGE_DIR, POSIX-style and relative — e.g. `2026/08/<random>.m4a`.
-   *
    * Relative so the storage root can move between environments without rewriting rows. Exactly one
    * of `data` and `storage_path` is set; see RecordingStorageService for why the bytes left the
    * database (backup and restore time, not query performance).
@@ -1117,6 +1116,9 @@ model lead_call_recordings {
   /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
   company_id Int @default(1)
 
+  // Declared so `migrate diff` stays empty: this index EXISTS in the database, created by a
+  // migration. An index the schema does not mention is one `migrate dev` offers to drop.
+  @@index([storage_path])
   @@index([company_id])
 }
 
@@ -1232,59 +1234,61 @@ model lead_tags {
  * snapshotted so the record stays accurate even if the template is later edited or deleted.
  */
 model campaigns {
-  id            Int                   @id @default(autoincrement())
-  name          String                @db.VarChar(255)
-  template_id   Int?
-  template_name String?               @db.VarChar(255)
-  category      String?               @db.VarChar(64)
-  subject       String                @db.VarChar(500)
-  content       String                @db.Text
+  id                Int                   @id @default(autoincrement())
+  name              String                @db.VarChar(255)
+  template_id       Int?
+  template_name     String?               @db.VarChar(255)
+  category          String?               @db.VarChar(64)
+  subject           String                @db.VarChar(500)
+  content           String                @db.Text
   /**
    * JSON snapshot of the audience filter this campaign targeted.
    */
-  audience      String?               @db.Text
+  audience          String?               @db.Text
   /**
    * JSON array of labels on the campaign itself.
    */
-  tags          String?               @db.Text
+  tags              String?               @db.Text
   /**
    * draft | sending | completed | failed
    */
-  status        String                @default("draft") @db.VarChar(16)
-  total         Int                   @default(0)
-  sent          Int                   @default(0)
-  failed        Int                   @default(0)
-  opened        Int                   @default(0)
+  status            String                @default("draft") @db.VarChar(16)
+  total             Int                   @default(0)
+  sent              Int                   @default(0)
+  failed            Int                   @default(0)
+  opened            Int                   @default(0)
   /// Distinct recipients who clicked at least one link.
-  clicked       Int                   @default(0)
-  unsubscribed  Int                   @default(0)
-  bounced       Int                   @default(0)
+  clicked           Int                   @default(0)
+  unsubscribed      Int                   @default(0)
+  bounced           Int                   @default(0)
   /// Where this campaign's tracking links point. Persisted so a resumed send builds the same
   /// URLs as the messages already delivered.
-  tracking_base_url String?           @db.VarChar(500)
-  created_by    String?               @db.VarChar(255)
-  created_by_id Int?
+  tracking_base_url String?               @db.VarChar(500)
+  created_by        String?               @db.VarChar(255)
+  created_by_id     Int?
   /**
    * When this campaign should go out, or null for send-now.
-   *
    * An absolute instant, always stored UTC. A local wall-clock string would drift by an hour
    * across the two DST transitions the brokerage sits through every year.
    */
-  scheduled_for DateTime?             @db.Timestamp(3)
-  sent_at       DateTime?             @db.Timestamp(0)
-  created_at    DateTime?             @db.Timestamp(0)
-  updated_at    DateTime?             @db.Timestamp(0)
-  recipients    campaign_recipients[]
+  scheduled_for     DateTime?             @db.Timestamp(3)
+  sent_at           DateTime?             @db.Timestamp(0)
+  created_at        DateTime?             @db.Timestamp(0)
+  updated_at        DateTime?             @db.Timestamp(0)
+  recipients        campaign_recipients[]
 
   /// The brokerage this row belongs to. See src/core/tenancy.spec.ts for why this table carries one.
-  company_id Int              @default(1)
-  company    company_settings @relation(fields: [company_id], references: [id], onUpdate: NoAction)
+  company_id      Int               @default(1)
+  company         company_settings  @relation(fields: [company_id], references: [id], onUpdate: NoAction)
+  campaign_links  campaign_links[]
+  campaign_clicks campaign_clicks[]
 
   @@index([status])
   @@index([created_at])
+  // Declared so `migrate diff` stays empty: this index EXISTS in the database, created by a
+  // migration. An index the schema does not mention is one `migrate dev` offers to drop.
+  @@index([scheduled_for])
   @@index([company_id])
-  campaign_links      campaign_links[]
-  campaign_clicks     campaign_clicks[]
 }
 
 /**
@@ -1401,44 +1405,47 @@ model campaign_template_attachments {
 }
 
 model campaign_recipients {
-  id              Int       @id @default(autoincrement())
+  id              Int               @id @default(autoincrement())
   campaign_id     Int
   lead_id         Int?
-  name            String?   @db.VarChar(255)
-  email           String    @db.VarChar(255)
+  name            String?           @db.VarChar(255)
+  email           String            @db.VarChar(255)
   /**
    * Unguessable per-recipient token embedded in the open pixel and unsubscribe link.
    */
-  token           String    @unique @db.VarChar(64)
+  token           String            @unique @db.VarChar(64)
   /**
    * pending | sent | failed
    */
   /// Resolved personalisation values, as JSON — kept so a resumed send addresses the remaining
   /// recipients exactly as the first half were addressed, even if the lead has changed since.
-  vars            String?   @db.Text
+  vars            String?           @db.Text
   /// When this recipient first clicked any link. Null means they never did.
-  clicked_at      DateTime? @db.Timestamp(0)
-  status          String    @default("pending") @db.VarChar(16)
-  error           String?   @db.Text
-  opened          Boolean   @default(false)
-  opened_at       DateTime? @db.Timestamp(0)
-  unsubscribed    Boolean   @default(false)
-  unsubscribed_at DateTime? @db.Timestamp(0)
-  bounced         Boolean   @default(false)
+  /// Timestamp(3), matching the column the migration created. Timestamp(0) ROUNDS rather than
+  /// truncating in Postgres, so declaring it here would have had `migrate dev` rewrite the column
+  /// and move recorded click times by up to half a second.
+  clicked_at      DateTime?         @db.Timestamp(3)
+  status          String            @default("pending") @db.VarChar(16)
+  error           String?           @db.Text
+  opened          Boolean           @default(false)
+  opened_at       DateTime?         @db.Timestamp(0)
+  unsubscribed    Boolean           @default(false)
+  unsubscribed_at DateTime?         @db.Timestamp(0)
+  bounced         Boolean           @default(false)
   /// hard | soft | unknown. A hard bounce means the mailbox is gone and the address is suppressed;
   /// a soft one is a transient refusal that gets retried. `unknown` is a fault at our end (bad
   /// SMTP credentials, no connection) and says nothing about the address.
-  bounce_type     String?   @db.VarChar(8)
+  bounce_type     String?           @db.VarChar(8)
   /// Delivery attempts made for this recipient. Only a soft bounce increments it.
-  retry_count     Int       @default(0)
+  retry_count     Int               @default(0)
   /// When a soft-bounced recipient may be attempted again. Null means "as soon as the send
   /// reaches it" — the state every recipient starts in.
-  next_retry_at   DateTime? @db.Timestamp(3)
-  created_at      DateTime? @db.Timestamp(0)
-  updated_at      DateTime? @db.Timestamp(0)
+  next_retry_at   DateTime?         @db.Timestamp(3)
+  created_at      DateTime?         @db.Timestamp(0)
+  updated_at      DateTime?         @db.Timestamp(0)
   campaign_clicks campaign_clicks[]
-  campaigns       campaigns @relation(fields: [campaign_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
-  leads           leads?    @relation(fields: [lead_id], references: [id], onDelete: SetNull, onUpdate: Restrict)
+  campaigns       campaigns         @relation(fields: [campaign_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  leads           leads?            @relation(fields: [lead_id], references: [id], onDelete: SetNull, onUpdate: Restrict)
 
   /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
   company_id Int @default(1)
@@ -1485,64 +1492,73 @@ model email_suppressions {
 /// calendar take the domain of the connection that produced them; those that pre-date the split
 /// stay NULL and appear in both calendars rather than vanishing from one.
 model calendar_events {
-  id                    Int           @id @default(autoincrement())
-  title                 String        @db.VarChar(255)
-  date                  DateTime      @db.Date
-  time                  String        @db.VarChar(8)
+  id                        Int                        @id @default(autoincrement())
+  title                     String                     @db.VarChar(255)
+  date                      DateTime                   @db.Date
+  time                      String                     @db.VarChar(8)
   /// Optional end time (HH:MM). Null on every event that pre-dates conflict detection; such an
   /// event is treated as a one-hour block, which is what the Google push has always assumed.
-  end_time              String?       @db.VarChar(8)
+  end_time                  String?                    @db.VarChar(8)
   /// Bumped on every save. An edit must send the version it read, or it is refused as a conflict.
-  version               Int           @default(1)
+  version                   Int                        @default(1)
   /// The series this belongs to — the id of its first occurrence. Null for a one-off appointment.
-  recurrence_id         Int?
+  recurrence_id             Int?
   /// The rule, carried only by the first occurrence. daily | weekly | monthly.
-  recur_freq            String?       @db.VarChar(10)
+  recur_freq                String?                    @db.VarChar(10)
   /// Every N days/weeks/months.
-  recur_interval        Int?
+  recur_interval            Int?
   /// The last day an occurrence may fall on.
-  recur_until           DateTime?     @db.Date
+  recur_until               DateTime?                  @db.Date
   /// Total occurrences including the first, when a count is used instead of an end date.
-  recur_count           Int?
+  recur_count               Int?
   /**
    * viewing | meeting | open-house | follow-up | call | showing | task
    */
-  type                  String        @default("meeting") @db.VarChar(24)
+  type                      String                     @default("meeting") @db.VarChar(24)
   /**
    * scheduled | completed | cancelled | rescheduled
    */
-  status                String        @default("scheduled") @db.VarChar(16)
-  location              String?       @db.VarChar(255)
-  description           String?       @db.Text
-  attendees             String?       @db.VarChar(255)
-  contact_phone         String?       @db.VarChar(64)
-  contact_email         String?       @db.VarChar(255)
-  property_details      String?       @db.Text
-  notes                 String?       @db.Text
-  enable_reminder       Boolean       @default(false)
-  reminder_sent         Boolean       @default(false)
-  transaction_id        Int?
+  status                    String                     @default("scheduled") @db.VarChar(16)
+  location                  String?                    @db.VarChar(255)
+  description               String?                    @db.Text
+  attendees                 String?                    @db.VarChar(255)
+  contact_phone             String?                    @db.VarChar(64)
+  contact_email             String?                    @db.VarChar(255)
+  property_details          String?                    @db.Text
+  notes                     String?                    @db.Text
+  enable_reminder           Boolean                    @default(false)
+  reminder_sent             Boolean                    @default(false)
+  transaction_id            Int?
   /**
    * Optional link to a lead — set when the event was raised from the Leads module.
    */
-  lead_id               Int?
-  user_id               Int?
-  created_by            String?       @db.VarChar(255)
-  domain                String?       @db.VarChar(8)
-  google_calendar_id    String?       @db.VarChar(255)
-  last_synced_to_google DateTime?     @db.Timestamp(0)
+  lead_id                   Int?
+  user_id                   Int?
+  created_by                String?                    @db.VarChar(255)
+  domain                    String?                    @db.VarChar(8)
+  google_calendar_id        String?                    @db.VarChar(255)
+  last_synced_to_google     DateTime?                  @db.Timestamp(0)
   /// Why the last push to Google failed, or null when there is nothing outstanding. Non-null is the
   /// definition of "this event is owed to Google" — see migration 20260805220000_google_sync_retry.
-  google_sync_error         String?   @db.VarChar(500)
+  google_sync_error         String?                    @db.VarChar(500)
   /// How many times the retry sweep has tried. Capped, so a permanently broken event stops asking.
-  google_sync_attempts      Int       @default(0)
+  google_sync_attempts      Int                        @default(0)
   /// When the sweep may try again. Backs off, so a Google outage is not hammered.
-  google_sync_next_retry_at DateTime? @db.Timestamp(0)
-  created_at            DateTime?     @db.Timestamp(0)
-  updated_at            DateTime?     @db.Timestamp(0)
-  deleted_at            DateTime?     @db.Timestamp(0)
-  transactions          transactions? @relation(fields: [transaction_id], references: [id], onDelete: SetNull, onUpdate: Restrict)
-  reminders             calendar_event_reminders[]
+  google_sync_next_retry_at DateTime?                  @db.Timestamp(0)
+  created_at                DateTime?                  @db.Timestamp(0)
+  updated_at                DateTime?                  @db.Timestamp(0)
+  deleted_at                DateTime?                  @db.Timestamp(0)
+  transactions              transactions?              @relation(fields: [transaction_id], references: [id], onDelete: SetNull, onUpdate: Restrict)
+  reminders                 calendar_event_reminders[]
+
+  /// The recurring series this occurrence belongs to — a self-relation, and a real foreign key in
+  /// the database (`calendar_events_recurrence_fk`, ON DELETE SET NULL) that this file did not
+  /// declare. Undeclared meant Prisma believed the constraint should not exist, so `migrate dev`
+  /// offered to drop it and take the series-to-occurrence integrity with it. Declared here, the two
+  /// agree. Deleting a series detaches its occurrences rather than deleting them, which is what
+  /// SET NULL already did.
+  recurrence  calendar_events?  @relation("calendar_event_recurrence", fields: [recurrence_id], references: [id], onDelete: SetNull, onUpdate: NoAction, map: "calendar_events_recurrence_fk")
+  occurrences calendar_events[] @relation("calendar_event_recurrence")
 
   /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
   company_id Int @default(1)
@@ -1551,8 +1567,8 @@ model calendar_events {
   @@index([user_id])
   /// The month grid asks for one month at a time now, so the list query filters on (user, date)
   /// instead of reading a user's whole history and narrowing it in the browser.
-  @@index([user_id, date])
-  @@index([recurrence_id])
+  @@index([user_id, date], map: "calendar_events_user_date_idx")
+  @@index([recurrence_id], map: "calendar_events_recurrence_idx")
   @@index([transaction_id])
   @@index([lead_id])
   @@index([status])
@@ -1562,7 +1578,6 @@ model calendar_events {
 
 /**
  * One appointment reminder, sent or attempted.
- *
  * `calendar_events.reminder_sent` is a single boolean and cannot say WHICH reminder it refers to,
  * so a day-before and an hour-before notice for the same appointment would overwrite each other on
  * it. A row per (event, lead time) with a unique index is what makes the sweep idempotent: a second
@@ -1570,7 +1585,6 @@ model calendar_events {
  */
 /**
  * A browser that has asked to be told about upcoming appointments.
- *
  * One row per browser, not per person: a phone and a desktop are two subscriptions and a reminder
  * reaches both. The endpoint is issued by the push service and identifies the device; the two keys
  * encrypt the payload so the push service cannot read the appointment it is carrying.
@@ -1578,13 +1592,11 @@ model calendar_events {
 /**
  * Which push notifications a person wants. One row per (user, category), and a row exists only
  * once someone has expressed a preference.
- *
  * ABSENCE MEANS ENABLED. That is deliberate: the alternative — seeding a row per user per
  * category, or defaulting to off — would either need a backfill that silently goes stale as
  * categories are added, or would switch off notifications people already rely on the moment this
  * shipped. Opting out is an explicit act and leaves an explicit row; everything else keeps
  * behaving exactly as it did.
- *
  * Deliberately NOT scoped by area. A subscription carries a scope because a browser asks for one
  * area's reminders, but "I don't want listing-expiry pushes" is a statement about the person, not
  * about which screen they were on when they said it.
@@ -1595,17 +1607,22 @@ model notification_preferences {
   /// Category key from NOTIFICATION_CATEGORIES — validated in the service, not by the database,
   /// so adding a category needs no migration.
   category   String    @db.VarChar(64)
+  /// 'in_app' | 'email' | 'push' — validated in the service, like `category`, so adding a channel
+  /// needs no migration. Defaults to 'push' because every row written before channels existed was
+  /// somebody muting a push notification; see migration 20260806160000.
+  channel    String    @default("push") @db.VarChar(16)
   enabled    Boolean   @default(true)
   created_at DateTime?
   updated_at DateTime?
 
-  users      users     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  users users @relation(fields: [user_id], references: [id], onDelete: Cascade)
 
   /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
   company_id Int @default(1)
 
-  @@unique([user_id, category])
+  @@unique([user_id, category, channel])
   @@index([user_id])
+  @@index([user_id, category])
   @@index([company_id])
 }
 
@@ -1625,14 +1642,14 @@ model push_subscriptions {
   created_at   DateTime?
   updated_at   DateTime?
 
-  users        users     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  users users @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "push_subscriptions_user_fk")
 
   /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
   company_id Int @default(1)
 
   @@unique([endpoint], map: "push_subscriptions_endpoint_key")
-  @@index([user_id])
-  @@index([company_id])
+  @@index([user_id], map: "push_subscriptions_user_idx")
+  @@index([company_id], map: "push_subscriptions_company_idx")
 }
 
 model calendar_event_reminders {
@@ -1653,15 +1670,21 @@ model calendar_event_reminders {
   created_at        DateTime?
   updated_at        DateTime?
 
-  calendar_events calendar_events @relation(fields: [calendar_event_id], references: [id], onDelete: Cascade)
+  // `onUpdate: NoAction` is not decoration: the constraint in the database carries no ON UPDATE
+  // clause, and Prisma's default is Cascade. Left unstated, the two disagree and `migrate dev`
+  // drops and recreates the key.
+  calendar_events calendar_events @relation(fields: [calendar_event_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "calendar_event_reminders_event_fk")
 
   /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
   company_id Int @default(1)
 
   @@unique([calendar_event_id, lead_minutes], map: "calendar_event_reminders_event_lead_key")
-  @@index([delivery_status])
-  @@index([next_retry_at])
-  @@index([company_id])
+  // The `map:` names below are the names these indexes ACTUALLY carry in the database, created by
+  // the migration that added them. Without them Prisma computes its own default names, decides the
+  // database is wrong, and `migrate dev` renames all three — see the note at the top of this file.
+  @@index([delivery_status], map: "calendar_event_reminders_status_idx")
+  @@index([next_retry_at], map: "calendar_event_reminders_retry_idx")
+  @@index([company_id], map: "calendar_event_reminders_company_idx")
 }
 
 /**
@@ -2207,6 +2230,9 @@ model team_members {
   company_id Int @default(1)
 
   @@index([transaction_id])
+  // Declared so `migrate diff` stays empty: this index EXISTS in the database, created by a
+  // migration. An index the schema does not mention is one `migrate dev` offers to drop.
+  @@index([user_id])
   @@index([company_id])
 }
 
@@ -2281,6 +2307,10 @@ model transaction_messages {
   user_id        Int?
   author         String?      @db.VarChar(255)
   body           String       @db.Text
+  /// JSON array of user ids this message mentions, already checked against who may open the deal.
+  /// Resolved by the client as the name is typed and re-validated server-side — see
+  /// migration 20260806220000 for why ids rather than names.
+  mentions       String?      @db.Text
   created_at     DateTime?    @db.Timestamp(0)
   updated_at     DateTime?    @db.Timestamp(0)
   transactions   transactions @relation(fields: [transaction_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
@@ -2356,6 +2386,9 @@ model transaction_reviews {
   @@index([created_at])
   @@index([resolution_status])
   @@index([transaction_id, resolution_status])
+  // Declared so `migrate diff` stays empty: this index EXISTS in the database, created by a
+  // migration. An index the schema does not mention is one `migrate dev` offers to drop.
+  @@index([resolution_status, sla_stage])
   @@index([company_id])
 }
 
@@ -2469,7 +2502,7 @@ model transaction_reminders {
 
   /// One reminder per occurrence per channel. The scheduler relies on this rather than on its own
   /// bookkeeping, so a second run on the same day is harmless by construction.
-  @@unique([transaction_id, kind, scheduled_for, delivery_method])
+  @@unique([transaction_id, kind, scheduled_for, delivery_method], map: "transaction_reminders_txn_kind_day_method_key")
   @@index([transaction_id])
   @@index([kind, scheduled_for])
   @@index([recipient, seen_at])
@@ -2639,6 +2672,9 @@ model transactions {
   @@index([listing_expiry_date])
   @@index([payment_type])
   @@index([lead_source])
+  // Declared so `migrate diff` stays empty: this index EXISTS in the database, created by a
+  // migration. An index the schema does not mention is one `migrate dev` offers to drop.
+  @@index([agent_user_id])
   @@index([company_id])
 }
 
@@ -2709,21 +2745,27 @@ model users {
   user_modules              user_modules[]
 
   /// The brokerage this row belongs to. See src/core/tenancy.spec.ts for why this table carries one.
-  push_subscriptions push_subscriptions[]
+  push_subscriptions       push_subscriptions[]
   notification_preferences notification_preferences[]
   crm_settings             crm_settings[]
   crm_trigger_settings     crm_trigger_settings[]
 
+  notifications       notifications[]
+  user_mfa_methods    user_mfa_methods[]
+  mfa_recovery_codes  mfa_recovery_codes[]
+  mfa_trusted_devices mfa_trusted_devices[]
+  mfa_challenges      mfa_challenges[]
+
   company_id Int              @default(1)
   company    company_settings @relation(fields: [company_id], references: [id], onUpdate: NoAction)
-
-  @@index([company_id])
 
   /// CASE-INSENSITIVE UNIQUENESS on `email` and `username` is enforced by two functional indexes
   /// Prisma cannot express here — `users_email_lower_key` and `users_username_lower_key`, added by
   /// migration `20260803000000_users_ci_unique`. The `@unique` attributes above are case-SENSITIVE,
   /// which let `PRIYA@X.CA` and `priya@x.ca` both exist as separate accounts. Do not drop either
   /// index believing `@unique` covers it — `users-validation.spec.ts` fails if they go missing.
+
+  @@index([company_id])
 }
 
 /// Which application modules a user may open.
@@ -2880,7 +2922,7 @@ model lead_import_jobs {
 
   /// The brokerage this row belongs to. See src/core/tenancy.spec.ts for why this table carries one.
   company_id Int              @default(1)
-  company    company_settings @relation(fields: [company_id], references: [id], onUpdate: NoAction)
+  company    company_settings @relation(fields: [company_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@index([status])
   @@index([requested_by_id])
@@ -2889,7 +2931,6 @@ model lead_import_jobs {
 
 /**
  * A link that appeared in a campaign, recorded at send time.
- *
  * The destination lives here rather than in the tracking URL. Putting it in the query string would
  * make the redirect endpoint an open redirect — anyone could hand out
  * `…/track/click?u=https://evil.example` carrying the brokerage's domain and reputation. The
@@ -2903,7 +2944,7 @@ model campaign_links {
   url         String    @db.Text
   /// Total clicks, including the same person clicking twice.
   clicks      Int       @default(0)
-  created_at  DateTime? @db.Timestamp(0)
+  created_at  DateTime? @db.Timestamp(3)
 
   campaigns       campaigns         @relation(fields: [campaign_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
   campaign_clicks campaign_clicks[]
@@ -2917,7 +2958,6 @@ model campaign_links {
 
 /**
  * One row per recipient per link, not per click.
- *
  * Kept distinct from `campaign_links.clicks` on purpose: one person clicking the same listing five
  * times is five clicks but one interested party, and reporting the former as engagement overstates
  * how many people are actually in play.
@@ -2927,7 +2967,7 @@ model campaign_clicks {
   campaign_id  Int
   recipient_id Int
   link_id      Int
-  clicked_at   DateTime @db.Timestamp(0)
+  clicked_at   DateTime @db.Timestamp(3)
 
   campaigns           campaigns           @relation(fields: [campaign_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
   campaign_recipients campaign_recipients @relation(fields: [recipient_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
@@ -2936,7 +2976,10 @@ model campaign_clicks {
   /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
   company_id Int @default(1)
 
-  @@unique([recipient_id, link_id])
+  @@unique([recipient_id, link_id], map: "campaign_clicks_recipient_link_key")
+  // Declared so `migrate diff` stays empty: this index EXISTS in the database, created by a
+  // migration. An index the schema does not mention is one `migrate dev` offers to drop.
+  @@index([recipient_id])
   @@index([campaign_id])
   @@index([company_id])
 }
@@ -2967,12 +3010,181 @@ model meta_oauth_nonces {
 /// One row per window, incremented atomically by an upsert with a conditional update, so two
 /// requests arriving together cannot both read "under budget" and both proceed.
 model meta_api_budget {
-  id           Int      @id @default(autoincrement())
+  id           Int    @id @default(autoincrement())
   /// Start of the window, as epoch MILLISECONDS. Deliberately not a timestamp: a
   /// `timestamp without time zone` is written by the raw driver in local time and read back by
   /// Prisma as UTC, so one window resolved to two different rows and the counter never incremented.
-  window_start BigInt   @unique
-  calls        Int      @default(0)
+  window_start BigInt @unique
+  calls        Int    @default(0)
 
   @@index([window_start])
+}
+
+/// ============================================================================================
+/// TWO-FACTOR AUTHENTICATION
+///
+/// Four per-user tables and one per-brokerage policy table. The per-user ones are DERIVED via
+/// `users` and carry a denormalised `company_id`, exactly like `user_permissions` — see
+/// src/core/tenancy.spec.ts, which fails if a new table arrives unclassified.
+///
+/// They are read during the login challenge, which happens BEFORE a tenant is in context, so every
+/// access goes through `runAsSystem` the same way `AuthService.loadUser` already does.
+/// ============================================================================================
+
+/// One row per enrolled factor. A person may hold a TOTP app, an email code and an SMS code at once.
+model user_mfa_methods {
+  id      Int   @id @default(autoincrement())
+  user_id Int
+  users   users @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  /// 'totp' | 'email' | 'sms'
+  type String @db.VarChar(16)
+
+  /// TOTP only: the base32 secret sealed by mfa-crypto (AES-256-GCM). Never returned to the browser
+  /// after enrolment is confirmed, and never logged.
+  secret String? @db.Text
+
+  /// email/sms only: where the code is sent. Shown to its owner masked.
+  destination String? @db.VarChar(255)
+
+  /// Null until the person proves they can produce a code. An unconfirmed row must never satisfy a
+  /// challenge — otherwise starting enrolment would be enough to weaken the account rather than
+  /// strengthen it.
+  confirmed_at DateTime? @db.Timestamp(0)
+
+  /// TOTP replay defence. The last time step accepted for this method; anything at or below it is
+  /// refused. RFC 6238 leaves this to the implementer and a code is otherwise reusable for its whole
+  /// 90-second window.
+  last_step BigInt?
+
+  last_used_at DateTime? @db.Timestamp(0)
+  created_at   DateTime  @db.Timestamp(0)
+  updated_at   DateTime  @db.Timestamp(0)
+
+  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
+  company_id Int @default(1)
+
+  @@unique([user_id, type])
+  @@index([user_id])
+}
+
+/// Single-use codes for the case the second factor is lost. Stored hashed; shown once, at issue.
+model mfa_recovery_codes {
+  id      Int   @id @default(autoincrement())
+  user_id Int
+  users   users @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  code_hash  String    @db.VarChar(64)
+  used_at    DateTime? @db.Timestamp(0)
+  /// How it was spent, for the audit trail — the IP that redeemed it.
+  used_ip    String?   @db.VarChar(64)
+  created_at DateTime  @db.Timestamp(0)
+
+  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
+  company_id Int @default(1)
+
+  @@index([user_id])
+  @@index([code_hash])
+}
+
+/// "Do not ask again on this device." A hashed random token in a cookie, with an expiry.
+model mfa_trusted_devices {
+  id      Int   @id @default(autoincrement())
+  user_id Int
+  users   users @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  /// Hashed, not stored raw: the raw value is a bearer credential that skips the second factor, so a
+  /// database read must not yield a working one.
+  token_hash String @unique @db.VarChar(64)
+
+  label        String?   @db.VarChar(120)
+  user_agent   String?   @db.VarChar(255)
+  ip           String?   @db.VarChar(64)
+  last_seen_at DateTime? @db.Timestamp(0)
+  expires_at   DateTime  @db.Timestamp(0)
+  revoked_at   DateTime? @db.Timestamp(0)
+  created_at   DateTime  @db.Timestamp(0)
+
+  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
+  company_id Int @default(1)
+
+  @@index([user_id])
+  @@index([expires_at])
+}
+
+/// An outstanding email or SMS code. Rows are short-lived and swept once spent or expired.
+model mfa_challenges {
+  id      Int   @id @default(autoincrement())
+  user_id Int
+  users   users @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  /// 'email' | 'sms'
+  method    String @db.VarChar(16)
+  code_hash String @db.VarChar(64)
+
+  /// Counted server-side so a code cannot be brute-forced inside its lifetime — six digits is a
+  /// million possibilities, which is not many at HTTP speed without a ceiling.
+  attempts    Int       @default(0)
+  expires_at  DateTime  @db.Timestamp(0)
+  consumed_at DateTime? @db.Timestamp(0)
+  created_at  DateTime  @db.Timestamp(0)
+
+  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
+  company_id Int @default(1)
+
+  @@index([user_id])
+  @@index([expires_at])
+}
+
+/// Whether a role must hold a second factor, per brokerage. Owned by the brokerage directly.
+model mfa_policies {
+  id Int @id @default(autoincrement())
+
+  /// The role this applies to, matching `users.role`.
+  role     String  @db.VarChar(64)
+  required Boolean @default(false)
+
+  /// Days a newly-covered person may sign in before enrolment becomes compulsory. Zero means at
+  /// once. Without it, switching the policy on locks out everybody who has not enrolled yet.
+  grace_days Int @default(7)
+
+  created_at DateTime @db.Timestamp(0)
+  updated_at DateTime @db.Timestamp(0)
+
+  company_id Int              @default(1)
+  company    company_settings @relation(fields: [company_id], references: [id], onUpdate: NoAction)
+
+  @@unique([company_id, role])
+  @@index([company_id])
+}
+
+/// In-app notifications the dispatcher delivers directly.
+///
+/// The Notification Centre reads this ALONGSIDE the four derived sources (audit logs, reviews,
+/// reminders) rather than instead of them — see migration 20260806190000 for why both exist.
+model notifications {
+  id      Int   @id @default(autoincrement())
+  user_id Int
+  users   users @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  /// A key from NOTIFICATION_CATEGORIES — validated in the service, so a new one needs no migration.
+  category String  @db.VarChar(64)
+  title    String  @db.VarChar(255)
+  body     String? @db.Text
+  /// Where "open the related record" goes. Nullable: not everything has a record.
+  link     String? @db.VarChar(255)
+
+  /// Idempotency handle, so a retried job cannot leave somebody two copies of one notification.
+  dedupe_key String? @db.VarChar(190)
+
+  read_at    DateTime? @db.Timestamp(0)
+  created_at DateTime  @db.Timestamp(0)
+
+  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
+  company_id Int @default(1)
+
+  @@unique([user_id, dedupe_key])
+  @@index([user_id, read_at])
+  @@index([user_id, created_at])
+  @@index([company_id])
 }

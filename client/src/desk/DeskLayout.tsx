@@ -132,6 +132,8 @@ const NAV: NavItem[] = [
       // The one entry here that is not an administrator's setting: it is the viewer's own push
       // choices, which is why it carries `personal` instead of a screen permission. Agents do not
       // see this group at all, so their route in is the card on their own Settings page.
+      { key: 'notification-center', label: 'Notifications', ico: 'bell', personal: true, path: 'notification-center',
+        match: (p) => p.endsWith('/notification-center') },
       { key: 'notifications', label: 'Notification Preferences', ico: 'bell', personal: true, path: 'notifications',
         match: (p) => p.endsWith('/notifications') },
     ],
@@ -150,6 +152,7 @@ TITLES.favorites = 'Favorites';
 // Reached from the Settings group for admins and from the agent's own Settings page, so it has no
 // top-level entry of its own to take a heading from.
 TITLES.notifications = 'Notification Preferences';
+TITLES['notification-center'] = 'Notifications';
 
 export default function DeskLayout({ area = DEFAULT_AREA }: { area?: Area }) {
   const { logout, user, can, isAdminOrAbove, isSuperAdmin, modules } = useAuth();

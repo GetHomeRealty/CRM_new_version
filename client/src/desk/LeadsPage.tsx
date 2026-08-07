@@ -7,6 +7,7 @@ import {
   updateLead,
 } from '../lib/leadsApi';
 import { apiErrorMessage } from '../lib/apiError';
+import { downloadCsv, objectsToCsv } from '../lib/csv';
 import { runLeadImport, type ImportJob } from '../lib/leadImportApi';
 import ImportProgress from '../components/ImportProgress';
 import { useToast } from './toast';
@@ -89,19 +90,16 @@ function SourceCell({ lead }: { lead: Lead }) {
 
 const shortDate = (iso: string | null): string => (iso ? iso.slice(0, 10) : '—');
 
-/** Build a CSV from row objects and hand it to the browser as a download. */
-function downloadCsv(rows: Record<string, unknown>[], filename: string): void {
-  const headers = Object.keys(rows[0] ?? {});
-  const escape = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
-  const csv = [headers.join(','), ...rows.map((r) => headers.map((h) => escape(r[h])).join(','))].join('\n');
-  // The BOM makes Excel read the file as UTF-8 rather than the local ANSI codepage.
-  const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
+/**
+ * Build a CSV from row objects and hand it to the browser as a download.
+ *
+ * The escaping lives in `lib/csv` rather than here. It used to be a local helper that quoted
+ * correctly and did nothing about spreadsheet formulas, so a lead named `=HYPERLINK(...)` — a value
+ * a stranger can supply through a Meta lead form — executed when the agent opened their own export.
+ * See that file for the full reasoning.
+ */
+function downloadLeadsCsv(rows: Record<string, unknown>[], filename: string): void {
+  downloadCsv(objectsToCsv(rows), filename);
 }
 
 export default function LeadsPage() {
@@ -214,7 +212,7 @@ export default function LeadsPage() {
     try {
       const { data: rows, meta } = await exportLeads([...selected], filters);
       if (!rows.length) { toast('Nothing to export.', 'info'); return; }
-      downloadCsv(rows, `leads-${new Date().toISOString().slice(0, 10)}.csv`);
+      downloadLeadsCsv(rows, `leads-${new Date().toISOString().slice(0, 10)}.csv`);
       /*
        * Say so when the file is short.
        *
@@ -424,15 +422,14 @@ export default function LeadsPage() {
                 <th>Source</th>
                 <th>Tags</th>
                 <th>Assigned To</th>
-                <th>Activity</th>
                 <th>Created</th>
                 <th>Actions</th>
               </tr>
             </thead>
             <tbody>
-              {loading && <tr><td colSpan={11} className="empty-cell">Loading leads…</td></tr>}
+              {loading && <tr><td colSpan={10} className="empty-cell">Loading leads…</td></tr>}
               {!loading && leads.length === 0 && (
-                <tr><td colSpan={11} className="empty-cell">
+                <tr><td colSpan={10} className="empty-cell">
                   No leads match these filters.{canEdit ? ' Add one, or import a CSV.' : ''}
                 </td></tr>
               )}
@@ -465,10 +462,6 @@ export default function LeadsPage() {
                     )}
                   </td>
                   <td>{l.assigned_to_name ?? <span className="muted">Unassigned</span>}</td>
-                  <td className="lead-activity-cell">
-                    <span title="Logged calls"><Icon name="phone" size={12} /> {l.call_count}</span>
-                    <span title="Pending of total tasks"><Icon name="check" size={12} /> {l.pending_task_count}/{l.task_count}</span>
-                  </td>
                   <td>{shortDate(l.created_at)}</td>
                   {/* Icon-only actions: four labelled buttons per row cost more width than the
                       rest of the table put together. `title` + `aria-label` keep the action

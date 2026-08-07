@@ -2,6 +2,7 @@ import { areaPath } from '../common/domain';
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { MailerService } from '../email/mailer.service';
+import { NotificationDispatcher } from '../notifications/notification-dispatcher.service';
 
 /**
  * The only lead sources that trigger an immediate "new lead" email to the agent. Deliberately
@@ -39,7 +40,12 @@ interface NotifiableLead {
 export class LeadNotificationService {
   private readonly log = new Logger(LeadNotificationService.name);
 
-  constructor(private readonly prisma: PrismaService, private readonly mailer: MailerService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly mailer: MailerService,
+    /** Optional so existing constructions keep working; always injected in the running app. */
+    private readonly dispatcher?: NotificationDispatcher,
+  ) {}
 
   async notifyNewLead(lead: NotifiableLead): Promise<void> {
     const sourceLabel = NOTIFY_SOURCES[(lead.lead_source ?? '').trim().toLowerCase()];
@@ -58,6 +64,21 @@ export class LeadNotificationService {
     }
     const to = recipient?.email?.trim();
     if (!to) return;
+
+    /*
+     * THE PREFERENCE, ASKED OF THE DISPATCHER RATHER THAN CHECKED HERE.
+     *
+     * This message is worth keeping — it is a templated inbound-lead email with the lead's details —
+     * so it is not replaced by a generic dispatched notification. What was missing is that it went
+     * out whatever the recipient had chosen. The dispatcher owns that decision for every channel of
+     * every category; this asks it, then sends its own, better message.
+     *
+     * Absent dispatcher (older constructions, tests) keeps the previous behaviour exactly.
+     */
+    if (this.dispatcher && !(await this.dispatcher.shouldSend(userId, 'lead_new', 'email'))) {
+      this.log.log(`Lead ${lead.id}: recipient has turned the new-lead email off.`);
+      return;
+    }
 
     const base = (process.env.FRONTEND_URL ?? 'http://localhost:5173').replace(/\/+$/, '');
     const link = `${base}${areaPath('crm', `lead/${lead.id}`)}`;
