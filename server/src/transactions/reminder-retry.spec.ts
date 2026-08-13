@@ -48,7 +48,7 @@ async function makeAgent(tx: PrismaService): Promise<string> {
   const tag = `${Date.now()}-${seq}`;
   const now = new Date();
   const u = await tx.users.create({
-    data: { name: `Retry Agent ${tag}`, email: `retry-${tag}@example.test`, role: 'agent', status: 'Active', password: 'x', company_id: 1, created_at: now, updated_at: now },
+    data: { name: `Retry Agent ${tag}`, email: `retry-${tag}@example.test`, role: 'agent', status: 'Active', password: 'x', created_at: now, updated_at: now },
   });
   return u.name;
 }
@@ -57,7 +57,7 @@ async function makeListing(tx: PrismaService, agent: string, expiry: Date): Prom
   seq += 1;
   const now = new Date();
   const t = await tx.transactions.create({
-    data: { trade_no: `RT-${Date.now()}-${seq}`, type: 'Residential Sale Listing', property: '1 Retry Road', agent, listing_expiry_date: expiry, company_id: 1, created_at: now, updated_at: now },
+    data: { trade_no: `RT-${Date.now()}-${seq}`, type: 'Residential Sale Listing', property: '1 Retry Road', agent, listing_expiry_date: expiry, created_at: now, updated_at: now },
   });
   await tx.transaction_statuses.create({ data: { transaction_id: t.id, status: 'Active', created_at: now, updated_at: now } });
   return t.id;

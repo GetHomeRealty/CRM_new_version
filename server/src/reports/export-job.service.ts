@@ -5,13 +5,14 @@ import * as fs from 'fs/promises';
 import { createWriteStream } from 'fs';
 import { PrismaService } from '../prisma/prisma.service';
 import { BulkExportService, type BulkSelection } from './bulk-export.service';
+import { clusterTick } from '../redis/cluster-tick';
+import { RedisService } from '../redis/redis.service';
+import { CacheService } from '../redis/cache.service';
 import type { AuthUserRecord } from '../auth/auth.types';
 import { schedulersEnabled, schedulerSkipReason } from '../common/schedulers';
 import { EXPORT_ROOT } from '../config/storage';
 
 
-import { forEachTenant, run, runAsSystem } from '../core/tenant-context';
-import { allTenantIds } from '../core/tenants';
 import { registerWorker, trackedTick } from '../observability/worker-health';
 /** What a job produces. */
 export type ExportAction =
@@ -58,7 +59,14 @@ export class ExportJobService implements OnModuleInit, OnModuleDestroy {
   private draining = false;
   private sweeper?: NodeJS.Timeout;
 
-  constructor(private readonly prisma: PrismaService, private readonly bulk: BulkExportService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly bulk: BulkExportService,
+    // Optional so existing constructions — including this service's specs — keep working.
+    // Used only to decide whether THIS process should run a given sweep; see `clusterTick`.
+    private readonly redis?: RedisService,
+    private readonly cache?: CacheService,
+  ) {}
 
   async onModuleInit(): Promise<void> {
     await fs.mkdir(EXPORT_ROOT, { recursive: true });
@@ -75,24 +83,26 @@ export class ExportJobService implements OnModuleInit, OnModuleDestroy {
     }
 
     // A job left mid-flight by a restart can never finish — fail it honestly rather than
-    // leaving it "Processing" forever.
-    // Reclaim and backlog pickup deliberately span every brokerage: a restart interrupts whatever
-    // was running regardless of whose export it was, and the queue belongs to this machine rather
-    // than to a tenant. Said with runAsSystem so the reason is recorded where the query is, instead
-    // of being left to a context that happens to be empty.
-    const orphaned = await runAsSystem(() => this.prisma.export_jobs.updateMany({
+    // leaving it "Processing" forever. Reclaim and backlog pickup cover whatever this machine was
+    // running, whoever queued it: the queue belongs to the process, not to the person.
+    const orphaned = await this.prisma.export_jobs.updateMany({
       where: { status: 'Processing' },
       data: { status: 'Failed', failure_reason: 'The server restarted while this export was being generated.', completed_at: new Date() },
-    }));
+    });
     if (orphaned.count) this.log.warn(`Marked ${orphaned.count} interrupted export job(s) as failed.`);
 
     // Anything still queued from before the restart can simply be run now.
-    const queued = await runAsSystem(() => this.prisma.export_jobs.findMany({ where: { status: 'Queued' }, select: { id: true }, orderBy: { id: 'asc' } }));
+    const queued = await this.prisma.export_jobs.findMany({ where: { status: 'Queued' }, select: { id: true }, orderBy: { id: 'asc' } });
     this.queue.push(...queued.map((j) => j.id));
     if (this.queue.length) void this.drain();
 
     registerWorker('export-sweeper', SWEEP_INTERVAL_MS);
-    this.sweeper = setInterval(trackedTick('export-sweeper', () => this.sweepExpired()), SWEEP_INTERVAL_MS);
+    this.sweeper = setInterval(
+      this.redis && this.cache
+        ? clusterTick({ redis: this.redis, cache: this.cache }, 'export-sweeper', () => this.sweepExpired())
+        : trackedTick('export-sweeper', () => this.sweepExpired()),
+      SWEEP_INTERVAL_MS,
+    );
     this.sweeper.unref?.();
     void this.sweepExpired();
   }
@@ -158,7 +168,7 @@ export class ExportJobService implements OnModuleInit, OnModuleDestroy {
     try {
       while (this.queue.length) {
         const id = this.queue.shift()!;
-        // A queued job outlives the request that asked for it, so it carries its own tenant and the
+        // A queued job outlives the request that asked for it, so it carries its own owner and the
         // work runs inside that brokerage's context — the export must contain exactly what the
         // person who asked for it could see, not whatever the worker happens to be able to read.
         try { await this.runOwnedJob(id); }
@@ -169,20 +179,14 @@ export class ExportJobService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  /**
-   * Run a queued job as the brokerage that owns it.
-   *
-   * Which tenant that is has to be read before the context exists, so the lookup is system and the
-   * work that follows is not.
-   */
+  /** Run a queued job, saying so when it has disappeared between being queued and being reached. */
   private async runOwnedJob(id: number): Promise<void> {
-    const owner = await runAsSystem(() =>
-      this.prisma.export_jobs.findUnique({ where: { id }, select: { company_id: true } }));
-    if (!owner) {
+    const exists = await this.prisma.export_jobs.findUnique({ where: { id }, select: { id: true } });
+    if (!exists) {
       this.log.warn(`Export job ${id} vanished before it could run.`);
       return;
     }
-    await run(owner.company_id, () => this.run(id));
+    await this.run(id);
   }
 
   /** Generate one job's file and record the outcome. */
@@ -335,19 +339,8 @@ export class ExportJobService implements OnModuleInit, OnModuleDestroy {
   }
 
   // ---------------------------------------------------------------- expiry
-  /**
-   * Remove expired files from disk and mark their jobs Expired, one brokerage at a time.
-   *
-   * Returns the total swept across all tenants, which is what the single-tenant version returned
-   * and what the caller logs.
-   */
+  /** Remove expired files from disk and mark their jobs Expired. Returns how many were swept. */
   async sweepExpired(): Promise<number> {
-    const counts = await forEachTenant(() => allTenantIds(this.prisma), () => this.sweepExpiredForTenant());
-    return counts.reduce((a, b) => a + b, 0);
-  }
-
-  /** The sweep itself, scoped to whichever tenant is in context. */
-  async sweepExpiredForTenant(): Promise<number> {
     const due = await this.prisma.export_jobs.findMany({
       where: { status: { in: ['Completed', 'Partially Completed'] }, expires_at: { lt: new Date() } },
       select: { id: true },

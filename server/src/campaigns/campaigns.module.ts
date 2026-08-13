@@ -1,9 +1,11 @@
 import { Module } from '@nestjs/common';
+import { NotificationDispatcherModule } from '../notifications/notification-dispatcher.module';
 import { AuthModule } from '../auth/auth.module';
 import { EmailModule } from '../email/email.module';
 import { CampaignsController } from './campaigns.controller';
 import { CampaignTrackingController } from './campaign-tracking.controller';
 import { CampaignsService } from './campaigns.service';
+import { CampaignAuditService } from './campaign-audit.service';
 import { CampaignResumeService } from './campaign-resume.service';
 import { CampaignAudienceService } from './campaign-audience.service';
 import { CampaignTemplatesController } from './campaign-templates.controller';
@@ -21,8 +23,8 @@ import { LeadsModule } from '../leads/leads.module';
 @Module({
   // LeadsModule for the shared import engine and queue — Campaigns imports leads through the
   // same path as the Leads screen so the two cannot drift apart again.
-  imports: [AuthModule, EmailModule, LeadsModule],
+  imports: [NotificationDispatcherModule, AuthModule, EmailModule, LeadsModule],
   controllers: [CampaignTrackingController, CampaignTemplatesController, CampaignsController],
-  providers: [CampaignResumeService, CampaignsService, CampaignAudienceService, CampaignTemplatesService, MailDeliverabilityService],
+  providers: [CampaignAuditService, CampaignResumeService, CampaignsService, CampaignAudienceService, CampaignTemplatesService, MailDeliverabilityService],
 })
 export class CampaignsModule {}

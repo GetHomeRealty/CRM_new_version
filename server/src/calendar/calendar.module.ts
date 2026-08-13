@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { NotificationDispatcherModule } from '../notifications/notification-dispatcher.module';
 import { AuthModule } from '../auth/auth.module';
 import { GoogleModule } from '../google/google.module';
 import { CalendarController } from './calendar.controller';
@@ -20,7 +21,7 @@ import { NotificationPreferenceModule } from '../notifications/notification-pref
 // routes — its own paths are all under `calendar/events`, but ordering keeps that guaranteed.
 @Module({
   // NotificationPreferenceModule exports the service WebPushService asks before sending.
-  imports: [AuthModule, GoogleModule, EmailModule, SettingsModule, NotificationPreferenceModule],
+  imports: [NotificationDispatcherModule, AuthModule, GoogleModule, EmailModule, SettingsModule, NotificationPreferenceModule],
   controllers: [TodosController, CalendarController],
   providers: [AiDisclosureService, CalendarService, TodosService, CalendarAnalyticsService, EventSuggestionsService, WebPushService, EventReminderService, EventReminderSchedulerService],
 })

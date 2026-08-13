@@ -100,6 +100,23 @@ describe('the capabilities restate the decisions they came from', () => {
      * `agent` stays OUT, unchanged — an agent works transactions but is not shown brokerage banking.
      */
     'company.read-banking': ['admin', 'manager', 'accounting', 'documentation'],
+    /*
+     * The brokerage's whole marketing audience: which leads may be SELECTED for a campaign, and the
+     * whole opt-out list.
+     *
+     * THE ONE CAPABILITY DEFINED BY NAMED ROLES RATHER THAN A RANK, because marketing does not run
+     * along the seniority ladder. `crm` (rank 40) needs it; `accounting` and `documentation`
+     * (rank 60) sit ABOVE it and must not have it — neither runs campaigns nor manages unsubscribes,
+     * so neither needs a brokerage-wide list of client email addresses. No threshold can express
+     * that, which is why this list is explicit.
+     *
+     * `agent` is OUT and keeps their own leads only.
+     *
+     * SELECTION, NOT PERMISSION TO SEND. Holding this widens the candidate pool; it bypasses none of
+     * the controls that narrow it. Suppression, the lead's own `unsubscribed` flag, the campaign
+     * filters, duplicate removal and malformed-address exclusion all still run, for everyone.
+     */
+    'campaigns.brokerage-audience': ['admin', 'manager', 'crm'],
   };
 
   it.each(Object.keys(EXPECTED) as Capability[])('%s is held by exactly the right roles', (cap) => {

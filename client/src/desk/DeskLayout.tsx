@@ -117,7 +117,11 @@ const NAV: NavItem[] = [
     children: [
       { key: 'settings-desk', label: 'Transaction Desk', ico: 'briefcase', superAdmin: true, area: 'desk', path: 'settings?tab=desk',
         match: (_p, q) => (new URLSearchParams(q).get('tab') ?? 'desk') === 'desk' },
-      { key: 'settings-crm', label: 'CRM Settings', ico: 'settings', superAdmin: true, area: 'crm', path: 'settings?tab=crm',
+      // `screen: 'settings'` to match the tab in SettingsPage and the API behind it. It was
+      // `superAdmin`, while every endpoint it opens gates on the `settings` permission — so a role
+      // granted `settings: edit` could write CRM settings and broadcast to all staff through the
+      // API with no navigation entry and no screen. See the comment on the tab itself.
+      { key: 'settings-crm', label: 'CRM Settings', ico: 'settings', screen: 'settings', area: 'crm', path: 'settings?tab=crm',
         match: (_p, q) => (new URLSearchParams(q).get('tab') ?? 'crm') === 'crm' },
       { key: 'settings-company', label: 'Company Settings', ico: 'building', screen: 'settings', path: 'settings?tab=company',
         match: (_p, q) => new URLSearchParams(q).get('tab') === 'company' },
@@ -128,8 +132,27 @@ const NAV: NavItem[] = [
       // The one entry here that is not an administrator's setting: it is the viewer's own push
       // choices, which is why it carries `personal` instead of a screen permission. Agents do not
       // see this group at all, so their route in is the card on their own Settings page.
+      { key: 'notification-center', label: 'Notifications', ico: 'bell', personal: true, path: 'notification-center',
+        match: (p) => p.endsWith('/notification-center') },
       { key: 'notifications', label: 'Notification Preferences', ico: 'bell', personal: true, path: 'notifications',
         match: (p) => p.endsWith('/notifications') },
+      /*
+       * CRM Communications. `personal` like the two above, and for the same reason: most of what
+       * it does is the viewer's own choices. The administrator-only parts are decided by the API
+       * per request rather than by who can see the link, so one entry serves both.
+       */
+      // `mail`, not `megaphone`: Campaigns already carries the megaphone two groups above, and two
+      // identical glyphs in one sidebar read as one entry duplicated.
+      { key: 'communications', label: 'Communications', ico: 'mail', personal: true, area: 'crm', path: 'communications',
+        match: (p) => p.endsWith('/communications') },
+      /*
+       * Two-step verification, moved here from the personal Settings page. `personal` for the same
+       * reason as the two above and more strongly: it configures the viewer's own second factor and
+       * nobody else's, and a role can be REQUIRED to hold one — so this must not be a link only
+       * administrators see.
+       */
+      { key: 'two-step', label: 'Two-Step Verification', ico: 'lock', personal: true, area: 'crm', path: 'two-step',
+        match: (p) => p.endsWith('/two-step') },
     ],
   },
   // Agent's own settings — profile, their email accounts, signature. Admins have the admin
@@ -146,6 +169,7 @@ TITLES.favorites = 'Favorites';
 // Reached from the Settings group for admins and from the agent's own Settings page, so it has no
 // top-level entry of its own to take a heading from.
 TITLES.notifications = 'Notification Preferences';
+TITLES['notification-center'] = 'Notifications';
 
 export default function DeskLayout({ area = DEFAULT_AREA }: { area?: Area }) {
   const { logout, user, can, isAdminOrAbove, isSuperAdmin, modules } = useAuth();
@@ -456,10 +480,18 @@ export default function DeskLayout({ area = DEFAULT_AREA }: { area?: Area }) {
                   )}
                 </div>
               )}
-              <div style={{ fontSize: 13, color: '#374151' }}>{'\u{1F1E8}\u{1F1E6}'} English</div>
+              {/* The three classes below carry no styling of their own — they exist so the phone
+                  breakpoint can drop what is decorative and keep what is not. The topbar is a
+                  non-wrapping flex row, and at 390px its right-hand cluster alone is 301px wide, so
+                  the whole shell scrolled sideways on every screen in both areas. Each of these
+                  says something the row still says without it: the locale is fixed, the name is on
+                  the avatar's tooltip, and the padlock is the same control as the word. */}
+              <div className="topbar-locale" style={{ fontSize: 13, color: '#374151' }}>{'\u{1F1E8}\u{1F1E6}'} English</div>
               <UserAvatar userId={user?.id ?? null} name={user?.name} size={34} title={user?.name ?? undefined} />
-              <span style={{ fontSize: 12, color: 'var(--muted)' }}>{user?.name || 'Gethomerealty'}</span>
-              <button className="btn ghost sm" onClick={() => setPwOpen(true)} title="Change your password"><Icon name="lock" size={13} /> Password</button>
+              <span className="topbar-who" style={{ fontSize: 12, color: 'var(--muted)' }}>{user?.name || 'Gethomerealty'}</span>
+              <button className="btn ghost sm" onClick={() => setPwOpen(true)} title="Change your password">
+                <Icon name="lock" size={13} /> <span className="topbar-pw-label">Password</span>
+              </button>
             </div>
           </div>
           {/*

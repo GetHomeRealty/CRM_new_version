@@ -211,11 +211,14 @@ export class CampaignsController {
   @Get('suppressions')
   @Screen('campaigns', 'view')
   suppressions(
+    @CurrentUser() user: AuthUserRecord,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
     @Query('search') search?: string,
   ): Promise<unknown> {
-    return this.campaigns.listSuppressions({ page, limit, search });
+    // The caller decides the scope: marketing and administrative roles see the brokerage's whole
+    // opt-out list, everyone else sees the opt-outs of their own leads.
+    return this.campaigns.listSuppressions(user, { page, limit, search });
   }
 
   /** Resuming mail to someone who opted out. Edit rights, and logged. */

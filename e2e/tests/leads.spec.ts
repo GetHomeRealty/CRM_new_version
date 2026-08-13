@@ -298,12 +298,12 @@ test.describe('authorization', () => {
   test('mass assignment: privileged columns cannot be set from the request body', async ({ page }) => {
     await signIn(page, 'agent');
     const res = await createLead(page, {
-      id: 999999, owner_user_id: 1, company_id: 99, deleted_at: '2020-01-01T00:00:00Z',
+      id: 999999, owner_user_id: 1, deleted_at: '2020-01-01T00:00:00Z',
     });
     expect(res.status).toBeLessThan(300);
     const lead = res.body as { id: number; owner_user_id?: number };
     expect(lead.id).not.toBe(999999);
-    // Still readable, i.e. not created pre-deleted or in another tenant.
+    // Still readable, i.e. not created pre-deleted or owned by somebody else.
     expect((await apiGet(page, `/api/leads/${lead.id}`)).status).toBe(200);
   });
 });

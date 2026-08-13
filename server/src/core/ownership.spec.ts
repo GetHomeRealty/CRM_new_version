@@ -43,7 +43,7 @@ async function people(tx: PrismaService) {
   const now = new Date();
   const n = ++seq;
   const mk = async (role: string, tag: string) => tx.users.create({
-    data: { name: `${tag} ${n}`, email: `${tag}-${Date.now()}-${n}@x.test`, password: 'x', role, company_id: 1, created_at: now, updated_at: now },
+    data: { name: `${tag} ${n}`, email: `${tag}-${Date.now()}-${n}@x.test`, password: 'x', role, created_at: now, updated_at: now },
   });
   return { owner: await mk('agent', 'owner'), colleague: await mk('agent', 'colleague'), admin: await mk('admin', 'brokerage') };
 }
@@ -56,7 +56,7 @@ describe('a lead belongs to its owner, and an assignment is shared', () => {
   async function lead(tx: PrismaService, ownerId: number, assignedTo: number | null) {
     const now = new Date();
     return tx.leads.create({
-      data: { name: 'A Lead', email: `lead-${Date.now()}-${++seq}@x.test`, owner_user_id: ownerId, assigned_to: assignedTo, company_id: 1, created_at: now, updated_at: now },
+      data: { name: 'A Lead', email: `lead-${Date.now()}-${++seq}@x.test`, owner_user_id: ownerId, assigned_to: assignedTo, created_at: now, updated_at: now },
     });
   }
 
@@ -103,7 +103,7 @@ describe('a lead belongs to its owner, and an assignment is shared', () => {
       const now = new Date();
       const { owner } = await people(tx);
       const manager = await tx.users.create({
-        data: { name: `manager ${++seq}`, email: `mgr-${Date.now()}-${seq}@x.test`, password: 'x', role: 'manager', company_id: 1, created_at: now, updated_at: now },
+        data: { name: `manager ${++seq}`, email: `mgr-${Date.now()}-${seq}@x.test`, password: 'x', role: 'manager', created_at: now, updated_at: now },
       });
       const l = await lead(tx, owner.id, null);
       const access = new ResourceAccessService(tx);
@@ -147,7 +147,7 @@ describe('a lead belongs to its owner, and an assignment is shared', () => {
       const { owner, admin } = await people(tx);
       const now = new Date();
       const orphan = await tx.leads.create({
-        data: { name: 'Unattributed', email: `orph-${Date.now()}-${++seq}@x.test`, owner_user_id: null, company_id: 1, created_at: now, updated_at: now },
+        data: { name: 'Unattributed', email: `orph-${Date.now()}-${++seq}@x.test`, owner_user_id: null, created_at: now, updated_at: now },
       });
       const access = new ResourceAccessService(tx);
       // An import that forgets to stamp an owner must surface somewhere instead of vanishing.
@@ -188,7 +188,7 @@ describe('campaign templates are the author\'s, and the built-ins are nobody\'s'
   async function template(tx: PrismaService, userId: number | null, name: string) {
     const now = new Date();
     return tx.campaign_templates.create({
-      data: { name, subject: 's', content: 'c', category: 'general', user_id: userId, created_by: userId ? 'agent' : 'System', company_id: 1, created_at: now, updated_at: now },
+      data: { name, subject: 's', content: 'c', category: 'general', user_id: userId, created_by: userId ? 'agent' : 'System', created_at: now, updated_at: now },
     });
   }
 
@@ -235,13 +235,30 @@ describe('campaign templates are the author\'s, and the built-ins are nobody\'s'
     });
   });
 
-  it('leaves the brokerage able to manage everything', async () => {
+  /*
+   * THIS TEST ASSERTED THE OPPOSITE UNTIL 2026-08-05, and the rule changed rather than the code
+   * breaking. It read "leaves the brokerage able to manage everything" and required an administrator
+   * to be able to edit a colleague's own template — which is exactly the behaviour the brokerage has
+   * now ruled against: an agent's custom campaign templates are their working notes and stay private,
+   * including from a Super Admin.
+   *
+   * What administrators keep is the SHARED set. Both halves are asserted, because a rule that only
+   * took things away would have locked the built-ins too.
+   */
+  it('keeps the built-ins administrable, and an agent’s own private', async () => {
     await inRollback(async (tx) => {
       const { colleague, admin } = await people(tx);
       const theirs = await template(tx, colleague.id, `theirs ${seq}`);
       const builtIn = await template(tx, null, `built-in ${seq}`);
-      await expect(svc(tx).update(theirs.id, { name: 'x', subject: 's', content: 'c' }, as(admin))).resolves.toBeDefined();
-      await expect(svc(tx).update(builtIn.id, { name: 'y', subject: 's', content: 'c' }, as(admin))).resolves.toBeDefined();
+
+      // Somebody else's own template: refused, and as "not found" rather than "forbidden", so its
+      // existence is not disclosed by the error.
+      await expect(svc(tx).update(theirs.id, { name: 'x', subject: 's', content: 'c' }, as(admin)))
+        .rejects.toThrow(/not found/i);
+
+      // The shared set is still theirs to maintain.
+      await expect(svc(tx).update(builtIn.id, { name: 'y', subject: 's', content: 'c' }, as(admin)))
+        .resolves.toBeDefined();
     });
   });
 });

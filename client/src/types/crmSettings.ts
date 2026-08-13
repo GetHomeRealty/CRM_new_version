@@ -108,7 +108,22 @@ export interface CrmBroadcast {
   id: number;
   message: string;
   type: string;
+  /** How many staff have actually received it so far. */
   recipients: number;
+  /**
+   * Delivery runs off the request thread, so the row exists — and says `sending` — before anybody
+   * has been emailed. Without these the list cannot tell a send still in flight from one that
+   * reached nobody: both read "0 recipients". A run cut short by a restart is closed out at the
+   * next boot rather than reading `sending` for ever.
+   */
+  status: 'sending' | 'completed' | 'partial' | 'failed';
+  /** How many addresses the send is working through in total. */
+  attempted: number;
+  /** Addresses the mail server refused. */
+  failed: number;
+  /** The first failure, in words the person who sent it can act on. */
+  error: string | null;
+  completed_at: string | null;
   sent_by: string | null;
   created_at: string | null;
 }
@@ -129,4 +144,25 @@ export interface CrmSendResult {
   success: boolean;
   message: string;
   redirected?: string | null;
+}
+
+/**
+ * One person's own CRM email triggers.
+ *
+ * `triggers` is what they effectively send today; `customised` says which of those they set
+ * themselves as opposed to inheriting from `brokerage_defaults`. The distinction is what lets the
+ * screen tell somebody "this is the brokerage's choice, and you have not changed it" rather than
+ * presenting an inherited value as their own decision.
+ */
+export interface CrmMyTriggers {
+  triggers: Record<string, boolean>;
+  customised: Record<string, boolean>;
+  brokerage_defaults: Record<string, boolean>;
+  /** The brokerage kill switch. Read-only here — it lives on CRM Settings. */
+  sending_allowed: boolean;
+  trigger_keys: string[];
+  updated_by: string | null;
+  updated_at: string | null;
+  /** Stored choices could not be read. Every send is refused until they are saved again. */
+  unreadable: boolean;
 }

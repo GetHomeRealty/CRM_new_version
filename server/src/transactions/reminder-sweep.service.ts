@@ -4,6 +4,7 @@ import { PersonResolver } from '../core/person-resolver.service';
 import { MailerService, isTransient } from '../email/mailer.service';
 import { CompanySettingsService } from '../settings/company-settings.service';
 import { AuditService } from '../audit/audit.service';
+import { NotificationDispatcher } from '../notifications/notification-dispatcher.service';
 import { areaPath } from '../common/domain';
 import { toDateString } from '../common/serialize';
 import { missingLawyerParties, tracksBothLawyers } from './lawyer-details';
@@ -75,6 +76,11 @@ export class ReminderSweepService {
     private readonly mailer: MailerService,
     private readonly settings: CompanySettingsService,
     private readonly audit: AuditService,
+    /*
+     * Optional so every existing construction — including the sweep's own spec files — keeps working
+     * untouched. Always injected in the running application.
+     */
+    private readonly dispatcher?: NotificationDispatcher,
   ) {}
 
   /** One night's work. `today` is injectable so the schedule can be tested across a whole run-up. */
@@ -469,6 +475,35 @@ export class ReminderSweepService {
     if (!claimed) return; // already handled today
 
     job.onSent();
+
+    /*
+     * PUSH, asked for here and nowhere else.
+     *
+     * Placed straight after the claim so it happens whether or not an email address exists — the
+     * agent's phone is worth buzzing even when their mailbox is not on file, which is one of the
+     * cases this sweep otherwise records as "Skipped" and moves on from.
+     *
+     * Only the push channel: the in-app row was claimed above and the email is sent below, each with
+     * its own delivery record and retry handling. Asking the dispatcher for those as well would
+     * deliver both twice.
+     *
+     * Never allowed to affect the sweep — a reminder must not be marked failed because a phone was
+     * unreachable, and the claim above has already made this occurrence idempotent.
+     */
+    if (this.dispatcher) {
+      const recipientId = await this.userIdFor(job.agentName);
+      if (recipientId) {
+        await this.dispatcher.dispatch({
+          category: job.kind === 'lawyer' ? 'lawyer_details' : 'listing_expiry',
+          userId: recipientId,
+          title: job.summary,
+          link: areaPath('desk', `transactions/${job.txnId}`),
+          dedupeKey: `${job.kind}-${job.txnId}-${job.day.toISOString().slice(0, 10)}`,
+          channels: ['push'],
+        }).catch(() => {});
+      }
+    }
+
     const company = (await this.settings.current()).name;
     const base = (process.env.FRONTEND_URL ?? '').trim().replace(/\/+$/, '');
     const link = base ? `${base}${areaPath('desk', `transactions/${job.txnId}`)}` : '';
@@ -571,6 +606,20 @@ export class ReminderSweepService {
     // orderBy, so the planner decided which colleague got the mail.
     const user = await this.people.resolve(null, name, { activeOnly: true });
     return (user?.email ?? '').trim() || null;
+  }
+
+  /**
+   * The user id behind an agent name, for the dispatcher.
+   *
+   * Through `PersonResolver` for the same reason `addressFor` is: two colleagues sharing a name must
+   * resolve identically and deterministically everywhere — Active wins, ties break on the lowest id.
+   * Resolving them differently here would mean one person got the email and another the push.
+   */
+  private async userIdFor(agentName: string | null): Promise<number | null> {
+    const name = (agentName ?? '').trim();
+    if (!name) return null;
+    const user = await this.people.resolve(null, name, { activeOnly: true });
+    return user?.id ?? null;
   }
 
   /** Active is the only status a listing is chased or expired in. */

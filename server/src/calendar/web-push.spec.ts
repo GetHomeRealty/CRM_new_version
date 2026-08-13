@@ -31,7 +31,7 @@ async function makeUser(tx: PrismaService) {
   const now = new Date();
   const t = tag();
   return tx.users.create({
-    data: { name: `Push User ${t}`, email: `push-${t}@example.test`, role: 'agent', status: 'Active', password: 'x', company_id: 1, created_at: now, updated_at: now },
+    data: { name: `Push User ${t}`, email: `push-${t}@example.test`, role: 'agent', status: 'Active', password: 'x', created_at: now, updated_at: now },
   });
 }
 

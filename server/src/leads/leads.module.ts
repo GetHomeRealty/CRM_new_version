@@ -1,10 +1,13 @@
 import { Module } from '@nestjs/common';
+import { NotificationDispatcherModule } from '../notifications/notification-dispatcher.module';
 import { AuthModule } from '../auth/auth.module';
 import { LeadsController } from './leads.controller';
 import { LeadsService } from './leads.service';
 import { LeadActivityService } from './lead-activity.service';
 import { LeadAuditService } from './lead-audit.service';
 import { LeadTransferService } from './lead-transfer.service';
+import { LeadRetentionService } from './lead-retention.service';
+import { LeadTaskReminderService } from './lead-task-reminder.service';
 import { LeadNotificationService } from './lead-notification.service';
 import { LeadImportEngine } from './lead-import.engine';
 import { LeadImportJobService } from './lead-import-job.service';
@@ -18,9 +21,9 @@ import { EmailModule } from '../email/email.module';
  * reads it as an audience — so neither module may change the vocabulary spellings alone.
  */
 @Module({
-  imports: [AuthModule, SmsModule, EmailModule],
+  imports: [NotificationDispatcherModule, AuthModule, SmsModule, EmailModule],
   controllers: [LeadsController],
-  providers: [LeadsService, LeadActivityService, LeadAuditService, LeadNotificationService, LeadTransferService, LeadImportEngine, LeadImportJobService, RecordingStorageService, AiDisclosureService],
+  providers: [LeadRetentionService, LeadTaskReminderService, LeadsService, LeadActivityService, LeadAuditService, LeadNotificationService, LeadTransferService, LeadImportEngine, LeadImportJobService, RecordingStorageService, AiDisclosureService],
   // Campaigns imports leads through the same engine and the same queue. Exporting them is what
   // stops the two screens drifting apart again — they previously had separate implementations,
   // and only one of them de-duplicated within the uploaded file.

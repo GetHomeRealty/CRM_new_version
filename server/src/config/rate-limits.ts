@@ -127,3 +127,47 @@ export const META_SYNC_LIMIT: Limit = {
   ttl: seconds(int(process.env.META_SYNC_RATE_LIMIT_WINDOW_SECONDS, 60)),
   limit: int(process.env.META_SYNC_RATE_LIMIT_MAX, 6),
 };
+
+/**
+ * "Send to All Users" on CRM Settings, per user.
+ *
+ * WHY THIS ONE NEEDS ITS OWN BUCKET. The general limit is a per-endpoint runaway guard sized for a
+ * screen that auto-saves — 600 a minute. That is the right number for a settings write, which costs
+ * one row, and an absurd one for this endpoint, which fans out one SMTP round trip per active
+ * member of staff and cannot be recalled. At 600 a minute a stuck client could put six hundred
+ * messages into every inbox in the brokerage before anyone noticed.
+ *
+ * The identical-message guard in `CrmSettingsService.broadcast` catches the accidental repeat; it
+ * does not catch a loop sending DIFFERENT messages, which is what this bounds. Three a minute is
+ * more than a person announcing something has any reason to need, and the audit trail records each
+ * one either way.
+ *
+ * Env: BROADCAST_RATE_LIMIT_MAX / BROADCAST_RATE_LIMIT_WINDOW_SECONDS
+ */
+export const BROADCAST_LIMIT: Limit = {
+  ttl: seconds(int(process.env.BROADCAST_RATE_LIMIT_WINDOW_SECONDS, 60)),
+  limit: int(process.env.BROADCAST_RATE_LIMIT_MAX, 3),
+};
+
+/**
+ * Configuration writes — CRM Settings, CRM email settings, company settings — per user.
+ *
+ * WHAT THIS IS ACTUALLY FOR, because it is not load. One of these writes a single row; six hundred
+ * a minute would not trouble the database. It is the AUDIT TRAIL. Every save here also writes an
+ * entry ("CRM settings updated", "Banking details changed"), and the trail is the only record of who
+ * changed the brokerage's bank account and when. A client stuck in a save loop under the general
+ * 600-a-minute bucket buries that evidence under thousands of identical rows — measured 2026-08-04:
+ * 40 consecutive `PUT /api/crm-settings` in a tight loop, all 200, all audited.
+ *
+ * DELIBERATELY NOT TIGHT. These are explicit Save buttons, not the transaction screen's 1.2 s
+ * auto-save, so nothing here bursts — but a settings screen with several cards can legitimately fire
+ * a handful of saves in quick succession while someone works through it, and a limit that refuses
+ * the fourth would be a worse bug than the one it closes. Thirty a minute is one every two seconds,
+ * sustained, for a minute: past any hand and well short of any real session.
+ *
+ * Env: SETTINGS_WRITE_RATE_LIMIT_MAX / SETTINGS_WRITE_RATE_LIMIT_WINDOW_SECONDS
+ */
+export const SETTINGS_WRITE_LIMIT: Limit = {
+  ttl: seconds(int(process.env.SETTINGS_WRITE_RATE_LIMIT_WINDOW_SECONDS, 60)),
+  limit: int(process.env.SETTINGS_WRITE_RATE_LIMIT_MAX, 30),
+};

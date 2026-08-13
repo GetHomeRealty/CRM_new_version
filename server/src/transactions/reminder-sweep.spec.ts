@@ -70,7 +70,7 @@ async function makeAgent(tx: PrismaService): Promise<string> {
   const tag = `${Date.now()}-${seq}`;
   const now = new Date();
   const u = await tx.users.create({
-    data: { name: `Sweep Agent ${tag}`, email: `sweep-${tag}@example.test`, role: 'agent', status: 'Active', password: 'x', company_id: 1, created_at: now, updated_at: now },
+    data: { name: `Sweep Agent ${tag}`, email: `sweep-${tag}@example.test`, role: 'agent', status: 'Active', password: 'x', created_at: now, updated_at: now },
   });
   return u.name;
 }
@@ -81,7 +81,7 @@ async function makeTxn(tx: PrismaService, over: Record<string, unknown>, statuse
   const t = await tx.transactions.create({
     data: {
       trade_no: `SW-${Date.now()}-${seq}`, type: 'Residential Sale Listing', property: '1 Test Road',
-      company_id: 1, created_at: now, updated_at: now, ...over,
+      created_at: now, updated_at: now, ...over,
     },
   });
   for (const status of statuses) {

@@ -60,7 +60,7 @@ async function makeUser(tx: PrismaService): Promise<{ id: number; name: string; 
   const u = await tx.users.create({
     data: {
       name: `Bud ${t}`, email: `bud-${t}@example.test`, role: 'agent', status: 'Active',
-      password: 'x', company_id: 1, created_at: now, updated_at: now,
+      password: 'x', created_at: now, updated_at: now,
     },
   });
   return { id: u.id, name: u.name, email: u.email };
@@ -77,16 +77,40 @@ async function connect(tx: PrismaService, userId: number, forms = 1): Promise<vo
   for (let i = 0; i < forms; i += 1) {
     await tx.meta_lead_forms.create({
       data: {
-        company_id: 1, user_id: userId, page_id: `page-${tag()}`, form_id: `form-${tag()}`,
+        user_id: userId, page_id: `page-${tag()}`, form_id: `form-${tag()}`,
         form_name: `Form ${i}`, is_active: true, created_at: now, updated_at: now,
       },
     });
   }
 }
 
+/**
+ * Start this window's allowance from zero.
+ *
+ * WHY THIS IS NEEDED, AND WHY IT IS NOT CHEATING. The budget is keyed by window — epoch
+ * milliseconds rounded to the window size — and that row is written by the running application, not
+ * only by tests. Anything that consumed Graph budget in the same window leaves a committed row, and
+ * a rolled-back transaction cannot undo a commit that happened before it started. Three of these
+ * tests then failed for a reason that had nothing to do with the code: the FIRST `consume()` of a
+ * full allowance hit `existing + 600 <= 600` and was refused.
+ *
+ * Deleting the row INSIDE the test's transaction rolls back with everything else, so the real
+ * window is untouched. What is being asserted is the arithmetic — collective draw-down, refusal at
+ * the ceiling, partial spends — and that arithmetic needs a known starting point, not whatever the
+ * application happened to spend a minute ago.
+ *
+ * The failure also cost an hour to find because `.env` points jest at the DEVELOPMENT database
+ * while the end-to-end suite uses `myapp_test`; checking the wrong one showed an empty table and
+ * ruled out pollution incorrectly.
+ */
+async function clearWindow(tx: PrismaService): Promise<void> {
+  await tx.$executeRawUnsafe('DELETE FROM meta_api_budget');
+}
+
 describe('the Graph budget everybody shares', () => {
   it('is spent collectively, so two agents draw down one allowance', async () => {
     await inRollback(async (tx) => {
+      await clearWindow(tx);
       const budget = new MetaApiBudgetService(tx);
       const before = await budget.remaining();
 
@@ -100,6 +124,7 @@ describe('the Graph budget everybody shares', () => {
 
   it('refuses once the window is spent, and says when it resets', async () => {
     await inRollback(async (tx) => {
+      await clearWindow(tx);
       const budget = new MetaApiBudgetService(tx);
       const first = await budget.consume(META_BUDGET_PER_WINDOW);
       expect(first.allowed).toBe(true);
@@ -115,6 +140,7 @@ describe('the Graph budget everybody shares', () => {
 
   it('lets a partial spend through and refuses only what exceeds the ceiling', async () => {
     await inRollback(async (tx) => {
+      await clearWindow(tx);
       const budget = new MetaApiBudgetService(tx);
       await budget.consume(META_BUDGET_PER_WINDOW - 2);
       expect((await budget.consume(2)).allowed).toBe(true);   // exactly fills it
@@ -127,7 +153,10 @@ describe('the Graph budget everybody shares', () => {
       const user = await makeUser(tx);
       await connect(tx, user.id, 3);
 
+      await clearWindow(tx);
       const spent = new MetaApiBudgetService(tx);
+      // Only fills the window because it starts empty — otherwise this "spend the budget" step
+      // silently spends nothing and the sync below is refused for an unrelated reason.
       await spent.consume(META_BUDGET_PER_WINDOW);
 
       const graph = { formLeads: async () => { throw new Error('Graph must not be called once the budget is spent'); } };
@@ -180,7 +209,7 @@ describe('a token Meta says is finished', () => {
       });
       await tx.meta_lead_forms.create({
         data: {
-          company_id: 1, user_id: userId, page_id: pageId, form_id: `form-${tag()}`,
+          user_id: userId, page_id: pageId, form_id: `form-${tag()}`,
           form_name: `Form ${i}`, is_active: true, created_at: now, updated_at: now,
         },
       });
@@ -268,7 +297,7 @@ describe('a token Meta says is finished', () => {
         },
       } as never);
 
-      await scheduler().pollAllForTenant();
+      await scheduler().pollAll();
       expect(polled).toContain(user.id);
 
       await new MetaConnectionService(tx, { fetchPages: async () => [] } as never).markTokenDead(user.id);
@@ -280,7 +309,7 @@ describe('a token Meta says is finished', () => {
           return { imported: 0, updated: 0, duplicates: 0, skipped: 0, forms: 0, errors: [] };
         },
       } as never);
-      await s2.pollAllForTenant();
+      await s2.pollAll();
       expect(after).not.toContain(user.id);
     });
   });
@@ -305,7 +334,7 @@ describe('a token Meta says is finished', () => {
           polled.push(u.id);
           return { imported: 0, updated: 0, duplicates: 0, skipped: 0, forms: 0, errors: [] };
         },
-      } as never).pollAllForTenant();
+      } as never).pollAll();
 
       expect(polled).toContain(user.id);
     });

@@ -59,6 +59,13 @@ export const SCREEN_AREA: Record<string, ScreenArea> = {
   // Client Reviews, by request. It has no screen behind it yet — no route, no controller, no page —
   // so this decides which sidebar offers it when one is built.
   reviews: 'crm',
+  // CRM Communications. Named here rather than left to the `undefined` default so it does not also
+  // answer at /desk/communications: the screen lists CRM communications only, and the Transaction
+  // Desk keeps its own templates under its own Settings.
+  communications: 'crm',
+  // Two-step verification, listed under CRM Settings. Named here for the same reason as the line
+  // above: it belongs to one area's Settings, so it should not also answer at /desk/two-step.
+  'two-step': 'crm',
 
   // Transaction Management
   transactions: 'desk',

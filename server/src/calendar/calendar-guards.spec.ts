@@ -33,7 +33,7 @@ async function makeUser(tx: PrismaService, role: string, name?: string): Promise
   const now = new Date();
   const t = tag();
   const u = await tx.users.create({
-    data: { name: name ?? `Cal ${role} ${t}`, email: `cal-${t}@example.test`, role, status: 'Active', password: 'x', company_id: 1, created_at: now, updated_at: now },
+    data: { name: name ?? `Cal ${role} ${t}`, email: `cal-${t}@example.test`, role, status: 'Active', password: 'x', created_at: now, updated_at: now },
   });
   return u as unknown as AuthUserRecord;
 }
@@ -46,7 +46,7 @@ describe('linking an event to a deal', () => {
       const mine = await makeUser(tx, 'agent');
       const now = new Date();
       const theirs = await tx.transactions.create({
-        data: { trade_no: `T-${tag()}`, type: 'Residential Sale Listing', property: '9 Secret Lane', agent: 'Someone Else', company_id: 1, created_at: now, updated_at: now },
+        data: { trade_no: `T-${tag()}`, type: 'Residential Sale Listing', property: '9 Secret Lane', agent: 'Someone Else', created_at: now, updated_at: now },
       });
 
       await expect(svc(tx).create(evt({ transaction_id: theirs.id }), mine, 'crm'))
@@ -59,7 +59,7 @@ describe('linking an event to a deal', () => {
       const agent = await makeUser(tx, 'agent');
       const now = new Date();
       const own = await tx.transactions.create({
-        data: { trade_no: `T-${tag()}`, type: 'Residential Sale Listing', property: '1 Own Street', agent: agent.name, company_id: 1, created_at: now, updated_at: now },
+        data: { trade_no: `T-${tag()}`, type: 'Residential Sale Listing', property: '1 Own Street', agent: agent.name, created_at: now, updated_at: now },
       });
 
       const row = await svc(tx).create(evt({ transaction_id: own.id }), agent, 'crm');
@@ -72,7 +72,7 @@ describe('linking an event to a deal', () => {
       const admin = await makeUser(tx, 'admin');
       const now = new Date();
       const any = await tx.transactions.create({
-        data: { trade_no: `T-${tag()}`, type: 'Residential Sale Listing', property: '5 Anywhere', agent: 'Another Agent', company_id: 1, created_at: now, updated_at: now },
+        data: { trade_no: `T-${tag()}`, type: 'Residential Sale Listing', property: '5 Anywhere', agent: 'Another Agent', created_at: now, updated_at: now },
       });
 
       const row = await svc(tx).create(evt({ transaction_id: any.id }), admin, 'crm');
@@ -86,7 +86,7 @@ describe('linking an event to a deal', () => {
       const other = await makeUser(tx, 'agent');
       const now = new Date();
       const lead = await tx.leads.create({
-        data: { name: `Lead ${tag()}`, email: `l-${tag()}@example.test`, owner_user_id: other.id, assigned_to: other.id, company_id: 1, created_at: now, updated_at: now },
+        data: { name: `Lead ${tag()}`, email: `l-${tag()}@example.test`, owner_user_id: other.id, assigned_to: other.id, created_at: now, updated_at: now },
       });
 
       await expect(svc(tx).create(evt({ lead_id: lead.id }), mine, 'crm'))

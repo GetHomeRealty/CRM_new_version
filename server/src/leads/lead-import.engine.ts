@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { CLIENT_TYPE, IMPORT_FIELD_LIMITS, LEAD_SOURCE, LEAD_STATUS, LEAD_TYPE } from './lead.constants';
+import { CLIENT_TYPE, IMPORT_FIELD_LIMITS, LEAD_RESPONSE, LEAD_SOURCE, LEAD_STATUS, LEAD_TYPE } from './lead.constants';
 
 /**
  * The CSV lead import, done in batches against an index.
@@ -79,18 +79,67 @@ export class LeadImportEngine {
    * different CRMs will actually contain.
    */
   parseCsv(csv: string): ImportRow[] {
-    const lines = csv.split(/\r?\n/).filter((l) => l.trim().length);
-    if (lines.length < 2) return [];
+    const records = this.splitRecords(csv);
+    if (records.length < 2) return [];
 
-    const headers = this.splitLine(lines[0]).map((h) => h.toLowerCase().replace(/[^a-z0-9]/g, ''));
+    const headers = records[0].map((h) => h.toLowerCase().replace(/[^a-z0-9]/g, ''));
     const rows: ImportRow[] = [];
-    for (let i = 1; i < lines.length; i++) {
-      const cells = this.splitLine(lines[i]);
+    for (let i = 1; i < records.length; i++) {
+      const cells = records[i];
+      // A row of nothing but empty cells is a trailing blank line, not a lead.
+      if (!cells.some((c) => c !== '')) continue;
       const row: ImportRow = {};
       headers.forEach((h, idx) => { if (h) row[h] = cells[idx] ?? ''; });
       rows.push(row);
     }
     return rows;
+  }
+
+  /**
+   * Split the whole file into records, respecting quotes ACROSS line breaks.
+   *
+   * WHAT WAS WRONG. This used to `csv.split(/\r?\n/)` first and parse quotes per line. A newline
+   * inside a quoted cell is ordinary CSV — Excel and Google Sheets both write one whenever a cell
+   * contains a line break, which for a lead list means any multi-line address or note. Splitting
+   * first tore that record in two: the tail became a "row" whose columns were shifted by one, so
+   * an address landed in the email column, the row failed the address check, and EVERY row after
+   * it was misaligned as well. The file imported "successfully" with most of it skipped.
+   *
+   * Parsing the file as one stream is the fix — a line break is only a record boundary when it is
+   * not inside quotes. Handles LF, CRLF and a lone CR.
+   */
+  private splitRecords(csv: string): string[][] {
+    const records: string[][] = [];
+    let row: string[] = [];
+    let cur = '';
+    let quoted = false;
+
+    // Strip a UTF-8 byte-order mark. Excel writes one, and it would otherwise be part of the first
+    // header — harmless here only because the header normaliser also strips it, but a cell value
+    // would keep it.
+    const text = csv.charCodeAt(0) === 0xfeff ? csv.slice(1) : csv;
+
+    const endCell = () => { row.push(cur.trim()); cur = ''; };
+    const endRow = () => { endCell(); records.push(row); row = []; };
+
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i];
+      if (quoted) {
+        if (c === '"' && text[i + 1] === '"') { cur += '"'; i++; }
+        else if (c === '"') quoted = false;
+        else cur += c;                                  // includes newlines, which is the point
+        continue;
+      }
+      if (c === '"') quoted = true;
+      else if (c === ',') endCell();
+      else if (c === '\r') { if (text[i + 1] === '\n') i++; endRow(); }
+      else if (c === '\n') endRow();
+      else cur += c;
+    }
+    // Whatever is left is the last record, unless the file ended on a newline.
+    if (cur !== '' || row.length) endRow();
+
+    return records.filter((r) => r.some((cell) => cell !== ''));
   }
 
   /**
@@ -110,23 +159,8 @@ export class LeadImportEngine {
     return client.$transaction(fn);
   }
 
-  /** Comma-separated with double-quote escaping — enough for what spreadsheets export. */
-  private splitLine(line: string): string[] {
-    const out: string[] = [];
-    let cur = '', quoted = false;
-    for (let i = 0; i < line.length; i++) {
-      const c = line[i];
-      if (quoted) {
-        if (c === '"' && line[i + 1] === '"') { cur += '"'; i++; }
-        else if (c === '"') quoted = false;
-        else cur += c;
-      } else if (c === '"') quoted = true;
-      else if (c === ',') { out.push(cur.trim()); cur = ''; }
-      else cur += c;
-    }
-    out.push(cur.trim());
-    return out;
-  }
+  // `splitLine` was removed with the line-at-a-time parser above: quote handling now has to span
+  // line breaks, so it cannot be done one line at a time.
 
   /**
    * Import one batch. Returns what changed; the caller accumulates and records progress.
@@ -155,7 +189,7 @@ export class LeadImportEngine {
     /*
      * Scoped to the importer's own book, because that is what uniqueness now means.
      *
-     * `leads_company_owner_email_key` is UNIQUE on `(company_id, COALESCE(owner_user_id, 0),
+     * `leads_owner_email_key` is UNIQUE on `(COALESCE(owner_user_id, 0),
      * lower(email))`, not on the address alone: the same person may be a lead of another brokerage,
      * and of another agent in this one, because they can arrive through anybody's ad, campaign or
      * referral. This lookup used to ask "does this address exist ANYWHERE", which under the old
@@ -267,6 +301,22 @@ export class LeadImportEngine {
         lead_type: vocab(pick('leadtype', 'type'), LEAD_TYPE),
         lead_source: vocab(pick('leadsource', 'source'), LEAD_SOURCE),
         client_type: vocab(pick('clienttype'), CLIENT_TYPE),
+        /*
+         * DOCUMENTED SINCE THE BEGINNING, READ SINCE NOW.
+         *
+         * The Import dialog lists `location`, `property` and `lead response` among its recognised
+         * columns, and all three are real columns on `leads` — but nothing here ever read them, so
+         * a file that filled them in imported cleanly and dropped them on the floor. Nobody would
+         * see that: the row count is right, and the missing values look like an empty spreadsheet.
+         *
+         * `location` and `property` are free text, exactly as they are when typed into the lead
+         * form. `lead_response` goes through `vocab` like the other three vocabulary columns,
+         * because it feeds the same filters — an unrecognised value would create a lead no filter
+         * could select.
+         */
+        location: fit('location', pick('location', 'city', 'area')),
+        property: fit('property', pick('property', 'propertyaddress', 'address')),
+        lead_response: vocab(pick('leadresponse', 'response'), LEAD_RESPONSE),
         tags: JSON.stringify(ctx.tag ? [ctx.tag] : []),
         created_by: ctx.userName,
         owner_user_id: ctx.userId,

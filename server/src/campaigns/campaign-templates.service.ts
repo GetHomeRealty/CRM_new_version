@@ -34,31 +34,41 @@ export class CampaignTemplatesService {
    * Who may see which templates.
    *
    * A template with no `user_id` is one of the six the application ships with — everybody's, and
-   * nobody's to change. Anything else belongs to the person who wrote it: an agent building a
-   * campaign for their own leads sees the built-ins and their own work, and never a colleague's or
-   * the brokerage's, which are not theirs to borrow or to break.
+   * only an administrator's to change. Anything else belongs to the person who wrote it, and is
+   * private to them **whatever the viewer's role**.
    *
-   * The brokerage is not scoped. Administrators run the campaign programme and have to be able to
-   * see what is being sent under the company's name.
+   * THAT INCLUDES SUPER ADMIN, and it is a deliberate exception to how the rest of this application
+   * works. Both this and `assertEditable` used to begin `if (!isAgent(user)) return {}` — so every
+   * non-agent role saw and could edit every agent's private drafts. Measured during the CRM audit: a
+   * Super Admin renamed an agent-owned template and got a 200.
+   *
+   * The brokerage's decision is that an agent's own campaign drafts stay theirs. A Super Admin still
+   * administers everything else — the built-ins, the campaigns, the suppression list — but a
+   * half-written template an agent has not sent is not administration, it is their working notes.
    */
   private visibleWhere(user: AuthUserRecord): Record<string, unknown> {
-    if (!isAgent(user)) return {};
     return { OR: [{ user_id: null }, { user_id: user.id ?? -1 }] };
   }
 
   /**
    * Refuse to change a template that is not this person's to change.
    *
-   * The six built-ins are locked for agents: they are the starting point every agent gets, and one
-   * agent editing them would change what every other agent sees. An agent's own template is fully
-   * theirs — editable, deletable, and invisible to everyone else.
+   * Two separate rules, and they point in opposite directions for the two kinds of template:
+   *
+   *   · A BUILT-IN (`user_id` null) is shared, so an agent may not edit it — one agent's change
+   *     would rewrite what every other agent starts from. An administrator may, because maintaining
+   *     the shared set is administration.
+   *   · SOMEBODY ELSE'S is refused to everyone, administrators included. In practice `visibleWhere`
+   *     means such a template is never even found, so this is the second lock rather than the first.
    */
   private assertEditable(t: { id: number; user_id: number | null; name: string }, user: AuthUserRecord): void {
-    if (!isAgent(user)) return;
     if (t.user_id === null) {
-      throw new ForbiddenException({
-        message: `"${t.name}" is one of the built-in templates. Duplicate it to make a version you can change.`,
-      });
+      if (isAgent(user)) {
+        throw new ForbiddenException({
+          message: `"${t.name}" is one of the built-in templates. Duplicate it to make a version you can change.`,
+        });
+      }
+      return;
     }
     if (t.user_id !== (user.id ?? -1)) {
       throw new ForbiddenException({ message: 'This template belongs to somebody else.' });
@@ -135,13 +145,32 @@ export class CampaignTemplatesService {
   }
 
   // ----------------------------------------------------------- attachments
+  /**
+   * THE THREE METHODS BELOW TOOK NO `user` AT ALL, AND THE CONTROLLER PASSED NONE.
+   *
+   * `get`, `update` and `remove` each go through `visibleWhere(user)` and `assertEditable`, which is
+   * what makes an agent's drafts theirs — the brokerage's explicit decision, recorded on
+   * `visibleWhere`: *a Super Admin must not see or edit an agent's custom campaign templates.* The
+   * attachment routes were not part of that change and were reachable by anyone holding
+   * `campaigns: view` (download) or `campaigns: edit` (add, remove), given two integer ids.
+   *
+   * The write side is the worse half. An attachment rides along with EVERY send of its template, so
+   * planting one is not "editing somebody's draft" — it is putting a file in front of the
+   * brokerage's clients over that agent's name; and removing one silently strips a document from
+   * sends that person believes still carry it.
+   *
+   * Same two locks, same wording, so a private template and its files answer identically: "not
+   * found" for something that is not yours, and the built-in rule for the shared six.
+   */
+
   /** Store a file that will ride along with every send of this template. */
-  async addAttachment(templateId: number, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+  async addAttachment(templateId: number, body: Record<string, unknown>, user: AuthUserRecord): Promise<Record<string, unknown>> {
     const template = await this.prisma.campaign_templates.findFirst({
-      where: { id: templateId, deleted_at: null },
+      where: { id: templateId, deleted_at: null, ...this.visibleWhere(user) },
       include: { attachments: { select: { id: true, size: true } } },
     });
     if (!template) throw new NotFoundException({ message: 'Template not found.' });
+    this.assertEditable(template, user);
 
     const filename = str(body.filename) || 'attachment';
     const contentType = str(body.content_type) || 'application/octet-stream';
@@ -182,7 +211,15 @@ export class CampaignTemplatesService {
     return row;
   }
 
-  async removeAttachment(templateId: number, attachmentId: number): Promise<{ deleted: boolean }> {
+  async removeAttachment(templateId: number, attachmentId: number, user: AuthUserRecord): Promise<{ deleted: boolean }> {
+    // A delete, so both locks — the same pair `remove()` applies to the template itself.
+    const template = await this.prisma.campaign_templates.findFirst({
+      where: { id: templateId, deleted_at: null, ...this.visibleWhere(user) },
+      select: { id: true, user_id: true, name: true },
+    });
+    if (!template) throw new NotFoundException({ message: 'Attachment not found.' });
+    this.assertEditable(template, user);
+
     const row = await this.prisma.campaign_template_attachments.findFirst({
       where: { id: attachmentId, template_id: templateId },
       select: { id: true },
@@ -192,7 +229,18 @@ export class CampaignTemplatesService {
     return { deleted: true };
   }
 
-  async getAttachment(templateId: number, attachmentId: number): Promise<{ filename: string; content_type: string; data: Buffer }> {
+  async getAttachment(templateId: number, attachmentId: number, user: AuthUserRecord): Promise<{ filename: string; content_type: string; data: Buffer }> {
+    // The template first: the file is only reachable if its template is. `visibleWhere` — not
+    // `assertEditable` — because reading a built-in's attachment is legitimate for everyone, exactly
+    // as reading the built-in itself is.
+    const template = await this.prisma.campaign_templates.findFirst({
+      where: { id: templateId, deleted_at: null, ...this.visibleWhere(user) },
+      select: { id: true },
+    });
+    // "Attachment not found", not "template not found", so the reply is the same whether the
+    // template is somebody else's or the attachment id is invented.
+    if (!template) throw new NotFoundException({ message: 'Attachment not found.' });
+
     const row = await this.prisma.campaign_template_attachments.findFirst({ where: { id: attachmentId, template_id: templateId } });
     if (!row) throw new NotFoundException({ message: 'Attachment not found.' });
     return { filename: row.filename, content_type: row.content_type, data: Buffer.from(row.data) };

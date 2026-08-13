@@ -68,10 +68,12 @@ export interface DeletedLeadPage {
  * no indication there were more, so past that point somebody's deleted lead was simply not on the
  * screen they had opened specifically to find it.
  */
-export const listDeletedLeads = (opts: { page?: number; limit?: number } = {}): Promise<DeletedLeadPage> => {
+export const listDeletedLeads = (opts: { page?: number; limit?: number; search?: string } = {}): Promise<DeletedLeadPage> => {
   const q = new URLSearchParams();
   if (opts.page) q.set('page', String(opts.page));
   if (opts.limit) q.set('limit', String(opts.limit));
+  // Matched on name or email server-side, within the caller's own leads.
+  if (opts.search?.trim()) q.set('search', opts.search.trim());
   const qs = q.toString();
   return api.get<DeletedLeadPage>(`/api/leads/deleted${qs ? `?${qs}` : ''}`).then((r) => r.data);
 };

@@ -1,5 +1,5 @@
 import { crmPath } from './area';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   addCallRecording, addLeadCall, addLeadMessage, addLeadNote, addLeadShowing, addLeadTask,
@@ -790,6 +790,16 @@ function EmailComposer({ lead, onClose, onSent }: { lead: LeadDetail; onClose: (
   // Once AI drafts the body it is real HTML, so it is sent verbatim; a hand-typed body is plain
   // text and gets escaped + newline-converted so markup can't sneak in and lines survive.
   const [isHtml, setIsHtml] = useState(false);
+  /**
+   * The HTML the preview was last SEEDED with, and the reason it is separate from `body`.
+   *
+   * The preview is edited in place, so it must not be re-rendered from `body` on every keystroke —
+   * replacing an iframe's srcDoc destroys its document and puts the caret back at the start. This
+   * changes only when the AI produces a new draft, which is the one moment the preview should be
+   * thrown away and rebuilt.
+   */
+  const [seed, setSeed] = useState('');
+  const previewRef = useRef<HTMLIFrameElement | null>(null);
 
   const generate = async () => {
     const p = aiPrompt.trim();
@@ -799,6 +809,7 @@ function EmailComposer({ lead, onClose, onSent }: { lead: LeadDetail; onClose: (
       const res = await generateLeadEmail(lead.id, p);
       setSubject(res.subject);
       setBody(res.html);
+      setSeed(res.html);        // a new draft is the one time the preview is rebuilt from scratch
       setIsHtml(true);
       toast('Draft generated — review and send.', 'ok');
     } catch (ex) {
@@ -864,20 +875,47 @@ function EmailComposer({ lead, onClose, onSent }: { lead: LeadDetail; onClose: (
             <input value={subject} maxLength={255} autoFocus required
               onChange={(e) => setSubject(e.target.value)} placeholder="What is this about?" />
           </div>
-          {isHtml && (
+          {isHtml ? (
+            /*
+              THE PREVIEW IS THE EDITOR. It used to be a read-only iframe with a raw-HTML textarea
+              underneath, so editing an AI draft meant editing markup — the formatted email was the
+              one thing you could not type into.
+              THE SANDBOX IS NOT DROPPED TO ACHIEVE THAT, because the content is model output built
+              from a prompt and lead fields, and rendering it into the app's own DOM would let an
+              `onerror=` attribute run with the user's session. `allow-same-origin` WITHOUT
+              `allow-scripts` is the pair that makes this safe: scripts and inline handlers still do
+              not run, and the parent can reach `contentDocument` to make the body editable and read
+              the edits back.
+            */
             <div className="field">
-              <label>Preview</label>
-              <iframe title="Email preview" sandbox="" srcDoc={body}
-                style={{ width: '100%', height: 240, border: '1px solid var(--line)', borderRadius: 8, background: '#fff' }} />
+              <label>Message</label>
+              <iframe
+                title="Email — click to edit"
+                ref={previewRef}
+                sandbox="allow-same-origin"
+                srcDoc={seed}
+                onLoad={() => {
+                  const doc = previewRef.current?.contentDocument;
+                  if (!doc) return;
+                  doc.body.contentEditable = 'true';
+                  doc.body.style.margin = '10px';
+                  doc.body.style.font = '14px system-ui, sans-serif';
+                  doc.body.style.outline = 'none';
+                  // Every edit flows straight back into the value that gets sent, so what was typed
+                  // is what leaves — there is no separate "apply" step to forget.
+                  doc.body.addEventListener('input', () => setBody(doc.body.innerHTML));
+                }}
+                style={{ width: '100%', height: 300, border: '1px solid var(--line)', borderRadius: 8, background: '#fff' }}
+              />
+              <div className="help">Click into the message to edit it. It sends exactly as it looks here.</div>
+            </div>
+          ) : (
+            <div className="field">
+              <label>Message</label>
+              <textarea rows={10} value={body} required
+                onChange={(e) => setBody(e.target.value)} placeholder={`Hi ${lead.name.split(' ')[0]},`} />
             </div>
           )}
-          <div className="field">
-            <label>{isHtml ? 'Message (HTML — editable)' : 'Message'}</label>
-            <textarea rows={isHtml ? 6 : 10} value={body} required
-              onChange={(e) => setBody(e.target.value)} placeholder={`Hi ${lead.name.split(' ')[0]},`}
-              style={isHtml ? { fontFamily: 'monospace', fontSize: 12 } : undefined} />
-            {isHtml && <div className="help">This is AI-generated HTML and will be sent as a formatted email. Edit if needed; the preview updates on change.</div>}
-          </div>
         </div>
         <div className="modal-foot">
           <button className="btn ghost" type="button" onClick={onClose}>Cancel</button>
@@ -1066,10 +1104,20 @@ function FollowUpModal({ lead, onClose, onSaved }: { lead: LeadDetail; onClose: 
     notes: '',
   });
   const [saving, setSaving] = useState(false);
+  /**
+   * The overlap the API refused, if it did.
+   *
+   * The refusal message ends "…or save again with 'Book anyway' to keep both", and this modal used
+   * to swallow the whole thing into a generic error toast — so the user was told to press a button
+   * that did not exist here. `EventEditorModal` has offered it all along; this is the same handling,
+   * against the same `allow_overlap` flag.
+   */
+  const [clash, setClash] = useState<string | null>(null);
 
-  const submit = async (e: React.FormEvent) => {
+  const submit = async (e: React.FormEvent, allowOverlap = false) => {
     e.preventDefault();
     setSaving(true);
+    if (!allowOverlap) setClash(null);
     try {
       const payload: CalendarEventInput & { lead_id: number } = {
         title: form.title.trim(),
@@ -1081,11 +1129,19 @@ function FollowUpModal({ lead, onClose, onSaved }: { lead: LeadDetail; onClose: 
         contact_phone: lead.phone ?? '',
         notes: form.notes.trim(),
         lead_id: lead.id,
+        ...(allowOverlap ? { allow_overlap: true } : {}),
       };
       await createEvent('crm', payload);
       onSaved();
     } catch (ex) {
-      toast(apiErrorMessage(ex, 'Could not create the follow-up'), 'bad');
+      const res = (ex as { response?: { data?: { conflict?: boolean; message?: string } } }).response?.data;
+      if (res?.conflict) {
+        // Deliberately NOT a toast. The choice it asks for needs the button beside it, and a toast
+        // disappears while the user is still reading which appointment they collided with.
+        setClash(res.message ?? 'This overlaps another appointment.');
+      } else {
+        toast(apiErrorMessage(ex, 'Could not create the follow-up'), 'bad');
+      }
     } finally {
       setSaving(false);
     }
@@ -1124,8 +1180,25 @@ function FollowUpModal({ lead, onClose, onSaved }: { lead: LeadDetail; onClose: 
             <textarea rows={2} value={form.notes} onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))} />
           </div>
           <span className="help">Appears on the Calendar and stays linked to this lead.</span>
+
+          {/*
+            The overlap, and the way through it. Double-booking is sometimes deliberate — two
+            viewings at one address, a call during a long meeting — so the API refuses once, says
+            what was hit, and accepts `allow_overlap` on the second attempt. Showing the collision
+            and the button together is what makes that an informed choice rather than a dead end.
+          */}
+          {clash && (
+            <div className="field-err" style={{ marginTop: 8 }} role="alert">{clash}</div>
+          )}
+
           <div className="actions">
             <button className="btn ghost" type="button" onClick={onClose} disabled={saving}>Cancel</button>
+            {clash && (
+              <button className="btn ghost" type="button" disabled={saving}
+                onClick={(e) => void submit(e as unknown as React.FormEvent, true)}>
+                Book anyway
+              </button>
+            )}
             <button className="btn primary" type="submit" disabled={saving}>{saving ? 'Saving…' : 'Add to Calendar'}</button>
           </div>
         </form>

@@ -1,8 +1,9 @@
 import { Injectable } from '@nestjs/common';
 import * as crypto from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
-import { EMAIL_SHAPE, FILLABLE_TOKENS } from './campaign.constants';
+import { EMAIL_SHAPE, FILLABLE_TOKENS, MAX_RECIPIENTS } from './campaign.constants';
 import type { AuthUserRecord } from '../auth/auth.types';
+import { can } from '../core/authz';
 
 /** The lead-segment filter a campaign targets. */
 export interface AudienceFilter {
@@ -30,17 +31,38 @@ export class CampaignAudienceService {
   constructor(private readonly prisma: PrismaService) {}
 
   /**
-   * Restrict an audience to the leads its author is entitled to reach — for EVERY role.
+   * Which leads this person may build an audience from.
    *
-   * Anyone, agent or admin, may only mail their own book: the leads assigned to them or that they
-   * created. Without this a campaign could reach the entire brokerage's lead database in one
-   * click, which is both a privacy breach and, under CASL, a consent problem — those leads
-   * consented to hear from the person handling them, not from whoever opened the builder. The
-   * rule is identical to the Leads list, so a campaign can only ever reach people its author can
-   * already see. When no user is supplied (should not happen from a request) it is fail-closed to
-   * an impossible id rather than opening the whole book.
+   * THE COMMENT THAT WAS HERE SAID THE OPPOSITE, and is worth recording rather than deleting
+   * silently. It stated that every role "may only mail their own book" and that anything else was
+   * "a privacy breach and, under CASL, a consent problem — those leads consented to hear from the
+   * person handling them, not from whoever opened the builder."
+   *
+   * That is the right argument about an AGENT and the wrong one about the brokerage. Consent under
+   * CASL is given to the organisation, not to an individual salesperson, and the roles listed on
+   * `campaigns.brokerage-audience` act for the brokerage: preparing campaigns on agents' behalf is
+   * the CRM role's stated job. The unchanged half of the argument is the important half — an agent
+   * is still capped, and every consent control below still runs for everyone.
+   *
+   * `{}` — no owner restriction — for the marketing and administrative roles, which select ELIGIBLE
+   * leads across the brokerage. Everyone else is capped to leads they own or are assigned.
+   *
+   * WIDENING THE POOL IS NOT BYPASSING THE RULES. This decides only which leads are candidates.
+   * Everything that narrows the list still runs, in `buildAudienceWhere` and `resolveRecipients`
+   * below and unchanged by this:
+   *
+   *   · `deleted_at: null`          — deleted leads are never candidates
+   *   · `unsubscribed: false`       — the lead's own opt-out flag
+   *   · the campaign's own filters  — status, type, source, client type, tag
+   *   · `EMAIL_SHAPE`               — malformed addresses dropped
+   *   · `seen`                      — duplicate addresses dropped
+   *   · `suppressedEmails()`        — the brokerage suppression list, applied last and to everyone
+   *
+   * The comment this replaces claimed "staff and admins see the whole book", which was not true of
+   * the code — every role was capped, including the one whose job is brokerage-wide marketing.
    */
   private ownerScope(user?: AuthUserRecord | null): Record<string, unknown> {
+    if (can(user, 'campaigns.brokerage-audience')) return {};
     const id = user?.id ?? -1;
     return { OR: [{ assigned_to: id }, { owner_user_id: id }] };
   }
@@ -60,16 +82,44 @@ export class CampaignAudienceService {
     // tags is a JSON array in a text column; `contains` on the quoted value avoids
     // matching "Buyer" inside "First Buyer".
     if (a.tag) where.tags = { contains: `"${a.tag}"` };
-    // An agent's audience is capped to their own leads; staff and admins see the whole book.
+    // Capped to their own leads, unless they hold the brokerage-audience capability.
     const scope = this.ownerScope(user);
     return Object.keys(scope).length ? { AND: [where, scope] } : where;
   }
+
+  /**
+   * How many lead rows one audience resolution may read.
+   *
+   * A campaign is capped at `MAX_RECIPIENTS` (300), but the cap was checked AFTER the whole matching
+   * set had been loaded — so an agent with a 60,000-lead book built a 300-person campaign by pulling
+   * 60,000 full rows into memory and then throwing them away. Against the 2.5M-lead scale model that
+   * is the single largest unbounded read in the CRM.
+   *
+   * Fifty times the recipient cap is deliberately generous: deduplication and the suppression list
+   * only ever REMOVE recipients, so 15,000 leads can never yield fewer than 300 distinct valid
+   * addresses unless the audience is almost entirely duplicates — and an audience that broad is one
+   * the user is about to be told to narrow anyway.
+   */
+  private static readonly MAX_AUDIENCE_SCAN = MAX_RECIPIENTS * 50;
 
   /** Resolve the concrete recipient list: deduped, email-validated, suppression-filtered. */
   async resolveRecipients(a: AudienceFilter, user?: AuthUserRecord | null): Promise<CampaignRecipient[]> {
     const leads = await this.prisma.leads.findMany({
       where: this.buildAudienceWhere(a, user),
       orderBy: { id: 'asc' },
+      /*
+       * EXPLICIT COLUMNS, because `notes` is the reason this mattered. A lead row carries around
+       * forty columns including a free-text note that the scale model measured at 2.5 kB on one lead
+       * in forty; the ten below are every field this method actually reads. Selecting them cuts the
+       * bytes crossing the wire by roughly an order of magnitude and, more to the point, stops a
+       * campaign preview from holding a brokerage's entire correspondence history in memory.
+       */
+      select: {
+        id: true, name: true, email: true, location: true,
+        property_address: true, property_price: true,
+        bedrooms: true, bathrooms: true, square_footage: true, key_features: true,
+      },
+      take: CampaignAudienceService.MAX_AUDIENCE_SCAN,
     });
 
     const seen = new Set<string>();

@@ -677,6 +677,8 @@ restoring the database *is* the rollback — which is why the backup is step 1.
 - [ ] OAuth redirect URIs and webhooks re-registered at the new domain with Google, Meta and Twilio.
 - [ ] `unattended-upgrades` enabled for security patches.
 
-**Read `OPERATIONS.md` → Known operational risks before onboarding anyone.** Two tenant-isolation
-defects (`AUD-001`, `AUD-002`) are open. They do not affect a single-brokerage deployment, but a
-second company record must not be created until they are closed.
+**Read `OPERATIONS.md` → Known operational risks before onboarding anyone.** This deployment is
+single-brokerage by design as of 2026-08-08; the tenancy layer was removed and the settings, CRM
+email and licence tables each hold exactly one row, enforced by the database. Do not create a
+second company record — it will be refused, and serving a second brokerage is a design exercise
+rather than a configuration change.

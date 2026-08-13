@@ -3,11 +3,14 @@ import { PrismaService } from '../prisma/prisma.service';
 import { isAdminOrAbove, isAgent, isSuperAdmin } from './authz';
 
 /**
- * Ownership — the authorization question the tenant filter cannot answer.
+ * Ownership — the authorization question no blanket filter can answer.
  *
- * Tenant isolation stops one brokerage reading another's records. It says nothing about one agent
- * reading a colleague's, because both rows belong to the same company and the filter is satisfied.
- * That second question has to be asked per resource, and it was being asked in some places and not
+ * This is the layer that actually keeps one agent out of another's records, and it is the only one:
+ * it survived the removal of multi-brokerage tenancy untouched, because the tenant filter never
+ * answered this question in the first place. Both rows belonged to the same company, so the filter
+ * was satisfied by a colleague's lead exactly as it was by your own.
+ *
+ * The question has to be asked per resource, and it was being asked in some places and not
  * others: `GET /api/transactions/:id` refused an agent who had no part in the deal, while
  * `GET /api/transactions/:id/messages` handed over the whole chat thread. Found by signing in as a
  * real agent and asking, not by reading the code.
@@ -49,6 +52,30 @@ export class ResourceAccessService {
 
     if (!allowed) {
       throw new ForbiddenException({ message: 'You do not have access to this transaction.' });
+    }
+  }
+
+  /**
+   * The same question as `assertTransaction`, answered rather than thrown.
+   *
+   * WHY IT DELEGATES INSTEAD OF RE-STATING THE RULE. Mentions need to ask "may this person open this
+   * deal?" about somebody who is NOT the caller, and the answer must be identical to the one the
+   * chat itself enforces. Writing the condition out a second time is how the two drift — and the
+   * drift here is not a broken page, it is telling an outsider that a deal exists. Delegating costs
+   * an exception as control flow and buys the guarantee that there is exactly one rule.
+   *
+   * A missing transaction answers false, for the same reason `assertTransaction` 404s it: the answer
+   * must not depend on who is asking.
+   */
+  async canReachTransaction(
+    user: { id?: number; name?: string | null; role?: string | null } | null,
+    transactionId: number,
+  ): Promise<boolean> {
+    try {
+      await this.assertTransaction(user, transactionId);
+      return true;
+    } catch {
+      return false;
     }
   }
 

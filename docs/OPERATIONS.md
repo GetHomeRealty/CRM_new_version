@@ -365,9 +365,20 @@ Live issues to be aware of while operating. Each is real, reproduced, and curren
    message, its sender, its date and its link to a lead. Mail attached to a lead is exempt from
    both unless `MAIL_RETENTION_INCLUDE_LINKED` is set.
 
-4. **Two tenant-isolation defects remain open** (`AUD-001`, `AUD-002`). They do not affect a
-   single-brokerage deployment. **They must be fixed before a second brokerage is onboarded** — see
-   the audit report. Do not create a second company record until they are closed.
+4. **This deployment is single-brokerage, and the database now enforces it.** The multi-brokerage
+   tenancy layer was removed on 2026-08-08 — no request context, no per-query `company_id` filter,
+   no `company_id` columns. With it went `AUD-001` and `AUD-002`, the two open tenant-isolation
+   defects, which no longer describe anything that exists.
+
+   What replaced them is stricter, not looser: `company_settings`, `crm_email_settings` and
+   `subscriptions` each hold **exactly one row**, enforced by unique indexes, so a second brokerage
+   record can no longer be created by accident. **Do not attempt to add one.** Serving a second
+   brokerage is a separate design exercise, not a row insert — see
+   `docs/audit/TENANT-REMOVAL-AUDIT-2026-08-08.md`.
+
+   Agent-to-agent privacy is unaffected and always was: it is enforced by record ownership and RBAC
+   (`ResourceAccessService`, the area/screen guards, the role tables), none of which ever consulted
+   `company_id`.
 
 5. **Monitoring exists but must be registered and given a channel.** `schedule-monitor.ps1` runs the
    checks every five minutes; until it is registered from an elevated prompt *and* an alert channel

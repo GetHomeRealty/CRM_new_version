@@ -45,6 +45,9 @@ const LeadDetailPage = lazy(() => import('./desk/LeadDetailPage'));
 const MetaPage = lazy(() => import('./desk/MetaPage'));
 const AccountSettingsPage = lazy(() => import('./desk/AccountSettingsPage'));
 const NotificationPreferencesPage = lazy(() => import('./desk/NotificationPreferencesPage'));
+const CrmCommunicationsPanel = lazy(() => import('./desk/CrmCommunicationsPanel'));
+const TwoFactorCard = lazy(() => import('./desk/TwoFactorCard'));
+const NotificationCenterPage = lazy(() => import('./desk/NotificationCenterPage'));
 const InboxPage = lazy(() => import('./desk/InboxPage'));
 const AuditLogPage = lazy(() => import('./desk/AuditLogPage'));
 const RecycleBinPage = lazy(() => import('./desk/RecycleBinPage'));
@@ -115,6 +118,33 @@ const SCREENS: ScreenRoutes[] = [
   // choices, so everyone from agent to super-admin reaches their own and nobody reaches
   // anyone else's. There is no admin permission that would make sense to gate it on.
   { screen: 'notifications', paths: [''], element: () => <NotificationPreferencesPage />, open: true },
+  /*
+   * CRM Communications. OPEN, for the same reason as the screen above and for one more.
+   *
+   * It is mostly a personal screen: an agent controls their own Email/In-app/Push choices there,
+   * and the write endpoints refuse everything beyond that on the server. Gating it on `settings`
+   * would have made it unreachable by exactly the people it is for — agents do not hold that
+   * permission and never see the Settings group at all. The administrator-only parts (template
+   * editing, creation, the brokerage switch) are decided per request by the API, not by whether
+   * the route opened.
+   */
+  { screen: 'communications', paths: [''], element: () => <CrmCommunicationsPanel standalone />, open: true },
+  /*
+   * Two-step verification. OPEN, and this one is not a convenience.
+   *
+   * It is listed under CRM → Settings, which is gated on `settings` — a permission agents do not
+   * hold. The card only ever reads and writes the signed-in person's OWN factors, and the enrolment
+   * policy can make a factor REQUIRED for a role: routed only through that tab, an agent could be
+   * told "your role requires two-step verification" and have no screen on which to set one up. This
+   * is the door they use.
+   */
+  { screen: 'two-step', paths: [''], element: () => <TwoFactorCard standalone />, open: true },
+  /*
+   * The Notification Centre — everything the person has been told, with history. Open like the
+   * other personal screens: it shows only the viewer's own notifications, scoped server-side, so
+   * there is no admin permission that would make sense to gate it on.
+   */
+  { screen: 'notification-center', paths: [''], element: () => <NotificationCenterPage />, open: true },
   { screen: 'inbox', paths: [''], element: () => <InboxPage />, open: true },
   { screen: 'recycle-bin', paths: [''], element: () => <RecycleBinPage />, superAdmin: true },
 ];

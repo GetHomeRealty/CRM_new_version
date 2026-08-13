@@ -33,7 +33,7 @@ export default function IntegrationsPanel() {
       {/* Mail Configuration — connect your own Gmail / SMTP sending + inbox account. */}
       <EmailIntegrationCard scope="desk" />
 
-      {/* Google Calendar — real OAuth "Sign in with Google", connected right here. */}
+      {/* Google Calendar — real OAuth, connected right here. */}
       <GoogleCalendarCard scope="desk" />
     </div>
   );

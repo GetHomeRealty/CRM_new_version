@@ -1,7 +1,7 @@
 import api from './axios';
 import type {
   CrmBroadcast, CrmEmailLogRow, CrmEmailSettings, CrmIntegrations, CrmProfile,
-  CrmReferralCode, CrmSendResult, CrmSettings,
+  CrmMyTriggers, CrmReferralCode, CrmSendResult, CrmSettings,
 } from '../types';
 
 /** CRM Settings API (migrated). Separate from Transaction Desk's own settings endpoints. */
@@ -30,6 +30,13 @@ export const saveCrmEmailSettings = (body: Record<string, unknown>): Promise<Crm
 /** The CRM's action-dispatch endpoint, preserved verbatim (sendWeddingEmail, bulkSend, …). */
 export const crmEmailAction = <T = CrmSendResult>(action: string, data: Record<string, unknown> = {}): Promise<T> =>
   api.post<T>('/api/crm-settings/email-settings', { action, ...data }).then((r) => r.data);
+
+/** A person's OWN CRM email triggers. Gated on the `triggers` permission, not `settings`. */
+export const getMyTriggers = (): Promise<CrmMyTriggers> =>
+  api.get<CrmMyTriggers>('/api/crm-settings/triggers').then((r) => r.data);
+
+export const saveMyTriggers = (triggers: Record<string, boolean>): Promise<CrmMyTriggers & { message: string }> =>
+  api.put<CrmMyTriggers & { message: string }>('/api/crm-settings/triggers', { triggers }).then((r) => r.data);
 
 export const listReferralCodes = (): Promise<CrmReferralCode[]> =>
   api.get<CrmReferralCode[]>('/api/crm-settings/referral-codes').then((r) => r.data);

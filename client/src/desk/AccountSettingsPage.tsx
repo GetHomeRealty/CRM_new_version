@@ -5,9 +5,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   deleteMyMailAccount, getAccountProfile, getAccountSettings, listMyMailAccounts,
   saveAccountProfile, setMyDefaultMailAccount, syncMailAccount, testMyMailAccount,
-  googleCalendarStatus, googleCalendarConnect, googleCalendarSync, googleCalendarDisconnect,
   type AccountIntegrations, type AccountMailAccount,
-  type GoogleCalendarStatus,
 } from '../lib/accountApi';
 import { getMyPhoto, uploadMyPhoto, deleteMyPhoto } from '../lib/api';
 import { fileToBase64 } from '../lib/importApi';
@@ -16,6 +14,7 @@ import { useAuth } from '../context/AuthContext';
 import { useToast } from './toast';
 import MailAccountModal from './MailAccountModal';
 import UserAvatar, { bumpPhotoVersion } from './UserAvatar';
+import GoogleCalendarCard from './GoogleCalendarCard';
 
 const PHOTO_ACCEPT = '.png,.jpg,.jpeg,.gif,.webp';
 const PHOTO_MAX_MB = 4;
@@ -184,6 +183,13 @@ export default function AccountSettingsPage() {
       {loadWarning && (
         <div className="lead-lock-note" style={{ marginBottom: 12 }}>⚠ {loadWarning}</div>
       )}
+
+      {/*
+        * Two-step verification used to sit here, above Profile Picture. It moved to CRM → Settings
+        * → Two-Step Verification, which is now the only place it is configured. Nothing about the
+        * factors themselves changed — same card, same endpoints, same enrolled methods — only where
+        * it is listed. The `two-step` route is its open door for anyone without `settings`.
+        */}
 
       {/* ---- Profile Picture ---- */}
       <div className="card">
@@ -355,7 +361,28 @@ export default function AccountSettingsPage() {
 
         {/* Calendar & social — grouped with mail under one Integrations section. */}
         <div className="intg" style={{ marginTop: 14 }}>
-          <GoogleCalendarRow />
+          {/*
+            ONE CARD — the one belonging to the area this screen is being viewed under.
+
+            This is a single component served at both /crm/account and /desk/account, and it used to
+            render BOTH scoped cards regardless. So Settings under the CRM showed a "Transaction
+            Management" Google Calendar and Settings under Transaction Management showed a
+            "Customer Relationship Management" one — each area offering a connection that belongs to
+            the other.
+
+            The two connections remain genuinely separate: `google_connections.scope` still keys
+            them, the same column pattern `mail_accounts.scope` uses, and connecting one still does
+            not connect the other. What changed is only which of them THIS screen offers. The
+            heading is kept and follows the area, because a card that just says "Google Calendar"
+            cannot tell you which of the two it manages — that ambiguity is what the headings were
+            added for in the first place.
+          */}
+          <div className="intg-scope">
+            <h4 className="intg-scope-title">
+              {area === 'crm' ? 'Customer Relationship Management' : 'Transaction Management'}
+            </h4>
+            <GoogleCalendarCard scope={area === 'crm' ? 'crm' : 'desk'} />
+          </div>
 
           {/*
             Meta Lead Ads is a CRM integration: it feeds lead forms into the Leads module and has
@@ -404,88 +431,3 @@ export default function AccountSettingsPage() {
   );
 }
 
-/**
- * Google Calendar — real OAuth. "Connect" fetches Google's consent-screen URL and sends the
- * browser to it; Google shows the account picker and consent, then redirects back to
- * /app/account?google_connected=1. Works once the server has Google OAuth credentials; until
- * then the button explains it's not set up rather than failing.
- */
-function GoogleCalendarRow() {
-  const toast = useToast();
-  const { link } = useArea();
-  const [st, setSt] = useState<GoogleCalendarStatus | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  const load = useCallback(() => { googleCalendarStatus().then(setSt).catch(() => setSt(null)); }, []);
-  useEffect(() => { load(); }, [load]);
-
-  // Surface the outcome of the round-trip once, then clean the URL. If the connect was started from
-  // another page (e.g. Email Settings → Integrations), a stored hint sends the browser back there so
-  // the flow ends where it began.
-  useEffect(() => {
-    const p = new URLSearchParams(window.location.search);
-    const outcome = p.get('google_connected') ? 'google_connected=1'
-      : p.get('google_error') ? `google_error=${encodeURIComponent(p.get('google_error') ?? '')}` : '';
-    if (!outcome) return;
-    const back = sessionStorage.getItem('gcal_return');
-    if (back) {
-      sessionStorage.removeItem('gcal_return');
-      window.location.replace(back + (back.includes('?') ? '&' : '?') + outcome);
-      return;
-    }
-    if (p.get('google_connected')) toast('Google Calendar connected.', 'ok');
-    else toast(`Google connection failed: ${p.get('google_error')}`, 'bad');
-    window.history.replaceState({}, '', link('account'));
-    load();
-  }, [toast, load]);
-
-  const connect = async () => {
-    setBusy(true);
-    try {
-      const res = await googleCalendarConnect();
-      if (res.url) window.location.href = res.url;               // → Google's own consent screen
-      else toast(res.message || 'Google sign-in is not set up on the server.', 'bad');
-    } catch (ex) {
-      toast(apiErrorMessage(ex, 'Could not start Google sign-in'), 'bad');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const run = async (fn: () => Promise<{ message?: string; error?: string | null }>, ok: string) => {
-    setBusy(true);
-    try { const r = await fn(); toast(r.error ? (r.message || r.error) : (r.message || ok), r.error ? 'bad' : 'ok'); load(); }
-    catch (ex) { toast(apiErrorMessage(ex, 'That did not work'), 'bad'); }
-    finally { setBusy(false); }
-  };
-
-  const detail = !st ? 'Checking…'
-    : !st.configured ? (st.setup_hint || 'Google sign-in is not set up on the server yet.')
-    : st.connected ? `Connected as ${st.email ?? 'your Google account'}${st.last_sync ? ` · last synced ${st.last_sync.slice(0, 16).replace('T', ' ')}` : ''}`
-    : 'Connect your Google Calendar — sign in with Google and your events sync both ways.';
-
-  return (
-    <div className="intg-row">
-      <div>
-        <strong>Google Calendar</strong>
-        <div className="muted">{detail}</div>
-        {st?.error && <div className="muted" style={{ color: 'var(--bad)' }}>{st.error}</div>}
-      </div>
-      <div className="acct-actions">
-        <span className={`pill ${st?.connected ? 'ok' : ''}`}>{st?.connected ? 'Connected' : 'Not connected'}</span>
-        {st?.connected ? (
-          <>
-            <button className="btn ghost sm" type="button" disabled={busy}
-              onClick={() => void run(() => googleCalendarSync(), 'Synced.')}>↻ Sync now</button>
-            <button className="btn ghost sm" type="button" disabled={busy}
-              onClick={() => void run(() => googleCalendarDisconnect().then(() => ({ message: 'Disconnected.' })), 'Disconnected.')}>Disconnect</button>
-          </>
-        ) : (
-          <button className="btn primary sm" type="button" disabled={busy || (st ? !st.configured : true)} onClick={() => void connect()}>
-            {busy ? '…' : 'Connect Google Calendar'}
-          </button>
-        )}
-      </div>
-    </div>
-  );
-}

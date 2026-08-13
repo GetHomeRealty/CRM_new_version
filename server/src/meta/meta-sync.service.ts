@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { LeadAuditService } from '../leads/lead-audit.service';
 import { LeadNotificationService } from '../leads/lead-notification.service';
+import { CrmEventNotifier } from '../notifications/crm-events.service';
 import { MetaConnectionService } from './meta-connection.service';
 import { MetaGraphService, GraphError, isAuthFailure, type GraphLead } from './meta-graph.service';
 import { MetaApiBudgetService } from './meta-api-budget.service';
@@ -48,6 +49,8 @@ export class MetaSyncService {
     private readonly notifications: LeadNotificationService,
     private readonly budget: MetaApiBudgetService,
     private readonly alerts: MetaAlertService,
+    /** Optional so existing constructions — including this service's specs — keep working. */
+    private readonly crmEvents?: CrmEventNotifier,
   ) {}
 
   /** Exposed for tests and for re-mapping a stored payload. */
@@ -274,6 +277,7 @@ export class MetaSyncService {
       });
       this.log.log(`Meta lead ${facebookLeadId} restored lead #${buried.id}, which had been deleted.`);
       void this.notifications.notifyNewLead(restored);
+      void this.metaArrived(restored, ctx, facebookLeadId);
       return { outcome: 'imported', leadId: restored.id, rule: 'restored a deleted lead with the same address' };
     }
 
@@ -301,7 +305,39 @@ export class MetaSyncService {
     });
     // Best-effort "new lead from Meta" email to the assigned agent; never blocks the sync.
     void this.notifications.notifyNewLead(row);
+    void this.metaArrived(row, ctx, facebookLeadId);
     return { outcome: 'imported', leadId: row.id };
+  }
+
+  /**
+   * Tell the owning agent that a Meta lead arrived.
+   *
+   * REACHED ONLY FROM THE TWO `imported` PATHS — a fresh lead, or a deleted one restored by a new
+   * enquiry. A submission that matched an existing lead returns `duplicate` or `updated` well before
+   * here, so deduplication produces no notification, which is the required behaviour: an existing
+   * lead being updated is not a new lead arriving.
+   *
+   * IDEMPOTENT ACROSS INTAKE MECHANISMS. `facebookLeadId` is Meta's own identifier for the
+   * submission, and both the scheduled poll and the webhook carry it. Keying on it — rather than on
+   * our row id, a timestamp, or which path got here first — means whichever arrives second is
+   * dropped deterministically by the dispatcher, with no dependence on ordering.
+   *
+   * In-app and push only. The templated Meta email is `notifyNewLead` on the line above, and asking
+   * the dispatcher for email as well would deliver two.
+   */
+  private async metaArrived(
+    lead: { id: number; name: string | null; email: string | null },
+    ctx: { userId: number | null; assignedTo?: number | null; formName?: string | null; pageName?: string | null },
+    facebookLeadId: string,
+  ): Promise<void> {
+    const recipient = this.assignee(ctx as never) ?? ctx.userId;
+    if (!recipient || !facebookLeadId) return;
+    await this.crmEvents?.metaLeadArrived(
+      { id: lead.id, first_name: lead.name, last_name: null, email: lead.email },
+      recipient,
+      facebookLeadId,
+      ctx.formName ?? ctx.pageName ?? null,
+    );
   }
 
   /**

@@ -4,8 +4,6 @@ import { parseJsonObject } from '../common/serialize';
 import { TransactionLawyerReminderService } from './transaction-lawyer-reminder.service';
 import { tracksBothLawyers } from './lawyer-details';
 
-import { forEachTenant } from '../core/tenant-context';
-import { allTenantIds } from '../core/tenants';
 const DEFAULT_INTERVAL_DAYS = 3;
 
 /**
@@ -54,17 +52,7 @@ export class LawyerReminderSchedulerService implements OnModuleInit, OnModuleDes
   }
 
   /** One pass: re-evaluate every deal that still has a lawyer detail outstanding. */
-  /**
-   * Send lawyer reminders, one brokerage at a time.
-   *
-   * The pass itself is unchanged; it simply runs once per tenant, inside that tenant's
-   * context, so every query it makes is scoped the same way a request would be.
-   */
   async sweep(): Promise<void> {
-    await forEachTenant(() => allTenantIds(this.prisma), () => this.sweepForTenant());
-  }
-
-  async sweepForTenant(): Promise<void> {
     if (this.running) return;
     this.running = true;
     try {

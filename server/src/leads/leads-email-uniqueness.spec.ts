@@ -3,11 +3,15 @@ import { PrismaClient } from '@prisma/client';
 /**
  * The constraint the schema cannot declare, and the rule it encodes.
  *
- * `leads` is UNIQUE on `(company_id, COALESCE(owner_user_id, 0), lower(email))`, created by a raw
- * statement in migrations/20260802140000_lead_email_unique_per_owner because Prisma has no syntax
- * for a functional index. That makes it invisible to `schema.prisma` — and therefore to anyone
- * rebuilding a database from the schema rather than by replaying migrations, which is what
- * `prisma db push` and most disaster-recovery runbooks do.
+ * `leads` is UNIQUE on `(COALESCE(owner_user_id, 0), lower(email))`, created by a raw statement
+ * because Prisma has no syntax for a functional index. That makes it invisible to `schema.prisma` —
+ * and therefore to anyone rebuilding a database from the schema rather than by replaying
+ * migrations, which is what `prisma db push` and most disaster-recovery runbooks do.
+ *
+ * It led with `company_id` until multi-brokerage tenancy was removed on 2026-08-08
+ * (migrations/20260808140000_tenant_removal_replacement_constraints). With one brokerage that
+ * column held a single value, so dropping it cannot merge two keys that were previously distinct —
+ * the rule below is unchanged.
  *
  * Two behaviours depend on it and both fail SILENTLY without it:
  *
@@ -29,7 +33,7 @@ describe('leads email uniqueness', () => {
   const made: number[] = [];
 
   const lead = (email: string, owner: number | null, name = 'Uniqueness Guard') => ({
-    name, email, owner_user_id: owner, company_id: 1, created_at: new Date(), updated_at: new Date(),
+    name, email, owner_user_id: owner, created_at: new Date(), updated_at: new Date(),
   });
 
   afterEach(async () => {
@@ -52,16 +56,15 @@ describe('leads email uniqueness', () => {
         + '  createMany({ skipDuplicates: true }) in LeadImportEngine compiles to ON CONFLICT DO NOTHING\n'
         + '  and de-duplicates nothing without it, so re-importing a list would silently create a second\n'
         + '  copy of every lead. LeadsService.create also relies on the P2002 it raises.\n\n'
-        + '  It is created by migrations/20260802140000_lead_email_unique_per_owner and CANNOT be\n'
-        + '  expressed in schema.prisma (Prisma has no functional-index syntax), so a database built with\n'
-        + '  `prisma db push` will not have it. Replay the migrations, or create it by hand:\n\n'
-        + '    CREATE UNIQUE INDEX "leads_company_owner_email_key"\n'
-        + '      ON "leads" ("company_id", COALESCE("owner_user_id", 0), LOWER("email"));\n',
+        + '  It is created by migrations/20260808140000_tenant_removal_replacement_constraints and\n'
+        + '  CANNOT be expressed in schema.prisma (Prisma has no functional-index syntax), so a database\n'
+        + '  built with `prisma db push` will not have it. Replay the migrations, or create it by hand:\n\n'
+        + '    CREATE UNIQUE INDEX "leads_owner_email_key"\n'
+        + '      ON "leads" (COALESCE("owner_user_id", 0), LOWER("email"));\n',
       );
     }
-    // Scoped, not global. A global index would pass the check above and reject every legitimate
+    // Per book, not global. A global index would pass the check above and reject every legitimate
     // second arrival of the same person.
-    expect(found).toMatch(/company_id/i);
     expect(found).toMatch(/owner_user_id/i);
   });
 
@@ -89,19 +92,18 @@ describe('leads email uniqueness', () => {
     expect(await prisma.leads.count({ where: { email: address } })).toBe(2);
   });
 
-  it('allows another brokerage to hold the same person', async () => {
-    const address = `Two.Firms.${Date.now()}@example.test`;
-    const other = await prisma.company_settings.findFirst({ where: { id: { not: 1 } }, select: { id: true } });
-    if (!other) {
-      // Single-tenant database: the company_id column is still in the index, which the definition
-      // check above proves, so there is nothing further this can demonstrate here.
-      return;
-    }
-    const a = await prisma.leads.create({ data: lead(address, 4001) });
-    const b = await prisma.leads.create({ data: { ...lead(address, 4001), company_id: other.id } });
-    made.push(a.id, b.id);
-    expect(await prisma.leads.count({ where: { email: address } })).toBe(2);
-  });
+  /*
+   * REMOVED: 'allows another brokerage to hold the same person'.
+   *
+   * It seeded a second `company_settings` row and asserted the index let both brokerages hold the
+   * same address. There is no second brokerage to seed any more — this deployment serves one, the
+   * `company_id` column is gone from `leads`, and the rule it demonstrated has no way to be
+   * exercised. It was already a no-op on a single-brokerage database, returning early whenever it
+   * could not find a second company, which is every run this suite has ever made here.
+   *
+   * The half of the rule that still applies — two AGENTS in this brokerage may each hold the same
+   * person — is covered by the test above it, which is the case that actually happens.
+   */
 
   /**
    * Unattributed brokerage intake is the highest-volume source there is, and `owner_user_id IS

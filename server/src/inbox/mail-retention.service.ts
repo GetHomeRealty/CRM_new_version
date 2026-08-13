@@ -1,7 +1,10 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { runAsSystem } from '../core/tenant-context';
 import { schedulersEnabled, schedulerSkipReason } from '../common/schedulers';
+import { clusterTick } from '../redis/cluster-tick';
+import { RedisService } from '../redis/redis.service';
+import { CacheService } from '../redis/cache.service';
+import { registerWorker } from '../observability/worker-health';
 
 /** Once a day is often enough for a policy measured in months. */
 const SWEEP_INTERVAL_MS = 24 * 60 * 60 * 1000;
@@ -64,7 +67,13 @@ export class MailRetentionService implements OnModuleInit, OnModuleDestroy {
   private first: ReturnType<typeof setTimeout> | null = null;
   private running = false;
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    // Optional so existing constructions — including this service's specs — keep working.
+    // Used only to decide whether THIS process should run a given sweep; see `clusterTick`.
+    private readonly redis?: RedisService,
+    private readonly cache?: CacheService,
+  ) {}
 
   onModuleInit(): void {
     const policy = retentionPolicy();
@@ -79,7 +88,28 @@ export class MailRetentionService implements OnModuleInit, OnModuleDestroy {
 
     this.first = setTimeout(() => { void this.sweep(); }, FIRST_SWEEP_DELAY_MS);
     this.first.unref?.();
-    this.timer = setInterval(() => { void this.sweep(); }, SWEEP_INTERVAL_MS);
+
+    /*
+     * `clusterTick`, so that on a multi-process deployment one instance sweeps rather than all of
+     * them.
+     *
+     * THE STAKES ARE LOWER HERE THAN FOR CAMPAIGN MAIL, and saying so matters because it explains
+     * why this is tidiness rather than a blocker. Both operations are idempotent: the body strip is
+     * an `updateMany` whose `where` excludes rows already stripped, and the delete works from a
+     * fresh `findMany` each batch. Four processes sweeping produce the same end state as one — they
+     * simply do redundant work against a large table while the IMAP poller is writing to it.
+     *
+     * Without Redis this behaves exactly as before, because `clusterTick` runs the tick when no
+     * lock is available. Registering the worker also puts the sweep on `/api/health/workers`, where
+     * every other scheduler already reports.
+     */
+    registerWorker('mail-retention', SWEEP_INTERVAL_MS);
+    this.timer = setInterval(
+      this.redis && this.cache
+        ? clusterTick({ redis: this.redis, cache: this.cache }, 'mail-retention', () => this.sweep())
+        : () => { void this.sweep(); },
+      SWEEP_INTERVAL_MS,
+    );
     this.timer.unref?.();
     this.log.log(
       `Mail retention: ${policy.stripBodiesAfterDays ? `strip bodies after ${policy.stripBodiesAfterDays}d` : 'no body stripping'}, `
@@ -96,7 +126,7 @@ export class MailRetentionService implements OnModuleInit, OnModuleDestroy {
   /** What a sweep would do, without doing it. Used by the readiness/monitoring surface and by tests. */
   async preview(): Promise<{ toStrip: number; toDelete: number; policy: RetentionPolicy }> {
     const policy = retentionPolicy();
-    return runAsSystem(async () => ({
+    return {
       policy,
       toStrip: policy.stripBodiesAfterDays
         ? await this.prisma.inbound_emails.count({ where: this.stripWhere(policy) })
@@ -104,7 +134,7 @@ export class MailRetentionService implements OnModuleInit, OnModuleDestroy {
       toDelete: policy.deleteAfterDays
         ? await this.prisma.inbound_emails.count({ where: this.deleteWhere(policy) })
         : 0,
-    }));
+    };
   }
 
   async sweep(): Promise<{ stripped: number; deleted: number }> {
@@ -114,33 +144,28 @@ export class MailRetentionService implements OnModuleInit, OnModuleDestroy {
     let stripped = 0, deleted = 0;
 
     try {
-      // Retention spans every brokerage, so it runs outside tenant scope — the same escape hatch
-      // the other cross-tenant background work uses, and the reason this file is on the pinned
-      // list of callers.
-      await runAsSystem(async () => {
-        if (policy.stripBodiesAfterDays) {
-          // updateMany, not a loop: this rewrites two columns and holds no rows in memory.
-          const r = await this.prisma.inbound_emails.updateMany({
-            where: this.stripWhere(policy),
-            data: { body_text: null, body_html: null },
-          });
-          stripped = r.count;
-        }
+      if (policy.stripBodiesAfterDays) {
+        // updateMany, not a loop: this rewrites two columns and holds no rows in memory.
+        const r = await this.prisma.inbound_emails.updateMany({
+          where: this.stripWhere(policy),
+          data: { body_text: null, body_html: null },
+        });
+        stripped = r.count;
+      }
 
-        if (policy.deleteAfterDays) {
-          // Batched. A single deleteMany over a 900 MB table takes one long transaction and blocks
-          // the IMAP poller writing into the same table; 500 at a time keeps each one short.
-          for (;;) {
-            const doomed = await this.prisma.inbound_emails.findMany({
-              where: this.deleteWhere(policy), select: { id: true }, take: BATCH,
-            });
-            if (!doomed.length) break;
-            const r = await this.prisma.inbound_emails.deleteMany({ where: { id: { in: doomed.map((d) => d.id) } } });
-            deleted += r.count;
-            if (doomed.length < BATCH) break;
-          }
+      if (policy.deleteAfterDays) {
+        // Batched. A single deleteMany over a 900 MB table takes one long transaction and blocks
+        // the IMAP poller writing into the same table; 500 at a time keeps each one short.
+        for (;;) {
+          const doomed = await this.prisma.inbound_emails.findMany({
+            where: this.deleteWhere(policy), select: { id: true }, take: BATCH,
+          });
+          if (!doomed.length) break;
+          const r = await this.prisma.inbound_emails.deleteMany({ where: { id: { in: doomed.map((d) => d.id) } } });
+          deleted += r.count;
+          if (doomed.length < BATCH) break;
         }
-      });
+      }
 
       if (stripped || deleted) {
         this.log.log(`Mail retention sweep: ${stripped} bodies stripped, ${deleted} messages deleted.`);

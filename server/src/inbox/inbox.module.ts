@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { NotificationDispatcherModule } from '../notifications/notification-dispatcher.module';
 import { AuthModule } from '../auth/auth.module';
 import { PrismaModule } from '../prisma/prisma.module';
 import { LaravelCryptService } from '../common/laravel-crypt.service';
@@ -14,7 +15,7 @@ import { MailRetentionService } from './mail-retention.service';
  * the crypto dependency stay contained.
  */
 @Module({
-  imports: [AuthModule, PrismaModule, GoogleModule],
+  imports: [NotificationDispatcherModule, AuthModule, PrismaModule, GoogleModule],
   controllers: [InboxController],
   providers: [InboxService, ImapSyncService, MailRetentionService, LaravelCryptService],
   exports: [ImapSyncService, MailRetentionService],

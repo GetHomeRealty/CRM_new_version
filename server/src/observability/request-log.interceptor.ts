@@ -33,7 +33,7 @@ export class RequestLogInterceptor implements NestInterceptor {
     if (context.getType() !== 'http') return next.handle();
 
     const http = context.switchToHttp();
-    const req = http.getRequest<Request & { authUser?: { id: number; role?: string | null; company_id?: number } }>();
+    const req = http.getRequest<Request & { authUser?: { id: number; role?: string | null } }>();
     const res = http.getResponse<Response>();
 
     // Honour an id from a proxy or load balancer so a trace survives the hop.
@@ -63,7 +63,7 @@ export class RequestLogInterceptor implements NestInterceptor {
   }
 
   private finish(
-    req: Request & { authUser?: { id: number; role?: string | null; company_id?: number } },
+    req: Request & { authUser?: { id: number; role?: string | null } },
     res: Response,
     started: number,
     forcedStatus?: number,
@@ -73,7 +73,7 @@ export class RequestLogInterceptor implements NestInterceptor {
 
     // Guards have run, so this is the first point at which the requester is knowable. It mutates the
     // context the whole request shares, which is why this has to happen inside the scope.
-    if (req.authUser) describeRequester(req.authUser.id, req.authUser.company_id ?? null, req.authUser.role ?? null);
+    if (req.authUser) describeRequester(req.authUser.id, req.authUser.role ?? null);
 
     // The route pattern as Express matched it — what keeps metric cardinality bounded.
     const route = (req.route?.path as string | undefined) ?? req.path ?? 'unknown';

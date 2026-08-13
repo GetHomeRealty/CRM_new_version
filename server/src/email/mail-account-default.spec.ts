@@ -37,7 +37,7 @@ async function makeUser(tx: PrismaService): Promise<number> {
   const now = new Date();
   const t = tag();
   const u = await tx.users.create({
-    data: { name: `Mail User ${t}`, email: `mail-${t}@example.test`, role: 'agent', status: 'Active', password: 'x', company_id: 1, created_at: now, updated_at: now },
+    data: { name: `Mail User ${t}`, email: `mail-${t}@example.test`, role: 'agent', status: 'Active', password: 'x', created_at: now, updated_at: now },
   });
   return u.id;
 }
@@ -49,8 +49,7 @@ async function makeAccount(tx: PrismaService, over: Record<string, unknown>) {
     data: {
       name: `acct-${t}`, from_name: 'QA', from_email: `acct-${t}@example.test`,
       host: 'smtp.example.test', port: 587, username: `acct-${t}`, password: 'x',
-      encryption: 'tls', is_active: true, is_default: false, company_id: 1,
-      created_at: now, updated_at: now, ...over,
+      encryption: 'tls', is_active: true, is_default: false,      created_at: now, updated_at: now, ...over,
     },
   });
 }

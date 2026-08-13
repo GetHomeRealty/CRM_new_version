@@ -3,7 +3,7 @@ import { crmPath } from './area';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  getInboxMessage, listInbox, markInboxSeen,
+  getInboxMessage, listInbox, listMyMailAccounts, markInboxSeen,
   type InboxList, type InboxMessage, type InboxMessageRow,
 } from '../lib/accountApi';
 import { apiErrorMessage } from '../lib/apiError';
@@ -43,6 +43,14 @@ export default function InboxPage() {
   const [page, setPage] = useState(1);
   const [open, setOpen] = useState<InboxMessage | null>(null);
   const [loading, setLoading] = useState(true);
+  /**
+   * Whether this area has any mail account at all.
+   *
+   * `list.mailbox` cannot answer this — it is only the account marked PRIMARY, and is null both
+   * when nothing is connected and when several are connected with none marked. Undefined while the
+   * answer is still unknown, so the toggle is not flashed on screen and then withdrawn.
+   */
+  const [hasMailAccount, setHasMailAccount] = useState<boolean | undefined>(undefined);
   const loadedOnce = useRef(false);
 
   const load = useCallback(async () => {
@@ -58,6 +66,20 @@ export default function InboxPage() {
   }, [unreadOnly, page, toast]);
 
   useEffect(() => { void load(); }, [load]);
+
+  /*
+   * Asked per area, because a mailbox connected under the CRM is not connected under the
+   * Transaction Desk. A failure leaves the toggle hidden rather than showing a control that may do
+   * nothing — the safer way round for a button whose whole purpose is filtering mail that is not
+   * there.
+   */
+  useEffect(() => {
+    let live = true;
+    listMyMailAccounts(area === 'crm' ? 'crm' : 'desk')
+      .then((accts) => { if (live) setHasMailAccount(accts.length > 0); })
+      .catch(() => { if (live) setHasMailAccount(false); });
+    return () => { live = false; };
+  }, [area]);
 
   /**
    * Keep the list fresh on its own. The server polls the mailboxes in the background, but this
@@ -124,10 +146,19 @@ export default function InboxPage() {
             </div>
           </div>
           <div className="toolbar-row">
-            <button className={`btn ghost${unreadOnly ? ' primary' : ''}`} type="button"
-              onClick={() => { setUnreadOnly((v) => !v); setPage(1); }}>
-              {unreadOnly ? 'Showing unread' : 'All mail'}
-            </button>
+            {/*
+              Only offered once a mailbox exists. With nothing connected there is no mail to filter,
+              so the toggle switched an empty list for an empty list — and read as a broken control
+              rather than an inapplicable one. `list.mailbox` is not the test: it names the PRIMARY
+              account and is null both when nothing is connected and when several are with none
+              marked, so it would have hidden the toggle from people who do have mail.
+            */}
+            {hasMailAccount && (
+              <button className={`btn ghost${unreadOnly ? ' primary' : ''}`} type="button"
+                onClick={() => { setUnreadOnly((v) => !v); setPage(1); }}>
+                {unreadOnly ? 'Showing unread' : 'All mail'}
+              </button>
+            )}
             <button className="btn ghost" type="button" onClick={() => navigate(link('account'))}>⚙ Email accounts</button>
           </div>
         </div>

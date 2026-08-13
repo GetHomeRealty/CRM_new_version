@@ -89,6 +89,25 @@ export const CAPABILITIES = {
   /** Read data belonging to people other than yourself. */
   'data.read-all': ROLE_RANK.manager,
   /**
+   * Work with the brokerage's whole marketing audience: select leads across the brokerage rather
+   * than only your own, and see the whole opt-out list.
+   *
+   * NAMED ROLES, NOT A RANK — the one capability here that is not a threshold, and deliberately so.
+   * Marketing responsibility does not run along the seniority ladder. `crm` sits at rank 40 and
+   * needs this; `accounting` and `documentation` sit ABOVE it at 60 and do not, because neither runs
+   * campaigns or manages unsubscribes. Any threshold that admitted `crm` would also admit those two,
+   * handing a brokerage-wide list of client email addresses to roles with no reason to hold one.
+   *
+   * `agent` is absent and keeps their own leads only — which is exactly the set they could otherwise
+   * have mailed.
+   *
+   * THIS GOVERNS SELECTION, NOT PERMISSION TO SEND. Every existing control still applies to whoever
+   * holds it: suppression and unsubscribe state, the campaign's own filters, lead status, duplicate
+   * prevention and malformed-address exclusion all run afterwards in `resolveRecipients`. Widening
+   * the pool is not the same as bypassing the rules that narrow it.
+   */
+  'campaigns.brokerage-audience': ['admin', 'manager', 'crm'],
+  /**
    * Change the identity of a lead the brokerage assigned to you — its name, email, phone, source
    * and assignment — or delete it.
    *
@@ -133,9 +152,22 @@ export const isAdminOrAbove = (u: Principal | null | undefined): boolean => rank
 /** An agent, the least privileged role, who sees their own work and no one else's. */
 export const isAgent = (u: Principal | null | undefined): boolean => (u?.role ?? '') === 'agent';
 
-/** May this person perform this action? */
-export const can = (u: Principal | null | undefined, capability: Capability): boolean =>
-  rankOf(u) >= CAPABILITIES[capability];
+/**
+ * May this person perform this action?
+ *
+ * A capability is defined either as a RANK THRESHOLD — the least authority that may perform it, which
+ * is right when the action follows the seniority ladder — or as an EXPLICIT SET OF ROLES, which is
+ * right when it does not. Marketing is the case that forced the second form: the role that needs it
+ * ranks below two roles that must not have it, so no threshold can express the answer.
+ *
+ * A named set is the stricter of the two: a role added to `ROLE_RANK` later inherits threshold
+ * capabilities at its rank, and inherits none of the named ones without being listed.
+ */
+export const can = (u: Principal | null | undefined, capability: Capability): boolean => {
+  const rule = CAPABILITIES[capability];
+  if (Array.isArray(rule)) return (rule as readonly string[]).includes(u?.role ?? '');
+  return rankOf(u) >= (rule as number);
+};
 
 /**
  * The same question, answered by refusal.

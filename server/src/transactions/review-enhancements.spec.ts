@@ -53,7 +53,7 @@ async function makeTxn(tx: PrismaService, agent = 'Test Agent'): Promise<number>
   seq += 1;
   const now = new Date();
   const t = await tx.transactions.create({
-    data: { trade_no: `RE-${Date.now()}-${seq}`, type: 'Residential Buying', agent, property: '1 Test Road', company_id: 1, created_at: now, updated_at: now },
+    data: { trade_no: `RE-${Date.now()}-${seq}`, type: 'Residential Buying', agent, property: '1 Test Road', created_at: now, updated_at: now },
   });
   return t.id;
 }
@@ -71,7 +71,7 @@ async function makeAgent(tx: PrismaService): Promise<string> {
   const u = await tx.users.create({
     data: {
       name: `SLA Agent ${tag}`, email: `sla-${tag}@example.test`, role: 'agent',
-      status: 'Active', password: 'x', company_id: 1, created_at: now, updated_at: now,
+      status: 'Active', password: 'x', created_at: now, updated_at: now,
     },
   });
   return u.name;
@@ -84,8 +84,7 @@ async function openRejection(tx: PrismaService, txnId: number, hoursAgo: number,
     data: {
       transaction_id: txnId, decision: 'Rejected', reason: 'Does not match the APS.',
       field_label: field, old_value: '1', new_value: '2', agent_name: 'Test Agent',
-      actor_name: 'Office Admin', resolution_status: 'Open', company_id: 1,
-      created_at: at, updated_at: at,
+      actor_name: 'Office Admin', resolution_status: 'Open',      created_at: at, updated_at: at,
     },
   });
 }

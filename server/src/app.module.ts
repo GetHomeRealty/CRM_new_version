@@ -1,12 +1,13 @@
-import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
+import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
-import { TenantContextMiddleware } from './core/tenant-context';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { IdentityThrottlerGuard } from './core/identity-throttler.guard';
 import configuration from './config/configuration';
 import { GLOBAL_LIMIT } from './config/rate-limits';
 import { PrismaModule } from './prisma/prisma.module';
+import { RedisModule } from './redis/redis.module';
+import { QueueModule } from './queue/queue.module';
 import { CoreModule } from './core/core.module';
 import { AppController } from './app.controller';
 import { HealthController } from './observability/health.controller';
@@ -65,6 +66,8 @@ import { TwilioVoiceModule } from './twilio-voice/twilio-voice.module';
     // config/rate-limits.ts, which explains why and is regression-tested.
     ThrottlerModule.forRoot([GLOBAL_LIMIT]),
     PrismaModule,
+    RedisModule,
+    QueueModule,
     // The Core Platform layer both modules sit on.
     CoreModule,
     AuditModule,
@@ -117,15 +120,4 @@ import { TwilioVoiceModule } from './twilio-voice/twilio-voice.module';
     { provide: APP_GUARD, useClass: IdentityThrottlerGuard },
   ],
 })
-export class AppModule implements NestModule {
-  /**
-   * Opens a tenant context around every request.
-   *
-   * Registered here rather than in CoreModule because middleware has to wrap the whole request, and
-   * `AsyncLocalStorage` only holds for the callback it is given — a guard or an interceptor would
-   * unwind before the handler queried anything.
-   */
-  configure(consumer: MiddlewareConsumer): void {
-    consumer.apply(TenantContextMiddleware).forRoutes('*');
-  }
-}
+export class AppModule {}

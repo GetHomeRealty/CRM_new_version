@@ -1,26 +1,36 @@
+import { useArea } from './AreaContext';
 import { useCallback, useEffect, useState } from 'react';
 import {
-  getNotificationPreferences, saveNotificationPreferences,
+  CHANNEL_LABEL,
+  getNotificationPreferences,
+  saveNotificationPreferences,
   type NotificationCategory,
+  type NotificationChannel,
 } from '../lib/accountApi';
 import { apiErrorMessage } from '../lib/apiError';
 import { useToast } from './toast';
 
 /**
- * Which push notifications this person wants.
+ * Which notifications reach this person, and by which route.
+ *
+ * A MATRIX RATHER THAN A LIST OF SWITCHES, because the question people actually have is not "do I
+ * want to hear about document reviews" but "I want the email, not the buzz on my phone". The old
+ * screen could only answer the first: the table stored one boolean per category and it meant PUSH,
+ * so the page had to explain in prose that turning something off left the email alone. It now stores
+ * a row per (category, channel) and the screen says so directly.
  *
  * Everything here is the signed-in user's own: the server scopes every read and write to them, so
- * there is no way to reach anyone else's choices and no admin view of them. Muting a category is
- * a personal decision, not something an office can make on somebody's behalf.
+ * there is no way to reach anyone else's choices and no admin view of them. Muting a category is a
+ * personal decision, not something an office can make on somebody's behalf.
  *
- * A category with no push sender yet is shown, and labelled as such. The alternative — hiding
- * them until each sender is built — would make this screen look complete when it is not, and
- * showing them unlabelled would be worse: somebody would switch one off, keep getting the email,
- * and reasonably conclude the setting was broken. The choice is stored either way and takes
- * effect the moment the sender exists.
+ * A cell with no sender yet is shown and disabled rather than hidden. Hiding them would make the
+ * screen look complete when it is not; leaving them live would be worse — somebody would switch one
+ * off, keep getting the notification another way, and reasonably conclude the setting was broken.
  */
 export default function NotificationPreferencesPage() {
   const toast = useToast();
+  const [channels, setChannels] = useState<NotificationChannel[]>([]);
+  const { area } = useArea();
   const [categories, setCategories] = useState<NotificationCategory[] | null>(null);
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
@@ -28,7 +38,9 @@ export default function NotificationPreferencesPage() {
   const load = useCallback(async () => {
     try {
       const r = await getNotificationPreferences();
+      setChannels(r.channels);
       setCategories(r.categories);
+      setDirty(false);
     } catch (ex) {
       toast(apiErrorMessage(ex, 'Could not load your notification settings'), 'bad');
     }
@@ -36,8 +48,10 @@ export default function NotificationPreferencesPage() {
 
   useEffect(() => { void load(); }, [load]);
 
-  const toggle = (key: string) => {
-    setCategories((cs) => (cs ?? []).map((c) => (c.key === key ? { ...c, enabled: !c.enabled } : c)));
+  const toggle = (key: string, channel: NotificationChannel) => {
+    setCategories((cs) => (cs ?? []).map((c) => (
+      c.key === key ? { ...c, enabled: { ...c.enabled, [channel]: !c.enabled[channel] } } : c
+    )));
     setDirty(true);
   };
 
@@ -45,14 +59,22 @@ export default function NotificationPreferencesPage() {
     if (!categories) return;
     setSaving(true);
     try {
-      // Only the categories that can actually be changed. Sending the disabled ones too would
-      // write a row per user per category saying "enabled", which is already the default when no
-      // row exists — rows that mean nothing and would have to be reasoned about later.
-      const body: Record<string, boolean> = {};
-      for (const c of categories) if (c.readiness === 'live') body[c.key] = c.enabled;
+      /*
+       * Only the pairs that can actually be changed. Sending the disabled ones would write a row per
+       * user per pair meaning "on", which is already what absence means — rows that say nothing and
+       * would have to be reasoned about later.
+       */
+      const body: Record<string, Record<string, boolean>> = {};
+      for (const c of categories) {
+        const row: Record<string, boolean> = {};
+        for (const ch of channels) if (c.channels[ch] === 'live') row[ch] = c.enabled[ch];
+        if (Object.keys(row).length) body[c.key] = row;
+      }
       // Re-seat from the response rather than trusting local state: the server is the authority on
-      // what was actually stored, and a category it rejected must not keep showing as saved.
-      setCategories((await saveNotificationPreferences(body)).categories);
+      // what was stored, and a pair it rejected must not keep showing as saved.
+      const saved = await saveNotificationPreferences(body);
+      setChannels(saved.channels);
+      setCategories(saved.categories);
       setDirty(false);
       toast('Notification settings saved.', 'ok');
     } catch (ex) {
@@ -64,7 +86,26 @@ export default function NotificationPreferencesPage() {
 
   if (!categories) return <div className="card"><p className="help">Loading your notification settings…</p></div>;
 
-  const pending = categories.filter((c) => c.readiness === 'pending').length;
+  /*
+   * Only the categories this area can actually raise.
+   *
+   * Five of them describe things that happen on a TRANSACTION — a listing expiring, lawyer details
+   * still missing, a document review, an approval, a mention in a deal's chat — and none can occur
+   * on the CRM side, so offering the switch there was offering control over an event that could
+   * never arrive.
+   *
+   * `areas` absent means both, so a category the server has not classified keeps appearing exactly
+   * as it does today. Hiding a switch does not silence anything: the stored preference is untouched
+   * and the senders still honour it — this is which screen shows the control, not who gets notified.
+   */
+  const shown = categories.filter((c) => !c.areas || c.areas.includes(area === 'crm' ? 'crm' : 'desk'));
+
+  // Counted over what is ON SCREEN, not over the whole catalogue — the notice below says "N of
+  // these routes", and once some categories belong to the other area, "these" is `shown`.
+  const pendingPairs = shown.reduce(
+    (n, c) => n + channels.filter((ch) => c.channels[ch] === 'pending').length,
+    0,
+  );
 
   return (
     <>
@@ -74,8 +115,8 @@ export default function NotificationPreferencesPage() {
             <h2 className="lead-title">Notification Preferences</h2>
             <div className="lead-subtitle">
               <span className="muted">
-                Choose which push notifications reach your phone and desktop. These are your own
-                settings — nobody else can see or change them.
+                Choose how each kind of notification reaches you. These are your own settings —
+                nobody else can see or change them.
               </span>
             </div>
           </div>
@@ -87,73 +128,86 @@ export default function NotificationPreferencesPage() {
         </div>
       </div>
 
-      <div className="card">
-        {/* `crm-toggle` is the settings-row pattern the CRM panels already use, so this screen
-            matches them rather than introducing a second look for the same control. */}
-        {categories.map((c) => (
-          <label className="crm-toggle" key={c.key}>
-            <span className="crm-toggle-text">
-              <strong>
-                {c.label}
-                {c.readiness === 'pending' && (
-                  <span
-                    className="pill warn"
-                    style={{ marginLeft: 8 }}
-                    title="No push notification is sent for this yet, so there is nothing here to switch off."
-                  >
-                    Coming Soon
-                  </span>
-                )}
-              </strong>
-              <em>{c.description}</em>
-              <em className="muted">How you are told today: {c.currentChannel}</em>
-            </span>
-            {/* Disabled, not merely badged, until something actually sends this push. A control
-                that moves implies it did something; leaving it live would let somebody switch a
-                category off, carry on receiving the email, and reasonably conclude the setting
-                was broken. It becomes operable on its own the moment the category's readiness
-                turns 'live' server-side — no change is needed here. */}
-            <input
-              type="checkbox"
-              checked={c.enabled}
-              disabled={c.readiness === 'pending'}
-              onChange={() => toggle(c.key)}
-              aria-label={
-                c.readiness === 'pending'
-                  ? `${c.label} push notifications — coming soon, nothing sends this yet`
-                  : `${c.label} push notifications`
-              }
-            />
-          </label>
-        ))}
+      <div className="card" style={{ overflowX: 'auto' }}>
+        <table className="table" style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead>
+            <tr>
+              <th style={{ textAlign: 'left', padding: '8px 12px' }}>Notification</th>
+              {channels.map((ch) => (
+                <th key={ch} style={{ textAlign: 'center', padding: '8px 12px', whiteSpace: 'nowrap' }}>
+                  {CHANNEL_LABEL[ch]}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {shown.map((c) => (
+              <tr key={c.key} style={{ borderTop: '1px solid var(--line, #eee)' }}>
+                <td style={{ padding: '10px 12px' }}>
+                  <strong>{c.label}</strong>
+                  <div className="muted" style={{ fontSize: '0.9em' }}>{c.description}</div>
+                </td>
+                {channels.map((ch) => {
+                  const readiness = c.channels[ch];
+                  const unsupported = readiness === 'unsupported';
+                  const pending = readiness === 'pending';
+                  return (
+                    <td key={ch} style={{ textAlign: 'center', padding: '10px 12px', whiteSpace: 'nowrap' }}>
+                      {unsupported ? (
+                        <span className="muted" title={`${c.label} cannot be delivered by ${CHANNEL_LABEL[ch]}.`}>—</span>
+                      ) : (
+                        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                          <input
+                            type="checkbox"
+                            checked={c.enabled[ch]}
+                            disabled={pending}
+                            onChange={() => toggle(c.key, ch)}
+                            aria-label={
+                              pending
+                                ? `${c.label} by ${CHANNEL_LABEL[ch]} — coming soon, nothing sends this yet`
+                                : `${c.label} by ${CHANNEL_LABEL[ch]}`
+                            }
+                          />
+                          {pending && (
+                            <span
+                              className="pill warn"
+                              title="Nothing sends this yet, so there is nothing here to switch off."
+                            >
+                              Soon
+                            </span>
+                          )}
+                        </label>
+                      )}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
 
-      {pending > 0 && (
+      {pendingPairs > 0 && (
         <div className="card">
           <p className="help">
-            <strong>About “Coming Soon”.</strong> {pending} of these {pending === 1 ? 'category does' : 'categories do'} not
-            send a push notification yet, so {pending === 1 ? 'its switch is' : 'their switches are'} turned
-            off until {pending === 1 ? 'it is' : 'they are'} built. You are still told about
-            {pending === 1 ? ' it' : ' them'} the ways listed above — those are unaffected, and
-            nothing is being missed.
-          </p>
-          <p className="help">
-            {pending === 1 ? 'It becomes' : 'They become'} switchable here automatically once push
-            is added, with no action needed from you.
+            <strong>About “Soon”.</strong> {pendingPairs} of these routes {pendingPairs === 1 ? 'is' : 'are'} not
+            built yet, so {pendingPairs === 1 ? 'its switch is' : 'their switches are'} turned off. You are
+            still told about those events the other ways shown in this table — nothing is being missed —
+            and each becomes switchable here automatically once its sender exists, with no action
+            needed from you.
           </p>
         </div>
       )}
 
       <div className="card">
         <p className="help">
-          Turning something off here stops the <strong>push notification only</strong>. Emails and
-          in-app notifications are unaffected — a muted calendar reminder still emails you, so
-          nothing is missed, your phone just stays quiet.
+          <strong>In-app</strong> notifications appear in the Notifications screen and the bell.{' '}
+          <strong>Email</strong> goes to your account address. <strong>Push</strong> reaches your phone
+          and desktop, and also needs this browser to be subscribed — if you get no push at all, check
+          that notifications are allowed for this site in your browser settings.
         </p>
         <p className="help">
-          Push also needs this browser to be subscribed. If you are not receiving any push
-          notifications at all, check that notifications are allowed for this site in your browser
-          settings.
+          A dash means that route does not apply to that kind of notification.
         </p>
       </div>
     </>

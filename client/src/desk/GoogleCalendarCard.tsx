@@ -1,7 +1,7 @@
-import { crmPath, deskPath } from './area';
+import { crmPath, deskPath, AREA_SHORT } from './area';
 import { useCallback, useEffect, useState } from 'react';
 import {
-  googleCalendarStatus, googleCalendarConnect, googleCalendarSync, googleCalendarDisconnect,
+  googleCalendarStatus, googleCalendarConnect, googleCalendarSync, googleCalendarDisconnect, googleCalendarRetrySync,
   type GoogleCalendarStatus, type IntegrationScope,
 } from '../lib/accountApi';
 import { apiErrorMessage } from '../lib/apiError';
@@ -31,7 +31,7 @@ const GoogleG = ({ size = 20 }: { size?: number }) => (
 const fmtSync = (iso: string | null): string => (iso ? iso.slice(0, 16).replace('T', ' ') : '');
 
 /**
- * Google Calendar via real OAuth, as a self-contained card. "Sign in with Google" fetches Google's
+ * Google Calendar via real OAuth, as a self-contained card. "Connect Google Calendar" fetches Google's
  * own consent-screen URL and sends the browser there; after the round-trip the server returns to
  * /app/account, and the hint stored below bounces the browser back here (see AccountSettingsPage).
  * Per-user; explains itself when the server has no Google credentials rather than failing silently.
@@ -87,7 +87,19 @@ export default function GoogleCalendarCard({ scope = 'crm' }: { scope?: Integrat
   const subtitle = !st ? 'Checking…'
     : !st.configured ? (st.setup_hint || 'Google sign-in is not set up on the server yet.')
     : st.connected ? `Signed in as ${st.email ?? 'your Google account'}${st.last_sync ? ` · last synced ${fmtSync(st.last_sync)}` : ''}`
-    : 'Sign in with Google — your events sync both ways between Google Calendar and the CRM.';
+    /*
+     * NAMES THE AREA, because this component renders on both sides. The copy was hardcoded to
+     * "the CRM", so the Transaction Desk card — and the Desk card on Account Settings — told the
+     * user their events synced with the CRM. The one string in a scope-aware component that was
+     * not scope-aware.
+     *
+     * "Sync both ways" is accurate and stays: the pull is a real incremental sync
+     * (listEvents + a persisted syncToken) and the push covers insert, update, patch and delete.
+     * Deliberately says no more than that — Google owns title, date, time and description on a
+     * pull while type and status stay the CRM's, so any wording implying merged or reconciled
+     * edits would overstate what happens.
+     */
+    : `Choose a Google account, review the requested access, and continue to connect your calendar. Your events then sync both ways between Google Calendar and the ${AREA_SHORT[scope]}.`;
 
   return (
     <div className="intg-card">
@@ -104,6 +116,34 @@ export default function GoogleCalendarCard({ scope = 'crm' }: { scope?: Integrat
 
       {st?.error && <div className="muted" style={{ color: 'var(--bad)', marginTop: 8 }}>{st.error}</div>}
 
+      {/*
+        * WHAT GOOGLE HAS NOT RECEIVED (CRM-GCAL-M01).
+        *
+        * A push that failed used to be caught, logged as a warning and dropped — no retry, nothing
+        * on the row, nothing here. An appointment moved while Google was briefly unreachable kept
+        * its old time on the agent's phone for ever, and the only way to find out was to look at
+        * the phone.
+        *
+        * Shown separately from `error` because the two are genuinely different: the connection can
+        * be healthy right now and still owe Google a viewing that failed during an outage earlier.
+        * A retry sweep is already working through these in the background; the button is for
+        * somebody who has just fixed the cause and does not want to wait — and for the events that
+        * have used up their five automatic attempts, which is exactly when a person is looking.
+        */}
+      {!!st?.pending_sync && (
+        <div className="muted" data-testid="gcal-pending-sync"
+          style={{ color: 'var(--warn-ink, var(--bad))', marginTop: 8, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <span>
+            {st.pending_sync} appointment{st.pending_sync === 1 ? '' : 's'} {st.pending_sync === 1 ? 'has' : 'have'} not
+            reached Google yet.
+          </span>
+          <button className="btn ghost sm" type="button" disabled={busy}
+            onClick={() => void run(() => googleCalendarRetrySync(scope), 'Retried.')}>
+            Retry now
+          </button>
+        </div>
+      )}
+
       <div className="intg-card-actions">
         {st?.connected ? (
           <>
@@ -112,11 +152,23 @@ export default function GoogleCalendarCard({ scope = 'crm' }: { scope?: Integrat
           </>
         ) : (
           <button className="btn gsi" type="button" disabled={busy || (st ? !st.configured : true)} onClick={() => void connect()}>
-            <GoogleG size={18} /><span>{busy ? 'Starting…' : 'Sign in with Google'}</span>
+            <GoogleG size={18} /><span>{busy ? 'Starting…' : 'Connect Google Calendar'}</span>
           </button>
         )}
         {st && !st.configured && (
           <span className="muted" style={{ fontSize: 12 }}>Ask an admin to add the Google keys on the server.</span>
+        )}
+        {/*
+          Only before connecting, and only about choosing the ACCOUNT — the one part of Google's
+          flow an agent has to make a decision in. Nothing here names Google's buttons: those labels
+          differ between personal and Workspace accounts and change without notice, so instructions
+          built on them would be wrong for some agents on the day they were written.
+        */}
+        {st?.configured && !st.connected && (
+          <span className="muted" style={{ fontSize: 12 }}>
+            If the account is already signed in on this browser, simply select it. To connect a
+            different account, choose <strong>Use another account</strong>.
+          </span>
         )}
       </div>
     </div>

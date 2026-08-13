@@ -1,9 +1,26 @@
 /** Lead + campaign vocabularies, mirroring the source campaign engine exactly. */
 
-export const LEAD_STATUS = ['cold', 'warm', 'hot', 'mild'] as const;
-export const LEAD_TYPE = ['Pre construction', 'resale', 'seller', 'buyer', 'tenant', 'lease', 'landlord'] as const;
-export const LEAD_SOURCE = ['google ads', 'meta', 'refferal', 'linkedin', 'youtube'] as const;
-export const CLIENT_TYPE = ['Investor', 'custom buyer', 'first home buyer', 'seasonal investor', 'commercial buyer'] as const;
+/**
+ * The lead vocabulary the audience builder offers — RE-EXPORTED from the Leads module, not copied.
+ *
+ * These were four separate literal arrays, and they had drifted. Measured against
+ * `leads/lead.constants.ts`:
+ *
+ *   status  campaigns lacked `closed`
+ *   source  campaigns lacked `website`
+ *   type    campaigns lacked `realtor`
+ *
+ * The consequence was not cosmetic. `campaigns.controller.ts` serves these as the audience
+ * dropdowns, so a lead whose source is `website` — one of the two commonest intake channels — could
+ * not be targeted by any campaign. The option simply was not offered, and nothing reported it. The
+ * backend was never the obstacle: `buildAudienceWhere` matches whatever string arrives, so an API
+ * caller could target those leads while a user could not.
+ *
+ * Re-exported rather than re-synchronised, because a second copy that happens to agree today is the
+ * same bug waiting to happen again. Leads owns this vocabulary — it owns the column — and there is
+ * now one definition. `lead-vocabulary-parity.spec.ts` asserts the two sides stay identical.
+ */
+export { LEAD_STATUS, LEAD_TYPE, LEAD_SOURCE, CLIENT_TYPE } from '../leads/lead.constants';
 export const TAG_OPTIONS = ['Pre Construction', 'Resale', 'Seller', 'Buyer', 'Tenant', 'Lease', 'Landlord', 'Realtor'] as const;
 
 export const CAMPAIGN_CATEGORIES = [

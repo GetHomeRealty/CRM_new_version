@@ -15,7 +15,30 @@ import { userPhotoUrl } from '../lib/api';
 
 /** Bumped after an upload/removal so mounted avatars pick up the new file. */
 let photoVersion = 0;
-export const bumpPhotoVersion = (): number => ++photoVersion;
+
+/**
+ * Users already known to have no picture, so the 404 is paid once instead of once per mount.
+ *
+ * The design above is right and is kept: asking the API who has a photo would cost one request per
+ * user in a list of fifty, which is worse than one 404 per user. What it did not account for is that
+ * the answer was forgotten the moment the component unmounted — so the same missing photo was
+ * re-requested on every navigation. Measured during the CRM audit: a 404 and a red console error on
+ * EVERY page load for any user without a picture, and five of them on one render of the Users
+ * screen.
+ *
+ * Keyed by user AND cache-buster, not by user alone. `bust` changes exactly when the picture does
+ * (it is the user's `photo_version`), so a newly uploaded photo is a different key and gets a fresh
+ * attempt — remembering "missing" for ever would mean an upload never appeared.
+ */
+const noPhoto = new Set<string>();
+const missKey = (userId: number, bust: string | number | null): string => `${userId}:${bust ?? ''}`;
+
+export const bumpPhotoVersion = (): number => {
+  // An upload or removal invalidates every remembered answer: the version-less callers share one
+  // counter, and a user who just gained a picture must stop being remembered as having none.
+  noPhoto.clear();
+  return ++photoVersion;
+};
 
 export interface UserAvatarProps {
   userId?: number | null;
@@ -29,11 +52,21 @@ export interface UserAvatarProps {
 }
 
 export default function UserAvatar({ userId, name, size = 36, version, title, style }: UserAvatarProps) {
-  const [failed, setFailed] = useState(false);
   const bust = version ?? (photoVersion || null);
+  // Start from what is already known, so a user we have seen 404 renders their initial without
+  // issuing the request again.
+  const [failed, setFailed] = useState(() => (userId ? noPhoto.has(missKey(userId, bust)) : false));
 
-  // A different user (or a new upload) deserves a fresh attempt at the image.
-  useEffect(() => { setFailed(false); }, [userId, bust]);
+  // A different user, or a new upload, deserves a fresh attempt — unless this exact user at this
+  // exact version has already been found to have no picture.
+  useEffect(() => {
+    setFailed(userId ? noPhoto.has(missKey(userId, bust)) : false);
+  }, [userId, bust]);
+
+  const remember = () => {
+    if (userId) noPhoto.add(missKey(userId, bust));
+    setFailed(true);
+  };
 
   const initial = (name || 'U').trim().charAt(0).toUpperCase() || 'U';
   const base: CSSProperties = {
@@ -60,7 +93,7 @@ export default function UserAvatar({ userId, name, size = 36, version, title, st
       alt={name ? `${name}'s profile picture` : 'Profile picture'}
       title={title ?? name ?? undefined}
       crossOrigin="use-credentials"
-      onError={() => setFailed(true)}
+      onError={remember}
       style={{ ...base, objectFit: 'cover' }}
     />
   );

@@ -1,4 +1,6 @@
 import { Module } from '@nestjs/common';
+import { MentionService } from './mention.service';
+import { NotificationDispatcherModule } from '../notifications/notification-dispatcher.module';
 import { AuthModule } from '../auth/auth.module';
 import { InvoicesModule } from '../invoices/invoices.module';
 import { EmailModule } from '../email/email.module';
@@ -21,9 +23,9 @@ import { SettingsModule } from '../settings/settings.module';
 
 @Module({
   // SettingsModule exports CompanySettingsService, which the review email needs for the brand name.
-  imports: [AuthModule, InvoicesModule, EmailModule, SettingsModule], // EmailModule exports MailerService (lawyer reminders)
+  imports: [NotificationDispatcherModule, AuthModule, InvoicesModule, EmailModule, SettingsModule], // EmailModule exports MailerService (lawyer reminders)
   controllers: [TransactionsController, MessagesController],
-  providers: [TransactionsService, TransactionsWriteService, MessagesService, TradeNumberService, TransactionLawyerReminderService, LawyerReminderSchedulerService, TransactionReviewService, ReviewSlaService, ReviewSlaSchedulerService, ReviewThreadService, ReviewExportService, ReminderSweepService, ReminderSchedulerService],
+  providers: [MentionService, TransactionsService, TransactionsWriteService, MessagesService, TradeNumberService, TransactionLawyerReminderService, LawyerReminderSchedulerService, TransactionReviewService, ReviewSlaService, ReviewSlaSchedulerService, ReviewThreadService, ReviewExportService, ReminderSweepService, ReminderSchedulerService],
   // the bulk importer creates transactions through the same write path as the UI;
   // the review service is exported so the agent's notification bell can read from it.
   exports: [TransactionsWriteService, TransactionReviewService, ReminderSweepService],

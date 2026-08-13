@@ -1,4 +1,5 @@
 import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { NotificationDispatcher } from '../notifications/notification-dispatcher.service';
 import type { Prisma, transaction_reviews } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { PersonResolver } from '../core/person-resolver.service';
@@ -82,6 +83,8 @@ export class TransactionReviewService {
     private readonly mailer: MailerService,
     private readonly settings: CompanySettingsService,
     private readonly messages: MessagesService,
+    /** Optional so existing constructions keep working; always injected in the running app. */
+    private readonly dispatcher?: NotificationDispatcher,
   ) {}
 
   // ------------------------------------------------------------------ writing
@@ -244,6 +247,41 @@ export class TransactionReviewService {
       await this.emailAgent(review, txnId);
     } catch (err) {
       this.log.error(`Review ${review.id}: could not email the agent — ${err instanceof Error ? err.message : String(err)}`);
+    }
+
+    /*
+     * PUSH, alongside the chat post and the email above.
+     *
+     * Only the push channel: in-app is the `transaction_reviews` row itself, which the Notification
+     * Centre reads as a review-decision, and the email has just been sent by `emailAgent`. Asking
+     * the dispatcher for either would deliver it twice.
+     *
+     * Wrapped like its two neighbours, so a decision is recorded even if telling somebody about it
+     * fails — the review is the record, and the notification is the courtesy.
+     */
+    try {
+      if (this.dispatcher && review.agent_name) {
+        const agent = await this.prisma.users.findFirst({
+          where: { name: review.agent_name, status: 'Active' },
+          select: { id: true },
+          orderBy: { id: 'asc' },
+        });
+        if (agent) {
+          await this.dispatcher.dispatch({
+            category: 'transaction_approvals',
+            userId: agent.id,
+            title: review.decision === 'Rejected' ? 'A change was rejected' : 'Your changes were reviewed',
+            body: review.decision === 'Rejected'
+              ? `${review.field_label ?? 'A change'} — ${review.reason ?? ''}`.trim()
+              : (review.reason ?? 'Your changes were reviewed.'),
+            link: `/desk/transactions/${txnId}`,
+            dedupeKey: `review-${review.id}`,
+            channels: ['push'],
+          });
+        }
+      }
+    } catch (err) {
+      this.log.error(`Review ${review.id}: could not push to the agent — ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 

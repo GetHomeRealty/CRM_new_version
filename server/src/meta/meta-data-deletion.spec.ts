@@ -59,8 +59,11 @@ function signedRequest(payload: Record<string, unknown>, secret = SECRET): strin
 
 const request = (signed: string): Request => ({ body: { signed_request: signed } } as unknown as Request);
 
+// Only the data-deletion path is exercised here, and it never reaches the OAuth callback's
+// collaborators — hence the nulls, AuthService among them.
 const controllerFor = (tx: PrismaService) => new MetaPublicController(
   new MetaConnectionService(tx, { fetchPages: async () => [] } as never),
+  null as never,
   null as never,
   null as never,
   null as never,
@@ -72,7 +75,7 @@ async function connect(tx: PrismaService, facebookUserId: string): Promise<numbe
   const user = await tx.users.create({
     data: {
       name: `Del ${t}`, email: `del-${t}@example.test`, role: 'agent', status: 'Active',
-      password: 'x', company_id: 1, created_at: now, updated_at: now,
+      password: 'x', created_at: now, updated_at: now,
     },
   });
   await tx.meta_connections.create({
@@ -83,7 +86,7 @@ async function connect(tx: PrismaService, facebookUserId: string): Promise<numbe
   });
   await tx.meta_lead_forms.create({
     data: {
-      company_id: 1, user_id: user.id, page_id: `page-${t}`, form_id: `form-${t}`,
+      user_id: user.id, page_id: `page-${t}`, form_id: `form-${t}`,
       form_name: 'Campaign', is_active: true, created_at: now, updated_at: now,
     },
   });

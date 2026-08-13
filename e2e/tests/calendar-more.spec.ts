@@ -126,3 +126,170 @@ test.describe('the month grid can show a full day', () => {
     await expect(dialog.locator('.cal-item')).toHaveCount(await onDay(page));
   });
 });
+
+/**
+ * The four questions the block above does not answer.
+ *
+ * Its isolation test asserts `.cal-item` count equals `onDay(page)` — but both sides of that
+ * comparison come from the SAME user's data, so it would pass unchanged if another agent's
+ * appointments were leaking into the popover. There were never any to leak. These create some.
+ *
+ * Also here: that the popover shows the day that was clicked rather than any day, that it survives
+ * being closed and reopened, and that it works at phone width — where the grid has least room and
+ * "+N more" is most likely to be the only way to reach anything.
+ */
+const NEIGHBOUR = '2026-09-16';   // the day after DAY, seeded so the popover can pick the wrong one
+
+/** Remove this block's probes for whichever user is signed in on `page`. */
+async function clearProbes(page: Page): Promise<void> {
+  const res = await apiGet(page, `/api/calendar/events?area=crm&from=${MONTH}-01&to=${MONTH}-30`);
+  const events = Array.isArray(res.body) ? res.body as { id: number; title: string }[] : [];
+  for (const e of events) {
+    if (String(e.title).startsWith(PREFIX) || String(e.title).startsWith('Other agent')) {
+      await apiSend(page, 'DELETE', `/api/calendar/events/${e.id}?area=crm&scope=this`);
+    }
+  }
+}
+
+async function seedOn(page: Page, day: string, howMany: number, prefix: string): Promise<void> {
+  for (let i = 0; i < howMany; i += 1) {
+    await apiSend(page, 'POST', '/api/calendar/events?area=crm', {
+      title: `${prefix} ${i + 1}`, date: day,
+      time: `${String(9 + i).padStart(2, '0')}:00`, type: 'meeting', allow_overlap: true,
+    });
+  }
+}
+
+test.describe('"+N more" — the day, the owner, and the small screen', () => {
+  test('another agent’s appointments on the same day do not appear', async ({ browser }) => {
+    /*
+     * THE ONE THAT MATTERS. The owner's rule is absolute — "no one can view any other agent's
+     * events, not even the admin or super admin" — and a change that surfaces MORE events is exactly
+     * where that could quietly stop being true.
+     *
+     * Two contexts, because signing in on a second page of one context replaces the session cookie
+     * for the whole context and would make this test compare a user with themselves.
+     */
+    const mineCtx = await browser.newContext();
+    const theirsCtx = await browser.newContext();
+    try {
+      const mine = await mineCtx.newPage();
+      const theirs = await theirsCtx.newPage();
+      await signIn(mine, 'agent');
+      await signIn(theirs, 'agent2');
+      await clearProbes(mine);
+      await clearProbes(theirs);
+
+      await seedOn(mine, DAY, 5, PREFIX);
+      await seedOn(theirs, DAY, 4, 'Other agent');
+
+      await mine.goto(`/crm/calendar?month=${MONTH}`);
+      const more = mine.locator('button.cal-more');
+      await expect(more).toBeVisible({ timeout: 15_000 });
+      await more.click();
+
+      const dialog = mine.locator('.modal').last();
+      await expect(dialog.locator('.cal-item')).toHaveCount(5);
+      // Named explicitly rather than only counted: a count can coincide, a title cannot.
+      await expect(dialog.getByText('Other agent', { exact: false })).toHaveCount(0);
+      for (let i = 1; i <= 5; i += 1) await expect(dialog.getByText(`${PREFIX} ${i}`)).toBeVisible();
+
+      await clearProbes(mine);
+      await clearProbes(theirs);
+    } finally {
+      await mineCtx.close().catch(() => undefined);
+      await theirsCtx.close().catch(() => undefined);
+    }
+  });
+
+  test('it opens the day that was clicked, not the neighbouring one', async ({ page }) => {
+    // Two busy days side by side. A popover keyed on the wrong cell — or on "the first day with
+    // overflow" — looks completely normal until the days hold different appointments.
+    await signIn(page, 'agent');
+    await clearProbes(page);
+    try {
+      await seedOn(page, DAY, 5, PREFIX);
+      await seedOn(page, NEIGHBOUR, 5, `${PREFIX} NEXTDAY`);
+      await page.goto(`/crm/calendar?month=${MONTH}`);
+
+      const buttons = page.locator('button.cal-more');
+      await expect(buttons).toHaveCount(2, { timeout: 15_000 });
+
+      // The second overflow button is the later day.
+      await buttons.nth(1).click();
+      const dialog = page.locator('.modal').last();
+      await expect(dialog.getByText(`${PREFIX} NEXTDAY 1`)).toBeVisible();
+      await expect(dialog.getByText(`${PREFIX} 1`, { exact: true })).toHaveCount(0);
+      await expect(dialog.locator('.cal-item')).toHaveCount(5);
+    } finally { await clearProbes(page); }
+  });
+
+  test('every appointment appears exactly once', async ({ page }) => {
+    // Duplication is the other half of "nothing missing", and a count alone cannot tell them apart:
+    // five items with one shown twice and one absent still counts five.
+    await signIn(page, 'agent');
+    await clearProbes(page);
+    try {
+      await seedOn(page, DAY, 6, PREFIX);
+      await page.goto(`/crm/calendar?month=${MONTH}`);
+      await page.locator('button.cal-more').first().click();
+
+      const dialog = page.locator('.modal').last();
+      await expect(dialog.locator('.cal-item')).toHaveCount(6);
+      for (let i = 1; i <= 6; i += 1) {
+        await expect(dialog.getByText(`${PREFIX} ${i}`, { exact: true })).toHaveCount(1);
+      }
+    } finally { await clearProbes(page); }
+  });
+
+  test('it can be closed and opened again', async ({ page }) => {
+    /*
+     * The block above closes it once. Reopening is where a popover that stores its day in state and
+     * never clears it goes wrong — the second open shows the first day, or nothing at all.
+     */
+    await signIn(page, 'agent');
+    await clearProbes(page);
+    try {
+      await seedOn(page, DAY, 5, PREFIX);
+      await page.goto(`/crm/calendar?month=${MONTH}`);
+      const more = page.locator('button.cal-more').first();
+      await expect(more).toBeVisible({ timeout: 15_000 });
+
+      for (let round = 1; round <= 2; round += 1) {
+        await more.click();
+        const dialog = page.locator('.modal').last();
+        await expect(dialog.locator('.cal-item')).toHaveCount(5);
+        await dialog.locator('.close').click();
+        await expect(page.locator('.modal')).toHaveCount(0);
+      }
+      expect(await onDay(page)).toBe(5);
+    } finally { await clearProbes(page); }
+  });
+
+  test('it works at phone width, where it matters most', async ({ browser }) => {
+    // The narrower the cell, the fewer chips fit and the more of the day lives behind this button.
+    const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
+    try {
+      const page = await ctx.newPage();
+      await signIn(page, 'agent');
+      await clearProbes(page);
+      await seedOn(page, DAY, 5, PREFIX);
+
+      await page.goto(`/crm/calendar?month=${MONTH}`);
+      const more = page.locator('button.cal-more').first();
+      await expect(more).toBeVisible({ timeout: 15_000 });
+      await more.click();
+
+      const dialog = page.locator('.modal').last();
+      await expect(dialog.locator('.cal-item')).toHaveCount(5);
+      // The dialog itself must not overflow the viewport, or the appointments it reveals are
+      // unreachable in a different way from the one this feature fixed.
+      const box = await dialog.boundingBox();
+      expect(box).toBeTruthy();
+      expect(Math.round(box!.width)).toBeLessThanOrEqual(390);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(390);
+      await clearProbes(page);
+    } finally { await ctx.close(); }
+  });
+});
+

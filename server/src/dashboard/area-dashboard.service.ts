@@ -3,8 +3,10 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import type { AuthUserRecord } from '../auth/auth.types';
 
-import { isAgent } from '../core/authz';
+import { isAgent, isSuperAdmin } from '../core/authz';
 import { leadTaskScopeWhere, liveLeadWhere } from '../common/lead-scope';
+import { PermissionService } from '../auth/permission.service';
+import { CacheService } from '../redis/cache.service';
 /**
  * The two dashboards, as two separate reads.
  *
@@ -39,14 +41,31 @@ export interface DeskDashboard {
   transactions: { total: number; by_validation: Record<string, number>; by_commission: Record<string, number> };
   closings: { next_30_days: number; overdue: number; this_month: number };
   documents: { pending: number; invalid: number; mandatory_missing: number };
-  invoices: { total: number; unpaid: number; billed: number; collected: number; outstanding: number };
+  /**
+   * `null` when the caller does not hold the `invoice` screen — see `desk()`.
+   *
+   * Null rather than zeros: an agent who holds `invoice: 'none'` has no invoice figures, and
+   * reporting `billed: 0` would tell them the brokerage has billed nothing, which is a different
+   * and worse untruth than the brokerage-wide numbers this replaced.
+   */
+  invoices: { total: number; unpaid: number; billed: number; collected: number; outstanding: number } | null;
   calendar: { upcoming: number; today: number };
   todos: { total: number; pending: number; overdue: number };
 }
 
 @Injectable()
 export class AreaDashboardService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly permissions: PermissionService,
+    /*
+     * Optional, and it has to stay that way. `CacheService` degrades to "not cached" with no Redis,
+     * so the deployment that has none is unaffected — and the scope specs construct this service
+     * directly with two arguments to assert what an agent may count. Those tests are the reason the
+     * scope rules are trustworthy; a required dependency would have made them a mock-wiring exercise.
+     */
+    private readonly cache?: CacheService,
+  ) {}
 
   private startOfToday(): Date {
     const d = new Date();
@@ -88,7 +107,43 @@ export class AreaDashboardService {
   }
 
   // ------------------------------------------------------------------- CRM
+  /**
+   * The CRM dashboard, cached for `TTL.dashboard` seconds PER PERSON.
+   *
+   * WHY THE KEY IS NOT JUST THE USER ID. Almost every figure below is scoped by identity alone —
+   * `leadScopeWhere` gives a lead to whoever is assigned it or owns it, and NOBODY reads a
+   * colleague's book by virtue of their rank. For those, the user id is the whole of the scope.
+   *
+   * One rule is not identity-based: `isSuperAdmin` additionally matches leads with no owner, the
+   * unattributed intake that surfaces at the top tier rather than nowhere. That is the only way two
+   * requests from the same id can legitimately deserve different numbers, so it is the only thing
+   * that joins the id in the key. Promoting somebody then takes effect on their next request rather
+   * than at the end of a TTL.
+   *
+   * `isAgent` would be the wrong discriminator here and was the first thing tried: it reads as the
+   * scope rule but does not drive one on this screen, so a demotion from manager to agent would
+   * have changed the key while changing no figure, and a promotion to Super Admin — which does
+   * change the figures — would have kept it.
+   *
+   * An anonymous caller (`user` null) collapses to id `-1` in the queries below, so it must not
+   * share a key with a real person; it gets its own by construction.
+   *
+   * WHAT IS DELIBERATELY NOT CACHED: `desk()`. Its invoice section is present or `null` depending
+   * on a permission checked at request time, which makes it an authorization-shaped answer rather
+   * than a summary — and it is not what the fan-out measurement was about.
+   */
   async crm(user: AuthUserRecord | null): Promise<CrmDashboard> {
+    if (!this.cache) return this.crmUncached(user);
+    const scope = isSuperAdmin(user) ? 'sa' : 'own';
+    return this.cache.remember(
+      'dashboard',
+      `crm:${user?.id ?? -1}:${scope}`,
+      CacheService.TTL.dashboard,
+      () => this.crmUncached(user),
+    );
+  }
+
+  private async crmUncached(user: AuthUserRecord | null): Promise<CrmDashboard> {
     const userId = user?.id ?? -1;
     // Both borrowed from the Leads module rather than restated here. This file used to spell the
     // rule itself and got it wrong in both directions — an agent was scoped by `assigned_to` alone
@@ -105,23 +160,39 @@ export class AreaDashboardService {
     const today = this.startOfToday();
     const personal = { user_id: userId, deleted_at: null };
 
+    /*
+     * TWELVE QUERIES, NOT EIGHTEEN.
+     *
+     * Every dashboard load used to issue one `count()` per tile — four for leads, six for tasks,
+     * three for to-dos — and `Promise.all` made that look free. It is not: measured at a hundred
+     * concurrent users this endpoint delivered 17 req/s while a single-query endpoint on the same
+     * server delivered 532. The cost is not the latency any one user sees, it is that each request
+     * occupies eighteen pool connections and re-scans the same rows.
+     *
+     * Where several tiles are buckets of ONE column, `groupBy` answers them in one pass. Where a
+     * tile asks a genuinely different question — a date range, another table — it keeps its own
+     * query, because merging those would mean hand-written SQL and a second copy of the scope
+     * rules. The scope objects below are passed to Prisma unchanged, so `liveLeadWhere`,
+     * `leadTaskScopeWhere` and the per-user campaign filter remain the single definition of who may
+     * see what.
+     */
     const [
-      leadTotal, byStatus, bySource, newThisWeek,
-      taskTotal, taskPending, taskCompleted, taskCancelled, taskToday, taskOverdue,
+      byStatus, bySource, newThisWeek,
+      taskByStatus, taskToday, taskOverdue,
       campaignAgg, campaignCount,
       unread,
       calUpcoming, calToday,
-      todoTotal, todoPending, todoOverdue,
+      todoByStatus, todoOverdue,
     ] = await Promise.all([
-      this.prisma.leads.count({ where: leadWhere }),
+      // `leadTotal` is no longer its own count — it is the sum of these buckets, which include the
+      // null-status group, so the tile and the breakdown beneath it cannot disagree.
       this.prisma.leads.groupBy({ by: ['lead_status'], _count: { _all: true }, where: leadWhere }),
       this.prisma.leads.groupBy({ by: ['lead_source'], _count: { _all: true }, where: leadWhere }),
       this.prisma.leads.count({ where: { ...leadWhere, created_at: { gte: this.daysFromToday(-7) } } }),
 
-      this.prisma.lead_tasks.count({ where: taskWhere }),
-      this.prisma.lead_tasks.count({ where: { ...taskWhere, status: 'pending' } }),
-      this.prisma.lead_tasks.count({ where: { ...taskWhere, status: 'completed' } }),
-      this.prisma.lead_tasks.count({ where: { ...taskWhere, status: 'cancelled' } }),
+      // Four counts (total, pending, completed, cancelled) in one pass.
+      this.prisma.lead_tasks.groupBy({ by: ['status'], _count: { _all: true }, where: taskWhere }),
+      // These two stay: "due today" and "overdue" are date questions, not status buckets.
       this.prisma.lead_tasks.count({ where: { ...taskWhere, status: 'pending', due_date: today } }),
       this.prisma.lead_tasks.count({ where: { ...taskWhere, status: 'pending', due_date: { lt: today } } }),
 
@@ -133,15 +204,43 @@ export class AreaDashboardService {
         where: { user_id: userId, seen: false, mail_account: { is: { OR: [{ scope: 'crm' }, { scope: null }] } } },
       }),
 
+      /*
+       * NEXT 30 DAYS STARTS TOMORROW. This counted from `today`, so every appointment today was in
+       * both figures — the card showed "3 today" beside a "next 30 days" that silently included the
+       * same three. Two counts presented side by side have to partition the range, or the reader
+       * adds them up and gets a number that does not exist.
+       *
+       * From tomorrow (day 1) to the end of day 30, i.e. day 31 exclusive — thirty whole days after
+       * today rather than twenty-nine and a bit. `daysFromToday` is built off local midnight, so
+       * both boundaries land on the reader's own day, not UTC's.
+       */
       this.prisma.calendar_events.count({
-        where: { ...personal, ...this.areaOr('crm'), ...this.liveEvent, date: { gte: today, lt: this.daysFromToday(30) } },
+        where: { ...personal, ...this.areaOr('crm'), ...this.liveEvent, date: { gte: this.daysFromToday(1), lt: this.daysFromToday(31) } },
       }),
       this.prisma.calendar_events.count({ where: { ...personal, ...this.areaOr('crm'), ...this.liveEvent, date: today } }),
 
-      this.prisma.todos.count({ where: { ...personal, ...this.areaOr('crm') } }),
-      this.prisma.todos.count({ where: { ...personal, ...this.areaOr('crm'), status: 'pending' } }),
+      // Total and pending in one pass; overdue is a date question and keeps its own.
+      this.prisma.todos.groupBy({ by: ['status'], _count: { _all: true }, where: { ...personal, ...this.areaOr('crm') } }),
       this.prisma.todos.count({ where: { ...personal, ...this.areaOr('crm'), status: 'pending', due_date: { lt: today } } }),
     ]);
+
+    /*
+     * The buckets, summed back into the totals the tiles expect.
+     *
+     * `groupBy` returns only the statuses that exist, so a bucket nobody holds must read 0 rather
+     * than undefined — these go straight to the screen.
+     */
+    const sum = (rows: { _count: { _all: number } }[]): number => rows.reduce((a, r) => a + r._count._all, 0);
+    const bucket = (rows: { status: string | null; _count: { _all: number } }[], k: string): number =>
+      rows.find((r) => r.status === k)?._count._all ?? 0;
+
+    const leadTotal = sum(byStatus);
+    const taskTotal = sum(taskByStatus);
+    const taskPending = bucket(taskByStatus, 'pending');
+    const taskCompleted = bucket(taskByStatus, 'completed');
+    const taskCancelled = bucket(taskByStatus, 'cancelled');
+    const todoTotal = sum(todoByStatus);
+    const todoPending = bucket(todoByStatus, 'pending');
 
     return {
       leads: {
@@ -177,6 +276,15 @@ export class AreaDashboardService {
     const personal = { user_id: userId, deleted_at: null };
     const monthEnd = new Date(today.getFullYear(), today.getMonth() + 1, 0);
 
+    // Asked of the same service `ScreenGuard` asks, including per-user overrides — so granting one
+    // agent invoice access through Roles & Permissions shows them their own figures here too,
+    // rather than requiring a second rule to be remembered.
+    const mayReadInvoices = this.permissions.can(user?.role || 'agent', user?.user_permissions ?? [], 'invoice', 'view');
+    const invoiceWhere: Prisma.invoicesWhereInput = {
+      deleted_at: null,
+      ...(isAgent(user) ? { transactions: { is: live } } : {}),
+    };
+
     const [
       txnTotal, byValidation, byCommission,
       closingsSoon, closingsOverdue, closingsThisMonth,
@@ -198,9 +306,35 @@ export class AreaDashboardService {
       this.prisma.documents.count({ where: { validation: 'Invalid', transactions: { is: live } } }),
       this.prisma.documents.count({ where: { mandatory: true, status: 'Pending', transactions: { is: live } } }),
 
-      this.prisma.invoices.count({ where: { deleted_at: null } }),
-      this.prisma.invoices.count({ where: { deleted_at: null, status: { not: 'Paid' } } }),
-      this.prisma.invoices.aggregate({ _sum: { total: true, amount_paid: true, balance_due: true }, where: { deleted_at: null } }),
+      /*
+       * THE THREE QUERIES ON THIS SCREEN THAT WERE NOT SCOPED TO ANYBODY.
+       *
+       * They read `{ deleted_at: null }` and nothing else, while every other aggregate in this method
+       * is scoped — transactions by `agent`, documents through `transactions: { is: live }`, calendar
+       * and to-dos by `user_id`. Measured 2026-08-05 against the development database: the agent
+       * "Akhil" saw `transactions.total: 3` of the brokerage's 7 — correctly their own — and
+       * `invoices: { total: 5, billed: 123396, outstanding: 123396 }`, identical to the Super Admin's
+       * and identical to `SELECT sum(total) FROM invoices`.
+       *
+       * The agent role holds `invoice: 'none'`. So the one screen every agent opens first was
+       * printing the brokerage's billed and outstanding money, in four tiles, for a module the same
+       * person is refused everywhere else in the product. This class's own docstring said "every
+       * query is scoped to the signed-in user the same way its module already scopes" — which was
+       * true of eleven of the fourteen.
+       *
+       * Two changes, because one would not be enough on its own:
+       *   - WITHHELD from anyone without the `invoice` screen. That is the authority; the numbers are
+       *     not theirs to see at any scope.
+       *   - SCOPED to their own deals for an agent who does hold it, via the same `transactions:
+       *     { is: live }` join the document counts already use. A nullable relation with `is`
+       *     excludes invoices attached to no transaction, which is the wanted answer here: a
+       *     standalone invoice is brokerage billing, not one agent's.
+       */
+      mayReadInvoices ? this.prisma.invoices.count({ where: invoiceWhere }) : Promise.resolve(0),
+      mayReadInvoices ? this.prisma.invoices.count({ where: { ...invoiceWhere, status: { not: 'Paid' } } }) : Promise.resolve(0),
+      mayReadInvoices
+        ? this.prisma.invoices.aggregate({ _sum: { total: true, amount_paid: true, balance_due: true }, where: invoiceWhere })
+        : Promise.resolve({ _sum: { total: null, amount_paid: null, balance_due: null } }),
 
       this.prisma.calendar_events.count({
         where: { ...personal, ...this.areaOr('desk'), ...this.liveEvent, date: { gte: today, lt: this.daysFromToday(30) } },
@@ -222,13 +356,15 @@ export class AreaDashboardService {
       },
       closings: { next_30_days: closingsSoon, overdue: closingsOverdue, this_month: closingsThisMonth },
       documents: { pending: docsPending, invalid: docsInvalid, mandatory_missing: docsMandatoryMissing },
-      invoices: {
-        total: invoiceCount,
-        unpaid: invoiceUnpaid,
-        billed: dec(invoiceMoney._sum.total),
-        collected: dec(invoiceMoney._sum.amount_paid),
-        outstanding: dec(invoiceMoney._sum.balance_due),
-      },
+      invoices: mayReadInvoices
+        ? {
+          total: invoiceCount,
+          unpaid: invoiceUnpaid,
+          billed: dec(invoiceMoney._sum.total),
+          collected: dec(invoiceMoney._sum.amount_paid),
+          outstanding: dec(invoiceMoney._sum.balance_due),
+        }
+        : null,
       calendar: { upcoming: calUpcoming, today: calToday },
       todos: { total: todoTotal, pending: todoPending, overdue: todoOverdue },
     };

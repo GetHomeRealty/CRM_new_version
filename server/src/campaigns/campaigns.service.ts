@@ -1,13 +1,17 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { CrmEventNotifier } from '../notifications/crm-events.service';
+import { CampaignAuditService } from './campaign-audit.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { MailerService, type MailAttachment } from '../email/mailer.service';
 import { CampaignAudienceService, type AudienceFilter } from './campaign-audience.service';
-import { runAsSystem } from '../core/tenant-context';
 import { CampaignTemplatesService } from './campaign-templates.service';
 import { MailDeliverabilityService } from './mail-deliverability.service';
 import { classifyBounce, nextRetryAt, MAX_SOFT_RETRIES } from './bounce-classifier';
 import { MAX_RECIPIENTS, SEND_DELAY_MS } from './campaign.constants';
 import type { AuthUserRecord } from '../auth/auth.types';
+import { Prisma } from '@prisma/client';
+import { can } from '../core/authz';
+import { leadScopeWhere } from '../common/lead-scope';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -95,6 +99,10 @@ export class CampaignsService {
     private readonly templates: CampaignTemplatesService,
     private readonly deliverability: MailDeliverabilityService,
     private readonly mailer: MailerService,
+    /** Optional so existing constructions — including this service's specs — keep working. */
+    private readonly crmEvents?: CrmEventNotifier,
+    /** Also optional, for the same reason. Absent means no trail row, never a failed operation. */
+    private readonly audit?: CampaignAuditService,
   ) {}
 
   /**
@@ -152,10 +160,19 @@ export class CampaignsService {
   async remove(id: number, user: AuthUserRecord): Promise<{ success: boolean }> {
     // Scoped, so an agent cannot delete a campaign they did not create — nor learn that one
     // exists by getting a different error for it.
-    const c = await this.prisma.campaigns.findFirst({ where: { id, ...this.ownerScope(user) }, select: { id: true } });
+    const c = await this.prisma.campaigns.findFirst({
+      where: { id, ...this.ownerScope(user) },
+      // Name and counts read BEFORE the delete: the cascade takes the recipients with it, so
+      // afterwards there is nothing left to describe what was removed.
+      select: { id: true, name: true, status: true, sent: true },
+    });
     if (!c) throw new NotFoundException({ message: 'Campaign not found.' });
     // recipients cascade
     await this.prisma.campaigns.delete({ where: { id } });
+    await this.audit?.record(
+      user, 'Campaign deleted', c.name ?? `#${id}`,
+      `Was ${c.status ?? 'unknown'}${c.sent ? ` after ${c.sent} sent` : ''} — recipients removed with it`,
+    );
     return { success: true };
   }
 
@@ -178,6 +195,17 @@ export class CampaignsService {
   async createAndSend(input: SendCampaignInput, user: AuthUserRecord): Promise<Record<string, unknown>> {
     const name = String(input.name ?? '').trim();
     if (!name) throw new BadRequestException({ message: 'Campaign name is required.' });
+    /*
+     * `campaigns.name` is VARCHAR(255). Without this the value reached Postgres and the driver
+     * error surfaced as a bare HTTP 500 — measured at 500 characters — while every other refusal on
+     * this endpoint returns a clean 400 naming the field. CRM-CAMP-M03.
+     */
+    if (name.length > 255) {
+      throw new BadRequestException({
+        message: 'The campaign name must be 255 characters or fewer.',
+        errors: { name: ['Must be 255 characters or fewer.'] },
+      });
+    }
 
     const templateId = Number(input.template_id);
     if (!Number.isInteger(templateId) || templateId <= 0) {
@@ -279,6 +307,10 @@ export class CampaignsService {
         },
       });
       this.log.log(`Campaign "${name}" (#${campaign.id}) scheduled for ${scheduledFor.toISOString()} (${recipients.length} recipients).`);
+      await this.audit?.record(
+        user, 'Campaign scheduled', name,
+        `${recipients.length} recipient(s), to send ${scheduledFor.toISOString()}`,
+      );
       return this.summary(held);
     }
 
@@ -288,6 +320,18 @@ export class CampaignsService {
       // URL they were built with, and the rest of the same campaign has to match them.
       data: { status: 'sending', tracking_base_url: input.baseUrl, updated_at: new Date() },
     });
+    /*
+     * Recorded HERE — at the decision to send — rather than when delivery finishes.
+     *
+     * The trail's question is who authorised mail to these people, and the answer is settled at this
+     * line. Delivery runs detached and may take minutes, may partially fail, may be resumed by a
+     * different process after a restart; none of that changes who pressed send. Per-recipient
+     * outcomes are already on `campaign_recipients` for anyone asking what happened next.
+     */
+    await this.audit?.record(
+      user, 'Campaign sent', name,
+      `${recipients.length} recipient(s), subject "${template.subject}"`,
+    );
     void this.deliver({
       campaignId: campaign.id, name, recipients, rows: campaign.recipients, tokens,
       template, agentVars, attachments, baseUrl: input.baseUrl, userId: user.id ?? null,
@@ -305,14 +349,51 @@ export class CampaignsService {
    * answered with a database query. CASL puts the burden of proof on the sender, so the record
    * being unreadable is most of the problem.
    *
-   * Brokerage-wide by design, not per agent. A suppression is the recipient's decision about the
-   * brokerage, and an agent must not be able to work around a colleague's opt-out by not seeing it.
+   * SCOPED TO THE VIEWER'S OWN LEADS, for everyone except the roles that run marketing.
+   *
+   * This was brokerage-wide, and the reasoning written here was that an agent "must not be able to
+   * work around a colleague's opt-out by not seeing it". That reasoning does not survive checking:
+   * `CampaignAudienceService.suppressedEmails` filters every send against the WHOLE table
+   * regardless of who is sending, so an address hidden from this list is still unmailable. Nothing
+   * about visibility affects enforcement.
+   *
+   * What visibility does affect is disclosure. Every row is a real person's email address, and the
+   * list showed every agent the addresses of every colleague's clients — the same boundary the lead
+   * list, the campaign audience and the export all hold. A brokerage-wide list was the one place it
+   * leaked.
+   *
+   * `campaigns.brokerage-audience` decides who still sees everything: the marketing and
+   * administrative roles whose job is the brokerage's whole audience. An agent sees the opt-outs of people who are their own
+   * leads, which is exactly the set they could have mailed.
    */
-  async listSuppressions(q: { page?: unknown; limit?: unknown; search?: unknown } = {}): Promise<Record<string, unknown>> {
+  async listSuppressions(
+    user: AuthUserRecord | null,
+    q: { page?: unknown; limit?: unknown; search?: unknown } = {},
+  ): Promise<Record<string, unknown>> {
     const page = Math.max(1, Number(q.page ?? 1) || 1);
     const limit = Math.min(200, Math.max(1, Number(q.limit ?? 50) || 50));
     const search = String(q.search ?? '').trim().toLowerCase();
-    const where = search ? { email: { contains: search, mode: 'insensitive' as const } } : {};
+
+    const searchWhere = search ? { email: { contains: search, mode: 'insensitive' as const } } : {};
+
+    /*
+     * The addresses this person's own leads use. Suppressions key on the address, not on a lead id
+     * — a person who opts out is opting the ADDRESS out — so the scope has to be expressed as the
+     * set of addresses they own rather than as a join.
+     */
+    let where: Prisma.email_suppressionsWhereInput = searchWhere;
+    if (!can(user, 'campaigns.brokerage-audience')) {
+      const own = await this.prisma.leads.findMany({
+        where: { deleted_at: null, ...leadScopeWhere(user) },
+        select: { email: true },
+      });
+      const addresses = [...new Set(own.map((l) => (l.email ?? '').trim().toLowerCase()).filter(Boolean))];
+      // No leads means no suppressions to show — an empty `in` would match everything.
+      if (!addresses.length) {
+        return { data: [], meta: { page, per_page: limit, total: 0, last_page: 1 } };
+      }
+      where = { ...searchWhere, email: { in: addresses, mode: 'insensitive' as const } };
+    }
 
     const [rows, total] = await Promise.all([
       this.prisma.email_suppressions.findMany({
@@ -356,6 +437,19 @@ export class CampaignsService {
     await this.prisma.email_suppressions.delete({ where: { email: address } });
     await this.prisma.$executeRaw`UPDATE "leads" SET "unsubscribed" = false, "unsubscribed_at" = NULL, "updated_at" = ${now} WHERE LOWER("email") = ${address}`;
     this.log.warn(`Suppression removed for ${address} by ${user.name ?? 'unknown'} — mail to this address will resume.`);
+    /*
+     * THE ROW THE COMMENT ABOVE ALREADY PROMISED. This method's own documentation said "deliberately
+     * narrow, and audited … the record of who did it is the point", and there was no writer — only a
+     * log line, which is not a record anybody can query a year later.
+     *
+     * This is the single most consequential action in the module: it resumes mail to somebody who
+     * asked for it to stop. Under CASL the question "who authorised that, and when" has a legal
+     * answer, and until now the system could not give one.
+     */
+    await this.audit?.record(
+      user, 'Suppression removed', address,
+      `Reason on the list was "${row.reason ?? 'unknown'}" — mail to this address resumes, and the matching leads were un-flagged`,
+    );
     return { removed: true };
   }
 
@@ -363,12 +457,39 @@ export class CampaignsService {
    * Send a campaign whose time has come. Reuses the resume path, which is already written to send
    * only the recipients still `pending` — for a scheduled campaign that is all of them.
    */
-  async dispatchScheduled(campaignId: number): Promise<void> {
-    await this.prisma.campaigns.update({
-      where: { id: campaignId },
+  /**
+   * Start a scheduled campaign — claiming it first, so only one worker can.
+   *
+   * THE CLAIM IS THE `WHERE` CLAUSE, and that is the whole mechanism. `UPDATE … WHERE id = ? AND
+   * status = 'scheduled'` is atomic in PostgreSQL: whichever transaction gets there first flips the
+   * row, and every other one matches zero rows and is told so by `count`. No lock table, no Redis,
+   * no coordination — the database was already the shared thing.
+   *
+   * WHY THIS IS NOT MERELY TIDY. The previous version updated `where: { id }` with no condition, so
+   * four application processes ticking at the same second all "succeeded" and all called `resume`.
+   * Measured against the real send path, that is four copies of a campaign in every recipient's
+   * inbox — a deliverability problem, a CASL problem, and the one failure this module elsewhere
+   * describes as worse than not sending at all.
+   *
+   * DELIBERATELY NOT DEPENDENT ON REDIS. `clusterTick` stops the other three processes running the
+   * sweep at all, which is better, but it is documented to RUN when Redis is absent rather than
+   * silently stopping every scheduled job on a deployment that has none. So a deployment that adds
+   * processes and forgets Redis would get the appearance of protection. For the one job that sends
+   * mail to clients, the guarantee has to live somewhere that is always present. It lives here.
+   *
+   * Returns whether this caller won the claim, so a loser is not reported as a failure.
+   */
+  async dispatchScheduled(campaignId: number): Promise<boolean> {
+    const claimed = await this.prisma.campaigns.updateMany({
+      where: { id: campaignId, status: 'scheduled' },
       data: { status: 'sending', updated_at: new Date() },
     });
+    // Zero means somebody else claimed it between our read and our write. That is a normal outcome
+    // in a multi-process deployment, not an error, and it must not be logged as one.
+    if (claimed.count === 0) return false;
+
     await this.resume(campaignId);
+    return true;
   }
 
   /**
@@ -380,7 +501,7 @@ export class CampaignsService {
   async cancelScheduled(campaignId: number, user: AuthUserRecord): Promise<{ cancelled: boolean }> {
     const c = await this.prisma.campaigns.findFirst({
       where: { id: campaignId, ...this.ownerScope(user) },
-      select: { id: true, status: true },
+      select: { id: true, status: true, name: true },
     });
     if (!c) throw new NotFoundException({ message: 'Campaign not found.' });
     if (c.status !== 'scheduled') {
@@ -394,6 +515,7 @@ export class CampaignsService {
       where: { id: campaignId },
       data: { status: 'draft', scheduled_for: null, updated_at: new Date() },
     });
+    await this.audit?.record(user, 'Campaign cancelled', c.name ?? `#${campaignId}`, 'Returned to draft before sending');
     return { cancelled: true };
   }
 
@@ -440,6 +562,55 @@ export class CampaignsService {
     });
     if (!pending.length) return;
 
+    /*
+     * CONSENT IS RE-CHECKED HERE, IMMEDIATELY BEFORE DELIVERY — not only when the audience was built.
+     *
+     * A campaign's recipient rows are materialised when it is created or scheduled. For a scheduled
+     * campaign that can be days ahead of the send, and `resolveRecipients` — which applies the
+     * suppression list and the lead's own opt-out — ran once, back then. Anyone who unsubscribed in
+     * between was still `pending` and was still sent to. Under CASL the violation is sending AFTER
+     * consent is withdrawn, so the check has to happen at the moment of sending. Finding
+     * CRM-CAMP-H02.
+     *
+     * Both sources are consulted, because they are set independently: `email_suppressions` is the
+     * brokerage-wide do-not-email list (unsubscribes, hard bounces, manual additions), while
+     * `leads.unsubscribed` is the flag on the lead record. An address can be on either.
+     *
+     * Excluded rows are MARKED, not silently skipped: a recipient dropped for consent is recorded as
+     * such, so the campaign's own results explain the gap between "attempted" and "sent" rather than
+     * leaving somebody to wonder where the missing recipients went.
+     */
+    const addresses = pending.map((r) => r.email);
+    const [suppressed, optedOutLeads] = await Promise.all([
+      this.audience.suppressedEmails(addresses),
+      this.prisma.leads.findMany({
+        where: { unsubscribed: true, email: { in: addresses, mode: 'insensitive' } },
+        select: { email: true },
+      }),
+    ]);
+    for (const l of optedOutLeads) suppressed.add(String(l.email ?? '').toLowerCase());
+
+    const stillAllowed = pending.filter((r) => !suppressed.has(r.email.toLowerCase()));
+    const withdrawn = pending.filter((r) => suppressed.has(r.email.toLowerCase()));
+
+    if (withdrawn.length) {
+      const now = new Date();
+      this.log.warn(
+        `Campaign #${campaignId}: ${withdrawn.length} recipient(s) opted out after this campaign was built — not sent.`,
+      );
+      await this.prisma.campaign_recipients.updateMany({
+        where: { id: { in: withdrawn.map((r) => r.id) } },
+        data: {
+          status: 'failed',
+          unsubscribed: true,
+          error: 'Not sent — this address opted out after the campaign was created.',
+          updated_at: now,
+        },
+      });
+    }
+    // Everyone left is gone; nothing to deliver.
+    if (!stillAllowed.length) return;
+
     const user = { id: campaign.created_by_id ?? null, name: campaign.created_by ?? '' } as AuthUserRecord;
     const attachments = campaign.template_id
       ? await this.templates.attachmentsForSend(campaign.template_id)
@@ -451,14 +622,14 @@ export class CampaignsService {
       // Subject and content come from the CAMPAIGN row, not the template: a template edited since
       // the send began must not change what the second half of the campaign says.
       template: { subject: campaign.subject, content: campaign.content },
-      recipients: pending.map((r) => ({
+      recipients: stillAllowed.map((r) => ({
         leadId: r.lead_id ?? null,
         name: r.name ?? '',
         email: r.email,
         vars: parseVars(r.vars),
       })) as never,
-      rows: pending.map((r) => ({ id: r.id, retry_count: r.retry_count })),
-      tokens: pending.map((r) => r.token),
+      rows: stillAllowed.map((r) => ({ id: r.id, retry_count: r.retry_count })),
+      tokens: stillAllowed.map((r) => r.token),
       agentVars: await this.agentVarsFor(user),
       attachments,
       baseUrl: campaign.tracking_base_url ?? '',
@@ -561,6 +732,43 @@ export class CampaignsService {
       // opting out must not depend on the click endpoint being healthy.
       html = this.audience.rewriteLinks(html, { baseUrl, campaignId: campaign.id, token: tokens[i], links: linkIds });
       html = this.audience.injectTracking(html, { baseUrl, campaignId: campaign.id, token: tokens[i] });
+
+      /*
+       * CLAIM BEFORE SENDING. This is the fix for CRM-CAMP-M02.
+       *
+       * The order used to be send-then-mark, so a crash in between left the row `pending` and the
+       * resume sent to that person a SECOND time. The window was one database write wide, and a
+       * deploy during a large campaign — which runs for minutes because of the inter-send delay — is
+       * a realistic way to land in it.
+       *
+       * Marking `sending` first makes the crash detectable instead of invisible. `deliverPending`
+       * selects `status: 'pending'` only, so a claimed row is never picked up again: after a crash
+       * it stays `sending`, and the outcome is one message possibly not delivered rather than one
+       * definitely delivered twice.
+       *
+       * THAT IS THE TRADE, AND IT IS THE ONE THIS MODULE ALREADY SAYS IT WANTS — the `delivering`
+       * guard is documented as existing because "a second copy in somebody's inbox is the one
+       * failure this module treats as worse than not sending at all". Send-then-mark optimised for
+       * the opposite. A `sending` row is visible in the campaign's own results, so the ambiguity is
+       * reported rather than silently resolved in either direction.
+       *
+       * No migration: `status` is VARCHAR(16) and holds this alongside pending/sent/failed.
+       *
+       * THE CLAIM IS NOW CONDITIONAL, and that is what makes it work across processes. Marking
+       * `sending` was always the right idea; doing it with `where: { id }` was not, because two
+       * workers both "succeeded" and both then sent. `WHERE id = ? AND status = 'pending'` means
+       * exactly one of them updates a row — PostgreSQL serialises the two updates on the row lock —
+       * and the loser is told by `count === 0` and skips.
+       *
+       * This is the guarantee that survives everything above it failing: even if the campaign-level
+       * claim were bypassed, even with no Redis and four processes in the same `resume`, a recipient
+       * can be claimed once. It is the last line, and it is the only one that is per-message.
+       */
+      if (!(await this.claimRecipient(row.id))) {
+        // Another worker owns this recipient and will record its outcome. Not counted here as sent
+        // or failed: this pass did not send it, and inventing a number would misreport the campaign.
+        continue;
+      }
 
       try {
         // Pass the sending user's id so the campaign goes from THEIR own connected account (their
@@ -705,6 +913,34 @@ export class CampaignsService {
       `Campaign "${name}" (#${campaign.id}): ${sent} sent, ${failed} failed`
       + `${deferred ? `, ${deferred} deferred for retry` : ''} (this pass covered ${recipients.length}).`,
     );
+
+    /*
+     * TELL THE OWNER — but only once the campaign has genuinely finished.
+     *
+     * `deferred > 0` leaves the status `sending`, because those recipients are queued for the retry
+     * sweep rather than done with. Notifying there would report a final outcome for a campaign still
+     * in flight, and the person would later see different numbers with no explanation. So a deferred
+     * pass says nothing and the notification comes from the pass that actually settles it.
+     *
+     *   completed / partial → finished, something got through   → "campaign finished"
+     *   failed              → finished, nothing got through     → "could not be completed"
+     *
+     * Never allowed to affect the send: the messages have already gone.
+     */
+    if (deferred === 0) {
+      // The owner is read here rather than carried down: the `campaign` in scope at this point is a
+      // narrowed projection for the send loop and does not include who created it.
+      const owner = await this.prisma.campaigns
+        .findUnique({ where: { id: campaign.id }, select: { created_by_id: true } })
+        .catch(() => null);
+      const summary = { recipients: recipients.length, sent, failed };
+
+      if (sent === 0) {
+        void this.crmEvents?.campaignFailed({ id: campaign.id, name }, owner?.created_by_id, 'no-recipients-reached');
+      } else {
+        void this.crmEvents?.campaignCompleted({ id: campaign.id, name }, owner?.created_by_id, summary);
+      }
+    }
    } catch (err) {
     // A send that died mid-flight must not be left saying "sending" for ever, and must not take
     // the process with it. Record what happened; the counters already hold how far it reached.
@@ -715,6 +951,23 @@ export class CampaignsService {
     await this.prisma.campaigns
       .update({ where: { id: job.campaignId }, data: { status: 'partial', updated_at: new Date() } })
       .catch(() => undefined);
+
+    /*
+     * A send that died mid-flight. The owner is told plainly and the technical reason goes to the
+     * log above — a stack trace, an SMTP response or a provider error is not something a campaign
+     * owner can act on, and it must not be delivered to their inbox or their phone.
+     */
+    const aborted = await this.prisma.campaigns
+      .findUnique({ where: { id: job.campaignId }, select: { id: true, name: true, created_by_id: true } })
+      .catch(() => null);
+    if (aborted) {
+      void this.crmEvents?.campaignFailed(
+        { id: aborted.id, name: aborted.name },
+        aborted.created_by_id,
+        'delivery-aborted',
+        err instanceof Error ? err.message : String(err),
+      );
+    }
    } finally {
     this.delivering.delete(job.campaignId);
    }
@@ -765,6 +1018,26 @@ export class CampaignsService {
   }
 
   /**
+   * Take ownership of one recipient, or discover that somebody else already has.
+   *
+   * `updateMany` rather than `update`, because only `updateMany` accepts a non-unique `where` — and
+   * the condition on `status` IS the lock. Two processes issuing this for the same row are
+   * serialised by PostgreSQL on that row: the first sees `count === 1`, the second re-evaluates the
+   * predicate against the committed row, finds `status = 'sending'`, matches nothing, and returns 0.
+   *
+   * Only `pending` is claimable. A row already `sending` belongs to another worker (or to a crashed
+   * one, which the module deliberately leaves visible rather than silently re-sending — see the
+   * claim comment in `deliver`). A row `sent` or `failed` is finished.
+   */
+  private async claimRecipient(id: number): Promise<boolean> {
+    const claimed = await this.prisma.campaign_recipients.updateMany({
+      where: { id, status: 'pending' },
+      data: { status: 'sending', error: null, updated_at: new Date() },
+    });
+    return claimed.count === 1;
+  }
+
+  /**
    * Put a hard-bounced address on the suppression list.
    *
    * The same list an unsubscribe writes to, because it answers the same question — may we mail
@@ -797,20 +1070,14 @@ export class CampaignsService {
 
   // -------------------------------------------------------------- tracking
   /**
-   * Record an open. Returns quietly whatever happens — the caller always serves the pixel
-   * so the email still renders.
-   */
-  /**
-   * Record an open. Same situation as unsubscribe — fetched by a mail client with no session, so
-   * no tenant — and the same fix. This failed for every open ever recorded; nobody noticed because
-   * the pixel handler swallows errors by design so the image always renders, which meant open
-   * tracking reported zero and looked like recipients simply were not opening anything.
+   * Record an open. Fetched by a mail client, so there is no session behind it — the recipient is
+   * identified by the token alone.
+   *
+   * Returns quietly whatever happens: the caller always serves the pixel so the email still
+   * renders. That swallowing is by design and is also why a failure here is invisible — open
+   * tracking simply reports zero and looks like nobody is opening anything.
    */
   async recordOpen(campaignId: number, token: string): Promise<void> {
-    return runAsSystem(() => this.recordOpenUnscoped(campaignId, token));
-  }
-
-  private async recordOpenUnscoped(campaignId: number, token: string): Promise<void> {
     const r = await this.prisma.campaign_recipients.findUnique({
       where: { token },
       include: { campaigns: { select: { id: true, sent_at: true } } },
@@ -837,28 +1104,21 @@ export class CampaignsService {
   /** Whether this open should be ignored because it arrived too soon after sending. */
   /** Where a link points, without attributing a click. Used when the fetch looks automated. */
   async linkDestination(campaignId: number, linkId: number): Promise<string | null> {
-    return runAsSystem(async () => {
-      const link = await this.prisma.campaign_links.findUnique({ where: { id: linkId } });
-      return link && link.campaign_id === campaignId ? link.url : null;
-    });
+    const link = await this.prisma.campaign_links.findUnique({ where: { id: linkId } });
+    return link && link.campaign_id === campaignId ? link.url : null;
   }
 
   /**
    * Record a click and return where to send the reader.
    *
-   * Public, so no session and no tenant — `runAsSystem` for the same reason as `recordOpen`. The
-   * destination comes from the stored row, never from the request, which is what keeps this from
-   * being an open redirect.
+   * Public, so no session, exactly like `recordOpen`. The destination comes from the stored row,
+   * never from the request, which is what keeps this from being an open redirect.
    *
    * Returns null when anything does not line up; the caller then sends the reader to the site
    * rather than showing an error, because a broken tracking link should not be the recipient's
    * problem.
    */
   async recordClick(campaignId: number, token: string, linkId: number): Promise<string | null> {
-    return runAsSystem(() => this.recordClickUnscoped(campaignId, token, linkId));
-  }
-
-  private async recordClickUnscoped(campaignId: number, token: string, linkId: number): Promise<string | null> {
     const link = await this.prisma.campaign_links.findUnique({ where: { id: linkId } });
     if (!link || link.campaign_id !== campaignId) return null;
 
@@ -898,12 +1158,8 @@ export class CampaignsService {
     return link.url;
   }
 
-  /** Called from the public pixel, so it needs the same system context. */
+  /** Called from the public pixel. */
   async isMachinePrefetch(campaignId: number): Promise<boolean> {
-    return runAsSystem(() => this.isMachinePrefetchUnscoped(campaignId));
-  }
-
-  private async isMachinePrefetchUnscoped(campaignId: number): Promise<boolean> {
     const c = await this.prisma.campaigns.findUnique({ where: { id: campaignId }, select: { sent_at: true } });
     if (!c?.sent_at) return false;
     return Date.now() - c.sent_at.getTime() < CampaignsService.MACHINE_PREFETCH_WINDOW_MS;
@@ -914,23 +1170,13 @@ export class CampaignsService {
    * list, and flag every matching lead so audience queries skip it.
    */
   /**
-   * Opt a recipient out. Reached from a link in their email, so there is NO SESSION and therefore
-   * no tenant in context — every query below has to say so explicitly or the tenant extension
-   * rejects it.
+   * Opt a recipient out. Reached from a link in their email, so there is NO SESSION behind it.
    *
-   * This was the bug that made unsubscribe fail for every token, not just unknown ones: the
-   * extension threw "No tenant in context", the controller's catch swallowed it without logging,
-   * and the recipient was told to try again later. CASL requires this to work.
-   *
-   * `runAsSystem` is the sanctioned way to say "this genuinely spans brokerages". It is safe here
-   * because the only authority accepted is the 192-bit token, which is unguessable and pinned to
-   * its campaign — the lookup cannot be steered to another brokerage's data by choosing an input.
+   * The only authority accepted is the 192-bit token, which is unguessable and pinned to its
+   * campaign — the lookup cannot be steered to another recipient's record by choosing an input.
+   * That is what makes an unauthenticated write safe here, and CASL requires it to work.
    */
   async unsubscribe(campaignId: number, token: string): Promise<{ ok: boolean; email?: string }> {
-    return runAsSystem(() => this.unsubscribeUnscoped(campaignId, token));
-  }
-
-  private async unsubscribeUnscoped(campaignId: number, token: string): Promise<{ ok: boolean; email?: string }> {
     const r = await this.prisma.campaign_recipients.findUnique({ where: { token } });
     if (!r || r.campaign_id !== campaignId) return { ok: false };
 
@@ -957,16 +1203,34 @@ export class CampaignsService {
   }
 
   // ----------------------------------------------------------------- leads
-  /** Distinct tags across the leads the caller can audience, for the dropdowns. */
+  /**
+   * Every tag the caller could audience by — the ones in USE, plus the ones that merely EXIST.
+   *
+   * This used to read tags off the leads alone, so a tag created on the Tags screen and not yet
+   * applied to anybody was missing from this dropdown. That is precisely backwards for building a
+   * campaign: a brokerage creates "Spring-2026", goes to tag a segment with it, and cannot find it
+   * in the list of things to filter by.
+   *
+   * `lead_tags` is the registry the Tags screen writes to; the per-lead `tags` column is where they
+   * end up in use. Neither is a superset of the other — a tag applied before the registry existed
+   * is on leads and not in it — so the answer is the union.
+   *
+   * THE SCOPE RULE IS UNCHANGED for the in-use half: those are still read through
+   * `buildAudienceWhere`, so an agent's list cannot reveal a segment they could not send to.
+   * Registry names carry no such signal — a tag's existence says nothing about whose leads hold it
+   * — which is why they can be added without narrowing.
+   */
   async leadTags(user: AuthUserRecord): Promise<string[]> {
-    const rows = await this.prisma.leads.findMany({
-      // Scoped through the same audience rule, so an agent's tag list can't leak the existence of
-      // segments they cannot actually send to.
-      where: this.audience.buildAudienceWhere({}, user),
-      select: { tags: true },
-    });
+    const [rows, registry] = await Promise.all([
+      this.prisma.leads.findMany({
+        where: this.audience.buildAudienceWhere({}, user),
+        select: { tags: true },
+      }),
+      this.prisma.lead_tags.findMany({ select: { name: true } }),
+    ]);
     const set = new Set<string>();
     for (const r of rows) for (const t of parseJsonArray(r.tags)) set.add(t);
+    for (const t of registry) if (t.name) set.add(t.name);
     return [...set].sort((a, b) => a.localeCompare(b));
   }
 

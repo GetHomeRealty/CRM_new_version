@@ -24,34 +24,7 @@ const RANGES: { label: string; days: number }[] = [
 
 const iso = (d: Date): string => d.toISOString().slice(0, 10);
 
-/**
- * One row of the bar list. `of` is the largest value, so bars are relative to the busiest.
- *
- * `display` overrides the trailing figure when the raw number is not what a person wants to read —
- * 135 occupied minutes is clearer as "2h 15m". A zero row is dimmed rather than hidden, because an
- * empty hour in the middle of a day is the thing worth seeing.
- */
-function Bar({ label, n, of, tone, display }: { label: string; n: number; of: number; tone?: string; display?: string }) {
-  const pct = of > 0 ? Math.round((n / of) * 100) : 0;
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '2px 0', opacity: n === 0 ? 0.45 : 1 }}>
-      <span style={{ fontSize: 12, width: 92, flex: 'none', color: 'var(--muted)' }}>{label}</span>
-      <span style={{ flex: 1, height: 8, background: 'var(--line)', borderRadius: 4, overflow: 'hidden' }}>
-        <span style={{ display: 'block', width: `${pct}%`, height: '100%', borderRadius: 4, background: tone ?? 'var(--pri, #4f46e5)' }} />
-      </span>
-      <strong style={{ fontSize: 12, width: 46, textAlign: 'right' }}>{display ?? n}</strong>
-    </div>
-  );
-}
 
-/** 135 → "2h 15m". Minutes alone stop being readable somewhere around ninety. */
-function duration(min: number): string {
-  if (min === 0) return '—';
-  if (min < 60) return `${min}m`;
-  const h = Math.floor(min / 60);
-  const m = min % 60;
-  return m ? `${h}h ${m}m` : `${h}h`;
-}
 
 export default function CalendarAnalyticsPanel() {
   const { area } = useArea();
@@ -76,10 +49,6 @@ export default function CalendarAnalyticsPanel() {
 
   const t = data?.totals;
   const r = data?.rates;
-  const maxDay = Math.max(1, ...(data?.by_weekday ?? []).map((d) => d.total));
-  const maxHour = Math.max(1, ...(data?.by_hour ?? []).map((h) => h.total));
-  const maxBusy = Math.max(1, ...(data?.by_hour_busy ?? []).map((h) => h.minutes));
-  const maxType = Math.max(1, ...(data?.by_type ?? []).map((x) => x.total));
 
   return (
     <div className="card" style={{ marginTop: 12 }}>
@@ -144,64 +113,16 @@ export default function CalendarAnalyticsPanel() {
               still-scheduled ones are not counted{r.settled > 0 && r.settled < 10 ? '. That is a small number; treat the percentages loosely.' : '.'}
             </p>
 
-            <div className="g2" style={{ marginTop: 12 }}>
-              <div>
-                <div className="modal-sub">Busiest days</div>
-                {data.by_weekday.map((d) => <Bar key={d.day} label={d.day} n={d.total} of={maxDay} />)}
-                {data.busiest.weekday && (
-                  <p className="help">
-                    Busiest overall: <strong>{data.busiest.weekday}</strong>
-                    {data.busiest.hour && <> · most common start <strong>{data.busiest.hour}</strong></>}
-                    {data.busiest.busy_hour && <> · fullest hour <strong>{data.busiest.busy_hour}</strong> ({duration(data.busiest.busy_minutes)})</>}
-                    {data.busiest.date && <> · fullest day <strong>{data.busiest.date}</strong> ({data.busiest.date_count})</>}
-                  </p>
-                )}
-              </div>
+            {/*
+              REMOVED at the brokerage's request: "Busiest days", "By appointment type",
+              "Time of day" and "Busy hours". They were four charts of the same appointments the
+              rates above already summarise, and nobody was reading them.
 
-              <div>
-                <div className="modal-sub">By appointment type</div>
-                {data.by_type.length === 0
-                  ? <p className="help">Nothing recorded.</p>
-                  : data.by_type.map((x) => (
-                    <div key={x.type}>
-                      <Bar label={x.label} n={x.total} of={maxType} />
-                      {(x.completed > 0 || x.no_show > 0) && (
-                        <div style={{ fontSize: 11, color: 'var(--muted)', marginLeft: 100, marginTop: -2, marginBottom: 4 }}>
-                          {x.completed} kept{x.no_show > 0 && <> · <span style={{ color: 'var(--bad-ink)' }}>{x.no_show} no-show</span></>}
-                        </div>
-                      )}
-                    </div>
-                  ))}
-              </div>
-            </div>
-
-            {data.by_hour.length > 0 && (
-              <div style={{ marginTop: 12 }}>
-                <div className="modal-sub">Time of day</div>
-                <p className="help" style={{ margin: '0 0 4px' }}>
-                  How many appointments <strong>start</strong> in each hour. Empty hours are shown so
-                  the gaps in a day are visible.
-                </p>
-                {data.by_hour.map((h) => <Bar key={h.hour} label={h.hour} n={h.total} of={maxHour} />)}
-              </div>
-            )}
-
-            {/* A different question from the chart above: a three-hour viewing and a fifteen-minute
-                call are one tick each there, and wildly different here. */}
-            {data.by_hour_busy.length > 0 && (
-              <div style={{ marginTop: 12 }}>
-                <div className="modal-sub">Busy hours</div>
-                <p className="help" style={{ margin: '0 0 4px' }}>
-                  How much of each hour is actually <strong>occupied</strong>. An appointment with no
-                  end time counts as one hour, the same assumption the clash check makes.
-                  {maxBusy > 60 && ' Over 60m means overlapping appointments in that hour.'}
-                </p>
-                {data.by_hour_busy.map((h) => (
-                  <Bar key={h.hour} label={h.hour} n={h.minutes} of={maxBusy}
-                    tone="var(--ok, #16a34a)" display={duration(h.minutes)} />
-                ))}
-              </div>
-            )}
+              The API still computes `by_weekday`, `by_type`, `by_hour`, `by_hour_busy` and
+              `busiest`. Left alone deliberately — they are one aggregate pass on a query this
+              endpoint already makes, several tests assert their shape, and removing them would be
+              a change to the Calendar's analytics contract rather than to this screen.
+            */}
           </>
         )
       )}

@@ -48,7 +48,7 @@ async function scene(tx: PrismaService, poolLeads = 3) {
   const now = new Date();
   const n = ++seq;
   const mk = (role: string, tag: string, status = 'Active') => tx.users.create({
-    data: { name: `${tag} ${n}`, email: `${tag}-${Date.now()}-${n}@x.test`, password: 'x', role, status, company_id: 1, created_at: now, updated_at: now },
+    data: { name: `${tag} ${n}`, email: `${tag}-${Date.now()}-${n}@x.test`, password: 'x', role, status, created_at: now, updated_at: now },
   });
   const agent = await mk('agent', 'agent');
   const successor = await mk('agent', 'successor');
@@ -57,7 +57,7 @@ async function scene(tx: PrismaService, poolLeads = 3) {
   // Unassigned brokerage leads: no owner, no assignee. The only kind this screen may touch.
   for (let i = 0; i < poolLeads; i++) {
     await tx.leads.create({
-      data: { name: `Pool ${i}`, email: `pool-${Date.now()}-${n}-${i}@x.test`, company_id: 1, created_at: now, updated_at: now },
+      data: { name: `Pool ${i}`, email: `pool-${Date.now()}-${n}-${i}@x.test`, created_at: now, updated_at: now },
     });
   }
   return { agent, successor, admin };
@@ -69,7 +69,7 @@ async function ownedLead(tx: PrismaService, userId: number, over: Record<string,
   return tx.leads.create({
     data: {
       name: `Owned ${++seq}`, email: `owned-${Date.now()}-${seq}@x.test`,
-      owner_user_id: userId, assigned_to: userId, company_id: 1, created_at: now, updated_at: now, ...over,
+      owner_user_id: userId, assigned_to: userId, created_at: now, updated_at: now, ...over,
     },
   });
 }
@@ -183,7 +183,7 @@ describe('an agent\'s own leads are out of reach', () => {
       const meta = await tx.leads.create({
         data: {
           name: `Meta ${++seq}`, email: `meta-${Date.now()}-${seq}@x.test`,
-          source: META_LEAD_SOURCE, company_id: 1, created_at: now, updated_at: now,
+          source: META_LEAD_SOURCE, created_at: now, updated_at: now,
         },
       });
 
@@ -247,7 +247,7 @@ describe('the door is narrow', () => {
       const { agent, successor } = await scene(tx, 1);
       const now = new Date();
       const manager = await tx.users.create({
-        data: { name: `mgr ${++seq}`, email: `mgr-${Date.now()}-${seq}@x.test`, password: 'x', role: 'manager', company_id: 1, created_at: now, updated_at: now },
+        data: { name: `mgr ${++seq}`, email: `mgr-${Date.now()}-${seq}@x.test`, password: 'x', role: 'manager', created_at: now, updated_at: now },
       });
       const svc = new LeadTransferService(tx, auditStub);
       await expect(svc.transfer(as(agent), successor.id)).rejects.toThrow(ForbiddenException);
@@ -262,7 +262,7 @@ describe('the door is narrow', () => {
       const { admin } = await scene(tx, 1);
       const now = new Date();
       const gone = await tx.users.create({
-        data: { name: `gone ${++seq}`, email: `gone-${Date.now()}-${seq}@x.test`, password: 'x', role: 'agent', status: 'Inactive', company_id: 1, created_at: now, updated_at: now },
+        data: { name: `gone ${++seq}`, email: `gone-${Date.now()}-${seq}@x.test`, password: 'x', role: 'agent', status: 'Inactive', created_at: now, updated_at: now },
       });
       // Otherwise they would be invisible again the moment they landed.
       await expect(new LeadTransferService(tx, auditStub).transfer(as(admin), gone.id))

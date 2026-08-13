@@ -11,6 +11,9 @@ interface AutoCompleteProps<T> {
   disabled?: boolean;
   type?: string;
   inputStyle?: CSSProperties;
+  /** Forwarded to the inner <input> so a `<label htmlFor>` outside can name it. Without this the
+   *  control has no accessible name wherever this component replaces a plain input. */
+  id?: string;
 }
 
 /**
@@ -21,7 +24,7 @@ interface AutoCompleteProps<T> {
  */
 export default function AutoComplete<T>({
   value, onChange, onPick, options = [], getLabel, getSub,
-  placeholder, disabled, type = 'text', inputStyle,
+  placeholder, disabled, type = 'text', inputStyle, id,
 }: AutoCompleteProps<T>) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -43,6 +46,7 @@ export default function AutoComplete<T>({
   return (
     <div ref={ref} style={{ position: 'relative' }}>
       <input
+        id={id}
         type={type} value={value} disabled={disabled} placeholder={placeholder} autoComplete="off"
         style={{ width: '100%', ...inputStyle }}
         onChange={(e) => { onChange(e.target.value); setOpen(true); }}

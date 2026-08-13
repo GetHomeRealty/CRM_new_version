@@ -109,7 +109,7 @@ async function main() {
         data: chunk(Math.min(BATCH, USERS - i)).map((k) => ({
           name: `Load Agent ${i + k}`,
           email: `load-agent-${i + k}@load.test`,
-          role: 'agent', status: 'Active', password: HASH, company_id: 1,
+          role: 'agent', status: 'Active', password: HASH,
           created_at: new Date(), updated_at: new Date(),
         })),
       });
@@ -173,7 +173,6 @@ async function main() {
           owner_user_id: owner,
           assigned_to: n % 7 === 0 ? probe.id : owner,
           created_by: 'Load Seed',
-          company_id: 1,
           // Spread over two years so the "recent" (30-day) counter is a real filter, not all-or-nothing.
           created_at: new Date(now.getTime() - (n % 730) * 24 * 3600 * 1000),
           updated_at: now,
@@ -205,7 +204,7 @@ async function main() {
           status: (i + k) % 3 === 0 ? 'pending' : 'completed',
           priority: pick(['low', 'medium', 'high'], i + k),
           assigned_to: probe.id, created_by: 'Load Seed', user_id: probe.id,
-          company_id: 1, created_at: now, updated_at: now,
+          created_at: now, updated_at: now,
         })),
       });
     }
@@ -223,7 +222,7 @@ async function main() {
           time: `${String(9 + ((i + k) % 9)).padStart(2, '0')}:00`,
           property: `${100 + ((i + k) % 900)} King St`,
           status: 'scheduled', created_by: 'Load Seed', user_id: probe.id,
-          company_id: 1, created_at: now, updated_at: now,
+          created_at: now, updated_at: now,
         })),
       });
     }
@@ -240,7 +239,7 @@ async function main() {
         data: slice.slice(i, i + BATCH).map((l, k) => ({
           lead_id: l.id, called_at: now, duration: 60 + ((i + k) % 600),
           outcome: pick(['connected', 'voicemail', 'no answer'], i + k),
-          created_by: 'Load Seed', user_id: probe.id, company_id: 1, created_at: now,
+          created_by: 'Load Seed', user_id: probe.id, created_at: now,
         })),
       });
     }
@@ -250,7 +249,7 @@ async function main() {
   for (const name of TAGS) {
     await prisma.lead_tags.upsert({
       where: { name }, update: {},
-      create: { name, created_by: 'Load Seed', created_at: now, company_id: 1 },
+      create: { name, created_by: 'Load Seed', created_at: now },
     });
   }
 

@@ -4,6 +4,7 @@ import * as path from 'path';
 import { PrismaService } from '../prisma/prisma.service';
 import { MailerService } from '../email/mailer.service';
 import { CompanySettingsService } from '../settings/company-settings.service';
+import { NotificationDispatcher } from '../notifications/notification-dispatcher.service';
 import { STORAGE_ROOT } from '../config/storage';
 
 /**
@@ -53,6 +54,11 @@ export class DocumentMailService {
     private readonly prisma: PrismaService,
     private readonly mailer: MailerService,
     private readonly settings: CompanySettingsService,
+    /*
+     * Optional so existing constructions — including this service's specs — keep working. Always
+     * injected in the running application.
+     */
+    private readonly dispatcher?: NotificationDispatcher,
   ) {}
 
   /**
@@ -71,9 +77,23 @@ export class DocumentMailService {
       });
       if (!txn) return;
 
-      const recipient = await this.agentEmail(txn.agent);
+      const agent = await this.agentFor(txn.agent);
+      const recipient = (agent?.email ?? '').trim() || null;
       if (!recipient) {
         this.log.warn(`Document review on ${txn.trade_no}: no email on file for "${txn.agent ?? 'unassigned'}" — nothing sent.`);
+        return;
+      }
+
+      /*
+       * THE PREFERENCE, ASKED OF THE DISPATCHER RATHER THAN CHECKED HERE.
+       *
+       * This message is worth keeping — it lists every document, which passed, and why the rest did
+       * not — so it is not replaced by a generic dispatched notification. What was missing is that
+       * it went out whatever the person had chosen. The dispatcher owns that decision for every
+       * channel of every category; this asks it and then sends its own, better message.
+       */
+      if (agent && this.dispatcher && !(await this.dispatcher.shouldSend(agent.id, 'document_review', 'email'))) {
+        this.log.log(`Document review on ${txn.trade_no}: ${txn.agent} has turned this email off.`);
         return;
       }
 
@@ -156,15 +176,22 @@ export class DocumentMailService {
   }
 
   /** The agent's address, by the name recorded on the deal — the same lookup document reminders use. */
-  private async agentEmail(agentName: string | null): Promise<string | null> {
+  /**
+   * The agent behind a name — id as well as address, because the preference is keyed by user id.
+   *
+   * This replaced `agentEmail`, which returned only the address and had exactly one caller — the
+   * one that now needs the id too.
+   */
+  private async agentFor(agentName: string | null): Promise<{ id: number; email: string | null } | null> {
     const name = (agentName ?? '').trim();
     if (!name) return null;
-    const user = await this.prisma.users.findFirst({
+    return this.prisma.users.findFirst({
       where: { name, status: 'Active' },
-      select: { email: true, profile: true },
+      select: { id: true, email: true },
+      orderBy: { id: 'asc' },
     });
-    return (user?.email ?? '').trim() || null;
   }
+
 
   /** Valid documents, then invalid ones with their reason. */
   private outcomeTable(

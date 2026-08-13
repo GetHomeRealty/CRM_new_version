@@ -7,6 +7,7 @@ import {
   updateLead,
 } from '../lib/leadsApi';
 import { apiErrorMessage } from '../lib/apiError';
+import { downloadCsv, objectsToCsv } from '../lib/csv';
 import { runLeadImport, type ImportJob } from '../lib/leadImportApi';
 import ImportProgress from '../components/ImportProgress';
 import { useToast } from './toast';
@@ -89,19 +90,16 @@ function SourceCell({ lead }: { lead: Lead }) {
 
 const shortDate = (iso: string | null): string => (iso ? iso.slice(0, 10) : '—');
 
-/** Build a CSV from row objects and hand it to the browser as a download. */
-function downloadCsv(rows: Record<string, unknown>[], filename: string): void {
-  const headers = Object.keys(rows[0] ?? {});
-  const escape = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
-  const csv = [headers.join(','), ...rows.map((r) => headers.map((h) => escape(r[h])).join(','))].join('\n');
-  // The BOM makes Excel read the file as UTF-8 rather than the local ANSI codepage.
-  const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
+/**
+ * Build a CSV from row objects and hand it to the browser as a download.
+ *
+ * The escaping lives in `lib/csv` rather than here. It used to be a local helper that quoted
+ * correctly and did nothing about spreadsheet formulas, so a lead named `=HYPERLINK(...)` — a value
+ * a stranger can supply through a Meta lead form — executed when the agent opened their own export.
+ * See that file for the full reasoning.
+ */
+function downloadLeadsCsv(rows: Record<string, unknown>[], filename: string): void {
+  downloadCsv(objectsToCsv(rows), filename);
 }
 
 export default function LeadsPage() {
@@ -214,7 +212,7 @@ export default function LeadsPage() {
     try {
       const { data: rows, meta } = await exportLeads([...selected], filters);
       if (!rows.length) { toast('Nothing to export.', 'info'); return; }
-      downloadCsv(rows, `leads-${new Date().toISOString().slice(0, 10)}.csv`);
+      downloadLeadsCsv(rows, `leads-${new Date().toISOString().slice(0, 10)}.csv`);
       /*
        * Say so when the file is short.
        *
@@ -424,15 +422,14 @@ export default function LeadsPage() {
                 <th>Source</th>
                 <th>Tags</th>
                 <th>Assigned To</th>
-                <th>Activity</th>
                 <th>Created</th>
                 <th>Actions</th>
               </tr>
             </thead>
             <tbody>
-              {loading && <tr><td colSpan={11} className="empty-cell">Loading leads…</td></tr>}
+              {loading && <tr><td colSpan={10} className="empty-cell">Loading leads…</td></tr>}
               {!loading && leads.length === 0 && (
-                <tr><td colSpan={11} className="empty-cell">
+                <tr><td colSpan={10} className="empty-cell">
                   No leads match these filters.{canEdit ? ' Add one, or import a CSV.' : ''}
                 </td></tr>
               )}
@@ -465,10 +462,6 @@ export default function LeadsPage() {
                     )}
                   </td>
                   <td>{l.assigned_to_name ?? <span className="muted">Unassigned</span>}</td>
-                  <td className="lead-activity-cell">
-                    <span title="Logged calls"><Icon name="phone" size={12} /> {l.call_count}</span>
-                    <span title="Pending of total tasks"><Icon name="check" size={12} /> {l.pending_task_count}/{l.task_count}</span>
-                  </td>
                   <td>{shortDate(l.created_at)}</td>
                   {/* Icon-only actions: four labelled buttons per row cost more width than the
                       rest of the table put together. `title` + `aria-label` keep the action
@@ -559,17 +552,78 @@ function FilterSelect({ label: name, value, options, none, onChange }: {
 function ImportModal({ onClose, onDone, tags }: { onClose: () => void; onDone: () => void; tags: string[] }) {
   const toast = useToast();
   const [csv, setCsv] = useState('');
+  const [fileName, setFileName] = useState('');
   const [tag, setTag] = useState('');
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<ImportJob | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   // Read by the poll loop, which outlives a render — a state flag would be captured stale.
   const closedRef = useRef(false);
-  useEffect(() => () => { closedRef.current = true; }, []);
+  /*
+   * RESET ON MOUNT, not only set on unmount.
+   *
+   * React 18's StrictMode mounts every effect, unmounts it, and mounts it again in development.
+   * That simulated unmount ran this cleanup, so `closedRef.current` was already `true` before the
+   * user had done anything — and nothing set it back. `runLeadImport` checks it as `cancelled()`
+   * before its first poll, so it took the initial response (status "Queued") and stopped asking.
+   *
+   * The import itself ran fine and finished in milliseconds; the modal simply never looked again,
+   * and sat on "Queued — N rows to import. 0%" for ever. A ref that survives a remount has to be
+   * re-initialised on mount, or it carries the previous life's last value into this one.
+   */
+  useEffect(() => {
+    closedRef.current = false;
+    return () => { closedRef.current = true; };
+  }, []);
 
   const readFile = async (file: File) => {
     setCsv(await file.text());
+    setFileName(file.name);
     toast(`Loaded ${file.name}.`, 'info');
+  };
+
+  /*
+   * Rows, for the confirmation line that replaced the textarea.
+   *
+   * Deliberately approximate — it counts non-empty lines less the header, so a quoted cell holding
+   * a line break inflates it slightly. The server is the authority on the real count and reports it
+   * as the import runs; this only needs to answer "did my file actually load?", and a parser here
+   * would be a second implementation of the one in `lead-import.engine.ts` to answer that.
+   */
+  const csvRowCount = Math.max(0, csv.split(/\r?\n/).filter((l) => l.trim().length).length - 1);
+
+  /**
+   * The template, built here rather than fetched.
+   *
+   * It has to match what `lead-import.engine.ts` actually reads, and the surest way to keep the two
+   * together is for the header row to be the same list the help text below states. A server
+   * endpoint would be a second place for that list to drift.
+   *
+   * The example rows are obviously fictional. A template carrying a real-looking address is one
+   * somebody eventually imports by accident.
+   *
+   * EVERY VALUE BELOW IS ONE THE IMPORTER ACCEPTS, and that is not a detail. Status, type, source,
+   * response and client type are matched against fixed vocabularies (`lead.constants.ts`); anything
+   * else is stored as empty rather than as typed, because a value no filter can select would create
+   * leads that no screen can find. A template demonstrating "New", "Buyer" or "Referral" — none of
+   * which are in those lists — would teach every agent to build files that quietly lose four
+   * columns. The third row is deliberately sparse: only name and email are needed.
+   */
+  const downloadTemplate = () => {
+    const csvText = [
+      'name,email,phone,location,property,lead status,lead type,lead source,lead response,client type',
+      'Jane Doe,jane.doe@example.com,416-555-0100,Toronto,12 Example St,hot,buyer,website,active,first home buyer',
+      'John Smith,john.smith@example.com,905-555-0142,Mississauga,,warm,seller,refferal,not answering,Investor',
+      'Priya Patel,priya.patel@example.com,647-555-0188,,,,,,,',
+    ].join('\r\n');
+    // BOM, so Excel opens it as UTF-8 rather than mangling accented names. The importer strips it.
+    const blob = new Blob([`﻿${csvText}`], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'lead-import-template.csv';
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   const run = async () => {
@@ -601,20 +655,42 @@ function ImportModal({ onClose, onDone, tags }: { onClose: () => void; onDone: (
         <button className="close" type="button" onClick={onClose} aria-label="Close"><Icon name="close" size={15} /></button>
         <div className="modal-h">Import Leads</div>
         <p className="help">
-          Paste CSV, or pick a .csv file. The first row must be a header. Recognised columns:
+          Pick a .csv file. The first row must be a header. Recognised columns:
           <strong> name, email, phone, location, property, lead status, lead type, lead source, lead response, client type</strong>.
+          {/* Stated plainly because it is the one rule that silently discards rows: a lead with no
+              address is counted as skipped, and the file otherwise imports as though it worked. */}
+          {' '}<strong>Email is required</strong> — it is how a lead is recognised, so rows without one are skipped.
           An address already on file is tagged rather than duplicated.
         </p>
         <div className="field">
           <label>CSV file</label>
           <input ref={fileRef} type="file" accept=".csv,text/csv"
             onChange={(e) => { const f = e.target.files?.[0]; if (f) void readFile(f); }} />
+          <p className="help" style={{ marginTop: 6 }}>
+            Not sure of the format?{' '}
+            <span role="button" onClick={downloadTemplate}
+              style={{ color: 'var(--brand-red)', cursor: 'pointer', textDecoration: 'underline', fontWeight: 600 }}>
+              Download the sample template
+            </span>{' '}— it has the header row and two example leads.
+          </p>
         </div>
-        <div className="field">
-          <label>CSV data</label>
-          <textarea rows={8} value={csv} onChange={(e) => setCsv(e.target.value)}
-            placeholder="name,email,phone&#10;Jane Doe,jane@example.com,416-555-0100" />
-        </div>
+        {/*
+          The raw "CSV data" textarea is gone. It showed the whole file as text the moment one was
+          chosen — a lead list is somebody's contact details, and a settings screen is not where
+          they should be on display over an agent's shoulder. Choosing a file still reads it into
+          the same `csv` state, so the Import button and everything behind it are unchanged; only
+          the on-screen copy of the data was removed.
+
+          A chosen file is confirmed by name and row count instead, because the button being enabled
+          is otherwise the only sign the file was read at all.
+        */}
+        {csv.trim() !== '' && (
+          <p className="help" style={{ marginTop: -4 }}>
+            <strong>{fileName || 'Pasted data'}</strong> — {csvRowCount.toLocaleString()} data row{csvRowCount === 1 ? '' : 's'} ready to import.{' '}
+            <span role="button" style={{ color: 'var(--brand-red)', cursor: 'pointer', textDecoration: 'underline' }}
+              onClick={() => { setCsv(''); setFileName(''); if (fileRef.current) fileRef.current.value = ''; }}>Clear</span>
+          </p>
+        )}
         <div className="field">
           <label>Tag every imported lead (optional)</label>
           <input list="import-tags" value={tag} onChange={(e) => setTag(e.target.value)} placeholder="e.g. Expo-2026" />
@@ -768,15 +844,33 @@ function RecycleModal({ canEdit, onClose, onChanged }: { canEdit: boolean; onClo
   const [page, setPage] = useState(1);
   const [meta, setMeta] = useState<{ page: number; last_page: number; total: number } | null>(null);
 
+  /*
+   * SEARCH, because this is the one list nobody browses.
+   *
+   * Recently Deleted is ordered by when things were deleted and paged, so recovering one lead among
+   * months of them meant clicking through pages hunting for a name — on the screen somebody opens
+   * precisely because something has already gone missing.
+   *
+   * `query` is what is typed; `search` is what has been sent. Debounced so a name is one request
+   * rather than one per keystroke, and the page resets to 1 on every change — otherwise a search
+   * run from page 4 returns nothing and reads as "not found" rather than "not on this page".
+   */
+  const [query, setQuery] = useState('');
+  const [search, setSearch] = useState('');
+  useEffect(() => {
+    const t = setTimeout(() => { setSearch(query.trim()); setPage(1); }, 300);
+    return () => clearTimeout(t);
+  }, [query]);
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await listDeletedLeads({ page });
+      const res = await listDeletedLeads({ page, search });
       setRows(res.data);
       setMeta(res.meta);
     } catch (ex) { toast(apiErrorMessage(ex, 'Could not load deleted leads'), 'bad'); }
     finally { setLoading(false); }
-  }, [toast, page]);
+  }, [toast, page, search]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -798,7 +892,15 @@ function RecycleModal({ canEdit, onClose, onChanged }: { canEdit: boolean; onClo
         <button className="close" type="button" onClick={onClose} aria-label="Close"><Icon name="close" size={15} /></button>
         <div className="modal-h">Recently Deleted Leads ({rows.length})</div>
         <p className="help">Deleted leads are kept here so they can be restored. Deleting permanently also removes their notes, tasks, showings and calls.</p>
-        {loading ? <p className="help">Loading…</p> : rows.length === 0 ? <p className="help">Nothing here.</p> : (
+        <div className="field" style={{ marginBottom: 10 }}>
+          <input value={query} onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search deleted leads by name or email" aria-label="Search deleted leads" />
+        </div>
+        {loading ? <p className="help">Loading…</p> : rows.length === 0 ? (
+          // Distinguishes "the bin is empty" from "nothing matched" — the same words for both would
+          // read as though the lead had already been purged.
+          <p className="help">{search ? `No deleted lead matches "${search}".` : 'Nothing here.'}</p>
+        ) : (
           <div className="lead-scroll">
             <table className="list-table">
               <thead><tr><th>Name</th><th>Contact</th><th>Deleted</th><th>By</th><th>Actions</th></tr></thead>

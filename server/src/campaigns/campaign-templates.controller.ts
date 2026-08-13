@@ -58,21 +58,34 @@ export class CampaignTemplatesController {
   }
 
   // ----------------------------------------------------------- attachments
+  /*
+   * ALL THREE PASS THE CALLER NOW.
+   *
+   * They did not, and the service had no `user` parameter to receive one — so a template's files
+   * were reachable by anyone with the screen permission, while the template itself is owner-private.
+   * `@Screen` answers "may you use the Campaigns module"; it cannot answer "is this yours".
+   */
   @Post(':id/attachments')
   @HttpCode(201)
   @Screen('campaigns', 'edit')
-  addAttachment(@Param('id', ParseIntPipe) id: number, @Body() body: Record<string, unknown>): Promise<unknown> {
-    return this.templates.addAttachment(id, body ?? {});
+  addAttachment(
+    @CurrentUser() user: AuthUserRecord,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: Record<string, unknown>,
+  ): Promise<unknown> {
+    return this.templates.addAttachment(id, body ?? {}, user);
   }
 
   @Get(':id/attachments/:attachmentId')
   @Screen('campaigns', 'view')
   async download(
+    @CurrentUser() user: AuthUserRecord,
     @Param('id', ParseIntPipe) id: number,
     @Param('attachmentId', ParseIntPipe) attachmentId: number,
     @Res() res: Response,
   ): Promise<void> {
-    const file = await this.templates.getAttachment(id, attachmentId);
+    // The ownership check has to happen before this line: everything below streams bytes.
+    const file = await this.templates.getAttachment(id, attachmentId, user);
     res.setHeader('Content-Type', file.content_type);
     // `attachment` so a stored HTML or SVG file downloads instead of executing in our origin.
     res.setHeader('Content-Disposition', `attachment; filename="${file.filename.replace(/"/g, '')}"`);
@@ -83,9 +96,10 @@ export class CampaignTemplatesController {
   @Delete(':id/attachments/:attachmentId')
   @Screen('campaigns', 'edit')
   removeAttachment(
+    @CurrentUser() user: AuthUserRecord,
     @Param('id', ParseIntPipe) id: number,
     @Param('attachmentId', ParseIntPipe) attachmentId: number,
   ): Promise<unknown> {
-    return this.templates.removeAttachment(id, attachmentId);
+    return this.templates.removeAttachment(id, attachmentId, user);
   }
 }

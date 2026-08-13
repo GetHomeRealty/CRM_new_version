@@ -2,6 +2,7 @@ import { AREAS, type Area } from '../desk/area';
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import api, { getCsrfCookie } from '../lib/axios';
 import type { AuthContextValue, AuthUser, RegisterPayload, ScreenLevel } from '../types';
+import { answerChallenge, isChallenge, type LoginOutcome, type MfaType } from '../lib/mfaApi';
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
@@ -22,11 +23,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  const login = async (username: string, password: string, remember = false): Promise<AuthUser> => {
+  /**
+   * Sign in — which may not finish here.
+   *
+   * The server answers one of two shapes. When the account holds a second factor and this browser is
+   * not already trusted, it answers `{ mfa_required: true, challenge }` and NO user payload: at that
+   * point a password has been proved and nothing else, and the payload is the thing being protected.
+   * The caller shows the challenge and calls `completeMfa` with the code.
+   *
+   * `setUser` is deliberately NOT called on a challenge. Setting a user here would make the whole
+   * application behave as though sign-in had succeeded while the server still refuses every request
+   * — which is the failure mode a partial-login bug takes.
+   */
+  const login = async (username: string, password: string, remember = false): Promise<LoginOutcome> => {
     await getCsrfCookie();
-    const { data } = await api.post<{ user: AuthUser }>('/api/login', { username, password, remember });
-    setUser(data.user);
-    return data.user;
+    const { data } = await api.post<LoginOutcome>('/api/login', { username, password, remember });
+    if (!isChallenge(data)) setUser(data.user);
+    return data;
+  };
+
+  /** Answer the outstanding challenge and finish signing in. */
+  const completeMfa = async (
+    method: MfaType | 'recovery',
+    code: string,
+    trustDevice = false,
+  ): Promise<AuthUser> => {
+    const { user: signedIn } = await answerChallenge(method, code, trustDevice);
+    setUser(signedIn);
+    return signedIn;
   };
 
   const register = async (payload: RegisterPayload): Promise<AuthUser> => {
@@ -59,7 +83,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const modules: Area[] = AREAS.filter((a) => (user?.modules ? user.modules.includes(a) : true));
   const isAdminOrAbove = !!user?.is_admin_or_above;
 
-  const value: AuthContextValue = { user, loading, login, register, logout, setUser, can, isSuperAdmin, isAdminOrAbove, modules };
+  const value: AuthContextValue = { user, loading, login, completeMfa, register, logout, setUser, can, isSuperAdmin, isAdminOrAbove, modules };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

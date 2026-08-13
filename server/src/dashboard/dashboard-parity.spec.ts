@@ -46,7 +46,7 @@ async function inRollback(fn: (tx: PrismaService) => Promise<void>) {
 
 const serviceFor = (tx: PrismaService) => new DashboardService(tx, new CommissionService(new PersonResolver(tx)), new PersonResolver(tx));
 const asUser = (name: string, role: string): ResourceUser =>
-  ({ id: 1, name, role, company_id: 1 } as unknown as ResourceUser);
+  ({ id: 1, name, role } as unknown as ResourceUser);
 
 /** A deal with an explicit team split — deterministic money, no profile lookup involved. */
 async function deal(tx: PrismaService, opts: { agent: string; price: number; closed: boolean; members?: { name: string; split: number; agent_pct: number }[] }) {
@@ -55,17 +55,17 @@ async function deal(tx: PrismaService, opts: { agent: string; price: number; clo
     data: {
       trade_no: `PAR-${Date.now()}-${++seq}`, type: 'Sale', agent: opts.agent,
       price: opts.price, comm_type: 'percentage', comm_value: 2.5, comm_pct: 2.5,
-      adjustments: '{}', admin_activities: '{}', company_id: 1, created_at: now, updated_at: now,
+      adjustments: '{}', admin_activities: '{}', created_at: now, updated_at: now,
     },
   });
   await tx.transaction_statuses.create({
-    data: { transaction_id: t.id, status: opts.closed ? 'Closed' : 'Active', company_id: 1, created_at: now, updated_at: now },
+    data: { transaction_id: t.id, status: opts.closed ? 'Closed' : 'Active', created_at: now, updated_at: now },
   });
   for (const m of opts.members ?? []) {
     await tx.team_members.create({
       data: {
         transaction_id: t.id, name: m.name, split: m.split, agent_pct: m.agent_pct,
-        brok_pct: 100 - m.agent_pct, scope: 'Entire', company_id: 1, created_at: now, updated_at: now,
+        brok_pct: 100 - m.agent_pct, scope: 'Entire', created_at: now, updated_at: now,
       },
     });
   }
@@ -81,8 +81,8 @@ describe('dashboard commission parity', () => {
     await inRollback(async (tx) => {
       const now = new Date();
       const name = `Dup${++seq}`;
-      await tx.users.create({ data: { name, username: `${name}-a`, email: `${name}a@x.test`, password: 'x', role: 'admin', status: 'Active', company_id: 1, profile: '{"agent_comm_pct":0}', created_at: now, updated_at: now } });
-      await tx.users.create({ data: { name, username: `${name}-b`, email: `${name}b@x.test`, password: 'x', role: 'agent', status: 'Active', company_id: 1, profile: '{"agent_comm_pct":"90"}', created_at: now, updated_at: now } });
+      await tx.users.create({ data: { name, username: `${name}-a`, email: `${name}a@x.test`, password: 'x', role: 'admin', status: 'Active', profile: '{"agent_comm_pct":0}', created_at: now, updated_at: now } });
+      await tx.users.create({ data: { name, username: `${name}-b`, email: `${name}b@x.test`, password: 'x', role: 'agent', status: 'Active', profile: '{"agent_comm_pct":"90"}', created_at: now, updated_at: now } });
 
       // No team members, so the split comes from the profile — the only path that reads one.
       await deal(tx, { agent: name, price: 500000, closed: false });
@@ -110,7 +110,7 @@ describe('dashboard commission parity', () => {
     await inRollback(async (tx) => {
       const name = `Pager${++seq}`;
       const now = new Date();
-      await tx.users.create({ data: { name, username: name, email: `${name}@x.test`, password: 'x', role: 'agent', status: 'Active', company_id: 1, profile: '{"agent_comm_pct":"88"}', created_at: now, updated_at: now } });
+      await tx.users.create({ data: { name, username: name, email: `${name}@x.test`, password: 'x', role: 'agent', status: 'Active', profile: '{"agent_comm_pct":"88"}', created_at: now, updated_at: now } });
       for (let i = 0; i < 7; i++) {
         await deal(tx, { agent: name, price: 400000 + i * 13_137, closed: i % 2 === 0, members: [{ name, split: 100, agent_pct: 88 }] });
       }
@@ -130,7 +130,7 @@ describe('dashboard commission parity', () => {
     await inRollback(async (tx) => {
       const name = `Sums${++seq}`;
       const now = new Date();
-      await tx.users.create({ data: { name, username: name, email: `${name}@x.test`, password: 'x', role: 'agent', status: 'Active', company_id: 1, profile: '{"agent_comm_pct":"80"}', created_at: now, updated_at: now } });
+      await tx.users.create({ data: { name, username: name, email: `${name}@x.test`, password: 'x', role: 'agent', status: 'Active', profile: '{"agent_comm_pct":"80"}', created_at: now, updated_at: now } });
       for (let i = 0; i < 5; i++) {
         await deal(tx, { agent: name, price: 350000 + i * 25_000, closed: i < 3, members: [{ name, split: 100, agent_pct: 80 }] });
       }
@@ -147,7 +147,7 @@ describe('dashboard commission parity', () => {
       const now = new Date();
       const mine = `Mine${++seq}`, theirs = `Theirs${++seq}`;
       for (const n of [mine, theirs]) {
-        await tx.users.create({ data: { name: n, username: n, email: `${n}@x.test`, password: 'x', role: 'agent', status: 'Active', company_id: 1, profile: '{"agent_comm_pct":"90"}', created_at: now, updated_at: now } });
+        await tx.users.create({ data: { name: n, username: n, email: `${n}@x.test`, password: 'x', role: 'agent', status: 'Active', profile: '{"agent_comm_pct":"90"}', created_at: now, updated_at: now } });
       }
       await deal(tx, { agent: mine, price: 600000, closed: false, members: [{ name: mine, split: 60, agent_pct: 90 }, { name: theirs, split: 40, agent_pct: 90 }] });
 

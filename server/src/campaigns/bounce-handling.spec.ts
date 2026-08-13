@@ -57,12 +57,11 @@ async function campaignWith(tx: PrismaService, emails: string[]): Promise<number
       name: `Bounce test ${Date.now()}-${seq}`,
       subject: 'Subject', content: '<p>Body</p>',
       status: 'sending', total: emails.length,
-      tracking_base_url: '', company_id: 1,
-      created_at: now, updated_at: now,
+      tracking_base_url: '',      created_at: now, updated_at: now,
       recipients: {
         create: emails.map((email, i) => ({
           email, name: `Lead ${i}`, token: `tok-${Date.now()}-${seq}-${i}`,
-          status: 'pending', company_id: 1, created_at: now, updated_at: now,
+          status: 'pending', created_at: now, updated_at: now,
         })),
       },
     },

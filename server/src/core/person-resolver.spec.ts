@@ -40,7 +40,7 @@ async function person(tx: PrismaService, name: string, status: string, pct: numb
   return tx.users.create({
     data: {
       name, email: `pr-${t}@example.test`, username: `pr-${t}`, password: 'x',
-      role: 'agent', status, company_id: 1, created_at: now, updated_at: now,
+      role: 'agent', status, created_at: now, updated_at: now,
       profile: JSON.stringify({ agent_comm_pct: pct }),
     },
   });

@@ -8,7 +8,6 @@ import {
   EMAIL_SHAPE, LANGUAGES, NOTIFICATION_KEYS, THEMES, TIME_ZONES, TRIGGER_KEYS,
 } from './crm-settings.constants';
 import { MailerService } from '../email/mailer.service';
-import { TENANT_ID } from '../core/tenant';
 import { MailAccountService } from '../email/mail-account.service';
 
 const str = (v: unknown): string => String(v ?? '').trim();
@@ -52,9 +51,49 @@ export class CrmSettingsService {
   }
 
   // -------------------------------------------------------------- settings
-  async getSettings(user: AuthUserRecord): Promise<Record<string, unknown>> {
-    const userId = this.scopeId(user);
-    const row = await this.prisma.crm_settings.findFirst({ where: { user_id: userId } });
+  /**
+   * The BROKERAGE-WIDE settings for an administrator, a person's own for everyone else.
+   *
+   * Reached only from `/api/crm-settings`, which is gated on the `settings` screen. The
+   * self-scoped pair below exists because `/api/account` is not.
+   */
+  getSettings(user: AuthUserRecord): Promise<Record<string, unknown>> {
+    return this.readSettings(user, this.scopeId(user));
+  }
+
+  saveSettings(user: AuthUserRecord, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return this.writeSettings(user, this.scopeId(user), body);
+  }
+
+  /**
+   * A PERSON'S OWN settings, whatever their role — the pair `/api/account` must use.
+   *
+   * WHY THIS EXISTS. `AccountController` is guarded by `AuthGuard` alone: no `ScreenGuard`, no
+   * `@Screen()`. It called `getSettings`/`saveSettings`, and for every role in `CRM_ADMIN_ROLES`
+   * those resolve to `user_id = null` — the shared brokerage row. Measured in the same session on
+   * 2026-08-04: an Admin holding `settings: 'view'` was refused at `PUT /api/crm-settings` (403) and
+   * accepted at `PUT /api/account/settings` (200, `scope: "global"`), and the Super Admin then read
+   * that value back. The screen permission the CRM Settings write asks for was simply not on the
+   * path an administrator's own Settings page took.
+   *
+   * It is also what `AccountSettingsPage` already promises in its own header comment — "everything
+   * here is scoped to the signed-in user by the server" — which was true for four roles out of six.
+   * An Admin now has a personal signature instead of silently editing the brokerage's, and two
+   * Admins no longer overwrite each other.
+   *
+   * The scope is forced, not derived: passing the id rather than asking `scopeId` is what makes the
+   * guarantee independent of the caller's role.
+   */
+  getOwnSettings(user: AuthUserRecord): Promise<Record<string, unknown>> {
+    return this.readSettings(user, user.id ?? -1);
+  }
+
+  saveOwnSettings(user: AuthUserRecord, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return this.writeSettings(user, user.id ?? -1, body);
+  }
+
+  private async readSettings(user: AuthUserRecord, userId: number | null): Promise<Record<string, unknown>> {
+    const row = await this.prisma.crm_settings.findFirst({ where: { user_id: userId }, orderBy: { id: 'asc' } });
     return {
       scope: userId === null ? 'global' : 'user',
       is_admin: this.isAdmin(user),
@@ -75,14 +114,15 @@ export class CrmSettingsService {
    * Save any subset of the four sections. The CRM rejected a body carrying none of them, and
    * that guard is kept so an empty PUT can't quietly wipe a section.
    */
-  async saveSettings(user: AuthUserRecord, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+  private async writeSettings(
+    user: AuthUserRecord, userId: number | null, body: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
     const has = (k: string) => body[k] !== undefined && body[k] !== null;
     if (!has('notifications') && !has('emailSettings') && !has('preferences') && !has('templates')) {
       throw new BadRequestException({ message: 'Invalid settings structure' });
     }
 
-    const userId = this.scopeId(user);
-    const existing = await this.prisma.crm_settings.findFirst({ where: { user_id: userId } });
+    const existing = await this.prisma.crm_settings.findFirst({ where: { user_id: userId }, orderBy: { id: 'asc' } });
     const now = new Date();
     const data: Record<string, unknown> = { updated_by: user.name, updated_at: now };
 
@@ -100,13 +140,39 @@ export class CrmSettingsService {
     await this.audit(user, 'CRM settings updated', userId === null ? 'Global settings' : `Settings for ${user.name}`,
       Object.keys(data).filter((k) => k !== 'updated_by' && k !== 'updated_at').join(', '));
 
-    return { ...(await this.getSettings(user)), message: 'Settings saved successfully' };
+    // Re-read the row that was just written, not the one this caller's ROLE would resolve to —
+    // otherwise an administrator saving their own settings gets the brokerage's back in the reply.
+    return { ...(await this.readSettings(user, userId)), message: 'Settings saved successfully' };
   }
 
+  /*
+   * SILENT COERCION IS NOT VALIDATION.
+   *
+   * Every one of these used to take an unusable value, quietly substitute the default, and answer
+   * 200. Measured on 2026-08-04: `timeZone: 'Mars/Olympus'` stored `America/Toronto`,
+   * `currency: 'XBT'` stored `CAD`, `emailAlerts: 'nope'` stored `true` — the DEFAULT, not `false`,
+   * so a client sending something truthy-looking got the opposite of what it asked for and was told
+   * the save succeeded. An API that answers "saved" to a value it discarded is lying to whoever
+   * wrote the client.
+   *
+   * An ABSENT key still takes the default: leaving a section out is how a partial save works and
+   * always has. What is refused is a key that is present and unusable.
+   */
   private validateNotifications(raw: unknown): Record<string, boolean> {
     const input = (raw ?? {}) as Record<string, unknown>;
     const out: Record<string, boolean> = {};
-    for (const key of NOTIFICATION_KEYS) out[key] = bool(input[key], DEFAULT_NOTIFICATIONS[key]);
+    for (const key of NOTIFICATION_KEYS) {
+      const given = input[key];
+      if (given === undefined) { out[key] = DEFAULT_NOTIFICATIONS[key]; continue; }
+      const asBool = bool(given, null as unknown as boolean);
+      if (typeof asBool !== 'boolean') {
+        throw new BadRequestException({
+          message: `"${key}" must be true or false.`,
+          errors: { [key]: ['Must be true or false.'] },
+        });
+      }
+      out[key] = asBool;
+    }
     return out;
   }
 
@@ -136,16 +202,22 @@ export class CrmSettingsService {
 
   private validatePreferences(raw: unknown): Record<string, unknown> {
     const input = (raw ?? {}) as Record<string, unknown>;
-    const pick = (value: unknown, allowed: string[], fallback: string) => {
+    /** Absent takes the default; present-and-unrecognised is refused rather than replaced. */
+    const pick = (key: string, value: unknown, allowed: readonly string[], fallback: string): string => {
+      if (value === undefined || value === null) return fallback;
       const v = str(value);
-      return allowed.includes(v) ? v : fallback;
+      if (allowed.includes(v)) return v;
+      throw new BadRequestException({
+        message: `"${v}" is not a valid ${key}. Choose one of: ${allowed.join(', ')}.`,
+        errors: { [key]: [`Must be one of: ${allowed.join(', ')}.`] },
+      });
     };
     return {
-      language: pick(input.language, LANGUAGES.map((l) => l.value), DEFAULT_PREFERENCES.language),
-      timeZone: pick(input.timeZone, TIME_ZONES, DEFAULT_PREFERENCES.timeZone),
-      currency: pick(input.currency, CURRENCIES, DEFAULT_PREFERENCES.currency),
-      dateFormat: pick(input.dateFormat, DATE_FORMATS, DEFAULT_PREFERENCES.dateFormat),
-      theme: pick(input.theme, THEMES, DEFAULT_PREFERENCES.theme),
+      language: pick('language', input.language, LANGUAGES.map((l) => l.value), DEFAULT_PREFERENCES.language),
+      timeZone: pick('timeZone', input.timeZone, TIME_ZONES, DEFAULT_PREFERENCES.timeZone),
+      currency: pick('currency', input.currency, CURRENCIES, DEFAULT_PREFERENCES.currency),
+      dateFormat: pick('dateFormat', input.dateFormat, DATE_FORMATS, DEFAULT_PREFERENCES.dateFormat),
+      theme: pick('theme', input.theme, THEMES, DEFAULT_PREFERENCES.theme),
     };
   }
 
@@ -160,8 +232,19 @@ export class CrmSettingsService {
       };
       // Only the birthday trigger schedules ahead, matching the CRM's shape.
       if ('daysBefore' in fallback) {
-        const n = Number(given.daysBefore);
-        entry.daysBefore = Number.isInteger(n) && n >= 0 && n <= 365 ? n : (fallback as { daysBefore: number }).daysBefore;
+        if (given.daysBefore === undefined || given.daysBefore === null) {
+          entry.daysBefore = (fallback as { daysBefore: number }).daysBefore;
+        } else {
+          const n = Number(given.daysBefore);
+          // 9999 used to store as 1 and answer 200. Refused now, for the same reason as the rest.
+          if (!Number.isInteger(n) || n < 0 || n > 365) {
+            throw new BadRequestException({
+              message: `"${key}" days before must be a whole number of days between 0 and 365.`,
+              errors: { [`templates.${key}.daysBefore`]: ['Must be between 0 and 365.'] },
+            });
+          }
+          entry.daysBefore = n;
+        }
       }
       out[key] = entry;
     }
@@ -170,7 +253,7 @@ export class CrmSettingsService {
 
   // -------------------------------------------------------- email settings
   async getEmailSettings(): Promise<Record<string, unknown>> {
-    const row = await this.prisma.crm_email_settings.findFirst({ where: { company_id: TENANT_ID }, orderBy: { id: 'asc' } });
+    const row = await this.prisma.crm_email_settings.findFirst({ orderBy: { id: 'asc' } });
     return {
       smtpHost: row?.smtp_host ?? '',
       smtpPort: row?.smtp_port ?? '587',
@@ -186,13 +269,64 @@ export class CrmSettingsService {
 
   /** The CRM's `updateSettings` action. Only staff with settings access reach this. */
   async saveEmailSettings(user: AuthUserRecord, body: Record<string, unknown>): Promise<Record<string, unknown>> {
-    const adminEmail = str(body.adminEmail);
+    /*
+     * These three are VarChar(255) and were length-checked nowhere, so an over-long value reached
+     * Postgres and came back as a bare 500 "Internal server error" — measured at 400 characters for
+     * `smtpHost` and `smtpUser`, and at a 306-character address for `adminEmail`, which passes
+     * EMAIL_SHAPE and fails the column. A raw 500 on a form an administrator types into, with no
+     * indication of which field caused it, while every other field on the same card returns a
+     * proper 400 with an inline error. Checked here so the column limit is stated once, in words.
+     */
+    const capped = (value: unknown, field: string, label: string): string => {
+      const s = str(value);
+      if (s.length > 255) {
+        throw new BadRequestException({
+          message: `The ${label} must be 255 characters or fewer.`,
+          errors: { [field]: ['Must be 255 characters or fewer.'] },
+        });
+      }
+      return s;
+    };
+
+    const smtpHost = capped(body.smtpHost, 'smtpHost', 'SMTP host');
+    /*
+     * A HOST HAS TO LOOK LIKE A HOST. `<img src=x onerror=alert(1)>` round-tripped through this
+     * field and came back intact — measured during the CRM › Triggers audit. It is not exploitable
+     * today: React escapes it on render and nothing dials this value, because sending goes through
+     * `mail_accounts`. But "not exploitable through the paths we happen to have today" is the same
+     * weak guarantee the logo upload was fixed for, and the day something does read this field to
+     * open a connection, the value it finds should be a hostname.
+     *
+     * Deliberately permissive about WHICH host: letters, digits, dots and hyphens, so an internal
+     * name, an IPv4 address and a punycode domain all pass. Blank stays legal — the field is
+     * optional and clearing it is how you unset it.
+     */
+    const hostLabelsValid = (host: string): boolean => host
+      .split('.')
+      // Per LABEL, not per string: `bad-.example.com` ends in a letter and passes a whole-string
+      // check while still being an invalid name, because it is the label that may not end in a
+      // hyphen. Caught by its own test rather than by reading the regex.
+      .every((label) => label.length > 0 && label.length <= 63 && /^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?$/.test(label));
+
+    if (smtpHost && !hostLabelsValid(smtpHost)) {
+      throw new BadRequestException({
+        message: 'The SMTP host must be a hostname or IP address — letters, digits, dots and hyphens only.',
+        errors: { smtpHost: ['Enter a hostname such as smtp.example.com.'] },
+      });
+    }
+    const smtpUser = capped(body.smtpUser, 'smtpUser', 'SMTP user');
+    const adminEmail = capped(body.adminEmail, 'adminEmail', 'admin email');
     if (adminEmail && !EMAIL_SHAPE.test(adminEmail)) {
       throw new BadRequestException({ message: 'The admin email must be a valid email address.', errors: { adminEmail: ['Enter a valid email address.'] } });
     }
+    // Digits alone is not a port: `99999` and `00000` were both accepted with 200. A TCP port is
+    // 1–65535, and the field exists to hold one.
     const port = str(body.smtpPort);
-    if (port && !/^\d{1,5}$/.test(port)) {
-      throw new BadRequestException({ message: 'The SMTP port must be a number.', errors: { smtpPort: ['Enter a port number.'] } });
+    if (port && (!/^\d{1,5}$/.test(port) || Number(port) < 1 || Number(port) > 65535)) {
+      throw new BadRequestException({
+        message: 'The SMTP port must be a number between 1 and 65535.',
+        errors: { smtpPort: ['Enter a port between 1 and 65535.'] },
+      });
     }
 
     const toggles: Record<string, boolean> = {};
@@ -201,9 +335,9 @@ export class CrmSettingsService {
 
     const now = new Date();
     const data = {
-      smtp_host: str(body.smtpHost) || null,
+      smtp_host: smtpHost || null,
       smtp_port: port || null,
-      smtp_user: str(body.smtpUser) || null,
+      smtp_user: smtpUser || null,
       admin_email: adminEmail || null,
       auto_send_enabled: bool(body.autoSendEnabled, true),
       template_toggles: JSON.stringify(toggles),
@@ -211,9 +345,9 @@ export class CrmSettingsService {
       updated_at: now,
     };
 
-    const existing = await this.prisma.crm_email_settings.findFirst({ where: { company_id: TENANT_ID }, orderBy: { id: 'asc' } });
+    const existing = await this.prisma.crm_email_settings.findFirst({ orderBy: { id: 'asc' } });
     if (existing) await this.prisma.crm_email_settings.update({ where: { id: existing.id }, data });
-    else await this.prisma.crm_email_settings.create({ data: { ...data, company_id: TENANT_ID, created_at: now } });
+    else await this.prisma.crm_email_settings.create({ data: { ...data, created_at: now } });
 
     await this.audit(user, 'CRM email settings updated', 'Email settings',
       `Auto-send ${data.auto_send_enabled ? 'on' : 'off'}; triggers: ${Object.entries(toggles).filter(([, v]) => v).map(([k]) => k).join(', ') || 'none'}`);
@@ -292,12 +426,30 @@ export class CrmSettingsService {
       }
     }
 
+    /*
+     * CASE-INSENSITIVELY, BECAUSE THAT IS WHAT THE INDEX DECIDES.
+     *
+     * `users_email_lower_key` and `users_username_lower_key` are UNIQUE on `lower(...)`
+     * (migration 20260803000000). These two lookups compared the raw string, so
+     * `ADMIN@test.local` passed a check that `admin@test.local` would have failed, reached the
+     * INSERT, violated the index and came back as a bare 500 — a stack-trace status code on an
+     * administrator's own profile form, for a value the form could have told them about.
+     *
+     * `users.service.ts` already compares this way at the other entry point. Two doors onto one
+     * `users` row and only one of them asked the question the database asks.
+     */
     if (username) {
-      const clash = await this.prisma.users.findFirst({ where: { username, id: { not: id } }, select: { id: true } });
+      const clash = await this.prisma.users.findFirst({
+        where: { username: { equals: username, mode: 'insensitive' }, id: { not: id } },
+        select: { id: true },
+      });
       if (clash) add('username', 'That username is already taken.');
     }
     if (email) {
-      const clash = await this.prisma.users.findFirst({ where: { email, id: { not: id } }, select: { id: true } });
+      const clash = await this.prisma.users.findFirst({
+        where: { email: { equals: email, mode: 'insensitive' }, id: { not: id } },
+        select: { id: true },
+      });
       if (clash) add('email', 'That email address is already in use.');
     }
 
@@ -306,11 +458,29 @@ export class CrmSettingsService {
       throw new BadRequestException({ message: first, errors });
     }
 
+    /*
+     * A FIELD THAT WAS NOT SENT IS NOT A FIELD THAT WAS CLEARED.
+     *
+     * `phone: phone || null` wrote null whenever the key was absent, so a caller updating only the
+     * name silently wiped the phone number — measured 2026-08-04: set to `416-555-9999`, then a PUT
+     * without `phone` read back `""`. `email` in the same object used `|| undefined`, which leaves
+     * it alone. Two fields, two contracts, neither written down, on an endpoint two screens share.
+     *
+     * Present-and-empty still clears — that is someone deliberately emptying the box. Absent means
+     * "not mine to touch".
+     */
+    const has = (k: string) => Object.prototype.hasOwnProperty.call(body, k);
     await this.prisma.users.update({
       where: { id },
       // Role is deliberately not writable here — the CRM shows it read-only, "managed by
       // administrators", so accepting it from this form would be a privilege-escalation hole.
-      data: { name, username: username || null, email: email || undefined, phone: phone || null, updated_at: new Date() },
+      data: {
+        name,
+        username: has('username') ? (username || null) : undefined,
+        email: email || undefined,
+        phone: has('phone') ? (phone || null) : undefined,
+        updated_at: new Date(),
+      },
     });
 
     await this.audit(user, 'CRM profile updated', name, `username: ${username}${phone ? ` · phone: ${phone}` : ''}`);
@@ -327,7 +497,20 @@ export class CrmSettingsService {
     const message = str(body.message);
     if (!message) throw new BadRequestException({ message: 'Please enter a message' });
     if (message.length > 5000) throw new BadRequestException({ message: 'The message must be 5,000 characters or fewer.' });
-    const type = BROADCAST_TYPES.includes(str(body.type)) ? str(body.type) : 'info';
+    // Absent means "info"; present-and-unrecognised is refused. `type: 'alert'` used to be accepted
+    // with 201 and silently stored as `info`, so the row said something the sender did not choose.
+    const givenType = body.type;
+    const type = (givenType === undefined || givenType === null) ? 'info' : str(givenType);
+    if (!BROADCAST_TYPES.includes(type)) {
+      throw new BadRequestException({
+        message: `"${type}" is not a broadcast type. Choose one of: ${BROADCAST_TYPES.join(', ')}.`,
+        errors: { type: [`Must be one of: ${BROADCAST_TYPES.join(', ')}.`] },
+      });
+    }
+
+    // The duplicate check and the row's creation happen together under a per-sender lock, further
+    // down in `claimBroadcast` — checking here and inserting later is what let two simultaneous
+    // requests both through.
 
     // Recipients are active users who actually have an address. Counting every active user and
     // reporting that number was misleading: one without an email can never receive anything.
@@ -365,13 +548,7 @@ export class CrmSettingsService {
      * The row is written first with `status: 'sending'`, the caller gets it immediately, and
      * delivery runs detached, updating the row as it goes so the Broadcasts list can show progress.
      */
-    const row = await this.prisma.crm_broadcasts.create({
-      data: {
-        message, type,
-        status: 'sending', attempted: to.length, recipients: 0, failed: 0,
-        sent_by: user.name, sent_by_id: user.id ?? null, created_at: new Date(),
-      },
-    });
+    const row = await this.claimBroadcast(user, message, type, to.length);
 
     await this.audit(user, 'CRM broadcast sent', `${to.length} recipient(s)`, message.slice(0, 160));
 
@@ -382,6 +559,67 @@ export class CrmSettingsService {
       id: row.id, recipients: 0, attempted: to.length, status: 'sending', type,
       message: `Broadcast queued for ${to.length} active user${to.length === 1 ? '' : 's'}. It is going out now — the Broadcasts list shows progress.`,
     };
+  }
+
+  /**
+   * Refuse the same message from the same person twice in quick succession.
+   *
+   * THE SAME MESSAGE TWICE IS ALMOST NEVER MEANT. Two identical POSTs issued at the same moment
+   * both returned 201 and both fanned out to every member of staff — measured 2026-08-04. The
+   * button's own `disabled` guard covers a double CLICK and nothing else: a retried request, a
+   * second tab or an impatient reload all get past it, and there is no undo on a message that has
+   * already reached everybody's inbox.
+   *
+   * WHY AN ADVISORY LOCK AND NOT JUST A SELECT. Read-committed is the default isolation, so two
+   * genuinely simultaneous requests both run the lookup before either writes its row, both see
+   * nothing, and both proceed — which is precisely the case that was measured, and a plain check
+   * would have passed the sequential test while leaving the real one open. `pg_advisory_xact_lock`
+   * serialises the check-and-insert per sender for the length of the transaction; it needs no
+   * schema change, and it is released when the transaction ends however it ends.
+   *
+   * Keyed on the sender, not the message: the contended resource is "this person sending a
+   * broadcast", and two different people announcing different things must not queue behind each
+   * other.
+   *
+   * A minute covers every accidental repeat and leaves a genuine follow-up — minutes or hours
+   * later, and usually reworded — unaffected. Refused rather than silently de-duplicated, because
+   * the sender needs to be told it did not go out again.
+   */
+  private async claimBroadcast(
+    user: AuthUserRecord, message: string, type: string, attempted: number,
+  ): Promise<{ id: number }> {
+    // A stable per-sender lock id. Arbitrary constants, chosen only to spread ids apart from any
+    // other advisory lock the application might take later.
+    const key = BigInt(user.id ?? 0) * 1_000_003n + 8_675_309n;
+
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(${key}::bigint)`;
+
+      const recent = await tx.crm_broadcasts.findFirst({
+        where: {
+          message,
+          sent_by_id: user.id ?? null,
+          created_at: { gte: new Date(Date.now() - 60_000) },
+        },
+        select: { id: true },
+      });
+      if (recent) {
+        throw new BadRequestException({
+          message: 'That exact message was already sent to everyone less than a minute ago. It is in the Broadcasts list below — send it again only if you genuinely mean everyone to receive it twice.',
+        });
+      }
+
+      // Created inside the lock, so the loser of the race sees it and is refused. A check that
+      // commits before the insert is not a check.
+      return tx.crm_broadcasts.create({
+        data: {
+          message, type,
+          status: 'sending', attempted, recipients: 0, failed: 0,
+          sent_by: user.name, sent_by_id: user.id ?? null, created_at: new Date(),
+        },
+        select: { id: true },
+      });
+    });
   }
 
   /**
@@ -442,15 +680,20 @@ export class CrmSettingsService {
     }
   }
 
-  /** Subject line per broadcast type, so it is recognisable in an inbox. */
+  /**
+   * Subject line per broadcast type, so it is recognisable in an inbox.
+   *
+   * `alert` used to have a branch here and in `broadcastHtml`. It is not a broadcast type —
+   * `BROADCAST_TYPES` is info / warning / success — so the branch could never be reached, and the
+   * validator above now refuses the value outright rather than storing it as `info`.
+   */
   private broadcastSubject(type: string): string {
-    const label = type === 'alert' ? 'Alert' : type === 'warning' ? 'Important' : 'Announcement';
-    return `${label} from Get Home Realty`;
+    return `${type === 'warning' ? 'Important' : 'Announcement'} from Get Home Realty`;
   }
 
   /** Minimal, inline-styled HTML — the same constraints every mail client imposes. */
   private broadcastHtml(message: string, type: string): string {
-    const accent = type === 'alert' ? '#dc2626' : type === 'warning' ? '#d97706' : '#4f46e5';
+    const accent = type === 'warning' ? '#d97706' : type === 'success' ? '#059669' : '#4f46e5';
     const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     // Author-entered text, so newlines carry meaning; everything else is escaped.
     const body = esc(message).replace(/\n/g, '<br />');
@@ -460,6 +703,54 @@ export class CrmSettingsService {
   </div>
   <p style="color:#6b7280;font-size:12px;margin-top:16px;">Sent to all active users of Transaction Desk.</p>
 </div>`;
+  }
+
+  /**
+   * Close out broadcasts this process was delivering when it stopped.
+   *
+   * `deliverBroadcast` runs detached — `void this.deliverBroadcast(...)` — so a deploy, a restart or
+   * a crash mid-loop leaves the row saying `sending` with nothing left alive to finish it or to
+   * correct it. Nothing reconciled those, and they never aged out: measured on 2026-08-04, six of
+   * eight rows in the QA database were still `sending`, the oldest created two days earlier. The
+   * Broadcasts list is the only place an administrator can find out whether staff were emailed, and
+   * for most of its rows it said "still going" for ever.
+   *
+   * Run once at boot, before anything can start a new send. The counters already on the row are
+   * how far the interrupted run actually reached, so they are kept rather than zeroed — `partial`
+   * with `recipients: 4 of 7` is the truth, and claiming either 0 or 7 would not be.
+   *
+   * The age floor matters: a row created seconds ago may belong to a send that is still running in
+   * THIS process during a fast restart cycle, and marking that one finished would be the same class
+   * of lie in the other direction.
+   */
+  async reconcileInterruptedBroadcasts(): Promise<number> {
+    const cutoff = new Date(Date.now() - 5 * 60 * 1000);
+    try {
+      const stuck = await this.prisma.crm_broadcasts.findMany({
+        where: { status: 'sending', created_at: { lt: cutoff } },
+        select: { id: true, recipients: true, attempted: true },
+      });
+      for (const row of stuck) {
+        await this.prisma.crm_broadcasts.update({
+          where: { id: row.id },
+          data: {
+            // Nobody reached at all is a failure; some reached is a partial. Either way it is over.
+            status: row.recipients === 0 ? 'failed' : 'partial',
+            failed: Math.max(0, row.attempted - row.recipients),
+            error: 'Delivery was interrupted — the server restarted while this broadcast was going out. Anyone not counted below was not emailed.',
+            completed_at: new Date(),
+          },
+        }).catch(() => undefined);
+      }
+      if (stuck.length > 0) {
+        this.log.warn(`Closed ${stuck.length} broadcast(s) left mid-delivery by a previous run.`);
+      }
+      return stuck.length;
+    } catch (err) {
+      // Never block boot over housekeeping.
+      this.log.warn(`Could not reconcile interrupted broadcasts: ${err instanceof Error ? err.message : String(err)}`);
+      return 0;
+    }
   }
 
   async listBroadcasts(limit = 50): Promise<Record<string, unknown>[]> {

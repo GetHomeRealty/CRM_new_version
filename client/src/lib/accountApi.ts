@@ -59,23 +59,51 @@ export interface AccountIntegrations {
  * calendar's reminders do. The screen says so rather than presenting seven identical toggles, six
  * of which would appear to do nothing. `current_channel` is how the user is told today.
  */
+/** The ways the application can reach somebody. */
+export type NotificationChannel = 'in_app' | 'email' | 'push';
+
+export const CHANNEL_LABEL: Record<NotificationChannel, string> = {
+  in_app: 'In-app',
+  email: 'Email',
+  push: 'Push',
+};
+
+/**
+ * Whether a (category, channel) pair actually has a sender.
+ *
+ *   live         something sends it and honours the choice now.
+ *   pending      the event happens and reaches you another way; no sender on this channel yet.
+ *   unsupported  the channel makes no sense for this event and is not offered.
+ */
+export type ChannelReadiness = 'live' | 'pending' | 'unsupported';
+
 export interface NotificationCategory {
   key: string;
   label: string;
   description: string;
-  readiness: 'live' | 'pending';
-  /** Named as the server sends it — this payload is not snake_cased like the ORM-backed ones. */
-  currentChannel: string;
-  enabled: boolean;
+  /** Readiness per channel — what the matrix renders each cell from. */
+  channels: Record<NotificationChannel, ChannelReadiness>;
+  /** This person's answer per channel. */
+  enabled: Record<NotificationChannel, boolean>;
+  /**
+   * Which area's screen offers this category. Absent means both — the server omits it for anything
+   * not tied to one side of the product, so absence must be read as "show it", never as "hide it".
+   */
+  areas?: ('crm' | 'desk')[];
 }
 
-export const getNotificationPreferences = (): Promise<{ categories: NotificationCategory[] }> =>
+export interface NotificationPreferences {
+  channels: NotificationChannel[];
+  categories: NotificationCategory[];
+}
+
+export const getNotificationPreferences = (): Promise<NotificationPreferences> =>
   api.get('/api/account/notification-preferences').then((r) => r.data);
 
-/** Saves the whole screen: a `{ category: enabled }` map. */
+/** Saves the whole matrix: a `{ category: { channel: enabled } }` map. */
 export const saveNotificationPreferences = (
-  prefs: Record<string, boolean>,
-): Promise<{ categories: NotificationCategory[] }> =>
+  prefs: Record<string, Record<string, boolean>>,
+): Promise<NotificationPreferences> =>
   api.put('/api/account/notification-preferences', prefs).then((r) => r.data);
 
 export const getAccountProfile = (): Promise<AccountProfile> =>
@@ -171,6 +199,13 @@ export interface GoogleCalendarStatus {
   last_sync: string | null;
   error: string | null;
   setup_hint: string | null;
+  /**
+   * Appointments this user has changed that Google has not received (CRM-GCAL-M01).
+   *
+   * Separate from `error`: the connection can look healthy right now and still owe Google a viewing
+   * that failed to push during an outage half an hour ago.
+   */
+  pending_sync: number;
 }
 
 export const googleCalendarStatus = (scope?: IntegrationScope): Promise<GoogleCalendarStatus> =>
@@ -183,11 +218,16 @@ export const googleCalendarConnect = (scope?: IntegrationScope): Promise<{ confi
 export const googleCalendarSync = (scope?: IntegrationScope): Promise<{ pulled: number; error: string | null; message: string }> =>
   api.post('/api/google/calendar/sync', {}, { params: scope ? { scope } : undefined }).then((r) => r.data);
 
+/** Try this user's outstanding pushes again, resetting the automatic attempt count. */
+export const googleCalendarRetrySync = (scope?: IntegrationScope): Promise<{
+  attempted: number; recovered: number; pending_sync: number; message: string;
+}> => api.post('/api/google/calendar/retry', {}, { params: scope ? { scope } : undefined }).then((r) => r.data);
+
 export const googleCalendarDisconnect = (scope?: IntegrationScope): Promise<{ disconnected: boolean }> =>
   api.post('/api/google/calendar/disconnect', {}, { params: scope ? { scope } : undefined }).then((r) => r.data);
 
 /**
- * Start connecting a Gmail account with OAuth ("Sign in with Google"). Returns Google's consent-URL;
+ * Start connecting a Gmail account with OAuth ("Connect Gmail"). Returns Google's consent-URL;
  * the caller navigates the browser there. After consent the server stores the account and redirects
  * back with `mail_connected=1`. Works once the server has Google OAuth credentials + Gmail scope.
  */

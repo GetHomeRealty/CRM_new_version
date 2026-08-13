@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { crmPath } from './area';
 import type { LeadFeedPage } from '../lib/leadsApi';
@@ -45,6 +46,13 @@ function Pager({ meta, onPage }: { meta: LeadFeedPage<unknown>['meta']; onPage: 
 export function LeadTasksPanel({ feed, onPage }: { feed: LeadFeedPage<LeadTaskRow> | null; onPage: (p: number) => void }) {
   const navigate = useNavigate();
   const todayIso = new Date().toISOString().slice(0, 10);
+  /*
+   * COLLAPSED UNTIL ASKED FOR. The summary — how many are open, how many overdue — is the part
+   * somebody reads on arrival; the twenty-five rows underneath are what made the dashboard a
+   * scroll. The counts stay visible so the panel still says something when shut, and nothing about
+   * how tasks are created, edited or paged changes: this only decides whether the table is drawn.
+   */
+  const [showTasks, setShowTasks] = useState(false);
 
   if (!feed) return <div className="card"><div className="modal-sub">Lead Tasks</div><p className="help">Loading…</p></div>;
   const tasks = feed.data;
@@ -53,11 +61,25 @@ export function LeadTasksPanel({ feed, onPage }: { feed: LeadFeedPage<LeadTaskRo
 
   return (
     <div className="card">
-      <div className="modal-sub">
-        Lead Tasks ({open} open of {total})
-        {overdue > 0 && <span className="pill bad" style={{ marginLeft: 8 }}>{overdue} overdue</span>}
+      <div className="modal-sub" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span>
+          Lead Tasks ({open} open of {total})
+          {overdue > 0 && <span className="pill bad" style={{ marginLeft: 8 }}>{overdue} overdue</span>}
+        </span>
+        {/* Always present. It was gated on `total > 0`, so an empty card lost its arrow and stopped
+            matching the two beside it — the control belongs to the card, not to the data. */}
+        <button
+          type="button"
+          className="btn ghost sm"
+          style={{ marginLeft: 'auto' }}
+          aria-expanded={showTasks}
+          title={showTasks ? 'Hide the task list' : 'Show the task list'}
+          onClick={() => setShowTasks((v) => !v)}
+        >
+          {showTasks ? '▲ Hide' : '▼ View'}
+        </button>
       </div>
-      {total === 0 ? <p className="help">No tasks have been created on any lead yet.</p> : (
+      {!showTasks ? null : total === 0 ? <p className="help">No tasks have been created on any lead yet.</p> : (
         <div className="lead-scroll">
           <table className="list-table">
             <thead>
@@ -104,6 +126,8 @@ export function LeadTasksPanel({ feed, onPage }: { feed: LeadFeedPage<LeadTaskRo
 export function LeadShowingsPanel({ feed, onPage }: { feed: LeadFeedPage<LeadShowingRow> | null; onPage: (p: number) => void }) {
   const navigate = useNavigate();
   const todayIso = new Date().toISOString().slice(0, 10);
+  /** Collapsed until asked for, matching Lead Tasks above. The counts say enough when it is shut. */
+  const [showRows, setShowRows] = useState(false);
 
   if (!feed) return <div className="card"><div className="modal-sub">Lead Showings</div><p className="help">Loading…</p></div>;
   const showings = feed.data;
@@ -111,8 +135,25 @@ export function LeadShowingsPanel({ feed, onPage }: { feed: LeadFeedPage<LeadSho
 
   return (
     <div className="card">
-      <div className="modal-sub">Lead Showings ({upcoming} upcoming of {total})</div>
-      {total === 0 ? <p className="help">No showings have been scheduled on any lead yet.</p> : (
+      <div className="modal-sub" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span>Lead Showings ({upcoming} upcoming of {total})</span>
+        {/*
+          Unconditional, like the one on Lead Tasks. Showing the arrow only when there are rows made
+          the card change shape with the data — three panels meant to read as one set, and the one
+          with nothing in it looked like a different kind of thing.
+        */}
+        <button
+          type="button"
+          className="btn ghost sm"
+          style={{ marginLeft: 'auto' }}
+          aria-expanded={showRows}
+          title={showRows ? 'Hide the showings list' : 'Show the showings list'}
+          onClick={() => setShowRows((v) => !v)}
+        >
+          {showRows ? '▲ Hide' : '▼ View'}
+        </button>
+      </div>
+      {!showRows ? null : total === 0 ? <p className="help">No showings have been scheduled on any lead yet.</p> : (
         <div className="lead-scroll">
           <table className="list-table">
             <thead>

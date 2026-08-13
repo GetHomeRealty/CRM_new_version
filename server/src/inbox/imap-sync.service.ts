@@ -1,4 +1,4 @@
-import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ImapFlow } from 'imapflow';
 import { simpleParser } from 'mailparser';
 import { PrismaService } from '../prisma/prisma.service';
@@ -6,9 +6,11 @@ import { schedulersEnabled, schedulerSkipReason } from '../common/schedulers';
 import { LaravelCryptService } from '../common/laravel-crypt.service';
 import { GoogleService } from '../google/google.service';
 
-import { forEachTenant } from '../core/tenant-context';
-import { allTenantIds } from '../core/tenants';
-import { registerWorker, trackedTick } from '../observability/worker-health';
+import { registerWorker } from '../observability/worker-health';
+import { clusterTick } from '../redis/cluster-tick';
+import { RedisService } from '../redis/redis.service';
+import { CacheService } from '../redis/cache.service';
+import { NotificationDispatcher } from '../notifications/notification-dispatcher.service';
 /** How often the poller pulls new mail for every sync-enabled account. */
 /**
  * How often connected mailboxes are polled for new mail.
@@ -61,10 +63,36 @@ export function countNewUids(found: number[] | false | null | undefined, lastUid
   return (found || []).filter((u) => u > floor);
 }
 
+/**
+ * Whether a completed sync should raise a "you have new mail" notification.
+ *
+ * Extracted for the same reason as `selectSyncBatch`: the alternative is a boolean buried inside a
+ * method that cannot run without a live IMAP server, which means the rule would go untested and
+ * the next person to widen it would not hear about it.
+ *
+ * Three things must all hold, and each rules out a real case:
+ *   `fetched`        nothing new arrived, so there is nothing to say
+ *   `userId`         a brokerage mailbox belongs to nobody in particular; there is no one to tell
+ *   `isPrimary`      the mailbox is the owner's primary one
+ *
+ * That last is the point of this function. A person may have several addresses syncing — one they
+ * work from, a shared enquiries box, an old address kept for archive — and notifying for all of
+ * them buried the line that mattered under the ones they only keep for reference. The other
+ * mailboxes still sync and their mail still arrives in the Inbox; what stops is the interruption.
+ */
+export function shouldNotifyNewMail(
+  account: { user_id: number | null; is_default: boolean },
+  fetched: number,
+): boolean {
+  return fetched > 0 && account.user_id !== null && account.is_default === true;
+}
+
 type AccountRow = {
   id: number; user_id: number | null; username: string | null; from_email: string;
   password: string | null; encryption: string | null; imap_host: string | null; imap_port: number | null;
   imap_encryption: string | null; last_uid: number | null;
+  /** Whether this is the owner's primary mailbox. Only that one raises a new-mail notification. */
+  is_default: boolean;
 };
 
 /**
@@ -100,6 +128,11 @@ export class ImapSyncService implements OnModuleInit, OnModuleDestroy {
     private readonly prisma: PrismaService,
     private readonly crypt: LaravelCryptService,
     private readonly google: GoogleService,
+    // Only used to decide whether THIS process should run a given pass — see `clusterTick`.
+    private readonly redis: RedisService,
+    private readonly cache: CacheService,
+    /** Optional so existing constructions — including this service's specs — keep working. */
+    private readonly dispatcher?: NotificationDispatcher,
   ) {}
 
   onModuleInit(): void {
@@ -118,7 +151,14 @@ export class ImapSyncService implements OnModuleInit, OnModuleDestroy {
     if (typeof this.first.unref === 'function') this.first.unref();
 
     registerWorker('imap-sync', POLL_INTERVAL_MS);
-    this.timer = setInterval(trackedTick('imap-sync', () => this.pollAll()), POLL_INTERVAL_MS);
+    /*
+     * `clusterTick`, not `trackedTick`: two processes polling one mailbox race on the same messages.
+     * With Redis exactly one process polls per pass; without it, unchanged from before.
+     */
+    this.timer = setInterval(
+      clusterTick({ redis: this.redis, cache: this.cache }, 'imap-sync', () => this.pollAll()),
+      POLL_INTERVAL_MS,
+    );
     if (typeof this.timer.unref === 'function') this.timer.unref();
     this.log.log(`IMAP polling every ${POLL_INTERVAL_MS / 1000}s (first pass in ${FIRST_POLL_DELAY_MS / 1000}s)`);
   }
@@ -129,17 +169,7 @@ export class ImapSyncService implements OnModuleInit, OnModuleDestroy {
   }
 
   /** Sync every account that has inbound sync switched on. Never overlaps with itself. */
-  /**
-   * Poll every mailbox, one brokerage at a time.
-   *
-   * The pass itself is unchanged; it simply runs once per tenant, inside that tenant's
-   * context, so every query it makes is scoped the same way a request would be.
-   */
   async pollAll(): Promise<void> {
-    await forEachTenant(() => allTenantIds(this.prisma), () => this.pollAllForTenant());
-  }
-
-  async pollAllForTenant(): Promise<void> {
     if (this.polling) return;
     this.polling = true;
     try {
@@ -176,11 +206,27 @@ export class ImapSyncService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  /** Sync one account, confirmed to belong to the user. Used by the manual "Sync now" button. */
+  /**
+   * Sync one account, confirmed to belong to the user. Used by the manual "Sync now" button.
+   *
+   * BOTH REFUSALS ARE TYPED, because both were bare `Error`s and therefore 500s.
+   *
+   * The first is the ownership check — the one that actually decides, since the controller's own
+   * lookup is a convenience. The second is reachable by an ordinary user with an SMTP-only account:
+   * pressing "Sync now" on it produced an Internal Server Error carrying a perfectly good
+   * explanation that nothing would ever render as one.
+   *
+   * `NotFound` rather than `Forbidden` for the ownership case, matching the Calendar and the
+   * message reads: the reply must not distinguish "not yours" from "does not exist".
+   */
   async syncForUser(userId: number, accountId: number): Promise<SyncResult> {
     const account = await this.prisma.mail_accounts.findFirst({ where: { id: accountId, user_id: userId } });
-    if (!account) throw new Error('Mail account not found.');
-    if (!account.imap_host) throw new Error('This account has no IMAP server configured, so there is nothing to sync.');
+    if (!account) throw new NotFoundException({ message: 'That email account no longer exists.' });
+    if (!account.imap_host) {
+      throw new BadRequestException({
+        message: 'This account has no IMAP server configured, so there is nothing to sync.',
+      });
+    }
     return this.syncAccount(account as AccountRow);
   }
 
@@ -227,7 +273,9 @@ export class ImapSyncService implements OnModuleInit, OnModuleDestroy {
         return { fetched: 0, matched: 0, error };
       }
       try {
-        const tok = await this.google.refresh(refresh);
+        // 'mail': this token was minted by the Gmail connect, which may run on its own Google
+        // project. Refreshing it against the calendar client would fail permanently.
+        const tok = await this.google.refresh(refresh, 'mail');
         auth.accessToken = tok.access_token;
       } catch (ex) {
         // Distinguish the one cause that the user can actually do something about. Google
@@ -358,6 +406,47 @@ export class ImapSyncService implements OnModuleInit, OnModuleDestroy {
         lock.release();
       }
       await this.recordOutcome(account.id, null, maxUid);
+
+      /*
+       * ONE notification per poll, not one per message.
+       *
+       * A quiet mailbox that receives forty messages overnight would otherwise produce forty
+       * notifications, which is worse than none: the person stops reading them and the useful ones
+       * are lost in the noise. The summary is what somebody actually wants — "you have new mail" —
+       * and the Inbox screen is where the detail lives.
+       *
+       * Best-effort, outside everything that matters: mail has already been stored, and the sync
+       * must not be marked failed because a notification could not be delivered.
+       */
+      /*
+       * AND ONLY FOR THE PRIMARY MAILBOX — see `shouldNotifyNewMail` for which cases that rules
+       * out and why.
+       *
+       * The read side enforces the same rule a second time, in `primaryMailboxOnly` in
+       * notification-center.service.ts, and that is not redundancy. This check governs only what is
+       * CREATED, and creation happens once: somebody who makes a different address primary tomorrow
+       * should stop seeing yesterday's lines from the old one, and nothing decided here can reach
+       * back and do that.
+       */
+      if (this.dispatcher && shouldNotifyNewMail(account, fetched)) {
+        await this.dispatcher.dispatch({
+          category: 'inbox_new_mail',
+          // Non-null by `shouldNotifyNewMail`, which the compiler cannot see across the call.
+          userId: account.user_id as number,
+          title: fetched === 1 ? 'You have a new email' : `You have ${fetched} new emails`,
+          body: account.from_email || undefined,
+          link: '/crm/inbox',
+          /*
+           * Keyed to the account and the highest UID in this batch, so a poll that runs twice over
+           * the same window — a retry, or a second process before the cluster lock was added — does
+           * not leave two copies of the same news.
+           */
+          dedupeKey: `inbox-${account.id}-${maxUid}`,
+          // Email is `unsupported` for this category, so only these two are meaningful.
+          channels: ['in_app', 'push'],
+        }).catch(() => {});
+      }
+
       return { fetched, matched, error: null };
     } catch (ex) {
       const error = this.explain((ex as Error).message);
@@ -412,8 +501,21 @@ export class ImapSyncService implements OnModuleInit, OnModuleDestroy {
     return lead?.id ?? null;
   }
 
+  /**
+   * `updateMany`, not `update`, because the account may be gone by the time we write the outcome.
+   *
+   * A poll cycle takes seconds; deleting a mail account takes one click. Delete one mid-cycle and
+   * `update({ where: { id } })` throws P2025 — "No record was found for an update" — which the
+   * caller logged as `IMAP poll failed for account #<id>`, and the screen showed as a mail
+   * SYNCHRONISATION error. So removing an account produced a scary message about the sync being
+   * broken, pointing the reader at credentials and ports that were never the problem. Observed
+   * exactly that way: a DELETE of account #24857 at 11:12:40, this failure at 11:12:42.
+   *
+   * `updateMany` matches zero rows and returns `{ count: 0 }` rather than throwing, which is the
+   * honest outcome: there is no account left to record anything against.
+   */
   private async recordOutcome(accountId: number, error: string | null, maxUid?: number): Promise<void> {
-    await this.prisma.mail_accounts.update({
+    await this.prisma.mail_accounts.updateMany({
       where: { id: accountId },
       data: {
         last_synced_at: new Date(),

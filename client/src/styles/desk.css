@@ -280,6 +280,40 @@ input[type="number"],.numeric,.stat-card .val{font-variant-numeric:tabular-nums;
   .btn{padding:8px 12px}
   .btn.sm{padding:6px 9px}
 }
+
+/* The topbar on a phone.
+   ----------------------
+   `.topbar` is a non-wrapping flex row — area switch, breadcrumbs, title, then a right-hand cluster
+   of bell, locale, avatar, name and Password. None of it could shrink and none of it could wrap, so
+   at 390px the row measured 547px and the WHOLE APPLICATION scrolled sideways: 547 on Settings, 567
+   on the CRM dashboard, 522 on Leads. Reported against CRM Settings because that is where it was
+   measured; it was never a Settings bug.
+
+   Nothing is removed that is not said twice over. The breadcrumb's first crumb is the area switch
+   sitting beside it and its last is the title. The locale is a fixed label, not a control. The name
+   is already the avatar's tooltip and its initial. The word "Password" sits next to a padlock on
+   the same button. Every CONTROL stays, at full tap size.
+
+   The title is what survives, not the breadcrumb — and that was the second attempt. Hiding the
+   title and letting the crumbs shrink measured `crumbsW: 0` on all three screens tested: the
+   breadcrumb was squeezed out of existence by the flex line and nothing named the screen at all.
+   Of the two, the title is the one worth the width. */
+@media(max-width:560px){
+  /* Wrap rather than overflow: if the row still cannot fit, it becomes two lines inside the shell
+     instead of pushing the document wider than the screen. */
+  .topbar{flex-wrap:wrap;row-gap:6px;column-gap:10px;padding:10px 14px}
+  .topbar .crumbs{display:none}
+  /* `min-width:0` is what actually lets a flex child shrink — without it the default `auto`
+     minimum keeps the title at its content width and nothing else can give. */
+  .topbar .title{min-width:0;flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .topbar .right{min-width:0;margin-left:auto;gap:8px}
+  .topbar-locale,.topbar-who,.topbar-pw-label{display:none}
+  /* Dropping the word "Password" leaves a padlock in a button sized by its padding — 27px square,
+     measured, which is a thumb target on a phone. Hiding a label must not shrink the thing you
+     press, so the topbar's controls get an explicit floor at this width. Caught by the test written
+     for this very fix. */
+  .topbar .right .btn,.topbar .right .icon-btn{min-width:36px;min-height:36px;display:inline-flex;align-items:center;justify-content:center}
+}
 /* Respect reduced-motion preference (accessibility) */
 @media (prefers-reduced-motion: reduce){
   *,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important;scroll-behavior:auto!important}
@@ -762,8 +796,6 @@ input[type="number"],.numeric,.stat-card .val{font-variant-numeric:tabular-nums;
 .lead-sel-col{width:38px;text-align:center}
 .lead-sel-col input[type=checkbox]{padding:0;width:15px;min-width:15px;max-width:15px;height:15px;margin:0;cursor:pointer}
 .lead-contact div{line-height:1.45}
-.lead-activity-cell{white-space:nowrap;font-size:12px;color:var(--text-2)}
-.lead-activity-cell span{margin-right:9px}
 /* This cell was making every lead row 160px tall — twice what its content needs.
    `display:flex` on a <td> takes the cell out of table layout, so the browser wraps it in an
    anonymous cell that is sized by the table's own column algorithm rather than by the buttons
@@ -893,6 +925,18 @@ input[type="number"],.numeric,.stat-card .val{font-variant-numeric:tabular-nums;
 .type-opt.custom{border-style:dashed;font-weight:600}
 .type-custom-row{display:flex;gap:6px;align-items:center;margin-top:8px}
 .type-custom-row input{flex:1}
+
+/* Property Type as a dropdown. The picker inside is unchanged; this is the closed state and the
+   panel it opens into. `position:relative` on the wrapper keeps the menu anchored to the trigger,
+   and the high z-index clears the fields below it inside the lead modal. */
+.type-dd{position:relative}
+.type-dd-trigger{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;
+  padding:9px 12px;border:1px solid var(--line-2);border-radius:10px;background:var(--surface);
+  font-size:13px;color:var(--text);cursor:pointer;text-align:left}
+.type-dd-trigger:hover{border-color:var(--brand)}
+.type-dd-menu{position:absolute;top:calc(100% + 4px);left:0;right:0;z-index:30;
+  background:var(--surface);border:1px solid var(--line-2);border-radius:10px;
+  box-shadow:var(--shadow-xl);padding:10px;max-height:280px;overflow-y:auto}
 .type-chosen{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
 .type-chosen .pill{display:inline-flex;align-items:center;gap:5px}
 .type-chosen .pill button{border:0;background:none;padding:0;margin:0;cursor:pointer;color:inherit;font-size:14px;line-height:1}
@@ -1470,3 +1514,52 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
 /* The field a failed save is about. Paired with a scroll-into-view and focus, so the message and
    the thing it is about are on screen together — the toast alone named fields the user could not see. */
 .field-bad{border-color:var(--bad,#dc2626) !important;box-shadow:0 0 0 3px rgba(220,38,38,.12)}
+
+/* ------------------------------------------------- full-screen template editor
+   The template editor is the one modal that is a workspace rather than a form: a block builder on
+   one side and a live preview on the other. At 980px both were cramped, so it now takes the whole
+   window EXCEPT the navigation rail — the sidebar stays reachable, because leaving the editor is
+   done from there as often as from its own Cancel.
+
+   The overlay is inset from the left by exactly the rail's width (248px, or 64px once it collapses
+   at 1100px), rather than the modal being given a margin. Insetting the overlay means the dimmed
+   backdrop stops at the rail too, so the sidebar reads as available rather than as greyed out
+   behind glass. */
+.overlay.beside-nav{left:248px;padding:0;align-items:stretch;justify-content:stretch}
+.modal.full{width:100%;max-width:100%;height:100vh;border-radius:0;border-left:none;
+  display:flex;flex-direction:column;padding:20px 24px;overflow-y:auto}
+/* The form fills the remaining height so the body editor grows with the window instead of leaving
+   the bottom of a maximised screen empty. */
+.modal.full > form{display:flex;flex-direction:column;flex:1;min-height:0}
+.modal.full .tpl-build{flex:1;min-height:0}
+.modal.full .tpl-build-preview .tpl-preview,
+.modal.full .tpl-code{height:100%;min-height:420px}
+
+/* Preview is a MODE, not a second column: the builder is hidden and the rendered email takes the
+   whole workspace, so what is on screen is the shape the recipient will actually get. The builder
+   is hidden rather than unmounted — see the comment at the call site — so its own state survives
+   the round trip. */
+.tpl-build.previewing .tpl-build-editor{display:none}
+.tpl-build-editor{min-width:0}
+.tpl-build-preview{min-width:0}
+
+/* The grid is `align-items:start` so the builder sits at the top rather than stretching to the
+   tallest row. Previewing wants the opposite: one pane that fills the workspace. Without this the
+   iframe resolved `height:100%` against an auto-height row and rendered 152px tall — full width and
+   almost no height, which is not a preview of anything. `position:static` drops the sticky offset
+   that only made sense when there was a second column to scroll past. */
+/* Preview mode shows the email and nothing else: the name/category/subject fields, the token list
+   and the token warning all step aside. The body field and the Cancel/Save row stay — the toolbar
+   inside the body field is how you get back. */
+.modal.full.tpl-previewing > form > .g2,
+.modal.full.tpl-previewing > form > .field:not(.tpl-body-fill),
+.modal.full.tpl-previewing > form > .tpl-warn{display:none}
+.modal.full .tpl-body-fill{display:flex;flex-direction:column;flex:1;min-height:0}
+.tpl-build.previewing{align-items:stretch;min-height:0}
+.tpl-build.previewing .tpl-build-preview{position:static;display:flex;flex-direction:column;min-height:0}
+.modal.full .tpl-build.previewing .tpl-preview{flex:1;height:auto;min-height:0}
+@media(max-width:1100px){.overlay.beside-nav{left:64px}}
+@media(max-width:900px){
+  .overlay.beside-nav{left:0}
+  .modal.full .tpl-build{grid-template-columns:1fr}
+}

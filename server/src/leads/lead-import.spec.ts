@@ -57,6 +57,46 @@ describe('lead import engine', () => {
     expect(rows[0].name).toBe('Smith, Ada');
   });
 
+  /*
+   * A LINE BREAK INSIDE A QUOTED CELL — ordinary CSV, and what broke real files.
+   *
+   * The parser split the file on newlines BEFORE looking at quotes, so a multi-line address (which
+   * Excel and Google Sheets both write whenever a cell contains a line break) tore one record into
+   * two. The tail became a row with its columns shifted, so its email column held a fragment of an
+   * address, that row failed the address check, and every row after it was misaligned as well. The
+   * import then reported success having skipped most of the file.
+   */
+  it('keeps a record together when a quoted field contains a line break', () => {
+    const e = new LeadImportEngine({} as PrismaService);
+    const rows = e.parseCsv('Name,Property,Email\n"Ada","12 Elm St\nUnit 4",ada@x.test\nBob,7 Oak Ave,bob@x.test');
+
+    // Two leads, not three — and the second is still Bob, not the tail of Ada's address.
+    expect(rows).toHaveLength(2);
+    expect(rows[0].property).toBe('12 Elm St\nUnit 4');
+    expect(rows[0].email).toBe('ada@x.test');
+    expect(rows[1].name).toBe('Bob');
+    expect(rows[1].email).toBe('bob@x.test');
+  });
+
+  it('reads a file written with CRLF line endings', () => {
+    // What every Windows spreadsheet exports.
+    const e = new LeadImportEngine({} as PrismaService);
+    const rows = e.parseCsv('Name,Email\r\nAda,ada@x.test\r\nBob,bob@x.test\r\n');
+    expect(rows.map((r) => r.email)).toEqual(['ada@x.test', 'bob@x.test']);
+  });
+
+  it('strips the byte-order mark Excel writes, so the first column still matches', () => {
+    const e = new LeadImportEngine({} as PrismaService);
+    const rows = e.parseCsv('﻿Name,Email\nAda,ada@x.test');
+    expect(rows[0].name).toBe('Ada');
+  });
+
+  it('ignores trailing blank lines rather than importing empty rows', () => {
+    const e = new LeadImportEngine({} as PrismaService);
+    const rows = e.parseCsv('Name,Email\nAda,ada@x.test\n\n,\n');
+    expect(rows).toHaveLength(1);
+  });
+
   it('imports new leads and counts them', async () => {
     await inRollback(async (tx) => {
       const u = uniq();
@@ -73,11 +113,51 @@ describe('lead import engine', () => {
     });
   });
 
+  /*
+   * THE THREE COLUMNS THE DIALOG PROMISED AND THE ENGINE DROPPED.
+   *
+   * "location, property, lead response" have been listed as recognised columns on the Import Leads
+   * screen since it shipped, and all three are real columns on `leads` — but nothing in the engine
+   * ever read them. A file that filled them in imported with the right ROW COUNT and none of that
+   * data, which is invisible: the totals are correct and the empty cells look like an incomplete
+   * spreadsheet rather than a discarded one.
+   */
+  it('imports location, property and lead response — the columns the dialog lists', async () => {
+    await inRollback(async (tx) => {
+      const u = uniq();
+      const rows = engineFor(tx).parseCsv(
+        'name,email,location,property,lead response\n'
+        + `Ada,ada-${u}@x.test,Toronto,12 Elm St,active`,
+      );
+      await engineFor(tx).runBatch(rows, ctx, new Set());
+
+      const created = await tx.leads.findFirst({ where: { email: `ada-${u}@x.test` } });
+      expect(created?.location).toBe('Toronto');
+      expect(created?.property).toBe('12 Elm St');
+      expect(created?.lead_response).toBe('active');
+    });
+  });
+
+  it('leaves lead response empty when the file says something the filters do not know', async () => {
+    // Same rule the other vocabulary columns follow: a value no filter can select is worse than
+    // none, because the lead then exists but cannot be found by the screens that matter.
+    await inRollback(async (tx) => {
+      const u = uniq();
+      const rows = engineFor(tx).parseCsv(
+        `name,email,lead response\nAda,ada-${u}@x.test,Extremely Keen`,
+      );
+      await engineFor(tx).runBatch(rows, ctx, new Set());
+
+      const created = await tx.leads.findFirst({ where: { email: `ada-${u}@x.test` } });
+      expect(created?.lead_response).toBeNull();
+    });
+  });
+
   it('tags an address already on file instead of duplicating it', async () => {
     await inRollback(async (tx) => {
       const u = uniq();
       const email = `existing-${u}@x.test`;
-      await tx.leads.create({ data: { name: 'Existing', email, tags: '["old"]', owner_user_id: IMPORTER_ID, company_id: 1, created_at: new Date(), updated_at: new Date() } });
+      await tx.leads.create({ data: { name: 'Existing', email, tags: '["old"]', owner_user_id: IMPORTER_ID, created_at: new Date(), updated_at: new Date() } });
 
       const rows = engineFor(tx).parseCsv(csvOf([{ name: 'Existing Again', email }]));
       const tally = await engineFor(tx).runBatch(rows, { ...ctx, tag: 'imported-2026' }, new Set());
@@ -102,7 +182,7 @@ describe('lead import engine', () => {
     // about, and it is tested where it still applies.
     await inRollback(async (tx) => {
       const u = uniq();
-      await tx.leads.create({ data: { name: 'Ada', email: `ADA-${u}@X.TEST`, owner_user_id: IMPORTER_ID, company_id: 1, created_at: new Date(), updated_at: new Date() } });
+      await tx.leads.create({ data: { name: 'Ada', email: `ADA-${u}@X.TEST`, owner_user_id: IMPORTER_ID, created_at: new Date(), updated_at: new Date() } });
 
       const rows = engineFor(tx).parseCsv(csvOf([{ name: 'ada', email: `ada-${u}@x.test` }]));
       const tally = await engineFor(tx).runBatch(rows, ctx, new Set());
@@ -184,7 +264,7 @@ describe('lead import engine', () => {
     await inRollback(async (tx) => {
       const u = uniq();
       const email = `tagged-${u}@x.test`;
-      await tx.leads.create({ data: { name: 'Tagged', email, tags: '["spring"]', company_id: 1, created_at: new Date(), updated_at: new Date() } });
+      await tx.leads.create({ data: { name: 'Tagged', email, tags: '["spring"]', created_at: new Date(), updated_at: new Date() } });
 
       const rows = engineFor(tx).parseCsv(csvOf([{ email }]));
       const tally = await engineFor(tx).runBatch(rows, { ...ctx, tag: 'spring' }, new Set());
@@ -204,7 +284,7 @@ describe('lead import engine', () => {
       const emails = Array.from({ length: 120 }, (_, i) => `retag-${i}-${u}@x.test`);
       const now = new Date();
       await tx.leads.createMany({
-        data: emails.map((email, i) => ({ name: `Existing ${i}`, email, tags: '[]', owner_user_id: IMPORTER_ID, company_id: 1, created_at: now, updated_at: now })),
+        data: emails.map((email, i) => ({ name: `Existing ${i}`, email, tags: '[]', owner_user_id: IMPORTER_ID, created_at: now, updated_at: now })),
       });
 
       const rows = engineFor(tx).parseCsv(csvOf(emails.map((email) => ({ email }))));
@@ -232,7 +312,7 @@ describe('lead import engine', () => {
         { email: `g4-${u}@x.test`, tags: '["cold","old"]' },
       ];
       await tx.leads.createMany({
-        data: seed.map((r, i) => ({ name: `Lead ${i}`, email: r.email, tags: r.tags, owner_user_id: IMPORTER_ID, company_id: 1, created_at: now, updated_at: now })),
+        data: seed.map((r, i) => ({ name: `Lead ${i}`, email: r.email, tags: r.tags, owner_user_id: IMPORTER_ID, created_at: now, updated_at: now })),
       });
 
       const rows = engineFor(tx).parseCsv(csvOf(seed.map((r) => ({ email: r.email }))));
@@ -267,7 +347,7 @@ describe('lead import engine', () => {
       const now = new Date();
       const email = `theirs-${u}@x.test`;
       const theirs = await tx.leads.create({
-        data: { name: 'Someone else\'s lead', email, tags: '[]', owner_user_id: 999001, company_id: 1, created_at: now, updated_at: now },
+        data: { name: 'Someone else\'s lead', email, tags: '[]', owner_user_id: 999001, created_at: now, updated_at: now },
       });
 
       const rows = engineFor(tx).parseCsv(csvOf([{ email }]));
@@ -296,7 +376,7 @@ describe('lead import engine', () => {
       const now = new Date();
       const email = `mine-${u}@x.test`;
       await tx.leads.create({
-        data: { name: 'Already mine', email, tags: '[]', owner_user_id: 999002, company_id: 1, created_at: now, updated_at: now },
+        data: { name: 'Already mine', email, tags: '[]', owner_user_id: 999002, created_at: now, updated_at: now },
       });
 
       const rows = engineFor(tx).parseCsv(csvOf([{ email }]));
@@ -317,8 +397,8 @@ describe('lead import engine', () => {
       const assigned = `assigned-${u}@x.test`;
       await tx.leads.createMany({
         data: [
-          { name: 'Mine by ownership', email: owned, tags: '[]', owner_user_id: 999002, company_id: 1, created_at: now, updated_at: now },
-          { name: 'Mine by assignment', email: assigned, tags: '[]', owner_user_id: 999001, assigned_to: 999002, company_id: 1, created_at: now, updated_at: now },
+          { name: 'Mine by ownership', email: owned, tags: '[]', owner_user_id: 999002, created_at: now, updated_at: now },
+          { name: 'Mine by assignment', email: assigned, tags: '[]', owner_user_id: 999001, assigned_to: 999002, created_at: now, updated_at: now },
         ],
       });
 
@@ -335,7 +415,7 @@ describe('lead import engine', () => {
       const u = uniq();
       const now = new Date();
       const email = `orphan-${u}@x.test`;
-      await tx.leads.create({ data: { name: 'Unowned', email, tags: '[]', company_id: 1, created_at: now, updated_at: now } });
+      await tx.leads.create({ data: { name: 'Unowned', email, tags: '[]', created_at: now, updated_at: now } });
 
       const rows = engineFor(tx).parseCsv(csvOf([{ email }]));
       const asAgent = await engineFor(tx).runBatch(rows, { tag: 'x', userName: 'Agent', userId: 999002 }, new Set());

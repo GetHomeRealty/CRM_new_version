@@ -1,9 +1,27 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { GoogleService, type GoogleEvent } from './google.service';
 import { GoogleConnectionService } from './google-connection.service';
 import type { IntegrationScope } from '../email/mail-account.service';
-import { MAX_EVENTS_PER_SYNC, SYNC_WINDOW_FUTURE_DAYS, SYNC_WINDOW_PAST_DAYS } from './google.constants';
+import { GOOGLE_ORIGIN_CREATED_BY, MAX_EVENTS_PER_SYNC, SYNC_WINDOW_FUTURE_DAYS, SYNC_WINDOW_PAST_DAYS } from './google.constants';
+import { schedulersEnabled, schedulerSkipReason } from '../common/schedulers';
+import { clusterTick } from '../redis/cluster-tick';
+import { RedisService } from '../redis/redis.service';
+import { CacheService } from '../redis/cache.service';
+import { registerWorker, trackedTick } from '../observability/worker-health';
+
+/** How often the retry sweep runs. Slow on purpose: this exists for outages, not for latency. */
+const RETRY_INTERVAL_MS = 5 * 60 * 1000;
+/** Delay before the first pass, so it does not compete with boot. */
+const FIRST_RETRY_DELAY_MS = 90 * 1000;
+/**
+ * The most events one pass will attempt.
+ *
+ * A brokerage-wide Google outage could leave hundreds outstanding; pushing all of them the moment
+ * Google returns would be its own thundering herd, and each one is a separate HTTPS round trip.
+ * The rest are picked up on the following pass, oldest first.
+ */
+const RETRY_BATCH = 50;
 
 export interface SyncResult { pulled: number; error: string | null }
 
@@ -18,14 +36,119 @@ export interface SyncResult { pulled: number; error: string | null }
  * Everything is per-user and scoped to the connection owner.
  */
 @Injectable()
-export class GoogleCalendarSyncService {
+export class GoogleCalendarSyncService implements OnModuleInit, OnModuleDestroy {
   private readonly log = new Logger(GoogleCalendarSyncService.name);
+  private timer: ReturnType<typeof setInterval> | null = null;
+  private first: ReturnType<typeof setTimeout> | null = null;
+  /** One pass at a time. A slow pass must not overlap the next tick and double every attempt. */
+  private sweeping = false;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly google: GoogleService,
     private readonly connections: GoogleConnectionService,
+    // Optional so existing constructions — including this service's specs — keep working.
+    // Used only to decide whether THIS process should run a given pass; see `clusterTick`.
+    private readonly redis?: RedisService,
+    private readonly cache?: CacheService,
   ) {}
+
+  onModuleInit(): void {
+    /*
+     * The first background worker this integration has had.
+     *
+     * Before it, a push that failed was simply gone: `pushEvent` is called with `void` from the
+     * request that saved the event, so nothing survived that request to try again. Gated like every
+     * other scheduler here — off in tests, off unless this process owns the schedulers — so a test
+     * run never calls Google and two instances never retry the same event twice.
+     */
+    if (!schedulersEnabled()) {
+      this.log.log(`Google Calendar retry sweep not started (${schedulerSkipReason()}). Retry on the Calendar screen still works.`);
+      return;
+    }
+    this.first = setTimeout(() => { void this.sweep(); }, FIRST_RETRY_DELAY_MS);
+    if (typeof this.first.unref === 'function') this.first.unref();
+
+    registerWorker('google-calendar-retry', RETRY_INTERVAL_MS);
+    this.timer = setInterval(
+      this.redis && this.cache
+        ? clusterTick({ redis: this.redis, cache: this.cache }, 'google-calendar-retry', () => this.sweep())
+        : trackedTick('google-calendar-retry', () => this.sweep()),
+      RETRY_INTERVAL_MS,
+    );
+    if (typeof this.timer.unref === 'function') this.timer.unref();
+    this.log.log(`Google Calendar retry sweep every ${RETRY_INTERVAL_MS / 1000}s (first pass in ${FIRST_RETRY_DELAY_MS / 1000}s)`);
+  }
+
+  onModuleDestroy(): void {
+    if (this.first) clearTimeout(this.first);
+    if (this.timer) clearInterval(this.timer);
+  }
+
+  /** One pass over every connection with a failed push to retry. */
+  async sweep(): Promise<void> {
+    if (this.sweeping) return;
+    this.sweeping = true;
+    try {
+      await this.retryFailedPushes();
+    } catch (ex) {
+      this.log.warn(`Google Calendar retry sweep failed: ${(ex as Error).message}`);
+    } finally {
+      this.sweeping = false;
+    }
+  }
+
+  /**
+   * How many times the sweep will try one event before it stops asking.
+   *
+   * Five attempts over roughly four hours of backoff. Past that the failure is not a blip, and
+   * carrying on would spend Google quota on something that needs a person — so the event keeps its
+   * error, stops being retried automatically, and stays available to the manual Retry button, which
+   * resets the count.
+   */
+  private static readonly MAX_SYNC_ATTEMPTS = 5;
+
+  /** 1 min, 5, 15, 60, 180 — then no more automatic attempts. */
+  private static readonly BACKOFF_MINUTES = [1, 5, 15, 60, 180];
+
+  /**
+   * Record that an event is now owed to Google, with when to try again.
+   *
+   * A non-null `google_sync_error` IS the definition of "outstanding" — the sweep, the count on the
+   * calendar screen and the manual retry all read it, so there is one fact rather than three that
+   * can disagree.
+   */
+  private async recordSyncFailure(eventId: number, message: string): Promise<void> {
+    const row = await this.prisma.calendar_events.findUnique({
+      where: { id: eventId }, select: { google_sync_attempts: true },
+    });
+    const attempts = (row?.google_sync_attempts ?? 0) + 1;
+    const wait = GoogleCalendarSyncService.BACKOFF_MINUTES[
+      Math.min(attempts - 1, GoogleCalendarSyncService.BACKOFF_MINUTES.length - 1)
+    ];
+    await this.prisma.calendar_events.update({
+      where: { id: eventId },
+      data: {
+        google_sync_error: message.slice(0, 500),
+        google_sync_attempts: attempts,
+        // Still stamped past the cap: the column then reads as "when it would have tried", and the
+        // sweep is bounded by the attempt count rather than by the absence of a date.
+        google_sync_next_retry_at: new Date(Date.now() + wait * 60_000),
+      },
+    }).catch(() => undefined);
+  }
+
+  /** Clear the outstanding state after a push finally lands. */
+  private async recordSyncSuccess(eventId: number, extra: Record<string, unknown> = {}): Promise<void> {
+    await this.prisma.calendar_events.update({
+      where: { id: eventId },
+      data: {
+        ...extra,
+        last_synced_to_google: new Date(),
+        google_sync_error: null, google_sync_attempts: 0, google_sync_next_retry_at: null,
+      },
+    }).catch(() => undefined);
+  }
 
   /** Pull the user's Google events into their CRM calendar. */
   async pull(userId: number, scope: IntegrationScope = 'crm'): Promise<SyncResult> {
@@ -81,8 +204,12 @@ export class GoogleCalendarSyncService {
     const existing = await this.prisma.calendar_events.findFirst({
       // `domain: null` is included so an event that pre-dates the split is claimed and stamped by
       // the next pull rather than being duplicated alongside itself.
+      //
+      // DELETED ROWS ARE DELIBERATELY IN SCOPE. This has never filtered `deleted_at`, and must not
+      // start: matching a hidden row is what makes a reconnect REUSE it instead of inserting a
+      // second copy of the same appointment beside it.
       where: { google_calendar_id: ev.id, user_id: userId, OR: [{ domain: area }, { domain: null }] },
-      select: { id: true },
+      select: { id: true, google_disconnected_at: true },
     });
 
     // A cancelled Google event removes its local copy rather than leaving a ghost. Only this
@@ -125,11 +252,32 @@ export class GoogleCalendarSyncService {
       // Nearly every event in this database arrives from Google, so that reverted almost the whole
       // calendar's status history. Writing a field a sync cannot know can only ever destroy
       // information, so this branch leaves both alone.
-      await this.prisma.calendar_events.update({ where: { id: existing.id }, data: fromGoogle });
+      await this.prisma.calendar_events.update({
+        where: { id: existing.id },
+        data: {
+          ...fromGoogle,
+          /*
+           * BRING BACK ONLY WHAT A DISCONNECT HID.
+           *
+           * `google_disconnected_at` is set exactly once — by `GoogleConnectionService.disconnect`
+           * — so a row carrying it is one this integration hid, and reconnecting is precisely the
+           * event that should undo that. Clearing both fields restores it in place, which is also
+           * what stops the reconnect creating a duplicate: the row is reused, so the calendar shows
+           * one appointment rather than two.
+           *
+           * A row WITHOUT the marker is one the agent deleted, and it stays deleted. That case is
+           * real rather than theoretical: `remove()` pushes the deletion on to Google best-effort
+           * and never blocks on it, so when that push fails the event still exists in Google and is
+           * returned by the very next pull. Restoring unconditionally would undo the agent's
+           * deletion, on a schedule, with nothing to show why.
+           */
+          ...(existing.google_disconnected_at ? { deleted_at: null, google_disconnected_at: null } : {}),
+        },
+      });
     } else {
       // On first arrival there is nothing to preserve, so the defaults apply.
       await this.prisma.calendar_events.create({
-        data: { ...fromGoogle, type: 'meeting', status: 'scheduled', created_by: 'Google Calendar', created_at: new Date() },
+        data: { ...fromGoogle, type: 'meeting', status: 'scheduled', created_by: GOOGLE_ORIGIN_CREATED_BY, created_at: new Date() },
       });
     }
     return true;
@@ -157,11 +305,13 @@ export class GoogleCalendarSyncService {
 
     try {
       const googleId = await this.google.insertEvent(conn.token, conn.calendarId, this.googlePayload(ev));
-      if (googleId) {
-        await this.prisma.calendar_events.update({ where: { id: ev.id }, data: { google_calendar_id: googleId, last_synced_to_google: new Date() } });
-      }
+      if (googleId) await this.recordSyncSuccess(ev.id, { google_calendar_id: googleId });
+      // A null id is not an exception but is not a success either — Google accepted nothing, so the
+      // event is still owed and must be retried like any other failure.
+      else await this.recordSyncFailure(ev.id, 'Google accepted the request but returned no event id.');
     } catch (ex) {
       this.log.warn(`Push to Google Calendar failed for event #${eventId}: ${(ex as Error).message}`);
+      await this.recordSyncFailure(ev.id, (ex as Error).message);
     }
   }
 
@@ -185,9 +335,11 @@ export class GoogleCalendarSyncService {
 
     try {
       const ok = await this.google.patchEvent(conn.token, conn.calendarId, ev.google_calendar_id, this.googlePayload(ev));
-      if (ok) await this.prisma.calendar_events.update({ where: { id: ev.id }, data: { last_synced_to_google: new Date() } });
+      if (ok) await this.recordSyncSuccess(ev.id);
+      else await this.recordSyncFailure(ev.id, 'Google refused the change to this appointment.');
     } catch (ex) {
       this.log.warn(`Update to Google Calendar failed for event #${eventId}: ${(ex as Error).message}`);
+      await this.recordSyncFailure(ev.id, (ex as Error).message);
     }
   }
 
@@ -197,15 +349,157 @@ export class GoogleCalendarSyncService {
    * Read before the local delete happens, because a soft-deleted row is still the only place the
    * Google id is recorded — so the caller passes the details in rather than looking them up again.
    */
-  async removeEvent(userId: number | null, googleEventId: string | null, domain: string | null): Promise<void> {
+  async removeEvent(userId: number | null, googleEventId: string | null, domain: string | null, eventId?: number): Promise<void> {
     if (!userId || !googleEventId) return;
     const conn = await this.connectionFor(userId, domain);
+    // No usable connection is not the same as a failed call: there is nothing to retry until the
+    // agent reconnects, and marking every deleted event as "owed" while disconnected would fill the
+    // screen's count with things no retry can fix.
     if (!conn) return;
     try {
       await this.google.deleteEvent(conn.token, conn.calendarId, googleEventId);
+      if (eventId) await this.recordSyncSuccess(eventId);
     } catch (ex) {
       this.log.warn(`Delete from Google Calendar failed for event ${googleEventId}: ${(ex as Error).message}`);
+      /*
+       * `eventId` is optional only because this method is called with the row's details read BEFORE
+       * the delete — the row still exists (soft delete), so it can carry the outstanding state like
+       * any other. Without it a failed delete leaves a cancelled showing on the client's shared
+       * calendar with nothing to try again, which is the worst of the three failures.
+       */
+      if (eventId) await this.recordSyncFailure(eventId, (ex as Error).message);
     }
+  }
+
+
+  // ------------------------------------------------------- retry (CRM-GCAL-M01)
+  /**
+   * Retry the pushes Google refused, oldest first.
+   *
+   * WHY A SWEEP AT ALL, given there was no Google scheduler before this. Because the alternative for
+   * a transient failure is nothing: `pushEvent` and friends are called with `void` from the request
+   * that saved the event, so once that request has returned there is no other thread of control
+   * left. Retrying inline would make an agent wait on Google to save a viewing, which is exactly the
+   * coupling `void` exists to avoid.
+   *
+   * BOUNDED IN THREE WAYS on purpose, because an unbounded retry against a third party is its own
+   * outage: five attempts per event, an increasing wait between them, and a cap on how many events
+   * one pass will take. A connection whose credential is permanently dead is excluded entirely —
+   * `accessToken` deactivates it (CRM-GCAL-M02), and a deactivated connection yields no token, so
+   * those events stop consuming attempts instead of burning all five on a certainty.
+   */
+  async retryFailedPushes(): Promise<{ attempted: number; recovered: number }> {
+    let attempted = 0;
+    let recovered = 0;
+
+    /*
+     * ONLY USERS WHO ARE ACTUALLY CONNECTED, which the first runtime check of this sweep earned.
+     *
+     * An event owed to Google by somebody with no active connection is picked up, finds no token,
+     * and returns without recording anything — correct, because a disconnected agent must not burn
+     * the five attempts on a certainty, and the event stays counted and visible until they
+     * reconnect. But it is also picked up on EVERY pass thereafter, so the sweep logged
+     * "0 of 1 recovered" every five minutes for ever and spent a slot in each batch on work that
+     * cannot succeed. Observed at 17:00 on 2026-08-05 against a seeded event.
+     *
+     * `is_active` is also what CRM-GCAL-M02 clears for a revoked grant, so this is the same filter
+     * that keeps a dead credential out of the batch.
+     */
+    const connected = await this.prisma.google_connections.findMany({
+      where: { is_active: true }, select: { user_id: true },
+    });
+    if (!connected.length) return { attempted: 0, recovered: 0 };
+
+    const due = await this.prisma.calendar_events.findMany({
+      where: {
+        user_id: { in: connected.map((c) => c.user_id) },
+        google_sync_error: { not: null },
+        google_sync_attempts: { lt: GoogleCalendarSyncService.MAX_SYNC_ATTEMPTS },
+        OR: [{ google_sync_next_retry_at: null }, { google_sync_next_retry_at: { lte: new Date() } }],
+      },
+      // Oldest failure first, so a backlog drains in the order it happened rather than newest-wins.
+      orderBy: { google_sync_next_retry_at: 'asc' },
+      take: RETRY_BATCH,
+      select: { id: true, user_id: true, deleted_at: true, google_calendar_id: true, domain: true },
+    });
+
+    for (const ev of due) {
+      if (!ev.user_id) continue;
+      attempted += 1;
+      const before = ev.google_calendar_id;
+      /*
+       * The operation is derived from the row rather than stored beside it: deleted means remove,
+       * never-mirrored means insert, otherwise patch. One source of truth, so the retry cannot
+       * disagree with what the event actually is now — an event created, edited and then deleted
+       * before the sweep ran needs a delete, not the insert that first failed.
+       */
+      if (ev.deleted_at) await this.removeEvent(ev.user_id, ev.google_calendar_id, ev.domain, ev.id);
+      else if (!before) await this.pushEvent(ev.user_id, ev.id);
+      else await this.updateEvent(ev.user_id, ev.id);
+
+      const after = await this.prisma.calendar_events.findUnique({
+        where: { id: ev.id }, select: { google_sync_error: true },
+      });
+      if (!after?.google_sync_error) recovered += 1;
+    }
+
+    if (attempted) this.log.log(`Google Calendar retry: ${recovered} of ${attempted} recovered.`);
+    return { attempted, recovered };
+  }
+
+  /**
+   * What one person still owes Google, for the calendar screen.
+   *
+   * Counted rather than listed: the screen needs to say "three appointments have not reached Google"
+   * and offer one button, and listing them would invite a per-event control that nobody can act on
+   * differently from the others.
+   */
+  async pendingSyncCount(userId: number, area: IntegrationScope = 'crm'): Promise<number> {
+    return this.prisma.calendar_events.count({
+      where: {
+        user_id: userId, google_sync_error: { not: null },
+        OR: [{ domain: area }, { domain: null }],
+      },
+    });
+  }
+
+  /**
+   * The Retry button: try this person's outstanding events again, now.
+   *
+   * The attempt COUNT is reset first, which is the whole point of a manual retry — an event that has
+   * exhausted its five automatic attempts is precisely the one somebody is pressing this for, and it
+   * would otherwise be skipped by the same rule that stopped the sweep. `next_retry_at` is cleared
+   * so nothing is waiting out a backoff either.
+   */
+  async retryNow(userId: number, area: IntegrationScope = 'crm'): Promise<{ attempted: number; recovered: number }> {
+    const mine = await this.prisma.calendar_events.findMany({
+      where: {
+        user_id: userId, google_sync_error: { not: null },
+        OR: [{ domain: area }, { domain: null }],
+      },
+      orderBy: { id: 'asc' },
+      take: RETRY_BATCH,
+      select: { id: true, deleted_at: true, google_calendar_id: true, domain: true },
+    });
+    if (!mine.length) return { attempted: 0, recovered: 0 };
+
+    await this.prisma.calendar_events.updateMany({
+      where: { id: { in: mine.map((m) => m.id) } },
+      data: { google_sync_attempts: 0, google_sync_next_retry_at: null },
+    });
+
+    let recovered = 0;
+    for (const ev of mine) {
+      if (ev.deleted_at) await this.removeEvent(userId, ev.google_calendar_id, ev.domain, ev.id);
+      else if (!ev.google_calendar_id) await this.pushEvent(userId, ev.id);
+      else await this.updateEvent(userId, ev.id);
+
+      const after = await this.prisma.calendar_events.findUnique({
+        where: { id: ev.id }, select: { google_sync_error: true },
+      });
+      if (!after?.google_sync_error) recovered += 1;
+    }
+    return { attempted: mine.length, recovered };
   }
 
   /**

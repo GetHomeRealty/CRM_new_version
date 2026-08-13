@@ -9,6 +9,7 @@ import { MetaStateService } from './meta-state.service';
 import { REQUIRED_LIVE_PERMISSIONS, isConfigured, redirectUri, webhookSecret, webhookVerifyToken } from './meta.constants';
 import { createHash } from 'node:crypto';
 import { SkipThrottle } from '@nestjs/throttler';
+import { AuthService } from '../auth/auth.service';
 
 const str = (v: unknown): string => String(v ?? '').trim();
 
@@ -36,6 +37,7 @@ export class MetaPublicController {
     private readonly graph: MetaGraphService,
     private readonly sync: MetaSyncService,
     private readonly state: MetaStateService,
+    private readonly auth: AuthService,
   ) {}
 
   /** Where the browser lands after Meta redirects back. */
@@ -64,6 +66,18 @@ export class MetaPublicController {
     // A bad state means forged, expired or replayed — never fall back to "trust the caller".
     const userId = await this.state.verify(str(q.state));
     if (!userId) return fail('invalid_state');
+
+    /**
+     * Resolve who started this flow, and refuse if they can no longer act.
+     *
+     * The signed state is what proves whose connect this is — there is no session on this route, so
+     * it is the only evidence available. `loadUser` returns null for an account that no longer
+     * exists or has been deactivated, and that has to stop here: a departed agent must not be able
+     * to finish binding a Facebook account to the CRM with a state parameter minted while they
+     * still had access.
+     */
+    const user = await this.auth.loadUser(userId);
+    if (!user) return fail('account_unavailable');
 
     if (!isConfigured()) return fail('not_configured');
 

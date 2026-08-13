@@ -461,6 +461,188 @@ export const MAIL_EVENTS: Record<string, MailEvent> = {
     default_subject: 'Client review request — {{ transaction_number }}',
     default_body_html: '<p>Hello {{ agent_name }},</p><p>Please request client reviews for transaction {{ transaction_number }}.</p><p>Regards,<br>{{ company_name }}</p>',
   },
+
+  /*
+   * ------------------------------------------------------------------ CRM
+   *
+   * The CRM's own emails to LEADS. `module: 'CRM'` is what puts them in their own group on
+   * Settings → Templates — that screen groups by this field, so the section is the grouping rather
+   * than a second screen. Campaign templates are a different table (`campaign_templates`) and a
+   * different screen entirely; nothing here touches them.
+   *
+   * EVERY KEY BELOW HAS A SENDER. That is a rule, not a coincidence: `birthday` and `anniversary`
+   * were once switches on a settings screen with nothing behind them, and were deleted for exactly
+   * that reason. A key registered here creates an editable, deactivatable template row, and a row
+   * that no code ever reads is a control that lies about what it does. If a CRM email is added
+   * later, register it in the same change that sends it.
+   *
+   * The bodies are the ones these emails have always sent, moved here verbatim so switching to
+   * template resolution changes nothing a recipient sees on day one — the point is that they are
+   * now EDITABLE, not that they are different. `{{ signature }}` is the agent's own sign-off,
+   * appended by the sender; it stays a variable so a brokerage that does not want it can remove it
+   * from the template without touching code.
+   */
+  /*
+   * The welcome, sent once to a lead shortly after they arrive — whoever they arrived from.
+   *
+   * WHY THE SUBJECT USES A VARIABLE. "Welcome to Get Home Realty" is the brokerage this was written
+   * for, and hard-coding it would be a second place the company name lives. `brokerage_name` reads
+   * `company_settings.name`, so renaming the brokerage renames the email and nobody has to remember
+   * this file.
+   *
+   * `agent_*` FALLS BACK TO THE BROKERAGE rather than rendering blank. A lead with no agent is sent
+   * from the brokerage account, and a default template that greeted them from "" and gave them ""
+   * to call would be worse than one that names the brokerage twice. A template that wants to
+   * distinguish the two cases has `brokerage_*` to do it with.
+   */
+  'crm.lead_welcome': {
+    module: 'CRM',
+    label: 'CRM — New Lead Welcome Email (automatic, once per lead)',
+    variables: [
+      'lead_first_name', 'lead_name',
+      'agent_name', 'agent_email', 'agent_phone',
+      'brokerage_name', 'brokerage_contact',
+      'signature', 'current_date', 'current_year',
+    ],
+    default_subject: 'Welcome to {{ brokerage_name }}',
+    default_body_html:
+      '<p>Hello {{ lead_first_name }},</p>'
+      + '<p>Thank you for getting in touch with {{ brokerage_name }} — we are glad you did, and we are '
+      + 'looking forward to helping you.</p>'
+      + '<p>I am {{ agent_name }}, and I will be looking after you from here. Whenever you have a '
+      + 'question — a property, a neighbourhood, or just where to start — reply to this email or '
+      + 'reach me directly:</p>'
+      + '<p>{{ agent_email }}<br />{{ agent_phone }}</p>'
+      + '<p>{{ brokerage_contact }}</p>'
+      + '<p>Talk soon,</p>',
+  },
+
+  'crm.birthday_greeting': {
+    module: 'CRM',
+    label: 'CRM — Birthday Greeting (automatic, on the day)',
+    variables: ['lead_name', 'agent_name', 'signature', 'current_date', 'current_year'],
+    default_subject: 'Happy Birthday!',
+    default_body_html:
+      '<p>Dear {{ lead_name }},</p>'
+      + '<p>Wishing you a very happy birthday from all of us. We hope you have a wonderful day.</p>'
+      + '<p>If there\'s anything property-related we can help with, just reply to this email.</p>'
+      + '<p>With warm wishes,</p>',
+  },
+  'crm.anniversary_greeting': {
+    module: 'CRM',
+    label: 'CRM — Wedding Anniversary Greeting (automatic, on the day)',
+    variables: ['lead_name', 'agent_name', 'signature', 'current_date', 'current_year'],
+    default_subject: 'Happy Anniversary!',
+    default_body_html:
+      '<p>Dear {{ lead_name }},</p>'
+      + '<p>Happy anniversary! Wishing you both a wonderful day and many more to come.</p>'
+      + '<p>If a move is part of your plans, we\'d be glad to help whenever the time feels right.</p>'
+      + '<p>With warm wishes,</p>',
+  },
+  'crm.wedding_congratulations': {
+    module: 'CRM',
+    label: 'CRM — Wedding Congratulations',
+    variables: ['lead_name', 'agent_name', 'wedding_date', 'signature', 'current_date', 'current_year'],
+    default_subject: 'Congratulations on your wedding!',
+    default_body_html:
+      '<p>Dear {{ lead_name }},</p>'
+      + '<p>Congratulations on your wedding{{ wedding_date }}! Wishing you both every happiness in this next chapter.</p>'
+      + '<p>If a new home is part of your plans together, I\'d be glad to help whenever the time feels right.</p>'
+      + '<p>With warm wishes,</p>',
+  },
+  'crm.seasonal_wishes': {
+    module: 'CRM',
+    label: 'CRM — Seasonal Wishes',
+    variables: ['lead_name', 'agent_name', 'season', 'year', 'signature', 'current_date', 'current_year'],
+    default_subject: '{{ season }} wishes from all of us',
+    default_body_html:
+      '<p>Dear {{ lead_name }},</p>'
+      + '<p>Wishing you a wonderful {{ season }} {{ year }} — thank you for your trust this year.</p>'
+      + '<p>If there\'s anything property-related I can help with in the year ahead, just reply to this email.</p>',
+  },
+
+  /*
+   * The five CRM notifications that reach a STAFF inbox rather than a lead's.
+   *
+   * All six above go to a lead; these tell an agent something happened — a lead landed on their
+   * desk, a follow-up came due, a campaign finished. They travel through `NotificationDispatcher`,
+   * which also carries Transaction Desk's notifications, so the template is resolved by
+   * `CrmEventNotifier` and handed to the dispatcher as an email OVERRIDE. Desk call sites pass no
+   * override and keep the dispatcher's own default body: the separation is structural, not a flag.
+   *
+   * CONFIRMED TO ACTUALLY SEND before being registered. Each of these five declares
+   * `email: 'live'` in the notification-preference catalogue, and `lead_task_due` was observed
+   * delivering by email in the development log. Nothing here is a control over an email that does
+   * not exist.
+   *
+   * `{{ open_link }}` is a full URL the dispatcher would otherwise append itself. A template that
+   * removes it still sends — it simply has no button, which is a brokerage's choice to make.
+   */
+  'crm.lead_new': {
+    module: 'CRM',
+    label: 'CRM — New Lead Added To Your Book',
+    variables: ['user_name', 'lead_name', 'lead_source', 'open_link', 'current_date', 'current_year'],
+    default_subject: 'New lead: {{ lead_name }}',
+    default_body_html:
+      '<p>Hello {{ user_name }},</p>'
+      + '<p><strong>{{ lead_name }}</strong> has been added to your leads{{ lead_source }}.</p>'
+      + '<p><a href="{{ open_link }}">Open the lead</a></p>',
+  },
+  'crm.lead_assigned': {
+    module: 'CRM',
+    label: 'CRM — Lead Assigned To You',
+    variables: ['user_name', 'lead_name', 'actor_name', 'open_link', 'current_date', 'current_year'],
+    default_subject: 'New lead assigned: {{ lead_name }}',
+    default_body_html:
+      '<p>Hello {{ user_name }},</p>'
+      + '<p><strong>{{ lead_name }}</strong> has been assigned to you{{ actor_name }}.</p>'
+      + '<p><a href="{{ open_link }}">Open the lead</a></p>',
+  },
+  'crm.lead_task_due': {
+    module: 'CRM',
+    label: 'CRM — Follow-up / Task Due Reminder',
+    variables: ['user_name', 'task_title', 'lead_name', 'due_date', 'open_link', 'current_date', 'current_year'],
+    default_subject: 'Follow-up due: {{ task_title }}',
+    default_body_html:
+      '<p>Hello {{ user_name }},</p>'
+      + '<p><strong>{{ task_title }}</strong> on {{ lead_name }} is due {{ due_date }}.</p>'
+      + '<p><a href="{{ open_link }}">Open the lead</a></p>',
+  },
+  'crm.meta_lead_received': {
+    module: 'CRM',
+    label: 'CRM — Facebook (Meta) Lead Received',
+    variables: ['user_name', 'lead_name', 'form_name', 'open_link', 'current_date', 'current_year'],
+    default_subject: 'New Facebook lead: {{ lead_name }}',
+    default_body_html:
+      '<p>Hello {{ user_name }},</p>'
+      + '<p><strong>{{ lead_name }}</strong> submitted {{ form_name }}.</p>'
+      + '<p><a href="{{ open_link }}">Open the lead</a></p>',
+  },
+  'crm.campaign_completed': {
+    module: 'CRM',
+    label: 'CRM — Campaign Finished',
+    variables: ['user_name', 'campaign_name', 'recipients', 'sent', 'failed', 'open_link', 'current_date', 'current_year'],
+    default_subject: 'Campaign finished: {{ campaign_name }}',
+    default_body_html:
+      '<p>Hello {{ user_name }},</p>'
+      + '<p><strong>{{ campaign_name }}</strong> finished: {{ sent }} of {{ recipients }} sent{{ failed }}.</p>'
+      + '<p><a href="{{ open_link }}">Open the campaign</a></p>',
+  },
+  'crm.campaign_failed': {
+    module: 'CRM',
+    label: 'CRM — Campaign Could Not Be Completed',
+    variables: ['user_name', 'campaign_name', 'open_link', 'current_date', 'current_year'],
+    default_subject: 'Campaign stopped: {{ campaign_name }}',
+    /*
+     * No technical detail, deliberately, matching the notifier's own rule: stack traces, SMTP
+     * responses and server paths stay in the log where they are useful. A campaign owner cannot act
+     * on "ECONNREFUSED 10.0.0.4:587" and it should not be in their inbox.
+     */
+    default_body_html:
+      '<p>Hello {{ user_name }},</p>'
+      + '<p><strong>{{ campaign_name }}</strong> stopped before it finished. Open it to review the details.</p>'
+      + '<p><a href="{{ open_link }}">Open the campaign</a></p>',
+  },
 };
 
 /**
@@ -485,9 +667,57 @@ export const SUPERSEDED_BODY_HASHES: Record<string, string[]> = {
 
 export const variablesFor = (key: string): string[] => MAIL_EVENTS[key]?.variables ?? [];
 
-/** Plain, safe {{ variable }} substitution — no eval. Unknown tokens → empty string. */
+/**
+ * The four merge variables whose value IS markup, and which must therefore not be escaped.
+ *
+ * This list is the whole risk of escaping by default, so it is enumerated rather than guessed at,
+ * and each entry names what builds it:
+ *
+ *   logo_img           `<img …>` for the brand logo — user-onboarding.service.ts `logoImg()`
+ *   documents_table    a `<tr>`-per-document table — document-mail.service.ts `outcomeTable()`
+ *                      and document-reminder.service.ts
+ *   pending_docs       a `<ul>` of outstanding documents — documents.service.ts
+ *   transaction_button a styled `<a>` wrapped in a `<p>` — reminder-sweep.service.ts
+ *
+ * Everything else is data — a name, an address, a date, a reason somebody typed — and is escaped.
+ *
+ * ADDING TO THIS LIST IS A SECURITY DECISION. A variable named here is trusted to be safe HTML, so
+ * whatever builds it owns that guarantee. Note that `logoImg()` already strips `[<>"&]` from the
+ * company name before interpolating it into the `alt` attribute — that is the shape a builder on
+ * this list has to have.
+ */
+const HTML_VARIABLES = new Set(['logo_img', 'documents_table', 'pending_docs', 'transaction_button']);
+
+/** The five characters that change the meaning of HTML. */
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+/**
+ * Plain, safe {{ variable }} substitution — no eval. Unknown tokens → empty string.
+ *
+ * VALUES ARE HTML-ESCAPED BY DEFAULT. They were not, and the consequence was not hypothetical: the
+ * company email address this application ships with is
+ * `info@GetHomeRealty.ca & Commissionpayouts@gethomerealty.ca`, whose bare `&` was already being
+ * emitted into HTML mail as an unterminated entity. Any brokerage named "Smith & Jones" hit the same
+ * thing on its first send, and a lead named `<script>…` — which `POST /api/leads` accepts and stores
+ * verbatim — reached client inboxes as markup. Found as S-M9 in the CRM › Settings audit and again
+ * as CRM-LEADS-M01.
+ *
+ * The subject line is rendered through here too, where escaping is equally right: a subject is
+ * plain text, and `&amp;` in a header is the correct encoding of an ampersand.
+ */
 export function renderTemplate(template: string, vars: Record<string, unknown>): string {
-  return template.replace(/\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}/g, (_m, key: string) =>
-    Object.prototype.hasOwnProperty.call(vars, key) && vars[key] !== null && vars[key] !== undefined ? String(vars[key]) : '',
-  );
+  return template.replace(/\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}/g, (_m, key: string) => {
+    if (!Object.prototype.hasOwnProperty.call(vars, key)) return '';
+    const value = vars[key];
+    if (value === null || value === undefined) return '';
+    const text = String(value);
+    return HTML_VARIABLES.has(key) ? text : escapeHtml(text);
+  });
 }

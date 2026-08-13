@@ -22,6 +22,20 @@ import type { TodoCounts } from '../types/todo';
  * showings rather than totals. They fail independently: a user without the Leads screen gets 403s
  * for them and simply sees the tiles.
  */
+/**
+ * The dashboard lists a person can switch off, and the key their choice is stored under.
+ *
+ * Scoped to the CRM in the key name because the Transaction Desk dashboard is a different screen
+ * with different sections — sharing one key would have one dashboard's preference silently apply
+ * to the other.
+ */
+const DASH_SECTIONS = [
+  { key: 'tasks', label: 'Lead Tasks list' },
+  { key: 'showings', label: 'Lead Showings list' },
+  { key: 'todos', label: 'Todo List' },
+] as const;
+const DASH_SECTIONS_KEY = 'crm.dashboard.hiddenSections';
+
 export default function CrmDashboardPage() {
   const toast = useToast();
   const { can } = useAuth();
@@ -64,6 +78,34 @@ export default function CrmDashboardPage() {
   // from here while leaving the parts on the page-load payload is exactly how the two drifted.
   const [todoCounts, setTodoCounts] = useState<TodoCounts | null>(null);
   const takeTodoCounts = useCallback((c: TodoCounts) => setTodoCounts(c), []);
+
+  /**
+   * Which of the three lists this person wants on their dashboard.
+   *
+   * Kept in `localStorage` rather than on the server, deliberately: it is a per-browser view
+   * preference with no bearing on what anyone is ALLOWED to see — the permission checks below are
+   * untouched and still decide whether a section can be rendered at all. Hiding one here changes
+   * only this person's screen, so it needs no API, no migration and no audit entry.
+   *
+   * Defaults to everything shown, so nobody's dashboard changes until they ask it to. An unreadable
+   * or corrupt value falls back to that same default rather than throwing on a private-mode browser
+   * where `localStorage` can be unavailable.
+   */
+  const [hidden, setHidden] = useState<Set<string>>(() => {
+    try {
+      const raw = localStorage.getItem(DASH_SECTIONS_KEY);
+      return new Set<string>(raw ? (JSON.parse(raw) as string[]) : []);
+    } catch { return new Set<string>(); }
+  });
+
+  const toggleSection = useCallback((key: string) => {
+    setHidden((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      try { localStorage.setItem(DASH_SECTIONS_KEY, JSON.stringify([...next])); } catch { /* nothing to do */ }
+      return next;
+    });
+  }, []);
 
   if (loading) return <div className="centered">Loading dashboard…</div>;
   if (!data) {
@@ -119,16 +161,19 @@ export default function CrmDashboardPage() {
             { n: data.tasks.due_today, label: 'due today', tone: 'info' },
             { n: data.tasks.overdue, label: 'overdue', tone: 'bad' },
           ]} />} />
+        {/* The count of campaigns, and only that. The sub-line used to carry sent/opened/failed,
+            which are delivery statistics rather than a campaign count and made the card read as a
+            performance summary. Those figures are unchanged and still on the Campaigns screen. */}
         <Tile label="Campaigns" value={data.campaigns.total} sub={
-          <Breakdown parts={[
-            { n: data.campaigns.sent, label: 'sent', tone: 'info' },
-            { n: data.campaigns.opened, label: 'opened', tone: 'ok' },
-            { n: data.campaigns.failed, label: 'failed', tone: 'bad' },
-          ]} />
+          <span className="tile-breakdown"><span className="tile-part">
+            {data.campaigns.total === 1 ? 'campaign' : 'campaigns'} created
+          </span></span>
         } />
-        <Tile label="CRM Calendar" value={data.calendar.upcoming} sub={
+        {/* Two counts that do not overlap: today, and the thirty days after it. The headline is
+            today's, because that is the one that changes what somebody does this morning. */}
+        <Tile label="CRM Calendar" value={data.calendar.today} sub={
           <Breakdown parts={[
-            { n: data.calendar.today, label: 'today', tone: 'info' },
+            { n: data.calendar.today, label: "today's events", tone: 'info' },
             { n: data.calendar.upcoming, label: 'next 30 days' },
           ]} />
         } />
@@ -143,12 +188,30 @@ export default function CrmDashboardPage() {
         } />
       </div>
 
-      {canSeeLeads && <LeadTasksPanel feed={tasks} onPage={setTaskPage} />}
-      {canSeeLeads && <LeadShowingsPanel feed={showings} onPage={setShowingPage} />}
+      {/*
+        Show/hide, for the three long lists only. The tiles above stay put: they are a fixed-height
+        summary, and it is the lists underneath that make the dashboard a scroll for somebody who
+        does not use them. Each control is rendered only when the person could see that section
+        anyway, so this never advertises a list their permissions would refuse.
+      */}
+      <div className="card" style={{ padding: '10px 14px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <span className="muted" style={{ fontSize: 12 }}>Sections</span>
+          {DASH_SECTIONS.filter((sec) => (sec.key === 'todos' ? can('calendar', 'view') : canSeeLeads)).map((sec) => (
+            <label key={sec.key} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, cursor: 'pointer' }}>
+              <input type="checkbox" checked={!hidden.has(sec.key)} onChange={() => toggleSection(sec.key)} />
+              {sec.label}
+            </label>
+          ))}
+        </div>
+      </div>
+
+      {canSeeLeads && !hidden.has('tasks') && <LeadTasksPanel feed={tasks} onPage={setTaskPage} />}
+      {canSeeLeads && !hidden.has('showings') && <LeadShowingsPanel feed={showings} onPage={setShowingPage} />}
 
       {/* The CRM's own list. Tasks added here belong to the CRM and do not appear on the
           Transaction Desk's list — section 11. */}
-      {can('calendar', 'view') && <TodoList onCounts={takeTodoCounts} />}
+      {can('calendar', 'view') && !hidden.has('todos') && <TodoList onCounts={takeTodoCounts} />}
     </>
   );
 }
