@@ -1,7 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import { PrismaService } from '../prisma/prisma.service';
-import { runAsSystem } from '../core/tenant-context';
 import { MailerService } from '../email/mailer.service';
 import { WebPushService } from '../calendar/web-push.service';
 import {
@@ -90,12 +89,7 @@ export class NotificationDispatcher {
     private readonly moduleRef: ModuleRef,
   ) {}
 
-  /**
-   * Deliver one notification to one person.
-   *
-   * Runs as the system: a dispatch is often triggered by a background sweep with no request and so
-   * no tenant in context, and the recipient's own `company_id` is what the rows are stamped with.
-   */
+  /** Deliver one notification to one person. */
   async dispatch(request: NotificationRequest): Promise<DispatchResult> {
     const result: DispatchResult = {
       category: request.category,
@@ -181,7 +175,7 @@ export class NotificationDispatcher {
   private async send(
     channel: NotificationChannel,
     request: NotificationRequest,
-    user: { id: number; email: string | null; company_id: number },
+    user: { id: number; email: string | null },
   ): Promise<true | SkipReason> {
     switch (channel) {
       case 'in_app':
@@ -215,9 +209,9 @@ export class NotificationDispatcher {
    */
   private async sendInApp(
     request: NotificationRequest,
-    user: { id: number; company_id: number },
+    user: { id: number },
   ): Promise<true | SkipReason> {
-    const written = await runAsSystem(() => this.prisma.notifications.createMany({
+    const written = await this.prisma.notifications.createMany({
       data: [{
         user_id: user.id,
         category: request.category,
@@ -226,10 +220,9 @@ export class NotificationDispatcher {
         link: request.link?.slice(0, 255) ?? null,
         dedupe_key: request.dedupeKey?.slice(0, 190) ?? null,
         created_at: new Date(),
-        company_id: user.company_id,
       }],
       skipDuplicates: true,
-    }));
+    });
 
     return written.count > 0 ? true : 'duplicate';
   }
@@ -280,15 +273,15 @@ export class NotificationDispatcher {
    * An inactive account is not notified: the same rule `AuthService.loadUser` applies, so somebody
    * who has been deactivated stops receiving mail about deals they can no longer open.
    */
-  private async recipient(userId: number): Promise<{ id: number; email: string | null; company_id: number } | null> {
+  private async recipient(userId: number): Promise<{ id: number; email: string | null } | null> {
     if (!Number.isInteger(userId) || userId <= 0) return null;
-    const user = await runAsSystem(() => this.prisma.users.findUnique({
+    const user = await this.prisma.users.findUnique({
       where: { id: userId },
-      select: { id: true, email: true, status: true, company_id: true },
-    }));
+      select: { id: true, email: true, status: true },
+    });
     if (!user) return null;
     if ((user.status ?? 'Active') === 'Inactive') return null;
-    return { id: user.id, email: user.email, company_id: user.company_id };
+    return { id: user.id, email: user.email };
   }
 
   /** Whether the category simply has no such channel, as opposed to the person having muted it. */

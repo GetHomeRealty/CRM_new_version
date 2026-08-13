@@ -5,6 +5,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { LaravelCryptService } from '../common/laravel-crypt.service';
 import { MAIL_EVENTS, renderTemplate } from './mail-event-registry';
 import { MailAccountService } from './mail-account.service';
+import { mailClientId, mailClientSecret } from '../google/google.constants';
 
 const e = (s: string): string => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -237,8 +238,10 @@ export class MailerService {
           auth: {
             type: 'OAuth2',
             user: account.username || account.from_email,
-            clientId: (process.env.GOOGLE_CLIENT_ID ?? '').trim(),
-            clientSecret: (process.env.GOOGLE_CLIENT_SECRET ?? '').trim(),
+            // The MAIL client, which is the one that issued this refresh token. It falls back to
+            // the main pair, so this is unchanged unless a separate mail project is configured.
+            clientId: mailClientId(),
+            clientSecret: mailClientSecret(),
             refreshToken: this.crypt.decryptString(account.password) ?? '',
           },
           connectionTimeout: 30000,

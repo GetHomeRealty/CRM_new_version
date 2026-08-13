@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  crmEmailAction, crmIntegrations, crmOptions, getCrmEmailSettings, getCrmProfile, getCrmSettings,
-  listCrmBroadcasts, listCrmEmailLog, listReferralCodes, saveCrmEmailSettings, saveCrmProfile,
+  crmEmailAction, crmIntegrations, crmOptions, getCrmProfile, getCrmSettings,
+  listCrmBroadcasts, listCrmEmailLog, listReferralCodes, saveCrmProfile,
   saveCrmSettings, sendCrmBroadcast,
 } from '../lib/crmSettingsApi';
 import { Link } from 'react-router-dom';
@@ -18,17 +18,13 @@ import MetaConnectionPanel from './MetaConnectionPanel';
 import GoogleCalendarCard from './GoogleCalendarCard';
 import EmailIntegrationCard from './EmailIntegrationCard';
 import type {
-  CrmBroadcast, CrmEmailLogRow, CrmEmailSettings, CrmIntegrations, CrmProfile, CrmReferralCode,
+  CrmBroadcast, CrmEmailLogRow, CrmIntegrations, CrmProfile, CrmReferralCode,
   CrmSendResult, CrmSettings,
 } from '../types';
 
 const title = (v: string): string => v.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase()).trim();
 const stamp = (iso: string | null): string => (iso ? iso.replace('T', ' ').slice(0, 16) : '—');
 
-const TRIGGER_LABELS: Record<string, string> = {
-  birthday: 'Birthday', anniversary: 'Anniversary', wedding: 'Wedding',
-  seasonal: 'Seasonal', promotional: 'Promotional', referral: 'Referral', custom: 'Custom',
-};
 
 const ROLE_BADGE: Record<string, string> = {
   admin: 'Super Admin', manager: 'Admin', agent: 'Agent',
@@ -49,20 +45,6 @@ const BROADCAST_PILL: Record<string, string> = {
   sending: 'info', completed: 'ok', partial: 'warn', failed: 'bad',
 };
 
-/** A labelled on/off control. `input[type=checkbox]` styled as a switch by desk.css. */
-function Toggle({ label, hint, checked, onChange, disabled }: {
-  label: string; hint?: string; checked: boolean; onChange: (v: boolean) => void; disabled?: boolean;
-}) {
-  return (
-    <label className="crm-toggle">
-      <span className="crm-toggle-text">
-        <strong>{label}</strong>
-        {hint && <em>{hint}</em>}
-      </span>
-      <input type="checkbox" checked={checked} disabled={disabled} onChange={(e) => onChange(e.target.checked)} />
-    </label>
-  );
-}
 
 /**
  * CRM Settings, migrated from the CRM app and rendered beneath Transaction Desk's existing
@@ -91,11 +73,18 @@ export default function CrmSettingsPanel() {
 
   const [settings, setSettings] = useState<CrmSettings | null>(null);
   const [profile, setProfile] = useState<CrmProfile | null>(null);
-  const [emailSettings, setEmailSettings] = useState<CrmEmailSettings | null>(null);
   const [integrations, setIntegrations] = useState<CrmIntegrations | null>(null);
   const [codes, setCodes] = useState<CrmReferralCode[]>([]);
   const [broadcasts, setBroadcasts] = useState<CrmBroadcast[]>([]);
   const [log, setLog] = useState<CrmEmailLogRow[]>([]);
+  /**
+   * Whether the send log is expanded.
+   *
+   * Collapsed by default: it is a history table that grows without bound and sits at the bottom of
+   * a settings screen people open to change one field. The rows are already fetched with the rest
+   * of the panel, so opening it costs nothing and needs no second request.
+   */
+  const [showLog, setShowLog] = useState(false);
   const [seasons, setSeasons] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState('');
@@ -103,8 +92,7 @@ export default function CrmSettingsPanel() {
   // Every section here has its own Save button, so an edit in one is easy to walk away from.
   const [dirty, setDirty] = useState(false);
   useUnsavedGuard(dirty);
-  // For the one control on this screen that stops every CRM email for the whole brokerage.
-  const { confirm, askDelete, closeConfirm } = useConfirm();
+  const { confirm, closeConfirm } = useConfirm();
 
   /**
    * Only the first fetch shows a loading state; later refreshes swap the panels in place so the
@@ -112,25 +100,14 @@ export default function CrmSettingsPanel() {
    */
   const loadedOnce = useRef(false);
 
-  /**
-   * What "Allow CRM emails" was when the screen last agreed with the server.
-   *
-   * The confirmation below fires on the TRANSITION to off, not on the state. Without this, a
-   * brokerage that already has CRM email switched off would be asked to confirm it again on every
-   * unrelated save in this card — and a confirmation people see when nothing is happening is one
-   * they learn to click through.
-   */
-  const loadedEmailSending = useRef(true);
-
   const load = useCallback(async () => {
     if (!loadedOnce.current) setLoading(true);
     try {
-      const [s, p, e, i, c, b, l, o] = await Promise.all([
-        getCrmSettings(), getCrmProfile(), getCrmEmailSettings(), crmIntegrations(),
+      const [s, p, i, c, b, l, o] = await Promise.all([
+        getCrmSettings(), getCrmProfile(), crmIntegrations(),
         listReferralCodes(), listCrmBroadcasts(), listCrmEmailLog(25), crmOptions(),
       ]);
-      setSettings(s); setProfile(p); setEmailSettings(e); setIntegrations(i);
-      loadedEmailSending.current = e.autoSendEnabled;
+      setSettings(s); setProfile(p); setIntegrations(i);
       setCodes(c); setBroadcasts(b); setLog(l); setSeasons(o.seasons);
     } catch (ex) {
       toast(apiErrorMessage(ex, 'Could not load CRM settings'), 'bad');
@@ -167,42 +144,9 @@ export default function CrmSettingsPanel() {
   const err = (k: string) => (errors[k]?.length ? <div className="field-err">{errors[k][0]}</div> : null);
 
   if (loading) return <div className="card"><p className="help">Loading CRM settings…</p></div>;
-  if (!settings || !profile || !emailSettings) {
+  if (!settings || !profile) {
     return <div className="card"><p className="help">CRM settings are unavailable.</p></div>;
   }
-
-  /**
-   * Save the Email Campaigns card — asking first when the save switches CRM email OFF entirely.
-   *
-   * "Allow CRM emails" is the brokerage kill switch: with it off, nothing sends for anybody, and the
-   * send screen simply refuses without explaining itself. The Triggers screen already confirms
-   * before somebody switches off all of their OWN emails, and the broadcast form confirms before
-   * emailing everyone — this control has a wider blast radius than either and asked nothing.
-   *
-   * The question is asked only on the transition to off. Turning it back on, or any other edit in
-   * this card, saves without ceremony: a confirmation on every save is one people learn to dismiss.
-   */
-  const persistEmailCampaigns = () => run(
-    'emailSettings',
-    async () => {
-      const saved = await saveCrmEmailSettings({ ...emailSettings });
-      setEmailSettings(saved);
-      loadedEmailSending.current = saved.autoSendEnabled;
-    },
-    'Settings updated successfully',
-  );
-
-  const saveEmailCampaigns = () => {
-    const switchingOff = !emailSettings.autoSendEnabled && loadedEmailSending.current;
-    if (!switchingOff) { void persistEmailCampaigns(); return; }
-    askDelete({
-      title: 'Switch off CRM email for the whole brokerage?',
-      message: 'No CRM email will send for anybody — not yours, not any colleague’s — whatever their own trigger settings say. The send screen will refuse without explaining why.',
-      note: 'You can turn it back on here at any time.',
-      onConfirm: () => { closeConfirm(); void persistEmailCampaigns(); },
-    });
-  };
-
 
   return (
     <>
@@ -377,72 +321,19 @@ export default function CrmSettingsPanel() {
         and that one is now allow-listed.
       */}
 
-      {/* --------------------------------------------------- email campaigns */}
-      <div className="card">
-        <h3 className="modal-h">Email Campaigns</h3>
-        <p className="help">
-          The CRM's own SMTP details and automatic-email switches. Transaction Desk sends through
-          the Mail Accounts configured above; these values are kept for reference and to gate the
-          triggers below.
-        </p>
-        <div className="g2">
-          <div className="field">
-            <label htmlFor="crm-smtp-host">SMTP Host</label>
-            <input id="crm-smtp-host" value={emailSettings.smtpHost} disabled={!canEdit} maxLength={255}
-              onChange={(e) => markDirty(setEmailSettings)({ ...emailSettings, smtpHost: e.target.value })} />
-            {err('smtpHost')}
-          </div>
-          <div className="field">
-            <label htmlFor="crm-smtp-port">SMTP Port</label>
-            <input id="crm-smtp-port" value={emailSettings.smtpPort} disabled={!canEdit} maxLength={5}
-              onChange={(e) => markDirty(setEmailSettings)({ ...emailSettings, smtpPort: e.target.value })} />
-            {err('smtpPort')}
-          </div>
-          <div className="field">
-            <label htmlFor="crm-smtp-user">SMTP User</label>
-            <input id="crm-smtp-user" value={emailSettings.smtpUser} disabled={!canEdit} maxLength={255}
-              onChange={(e) => markDirty(setEmailSettings)({ ...emailSettings, smtpUser: e.target.value })} />
-            {err('smtpUser')}
-          </div>
-          <div className="field">
-            <label htmlFor="crm-admin-email">Admin Email</label>
-            <input id="crm-admin-email" type="email" value={emailSettings.adminEmail} disabled={!canEdit} maxLength={255}
-              onChange={(e) => markDirty(setEmailSettings)({ ...emailSettings, adminEmail: e.target.value })} />
-            {err('adminEmail')}
-          </div>
-        </div>
-        {/*
-          This switch is now enforced. It was not: `CrmAdvancedEmailService.autoSendEnabled()` had
-          no caller at all, so turning it off changed nothing and a send went straight through — the
-          2026-08-04 audit measured exactly that. `dispatch()` consults it before anything else now,
-          which is what this label has always claimed.
-        */}
-        <Toggle label="Allow CRM emails" hint="Master switch — turn off to block every send below"
-          checked={emailSettings.autoSendEnabled} disabled={!canEdit}
-          onChange={(v) => markDirty(setEmailSettings)({ ...emailSettings, autoSendEnabled: v })} />
+      {/*
+        REMOVED at the brokerage's request: the "Email Campaigns" card — the CRM's own SMTP details
+        — and the "Email Triggers" grid of per-template switches inside it. Campaigns are built on
+        the Campaigns screen and the trigger templates live on Triggers -> CRM Triggers, so both had
+        become a second place to configure something owned elsewhere.
 
-        <h4 className="modal-sub">Email Triggers</h4>
-        <p className="help" style={{ marginTop: 0 }}>
-          Each switch decides whether that email may be sent from “Send a CRM Email” below.
-          <strong> Nothing here sends on a schedule</strong> — every CRM email is sent by hand.
-        </p>
-        <div className="g3">
-          {emailSettings.trigger_keys.map((key) => (
-            <Toggle key={key} label={TRIGGER_LABELS[key] ?? title(key)}
-              checked={emailSettings.emailTemplates[key] !== false}
-              disabled={!canEdit || !emailSettings.autoSendEnabled}
-              onChange={(v) => markDirty(setEmailSettings)({ ...emailSettings, emailTemplates: { ...emailSettings.emailTemplates, [key]: v } })} />
-          ))}
-        </div>
-        {canEdit && (
-          <div className="actions">
-            <button className="btn primary" type="button" disabled={busy !== ''}
-              onClick={() => saveEmailCampaigns()}>
-              {busy === 'emailSettings' ? 'Saving…' : 'Save Email Campaign Settings'}
-            </button>
-          </div>
-        )}
-      </div>
+        ONE CONTROL IN THAT CARD WAS NOT A DUPLICATE, and it is not here either: the brokerage-wide
+        kill switch on `crm_email_settings.auto_send_enabled`. It went to Triggers → CRM Triggers,
+        which is the screen that already reported it — an administrator read "an administrator must
+        turn this back on under CRM Settings" and had to navigate here to act on their own warning.
+        The switch is now at the top of that screen, behind the same `settings` permission this
+        card asked for, so agents still see only the notice. `saveCrmEmailSettings` is unchanged.
+      */}
 
       {/* Trigger templates moved to the Triggers screen (Triggers -> CRM Triggers), where an
           automation is actually looked for. Same data, same endpoint — only the location moved. */}
@@ -496,7 +387,7 @@ export default function CrmSettingsPanel() {
         {/* Mail Configuration — connect your own Gmail / SMTP sending + inbox account. */}
         <EmailIntegrationCard scope="crm" />
 
-        {/* Google Calendar — real OAuth "Sign in with Google", connected right here. */}
+        {/* Google Calendar — real OAuth, connected right here. */}
         <GoogleCalendarCard scope="crm" />
       </div>
 
@@ -506,8 +397,14 @@ export default function CrmSettingsPanel() {
 
       {/* ----------------------------------------------------------- send log */}
       <div className="card">
-        <h3 className="modal-h">CRM Email Log</h3>
-        {log.length === 0 ? <p className="help">Nothing sent from CRM Settings yet.</p> : (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <h3 className="modal-h" style={{ margin: 0 }}>CRM Email Log</h3>
+          <button className="btn ghost sm" type="button" style={{ marginLeft: 'auto' }}
+            aria-expanded={showLog} onClick={() => setShowLog((v) => !v)}>
+            {showLog ? 'Hide' : `View${log.length ? ` (${log.length})` : ''}`}
+          </button>
+        </div>
+        {!showLog ? null : log.length === 0 ? <p className="help">Nothing sent from CRM Settings yet.</p> : (
           <div className="lead-scroll">
             <table className="list-table">
               <thead><tr><th>When</th><th>Type</th><th>Recipient</th><th>Subject</th><th>Result</th><th>By</th></tr></thead>

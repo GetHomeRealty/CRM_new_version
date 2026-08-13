@@ -3,7 +3,6 @@ import type { PrismaService } from '../prisma/prisma.service';
 import { CampaignsService } from './campaigns.service';
 import { CampaignAudienceService } from './campaign-audience.service';
 import { CampaignTemplatesService } from './campaign-templates.service';
-import { TENANT_ID } from '../core/tenant';
 
 /**
  * CRM-CAMP-M02 — the half `claim-then-send.spec.ts` could not reach.
@@ -56,7 +55,7 @@ async function pendingCampaign(tx: PrismaService, email: string) {
   const c = await tx.campaigns.create({
     data: {
       name: `ZZ claim ${tag()}`, subject: 'Hello {{leadName}}', content: '<p>Hi</p>',
-      status: 'sending', company_id: TENANT_ID, created_by: 'ZZ Prober', created_by_id: null,
+      status: 'sending', created_by: 'ZZ Prober', created_by_id: null,
       tracking_base_url: '', created_at: now, updated_at: now,
     },
   });
@@ -171,7 +170,7 @@ describe('CRM-CAMP-H02 — consent is re-checked on the real send path, not only
       const { campaignId, recipientId } = await pendingCampaign(tx, email);
       const now = new Date();
       await tx.email_suppressions.create({
-        data: { email: email.toLowerCase(), reason: 'unsubscribe', company_id: TENANT_ID, created_at: now, updated_at: now },
+        data: { email: email.toLowerCase(), reason: 'unsubscribe', created_at: now, updated_at: now },
       });
 
       await serviceObserving(tx, observed).resume(campaignId);
@@ -198,7 +197,7 @@ describe('CRM-CAMP-H02 — consent is re-checked on the real send path, not only
       await tx.leads.create({
         data: {
           name: `ZZ Lead ${tag()}`, email, lead_status: 'New', unsubscribed: true,
-          company_id: TENANT_ID, created_at: now, updated_at: now,
+          created_at: now, updated_at: now,
         },
       });
 

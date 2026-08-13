@@ -11,7 +11,11 @@ import { LaravelCryptService } from '../common/laravel-crypt.service';
   imports: [AuthModule, SettingsModule],
   controllers: [EmailController],
   providers: [MailAccountService, EmailTemplateService, MailerService, LaravelCryptService],
-  exports: [MailerService, MailAccountService],
+  // `EmailTemplateService` is exported so CRM → Settings → Communications can edit and preview CRM
+  // templates through the SAME service the Transaction Desk screen uses, rather than growing a
+  // second implementation of template editing that would be free to drift from this one. Purely
+  // additive: nothing about what this module provides to Desk changes.
+  exports: [MailerService, MailAccountService, EmailTemplateService],
 })
 export class EmailModule implements OnModuleInit {
   constructor(private readonly mailer: MailerService) {}

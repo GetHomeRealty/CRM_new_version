@@ -382,7 +382,7 @@ describe('U-H3 — a unique violation reads as validation, not as a crash', () =
           await tx.users.create({
             data: {
               name: `Race ${tag()}`, username: `race-${tag()}`, email, password: 'x',
-              role: 'agent', status: 'Active', company_id: 1, created_at: new Date(), updated_at: new Date(),
+              role: 'agent', status: 'Active', created_at: new Date(), updated_at: new Date(),
             },
           });
         } catch (e) { svcAny.rethrowUniqueViolation(e); }
@@ -402,8 +402,7 @@ describe('U-H4 — deletion refuses to strand records', () => {
       await tx.calendar_events.create({
         data: {
           title: `Ev ${tag()}`, date: new Date('2026-09-01T00:00:00.000Z'), time: '10:00',
-          type: 'meeting', status: 'scheduled', user_id: made.id, domain: 'crm', company_id: 1,
-          created_at: now, updated_at: now,
+          type: 'meeting', status: 'scheduled', user_id: made.id, domain: 'crm',          created_at: now, updated_at: now,
         },
       });
 
@@ -429,7 +428,7 @@ describe('U-H4 — deletion refuses to strand records', () => {
       await tx.campaigns.create({
         data: {
           name: `Camp ${tag()}`, subject: 'Subject', content: 'Body',
-          created_by: made.name, created_by_id: made.id, company_id: 1, created_at: now, updated_at: now,
+          created_by: made.name, created_by_id: made.id, created_at: now, updated_at: now,
         },
       });
 
@@ -446,7 +445,7 @@ describe('U-H4 — deletion refuses to strand records', () => {
       await tx.campaign_templates.create({
         data: {
           name: `Tpl ${tag()}`, subject: 'Subject', content: 'Body',
-          user_id: made.id, company_id: 1, created_at: now, updated_at: now,
+          user_id: made.id, created_at: now, updated_at: now,
         },
       });
 
@@ -461,7 +460,7 @@ describe('U-H4 — deletion refuses to strand records', () => {
       const now = new Date();
       // user_id NULL is one of the six the application ships with — nobody's to strand.
       await tx.campaign_templates.create({
-        data: { name: `Shipped ${tag()}`, subject: 'S', content: 'B', user_id: null, company_id: 1, created_at: now, updated_at: now },
+        data: { name: `Shipped ${tag()}`, subject: 'S', content: 'B', user_id: null, created_at: now, updated_at: now },
       });
 
       await expect(s.destroy(actor, made.id)).resolves.toMatchObject({ message: 'User deleted' });
@@ -485,7 +484,7 @@ describe('U-H4 — deletion refuses to strand records', () => {
       await tx.campaign_templates.create({
         data: {
           name: `Gone ${tag()}`, subject: 'S', content: 'B',
-          user_id: made.id, company_id: 1, created_at: now, updated_at: now, deleted_at: now,
+          user_id: made.id, created_at: now, updated_at: now, deleted_at: now,
         },
       });
 
@@ -501,7 +500,7 @@ describe('U-H4 — deletion refuses to strand records', () => {
       await tx.invoices.create({
         data: {
           invoice_no: `PROBE-${tag()}`, invoice_date: now, created_by: made.id,
-          company_id: 1, created_at: now, updated_at: now, deleted_at: now,
+          created_at: now, updated_at: now, deleted_at: now,
         },
       });
 
@@ -518,7 +517,7 @@ describe('U-H4 — deletion refuses to strand records', () => {
       await tx.invoices.create({
         data: {
           invoice_no: `PROBE-${tag()}`, invoice_date: now, created_by: made.id,
-          company_id: 1, created_at: now, updated_at: now,
+          created_at: now, updated_at: now,
         },
       });
 

@@ -31,15 +31,44 @@ import {
  *     by scanning is one a person on a desktop cannot complete.
  *   - Turning a factor OFF costs the account password, so a borrowed session cannot strip it.
  */
-export default function TwoFactorCard() {
+/**
+ * `standalone` is the difference between the two doors into this card, and nothing more.
+ *
+ * Administrators arrive at CRM → Settings → Two-Step Verification, which has already drawn its own
+ * title and tab strip. Everybody else arrives at /crm/two-step directly, because they hold no
+ * `settings` permission and never see that tab — so there the card needs the page header the
+ * Settings shell would otherwise have provided. Same component, same endpoints, same factors.
+ */
+export default function TwoFactorCard({ standalone = false }: { standalone?: boolean }) {
   const [status, setStatus] = useState<MfaStatus | null>(null);
   const [error, setError] = useState('');
+  /** Confirmation of something that worked — currently only "we sent another code". */
+  const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
 
-  // Enrolment in progress
-  const [setup, setSetup] = useState<{ type: MfaType; secret?: string; display?: string; qr?: string; masked?: string } | null>(null);
+  // Enrolment in progress. `destination` is kept for email/SMS so the code can be resent to the
+  // same place without making somebody type it again.
+  const [setup, setSetup] = useState<
+    { type: MfaType; secret?: string; display?: string; qr?: string; masked?: string; destination?: string } | null
+  >(null);
   const [code, setCode] = useState('');
-  const [destination, setDestination] = useState('');
+
+  /*
+   * ONE VALUE PER CHANNEL, not one shared between them.
+   *
+   * Both rows — Email address and Mobile number — are rendered from the same `map`, and a single
+   * `destination` state meant they were two views of one string: typing an email address into the
+   * email field put that same address in the mobile field, and a phone number overwrote the email.
+   * Whichever was submitted last was the only one that had ever really existed.
+   *
+   * Keyed by channel, so the two are independent all the way down. Nothing else needed changing for
+   * that: the server has always kept them apart — `user_mfa_methods` is unique on (user, type), so
+   * email and SMS are separate rows with their own `destination`, their own validator (an address
+   * pattern against a digit count) and their own live code in `mfa_challenges`.
+   */
+  const [destinations, setDestinations] = useState<Record<OtpChannel, string>>({ email: '', sms: '' });
+  const setDestinationFor = (channel: OtpChannel, value: string) =>
+    setDestinations((prev) => ({ ...prev, [channel]: value }));
 
   // Shown once, after a successful enrolment or a regeneration.
   const [codes, setCodes] = useState<string[] | null>(null);
@@ -79,12 +108,21 @@ export default function TwoFactorCard() {
     }
   };
 
+  /**
+   * Send a code to one channel's own address.
+   *
+   * Reads `destinations[channel]` rather than a shared field, so sending to email cannot pick up
+   * whatever was typed into the mobile row. Also used to resend: the server supersedes any live code
+   * for that channel and leaves the other channel's alone, so pressing it twice cannot leave two
+   * valid email codes, and resending an email code cannot invalidate an SMS one.
+   */
   const startOtp = async (channel: OtpChannel) => {
+    const to = destinations[channel].trim();
     setError('');
     setBusy(true);
     try {
-      const { masked } = await beginOtp(channel, destination.trim());
-      setSetup({ type: channel, masked });
+      const { masked } = await beginOtp(channel, to);
+      setSetup({ type: channel, masked, destination: to });
       setCode('');
     } catch (err) {
       setError(apiErrorMessage(err, 'Could not send a code to that destination.'));
@@ -93,16 +131,36 @@ export default function TwoFactorCard() {
     }
   };
 
+  /** Send another code to the address this enrolment already used. */
+  const resendOtp = async () => {
+    if (!setup || setup.type === 'totp' || !setup.destination) return;
+    setError('');
+    setBusy(true);
+    try {
+      const { masked } = await beginOtp(setup.type, setup.destination);
+      setSetup({ ...setup, masked });
+      setCode('');
+      setNotice(`We sent another code to ${masked}.`);
+    } catch (err) {
+      setError(apiErrorMessage(err, 'Could not send another code.'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const finishEnrolment = async () => {
     if (!setup) return;
     setError('');
+    setNotice('');
     setBusy(true);
     try {
       const { recovery_codes } = await confirmEnrolment(setup.type, code.trim());
       setCodes(recovery_codes);
+      // Clear ONLY the channel that was just confirmed. Anything half-typed into the other row is
+      // that row's own business and survives — the whole point of keeping the two apart.
+      if (setup.type !== 'totp') setDestinationFor(setup.type, '');
       setSetup(null);
       setCode('');
-      setDestination('');
       await refresh();
     } catch (err) {
       setError(apiErrorMessage(err, 'That code is not right. Try again.'));
@@ -149,7 +207,23 @@ export default function TwoFactorCard() {
   const canAddTotp = !confirmedTypes.includes('totp') && status.storage_available;
 
   return (
-    <div className="card">
+    <>
+      {standalone && (
+        <div className="toolbar">
+          <div className="toolbar-row">
+            <div>
+              <h2 className="lead-title">Two-Step Verification</h2>
+              <div className="lead-subtitle">
+                <span className="muted">
+                  A second step at sign-in, on your own account. Nobody else's settings are shown here.
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="card">
       <div className="modal-sub">Two-step verification</div>
       <p className="muted">
         A second step at sign-in, so a stolen password is not enough on its own.
@@ -233,12 +307,20 @@ export default function TwoFactorCard() {
                 {channel === 'sms' ? 'Mobile number' : 'Email address'}
                 <input
                   type={channel === 'sms' ? 'tel' : 'email'}
-                  value={destination}
-                  onChange={(e) => setDestination(e.target.value)}
+                  // Its own value and its own setter. Sharing one made the two rows a single field
+                  // wearing two labels.
+                  value={destinations[channel]}
+                  onChange={(e) => setDestinationFor(channel, e.target.value)}
                   placeholder={channel === 'sms' ? '416-555-0100' : 'you@example.com'}
+                  autoComplete={channel === 'sms' ? 'tel' : 'email'}
                 />
               </label>
-              <button className="btn primary sm" type="button" onClick={() => startOtp(channel)} disabled={busy || destination.trim() === ''}>
+              <button
+                className="btn primary sm"
+                type="button"
+                onClick={() => startOtp(channel)}
+                disabled={busy || destinations[channel].trim() === ''}
+              >
                 Send a code by {channel === 'sms' ? 'text' : 'email'}
               </button>
             </div>
@@ -264,6 +346,8 @@ export default function TwoFactorCard() {
             <p>We sent a code to {setup.masked}. Enter it below to confirm.</p>
           )}
 
+          {notice && <p className="muted">{notice}</p>}
+
           <label>
             Code
             <input
@@ -278,7 +362,19 @@ export default function TwoFactorCard() {
           <button className="btn primary sm" type="button" onClick={finishEnrolment} disabled={busy || code.trim() === ''}>
             {busy ? 'Checking…' : 'Confirm'}
           </button>{' '}
-          <button className="btn ghost sm" type="button" onClick={() => { setSetup(null); setCode(''); }}>Cancel</button>
+          {/*
+            * Resend. A code that never arrives — a slow mail relay, a mistyped digit noticed too
+            * late, five wrong guesses having burned it — otherwise left cancelling and starting
+            * over as the only way forward, on a screen whose whole job is to be completed once.
+            */}
+          {setup.type !== 'totp' && (
+            <>
+              <button className="btn ghost sm" type="button" onClick={resendOtp} disabled={busy}>
+                {busy ? 'Sending…' : 'Send another code'}
+              </button>{' '}
+            </>
+          )}
+          <button className="btn ghost sm" type="button" onClick={() => { setSetup(null); setCode(''); setNotice(''); }}>Cancel</button>
         </div>
       )}
 
@@ -339,6 +435,7 @@ export default function TwoFactorCard() {
           </button>
         </>
       )}
-    </div>
+      </div>
+    </>
   );
 }

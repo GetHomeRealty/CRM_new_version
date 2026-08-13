@@ -190,7 +190,25 @@ function AccountModal({ account, onClose, onSaved, toast }: AccountModalProps) {
 
 /* ---------------------------------- Templates ---------------------------------- */
 
-export function TemplatesTab({ toast }: { toast: ToastFn }) {
+/**
+ * The module the CRM's own automated emails are registered under. One literal, used by both
+ * halves of the split below, so the two can never disagree about which group belongs where.
+ */
+const CRM_MODULE = 'CRM';
+
+/**
+ * The template list, shown from two places and split by `scope`.
+ *
+ * WHY ONE COMPONENT AND NOT TWO. These are the same `email_templates` rows, the same endpoints and
+ * the same editor — the only difference is which module groups are listed. A second screen would
+ * have been a second copy of the editing, preview, attachment and sender-selection code, free to
+ * drift from this one, over data that is not itself divided.
+ *
+ * The split is a PARTITION, not a filter: `crm` shows the CRM group and `desk` shows everything
+ * else, so every group appears on exactly one screen. Nothing is hidden from both, and nothing is
+ * offered twice — which is what makes "moved" true rather than "copied".
+ */
+export function TemplatesTab({ toast, scope }: { toast: ToastFn; scope: 'crm' | 'desk' }) {
   const [groups, setGroups] = useState<TemplateGroup[]>([]);
   const [accounts, setAccounts] = useState<MailAccount[]>([]);
   const [loading, setLoading] = useState(true);
@@ -207,9 +225,31 @@ export function TemplatesTab({ toast }: { toast: ToastFn }) {
 
   if (loading) return <div className="centered">Loading templates…</div>;
 
+  const shown = groups.filter((g) => (scope === 'crm' ? g.module === CRM_MODULE : g.module !== CRM_MODULE));
+
+  /*
+   * A template row is created the first time its event fires, so a group can legitimately be
+   * empty on a database where nothing has triggered yet. Saying so is worth a line: the alternative
+   * is a blank panel that reads like a broken screen or a missing migration.
+   */
+  if (shown.length === 0) {
+    return (
+      <div className="card">
+        <div className="modal-sub" style={{ marginTop: 0 }}>
+          {scope === 'crm' ? 'CRM email templates' : 'Email templates'}
+        </div>
+        <p className="help">
+          {scope === 'crm'
+            ? 'No CRM templates yet. Each one is created automatically the first time its event happens — assign a lead, or let a follow-up fall due, and it will appear here ready to edit.'
+            : 'No templates yet. Each one is created automatically the first time its event happens.'}
+        </p>
+      </div>
+    );
+  }
+
   return (
     <>
-      {groups.map((g) => (
+      {shown.map((g) => (
         <div className="card" key={g.module} style={{ marginBottom: 14 }}>
           <div className="modal-sub" style={{ marginTop: 0 }}>{g.module}</div>
           <table className="list-table">

@@ -4,7 +4,6 @@ import { CampaignTrackingController } from './campaign-tracking.controller';
 import { CampaignsService } from './campaigns.service';
 import { CampaignAudienceService } from './campaign-audience.service';
 import { CampaignTemplatesService } from './campaign-templates.service';
-import { TENANT_ID } from '../core/tenant';
 
 /**
  * PRIORITY 7 — open tracking and click attribution, driven through the real controller.
@@ -90,7 +89,7 @@ async function sentCampaign(tx: PrismaService, over: Record<string, unknown> = {
   const campaign = await tx.campaigns.create({
     data: {
       name: `ZZTRACK ${t}`, subject: 'S', content: '<p>Hi <a href="https://example.test/listing">see it</a></p>',
-      status: 'sent', company_id: TENANT_ID, sent: 1, opened: 0, clicked: 0,
+      status: 'sent', sent: 1, opened: 0, clicked: 0,
       sent_at: new Date(now.getTime() - 60 * 60 * 1000),
       created_at: now, updated_at: now, ...over,
     },

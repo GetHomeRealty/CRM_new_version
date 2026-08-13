@@ -60,7 +60,7 @@ async function makeUser(tx: PrismaService): Promise<{ id: number; name: string; 
   const u = await tx.users.create({
     data: {
       name: `Bud ${t}`, email: `bud-${t}@example.test`, role: 'agent', status: 'Active',
-      password: 'x', company_id: 1, created_at: now, updated_at: now,
+      password: 'x', created_at: now, updated_at: now,
     },
   });
   return { id: u.id, name: u.name, email: u.email };
@@ -77,7 +77,7 @@ async function connect(tx: PrismaService, userId: number, forms = 1): Promise<vo
   for (let i = 0; i < forms; i += 1) {
     await tx.meta_lead_forms.create({
       data: {
-        company_id: 1, user_id: userId, page_id: `page-${tag()}`, form_id: `form-${tag()}`,
+        user_id: userId, page_id: `page-${tag()}`, form_id: `form-${tag()}`,
         form_name: `Form ${i}`, is_active: true, created_at: now, updated_at: now,
       },
     });
@@ -209,7 +209,7 @@ describe('a token Meta says is finished', () => {
       });
       await tx.meta_lead_forms.create({
         data: {
-          company_id: 1, user_id: userId, page_id: pageId, form_id: `form-${tag()}`,
+          user_id: userId, page_id: pageId, form_id: `form-${tag()}`,
           form_name: `Form ${i}`, is_active: true, created_at: now, updated_at: now,
         },
       });
@@ -297,7 +297,7 @@ describe('a token Meta says is finished', () => {
         },
       } as never);
 
-      await scheduler().pollAllForTenant();
+      await scheduler().pollAll();
       expect(polled).toContain(user.id);
 
       await new MetaConnectionService(tx, { fetchPages: async () => [] } as never).markTokenDead(user.id);
@@ -309,7 +309,7 @@ describe('a token Meta says is finished', () => {
           return { imported: 0, updated: 0, duplicates: 0, skipped: 0, forms: 0, errors: [] };
         },
       } as never);
-      await s2.pollAllForTenant();
+      await s2.pollAll();
       expect(after).not.toContain(user.id);
     });
   });
@@ -334,7 +334,7 @@ describe('a token Meta says is finished', () => {
           polled.push(u.id);
           return { imported: 0, updated: 0, duplicates: 0, skipped: 0, forms: 0, errors: [] };
         },
-      } as never).pollAllForTenant();
+      } as never).pollAll();
 
       expect(polled).toContain(user.id);
     });

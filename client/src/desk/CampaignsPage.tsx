@@ -7,8 +7,6 @@ import {
 } from '../lib/campaignsApi';
 import { apiErrorMessage } from '../lib/apiError';
 import { csvCell } from '../lib/csv';
-import { runLeadImport, type ImportJob } from '../lib/leadImportApi';
-import ImportProgress from '../components/ImportProgress';
 import { useToast } from './toast';
 import { useAuth } from '../context/AuthContext';
 import ConfirmDialog from './ConfirmDialog';
@@ -111,7 +109,6 @@ export default function CampaignsPage() {
   const [sentEmail, setSentEmail] = useState<CampaignDetail | null>(null);
   const [toDelete, setToDelete] = useState<CampaignSummary | null>(null);
   const [toCancel, setToCancel] = useState<CampaignSummary | null>(null);
-  const [importOpen, setImportOpen] = useState(false);
   const [tagOpen, setTagOpen] = useState(false);
 
   // Pre-flight SMTP check — send one test email through the account a campaign would use.
@@ -367,7 +364,9 @@ export default function CampaignsPage() {
           {/* Actions belong to the campaigns view; the template library has its own. */}
           {tab === 'campaigns' && (
             <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              {canEdit && <button className="btn ghost" onClick={() => setImportOpen(true)}><Icon name="upload" size={14} /> Import Leads</button>}
+              {/* Import Leads removed from Campaigns by request. Importing still lives on the Leads
+                  screen, which is untouched — this only stops the same action being offered from a
+                  screen about sending to an audience. */}
               {canEdit && <button className="btn ghost" onClick={() => setTagOpen(true)}><Icon name="tag" size={14} /> Tag Leads</button>}
               {canEdit && <button className="btn primary" onClick={openBuilder}>+ Create Campaign</button>}
             </div>
@@ -553,9 +552,25 @@ export default function CampaignsPage() {
               <strong>Audience (lead segment)</strong>
               <div className="report-filters" style={{ marginTop: 8 }}>
                 {filterSelect('Status', 'leadStatus', options.lead_status)}
+                {/*
+                  Lead type — buyer, seller, tenant, landlord and the rest. The form state, the
+                  `toFilter` mapping and the server's `buildAudienceWhere` all handled `leadType`
+                  already; the only thing missing was the control, so the filter existed everywhere
+                  except where somebody could set it.
+                */}
+                {filterSelect('Lead type', 'leadType', options.lead_type)}
                 {filterSelect('Source', 'leadSource', options.lead_source)}
                 {filterSelect('Client type', 'clientType', options.client_type)}
-                {filterSelect('Tag', 'tag', [...new Set([...options.tag_options, ...options.tags])])}
+                {/*
+                  REAL TAGS ONLY. This used to union `tag_options` in, which is not tag data at all:
+                  it is a hard-coded literal on the server — 'Pre Construction', 'Resale', 'Seller',
+                  'Buyer', 'Tenant', 'Lease', 'Landlord', 'Realtor' — so the dropdown offered eight
+                  values that no lead necessarily carried, and selecting one silently produced an
+                  audience of nobody. `options.tags` is the CRM's own tag data: the Tags-screen
+                  registry plus the tags actually in use, so a tag created but not yet applied can
+                  still be audienced by. Already de-duplicated by the server.
+                */}
+                {filterSelect('Tag', 'tag', options.tags)}
               </div>
               <div className="camp-audience">
                 {previewing ? <span className="muted">Counting recipients…</span> : (
@@ -708,7 +723,6 @@ export default function CampaignsPage() {
         </div>
       )}
 
-      {importOpen && <ImportLeadsModal onClose={() => setImportOpen(false)} onDone={() => { setImportOpen(false); refreshOptions(); }} />}
       {tagOpen && options && <TagLeadsModal options={options} onClose={() => setTagOpen(false)} onDone={() => { setTagOpen(false); refreshOptions(); }} />}
 
       {testOpen && (
@@ -775,79 +789,6 @@ export default function CampaignsPage() {
         onClose={() => setToCancel(null)}
       />
     </>
-  );
-}
-
-/** Import leads from a pasted or uploaded CSV. */
-function ImportLeadsModal({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
-  const toast = useToast();
-  const [csv, setCsv] = useState('');
-  const [tag, setTag] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [progress, setProgress] = useState<ImportJob | null>(null);
-  const fileRef = useRef<HTMLInputElement>(null);
-  // Read by the poll loop, which outlives a render — a state flag would be captured stale.
-  const closedRef = useRef(false);
-  useEffect(() => () => { closedRef.current = true; }, []);
-
-  const pick = (f: File | null) => {
-    if (!f) return;
-    if (f.size > 5 * 1024 * 1024) return toast('File too large (max 5MB)', 'bad');
-    const reader = new FileReader();
-    reader.onload = () => { setCsv(String(reader.result ?? '').trim()); toast(`Loaded ${f.name}`, 'ok'); };
-    reader.onerror = () => toast('Could not read the file', 'bad');
-    reader.readAsText(f);
-  };
-
-  const run = async () => {
-    if (!csv.trim()) return toast('Paste CSV data or choose a file first', 'bad');
-    setBusy(true);
-    setProgress(null);
-    try {
-      // The same server-side queue the Leads screen uses, so a file imported from either place
-      // behaves identically — these two screens previously had separate implementations.
-      const job = await runLeadImport(csv, tag.trim(), {
-        source: 'campaigns',
-        onProgress: setProgress,
-        cancelled: () => closedRef.current,
-      });
-      if (closedRef.current) return;
-      if (job.status === 'Failed') { toast(job.message, 'bad'); setBusy(false); return; }
-      toast(job.message, 'ok');
-      onDone();
-    } catch (e) { toast(apiErrorMessage(e, 'Import failed'), 'bad'); setBusy(false); }
-  };
-
-  return (
-    <div className="overlay open" onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}>
-      <div className="modal" style={{ maxWidth: 560 }}>
-        <button className="close" onClick={onClose} disabled={busy}><Icon name="close" size={15} /></button>
-        <div className="modal-h">Import Leads</div>
-        <div className="field">
-          <label>Tag (optional)</label>
-          <input value={tag} onChange={(e) => setTag(e.target.value)} placeholder="e.g. Expo-2026, Website-Signup" />
-          <div className="help">All imported leads get this tag so you can target them in a campaign.</div>
-        </div>
-        <div className="field">
-          <label>CSV data</label>
-          <input ref={fileRef} type="file" accept=".csv,.txt,text/csv,text/plain" style={{ display: 'none' }} onChange={(e) => pick(e.target.files?.[0] ?? null)} />
-          <button className="btn ghost sm" type="button" onClick={() => fileRef.current?.click()} style={{ marginBottom: 6 }}>Choose CSV file</button>
-          <textarea rows={8} value={csv} onChange={(e) => setCsv(e.target.value)} style={{ fontFamily: 'monospace', fontSize: 12 }}
-            placeholder={'name,email,phone,status,type,source,clienttype\nJohn Smith,john@example.com,4165551234,hot,buyer,meta,Investor'} />
-          <div className="help">
-            Include a header row with <strong>name</strong>, <strong>email</strong>, <strong>phone</strong> — and optionally
-            status, type, source, clienttype. Rows without a valid email are skipped; existing addresses are tagged, not duplicated.
-          </div>
-        </div>
-        {progress && <ImportProgress job={progress} />}
-        <div className="actions">
-          {/* Not disabled while importing: the work is on the server, so closing only stops this
-              tab watching it rather than trapping somebody in a modal for minutes. */}
-          <button className="btn ghost" onClick={onClose}>{busy ? 'Close — the import keeps running' : 'Cancel'}</button>
-          <button className="btn primary" onClick={run} disabled={busy || !csv.trim()}>{busy ? 'Importing…' : 'Import'}</button>
-        </div>
-      </div>
-    </div>
   );
 }
 

@@ -85,6 +85,11 @@ export interface NotificationCategory {
   channels: Record<NotificationChannel, ChannelReadiness>;
   /** This person's answer per channel. */
   enabled: Record<NotificationChannel, boolean>;
+  /**
+   * Which area's screen offers this category. Absent means both — the server omits it for anything
+   * not tied to one side of the product, so absence must be read as "show it", never as "hide it".
+   */
+  areas?: ('crm' | 'desk')[];
 }
 
 export interface NotificationPreferences {
@@ -222,7 +227,7 @@ export const googleCalendarDisconnect = (scope?: IntegrationScope): Promise<{ di
   api.post('/api/google/calendar/disconnect', {}, { params: scope ? { scope } : undefined }).then((r) => r.data);
 
 /**
- * Start connecting a Gmail account with OAuth ("Sign in with Google"). Returns Google's consent-URL;
+ * Start connecting a Gmail account with OAuth ("Connect Gmail"). Returns Google's consent-URL;
  * the caller navigates the browser there. After consent the server stores the account and redirects
  * back with `mail_connected=1`. Works once the server has Google OAuth credentials + Gmail scope.
  */

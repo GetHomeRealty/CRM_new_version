@@ -88,7 +88,7 @@ export class WebPushService {
         user_id: userId, endpoint: sub.endpoint,
         p256dh: sub.keys.p256dh, auth: sub.keys.auth,
         scope, user_agent: userAgent?.slice(0, 255) ?? null,
-        company_id: 1, created_at: now, updated_at: now,
+        created_at: now, updated_at: now,
       },
       // A device handed to a new agent must not keep pushing the old one's appointments, so the
       // owner is taken from whoever is subscribing now.

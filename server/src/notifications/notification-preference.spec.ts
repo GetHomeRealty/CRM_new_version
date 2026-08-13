@@ -29,7 +29,7 @@ async function makeUser(tx: PrismaService): Promise<number> {
   const now = new Date();
   const t = tag();
   const u = await tx.users.create({
-    data: { name: `Notif User ${t}`, email: `notif-${t}@example.test`, role: 'agent', status: 'Active', password: 'x', company_id: 1, created_at: now, updated_at: now },
+    data: { name: `Notif User ${t}`, email: `notif-${t}@example.test`, role: 'agent', status: 'Active', password: 'x', created_at: now, updated_at: now },
   });
   return u.id;
 }

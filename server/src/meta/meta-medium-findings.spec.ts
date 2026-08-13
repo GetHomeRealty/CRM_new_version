@@ -42,7 +42,7 @@ async function makeUser(tx: PrismaService, role = 'agent'): Promise<number> {
   const u = await tx.users.create({
     data: {
       name: `M ${t}`, email: `m-${t}@example.test`, role, status: 'Active',
-      password: 'x', company_id: 1, created_at: now, updated_at: now,
+      password: 'x', created_at: now, updated_at: now,
     },
   });
   return u.id;
@@ -53,7 +53,7 @@ async function connectForm(tx: PrismaService, userId: number, formId: string): P
   const pageId = `page-${tag()}`;
   await tx.meta_lead_forms.create({
     data: {
-      company_id: 1, user_id: userId, page_id: pageId, form_id: formId,
+      user_id: userId, page_id: pageId, form_id: formId,
       form_name: 'Campaign', is_active: true, created_at: now, updated_at: now,
     },
   });
@@ -229,13 +229,13 @@ describe('M-M4 — the stored Graph payload is bounded and forgotten', () => {
       const old = new Date(Date.now() - (META_RAW_RETENTION_DAYS + 1) * 86_400_000);
       const stale = await tx.leads.create({
         data: {
-          company_id: 1, name: `Old ${tag()}`, email: `old-${tag()}@example.test`,
+          name: `Old ${tag()}`, email: `old-${tag()}@example.test`,
           meta_raw: '{"answers":"old"}', meta_imported_at: old, created_at: old, updated_at: old,
         },
       });
       const fresh = await tx.leads.create({
         data: {
-          company_id: 1, name: `New ${tag()}`, email: `new-${tag()}@example.test`,
+          name: `New ${tag()}`, email: `new-${tag()}@example.test`,
           meta_raw: '{"answers":"new"}', meta_imported_at: now, created_at: now, updated_at: now,
         },
       });

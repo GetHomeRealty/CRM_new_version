@@ -35,3 +35,9 @@ e2e/playwright-report/
 # repository one `git add -A` publishes the database account, and a pushed credential is not undone
 # by deleting it: it stays in history and in every fork. Local convenience only; never shared.
 e2e/.testdb
+
+# QA restore rehearsals. `backups/` was ignored and this sibling was not, so an 83 MB pg_dump of the
+# QA database — real leads, message bodies, user rows and password hashes — sat one `git add -A`
+# away from the history. A pushed dump is not undone by deleting it: it stays in every clone and
+# every fork. Same reasoning as the line above.
+backups-qa/

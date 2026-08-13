@@ -203,7 +203,7 @@ describe('the lead filter', () => {
       const lead = await tx.leads.create({
         data: {
           name: `ZZ Lead ${tag()}`, email: `zz-lead-${tag()}@probe.test`, lead_status: 'New',
-          owner_user_id: theirs.userId, company_id: 1, created_at: now, updated_at: now,
+          owner_user_id: theirs.userId, created_at: now, updated_at: now,
         },
         select: { id: true },
       });

@@ -58,6 +58,48 @@ test.describe('tags', () => {
     expect((await apiSend(page, 'DELETE', `/api/leads/tags?tag=${encodeURIComponent(name)}`)).status).toBeLessThan(300);
   });
 
+  /**
+   * The tag picker on the lead editor, in the browser.
+   *
+   * The Tags field was free text with no list of what the brokerage already uses, so the only way
+   * to reuse a tag was to remember it and spell it identically. That is not a cosmetic gap: tags
+   * select campaign audiences by exact name, so "VIP" typed here and "vip" on the Tags screen are
+   * two audiences, and a lead tagged with a near-miss quietly misses the campaign it was meant for.
+   *
+   * The API tests above prove tags can be created and listed. They cannot prove the EDITOR offers
+   * them — which was exactly the gap: every endpoint behaved, and the screen still showed a bare
+   * text box.
+   */
+  test('the lead editor offers the tags that already exist', async ({ page }) => {
+    const name = unique('picker');
+    expect((await apiSend(page, 'POST', '/api/leads/tags', { tag: name })).status).toBeLessThan(300);
+
+    try {
+      await page.goto('/crm/lead');
+      await page.getByRole('button', { name: 'Edit' }).first().click();
+
+      const modal = page.locator('.modal').filter({ has: page.getByText('Tags', { exact: true }) });
+      const picker = modal.locator('select').filter({ hasText: 'Add an existing tag' });
+      await expect(picker).toBeVisible({ timeout: 15_000 });
+
+      // The tag just registered is offered, even though no lead carries it yet — the registry is
+      // the point, not what happens to be in use.
+      await picker.selectOption(name);
+
+      /*
+       * Picking APPENDS to the comma-separated field rather than replacing it.
+       *
+       * Matched on the START of the placeholder, not on "Comma-separated": the property-preferences
+       * section further down has its own comma-separated field ("Finished basement, South-facing
+       * yard"), so the looser match finds two inputs and this asserts against whichever comes first.
+       */
+      const field = modal.locator('input[placeholder^="Comma-separated, e.g. Expo-2026"]');
+      await expect(field).toHaveValue(new RegExp(name));
+    } finally {
+      await apiSend(page, 'DELETE', `/api/leads/tags?tag=${encodeURIComponent(name)}`);
+    }
+  });
+
   test('an empty tag name is refused', async ({ page }) => {
     const res = await apiSend(page, 'POST', '/api/leads/tags', { tag: '   ' });
     expect([400, 422]).toContain(res.status);

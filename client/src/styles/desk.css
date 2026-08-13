@@ -925,6 +925,18 @@ input[type="number"],.numeric,.stat-card .val{font-variant-numeric:tabular-nums;
 .type-opt.custom{border-style:dashed;font-weight:600}
 .type-custom-row{display:flex;gap:6px;align-items:center;margin-top:8px}
 .type-custom-row input{flex:1}
+
+/* Property Type as a dropdown. The picker inside is unchanged; this is the closed state and the
+   panel it opens into. `position:relative` on the wrapper keeps the menu anchored to the trigger,
+   and the high z-index clears the fields below it inside the lead modal. */
+.type-dd{position:relative}
+.type-dd-trigger{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;
+  padding:9px 12px;border:1px solid var(--line-2);border-radius:10px;background:var(--surface);
+  font-size:13px;color:var(--text);cursor:pointer;text-align:left}
+.type-dd-trigger:hover{border-color:var(--brand)}
+.type-dd-menu{position:absolute;top:calc(100% + 4px);left:0;right:0;z-index:30;
+  background:var(--surface);border:1px solid var(--line-2);border-radius:10px;
+  box-shadow:var(--shadow-xl);padding:10px;max-height:280px;overflow-y:auto}
 .type-chosen{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
 .type-chosen .pill{display:inline-flex;align-items:center;gap:5px}
 .type-chosen .pill button{border:0;background:none;padding:0;margin:0;cursor:pointer;color:inherit;font-size:14px;line-height:1}
@@ -1502,3 +1514,52 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
 /* The field a failed save is about. Paired with a scroll-into-view and focus, so the message and
    the thing it is about are on screen together — the toast alone named fields the user could not see. */
 .field-bad{border-color:var(--bad,#dc2626) !important;box-shadow:0 0 0 3px rgba(220,38,38,.12)}
+
+/* ------------------------------------------------- full-screen template editor
+   The template editor is the one modal that is a workspace rather than a form: a block builder on
+   one side and a live preview on the other. At 980px both were cramped, so it now takes the whole
+   window EXCEPT the navigation rail — the sidebar stays reachable, because leaving the editor is
+   done from there as often as from its own Cancel.
+
+   The overlay is inset from the left by exactly the rail's width (248px, or 64px once it collapses
+   at 1100px), rather than the modal being given a margin. Insetting the overlay means the dimmed
+   backdrop stops at the rail too, so the sidebar reads as available rather than as greyed out
+   behind glass. */
+.overlay.beside-nav{left:248px;padding:0;align-items:stretch;justify-content:stretch}
+.modal.full{width:100%;max-width:100%;height:100vh;border-radius:0;border-left:none;
+  display:flex;flex-direction:column;padding:20px 24px;overflow-y:auto}
+/* The form fills the remaining height so the body editor grows with the window instead of leaving
+   the bottom of a maximised screen empty. */
+.modal.full > form{display:flex;flex-direction:column;flex:1;min-height:0}
+.modal.full .tpl-build{flex:1;min-height:0}
+.modal.full .tpl-build-preview .tpl-preview,
+.modal.full .tpl-code{height:100%;min-height:420px}
+
+/* Preview is a MODE, not a second column: the builder is hidden and the rendered email takes the
+   whole workspace, so what is on screen is the shape the recipient will actually get. The builder
+   is hidden rather than unmounted — see the comment at the call site — so its own state survives
+   the round trip. */
+.tpl-build.previewing .tpl-build-editor{display:none}
+.tpl-build-editor{min-width:0}
+.tpl-build-preview{min-width:0}
+
+/* The grid is `align-items:start` so the builder sits at the top rather than stretching to the
+   tallest row. Previewing wants the opposite: one pane that fills the workspace. Without this the
+   iframe resolved `height:100%` against an auto-height row and rendered 152px tall — full width and
+   almost no height, which is not a preview of anything. `position:static` drops the sticky offset
+   that only made sense when there was a second column to scroll past. */
+/* Preview mode shows the email and nothing else: the name/category/subject fields, the token list
+   and the token warning all step aside. The body field and the Cancel/Save row stay — the toolbar
+   inside the body field is how you get back. */
+.modal.full.tpl-previewing > form > .g2,
+.modal.full.tpl-previewing > form > .field:not(.tpl-body-fill),
+.modal.full.tpl-previewing > form > .tpl-warn{display:none}
+.modal.full .tpl-body-fill{display:flex;flex-direction:column;flex:1;min-height:0}
+.tpl-build.previewing{align-items:stretch;min-height:0}
+.tpl-build.previewing .tpl-build-preview{position:static;display:flex;flex-direction:column;min-height:0}
+.modal.full .tpl-build.previewing .tpl-preview{flex:1;height:auto;min-height:0}
+@media(max-width:1100px){.overlay.beside-nav{left:64px}}
+@media(max-width:900px){
+  .overlay.beside-nav{left:0}
+  .modal.full .tpl-build{grid-template-columns:1fr}
+}

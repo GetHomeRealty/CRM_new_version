@@ -150,7 +150,7 @@ describe('a push to Google that fails', () => {
       data: {
         user_id: userId, title: `ZZ GCal ev ${tag()}`, date: new Date('2026-12-20T00:00:00.000Z'),
         time: '10:00', type: 'showing', status: 'scheduled', domain: 'crm', version: 1,
-        google_calendar_id: googleId, company_id: 1, created_at: now, updated_at: now,
+        google_calendar_id: googleId, created_at: now, updated_at: now,
       },
       select: { id: true },
     });

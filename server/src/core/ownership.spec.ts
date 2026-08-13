@@ -43,7 +43,7 @@ async function people(tx: PrismaService) {
   const now = new Date();
   const n = ++seq;
   const mk = async (role: string, tag: string) => tx.users.create({
-    data: { name: `${tag} ${n}`, email: `${tag}-${Date.now()}-${n}@x.test`, password: 'x', role, company_id: 1, created_at: now, updated_at: now },
+    data: { name: `${tag} ${n}`, email: `${tag}-${Date.now()}-${n}@x.test`, password: 'x', role, created_at: now, updated_at: now },
   });
   return { owner: await mk('agent', 'owner'), colleague: await mk('agent', 'colleague'), admin: await mk('admin', 'brokerage') };
 }
@@ -56,7 +56,7 @@ describe('a lead belongs to its owner, and an assignment is shared', () => {
   async function lead(tx: PrismaService, ownerId: number, assignedTo: number | null) {
     const now = new Date();
     return tx.leads.create({
-      data: { name: 'A Lead', email: `lead-${Date.now()}-${++seq}@x.test`, owner_user_id: ownerId, assigned_to: assignedTo, company_id: 1, created_at: now, updated_at: now },
+      data: { name: 'A Lead', email: `lead-${Date.now()}-${++seq}@x.test`, owner_user_id: ownerId, assigned_to: assignedTo, created_at: now, updated_at: now },
     });
   }
 
@@ -103,7 +103,7 @@ describe('a lead belongs to its owner, and an assignment is shared', () => {
       const now = new Date();
       const { owner } = await people(tx);
       const manager = await tx.users.create({
-        data: { name: `manager ${++seq}`, email: `mgr-${Date.now()}-${seq}@x.test`, password: 'x', role: 'manager', company_id: 1, created_at: now, updated_at: now },
+        data: { name: `manager ${++seq}`, email: `mgr-${Date.now()}-${seq}@x.test`, password: 'x', role: 'manager', created_at: now, updated_at: now },
       });
       const l = await lead(tx, owner.id, null);
       const access = new ResourceAccessService(tx);
@@ -147,7 +147,7 @@ describe('a lead belongs to its owner, and an assignment is shared', () => {
       const { owner, admin } = await people(tx);
       const now = new Date();
       const orphan = await tx.leads.create({
-        data: { name: 'Unattributed', email: `orph-${Date.now()}-${++seq}@x.test`, owner_user_id: null, company_id: 1, created_at: now, updated_at: now },
+        data: { name: 'Unattributed', email: `orph-${Date.now()}-${++seq}@x.test`, owner_user_id: null, created_at: now, updated_at: now },
       });
       const access = new ResourceAccessService(tx);
       // An import that forgets to stamp an owner must surface somewhere instead of vanishing.
@@ -188,7 +188,7 @@ describe('campaign templates are the author\'s, and the built-ins are nobody\'s'
   async function template(tx: PrismaService, userId: number | null, name: string) {
     const now = new Date();
     return tx.campaign_templates.create({
-      data: { name, subject: 's', content: 'c', category: 'general', user_id: userId, created_by: userId ? 'agent' : 'System', company_id: 1, created_at: now, updated_at: now },
+      data: { name, subject: 's', content: 'c', category: 'general', user_id: userId, created_by: userId ? 'agent' : 'System', created_at: now, updated_at: now },
     });
   }
 

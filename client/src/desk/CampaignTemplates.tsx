@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   addTemplateAttachment, createCampaignTemplate, deleteCampaignTemplate, deleteTemplateAttachment,
   getCampaignTemplate, listCampaignTemplates, updateCampaignTemplate,
@@ -114,6 +115,70 @@ export default function CampaignTemplates({ options, onChanged, onUse }: {
     return !q || t.name.toLowerCase().includes(q) || t.subject.toLowerCase().includes(q);
   });
 
+  /*
+   * TWO LISTS, ONE TABLE, NO NEW COLUMN.
+   *
+   * The distinction already exists in the data: a built-in template is seeded with no author, which
+   * is why the card has always been able to print "Built-in template" instead of "By <name>". So
+   * `created_by === null` IS the type, and reusing it means no migration, no backfill, and no risk
+   * of a template ending up in neither group because a new flag was never set on it.
+   *
+   * Splitting on render rather than fetching twice keeps one request and one search box, and
+   * guarantees the two lists partition the set — every template is in exactly one, so none can be
+   * duplicated across the groups or dropped from both.
+   */
+  const crmTemplates = shown.filter((t) => !t.created_by);
+  const campaignTemplates = shown.filter((t) => !!t.created_by);
+
+  /*
+   * A render FUNCTION, called directly, rather than a nested component used as `<TemplateGroup/>`.
+   * A component declared inside a render gets a new identity every pass, so React unmounts and
+   * remounts its whole subtree — here that would tear down and reload every thumbnail iframe on
+   * each keystroke in the search box. Calling it keeps the cards mounted, and the markup inside is
+   * unchanged from the single grid it replaced.
+   */
+  const templateGroup = (title: string, note: string, empty: string, items: CampaignTemplateDetail[]) => (
+    <div className="tpl-group" key={title}>
+      <div className="modal-sub" style={{ marginTop: 18 }}>
+        {title} <span className="sec-count">{items.length}</span>
+      </div>
+      <div className="muted tpl-sub" style={{ marginBottom: 10 }}>{note}</div>
+      {items.length === 0 ? <p className="help">{empty}</p> : (
+        <div className="tpl-grid">
+          {items.map((t) => (
+            <div key={t.id} className="tpl-card">
+              {/* Rendered preview thumbnail — click (or the hover button) opens the full preview.
+                  Sandboxed and non-interactive so the stored HTML can't run or be clicked into. */}
+              <button className="tpl-thumb" type="button" onClick={() => setPreviewing(t)} title={`Preview ${t.name}`}>
+                <iframe className="tpl-thumb-frame" title={`Preview of ${t.name}`} sandbox="" srcDoc={t.content} tabIndex={-1} />
+                <span className="tpl-thumb-overlay"><span className="tpl-thumb-btn">👁 Preview</span></span>
+              </button>
+
+              <div className="tpl-card-body">
+                <div className="tpl-card-top">
+                  <strong className="tpl-card-name">{t.name}</strong>
+                  <span className="pill type-res-buy">{label(t.category)}</span>
+                </div>
+                <div className="muted tpl-card-subject">{t.subject}</div>
+                <div className="tpl-card-foot">
+                  {t.created_by ? `By ${t.created_by}` : 'Built-in template'}
+                  {t.attachments.length > 0 && <span className="pill warn" style={{ marginLeft: 6 }}>📎 {t.attachments.length}</span>}
+                </div>
+              </div>
+
+              <div className="tpl-card-actions">
+                {canEdit && <button className="btn ghost sm" type="button" onClick={() => setEditing(t)} title="Edit">✏️ Edit</button>}
+                {canEdit && onUse && <button className="icon-btn" type="button" onClick={() => onUse(t.id)} title="Send as a campaign">📨</button>}
+                {canEdit && <button className="icon-btn" type="button" disabled={busy === t.id} onClick={() => void duplicate(t)} title="Duplicate">📄</button>}
+                {canEdit && <button className="icon-btn danger" type="button" onClick={() => remove(t)} title="Delete">🗑️</button>}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+
   return (
     <div className="card">
       <div className="tpl-head">
@@ -144,37 +209,26 @@ export default function CampaignTemplates({ options, onChanged, onUse }: {
           {canEdit && !search.trim() ? ' Create one to send a campaign.' : ''}
         </p>
       ) : (
-        <div className="tpl-grid">
-          {shown.map((t) => (
-            <div key={t.id} className="tpl-card">
-              {/* Rendered preview thumbnail — click (or the hover button) opens the full preview.
-                  Sandboxed and non-interactive so the stored HTML can't run or be clicked into. */}
-              <button className="tpl-thumb" type="button" onClick={() => setPreviewing(t)} title={`Preview ${t.name}`}>
-                <iframe className="tpl-thumb-frame" title={`Preview of ${t.name}`} sandbox="" srcDoc={t.content} tabIndex={-1} />
-                <span className="tpl-thumb-overlay"><span className="tpl-thumb-btn">👁 Preview</span></span>
-              </button>
-
-              <div className="tpl-card-body">
-                <div className="tpl-card-top">
-                  <strong className="tpl-card-name">{t.name}</strong>
-                  <span className="pill type-res-buy">{label(t.category)}</span>
-                </div>
-                <div className="muted tpl-card-subject">{t.subject}</div>
-                <div className="tpl-card-foot">
-                  {t.created_by ? `By ${t.created_by}` : 'Built-in template'}
-                  {t.attachments.length > 0 && <span className="pill warn" style={{ marginLeft: 6 }}>📎 {t.attachments.length}</span>}
-                </div>
-              </div>
-
-              <div className="tpl-card-actions">
-                {canEdit && <button className="btn ghost sm" type="button" onClick={() => setEditing(t)} title="Edit">✏️ Edit</button>}
-                {canEdit && onUse && <button className="icon-btn" type="button" onClick={() => onUse(t.id)} title="Send as a campaign">📨</button>}
-                {canEdit && <button className="icon-btn" type="button" disabled={busy === t.id} onClick={() => void duplicate(t)} title="Duplicate">📄</button>}
-                {canEdit && <button className="icon-btn danger" type="button" onClick={() => remove(t)} title="Delete">🗑️</button>}
-              </div>
-            </div>
-          ))}
-        </div>
+        <>
+          {/*
+            The two groups, always in this order and always labelled, so the boundary is visible
+            rather than implied. A group with nothing in it still prints its heading and says so —
+            an absent heading would read as "this kind does not exist" rather than "none yet",
+            and the whole point of the split is that both kinds are always a thing.
+          */}
+          {templateGroup(
+            'CRM Templates',
+            'Built into the CRM. Available to every user; editing one changes it wherever the CRM uses it.',
+            'No built-in templates match.',
+            crmTemplates,
+          )}
+          {templateGroup(
+            'Campaign Templates',
+            'Created by you and your team for campaigns.',
+            canEdit ? 'None yet — use “+ Create Template” to add one.' : 'None yet.',
+            campaignTemplates,
+          )}
+        </>
       )}
 
       {previewing && (
@@ -368,9 +422,34 @@ function TemplateEditor({ template, options, onClose, onSaved }: {
     }
   };
 
-  return (
-    <div className="overlay open" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="modal lg">
+  return createPortal(
+    /*
+      FULL SCREEN, LESS THE NAVIGATION RAIL. This modal is a workspace, not a form — a block builder
+      and a live preview — and at 980px neither had room. `beside-nav` insets the overlay by the
+      rail's width so the sidebar stays usable and un-dimmed; `full` lets the modal take everything
+      that is left.
+
+      RENDERED THROUGH A PORTAL, and that is load-bearing rather than tidiness. This editor is
+      returned from inside the Templates `.card`, and `.card` carries `animation:pageIn` whose
+      keyframes set `transform`. With `animation-fill-mode: both` the finished animation keeps its
+      last keyframe as a COMPUTED MATRIX — `matrix(1,0,0,1,0,0)`, visually nothing — and any
+      transform other than the keyword `none` makes that element the containing block for
+      `position:fixed` descendants. So `inset:0` resolved to the card, not the window, and the
+      "full screen" editor rendered as a 1054x853 box floating at x=521. Measured, not guessed.
+      Portalling to <body> puts it outside every such ancestor, present and future.
+
+      Click-outside-to-close is deliberately dropped here. There is nothing left to click outside,
+      and a stray click near the edge of a full-screen editor would have discarded a half-written
+      template.
+    */
+    <div className="overlay open beside-nav">
+      {/*
+        In preview mode the editing chrome — name, category, subject, the token list — is hidden so
+        the rendered email is the only thing on screen, which is the question being asked. The
+        toolbar and the Cancel/Save row deliberately stay: a preview you cannot leave or save from
+        would be a trap rather than a clean view.
+      */}
+      <div className={`modal full${showPreview && mode === 'design' ? ' tpl-previewing' : ''}`}>
         <button className="close" type="button" onClick={onClose} aria-label="Close">✕</button>
         <div className="modal-h">{template ? `Edit Template — ${template.name}` : 'New Email Template'}</div>
 
@@ -398,7 +477,15 @@ function TemplateEditor({ template, options, onClose, onSaved }: {
             {err('subject')}
           </div>
 
-          <div className="field">
+          {/*
+            `tpl-body-fill` only while previewing. The field wrapping the body editor is a plain
+            block, so the pane inside it is sized by its content — which is why the preview came out
+            full width and 152px tall. Making the field a flex column that grows lets the preview
+            take the height the workspace has. It is applied ONLY in preview mode on purpose: the
+            builder has no internal scroll region, so giving it a bounded height while editing
+            would clip a long template instead of letting the modal scroll.
+          */}
+          <div className={`field${showPreview && mode === 'design' ? ' tpl-body-fill' : ''}`}>
             <div className="tpl-body-head">
               <label style={{ margin: 0 }}>Body *</label>
               <div className="seg">
@@ -407,14 +494,16 @@ function TemplateEditor({ template, options, onClose, onSaved }: {
                 <button type="button" className={`seg-btn${mode === 'html' ? ' on' : ''}`}
                   onClick={() => { setForm((f) => ({ ...f, content })); setMode('html'); }}>{'</>'} HTML</button>
               </div>
-              {/* The preview used to be a permanent second column, which left the blocks
-                  themselves in a little over half the width. Off by default so building has the
-                  room, on when you want to check the result. */}
+              {/* Preview REPLACES the builder rather than sitting beside it. A half-width preview
+                  answers "does this look right?" with a squeezed column that is not the shape the
+                  reader will see; the whole point of looking is to see the email as it will arrive.
+                  So this is a mode switch, not a second pane — and it is off by default, because
+                  building needs the room more often than checking does. */}
               {mode === 'design' && (
                 <button type="button" className={`btn ghost sm${showPreview ? ' primary' : ''}`}
                   style={{ marginLeft: 'auto' }}
                   onClick={() => setShowPreview((v) => !v)}>
-                  {showPreview ? '✕ Hide preview' : '👁 Preview'}
+                  {showPreview ? '✕ Back to editing' : '👁 Preview'}
                 </button>
               )}
             </div>
@@ -422,11 +511,19 @@ function TemplateEditor({ template, options, onClose, onSaved }: {
             {loading ? (
               <p className="help">Loading…</p>
             ) : mode === 'design' ? (
-              <div className={`tpl-build${showPreview ? '' : ' solo'}`}>
-                <TemplateBuilder blocks={blocks} setBlocks={setBlocks} styles={styles} setStyles={setStyles} />
+              <div className={`tpl-build solo${showPreview ? ' previewing' : ''}`}>
+                {/*
+                  The builder stays MOUNTED and is hidden in CSS while previewing. Unmounting it
+                  would be simpler and would throw away everything it holds that the parent does
+                  not — which block is selected, which style panel is open — so toggling preview
+                  and coming back would land you at the top of an unfamiliar canvas rather than
+                  where you were working.
+                */}
+                <div className="tpl-build-editor">
+                  <TemplateBuilder blocks={blocks} setBlocks={setBlocks} styles={styles} setStyles={setStyles} />
+                </div>
                 {showPreview && (
                   <div className="tpl-build-preview">
-                    <div className="muted" style={{ fontSize: 11, marginBottom: 4 }}>Live preview</div>
                     <iframe className="tpl-preview" title="Template preview" sandbox="" srcDoc={content} />
                   </div>
                 )}
@@ -475,6 +572,7 @@ function TemplateEditor({ template, options, onClose, onSaved }: {
           </div>
         </form>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

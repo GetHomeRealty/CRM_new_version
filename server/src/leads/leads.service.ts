@@ -127,9 +127,24 @@ export class LeadsService {
   }
 
   // ------------------------------------------------------------------ read
-  /** Paginated list plus the header counters, both computed from the same filter set. */
+  /**
+   * Paginated list, plus the header counters.
+   *
+   * THE ROWS ARE FILTERED; THE COUNTERS ARE NOT. They used to share one `where`, so choosing a
+   * filter rescoped every counter to it — clicking "Meta" made the "All Leads" tab report the
+   * number of Meta leads, and every status tab report its share of Meta. A tab that changes its own
+   * meaning when you press the one beside it cannot be used to navigate, which is what those
+   * numbers are for: each one answers "how many leads will I see if I click this?".
+   *
+   * So the counters are computed from the SCOPE alone — this user's own live leads — and the
+   * filters apply only to the page of rows and to `meta.total`, which is the count that has to
+   * match what is on screen for pagination to be right.
+   */
   async list(user: AuthUserRecord, q: LeadQuery): Promise<Record<string, unknown>> {
     const where = this.buildWhere(user, q);
+    // Ownership and not-deleted, and nothing the user chose. Exactly the two clauses `buildWhere`
+    // starts from, so a counter can never show a lead the list would refuse to open.
+    const scopeOnly: Prisma.leadsWhereInput = { AND: [{ deleted_at: null }, this.scopeWhere(user)] };
     const page = Math.max(1, Number(q.page ?? 1) || 1);
     const limit = Math.min(MAX_PER_PAGE, Math.max(1, Number(q.limit ?? LEADS_PER_PAGE) || LEADS_PER_PAGE));
 
@@ -145,7 +160,7 @@ export class LeadsService {
         },
       }),
       this.prisma.leads.count({ where }),
-      this.statsGrouped(where),
+      this.statsGrouped(scopeOnly),
     ]);
 
     const assignees = await this.assigneeNames(rows.map((r) => r.assigned_to));
@@ -631,8 +646,32 @@ export class LeadsService {
    * Same shape as the live list — `page`/`limit` in, `meta` out — so the two screens paginate
    * identically. `count` is kept alongside `meta.total` because the existing client reads it.
    */
-  async listDeleted(user: AuthUserRecord, q: { page?: unknown; limit?: unknown } = {}): Promise<Record<string, unknown>> {
-    const where: Prisma.leadsWhereInput = { deleted_at: { not: null }, ...this.scopeWhere(user) };
+  async listDeleted(user: AuthUserRecord, q: { page?: unknown; limit?: unknown; search?: unknown } = {}): Promise<Record<string, unknown>> {
+    /*
+     * SEARCHABLE, because the bin is the one list nobody can browse.
+     *
+     * Recently Deleted is paged and ordered by deletion time, so finding one lead among months of
+     * them meant clicking through pages looking for a name. That is the opposite of what the screen
+     * is for: somebody comes here because they know exactly who they deleted and want them back.
+     *
+     * Name and email only — the two things a person remembers about a lead they are trying to
+     * recover. Deliberately NOT the free-text search the main list uses: this stays inside
+     * `scopeWhere`, so an agent still searches only their own deleted leads and cannot use the bin
+     * to discover a colleague's.
+     */
+    const search = String(q.search ?? '').trim();
+    const where: Prisma.leadsWhereInput = {
+      deleted_at: { not: null },
+      ...this.scopeWhere(user),
+      ...(search
+        ? {
+          OR: [
+            { name: { contains: search, mode: 'insensitive' as const } },
+            { email: { contains: search, mode: 'insensitive' as const } },
+          ],
+        }
+        : {}),
+    };
     const page = Math.max(1, Number(q.page ?? 1) || 1);
     const limit = Math.min(MAX_PER_PAGE, Math.max(1, Number(q.limit ?? LEADS_PER_PAGE) || LEADS_PER_PAGE));
 
@@ -952,7 +991,7 @@ export class LeadsService {
          * What must still be refused is the same address twice in the SAME person's book: that
          * splits one person's history across two records and double-sends every campaign. So the
          * lookup is scoped to whoever will own the new row — matching
-         * `leads_company_owner_email_key`, which is `(company_id, COALESCE(owner_user_id, 0),
+         * `leads_owner_email_key`, which is `(COALESCE(owner_user_id, 0),
          * lower(email))`.
          *
          * `ownerId` is the creator on a create. On an update it is the row's existing owner, because

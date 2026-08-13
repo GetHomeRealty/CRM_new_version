@@ -1,3 +1,4 @@
+import { useArea } from './AreaContext';
 import { useCallback, useEffect, useState } from 'react';
 import {
   CHANNEL_LABEL,
@@ -29,6 +30,7 @@ import { useToast } from './toast';
 export default function NotificationPreferencesPage() {
   const toast = useToast();
   const [channels, setChannels] = useState<NotificationChannel[]>([]);
+  const { area } = useArea();
   const [categories, setCategories] = useState<NotificationCategory[] | null>(null);
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
@@ -84,7 +86,23 @@ export default function NotificationPreferencesPage() {
 
   if (!categories) return <div className="card"><p className="help">Loading your notification settings…</p></div>;
 
-  const pendingPairs = categories.reduce(
+  /*
+   * Only the categories this area can actually raise.
+   *
+   * Five of them describe things that happen on a TRANSACTION — a listing expiring, lawyer details
+   * still missing, a document review, an approval, a mention in a deal's chat — and none can occur
+   * on the CRM side, so offering the switch there was offering control over an event that could
+   * never arrive.
+   *
+   * `areas` absent means both, so a category the server has not classified keeps appearing exactly
+   * as it does today. Hiding a switch does not silence anything: the stored preference is untouched
+   * and the senders still honour it — this is which screen shows the control, not who gets notified.
+   */
+  const shown = categories.filter((c) => !c.areas || c.areas.includes(area === 'crm' ? 'crm' : 'desk'));
+
+  // Counted over what is ON SCREEN, not over the whole catalogue — the notice below says "N of
+  // these routes", and once some categories belong to the other area, "these" is `shown`.
+  const pendingPairs = shown.reduce(
     (n, c) => n + channels.filter((ch) => c.channels[ch] === 'pending').length,
     0,
   );
@@ -123,7 +141,7 @@ export default function NotificationPreferencesPage() {
             </tr>
           </thead>
           <tbody>
-            {categories.map((c) => (
+            {shown.map((c) => (
               <tr key={c.key} style={{ borderTop: '1px solid var(--line, #eee)' }}>
                 <td style={{ padding: '10px 12px' }}>
                   <strong>{c.label}</strong>

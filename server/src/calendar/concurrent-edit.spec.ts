@@ -54,7 +54,7 @@ async function makeEvent(userId: number) {
     data: {
       user_id: userId, title: `ZZCONC event ${tag()}`, date: new Date(`${DAY}T00:00:00.000Z`),
       time: '10:00', type: 'showing', status: 'scheduled', domain: 'crm', version: 1,
-      company_id: 1, created_at: now, updated_at: now,
+      created_at: now, updated_at: now,
     },
     select: { id: true, version: true },
   });

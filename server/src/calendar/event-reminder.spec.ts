@@ -51,7 +51,7 @@ async function makeUser(tx: PrismaService, email: string | null = null) {
   const now = new Date();
   const t = tag();
   return tx.users.create({
-    data: { name: `Cal User ${t}`, email: email ?? `cal-${t}@example.test`, role: 'agent', status: 'Active', password: 'x', company_id: 1, created_at: now, updated_at: now },
+    data: { name: `Cal User ${t}`, email: email ?? `cal-${t}@example.test`, role: 'agent', status: 'Active', password: 'x', created_at: now, updated_at: now },
   });
 }
 
@@ -64,7 +64,7 @@ async function makeEvent(tx: PrismaService, userId: number, now: Date, minutesAh
   return tx.calendar_events.create({
     data: {
       title: `Showing ${tag()}`, date, time, type: 'showing', status: 'scheduled',
-      enable_reminder: true, user_id: userId, domain: 'crm', company_id: 1, created_at: ts, updated_at: ts,
+      enable_reminder: true, user_id: userId, domain: 'crm', created_at: ts, updated_at: ts,
       ...over,
     },
   });

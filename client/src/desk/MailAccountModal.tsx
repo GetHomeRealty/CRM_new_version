@@ -99,10 +99,20 @@ function ChooseProvider({ email, setEmail, onGmail, onSmtp, onCancel, scope }: {
       <div className="modal-h">Connect Email Account</div>
 
       <button type="button" className="btn gsi" style={{ width: '100%', justifyContent: 'center' }} disabled={connecting} onClick={() => void connectGoogle()}>
-        <GoogleG /><span>{connecting ? 'Starting…' : 'Sign in with Google'}</span>
+        <GoogleG /><span>{connecting ? 'Starting…' : 'Connect Gmail'}</span>
       </button>
-      <p className="help" style={{ textAlign: 'center', margin: '8px 0 14px' }}>
-        Recommended for Gmail / Google Workspace — pick your account, no password needed.
+      {/*
+        DESCRIBES THE SHAPE OF GOOGLE'S FLOW, NEVER ITS BUTTONS. "Click Continue, then Allow" would
+        be wrong the day Google relabels a screen — and those labels already vary between a personal
+        account and a Workspace one, so it would be wrong for some agents immediately. Wording that
+        says what to accomplish rather than what to press stays true through Google's redesigns.
+      */}
+      <p className="help" style={{ textAlign: 'center', margin: '8px 0 4px' }}>
+        Choose a Google account, review the requested access, and continue to connect your mailbox.
+      </p>
+      <p className="help" style={{ textAlign: 'center', margin: '0 0 14px' }}>
+        If the account is already signed in on this browser, simply select it. To connect a different
+        account, choose <strong>Use another account</strong>.
       </p>
 
       <div className="or-divider"><span>or connect manually</span></div>

@@ -71,7 +71,7 @@ async function makeUser(tx: PrismaService, status = 'Active'): Promise<{ id: num
   const u = await tx.users.create({
     data: {
       name: `Off ${t}`, email: `off-${t}@example.test`, role: 'agent', status,
-      password: 'x', company_id: 1, created_at: now, updated_at: now,
+      password: 'x', created_at: now, updated_at: now,
     },
   });
   return { id: u.id, name: u.name };
@@ -88,7 +88,7 @@ async function connectMeta(tx: PrismaService, userId: number, forms = 1): Promis
   for (let i = 0; i < forms; i += 1) {
     await tx.meta_lead_forms.create({
       data: {
-        company_id: 1, user_id: userId, page_id: `page-${tag()}`, form_id: `form-${tag()}`,
+        user_id: userId, page_id: `page-${tag()}`, form_id: `form-${tag()}`,
         form_name: 'Campaign', is_active: true, created_at: now, updated_at: now,
       },
     });
@@ -100,7 +100,7 @@ async function giveLead(tx: PrismaService, userId: number, source: string): Prom
   const now = new Date();
   const l = await tx.leads.create({
     data: {
-      company_id: 1, name: `Lead ${tag()}`, email: `lead-${tag()}@example.test`,
+      name: `Lead ${tag()}`, email: `lead-${tag()}@example.test`,
       owner_user_id: userId, assigned_to: userId, source, lead_source: 'meta',
       created_at: now, updated_at: now,
     },
@@ -196,7 +196,7 @@ describe('deactivating an agent', () => {
       const now = new Date();
       const noSource = await tx.leads.create({
         data: {
-          company_id: 1, name: `Lead ${tag()}`, email: `lead-${tag()}@example.test`,
+          name: `Lead ${tag()}`, email: `lead-${tag()}@example.test`,
           owner_user_id: agent.id, assigned_to: agent.id, created_at: now, updated_at: now,
         },
       });
@@ -216,7 +216,7 @@ describe('deactivating an agent', () => {
       const now = new Date();
       await tx.leads.create({
         data: {
-          company_id: 1, name: `Lead ${tag()}`, email: `lead-${tag()}@example.test`,
+          name: `Lead ${tag()}`, email: `lead-${tag()}@example.test`,
           owner_user_id: agent.id, created_at: now, updated_at: now,
         },
       });
@@ -274,7 +274,7 @@ describe('deleting an agent rather than deactivating them', () => {
       const now = new Date();
       await tx.leads.create({
         data: {
-          company_id: 1, name: `Lead ${tag()}`, email: `lead-${tag()}@example.test`,
+          name: `Lead ${tag()}`, email: `lead-${tag()}@example.test`,
           owner_user_id: agent.id, created_at: now, updated_at: now,
         },
       });
@@ -301,7 +301,7 @@ describe('reactivating an agent', () => {
 
       // And the poller has nothing to pick up, because it only reads active connections.
       const polled: number[] = [];
-      await schedulerWatching(tx, polled).pollAllForTenant();
+      await schedulerWatching(tx, polled).pollAll();
       expect(polled).not.toContain(agent.id);
     });
   });
@@ -342,12 +342,12 @@ describe('a connection that outlives an active account', () => {
       await connectMeta(tx, agent.id);
 
       const active: number[] = [];
-      await schedulerWatching(tx, active).pollAllForTenant();
+      await schedulerWatching(tx, active).pollAll();
       expect(active).toContain(agent.id);
 
       await tx.users.update({ where: { id: agent.id }, data: { status: 'Inactive' } });
       const inactive: number[] = [];
-      await schedulerWatching(tx, inactive).pollAllForTenant();
+      await schedulerWatching(tx, inactive).pollAll();
       expect(inactive).not.toContain(agent.id);
     });
   });
@@ -380,7 +380,7 @@ describe('a webhook lead for a deactivated agent', () => {
       const formId = `form-${tag()}`;
       await tx.meta_lead_forms.create({
         data: {
-          company_id: 1, user_id: agent.id, page_id: pageId, form_id: formId,
+          user_id: agent.id, page_id: pageId, form_id: formId,
           form_name: 'Campaign', is_active: true, created_at: now, updated_at: now,
         },
       });

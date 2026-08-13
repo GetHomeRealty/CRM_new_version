@@ -207,7 +207,7 @@ export class MfaAdminController {
   @Screen('users', 'view')
   async policies(@CurrentUser() user: AuthUserRecord | undefined): Promise<Record<string, unknown>> {
     if (!user) throw new UnauthorizedException({ message: 'Unauthenticated.' });
-    return { policies: await this.policy.list(user.company_id) };
+    return { policies: await this.policy.list() };
   }
 
   @Post('policies')
@@ -218,7 +218,7 @@ export class MfaAdminController {
     @Body() dto: SetPolicyDto,
   ): Promise<MfaPolicyView> {
     if (!user) throw new UnauthorizedException({ message: 'Unauthenticated.' });
-    return this.policy.set(user.company_id, dto.role, dto.required, dto.grace_days ?? 7);
+    return this.policy.set(dto.role, dto.required, dto.grace_days ?? 7);
   }
 
   /**

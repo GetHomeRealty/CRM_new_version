@@ -3,13 +3,11 @@ import { PrismaService } from '../prisma/prisma.service';
 import { GoogleService, type GoogleEvent } from './google.service';
 import { GoogleConnectionService } from './google-connection.service';
 import type { IntegrationScope } from '../email/mail-account.service';
-import { MAX_EVENTS_PER_SYNC, SYNC_WINDOW_FUTURE_DAYS, SYNC_WINDOW_PAST_DAYS } from './google.constants';
+import { GOOGLE_ORIGIN_CREATED_BY, MAX_EVENTS_PER_SYNC, SYNC_WINDOW_FUTURE_DAYS, SYNC_WINDOW_PAST_DAYS } from './google.constants';
 import { schedulersEnabled, schedulerSkipReason } from '../common/schedulers';
 import { clusterTick } from '../redis/cluster-tick';
 import { RedisService } from '../redis/redis.service';
 import { CacheService } from '../redis/cache.service';
-import { forEachTenant } from '../core/tenant-context';
-import { allTenantIds } from '../core/tenants';
 import { registerWorker, trackedTick } from '../observability/worker-health';
 
 /** How often the retry sweep runs. Slow on purpose: this exists for outages, not for latency. */
@@ -87,14 +85,12 @@ export class GoogleCalendarSyncService implements OnModuleInit, OnModuleDestroy 
     if (this.timer) clearInterval(this.timer);
   }
 
-  /** One pass, per brokerage, inside that brokerage's tenant context. */
+  /** One pass over every connection with a failed push to retry. */
   async sweep(): Promise<void> {
     if (this.sweeping) return;
     this.sweeping = true;
     try {
-      // Background work has no request to take a tenant from; `forEachTenant` is the seam that
-      // gives it one, and PrismaService refuses the query without it.
-      await forEachTenant(() => allTenantIds(this.prisma), async () => { await this.retryFailedPushes(); });
+      await this.retryFailedPushes();
     } catch (ex) {
       this.log.warn(`Google Calendar retry sweep failed: ${(ex as Error).message}`);
     } finally {
@@ -208,8 +204,12 @@ export class GoogleCalendarSyncService implements OnModuleInit, OnModuleDestroy 
     const existing = await this.prisma.calendar_events.findFirst({
       // `domain: null` is included so an event that pre-dates the split is claimed and stamped by
       // the next pull rather than being duplicated alongside itself.
+      //
+      // DELETED ROWS ARE DELIBERATELY IN SCOPE. This has never filtered `deleted_at`, and must not
+      // start: matching a hidden row is what makes a reconnect REUSE it instead of inserting a
+      // second copy of the same appointment beside it.
       where: { google_calendar_id: ev.id, user_id: userId, OR: [{ domain: area }, { domain: null }] },
-      select: { id: true },
+      select: { id: true, google_disconnected_at: true },
     });
 
     // A cancelled Google event removes its local copy rather than leaving a ghost. Only this
@@ -252,11 +252,32 @@ export class GoogleCalendarSyncService implements OnModuleInit, OnModuleDestroy 
       // Nearly every event in this database arrives from Google, so that reverted almost the whole
       // calendar's status history. Writing a field a sync cannot know can only ever destroy
       // information, so this branch leaves both alone.
-      await this.prisma.calendar_events.update({ where: { id: existing.id }, data: fromGoogle });
+      await this.prisma.calendar_events.update({
+        where: { id: existing.id },
+        data: {
+          ...fromGoogle,
+          /*
+           * BRING BACK ONLY WHAT A DISCONNECT HID.
+           *
+           * `google_disconnected_at` is set exactly once — by `GoogleConnectionService.disconnect`
+           * — so a row carrying it is one this integration hid, and reconnecting is precisely the
+           * event that should undo that. Clearing both fields restores it in place, which is also
+           * what stops the reconnect creating a duplicate: the row is reused, so the calendar shows
+           * one appointment rather than two.
+           *
+           * A row WITHOUT the marker is one the agent deleted, and it stays deleted. That case is
+           * real rather than theoretical: `remove()` pushes the deletion on to Google best-effort
+           * and never blocks on it, so when that push fails the event still exists in Google and is
+           * returned by the very next pull. Restoring unconditionally would undo the agent's
+           * deletion, on a schedule, with nothing to show why.
+           */
+          ...(existing.google_disconnected_at ? { deleted_at: null, google_disconnected_at: null } : {}),
+        },
+      });
     } else {
       // On first arrival there is nothing to preserve, so the defaults apply.
       await this.prisma.calendar_events.create({
-        data: { ...fromGoogle, type: 'meeting', status: 'scheduled', created_by: 'Google Calendar', created_at: new Date() },
+        data: { ...fromGoogle, type: 'meeting', status: 'scheduled', created_by: GOOGLE_ORIGIN_CREATED_BY, created_at: new Date() },
       });
     }
     return true;

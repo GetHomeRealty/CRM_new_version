@@ -55,8 +55,7 @@ async function makeUser(tx: PrismaService, over: Record<string, unknown> = {}): 
   const row = await tx.users.create({
     data: {
       name: `ZZ Mention ${t}`, email: `zz-mention-${t}@probe.test`, username: `zzmention${t.replace(/-/g, '')}`,
-      role: 'agent', status: 'Active', password: 'x', created_at: now, updated_at: now, company_id: 1,
-      ...over,
+      role: 'agent', status: 'Active', password: 'x', created_at: now, updated_at: now,      ...over,
     },
     select: { id: true, name: true },
   });
@@ -71,8 +70,7 @@ async function scene(tx: PrismaService) {
   const txn = await tx.transactions.create({
     data: {
       trade_no: `ZZ-M-${tag()}`, type: 'Sale', agent: owner.name,
-      property: '12 Probe Street', created_at: now, updated_at: now, company_id: 1,
-    },
+      property: '12 Probe Street', created_at: now, updated_at: now,    },
     select: { id: true },
   });
   return { owner, outsider, txn };
@@ -85,7 +83,7 @@ describe('who a mention resolves to', () => {
   it('accepts somebody who can open the deal', async () => {
     await inRollback(async (tx) => {
       const { owner, outsider, txn } = await scene(tx);
-      await tx.team_members.create({ data: { transaction_id: txn.id, name: outsider.name, company_id: 1 } });
+      await tx.team_members.create({ data: { transaction_id: txn.id, name: outsider.name } });
 
       const result = await mentionsFor(tx).resolve(asUser(owner), txn.id, [outsider.id]);
       expect(result.allowed).toEqual([outsider.id]);
@@ -111,7 +109,7 @@ describe('who a mention resolves to', () => {
     await inRollback(async (tx) => {
       const { owner, txn } = await scene(tx);
       const gone = await makeUser(tx, { status: 'Inactive' });
-      await tx.team_members.create({ data: { transaction_id: txn.id, name: gone.name, company_id: 1 } });
+      await tx.team_members.create({ data: { transaction_id: txn.id, name: gone.name } });
 
       const result = await mentionsFor(tx).resolve(asUser(owner), txn.id, [gone.id]);
       expect(result.allowed).toEqual([]);
@@ -141,7 +139,7 @@ describe('who a mention resolves to', () => {
   it('counts one person once, however many times they are named', async () => {
     await inRollback(async (tx) => {
       const { owner, outsider, txn } = await scene(tx);
-      await tx.team_members.create({ data: { transaction_id: txn.id, name: outsider.name, company_id: 1 } });
+      await tx.team_members.create({ data: { transaction_id: txn.id, name: outsider.name } });
 
       const result = await mentionsFor(tx).resolve(asUser(owner), txn.id, [outsider.id, outsider.id, outsider.id]);
       expect(result.allowed).toEqual([outsider.id]);
@@ -152,7 +150,7 @@ describe('who a mention resolves to', () => {
     await inRollback(async (tx) => {
       const { owner, outsider, txn } = await scene(tx);
       const colleague = await makeUser(tx);
-      await tx.team_members.create({ data: { transaction_id: txn.id, name: colleague.name, company_id: 1 } });
+      await tx.team_members.create({ data: { transaction_id: txn.id, name: colleague.name } });
 
       const result = await mentionsFor(tx).resolve(asUser(owner), txn.id, [colleague.id, outsider.id, owner.id]);
       expect(result.allowed).toEqual([colleague.id]);
@@ -192,7 +190,7 @@ describe('who the autocomplete offers', () => {
     await inRollback(async (tx) => {
       const { owner, outsider, txn } = await scene(tx);
       const colleague = await makeUser(tx);
-      await tx.team_members.create({ data: { transaction_id: txn.id, name: colleague.name, company_id: 1 } });
+      await tx.team_members.create({ data: { transaction_id: txn.id, name: colleague.name } });
 
       const offered = await mentionsFor(tx).candidates(asUser(owner), txn.id);
       const ids = offered.map((c) => c.id);
@@ -215,7 +213,7 @@ describe('posting a message that mentions somebody', () => {
   it('notifies the mentioned person, once, with a link to the deal', async () => {
     await inRollback(async (tx) => {
       const { owner, outsider, txn } = await scene(tx);
-      await tx.team_members.create({ data: { transaction_id: txn.id, name: outsider.name, company_id: 1 } });
+      await tx.team_members.create({ data: { transaction_id: txn.id, name: outsider.name } });
       const { messages, sent } = chatWith(tx);
 
       await messages.post(txn.id, asUser(owner), 'please review this deal', [outsider.id]);
@@ -247,7 +245,7 @@ describe('posting a message that mentions somebody', () => {
     await inRollback(async (tx) => {
       const { owner, outsider, txn } = await scene(tx);
       const colleague = await makeUser(tx);
-      await tx.team_members.create({ data: { transaction_id: txn.id, name: colleague.name, company_id: 1 } });
+      await tx.team_members.create({ data: { transaction_id: txn.id, name: colleague.name } });
       const { messages } = chatWith(tx);
 
       await messages.post(txn.id, asUser(owner), 'both of you', [colleague.id, outsider.id]);
@@ -260,7 +258,7 @@ describe('posting a message that mentions somebody', () => {
   it('returns the mentions on the thread, so the client can highlight them', async () => {
     await inRollback(async (tx) => {
       const { owner, outsider, txn } = await scene(tx);
-      await tx.team_members.create({ data: { transaction_id: txn.id, name: outsider.name, company_id: 1 } });
+      await tx.team_members.create({ data: { transaction_id: txn.id, name: outsider.name } });
       const { messages } = chatWith(tx);
 
       const thread = await messages.post(txn.id, asUser(owner), 'over to you', [outsider.id]);
@@ -274,7 +272,7 @@ describe('posting a message that mentions somebody', () => {
       const a = await makeUser(tx);
       const b = await makeUser(tx);
       for (const person of [a, b]) {
-        await tx.team_members.create({ data: { transaction_id: txn.id, name: person.name, company_id: 1 } });
+        await tx.team_members.create({ data: { transaction_id: txn.id, name: person.name } });
       }
       const { messages, sent } = chatWith(tx);
 
@@ -296,7 +294,7 @@ describe('posting a message that mentions somebody', () => {
       const a = await makeUser(tx);
       const b = await makeUser(tx);
       for (const person of [a, b]) {
-        await tx.team_members.create({ data: { transaction_id: txn.id, name: person.name, company_id: 1 } });
+        await tx.team_members.create({ data: { transaction_id: txn.id, name: person.name } });
       }
       const { messages, sent } = chatWith(tx);
 
@@ -332,7 +330,7 @@ describe('posting a message that mentions somebody', () => {
       const first = await makeUser(tx);
       const added = await makeUser(tx);
       for (const person of [first, added]) {
-        await tx.team_members.create({ data: { transaction_id: txn.id, name: person.name, company_id: 1 } });
+        await tx.team_members.create({ data: { transaction_id: txn.id, name: person.name } });
       }
 
       // Only the in-app channel is resolvable here, which is the one an edit must not duplicate.

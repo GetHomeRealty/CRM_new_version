@@ -25,7 +25,7 @@ import { AREAS, type Area } from '../common/domain';
  * as it did before licensing existed, which is what makes this safe to introduce to a running system.
  */
 
-/** One company's licence. `company_id` is `company_settings.id`; this deployment has exactly one. */
+/** The deployment's licence. One row, enforced by a singleton unique index on `subscriptions`. */
 export interface Licence {
   crm: boolean;
   desk: boolean;
@@ -39,9 +39,6 @@ export interface Licence {
 @Injectable()
 export class ModuleAccessService {
   constructor(private readonly prisma: PrismaService) {}
-
-  /** The company this deployment runs for. One row, id 1 — see the note on `subscriptions`. */
-  private readonly companyId = 1;
 
   /**
    * The licence, briefly remembered.
@@ -61,11 +58,14 @@ export class ModuleAccessService {
    *
    * No row at all means fully licensed: the table is new, and a deployment upgraded before anyone
    * filled it in must keep working. An expired or suspended subscription licenses nothing.
+   *
+   * `findFirst` rather than a keyed lookup: the row is a singleton, and the database enforces that
+   * with a unique index on a constant expression rather than on a company id.
    */
   async licence(): Promise<Licence> {
     const fresh = this.cached && Date.now() - this.cached.at < ModuleAccessService.CACHE_MS;
     if (!fresh) {
-      const row = await this.prisma.subscriptions.findUnique({ where: { company_id: this.companyId } });
+      const row = await this.prisma.subscriptions.findFirst({ orderBy: { id: 'asc' } });
       this.cached = { row, at: Date.now() };
     }
     const row = this.cached!.row;

@@ -37,12 +37,12 @@ async function scene(tx: PrismaService) {
   const n = ++seq;
   const now = new Date();
   const lead = await tx.leads.create({
-    data: { name: `retention lead ${n}`, email: `ret-${Date.now()}-${n}@x.test`, company_id: 1, created_at: now, updated_at: now },
+    data: { name: `retention lead ${n}`, email: `ret-${Date.now()}-${n}@x.test`, created_at: now, updated_at: now },
   });
 
   // inbound_emails.account_id is a real foreign key, so the mailbox has to exist.
   const account = await tx.mail_accounts.create({
-    data: { name: `retention box ${n}`, from_email: `box-${Date.now()}-${n}@x.test`, host: 'imap.x.test', company_id: 1, created_at: now, updated_at: now },
+    data: { name: `retention box ${n}`, from_email: `box-${Date.now()}-${n}@x.test`, host: 'imap.x.test', created_at: now, updated_at: now },
   });
 
   const mail = async (tag: string, receivedAt: Date, leadId: number | null) => tx.inbound_emails.create({
@@ -51,7 +51,7 @@ async function scene(tx: PrismaService) {
       from_email: 'someone@x.test', to_email: 'agent@x.test',
       subject: tag, snippet: 'snip',
       body_text: 'plain body', body_html: '<p>html body</p>',
-      received_at: receivedAt, lead_id: leadId, company_id: 1, created_at: now,
+      received_at: receivedAt, lead_id: leadId, created_at: now,
     },
   });
 

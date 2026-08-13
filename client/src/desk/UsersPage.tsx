@@ -812,14 +812,26 @@ function UserModal({ catalog, existing, onClose, onSaved }: UserModalProps) {
         )}
 
         <div className="actions" style={{ flexWrap: 'wrap', gap: 8 }}>
-          {/* Both open a review first: the message as it will arrive for this agent, editable
-              before it goes. Only for a saved user — there is nobody to address it to otherwise. */}
-          {isAgent && (
+          {/*
+            TRANSACTION MANAGEMENT ONLY, alongside the finance fields above.
+
+            Both send a document about the agent's ENGAGEMENT with the brokerage — the onboarding
+            guide and the contract agreement — which is Transaction Management's business, the same
+            side that owns their commission split, loan and deal history (`showAgentFinance`). The
+            CRM's interest in a user is who owns which leads; it has no part in contracting them.
+
+            Hidden, not removed: the buttons, the modal and the endpoints behind them are unchanged
+            and still reachable from Transaction Management. Nothing about who may send them moved.
+
+            Both open a review first: the message as it will arrive for this agent, editable before
+            it goes. Only for a saved user — there is nobody to address it to otherwise.
+          */}
+          {isAgent && area === 'desk' && (
             <button className="btn ghost" disabled={!existing}
               title={existing ? 'Preview and send the onboarding guide' : 'Save the agent first'}
               onClick={() => setOnboarding('onboard')}><Icon name="mail" size={13} /> Send Onboard Email</button>
           )}
-          {isAgent && (
+          {isAgent && area === 'desk' && (
             <button className="btn ghost" disabled={!existing}
               title={existing ? 'Preview and send the contract agreement' : 'Save the agent first'}
               onClick={() => setOnboarding('contract')}><Icon name="doc" size={13} /> Send Contract Agreement</button>

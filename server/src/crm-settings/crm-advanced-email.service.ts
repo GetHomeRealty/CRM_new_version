@@ -3,7 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { MailerService } from '../email/mailer.service';
 import { MailAccountService } from '../email/mail-account.service';
-import { TENANT_ID } from '../core/tenant';
+import { MAIL_EVENTS, renderTemplate } from '../email/mail-event-registry';
 import { EMAIL_SHAPE, MAX_BULK_RECIPIENTS } from './crm-settings.constants';
 import { CrmTriggersService } from './crm-triggers.service';
 // The same rule the Leads screen applies, so this path cannot reach further than the screens
@@ -41,6 +41,27 @@ export interface SendOutcome {
   redirected?: string | null;
 }
 
+/** The lead's own first name, for a greeting that reads like a person wrote it. */
+const firstNameOf = (full: string): string => str(full).split(/\s+/)[0] ?? '';
+
+/**
+ * Who a welcome email comes from, resolved before the send.
+ *
+ * `user` decides the mailbox, the name in the log and the signature; the rest are what the template
+ * may print. They are separate fields because they are not always the same thing: a lead with no
+ * agent is sent from the brokerage, and then `agentName` IS the brokerage's name — a default
+ * template must not greet somebody from nobody. See `LeadWelcomeService.senderFor`, which is the
+ * one place either shape is built.
+ */
+export interface WelcomeSender {
+  user: AuthUserRecord;
+  agentName: string;
+  agentEmail: string;
+  agentPhone: string;
+  brokerageName: string;
+  brokerageContact: string;
+}
+
 /**
  * The CRM's AdvancedEmailService, ported onto Transaction Desk's mailer.
  *
@@ -61,7 +82,7 @@ export class CrmAdvancedEmailService {
 
   /** Whether automatic sending is on at all — the CRM's `autoSendEnabled`. */
   async autoSendEnabled(): Promise<boolean> {
-    const row = await this.prisma.crm_email_settings.findFirst({ where: { company_id: TENANT_ID }, orderBy: { id: 'asc' } });
+    const row = await this.prisma.crm_email_settings.findFirst({ orderBy: { id: 'asc' } });
     return row ? row.auto_send_enabled : true;
   }
 
@@ -100,25 +121,198 @@ ${sig ? `<hr style="border:0;border-top:1px solid #e5e7eb;margin:24px 0 12px"><d
 </div>`;
   }
 
+  /**
+   * Resolve this CRM email's subject and body from Settings → Templates.
+   *
+   * WHY THIS EXISTS. These four emails carried their wording in this file, so changing a greeting
+   * meant a code change and a deploy. They now read the same `email_templates` row every other
+   * automated email in the application reads, keyed by event — which is what makes them editable,
+   * deactivatable, and visibly linked to the thing that sends them.
+   *
+   * FIRST CALL SEEDS THE ROW, exactly as `MailerService.send` does: absent a stored template the
+   * registry default is written to the database and used. So an upgraded brokerage sees the same
+   * wording it saw yesterday, now with a row it can edit, and nobody has to run a seed script.
+   *
+   * AN INACTIVE TEMPLATE REFUSES. Switching a template off on the Templates screen has to stop the
+   * email, or the switch is decorative — the same failure the CRM trigger toggles were deleted for.
+   * The refusal is thrown and the caller records it, so it lands in the CRM email log with a reason
+   * rather than disappearing.
+   *
+   * NOT ROUTED THROUGH `MailerService.send`, deliberately. That method resolves its own sender and
+   * dispatches; these emails must keep going through `dispatch` below, which applies the brokerage
+   * master switch, the "recipient must be one of your leads" rule, the unsubscribe and suppression
+   * checks, and the `crm_email_log` entry. Only the WORDING moves; every guard stays where it was.
+   */
+  private async fromTemplate(
+    eventKey: string,
+    vars: Record<string, unknown>,
+    signature?: string,
+  ): Promise<{ subject: string; html: string }> {
+    const meta = MAIL_EVENTS[eventKey];
+    if (!meta) throw new BadRequestException({ message: `No CRM email is registered for '${eventKey}'.` });
+
+    let template = await this.prisma.email_templates.findUnique({ where: { event_key: eventKey } });
+    if (!template) {
+      const now = new Date();
+      try {
+        await this.prisma.email_templates.create({
+          data: {
+            event_key: eventKey, module: meta.module, name: meta.label,
+            subject: meta.default_subject, body_html: meta.default_body_html,
+            is_active: true, created_at: now, updated_at: now,
+          },
+        });
+      } catch {
+        // A concurrent send seeded it first; the read below picks that row up.
+      }
+      template = await this.prisma.email_templates.findUnique({ where: { event_key: eventKey } });
+    }
+    if (!template) throw new Error(`Could not resolve the '${eventKey}' email template.`);
+    if (!template.is_active) {
+      throw new BadRequestException({
+        message: `Not sent — the "${template.name}" template is switched off under Settings → Templates.`,
+      });
+    }
+
+    const now = new Date();
+    const merged: Record<string, unknown> = {
+      current_date: now.toISOString().slice(0, 10),
+      current_year: String(now.getFullYear()),
+      ...vars,
+    };
+    // The body goes inside the same shell as before, so the signature block, width and typography
+    // are unchanged; only the paragraphs between them come from the template now.
+    return {
+      subject: renderTemplate(template.subject, merged),
+      html: this.shell(renderTemplate(template.body_html, merged), signature),
+    };
+  }
+
   // ---------------------------------------------------------------- sends
   async sendWeddingCongratulations(leadName: string, leadEmail: string, weddingDate: string, user: AuthUserRecord, signature?: string): Promise<SendOutcome> {
     if (!(await this.triggers.isEnabledFor(user, 'wedding'))) return this.refuse('wedding', leadName, leadEmail, user);
     const when = str(weddingDate);
-    return this.dispatch('wedding', leadName, leadEmail, 'Congratulations on your wedding!', this.shell(
-      `<p>Dear ${esc(leadName || 'there')},</p>
-<p>Congratulations on your wedding${when ? ` on ${esc(when)}` : ''}! Wishing you both every happiness in this next chapter.</p>
-<p>If a new home is part of your plans together, I'd be glad to help whenever the time feels right.</p>
-<p>With warm wishes,</p>`, signature), user);
+    const t = await this.fromTemplate('crm.wedding_congratulations', {
+      lead_name: leadName || 'there',
+      agent_name: user.name ?? '',
+      // Carries its own leading " on " so the sentence reads correctly when no date is stored, and
+      // the template does not need conditional logic it has no way to express.
+      wedding_date: when ? ` on ${when}` : '',
+    }, signature);
+    return this.dispatch('wedding', leadName, leadEmail, t.subject, t.html, user);
+  }
+
+  /*
+   * The two date-driven greetings. Same shape as every other send here — trigger check, then
+   * `dispatch`, which applies the master switch, the "must be one of your leads" rule and the
+   * `crm_email_log` entry. Nothing about them is special-cased for being sent by a timer; the
+   * scheduler that calls them is just another caller.
+   *
+   * Neither mentions an age or a number of years. The birth year is on file and the anniversary
+   * count is arithmetic, but "Happy 60th!" from a brokerage is a different message from "Happy
+   * birthday", and getting it wrong from a mistyped year is worse than not saying it.
+   */
+  /**
+   * The welcome a new lead gets, once, shortly after they arrive.
+   *
+   * WHO IT COMES FROM. `sender` carries the answer, and it is the same answer `senderFor` would
+   * give: the lead's own agent when they have one, the brokerage when they do not. Passing the
+   * agent as `user` therefore selects their connected CRM mailbox, their name in the log, and their
+   * signature; passing a brokerage stand-in with `id: null` falls through to the brokerage's CRM
+   * account. Either way it is a CRM mailbox — `senderFor(..., 'crm')` — so a Transaction Desk
+   * account can never send it, which is the separation `mail_accounts.scope` exists for.
+   *
+   * WHY IT TAKES `leadId`. This is the one send with no human caller, so the "must be one of your
+   * leads" rule has nobody to be about — and a brokerage-owned lead is in no agent's scope at all.
+   * See `dispatch`: naming the lead is a narrower claim than the scope query, not an escape from it.
+   *
+   * The trigger check uses the AGENT's switch when there is an agent, so somebody who has turned
+   * their own CRM emails off does not have welcomes going out under their name. With no agent there
+   * is no personal switch to consult and the brokerage default decides.
+   */
+  async sendWelcomeEmail(
+    lead: { id: number; name: string | null; email: string },
+    sender: WelcomeSender,
+    signature?: string,
+  ): Promise<SendOutcome> {
+    const leadName = lead.name ?? '';
+    if (!(await this.welcomeEnabledFor(sender.user))) {
+      return this.refuse('welcome', leadName, lead.email, sender.user);
+    }
+
+    const t = await this.fromTemplate('crm.lead_welcome', {
+      lead_first_name: firstNameOf(leadName) || 'there',
+      lead_name: leadName || 'there',
+      agent_name: sender.agentName,
+      agent_email: sender.agentEmail,
+      agent_phone: sender.agentPhone,
+      brokerage_name: sender.brokerageName,
+      brokerage_contact: sender.brokerageContact,
+    }, signature);
+
+    return this.dispatch('welcome', leadName, lead.email, t.subject, t.html, sender.user, lead.id);
+  }
+
+  /**
+   * Is the welcome switched on for whoever is sending it?
+   *
+   * An agent has their own switch, inheriting the brokerage default. A brokerage-owned lead has no
+   * agent, so there is no personal row to read and the brokerage default is the whole answer —
+   * asking `isEnabledFor` with a null id would look up overrides for user -1 and get the same
+   * answer by accident rather than on purpose.
+   */
+  private async welcomeEnabledFor(user: AuthUserRecord): Promise<boolean> {
+    if (user.id) return this.triggers.isEnabledFor(user, 'welcome');
+    return (await this.triggers.brokerageDefaultFor('welcome'));
+  }
+
+  /**
+   * Everything that would refuse a welcome for a reason that is NOT about this lead.
+   *
+   * WHY THIS IS SEPARATE FROM SENDING. `dispatch` records every refusal in `crm_email_log`, and the
+   * sweep treats any logged welcome as "this lead has had theirs" — which is what stops imports and
+   * retries producing duplicates. Those two together mean a brokerage that has not connected a CRM
+   * mailbox yet would have every lead's one-and-only welcome permanently spent on a refusal, and
+   * connecting the account later would fix nothing. So the sweep asks THIS first and skips quietly,
+   * leaving the lead eligible; only a real attempt to deliver spends the one chance.
+   *
+   * Returns the reason, or null when there is nothing in the way.
+   */
+  async welcomeBlockedReason(userId: number | null): Promise<string | null> {
+    if (!(await this.autoSendEnabled())) {
+      return 'the CRM\'s per-lead emails are switched off for the brokerage (Triggers → CRM Triggers)';
+    }
+    const template = await this.prisma.email_templates.findUnique({ where: { event_key: 'crm.lead_welcome' } });
+    if (template && !template.is_active) {
+      return `the "${template.name}" template is switched off (CRM Settings → Templates → CRM)`;
+    }
+    if (!(await this.accounts.senderFor(userId, 'crm'))) {
+      return 'no CRM email account is connected (CRM Settings → Integrations)';
+    }
+    return null;
+  }
+
+  async sendBirthdayWishes(leadName: string, leadEmail: string, user: AuthUserRecord, signature?: string): Promise<SendOutcome> {
+    if (!(await this.triggers.isEnabledFor(user, 'birthday'))) return this.refuse('birthday', leadName, leadEmail, user);
+    const t = await this.fromTemplate('crm.birthday_greeting',
+      { lead_name: leadName || 'there', agent_name: user.name ?? '' }, signature);
+    return this.dispatch('birthday', leadName, leadEmail, t.subject, t.html, user);
+  }
+
+  async sendAnniversaryWishes(leadName: string, leadEmail: string, user: AuthUserRecord, signature?: string): Promise<SendOutcome> {
+    if (!(await this.triggers.isEnabledFor(user, 'anniversary'))) return this.refuse('anniversary', leadName, leadEmail, user);
+    const t = await this.fromTemplate('crm.anniversary_greeting',
+      { lead_name: leadName || 'there', agent_name: user.name ?? '' }, signature);
+    return this.dispatch('anniversary', leadName, leadEmail, t.subject, t.html, user);
   }
 
   async sendSeasonalWishes(leadName: string, leadEmail: string, season: string, year: string | number, user: AuthUserRecord, signature?: string): Promise<SendOutcome> {
     if (!(await this.triggers.isEnabledFor(user, 'seasonal'))) return this.refuse('seasonal', leadName, leadEmail, user);
     const s = str(season) || 'the season';
     const y = str(year) || String(new Date().getFullYear());
-    return this.dispatch('seasonal', leadName, leadEmail, `${s} wishes from all of us`, this.shell(
-      `<p>Dear ${esc(leadName || 'there')},</p>
-<p>Wishing you a wonderful ${esc(s)} ${esc(y)} — thank you for your trust this year.</p>
-<p>If there's anything property-related I can help with in the year ahead, just reply to this email.</p>`, signature), user);
+    const t = await this.fromTemplate('crm.seasonal_wishes',
+      { lead_name: leadName || 'there', agent_name: user.name ?? '', season: s, year: y }, signature);
+    return this.dispatch('seasonal', leadName, leadEmail, t.subject, t.html, user);
   }
 
   async sendPromotionalOffer(leadName: string, leadEmail: string, offer: PromotionalOffer, user: AuthUserRecord, signature?: string): Promise<SendOutcome> {
@@ -386,6 +580,24 @@ ${offer?.description ? `<p>${esc(offer.description)}</p>` : ''}
   }
 
   /**
+   * The named lead, if that really is their address.
+   *
+   * Used only by the automatic welcome, where the sweep already has the lead in hand. It asserts
+   * the pair rather than trusting the id: an address that has since been edited to somebody else's
+   * no longer matches, and the send is refused exactly as an unknown address would be.
+   */
+  private async resolveNamedLead(email: string, leadId: number): Promise<{ id: number; name: string } | null> {
+    return this.prisma.leads.findFirst({
+      where: {
+        id: leadId,
+        email: { equals: email.trim().toLowerCase(), mode: 'insensitive' },
+        deleted_at: null,
+      },
+      select: { id: true, name: true },
+    });
+  }
+
+  /**
    * Whether this address has told the brokerage to stop, and why.
    *
    * Two records answer that, and both have to be consulted because they are written by different
@@ -430,7 +642,20 @@ ${offer?.description ? `<p>${esc(offer.description)}</p>` : ''}
    * opt-out was honoured, and an opt-out nobody can prove was honoured is most of the problem CASL
    * puts on the sender.
    */
-  private async dispatch(kind: string, leadName: string, leadEmail: string, subject: string, html: string, user: AuthUserRecord): Promise<SendOutcome> {
+  private async dispatch(
+    kind: string, leadName: string, leadEmail: string, subject: string, html: string, user: AuthUserRecord,
+    /**
+     * The lead this send is FOR, when the sender is the system rather than a person.
+     *
+     * `resolveRecipient` normally asks "is this address one of the caller's leads?", which is the
+     * rule that stops this endpoint being a mail relay. The automatic welcome has no caller in that
+     * sense: the sweep found the lead, and a lead nobody owns — the brokerage's own — belongs to no
+     * agent whose scope could contain it. Naming the lead is a NARROWER claim than the scope query,
+     * not a way around it: the address still has to be that exact lead's, the lead still has to
+     * exist and not be deleted, and every other guard below is unchanged.
+     */
+    forLeadId?: number,
+  ): Promise<SendOutcome> {
     const email = str(leadEmail);
     if (!EMAIL_SHAPE.test(email)) throw new BadRequestException({ message: 'Enter a valid recipient email address.' });
 
@@ -445,12 +670,19 @@ ${offer?.description ? `<p>${esc(offer.description)}</p>` : ''}
      * card, worked correctly — so the screen offered one gate that held and one that did not, with
      * the ineffective one labelled as the stronger.
      *
-     * Checked before the trigger, because it is the broader statement of the two: an administrator
-     * who turns this off is saying "stop sending", and finding out which individual trigger was
-     * also off does not change the answer.
+     * WHERE IT LIVES NOW: Triggers → CRM Triggers, in the "Brokerage" card above the personal
+     * switches, behind the `settings` permission this endpoint's siblings already enforce. It moved
+     * off CRM Settings because the Triggers screen was the one already REPORTING it — the notice
+     * there used to tell an administrator to go elsewhere to act on a warning they were reading.
+     *
+     * NOT checked before the trigger, despite what this comment claimed until 2026-08-08. Each of
+     * the five entry points calls `triggers.isEnabledFor` and returns before `dispatch` is reached,
+     * so a caller whose own trigger is also off is told about the trigger and the log records a
+     * trigger refusal. Nothing sends either way — the order only decides which of two true reasons
+     * is reported, and rearranging it would rewrite the meaning of existing `crm_email_log` rows.
      */
     if (!(await this.autoSendEnabled())) {
-      const message = 'Not sent — CRM emails are switched off. Turn "Allow CRM emails" back on under CRM Settings → Email Campaigns.';
+      const message = 'Not sent — the CRM\'s per-lead emails are switched off for the brokerage. Turn them back on under Triggers → CRM Triggers.';
       this.log.warn(`CRM ${kind} email to ${email} refused: CRM sending is switched off.`);
       await this.record(kind, leadName, email, subject, false, message, user, null);
       return { success: false, message };
@@ -458,7 +690,9 @@ ${offer?.description ? `<p>${esc(offer.description)}</p>` : ''}
 
     // The recipient has to be one of the caller's own leads. See `resolveRecipient` — this is what
     // stops the endpoint being a mail relay wearing a CRM's clothes.
-    const recipient = await this.resolveRecipient(email, user);
+    const recipient = forLeadId
+      ? await this.resolveNamedLead(email, forLeadId)
+      : await this.resolveRecipient(email, user);
     if (!recipient) {
       const message = can(user, 'data.read-all')
         ? 'Not sent — no lead in the CRM has this address. Add them as a lead first; CRM emails only go to people the brokerage already has a record of.'

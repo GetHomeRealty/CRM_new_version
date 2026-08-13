@@ -6,8 +6,6 @@ import { schedulersEnabled, schedulerSkipReason } from '../common/schedulers';
 import { LaravelCryptService } from '../common/laravel-crypt.service';
 import { GoogleService } from '../google/google.service';
 
-import { forEachTenant } from '../core/tenant-context';
-import { allTenantIds } from '../core/tenants';
 import { registerWorker } from '../observability/worker-health';
 import { clusterTick } from '../redis/cluster-tick';
 import { RedisService } from '../redis/redis.service';
@@ -65,10 +63,36 @@ export function countNewUids(found: number[] | false | null | undefined, lastUid
   return (found || []).filter((u) => u > floor);
 }
 
+/**
+ * Whether a completed sync should raise a "you have new mail" notification.
+ *
+ * Extracted for the same reason as `selectSyncBatch`: the alternative is a boolean buried inside a
+ * method that cannot run without a live IMAP server, which means the rule would go untested and
+ * the next person to widen it would not hear about it.
+ *
+ * Three things must all hold, and each rules out a real case:
+ *   `fetched`        nothing new arrived, so there is nothing to say
+ *   `userId`         a brokerage mailbox belongs to nobody in particular; there is no one to tell
+ *   `isPrimary`      the mailbox is the owner's primary one
+ *
+ * That last is the point of this function. A person may have several addresses syncing — one they
+ * work from, a shared enquiries box, an old address kept for archive — and notifying for all of
+ * them buried the line that mattered under the ones they only keep for reference. The other
+ * mailboxes still sync and their mail still arrives in the Inbox; what stops is the interruption.
+ */
+export function shouldNotifyNewMail(
+  account: { user_id: number | null; is_default: boolean },
+  fetched: number,
+): boolean {
+  return fetched > 0 && account.user_id !== null && account.is_default === true;
+}
+
 type AccountRow = {
   id: number; user_id: number | null; username: string | null; from_email: string;
   password: string | null; encryption: string | null; imap_host: string | null; imap_port: number | null;
   imap_encryption: string | null; last_uid: number | null;
+  /** Whether this is the owner's primary mailbox. Only that one raises a new-mail notification. */
+  is_default: boolean;
 };
 
 /**
@@ -145,17 +169,7 @@ export class ImapSyncService implements OnModuleInit, OnModuleDestroy {
   }
 
   /** Sync every account that has inbound sync switched on. Never overlaps with itself. */
-  /**
-   * Poll every mailbox, one brokerage at a time.
-   *
-   * The pass itself is unchanged; it simply runs once per tenant, inside that tenant's
-   * context, so every query it makes is scoped the same way a request would be.
-   */
   async pollAll(): Promise<void> {
-    await forEachTenant(() => allTenantIds(this.prisma), () => this.pollAllForTenant());
-  }
-
-  async pollAllForTenant(): Promise<void> {
     if (this.polling) return;
     this.polling = true;
     try {
@@ -259,7 +273,9 @@ export class ImapSyncService implements OnModuleInit, OnModuleDestroy {
         return { fetched: 0, matched: 0, error };
       }
       try {
-        const tok = await this.google.refresh(refresh);
+        // 'mail': this token was minted by the Gmail connect, which may run on its own Google
+        // project. Refreshing it against the calendar client would fail permanently.
+        const tok = await this.google.refresh(refresh, 'mail');
         auth.accessToken = tok.access_token;
       } catch (ex) {
         // Distinguish the one cause that the user can actually do something about. Google
@@ -402,10 +418,21 @@ export class ImapSyncService implements OnModuleInit, OnModuleDestroy {
        * Best-effort, outside everything that matters: mail has already been stored, and the sync
        * must not be marked failed because a notification could not be delivered.
        */
-      if (fetched > 0 && this.dispatcher && account.user_id) {
+      /*
+       * AND ONLY FOR THE PRIMARY MAILBOX — see `shouldNotifyNewMail` for which cases that rules
+       * out and why.
+       *
+       * The read side enforces the same rule a second time, in `primaryMailboxOnly` in
+       * notification-center.service.ts, and that is not redundancy. This check governs only what is
+       * CREATED, and creation happens once: somebody who makes a different address primary tomorrow
+       * should stop seeing yesterday's lines from the old one, and nothing decided here can reach
+       * back and do that.
+       */
+      if (this.dispatcher && shouldNotifyNewMail(account, fetched)) {
         await this.dispatcher.dispatch({
           category: 'inbox_new_mail',
-          userId: account.user_id,
+          // Non-null by `shouldNotifyNewMail`, which the compiler cannot see across the call.
+          userId: account.user_id as number,
           title: fetched === 1 ? 'You have a new email' : `You have ${fetched} new emails`,
           body: account.from_email || undefined,
           link: '/crm/inbox',
@@ -474,8 +501,21 @@ export class ImapSyncService implements OnModuleInit, OnModuleDestroy {
     return lead?.id ?? null;
   }
 
+  /**
+   * `updateMany`, not `update`, because the account may be gone by the time we write the outcome.
+   *
+   * A poll cycle takes seconds; deleting a mail account takes one click. Delete one mid-cycle and
+   * `update({ where: { id } })` throws P2025 — "No record was found for an update" — which the
+   * caller logged as `IMAP poll failed for account #<id>`, and the screen showed as a mail
+   * SYNCHRONISATION error. So removing an account produced a scary message about the sync being
+   * broken, pointing the reader at credentials and ports that were never the problem. Observed
+   * exactly that way: a DELETE of account #24857 at 11:12:40, this failure at 11:12:42.
+   *
+   * `updateMany` matches zero rows and returns `{ count: 0 }` rather than throwing, which is the
+   * honest outcome: there is no account left to record anything against.
+   */
   private async recordOutcome(accountId: number, error: string | null, maxUid?: number): Promise<void> {
-    await this.prisma.mail_accounts.update({
+    await this.prisma.mail_accounts.updateMany({
       where: { id: accountId },
       data: {
         last_synced_at: new Date(),

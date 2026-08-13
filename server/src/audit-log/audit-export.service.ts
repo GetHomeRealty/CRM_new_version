@@ -24,7 +24,7 @@ export interface AuditExportFile {
  * an export that quietly disagrees with the screen it was taken from is worse than no export at all,
  * because the person reading it has no way to notice. One builder, two callers.
  *
- * DOMAIN AND TENANT ISOLATION COME FOR FREE, and neither is re-stated:
+ * DOMAIN ISOLATION COMES FOR FREE, and is not re-stated:
  *   - the CRM/Desk split is part of `buildWhere` (via `domainWhere`), so a CRM export can only ever
  *     contain CRM-domain rows;
  *   - the brokerage filter is applied by the Prisma client extension to every query in the
@@ -276,7 +276,7 @@ export class AuditExportService {
   /**
    * A filename that says what the file is.
    *
-   * Deliberately carries NO database or tenant identifier: the file is emailed and stored, and a
+   * Deliberately carries NO database or deployment identifier: the file is emailed and stored, and a
    * company id in the name tells a recipient something about the deployment for no benefit. The date
    * range is included when one was filtered on, because that is what distinguishes two exports.
    */

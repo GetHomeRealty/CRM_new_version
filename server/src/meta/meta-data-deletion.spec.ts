@@ -75,7 +75,7 @@ async function connect(tx: PrismaService, facebookUserId: string): Promise<numbe
   const user = await tx.users.create({
     data: {
       name: `Del ${t}`, email: `del-${t}@example.test`, role: 'agent', status: 'Active',
-      password: 'x', company_id: 1, created_at: now, updated_at: now,
+      password: 'x', created_at: now, updated_at: now,
     },
   });
   await tx.meta_connections.create({
@@ -86,7 +86,7 @@ async function connect(tx: PrismaService, facebookUserId: string): Promise<numbe
   });
   await tx.meta_lead_forms.create({
     data: {
-      company_id: 1, user_id: user.id, page_id: `page-${t}`, form_id: `form-${t}`,
+      user_id: user.id, page_id: `page-${t}`, form_id: `form-${t}`,
       form_name: 'Campaign', is_active: true, created_at: now, updated_at: now,
     },
   });

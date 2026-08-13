@@ -1,7 +1,6 @@
 import { PrismaClient } from '@prisma/client';
 import type { PrismaService } from '../prisma/prisma.service';
 import { CrmSettingsService } from './crm-settings.service';
-import { TENANT_ID } from '../core/tenant';
 import type { AuthUserRecord } from '../auth/auth.types';
 
 /**
@@ -86,21 +85,24 @@ describe('T-M8 — one brokerage cannot end up with two settings rows', () => {
     const idx = await prisma.$queryRawUnsafe<{ indexname: string }[]>(
       "select indexname from pg_indexes where tablename='crm_email_settings' and indexdef like '%UNIQUE%'",
     );
-    expect(idx.map((i) => i.indexname)).toContain('crm_email_settings_company_id_key');
+    // Renamed when multi-brokerage tenancy was removed: the unique was on `company_id`, a column
+    // that no longer exists, and is now on the constant expression `(true)` — same guarantee of one
+    // row, expressed without a tenant.
+    expect(idx.map((i) => i.indexname)).toContain('crm_email_settings_singleton_key');
   });
 
-  it('refuses a second row for the same brokerage', async () => {
+  it('refuses a second row outright', async () => {
     await inRollback(async (tx) => {
       const now = new Date();
-      // The seeded database may or may not already hold a row for this tenant, and a test that
+      // The seeded database may or may not already hold the row, and a test that
       // passes only when it happens to is not a test. Guarantee the first one exists, then collide.
-      const existing = await tx.crm_email_settings.findFirst({ where: { company_id: TENANT_ID } });
+      const existing = await tx.crm_email_settings.findFirst({});
       if (!existing) {
-        await tx.crm_email_settings.create({ data: { company_id: TENANT_ID, created_at: now, updated_at: now } });
+        await tx.crm_email_settings.create({ data: { created_at: now, updated_at: now } });
       }
 
       await expect(
-        tx.crm_email_settings.create({ data: { company_id: TENANT_ID, created_at: now, updated_at: now } }),
+        tx.crm_email_settings.create({ data: { created_at: now, updated_at: now } }),
       ).rejects.toThrow();
     });
   });

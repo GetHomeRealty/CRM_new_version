@@ -45,6 +45,14 @@ export default function TodoList({ onCounts }: { onCounts?: (c: TodoCounts) => v
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
   const [busy, setBusy] = useState(0);
+  /*
+   * Collapsed until asked for, matching the two lead panels above it on the dashboard.
+   *
+   * The heading and the item count stay visible when shut, so the card still reports how much is
+   * on the list; what folds is the toolbar and the rows. Nothing about loading, filtering, adding,
+   * completing or deleting changes — this only decides what is drawn.
+   */
+  const [showList, setShowList] = useState(false);
 
   // Debounced so typing doesn't fire a request per keystroke.
   useEffect(() => {
@@ -114,12 +122,29 @@ export default function TodoList({ onCounts }: { onCounts?: (c: TodoCounts) => v
         <div className="todo-head-actions">
           <span className="todo-count">{counts.total} item{counts.total === 1 ? '' : 's'}</span>
           {counts.overdue > 0 && <span className="pill bad">{counts.overdue} overdue</span>}
-          <button className="btn ghost sm" type="button" onClick={clearFilters} disabled={!filtersActive}>Clear filters</button>
-          <button className="btn ghost sm" type="button" onClick={() => void load()}>↻ Refresh</button>
-          {canEdit && <button className="btn primary sm" type="button" onClick={() => setAdding(true)}>+ Add todo</button>}
+          {/* The controls that only make sense against a visible list fold away with it; the count
+              and the overdue pill stay, because those are what the card says when it is shut. */}
+          {showList && (
+            <>
+              <button className="btn ghost sm" type="button" onClick={clearFilters} disabled={!filtersActive}>Clear filters</button>
+              <button className="btn ghost sm" type="button" onClick={() => void load()}>↻ Refresh</button>
+              {canEdit && <button className="btn primary sm" type="button" onClick={() => setAdding(true)}>+ Add todo</button>}
+            </>
+          )}
+          <button
+            type="button"
+            className="btn ghost sm"
+            aria-expanded={showList}
+            title={showList ? 'Hide the todo list' : 'Show the todo list'}
+            onClick={() => setShowList((v) => !v)}
+          >
+            {showList ? '▲ Hide' : '▼ View'}
+          </button>
         </div>
       </div>
 
+      {showList && (
+      <>
       <div className="todo-filters">
         <input
           className="todo-search"
@@ -204,6 +229,8 @@ export default function TodoList({ onCounts }: { onCounts?: (c: TodoCounts) => v
             ))}
           </div>
         ))
+      )}
+      </>
       )}
 
       </div>

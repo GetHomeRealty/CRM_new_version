@@ -7,6 +7,8 @@ import { areaPath, type Area } from './area';
 import IntegrationsPanel from './IntegrationsPanel';
 import { TemplatesTab } from './EmailSettingsPanels';
 import CrmSettingsPanel from './CrmSettingsPanel';
+import CrmCommunicationsPanel from './CrmCommunicationsPanel';
+import TwoFactorCard from './TwoFactorCard';
 import CompanySettingsPage from './CompanySettingsPage';
 import RolesPanel from './RolesPanel';
 import LicencePanel from './LicencePanel';
@@ -82,6 +84,42 @@ const DESK_SECTIONS = [
 ] as const;
 
 /**
+ * The two sections inside CRM Settings.
+ *
+ * Templates moved here from Transaction Desk. They are the CRM's own automated emails — new lead,
+ * lead assigned, follow-up due, Meta lead, campaign finished, and the greetings that go to a lead
+ * directly — so they belong beside the rest of the CRM's configuration rather than behind a tab
+ * about deals. The rows, the endpoints and the editor are unchanged; only where they are listed
+ * moved. Transaction Desk keeps every other module group.
+ */
+const CRM_SECTIONS = [
+  { key: 'settings', label: 'CRM Settings', ico: 'settings' },
+  /*
+   * Communications is where CRM email preferences and template management are heading: one screen
+   * instead of Templates, Notification Preferences and Triggers. It is added ALONGSIDE Templates
+   * rather than replacing it while the preference migration is still outstanding — the old routes
+   * keep working, and nothing is removed until the cutover is approved.
+   */
+  { key: 'communications', label: 'Communications', ico: 'mail' },
+  { key: 'templates', label: 'Templates', ico: 'file' },
+  /*
+   * Two-step verification, moved here from the personal Settings page beside Email Accounts.
+   *
+   * It is listed here as asked, but it is NOT an administrator's setting and is not gated like one:
+   * the card only ever reads and writes the signed-in person's own factors, and the policy can make
+   * enrolment REQUIRED for a role. Reachable only through this tab, every agent — who holds no
+   * `settings` permission — would have been told to set up a factor with no screen on which to do
+   * it. So it also answers at its own open route, and that is the door agents use. See the entry in
+   * App.tsx and the sidebar entry in DeskLayout.tsx.
+   */
+  { key: 'two-step', label: 'Two-Step Verification', ico: 'lock' },
+] as const;
+
+/** The sections a given top-level tab owns. Tabs without sub-navigation have none. */
+const sectionsFor = (tabKey: string): readonly { key: string; label: string; ico: string }[] =>
+  (tabKey === 'desk' ? DESK_SECTIONS : tabKey === 'crm' ? CRM_SECTIONS : []);
+
+/**
  * Old deep links, bookmarks and the Google/Gmail OAuth return path (`?tab=integrations`)
  * still point at the previous top-level names. Map each onto its new home so none of them
  * break — the second element is the Transaction Desk sub-section to open.
@@ -125,7 +163,15 @@ export default function SettingsPage() {
   const foreign = TABS.find((t) => t.key === aliasTab && t.area && t.area !== area);
   const active = visible.some((t) => t.key === aliasTab) ? aliasTab : fallback;
   const requestedSub = aliasSub ?? params.get('section') ?? '';
-  const activeSub = DESK_SECTIONS.some((s) => s.key === requestedSub) ? requestedSub : DESK_SECTIONS[0].key;
+  /*
+   * Resolved against the sections the ACTIVE tab owns, not against the Desk's alone. Both tabs
+   * happen to have a section called `templates`; scoping the lookup this way is what keeps
+   * `?tab=crm&section=templates` on the CRM's list rather than silently falling back.
+   */
+  const tabSections = sectionsFor(active);
+  const activeSub = tabSections.some((s) => s.key === requestedSub)
+    ? requestedSub
+    : (tabSections[0]?.key ?? '');
 
   const [tab, setTab] = useState(active);
   const [sub, setSub] = useState<string>(activeSub);
@@ -172,7 +218,9 @@ export default function SettingsPage() {
     if (section) setSub(section);
     const next = new URLSearchParams(params);
     next.set('tab', key);
-    if (key === 'desk') next.set('section', section ?? sub);
+    // Both tabs that own sections keep theirs in the URL, so a CRM Templates link is shareable
+    // and the Back button steps through sections the same way on either side.
+    if (sectionsFor(key).length) next.set('section', section ?? sectionsFor(key)[0].key);
     else next.delete('section');
     setParams(next, { replace: true });
   };
@@ -203,10 +251,38 @@ export default function SettingsPage() {
           </div></div>
 
           {sub === 'integrations' && <IntegrationsPanel />}
-          {sub === 'templates' && <TemplatesTab toast={toast} />}
+          {/* `desk` scope = every module EXCEPT CRM. The CRM group now lives under CRM Settings. */}
+          {sub === 'templates' && <TemplatesTab toast={toast} scope="desk" />}
         </>
       )}
-      {tab === 'crm' && <CrmSettingsPanel />}
+
+      {tab === 'crm' && (
+        <>
+          {/*
+            Sub-navigation, and Templates only for a Super Admin.
+            `/api/email-templates` is behind `AdminGuard`, which is the top tier — so offering the
+            section to the Admin/manager role that `settings: view` also admits here would show
+            them a tab that 403s the moment it loads. The gate matches the endpoint exactly;
+            widening who may edit templates is an API decision, not a navigation one.
+          */}
+          <div className="toolbar"><div className="toolbar-row">
+            <strong style={{ marginRight: 6 }}>CRM Settings</strong>
+            {CRM_SECTIONS.filter((s) => s.key !== 'templates' || isSuperAdmin).map((s) => (
+              <button key={s.key} className={`btn sm ${sub === s.key ? 'primary' : 'ghost'}`}
+                onClick={() => go('crm', s.key)}>
+                <Icon name={s.ico} size={14} /> {s.label}
+              </button>
+            ))}
+          </div></div>
+
+          {/* Communications is open to everybody: an agent controls their own preferences there,
+              and the write endpoints refuse anything beyond that on the server. */}
+          {sub === 'communications' ? <CrmCommunicationsPanel />
+            : sub === 'two-step' ? <TwoFactorCard />
+              : sub === 'templates' && isSuperAdmin ? <TemplatesTab toast={toast} scope="crm" />
+                : <CrmSettingsPanel />}
+        </>
+      )}
       {tab === 'company' && <CompanySettingsPage />}
       {tab === 'roles' && <><LicencePanel /><RolesPanel /><LeadBooksPanel /></>}
     </>

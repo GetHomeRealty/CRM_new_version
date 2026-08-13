@@ -6,6 +6,7 @@ import { GoogleStateService } from './google-state.service';
 import { GoogleCalendarSyncService } from './google-calendar-sync.service';
 import { GmailConnectService } from './gmail-connect.service';
 import { frontendReturn, isConfigured, redirectUri } from './google.constants';
+import { PrismaService } from '../prisma/prisma.service';
 
 const str = (v: unknown): string => String(v ?? '').trim();
 
@@ -28,6 +29,8 @@ export class GooglePublicController {
     private readonly state: GoogleStateService,
     private readonly sync: GoogleCalendarSyncService,
     private readonly gmail: GmailConnectService,
+    // Confirms the user named by the signed state still exists; see the callback.
+    private readonly prisma: PrismaService,
   ) {}
 
   @Get('callback')
@@ -51,21 +54,32 @@ export class GooglePublicController {
       const host = str(req.headers['x-forwarded-host']) || str(req.headers.host);
       const uri = redirectUri(host ? `${proto}://${host}` : '');
 
-      const tokens = await this.google.exchangeCode(code, uri);
+      // Exchanged against the SAME client the authorization URL used — the mail flow may run on its
+      // own Google project, and a code is only redeemable by the client it was issued to.
+      const tokens = await this.google.exchangeCode(code, uri, purpose === 'mail' ? 'mail' : 'calendar');
       const email = await this.google.email(tokens.access_token);
+
+      /*
+       * The state is signed and already verified, but it names a user id rather than proving that
+       * user still exists — a state minted before an account was deleted still verifies. Checking
+       * here turns that into a clean `unknown_user` rather than a foreign-key error partway through
+       * the writes below.
+       */
+      const owner = await this.prisma.users.findUnique({ where: { id: userId }, select: { id: true } });
+      if (!owner) return fail('unknown_user', `no user #${userId} for a verified state`);
 
       // Same callback finishes either a Gmail (mail) or a Calendar connect, per the signed state.
       if (purpose === 'mail') {
         await this.gmail.upsert(userId, tokens, email, scope);
-        return res.redirect(frontendReturn('mail_connected=1'));
+      } else {
+        // Stored against the area that began the flow — CRM and Transaction Desk hold
+        // independent calendar connections.
+        await this.connections.save(userId, tokens, email, scope);
+        // Pull once immediately so the calendar isn't empty right after connecting. Best-effort.
+        try { await this.sync.pull(userId, scope); } catch { /* surfaced later via status */ }
       }
 
-      // Stored against the area that began the flow — CRM and Transaction Desk hold
-      // independent calendar connections.
-      await this.connections.save(userId, tokens, email, scope);
-      // Pull once immediately so the calendar isn't empty right after connecting. Best-effort.
-      try { await this.sync.pull(userId, scope); } catch { /* surfaced later via status */ }
-      res.redirect(frontendReturn('google_connected=1'));
+      res.redirect(frontendReturn(purpose === 'mail' ? 'mail_connected=1' : 'google_connected=1'));
     } catch (ex) {
       const detail = (ex as Error).message;
       if (purpose === 'mail') {

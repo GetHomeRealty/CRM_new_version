@@ -1,6 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
-import { runAsSystem } from '../../core/tenant-context';
 import type { AuthUserRecord } from '../auth.types';
 
 export interface MfaPolicyView {
@@ -35,31 +34,40 @@ export class MfaPolicyService {
 
   constructor(private readonly prisma: PrismaService) {}
 
-  /** Every policy row for a brokerage, for the settings screen. */
-  async list(companyId: number): Promise<MfaPolicyView[]> {
-    const rows = await runAsSystem(() => this.prisma.mfa_policies.findMany({
-      where: { company_id: companyId },
+  /** Every policy row, for the settings screen. */
+  async list(): Promise<MfaPolicyView[]> {
+    const rows = await this.prisma.mfa_policies.findMany({
       orderBy: { role: 'asc' },
       select: { role: true, required: true, grace_days: true },
-    }));
+    });
     return rows;
   }
 
   /** Set the policy for one role. */
-  async set(companyId: number, role: string, required: boolean, graceDays: number): Promise<MfaPolicyView> {
+  async set(role: string, required: boolean, graceDays: number): Promise<MfaPolicyView> {
     const now = new Date();
     const grace = Number.isFinite(graceDays) && graceDays >= 0 ? Math.floor(graceDays) : 7;
-    const row = await runAsSystem(() => this.prisma.mfa_policies.upsert({
-      where: { company_id_role: { company_id: companyId, role } },
-      /*
-       * `updated_at` moves on every change, and the grace period is measured from it. That is
-       * deliberate: turning the requirement off and on again, or extending the grace, restarts the
-       * clock rather than leaving people instantly overdue against a date they never saw.
-       */
-      update: { required, grace_days: grace, updated_at: now },
-      create: { company_id: companyId, role, required, grace_days: grace, created_at: now, updated_at: now },
-      select: { role: true, required: true, grace_days: true },
-    }));
+    /*
+     * `updated_at` moves on every change, and the grace period is measured from it. That is
+     * deliberate: turning the requirement off and on again, or extending the grace, restarts the
+     * clock rather than leaving people instantly overdue against a date they never saw.
+     *
+     * Find-then-write rather than `upsert`, because the uniqueness that made a keyed upsert possible
+     * is now on `role` alone and Prisma exposes a compound accessor only while the compound key
+     * exists. The unique index still refuses a second row for a role, so a concurrent double-create
+     * fails loudly rather than duplicating the policy.
+     */
+    const existing = await this.prisma.mfa_policies.findFirst({ where: { role }, select: { id: true } });
+    const row = existing
+      ? await this.prisma.mfa_policies.update({
+          where: { id: existing.id },
+          data: { required, grace_days: grace, updated_at: now },
+          select: { role: true, required: true, grace_days: true },
+        })
+      : await this.prisma.mfa_policies.create({
+          data: { role, required, grace_days: grace, created_at: now, updated_at: now },
+          select: { role: true, required: true, grace_days: true },
+        });
     this.log.log(`Two-factor policy for "${role}" set to ${required ? 'required' : 'optional'} (grace ${grace}d).`);
     return row;
   }
@@ -73,10 +81,10 @@ export class MfaPolicyService {
   async obligationFor(user: AuthUserRecord, enrolled: boolean, now: Date = new Date()): Promise<MfaObligation> {
     if (enrolled) return { state: 'none' };
 
-    const policy = await runAsSystem(() => this.prisma.mfa_policies.findUnique({
-      where: { company_id_role: { company_id: user.company_id, role: user.role || 'agent' } },
+    const policy = await this.prisma.mfa_policies.findFirst({
+      where: { role: user.role || 'agent' },
       select: { required: true, grace_days: true, updated_at: true },
-    }));
+    });
     if (!policy?.required) return { state: 'none' };
 
     // The later of "when this policy last changed" and "when this account was created".

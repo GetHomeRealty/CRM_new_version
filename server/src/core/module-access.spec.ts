@@ -38,17 +38,21 @@ async function seed(tx: PrismaService, licence?: { crm?: boolean; desk?: boolean
     data: { name: 'access spec', email: `acc-${Date.now()}-${Math.round(performance.now() * 1000)}@example.test`, password: 'x', role: 'agent', created_at: now, updated_at: now },
   });
   if (licence) {
-    await tx.subscriptions.upsert({
-      where: { company_id: 1 },
-      create: {
-        company_id: 1, crm_enabled: licence.crm ?? true, transaction_enabled: licence.desk ?? true,
-        status: licence.status ?? 'active', expiry_date: licence.expiry ?? null, created_at: now, updated_at: now,
-      },
-      update: {
-        crm_enabled: licence.crm ?? true, transaction_enabled: licence.desk ?? true,
-        status: licence.status ?? 'active', expiry_date: licence.expiry ?? null, updated_at: now,
-      },
-    });
+    // Find-then-write rather than a keyed upsert: the licence row is a singleton enforced by a
+    // unique index on a constant expression, so there is no unique column to address it by.
+    const existingLicence = await tx.subscriptions.findFirst({ select: { id: true } });
+    const licenceData = {
+      crm_enabled: licence.crm ?? true,
+      transaction_enabled: licence.desk ?? true,
+      status: licence.status ?? 'active',
+      expiry_date: licence.expiry ?? null,
+      updated_at: now,
+    };
+    if (existingLicence) {
+      await tx.subscriptions.update({ where: { id: existingLicence.id }, data: licenceData });
+    } else {
+      await tx.subscriptions.create({ data: { ...licenceData, created_at: now } });
+    }
   }
   const assign = (modules: string[]) =>
     tx.user_modules.createMany({
@@ -133,7 +137,7 @@ describe('the defaults fail open, so nobody is locked out by an empty table', ()
   it('treats a missing subscription as fully licensed', async () => {
     await inRollback(async (tx) => {
       const { user, assign } = await seed(tx);
-      await tx.subscriptions.deleteMany({ where: { company_id: 1 } });
+      await tx.subscriptions.deleteMany({ where: {} });
       await assign(['crm', 'desk']);
       const licence = await svc(tx).licence();
       expect({ crm: licence.crm, desk: licence.desk, valid: licence.valid }).toEqual({ crm: true, desk: true, valid: true });
@@ -257,7 +261,7 @@ describe('the live data is untouched by any of this', () => {
   });
 
   it('still licenses both modules for the company', async () => {
-    const sub = await prisma.subscriptions.findUnique({ where: { company_id: 1 } });
+    const sub = await prisma.subscriptions.findFirst();
     expect(sub).not.toBeNull();
     expect({ crm: sub!.crm_enabled, desk: sub!.transaction_enabled, status: sub!.status }).toEqual({ crm: true, desk: true, status: 'active' });
   });

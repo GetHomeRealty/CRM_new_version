@@ -1,6 +1,5 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { runAsSystem } from '../core/tenant-context';
 import { schedulersEnabled, schedulerSkipReason } from '../common/schedulers';
 import { clusterTick } from '../redis/cluster-tick';
 import { RedisService } from '../redis/redis.service';
@@ -127,7 +126,7 @@ export class MailRetentionService implements OnModuleInit, OnModuleDestroy {
   /** What a sweep would do, without doing it. Used by the readiness/monitoring surface and by tests. */
   async preview(): Promise<{ toStrip: number; toDelete: number; policy: RetentionPolicy }> {
     const policy = retentionPolicy();
-    return runAsSystem(async () => ({
+    return {
       policy,
       toStrip: policy.stripBodiesAfterDays
         ? await this.prisma.inbound_emails.count({ where: this.stripWhere(policy) })
@@ -135,7 +134,7 @@ export class MailRetentionService implements OnModuleInit, OnModuleDestroy {
       toDelete: policy.deleteAfterDays
         ? await this.prisma.inbound_emails.count({ where: this.deleteWhere(policy) })
         : 0,
-    }));
+    };
   }
 
   async sweep(): Promise<{ stripped: number; deleted: number }> {
@@ -145,33 +144,28 @@ export class MailRetentionService implements OnModuleInit, OnModuleDestroy {
     let stripped = 0, deleted = 0;
 
     try {
-      // Retention spans every brokerage, so it runs outside tenant scope — the same escape hatch
-      // the other cross-tenant background work uses, and the reason this file is on the pinned
-      // list of callers.
-      await runAsSystem(async () => {
-        if (policy.stripBodiesAfterDays) {
-          // updateMany, not a loop: this rewrites two columns and holds no rows in memory.
-          const r = await this.prisma.inbound_emails.updateMany({
-            where: this.stripWhere(policy),
-            data: { body_text: null, body_html: null },
-          });
-          stripped = r.count;
-        }
+      if (policy.stripBodiesAfterDays) {
+        // updateMany, not a loop: this rewrites two columns and holds no rows in memory.
+        const r = await this.prisma.inbound_emails.updateMany({
+          where: this.stripWhere(policy),
+          data: { body_text: null, body_html: null },
+        });
+        stripped = r.count;
+      }
 
-        if (policy.deleteAfterDays) {
-          // Batched. A single deleteMany over a 900 MB table takes one long transaction and blocks
-          // the IMAP poller writing into the same table; 500 at a time keeps each one short.
-          for (;;) {
-            const doomed = await this.prisma.inbound_emails.findMany({
-              where: this.deleteWhere(policy), select: { id: true }, take: BATCH,
-            });
-            if (!doomed.length) break;
-            const r = await this.prisma.inbound_emails.deleteMany({ where: { id: { in: doomed.map((d) => d.id) } } });
-            deleted += r.count;
-            if (doomed.length < BATCH) break;
-          }
+      if (policy.deleteAfterDays) {
+        // Batched. A single deleteMany over a 900 MB table takes one long transaction and blocks
+        // the IMAP poller writing into the same table; 500 at a time keeps each one short.
+        for (;;) {
+          const doomed = await this.prisma.inbound_emails.findMany({
+            where: this.deleteWhere(policy), select: { id: true }, take: BATCH,
+          });
+          if (!doomed.length) break;
+          const r = await this.prisma.inbound_emails.deleteMany({ where: { id: { in: doomed.map((d) => d.id) } } });
+          deleted += r.count;
+          if (doomed.length < BATCH) break;
         }
-      });
+      }
 
       if (stripped || deleted) {
         this.log.log(`Mail retention sweep: ${stripped} bodies stripped, ${deleted} messages deleted.`);

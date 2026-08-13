@@ -14,7 +14,6 @@ import { useAuth } from '../context/AuthContext';
 import { useToast } from './toast';
 import MailAccountModal from './MailAccountModal';
 import UserAvatar, { bumpPhotoVersion } from './UserAvatar';
-import TwoFactorCard from './TwoFactorCard';
 import GoogleCalendarCard from './GoogleCalendarCard';
 
 const PHOTO_ACCEPT = '.png,.jpg,.jpeg,.gif,.webp';
@@ -185,8 +184,12 @@ export default function AccountSettingsPage() {
         <div className="lead-lock-note" style={{ marginBottom: 12 }}>⚠ {loadWarning}</div>
       )}
 
-      {/* ---- Two-step verification ---- */}
-      <TwoFactorCard />
+      {/*
+        * Two-step verification used to sit here, above Profile Picture. It moved to CRM → Settings
+        * → Two-Step Verification, which is now the only place it is configured. Nothing about the
+        * factors themselves changed — same card, same endpoints, same enrolled methods — only where
+        * it is listed. The `two-step` route is its open door for anyone without `settings`.
+        */}
 
       {/* ---- Profile Picture ---- */}
       <div className="card">
@@ -359,26 +362,26 @@ export default function AccountSettingsPage() {
         {/* Calendar & social — grouped with mail under one Integrations section. */}
         <div className="intg" style={{ marginTop: 14 }}>
           {/*
-            TWO CARDS, ONE PER SCOPE — not one card and not a bespoke copy of it.
+            ONE CARD — the one belonging to the area this screen is being viewed under.
 
-            This screen used to render its own inline Google Calendar row, which took no `scope` at
-            all. CRM Settings and Transaction Desk Settings each render the shared
-            `GoogleCalendarCard` with their own scope, so they manage two genuinely separate
-            connections; this page could express neither. A user connected under CRM saw a card that
-            said "Google Calendar connected" and could not tell them for which area — and the copy
-            had drifted from the shared component besides.
+            This is a single component served at both /crm/account and /desk/account, and it used to
+            render BOTH scoped cards regardless. So Settings under the CRM showed a "Transaction
+            Management" Google Calendar and Settings under Transaction Management showed a
+            "Customer Relationship Management" one — each area offering a connection that belongs to
+            the other.
 
-            `google_connections.scope` is what makes them separate, the same column pattern
-            `mail_accounts.scope` uses. Rendering both here, each labelled, is the only honest way to
-            show a personal settings page: connected to one is not connected to the other.
+            The two connections remain genuinely separate: `google_connections.scope` still keys
+            them, the same column pattern `mail_accounts.scope` uses, and connecting one still does
+            not connect the other. What changed is only which of them THIS screen offers. The
+            heading is kept and follows the area, because a card that just says "Google Calendar"
+            cannot tell you which of the two it manages — that ambiguity is what the headings were
+            added for in the first place.
           */}
           <div className="intg-scope">
-            <h4 className="intg-scope-title">Customer Relationship Management</h4>
-            <GoogleCalendarCard scope="crm" />
-          </div>
-          <div className="intg-scope" style={{ marginTop: 10 }}>
-            <h4 className="intg-scope-title">Transaction Management</h4>
-            <GoogleCalendarCard scope="desk" />
+            <h4 className="intg-scope-title">
+              {area === 'crm' ? 'Customer Relationship Management' : 'Transaction Management'}
+            </h4>
+            <GoogleCalendarCard scope={area === 'crm' ? 'crm' : 'desk'} />
           </div>
 
           {/*

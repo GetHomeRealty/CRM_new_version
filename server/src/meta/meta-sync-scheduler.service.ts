@@ -6,8 +6,6 @@ import { clusterTick } from '../redis/cluster-tick';
 import { RedisService } from '../redis/redis.service';
 import { CacheService } from '../redis/cache.service';
 
-import { forEachTenant } from '../core/tenant-context';
-import { allTenantIds } from '../core/tenants';
 import { registerWorker, trackedTick } from '../observability/worker-health';
 /**
  * Pulls Meta lead-ad submissions on a timer, so leads arrive without anyone pressing Sync.
@@ -79,17 +77,7 @@ export class MetaSyncSchedulerService implements OnModuleInit, OnModuleDestroy {
    * throttle that stops every account at once — and unlike mail, nobody is waiting on this in
    * the foreground.
    */
-  /**
-   * Pull lead-ad submissions, one brokerage at a time.
-   *
-   * The pass itself is unchanged; it simply runs once per tenant, inside that tenant's
-   * context, so every query it makes is scoped the same way a request would be.
-   */
   async pollAll(): Promise<void> {
-    await forEachTenant(() => allTenantIds(this.prisma), () => this.pollAllForTenant());
-  }
-
-  async pollAllForTenant(): Promise<void> {
     if (this.running) return; // a slow round must not overlap the next tick
     this.running = true;
     try {

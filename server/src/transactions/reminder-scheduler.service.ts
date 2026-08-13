@@ -1,8 +1,5 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
 import { schedulersEnabled, schedulerSkipReason } from '../common/schedulers';
-import { forEachTenant } from '../core/tenant-context';
-import { allTenantIds } from '../core/tenants';
 import { registerWorker } from '../observability/worker-health';
 import { clusterTick } from '../redis/cluster-tick';
 import { RedisService } from '../redis/redis.service';
@@ -29,7 +26,6 @@ export class ReminderSchedulerService implements OnModuleInit, OnModuleDestroy {
   private running = false;
 
   constructor(
-    private readonly prisma: PrismaService,
     private readonly sweep: ReminderSweepService,
     // Only used to decide whether THIS process should run a given pass — see `clusterTick`.
     private readonly redis: RedisService,
@@ -61,12 +57,12 @@ export class ReminderSchedulerService implements OnModuleInit, OnModuleDestroy {
     if (this.timer) clearInterval(this.timer);
   }
 
-  /** One pass per brokerage, inside that tenant's context, as the other sweeps do. */
+  /** One pass over every due reminder. */
   async run(): Promise<void> {
     if (this.running) return;
     this.running = true;
     try {
-      await forEachTenant(() => allTenantIds(this.prisma), async () => { await this.sweep.sweep(); });
+      await this.sweep.sweep();
     } catch (err) {
       this.log.error(`Reminder sweep failed: ${err instanceof Error ? err.message : String(err)}`);
     } finally {

@@ -1,9 +1,10 @@
 /**
  * Whether this process should run background schedulers.
  *
- * Ten of them live inside the API process — the IMAP poller, campaign resume, lead-task and
- * appointment reminders, Meta sync, the Google retry, the export sweeper, review SLA and mail
- * retention. Every one now goes through `clusterTick`, so with Redis exactly one process runs each
+ * Eleven of them live inside the API process — the IMAP poller, campaign resume, lead-task and
+ * appointment reminders, Meta sync, the Google retry, the export sweeper, review SLA, mail
+ * retention and lead birthday/anniversary greetings. Every one goes through `clusterTick`, so with
+ * Redis exactly one process runs each
  * pass. WITHOUT Redis `clusterTick` deliberately runs the tick anyway — failing closed would
  * silently stop every scheduled job on a deployment that has none — so on more than one process
  * this flag is still the only thing standing between a brokerage and two IMAP syncs racing on one

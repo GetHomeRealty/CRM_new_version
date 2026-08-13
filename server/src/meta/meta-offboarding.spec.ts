@@ -65,7 +65,7 @@ async function makeAgent(tx: PrismaService, label: string): Promise<AuthUserReco
   const u = await tx.users.create({
     data: {
       name: `Meta ${label} ${t}`, email: `meta-${t}@example.test`, role: 'agent',
-      status: 'Active', password: 'x', company_id: 1, created_at: now, updated_at: now,
+      status: 'Active', password: 'x', created_at: now, updated_at: now,
     },
   });
   return u as unknown as AuthUserRecord;
@@ -86,7 +86,7 @@ async function claimForm(tx: PrismaService, userId: number, pageId: string, form
   const now = new Date();
   await tx.meta_lead_forms.create({
     data: {
-      company_id: 1, user_id: userId, page_id: pageId, form_id: formId,
+      user_id: userId, page_id: pageId, form_id: formId,
       form_name: 'Spring campaign', is_active: true, created_at: now, updated_at: now,
     },
   });
@@ -171,7 +171,7 @@ describe('an agent leaving hands their forms back', () => {
       await tx.meta_lead_forms.upsert({
         where: { user_id_form_id_page_id: { user_id: agent.id as number, form_id: formId, page_id: pageId } },
         create: {
-          company_id: 1, user_id: agent.id as number, page_id: pageId, form_id: formId,
+          user_id: agent.id as number, page_id: pageId, form_id: formId,
           form_name: 'Spring campaign', is_active: true, created_at: now, updated_at: now,
         },
         update: { is_active: true, updated_at: now },

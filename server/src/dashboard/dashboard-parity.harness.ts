@@ -46,7 +46,7 @@ export const PARITY_ROLES: { label: string; user: ResourceUser | null }[] = [];
 export async function parityRoles(prisma: PrismaClient): Promise<{ label: string; user: ResourceUser }[]> {
   const users = await prisma.users.findMany({
     where: { status: 'Active' },
-    select: { id: true, name: true, role: true, company_id: true },
+    select: { id: true, name: true, role: true },
     orderBy: { id: 'asc' },
   });
   // Keyed by USER ID, not by name. Keying on the name made a rename look like a parity failure:
@@ -55,7 +55,7 @@ export async function parityRoles(prisma: PrismaClient): Promise<{ label: string
   // ignored, which would defeat the point of having one.
   return users.map((u) => ({
     label: `${u.role}#${u.id}`,
-    user: { id: u.id, name: u.name, role: u.role, company_id: u.company_id } as unknown as ResourceUser,
+    user: { id: u.id, name: u.name, role: u.role } as unknown as ResourceUser,
   }));
 }
 

@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { createLead, updateLead } from '../lib/leadsApi';
+import { useEffect, useRef, useState } from 'react';
+import { createLead, listLeadTags, updateLead } from '../lib/leadsApi';
 import { apiErrorMessage, apiFieldErrors } from '../lib/apiError';
 import { useToast } from './toast';
 import type { Lead, LeadOptions, LeadPropertyPreferences } from '../types';
@@ -135,6 +135,29 @@ function PropertyTypePicker({ vocabulary, types, custom, onChange }: {
 }) {
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState('');
+  /*
+   * Collapsed into a dropdown. The checkboxes, the custom entry and the chips are unchanged — the
+   * list was simply always open, which on a form with a dozen other fields pushed everything below
+   * it off the screen. Closed, the trigger says what is selected; open, it is the same picker.
+   */
+  const [open, setOpen] = useState(false);
+  const boxRef = useRef<HTMLDivElement>(null);
+
+  /*
+   * Close on an outside click or Escape. Registered only while open, so a form with this field on
+   * it carries no document listener until somebody actually opens the menu. `mousedown` rather
+   * than `click`: a click that begins outside and ends inside would otherwise slip through.
+   */
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (boxRef.current && !boxRef.current.contains(e.target as Node)) { setOpen(false); setAdding(false); }
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { setOpen(false); setAdding(false); } };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => { document.removeEventListener('mousedown', onDown); document.removeEventListener('keydown', onKey); };
+  }, [open]);
 
   const toggle = (t: string) =>
     onChange({ types: types.includes(t) ? types.filter((x) => x !== t) : [...types, t] });
@@ -157,29 +180,51 @@ function PropertyTypePicker({ vocabulary, types, custom, onChange }: {
 
   return (
     <div className="field">
-      <label>Property Type</label>
-      <div className="type-picker">
-        {vocabulary.map((t) => (
-          <label key={t} className={`type-opt${types.includes(t) ? ' on' : ''}`}>
-            <input type="checkbox" checked={types.includes(t)} onChange={() => toggle(t)} />
-            {t}
-          </label>
-        ))}
-        <button type="button" className={`type-opt custom${adding ? ' on' : ''}`} onClick={() => setAdding((a) => !a)}>
-          + Custom
+      <label id="prop-type-label">Property Type</label>
+      <div className="type-dd" ref={boxRef}>
+        <button
+          type="button"
+          className="type-dd-trigger"
+          aria-expanded={open}
+          aria-haspopup="listbox"
+          aria-labelledby="prop-type-label"
+          onClick={() => setOpen((v) => !v)}
+        >
+          <span className={chosen.length ? '' : 'muted'}>
+            {chosen.length === 0
+              ? 'Select property types…'
+              : `${chosen.length} selected`}
+          </span>
+          <span aria-hidden="true">{open ? '▲' : '▼'}</span>
         </button>
-      </div>
 
-      {adding && (
-        <div className="type-custom-row">
-          <input value={draft} autoFocus placeholder="Type a property type…"
-            onChange={(e) => setDraft(e.target.value)}
-            // Enter must not submit the whole lead form while the user is mid-entry.
-            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addCustom(); } }} />
-          <button className="btn primary sm" type="button" disabled={!draft.trim()} onClick={addCustom}>Add</button>
-          <button className="btn ghost sm" type="button" onClick={() => { setDraft(''); setAdding(false); }}>Cancel</button>
-        </div>
-      )}
+        {open && (
+          <div className="type-dd-menu" role="listbox" aria-multiselectable="true">
+            <div className="type-picker">
+              {vocabulary.map((t) => (
+                <label key={t} className={`type-opt${types.includes(t) ? ' on' : ''}`}>
+                  <input type="checkbox" checked={types.includes(t)} onChange={() => toggle(t)} />
+                  {t}
+                </label>
+              ))}
+              <button type="button" className={`type-opt custom${adding ? ' on' : ''}`} onClick={() => setAdding((a) => !a)}>
+                + Custom
+              </button>
+            </div>
+
+            {adding && (
+              <div className="type-custom-row">
+                <input value={draft} autoFocus placeholder="Type a property type…"
+                  onChange={(e) => setDraft(e.target.value)}
+                  // Enter must not submit the whole lead form while the user is mid-entry.
+                  onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addCustom(); } }} />
+                <button className="btn primary sm" type="button" disabled={!draft.trim()} onClick={addCustom}>Add</button>
+                <button className="btn ghost sm" type="button" onClick={() => { setDraft(''); setAdding(false); }}>Cancel</button>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
 
       {chosen.length === 0 ? <div className="help">None selected.</div> : (
         <div className="type-chosen">
@@ -221,6 +266,37 @@ export default function LeadEditorModal({ lead, options, onClose, onSaved, lockI
   const [saving, setSaving] = useState(false);
 
   const vocabulary = options?.property_types ?? [];
+
+  /*
+   * THE TAGS THAT ALREADY EXIST, so this field stops being a memory test.
+   *
+   * Tags were editable here only as free text, with no list of what the brokerage already uses.
+   * That is worse than inconvenient: tags drive campaign audiences by exact name, so "VIP" typed
+   * here and "vip" typed on the Tags screen are two different audiences, and a lead tagged with a
+   * near-miss silently drops out of the campaign it was meant for. Every other place that edits a
+   * tag — the importer, the bulk-tag dialog, the Campaigns builder — already offers the list.
+   *
+   * FETCHED HERE rather than passed in, because this modal opens from two screens and only one of
+   * them holds the tag list; threading a prop would have meant a second fetch on the Lead detail
+   * page for a value this component is perfectly able to ask for itself. A failure is ignored: not
+   * knowing the existing tags makes the picker empty, and the text field still works exactly as it
+   * always has.
+   */
+  const [knownTags, setKnownTags] = useState<string[]>([]);
+  useEffect(() => {
+    let live = true;
+    listLeadTags().then((d) => { if (live) setKnownTags(d.tags ?? []); }).catch(() => { /* picker stays empty */ });
+    return () => { live = false; };
+  }, []);
+
+  /** The tags currently typed into the field, in the order they appear. */
+  const currentTags = form.tags.split(',').map((t) => t.trim()).filter(Boolean);
+
+  /** Append a chosen tag, matching case-insensitively so the same tag cannot be added twice. */
+  const addTag = (tag: string) => {
+    if (!tag || currentTags.some((t) => t.toLowerCase() === tag.toLowerCase())) return;
+    set('tags', [...currentTags, tag].join(', '));
+  };
 
   useEffect(() => {
     setForm(lead ? toForm(lead) : EMPTY);
@@ -283,12 +359,26 @@ export default function LeadEditorModal({ lead, options, onClose, onSaved, lockI
     }
   };
 
-  const pick = (list: string[] | undefined, placeholder: string) => (
-    <>
-      <option value="">{placeholder}</option>
-      {(list ?? []).map((v) => <option key={v} value={v}>{label(v)}</option>)}
-    </>
-  );
+  /**
+   * Options for a select, keeping whatever is already stored even when it is not on the list.
+   *
+   * `current` matters for the fields that used to be free text. Language and Religion were typed
+   * into a datalist, so real leads carry values these lists have never contained — and a plain
+   * select cannot display a value it has no option for, so it would show the placeholder and then
+   * SAVE that emptiness the next time anybody touched the form. Someone editing a phone number
+   * would silently erase a lead's recorded language. Carrying the stored value through as its own
+   * option means the list guides new entries without rewriting old ones.
+   */
+  const pick = (list: string[] | undefined, placeholder: string, current?: string) => {
+    const all = list ?? [];
+    const kept = current && !all.some((v) => v.toLowerCase() === current.toLowerCase()) ? [current] : [];
+    return (
+      <>
+        <option value="">{placeholder}</option>
+        {[...all, ...kept].map((v) => <option key={v} value={v}>{label(v)}</option>)}
+      </>
+    );
+  };
 
   return (
     <div className="overlay open" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
@@ -393,7 +483,29 @@ export default function LeadEditorModal({ lead, options, onClose, onSaved, lockI
           <div className="field">
             <label>Tags</label>
             <input value={form.tags} onChange={(e) => set('tags', e.target.value)} placeholder="Comma-separated, e.g. Expo-2026, VIP" />
-            <span className="help">Tags drive campaign audiences — the same names appear in the Campaigns builder.</span>
+            {/*
+              The picker ADDS to the field rather than replacing it. A lead can carry several tags,
+              so the comma-separated text stays the thing being edited — this only saves people
+              typing a name they have to spell exactly right. Typing a brand-new tag straight into
+              the field still works and still creates it, which is how tags were made before.
+
+              Resets to its placeholder after each pick, so the same list can be used twice.
+            */}
+            {knownTags.length > 0 && (
+              <select value="" style={{ marginTop: 6 }}
+                onChange={(e) => { addTag(e.target.value); e.currentTarget.value = ''; }}>
+                <option value="">Add an existing tag…</option>
+                {knownTags.map((t) => (
+                  <option key={t} value={t} disabled={currentTags.some((c) => c.toLowerCase() === t.toLowerCase())}>
+                    {t}
+                  </option>
+                ))}
+              </select>
+            )}
+            <span className="help">
+              Tags drive campaign audiences — the same names appear in the Campaigns builder. Pick an
+              existing tag above so the names match exactly, or type a new one to create it.
+            </span>
             {err('tags')}
           </div>
 
@@ -411,20 +523,27 @@ export default function LeadEditorModal({ lead, options, onClose, onSaved, lockI
               </select>
               {err('gender')}
             </div>
+            {/*
+              SELECTS, like Gender beside them. These two were `input list=` datalists: a text box
+              that reveals its suggestions only once you start typing, and on several browsers gives
+              no sign a list exists at all. Sat next to Gender — a real dropdown — they read as a
+              different kind of control entirely, and the values they offered went unseen.
+
+              A fixed list is also what these fields are for. They feed segmentation, so a lead typed
+              as "Punjabi" and another as "punjabi" are two groups; the datalist invited exactly that.
+            */}
             <div className="field">
               <label>Language</label>
-              <input list="lead-languages" value={form.language} onChange={(e) => set('language', e.target.value)} />
-              <datalist id="lead-languages">
-                {(options?.languages ?? []).map((l) => <option key={l} value={l} />)}
-              </datalist>
+              <select value={form.language} onChange={(e) => set('language', e.target.value)}>
+                {pick(options?.languages, 'Not set', form.language)}
+              </select>
               {err('language')}
             </div>
             <div className="field">
               <label>Religion</label>
-              <input list="lead-religions" value={form.religion} onChange={(e) => set('religion', e.target.value)} />
-              <datalist id="lead-religions">
-                {(options?.religions ?? []).map((r) => <option key={r} value={r} />)}
-              </datalist>
+              <select value={form.religion} onChange={(e) => set('religion', e.target.value)}>
+                {pick(options?.religions, 'Not set', form.religion)}
+              </select>
               {err('religion')}
             </div>
             <div className="field">

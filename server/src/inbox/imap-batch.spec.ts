@@ -1,4 +1,4 @@
-import { selectSyncBatch } from './imap-sync.service';
+import { selectSyncBatch, shouldNotifyNewMail } from './imap-sync.service';
 
 /**
  * The batch a poll pulls from a mailbox.
@@ -63,5 +63,44 @@ describe('selectSyncBatch', () => {
 
   it('returns everything when the backlog is smaller than the cap', () => {
     expect(selectSyncBatch([4, 5, 6], 3, MAX)).toEqual([4, 5, 6]);
+  });
+});
+
+/**
+ * Which completed syncs are worth telling somebody about.
+ *
+ * The rule is a single boolean inside a method that cannot run without a live IMAP server, so it is
+ * exported and tested here instead — the same reason `selectSyncBatch` above is. Without this, the
+ * only thing standing between a person and a notification per mailbox would be an untested `&&`.
+ */
+describe('shouldNotifyNewMail', () => {
+  const box = (over: Partial<{ user_id: number | null; is_default: boolean }> = {}) =>
+    ({ user_id: 7, is_default: true, ...over });
+
+  it('notifies for the primary mailbox when mail actually arrived', () => {
+    expect(shouldNotifyNewMail(box(), 1)).toBe(true);
+    expect(shouldNotifyNewMail(box(), 40)).toBe(true);
+  });
+
+  it('says nothing for a mailbox that is not the primary one', () => {
+    // THE REGRESSION. A person with a working address, a shared enquiries box and an archive
+    // address got three notifications a poll; the one that mattered was the hardest to find.
+    expect(shouldNotifyNewMail(box({ is_default: false }), 12)).toBe(false);
+  });
+
+  it('says nothing when the poll found nothing', () => {
+    expect(shouldNotifyNewMail(box(), 0)).toBe(false);
+    // Not even for the primary mailbox — an empty poll is not news.
+    expect(shouldNotifyNewMail(box({ is_default: true }), 0)).toBe(false);
+  });
+
+  it('says nothing for a brokerage mailbox, which belongs to no one to tell', () => {
+    expect(shouldNotifyNewMail(box({ user_id: null }), 5)).toBe(false);
+    expect(shouldNotifyNewMail(box({ user_id: null, is_default: true }), 5)).toBe(false);
+  });
+
+  it('treats user 0 as a real owner rather than as absent', () => {
+    // `account.user_id &&` was the previous shape, and it would have dropped this one silently.
+    expect(shouldNotifyNewMail(box({ user_id: 0 }), 3)).toBe(true);
   });
 });

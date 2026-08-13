@@ -47,7 +47,7 @@ test.describe('T-M3 — the screen re-reads when you come back to it', () => {
     await page.goto('/crm/triggers');
     await expect(page.getByRole('heading', { name: 'CRM Triggers' })).toBeVisible({ timeout: 15_000 });
 
-    const box = page.locator('.crm-toggle input[type=checkbox]').first();
+    const box = page.locator('.card').filter({ has: page.getByRole('heading', { name: 'CRM Triggers' }) }).locator('.crm-toggle input[type=checkbox]').first();
     const was = await box.isChecked();
     await box.setChecked(!was);
     await expect(page.getByRole('button', { name: /^Save \d+ change/ })).toBeVisible();
@@ -61,20 +61,48 @@ test.describe('T-M3 — the screen re-reads when you come back to it', () => {
   });
 });
 
+/**
+ * The switch has moved SCREENS, and the behaviour asserted below is unchanged by the move.
+ *
+ * "Email Campaigns" was removed from CRM Settings as a duplicate of the Campaigns screen, and this
+ * control — the only writable path to `crm_email_settings.auto_send_enabled` — went with it by
+ * accident. It now sits in a "Brokerage" card at the top of THIS screen, which was already the one
+ * reporting it: the notice below used to tell an administrator to go to CRM Settings to act on a
+ * warning they were reading here.
+ *
+ * It is still gated on `settings`, not on `triggers`. Everything else on this screen is one row per
+ * person, which is why `triggers` was safe to widen to every agent; this switch is one row for the
+ * whole brokerage, so an agent sees the notice and no control. `write-authorization.spec.ts` is
+ * where that boundary is proved against the API — the card being absent is a courtesy, not the gate.
+ *
+ * Selectors here are scoped to their card. Both cards render `.crm-toggle`, so an unscoped `.first()`
+ * silently means the brokerage switch, and a test meaning to flip a personal trigger would instead
+ * be changing what every colleague can send.
+ */
 test.describe('T-M5 — the brokerage kill switch asks first', () => {
   test('switching CRM email off for everyone is confirmed', async ({ page }) => {
     await signIn(page, 'superAdmin');
-    await page.goto('/crm/settings?tab=crm');
+
+    /*
+     * ON BEFORE THE PAGE LOADS, not after — the subject is the TRANSITION to off, so the screen has
+     * to have been opened on a brokerage that allows CRM email. Ticking the box in the browser
+     * cannot establish that: it changes the pending value, while the confirmation compares against
+     * what the screen loaded with. This test used to do exactly that and passed only as long as the
+     * flag happened to already be on, which the `settings-*` files do not guarantee.
+     */
+    const original = ((await apiGet(page, '/api/crm-settings/email-settings')).body as { autoSendEnabled?: boolean }).autoSendEnabled ?? true;
+    await apiSend(page, 'PUT', '/api/crm-settings/email-settings', { autoSendEnabled: true });
+
+    await page.goto('/crm/triggers');
     await page.waitForLoadState('networkidle');
 
-    const master = page.locator('.crm-toggle', { hasText: 'Allow CRM emails' }).locator('input[type=checkbox]');
+    const master = page.locator('.crm-toggle', { hasText: "Allow the CRM's per-lead emails" }).locator('input[type=checkbox]');
     await expect(master).toBeVisible({ timeout: 15_000 });
-    const original = await master.isChecked();
+    await expect(master).toBeChecked();
 
     try {
-      if (!original) await master.setChecked(true);
       await master.setChecked(false);
-      await page.getByRole('button', { name: /Save Email Campaign Settings/i }).click();
+      await page.getByRole('button', { name: /Save CRM Email/i }).click();
 
       // The whole point: a dialog, not a silent save.
       await expect(page.getByText(/Switch off CRM email for the whole brokerage/i)).toBeVisible({ timeout: 10_000 });
@@ -82,8 +110,10 @@ test.describe('T-M5 — the brokerage kill switch asks first', () => {
       // Backing out leaves it alone. Scoped to the dialog: 'Cancel' also appears on other
       // cards of this screen, and clicking the wrong one proves nothing.
       await page.locator('.modal, [role=dialog]').getByRole('button', { name: 'Cancel' }).click();
+      // Still on — cancelling a confirmation must not be a slower way of agreeing to it. Compared
+      // against the value this test established above, not against whatever it inherited.
       const after = await apiGet(page, '/api/crm-settings/email-settings');
-      expect((after.body as Record<string, unknown>).autoSendEnabled).toBe(original);
+      expect((after.body as Record<string, unknown>).autoSendEnabled).toBe(true);
     } finally {
       await apiSend(page, 'PUT', '/api/crm-settings/email-settings', { autoSendEnabled: original });
     }
@@ -93,13 +123,13 @@ test.describe('T-M5 — the brokerage kill switch asks first', () => {
     // A confirmation on every save is one people learn to click through. Only the off transition.
     await signIn(page, 'superAdmin');
     await apiSend(page, 'PUT', '/api/crm-settings/email-settings', { autoSendEnabled: false });
-    await page.goto('/crm/settings?tab=crm');
+    await page.goto('/crm/triggers');
     await page.waitForLoadState('networkidle');
 
-    const master = page.locator('.crm-toggle', { hasText: 'Allow CRM emails' }).locator('input[type=checkbox]');
+    const master = page.locator('.crm-toggle', { hasText: "Allow the CRM's per-lead emails" }).locator('input[type=checkbox]');
     await expect(master).toBeVisible({ timeout: 15_000 });
     await master.setChecked(true);
-    await page.getByRole('button', { name: /Save Email Campaign Settings/i }).click();
+    await page.getByRole('button', { name: /Save CRM Email/i }).click();
 
     await expect(page.getByText(/Switch off CRM email for the whole brokerage/i)).toHaveCount(0);
     await expect(page.getByText(/Settings updated successfully/i)).toBeVisible({ timeout: 10_000 });
@@ -112,7 +142,7 @@ test.describe('T-M9 — an expired session says what happened', () => {
     await page.goto('/crm/triggers');
     await expect(page.getByRole('heading', { name: 'CRM Triggers' })).toBeVisible({ timeout: 15_000 });
 
-    const box = page.locator('.crm-toggle input[type=checkbox]').first();
+    const box = page.locator('.card').filter({ has: page.getByRole('heading', { name: 'CRM Triggers' }) }).locator('.crm-toggle input[type=checkbox]').first();
     await box.setChecked(!(await box.isChecked()));
 
     // The session ends underneath them, which is what a timeout looks like from the page's side.

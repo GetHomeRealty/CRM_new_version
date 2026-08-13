@@ -28,7 +28,6 @@ export interface RequestContext {
   method?: string;
   path?: string;
   userId?: number;
-  companyId?: number | null;
   role?: string | null;
 }
 
@@ -45,11 +44,10 @@ export function currentRequest(): RequestContext | undefined {
 }
 
 /** Fill in who is asking, once authentication has worked it out. */
-export function describeRequester(userId: number, companyId: number | null, role: string | null): void {
+export function describeRequester(userId: number, role: string | null): void {
   const ctx = storage.getStore();
   if (!ctx) return;
   ctx.userId = userId;
-  ctx.companyId = companyId;
   ctx.role = role;
 }
 
@@ -90,7 +88,6 @@ function emit(level: string, context: string | undefined, message: unknown, extr
     if (req.method) line.method = req.method;
     if (req.path) line.path = req.path;
     if (req.userId !== undefined) line.user = req.userId;
-    if (req.companyId !== undefined && req.companyId !== null) line.company = req.companyId;
     if (req.role) line.role = req.role;
   }
   if (extra) Object.assign(line, scrub(extra) as Record<string, unknown>);

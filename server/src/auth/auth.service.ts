@@ -5,7 +5,6 @@ import { PrismaService } from '../prisma/prisma.service';
 import { throwValidation } from '../common/laravel-exceptions';
 import { PermissionService } from './permission.service';
 import type { AuthPayload, AuthUserRecord } from './auth.types';
-import { run, runAsSystem } from '../core/tenant-context';
 import { AccountLockoutService } from './account-lockout.service';
 
 import { isAdminOrAbove, isSuperAdmin } from '../core/authz';
@@ -86,13 +85,10 @@ export class AuthService {
    * spells it — a null status means active — so the two cannot disagree about who is shut out.
    */
   async loadUser(id: number): Promise<AuthUserRecord | null> {
-    // System, and it has to be. This runs on every request BEFORE anything knows which brokerage
-    // the caller belongs to — resolving the session's user is how the tenant is discovered in the
-    // first place. Scoping it would make authentication depend on its own result.
-    const user = await runAsSystem(() => this.prisma.users.findUnique({
+    const user = await this.prisma.users.findUnique({
       where: { id },
       include: { user_permissions: true, user_modules: true },
-    }));
+    });
     if (!user) return null;
     return (user.status ?? 'Active') === 'Inactive' ? null : user;
   }
@@ -153,8 +149,6 @@ export class AuthService {
    * ON THE INDEX, which is the same change. `users_email_lower_key` and `users_username_lower_key`
    * are functional indexes on `lower(...)`; ILIKE could not use either, so every sign-in was a
    * sequential scan. This form matches them exactly.
-   *
-   * The tenant is not known here and cannot be: signing in is the moment it becomes knowable.
    */
   private async findAuthenticatable(login: string, password: string): Promise<AuthUserRecord | null> {
     /*
@@ -164,19 +158,19 @@ export class AuthService {
      *
      * Parameterised by the tagged template, so the value is bound rather than interpolated.
      */
-    const matches = await runAsSystem(() => this.prisma.$queryRaw<Array<{ id: number; by_username: boolean }>>`
+    const matches = await this.prisma.$queryRaw<Array<{ id: number; by_username: boolean }>>`
       SELECT id, lower(username) = lower(${login}) AS by_username
       FROM users
       WHERE lower(username) = lower(${login}) OR lower(email) = lower(${login})
       ORDER BY by_username DESC NULLS LAST, id ASC
       LIMIT 2
-    `);
+    `;
 
     for (const match of matches) {
-      const user = await runAsSystem(() => this.prisma.users.findUnique({
+      const user = await this.prisma.users.findUnique({
         where: { id: match.id },
         include: { user_permissions: true },
-      }));
+      });
       /*
        * `verifyPassword` answers false for a null or empty hash rather than throwing — a row with no
        * password set is not a fantasy, it is what a half-finished import leaves behind.
@@ -197,18 +191,16 @@ export class AuthService {
    *
    * BEST EFFORT, DELIBERATELY. The user has already proved who they are; a failed write here must
    * not cost them the sign-in. It is logged and the next sign-in tries again.
-   *
-   * Runs as the system: this happens before a tenant is in context, exactly like the lookup above.
    */
   private async upgradeHashIfWeak(user: AuthUserRecord, password: string): Promise<void> {
     if (!this.passwords.needsRehash(user.password)) return;
     const was = this.passwords.costOf(user.password);
     try {
       const upgraded = await this.passwords.hashPassword(password);
-      await runAsSystem(() => this.prisma.users.update({
+      await this.prisma.users.update({
         where: { id: user.id },
         data: { password: upgraded },
-      }));
+      });
       // The in-memory record is handed to the session payload; keep it consistent with the row.
       user.password = upgraded;
       this.log.log(`Upgraded the password hash for user #${user.id} from cost ${was} to ${this.passwords.getConfiguredCost()}.`);
@@ -227,7 +219,7 @@ export class AuthService {
     password: string,
     passwordConfirmation: string,
   ): Promise<AuthUserRecord> {
-    if ((await runAsSystem(() => this.prisma.users.count())) > 0) {
+    if ((await this.prisma.users.count()) > 0) {
       throw new ForbiddenException({
         message: 'Registration is closed. Ask an administrator to create your account.',
       });
@@ -240,29 +232,26 @@ export class AuthService {
 
     // Case-insensitive for the same reason sign-in is: the unique index is on `lower(email)`, so an
     // exact-match pre-check passes and the INSERT then fails with a raw P2002 instead of a 422.
-    const existingUser = await runAsSystem(() =>
-      this.prisma.users.findFirst({
-        where: { email: { equals: email, mode: 'insensitive' } },
-        select: { id: true },
-      }),
-    );
+    const existingUser = await this.prisma.users.findFirst({
+      where: { email: { equals: email, mode: 'insensitive' } },
+      select: { id: true },
+    });
     if (existingUser) {
       throwValidation({ email: ['The email has already been taken.'] });
     }
 
     const now = new Date();
-    return run(1, async () => this.prisma.users.create({
+    return this.prisma.users.create({
       data: {
         name: name.trim(),
         email: email.trim(),
         password: await this.passwords.hashPassword(password),
         role: 'admin', // the first user is the administrator
-        company_id: 1,
         created_at: now,
         updated_at: now,
       },
       include: { user_permissions: true },
-    }));
+    });
   }
 
   /** Change the signed-in user's password (current password required). */
@@ -305,7 +294,7 @@ export class AuthService {
   }
 
   usersExist(): Promise<boolean> {
-    return runAsSystem(() => this.prisma.users.count()).then((n) => n > 0);
+    return this.prisma.users.count().then((n) => n > 0);
   }
 
   /** bcrypt truncates past 72 bytes, so a longer password is not the password it appears to be. */

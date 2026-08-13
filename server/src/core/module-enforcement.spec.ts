@@ -173,11 +173,11 @@ describe('module access is enforced on every screen, not only the four that name
   it('says when the module was never bought, rather than blaming permissions', async () => {
     await inRollback(async (tx) => {
       const now = new Date();
-      await tx.subscriptions.upsert({
-        where: { company_id: 1 },
-        create: { company_id: 1, crm_enabled: false, transaction_enabled: true, status: 'active', created_at: now, updated_at: now },
-        update: { crm_enabled: false, transaction_enabled: true, status: 'active', updated_at: now },
-      });
+      // Singleton row, so find-then-write rather than a keyed upsert.
+      const existing = await tx.subscriptions.findFirst({ select: { id: true } });
+      const data = { crm_enabled: false, transaction_enabled: true, status: 'active', updated_at: now };
+      if (existing) await tx.subscriptions.update({ where: { id: existing.id }, data });
+      else await tx.subscriptions.create({ data: { ...data, created_at: now } });
       const user = await adminAssigned(tx, ['crm', 'desk']);
       // Assigned but not licensed. "No access" would send an administrator hunting through
       // permissions for something no permission can fix.

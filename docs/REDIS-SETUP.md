@@ -1,7 +1,27 @@
 # Redis on the production server
 
-**Status:** not installed anywhere yet. The application runs correctly without it — this document is
-for enabling it, not repairing it.
+**Status:** **installed and configured in PRODUCTION as of 2026-08-08**, on a current Redis, as
+reported by the operator. Not installed on the development machine, which continues to run
+in-process — so anything measured or tested there still reflects the no-Redis path.
+
+> **Not independently verified.** Nobody has yet run `node scripts/verify-redis.cjs` against the
+> production server. Until that passes, four things remain assumed rather than known: that the
+> version clears BullMQ's floor, that `maxmemory-policy` is `noeviction`, that the key prefix is
+> unique to production, and that `SET NX` is atomic across connections. Every one of those fails
+> **silently** — nothing errors, the behaviour is simply wrong. That is the whole reason the
+> script exists.
+
+**Two scripts do the work described below.** They were added 2026-08-08 so the steps are executed
+rather than transcribed:
+
+| | |
+|---|---|
+| `server/scripts/setup-redis.sh` | Installs, configures and starts Redis on the Linux server. Idempotent. Generates the password on the machine from `/dev/urandom`, so it is never typed or pasted. **Refuses to proceed below Redis 6.2** — see §1 for why that matters more than it looks. `--verify-only` checks an existing install without changing it. |
+| `server/scripts/verify-redis.cjs` | Verifies the APPLICATION, not the server: prefix isolation, cache round-trip and expiry, the distributed lock's atomicity across two connections, and `noeviction`. Exits non-zero, so it can gate a deployment step. |
+
+`verify-redis.cjs` was itself tested against a mock server for all three hazards it exists to catch —
+a 3.0.504 server, a wrong eviction policy, and a non-atomic `SET NX` — and correctly fails each one.
+Every one of those failures is silent in normal use, which is the reason the check exists.
 
 **What it is worth.** Three things are dormant without Redis, and all three switch on from one
 environment variable with no code change and no data migration:

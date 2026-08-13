@@ -1,5 +1,4 @@
 import { PrismaClient } from '@prisma/client';
-import { TENANT_ID } from './tenant';
 import { GoogleCalendarSyncService } from '../google/google-calendar-sync.service';
 
 /**
@@ -19,7 +18,7 @@ import { GoogleCalendarSyncService } from '../google/google-calendar-sync.servic
  * property under test cannot fail. Each test discards its own rows, and `afterAll` sweeps anything
  * a failure left behind.
  *
- * Fixtures are kept out of states the tenant-wide sweeps select — no `enable_reminder`, no
+ * Fixtures are kept out of states the background sweeps select — no `enable_reminder`, no
  * `inbound_enabled` — so a scheduler in a neighbouring suite cannot pick them up mid-assertion.
  */
 
@@ -44,7 +43,6 @@ const mailRow = (scope: 'crm' | 'desk') => ({
   scope,
   is_active: true,
   // Left off deliberately: `inbound_enabled` would make these visible to the IMAP sweep.
-  company_id: TENANT_ID,
   created_at: new Date(),
   updated_at: new Date(),
 });
@@ -136,7 +134,7 @@ const eventRow = (googleId: string, domain: 'crm' | 'desk', title: string) => ({
   // Off deliberately: an event with reminders enabled is visible to the reminder sweep.
   enable_reminder: false,
   google_calendar_id: googleId, user_id: USER, domain,
-  company_id: TENANT_ID, created_at: new Date(), updated_at: new Date(),
+  created_at: new Date(), updated_at: new Date(),
 });
 
 describe('CRM Calendar and Transaction Desk Calendar stay separate', () => {
@@ -261,7 +259,6 @@ const googleRow = (scope: 'crm' | 'desk') => ({
   sync_token: `synctoken-${scope}-original`,
   last_sync: new Date('2027-01-01T00:00:00Z'),
   is_active: true,
-  company_id: TENANT_ID,
   created_at: new Date(),
   updated_at: new Date(),
 });

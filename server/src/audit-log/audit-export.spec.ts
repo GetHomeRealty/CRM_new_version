@@ -172,8 +172,7 @@ describe('the export honours every filter, exactly as the screen does', () => {
       const user = await tx.users.create({
         data: {
           name: `ZZ Auditor ${t}`, email: `zz-aud-${t}@probe.test`, username: `zzaud${t.replace(/-/g, '')}`,
-          role: 'agent', status: 'Active', password: 'x', created_at: now, updated_at: now, company_id: 1,
-        },
+          role: 'agent', status: 'Active', password: 'x', created_at: now, updated_at: now,        },
         select: { id: true },
       });
       await crmEntry(tx, { user_id: user.id, who: 'ZZ Mine' });
@@ -411,7 +410,7 @@ describe('edge cases', () => {
 
       expect(plain.filename).toMatch(/^crm-audit-\d{4}-\d{2}-\d{2}\.csv$/);
       expect(ranged.filename).toBe('crm-audit-2026-08-01-to-2026-08-06.xlsx');
-      // No tenant or database id anywhere in the name.
+      // No deployment or database id anywhere in the name.
       expect(ranged.filename).not.toMatch(/company|tenant|_id|\bid\b/i);
     });
   });

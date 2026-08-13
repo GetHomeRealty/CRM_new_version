@@ -3,7 +3,6 @@ import { randomBytes } from 'node:crypto';
 import type { Request, Response } from 'express';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../prisma/prisma.service';
-import { runAsSystem } from '../../core/tenant-context';
 import type { AppConfig } from '../../config/configuration';
 import { hashOneTimeValue } from './mfa-crypto';
 
@@ -57,7 +56,7 @@ export class TrustedDeviceService {
     if (!raw) return false;
 
     const now = new Date();
-    const device = await runAsSystem(() => this.prisma.mfa_trusted_devices.findFirst({
+    const device = await this.prisma.mfa_trusted_devices.findFirst({
       where: {
         token_hash: hashOneTimeValue(raw),
         user_id: userId,          // bound to one account: another person's token is worthless here
@@ -65,15 +64,15 @@ export class TrustedDeviceService {
         expires_at: { gt: now },
       },
       select: { id: true },
-    }));
+    });
     if (!device) return false;
 
     // Last seen is for the owner reading their own device list — "Toronto laptop, 3 minutes ago" is
     // what makes an unfamiliar entry recognisable as unfamiliar.
-    await runAsSystem(() => this.prisma.mfa_trusted_devices.update({
+    await this.prisma.mfa_trusted_devices.update({
       where: { id: device.id },
       data: { last_seen_at: now },
-    }));
+    });
     return true;
   }
 
@@ -82,14 +81,13 @@ export class TrustedDeviceService {
     req: Request,
     res: Response,
     userId: number,
-    companyId: number,
     label?: string | null,
   ): Promise<void> {
     const raw = randomBytes(32).toString('base64url');
     const now = new Date();
     const expires = new Date(now.getTime() + this.days() * 24 * 60 * 60 * 1000);
 
-    await runAsSystem(() => this.prisma.mfa_trusted_devices.create({
+    await this.prisma.mfa_trusted_devices.create({
       data: {
         user_id: userId,
         token_hash: hashOneTimeValue(raw),
@@ -99,9 +97,8 @@ export class TrustedDeviceService {
         last_seen_at: now,
         expires_at: expires,
         created_at: now,
-        company_id: companyId,
       },
-    }));
+    });
 
     const session = this.config.get<AppConfig['session']>('session');
     res.cookie(TrustedDeviceService.COOKIE, raw, {
@@ -120,19 +117,19 @@ export class TrustedDeviceService {
     id: number; label: string | null; ip: string | null;
     last_seen_at: Date | null; expires_at: Date; created_at: Date;
   }>> {
-    return runAsSystem(() => this.prisma.mfa_trusted_devices.findMany({
+    return this.prisma.mfa_trusted_devices.findMany({
       where: { user_id: userId, revoked_at: null, expires_at: { gt: new Date() } },
       select: { id: true, label: true, ip: true, last_seen_at: true, expires_at: true, created_at: true },
       orderBy: { last_seen_at: 'desc' },
-    }));
+    });
   }
 
   /** Revoke one device. Scoped by user id, so nobody can revoke somebody else's by guessing an id. */
   async revoke(userId: number, deviceId: number): Promise<boolean> {
-    const result = await runAsSystem(() => this.prisma.mfa_trusted_devices.updateMany({
+    const result = await this.prisma.mfa_trusted_devices.updateMany({
       where: { id: deviceId, user_id: userId, revoked_at: null },
       data: { revoked_at: new Date() },
-    }));
+    });
     return result.count > 0;
   }
 
@@ -144,10 +141,10 @@ export class TrustedDeviceService {
    * leaving the old ones trusted would defeat the action they just took.
    */
   async revokeAll(userId: number): Promise<number> {
-    const result = await runAsSystem(() => this.prisma.mfa_trusted_devices.updateMany({
+    const result = await this.prisma.mfa_trusted_devices.updateMany({
       where: { user_id: userId, revoked_at: null },
       data: { revoked_at: new Date() },
-    }));
+    });
     if (result.count) this.log.log(`Revoked ${result.count} trusted device(s) for user #${userId}.`);
     return result.count;
   }

@@ -22,7 +22,16 @@ import { signIn, apiGet } from './helpers';
  * up is what "wiring a sender" looks like from the outside, and this file failing is the reminder to
  * move it.
  */
-const LIVE_PAIRS = 38;   // 20 + six new CRM categories x three channels
+/**
+ * THESE COUNTS ARE PER AREA NOW. Five categories describe things that only happen on a transaction
+ * — a listing expiring, lawyer details missing, a document review, an approval, a mention in a
+ * deal's chat — and are no longer offered on the CRM's screen, where none of them can occur. The
+ * preferences themselves are untouched and every sender still honours them; only the screen split.
+ *
+ * Desk sees all thirteen categories: 13 x 3 = 39 pairs, less the one unsupported (emailing somebody
+ * to say they have an email) = 38 live.
+ */
+const LIVE_PAIRS = 38;   // Transaction Desk: every category on every channel that has a sender
 /**
  * None. Every category now has a sender on every channel it supports.
  *
@@ -33,14 +42,23 @@ const PENDING_PAIRS = 0;
 /** Pairs that make no sense at all: emailing somebody to say they have an email. */
 const UNSUPPORTED_PAIRS = 1;
 
-const CATEGORIES = [
-  'Calendar reminders', 'Listing expiry reminders', 'Lawyer detail reminders',
-  'Document review updates', 'Transaction approvals', 'New inbox emails',
+/** Only ever raised by a transaction, so offered only on the Transaction Desk's screen. */
+const DESK_ONLY = [
+  'Listing expiry reminders', 'Lawyer detail reminders', 'Document review updates',
+  'Transaction approvals', 'Team chat mentions',
+];
+
+/** Shown on both screens — nothing here is tied to one side of the product. */
+const SHARED = [
+  'Calendar reminders', 'New inbox emails',
   // The CRM lead and campaign events.
   'New leads', 'Leads assigned to you', 'Facebook leads', 'Follow-ups falling due',
   'Campaign finished', 'Campaign problems',
-  'Team chat mentions',
 ];
+
+const CATEGORIES = [...SHARED, ...DESK_ONLY];
+/** CRM: eight categories x three channels, less the one unsupported pair. */
+const CRM_LIVE_PAIRS = SHARED.length * 3 - UNSUPPORTED_PAIRS;
 
 /**
  * One cell of the matrix.
@@ -84,25 +102,44 @@ test.beforeEach(async ({ page }) => {
   await resetPreferences(page);
 });
 
-test('shows every category against every channel', async ({ page }) => {
+test('the CRM shows only what the CRM can raise', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Notification Preferences' })).toBeVisible();
-  for (const label of CATEGORIES) {
+  for (const label of SHARED) {
     await expect(page.getByRole('row').filter({ hasText: label })).toHaveCount(1);
+  }
+  // The five transaction-only ones must NOT be offered here. A switch for an event that cannot
+  // reach you on this side of the product is a puzzle, not a preference.
+  for (const label of DESK_ONLY) {
+    await expect(page.getByRole('row').filter({ hasText: label })).toHaveCount(0);
   }
   for (const channel of ['In-app', 'Email', 'Push']) {
     await expect(page.getByRole('columnheader', { name: channel })).toBeVisible();
   }
 });
 
+test('the Transaction Desk shows every category, including its own five', async ({ page }) => {
+  await page.goto('/desk/notifications');
+  await expect(page.getByRole('heading', { name: 'Notification Preferences' })).toBeVisible();
+  for (const label of CATEGORIES) {
+    await expect(page.getByRole('row').filter({ hasText: label })).toHaveCount(1);
+  }
+});
+
 test('everything that can be switched starts on', async ({ page }) => {
   // Absence of a stored row means enabled. Nobody's notifications may go quiet because this
   // feature shipped.
+  // Counted on the CRM screen, which `beforeEach` opens — so the expected number is the CRM's.
+  // An unsupported pair renders no control at all, only the reason, so it is not in this count.
   const boxes = page.locator('table input[type="checkbox"]');
-  await expect(boxes).toHaveCount(LIVE_PAIRS + PENDING_PAIRS);
+  await expect(boxes).toHaveCount(CRM_LIVE_PAIRS + PENDING_PAIRS);
 
   const switchable = page.locator('table input[type="checkbox"]:not([disabled])');
-  await expect(switchable).toHaveCount(LIVE_PAIRS);
-  for (let i = 0; i < LIVE_PAIRS; i += 1) await expect(switchable.nth(i)).toBeChecked();
+  await expect(switchable).toHaveCount(CRM_LIVE_PAIRS);
+  for (let i = 0; i < CRM_LIVE_PAIRS; i += 1) await expect(switchable.nth(i)).toBeChecked();
+
+  // And the Desk screen still offers the full set, so nothing was lost by the split.
+  await page.goto('/desk/notifications');
+  await expect(page.locator('table input[type="checkbox"]:not([disabled])')).toHaveCount(LIVE_PAIRS);
 });
 
 test('nothing is badged Soon any more — every route has a sender', async ({ page }) => {

@@ -4,7 +4,6 @@ import { CampaignResumeService } from './campaign-resume.service';
 import { CampaignsService } from './campaigns.service';
 import { CampaignAudienceService } from './campaign-audience.service';
 import { CampaignTemplatesService } from './campaign-templates.service';
-import { TENANT_ID } from '../core/tenant';
 
 /**
  * PRIORITY 7 — schedule execution and restart recovery, driven through the real sweeps.
@@ -64,7 +63,7 @@ async function campaignWith(db: PrismaService, over: Record<string, unknown>, re
   const campaign = await db.campaigns.create({
     data: {
       name: `ZZSCHED ${t}`, subject: 'S', content: '<p>Hi</p>',
-      company_id: TENANT_ID, created_by: 'ZZ Prober', tracking_base_url: '',
+      created_by: 'ZZ Prober', tracking_base_url: '',
       sent: 0, failed: 0, created_at: now, updated_at: now, ...over,
     },
   });

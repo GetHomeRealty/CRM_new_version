@@ -48,7 +48,7 @@ async function makeTxn(tx: PrismaService, agent = 'Test Agent'): Promise<number>
   seq += 1;
   const now = new Date();
   const t = await tx.transactions.create({
-    data: { trade_no: `TH-${Date.now()}-${seq}`, type: 'Residential Buying', agent, property: '1 Test Road', company_id: 1, created_at: now, updated_at: now },
+    data: { trade_no: `TH-${Date.now()}-${seq}`, type: 'Residential Buying', agent, property: '1 Test Road', created_at: now, updated_at: now },
   });
   return t.id;
 }
@@ -59,8 +59,7 @@ async function makeReview(tx: PrismaService, txnId: number, over: Record<string,
     data: {
       transaction_id: txnId, decision: 'Rejected', reason: 'Does not match the APS.',
       field_label: 'Purchase Price', old_value: '1', new_value: '2', agent_name: 'Test Agent',
-      actor_name: 'Office Admin', resolution_status: 'Open', company_id: 1,
-      created_at: now, updated_at: now, ...over,
+      actor_name: 'Office Admin', resolution_status: 'Open',      created_at: now, updated_at: now, ...over,
     },
   });
 }

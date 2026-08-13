@@ -136,6 +136,23 @@ const NAV: NavItem[] = [
         match: (p) => p.endsWith('/notification-center') },
       { key: 'notifications', label: 'Notification Preferences', ico: 'bell', personal: true, path: 'notifications',
         match: (p) => p.endsWith('/notifications') },
+      /*
+       * CRM Communications. `personal` like the two above, and for the same reason: most of what
+       * it does is the viewer's own choices. The administrator-only parts are decided by the API
+       * per request rather than by who can see the link, so one entry serves both.
+       */
+      // `mail`, not `megaphone`: Campaigns already carries the megaphone two groups above, and two
+      // identical glyphs in one sidebar read as one entry duplicated.
+      { key: 'communications', label: 'Communications', ico: 'mail', personal: true, area: 'crm', path: 'communications',
+        match: (p) => p.endsWith('/communications') },
+      /*
+       * Two-step verification, moved here from the personal Settings page. `personal` for the same
+       * reason as the two above and more strongly: it configures the viewer's own second factor and
+       * nobody else's, and a role can be REQUIRED to hold one — so this must not be a link only
+       * administrators see.
+       */
+      { key: 'two-step', label: 'Two-Step Verification', ico: 'lock', personal: true, area: 'crm', path: 'two-step',
+        match: (p) => p.endsWith('/two-step') },
     ],
   },
   // Agent's own settings — profile, their email accounts, signature. Admins have the admin

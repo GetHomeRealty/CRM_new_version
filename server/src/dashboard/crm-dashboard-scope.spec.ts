@@ -31,7 +31,7 @@ const tag = (): string => { seq += 1; return `${Date.now()}-${seq}`; };
 async function makeUser(tx: PrismaService, role: string): Promise<AuthUserRecord> {
   const now = new Date();
   const u = await tx.users.create({
-    data: { name: `Dash ${role} ${tag()}`, email: `dash-${tag()}@example.test`, role, status: 'Active', password: 'x', company_id: 1, created_at: now, updated_at: now },
+    data: { name: `Dash ${role} ${tag()}`, email: `dash-${tag()}@example.test`, role, status: 'Active', password: 'x', created_at: now, updated_at: now },
   });
   return u as unknown as AuthUserRecord;
 }
@@ -39,7 +39,7 @@ async function makeUser(tx: PrismaService, role: string): Promise<AuthUserRecord
 async function makeLead(tx: PrismaService, over: Record<string, unknown> = {}): Promise<{ id: number }> {
   const now = new Date();
   return tx.leads.create({
-    data: { name: `Lead ${tag()}`, email: `lead-${tag()}@example.test`, lead_status: 'hot', lead_source: 'meta', company_id: 1, created_at: now, updated_at: now, ...over },
+    data: { name: `Lead ${tag()}`, email: `lead-${tag()}@example.test`, lead_status: 'hot', lead_source: 'meta', created_at: now, updated_at: now, ...over },
   });
 }
 
@@ -109,7 +109,7 @@ describe('CRM dashboard — campaign counting', () => {
       const theirs = await makeUser(tx, 'manager');
       const now = new Date();
       await tx.campaigns.create({
-        data: { name: `Theirs ${tag()}`, created_by_id: theirs.id, subject: 'Theirs subject', content: 'body', sent: 40, opened: 10, failed: 1, company_id: 1, created_at: now, updated_at: now },
+        data: { name: `Theirs ${tag()}`, created_by_id: theirs.id, subject: 'Theirs subject', content: 'body', sent: 40, opened: 10, failed: 1, created_at: now, updated_at: now },
       });
 
       // Unfiltered, this read the brokerage's totals: an agent owning nothing still saw the count
@@ -126,7 +126,7 @@ describe('CRM dashboard — campaign counting', () => {
       const mine = await makeUser(tx, 'agent');
       const now = new Date();
       await tx.campaigns.create({
-        data: { name: `Mine ${tag()}`, created_by_id: mine.id, subject: 'Mine subject', content: 'body', sent: 7, opened: 3, failed: 0, company_id: 1, created_at: now, updated_at: now },
+        data: { name: `Mine ${tag()}`, created_by_id: mine.id, subject: 'Mine subject', content: 'body', sent: 7, opened: 3, failed: 0, created_at: now, updated_at: now },
       });
 
       const dash = await crmFor(tx, mine);
@@ -143,7 +143,7 @@ describe('CRM dashboard — lead task counting', () => {
       const lead = await makeLead(tx, { owner_user_id: owner.id });
       const now = new Date();
       await tx.lead_tasks.create({
-        data: { lead_id: lead.id, title: 'Call back', status: 'pending', due_date: new Date(), user_id: owner.id, assigned_to: owner.id, company_id: 1, created_at: now, updated_at: now },
+        data: { lead_id: lead.id, title: 'Call back', status: 'pending', due_date: new Date(), user_id: owner.id, assigned_to: owner.id, created_at: now, updated_at: now },
       });
 
       expect((await crmFor(tx, owner)).tasks.total).toBe(1);
@@ -163,7 +163,7 @@ describe('CRM dashboard — lead task counting', () => {
       const lead = await makeLead(tx, { owner_user_id: theirs.id, assigned_to: theirs.id });
       const now = new Date();
       await tx.lead_tasks.create({
-        data: { lead_id: lead.id, title: 'Not mine', status: 'pending', due_date: new Date(), user_id: theirs.id, assigned_to: theirs.id, company_id: 1, created_at: now, updated_at: now },
+        data: { lead_id: lead.id, title: 'Not mine', status: 'pending', due_date: new Date(), user_id: theirs.id, assigned_to: theirs.id, created_at: now, updated_at: now },
       });
 
       expect((await crmFor(tx, mine)).tasks.total).toBe(0);

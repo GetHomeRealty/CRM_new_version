@@ -33,6 +33,20 @@ export interface NotificationCategory {
   description: string;
   /** Readiness per channel — the matrix the settings screen renders. */
   channels: Record<NotificationChannel, CategoryReadiness>;
+  /**
+   * Which area's Notification Preferences screen offers this category. Omitted means BOTH, which is
+   * the right default for anything that is not tied to one side of the product.
+   *
+   * This exists because five categories describe things that only ever happen on a transaction — a
+   * listing expiring, lawyer details missing, a document review, an approval, a mention in a deal's
+   * chat — and were being offered on the CRM's screen too, where none of them can occur. A switch
+   * for an event that cannot reach you is not a preference, it is a puzzle.
+   *
+   * IT GOVERNS THE SCREEN, NOT DELIVERY. A category hidden from one area is still stored, still
+   * respected, and still honoured by whatever sends it; the preference a user already set is
+   * untouched. Nothing about who is notified changes — only where the switch is shown.
+   */
+  areas?: readonly ('crm' | 'desk')[];
 }
 
 /**
@@ -68,6 +82,7 @@ export const NOTIFICATION_CATEGORIES: readonly NotificationCategory[] = [
     // In-app is the `transaction_reminders` row the Centre reads; push goes through the dispatcher
     // from `reminder-sweep.service.ts`.
     channels: { in_app: 'live', email: 'live', push: 'live' },
+    areas: ['desk'],
   },
   {
     key: 'lawyer_details',
@@ -75,6 +90,7 @@ export const NOTIFICATION_CATEGORIES: readonly NotificationCategory[] = [
     description: 'A deal has reached a phase where the lawyer’s details are still missing.',
     // Same sweep, same dispatcher call, keyed on the reminder's kind.
     channels: { in_app: 'live', email: 'live', push: 'live' },
+    areas: ['desk'],
   },
   {
     key: 'document_review',
@@ -84,6 +100,7 @@ export const NOTIFICATION_CATEGORIES: readonly NotificationCategory[] = [
     // email    `DocumentMailService.sendReviewOutcome`, now gated on this preference
     // push     dispatched from `documents.service.ts` beside the audit row
     channels: { in_app: 'live', email: 'live', push: 'live' },
+    areas: ['desk'],
   },
   {
     key: 'transaction_approvals',
@@ -91,6 +108,7 @@ export const NOTIFICATION_CATEGORIES: readonly NotificationCategory[] = [
     description: 'A correction or review on one of your deals has been approved or turned down.',
     // in-app and email were already sent by `announce`; push joins them through the dispatcher.
     channels: { in_app: 'live', email: 'live', push: 'live' },
+    areas: ['desk'],
   },
   {
     key: 'inbox_new_mail',
@@ -159,6 +177,7 @@ export const NOTIFICATION_CATEGORIES: readonly NotificationCategory[] = [
      * A mention only ever reaches somebody who can already open the deal; see `mention.service.ts`.
      */
     channels: { in_app: 'live', email: 'live', push: 'live' },
+    areas: ['desk'],
   },
 ] as const;
 

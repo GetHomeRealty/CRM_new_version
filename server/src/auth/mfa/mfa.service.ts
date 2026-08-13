@@ -1,7 +1,6 @@
 import { BadRequestException, HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
 import type { Request } from 'express';
 import { PrismaService } from '../../prisma/prisma.service';
-import { runAsSystem } from '../../core/tenant-context';
 import { AuditService } from '../../audit/audit.service';
 import { throwValidation } from '../../common/laravel-exceptions';
 import { PasswordHashService } from '../password-hash.service';
@@ -54,10 +53,9 @@ const AUDIT_CATEGORY = 'Security';
  * defend against a compromised server, and it is not a substitute for the lockout and hashing work
  * in Phases 1 and 2 — it sits on top of both.
  *
- * EVERY READ IS `runAsSystem`. These tables are consulted DURING the login challenge, before a
- * tenant is in context — the challenge is answered by somebody who is not yet signed in, so there is
- * no session to inherit a brokerage from. That is the same reason `AuthService.loadUser` runs as the
- * system, and rows are always additionally filtered by `user_id`, which is what actually bounds them.
+ * EVERY READ HAPPENS BEFORE THE CALLER IS SIGNED IN. These tables are consulted DURING the login
+ * challenge, so none of them may depend on an authenticated session existing. Every row is bounded
+ * by `user_id` instead, which is what actually decides whose factor is being checked.
  */
 @Injectable()
 export class MfaService {
@@ -81,10 +79,10 @@ export class MfaService {
 
   /** Every method this person holds, confirmed or not. */
   async methodsFor(userId: number): Promise<MfaMethodView[]> {
-    const rows = await runAsSystem(() => this.prisma.user_mfa_methods.findMany({
+    const rows = await this.prisma.user_mfa_methods.findMany({
       where: { user_id: userId },
       orderBy: { created_at: 'asc' },
-    }));
+    });
     return rows.map((r) => ({
       type: r.type as MfaType,
       destination: r.destination ? this.delivery.mask(r.type as OtpChannel, r.destination) : null,
@@ -102,11 +100,11 @@ export class MfaService {
    * protecting it.
    */
   async activeMethods(userId: number): Promise<Array<{ type: MfaType; destination: string | null }>> {
-    const rows = await runAsSystem(() => this.prisma.user_mfa_methods.findMany({
+    const rows = await this.prisma.user_mfa_methods.findMany({
       where: { user_id: userId, confirmed_at: { not: null } },
       select: { type: true, destination: true },
       orderBy: { created_at: 'asc' },
-    }));
+    });
     return rows.map((r) => ({ type: r.type as MfaType, destination: r.destination }));
   }
 
@@ -148,16 +146,16 @@ export class MfaService {
 
     const secret = generateSecret();
     const now = new Date();
-    await runAsSystem(() => this.prisma.user_mfa_methods.upsert({
+    await this.prisma.user_mfa_methods.upsert({
       where: { user_id_type: { user_id: user.id, type: 'totp' } },
       // Re-enrolling replaces the pending secret and clears any previous confirmation, so a half
       // finished attempt cannot leave an old secret working.
       update: { secret: encryptSecret(secret), confirmed_at: null, last_step: null, updated_at: now },
       create: {
         user_id: user.id, type: 'totp', secret: encryptSecret(secret),
-        created_at: now, updated_at: now, company_id: user.company_id,
+        created_at: now, updated_at: now,
       },
-    }));
+    });
 
     return {
       secret,
@@ -173,9 +171,9 @@ export class MfaService {
    * them, and never again.
    */
   async confirmTotpEnrolment(user: AuthUserRecord, code: string): Promise<{ recovery_codes: string[] }> {
-    const row = await runAsSystem(() => this.prisma.user_mfa_methods.findUnique({
+    const row = await this.prisma.user_mfa_methods.findUnique({
       where: { user_id_type: { user_id: user.id, type: 'totp' } },
-    }));
+    });
     if (!row?.secret) throwValidation({ code: ['Start setting up your authenticator app first.'] });
 
     const secret = decryptSecret(row.secret);
@@ -188,12 +186,12 @@ export class MfaService {
     if (!result.valid) throwValidation({ code: ['That code is not right. Check the app and try again.'] });
 
     const now = new Date();
-    await runAsSystem(() => this.prisma.user_mfa_methods.update({
+    await this.prisma.user_mfa_methods.update({
       where: { id: row.id },
       data: { confirmed_at: now, last_step: BigInt(result.step), last_used_at: now, updated_at: now },
-    }));
+    });
 
-    const codes = await this.recovery.issue(user.id, user.company_id);
+    const codes = await this.recovery.issue(user.id);
     await this.auditEvent(user, 'Two-factor authentication enabled', 'Authenticator app');
     return { recovery_codes: codes };
   }
@@ -216,16 +214,16 @@ export class MfaService {
     }
 
     const now = new Date();
-    await runAsSystem(() => this.prisma.user_mfa_methods.upsert({
+    await this.prisma.user_mfa_methods.upsert({
       where: { user_id_type: { user_id: user.id, type: channel } },
       update: { destination: cleaned, confirmed_at: null, updated_at: now },
       create: {
         user_id: user.id, type: channel, destination: cleaned,
-        created_at: now, updated_at: now, company_id: user.company_id,
+        created_at: now, updated_at: now,
       },
-    }));
+    });
 
-    await this.issueOtp(user.id, user.company_id, channel, cleaned);
+    await this.issueOtp(user.id, channel, cleaned);
     return { masked: provider.mask(cleaned) };
   }
 
@@ -236,12 +234,12 @@ export class MfaService {
     }
 
     const now = new Date();
-    await runAsSystem(() => this.prisma.user_mfa_methods.updateMany({
+    await this.prisma.user_mfa_methods.updateMany({
       where: { user_id: user.id, type: channel },
       data: { confirmed_at: now, last_used_at: now, updated_at: now },
-    }));
+    });
 
-    const codes = await this.recovery.issue(user.id, user.company_id);
+    const codes = await this.recovery.issue(user.id);
     await this.auditEvent(user, 'Two-factor authentication enabled', channel === 'sms' ? 'Text message' : 'Email');
     return { recovery_codes: codes };
   }
@@ -257,9 +255,9 @@ export class MfaService {
   async removeMethod(user: AuthUserRecord, type: MfaType, password: string): Promise<void> {
     await this.assertPassword(user, password);
 
-    const deleted = await runAsSystem(() => this.prisma.user_mfa_methods.deleteMany({
+    const deleted = await this.prisma.user_mfa_methods.deleteMany({
       where: { user_id: user.id, type },
-    }));
+    });
     if (deleted.count === 0) throwValidation({ type: ['That method is not set up.'] });
 
     // Trusted devices were trusted BECAUSE a factor was held. Changing the factors invalidates that.
@@ -274,7 +272,7 @@ export class MfaService {
   /** Fresh recovery codes, replacing every old one. Requires the password, for the same reason. */
   async regenerateRecoveryCodes(user: AuthUserRecord, password: string): Promise<string[]> {
     await this.assertPassword(user, password);
-    const codes = await this.recovery.issue(user.id, user.company_id);
+    const codes = await this.recovery.issue(user.id);
     await this.auditEvent(user, 'Recovery codes regenerated', null);
     return codes;
   }
@@ -288,14 +286,14 @@ export class MfaService {
    * is not told, because the caller may not be who they say they are yet.
    */
   async sendChallengeCode(userId: number, channel: OtpChannel): Promise<void> {
-    const row = await runAsSystem(() => this.prisma.user_mfa_methods.findUnique({
+    const row = await this.prisma.user_mfa_methods.findUnique({
       where: { user_id_type: { user_id: userId, type: channel } },
-      select: { destination: true, confirmed_at: true, company_id: true },
-    }));
+      select: { destination: true, confirmed_at: true },
+    });
     // Silently does nothing for a method that is not set up: answering differently would tell an
     // unauthenticated caller which factors an account holds.
     if (!row?.destination || !row.confirmed_at) return;
-    await this.issueOtp(userId, row.company_id, channel, row.destination);
+    await this.issueOtp(userId, channel, row.destination);
   }
 
   /**
@@ -327,9 +325,9 @@ export class MfaService {
    * out.
    */
   private async verifyTotpFor(userId: number, code: string): Promise<boolean> {
-    const row = await runAsSystem(() => this.prisma.user_mfa_methods.findUnique({
+    const row = await this.prisma.user_mfa_methods.findUnique({
       where: { user_id_type: { user_id: userId, type: 'totp' } },
-    }));
+    });
     if (!row?.secret || !row.confirmed_at) return false;
 
     const secret = decryptSecret(row.secret);
@@ -346,35 +344,32 @@ export class MfaService {
     }
 
     const now = new Date();
-    await runAsSystem(() => this.prisma.user_mfa_methods.update({
+    await this.prisma.user_mfa_methods.update({
       where: { id: row.id },
       data: { last_step: BigInt(result.step), last_used_at: now, updated_at: now },
-    }));
+    });
     return true;
   }
 
   /** Issue and send a one-time code, replacing any outstanding one for the same channel. */
-  private async issueOtp(userId: number, companyId: number, channel: OtpChannel, destination: string): Promise<void> {
+  private async issueOtp(userId: number, channel: OtpChannel, destination: string): Promise<void> {
     const code = generateOtp();
     const now = new Date();
 
-    await runAsSystem(async () => {
-      // Only one live code per channel. Leaving older ones valid would multiply the guessing surface
-      // every time somebody pressed Resend.
-      await this.prisma.mfa_challenges.updateMany({
-        where: { user_id: userId, method: channel, consumed_at: null },
-        data: { consumed_at: now },
-      });
-      await this.prisma.mfa_challenges.create({
-        data: {
-          user_id: userId,
-          method: channel,
-          code_hash: hashOneTimeValue(code),
-          expires_at: new Date(now.getTime() + MfaService.OTP_TTL_MINUTES * 60 * 1000),
-          created_at: now,
-          company_id: companyId,
-        },
-      });
+    // Only one live code per channel. Leaving older ones valid would multiply the guessing surface
+    // every time somebody pressed Resend.
+    await this.prisma.mfa_challenges.updateMany({
+      where: { user_id: userId, method: channel, consumed_at: null },
+      data: { consumed_at: now },
+    });
+    await this.prisma.mfa_challenges.create({
+      data: {
+        user_id: userId,
+        method: channel,
+        code_hash: hashOneTimeValue(code),
+        expires_at: new Date(now.getTime() + MfaService.OTP_TTL_MINUTES * 60 * 1000),
+        created_at: now,
+      },
     });
 
     const result = await this.delivery.dispatch(channel, destination, code, MfaService.OTP_TTL_MINUTES);
@@ -393,16 +388,16 @@ export class MfaService {
    */
   private async consumeOtp(userId: number, channel: OtpChannel, code: string): Promise<boolean> {
     const now = new Date();
-    const challenge = await runAsSystem(() => this.prisma.mfa_challenges.findFirst({
+    const challenge = await this.prisma.mfa_challenges.findFirst({
       where: { user_id: userId, method: channel, consumed_at: null, expires_at: { gt: now } },
       orderBy: { created_at: 'desc' },
-    }));
+    });
     if (!challenge) return false;
 
     if (challenge.attempts >= MfaService.OTP_MAX_ATTEMPTS) {
-      await runAsSystem(() => this.prisma.mfa_challenges.update({
+      await this.prisma.mfa_challenges.update({
         where: { id: challenge.id }, data: { consumed_at: now },
-      }));
+      });
       throw new HttpException(
         { message: 'Too many wrong codes. Ask for a new one.' },
         HttpStatus.TOO_MANY_REQUESTS,
@@ -410,18 +405,18 @@ export class MfaService {
     }
 
     if (challenge.code_hash !== hashOneTimeValue(code)) {
-      await runAsSystem(() => this.prisma.mfa_challenges.update({
+      await this.prisma.mfa_challenges.update({
         where: { id: challenge.id }, data: { attempts: { increment: 1 } },
-      }));
+      });
       return false;
     }
 
     // Consuming is filtered on `consumed_at: null`, so two simultaneous correct submissions cannot
     // both succeed — the second updates nothing.
-    const spent = await runAsSystem(() => this.prisma.mfa_challenges.updateMany({
+    const spent = await this.prisma.mfa_challenges.updateMany({
       where: { id: challenge.id, consumed_at: null },
       data: { consumed_at: now },
-    }));
+    });
     return spent.count > 0;
   }
 
@@ -440,16 +435,14 @@ export class MfaService {
    * must set one up again, which is the only state this application can be sure about.
    */
   async adminReset(actor: AuthUserRecord, targetUserId: number): Promise<void> {
-    const target = await runAsSystem(() => this.prisma.users.findUnique({
+    const target = await this.prisma.users.findUnique({
       where: { id: targetUserId },
       select: { id: true, name: true, email: true },
-    }));
+    });
     if (!target) throwValidation({ user: ['That user does not exist.'] });
 
-    await runAsSystem(async () => {
-      await this.prisma.user_mfa_methods.deleteMany({ where: { user_id: targetUserId } });
-      await this.prisma.mfa_challenges.deleteMany({ where: { user_id: targetUserId } });
-    });
+    await this.prisma.user_mfa_methods.deleteMany({ where: { user_id: targetUserId } });
+    await this.prisma.mfa_challenges.deleteMany({ where: { user_id: targetUserId } });
     await this.recovery.revokeAll(targetUserId);
     await this.devices.revokeAll(targetUserId);
 

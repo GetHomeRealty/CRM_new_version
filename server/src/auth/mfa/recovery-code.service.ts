@@ -1,7 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { randomInt } from 'node:crypto';
 import { PrismaService } from '../../prisma/prisma.service';
-import { runAsSystem } from '../../core/tenant-context';
 import { hashOneTimeValue } from './mfa-crypto';
 
 /**
@@ -52,20 +51,17 @@ export class RecoveryCodeService {
    * been photographed, emailed to oneself, or left in a drawer at a previous job. Adding to it would
    * leave every one of those working.
    */
-  async issue(userId: number, companyId: number): Promise<string[]> {
+  async issue(userId: number): Promise<string[]> {
     const codes = Array.from({ length: RecoveryCodeService.COUNT }, () => this.generateCode());
     const now = new Date();
 
-    await runAsSystem(async () => {
-      await this.prisma.mfa_recovery_codes.deleteMany({ where: { user_id: userId } });
-      await this.prisma.mfa_recovery_codes.createMany({
-        data: codes.map((code) => ({
-          user_id: userId,
-          code_hash: hashOneTimeValue(code),
-          created_at: now,
-          company_id: companyId,
-        })),
-      });
+    await this.prisma.mfa_recovery_codes.deleteMany({ where: { user_id: userId } });
+    await this.prisma.mfa_recovery_codes.createMany({
+      data: codes.map((code) => ({
+        user_id: userId,
+        code_hash: hashOneTimeValue(code),
+        created_at: now,
+      })),
     });
 
     this.log.log(`Issued ${codes.length} recovery codes for user #${userId}.`);
@@ -74,9 +70,9 @@ export class RecoveryCodeService {
 
   /** How many are left unspent — shown on the security screen so nobody runs out unknowingly. */
   async remaining(userId: number): Promise<number> {
-    return runAsSystem(() => this.prisma.mfa_recovery_codes.count({
+    return this.prisma.mfa_recovery_codes.count({
       where: { user_id: userId, used_at: null },
-    }));
+    });
   }
 
   /**
@@ -91,10 +87,10 @@ export class RecoveryCodeService {
     const hash = hashOneTimeValue(code);
     if (!code || !hash) return false;
 
-    const result = await runAsSystem(() => this.prisma.mfa_recovery_codes.updateMany({
+    const result = await this.prisma.mfa_recovery_codes.updateMany({
       where: { user_id: userId, code_hash: hash, used_at: null },
       data: { used_at: new Date(), used_ip: ip?.slice(0, 64) ?? null },
-    }));
+    });
 
     if (result.count > 0) {
       this.log.log(`Recovery code redeemed for user #${userId}.`);
@@ -105,6 +101,6 @@ export class RecoveryCodeService {
 
   /** Drop every code — used when two-factor is turned off, so nothing outlives it. */
   async revokeAll(userId: number): Promise<void> {
-    await runAsSystem(() => this.prisma.mfa_recovery_codes.deleteMany({ where: { user_id: userId } }));
+    await this.prisma.mfa_recovery_codes.deleteMany({ where: { user_id: userId } });
   }
 }

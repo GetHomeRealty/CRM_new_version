@@ -5,8 +5,6 @@ import { registerWorker } from '../observability/worker-health';
 import { clusterTick } from '../redis/cluster-tick';
 import { RedisService } from '../redis/redis.service';
 import { CacheService } from '../redis/cache.service';
-import { forEachTenant } from '../core/tenant-context';
-import { allTenantIds } from '../core/tenants';
 import { CrmEventNotifier } from '../notifications/crm-events.service';
 
 /** Every 30 minutes. A follow-up is due on a DAY, so this is about promptness, not precision. */
@@ -57,7 +55,7 @@ export class LeadTaskReminderService implements OnModuleInit, OnModuleDestroy {
      * would mean two of everything. With Redis exactly one process wins each pass; without it,
      * behaviour is unchanged from a single-instance deployment.
      */
-    const tick = clusterTick({ redis: this.redis, cache: this.cache }, 'lead-task-due', () => this.sweepAllTenants());
+    const tick = clusterTick({ redis: this.redis, cache: this.cache }, 'lead-task-due', () => this.sweep());
     setTimeout(tick, FIRST_PASS_MS).unref?.();
     this.timer = setInterval(tick, POLL_INTERVAL_MS);
     this.timer.unref?.();
@@ -69,13 +67,8 @@ export class LeadTaskReminderService implements OnModuleInit, OnModuleDestroy {
     this.timer = null;
   }
 
-  /** A timer has no request to inherit a brokerage from, so it must name each one itself. */
-  async sweepAllTenants(): Promise<void> {
-    await forEachTenant(() => allTenantIds(this.prisma), () => this.sweep());
-  }
-
   /**
-   * One pass for one brokerage.
+   * One pass over every due follow-up.
    *
    * `today` is injectable so a test can place itself relative to a due date rather than having to
    * create a task at a real wall-clock offset.

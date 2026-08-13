@@ -63,7 +63,7 @@ async function main() {
   const now = new Date();
 
   // ---- the brokerage itself -------------------------------------------------
-  // Everything else carries company_id = 1, and users.company_id has a foreign key to this.
+  // The brokerage's own record — letterhead, banking, invoice counter. One row, id 1.
   await prisma.company_settings.upsert({
     where: { id: 1 },
     update: {},
@@ -89,7 +89,7 @@ async function main() {
       update: { name: u.name, role: u.role, status: 'Active', password: hash },
       create: {
         name: u.name, email: u.email, role: u.role, status: 'Active',
-        password: hash, company_id: 1, created_at: now, updated_at: now,
+        password: hash, created_at: now, updated_at: now,
       },
     });
     users[u.email] = row.id;
@@ -122,7 +122,7 @@ async function main() {
       data: {
         name: l.name, email: l.email, phone: l.phone,
         assigned_to: l.owner, owner_user_id: l.owner,
-        company_id: 1, created_at: now, updated_at: now,
+        created_at: now, updated_at: now,
       },
     });
     leadCount += 1;
@@ -141,7 +141,7 @@ async function main() {
     const existing = await prisma.transactions.findFirst({ where: { trade_no: t.trade_no } });
     if (existing) continue;
     await prisma.transactions.create({
-      data: { trade_no: t.trade_no, type: t.type, company_id: 1, created_at: now, updated_at: now },
+      data: { trade_no: t.trade_no, type: t.type, created_at: now, updated_at: now },
     });
     txnCount += 1;
   }
@@ -160,7 +160,7 @@ async function main() {
     const existing = await prisma.calendar_events.findFirst({ where: { title: e.title } });
     if (existing) continue;
     await prisma.calendar_events.create({
-      data: { ...e, company_id: 1, created_at: now, updated_at: now },
+      data: { ...e, created_at: now, updated_at: now },
     });
     evCount += 1;
   }
@@ -178,7 +178,7 @@ async function main() {
         host: 'smtp.invalid.test', port: 587, username: 'dana.okafor@test.local',
         encryption: 'tls', is_active: true, is_default: true, user_id: agent, scope: 'crm',
         imap_host: null, inbound_enabled: false,
-        company_id: 1, created_at: now, updated_at: now,
+        created_at: now, updated_at: now,
       },
     });
   }
@@ -204,7 +204,7 @@ async function main() {
         // Spread over recent days so ordering and the date column are meaningfully exercised.
         received_at: new Date(Date.now() - m.uid % 10 * 86400000 - 3600000),
         seen: m.uid === 9003, lead_id: null,
-        company_id: 1, created_at: now,
+        created_at: now,
       },
     });
     mailCount += 1;

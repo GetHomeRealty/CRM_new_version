@@ -47,22 +47,37 @@ export const DEFAULT_TRIGGER_TEMPLATES = {
 /**
  * CRM `emailSettings.emailTemplates` trigger switches — one per email this application can send.
  *
- * `birthday` and `anniversary` are gone. There is no send path for either: `CrmSettingsPanel`'s
- * `actionFor` offers wedding, seasonal, promotional, referral and custom, and
- * `CrmAdvancedEmailService` implements exactly those five. The two extras were switches whose help
- * text ("decides whether that email may be sent from Send a CRM Email below") was false in both
- * positions — switching them on made nothing available and switching them off blocked nothing.
+ * `birthday` and `anniversary` were removed once, because nothing sent either and both switches
+ * were decorative — the help text ("decides whether that email may be sent") was false in both
+ * positions. That note ended "put them back the day something sends a birthday email".
  *
- * Rows that already carry the two keys keep them in their stored JSON; nothing reads them, and the
- * next save drops them. Put them back the day something sends a birthday email.
+ * THAT DAY IS NOW. `LeadGreetingsService` sweeps daily for leads whose `date_of_birth` or
+ * `marriage_day` falls today and sends through `CrmAdvancedEmailService`, which checks these
+ * switches like every other send. So they gate something real, in both positions.
+ *
+ * DEFAULT OFF, unlike the five above, and that asymmetry is deliberate. The others fire only when
+ * a person presses a button; these fire on a timer, at whatever the stored dates say, without
+ * anybody present. An upgrade that silently began emailing a brokerage's whole book on a schedule
+ * nobody chose would be the wrong default whatever the feature. Switch them on under
+ * Triggers → CRM Triggers when the brokerage wants them.
  */
 export const TRIGGER_KEYS = [
-  'wedding', 'seasonal', 'promotional', 'referral', 'custom',
+  'wedding', 'seasonal', 'promotional', 'referral', 'custom', 'birthday', 'anniversary', 'welcome',
 ] as const;
 export type TriggerKey = (typeof TRIGGER_KEYS)[number];
 
+/**
+ * `welcome` defaults to FALSE, with birthday and anniversary and for the same reason.
+ *
+ * The five that default to true are button-driven: somebody chose a lead, chose a message and
+ * pressed send, so the switch is about whether that button works. The three that default to false
+ * are timer-driven — nobody is watching when they go — and an upgrade that quietly began emailing
+ * every lead who arrives is not a decision this file gets to make on a brokerage's behalf. Turning
+ * it on is one switch under Triggers → CRM Triggers.
+ */
 export const DEFAULT_TRIGGERS: Record<string, boolean> = {
   wedding: true, seasonal: true, promotional: true, referral: true, custom: true,
+  birthday: false, anniversary: false, welcome: false,
 };
 
 export const LANGUAGES = [

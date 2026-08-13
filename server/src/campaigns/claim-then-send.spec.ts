@@ -1,5 +1,4 @@
 import { PrismaClient } from '@prisma/client';
-import { TENANT_ID } from '../core/tenant';
 
 /**
  * CRM-CAMP-M02 — a crash mid-send must not deliver a second copy.
@@ -54,7 +53,7 @@ async function recipientInState(tx: PrismaClient, status: string): Promise<{ cam
   const c = await tx.campaigns.create({
     data: {
       name: `ZZM02 ${tag()}`, subject: 'S', content: 'C', status: 'sending',
-      company_id: TENANT_ID, created_at: now, updated_at: now,
+      created_at: now, updated_at: now,
     },
   });
   const r = await tx.campaign_recipients.create({

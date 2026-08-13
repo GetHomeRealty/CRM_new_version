@@ -7,7 +7,7 @@ import { MfaService } from './mfa.service';
 import { MfaPolicyService } from './mfa-policy.service';
 import { RecoveryCodeService } from './recovery-code.service';
 import { TrustedDeviceService } from './trusted-device.service';
-import { OtpDeliveryService, type OtpProvider } from './otp-delivery.service';
+import { EmailOtpProvider, OtpDeliveryService, SmsOtpProvider, type OtpProvider } from './otp-delivery.service';
 import { base32Decode, totp } from './totp';
 import { decryptSecret, hashOneTimeValue } from './mfa-crypto';
 
@@ -76,7 +76,7 @@ async function makeUser(tx: PrismaService, overrides: Record<string, unknown> = 
     data: {
       name: `ZZ Mfa ${t}`, email: `zz-mfa-${t}@probe.test`, username: `zzmfa${t.replace(/-/g, '')}`,
       role: 'agent', status: 'Active', password: await hasher.hashPassword(PASSWORD),
-      created_at: now, updated_at: now, company_id: 1, ...overrides,
+      created_at: now, updated_at: now, ...overrides,
     },
   });
   return { ...row, user_permissions: [] } as AuthUserRecord;
@@ -245,7 +245,7 @@ describe('recovery codes', () => {
     await inRollback(async (tx) => {
       const user = await makeUser(tx);
       const { recovery } = build(tx);
-      const codes = await recovery.issue(user.id, 1);
+      const codes = await recovery.issue(user.id);
 
       const rows = await tx.mfa_recovery_codes.findMany({ where: { user_id: user.id } });
       expect(rows).toHaveLength(RecoveryCodeService.COUNT);
@@ -258,7 +258,7 @@ describe('recovery codes', () => {
     await inRollback(async (tx) => {
       const user = await makeUser(tx);
       const { recovery } = build(tx);
-      const codes = await recovery.issue(user.id, 1);
+      const codes = await recovery.issue(user.id);
 
       expect(await recovery.redeem(user.id, codes[0], '127.0.0.1')).toBe(true);
       expect(await recovery.redeem(user.id, codes[0], '127.0.0.1')).toBe(false);
@@ -270,7 +270,7 @@ describe('recovery codes', () => {
     await inRollback(async (tx) => {
       const user = await makeUser(tx);
       const { recovery } = build(tx);
-      const codes = await recovery.issue(user.id, 1);
+      const codes = await recovery.issue(user.id);
       expect(await recovery.redeem(user.id, codes[0].toLowerCase().replace('-', ' '), null)).toBe(true);
     });
   });
@@ -281,7 +281,7 @@ describe('recovery codes', () => {
       const mine = await makeUser(tx);
       const theirs = await makeUser(tx);
       const { recovery } = build(tx);
-      const codes = await recovery.issue(mine.id, 1);
+      const codes = await recovery.issue(mine.id);
 
       expect(await recovery.redeem(theirs.id, codes[0], null)).toBe(false);
       expect(await recovery.remaining(mine.id)).toBe(RecoveryCodeService.COUNT);
@@ -297,8 +297,8 @@ describe('recovery codes', () => {
     await inRollback(async (tx) => {
       const user = await makeUser(tx);
       const { recovery } = build(tx);
-      const old = await recovery.issue(user.id, 1);
-      const fresh = await recovery.issue(user.id, 1);
+      const old = await recovery.issue(user.id);
+      const fresh = await recovery.issue(user.id);
 
       expect(await recovery.redeem(user.id, old[0], null)).toBe(false);
       expect(await recovery.redeem(user.id, fresh[0], null)).toBe(true);
@@ -309,7 +309,7 @@ describe('recovery codes', () => {
     await inRollback(async (tx) => {
       const user = await makeUser(tx);
       const { recovery } = build(tx);
-      await recovery.issue(user.id, 1);
+      await recovery.issue(user.id);
       expect(await recovery.redeem(user.id, 'ZZZZZ-ZZZZZ', null)).toBe(false);
       expect(await recovery.redeem(user.id, '', null)).toBe(false);
     });
@@ -466,7 +466,7 @@ describe('trusted devices', () => {
       const res = fakeRes();
 
       expect(await devices.isTrusted(reqWith(), user.id)).toBe(false);
-      await devices.trust(reqWith(), res as never, user.id, 1);
+      await devices.trust(reqWith(), res as never, user.id);
 
       const token = res.cookies.mfa_device;
       expect(token).toBeTruthy();
@@ -480,7 +480,7 @@ describe('trusted devices', () => {
       const user = await makeUser(tx);
       const { devices } = build(tx);
       const res = fakeRes();
-      await devices.trust(reqWith(), res as never, user.id, 1);
+      await devices.trust(reqWith(), res as never, user.id);
 
       const row = await tx.mfa_trusted_devices.findFirst({ where: { user_id: user.id } });
       expect(row!.token_hash).not.toBe(res.cookies.mfa_device);
@@ -494,7 +494,7 @@ describe('trusted devices', () => {
       const theirs = await makeUser(tx);
       const { devices } = build(tx);
       const res = fakeRes();
-      await devices.trust(reqWith(), res as never, mine.id, 1);
+      await devices.trust(reqWith(), res as never, mine.id);
 
       expect(await devices.isTrusted(reqWith(res.cookies.mfa_device), theirs.id)).toBe(false);
     });
@@ -505,7 +505,7 @@ describe('trusted devices', () => {
       const user = await makeUser(tx);
       const { devices } = build(tx);
       const res = fakeRes();
-      await devices.trust(reqWith(), res as never, user.id, 1);
+      await devices.trust(reqWith(), res as never, user.id);
 
       await tx.mfa_trusted_devices.updateMany({
         where: { user_id: user.id }, data: { expires_at: new Date(Date.now() - 1000) },
@@ -519,7 +519,7 @@ describe('trusted devices', () => {
       const user = await makeUser(tx);
       const { devices } = build(tx);
       const res = fakeRes();
-      await devices.trust(reqWith(), res as never, user.id, 1);
+      await devices.trust(reqWith(), res as never, user.id);
 
       expect(await devices.revokeAll(user.id)).toBe(1);
       expect(await devices.isTrusted(reqWith(res.cookies.mfa_device), user.id)).toBe(false);
@@ -538,7 +538,7 @@ describe('trusted devices', () => {
       await mfa.confirmTotpEnrolment(user, totp(base32Decode(secret)));
 
       const res = fakeRes();
-      await devices.trust(reqWith(), res as never, user.id, 1);
+      await devices.trust(reqWith(), res as never, user.id);
       await mfa.removeMethod(user, 'totp', PASSWORD);
 
       expect(await devices.isTrusted(reqWith(res.cookies.mfa_device), user.id)).toBe(false);
@@ -569,7 +569,7 @@ describe('an administrator clearing somebody two-factor', () => {
       const { secret } = await mfa.beginTotpEnrolment(user, 'Issuer');
       await mfa.confirmTotpEnrolment(user, totp(base32Decode(secret)));
       const res = fakeRes();
-      await devices.trust(reqWith(), res as never, user.id, 1);
+      await devices.trust(reqWith(), res as never, user.id);
 
       await mfa.adminReset(admin, user.id);
 
@@ -605,7 +605,7 @@ describe('the enrolment policy', () => {
     await inRollback(async (tx) => {
       const user = await makeUser(tx);
       const policy = policyFor(tx);
-      await policy.set(1, 'agent', true, 0);
+      await policy.set('agent', true, 0);
       expect(await policy.obligationFor(user, true)).toEqual({ state: 'none' });
     });
   });
@@ -618,7 +618,7 @@ describe('the enrolment policy', () => {
     await inRollback(async (tx) => {
       const user = await makeUser(tx);
       const policy = policyFor(tx);
-      await policy.set(1, 'agent', true, 7);
+      await policy.set('agent', true, 7);
 
       const result = await policy.obligationFor(user, false);
       expect(result.state).toBe('grace');
@@ -630,7 +630,7 @@ describe('the enrolment policy', () => {
     await inRollback(async (tx) => {
       const user = await makeUser(tx);
       const policy = policyFor(tx);
-      await policy.set(1, 'agent', true, 7);
+      await policy.set('agent', true, 7);
 
       const later = new Date(Date.now() + 8 * 24 * 60 * 60 * 1000);
       expect(await policy.obligationFor(user, false, later)).toEqual({ state: 'overdue' });
@@ -644,7 +644,7 @@ describe('the enrolment policy', () => {
      */
     await inRollback(async (tx) => {
       const policy = policyFor(tx);
-      await policy.set(1, 'agent', true, 7);
+      await policy.set('agent', true, 7);
 
       const newHire = await makeUser(tx, { created_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) });
       const wellAfterThePolicy = new Date(Date.now() + 10 * 24 * 60 * 60 * 1000);
@@ -668,7 +668,7 @@ describe('the enrolment policy', () => {
       const agent = await makeUser(tx, { role: 'agent' });
       const accounting = await makeUser(tx, { role: 'accounting' });
       const policy = policyFor(tx);
-      await policy.set(1, 'agent', true, 0);
+      await policy.set('agent', true, 0);
 
       const inAMoment = new Date(Date.now() + 5000);
       expect((await policy.obligationFor(agent, false, inAMoment)).state).toBe('overdue');
@@ -680,8 +680,8 @@ describe('the enrolment policy', () => {
     await inRollback(async (tx) => {
       const user = await makeUser(tx);
       const policy = policyFor(tx);
-      await policy.set(1, 'agent', true, 0);
-      await policy.set(1, 'agent', false, 0);
+      await policy.set('agent', true, 0);
+      await policy.set('agent', false, 0);
       expect(await policy.obligationFor(user, false)).toEqual({ state: 'none' });
     });
   });
@@ -723,6 +723,212 @@ describe('answering a challenge', () => {
       // A code that is genuinely valid — for somebody else.
       expect(await mfa.verifyChallenge(theirs.id, 'totp', totp(base32Decode(secret), Date.now() + 30_000), null))
         .toBe(false);
+    });
+  });
+});
+
+// ============================================================================ two channels, not one
+/**
+ * Email and mobile are two separate factors, and every layer has to keep them that way.
+ *
+ * THE DEFECT THIS BLOCK IS THE FLOOR UNDER. On the settings screen both rows were bound to one
+ * piece of state, so typing an address into "Email address" also filled "Mobile number" and a phone
+ * number typed afterwards overwrote the address. That was a client bug and it is fixed there — but
+ * "the two are independent" is a claim about the whole stack, and a screen is the easiest place for
+ * it to be quietly re-broken. These assertions hold the server end of it: separate rows, separate
+ * destinations, separate live codes, separate confirmation, separate removal.
+ */
+describe('email and mobile are two separate factors', () => {
+  /** Enrol both channels for one person, unconfirmed, and return where each was sent. */
+  async function bothStarted(tx: PrismaService) {
+    const { mfa, email, sms } = build(tx);
+    const user = await makeUser(tx);
+    await mfa.beginOtpEnrolment(user, 'email', 'first@probe.test');
+    await mfa.beginOtpEnrolment(user, 'sms', '416-555-0100');
+    return { mfa, email, sms, user };
+  }
+
+  const destinations = async (tx: PrismaService, userId: number): Promise<Record<string, string | null>> => {
+    const rows = await tx.user_mfa_methods.findMany({ where: { user_id: userId }, select: { type: true, destination: true } });
+    return Object.fromEntries(rows.map((r) => [r.type, r.destination]));
+  };
+
+  it('stores one row per channel, each with its own destination', async () => {
+    await inRollback(async (tx) => {
+      const { user } = await bothStarted(tx);
+      expect(await destinations(tx, user.id)).toEqual({
+        email: 'first@probe.test',
+        sms: '416-555-0100',
+      });
+    });
+  });
+
+  it('changing the email address leaves the mobile number exactly as it was', async () => {
+    /*
+     * THE SHAPE OF THE ORIGINAL COMPLAINT. Entering an address updated both fields; whichever was
+     * saved last was the only one that had ever really existed.
+     */
+    await inRollback(async (tx) => {
+      const { mfa, user } = await bothStarted(tx);
+
+      await mfa.beginOtpEnrolment(user, 'email', 'second@probe.test');
+
+      expect(await destinations(tx, user.id)).toEqual({
+        email: 'second@probe.test',
+        sms: '416-555-0100',          // untouched
+      });
+    });
+  });
+
+  it('changing the mobile number leaves the email address exactly as it was', async () => {
+    await inRollback(async (tx) => {
+      const { mfa, user } = await bothStarted(tx);
+
+      await mfa.beginOtpEnrolment(user, 'sms', '416-555-0199');
+
+      expect(await destinations(tx, user.id)).toEqual({
+        email: 'first@probe.test',    // untouched
+        sms: '416-555-0199',
+      });
+    });
+  });
+
+  it('sends each code to its own destination and nowhere else', async () => {
+    await inRollback(async (tx) => {
+      const { email, sms } = await bothStarted(tx);
+
+      expect(email.sent.map((s) => s.destination)).toEqual(['first@probe.test']);
+      expect(sms.sent.map((s) => s.destination)).toEqual(['416-555-0100']);
+      // The codes themselves are different too — one is not a copy of the other.
+      expect(email.sent[0].code).not.toBe(sms.sent[0].code);
+    });
+  });
+
+  it('an emailed code cannot confirm the mobile factor, or the reverse', async () => {
+    await inRollback(async (tx) => {
+      const { mfa, email, sms, user } = await bothStarted(tx);
+
+      await expect(mfa.confirmOtpEnrolment(user, 'sms', email.sent[0].code)).rejects.toThrow();
+      await expect(mfa.confirmOtpEnrolment(user, 'email', sms.sent[0].code)).rejects.toThrow();
+
+      // And neither wrong attempt confirmed anything.
+      const rows = await tx.user_mfa_methods.findMany({ where: { user_id: user.id }, select: { confirmed_at: true } });
+      expect(rows.every((r) => r.confirmed_at === null)).toBe(true);
+    });
+  });
+
+  it('asking for a new email code leaves a live mobile code alone', async () => {
+    /*
+     * Resend is per channel. `issueOtp` supersedes the live code for the channel it was asked
+     * about — if it superseded every channel, pressing "send another code" on the email row would
+     * silently invalidate a text somebody was already reading off their phone.
+     */
+    await inRollback(async (tx) => {
+      const { mfa, email, sms, user } = await bothStarted(tx);
+      const textedCode = sms.sent[0].code;
+
+      await mfa.beginOtpEnrolment(user, 'email', 'first@probe.test');   // resend, same address
+
+      // A second email code was sent, and the first no longer works.
+      expect(email.sent).toHaveLength(2);
+      await expect(mfa.confirmOtpEnrolment(user, 'email', email.sent[0].code)).rejects.toThrow();
+      // The texted one, meanwhile, is still good.
+      await expect(mfa.confirmOtpEnrolment(user, 'sms', textedCode)).resolves.toBeDefined();
+    });
+  });
+
+  it('confirming one channel leaves the other unconfirmed and still pending', async () => {
+    await inRollback(async (tx) => {
+      const { mfa, email, user } = await bothStarted(tx);
+
+      await mfa.confirmOtpEnrolment(user, 'email', email.sent[0].code);
+
+      const rows = await mfa.methodsFor(user.id);
+      expect(rows.find((m) => m.type === 'email')?.confirmed).toBe(true);
+      expect(rows.find((m) => m.type === 'sms')?.confirmed).toBe(false);
+    });
+  });
+
+  it('removing one channel leaves the other with its destination intact', async () => {
+    await inRollback(async (tx) => {
+      const { mfa, email, sms, user } = await bothStarted(tx);
+      await mfa.confirmOtpEnrolment(user, 'email', email.sent[0].code);
+      await mfa.confirmOtpEnrolment(user, 'sms', sms.sent[0].code);
+
+      await mfa.removeMethod(user, 'email', PASSWORD);
+
+      expect(await destinations(tx, user.id)).toEqual({ sms: '416-555-0100' });
+    });
+  });
+
+  it('shows each one masked in its own way, so neither is mistaken for the other', () => {
+    // Real providers rather than the capturing stub: masking is what the settings screen displays
+    // beside each factor, and an address masked as a phone number would be the same confusion
+    // wearing a new hat.
+    const real = new OtpDeliveryService(
+      new EmailOtpProvider(null as never) as never,
+      new SmsOtpProvider(null as never) as never,
+    );
+
+    expect(real.mask('email', 'patricia@brokerage.ca')).toBe('p••••••a@brokerage.ca');
+    expect(real.mask('sms', '416-555-0100')).toBe('•••-•••-0100');
+  });
+});
+
+// ============================================================================ per-channel validation
+/**
+ * Each channel judges its own destination, so a value meant for one field cannot be saved into the
+ * other. This is the server's half of "they are separate fields": even if a screen handed it the
+ * wrong one, it would be refused rather than stored.
+ */
+describe('each channel validates its own kind of destination', () => {
+  const email = new EmailOtpProvider(null as never);
+  const sms = new SmsOtpProvider(null as never);
+
+  it('the email channel takes an address and refuses a phone number', () => {
+    expect(email.validDestination('patricia@brokerage.ca')).toBe(true);
+    expect(email.validDestination('416-555-0100')).toBe(false);
+    expect(email.validDestination('+1 416 555 0100')).toBe(false);
+  });
+
+  it('the mobile channel takes a number in the forms people actually write, and refuses an address', () => {
+    expect(sms.validDestination('416-555-0100')).toBe(true);
+    expect(sms.validDestination('+1 416 555 0100')).toBe(true);
+    expect(sms.validDestination('(416) 555-0100')).toBe(true);
+    expect(sms.validDestination('patricia@brokerage.ca')).toBe(false);
+  });
+
+  it('neither accepts blank, and neither accepts the other channel\'s value', () => {
+    for (const provider of [email, sms]) {
+      expect(provider.validDestination('')).toBe(false);
+      expect(provider.validDestination('   ')).toBe(false);
+    }
+    // A number too short to dial and an address with no domain: plainly neither.
+    expect(sms.validDestination('12345')).toBe(false);
+    expect(email.validDestination('patricia@')).toBe(false);
+  });
+
+  it('the service refuses a mismatched destination rather than storing it', async () => {
+    await inRollback(async (tx) => {
+      // Real providers, so the validators above are the ones the endpoint actually consults.
+      const delivery = new OtpDeliveryService(
+        new EmailOtpProvider(null as never) as never,
+        new SmsOtpProvider(null as never) as never,
+      );
+      const passwords = new PasswordHashService({ get: () => 4 } as unknown as ConfigService);
+      const mfa = new MfaService(
+        tx, new RecoveryCodeService(tx),
+        new TrustedDeviceService(tx, { get: () => ({ secure: false, sameSite: 'lax' }) } as unknown as ConfigService),
+        delivery, passwords, { logModule: async () => {}, record: async () => {} } as never,
+      );
+      const user = await makeUser(tx);
+
+      // A phone number offered as an email address, and an address offered as a number.
+      await expect(mfa.beginOtpEnrolment(user, 'email', '416-555-0100')).rejects.toThrow();
+      await expect(mfa.beginOtpEnrolment(user, 'sms', 'patricia@brokerage.ca')).rejects.toThrow();
+
+      // Nothing was written by either refusal.
+      expect(await tx.user_mfa_methods.count({ where: { user_id: user.id } })).toBe(0);
     });
   });
 });

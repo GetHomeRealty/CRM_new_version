@@ -30,7 +30,7 @@ async function makeUser(tx: PrismaService, role = 'agent'): Promise<AuthUserReco
   const now = new Date();
   const t = tag();
   const u = await tx.users.create({
-    data: { name: `An User ${t}`, email: `an-${t}@example.test`, role, status: 'Active', password: 'x', company_id: 1, created_at: now, updated_at: now },
+    data: { name: `An User ${t}`, email: `an-${t}@example.test`, role, status: 'Active', password: 'x', created_at: now, updated_at: now },
   });
   return u as unknown as AuthUserRecord;
 }
@@ -40,8 +40,7 @@ async function makeEvent(tx: PrismaService, userId: number, date: string, over: 
   return tx.calendar_events.create({
     data: {
       title: `Ev ${tag()}`, date: new Date(`${date}T00:00:00.000Z`), time: '10:00',
-      type: 'showing', status: 'scheduled', user_id: userId, domain: 'crm', company_id: 1,
-      created_at: now, updated_at: now, ...over,
+      type: 'showing', status: 'scheduled', user_id: userId, domain: 'crm',      created_at: now, updated_at: now, ...over,
     },
   });
 }

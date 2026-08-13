@@ -67,7 +67,7 @@ export default function NotificationCenterPage() {
      */
     if (item.unread) {
       try {
-        await markNotificationRead(item.source, item.transaction_id);
+        await markNotificationRead(item);
       } catch {
         // Navigation is the point; a failed mark corrects itself when the deal is opened.
       }
@@ -78,7 +78,7 @@ export default function NotificationCenterPage() {
   const markOne = async (item: NotificationItem) => {
     setBusy(true);
     try {
-      await markNotificationRead(item.source, item.transaction_id);
+      await markNotificationRead(item);
       await load();
     } catch (ex) {
       toast(apiErrorMessage(ex, 'Could not mark that read'), 'bad');
@@ -114,6 +114,21 @@ export default function NotificationCenterPage() {
     const to = Math.min(feed.offset + feed.limit, feed.total);
     return { from, to, hasPrev: feed.offset > 0, hasNext: to < feed.total };
   }, [feed]);
+
+  /*
+   * What the open button says, taken from where the row actually goes.
+   *
+   * It was hard-coded to "Open deal", which was true when every source was a Transaction Desk
+   * deal and stopped being true once the dispatcher started delivering direct notifications: a new
+   * mail line offered "Open deal" and then opened the Inbox. Reading the destination keeps the two
+   * in step by construction, so a source added later cannot reintroduce the mismatch.
+   */
+  const openLabel = (link: string): string => {
+    if (/\/inbox\b/.test(link)) return 'Open mail';
+    if (/\/leads?\//.test(link)) return 'Open lead';
+    if (/\/transactions\//.test(link)) return 'Open deal';
+    return 'Open';
+  };
 
   const when = (at: string | null): string => {
     if (!at) return '';
@@ -229,9 +244,12 @@ export default function NotificationCenterPage() {
                   <div className="muted" style={{ marginTop: 4, fontSize: '0.85em' }}>{when(item.at)}</div>
                 </div>
                 <div className="acct-actions" style={{ flex: '0 0 auto' }}>
-                  <button className="btn primary sm" type="button" onClick={() => void open(item)}>
-                    Open deal
-                  </button>
+                  {/* No link, no button: it used to render one anyway and navigate to ''. */}
+                  {item.link && (
+                    <button className="btn primary sm" type="button" onClick={() => void open(item)}>
+                      {openLabel(item.link)}
+                    </button>
+                  )}
                   {item.unread && (
                     <button className="btn ghost sm" type="button" disabled={busy} onClick={() => void markOne(item)}>
                       Mark read

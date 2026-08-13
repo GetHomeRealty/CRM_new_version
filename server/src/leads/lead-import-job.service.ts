@@ -1,7 +1,6 @@
 import { BadRequestException, Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { randomBytes } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
-import { runAsSystem } from '../core/tenant-context';
 import { schedulersEnabled, schedulerSkipReason } from '../common/schedulers';
 import { IMPORT_BATCH_SIZE, LeadImportEngine, emptyTally } from './lead-import.engine';
 import { isSuperAdmin } from '../core/authz';
@@ -66,7 +65,7 @@ export class LeadImportJobService implements OnModuleInit {
     // bar that never moves. It is failed with a reason that says what to do, and the rows it did
     // import are already committed, so re-importing the same file is safe: existing addresses are
     // recognised and tagged rather than duplicated.
-    const stranded = await runAsSystem(() => this.prisma.lead_import_jobs.updateMany({
+    const stranded = await this.prisma.lead_import_jobs.updateMany({
       where: { status: 'Processing' },
       data: {
         status: 'Failed',
@@ -74,12 +73,12 @@ export class LeadImportJobService implements OnModuleInit {
         completed_at: new Date(),
         payload: null,
       },
-    }));
+    });
     if (stranded.count) this.log.warn(`Marked ${stranded.count} interrupted lead import(s) as failed.`);
 
-    const queued = await runAsSystem(() => this.prisma.lead_import_jobs.findMany({
+    const queued = await this.prisma.lead_import_jobs.findMany({
       where: { status: 'Queued' }, select: { id: true }, orderBy: { id: 'asc' },
-    }));
+    });
     this.queue.push(...queued.map((j) => j.id));
     if (this.queue.length) {
       this.log.log(`Resuming ${this.queue.length} queued lead import(s).`);
@@ -127,7 +126,6 @@ export class LeadImportJobService implements OnModuleInit {
   // ------------------------------------------------------------------ status
 
   async status(jobId: string): Promise<ImportJobView> {
-    // Tenant-scoped by the Prisma extension, so one brokerage cannot poll another's import.
     const job = await this.prisma.lead_import_jobs.findFirst({ where: { job_id: jobId } });
     if (!job) throw new NotFoundException({ message: 'That import could not be found.' });
     return this.view(job);
@@ -159,14 +157,14 @@ export class LeadImportJobService implements OnModuleInit {
   }
 
   private async run(id: number): Promise<void> {
-    // The job carries its own tenant, and this runs on a timer with no request in context.
-    const job = await runAsSystem(() => this.prisma.lead_import_jobs.findUnique({ where: { id } }));
+    // Runs on a timer, with no request in context — the job row carries everything it needs.
+    const job = await this.prisma.lead_import_jobs.findUnique({ where: { id } });
     if (!job || job.status !== 'Queued' || !job.payload) return;
 
     const started = Date.now();
-    await runAsSystem(() => this.prisma.lead_import_jobs.update({
+    await this.prisma.lead_import_jobs.update({
       where: { id }, data: { status: 'Processing', started_at: new Date(), updated_at: new Date() },
-    }));
+    });
 
     const total = emptyTally();
     let processed = 0;
@@ -176,7 +174,7 @@ export class LeadImportJobService implements OnModuleInit {
       // The requester's rank, read once per job: the engine needs it to decide which existing
       // leads are theirs to tag. Cheap, and it keeps the rule identical to the Leads module's.
       const requester = job.requested_by_id
-        ? await runAsSystem(() => this.prisma.users.findUnique({ where: { id: job.requested_by_id! }, select: { role: true } }))
+        ? await this.prisma.users.findUnique({ where: { id: job.requested_by_id! }, select: { role: true } })
         : null;
       const ctx = {
         tag: job.tag ?? '', userName: job.requested_by, userId: job.requested_by_id,
@@ -187,8 +185,7 @@ export class LeadImportJobService implements OnModuleInit {
 
       for (let i = 0; i < rows.length; i += IMPORT_BATCH_SIZE) {
         const batch = rows.slice(i, i + IMPORT_BATCH_SIZE);
-        // The engine writes rows for one brokerage; the tenant comes from the job, not a request.
-        const tally = await runAsSystem(() => this.engine.runBatch(batch, ctx, seen));
+        const tally = await this.engine.runBatch(batch, ctx, seen);
         total.imported += tally.imported;
         total.tagged += tally.tagged;
         total.duplicate += tally.duplicate;
@@ -197,25 +194,25 @@ export class LeadImportJobService implements OnModuleInit {
 
         // Written once per batch, not per row: this is what a client polls, and 100 writes for a
         // 50,000-row file is negligible where 50,000 would not be.
-        await runAsSystem(() => this.prisma.lead_import_jobs.update({
+        await this.prisma.lead_import_jobs.update({
           where: { id },
           data: { processed_rows: processed, ...total, updated_at: new Date() },
-        }));
+        });
       }
 
-      await runAsSystem(() => this.prisma.lead_import_jobs.update({
+      await this.prisma.lead_import_jobs.update({
         where: { id },
         data: {
           status: 'Completed', processed_rows: processed, ...total,
           completed_at: new Date(), updated_at: new Date(),
           payload: null,   // the uploaded file has served its purpose; do not keep it forever
         },
-      }));
+      });
       this.log.log(`Lead import ${job.job_id}: ${total.imported} imported, ${total.duplicate} existing, ${total.invalid} invalid in ${((Date.now() - started) / 1000).toFixed(1)}s`);
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       this.log.error(`Lead import ${job.job_id} failed after ${processed} rows: ${reason}`);
-      await runAsSystem(() => this.prisma.lead_import_jobs.update({
+      await this.prisma.lead_import_jobs.update({
         where: { id },
         data: {
           status: 'Failed', processed_rows: processed, ...total,
@@ -224,7 +221,7 @@ export class LeadImportJobService implements OnModuleInit {
           failure_reason: `${reason} — ${total.imported} lead(s) imported before the failure were kept. Re-importing the same file will skip them.`,
           completed_at: new Date(), updated_at: new Date(), payload: null,
         },
-      }));
+      });
     }
   }
 
@@ -245,7 +242,15 @@ export class LeadImportJobService implements OnModuleInit {
       const parts = [`${job.imported.toLocaleString()} imported`];
       if (job.tagged) parts.push(`${job.tagged.toLocaleString()} tagged`);
       if (job.duplicate) parts.push(`${job.duplicate.toLocaleString()} already existed`);
-      if (job.invalid) parts.push(`${job.invalid.toLocaleString()} skipped`);
+      /*
+       * SAYS WHY, because "skipped" on its own is unactionable.
+       *
+       * There is exactly one reason a row is counted invalid: it carried no usable email address.
+       * An agent importing a list gathered by phone therefore saw "0 imported, 500 skipped" and no
+       * hint that the address column was the problem — the commonest confusion this screen
+       * produces. Naming the cause turns it into something they can fix in the spreadsheet.
+       */
+      if (job.invalid) parts.push(`${job.invalid.toLocaleString()} skipped (no email address)`);
       message = parts.join(', ') + '.';
     }
 

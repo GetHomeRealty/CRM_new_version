@@ -4,7 +4,6 @@ import { join } from 'path';
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
 import { QueueService } from '../queue/queue.service';
-import { runAsSystem } from '../core/tenant-context';
 import { STORAGE_ROOT } from '../config/storage';
 import { metrics } from './metrics';
 import { auditHealth } from './audit-health';
@@ -60,7 +59,7 @@ export class HealthController {
     // about the server, not about anybody's data.
     const dbStart = Date.now();
     try {
-      await runAsSystem(() => this.prisma.$queryRawUnsafe('SELECT 1'));
+      await this.prisma.$queryRawUnsafe('SELECT 1');
       checks.database = { ok: true, ms: Date.now() - dbStart };
     } catch (e) {
       checks.database = { ok: false, ms: Date.now() - dbStart, detail: (e as Error).message.slice(0, 160) };
@@ -82,8 +81,8 @@ export class HealthController {
     // Authorization data. Fail-closed means an empty permission table locks everybody out, so an
     // empty one is an outage even though every process is running.
     try {
-      const roles = await runAsSystem(() => this.prisma.roles.count());
-      const grants = await runAsSystem(() => this.prisma.role_permissions.count());
+      const roles = await this.prisma.roles.count();
+      const grants = await this.prisma.role_permissions.count();
       checks.authorization = { ok: roles > 0 && grants > 0, detail: `${roles} roles, ${grants} grants` };
     } catch (e) {
       checks.authorization = { ok: false, detail: (e as Error).message.slice(0, 160) };
@@ -184,12 +183,12 @@ export class HealthController {
     // reclaims them on restart, so a stuck one means a job that is neither progressing nor failing.
     try {
       const hourAgo = new Date(Date.now() - 60 * 60 * 1000);
-      const [queued, processing, stuck, failed] = await runAsSystem(() => Promise.all([
+      const [queued, processing, stuck, failed] = await Promise.all([
         this.prisma.export_jobs.count({ where: { status: 'Queued' } }),
         this.prisma.export_jobs.count({ where: { status: 'Processing' } }),
         this.prisma.export_jobs.count({ where: { status: 'Processing', created_at: { lt: hourAgo } } }),
         this.prisma.export_jobs.count({ where: { status: 'Failed', completed_at: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } } }),
-      ]));
+      ]);
       result.jobs = { queued, processing, stuck_over_1h: stuck, failed_last_24h: failed, ok: stuck === 0 };
     } catch (e) {
       result.jobs = { ok: false, detail: (e as Error).message.slice(0, 160) };
@@ -207,12 +206,12 @@ export class HealthController {
     // predate that rule. It reports rather than fails: it is a data problem needing a human
     // decision about which account is which, not a reason to take a server out of rotation.
     try {
-      const dupes = await runAsSystem(() => this.prisma.users.groupBy({
+      const dupes = await this.prisma.users.groupBy({
         by: ['name'],
         where: { status: 'Active' },
         _count: { name: true },
         having: { name: { _count: { gt: 1 } } },
-      }));
+      });
       result.duplicate_agent_names = {
         ok: dupes.length === 0,
         count: dupes.length,
@@ -228,10 +227,10 @@ export class HealthController {
     // Mailbox synchronisation. Reported per enabled account, because one broken mailbox among five
     // is invisible in any aggregate — and it is somebody's whole inbox.
     try {
-      const accounts = await runAsSystem(() => this.prisma.mail_accounts.findMany({
+      const accounts = await this.prisma.mail_accounts.findMany({
         where: { inbound_enabled: true, is_active: true },
         select: { id: true, name: true, last_synced_at: true },
-      }));
+      });
       const now = Date.now();
       const stale = accounts.filter((a) => !a.last_synced_at || now - a.last_synced_at.getTime() > 30 * 60 * 1000);
       result.mail_sync = {

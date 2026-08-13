@@ -2,7 +2,6 @@ import { PrismaClient } from '@prisma/client';
 import type { PrismaService } from '../prisma/prisma.service';
 import { CampaignsService } from './campaigns.service';
 import { CampaignAudienceService } from './campaign-audience.service';
-import { TENANT_ID } from '../core/tenant';
 
 /**
  * CRM-CAMP-H02 — consent is re-checked immediately before delivery.
@@ -71,7 +70,7 @@ describe('consent is re-checked at dispatch, not only when the audience was buil
 
       // …then one of them unsubscribes, which is what the old code never saw.
       await tx.email_suppressions.create({
-        data: { email: optedOut, reason: 'unsubscribe', company_id: TENANT_ID, created_at: now, updated_at: now },
+        data: { email: optedOut, reason: 'unsubscribe', created_at: now, updated_at: now },
       });
 
       expect(await survivors(tx, [optedOut, fine])).toEqual([fine]);
@@ -86,7 +85,7 @@ describe('consent is re-checked at dispatch, not only when the audience was buil
       await tx.leads.create({
         data: {
           name: `ZZ Consent ${tag()}`, email, unsubscribed: true,
-          company_id: TENANT_ID, created_at: now, updated_at: now,
+          created_at: now, updated_at: now,
         },
       });
       expect(await survivors(tx, [email])).toEqual([]);
@@ -99,7 +98,7 @@ describe('consent is re-checked at dispatch, not only when the audience was buil
       const now = new Date();
       const lower = `zz-case-${tag()}@probe.test`;
       await tx.email_suppressions.create({
-        data: { email: lower, reason: 'unsubscribe', company_id: TENANT_ID, created_at: now, updated_at: now },
+        data: { email: lower, reason: 'unsubscribe', created_at: now, updated_at: now },
       });
       expect(await survivors(tx, [lower.toUpperCase()])).toEqual([]);
     });

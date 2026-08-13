@@ -144,6 +144,11 @@ export const IMPORT_FIELD_LIMITS: Record<string, number> = {
   lead_type: 48,
   lead_source: 48,
   client_type: 48,
+  // The three the Import dialog has always listed as recognised and the engine never read. Their
+  // limits match the columns in `schema.prisma`.
+  location: 255,
+  property: 255,
+  lead_response: 48,
 };
 
 export const EMAIL_SHAPE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;

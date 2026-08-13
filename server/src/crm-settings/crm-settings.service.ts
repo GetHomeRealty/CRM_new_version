@@ -8,7 +8,6 @@ import {
   EMAIL_SHAPE, LANGUAGES, NOTIFICATION_KEYS, THEMES, TIME_ZONES, TRIGGER_KEYS,
 } from './crm-settings.constants';
 import { MailerService } from '../email/mailer.service';
-import { TENANT_ID } from '../core/tenant';
 import { MailAccountService } from '../email/mail-account.service';
 
 const str = (v: unknown): string => String(v ?? '').trim();
@@ -254,7 +253,7 @@ export class CrmSettingsService {
 
   // -------------------------------------------------------- email settings
   async getEmailSettings(): Promise<Record<string, unknown>> {
-    const row = await this.prisma.crm_email_settings.findFirst({ where: { company_id: TENANT_ID }, orderBy: { id: 'asc' } });
+    const row = await this.prisma.crm_email_settings.findFirst({ orderBy: { id: 'asc' } });
     return {
       smtpHost: row?.smtp_host ?? '',
       smtpPort: row?.smtp_port ?? '587',
@@ -346,9 +345,9 @@ export class CrmSettingsService {
       updated_at: now,
     };
 
-    const existing = await this.prisma.crm_email_settings.findFirst({ where: { company_id: TENANT_ID }, orderBy: { id: 'asc' } });
+    const existing = await this.prisma.crm_email_settings.findFirst({ orderBy: { id: 'asc' } });
     if (existing) await this.prisma.crm_email_settings.update({ where: { id: existing.id }, data });
-    else await this.prisma.crm_email_settings.create({ data: { ...data, company_id: TENANT_ID, created_at: now } });
+    else await this.prisma.crm_email_settings.create({ data: { ...data, created_at: now } });
 
     await this.audit(user, 'CRM email settings updated', 'Email settings',
       `Auto-send ${data.auto_send_enabled ? 'on' : 'off'}; triggers: ${Object.entries(toggles).filter(([, v]) => v).map(([k]) => k).join(', ') || 'none'}`);

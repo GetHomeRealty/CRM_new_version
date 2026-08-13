@@ -4,7 +4,6 @@ import { CampaignAuditService } from './campaign-audit.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { MailerService, type MailAttachment } from '../email/mailer.service';
 import { CampaignAudienceService, type AudienceFilter } from './campaign-audience.service';
-import { runAsSystem } from '../core/tenant-context';
 import { CampaignTemplatesService } from './campaign-templates.service';
 import { MailDeliverabilityService } from './mail-deliverability.service';
 import { classifyBounce, nextRetryAt, MAX_SOFT_RETRIES } from './bounce-classifier';
@@ -1071,20 +1070,14 @@ export class CampaignsService {
 
   // -------------------------------------------------------------- tracking
   /**
-   * Record an open. Returns quietly whatever happens — the caller always serves the pixel
-   * so the email still renders.
-   */
-  /**
-   * Record an open. Same situation as unsubscribe — fetched by a mail client with no session, so
-   * no tenant — and the same fix. This failed for every open ever recorded; nobody noticed because
-   * the pixel handler swallows errors by design so the image always renders, which meant open
-   * tracking reported zero and looked like recipients simply were not opening anything.
+   * Record an open. Fetched by a mail client, so there is no session behind it — the recipient is
+   * identified by the token alone.
+   *
+   * Returns quietly whatever happens: the caller always serves the pixel so the email still
+   * renders. That swallowing is by design and is also why a failure here is invisible — open
+   * tracking simply reports zero and looks like nobody is opening anything.
    */
   async recordOpen(campaignId: number, token: string): Promise<void> {
-    return runAsSystem(() => this.recordOpenUnscoped(campaignId, token));
-  }
-
-  private async recordOpenUnscoped(campaignId: number, token: string): Promise<void> {
     const r = await this.prisma.campaign_recipients.findUnique({
       where: { token },
       include: { campaigns: { select: { id: true, sent_at: true } } },
@@ -1111,28 +1104,21 @@ export class CampaignsService {
   /** Whether this open should be ignored because it arrived too soon after sending. */
   /** Where a link points, without attributing a click. Used when the fetch looks automated. */
   async linkDestination(campaignId: number, linkId: number): Promise<string | null> {
-    return runAsSystem(async () => {
-      const link = await this.prisma.campaign_links.findUnique({ where: { id: linkId } });
-      return link && link.campaign_id === campaignId ? link.url : null;
-    });
+    const link = await this.prisma.campaign_links.findUnique({ where: { id: linkId } });
+    return link && link.campaign_id === campaignId ? link.url : null;
   }
 
   /**
    * Record a click and return where to send the reader.
    *
-   * Public, so no session and no tenant — `runAsSystem` for the same reason as `recordOpen`. The
-   * destination comes from the stored row, never from the request, which is what keeps this from
-   * being an open redirect.
+   * Public, so no session, exactly like `recordOpen`. The destination comes from the stored row,
+   * never from the request, which is what keeps this from being an open redirect.
    *
    * Returns null when anything does not line up; the caller then sends the reader to the site
    * rather than showing an error, because a broken tracking link should not be the recipient's
    * problem.
    */
   async recordClick(campaignId: number, token: string, linkId: number): Promise<string | null> {
-    return runAsSystem(() => this.recordClickUnscoped(campaignId, token, linkId));
-  }
-
-  private async recordClickUnscoped(campaignId: number, token: string, linkId: number): Promise<string | null> {
     const link = await this.prisma.campaign_links.findUnique({ where: { id: linkId } });
     if (!link || link.campaign_id !== campaignId) return null;
 
@@ -1172,12 +1158,8 @@ export class CampaignsService {
     return link.url;
   }
 
-  /** Called from the public pixel, so it needs the same system context. */
+  /** Called from the public pixel. */
   async isMachinePrefetch(campaignId: number): Promise<boolean> {
-    return runAsSystem(() => this.isMachinePrefetchUnscoped(campaignId));
-  }
-
-  private async isMachinePrefetchUnscoped(campaignId: number): Promise<boolean> {
     const c = await this.prisma.campaigns.findUnique({ where: { id: campaignId }, select: { sent_at: true } });
     if (!c?.sent_at) return false;
     return Date.now() - c.sent_at.getTime() < CampaignsService.MACHINE_PREFETCH_WINDOW_MS;
@@ -1188,23 +1170,13 @@ export class CampaignsService {
    * list, and flag every matching lead so audience queries skip it.
    */
   /**
-   * Opt a recipient out. Reached from a link in their email, so there is NO SESSION and therefore
-   * no tenant in context — every query below has to say so explicitly or the tenant extension
-   * rejects it.
+   * Opt a recipient out. Reached from a link in their email, so there is NO SESSION behind it.
    *
-   * This was the bug that made unsubscribe fail for every token, not just unknown ones: the
-   * extension threw "No tenant in context", the controller's catch swallowed it without logging,
-   * and the recipient was told to try again later. CASL requires this to work.
-   *
-   * `runAsSystem` is the sanctioned way to say "this genuinely spans brokerages". It is safe here
-   * because the only authority accepted is the 192-bit token, which is unguessable and pinned to
-   * its campaign — the lookup cannot be steered to another brokerage's data by choosing an input.
+   * The only authority accepted is the 192-bit token, which is unguessable and pinned to its
+   * campaign — the lookup cannot be steered to another recipient's record by choosing an input.
+   * That is what makes an unauthenticated write safe here, and CASL requires it to work.
    */
   async unsubscribe(campaignId: number, token: string): Promise<{ ok: boolean; email?: string }> {
-    return runAsSystem(() => this.unsubscribeUnscoped(campaignId, token));
-  }
-
-  private async unsubscribeUnscoped(campaignId: number, token: string): Promise<{ ok: boolean; email?: string }> {
     const r = await this.prisma.campaign_recipients.findUnique({ where: { token } });
     if (!r || r.campaign_id !== campaignId) return { ok: false };
 
@@ -1231,16 +1203,34 @@ export class CampaignsService {
   }
 
   // ----------------------------------------------------------------- leads
-  /** Distinct tags across the leads the caller can audience, for the dropdowns. */
+  /**
+   * Every tag the caller could audience by — the ones in USE, plus the ones that merely EXIST.
+   *
+   * This used to read tags off the leads alone, so a tag created on the Tags screen and not yet
+   * applied to anybody was missing from this dropdown. That is precisely backwards for building a
+   * campaign: a brokerage creates "Spring-2026", goes to tag a segment with it, and cannot find it
+   * in the list of things to filter by.
+   *
+   * `lead_tags` is the registry the Tags screen writes to; the per-lead `tags` column is where they
+   * end up in use. Neither is a superset of the other — a tag applied before the registry existed
+   * is on leads and not in it — so the answer is the union.
+   *
+   * THE SCOPE RULE IS UNCHANGED for the in-use half: those are still read through
+   * `buildAudienceWhere`, so an agent's list cannot reveal a segment they could not send to.
+   * Registry names carry no such signal — a tag's existence says nothing about whose leads hold it
+   * — which is why they can be added without narrowing.
+   */
   async leadTags(user: AuthUserRecord): Promise<string[]> {
-    const rows = await this.prisma.leads.findMany({
-      // Scoped through the same audience rule, so an agent's tag list can't leak the existence of
-      // segments they cannot actually send to.
-      where: this.audience.buildAudienceWhere({}, user),
-      select: { tags: true },
-    });
+    const [rows, registry] = await Promise.all([
+      this.prisma.leads.findMany({
+        where: this.audience.buildAudienceWhere({}, user),
+        select: { tags: true },
+      }),
+      this.prisma.lead_tags.findMany({ select: { name: true } }),
+    ]);
     const set = new Set<string>();
     for (const r of rows) for (const t of parseJsonArray(r.tags)) set.add(t);
+    for (const t of registry) if (t.name) set.add(t.name);
     return [...set].sort((a, b) => a.localeCompare(b));
   }
 

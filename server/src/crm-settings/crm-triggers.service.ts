@@ -1,7 +1,6 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { auditDomain } from '../common/domain';
 import { PrismaService } from '../prisma/prisma.service';
-import { TENANT_ID } from '../core/tenant';
 import type { AuthUserRecord } from '../auth/auth.types';
 import { DEFAULT_TRIGGERS, TRIGGER_KEYS, type TriggerKey } from './crm-settings.constants';
 
@@ -39,7 +38,7 @@ export class CrmTriggersService {
   /** The brokerage's defaults, or the compiled ones when nothing is configured. */
   private async brokerageDefaults(): Promise<Record<string, boolean>> {
     const row = await this.prisma.crm_email_settings.findFirst({
-      where: { company_id: TENANT_ID }, orderBy: { id: 'asc' },
+      orderBy: { id: 'asc' },
     });
     if (!row?.template_toggles) return { ...DEFAULT_TRIGGERS };
     try {
@@ -76,7 +75,7 @@ export class CrmTriggersService {
     const [defaults, overrides, brokerage] = await Promise.all([
       this.brokerageDefaults(),
       this.ownOverrides(userId),
-      this.prisma.crm_email_settings.findFirst({ where: { company_id: TENANT_ID }, orderBy: { id: 'asc' } }),
+      this.prisma.crm_email_settings.findFirst({ orderBy: { id: 'asc' } }),
     ]);
     const row = await this.prisma.crm_trigger_settings.findUnique({ where: { user_id: userId } });
 
@@ -152,7 +151,7 @@ export class CrmTriggersService {
     await this.prisma.crm_trigger_settings.upsert({
       where: { user_id: userId },
       create: {
-        user_id: userId, company_id: TENANT_ID,
+        user_id: userId,
         template_toggles: JSON.stringify(next),
         updated_by: user.name, created_at: now, updated_at: now,
       },
@@ -210,6 +209,18 @@ export class CrmTriggersService {
    *
    * A MISSING row is not corruption — it means "I have never set these", and inherits.
    */
+  /**
+   * The brokerage's own answer for one trigger, with no person in it.
+   *
+   * For the sends that have no agent to attribute — the welcome to a lead the brokerage owns
+   * outright. `isEnabledFor` would read overrides for user -1 and arrive at the same value by
+   * accident; this asks the question that is actually being asked.
+   */
+  async brokerageDefaultFor(key: TriggerKey): Promise<boolean> {
+    const defaults = await this.brokerageDefaults();
+    return defaults[key] ?? true;
+  }
+
   async isEnabledFor(user: AuthUserRecord, key: TriggerKey): Promise<boolean> {
     const overrides = await this.ownOverrides(user.id ?? -1);
     if (overrides === null) return false;

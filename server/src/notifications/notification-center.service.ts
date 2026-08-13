@@ -1,7 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { toDateTimeString } from '../common/serialize';
-import { runAsSystem } from '../core/tenant-context';
 import { isAgent } from '../core/authz';
 import type { ResourceUser } from '../transactions/transaction.resource';
 import { NotificationsService } from './notifications.service';
@@ -9,6 +8,12 @@ import { TransactionReviewService } from '../transactions/transaction-review.ser
 import { ReminderSweepService } from '../transactions/reminder-sweep.service';
 
 export type NotificationSource = 'agent-change' | 'doc-review' | 'review-decision' | 'reminder' | 'direct';
+
+/**
+ * The one direct category that is filtered by which mailbox it came from. Named here because both
+ * the dispatch site and `primaryMailboxOnly` below have to agree on it.
+ */
+const MAIL_CATEGORY = 'inbox_new_mail';
 export type NotificationFilter = 'all' | 'unread' | 'read';
 
 export interface NotificationItem {
@@ -168,13 +173,12 @@ export class NotificationCenterService {
          * the notification id here. Scoped by `user_id` in the update itself, so guessing an id
          * belonging to somebody else clears nothing.
          */
-        return runAsSystem(async () => {
-          const done = await this.prisma.notifications.updateMany({
+        return this.prisma.notifications
+          .updateMany({
             where: { id: transactionId, user_id: user.id, read_at: null },
             data: { read_at: new Date() },
-          });
-          return { ok: done.count > 0 };
-        });
+          })
+          .then((done) => ({ ok: done.count > 0 }));
       default:
         return { ok: false };
     }
@@ -328,13 +332,15 @@ export class NotificationCenterService {
    * whole of its ownership rule: a direct notification belongs to exactly the person it was sent to.
    */
   private async directItems(user: ResourceUser, includeRead: boolean): Promise<NotificationItem[]> {
-    const rows = await runAsSystem(() => this.prisma.notifications.findMany({
+    const rows = await this.prisma.notifications.findMany({
       where: { user_id: user.id, ...(includeRead ? {} : { read_at: null }) },
       orderBy: [{ created_at: 'desc' }, { id: 'desc' }],
       take: 100,
-    }));
+    });
 
-    return rows.map((r: { id: number; title: string; body: string | null; link: string | null; read_at: Date | null; created_at: Date }) => ({
+    const visible = await this.primaryMailboxOnly(user, rows);
+
+    return visible.map((r: { id: number; title: string; body: string | null; link: string | null; read_at: Date | null; created_at: Date }) => ({
       key: `direct:${r.id}`,
       notification_id: r.id,
       source: 'direct' as const,
@@ -348,6 +354,49 @@ export class NotificationCenterService {
       at: toDateTimeString(r.created_at),
       link: r.link ?? '',
     }));
+  }
+
+  /**
+   * Drop new-mail lines that belong to a mailbox which is not the person's primary one.
+   *
+   * WHY THIS IS DONE AT READ TIME, when `imap-sync.service.ts` already refuses to create them.
+   * That check governs what is written, and writing is a one-off: a line created last week while
+   * `enquiries@` was primary is still sitting in the table today, after somebody made `sales@`
+   * primary instead. Deciding it here means the answer is recomputed on every read, so changing
+   * the primary address retires the old mailbox's history immediately, with nothing to migrate and
+   * no rows to delete. Change it back and the old lines return — they were never destroyed.
+   *
+   * Both scopes count. A person may hold one primary in the CRM and another in the Transaction
+   * Desk, and each is genuinely primary for its own area, so a line from either is kept.
+   *
+   * WHICH MAILBOX A LINE CAME FROM is read from the dedupe key the dispatch site sets,
+   * `inbox-<account id>-<uid>`, because the notifications table stores no account column and
+   * adding one would mean a migration for a question the existing key already answers. A row that
+   * does not parse is treated as not-primary: every one the application creates carries that key,
+   * so a row without it is older than this rule or came from somewhere that no longer exists, and
+   * both are exactly what the person asked to stop seeing.
+   *
+   * Everything that is not a new-mail line passes through untouched — this narrows one category,
+   * not the feed.
+   */
+  private async primaryMailboxOnly<T extends { category: string; dedupe_key: string | null }>(
+    user: ResourceUser,
+    rows: T[],
+  ): Promise<T[]> {
+    const mail = rows.filter((r) => r.category === MAIL_CATEGORY);
+    if (mail.length === 0) return rows;   // nothing to decide; do not pay for the query
+
+    const primaries = await this.prisma.mail_accounts.findMany({
+      where: { user_id: user.id, is_default: true },
+      select: { id: true },
+    });
+    const allowed = new Set(primaries.map((a: { id: number }) => a.id));
+
+    return rows.filter((r) => {
+      if (r.category !== MAIL_CATEGORY) return true;
+      const from = /^inbox-(\d+)-/.exec(r.dedupe_key ?? '');
+      return from ? allowed.has(Number(from[1])) : false;
+    });
   }
 
   private emptyCounts(): Record<NotificationSource, number> {

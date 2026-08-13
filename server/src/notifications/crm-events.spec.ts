@@ -48,7 +48,9 @@ function build(tx: PrismaService) {
     },
   };
   const dispatcher = new NotificationDispatcher(tx, new NotificationPreferenceService(tx), moduleRef as never);
-  return { notifier: new CrmEventNotifier(dispatcher), emails, pushes, prefs: new NotificationPreferenceService(tx) };
+  // The real transaction, so the notifier's template resolution runs against real rows rather
+  // than being stubbed out — these tests then cover the templated path as well as the dispatch.
+  return { notifier: new CrmEventNotifier(dispatcher, tx), emails, pushes, prefs: new NotificationPreferenceService(tx) };
 }
 
 async function makeUser(tx: PrismaService): Promise<{ id: number; name: string }> {
@@ -57,8 +59,7 @@ async function makeUser(tx: PrismaService): Promise<{ id: number; name: string }
   return tx.users.create({
     data: {
       name: `ZZ Crm ${t}`, email: `zz-crm-${t}@probe.test`, username: `zzcrm${t.replace(/-/g, '')}`,
-      role: 'agent', status: 'Active', password: 'x', created_at: now, updated_at: now, company_id: 1,
-    },
+      role: 'agent', status: 'Active', password: 'x', created_at: now, updated_at: now,    },
     select: { id: true, name: true },
   });
 }
@@ -524,12 +525,17 @@ describe('who receives what', () => {
     });
   });
 
-  it('a notification is stamped with the recipient\'s own brokerage', async () => {
+  it('addresses the notification to the recipient and nobody else', async () => {
+    // This asserted the row's `company_id` until multi-brokerage tenancy was removed. What survived
+    // the column is the responsibility that always mattered: a notification is addressed to a
+    // person, and `user_id` is what decides whose notification centre it turns up in.
     await inRollback(async (tx) => {
       const user = await makeUser(tx);
+      const other = await makeUser(tx);
       const { notifier } = build(tx);
       await notifier.leadCreated(LEAD, user.id, null);
-      expect((await stored(tx, user.id))[0].company_id).toBe(1);
+      expect((await stored(tx, user.id)).map((r) => r.user_id)).toEqual([user.id]);
+      expect(await stored(tx, other.id)).toEqual([]);
     });
   });
 });
@@ -542,7 +548,12 @@ describe('a notification never breaks the operation that caused it', () => {
      * catches and logs; the caller sees a resolved promise either way.
      */
     const exploding = { dispatch: async () => { throw new Error('everything is on fire'); } } as never;
-    const notifier = new CrmEventNotifier(exploding);
+    /*
+     * No Prisma either — deliberately. Template resolution must not be able to stop a notification
+     * any more than the dispatcher can: with no database to read, `templated` falls back to the
+     * dispatcher's own body rather than throwing into the caller, which is what this asserts.
+     */
+    const notifier = new CrmEventNotifier(exploding, null as never);
 
     await expect(notifier.leadCreated(LEAD, 1, null)).resolves.toBeUndefined();
     await expect(notifier.leadAssigned(LEAD, 1, null, 'A')).resolves.toBeUndefined();

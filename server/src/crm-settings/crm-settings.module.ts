@@ -1,13 +1,15 @@
 import { Module, type OnModuleInit } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
 import { EmailModule } from '../email/email.module';
-import { PrismaService } from '../prisma/prisma.service';
-import { forEachTenant } from '../core/tenant-context';
-import { allTenantIds } from '../core/tenants';
 import { CrmSettingsController } from './crm-settings.controller';
 import { CrmSettingsService } from './crm-settings.service';
 import { CrmAdvancedEmailService } from './crm-advanced-email.service';
 import { CrmTriggersService } from './crm-triggers.service';
+import { LeadGreetingsService } from './lead-greetings.service';
+import { LeadWelcomeService } from './lead-welcome.service';
+import { CrmCommunicationsController } from './crm-communications.controller';
+import { CrmCommunicationsService } from './crm-communications.service';
+import { NotificationPreferenceModule } from '../notifications/notification-preference.module';
 
 /**
  * CRM Settings, migrated from the CRM app.
@@ -17,15 +19,14 @@ import { CrmTriggersService } from './crm-triggers.service';
  * Overlap between the two is expected at this stage and will be reconciled later.
  */
 @Module({
-  imports: [AuthModule, EmailModule],
-  controllers: [CrmSettingsController],
-  providers: [CrmSettingsService, CrmAdvancedEmailService, CrmTriggersService],
+  imports: [AuthModule, EmailModule, NotificationPreferenceModule],
+  controllers: [CrmSettingsController, CrmCommunicationsController],
+  providers: [CrmSettingsService, CrmAdvancedEmailService, CrmTriggersService, LeadGreetingsService, LeadWelcomeService, CrmCommunicationsService],
   exports: [CrmSettingsService, CrmTriggersService],
 })
 export class CrmSettingsModule implements OnModuleInit {
   constructor(
     private readonly settings: CrmSettingsService,
-    private readonly prisma: PrismaService,
   ) {}
 
   /**
@@ -43,18 +44,9 @@ export class CrmSettingsModule implements OnModuleInit {
    *
    * Awaited rather than fired off, because it is one query against a small table and a broadcast
    * wrongly reading "sending" while the screen is already up is the exact state this removes.
-   *
-   * Run through `forEachTenant`, which is what background work does here instead of querying the
-   * whole table: boot has no request to inherit a tenant from, and the Prisma extension refuses a
-   * query that cannot say which brokerage it is for. The first version of this reached straight for
-   * `prisma.crm_broadcasts` and was refused at boot with exactly that message — a good refusal,
-   * caught because the fix's own test failed.
    */
   async onModuleInit(): Promise<void> {
     if (process.env.NODE_ENV === 'test') return;
-    await forEachTenant(
-      () => allTenantIds(this.prisma),
-      async () => { await this.settings.reconcileInterruptedBroadcasts(); },
-    );
+    await this.settings.reconcileInterruptedBroadcasts();
   }
 }

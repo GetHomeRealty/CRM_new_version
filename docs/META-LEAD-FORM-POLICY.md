@@ -39,9 +39,10 @@ No sharing at any level. Nothing crosses.
 must be free for whoever is running it next. A full unique index would let a dead row hold the claim
 for ever, and the only remedy would be a database edit.
 
-**Why `company_id` is in the key.** Form ids come from Meta and are unique there, but the table
-carries a tenant like every other. Without it, one brokerage's row could block another's — a
-cross-tenant failure that would be almost impossible to diagnose from the message.
+**The key is `(page_id, form_id)`.** It was `(company_id, page_id, form_id)` until the tenancy
+layer was removed on 2026-08-08. With one brokerage the leading column held a single value, so
+dropping it cannot merge two claims that were previously distinct — the rule this page describes is
+unchanged. The index is now `meta_lead_forms_page_form_v2_key`.
 
 ## What this rule rules out, on purpose
 

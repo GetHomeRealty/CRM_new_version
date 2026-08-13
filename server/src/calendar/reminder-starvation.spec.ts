@@ -1,5 +1,4 @@
 import { PrismaClient } from '@prisma/client';
-import { TENANT_ID } from '../core/tenant';
 
 /**
  * The two-hundredth appointment must not be the last one that ever gets a reminder.
@@ -69,7 +68,7 @@ describe('an already-reminded appointment stops occupying a sweep slot', () => {
         data: {
           title: `${MARK}-${String(i).padStart(3, '0')}`,
           date: DAY, time: `0${i}:00`, type: 'meeting', status: 'scheduled',
-          enable_reminder: true, user_id: null, company_id: TENANT_ID,
+          enable_reminder: true, user_id: null,
           created_at: now, updated_at: now,
         },
       });
@@ -79,7 +78,7 @@ describe('an already-reminded appointment stops occupying a sweep slot', () => {
     await prisma.calendar_event_reminders.createMany({
       data: handled.map((id) => ({
         calendar_event_id: id, lead_minutes: LEAD, delivery_status: 'Sent',
-        company_id: TENANT_ID, created_at: now, updated_at: now,
+        created_at: now, updated_at: now,
       })),
       skipDuplicates: true,
     });

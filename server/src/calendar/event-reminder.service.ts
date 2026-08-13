@@ -101,7 +101,7 @@ export class EventReminderService {
         const claimed = await this.prisma.calendar_event_reminders.createMany({
           data: [{
             calendar_event_id: ev.id, lead_minutes: lead, delivery_status: 'Pending',
-            company_id: ev.company_id, created_at: new Date(), updated_at: new Date(),
+            created_at: new Date(), updated_at: new Date(),
           }],
           skipDuplicates: true,
         });
@@ -385,7 +385,6 @@ interface EventRow {
   contact_email: string | null;
   notes: string | null;
   user_id: number | null;
-  company_id: number;
   deleted_at: Date | null;
   enable_reminder: boolean;
   transactions?: { trade_no: string | null; property: string | null } | null;

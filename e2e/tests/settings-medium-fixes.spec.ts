@@ -46,7 +46,9 @@ test.describe('M1–M3 — the inert controls are gone from the screen', () => {
   test('Preferences, Notification Settings, auto-responder and forwarding address are not offered', async ({ page }) => {
     await signIn(page, 'superAdmin');
     await page.goto('/crm/settings?tab=crm');
-    await expect(page.getByRole('heading', { name: 'Email Campaigns' })).toBeVisible();
+    // Anchor on the panel's own heading. This waited on "Email Campaigns", which was removed from
+    // CRM Settings along with the Email Triggers switches inside it.
+    await expect(page.getByRole('heading', { name: 'CRM Settings' })).toBeVisible();
 
     for (const gone of ['Save Preferences', 'Save Notification Settings']) {
       await expect(page.getByRole('button', { name: gone })).toHaveCount(0);
@@ -354,7 +356,8 @@ test('M12 — every form control on the screen has a programmatic label', async 
   // nor a way to move between sections.
   await signIn(page, 'superAdmin');
   await page.goto('/crm/settings?tab=crm');
-  await expect(page.getByRole('heading', { name: 'Email Campaigns' })).toBeVisible();
+  // See above: "Email Campaigns" no longer exists on this screen.
+  await expect(page.getByRole('heading', { name: 'CRM Settings' })).toBeVisible();
 
   const audit = await page.evaluate(() => {
     const controls = Array.from(document.querySelectorAll('.card input, .card textarea, .card select'));

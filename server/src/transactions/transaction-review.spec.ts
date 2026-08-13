@@ -60,7 +60,7 @@ async function makeTxn(tx: PrismaService, agent = 'Test Agent'): Promise<number>
   seq += 1;
   const now = new Date();
   const t = await tx.transactions.create({
-    data: { trade_no: `RV-${Date.now()}-${seq}`, type: 'Residential Buying', agent, company_id: 1, created_at: now, updated_at: now },
+    data: { trade_no: `RV-${Date.now()}-${seq}`, type: 'Residential Buying', agent, created_at: now, updated_at: now },
   });
   return t.id;
 }

@@ -4,7 +4,6 @@ import { CampaignsService } from './campaigns.service';
 import { CampaignAudienceService } from './campaign-audience.service';
 import { CampaignTemplatesService } from './campaign-templates.service';
 import { clusterTick } from '../redis/cluster-tick';
-import { TENANT_ID } from '../core/tenant';
 
 /**
  * FOUR PROCESSES, ONE CAMPAIGN, ONE HUNDRED RECIPIENTS — EXACTLY ONE HUNDRED SENDS.
@@ -56,8 +55,8 @@ const alwaysDeliverable = { domainCanReceiveMail: async () => true } as never;
 /**
  * A committed campaign with `n` pending recipients.
  *
- * THE STATUS MATTERS FOR TEST ISOLATION, not only for the code under test. `resumeForTenant`
- * selects EVERY campaign with `status = 'sending'` in the tenant — it is a recovery sweep, so it
+ * THE STATUS MATTERS FOR TEST ISOLATION, not only for the code under test. `resumeStuck`
+ * selects EVERY campaign with `status = 'sending'` — it is a recovery sweep, so it
  * has no campaign id to narrow by. These rows are committed, so any other spec in the suite whose
  * resume sweep runs at the same moment will pick this campaign up and deliver it through ITS mock
  * mailer. Measured: 83 sends in this file's ledger, 0 duplicates, and all 100 rows `sent` — the
@@ -74,7 +73,7 @@ async function committedCampaign(
    * `sent` creates recipients that are already settled, so the campaign has nothing deliverable.
    *
    * The campaign-claim tests need a claimable campaign, not a deliverable one — and claiming flips
-   * it to `sending`, which is exactly the state `resumeForTenant` sweeps for in every other spec
+   * it to `sending`, which is exactly the state `resumeStuck` sweeps for in every other spec
    * running in parallel. Measured: two of this fixture's five recipients went out through
    * `schedule-and-recovery`'s mailer and broke its count. With nothing pending there is nothing for
    * a foreign sweep to send, so the fixture can be visible and still inert.
@@ -88,12 +87,12 @@ async function committedCampaign(
   const c = await admin.campaigns.create({
     data: {
       name: `${MARK} ${run}`, subject: 'Hello', content: '<p>Hi</p>',
-      status, company_id: TENANT_ID, created_by: 'ZZ Prober', created_by_id: null,
+      status, created_by: 'ZZ Prober', created_by_id: null,
       // Empty on purpose: link rewriting and open tracking belong to other specs.
       tracking_base_url: '',
       /*
        * DUE IN THE FUTURE, deliberately. `dispatchDue` — which several other specs exercise —
-       * selects every campaign that is `scheduled` AND due now, across the whole tenant. A fixture
+       * selects every campaign that is `scheduled` AND due now, across the whole table. A fixture
        * dated in the past is therefore claimed by a neighbouring suite before this file's four
        * workers reach it, and the test sees zero winners instead of one. Dating it forward hides it
        * from that sweep; the tests here call `dispatchScheduled` directly, which claims on status
@@ -110,7 +109,6 @@ async function committedCampaign(
       name: `Probe ${i}`,
       token: `tok-${MARK}-${run}-${i}`,
       status: recipientStatus,
-      company_id: TENANT_ID,
       created_at: now, updated_at: now,
     })),
   });
@@ -141,7 +139,7 @@ const duplicates = (ledger: Map<string, number>) => [...ledger].filter(([, n]) =
  * Remove a fixture the moment its test is done, rather than in `afterAll`.
  *
  * Interference runs BOTH ways, and the second direction cost a full-suite run to find. A campaign
- * left `scheduled` or `sending` is visible to `resumeForTenant` in every other spec running in
+ * left `scheduled` or `sending` is visible to `resumeStuck` in every other spec running in
  * parallel — those sweeps select every campaign in that state, by design, because a recovery sweep
  * has no id to narrow by. Leaving these rows committed for the length of the file made
  * `schedule-and-recovery` fail while this file passed. Deleting on the way out shrinks the window
@@ -258,7 +256,7 @@ describe('the pre-send consent re-check survives the concurrency change', () => 
       where: { campaign_id: campaignId }, orderBy: { id: 'asc' }, take: 2, select: { email: true },
     });
     await admin.email_suppressions.createMany({
-      data: victims.map((v) => ({ email: v.email, reason: 'unsubscribe', company_id: TENANT_ID, created_at: new Date() })),
+      data: victims.map((v) => ({ email: v.email, reason: 'unsubscribe', created_at: new Date() })),
       skipDuplicates: true,
     });
 

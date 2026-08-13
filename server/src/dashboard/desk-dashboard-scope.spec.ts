@@ -57,14 +57,14 @@ async function twoAgentsWithInvoices(tx: PrismaService) {
     const txn = await tx.transactions.create({
       data: {
         trade_no: `ZZ${t}`.slice(0, 20), agent: u.name, type: 'Residential Buying',
-        company_id: 1, created_at: now, updated_at: now,
+        created_at: now, updated_at: now,
       },
       select: { id: true },
     });
     await tx.invoices.create({
       data: {
         invoice_no: `ZZ-${t}`.slice(0, 30), transaction_id: txn.id, status: 'Unpaid', invoice_date: now,
-        total: 1000, amount_paid: 0, balance_due: 1000, company_id: 1, created_at: now, updated_at: now,
+        total: 1000, amount_paid: 0, balance_due: 1000, created_at: now, updated_at: now,
       },
     });
     return u;
@@ -158,7 +158,7 @@ describe('a role that may read invoices still gets them, at its own scope', () =
       await tx.invoices.create({
         data: {
           invoice_no: `ZZ-solo-${tag()}`.slice(0, 30), transaction_id: null, status: 'Unpaid', invoice_date: now,
-          total: 9999, amount_paid: 0, balance_due: 9999, company_id: 1, created_at: now, updated_at: now,
+          total: 9999, amount_paid: 0, balance_due: 9999, created_at: now, updated_at: now,
         },
       });
       const granted = asUser('agent', mine.id, mine.name, [{ screen: 'invoice', level: 'view' }]);
@@ -176,7 +176,7 @@ describe('a role that may read invoices still gets them, at its own scope', () =
         data: {
           invoice_no: `ZZ-del-${tag()}`.slice(0, 30), transaction_id: txn!.id, status: 'Unpaid', invoice_date: now,
           total: 500, amount_paid: 0, balance_due: 500, deleted_at: now,
-          company_id: 1, created_at: now, updated_at: now,
+          created_at: now, updated_at: now,
         },
       });
       const granted = asUser('agent', mine.id, mine.name, [{ screen: 'invoice', level: 'view' }]);

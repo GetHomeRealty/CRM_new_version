@@ -72,8 +72,7 @@ async function makeUser(tx: PrismaService, over: Record<string, unknown> = {}): 
   const row = await tx.users.create({
     data: {
       name: `ZZ Disp ${t}`, email: `zz-disp-${t}@probe.test`, username: `zzdisp${t.replace(/-/g, '')}`,
-      role: 'agent', status: 'Active', password: 'x', created_at: now, updated_at: now, company_id: 1,
-      ...over,
+      role: 'agent', status: 'Active', password: 'x', created_at: now, updated_at: now,      ...over,
     },
     select: { id: true },
   });
@@ -109,16 +108,21 @@ describe('delivering to every enabled channel', () => {
     });
   });
 
-  it('stamps the notification with the recipient\'s own brokerage', async () => {
-    // The dispatcher runs from background sweeps with no tenant in context; the row must still land
-    // in the right brokerage rather than wherever the caller happened to be.
+  it('addresses the notification to the recipient it was asked for', async () => {
+    // The dispatcher runs from background sweeps with no request behind it, so nothing in the
+    // ambient context says who this is for — the row has to be addressed from the request alone.
+    // This asserted `company_id` until tenancy was removed; `user_id` is the part that decides
+    // whose notification centre the row appears in, and always was.
     await inRollback(async (tx) => {
       const userId = await makeUser(tx);
+      const otherId = await makeUser(tx);
       const { dispatcher } = build(tx);
       await dispatcher.dispatch({ ...REQUEST, userId });
 
       const stored = await tx.notifications.findFirst({ where: { user_id: userId } });
-      expect(stored?.company_id).toBe(1);
+      expect(stored).not.toBeNull();
+      expect(stored!.user_id).toBe(userId);
+      expect(await tx.notifications.findFirst({ where: { user_id: otherId } })).toBeNull();
     });
   });
 });

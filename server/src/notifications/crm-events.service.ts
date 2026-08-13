@@ -1,5 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { NotificationDispatcher } from './notification-dispatcher.service';
+import { PrismaService } from '../prisma/prisma.service';
+import { MAIL_EVENTS, renderTemplate } from '../email/mail-event-registry';
+import type { NotificationChannel } from './notification-preference.service';
 
 /**
  * The CRM's six notification events, in one place.
@@ -22,7 +25,99 @@ import { NotificationDispatcher } from './notification-dispatcher.service';
 export class CrmEventNotifier {
   private readonly log = new Logger(CrmEventNotifier.name);
 
-  constructor(private readonly dispatcher: NotificationDispatcher) {}
+  constructor(
+    private readonly dispatcher: NotificationDispatcher,
+    private readonly prisma: PrismaService,
+  ) {}
+
+  /**
+   * Resolve this CRM notification's email wording from Settings → Templates.
+   *
+   * WHY IT LIVES HERE AND NOT IN THE DISPATCHER. `NotificationDispatcher` carries Transaction Desk's
+   * notifications as well as the CRM's. Teaching it to look up templates would change how Desk
+   * renders its email too. Instead this resolves the row and hands the dispatcher an `email`
+   * OVERRIDE — a hook it already had for exactly this. Desk call sites pass no override and keep
+   * `defaultEmailBody`, so the two paths cannot affect each other: the separation is structural
+   * rather than a flag somebody could set wrongly.
+   *
+   * WHAT IT RETURNS is a fragment spread into the dispatch request:
+   *
+   *   active template   → `{ email: { subject, html } }` — every supported channel still delivers,
+   *                        the email simply carries the brokerage's own wording.
+   *   inactive template → `{ channels: ['in_app', 'push'] }` — EMAIL IS DROPPED and the reason is
+   *                        logged. In-app and push are not template-driven, so silencing them too
+   *                        would take away notice the person never asked to lose.
+   *
+   * FIRST USE SEEDS THE ROW from the registry, exactly as `MailerService.send` and the lead-facing
+   * CRM templates do. An upgraded brokerage therefore reads the same words it read yesterday, from
+   * a row it can now edit.
+   *
+   * A failure here never stops the notification. The in-app record is the one somebody is waiting
+   * on; a template lookup that throws falls back to the dispatcher's default body rather than
+   * losing the message.
+   */
+  private async templated(
+    eventKey: string,
+    vars: Record<string, unknown>,
+  ): Promise<{ email?: { subject: string; html: string }; channels?: NotificationChannel[] }> {
+    try {
+      const meta = MAIL_EVENTS[eventKey];
+      if (!meta) return {};
+
+      let row = await this.prisma.email_templates.findUnique({ where: { event_key: eventKey } });
+      if (!row) {
+        const now = new Date();
+        try {
+          await this.prisma.email_templates.create({
+            data: {
+              event_key: eventKey, module: meta.module, name: meta.label,
+              subject: meta.default_subject, body_html: meta.default_body_html,
+              is_active: true, created_at: now, updated_at: now,
+            },
+          });
+        } catch { /* a concurrent dispatch seeded it; the read below picks it up */ }
+        row = await this.prisma.email_templates.findUnique({ where: { event_key: eventKey } });
+      }
+      if (!row) return {};
+
+      if (!row.is_active) {
+        this.log.log(`"${eventKey}" email not sent: the "${row.name}" template is switched off under Settings → Templates.`);
+        return { channels: ['in_app', 'push'] };
+      }
+
+      const now = new Date();
+      const merged: Record<string, unknown> = {
+        current_date: now.toISOString().slice(0, 10),
+        current_year: String(now.getFullYear()),
+        ...vars,
+      };
+      return {
+        email: {
+          subject: renderTemplate(row.subject, merged),
+          html: renderTemplate(row.body_html, merged),
+        },
+      };
+    } catch (err) {
+      this.log.warn(`Could not resolve the "${eventKey}" template; falling back to the default body: ${(err as Error).message}`);
+      return {};
+    }
+  }
+
+  /** The recipient's own name, for wording that greets them. Absent, the greeting reads plainly. */
+  private async userName(userId: number): Promise<string> {
+    try {
+      const u = await this.prisma.users.findUnique({ where: { id: userId }, select: { name: true } });
+      return (u?.name ?? '').trim() || 'there';
+    } catch {
+      return 'there';
+    }
+  }
+
+  /** An absolute URL for the template's own link, matching what the dispatcher would have built. */
+  private absoluteLink(path: string): string {
+    const base = (process.env.FRONTEND_URL ?? '').replace(/\/+$/, '');
+    return base ? `${base}${path}` : path;
+  }
 
   /**
    * The lead-detail route.
@@ -93,7 +188,16 @@ export class CrmEventNotifier {
     if (!recipientUserId) return;
     if (recipientUserId === actorUserId) return;   // you made it; you know
 
+    const tpl = await this.templated('crm.lead_new', {
+      user_name: await this.userName(recipientUserId),
+      lead_name: this.nameOf(lead),
+      // Carries its own leading " from " so the sentence reads correctly with no source recorded.
+      lead_source: lead.source ? ` from ${lead.source}` : '',
+      open_link: this.absoluteLink(this.leadLink(lead.id)),
+    });
+
     await this.send({
+      ...tpl,
       category: 'lead_new',
       userId: recipientUserId,
       title: 'New lead',
@@ -123,7 +227,16 @@ export class CrmEventNotifier {
     if (!assigneeUserId) return;
     if (assigneeUserId === actorUserId) return;    // you assigned it to yourself
 
+    const tpl = await this.templated('crm.lead_assigned', {
+      user_name: await this.userName(assigneeUserId),
+      lead_name: this.nameOf(lead),
+      // Carries its own leading " by " so the sentence reads correctly with no actor recorded.
+      actor_name: actorName ? ` by ${actorName}` : '',
+      open_link: this.absoluteLink(this.leadLink(lead.id)),
+    });
+
     await this.send({
+      ...tpl,
       category: 'lead_assigned',
       userId: assigneeUserId,
       title: 'New lead assigned',
@@ -158,7 +271,15 @@ export class CrmEventNotifier {
   }, recipientUserId: number | null | undefined, metaLeadId: string, formName?: string | null): Promise<void> {
     if (!recipientUserId || !metaLeadId) return;
 
+    const tpl = await this.templated('crm.meta_lead_received', {
+      user_name: await this.userName(recipientUserId),
+      lead_name: this.nameOf(lead),
+      form_name: formName ? `"${formName}"` : 'a Facebook lead form',
+      open_link: this.absoluteLink(this.leadLink(lead.id)),
+    });
+
     await this.send({
+      ...tpl,
       category: 'lead_meta',
       userId: recipientUserId,
       title: 'New Facebook lead',
@@ -185,7 +306,16 @@ export class CrmEventNotifier {
     if (!recipientUserId) return;
 
     const when = task.due_at ? task.due_at.toISOString().slice(0, 10) : '';
+    const tpl = await this.templated('crm.lead_task_due', {
+      user_name: await this.userName(recipientUserId),
+      task_title: task.title?.trim() || 'A follow-up',
+      lead_name: this.nameOf(lead),
+      due_date: when || 'today',
+      open_link: this.absoluteLink(this.leadLink(lead.id)),
+    });
+
     await this.send({
+      ...tpl,
       category: 'lead_task_due',
       userId: recipientUserId,
       title: 'Follow-up due',
@@ -204,7 +334,18 @@ export class CrmEventNotifier {
     if (!ownerUserId) return;
 
     const failed = summary.failed > 0 ? `, ${summary.failed} could not be delivered` : '';
+    const tpl = await this.templated('crm.campaign_completed', {
+      user_name: await this.userName(ownerUserId),
+      campaign_name: campaign.name ?? 'Your campaign',
+      recipients: summary.recipients,
+      sent: summary.sent,
+      // Carries its own leading clause so the sentence ends cleanly when nothing failed.
+      failed,
+      open_link: this.absoluteLink(this.campaignLink(campaign.id)),
+    });
+
     await this.send({
+      ...tpl,
       category: 'campaign_completed',
       userId: ownerUserId,
       title: 'Campaign finished',
@@ -233,7 +374,16 @@ export class CrmEventNotifier {
       this.log.error(`Campaign ${campaign.id} failed (${terminalState}): ${technicalDetail}`);
     }
 
+    const tpl = await this.templated('crm.campaign_failed', {
+      user_name: await this.userName(ownerUserId),
+      campaign_name: campaign.name ?? 'Your campaign',
+      open_link: this.absoluteLink(this.campaignLink(campaign.id)),
+      // `terminalState` and `technicalDetail` are deliberately NOT offered as variables: they are
+      // for the log, and a template author cannot put them in front of a reader by accident.
+    });
+
     await this.send({
+      ...tpl,
       category: 'campaign_failed',
       userId: ownerUserId,
       title: 'Campaign could not be completed',

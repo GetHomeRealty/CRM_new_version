@@ -57,8 +57,7 @@ async function seedDeal(
   const txn = await tx.transactions.create({
     data: {
       trade_no: `ZZ-${t}`, type: 'Sale', agent: agentName,
-      property: `${t} Probe Street`, created_at: now, updated_at: now, company_id: 1,
-    },
+      property: `${t} Probe Street`, created_at: now, updated_at: now,    },
     select: { id: true, trade_no: true },
   });
 
@@ -75,8 +74,7 @@ async function seedDeal(
       transaction_id: txn.id, decision: 'Rejected', agent_name: agentName,
       field_label: 'Purchase price', reason: 'Does not match the agreement',
       agent_seen_at: opts.reviewRead === true ? now : null,
-      created_at: now, company_id: 1,
-    },
+      created_at: now,    },
   });
 
   await tx.transaction_reminders.create({
@@ -85,8 +83,7 @@ async function seedDeal(
       delivery_method: 'in-app', delivery_status: 'sent', recipient: agentName,
       subject: 'Listing expires in 7 days',
       seen_at: opts.reminderRead === true ? now : null,
-      created_at: now, company_id: 1,
-    },
+      created_at: now,    },
   });
 
   return txn;
@@ -332,6 +329,190 @@ describe('marking read', () => {
       expect(result.ok).toBe(true);
       expect(result.marked + result.failed).toBeGreaterThan(0);
       expect(result.failed).toBeGreaterThan(0);
+    });
+  });
+});
+
+// ============================================================================ new-mail lines
+/**
+ * New mail is the one direct notification filtered by WHICH MAILBOX it came from.
+ *
+ * A person may have several addresses syncing — a working one, a shared enquiries box, an old
+ * address kept for archive — and only the primary one is worth interrupting them for. The rule is
+ * applied on read rather than only on write, so making a different address primary retires the old
+ * mailbox's history at once instead of leaving it in the list until somebody clears it by hand.
+ * Every assertion below is against real rows, inside a rollback.
+ */
+describe('new-mail notifications follow the primary mailbox', () => {
+  /** A user with mailboxes, and one new-mail notification per mailbox. */
+  async function seedMailboxes(tx: PrismaService, count: number, primaryIndex: number) {
+    const now = new Date();
+    const t = tag();
+
+    const user = await tx.users.create({
+      data: {
+        name: `ZZ Mail ${t}`, email: `zz-mail-${t}@probe.test`, username: `zzmail${t.replace(/-/g, '')}`,
+        role: 'agent', status: 'Active', password: 'x', created_at: now, updated_at: now,
+      },
+      select: { id: true, name: true },
+    });
+
+    const boxes: { id: number }[] = [];
+    for (let i = 0; i < count; i += 1) {
+      const box = await tx.mail_accounts.create({
+        data: {
+          name: `ZZ Box ${i} ${t}`, from_email: `zz-box-${i}-${t}@probe.test`,
+          host: 'smtp.probe.test', port: 587, user_id: user.id, scope: 'crm',
+          is_active: true, is_default: i === primaryIndex,
+          created_at: now, updated_at: now,
+        },
+        select: { id: true },
+      });
+      boxes.push(box);
+
+      await tx.notifications.create({
+        data: {
+          user_id: user.id, category: 'inbox_new_mail',
+          title: `You have a new email (box ${i})`, body: `zz-box-${i}-${t}@probe.test`,
+          link: '/crm/inbox', dedupe_key: `inbox-${box.id}-${100 + i}`,
+          read_at: null, created_at: now,
+        },
+      });
+    }
+
+    return { user: { id: user.id, role: 'agent', name: user.name } as ResourceUser, boxes };
+  }
+
+  const mailTitles = (feed: { items: { title: string }[] }): string[] =>
+    feed.items.filter((i) => i.title.startsWith('You have a new email')).map((i) => i.title);
+
+  it('shows the primary mailbox and hides the others', async () => {
+    await inRollback(async (tx) => {
+      const { user } = await seedMailboxes(tx, 3, 1);
+      const feed = await centre(tx).feed(user, { filter: 'all', limit: 100 });
+
+      expect(mailTitles(feed)).toEqual(['You have a new email (box 1)']);
+    });
+  });
+
+  it('follows the primary when it changes, without touching a stored row', async () => {
+    /*
+     * THE CASE THIS BLOCK EXISTS FOR. The line for box 0 was created while box 0 was primary and is
+     * still in the table afterwards — the filter is what stops it being shown, so the switch takes
+     * effect immediately, and reversing it brings the old one back rather than having destroyed it.
+     */
+    await inRollback(async (tx) => {
+      const { user, boxes } = await seedMailboxes(tx, 2, 0);
+      expect(mailTitles(await centre(tx).feed(user, { filter: 'all', limit: 100 })))
+        .toEqual(['You have a new email (box 0)']);
+
+      const stored = await tx.notifications.count({ where: { user_id: user.id } });
+
+      // Hand the primary to the second mailbox, exactly as Settings does.
+      await tx.mail_accounts.update({ where: { id: boxes[0].id }, data: { is_default: false } });
+      await tx.mail_accounts.update({ where: { id: boxes[1].id }, data: { is_default: true } });
+
+      expect(mailTitles(await centre(tx).feed(user, { filter: 'all', limit: 100 })))
+        .toEqual(['You have a new email (box 1)']);
+      // Nothing was deleted to achieve that.
+      expect(await tx.notifications.count({ where: { user_id: user.id } })).toBe(stored);
+
+      // And it is reversible, which a deletion would not have been.
+      await tx.mail_accounts.update({ where: { id: boxes[1].id }, data: { is_default: false } });
+      await tx.mail_accounts.update({ where: { id: boxes[0].id }, data: { is_default: true } });
+      expect(mailTitles(await centre(tx).feed(user, { filter: 'all', limit: 100 })))
+        .toEqual(['You have a new email (box 0)']);
+    });
+  });
+
+  it('keeps the unread count and the list telling the same story', async () => {
+    /*
+     * A hidden line that still counted would light the badge with nothing behind it. Both the feed
+     * and the count go through `collect`, and this is what holds them together.
+     */
+    await inRollback(async (tx) => {
+      const { user } = await seedMailboxes(tx, 4, 2);
+
+      const feed = await centre(tx).feed(user, { filter: 'unread', limit: 100 });
+      const counts = await centre(tx).unreadCount(user);
+
+      expect(mailTitles(feed)).toEqual(['You have a new email (box 2)']);
+      expect(counts.by_source.direct).toBe(1);
+      expect(counts.unread).toBe(feed.total);
+    });
+  });
+
+  it('hides every one of them when no mailbox is primary', async () => {
+    await inRollback(async (tx) => {
+      const { user, boxes } = await seedMailboxes(tx, 2, 0);
+      await tx.mail_accounts.update({ where: { id: boxes[0].id }, data: { is_default: false } });
+
+      const feed = await centre(tx).feed(user, { filter: 'all', limit: 100 });
+      expect(mailTitles(feed)).toEqual([]);
+      expect((await centre(tx).unreadCount(user)).by_source.direct).toBe(0);
+    });
+  });
+
+  it('keeps a primary in each area, because each is primary for its own side', async () => {
+    await inRollback(async (tx) => {
+      const { user, boxes } = await seedMailboxes(tx, 2, 0);
+      // The second becomes the Transaction Desk's primary. Both are now primary somewhere.
+      await tx.mail_accounts.update({
+        where: { id: boxes[1].id }, data: { is_default: true, scope: 'desk' },
+      });
+
+      const feed = await centre(tx).feed(user, { filter: 'all', limit: 100 });
+      expect(mailTitles(feed).sort())
+        .toEqual(['You have a new email (box 0)', 'You have a new email (box 1)']);
+    });
+  });
+
+  it('narrows new mail only — every other direct notification is untouched', async () => {
+    await inRollback(async (tx) => {
+      const { user } = await seedMailboxes(tx, 2, 0);
+      await tx.notifications.create({
+        data: {
+          user_id: user.id, category: 'lead_assigned', title: 'A lead was assigned to you',
+          body: null, link: '/crm/leads/1', dedupe_key: `lead-${tag()}`,
+          read_at: null, created_at: new Date(),
+        },
+      });
+
+      const feed = await centre(tx).feed(user, { filter: 'all', limit: 100 });
+      expect(feed.items.some((i) => i.title === 'A lead was assigned to you')).toBe(true);
+      expect(mailTitles(feed)).toEqual(['You have a new email (box 0)']);
+    });
+  });
+
+  it('hides a new-mail line whose mailbox cannot be identified', async () => {
+    /*
+     * Every one the application writes carries `inbox-<account>-<uid>`. A row without it predates
+     * the rule or came from a mailbox that no longer exists, and both are what was asked to stop
+     * appearing — so an unreadable key is treated as "not the primary", not "show it anyway".
+     */
+    await inRollback(async (tx) => {
+      const { user } = await seedMailboxes(tx, 1, 0);
+      await tx.notifications.create({
+        data: {
+          user_id: user.id, category: 'inbox_new_mail', title: 'You have a new email (orphan)',
+          body: null, link: '/crm/inbox', dedupe_key: null, read_at: null, created_at: new Date(),
+        },
+      });
+
+      const feed = await centre(tx).feed(user, { filter: 'all', limit: 100 });
+      expect(mailTitles(feed)).toEqual(['You have a new email (box 0)']);
+    });
+  });
+
+  it('leaves a feed with no new-mail lines exactly as it was', async () => {
+    /*
+     * The guard that skips the mailbox lookup when there is nothing to filter, asserted through
+     * behaviour rather than by counting queries.
+     */
+    await inRollback(async (tx) => {
+      const deal = await seedDeal(tx, AGENT.name);
+      const feed = await centre(tx).feed(AGENT, { filter: 'all', limit: 100 });
+      expect(feed.items.some((i) => i.transaction_id === deal.id)).toBe(true);
     });
   });
 });

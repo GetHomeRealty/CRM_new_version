@@ -204,8 +204,18 @@ export class AreaDashboardService {
         where: { user_id: userId, seen: false, mail_account: { is: { OR: [{ scope: 'crm' }, { scope: null }] } } },
       }),
 
+      /*
+       * NEXT 30 DAYS STARTS TOMORROW. This counted from `today`, so every appointment today was in
+       * both figures — the card showed "3 today" beside a "next 30 days" that silently included the
+       * same three. Two counts presented side by side have to partition the range, or the reader
+       * adds them up and gets a number that does not exist.
+       *
+       * From tomorrow (day 1) to the end of day 30, i.e. day 31 exclusive — thirty whole days after
+       * today rather than twenty-nine and a bit. `daysFromToday` is built off local midnight, so
+       * both boundaries land on the reader's own day, not UTC's.
+       */
       this.prisma.calendar_events.count({
-        where: { ...personal, ...this.areaOr('crm'), ...this.liveEvent, date: { gte: today, lt: this.daysFromToday(30) } },
+        where: { ...personal, ...this.areaOr('crm'), ...this.liveEvent, date: { gte: this.daysFromToday(1), lt: this.daysFromToday(31) } },
       }),
       this.prisma.calendar_events.count({ where: { ...personal, ...this.areaOr('crm'), ...this.liveEvent, date: today } }),
 

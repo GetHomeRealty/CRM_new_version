@@ -2,7 +2,6 @@ import { PrismaClient } from '@prisma/client';
 import type { PrismaService } from '../prisma/prisma.service';
 import { CampaignTemplatesService } from './campaign-templates.service';
 import { CampaignAudienceService } from './campaign-audience.service';
-import { TENANT_ID } from '../core/tenant';
 import type { AuthUserRecord } from '../auth/auth.types';
 
 /**
@@ -61,14 +60,14 @@ async function templateWithAttachment(tx: PrismaService, ownerId: number | null)
   const template = await tx.campaign_templates.create({
     data: {
       name: `ZZ tmpl ${t}`, subject: 'S', content: '<p>C</p>', category: 'general',
-      user_id: ownerId, company_id: TENANT_ID, created_at: now, updated_at: now,
+      user_id: ownerId, created_at: now, updated_at: now,
     },
     select: { id: true },
   });
   const attachment = await tx.campaign_template_attachments.create({
     data: {
       template_id: template.id, filename: `private-${t}.txt`, content_type: 'text/plain',
-      size: secret.length, data: Buffer.from(secret), company_id: TENANT_ID, created_at: now,
+      size: secret.length, data: Buffer.from(secret), created_at: now,
     },
     select: { id: true },
   });

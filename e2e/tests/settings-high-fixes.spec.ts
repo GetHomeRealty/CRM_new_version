@@ -180,18 +180,43 @@ test.describe('H3 — the master switch blocks every send', () => {
     });
     const body = send.body as any;
     expect(body.success).toBe(false);
-    // The refusal must name the master switch — reaching SMTP and failing there is the bug.
-    expect(String(body.message)).toMatch(/CRM emails are switched off/i);
+    // The refusal must name the master switch — reaching SMTP and failing there is the bug. The
+    // wording now says WHICH emails ("per-lead") because the flag never stopped campaigns, and
+    // points at Triggers, where the switch moved to sit beside the notice that reports it.
+    expect(String(body.message)).toMatch(/per-lead emails are switched off/i);
+    expect(String(body.message)).toMatch(/Triggers/i);
     expect(String(body.message)).not.toMatch(/getaddrinfo|ENOTFOUND|SMTP/i);
   });
 
-  test('the two triggers with no send path are no longer offered as switches', async ({ page }) => {
-    // `birthday` and `anniversary` gated nothing in either position: no send action exists for
-    // either, so switching them on made nothing available and switching them off blocked nothing.
+  /*
+   * WAS: "the two triggers with no send path are no longer offered as switches".
+   *
+   * `birthday` and `anniversary` were removed because nothing sent either, so both switches were
+   * decorative. `LeadGreetingsService` now sweeps daily and sends both through the same path as
+   * every other CRM email, so they gate something real and are offered again.
+   *
+   * The rule this test protects is unchanged and is the one worth keeping: a switch on this screen
+   * must control an actual send. So it still pins the exact list — a key appearing here without a
+   * sender is the regression — and additionally pins the two new ones to OFF, because they fire on
+   * a timer rather than a button and must not begin emailing a brokerage's book on upgrade.
+   */
+  test('every offered trigger has a send path, and the timer-driven three default to off', async ({ page }) => {
     await signIn(page, 'superAdmin');
     const res = await apiGet(page, '/api/crm-settings/email-settings');
     const keys = (res.body as any)?.trigger_keys as string[];
-    expect(keys).toEqual(['wedding', 'seasonal', 'promotional', 'referral', 'custom']);
+    expect(keys).toEqual([
+      'wedding', 'seasonal', 'promotional', 'referral', 'custom', 'birthday', 'anniversary',
+      // The new-lead welcome, swept by `LeadWelcomeService` — a real sender, like the rest.
+      'welcome',
+    ]);
+
+    const toggles = (res.body as any)?.emailTemplates as Record<string, boolean> | undefined;
+    if (toggles) {
+      expect(toggles.birthday ?? false).toBe(false);
+      expect(toggles.anniversary ?? false).toBe(false);
+      // Same reasoning as the two above: it fires on a timer, so an upgrade must not start it.
+      expect(toggles.welcome ?? false).toBe(false);
+    }
   });
 });
 

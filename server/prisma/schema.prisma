@@ -36,10 +36,7 @@ model agents {
   updated_at DateTime? @db.Timestamp(0)
 
   /// The brokerage this row belongs to. See src/core/tenancy.spec.ts for why this table carries one.
-  company_id Int              @default(1)
-  company    company_settings @relation(fields: [company_id], references: [id], onUpdate: NoAction)
 
-  @@index([company_id])
 }
 
 /// `domain` marks which area an audit entry belongs to: 'crm', 'desk', or 'common' for the
@@ -64,13 +61,9 @@ model audit_logs {
   updated_at     DateTime?     @db.Timestamp(0)
   transactions   transactions? @relation(fields: [transaction_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
 
-  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
-  company_id Int @default(1)
-
   @@index([category])
   @@index([domain])
   @@index([transaction_id])
-  @@index([company_id])
 }
 
 model brokerage_agents {
@@ -82,11 +75,7 @@ model brokerage_agents {
   updated_at   DateTime?  @db.Timestamp(0)
   brokerages   brokerages @relation(fields: [brokerage_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
 
-  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
-  company_id Int @default(1)
-
   @@index([brokerage_id])
-  @@index([company_id])
 }
 
 model brokerages {
@@ -103,10 +92,6 @@ model brokerages {
   brokerage_agents brokerage_agents[]
   transactions     transactions       @relation(fields: [transaction_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
 
-  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
-  company_id Int @default(1)
-
-  @@index([company_id])
 }
 
 model cache {
@@ -145,11 +130,7 @@ model client_identifications {
   updated_at           DateTime?    @db.Timestamp(0)
   transactions         transactions @relation(fields: [transaction_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
 
-  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
-  company_id Int @default(1)
-
   @@unique([transaction_id, client_name])
-  @@index([company_id])
 }
 
 model clients {
@@ -163,11 +144,7 @@ model clients {
   updated_at     DateTime?    @db.Timestamp(0)
   transactions   transactions @relation(fields: [transaction_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
 
-  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
-  company_id Int @default(1)
-
   @@index([transaction_id])
-  @@index([company_id])
 }
 
 model company_settings {
@@ -193,29 +170,6 @@ model company_settings {
   deposit_heading  String?   @db.Text
   created_at       DateTime? @db.Timestamp(0)
   updated_at       DateTime? @db.Timestamp(0)
-
-  // Every table the brokerage owns directly.
-  users                  users[]
-  leads                  leads[]
-  transactions           transactions[]
-  customers              customers[]
-  campaigns              campaigns[]
-  agents                 agents[]
-  marketing_inventory    marketing_inventory[]
-  lead_tags              lead_tags[]
-  crm_email_settings     crm_email_settings[]
-  crm_referral_codes     crm_referral_codes[]
-  crm_email_log          crm_email_log[]
-  crm_broadcasts         crm_broadcasts[]
-  crm_settings           crm_settings[]
-  crm_trigger_settings   crm_trigger_settings[]
-  email_suppressions     email_suppressions[]
-  import_batches         import_batches[]
-  export_jobs            export_jobs[]
-  lead_import_jobs       lead_import_jobs[]
-  personal_access_tokens personal_access_tokens[]
-  meta_webhook_events    meta_webhook_events[]
-  mfa_policies           mfa_policies[]
 }
 
 model conditions {
@@ -230,11 +184,7 @@ model conditions {
   updated_at     DateTime?    @db.Timestamp(0)
   transactions   transactions @relation(fields: [transaction_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
 
-  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
-  company_id Int @default(1)
-
   @@index([transaction_id])
-  @@index([company_id])
 }
 
 model customers {
@@ -252,10 +202,7 @@ model customers {
   invoices    invoices[]
 
   /// The brokerage this row belongs to. See src/core/tenancy.spec.ts for why this table carries one.
-  company_id Int              @default(1)
-  company    company_settings @relation(fields: [company_id], references: [id], onUpdate: NoAction)
 
-  @@index([company_id])
 }
 
 model documents {
@@ -285,11 +232,7 @@ model documents {
   deleted_at           DateTime?    @db.Timestamp(0)
   transactions         transactions @relation(fields: [transaction_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
 
-  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
-  company_id Int @default(1)
-
   @@index([transaction_id])
-  @@index([company_id])
 }
 
 /**
@@ -424,17 +367,16 @@ model leads {
   inbound_emails       inbound_emails[]
 
   /// The brokerage this row belongs to. See src/core/tenancy.spec.ts for why this table carries one.
-  company_id Int              @default(1)
-  company    company_settings @relation(fields: [company_id], references: [id], onUpdate: NoAction)
 
   @@index([email])
   /// UNIQUE PER BOOK — enforced by the database, and NOT expressible here.
   ///
-  ///   CREATE UNIQUE INDEX "leads_company_owner_email_key"
-  ///     ON "leads" ("company_id", COALESCE("owner_user_id", 0), LOWER("email"));
+  ///   CREATE UNIQUE INDEX "leads_owner_email_key"
+  ///     ON "leads" (COALESCE("owner_user_id", 0), LOWER("email"));
   ///
-  /// in migrations/20260802140000_lead_email_unique_per_owner. Prisma has no syntax for a
-  /// functional index, so this comment is the only place the schema can record it.
+  /// in migrations/20260808140000_tenant_removal_replacement_constraints, which narrowed the
+  /// original three-column form when multi-brokerage tenancy was removed. Prisma has no syntax for
+  /// a functional index, so this comment is the only place the schema can record it.
   ///
   /// WHY PER BOOK AND NOT GLOBAL. One person may genuinely be a lead more than once. They click
   /// brokerage A's ad on Monday and brokerage B's on Thursday; they reach agent 1 by referral and
@@ -458,9 +400,9 @@ model leads {
   /// `leads-email-uniqueness.spec.ts` asserts it exists in the connected database and proves both
   /// halves by behaviour, so a schema-only rebuild fails a test rather than production.
   ///
-  /// `leads_company_email_lower_idx` (company_id, lower(email)) covers the other question the
-  /// module asks — "is this address anywhere in the brokerage?" — which the old global unique index
-  /// used to answer and this one cannot.
+  /// `leads_email_lower_idx` (lower(email)) covers the other question the module asks — "is this
+  /// address anywhere in the brokerage?" — which the old global unique index used to answer and
+  /// this one cannot.
   @@index([lead_status])
   @@index([lead_source])
   @@index([unsubscribed])
@@ -472,7 +414,6 @@ model leads {
   @@index([source])
   @@index([phone_normalized])
   @@index([meta_campaign_id])
-  @@index([company_id])
 }
 
 /**
@@ -515,14 +456,10 @@ model google_connections {
   created_at       DateTime? @db.Timestamp(0)
   updated_at       DateTime? @db.Timestamp(0)
 
-  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
-  company_id Int @default(1)
-
   // One connection per area per user — the pair is what must be unique now that a user can
   // hold a separate CRM and Transaction Desk calendar.
   @@unique([user_id, scope])
   @@index([user_id])
-  @@index([company_id])
 }
 
 /**
@@ -548,11 +485,7 @@ model ical_feeds {
   created_at DateTime? @db.Timestamp(0)
   updated_at DateTime? @db.Timestamp(0)
 
-  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
-  company_id Int @default(1)
-
   @@index([user_id])
-  @@index([company_id])
 }
 
 // ---------------------------------------------------------------------------
@@ -593,17 +526,12 @@ model crm_settings {
   created_at     DateTime? @db.Timestamp(0)
   updated_at     DateTime? @db.Timestamp(0)
 
-  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
-  company_id Int @default(1)
-
-  /// This table was the odd one out: its four sibling CRM tables carry both relations and it
-  /// carried neither, so a deleted user left their settings row behind for ever and `company_id`
-  /// pointed at a brokerage nothing guaranteed existed. `Cascade`, because a personal settings row
-  /// has no meaning without the person — the global row (user_id NULL) is unaffected.
+  /// This table was the odd one out: its sibling CRM tables carried a users relation and it did
+  /// not, so a deleted user left their settings row behind for ever. `Cascade`, because a personal
+  /// settings row has no meaning without the person — the shared row (user_id NULL) is unaffected,
+  /// and `crm_settings_single_global_key` allows only one of those.
   user    users?           @relation(fields: [user_id], references: [id], onDelete: Cascade)
-  company company_settings @relation(fields: [company_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
-  @@index([company_id])
 }
 
 /**
@@ -625,13 +553,9 @@ model crm_email_settings {
   updated_at        DateTime? @db.Timestamp(0)
 
   /// The brokerage this row belongs to. See src/core/tenancy.spec.ts for why this table carries one.
-  company_id Int              @default(1)
-  company    company_settings @relation(fields: [company_id], references: [id], onUpdate: NoAction)
 
   // Declared so `migrate diff` stays empty: this index EXISTS in the database, created by a
   // migration. An index the schema does not mention is one `migrate dev` offers to drop.
-  @@unique([company_id])
-  @@index([company_id])
 }
 
 /**
@@ -660,11 +584,8 @@ model crm_trigger_settings {
   updated_at       DateTime? @db.Timestamp(0)
 
   /// The brokerage this row belongs to. See src/core/tenancy.spec.ts for why this table carries one.
-  company_id Int              @default(1)
-  company    company_settings @relation(fields: [company_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   user       users            @relation(fields: [user_id], references: [id], onDelete: Cascade)
 
-  @@index([company_id])
 }
 
 /**
@@ -681,10 +602,7 @@ model crm_referral_codes {
   created_at  DateTime? @db.Timestamp(0)
 
   /// The brokerage this row belongs to. See src/core/tenancy.spec.ts for why this table carries one.
-  company_id Int              @default(1)
-  company    company_settings @relation(fields: [company_id], references: [id], onUpdate: NoAction)
 
-  @@index([company_id])
 }
 
 /**
@@ -709,12 +627,9 @@ model crm_email_log {
   created_at DateTime? @db.Timestamp(0)
 
   /// The brokerage this row belongs to. See src/core/tenancy.spec.ts for why this table carries one.
-  company_id Int              @default(1)
-  company    company_settings @relation(fields: [company_id], references: [id], onUpdate: NoAction)
 
   @@index([kind])
   @@index([created_at])
-  @@index([company_id])
 }
 
 /**
@@ -745,11 +660,8 @@ model crm_broadcasts {
   created_at   DateTime? @db.Timestamp(0)
 
   /// The brokerage this row belongs to. See src/core/tenancy.spec.ts for why this table carries one.
-  company_id Int              @default(1)
-  company    company_settings @relation(fields: [company_id], references: [id], onUpdate: NoAction)
 
   @@index([created_at])
-  @@index([company_id])
 }
 
 /**
@@ -779,15 +691,11 @@ model todos {
   deleted_at   DateTime? @db.Timestamp(0)
   domain       String?   @db.VarChar(8)
 
-  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
-  company_id Int @default(1)
-
   @@index([status])
   @@index([user_id])
   @@index([due_date])
   @@index([deleted_at])
   @@index([domain])
-  @@index([company_id])
 }
 
 /**
@@ -833,12 +741,8 @@ model meta_connections {
   updated_at            DateTime?    @db.Timestamp(0)
   pages                 meta_pages[]
 
-  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
-  company_id Int @default(1)
-
   @@index([is_active])
   @@index([token_expires_at])
-  @@index([company_id])
 }
 
 /**
@@ -866,13 +770,10 @@ model meta_webhook_events {
   processed_at DateTime? @db.Timestamp(0)
 
   /// The brokerage this row belongs to. See src/core/tenancy.spec.ts for why this table carries one.
-  company_id Int?
-  company    company_settings? @relation(fields: [company_id], references: [id], onUpdate: NoAction)
 
   @@index([status])
   @@index([leadgen_id])
   @@index([received_at])
-  @@index([company_id])
 }
 
 /**
@@ -894,12 +795,8 @@ model meta_sync_history {
   started_at  DateTime  @db.Timestamp(0)
   finished_at DateTime? @db.Timestamp(0)
 
-  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
-  company_id Int @default(1)
-
   @@index([user_id])
   @@index([started_at])
-  @@index([company_id])
 }
 
 /**
@@ -915,12 +812,8 @@ model meta_pages {
   updated_at    DateTime?        @db.Timestamp(0)
   connection    meta_connections @relation(fields: [connection_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
 
-  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
-  company_id Int @default(1)
-
   @@unique([connection_id, page_id])
   @@index([page_id])
-  @@index([company_id])
 }
 
 /**
@@ -938,14 +831,11 @@ model meta_lead_forms {
   created_at DateTime? @db.Timestamp(0)
   updated_at DateTime? @db.Timestamp(0)
 
-  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
-  company_id Int @default(1)
-
   @@unique([user_id, form_id, page_id])
-  /// ONE FORM, ONE AGENT — enforced by `meta_lead_forms_page_form_key`, a partial unique index on
-  /// (company_id, page_id, form_id) WHERE is_active, created in
-  /// migrations/20260802180000_meta_one_form_one_agent. Partial indexes cannot be expressed in
-  /// Prisma, so this comment is where the schema records it.
+  /// ONE FORM, ONE AGENT — enforced by `meta_lead_forms_page_form_v2_key`, a partial unique index
+  /// on (page_id, form_id) WHERE is_active, created in
+  /// migrations/20260808140000_tenant_removal_replacement_constraints. Partial indexes cannot be
+  /// expressed in Prisma, so this comment is where the schema records it.
   ///
   /// Each agent connects their own Meta account, their own Page and their own lead forms, and
   /// receives their own leads; nothing is shared. Without the constraint two agents could both
@@ -956,7 +846,6 @@ model meta_lead_forms {
   /// for whoever is running it now.
   @@index([page_id])
   @@index([is_active])
-  @@index([company_id])
 }
 
 /**
@@ -974,11 +863,7 @@ model lead_notes {
   updated_at DateTime? @db.Timestamp(0)
   leads      leads     @relation(fields: [lead_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
 
-  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
-  company_id Int @default(1)
-
   @@index([lead_id])
-  @@index([company_id])
 }
 
 model lead_tasks {
@@ -1002,13 +887,9 @@ model lead_tasks {
   updated_at  DateTime? @db.Timestamp(0)
   leads       leads     @relation(fields: [lead_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
 
-  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
-  company_id Int @default(1)
-
   @@index([lead_id])
   @@index([status])
   @@index([assigned_to])
-  @@index([company_id])
 }
 
 model lead_showings {
@@ -1028,12 +909,8 @@ model lead_showings {
   updated_at   DateTime? @db.Timestamp(0)
   leads        leads     @relation(fields: [lead_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
 
-  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
-  company_id Int @default(1)
-
   @@index([lead_id])
   @@index([showing_date])
-  @@index([company_id])
 }
 
 /**
@@ -1067,12 +944,8 @@ model lead_calls {
   leads        leads                 @relation(fields: [lead_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
   recording    lead_call_recordings?
 
-  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
-  company_id Int @default(1)
-
   @@index([lead_id])
   @@index([provider_sid])
-  @@index([company_id])
 }
 
 /**
@@ -1113,13 +986,9 @@ model lead_call_recordings {
   created_at   DateTime?  @db.Timestamp(0)
   call         lead_calls @relation(fields: [call_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
 
-  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
-  company_id Int @default(1)
-
   // Declared so `migrate diff` stays empty: this index EXISTS in the database, created by a
   // migration. An index the schema does not mention is one `migrate dev` offers to drop.
   @@index([storage_path])
-  @@index([company_id])
 }
 
 /**
@@ -1152,11 +1021,7 @@ model lead_emails {
   sent_at    DateTime @db.Timestamp(0)
   leads      leads    @relation(fields: [lead_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
 
-  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
-  company_id Int @default(1)
-
   @@index([lead_id])
-  @@index([company_id])
 }
 
 /**
@@ -1205,11 +1070,7 @@ model lead_messages {
   created_at    DateTime? @db.Timestamp(0)
   leads         leads     @relation(fields: [lead_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
 
-  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
-  company_id Int @default(1)
-
   @@index([lead_id])
-  @@index([company_id])
 }
 
 /**
@@ -1223,10 +1084,7 @@ model lead_tags {
   created_at DateTime? @db.Timestamp(0)
 
   /// The brokerage this row belongs to. See src/core/tenancy.spec.ts for why this table carries one.
-  company_id Int              @default(1)
-  company    company_settings @relation(fields: [company_id], references: [id], onUpdate: NoAction)
 
-  @@index([company_id])
 }
 
 /**
@@ -1278,8 +1136,6 @@ model campaigns {
   recipients        campaign_recipients[]
 
   /// The brokerage this row belongs to. See src/core/tenancy.spec.ts for why this table carries one.
-  company_id      Int               @default(1)
-  company         company_settings  @relation(fields: [company_id], references: [id], onUpdate: NoAction)
   campaign_links  campaign_links[]
   campaign_clicks campaign_clicks[]
 
@@ -1288,7 +1144,6 @@ model campaigns {
   // Declared so `migrate diff` stays empty: this index EXISTS in the database, created by a
   // migration. An index the schema does not mention is one `migrate dev` offers to drop.
   @@index([scheduled_for])
-  @@index([company_id])
 }
 
 /**
@@ -1321,12 +1176,9 @@ model marketing_inventory {
   deleted_at    DateTime? @db.Timestamp(0)
 
   /// The brokerage this row belongs to. See src/core/tenancy.spec.ts for why this table carries one.
-  company_id Int              @default(1)
-  company    company_settings @relation(fields: [company_id], references: [id], onUpdate: NoAction)
 
   @@index([deleted_at])
   @@index([type])
-  @@index([company_id])
 }
 
 /**
@@ -1342,12 +1194,8 @@ model favorites {
   notes       String?   @db.Text
   created_at  DateTime? @db.Timestamp(0)
 
-  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
-  company_id Int @default(1)
-
   @@unique([user_id, listing_key])
   @@index([user_id])
-  @@index([company_id])
 }
 
 /**
@@ -1376,12 +1224,8 @@ model campaign_templates {
   deleted_at  DateTime?                       @db.Timestamp(0)
   attachments campaign_template_attachments[]
 
-  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
-  company_id Int @default(1)
-
   @@index([category])
   @@index([deleted_at])
-  @@index([company_id])
 }
 
 /**
@@ -1397,11 +1241,7 @@ model campaign_template_attachments {
   created_at   DateTime?          @db.Timestamp(0)
   template     campaign_templates @relation(fields: [template_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
 
-  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
-  company_id Int @default(1)
-
   @@index([template_id])
-  @@index([company_id])
 }
 
 model campaign_recipients {
@@ -1447,13 +1287,9 @@ model campaign_recipients {
   campaigns       campaigns         @relation(fields: [campaign_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
   leads           leads?            @relation(fields: [lead_id], references: [id], onDelete: SetNull, onUpdate: Restrict)
 
-  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
-  company_id Int @default(1)
-
   @@index([campaign_id])
   @@index([lead_id])
   @@index([email])
-  @@index([company_id])
   /// The retry sweep asks "which deferred recipients are due?" once a minute. Without this it
   /// scans every recipient row the brokerage has ever created to answer it.
   @@index([status, next_retry_at])
@@ -1474,10 +1310,7 @@ model email_suppressions {
   updated_at  DateTime? @db.Timestamp(0)
 
   /// The brokerage this row belongs to. See src/core/tenancy.spec.ts for why this table carries one.
-  company_id Int              @default(1)
-  company    company_settings @relation(fields: [company_id], references: [id], onUpdate: NoAction)
 
-  @@index([company_id])
 }
 
 /**
@@ -1548,6 +1381,16 @@ model calendar_events {
   created_at                DateTime?                  @db.Timestamp(0)
   updated_at                DateTime?                  @db.Timestamp(0)
   deleted_at                DateTime?                  @db.Timestamp(0)
+  /// Set when this event was hidden because its Google connection was disconnected — never by a
+  /// person deleting an appointment.
+  ///
+  /// WHY A SEPARATE COLUMN AND NOT JUST `deleted_at`. Both hide the row, and every calendar query
+  /// already filters `deleted_at: null`, which is exactly why the hiding is done that way. But the
+  /// two must be told apart on RECONNECT: an event hidden by a disconnect has to come back, and an
+  /// event the agent deleted must stay gone. Without this marker the pull would have to either
+  /// resurrect everything Google still lists — undoing real deletions whenever the push of that
+  /// deletion to Google had failed — or resurrect nothing, leaving a reconnected calendar empty.
+  google_disconnected_at    DateTime?                  @db.Timestamp(0)
   transactions              transactions?              @relation(fields: [transaction_id], references: [id], onDelete: SetNull, onUpdate: Restrict)
   reminders                 calendar_event_reminders[]
 
@@ -1560,9 +1403,6 @@ model calendar_events {
   recurrence  calendar_events?  @relation("calendar_event_recurrence", fields: [recurrence_id], references: [id], onDelete: SetNull, onUpdate: NoAction, map: "calendar_events_recurrence_fk")
   occurrences calendar_events[] @relation("calendar_event_recurrence")
 
-  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
-  company_id Int @default(1)
-
   @@index([date])
   @@index([user_id])
   /// The month grid asks for one month at a time now, so the list query filters on (user, date)
@@ -1573,7 +1413,6 @@ model calendar_events {
   @@index([lead_id])
   @@index([status])
   @@index([domain])
-  @@index([company_id])
 }
 
 /**
@@ -1617,13 +1456,9 @@ model notification_preferences {
 
   users users @relation(fields: [user_id], references: [id], onDelete: Cascade)
 
-  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
-  company_id Int @default(1)
-
   @@unique([user_id, category, channel])
   @@index([user_id])
   @@index([user_id, category])
-  @@index([company_id])
 }
 
 model push_subscriptions {
@@ -1644,12 +1479,8 @@ model push_subscriptions {
 
   users users @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "push_subscriptions_user_fk")
 
-  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
-  company_id Int @default(1)
-
   @@unique([endpoint], map: "push_subscriptions_endpoint_key")
   @@index([user_id], map: "push_subscriptions_user_idx")
-  @@index([company_id], map: "push_subscriptions_company_idx")
 }
 
 model calendar_event_reminders {
@@ -1675,16 +1506,12 @@ model calendar_event_reminders {
   // drops and recreates the key.
   calendar_events calendar_events @relation(fields: [calendar_event_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "calendar_event_reminders_event_fk")
 
-  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
-  company_id Int @default(1)
-
   @@unique([calendar_event_id, lead_minutes], map: "calendar_event_reminders_event_lead_key")
   // The `map:` names below are the names these indexes ACTUALLY carry in the database, created by
   // the migration that added them. Without them Prisma computes its own default names, decides the
   // database is wrong, and `migrate dev` renames all three — see the note at the top of this file.
   @@index([delivery_status], map: "calendar_event_reminders_status_idx")
   @@index([next_retry_at], map: "calendar_event_reminders_retry_idx")
-  @@index([company_id], map: "calendar_event_reminders_company_idx")
 }
 
 /**
@@ -1725,13 +1552,10 @@ model export_jobs {
   updated_at        DateTime? @db.Timestamp(0)
 
   /// The brokerage this row belongs to. See src/core/tenancy.spec.ts for why this table carries one.
-  company_id Int              @default(1)
-  company    company_settings @relation(fields: [company_id], references: [id], onUpdate: NoAction)
 
   @@index([requested_by_id])
   @@index([status])
   @@index([requested_at])
-  @@index([company_id])
 }
 
 /**
@@ -1759,11 +1583,8 @@ model import_batches {
   updated_at     DateTime? @db.Timestamp(0)
 
   /// The brokerage this row belongs to. See src/core/tenancy.spec.ts for why this table carries one.
-  company_id Int              @default(1)
-  company    company_settings @relation(fields: [company_id], references: [id], onUpdate: NoAction)
 
   @@index([uploaded_at])
-  @@index([company_id])
 }
 
 /**
@@ -1805,14 +1626,10 @@ model document_reminders {
   updated_at      DateTime?    @db.Timestamp(0)
   transactions    transactions @relation(fields: [transaction_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
 
-  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
-  company_id Int @default(1)
-
   @@index([transaction_id])
   @@index([document_id])
   @@index([sent_at])
   @@index([batch_id])
-  @@index([company_id])
 }
 
 model email_templates {
@@ -1829,11 +1646,7 @@ model email_templates {
   mail_accounts   mail_accounts?               @relation(fields: [mail_account_id], references: [id], onUpdate: Restrict)
   attachments     email_template_attachments[]
 
-  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
-  company_id Int @default(1)
-
   @@index([mail_account_id])
-  @@index([company_id])
 }
 
 /// Files that ride along with every send of an email template. Same shape as
@@ -1849,11 +1662,7 @@ model email_template_attachments {
   created_at   DateTime?       @db.Timestamp(0)
   template     email_templates @relation(fields: [template_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
 
-  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
-  company_id Int @default(1)
-
   @@index([template_id])
-  @@index([company_id])
 }
 
 model failed_jobs {
@@ -1877,11 +1686,7 @@ model inter_board_listings {
   updated_at     DateTime?    @db.Timestamp(0)
   transactions   transactions @relation(fields: [transaction_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
 
-  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
-  company_id Int @default(1)
-
   @@index([transaction_id])
-  @@index([company_id])
 }
 
 model invoice_line_items {
@@ -1897,11 +1702,7 @@ model invoice_line_items {
   updated_at  DateTime? @db.Timestamp(0)
   invoices    invoices  @relation(fields: [invoice_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
 
-  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
-  company_id Int @default(1)
-
   @@index([invoice_id])
-  @@index([company_id])
 }
 
 model invoice_payments {
@@ -1916,11 +1717,7 @@ model invoice_payments {
   deleted_at DateTime? @db.Timestamp(0)
   invoices   invoices  @relation(fields: [invoice_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
 
-  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
-  company_id Int @default(1)
-
   @@index([invoice_id])
-  @@index([company_id])
 }
 
 model invoices {
@@ -1974,12 +1771,8 @@ model invoices {
   customers                customers?           @relation(fields: [customer_id], references: [id], onUpdate: Restrict)
   transactions             transactions?        @relation(fields: [transaction_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
 
-  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
-  company_id Int @default(1)
-
   @@index([customer_id])
   @@index([transaction_id])
-  @@index([company_id])
 }
 
 model job_batches {
@@ -2060,11 +1853,7 @@ model mail_accounts {
   email_templates email_templates[]
   inbound_emails  inbound_emails[]
 
-  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
-  company_id Int @default(1)
-
   @@index([user_id])
-  @@index([company_id])
 }
 
 /**
@@ -2111,13 +1900,9 @@ model inbound_emails {
   mail_account mail_accounts @relation(fields: [account_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
   leads        leads?        @relation(fields: [lead_id], references: [id], onDelete: SetNull, onUpdate: Restrict)
 
-  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
-  company_id Int @default(1)
-
   @@unique([account_id, uid])
   @@index([user_id])
   @@index([lead_id])
-  @@index([company_id])
   /// The list query: filter by owner (or by the area's primary account) and take the newest 30.
   /// Without these the planner sorts the whole matching set on every page load — measured with
   /// EXPLAIN on 2026-08-05. See migration 20260805200000_inbox_list_index.
@@ -2150,12 +1935,9 @@ model personal_access_tokens {
   updated_at     DateTime? @db.Timestamp(0)
 
   /// The brokerage this row belongs to. See src/core/tenancy.spec.ts for why this table carries one.
-  company_id Int              @default(1)
-  company    company_settings @relation(fields: [company_id], references: [id], onUpdate: NoAction)
 
   @@index([expires_at])
   @@index([tokenable_type, tokenable_id])
-  @@index([company_id])
 }
 
 model precon_terms {
@@ -2168,11 +1950,7 @@ model precon_terms {
   updated_at     DateTime?    @db.Timestamp(0)
   transactions   transactions @relation(fields: [transaction_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
 
-  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
-  company_id Int @default(1)
-
   @@unique([transaction_id, term_no])
-  @@index([company_id])
 }
 
 model sessions {
@@ -2183,12 +1961,8 @@ model sessions {
   payload       String  @db.Text
   last_activity Int
 
-  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
-  company_id Int @default(1)
-
   @@index([last_activity])
   @@index([user_id])
-  @@index([company_id])
 }
 
 model team_member_terms {
@@ -2199,11 +1973,7 @@ model team_member_terms {
   updated_at     DateTime?    @db.Timestamp(0)
   team_members   team_members @relation(fields: [team_member_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
 
-  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
-  company_id Int @default(1)
-
   @@unique([team_member_id, term_no])
-  @@index([company_id])
 }
 
 model team_members {
@@ -2226,14 +1996,10 @@ model team_members {
   team_member_terms team_member_terms[]
   transactions      transactions        @relation(fields: [transaction_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
 
-  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
-  company_id Int @default(1)
-
   @@index([transaction_id])
   // Declared so `migrate diff` stays empty: this index EXISTS in the database, created by a
   // migration. An index the schema does not mention is one `migrate dev` offers to drop.
   @@index([user_id])
-  @@index([company_id])
 }
 
 model transaction_delete_requests {
@@ -2253,11 +2019,7 @@ model transaction_delete_requests {
   updated_at        DateTime?    @db.Timestamp(0)
   transactions      transactions @relation(fields: [transaction_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
 
-  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
-  company_id Int @default(1)
-
   @@index([transaction_id, status])
-  @@index([company_id])
 }
 
 model transaction_edit_requests {
@@ -2276,11 +2038,7 @@ model transaction_edit_requests {
   updated_at        DateTime?    @db.Timestamp(0)
   transactions      transactions @relation(fields: [transaction_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
 
-  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
-  company_id Int @default(1)
-
   @@index([transaction_id])
-  @@index([company_id])
 }
 
 model transaction_message_reads {
@@ -2293,12 +2051,8 @@ model transaction_message_reads {
   transactions   transactions @relation(fields: [transaction_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
   users          users        @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
 
-  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
-  company_id Int @default(1)
-
   @@unique([transaction_id, user_id])
   @@index([user_id])
-  @@index([company_id])
 }
 
 model transaction_messages {
@@ -2315,11 +2069,7 @@ model transaction_messages {
   updated_at     DateTime?    @db.Timestamp(0)
   transactions   transactions @relation(fields: [transaction_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
 
-  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
-  company_id Int @default(1)
-
   @@index([transaction_id])
-  @@index([company_id])
 }
 
 /// One decision an administrator made about one agent change, kept for good.
@@ -2379,9 +2129,6 @@ model transaction_reviews {
   messages     transaction_review_messages[]
   attachments  transaction_review_attachments[]
 
-  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
-  company_id Int @default(1)
-
   @@index([transaction_id])
   @@index([created_at])
   @@index([resolution_status])
@@ -2389,7 +2136,6 @@ model transaction_reviews {
   // Declared so `migrate diff` stays empty: this index EXISTS in the database, created by a
   // migration. An index the schema does not mention is one `migrate dev` offers to drop.
   @@index([resolution_status, sla_stage])
-  @@index([company_id])
 }
 
 /// One message in the conversation about a single review item.
@@ -2415,12 +2161,8 @@ model transaction_review_messages {
   review      transaction_reviews              @relation(fields: [review_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
   attachments transaction_review_attachments[]
 
-  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
-  company_id Int @default(1)
-
   @@index([review_id])
   @@index([transaction_id])
-  @@index([company_id])
 }
 
 /// A file or screenshot attached to a review decision or to one of its messages.
@@ -2443,12 +2185,8 @@ model transaction_review_attachments {
   review  transaction_reviews?         @relation(fields: [review_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
   message transaction_review_messages? @relation(fields: [message_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
 
-  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
-  company_id Int @default(1)
-
   @@index([review_id])
   @@index([message_id])
-  @@index([company_id])
 }
 
 /// One reminder the scheduler sent, tried to send, or decided not to send.
@@ -2497,9 +2235,6 @@ model transaction_reminders {
 
   transactions transactions @relation(fields: [transaction_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
 
-  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
-  company_id Int @default(1)
-
   /// One reminder per occurrence per channel. The scheduler relies on this rather than on its own
   /// bookkeeping, so a second run on the same day is harmless by construction.
   @@unique([transaction_id, kind, scheduled_for, delivery_method], map: "transaction_reminders_txn_kind_day_method_key")
@@ -2507,7 +2242,6 @@ model transaction_reminders {
   @@index([kind, scheduled_for])
   @@index([recipient, seen_at])
   @@index([next_retry_at])
-  @@index([company_id])
 }
 
 model transaction_snapshots {
@@ -2521,11 +2255,7 @@ model transaction_snapshots {
   updated_at     DateTime?    @db.Timestamp(0)
   transactions   transactions @relation(fields: [transaction_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
 
-  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
-  company_id Int @default(1)
-
   @@index([transaction_id, module])
-  @@index([company_id])
 }
 
 model transaction_statuses {
@@ -2536,11 +2266,7 @@ model transaction_statuses {
   updated_at     DateTime?    @db.Timestamp(0)
   transactions   transactions @relation(fields: [transaction_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
 
-  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
-  company_id Int @default(1)
-
   @@unique([transaction_id, status])
-  @@index([company_id])
 }
 
 model transactions {
@@ -2660,8 +2386,6 @@ model transactions {
   trashed_row_items           trashed_row_items[]
 
   /// The brokerage this row belongs to. See src/core/tenancy.spec.ts for why this table carries one.
-  company_id Int              @default(1)
-  company    company_settings @relation(fields: [company_id], references: [id], onUpdate: NoAction)
 
   @@index([agent])
   @@index([type])
@@ -2675,7 +2399,6 @@ model transactions {
   // Declared so `migrate diff` stays empty: this index EXISTS in the database, created by a
   // migration. An index the schema does not mention is one `migrate dev` offers to drop.
   @@index([agent_user_id])
-  @@index([company_id])
 }
 
 model trashed_row_items {
@@ -2693,11 +2416,7 @@ model trashed_row_items {
   updated_at     DateTime?    @db.Timestamp(0)
   transactions   transactions @relation(fields: [transaction_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
 
-  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
-  company_id Int @default(1)
-
   @@index([transaction_id])
-  @@index([company_id])
 }
 
 model user_permissions {
@@ -2709,11 +2428,7 @@ model user_permissions {
   updated_at DateTime? @db.Timestamp(0)
   users      users     @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
 
-  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
-  company_id Int @default(1)
-
   @@unique([user_id, screen])
-  @@index([company_id])
 }
 
 model users {
@@ -2756,16 +2471,12 @@ model users {
   mfa_trusted_devices mfa_trusted_devices[]
   mfa_challenges      mfa_challenges[]
 
-  company_id Int              @default(1)
-  company    company_settings @relation(fields: [company_id], references: [id], onUpdate: NoAction)
-
   /// CASE-INSENSITIVE UNIQUENESS on `email` and `username` is enforced by two functional indexes
   /// Prisma cannot express here — `users_email_lower_key` and `users_username_lower_key`, added by
   /// migration `20260803000000_users_ci_unique`. The `@unique` attributes above are case-SENSITIVE,
   /// which let `PRIYA@X.CA` and `priya@x.ca` both exist as separate accounts. Do not drop either
   /// index believing `@unique` covers it — `users-validation.spec.ts` fails if they go missing.
 
-  @@index([company_id])
 }
 
 /// Which application modules a user may open.
@@ -2788,23 +2499,21 @@ model user_modules {
   updated_at  DateTime? @db.Timestamp(0)
   users       users     @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
 
-  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
-  company_id Int @default(1)
-
   /// One row per user per module — assigning twice is the same fact, not two.
   @@unique([user_id, module_name])
   @@index([module_name])
-  @@index([company_id])
 }
 
-/// What the company has bought.
+/// What the brokerage has bought — the gate that keeps CRM and Transaction Desk separately
+/// licensed.
 ///
-/// `company_id` refers to `company_settings.id`, which is the only company this deployment has (id 1).
-/// The column exists so the shape is right for selling to more than one brokerage later; it is NOT
-/// multi-tenancy, and no other table is scoped by it. Adding that is a separate, much larger change.
+/// EXACTLY ONE ROW, enforced by `subscriptions_singleton_key`, a unique index on the constant
+/// expression `(true)`. That replaced a unique on `company_id` when multi-brokerage tenancy was
+/// removed: dropping the column would have deleted the constraint rather than narrowing it, and a
+/// second row would silently decide module access for everyone, since the licence is read with
+/// `findFirst`. Prisma cannot express an expression index, so this comment records it.
 model subscriptions {
   id                  Int       @id @default(autoincrement())
-  company_id          Int       @unique
   crm_enabled         Boolean   @default(true)
   transaction_enabled Boolean   @default(true)
   plan                String?   @db.VarChar(64)
@@ -2822,7 +2531,6 @@ model subscriptions {
 /// not be deleted.
 model roles {
   id               Int                @id @default(autoincrement())
-  company_id       Int                @default(1)
   key              String             @db.VarChar(32)
   label            String             @db.VarChar(64)
   is_system        Boolean            @default(false)
@@ -2834,7 +2542,7 @@ model roles {
   updated_at       DateTime?          @db.Timestamp(0)
   role_permissions role_permissions[]
 
-  @@unique([company_id, key])
+  @@unique([key])
 }
 
 /// One grantable permission: a screen at a level.
@@ -2869,12 +2577,8 @@ model role_permissions {
   roles         roles       @relation(fields: [role_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
   permissions   permissions @relation(fields: [permission_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
 
-  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
-  company_id Int @default(1)
-
   @@unique([role_id, permission_id])
   @@index([permission_id])
-  @@index([company_id])
 }
 
 /// A CSV lead import, run in the background rather than inside the request that asked for it.
@@ -2921,12 +2625,9 @@ model lead_import_jobs {
   updated_at      DateTime? @db.Timestamp(0)
 
   /// The brokerage this row belongs to. See src/core/tenancy.spec.ts for why this table carries one.
-  company_id Int              @default(1)
-  company    company_settings @relation(fields: [company_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@index([status])
   @@index([requested_by_id])
-  @@index([company_id])
 }
 
 /**
@@ -2949,11 +2650,7 @@ model campaign_links {
   campaigns       campaigns         @relation(fields: [campaign_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
   campaign_clicks campaign_clicks[]
 
-  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
-  company_id Int @default(1)
-
   @@index([campaign_id])
-  @@index([company_id])
 }
 
 /**
@@ -2973,15 +2670,11 @@ model campaign_clicks {
   campaign_recipients campaign_recipients @relation(fields: [recipient_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
   campaign_links      campaign_links      @relation(fields: [link_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
 
-  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
-  company_id Int @default(1)
-
   @@unique([recipient_id, link_id], map: "campaign_clicks_recipient_link_key")
   // Declared so `migrate diff` stays empty: this index EXISTS in the database, created by a
   // migration. An index the schema does not mention is one `migrate dev` offers to drop.
   @@index([recipient_id])
   @@index([campaign_id])
-  @@index([company_id])
 }
 
 /// Redeemed OAuth `state` nonces, so a captured callback URL cannot be replayed.
@@ -3023,12 +2716,12 @@ model meta_api_budget {
 /// ============================================================================================
 /// TWO-FACTOR AUTHENTICATION
 ///
-/// Four per-user tables and one per-brokerage policy table. The per-user ones are DERIVED via
-/// `users` and carry a denormalised `company_id`, exactly like `user_permissions` — see
-/// src/core/tenancy.spec.ts, which fails if a new table arrives unclassified.
+/// Four per-user tables and one brokerage-wide policy table. The per-user ones are reached only
+/// through `users` — see src/core/data-ownership.spec.ts, which fails if a new table arrives
+/// unclassified. Every read is additionally filtered by `user_id`, which is what bounds them.
 ///
-/// They are read during the login challenge, which happens BEFORE a tenant is in context, so every
-/// access goes through `runAsSystem` the same way `AuthService.loadUser` already does.
+/// They are read during the login challenge, which happens before the caller is signed in, so none
+/// of them may depend on an authenticated session being present.
 /// ============================================================================================
 
 /// One row per enrolled factor. A person may hold a TOTP app, an email code and an SMS code at once.
@@ -3061,9 +2754,6 @@ model user_mfa_methods {
   created_at   DateTime  @db.Timestamp(0)
   updated_at   DateTime  @db.Timestamp(0)
 
-  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
-  company_id Int @default(1)
-
   @@unique([user_id, type])
   @@index([user_id])
 }
@@ -3079,9 +2769,6 @@ model mfa_recovery_codes {
   /// How it was spent, for the audit trail — the IP that redeemed it.
   used_ip    String?   @db.VarChar(64)
   created_at DateTime  @db.Timestamp(0)
-
-  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
-  company_id Int @default(1)
 
   @@index([user_id])
   @@index([code_hash])
@@ -3105,9 +2792,6 @@ model mfa_trusted_devices {
   revoked_at   DateTime? @db.Timestamp(0)
   created_at   DateTime  @db.Timestamp(0)
 
-  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
-  company_id Int @default(1)
-
   @@index([user_id])
   @@index([expires_at])
 }
@@ -3129,9 +2813,6 @@ model mfa_challenges {
   consumed_at DateTime? @db.Timestamp(0)
   created_at  DateTime  @db.Timestamp(0)
 
-  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
-  company_id Int @default(1)
-
   @@index([user_id])
   @@index([expires_at])
 }
@@ -3151,11 +2832,7 @@ model mfa_policies {
   created_at DateTime @db.Timestamp(0)
   updated_at DateTime @db.Timestamp(0)
 
-  company_id Int              @default(1)
-  company    company_settings @relation(fields: [company_id], references: [id], onUpdate: NoAction)
-
-  @@unique([company_id, role])
-  @@index([company_id])
+  @@unique([role])
 }
 
 /// In-app notifications the dispatcher delivers directly.
@@ -3180,11 +2857,7 @@ model notifications {
   read_at    DateTime? @db.Timestamp(0)
   created_at DateTime  @db.Timestamp(0)
 
-  /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
-  company_id Int @default(1)
-
   @@unique([user_id, dedupe_key])
   @@index([user_id, read_at])
   @@index([user_id, created_at])
-  @@index([company_id])
 }

@@ -31,7 +31,7 @@ const GoogleG = ({ size = 20 }: { size?: number }) => (
 const fmtSync = (iso: string | null): string => (iso ? iso.slice(0, 16).replace('T', ' ') : '');
 
 /**
- * Google Calendar via real OAuth, as a self-contained card. "Sign in with Google" fetches Google's
+ * Google Calendar via real OAuth, as a self-contained card. "Connect Google Calendar" fetches Google's
  * own consent-screen URL and sends the browser there; after the round-trip the server returns to
  * /app/account, and the hint stored below bounces the browser back here (see AccountSettingsPage).
  * Per-user; explains itself when the server has no Google credentials rather than failing silently.
@@ -99,7 +99,7 @@ export default function GoogleCalendarCard({ scope = 'crm' }: { scope?: Integrat
      * pull while type and status stay the CRM's, so any wording implying merged or reconciled
      * edits would overstate what happens.
      */
-    : `Sign in with Google — your events sync both ways between Google Calendar and the ${AREA_SHORT[scope]}.`;
+    : `Choose a Google account, review the requested access, and continue to connect your calendar. Your events then sync both ways between Google Calendar and the ${AREA_SHORT[scope]}.`;
 
   return (
     <div className="intg-card">
@@ -152,11 +152,23 @@ export default function GoogleCalendarCard({ scope = 'crm' }: { scope?: Integrat
           </>
         ) : (
           <button className="btn gsi" type="button" disabled={busy || (st ? !st.configured : true)} onClick={() => void connect()}>
-            <GoogleG size={18} /><span>{busy ? 'Starting…' : 'Sign in with Google'}</span>
+            <GoogleG size={18} /><span>{busy ? 'Starting…' : 'Connect Google Calendar'}</span>
           </button>
         )}
         {st && !st.configured && (
           <span className="muted" style={{ fontSize: 12 }}>Ask an admin to add the Google keys on the server.</span>
+        )}
+        {/*
+          Only before connecting, and only about choosing the ACCOUNT — the one part of Google's
+          flow an agent has to make a decision in. Nothing here names Google's buttons: those labels
+          differ between personal and Workspace accounts and change without notice, so instructions
+          built on them would be wrong for some agents on the day they were written.
+        */}
+        {st?.configured && !st.connected && (
+          <span className="muted" style={{ fontSize: 12 }}>
+            If the account is already signed in on this browser, simply select it. To connect a
+            different account, choose <strong>Use another account</strong>.
+          </span>
         )}
       </div>
     </div>

@@ -29,7 +29,6 @@ import { MfaPolicyService, type MfaObligation } from './mfa/mfa-policy.service';
 import { TrustedDeviceService } from './mfa/trusted-device.service';
 import { ChallengeDto, SendChallengeCodeDto } from './mfa/mfa.dto';
 
-import { setCompanyId } from '../core/tenant-context';
 
 /**
  * What `POST /api/login` answers with.
@@ -163,9 +162,6 @@ export class AuthController {
   ): Promise<{ user: AuthPayload }> {
     const user = await this.auth.register(dto.name, dto.email, dto.password, dto.password_confirmation);
     await this.startAuthenticatedSession(req, res, user.id);
-    // Bootstrap registration creates the very first account, so there is no guard and no tenant in
-    // context — same as login, and the payload reads tenant-owned rows.
-    setCompanyId(user.company_id);
     return { user: await this.auth.payloadFor(user) };
   }
 
@@ -193,7 +189,6 @@ export class AuthController {
      */
     if (await this.mfa.isEnabled(user.id) && !(await this.mfa.deviceIsTrusted(req, user.id))) {
       await this.startPendingSession(req, user.id);
-      setCompanyId(user.company_id);
       const view = await this.mfa.challengeView(user.id);
       // A code is sent straight away only when there is nothing else to try — somebody holding an
       // authenticator app should not also be texted every time they sign in.
@@ -204,10 +199,6 @@ export class AuthController {
     }
 
     await this.startAuthenticatedSession(req, res, user.id, dto.remember === true);
-    // Sign-in is the one authenticated action AuthGuard never sees, so nothing has named the tenant
-    // yet — and the payload below reads the subscription and this person's module assignments, both
-    // of which are tenant-owned. Naming it here is what every other request gets from the guard.
-    setCompanyId(user.company_id);
     return { user: await this.auth.payloadFor(user), mfa: await this.obligationFor(user) };
   }
 
@@ -239,11 +230,10 @@ export class AuthController {
     if (!user) throw new UnauthorizedException({ message: 'Unauthenticated.' });
 
     await this.startAuthenticatedSession(req, res, user.id, false);
-    setCompanyId(user.company_id);
 
     // Trusting the device is a choice, never a default — see TrustedDeviceService for what it costs.
     if (dto.trust_device === true) {
-      await this.devices.trust(req, res, user.id, user.company_id);
+      await this.devices.trust(req, res, user.id);
     }
 
     this.log.log(`User #${user.id} completed two-factor sign-in by ${dto.method}.`);

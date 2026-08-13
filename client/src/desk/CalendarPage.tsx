@@ -141,6 +141,8 @@ export default function CalendarPage() {
    * read as the page reloading itself.
    */
   const loadedOnce = useRef(false);
+  /** Drives the Refresh button's own label; separate from `loading`, which owns the first paint. */
+  const [refreshing, setRefreshing] = useState(false);
 
   // The span the grid is showing, including the trailing days of the neighbouring months. Computed
   // before `load` because the fetch is scoped to it.
@@ -159,9 +161,11 @@ export default function CalendarPage() {
    * A month either side is included so an event on the trailing days of the grid is still shown.
    */
   const load = useCallback(() => {
-    if (!gridFrom || !gridTo) return;
+    if (!gridFrom || !gridTo) return Promise.resolve();
     if (!loadedOnce.current) setLoading(true);
-    listEvents(area, { from: gridFrom, to: gridTo })
+    // Returned, not fired and forgotten: the Refresh button awaits this so it can show that
+    // something is happening. Every other caller ignores the promise exactly as before.
+    return listEvents(area, { from: gridFrom, to: gridTo })
       .then(setEvents)
       .catch((e) => toast(apiErrorMessage(e, 'Could not load the calendar'), 'bad'))
       .finally(() => { loadedOnce.current = true; setLoading(false); });
@@ -278,7 +282,21 @@ export default function CalendarPage() {
             <div className="muted" style={{ fontSize: 13 }}>Manage your appointments, showings and follow-ups.</div>
           </div>
           <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
-            <button className="btn ghost" onClick={() => load()}>↻ Refresh</button>
+            {/*
+              THE BUTTON ALWAYS WORKED — it has always called `load()`, which refetches the month.
+              What it did not do is SAY so. After the first fetch `loadedOnce` suppresses the
+              loading screen (deliberately: replacing the grid with "Loading calendar…" on every
+              save read as the page reloading itself), so a refresh that returned the same events
+              changed not one pixel. Clicking it and seeing nothing happen is indistinguishable from
+              a dead button, which is how it was reported.
+            */}
+            <button
+              className="btn ghost"
+              disabled={refreshing}
+              onClick={() => { setRefreshing(true); void load().finally(() => setRefreshing(false)); }}
+            >
+              {refreshing ? '↻ Refreshing…' : '↻ Refresh'}
+            </button>
             {canEdit && <button className="btn primary" onClick={() => setEditing('new')}>+ Add Event</button>}
           </div>
         </div>

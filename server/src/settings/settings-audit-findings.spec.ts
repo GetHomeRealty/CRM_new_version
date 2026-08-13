@@ -2,7 +2,6 @@ import { PrismaClient } from '@prisma/client';
 import type { PrismaService } from '../prisma/prisma.service';
 import { CrmSettingsService } from '../crm-settings/crm-settings.service';
 import { can } from '../core/authz';
-import { TENANT_ID } from '../core/tenant';
 import type { AuthUserRecord } from '../auth/auth.types';
 
 /**
@@ -64,7 +63,7 @@ describe('S-H4 — the CRM profile form refuses a name another account holds', (
     return tx.users.create({
       data: {
         name: `Settings Probe ${t}`, email: `sp-${t}@probe.test`, role: 'agent', status: 'Active',
-        password: 'x', company_id: TENANT_ID, created_at: now, updated_at: now, ...over,
+        password: 'x', created_at: now, updated_at: now, ...over,
       },
     });
   };
@@ -123,41 +122,47 @@ describe('S-H4 — the CRM profile form refuses a name another account holds', (
   });
 });
 
-describe('S-H5 — the CRM email settings are read for one brokerage, not for whichever row is first', () => {
+/**
+ * S-H5, restated after multi-brokerage tenancy was removed.
+ *
+ * THE ORIGINAL FINDING was that `crm_email_settings` was read with `findFirst({ orderBy: { id:
+ * 'asc' } })` and no tenant filter, so a second brokerage's row — if it happened to have the lower
+ * id — would silently govern both. The fix at the time was to filter the read on `TENANT_ID`.
+ *
+ * THAT FILTER IS GONE, and deliberately: with one brokerage it distinguished nothing. What replaced
+ * it is stronger than the filter ever was. `crm_email_settings_singleton_key`, a unique index on
+ * the constant expression `(true)`, makes a second row impossible to create in the first place — so
+ * "whichever row is first" has exactly one answer and the class of bug the finding described cannot
+ * recur, rather than being filtered around.
+ *
+ * These tests therefore assert the constraint rather than the filter. Testing the old way would
+ * mean seeding a second row to prove it is ignored, and seeding it is the thing that now fails.
+ */
+describe('S-H5 — the CRM email settings are a singleton, so there is no "first row" to get wrong', () => {
   const svc = (tx: PrismaService) => new CrmSettingsService(tx, noMailer, noAccounts);
 
-  it('ignores a row belonging to another brokerage', async () => {
+  it('refuses a second settings row outright', async () => {
     await inRollback(async (tx) => {
       const now = new Date();
-      // A second brokerage, which the schema already supports — company_settings IS the tenant.
-      const other = await tx.company_settings.create({ data: { name: `Other Brokerage ${tag()}` } });
+      // Ensure the one row exists, whatever the database arrived in.
+      const existing = await tx.crm_email_settings.findFirst({ select: { id: true } });
+      if (!existing) await tx.crm_email_settings.create({ data: { created_at: now, updated_at: now } });
 
-      // Its settings row is created FIRST in id order for this probe's purposes, which is exactly
-      // what `findFirst({ orderBy: { id: 'asc' } })` with no tenant filter would have latched onto
-      // had the other brokerage been seeded first.
-      await tx.crm_email_settings.create({
-        data: { smtp_host: 'other-brokerage.invalid', auto_send_enabled: false, company_id: other.id, created_at: now, updated_at: now },
-      });
-
-      const read = await svc(tx).getEmailSettings() as Record<string, unknown>;
-      expect(read.smtpHost).not.toBe('other-brokerage.invalid');
+      await expect(
+        tx.crm_email_settings.create({
+          data: { smtp_host: 'second-row.invalid', auto_send_enabled: false, created_at: now, updated_at: now },
+        }),
+      ).rejects.toThrow();
     });
   });
 
-  it('writes against this brokerage, leaving the other one alone', async () => {
+  it('reads back exactly what was written, from the only row there is', async () => {
     await inRollback(async (tx) => {
-      const now = new Date();
-      const other = await tx.company_settings.create({ data: { name: `Other Brokerage ${tag()}` } });
-      const foreign = await tx.crm_email_settings.create({
-        data: { smtp_host: 'untouched.invalid', company_id: other.id, created_at: now, updated_at: now },
-      });
-
       await svc(tx).saveEmailSettings(asUser('admin', 1, 'Root'), { smtpHost: 'ours.invalid' });
 
-      const after = await tx.crm_email_settings.findUnique({ where: { id: foreign.id } });
-      expect(after?.smtp_host).toBe('untouched.invalid');
-      const ours = await tx.crm_email_settings.findFirst({ where: { company_id: TENANT_ID }, orderBy: { id: 'asc' } });
-      expect(ours?.smtp_host).toBe('ours.invalid');
+      const read = await svc(tx).getEmailSettings() as Record<string, unknown>;
+      expect(read.smtpHost).toBe('ours.invalid');
+      expect(await tx.crm_email_settings.count()).toBe(1);
     });
   });
 });

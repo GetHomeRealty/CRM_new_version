@@ -5,8 +5,6 @@ import { schedulersEnabled, schedulerSkipReason } from '../common/schedulers';
 import { clusterTick } from '../redis/cluster-tick';
 import { RedisService } from '../redis/redis.service';
 import { CacheService } from '../redis/cache.service';
-import { forEachTenant } from '../core/tenant-context';
-import { allTenantIds } from '../core/tenants';
 
 /** Wait after boot before resuming, so recovery does not compete with startup. */
 const RESUME_DELAY_MS = 20_000;
@@ -111,7 +109,7 @@ export class CampaignResumeService implements OnModuleInit {
     if (this.dispatching) return;
     this.dispatching = true;
     try {
-      await forEachTenant(() => allTenantIds(this.prisma), () => this.dispatchDueForTenant());
+      await this.dispatchDueOnce();
     } catch (err) {
       this.log.error(`Scheduled campaign sweep failed: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
@@ -119,7 +117,7 @@ export class CampaignResumeService implements OnModuleInit {
     }
   }
 
-  private async dispatchDueForTenant(): Promise<void> {
+  private async dispatchDueOnce(): Promise<void> {
     const due = await this.prisma.campaigns.findMany({
       where: { status: 'scheduled', scheduled_for: { lte: new Date() } },
       select: { id: true, name: true, scheduled_for: true },
@@ -168,7 +166,7 @@ export class CampaignResumeService implements OnModuleInit {
     if (this.dispatching) return;
     this.dispatching = true;
     try {
-      await forEachTenant(() => allTenantIds(this.prisma), () => this.retryDeferredForTenant());
+      await this.retryDeferredOnce();
     } catch (err) {
       this.log.error(`Soft-bounce retry sweep failed: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
@@ -176,7 +174,7 @@ export class CampaignResumeService implements OnModuleInit {
     }
   }
 
-  private async retryDeferredForTenant(): Promise<void> {
+  private async retryDeferredOnce(): Promise<void> {
     // Which campaigns have someone due, rather than which recipients — the delivery pass picks up
     // every due recipient of a campaign in one go, so one row per campaign is all this needs.
     const due = await this.prisma.campaign_recipients.findMany({
@@ -201,16 +199,16 @@ export class CampaignResumeService implements OnModuleInit {
     }
   }
 
-  /** One pass per brokerage, inside that brokerage's context. */
+  /** One pass over every campaign left mid-flight by a restart. */
   async resumeAll(): Promise<void> {
     try {
-      await forEachTenant(() => allTenantIds(this.prisma), () => this.resumeForTenant());
+      await this.resumeStuck();
     } catch (err) {
       this.log.error(`Campaign resume sweep failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
-  async resumeForTenant(): Promise<void> {
+  async resumeStuck(): Promise<void> {
     const stuck = await this.prisma.campaigns.findMany({
       where: { status: 'sending' },
       select: { id: true, name: true },

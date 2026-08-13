@@ -6,9 +6,10 @@ import { MentionService } from '../transactions/mention.service';
 import { MessagesService } from '../transactions/messages.service';
 
 /**
- * Ownership, the authorization question tenant isolation cannot answer.
+ * Ownership, the authorization question no blanket filter can answer.
  *
- * The tenant filter stops one brokerage reading another's rows. It says nothing about one agent
+ * A tenant filter — which this application no longer has — stopped one brokerage reading another's
+ * rows. It said nothing about one agent
  * reading a colleague's, because both belong to the same company and the filter is satisfied.
  *
  * The chat thread is here by name because it was genuinely open: `GET /api/transactions/:id/messages`
@@ -37,14 +38,14 @@ async function scene(tx: PrismaService) {
   const now = new Date();
   const n = ++seq;
   const owner = await tx.users.create({
-    data: { name: `Owner ${n}`, email: `own-${Date.now()}-${n}@x.test`, password: 'x', role: 'agent', company_id: 1, created_at: now, updated_at: now },
+    data: { name: `Owner ${n}`, email: `own-${Date.now()}-${n}@x.test`, password: 'x', role: 'agent', created_at: now, updated_at: now },
   });
   const other = await tx.users.create({
-    data: { name: `Other ${n}`, email: `oth-${Date.now()}-${n}@x.test`, password: 'x', role: 'agent', company_id: 1, created_at: now, updated_at: now },
+    data: { name: `Other ${n}`, email: `oth-${Date.now()}-${n}@x.test`, password: 'x', role: 'agent', created_at: now, updated_at: now },
   });
   const admin = { id: 999000 + n, name: 'An Admin', role: 'admin' };
   const txn = await tx.transactions.create({
-    data: { agent: owner.name, trade_no: 'T' + n, type: 'Residential Buying', company_id: 1, created_at: now, updated_at: now },
+    data: { agent: owner.name, trade_no: 'T' + n, type: 'Residential Buying', created_at: now, updated_at: now },
   });
   return { owner, other, admin, txn };
 }
@@ -73,7 +74,7 @@ describe('an agent reaches their own work and nobody else\'s', () => {
   it('lets an agent split into the deal in', async () => {
     await inRollback(async (tx) => {
       const { other, txn } = await scene(tx);
-      await tx.team_members.create({ data: { transaction_id: txn.id, name: other.name, company_id: 1 } });
+      await tx.team_members.create({ data: { transaction_id: txn.id, name: other.name } });
       const access = new ResourceAccessService(tx);
       await expect(access.assertTransaction(asUser(other), txn.id)).resolves.toBeUndefined();
     });
@@ -83,9 +84,9 @@ describe('an agent reaches their own work and nobody else\'s', () => {
     await inRollback(async (tx) => {
       const { owner, other } = await scene(tx);
       const now = new Date();
-      const orphan = await tx.transactions.create({ data: { agent: null, trade_no: 'O' + Date.now(), type: 'Residential Buying', company_id: 1, created_at: now, updated_at: now } });
+      const orphan = await tx.transactions.create({ data: { agent: null, trade_no: 'O' + Date.now(), type: 'Residential Buying', created_at: now, updated_at: now } });
       // A team row on an unassigned deal grants nothing — there is no agent to be part of.
-      await tx.team_members.create({ data: { transaction_id: orphan.id, name: other.name, company_id: 1 } });
+      await tx.team_members.create({ data: { transaction_id: orphan.id, name: other.name } });
       const access = new ResourceAccessService(tx);
       await expect(access.assertTransaction(asUser(owner), orphan.id)).rejects.toThrow(ForbiddenException);
       await expect(access.assertTransaction(asUser(other), orphan.id)).rejects.toThrow(ForbiddenException);
@@ -120,7 +121,7 @@ describe('the chat thread is not readable by someone with no part in the deal', 
     await inRollback(async (tx) => {
       const { owner, other, txn } = await scene(tx);
       await tx.transaction_messages.create({
-        data: { transaction_id: txn.id, company_id: 1, body: 'commission dispute', created_at: new Date(), updated_at: new Date() },
+        data: { transaction_id: txn.id, body: 'commission dispute', created_at: new Date(), updated_at: new Date() },
       });
       const messages = new MessagesService(tx, new ResourceAccessService(tx), new MentionService(tx, new ResourceAccessService(tx)));
 
@@ -144,7 +145,7 @@ describe('the chat thread is not readable by someone with no part in the deal', 
   it('still lets the people on the deal talk', async () => {
     await inRollback(async (tx) => {
       const { owner, other, txn } = await scene(tx);
-      await tx.team_members.create({ data: { transaction_id: txn.id, name: other.name, company_id: 1 } });
+      await tx.team_members.create({ data: { transaction_id: txn.id, name: other.name } });
       const messages = new MessagesService(tx, new ResourceAccessService(tx), new MentionService(tx, new ResourceAccessService(tx)));
       await expect(messages.post(txn.id, asUser(owner), 'hello')).resolves.toHaveLength(1);
       await expect(messages.post(txn.id, asUser(other), 'hello back')).resolves.toHaveLength(2);

@@ -156,8 +156,9 @@ export class LeadsController {
     @CurrentUser() user: AuthUserRecord,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
+    @Query('search') search?: string,
   ): Promise<unknown> {
-    return this.leads.listDeleted(user, { page, limit });
+    return this.leads.listDeleted(user, { page, limit, search });
   }
 
   @Post('deleted/:id/restore')
