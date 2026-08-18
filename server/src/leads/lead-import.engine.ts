@@ -54,9 +54,30 @@ export const emptyTally = (): ImportTally => ({ imported: 0, tagged: 0, duplicat
 export interface ImportContext {
   tag: string;
   userName: string | null;
+  /** Who is running the import. Identifies THEIR book for duplicate matching. */
   userId: number | null;
-  /** Super-admins also own unattributed intake, exactly as the Leads module has it. */
-  userIsSuperAdmin?: boolean;
+  /**
+   * Who will OWN the imported rows: the importer when they are an agent, `null` — the brokerage —
+   * for everybody else. Computed once by `ownerAtIntake` and passed in, rather than re-derived
+   * here, so manual entry, this importer and the Meta sync cannot answer it differently.
+   *
+   * Distinct from `userId` on purpose: a manager importing a list owns nothing (the brokerage does)
+   * but still matches duplicates against what a manager can see.
+   */
+  ownerId?: number | null;
+  /**
+   * Whether the importer's data scope includes the leads the BROKERAGE owns.
+   *
+   * Decides which existing rows this import may recognise as "already here" and tag, rather than
+   * duplicate. It is the same `leads.brokerage-scope` the Leads screen applies — the importer must
+   * match against exactly the set the importer can see, or it creates a second copy of a row that
+   * was in front of them the whole time.
+   *
+   * Was `userIsSuperAdmin`, which named a role instead of asking for a scope and so gave the wrong
+   * answer for `manager` and `crm` the moment they gained brokerage leads: their imports would have
+   * duplicated every brokerage lead already on file.
+   */
+  userHasBrokerageScope?: boolean;
 }
 
 const parseJsonArray = (v: unknown): string[] => {
@@ -212,9 +233,10 @@ export class LeadImportEngine {
      */
     const keys = candidates.map((c) => c.key);
     const userId = ctx.userId;
-    // Unattributed intake belongs to the top tier, so a super-admin's import must see it here or it
-    // would create a duplicate of the very rows it is meant to recognise.
-    const claimsUnowned = ctx.userIsSuperAdmin === true || userId == null;
+    // The brokerage's own leads are in scope for a brokerage-scoped importer, so their import must
+    // match against them here or it would create a duplicate of the very rows it is meant to
+    // recognise. An importer with no user at all is the brokerage acting for itself.
+    const claimsUnowned = ctx.userHasBrokerageScope === true || userId == null;
     const existing = await this.prisma.$queryRaw<
       { id: number; email: string; tags: string | null; owner_user_id: number | null; assigned_to: number | null }[]
     >`
@@ -238,8 +260,8 @@ export class LeadImportEngine {
     const mine = (e: { owner_user_id: number | null; assigned_to: number | null }): boolean => {
       if (ctx.userId == null) return e.owner_user_id === null;
       if (e.owner_user_id === ctx.userId || e.assigned_to === ctx.userId) return true;
-      // Matches the Leads module: unattributed intake belongs to the top tier.
-      return ctx.userIsSuperAdmin === true && e.owner_user_id === null;
+      // Matches the Leads module: the brokerage's own leads are in a brokerage-scoped user's book.
+      return ctx.userHasBrokerageScope === true && e.owner_user_id === null;
     };
 
     const byKey = new Map(existing.map((e) => [String(e.email).toLowerCase(), e]));
@@ -319,7 +341,16 @@ export class LeadImportEngine {
         lead_response: vocab(pick('leadresponse', 'response'), LEAD_RESPONSE),
         tags: JSON.stringify(ctx.tag ? [ctx.tag] : []),
         created_by: ctx.userName,
-        owner_user_id: ctx.userId,
+        /*
+         * An agent's import fills their own book; anyone else is importing FOR the brokerage, and
+         * the rows land as brokerage leads. One rule, shared with manual entry and the Meta sync —
+         * see `ownerAtIntake`, which is what the job service passes in.
+         *
+         * An ABSENT `ownerId` falls back to the importer, which is what this did before the rule
+         * existed. Defaulting to `null` instead would mean a caller that simply forgot the field
+         * quietly published its rows to the whole brokerage — the wrong way for an omission to fail.
+         */
+        owner_user_id: ctx.ownerId === undefined ? ctx.userId : ctx.ownerId,
         created_at: now,
         updated_at: now,
       });

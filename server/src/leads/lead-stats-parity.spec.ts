@@ -21,15 +21,18 @@ import { DASHBOARD_LEAD_SOURCES, RECENT_LEAD_DAYS, WEBSITE_ENQUIRY_SOURCES } fro
  */
 
 const prisma = new PrismaClient();
+
+/** Either the client or a transaction handle — both implementations read through one of these. */
+type Client = Pick<PrismaClient, 'leads'>;
 afterAll(async () => { await prisma.$disconnect(); });
 
 /** The implementation as it stood before: one query per counter. */
-async function statsTheOldWay(where: Prisma.leadsWhereInput): Promise<Record<string, unknown>> {
+async function statsTheOldWay(where: Prisma.leadsWhereInput, db: Client = prisma): Promise<Record<string, unknown>> {
   const since = new Date(Date.now() - RECENT_LEAD_DAYS * 24 * 60 * 60 * 1000);
-  const count = (extra: Prisma.leadsWhereInput) => prisma.leads.count({ where: { AND: [where, extra] } });
+  const count = (extra: Prisma.leadsWhereInput) => db.leads.count({ where: { AND: [where, extra] } });
 
   const [total, noCalls, websiteEnquiries, recent, hot, warm, cold, mild, closed, ...sourceCounts] = await Promise.all([
-    prisma.leads.count({ where }),
+    db.leads.count({ where }),
     count({ lead_calls: { none: {} } }),
     count({ lead_source: { in: [...WEBSITE_ENQUIRY_SOURCES] } }),
     count({ created_at: { gte: since } }),
@@ -49,13 +52,13 @@ async function statsTheOldWay(where: Prisma.leadsWhereInput): Promise<Record<str
 }
 
 /** The implementation as it stands now, copied from `LeadsService.statsGrouped`. */
-async function statsTheNewWay(where: Prisma.leadsWhereInput): Promise<Record<string, unknown>> {
+async function statsTheNewWay(where: Prisma.leadsWhereInput, db: Client = prisma): Promise<Record<string, unknown>> {
   const since = new Date(Date.now() - RECENT_LEAD_DAYS * 24 * 60 * 60 * 1000);
-  const count = (extra: Prisma.leadsWhereInput) => prisma.leads.count({ where: { AND: [where, extra] } });
+  const count = (extra: Prisma.leadsWhereInput) => db.leads.count({ where: { AND: [where, extra] } });
 
   const [byStatusRows, bySourceRows, noCalls, recent] = await Promise.all([
-    prisma.leads.groupBy({ by: ['lead_status'], where, _count: { _all: true } }),
-    prisma.leads.groupBy({ by: ['lead_source'], where, _count: { _all: true } }),
+    db.leads.groupBy({ by: ['lead_status'], where, _count: { _all: true } }),
+    db.leads.groupBy({ by: ['lead_source'], where, _count: { _all: true } }),
     count({ lead_calls: { none: {} } }),
     count({ created_at: { gte: since } }),
   ]);
@@ -125,7 +128,23 @@ const CASES: { name: string; where: Prisma.leadsWhereInput }[] = [
 describe('the rewritten Leads counters return exactly the old numbers', () => {
   for (const c of CASES) {
     it(`agrees for: ${c.name}`, async () => {
-      const [oldWay, newWay] = await Promise.all([statsTheOldWay(c.where), statsTheNewWay(c.where)]);
+      /*
+       * BOTH IMPLEMENTATIONS READ ONE SNAPSHOT, at REPEATABLE READ.
+       *
+       * They used to run as separate top-level queries against live data, so any row committed
+       * between them made the two disagree — and the disagreement looked exactly like the counter
+       * bug this file exists to catch. It fired for real once a spec that commits outside a
+       * transaction joined the suite.
+       *
+       * A plain transaction is NOT enough: PostgreSQL's default READ COMMITTED gives every
+       * STATEMENT its own snapshot, so the two would still see different data inside one. Repeatable
+       * read pins the snapshot for the whole transaction, which is what "against the same rows"
+       * requires.
+       */
+      const [oldWay, newWay] = await prisma.$transaction(
+        (tx) => Promise.all([statsTheOldWay(c.where, tx), statsTheNewWay(c.where, tx)]),
+        { isolationLevel: 'RepeatableRead' },
+      );
       expect(newWay).toEqual(oldWay);
     }, 120_000);
   }

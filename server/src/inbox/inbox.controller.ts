@@ -1,10 +1,12 @@
 import { AreaGuard } from '../core/area.guard';
-import { BadRequestException, Body, Controller, ForbiddenException, Get, NotFoundException, Param, ParseIntPipe, Post, Put, Query, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, ForbiddenException, Get, NotFoundException, Param, ParseIntPipe, Post, Put, Query, Sse, UseGuards } from '@nestjs/common';
+import type { Observable } from 'rxjs';
 import { AuthGuard } from '../auth/guards/auth.guard';
 import { CurrentUser } from '../auth/decorators';
 import type { AuthUserRecord } from '../auth/auth.types';
 import { InboxService } from './inbox.service';
 import { ImapSyncService } from './imap-sync.service';
+import { InboxEventsService } from './inbox-events.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { AREA_LABEL, parseArea } from '../common/domain';
 
@@ -25,7 +27,33 @@ export class InboxController {
     private readonly inbox: InboxService,
     private readonly imap: ImapSyncService,
     private readonly prisma: PrismaService,
+    private readonly events: InboxEventsService,
   ) {}
+
+  /**
+   * A live stream of "your Inbox changed", as Server-Sent Events.
+   *
+   * WHAT IT IS FOR. The Inbox refreshed on a browser timer, on top of the server's own IMAP poll —
+   * so a message could wait for the sum of the two before appearing. `ImapIdleService` removes the
+   * first delay; this removes the second, by telling the browser instead of waiting to be asked.
+   *
+   * IT CARRIES NO MAIL. An event says only that an account of YOURS stored new messages, and the
+   * browser then refetches through `GET /api/account/inbox`, which applies every ownership and area
+   * rule it already applies. So this cannot become a second way to read a message, and it does not
+   * need its own authorization beyond knowing who is asking.
+   *
+   * SCOPED TO THE CALLER BY SHAPE. `stream()` takes the user id from the session and filters on it;
+   * there is no parameter naming a user, so one cannot be pointed at somebody else's mailbox.
+   *
+   * NO AREA PARAMETER, deliberately. An event names the account, and the client refetches the area
+   * it is showing — so a CRM tab and a Desk tab both learn that something arrived and each refreshes
+   * its own view. Filtering by area here would mean this endpoint deciding which mailbox belongs to
+   * which side of the product, which `InboxService` already decides and should keep deciding alone.
+   */
+  @Sse('stream')
+  stream(@CurrentUser() user: AuthUserRecord): Observable<{ type: string; data: string }> {
+    return this.events.stream(user.id ?? -1);
+  }
 
   @Get()
   list(

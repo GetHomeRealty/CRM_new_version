@@ -4,9 +4,10 @@ import { PrismaService } from '../prisma/prisma.service';
 import { PersonResolver } from '../core/person-resolver.service';
 import { AuditService, type ActingUser } from '../audit/audit.service';
 import { CommissionService } from './commission.service';
+import { PaymentCacheService } from './payment-cache.service';
 import { normalizeCommissionTxn } from './commission.loader';
 import { parseJsonObject, phpEmpty, phpFloat, phpJsonNormalize, round2, toFloat } from '../common/serialize';
-import { isInvoiceableType, isListingType, SECURED_DEAL_TYPES } from '../reference/transaction.constants';
+import { isInvoiceableType, isListingType, SECURED_DEAL_TYPES, statusSetProblem } from '../reference/transaction.constants';
 import { TradeNumberService } from './trade-number.service';
 import { TransactionLawyerReminderService } from './transaction-lawyer-reminder.service';
 import { TransactionReviewService } from './transaction-review.service';
@@ -15,13 +16,14 @@ import { TransactionInvoiceService } from '../invoices/transaction-invoice.servi
 import { parseJson } from '../common/serialize';
 import {
   transactionResource,
-  txnShowInclude,
+  txnShowIncludeFor,
   type LoadedTxn,
   type ResourceUser,
 } from './transaction.resource';
 import type { AuthUserRecord } from '../auth/auth.types';
 
 import { isAdminOrAbove, isAgent, isSuperAdmin } from '../core/authz';
+import { ownsTransaction, teamMemberIdentity } from '../common/transaction-scope';
 type Tx = Prisma.TransactionClient;
 
 const REVERT_BOOL = new Set(['comm_adjust_enabled', 'listing_adj_enabled', 'coop_adj_enabled', 'precon_net_of_hst', 'mls_verified', 'conditional_offer', 'inter_board_enabled']);
@@ -89,7 +91,32 @@ export class TransactionsWriteService {
     private readonly lawyerReminder: TransactionLawyerReminderService,
     private readonly reviews: TransactionReviewService,
     private readonly reminders: ReminderSweepService,
+    private readonly paymentCache: PaymentCacheService,
   ) {}
+
+  /**
+   * Refresh the deal's cached agent-payment figures.
+   *
+   * CALLED ON EVERY WRITE, not only on the ones that touch `admin_activities`. The cached values
+   * depend on the blob AND on the deal's agent names, which come from `team_members` through the
+   * commission engine — so a change to the team, to a split, to the deal type or to the price can
+   * move them without the blob being touched at all. Deciding per-field which writes matter would be
+   * a list to keep in step with the commission engine; recomputing one row is a few milliseconds.
+   *
+   * AWAITED, so a save followed immediately by opening a report cannot show the previous figures.
+   * Firing it off would make the write marginally faster and the read occasionally wrong.
+   *
+   * A FAILURE HERE MUST NOT FAIL THE WRITE. The blob is authoritative and `calc_at` is left as it
+   * was; the reports fall back to parsing it for this row, which is correct and merely slower.
+   * `verify-payment-cache.cjs` is what surfaces a row that has drifted this way.
+   */
+  private async refreshPaymentCache(txnId: number): Promise<void> {
+    try {
+      await this.paymentCache.recomputeOne(txnId);
+    } catch {
+      // Deliberately swallowed — see above. The service logs its own reason.
+    }
+  }
 
   /** Create a transaction (port of TransactionController::store). */
   async store(user: AuthUserRecord | null, body: Record<string, unknown>): Promise<{ data: Record<string, unknown> }> {
@@ -101,6 +128,15 @@ export class TransactionsWriteService {
     if (!isListing) {
       for (const f of ['comm_type', 'comm_value', 'price', 'offer_date', 'closing_date']) this.req(body, f);
     }
+    // The status the deal is being opened with has to exist for the type. Creation takes a single
+    // status, so the only rule that can bite here is the vocabulary one — but a deal created
+    // through the API with `status: 'Expired'` on a Residential Buying was accepted, and every
+    // later save inherited it.
+    if (body.status !== undefined && body.status !== null && body.status !== '') {
+      const problem = statusSetProblem(type, [String(body.status)]);
+      if (problem) throw new UnprocessableEntityException({ message: problem, errors: { status: [problem] } });
+    }
+
     const creatorAgent = user && isAgent(user) ? user.name : null;
     const commType = isListing ? '%' : String(body.comm_type ?? '%');
     const commValue = isListing ? 0 : toFloat(body.comm_value ?? 0);
@@ -277,8 +313,12 @@ export class TransactionsWriteService {
     const actor: ActingUser | null = user ? { id: user.id, name: user.name } : null;
 
     if (user && isAgent(user)) {
-      const isOwner = t.agent === user.name;
-      const isFullMember = (await this.prisma.team_members.findFirst({ where: { transaction_id: txnId, name: user.name, access: 'full' } })) !== null;
+      // Identity by id where the row has one — see `common/transaction-scope.ts`. A namesake must
+      // not inherit edit rights, and must not be able to write their own name over the agent field.
+      const isOwner = ownsTransaction(user, t);
+      const isFullMember = (await this.prisma.team_members.findFirst({
+        where: { transaction_id: txnId, access: 'full', ...teamMemberIdentity(user) },
+      })) !== null;
       if (!isOwner && !isFullMember) throw new ForbiddenException({ message: 'You do not have edit access to this transaction.' });
       if (isOwner) data.agent = user.name;
       else delete data.agent;
@@ -291,6 +331,35 @@ export class TransactionsWriteService {
     }
 
     const statuses = await this.statusList(this.prisma, txnId);
+
+    /*
+     * A STATUS SET THAT CANNOT BE TRUE IS REFUSED, and refused here — before the lock checks, so an
+     * impossible request is answered as impossible rather than as "you may not do that".
+     *
+     * Two guards, and the second is the one that makes this safe to deploy:
+     *
+     *   ONLY WHEN THE STATUSES ARE ACTUALLY CHANGING. A save that leaves them alone is not the place
+     *   to litigate them. Rows already holding a contradictory pair — which the database can contain,
+     *   because nothing stopped it until now — stay editable, so nobody is locked out of a deal they
+     *   have to fix. The contradiction is refused the moment somebody tries to CREATE one.
+     *
+     *   ONLY WHEN A SET IS SUBMITTED. `statuses` absent means the caller is not touching them.
+     *
+     * Deliberately not a transition table: which status may follow which is how a brokerage works,
+     * and that is a decision to be stated rather than inferred. This rejects only what is
+     * self-contradictory or does not exist for the type.
+     */
+    if (Object.prototype.hasOwnProperty.call(data, 'statuses')) {
+      const submitted = [...new Set((data.statuses as unknown[]).filter(Boolean).map(String))];
+      const changed = submitted.length !== statuses.length || submitted.some((s) => !statuses.includes(s));
+      if (changed) {
+        const problem = statusSetProblem(String(data.type ?? t.type), submitted);
+        if (problem) {
+          throw new UnprocessableEntityException({ message: problem, errors: { statuses: [problem] } });
+        }
+      }
+    }
+
     if (statuses.includes('Closed') && !isSuperAdmin(user)) {
       throw new ForbiddenException({ message: 'This transaction is Closed — only a Super Admin can edit it.' });
     }
@@ -427,7 +496,9 @@ export class TransactionsWriteService {
       }
     }
 
-    const full = (await this.prisma.transactions.findUnique({ where: { id: txnId }, include: txnShowInclude })) as LoadedTxn;
+    await this.refreshPaymentCache(txnId);
+
+    const full = (await this.prisma.transactions.findUnique({ where: { id: txnId }, include: txnShowIncludeFor(user) })) as unknown as LoadedTxn;
     const ctx = { user: user ? ({ id: user.id, role: user.role, name: user.name } as ResourceUser) : null, commission: this.commission, prisma: this.prisma };
     return { data: await transactionResource(full, ctx) };
   }
@@ -877,7 +948,9 @@ export class TransactionsWriteService {
   }
 
   private async loadResource(txnId: number, user: AuthUserRecord | null, inMemoryNulls?: readonly string[]): Promise<{ data: Record<string, unknown> }> {
-    const full = (await this.prisma.transactions.findUnique({ where: { id: txnId }, include: txnShowInclude })) as LoadedTxn;
+    // Every create returns through here, so this is where a new deal's cache is first built.
+    await this.refreshPaymentCache(txnId);
+    const full = (await this.prisma.transactions.findUnique({ where: { id: txnId }, include: txnShowIncludeFor(user) })) as unknown as LoadedTxn;
     // On create, Laravel returns the in-memory model (loadDetail loads relations but never
     // refreshes scalar attributes), so columns not passed to create() read as null in the
     // POST response even though the DB row carries their non-null default. Replicate that

@@ -12,10 +12,15 @@ import type { AuthUserRecord } from '../auth/auth.types';
 /**
  * What happens to an agent's work when they leave.
  *
- * THE RULE these defend: Meta leads are personal and stay with the agent who generated them;
- * everything else belongs to the brokerage and comes back to it. Deactivating an account
- * disconnects Meta, and reactivating does not reconnect it — a stored token from before a
- * departure is not one to trust.
+ * THE RULE these defend, and it is decided by OWNERSHIP rather than by how a lead arrived:
+ *
+ *   a lead the agent OWNS      stays theirs. Private, not inherited by the brokerage, not deleted,
+ *                              and not a reason the account cannot be switched off.
+ *   a BROKERAGE lead they were only their ASSIGNMENT is cleared. The lead stays in the CRM, still
+ *     working                  owned by the brokerage, back in the pool for somebody to take on.
+ *
+ * Deactivating an account also disconnects Meta, and reactivating does not reconnect it — a stored
+ * token from before a departure is not one to trust.
  *
  * Written against the real services and the real schema. The lesson from M-H8 is that a
  * reconstruction of a code path agrees with the design intent rather than with the code.
@@ -95,7 +100,7 @@ async function connectMeta(tx: PrismaService, userId: number, forms = 1): Promis
   }
 }
 
-/** `source` decides provenance: 'facebook_meta' is the agent's own, anything else is the brokerage's. */
+/** A lead this person OWNS. `source` records how it arrived and no longer decides whose it is. */
 async function giveLead(tx: PrismaService, userId: number, source: string): Promise<number> {
   const now = new Date();
   const l = await tx.leads.create({
@@ -113,14 +118,23 @@ describe('the checklist shown before deactivating', () => {
     await inRollback(async (tx) => {
       const agent = await makeUser(tx);
       await connectMeta(tx, agent.id, 2);
+      // Three leads they OWN — the source they arrived by no longer changes whose they are — and
+      // one brokerage lead they are merely working.
       await giveLead(tx, agent.id, META_LEAD_SOURCE);
       await giveLead(tx, agent.id, META_LEAD_SOURCE);
       await giveLead(tx, agent.id, 'manual');
+      const now = new Date();
+      await tx.leads.create({
+        data: {
+          name: `Pool ${tag()}`, email: `pool-${tag()}@example.test`,
+          owner_user_id: null, assigned_to: agent.id, created_at: now, updated_at: now,
+        },
+      });
 
       const c = await offboardingFor(tx).checklist(superAdmin, agent.id);
 
       expect(c.meta).toEqual({ connected: true, forms: 2 });
-      expect(c.leads).toEqual({ total: 3, personal: 2, brokerage: 1 });
+      expect(c.leads).toEqual({ total: 4, personal: 3, brokerage: 1 });
       // Counts, never content — the same rule as LeadTransferService.books().
       expect(JSON.stringify(c)).not.toContain('@example.test');
     });
@@ -151,24 +165,70 @@ describe('deactivating an agent', () => {
     });
   });
 
-  it('returns their brokerage leads to the brokerage, where an admin can see and reassign them', async () => {
+  it('releases the ASSIGNMENT on a brokerage lead they were working, and keeps it in the CRM', async () => {
     await inRollback(async (tx) => {
       const agent = await makeUser(tx);
-      const walkIn = await giveLead(tx, agent.id, 'manual');
-      const imported = await giveLead(tx, agent.id, 'import');
+      const now = new Date();
+      // A brokerage lead — owned by nobody — that this agent was working.
+      const brokerageLead = await tx.leads.create({
+        data: {
+          name: `Brokerage ${tag()}`, email: `brokerage-${tag()}@example.test`,
+          owner_user_id: null, assigned_to: agent.id, created_at: now, updated_at: now,
+        },
+      });
 
       await offboardingFor(tx).depart(agent.id, agent.name);
 
-      for (const id of [walkIn, imported]) {
-        const lead = await tx.leads.findUnique({ where: { id } });
-        // Unowned is what a Super Admin's unattributed-intake view shows.
-        expect(lead?.owner_user_id).toBeNull();
-        expect(lead?.assigned_to).toBeNull();
+      const lead = await tx.leads.findUnique({ where: { id: brokerageLead.id } });
+      // Still there, still the brokerage's, and back in the pool for somebody to pick up.
+      expect(lead).not.toBeNull();
+      expect(lead?.deleted_at).toBeNull();
+      expect(lead?.owner_user_id).toBeNull();
+      expect(lead?.assigned_to).toBeNull();
+    });
+  });
+
+  /**
+   * THE CONVERSION THAT USED TO HAPPEN HERE, AND MUST NOT.
+   *
+   * `returnToBrokerage` ran `owner_user_id = NULL` over every non-Meta lead the leaver owned, so an
+   * agent's own clients became brokerage leads on the day they left — visible from that moment to
+   * every brokerage role. Ownership is now decided at intake, so there is nothing to convert, and
+   * converting anyway would publish the one category that is genuinely private.
+   *
+   * Asserted for a lead with NO source recorded on purpose: that is precisely the row the old
+   * `source != 'facebook_meta'` predicate treated as the brokerage's.
+   */
+  it('NEVER converts a lead the agent owns into a brokerage lead — whatever its source', async () => {
+    await inRollback(async (tx) => {
+      const agent = await makeUser(tx);
+      const now = new Date();
+      const mk = async (source: string | null) => tx.leads.create({
+        data: {
+          name: `Private ${tag()}`, email: `private-${tag()}@example.test`,
+          owner_user_id: agent.id, assigned_to: agent.id, source,
+          created_at: now, updated_at: now,
+        },
+      });
+      const noSource = await mk(null);
+      const manual = await mk('manual');
+      const imported = await mk('import');
+      const meta = await mk(META_LEAD_SOURCE);
+
+      await offboardingFor(tx).depart(agent.id, agent.name);
+
+      for (const lead of [noSource, manual, imported, meta]) {
+        const after = await tx.leads.findUnique({ where: { id: lead.id } });
+        // Named in the failure output via the loop variable rather than a message argument —
+        // Jest's `expect` takes only the value.
+        expect({ source: lead.source, owner: after?.owner_user_id })
+          .toEqual({ source: lead.source, owner: agent.id });
+        expect(after?.deleted_at).toBeNull();   // and it is not deleted either
       }
     });
   });
 
-  it('leaves their Meta leads exactly where they are — those are personal', async () => {
+  it('says plainly in the summary what stayed with them', async () => {
     await inRollback(async (tx) => {
       const agent = await makeUser(tx);
       const personal = await giveLead(tx, agent.id, META_LEAD_SOURCE);
@@ -177,52 +237,37 @@ describe('deactivating an agent', () => {
 
       const lead = await tx.leads.findUnique({ where: { id: personal } });
       expect(lead?.owner_user_id).toBe(agent.id);
-      expect(lead?.assigned_to).toBe(agent.id);
-      expect(summary).toContain('1 Meta lead kept with them');
+      expect(summary).toContain('1 private lead left with them, still theirs');
     });
   });
 
-  /**
-   * A lead with no source recorded is the brokerage's, not the agent's.
-   *
-   * This is the case that `source: { not: 'facebook_meta' }` gets wrong: in SQL a comparison
-   * against NULL is NULL rather than true, so a lead with no source failed the test, counted as
-   * personal, and would have stayed with the departing agent for ever. 18 live leads in the
-   * development database had a NULL source when this was found.
-   */
-  it('returns leads that have no source recorded — absence of evidence is not personal ownership', async () => {
+  it('reports the split on the checklist by OWNERSHIP, not by source', async () => {
     await inRollback(async (tx) => {
       const agent = await makeUser(tx);
       const now = new Date();
-      const noSource = await tx.leads.create({
-        data: {
-          name: `Lead ${tag()}`, email: `lead-${tag()}@example.test`,
-          owner_user_id: agent.id, assigned_to: agent.id, created_at: now, updated_at: now,
-        },
-      });
-      expect(noSource.source).toBeNull();
-
-      const { returned, kept } = await new LeadTransferService(tx, noAudit as never).returnToBrokerage(agent.id);
-
-      expect(returned).toBe(1);
-      expect(kept).toBe(0);
-      expect((await tx.leads.findUnique({ where: { id: noSource.id } }))?.owner_user_id).toBeNull();
-    });
-  });
-
-  it('counts a lead with no source as the brokerage\'s on the checklist too', async () => {
-    await inRollback(async (tx) => {
-      const agent = await makeUser(tx);
-      const now = new Date();
+      // Two of their own (one with no source at all), one brokerage lead they are working.
       await tx.leads.create({
         data: {
-          name: `Lead ${tag()}`, email: `lead-${tag()}@example.test`,
+          name: `Own A ${tag()}`, email: `own-a-${tag()}@example.test`,
           owner_user_id: agent.id, created_at: now, updated_at: now,
+        },
+      });
+      await tx.leads.create({
+        data: {
+          name: `Own B ${tag()}`, email: `own-b-${tag()}@example.test`,
+          owner_user_id: agent.id, source: META_LEAD_SOURCE, created_at: now, updated_at: now,
+        },
+      });
+      await tx.leads.create({
+        data: {
+          name: `Pool ${tag()}`, email: `pool-${tag()}@example.test`,
+          owner_user_id: null, assigned_to: agent.id, created_at: now, updated_at: now,
         },
       });
 
       const c = await offboardingFor(tx).checklist(superAdmin, agent.id);
-      expect(c.leads).toEqual({ total: 1, personal: 0, brokerage: 1 });
+      // `personal` is everything they OWN; `brokerage` is what they were merely working.
+      expect(c.leads).toEqual({ total: 3, personal: 2, brokerage: 1 });
     });
   });
 
@@ -259,16 +304,26 @@ describe('deleting an agent rather than deactivating them', () => {
     });
   });
 
-  it('reports nothing personal once only brokerage leads remain, so the delete may proceed', async () => {
+  /**
+   * `leadCounts` splits by OWNERSHIP, which is what the delete path needs to know.
+   *
+   * These used to assert the opposite — that a manual or source-less lead an agent owned counted as
+   * the BROKERAGE's — because ownership was then inferred from `source`. Under the intake rule a
+   * lead an agent owns is theirs whatever its source, so they now assert `personal`.
+   *
+   * That is the honest input to the delete guard: permanently removing the account would strand
+   * these rows, and the administrator is told so rather than having the leads quietly reassigned to
+   * the brokerage to make the deletion succeed.
+   */
+  it('counts everything the agent OWNS as personal, whatever its source', async () => {
     await inRollback(async (tx) => {
       const agent = await makeUser(tx);
       await giveLead(tx, agent.id, 'manual');
-      const counts = await offboardingFor(tx).leadCounts(agent.id);
-      expect(counts).toEqual({ personal: 0, brokerage: 1 });
+      expect(await offboardingFor(tx).leadCounts(agent.id)).toEqual({ personal: 1, brokerage: 0 });
     });
   });
 
-  it('counts a lead with no source as the brokerage\'s here too, not as personal', async () => {
+  it('counts a source-less lead as theirs too — no source is not the brokerage making a claim', async () => {
     await inRollback(async (tx) => {
       const agent = await makeUser(tx);
       const now = new Date();
@@ -278,10 +333,24 @@ describe('deleting an agent rather than deactivating them', () => {
           owner_user_id: agent.id, created_at: now, updated_at: now,
         },
       });
-      // If this said personal:1 the delete would be refused for a lead nobody owns personally.
+      expect(await offboardingFor(tx).leadCounts(agent.id)).toEqual({ personal: 1, brokerage: 0 });
+    });
+  });
+
+  it('counts a brokerage lead they are merely working under `brokerage`', async () => {
+    await inRollback(async (tx) => {
+      const agent = await makeUser(tx);
+      const now = new Date();
+      await tx.leads.create({
+        data: {
+          name: `Pool ${tag()}`, email: `pool-${tag()}@example.test`,
+          owner_user_id: null, assigned_to: agent.id, created_at: now, updated_at: now,
+        },
+      });
       expect(await offboardingFor(tx).leadCounts(agent.id)).toEqual({ personal: 0, brokerage: 1 });
     });
   });
+
 });
 
 describe('reactivating an agent', () => {
@@ -408,15 +477,23 @@ describe('transferring a book by hand', () => {
    * hands the pooled one to the successor. There is no longer a step that takes leads directly from
    * one person to another, which is the rule this sequence has to satisfy.
    */
-  it('routes a departing agent\'s brokerage lead to the successor via the pool, never directly', async () => {
+  it("routes a departing person's BROKERAGE lead to the successor via the pool, never directly", async () => {
     await inRollback(async (tx) => {
       const leaving = await makeUser(tx);
       const successor = await makeUser(tx);
-      const brokerage = await giveLead(tx, leaving.id, 'manual');
-      const personal = await giveLead(tx, leaving.id, META_LEAD_SOURCE);
+      const now = new Date();
+      // What actually routes: a brokerage lead the leaver was WORKING.
+      const brokerage = await tx.leads.create({
+        data: {
+          name: `Pool ${tag()}`, email: `pool-${tag()}@example.test`,
+          owner_user_id: null, assigned_to: leaving.id, created_at: now, updated_at: now,
+        },
+      });
+      // And one of their own, which must take no part in any of this.
+      const personal = await giveLead(tx, leaving.id, 'manual');
       const transfers = new LeadTransferService(tx, noAudit as never);
 
-      // Before deactivation there is nothing to hand over: both leads are in somebody's book.
+      // Assigned, so not in the pool yet.
       const poolBefore = (await transfers.books(superAdmin)).available;
 
       await offboardingFor(tx).depart(leaving.id, leaving.name);
@@ -425,35 +502,89 @@ describe('transferring a book by hand', () => {
       const r = await transfers.transfer(superAdmin, successor.id);
       expect(r.moved).toBeGreaterThanOrEqual(1);
 
-      expect((await tx.leads.findUnique({ where: { id: brokerage } }))?.owner_user_id).toBe(successor.id);
-      // Untouched throughout — it never entered the pool, so Lead Books never saw it.
+      /*
+       * The successor is the ASSIGNEE and the brokerage is still the owner — Lead Books hands work
+       * over, it does not hand ownership over. The routing this test exists to prove, via the pool
+       * rather than person-to-person, is what the two `books()` assertions above established.
+       */
+      const routed = await tx.leads.findUnique({ where: { id: brokerage.id } });
+      expect(routed?.assigned_to).toBe(successor.id);
+      expect(routed?.owner_user_id).toBeNull();
+      // Their own lead never entered the pool and never changed hands.
       expect((await tx.leads.findUnique({ where: { id: personal } }))?.owner_user_id).toBe(leaving.id);
     });
   });
 
   /**
-   * The departure path and Lead Books meet here, and the join is the point.
+   * THE MIXED DEPARTURE, end to end — the case the business asked to be pinned exactly.
    *
-   * Deactivating returns the agent's brokerage leads to the pool unowned; Lead Books can then hand
-   * them on. It cannot reach anything still in a book — which, after `depart`, is exactly their
-   * personal Meta leads.
+   * An agent leaves holding both kinds of lead at once. Each kind must go its own way in the same
+   * operation, and the account must switch off regardless of what is left behind.
    */
-  it('puts a departing agent\'s brokerage leads into the pool, and none of their personal ones', async () => {
+  it('releases the brokerage leads into the pool and leaves every private one alone', async () => {
     await inRollback(async (tx) => {
       const agent = await makeUser(tx);
-      await giveLead(tx, agent.id, 'manual');
-      await giveLead(tx, agent.id, META_LEAD_SOURCE);
-      await giveLead(tx, agent.id, META_LEAD_SOURCE);
+      const now = new Date();
+
+      // 5 the agent OWNS — their private book. Deliberately mixed sources, because source must not
+      // matter any more: two arrived through their own Meta ads, one by import, two by hand.
+      const privateIds: number[] = [];
+      for (const source of [META_LEAD_SOURCE, META_LEAD_SOURCE, 'import', 'manual', null]) {
+        const l = await tx.leads.create({
+          data: {
+            name: `Private ${tag()}`, email: `private-${tag()}@example.test`,
+            owner_user_id: agent.id, assigned_to: agent.id, source,
+            created_at: now, updated_at: now,
+          },
+        });
+        privateIds.push(l.id);
+      }
+
+      // 10 the BROKERAGE owns that this agent was working.
+      const brokerageIds: number[] = [];
+      for (let i = 0; i < 10; i += 1) {
+        const l = await tx.leads.create({
+          data: {
+            name: `Brokerage ${tag()}`, email: `brok-${tag()}@example.test`,
+            owner_user_id: null, assigned_to: agent.id, created_at: now, updated_at: now,
+          },
+        });
+        brokerageIds.push(l.id);
+      }
 
       const transfers = new LeadTransferService(tx, noAudit as never);
-      const before = (await transfers.books(superAdmin)).available;
+      const poolBefore = (await transfers.books(superAdmin)).available;
 
       await offboardingFor(tx).depart(agent.id, agent.name);
 
-      const after = await transfers.books(superAdmin);
-      expect(after.available).toBe(before + 1);          // the one brokerage lead
-      // The two Meta leads stayed with them, so Lead Books cannot see or move them.
-      expect(await tx.leads.count({ where: { owner_user_id: agent.id, source: META_LEAD_SOURCE } })).toBe(2);
+      // ---- the 10 brokerage leads --------------------------------------------------------------
+      const brokerageAfter = await tx.leads.findMany({
+        where: { id: { in: brokerageIds } },
+        select: { owner_user_id: true, assigned_to: true, deleted_at: true },
+      });
+      expect(brokerageAfter).toHaveLength(10);                                   // none deleted
+      expect(brokerageAfter.every((l) => l.owner_user_id === null)).toBe(true);  // still the brokerage's
+      expect(brokerageAfter.every((l) => l.assigned_to === null)).toBe(true);    // assignment released
+      expect(brokerageAfter.every((l) => l.deleted_at === null)).toBe(true);     // still live in the CRM
+      // And they are genuinely back in the pool, ready to hand on.
+      expect((await transfers.books(superAdmin)).available).toBe(poolBefore + 10);
+
+      // ---- the 5 private leads -----------------------------------------------------------------
+      const privateAfter = await tx.leads.findMany({
+        where: { id: { in: privateIds } },
+        select: { owner_user_id: true, deleted_at: true },
+      });
+      expect(privateAfter).toHaveLength(5);
+      // Never converted to brokerage ownership, whatever their source, and never deleted.
+      expect(privateAfter.every((l) => l.owner_user_id === agent.id)).toBe(true);
+      expect(privateAfter.every((l) => l.deleted_at === null)).toBe(true);
+      // So Lead Books still cannot see or move any of them.
+      expect(privateAfter.filter((l) => l.owner_user_id === null)).toHaveLength(0);
+
+      // ---- and the account itself --------------------------------------------------------------
+      // `depart` neither threw nor refused: the five private leads did not hold the departure up.
+      await tx.users.update({ where: { id: agent.id }, data: { status: 'Inactive' } });
+      expect((await tx.users.findUnique({ where: { id: agent.id } }))?.status).toBe('Inactive');
     });
   });
 

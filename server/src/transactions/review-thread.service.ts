@@ -3,6 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { isAdminOrAbove, isAgent } from '../core/authz';
 import { toDateTimeString } from '../common/serialize';
 import type { AuthUserRecord } from '../auth/auth.types';
+import { ownsTransaction, teamMemberIdentity } from '../common/transaction-scope';
 
 /**
  * The conversation about one review item, and the evidence attached to it.
@@ -166,15 +167,17 @@ export class ReviewThreadService {
   private async reviewFor(user: AuthUserRecord | null, reviewId: number) {
     const review = await this.prisma.transaction_reviews.findUnique({
       where: { id: reviewId },
-      select: { id: true, transaction_id: true, first_response_at: true, transactions: { select: { agent: true, deleted_at: true } } },
+      select: { id: true, transaction_id: true, first_response_at: true, transactions: { select: { agent: true, agent_user_id: true, deleted_at: true } } },
     });
     if (!review || review.transactions?.deleted_at) throw new NotFoundException({ message: 'Review not found.' });
     if (!user || !isAgent(user)) return review;
 
-    const name = user.name ?? '';
+    // Identity by id where the row has one — see `common/transaction-scope.ts`.
     const allowed =
-      review.transactions?.agent === name ||
-      (await this.prisma.team_members.findFirst({ where: { transaction_id: review.transaction_id, name } })) !== null;
+      (!!review.transactions && ownsTransaction(user, review.transactions)) ||
+      (await this.prisma.team_members.findFirst({
+        where: { transaction_id: review.transaction_id, ...teamMemberIdentity(user) },
+      })) !== null;
     if (!allowed) throw new ForbiddenException({ message: 'You do not have access to this transaction.' });
     return review;
   }

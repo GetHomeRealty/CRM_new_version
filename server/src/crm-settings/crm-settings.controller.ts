@@ -7,7 +7,7 @@ import { CurrentUser, Screen } from '../auth/decorators';
 import type { AuthUserRecord } from '../auth/auth.types';
 import { CrmSettingsService } from './crm-settings.service';
 import { CrmAdvancedEmailService, type PromotionalOffer, type ReferralCode } from './crm-advanced-email.service';
-import { CrmTriggersService } from './crm-triggers.service';
+
 import { SEASONS, BROADCAST_TYPES } from './crm-settings.constants';
 
 const str = (v: unknown): string => String(v ?? '').trim();
@@ -26,7 +26,6 @@ export class CrmSettingsController {
   constructor(
     private readonly settings: CrmSettingsService,
     private readonly email: CrmAdvancedEmailService,
-    private readonly triggers: CrmTriggersService,
   ) {}
 
   /** Vocabularies for the forms, so the client never hardcodes a list the server validates. */
@@ -120,9 +119,11 @@ export class CrmSettingsController {
       case 'updateSettings':
         return this.settings.saveEmailSettings(user, data);
 
-      case 'sendWeddingEmail':
-        return this.email.sendWeddingCongratulations(str(data.leadName), str(data.leadEmail), str(data.weddingDate), user, signature);
-
+      /*
+       * `sendWeddingEmail` was here and has been retired with the rest of Wedding Congratulations.
+       * It is not left as a no-op returning success: falling through to `default` means a stale
+       * client gets "Invalid action" rather than being told an email was sent that was not.
+       */
       case 'sendSeasonalEmail':
         return this.email.sendSeasonalWishes(str(data.leadName), str(data.leadEmail), str(data.season), str(data.year), user, signature);
 
@@ -155,31 +156,22 @@ export class CrmSettingsController {
     }
   }
 
-  // ------------------------------------------------------------- triggers
-  /**
-   * A PERSON'S OWN CRM email triggers.
+  /*
+   * ------------------------------------------------------------- triggers
    *
-   * Gated on `triggers`, not `settings` — the permission the route and the sidebar entry already
-   * ask for. They asked for `triggers` while this screen's data asked for `settings`, so agent,
-   * accounting, documentation and crm were all offered a Triggers item in the navigation and met a
-   * 403 behind it (CRM › Triggers audit, T-H1). One permission for one screen.
+   * `GET|PUT /api/crm-settings/triggers` stood here, serving the CRM Triggers screen with a
+   * person's own switches. Both are gone with that screen.
    *
-   * Safe to widen because the rows are per-user: `crm_trigger_settings` is one row per person, and
-   * neither endpoint takes a user id from the caller. Whoever is signed in reads and writes their
-   * own switches and cannot reach anybody else's — an agent turning off promotional email changes
-   * what THEY send and nothing else.
+   * THE SERVICE BEHIND THEM IS NOT GONE, and that distinction is the whole shape of this cleanup.
+   * `CrmTriggersService` still resolves every CRM email's three levels — brokerage kill switch,
+   * personal choice, brokerage default — and still owns the `crm_trigger_settings` rows for Welcome
+   * and the three manual emails. What changed is that the only door into it from a browser is now
+   * `PUT /api/crm-communications/preferences/:key/:channel`, which calls the same `saveForUser`,
+   * merges rather than replaces, and writes the same audit rows.
+   *
+   * The `triggers` SCREEN PERMISSION is deliberately still in `SCREENS` and still granted: it gates
+   * Transaction Desk → Triggers, which is untouched.
    */
-  @Get('triggers')
-  @Screen('triggers', 'view')
-  myTriggers(@CurrentUser() user: AuthUserRecord): Promise<unknown> {
-    return this.triggers.getForUser(user);
-  }
-
-  @Put('triggers')
-  @Screen('triggers', 'edit')
-  saveMyTriggers(@CurrentUser() user: AuthUserRecord, @Body() body: Record<string, unknown>): Promise<unknown> {
-    return this.triggers.saveForUser(user, body ?? {});
-  }
 
   @Get('referral-codes')
   @Screen('settings', 'view')

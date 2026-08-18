@@ -6,8 +6,8 @@ import { LeadNotificationService } from './lead-notification.service';
 import { CrmEventNotifier } from '../notifications/crm-events.service';
 import { normalizePhone } from '../meta/meta-lead-mapper';
 import type { AuthUserRecord } from '../auth/auth.types';
-import { can, isSuperAdmin } from '../core/authz';
-import { leadScopeWhere } from '../common/lead-scope';
+import { can } from '../core/authz';
+import { hasBrokerageLeadScope, isBrokerageLead, leadScopeWhere, ownerAtIntake } from '../common/lead-scope';
 import { throwValidation } from '../common/laravel-exceptions';
 import {
   EMAIL_SHAPE, FEED_PER_PAGE, LEADS_PER_PAGE, MAX_PER_PAGE, MAX_EXPORT_ROWS, NONE_FILTER_VALUE,
@@ -69,35 +69,24 @@ export class LeadsService {
 
   // --------------------------------------------------------------- scoping
   /**
-   * Leads are private to their owner, for EVERY role including admins and super-admins. A user
-   * sees a lead only if they created it or it was assigned to them — nobody, however senior, sees
-   * another person's book. The one shared case is a brokerage-assigned lead: the admin who
-   * created it (owner) and the agent it was handed to (assignee) both see that one lead, which is
-   * what makes assignment work.
+   * What this person may see. An AGENT'S BOOK IS CONFIDENTIAL; the brokerage's own leads are not.
    *
-   * The deal core — transactions, invoices, reports, commissions — is deliberately NOT scoped
-   * this way; those stay shared across the brokerage. Only the personal CRM modules are private.
-   */
-  /**
-   * What this person may see. An agent's book is confidential.
+   * Two categories, told apart by `owner_user_id` — see `common/lead-scope.ts` for the full model:
    *
-   * Everybody — agent, manager, broker, administrator alike — sees the leads they own and the leads
-   * someone has assigned them. Nobody sees anyone else's. A manager does not get to read their
-   * agents' pipelines, and one agent never sees another's until the lead is handed over, at which
-   * point both work it together.
+   *   owned by a person   that person's private lead. No role reads it, at any rank, unless it is
+   *                       assigned to them. A manager does not get to read their agents' pipelines.
+   *   owned by nobody     the BROKERAGE's lead — central intake, brokerage imports, website and
+   *                       campaign enquiries. Visible to `leads.brokerage-scope` holders and to
+   *                       whoever it is assigned to.
    *
-   * The administrator still sees the brokerage's own leads because the BROKERAGE OWNS THEM — the
-   * intake from Meta, Google and imports is recorded against the administrator's account, not
-   * because administrators are exempt from this rule. That distinction is the whole point: there is
-   * no role here that can read a colleague's book, only an owner and the people they hand a lead to.
+   * Assignment is a separate field from ownership, so a brokerage lead handed to an agent stays the
+   * brokerage's: the brokerage keeps seeing it, the assignee gains it, and no other agent does.
    *
-   * A lead with no owner at all is brokerage intake that has not been attributed yet. It goes to the
-   * top tier rather than to nobody, so an import that forgets to stamp an owner surfaces somewhere
-   * instead of vanishing.
+   * The deal core — transactions, invoices, reports, commissions — is deliberately NOT scoped this
+   * way; those stay shared across the brokerage. Only the CRM's lead data is split like this.
    *
-   * Now shared with the CRM dashboard, which used to restate it from memory and got it wrong in
-   * both directions. The rule is unchanged; it simply lives in one file so a tile and the screen it
-   * summarises cannot drift apart again.
+   * Delegated rather than restated, so this screen, the dashboard tile that summarises it, the
+   * campaign audience and the direct-email recipient check cannot drift apart. They used to.
    */
   private scopeWhere(user: AuthUserRecord): Prisma.leadsWhereInput {
     return leadScopeWhere(user);
@@ -123,7 +112,9 @@ export class LeadsService {
   private canSee(lead: { owner_user_id: number | null; assigned_to: number | null }, user: AuthUserRecord): boolean {
     const id = user.id ?? -1;
     if (lead.owner_user_id === id || lead.assigned_to === id) return true;
-    return lead.owner_user_id === null && isSuperAdmin(user);
+    // The brokerage's own lead, asked of a row rather than as a query. Same capability
+    // `leadScopeWhere` uses, so this cannot answer differently from the list it accompanies.
+    return isBrokerageLead(lead) && hasBrokerageLeadScope(user);
   }
 
   // ------------------------------------------------------------------ read
@@ -465,23 +456,25 @@ export class LeadsService {
 
   // ----------------------------------------------------------------- write
   async create(input: LeadInput, user: AuthUserRecord): Promise<Record<string, unknown>> {
-    const data = await this.validate(input, true, undefined, user);
+    const owner = ownerAtIntake(user);
+    const data = await this.validate(input, true, undefined, user, owner);
     const now = new Date();
     const row = await this.prisma.leads.create({
       data: {
         ...data,
         name: data.name as string,
         email: data.email as string,
-        // May be left unassigned; the creator still sees it through owner_user_id below, so a new
-        // lead does not have to be assigned to anyone to be visible to the person who made it.
+        // May be left unassigned. Whoever created it still sees it — an agent through
+        // `owner_user_id`, brokerage staff through the brokerage's own scope — so a new lead does
+        // not have to be assigned to anyone to be visible to the person who made it.
         assigned_to: (data.assigned_to as number | null | undefined) ?? null,
-        owner_user_id: user.id ?? null,
+        owner_user_id: owner,
         created_by: user.name,
         created_at: now,
         updated_at: now,
       },
       include: { _count: { select: { lead_calls: true, lead_tasks: true } } },
-    }).catch((err: unknown) => this.rethrowEmailClash(err, data.email as string, user.id ?? null));
+    }).catch((err: unknown) => this.rethrowEmailClash(err, data.email as string, owner));
     await this.audit.record(user, 'Lead created', row.name, `${row.email}${row.phone ? ` · ${row.phone}` : ''}`);
     // Best-effort inbound-lead email (Meta / Google Ads / Website only); never blocks creation.
     void this.notifications.notifyNewLead(row);
@@ -957,8 +950,18 @@ export class LeadsService {
     requireCore: boolean,
     selfId?: number,
     user?: AuthUserRecord,
-    /** The owner the row will have. Undefined on a create, where it is the caller. */
-    existingOwnerId?: number | null,
+    /**
+     * The owner the row will have — the book the duplicate check must look in.
+     *
+     * On an UPDATE it is the row's existing owner, because an edit never changes ownership. On a
+     * CREATE the caller passes what `ownerAtIntake` decided, which is the creator for an agent and
+     * `null` — the brokerage's book — for everybody else. It used to fall back to `user.id` here,
+     * which was right only while every lead was owned by whoever made it: a manager creating a
+     * brokerage lead would have had its duplicate checked against the manager's own empty book, so
+     * the same address could be added to the brokerage twice and the second would fail on the
+     * database constraint instead of as a readable validation error.
+     */
+    ownerAtCreate?: number | null,
   ): Promise<Record<string, unknown>> {
     const errors: Record<string, string[]> = {};
     const add = (f: string, m: string) => { (errors[f] ??= []).push(m); };
@@ -994,10 +997,9 @@ export class LeadsService {
          * `leads_owner_email_key`, which is `(COALESCE(owner_user_id, 0),
          * lower(email))`.
          *
-         * `ownerId` is the creator on a create. On an update it is the row's existing owner, because
-         * an edit does not change who owns it — `owner_user_id` is not an editable field.
+         * `ownerId` is whoever will own the row — see the parameter's own comment.
          */
-        const ownerId = existingOwnerId !== undefined ? existingOwnerId : user?.id ?? null;
+        const ownerId = ownerAtCreate !== undefined ? ownerAtCreate : ownerAtIntake(user);
         const clash = await this.prisma.leads.findFirst({
           where: {
             email: { equals: email, mode: 'insensitive' },
@@ -1235,6 +1237,21 @@ export class LeadsService {
       // an agent working a lead the brokerage created cannot change those. Not sensitive — it is
       // just a user id, and the server enforces the rule regardless of what the client shows.
       owner_user_id: (r.owner_user_id as number | null) ?? null,
+      /*
+       * WHOSE LEAD THIS IS, in one word, so a screen does not have to re-derive it.
+       *
+       *   'brokerage'  the brokerage owns it. Assigned or not, it is the office's lead.
+       *   'agent'      somebody's own book. Only ever their own, because a lead belonging to
+       *                anybody else was filtered out long before this presenter ran.
+       *
+       * Paired with `assigned_to_name`, that is the three states the business asked to be able to
+       * tell apart: "Brokerage — Unassigned", "Brokerage — Assigned to <name>", and "Private".
+       *
+       * It discloses nothing new. `owner_user_id` is already on this row, and the scope rule
+       * guarantees every row here is either the brokerage's or the reader's own — so this label can
+       * never say "agent" about a lead the reader may not see.
+       */
+      ownership: ((r.owner_user_id as number | null) ?? null) === null ? 'brokerage' : 'agent',
       call_count: counts?.lead_calls ?? 0,
       task_count: counts?.lead_tasks ?? 0,
       pending_task_count: pending ?? 0,

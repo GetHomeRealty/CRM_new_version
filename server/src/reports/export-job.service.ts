@@ -189,16 +189,48 @@ export class ExportJobService implements OnModuleInit, OnModuleDestroy {
     await this.run(id);
   }
 
-  /** Generate one job's file and record the outcome. */
-  private async run(id: number): Promise<void> {
+  /**
+   * Generate one job's file and record the outcome.
+   *
+   * Public because it is the single-job entry point: `drain` calls it, and so does
+   * `core/transaction-identity.spec.ts`, which asserts that the principal handed to the exporter is
+   * the requester rather than a fabricated admin. That rule is worth being able to test directly.
+   */
+  async run(id: number): Promise<void> {
     const job = await this.prisma.export_jobs.findUnique({ where: { id } });
     if (!job || job.status !== 'Queued') return;
 
-    await this.prisma.export_jobs.update({ where: { id }, data: { status: 'Processing', started_at: new Date(), updated_at: new Date() } });
     const meta = ACTION_META[job.action_type as ExportAction];
     const sel = JSON.parse(job.selection ?? '{}') as BulkSelection;
-    // the job runs as the user who requested it, so scoping is identical to a live request
-    const user = { id: job.requested_by_id ?? undefined, name: job.requested_by ?? '', role: 'admin' } as unknown as AuthUserRecord;
+
+    /*
+     * THE JOB RUNS AS THE PERSON WHO ASKED FOR IT. It did not.
+     *
+     * This line built the requester as `{ id, name, role: 'admin' }` — a literal admin, because the
+     * work happens in a worker rather than in their request. `BulkExportService.resolve` decides
+     * agent scoping from `user.role`, so every queued export was generated brokerage-wide whoever
+     * asked for it. The Transactions screen queues automatically past 25 rows with
+     * `all_matching: true`, and the finished file is downloadable by its requester — so an agent
+     * pressing "Download All Transactions" received every deal in the brokerage, with prices,
+     * clients, commissions, splits, adjustments and referrals. The enqueue-time count was computed
+     * with their real identity, so the job even reported their own deal count beside it.
+     *
+     * The role is now RE-READ FROM THE DATABASE at run time, together with the permission and module
+     * rows, so a queued export is scoped exactly as the same request would have been live — and a
+     * role changed, or an account disabled, between queueing and running is honoured rather than
+     * frozen at request time.
+     *
+     * A job whose requester can no longer be loaded FAILS. Running it as anybody else — an admin, or
+     * a nameless principal — is what this whole comment is about; refusing is the only safe answer,
+     * and the Download Centre shows the reason.
+     */
+    const user = await this.requesterOf(job);
+    if (!user) {
+      await this.fail(id, 'The account that requested this export no longer exists, so it cannot be generated.');
+      return;
+    }
+
+    await this.prisma.export_jobs.update({ where: { id }, data: { status: 'Processing', started_at: new Date(), updated_at: new Date() } });
     const fileName = `${meta.label.replace(/[^A-Za-z0-9]+/g, '_')}_${job.export_id}.${meta.ext}`;
     const rel = path.join('exports', fileName);
     const abs = path.join(EXPORT_ROOT, fileName);
@@ -249,6 +281,37 @@ export class ExportJobService implements OnModuleInit, OnModuleDestroy {
         },
       });
     }
+  }
+
+  /**
+   * The person a queued job belongs to, loaded fresh — role, permission overrides and module rows.
+   *
+   * The SAME shape and the SAME rules `AuthGuard` puts on a live request: `user_permissions` and
+   * `user_modules` ride along, and an account that has been deactivated resolves to null rather than
+   * to a principal with yesterday's rights. That is the whole point — a queued export must be
+   * scoped by who the requester IS when it runs, not by what the worker happens to be able to read.
+   *
+   * `requested_by_id` is the key. The stored `requested_by` name is display only and is never used
+   * to resolve the account, because a name is editable and not unique — the same reason the
+   * transaction scope moved off names.
+   */
+  private async requesterOf(job: { requested_by_id: number | null }): Promise<AuthUserRecord | null> {
+    if (job.requested_by_id === null) return null;
+    const user = await this.prisma.users.findUnique({
+      where: { id: job.requested_by_id },
+      include: { user_permissions: true, user_modules: true },
+    });
+    if (!user) return null;
+    return (user.status ?? 'Active') === 'Inactive' ? null : user;
+  }
+
+  /** Record a job as failed with a reason the Download Centre can show. */
+  private async fail(id: number, reason: string): Promise<void> {
+    this.log.error(`Export job ${id} refused: ${reason}`);
+    await this.prisma.export_jobs.update({
+      where: { id },
+      data: { status: 'Failed', failure_reason: reason, completed_at: new Date(), updated_at: new Date() },
+    });
   }
 
   /**

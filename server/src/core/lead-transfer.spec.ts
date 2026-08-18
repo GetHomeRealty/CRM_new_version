@@ -78,14 +78,29 @@ describe('unassigned brokerage leads can be handed out', () => {
   beforeEach(() => { audits.length = 0; });
   afterAll(async () => { await prisma.$disconnect(); });
 
-  it('gives the pool to the chosen person, as owner and assignee', async () => {
+  /**
+   * ASSIGNS THE POOL, AND THE BROKERAGE STAYS THE OWNER.
+   *
+   * This used to expect `owner_user_id = successor` as well, and that expectation was the bug: it
+   * CONVERTED a brokerage lead into that agent's private one, so the moment a lead was handed out
+   * the brokerage could no longer see the lead it had generated. Ownership and assignment are
+   * separate columns precisely so they can say different things — see `common/lead-scope.ts`.
+   *
+   * The test now asserts both halves of the corrected model at once: the assignee is set, and the
+   * owner is still nobody.
+   */
+  it('assigns the pool to the chosen person while the brokerage keeps ownership', async () => {
     await inRollback(async (tx) => {
       const { successor, admin } = await scene(tx, 3);
       const result = await new LeadTransferService(tx, auditStub).transfer(as(admin), successor.id);
 
       expect(result.moved).toBe(3);
       expect(result.remaining).toBe(0);
-      expect(await tx.leads.count({ where: { owner_user_id: successor.id, assigned_to: successor.id, deleted_at: null } })).toBe(3);
+      expect(await tx.leads.count({
+        where: { owner_user_id: null, assigned_to: successor.id, deleted_at: null },
+      })).toBe(3);
+      // And nothing was quietly taken into the successor's own book.
+      expect(await tx.leads.count({ where: { owner_user_id: successor.id, deleted_at: null } })).toBe(0);
     });
   });
 
@@ -110,7 +125,8 @@ describe('unassigned brokerage leads can be handed out', () => {
 
       expect(result.moved).toBe(2);
       expect(result.remaining).toBe(3);
-      const moved = await tx.leads.findMany({ where: { owner_user_id: successor.id }, select: { id: true }, orderBy: { id: 'asc' } });
+      // Identified by ASSIGNMENT now, not ownership — the brokerage still owns all five.
+      const moved = await tx.leads.findMany({ where: { assigned_to: successor.id }, select: { id: true }, orderBy: { id: 'asc' } });
       expect(moved.map((m) => m.id)).toEqual(oldest.map((o) => o.id));
     });
   });
@@ -176,7 +192,20 @@ describe('an agent\'s own leads are out of reach', () => {
     });
   });
 
-  it('will not take a Meta lead even when it has no owner at all', async () => {
+  /**
+   * A META LEAD NOBODY OWNS IS THE BROKERAGE'S, AND IS HANDABLE. This asserted the opposite.
+   *
+   * The pool used to exclude `source = 'facebook_meta'` outright, to keep an agent's personal Meta
+   * leads out of it. That exclusion is now redundant — a personal Meta lead is OWNED by its agent,
+   * and the pool already requires `owner_user_id IS NULL` — and it had become actively harmful:
+   * a Page connected by brokerage staff produces brokerage-owned Meta leads, and once the person
+   * triaging them leaves, those leads land unowned and unassigned with nothing able to hand them on.
+   * A lead the brokerage paid for would have been stranded for ever.
+   *
+   * The protection that matters is unchanged and is asserted directly below: an agent's OWN Meta
+   * lead is still untouchable, because it has an owner.
+   */
+  it("takes an unowned Meta lead — nobody owns it, so it is the brokerage's to hand out", async () => {
     await inRollback(async (tx) => {
       const { successor, admin } = await scene(tx, 0);
       const now = new Date();
@@ -187,10 +216,38 @@ describe('an agent\'s own leads are out of reach', () => {
         },
       });
 
+      expect((await new LeadTransferService(tx, auditStub).books(as(admin))).available).toBe(1);
+      const r = await new LeadTransferService(tx, auditStub).transfer(as(admin), successor.id);
+      expect(r.moved).toBe(1);
+
+      const after = await tx.leads.findUnique({ where: { id: meta.id } });
+      expect(after?.assigned_to).toBe(successor.id);   // handed on
+      expect(after?.owner_user_id).toBeNull();         // still the brokerage's
+    });
+  });
+
+  it("will NOT take an agent's own Meta lead — that one has an owner", async () => {
+    await inRollback(async (tx) => {
+      const { successor, admin } = await scene(tx, 0);
+      const now = new Date();
+      const agent = await tx.users.create({
+        data: {
+          name: `MetaAgent ${++seq}`, email: `meta-agent-${Date.now()}-${seq}@x.test`,
+          password: 'x', role: 'agent', created_at: now, updated_at: now,
+        },
+      });
+      const mine = await tx.leads.create({
+        data: {
+          name: `Mine ${++seq}`, email: `mine-${Date.now()}-${seq}@x.test`,
+          source: META_LEAD_SOURCE, owner_user_id: agent.id,
+          created_at: now, updated_at: now,
+        },
+      });
+
       expect((await new LeadTransferService(tx, auditStub).books(as(admin))).available).toBe(0);
       await expect(new LeadTransferService(tx, auditStub).transfer(as(admin), successor.id))
         .rejects.toThrow(UnprocessableEntityException);
-      expect((await tx.leads.findUnique({ where: { id: meta.id } }))?.owner_user_id).toBeNull();
+      expect((await tx.leads.findUnique({ where: { id: mine.id } }))?.owner_user_id).toBe(agent.id);
     });
   });
 });
@@ -279,6 +336,79 @@ describe('the door is narrow', () => {
       expect(audits[0].action).toBe('Brokerage leads assigned');
       expect(audits[0].subject).toContain(successor.name);
       expect(audits[0].details).toContain('2 unassigned brokerage leads');
+    });
+  });
+});
+
+/**
+ * A MALFORMED RECIPIENT IS THE CALLER'S MISTAKE, NOT A SERVER FAULT.
+ *
+ * ================================================================================================
+ * THE DEFECT THIS PINS DOWN, found by probing the running API during the CRM audit. The controller
+ * reads the recipient with `Number(body?.to_user_id)`, and that is `NaN` for a missing field and for
+ * anything non-numeric. `NaN` cannot be compiled into a Prisma `where`, so `findUnique` threw a
+ * validation error and the request ended as:
+ *
+ *     POST /api/leads/transfer-ownership  {}                  -> 500 Internal Server Error
+ *     POST /api/leads/transfer-ownership  {to_user_id:'abc'}  -> 500 Internal Server Error
+ *
+ * No stack reached the client — the body was the generic "Internal server error" — so this was never
+ * a disclosure. It was still wrong: a bad request body must not be a server-level failure, and every
+ * one of them wrote a Prisma stack into the error log as though something had broken.
+ * ================================================================================================
+ *
+ * ZERO AND NEGATIVES ARE REFUSED TOO, and that is the part worth reading twice. `Number(null)` is
+ * `0` — an integer, so a test for "is this a number" would pass it straight through to a lookup for
+ * user zero, which then answered "that person no longer exists" to what was really a missing field.
+ * A well-formed id that matches nobody is a genuinely different answer and is still a 404.
+ */
+describe('the recipient must be a valid id before anything is moved', () => {
+  it.each([
+    ['a missing field', Number(undefined)],   // NaN — `{}`
+    ['a non-numeric value', Number('abc')],   // NaN — `{to_user_id:'abc'}`
+    ['null', Number(null)],                   // 0
+    ['zero', 0],
+    ['a negative id', -1],
+    ['a fractional id', 1.5],
+  ])('refuses %s with 422 rather than failing', async (_label, value) => {
+    await inRollback(async (tx) => {
+      const { admin } = await scene(tx, 1);
+      await expect(new LeadTransferService(tx, auditStub).transfer(as(admin), value))
+        .rejects.toBeInstanceOf(UnprocessableEntityException);
+    });
+  });
+
+  it('still answers 404 for a well-formed id that matches nobody', async () => {
+    await inRollback(async (tx) => {
+      const { admin } = await scene(tx, 1);
+      // Not 422: the request is well formed, the person simply is not there. Collapsing the two
+      // would lose the distinction between "you sent nothing" and "they have gone".
+      await expect(new LeadTransferService(tx, auditStub).transfer(as(admin), 2_146_000_000))
+        .rejects.toMatchObject({ status: 404 });
+    });
+  });
+
+  it('refuses a malformed recipient BEFORE the permission check is passed, not after', async () => {
+    await inRollback(async (tx) => {
+      const { agent } = await scene(tx, 1);
+      // An ordinary agent sending rubbish must still be told they may not do this at all — the
+      // validation must not become a way to probe the endpoint from an unprivileged account.
+      await expect(new LeadTransferService(tx, auditStub).transfer(as(agent), Number('abc')))
+        .rejects.toBeInstanceOf(ForbiddenException);
+    });
+  });
+
+  it('moves nothing and records nothing when the recipient is malformed', async () => {
+    await inRollback(async (tx) => {
+      const { admin } = await scene(tx, 3);
+      const before = audits.length;
+
+      await expect(new LeadTransferService(tx, auditStub).transfer(as(admin), Number(undefined)))
+        .rejects.toBeInstanceOf(UnprocessableEntityException);
+
+      expect(audits).toHaveLength(before);
+      // Every eligible lead is still eligible: nothing was handed to anybody.
+      expect((await new LeadTransferService(tx, auditStub).books(as(admin))).available).toBe(3);
     });
   });
 });

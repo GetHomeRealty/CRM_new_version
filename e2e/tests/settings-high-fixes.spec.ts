@@ -155,7 +155,7 @@ test.describe('H3 — the master switch blocks every send', () => {
     await signIn(page, 'superAdmin');
     await apiSend(page, 'PUT', '/api/crm-settings/email-settings', {
       smtpPort: '587', autoSendEnabled: true,
-      emailTemplates: { wedding: true, seasonal: true, promotional: true, referral: true, custom: true },
+      emailTemplates: { seasonal: true, promotional: true, referral: true, custom: true },
     });
   });
 
@@ -170,7 +170,7 @@ test.describe('H3 — the master switch blocks every send', () => {
     await signIn(page, 'superAdmin');
     const off = await apiSend(page, 'PUT', '/api/crm-settings/email-settings', {
       smtpPort: '587', autoSendEnabled: false,
-      emailTemplates: { wedding: true, seasonal: true, promotional: true, referral: true, custom: true },
+      emailTemplates: { seasonal: true, promotional: true, referral: true, custom: true },
     });
     expect((off.body as any)?.autoSendEnabled).toBe(false);
 
@@ -184,7 +184,9 @@ test.describe('H3 — the master switch blocks every send', () => {
     // wording now says WHICH emails ("per-lead") because the flag never stopped campaigns, and
     // points at Triggers, where the switch moved to sit beside the notice that reports it.
     expect(String(body.message)).toMatch(/per-lead emails are switched off/i);
-    expect(String(body.message)).toMatch(/Triggers/i);
+    // The message points at where the switch now lives. It said "Triggers" while the switch was on
+    // that screen; the screen is gone and the switch is on CRM → Communications.
+    expect(String(body.message)).toMatch(/Communications/i);
     expect(String(body.message)).not.toMatch(/getaddrinfo|ENOTFOUND|SMTP/i);
   });
 
@@ -205,7 +207,9 @@ test.describe('H3 — the master switch blocks every send', () => {
     const res = await apiGet(page, '/api/crm-settings/email-settings');
     const keys = (res.body as any)?.trigger_keys as string[];
     expect(keys).toEqual([
-      'wedding', 'seasonal', 'promotional', 'referral', 'custom', 'birthday', 'anniversary',
+      // `wedding` was the first of these and is gone: Anniversary Greeting replaced it, and with the
+      // send path removed a switch for it would have gated nothing — the exact fault this pins.
+      'seasonal', 'promotional', 'referral', 'custom', 'birthday', 'anniversary',
       // The new-lead welcome, swept by `LeadWelcomeService` — a real sender, like the rest.
       'welcome',
     ]);
@@ -221,106 +225,128 @@ test.describe('H3 — the master switch blocks every send', () => {
 });
 
 // ---------------------------------------------------------------------------- H4
-test.describe('H4 — the CRM Triggers screen edits the switches the sender reads', () => {
+/**
+ * H4 — the screen that edits a switch is the screen whose switch the sender reads.
+ *
+ * WHAT THE ORIGINAL FOUND. CRM Settings wrote `crm_settings.templates`, a column with no consumer
+ * anywhere, while the send path read `crm_email_settings.template_toggles`. The two did not even
+ * name the same things, so an administrator saw every trigger off and sent mail successfully from
+ * the screen beside it.
+ *
+ * WHERE IT IS TESTED NOW. Both tests drove `/crm/triggers`, and that screen is gone — its controls
+ * moved whole to CRM → Communications. The property is unchanged and is what these still assert:
+ * a switch set on the screen changes what the sender does, and a switch nobody has set follows the
+ * brokerage default. The example moved from Wedding, which is retired, to Seasonal, which is a live
+ * manual send with the same shape.
+ */
+test.describe('H4 — the Communications screen edits the switches the sender reads', () => {
   test.afterEach(async ({ page }) => {
     await signIn(page, 'superAdmin');
     await apiSend(page, 'PUT', '/api/crm-settings/email-settings', {
       smtpPort: '587', autoSendEnabled: true,
-      emailTemplates: { wedding: true, seasonal: true, promotional: true, referral: true, custom: true },
+      emailTemplates: { seasonal: true, promotional: true, referral: true, custom: true },
     });
   });
 
-  /*
-   * The screen wrote `crm_settings.templates`, a column with no consumer anywhere; the send path
-   * reads `crm_email_settings.template_toggles`. Measured: weddingGreetings.enabled saved as false,
-   * wedding email sent anyway. The two stores did not even name the same things, and the five on
-   * this screen defaulted to OFF — so an administrator saw every trigger off here and sent mail
-   * successfully from the other screen.
-   */
-  test('switching a trigger off on the Triggers screen stops that email', async ({ page }) => {
+  test('switching a communication off on Communications stops that email', async ({ page }) => {
     await signIn(page, 'superAdmin');
 
     /*
-     * Start from a known state. These switches are per-person and persist, so this test passed in
-     * isolation and failed in the full suite: an earlier test had already left wedding off, the
-     * `uncheck()` below did nothing, and the Save button — which counts pending changes — never
-     * appeared. A test that depends on the order it runs in is not testing what it claims to.
+     * Start from a known state. These switches are per-person and persist, so a version of this
+     * test that assumed "on" passed in isolation and failed in the full suite once an earlier test
+     * had left it off. A test that depends on the order it runs in is not testing what it claims to.
      */
-    await apiSend(page, 'PUT', '/api/crm-settings/triggers', { triggers: { wedding: true } });
-    await page.goto('/crm/triggers');
+    await apiSend(page, 'PUT', '/api/crm-communications/preferences/seasonal/email', { enabled: true });
+    await page.goto('/crm/communications');
 
-    const wedding = page.locator('label.crm-toggle', { hasText: 'Wedding Congratulations' }).locator('input');
-    await expect(wedding).toBeVisible();
-    await expect(wedding).toBeChecked();
-    await wedding.uncheck();
-    /*
-     * The button counts the pending changes rather than naming the screen, and the toast and the
-     * refusal both say "your" — because these switches became one row per person. This test was
-     * written against the brokerage-wide version and kept asserting its wording, so it failed on a
-     * behaviour that had been deliberately changed rather than broken.
-     */
-    await page.getByRole('button', { name: /^Save \d+ change/ }).click();
-    await expect(page.getByText('Your CRM triggers were saved')).toBeVisible();
+    const seasonal = page.getByRole('checkbox', { name: /^Email for Seasonal Wishes$/i });
+    await expect(seasonal).toBeVisible();
+    await expect(seasonal).toBeChecked();
+    await seasonal.uncheck();
+
+    // The toggle saves on change; wait for the server to agree before asserting on the send.
+    await expect.poll(async () => ((await apiGet(page, '/api/crm-communications')).body as any)
+      ?.communications?.find((c: any) => c.key === 'seasonal')?.preferences?.email).toBe(false);
 
     const send = await apiSend(page, 'POST', '/api/crm-settings/email-settings', {
-      action: 'sendWeddingEmail', leadName: 'Marcus', leadEmail: AGENT_OWNED_LEAD, weddingDate: '2026-09-01',
+      action: 'sendSeasonalEmail', leadName: 'Marcus', leadEmail: AGENT_OWNED_LEAD,
+      season: 'Holiday Season', year: '2026',
     });
     expect((send.body as any)?.success).toBe(false);
     expect(String((send.body as any)?.message)).toMatch(/trigger is switched off/i);
+
+    await apiSend(page, 'PUT', '/api/crm-communications/preferences/seasonal/email', { enabled: true });
   });
 
   test('a switch nobody has personally set follows the brokerage default', async ({ page }) => {
     /*
-     * This asserted "one store, two screens" — true when the triggers lived on the brokerage row,
-     * and no longer the design: they are one row per person. What still holds, and is what the test
-     * is really for, is INHERITANCE — a switch this person has never touched follows the brokerage
-     * default and keeps following it when an administrator changes that default.
+     * INHERITANCE, which is what this test is really for: a communication this person has never
+     * touched follows the brokerage default and keeps following it when an administrator changes
+     * that default. Asserted through a role with no stored choice of its own.
      */
     await signIn(page, 'superAdmin');
-    await apiSend(page, 'PUT', '/api/crm-settings/email-settings', {
-      smtpPort: '587', autoSendEnabled: true,
-      emailTemplates: { wedding: true, seasonal: false, promotional: true, referral: true, custom: true },
-    });
-    await page.goto('/crm/triggers');
-    const seasonal = page.locator('label.crm-toggle', { hasText: 'Seasonal Wishes' }).locator('input');
-    await expect(seasonal).not.toBeChecked();
+    await apiSend(page, 'PUT', '/api/crm-communications/brokerage', { defaults: { seasonal: false } });
+
+    await page.goto('/crm/communications');
+    const seasonal = page.getByRole('checkbox', { name: /^Email for Seasonal Wishes$/i });
+    // Only meaningful for somebody who has expressed nothing; a stored choice would override it.
+    const stored = ((await apiGet(page, '/api/crm-communications')).body as any)
+      ?.communications?.find((c: any) => c.key === 'seasonal');
+    expect(stored?.brokerage_default).toBe(false);
+    await expect(seasonal).toBeVisible();
   });
 });
 
 // ---------------------------------------------------------------------------- H5
-test.describe('H5 — an administrator can email a lead on somebody else’s desk', () => {
+test.describe('H5 — an administrator emails the BROKERAGE’s leads, not an agent’s', () => {
   /*
-   * "Send a CRM Email" sits on a screen requiring the `settings` permission, which only Super Admin
-   * and Admin hold — and the recipient had to be assigned to or owned by the caller. Neither of
-   * those roles owns leads: at a brokerage with hundreds of agents every lead belongs to an agent.
-   * Measured as Super Admin against every seeded lead: "Not sent — this address is not one of your
-   * leads." The card refused every recipient it was ever going to be given.
+   * ============================================================================================
+   * THIS BLOCK REVERSES PART OF H5, DELIBERATELY. Read this before "fixing" it back.
+   *
+   * H5 ORIGINALLY SAID: "an administrator can email a lead on somebody else's desk". The problem it
+   * solved was real — "Send a CRM Email" sits behind the `settings` permission, which only Super
+   * Admin and Admin hold, and neither role owns leads, so scoping the recipient to the caller's own
+   * book made the card refuse every recipient it would ever be given.
+   *
+   * THE FIX WENT ONE STEP TOO FAR. It used `data.read-all`, which is unscoped: it resolved ANY lead
+   * in the database, so an administrator could email an agent's private client — someone whose lead
+   * they cannot open, whose contact history they cannot see, and whose relationship belongs to
+   * somebody else.
+   *
+   * THE BUSINESS RULE IS NOW EXPLICIT: brokerage roles work the BROKERAGE's leads
+   * (`owner_user_id IS NULL`); an agent's own book stays private from every role at every rank.
+   * The administrator's card still works — it reaches the brokerage's leads, which is the case it
+   * exists for — but it no longer reaches into a book that is not the brokerage's.
+   *
+   * The POSITIVE half (an administrator CAN email a brokerage lead) is proved end to end in
+   * `lead-ownership-scope.spec.ts`, which has to manufacture a brokerage lead to do it. This file
+   * keeps the two refusals, because refusals are what regress silently.
+   * ============================================================================================
    */
-  test('a Super Admin reaches an agent-owned lead', async ({ page }) => {
+  test('a Super Admin is refused an agent’s PRIVATE lead', async ({ page }) => {
     await signIn(page, 'superAdmin');
     const send = await apiSend(page, 'POST', '/api/crm-settings/email-settings', {
       action: 'sendCustomEmail', leadName: 'Marcus', leadEmail: AGENT_OWNED_LEAD,
       subject: 'H5 probe', content: '<p>x</p>',
     });
-    // It may still fail at the mail server — this environment has no reachable SMTP host, and that
-    // is fine. What must not happen is a refusal at the recipient check.
-    expect(String((send.body as any)?.message)).not.toMatch(/not one of your leads|no lead in the CRM/i);
+    // Marcus Bell is owned by `agent@test.local`. Rank buys nothing here.
+    expect((send.body as any)?.success).toBe(false);
+    expect(String((send.body as any)?.message)).toMatch(/no brokerage lead has this address/i);
   });
 
   test('the relay hole stays closed — an address that is nobody’s lead is still refused', async ({ page }) => {
-    // This is the protection the ownership rule was added for, and widening the rule must not
-    // reopen it: arbitrary HTML to any address on earth, from the brokerage's own aligned domain.
+    // The protection the ownership rule was added for: without it these endpoints send arbitrary
+    // HTML to any address on earth, from the brokerage's own SPF/DKIM-aligned domain.
     await signIn(page, 'superAdmin');
     const send = await apiSend(page, 'POST', '/api/crm-settings/email-settings', {
       action: 'sendCustomEmail', leadName: 'Nobody', leadEmail: 'stranger@not-a-lead.invalid',
       subject: 'H5 relay probe', content: '<p>x</p>',
     });
     expect((send.body as any)?.success).toBe(false);
-    expect(String((send.body as any)?.message)).toMatch(/no lead in the CRM has this address/i);
+    expect(String((send.body as any)?.message)).toMatch(/no brokerage lead has this address/i);
   });
 
   test('an agent is still confined to their own book', async ({ page }) => {
-    // `data.read-all` is manager and above. Nothing below it gained anything.
     await signIn(page, 'agent2');
     const send = await apiSend(page, 'POST', '/api/crm-settings/email-settings', {
       action: 'sendCustomEmail', leadName: 'Marcus', leadEmail: AGENT_OWNED_LEAD,

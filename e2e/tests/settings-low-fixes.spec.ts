@@ -111,6 +111,25 @@ test.describe('L10 — a CRM email leaves from a CRM mailbox', () => {
    */
   const HOST = 'own-crm-account.invalid';
 
+  /**
+   * A recipient the SENDER may actually reach.
+   *
+   * These two cases are about WHICH MAILBOX a CRM email leaves from, and they used to address
+   * `AGENT_OWNED_LEAD` — a lead belonging to `agent@test.local`. That worked only while an
+   * administrator could email any lead in the database, which is no longer true: the recipient must
+   * be the brokerage's or the sender's own, so the send is now refused at the recipient check and
+   * never reaches the mailbox selection these tests exist to pin.
+   *
+   * Creating the lead as the sender keeps the subject of the test unchanged and removes its
+   * dependence on somebody else's fixture.
+   */
+  async function ownLead(page: Parameters<typeof signIn>[0]): Promise<{ email: string; id: number }> {
+    const email = `l10-recipient-${Date.now()}@x.test`;
+    const made = await apiSend(page, 'POST', '/api/leads', { name: 'L10 Recipient', email });
+    expect([200, 201], `L10 recipient lead must be created: ${JSON.stringify(made.body)}`).toContain(made.status);
+    return { email, id: (made.body as any).id };
+  }
+
   test('the sender’s own CRM account is preferred over anyone else’s', async ({ page }) => {
     await signIn(page, 'superAdmin');
 
@@ -125,9 +144,10 @@ test.describe('L10 — a CRM email leaves from a CRM mailbox', () => {
     expect(created.status, 'the probe account must be created').toBeLessThan(300);
     const id = (created.body as any)?.id ?? (created.body as any)?.data?.id;
 
+    const lead = await ownLead(page);
     try {
       const send = await apiSend(page, 'POST', '/api/crm-settings/email-settings', {
-        action: 'sendCustomEmail', leadName: 'Marcus', leadEmail: AGENT_OWNED_LEAD,
+        action: 'sendCustomEmail', leadName: 'L10 Recipient', leadEmail: lead.email,
         subject: 'L10 probe', content: '<p>x</p>',
       });
       const message = String((send.body as any)?.message);
@@ -138,6 +158,7 @@ test.describe('L10 — a CRM email leaves from a CRM mailbox', () => {
       expect(message).not.toContain('smtp.invalid.test');
     } finally {
       if (id) await apiSend(page, 'DELETE', `/api/account/mail-accounts/${id}`);
+      await apiSend(page, 'DELETE', `/api/leads/${lead.id}`);
     }
   });
 
@@ -150,8 +171,9 @@ test.describe('L10 — a CRM email leaves from a CRM mailbox', () => {
      * an administrator can act on rather than going out under an unrecognisable address.
      */
     await signIn(page, 'superAdmin');
+    const lead = await ownLead(page);
     const send = await apiSend(page, 'POST', '/api/crm-settings/email-settings', {
-      action: 'sendCustomEmail', leadName: 'Marcus', leadEmail: AGENT_OWNED_LEAD,
+      action: 'sendCustomEmail', leadName: 'L10 Recipient', leadEmail: lead.email,
       subject: 'L10 fallback probe', content: '<p>x</p>',
     });
     const message = String((send.body as any)?.message);
@@ -164,6 +186,8 @@ test.describe('L10 — a CRM email leaves from a CRM mailbox', () => {
     // Never the raw "no active SMTP account" from the generic mailer — that message names the
     // Transaction Desk's Settings screen and would send whoever read it to the wrong place.
     expect(message).not.toMatch(/No active SMTP account is configured/i);
+
+    await apiSend(page, 'DELETE', `/api/leads/${lead.id}`);
   });
 
   test('the refusal is recorded in the CRM email log either way', async ({ page }) => {

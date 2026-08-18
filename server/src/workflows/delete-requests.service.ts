@@ -6,6 +6,7 @@ import { toDateTimeString } from '../common/serialize';
 import type { AuthUserRecord } from '../auth/auth.types';
 
 import { isAdminOrAbove, isAgent, isSuperAdmin } from '../core/authz';
+import { ownsTransaction } from '../common/transaction-scope';
 const SECTION = 'Approvals';
 
 /** Transaction deletion approval workflow: agent → admin forwards → super admin approves/rejects. */
@@ -20,7 +21,9 @@ export class DeleteRequestsService {
     if (!isAgent(user)) throw new ForbiddenException({ message: 'Only agents raise deletion requests.' });
     const t = await this.prisma.transactions.findFirst({ where: { id: txnId, deleted_at: null } });
     if (!t) throw new NotFoundException({ message: `No query results for model [App\\Models\\Transaction] ${txnId}.` });
-    if (t.agent !== user.name) throw new ForbiddenException({ message: 'You can only request deletion of your own transactions.' });
+    // By id where the row has one — see `common/transaction-scope.ts`. Requesting deletion of a
+    // namesake's deal was possible while this compared names.
+    if (!ownsTransaction(user, t)) throw new ForbiddenException({ message: 'You can only request deletion of your own transactions.' });
 
     const inProgress = await this.prisma.transaction_delete_requests.findFirst({
       where: { transaction_id: txnId, status: { in: ['pending', 'forwarded'] } },

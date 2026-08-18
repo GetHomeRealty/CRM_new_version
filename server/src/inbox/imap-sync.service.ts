@@ -1,6 +1,10 @@
 import { BadRequestException, Injectable, Logger, NotFoundException, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ImapFlow } from 'imapflow';
 import { simpleParser } from 'mailparser';
+import * as fs from 'fs/promises';
+import * as path from 'path';
+import { STORAGE_ROOT } from '../config/storage';
+import { threadKeyFor } from './mailbox';
 import { PrismaService } from '../prisma/prisma.service';
 import { schedulersEnabled, schedulerSkipReason } from '../common/schedulers';
 import { LaravelCryptService } from '../common/laravel-crypt.service';
@@ -106,6 +110,9 @@ type AccountRow = {
  * asks the server only for messages newer than that; the first-ever sync reaches back a couple of
  * weeks. Re-fetching is harmless anyway — messages are deduped on (account, UID).
  */
+/** What ImapFlow needs to authenticate: a user plus either a password or an OAuth access token. */
+export interface ImapAuth { user: string; pass?: string; accessToken?: string }
+
 @Injectable()
 export class ImapSyncService implements OnModuleInit, OnModuleDestroy {
   private readonly log = new Logger(ImapSyncService.name);
@@ -259,19 +266,25 @@ export class ImapSyncService implements OnModuleInit, OnModuleDestroy {
    * The `imap_host` narrowing is in the signature rather than re-checked here, so the
    * caller's guard is what makes this callable at all.
    */
-  private async runSync(account: AccountRow & { imap_host: string }): Promise<SyncResult> {
-
+  /**
+   * The credentials for one mailbox, or the reason there are none.
+   *
+   * EXTRACTED SO THE IDLE SUPERVISOR SHARES IT. `ImapIdleService` opens a long-lived connection to
+   * the same mailboxes with the same credentials; a second copy of this would be a second place for
+   * the Gmail refresh, the "Testing mode expires in 7 days" explanation and the encryption defaults
+   * to drift. The behaviour here is unchanged — the caller records the outcome exactly as before.
+   *
+   * Returns the error as a STRING rather than throwing, because both callers write it to
+   * `sync_error` on the account, which is what the Inbox screen shows the user.
+   */
+  async resolveAuth(account: AccountRow): Promise<{ auth: ImapAuth } | { error: string }> {
     // OAuth (Gmail) accounts authenticate with a short-lived access token minted from the stored
     // refresh token; password accounts decrypt their stored password. Either yields an ImapFlow auth.
     const user = account.username || account.from_email;
-    const auth: { user: string; pass?: string; accessToken?: string } = { user };
+    const auth: ImapAuth = { user };
     if (account.encryption === 'oauth') {
       const refresh = this.crypt.decryptString(account.password);
-      if (!refresh) {
-        const error = 'No Google token stored for this account — reconnect it.';
-        await this.recordOutcome(account.id, error);
-        return { fetched: 0, matched: 0, error };
-      }
+      if (!refresh) return { error: 'No Google token stored for this account — reconnect it.' };
       try {
         // 'mail': this token was minted by the Gmail connect, which may run on its own Google
         // project. Refreshing it against the calendar client would fail permanently.
@@ -285,33 +298,43 @@ export class ImapSyncService implements OnModuleInit, OnModuleDestroy {
         // the account simply has to be connected again.
         const raw = (ex as Error).message;
         const revoked = /invalid_grant|expired or revoked|Token has been expired/i.test(raw);
-        const error = revoked
-          ? 'Google has revoked this connection — click Reconnect to sign in again. (Refresh tokens also expire after 7 days while the Google OAuth app is in Testing mode.)'
-          : `Google token refresh failed: ${raw}`;
-        await this.recordOutcome(account.id, error);
-        return { fetched: 0, matched: 0, error };
+        return {
+          error: revoked
+            ? 'Google has revoked this connection — click Reconnect to sign in again. (Refresh tokens also expire after 7 days while the Google OAuth app is in Testing mode.)'
+            : `Google token refresh failed: ${raw}`,
+        };
       }
     } else {
       const password = this.crypt.decryptString(account.password);
-      if (!password) {
-        const error = 'No password stored for this account.';
-        await this.recordOutcome(account.id, error);
-        return { fetched: 0, matched: 0, error };
-      }
+      if (!password) return { error: 'No password stored for this account.' };
       auth.pass = password;
     }
+    return { auth };
+  }
 
-
+  /**
+   * The connection settings for one mailbox. Shared with the IDLE supervisor for the same reason
+   * `resolveAuth` is: one definition of how this application talks to a mail server.
+   *
+   * `socketTimeout` is the caller's, because the two have opposite needs — a poll must fail fast
+   * rather than hang, and an idle connection is SUPPOSED to sit silent for minutes at a time.
+   */
+  connectionFor(account: AccountRow & { imap_host: string }, auth: ImapAuth, socketTimeout: number): ImapFlow {
     const port = account.imap_port ?? 993;
     // ssl / 993 => implicit TLS; tls / 143 => STARTTLS. Matches the SMTP encryption field.
     const secure = account.imap_encryption ? account.imap_encryption === 'ssl' : port === 993;
-    const client = new ImapFlow({
-      host: account.imap_host, port, secure,
-      auth,
-      logger: false,
-      // Fail fast rather than hang a poll on an unreachable server.
-      socketTimeout: 20000,
-    });
+    return new ImapFlow({ host: account.imap_host, port, secure, auth, logger: false, socketTimeout });
+  }
+
+  private async runSync(account: AccountRow & { imap_host: string }): Promise<SyncResult> {
+    const resolved = await this.resolveAuth(account);
+    if ('error' in resolved) {
+      await this.recordOutcome(account.id, resolved.error);
+      return { fetched: 0, matched: 0, error: resolved.error };
+    }
+
+    // Fail fast rather than hang a poll on an unreachable server.
+    const client = this.connectionFor(account, resolved.auth, 20000);
 
     // ImapFlow is an EventEmitter that emits an asynchronous 'error' event on auth/connection
     // failure — separately from the connect() promise rejection the try/catch below handles.
@@ -377,15 +400,25 @@ export class ImapSyncService implements OnModuleInit, OnModuleDestroy {
           // exists either way, so a duplicate is treated as success and the loop carries on
           // to advance last_uid.
           try {
-            await this.prisma.inbound_emails.create({
+            const saved = await this.prisma.inbound_emails.create({
               data: {
                 user_id: account.user_id ?? -1, account_id: account.id, uid,
                 message_id: record.message_id, from_email: record.from_email, from_name: record.from_name,
                 to_email: record.to_email, subject: record.subject, snippet: record.snippet,
                 body_text: record.body_text, body_html: record.body_html,
                 received_at: record.received_at, lead_id: leadId, created_at: new Date(),
+                in_reply_to: record.in_reply_to,
+                references_header: record.references_header,
+                // A message that starts a conversation is its own thread, so this is never null for
+                // a message that has an id — see `threadKeyFor`.
+                thread_key: record.thread_key,
+                has_attachments: record.attachments.length > 0,
               },
+              select: { id: true },
             });
+            // Written AFTER the row exists, so an attachment can never be orphaned by a failed
+            // insert — and failing to store one does not lose the message itself.
+            if (record.attachments.length) await this.storeAttachments(saved.id, record.attachments);
             fetched++;
           } catch (ex) {
             // P2002 = unique violation on (account_id, uid): someone else got there first.
@@ -462,6 +495,10 @@ export class ImapSyncService implements OnModuleInit, OnModuleDestroy {
     message_id: string | null; from_email: string | null; from_name: string | null; to_email: string | null;
     subject: string | null; snippet: string | null; body_text: string | null; body_html: string | null;
     received_at: Date;
+    /** RFC 5322 threading, so a reply from this mailbox joins the conversation. */
+    in_reply_to: string | null; references_header: string | null; thread_key: string | null;
+    /** Attachment PARTS, not their bytes — see `storeAttachments`. */
+    attachments: { filename: string; mime: string; contentId: string | null; content: Buffer }[];
   } | null> {
     const msg = await client.fetchOne(String(uid), { source: true }, { uid: true });
     if (!msg || !msg.source) return null;
@@ -469,7 +506,33 @@ export class ImapSyncService implements OnModuleInit, OnModuleDestroy {
     const fromAddr = p.from?.value?.[0];
     const toText = Array.isArray(p.to) ? p.to.map((t) => t.text).join(', ') : p.to?.text ?? null;
     const text = (p.text ?? '').trim();
+
+    /*
+     * THREADING AND ATTACHMENTS ARE READ HERE BECAUSE THE PARSE ALREADY HAPPENED.
+     *
+     * `simpleParser` has the whole message in hand; taking `inReplyTo`, `references` and
+     * `attachments` from it costs nothing extra, and re-fetching the source later to get them would
+     * mean a second round trip per message against the mail server.
+     *
+     * `references` arrives as a string or an array depending on the sender, so both are normalised
+     * to one space-separated string.
+     */
+    const references = Array.isArray(p.references) ? p.references.join(' ') : (p.references ?? null);
+    const inReplyTo = p.inReplyTo ? p.inReplyTo.slice(0, 512) : null;
+    const attachments = (p.attachments ?? [])
+      .filter((a) => a.content && Buffer.isBuffer(a.content))
+      .map((a) => ({
+        filename: String(a.filename ?? 'attachment').replace(/[\\/:*?"<>|]+/g, ' ').trim().slice(0, 255) || 'attachment',
+        mime: String(a.contentType ?? 'application/octet-stream').slice(0, 255),
+        contentId: a.cid ? `<${String(a.cid).replace(/^<|>$/g, '')}>`.slice(0, 255) : null,
+        content: a.content as Buffer,
+      }));
+
     return {
+      in_reply_to: inReplyTo,
+      references_header: references,
+      thread_key: threadKeyFor({ references, inReplyTo, messageId: p.messageId ?? null }),
+      attachments,
       message_id: p.messageId ? p.messageId.slice(0, 512) : null,
       from_email: fromAddr?.address ? fromAddr.address.toLowerCase().slice(0, 320) : null,
       from_name: fromAddr?.name ? fromAddr.name.slice(0, 255) : null,
@@ -480,6 +543,43 @@ export class ImapSyncService implements OnModuleInit, OnModuleDestroy {
       body_html: typeof p.html === 'string' ? p.html : null,
       received_at: p.date ?? new Date(),
     };
+  }
+
+  /**
+   * Write a message's attachments to disk and record their metadata.
+   *
+   * THE BYTES DO NOT GO IN THE DATABASE. They live under STORAGE_ROOT beside transaction documents,
+   * because a ten-megabyte attachment in a column is read into memory every time the row is touched
+   * — including by a list query that wanted a subject line — and it lands in every backup of the
+   * mail table.
+   *
+   * A failure here is logged and swallowed: the MESSAGE is the thing that must not be lost, and a
+   * mail sync that aborts because one attachment could not be written would leave the mailbox
+   * stuck on that UID for ever.
+   */
+  private async storeAttachments(
+    emailId: number,
+    parts: { filename: string; mime: string; contentId: string | null; content: Buffer }[],
+  ): Promise<void> {
+    const rel = path.join('mail', 'inbound', String(emailId));
+    try {
+      await fs.mkdir(path.join(STORAGE_ROOT, rel), { recursive: true });
+      let n = 0;
+      for (const a of parts) {
+        n += 1;
+        const relFile = path.join(rel, `${n}-${a.filename}`);
+        await fs.writeFile(path.join(STORAGE_ROOT, relFile), a.content);
+        await this.prisma.inbound_email_attachments.create({
+          data: {
+            email_id: emailId, filename: a.filename, mime: a.mime,
+            size_bytes: a.content.length, content_id: a.contentId,
+            storage_path: relFile.split(path.sep).join('/'), created_at: new Date(),
+          },
+        });
+      }
+    } catch (err) {
+      this.log.warn(`Could not store attachments for message #${emailId}: ${(err as Error)?.message ?? String(err)}`);
+    }
   }
 
   /**

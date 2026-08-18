@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { reviewScopeWhere } from '../common/transaction-scope';
 import { toDateTimeString } from '../common/serialize';
 import { isAgent } from '../core/authz';
 import type { ResourceUser } from '../transactions/transaction.resource';
@@ -272,7 +273,9 @@ export class NotificationCenterService {
     if (!isAgent(user)) return [];
 
     const rows = await this.prisma.transaction_reviews.findMany({
-      where: { agent_name: user.name, ...(includeRead ? {} : { agent_seen_at: null }) },
+      // By id where the row has one — the same rule `TransactionReviewService` applies. This fed a
+      // namesake the other person's rejected fields, reasons and old/new values.
+      where: { ...reviewScopeWhere(user), ...(includeRead ? {} : { agent_seen_at: null }) },
       orderBy: [{ created_at: 'desc' }, { id: 'desc' }],
       take: 100,
       include: { transactions: { select: { id: true, trade_no: true, property: true, deleted_at: true } } },

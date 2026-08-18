@@ -5,14 +5,14 @@ import { createHash } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { MailerService } from '../email/mailer.service';
 import { CompanySettingsService } from '../settings/company-settings.service';
-import { MAIL_EVENTS, SUPERSEDED_BODY_HASHES, renderTemplate, variablesFor } from '../email/mail-event-registry';
+import { MAIL_EVENTS, SUPERSEDED_BODY_HASHES, TRAINING_BANNER_FALLBACK, renderTemplate, variablesFor } from '../email/mail-event-registry';
 import type { MailAttachment } from '../email/mailer.service';
 import { parseJsonObject } from '../common/serialize';
 import { renderContractPdf } from './contract-pdf';
 
 /**
- * The two emails sent to an agent from the Users screen: the onboarding guide and the contract
- * agreement. Both buttons used to be placeholders that only raised a toast.
+ * The emails sent to an agent from the Users screen: the onboarding guide, Accounts' request for
+ * banking details, the Training Department's welcome, and the contract agreement.
  *
  * They are ordinary email templates, editable in Settings → Templates with their own subject,
  * body, sender and attachments — the resignation-letter sample, the 30-day action plan, the
@@ -25,11 +25,32 @@ import { renderContractPdf } from './contract-pdf';
  * screen is for.
  */
 
-export type OnboardingKind = 'onboard' | 'contract';
+export type OnboardingKind = 'onboard' | 'contract' | 'accounting' | 'training';
 
-const EVENT_KEY: Record<OnboardingKind, string> = {
-  onboard: 'user.onboard_email',
-  contract: 'user.contract_agreement',
+/**
+ * Which template each button sends.
+ *
+ * `onboard` is the one that is not a constant: a fresher and an agent transferring in receive
+ * letters with nothing in common — one registers with RECO and TREB from scratch, the other resigns
+ * and waits on a transfer — so the agent's own Fresher / Experienced field decides which goes. That
+ * field is required on the user form, and an older record that has neither still gets the
+ * experienced letter, which is the one every agent received before this existed.
+ */
+const ONBOARD_EXPERIENCED = 'user.onboard_email';
+const ONBOARD_FRESHER = 'user.onboard_email_fresher';
+const TRAINING_EMAIL = 'user.training_onboard_email';
+
+/**
+ * Every template a kind can resolve to. `onboard` has two; the rest have one.
+ *
+ * Kept as the single list so a lookup that has no agent to consult — reading back a file attached to
+ * one of these emails — can still be confined to the templates that button actually sends.
+ */
+const KIND_EVENT_KEYS: Record<OnboardingKind, string[]> = {
+  onboard: [ONBOARD_EXPERIENCED, ONBOARD_FRESHER],
+  contract: ['user.contract_agreement'],
+  accounting: ['user.accounting_onboard_email'],
+  training: [TRAINING_EMAIL],
 };
 
 /** A file picked in the review dialog, attached to this one send. */
@@ -54,11 +75,66 @@ export const MAX_ADHOC_FILES = 5;
  * whether the process is started from `server/`, systemd or a container.
  */
 const ONBOARD_DOC_DIR = path.resolve(__dirname, '..', '..', 'assets', 'onboarding');
-const ONBOARD_DOCUMENTS = [
-  'Agent Resignation Letter Template.pdf',
-  'Sample Headshots.pdf',
-  'First 30 Days Action Plan.pdf',
-];
+const ACTION_PLAN = 'First 30 Days Action Plan.pdf';
+
+/**
+ * Both sample sheets go to every agent, and the agent picks the style they want.
+ *
+ * Deliberately not chosen for them: this application records no gender, and guessing one from a name
+ * to decide which sheet somebody receives would be wrong often enough — and wrong in a way worth
+ * avoiding — that sending both is the better answer. The letter asks them to indicate a style
+ * preference, which reads the same either way.
+ */
+const SAMPLE_HEADSHOTS = ['Sample Headshots - Male.pdf', 'Sample Headshots - Female.pdf'];
+
+/**
+ * Files that go to some agents and not others, and the `gender` each one belongs to.
+ *
+ * Both sheets sit on the template so both are visible and replaceable in Settings → Templates; which
+ * of them travels is decided per agent, here, when the email is built. A file not named in this map
+ * goes to everyone, so adding an ordinary document to a template needs no thought about who gets it.
+ */
+const GENDERED_DOCUMENTS: Record<string, string> = {
+  'Sample Headshots - Male.pdf': 'Male',
+  'Sample Headshots - Female.pdf': 'Female',
+};
+
+/**
+ * Where an agent sends their banking details, when Company Settings does not say.
+ *
+ * Settings holds ONE address for the brokerage, optionally two separated by "&" — the general one
+ * and the payouts one. It currently holds only `info@`, and with that as the fallback both
+ * onboarding letters asked a new agent to send their SIN, void cheque and incorporation documents to
+ * the brokerage's public inbox. This is the address Accounts actually collects them at, so it is
+ * what the letters say until Settings carries a payouts address of its own.
+ */
+const ACCOUNTS_EMAIL = 'Commissionpayouts@gethomerealty.ca';
+
+/**
+ * Which shipped documents each template starts out carrying, put on it the first time it is used.
+ *
+ * The action plan appears twice on purpose. It is one file on disk attached to two templates, not
+ * two copies to keep in step: the experienced agent's letter sends it as part of the recruitment
+ * pack, and the Training Department's letter sends it as the plan behind the subjects it lists. An
+ * agent who receives both gets the same document twice, which is what happens today when Recruitment
+ * and Training each send their own copy.
+ *
+ * The fresher letter gets the headshots but NOT the resignation template: it asks them for a
+ * professional headshot and issues their business cards from it, while a newly licensed agent has no
+ * brokerage to resign from and no use for a letter telling them how.
+ *
+ * A template not named here starts empty — the accounting letter refers to no documents, and
+ * attaching one to a letter that never mentions it is how a new agent ends up ignoring attachments.
+ */
+const SEEDED_DOCUMENTS: Record<string, string[]> = {
+  [ONBOARD_EXPERIENCED]: [
+    'Agent Resignation Letter Template.pdf',
+    ...SAMPLE_HEADSHOTS,
+    ACTION_PLAN,
+  ],
+  [ONBOARD_FRESHER]: [...SAMPLE_HEADSHOTS],
+  [TRAINING_EMAIL]: [ACTION_PLAN],
+};
 
 export interface OnboardingPreview {
   kind: OnboardingKind;
@@ -74,6 +150,11 @@ export interface OnboardingPreview {
    * is not known until it is rendered.
    */
   generated_document: string | null;
+  /**
+   * Which of the brokerage's five standard agreements these terms are, for the contract only —
+   * `null` on the other emails, and on a contract whose split is not one of the five.
+   */
+  contract_variant: string | null;
   sender: string | null;
   /** Set when something would make the send fail or arrive incomplete. */
   warning: string | null;
@@ -89,6 +170,27 @@ export interface OnboardingPreview {
  */
 const LOGO_SRC = /src="[^"]*\/api\/company-settings\/logo[^"]*"/i;
 const LOGO_CID = 'brand-logo';
+
+/**
+ * The designed "Onboard Trainings" banner, if the brokerage has installed one.
+ *
+ * Dropped into `server/assets/onboarding/` under this name with any ordinary image extension. There
+ * is no upload screen for it because it is artwork that changes when the training programme does,
+ * not per brokerage — replacing it is replacing the file.
+ *
+ * Carried the opposite way round to the logo, and for the opposite reason: the logo is a user upload
+ * that already has an endpoint to serve it, while this is a file on disk with none, so the review
+ * screen gets it as a `data:` URI and the message that goes out gets it as `cid:`. Both halves are
+ * needed — a review screen cannot render `cid:`, and Gmail drops `data:` images.
+ */
+const BANNER_STEM = 'onboard-trainings-banner';
+const BANNER_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.gif', '.webp'];
+const BANNER_MIME: Record<string, string> = {
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp',
+};
+const BANNER_CID = 'training-banner';
+/** Matches the banner however it reached the body — as the data: URI, or already swapped to cid:. */
+const BANNER_SRC = /src="(?:data:image\/[a-z+]+;base64,[^"]+|cid:training-banner)"/i;
 
 /**
  * What a detail the profile does not hold looks like in the contract: the ruled blank of the paper
@@ -116,15 +218,59 @@ const complement = (share: string): string => (share ? pct(100 - Number(share)) 
 /** Zero-padded, the way the agreement writes a split: 95-05, not 95-5. */
 const pad2 = (share: string): string => (share.length === 1 ? `0${share}` : share);
 
-const escapeHtml = (s: string): string =>
-  s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+/**
+ * Make typed text safe to place inside the agreement's markup.
+ *
+ * WHY THIS EXISTS AND WHY IT MATTERS MORE THAN IT LOOKS. `agent_address`, `company_address` and the
+ * past-brokerage name inside `agent_type` are on the mail renderer's HTML_VARIABLES allow-list —
+ * the short list of merge values that are NOT escaped at render time, because the markup around
+ * them (the ruled blank, the bracketed label) is this file's own. That allow-list is only safe
+ * because of this function: it is the single point at which somebody's typed address stops being
+ * able to carry markup into an email and into the signed PDF generated from it.
+ *
+ * `'` IS ESCAPED, though the three values all land in TEXT CONTENT today — `residing at {{
+ * agent_address }}` — where an apostrophe is harmless. It is escaped anyway because the safety of
+ * this depends on a fact about the TEMPLATE, and templates are edited in Settings → Templates by
+ * people who have no reason to know that. The day one of these moves inside a single-quoted
+ * attribute, an address of `x' onmouseover='…` would be an injection. Escaping all five characters
+ * costs nothing — an apostrophe renders as `'` in every mail client — and removes the trap.
+ */
+export const escapeHtml = (s: string): string =>
+  s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 
 /**
  * What the generated agreement is called. Kept to characters that survive every mail client and
  * filesystem, and short enough to read in an attachment strip.
  */
-const documentName = (agentName: string): string =>
-  `Independent Contractor Agreement - ${agentName.replace(/[^\w\s.-]/g, '').trim().slice(0, 60) || 'Agent'}.pdf`;
+/**
+ * The five agreements in circulation, by the split they are drawn up for.
+ *
+ * The app does not pick one of these files and send it — it writes the agreement from the agent's own
+ * record, which is why the wording is right for any split. This list answers a different question:
+ * WHICH of the documents the brokerage has on file this agent's terms correspond to, so the person
+ * pressing Send can recognise the agreement before it goes.
+ *
+ * A split that is not on this list is not an error. It means the terms recorded for this agent are
+ * not one of the standard five, and saying so is more use than naming the nearest one.
+ */
+const CONTRACT_VARIANTS = new Set([
+  '95-05 + 60-40',
+  '95-05 + 70-30',
+  '90-10',
+  '90-10 + 70-30',
+  '90-10 + 60-40',
+]);
+
+/** The deal count the tiered agreements are written for. A different one is a different document. */
+const TIERED_THRESHOLD = 10;
+
+const documentName = (agentName: string, variant: string | null): string => {
+  const who = agentName.replace(/[^\w\s.-]/g, '').trim().slice(0, 60) || 'Agent';
+  // The split in the filename so a signed copy can be filed and found by the terms it is on, which
+  // is how the brokerage's own five documents are named.
+  return `Independent Contractor Agreement${variant ? ` ${variant}` : ''} - ${who}.pdf`;
+};
 
 @Injectable()
 export class UserOnboardingService {
@@ -153,6 +299,64 @@ export class UserOnboardingService {
     const alt = company.name.replace(/[<>"&]/g, '');
     return `<img src="${baseUrl}/api/company-settings/logo?v=${version}" alt="${alt}" width="132"`
       + ' style="width:132px;max-width:132px;height:auto;display:block;border:0">';
+  }
+
+  /**
+   * The training banner as the review screen will show it, or the subjects as text when no artwork
+   * is installed.
+   *
+   * The fallback is not a placeholder for a missing image — it is the same nine subjects the banner
+   * shows, set as text, so the letter reads correctly either way and a brokerage that never installs
+   * artwork is not sending an empty rectangle to every new agent.
+   */
+  private async trainingBanner(): Promise<string> {
+    const found = await this.bannerFile();
+    if (!found) return TRAINING_BANNER_FALLBACK;
+    try {
+      const bytes = await fs.readFile(found.abs);
+      // Sized in the tag as well as the style because Outlook ignores CSS width on images. 420 for a
+      // portrait banner: at the 560-odd pixels a message body gets it would stand a full screen tall
+      // before the letter began.
+      return `<img src="data:${found.mime};base64,${bytes.toString('base64')}" alt="Onboard Trainings"`
+        + ' width="420" style="width:100%;max-width:420px;height:auto;display:block;border:0;margin:0 0 18px">';
+    } catch {
+      return TRAINING_BANNER_FALLBACK; // present but unreadable — the subjects still have to arrive
+    }
+  }
+
+  /** The installed banner, whichever image format it was dropped in as. */
+  private async bannerFile(): Promise<{ abs: string; mime: string } | null> {
+    for (const ext of BANNER_EXTENSIONS) {
+      const abs = path.join(ONBOARD_DOC_DIR, `${BANNER_STEM}${ext}`);
+      try {
+        await fs.access(abs);
+        return { abs, mime: BANNER_MIME[ext] };
+      } catch { /* not this extension */ }
+    }
+    return null;
+  }
+
+  /**
+   * Swap the banner's inline data for a `cid:` reference and carry the image alongside the message.
+   *
+   * Same bargain as the logo: the review screen needs something a browser can render and the agent's
+   * mail client needs something Gmail will not strip. Matched on the src rather than the filename
+   * because the body being sent is whatever came back from the review.
+   */
+  private async embedBanner(html: string): Promise<{ html: string; file: MailAttachment | null }> {
+    if (!BANNER_SRC.test(html)) return { html, file: null };
+
+    const found = await this.bannerFile();
+    if (!found) return { html, file: null };
+    try {
+      const data = await fs.readFile(found.abs);
+      return {
+        html: html.replace(BANNER_SRC, `src="cid:${BANNER_CID}"`),
+        file: { data: data.toString('base64'), name: path.basename(found.abs), mime: found.mime, cid: BANNER_CID },
+      };
+    } catch {
+      return { html, file: null };
+    }
   }
 
   /** "Fresher Agent", or "Experienced Agent" with the brokerage they came from, as the form has it. */
@@ -222,6 +426,57 @@ export class UserOnboardingService {
     return lines.join('');
   }
 
+  /**
+   * The address the letters send an agent's banking documents to.
+   *
+   * Company Settings may hold two addresses separated by "&" — the general one first, the payouts
+   * one second — and where it does, the second is used exactly as before. Where it holds only one,
+   * that one address is the brokerage's public inbox, and the previous code took it as the accounts
+   * address by default. `ACCOUNTS_EMAIL` is used instead: an agent following the letter should not
+   * be sending a SIN and a void cheque to whoever reads `info@`.
+   */
+  private accountsEmail(setting: string | null): string {
+    const parts = String(setting ?? '').split('&').map((s) => s.trim()).filter(Boolean);
+    return parts.length > 1 ? parts[parts.length - 1] : ACCOUNTS_EMAIL;
+  }
+
+  /**
+   * Which of the brokerage's five agreements this agent's recorded terms correspond to, or null when
+   * they correspond to none of them.
+   *
+   * Read from the same fields `commissionTerms()` writes from, so the label and the wording under it
+   * can never describe different splits. Deliberately exact: the tiered documents are written for
+   * the first TEN deals, so a threshold of eight is genuinely not one of them, and the honest answer
+   * is that no standard document covers it.
+   */
+  private contractVariant(profile: Record<string, unknown>): string | null {
+    const agent = pad2(pct(profile.agent_comm_pct));
+    const brokerage = pad2(pct(profile.brok_comm_pct) || complement(agent));
+    const lease = pct(profile.lease_comm_pct);
+    const threshold = Math.floor(Number(profile.completed_deals) || 0);
+    const nextAgent = pad2(pct(profile.upgrade_agent_pct));
+    const nextBrokerage = pad2(pct(profile.upgrade_brok_pct) || complement(nextAgent));
+    const leadAgent = pad2(pct(profile.brokerage_lead_pct));
+    const leadBrokerage = pad2(pct(profile.brokerage_lead_brok_pct) || complement(leadAgent));
+
+    let base: string;
+    if (threshold > 0 && nextAgent) {
+      // The tiered family: the first tier, the tier after it, and a flat lease rate all have to match.
+      base = threshold === TIERED_THRESHOLD && lease === '95'
+        && agent === '90' && brokerage === '10' && nextAgent === '95' && nextBrokerage === '05'
+        ? '90-10' : '';
+    } else {
+      // The flat family is 95-05 and nothing else. Note what this rules out: an agent on a flat
+      // 90/10 with no tier at all would otherwise spell "90-10" and be handed the name of the tiered
+      // document, which promises them 95-05 after ten deals — terms they are not on.
+      base = agent === '95' && brokerage === '05' ? '95-05' : '';
+    }
+    if (!base) return null;
+
+    const candidate = leadAgent ? `${base} + ${leadAgent}-${leadBrokerage}` : base;
+    return CONTRACT_VARIANTS.has(candidate) ? candidate : null;
+  }
+
   /** Values every onboarding template can use, drawn from the agent and company settings. */
   private async vars(userId: number, attachmentCount = 0, baseUrl = ''): Promise<{ vars: Record<string, unknown>; to: string; name: string }> {
     const user = await this.prisma.users.findUnique({ where: { id: userId } });
@@ -245,8 +500,12 @@ export class UserOnboardingService {
         agent_name: user.name,
         agent_email: to,
         company_name: company.name,
-        company_address: String(company.address ?? '').trim() || BLANK,
-        agent_address: String(profile.address ?? '').trim() || BLANK,
+        // Escaped HERE, not by the renderer. These three carry the ruled blank when the detail is
+        // missing, which is markup, so they are on `HTML_VARIABLES` and the renderer leaves them
+        // alone — which makes escaping the typed part this service's job. An address containing
+        // `&` or `<` would otherwise reach the agreement as markup.
+        company_address: escapeHtml(String(company.address ?? '').trim()) || BLANK,
+        agent_address: escapeHtml(String(profile.address ?? '').trim()) || BLANK,
         agent_type: this.agentType(profile),
         commission_terms: this.commissionTerms(profile),
         agreement_day: ordinal(signed.getUTCDate()),
@@ -256,7 +515,7 @@ export class UserOnboardingService {
         // so a fallback of the same words rendered it twice in the same sentence.
         broker_of_record: String(profile.broker_of_record ?? '').trim(),
         broker_email: String(profile.broker_email ?? '').trim() || String(company.email ?? '').split('&')[0].trim(),
-        accounts_email: String(company.email ?? '').split('&').pop()?.trim() ?? '',
+        accounts_email: this.accountsEmail(company.email),
         onboard_date: onboardDate || today,
         contract_date: onboardDate || today,
         current_date: today,
@@ -265,8 +524,49 @@ export class UserOnboardingService {
         // "the attached documents", and the sentence reads either way.
         attachment_count: attachmentCount >= 2 ? String(attachmentCount) : '',
         logo_img: this.logoImg(company, baseUrl),
+        training_banner: await this.trainingBanner(),
       },
     };
+  }
+
+  /**
+   * Which template this button sends for THIS agent.
+   *
+   * Only the onboarding guide has to ask, and it asks the record rather than the person pressing the
+   * button: an agent marked Fresher receives the RECO/TREB letter and one marked Experienced receives
+   * the resignation-and-transfer letter, with no way to send the wrong one by mistake. Anything else
+   * — including a record onboarded before the field existed — receives the experienced letter, which
+   * is what this button sent for every agent until now.
+   */
+  private eventKeyFor(kind: OnboardingKind, profile: Record<string, unknown>): string {
+    const keys = KIND_EVENT_KEYS[kind];
+    if (!keys) throw new BadRequestException({ message: `Unknown onboarding email "${kind}".` });
+    if (kind !== 'onboard') return keys[0];
+
+    const experience = String(profile.experience ?? '').trim();
+    return experience === 'Fresher' ? ONBOARD_FRESHER : ONBOARD_EXPERIENCED;
+  }
+
+  /** The agent's saved profile, which decides both which letter goes and which files go with it. */
+  private async agentProfile(userId: number): Promise<Record<string, unknown>> {
+    const user = await this.prisma.users.findUnique({ where: { id: userId }, select: { profile: true } });
+    if (!user) throw new NotFoundException({ message: `No query results for model [App\\Models\\User] ${userId}.` });
+    return parseJsonObject(user.profile);
+  }
+
+  /**
+   * Whether one of the template's files belongs in THIS agent's copy of the email.
+   *
+   * Only the two headshot sheets are addressed to part of the roster; everything else goes to
+   * everyone. An agent recorded as Other, or with no gender saved at all, receives both sheets —
+   * the record is the only thing consulted, and where it does not answer the question the letter
+   * falls back to offering both rather than picking one on the agent's behalf.
+   */
+  private appliesToAgent(filename: string, gender: string): boolean {
+    const belongsTo = GENDERED_DOCUMENTS[filename];
+    if (!belongsTo) return true;
+    if (gender !== 'Male' && gender !== 'Female') return true;
+    return belongsTo === gender;
   }
 
   /**
@@ -275,9 +575,8 @@ export class UserOnboardingService {
    * `baseUrl` is where this API is reachable, used to point the signature logo at it.
    */
   async preview(userId: number, kind: OnboardingKind, baseUrl = ''): Promise<OnboardingPreview> {
-    const eventKey = EVENT_KEY[kind];
-    if (!eventKey) throw new BadRequestException({ message: `Unknown onboarding email "${kind}".` });
-
+    const profile = await this.agentProfile(userId);
+    const eventKey = this.eventKeyFor(kind, profile);
     const meta = MAIL_EVENTS[eventKey];
 
     // Seeded on first use, exactly as the mailer does, so the template exists to be edited even
@@ -316,16 +615,25 @@ export class UserOnboardingService {
       template.body_html = meta.default_body_html;
     }
 
-    // The onboarding letter tells the agent to look at documents it says are attached, so the
-    // standard three are put on the template the first time it is used. Read after seeding, since
-    // the count is quoted in the body.
-    if (kind === 'onboard' && template.attachments.length === 0) {
-      const added = await this.seedOnboardDocuments(template.id);
+    // The letters that refer to documents get them the first time they are used: the experienced
+    // agent's guide tells them to look at three attached files, and the Training Department's letter
+    // sends the action plan behind the subjects it lists. Read after seeding, since the experienced
+    // letter quotes the count in its body.
+    const documents = SEEDED_DOCUMENTS[eventKey];
+    if (documents && template.attachments.length === 0) {
+      const added = await this.seedOnboardDocuments(template.id, documents);
       if (added) template.attachments = added;
     }
 
+    // Narrowed to this agent BEFORE the count is taken: the sheet that is not theirs is not sent, so
+    // it must not be listed on the review screen and must not be counted in the line asking them to
+    // confirm how many documents arrived.
+    const gender = String(profile.gender ?? '').trim();
+    const attachments = template.attachments.filter((a) => this.appliesToAgent(a.filename, gender));
+
     // Rendered with the real attachment count, which is only known once the template is loaded.
-    const { vars, to, name } = await this.vars(userId, template.attachments.length, baseUrl);
+    const { vars, to, name } = await this.vars(userId, attachments.length, baseUrl);
+    const variant = kind === 'contract' ? this.contractVariant(profile) : null;
     const html = renderTemplate(template.body_html, vars);
 
     return {
@@ -335,8 +643,9 @@ export class UserOnboardingService {
       html,
       to,
       variables: variablesFor(eventKey),
-      attachments: template.attachments,
-      generated_document: kind === 'contract' ? documentName(name) : null,
+      attachments,
+      generated_document: kind === 'contract' ? documentName(name, variant) : null,
+      contract_variant: variant,
       sender: template.mail_accounts?.from_email ?? null,
       ...this.warningFor({ to, isActive: template.is_active }),
     };
@@ -400,9 +709,14 @@ export class UserOnboardingService {
     // receives the resignation sample, action plan or contract that is attached to it.
     const template = await this.prisma.email_templates.findUnique({
       where: { event_key: preview.event_key },
-      select: { mail_account_id: true, attachments: { select: { filename: true, content_type: true, data: true } } },
+      select: { mail_account_id: true, attachments: { select: { id: true, filename: true, content_type: true, data: true } } },
     });
-    const files: MailAttachment[] = (template?.attachments ?? []).map((a) => ({
+
+    // Exactly the files the review listed, by id rather than by name: the preview has already
+    // decided which of the two headshot sheets is this agent's, and re-deciding it here would be a
+    // second answer to the same question, free to disagree with the one that was on screen.
+    const reviewed = new Set(preview.attachments.map((a) => a.id));
+    const files: MailAttachment[] = (template?.attachments ?? []).filter((a) => reviewed.has(a.id)).map((a) => ({
       data: Buffer.from(a.data).toString('base64'),
       name: a.filename,
       mime: a.content_type,
@@ -426,7 +740,12 @@ export class UserOnboardingService {
     const embedded = await this.embedLogo(html);
     if (embedded.file) files.push(embedded.file);
 
-    await this.mailer.sendDirect(preview.to, subject, embedded.html, template?.mail_account_id ?? null, files, null);
+    // The training banner travels the same way, and after the logo so both swaps see the body the
+    // other left behind.
+    const withBanner = await this.embedBanner(embedded.html);
+    if (withBanner.file) files.push(withBanner.file);
+
+    await this.mailer.sendDirect(preview.to, subject, withBanner.html, template?.mail_account_id ?? null, files, null);
     const extra = (edited.attachments ?? []).length;
     return {
       message: extra ? `Sent to ${preview.to} with ${extra} attached file${extra === 1 ? '' : 's'}.` : `Sent to ${preview.to}.`,
@@ -442,12 +761,12 @@ export class UserOnboardingService {
    * reviewed HTML, a correction made in the dialog reaches the attachment as well as the email.
    */
   async contractDocument(userId: number, html: string): Promise<{ filename: string; data: Buffer }> {
-    const user = await this.prisma.users.findUnique({ where: { id: userId }, select: { name: true } });
+    const user = await this.prisma.users.findUnique({ where: { id: userId }, select: { name: true, profile: true } });
     if (!user) throw new NotFoundException({ message: `No query results for model [App\\Models\\User] ${userId}.` });
 
     const logo = await this.logoDataUri();
     const data = await renderContractPdf(html, logo);
-    return { filename: documentName(user.name), data };
+    return { filename: documentName(user.name, this.contractVariant(parseJsonObject(user.profile))), data };
   }
 
   /** The brand logo as a data URI for the generated document, or null when none is uploaded. */
@@ -494,20 +813,22 @@ export class UserOnboardingService {
    * out of step, and no way to read a file off some other template through this route.
    */
   async attachment(kind: OnboardingKind, attachmentId: number): Promise<{ filename: string; contentType: string; data: Buffer }> {
-    const eventKey = EVENT_KEY[kind];
-    if (!eventKey) throw new BadRequestException({ message: `Unknown onboarding email "${kind}".` });
+    const eventKeys = KIND_EVENT_KEYS[kind];
+    if (!eventKeys) throw new BadRequestException({ message: `Unknown onboarding email "${kind}".` });
 
+    // Either onboarding guide, since this route has no agent to decide between them — but still only
+    // the templates this button sends, so no other template's files are reachable through it.
     const row = await this.prisma.email_template_attachments.findFirst({
-      where: { id: attachmentId, template: { event_key: eventKey } },
+      where: { id: attachmentId, template: { event_key: { in: eventKeys } } },
     });
     if (!row) throw new NotFoundException({ message: 'That file is no longer attached to this email.' });
     return { filename: row.filename, contentType: row.content_type, data: Buffer.from(row.data) };
   }
 
   /**
-   * Put the three standard onboarding documents on the template the first time it is used: the
-   * resignation-letter sample the letter tells the agent to find attached, the sample headshots
-   * they pick a business-card style from, and the 30-day action plan.
+   * Put a template's shipped documents on it the first time it is used — the resignation-letter
+   * sample the onboarding guide tells the agent to find attached, the sample headshots they pick a
+   * business-card style from, and the 30-day action plan that both Recruitment and Training send.
    *
    * They ship with the server rather than being pasted into a migration, so replacing one is
    * dropping a new file in `assets/onboarding`. Only ever done when the template carries no files
@@ -517,11 +838,11 @@ export class UserOnboardingService {
    * Best-effort: a missing or unreadable file leaves the email to go out without it, which is far
    * better than a review screen that will not open.
    */
-  private async seedOnboardDocuments(templateId: number): Promise<{ id: number; filename: string; size: number }[] | null> {
+  private async seedOnboardDocuments(templateId: number, filenames: string[]): Promise<{ id: number; filename: string; size: number }[] | null> {
     const now = new Date();
     let added = false;
 
-    for (const filename of ONBOARD_DOCUMENTS) {
+    for (const filename of filenames) {
       try {
         const data = await fs.readFile(path.join(ONBOARD_DOC_DIR, filename));
         await this.prisma.email_template_attachments.create({

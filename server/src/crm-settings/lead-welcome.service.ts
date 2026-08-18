@@ -101,21 +101,63 @@ export class LeadWelcomeService implements OnModuleInit, OnModuleDestroy {
   async sweep(now: Date = new Date()): Promise<{ sent: number; skipped: number; failed: number }> {
     const since = new Date(now.getTime() - NEW_LEAD_WINDOW_MS);
 
-    const leads = await this.prisma.leads.findMany({
-      where: {
-        deleted_at: null,
-        unsubscribed: false,
-        created_at: { gte: since },
-        // `leads.email` is NOT NULL, so the only absent address is the empty string — which the
-        // import writes for a row that had no email column. It is still not somewhere to send.
-        email: { not: '' },
-      },
-      select: {
-        id: true, name: true, email: true, owner_user_id: true, assigned_to: true, created_at: true,
-      },
-      orderBy: { id: 'asc' },
-      take: MAX_PER_PASS,
-    });
+    /*
+     * ==============================================================================================
+     * THE ALREADY-WELCOMED EXCLUSION HAPPENS IN THE DATABASE, BEFORE THE LIMIT.
+     *
+     * This was a Prisma `findMany` with `take: 100` and the "has this address had a welcome?" check
+     * done afterwards, per lead, in the loop. The consequence was worse here than for the greetings,
+     * because this window MOVES:
+     *
+     *   500 leads arrive. Pass one welcomes the oldest hundred. Pass two fetches the same hundred —
+     *   they are still inside the 24-hour window and still the lowest ids — finds them all welcomed,
+     *   and stops. Leads 101 to 500 are never fetched, and twenty-four hours later they fall out of
+     *   the window entirely. They do not get a late welcome; they get none, and nothing reports it.
+     *
+     * Excluding welcomed addresses in the query is what makes the set drain: every pass sees only
+     * what is left, so a hundred at a time clears five hundred in five passes, all well inside the
+     * window. Raising the limit would only move the number at which the silence starts.
+     * ==============================================================================================
+     *
+     * RAW, BECAUSE THE EXCLUSION IS NOT A RELATION. `crm_email_log` has no foreign key to `leads` —
+     * it records an ADDRESS, deliberately, so that a person imported twice is welcomed once — and
+     * Prisma cannot express `NOT EXISTS` against an unrelated table. The id list comes back here and
+     * the fields are read through Prisma exactly as before.
+     *
+     * The predicate is `alreadyWelcomed` transliterated: kind `welcome`, case-insensitively on the
+     * address, with no time floor — a welcome is once per address for ever, not once per year.
+     * That method is still called below and still guards the case this cannot: two lead rows sharing
+     * one address inside a single pass.
+     */
+    const eligible = await this.prisma.$queryRawUnsafe<{ id: number }[]>(
+      `SELECT l.id FROM leads l
+        WHERE l.deleted_at IS NULL
+          AND l.unsubscribed = false
+          AND l.created_at >= $1
+          -- \`leads.email\` is NOT NULL, so the only absent address is the empty string — which the
+          -- import writes for a row that had no email column. It is still not somewhere to send.
+          AND l.email <> ''
+          AND NOT EXISTS (
+            SELECT 1 FROM crm_email_log w
+             WHERE w.kind = 'welcome'
+               AND lower(w.recipient) = lower(l.email)
+          )
+        ORDER BY l.id
+        LIMIT ${MAX_PER_PASS}`,
+      since,
+    );
+
+    const byId = new Map(
+      (await this.prisma.leads.findMany({
+        where: { id: { in: eligible.map((r) => r.id) } },
+        select: {
+          id: true, name: true, email: true, owner_user_id: true, assigned_to: true, created_at: true,
+        },
+      })).map((l) => [l.id, l]),
+    );
+    // Re-ordered to the query's order: `findMany` does not promise the order of an `in` list, and
+    // the oldest-first sweep is what makes a backlog drain predictably rather than in id soup.
+    const leads = eligible.map((r) => byId.get(r.id)).filter((l): l is NonNullable<typeof l> => !!l);
 
     let sent = 0;
     let skipped = 0;

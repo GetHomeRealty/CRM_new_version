@@ -1,7 +1,8 @@
 import { Body, Controller, Get, HttpCode, Param, ParseIntPipe, Post, Put, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '../auth/guards/auth.guard';
 import { AdminGuard } from '../auth/guards/admin.guard';
-import { CurrentUser } from '../auth/decorators';
+import { ScreenGuard } from '../auth/guards/screen.guard';
+import { CurrentUser, Screen } from '../auth/decorators';
 import { EmailTemplateService } from '../email/email-template.service';
 import { CrmCommunicationsService } from './crm-communications.service';
 import type { AuthUserRecord } from '../auth/auth.types';
@@ -16,8 +17,17 @@ type Res = Record<string, unknown>;
  *
  *   Everyone signed in  — read the list, read their own preferences, set their OWN preferences,
  *                         preview a template.
+ *   `settings: edit`    — the brokerage controls: the master switch and the per-communication
+ *                         defaults. Exactly the permission `PUT /api/crm-settings/email-settings`
+ *                         has always enforced for these two values, carried over unchanged when
+ *                         they moved off the Triggers screen. NOT `superAdmin`: a brokerage can
+ *                         grant this through Roles & Permissions, and the control must follow the
+ *                         grant rather than the role.
  *   Super Admin only    — edit template content, choose a sender, manage attachments, set the
- *                         brokerage template Active/Off, create a template.
+ *                         template Active/Off, create a template.
+ *
+ * `ScreenGuard` is mounted on the class and does nothing to a route with no `@Screen` — so the open
+ * routes below stay open and the one route that declares a screen is the only one gated by it.
  *
  * ENFORCED HERE, NOT IN THE SCREEN. An agent who calls the write endpoints directly is refused by
  * `AdminGuard` on those routes; hiding the buttons is presentation, not authorization. The read and
@@ -33,7 +43,7 @@ type Res = Record<string, unknown>;
  * calls the same service so the two screens cannot drift, and so nothing about Desk changes.
  */
 @Controller('crm-communications')
-@UseGuards(AuthGuard)
+@UseGuards(AuthGuard, ScreenGuard)
 export class CrmCommunicationsController {
   constructor(
     private readonly comms: CrmCommunicationsService,
@@ -66,6 +76,21 @@ export class CrmCommunicationsController {
   @HttpCode(200)
   preview(@Param('id', ParseIntPipe) id: number): Promise<{ subject: string; html: string }> {
     return this.templates.preview(id);
+  }
+
+  /**
+   * The brokerage controls — the master switch and the per-communication defaults.
+   *
+   * `settings: edit`, the permission these two values have always been written behind. This is the
+   * one place they are set now: the card that used to hold them on Triggers → CRM Triggers is gone
+   * with that screen, and there is no second endpoint offering them.
+   *
+   * A PATCH in everything but the verb: an absent field is unchanged. See `setBrokerage`.
+   */
+  @Put('brokerage')
+  @Screen('settings', 'edit')
+  setBrokerage(@CurrentUser() user: AuthUserRecord, @Body() body: Res): Promise<Res> {
+    return this.comms.setBrokerage(user, body ?? {});
   }
 
   // ------------------------------------------------------- Super Admin only

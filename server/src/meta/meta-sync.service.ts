@@ -9,6 +9,7 @@ import { MetaGraphService, GraphError, isAuthFailure, type GraphLead } from './m
 import { MetaApiBudgetService } from './meta-api-budget.service';
 import { MetaAlertService } from './meta-alert.service';
 import { mapMetaLead, normalizePhone, type MappedMetaLead } from './meta-lead-mapper';
+import { ownerAtIntake } from '../common/lead-scope';
 import { MAX_LEADS_PER_FORM, META_RAW_MAX_CHARS, META_RAW_RETENTION_DAYS, WEBHOOK_QUIET_ALERT_MS } from './meta.constants';
 import { isSuperAdmin } from '../core/authz';
 import type { AuthUserRecord } from '../auth/auth.types';
@@ -35,6 +36,16 @@ interface LeadContext {
   pageName?: string;
   formId: string;
   formName?: string;
+  /**
+   * Who will OWN what this form brings in: the connecting agent, or `null` for the brokerage.
+   *
+   * WHAT DECIDES IT, since Meta reports nothing about whose budget paid for a click. A connection
+   * belongs to the person who made it (`meta_lead_forms.user_id`), so the question becomes "whose
+   * ads are these?" — and the answer follows the same one-line rule as every other intake: an
+   * AGENT connecting their own ad account keeps their leads; anybody else connecting a Page is the
+   * brokerage advertising for itself. Computed by `ownerAtIntake`, never re-derived here.
+   */
+  ownerId?: number | null;
 }
 
 @Injectable()
@@ -105,14 +116,44 @@ export class MetaSyncService {
   }
 
   /**
-   * Decide who owns an imported lead.
+   * Who WORKS an imported lead. Unchanged: whoever's Meta connection produced it.
    *
    * The Leads module scopes an agent to leads assigned to them, so an unassigned Meta lead
    * would be invisible to the very person meant to work it. It therefore goes to the user whose
    * Meta connection produced it — the same rule the Leads module applies to agent-created leads.
+   *
+   * This stays true for a brokerage connection too: the administrator or CRM staffer who connected
+   * the Page is the person triaging what comes in, and they can reassign it. What changes for a
+   * brokerage connection is the OWNER, not the assignee — see `ownerFor`.
    */
   private assignee(ctx: LeadContext): number {
     return ctx.userId;
+  }
+
+  /**
+   * Who OWNS an imported lead — the brokerage, or the agent whose ad it was.
+   *
+   * `null` is not "nobody": in this database it is how a BROKERAGE-owned lead is recorded, and it
+   * is what puts the lead in front of every `leads.brokerage-scope` holder rather than one person.
+   * See `common/lead-scope.ts`.
+   *
+   * WHY THE CONNECTION DECIDES. Meta reports nothing about whose budget paid for a click, so the
+   * only honest signal is who connected the Page. An `agent` connecting their own ad account keeps
+   * their leads — that is the long-standing meaning of `source = 'facebook_meta'`, and it is why a
+   * personal Meta lead is never transferable and stays with a departing agent. Anybody else
+   * connecting a Page is the brokerage advertising for itself, and those leads are the brokerage's.
+   *
+   * A BROKERAGE META LEAD IS STILL `source = 'facebook_meta'`, and that is deliberate. The source
+   * records HOW it arrived; ownership records WHOSE it is. Keeping them separate means the
+   * departure rule — "a personal Meta lead stays with its agent" — keeps working unchanged, because
+   * that rule is about leads an agent OWNS, and these are not owned by anyone.
+   *
+   * Falls back to the connecting user when the caller did not resolve an owner, which is the
+   * pre-existing behaviour and the safe direction: a lead nobody owns is visible to brokerage staff,
+   * and getting there by accident should need a decision rather than a missing field.
+   */
+  private ownerFor(ctx: LeadContext): number | null {
+    return ctx.ownerId === undefined ? ctx.userId : ctx.ownerId;
   }
 
   /**
@@ -298,7 +339,7 @@ export class MetaSyncService {
         source: 'facebook_meta',
         tags: JSON.stringify([]),
         assigned_to: this.assignee(ctx),
-        owner_user_id: ctx.userId,
+        owner_user_id: this.ownerFor(ctx),
         created_by: `Meta${ctx.pageName ? ` · ${ctx.pageName}` : ''}`,
         created_at: createdAt,
       },
@@ -424,6 +465,8 @@ export class MetaSyncService {
             const { outcome } = await this.upsertLead(lead, {
               userId, userName: user.name, pageId: form.page_id, pageName: page.name,
               formId: form.form_id, formName: form.form_name ?? undefined,
+              // The signed-in person running the sync IS the connection's owner here.
+              ownerId: ownerAtIntake(user),
             });
             // `duplicate` is counted under `duplicates` — the plural key on SyncResult.
             if (outcome === 'duplicate') result.duplicates++;
@@ -592,7 +635,10 @@ export class MetaSyncService {
 
     const owner = await this.prisma.users.findUnique({
       where: { id: form.user_id },
-      select: { id: true, name: true, status: true },
+      // `role` decides whether this connection is the brokerage's advertising or an agent's own,
+      // which decides who owns the lead. The webhook runs with no request in context, so the
+      // connecting user's role has to be read here.
+      select: { id: true, name: true, status: true, role: true },
     });
 
     /*
@@ -625,6 +671,7 @@ export class MetaSyncService {
       const { outcome, leadId, rule } = await this.upsertLead(lead, {
         userId: form.user_id, userName: owner?.name ?? 'Meta', pageId, pageName: page.name,
         formId, formName: form.form_name ?? undefined,
+        ownerId: ownerAtIntake(owner),
       });
 
       await this.connections.touchWebhook(form.user_id);

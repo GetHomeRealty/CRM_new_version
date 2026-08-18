@@ -1,6 +1,7 @@
 import { Body, Controller, HttpCode, Param, ParseIntPipe, Post, UnauthorizedException, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '../auth/guards/auth.guard';
-import { CurrentUser } from '../auth/decorators';
+import { ScreenGuard } from '../auth/guards/screen.guard';
+import { CurrentUser, Screen } from '../auth/decorators';
 import type { AuthUserRecord } from '../auth/auth.types';
 import { DeleteRequestsService } from './delete-requests.service';
 import { DeleteRequestForwardDto, DeleteRequestStoreDto } from './dto/workflow.dto';
@@ -10,8 +11,15 @@ const requireUser = (u: AuthUserRecord | undefined): AuthUserRecord => {
   return u;
 };
 
+/*
+ * Behind the `transactions` screen permission, declared once on the class — same reasoning as
+ * `TransactionsController`: these routes hang off a deal, so a role that may not open the
+ * Transactions screen must not reach them either. Reading needs `view`; the services apply their
+ * own role and ownership rules on top.
+ */
 @Controller()
-@UseGuards(AuthGuard)
+@UseGuards(AuthGuard, ScreenGuard)
+@Screen('transactions', 'view')
 export class DeleteRequestsController {
   constructor(private readonly deleteRequests: DeleteRequestsService) {}
 

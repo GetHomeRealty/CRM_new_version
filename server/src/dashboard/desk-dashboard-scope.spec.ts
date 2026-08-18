@@ -126,52 +126,49 @@ describe('a role that may read invoices still gets them, at its own scope', () =
     });
   });
 
-  it('an AGENT granted invoice access sees their own deals\' invoices, not the brokerage\'s', async () => {
-    /*
-     * The second half of the fix, and the reason withholding alone was not enough: Roles &
-     * Permissions can grant an individual agent `invoice: view`, and at that point the old query
-     * would have handed them everything again. Scoped through `transactions: { is: live }`, the same
-     * join the document counts already use.
-     */
+  /*
+   * INVOICES ARE BROKERAGE FINANCIAL RECORDS, AND AN AGENT HAS NO PART IN THEM.
+   *
+   * These three tests used to assert the opposite — that an agent granted `invoice: view` saw their
+   * own deals' invoices, scoped through the transaction join. That was the wrong model. Invoices are
+   * the brokerage's billing rather than an agent's own work, so there is no such thing as "their"
+   * invoice to scope to; the answer is none. `invoices.access` is a named role set — Super Admin,
+   * Admin, Accounting — and the screen permission can no longer grant what the role must not have.
+   */
+  it('an AGENT is refused even when granted invoice: view by an override', async () => {
     await inRollback(async (tx) => {
       const { mine } = await twoAgentsWithInvoices(tx);
       const granted = asUser('agent', mine.id, mine.name, [{ screen: 'invoice', level: 'view' }]);
       const d = await svc(tx).desk(granted);
 
-      expect(d.invoices).not.toBeNull();
-      expect(d.invoices!.total).toBe(1);            // their own deal's invoice, not both
-      expect(d.invoices!.billed).toBe(1000);
-      expect(d.invoices!.outstanding).toBe(1000);
+      // Null, not zeros: an agent has no invoice figures at all, and reporting `billed: 0` would
+      // tell them the brokerage has billed nothing.
+      expect(d.invoices).toBeNull();
     });
   });
 
-  it('…and an invoice attached to no transaction is not counted as theirs', async () => {
-    /*
-     * A standalone invoice is brokerage billing. `transactions: { is: … }` on a nullable relation
-     * excludes it, which is the wanted answer — and worth pinning, because the opposite trap is
-     * recorded elsewhere in this codebase: `{ not: … }` against a nullable column silently drops
-     * every NULL row.
-     */
+  it.each(['documentation', 'crm'])('%s is refused too, override or not', async (role) => {
     await inRollback(async (tx) => {
       const { mine } = await twoAgentsWithInvoices(tx);
-      const now = new Date();
-      await tx.invoices.create({
-        data: {
-          invoice_no: `ZZ-solo-${tag()}`.slice(0, 30), transaction_id: null, status: 'Unpaid', invoice_date: now,
-          total: 9999, amount_paid: 0, balance_due: 9999, created_at: now, updated_at: now,
-        },
-      });
-      const granted = asUser('agent', mine.id, mine.name, [{ screen: 'invoice', level: 'view' }]);
-      const d = await svc(tx).desk(granted);
-      expect(d.invoices!.billed).toBe(1000);
+      const granted = asUser(role, mine.id, mine.name, [{ screen: 'invoice', level: 'edit' }]);
+      expect((await svc(tx).desk(granted)).invoices).toBeNull();
     });
   });
 
-  it('a deleted invoice is still excluded for everyone', async () => {
+  it('an accounting user with invoice: none is still refused — the permission has not stopped mattering', async () => {
+    await inRollback(async (tx) => {
+      const { mine } = await twoAgentsWithInvoices(tx);
+      const revoked = asUser('accounting', mine.id, mine.name, [{ screen: 'invoice', level: 'none' }]);
+      expect((await svc(tx).desk(revoked)).invoices).toBeNull();
+    });
+  });
+
+  it('a deleted invoice is excluded for the roles that do read them', async () => {
     await inRollback(async (tx) => {
       const { mine } = await twoAgentsWithInvoices(tx);
       const now = new Date();
       const txn = await tx.transactions.findFirst({ where: { agent: mine.name }, select: { id: true } });
+      const before = (await svc(tx).desk(asUser('accounting', mine.id, mine.name))).invoices!.billed;
       await tx.invoices.create({
         data: {
           invoice_no: `ZZ-del-${tag()}`.slice(0, 30), transaction_id: txn!.id, status: 'Unpaid', invoice_date: now,
@@ -179,8 +176,7 @@ describe('a role that may read invoices still gets them, at its own scope', () =
           created_at: now, updated_at: now,
         },
       });
-      const granted = asUser('agent', mine.id, mine.name, [{ screen: 'invoice', level: 'view' }]);
-      expect((await svc(tx).desk(granted)).invoices!.billed).toBe(1000);
+      expect((await svc(tx).desk(asUser('accounting', mine.id, mine.name))).invoices!.billed).toBe(before);
     });
   });
 });

@@ -1,7 +1,23 @@
 import { Injectable } from '@nestjs/common';
 
-/** Type-specific default document checklists (port of DocumentService::defaultsFor).
- *  Documents are no longer flagged mandatory — every row is created with mandatory:false. */
+/**
+ * Type-specific default document checklists (port of DocumentService::defaultsFor).
+ *
+ * NOTHING IS SEEDED AS MANDATORY, and that is a policy gap rather than a decision this file makes.
+ * Which documents a brokerage is obliged to hold for each transaction type is a RECO/compliance
+ * question with a real answer, and it has never been recorded anywhere in this codebase — the file
+ * was born with `mandatory: false` on every row. Inventing a list here would put a compliance
+ * assertion into the product on no authority.
+ *
+ * Until the brokerage supplies that list, `mandatory` is an ADMINISTRATOR'S FLAG: the Mandatory
+ * checkbox in Legal & Documentation sets it per document per deal, `bulkUpdate` saves it, and it now
+ * survives (a reset on every load used to wipe it — see `DocumentsService.index`). The Dashboard
+ * tile and the reports therefore count exactly what somebody has actually marked.
+ *
+ * TO TURN ON DEFAULTS: replace the `false` in `rows()` with a per-title decision — the checklist
+ * titles below are already the per-type vocabulary, so it is one map from title to boolean. Every
+ * downstream consumer already reads the column and needs no change.
+ */
 @Injectable()
 export class DocumentDefaultsService {
   defaultsFor(type: string): { title: string; mandatory: boolean }[] {

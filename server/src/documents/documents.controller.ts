@@ -13,12 +13,28 @@ import { PrismaService } from '../prisma/prisma.service';
 import { STORAGE_ROOT } from '../config/storage';
 
 import { isAgent } from '../core/authz';
+import { ownsTransaction, teamMemberIdentity } from '../common/transaction-scope';
 type Res0 = Record<string, unknown>;
 const u = (x: AuthUserRecord | undefined): AuthUserRecord | null => x ?? null;
 const MB20 = 20480 * 1024;
 
+/*
+ * EVERY ROUTE HERE IS BEHIND THE `transactions` SCREEN PERMISSION, DECLARED ONCE ON THE CLASS.
+ *
+ * It was declared per method, and only on the writes — so `GET /api/transactions`, the detail
+ * endpoint and everything hanging off them answered to anybody with a session. The `crm` role's
+ * permission map says `transactions: 'none'` and it could still read every deal in the brokerage,
+ * including the commission breakdown; so could a user whose access had been deliberately revoked.
+ * The navigation hid the screen and nothing else did.
+ *
+ * Declared on the CLASS so the default is closed: a route added later inherits `view` without
+ * anybody remembering to decorate it, and a write route overrides it with `edit` — `ScreenGuard`
+ * reads the handler's metadata first (`getAllAndOverride`). `ScreenGuard` also enforces module
+ * access for the screen's area, so a login without Transaction Management is refused here too.
+ */
 @Controller()
-@UseGuards(AuthGuard)
+@UseGuards(AuthGuard, ScreenGuard)
+@Screen('transactions', 'view')
 export class DocumentsController {
   constructor(private readonly docs: DocumentsService, private readonly prisma: PrismaService) {}
 
@@ -50,13 +66,15 @@ export class DocumentsController {
   async downloadAll(@CurrentUser() user: AuthUserRecord | undefined, @Param('transaction', ParseIntPipe) txnId: number, @Res() res: Response): Promise<void> {
     const txn = await this.prisma.transactions.findFirst({ where: { id: txnId, deleted_at: null } });
     if (!txn) throw new NotFoundException({ message: `No query results for model [App\\Models\\Transaction] ${txnId}.` });
-    // Agent access guard mirrors the service.
+    // Agent access guard mirrors the service, identity rule included — id where the row has one.
     if (user && isAgent(user)) {
-      const member = await this.prisma.team_members.findFirst({ where: { transaction_id: txnId, name: user.name } });
-      if (txn.agent !== user.name && !member) throw new NotFoundException({ message: 'You do not have access to this transaction.' });
+      const member = await this.prisma.team_members.findFirst({
+        where: { transaction_id: txnId, ...teamMemberIdentity(user) },
+      });
+      if (!ownsTransaction(user, txn) && !member) throw new NotFoundException({ message: 'You do not have access to this transaction.' });
     }
     const folder = this.safeName(txn.property || `Trade ${txn.trade_no}`);
-    const docs = await this.prisma.documents.findMany({ where: { transaction_id: txnId, deleted_at: null, pending_delete: false }, orderBy: { position: 'asc' } });
+    const docs = await this.prisma.documents.findMany({ where: { transaction_id: txnId, deleted_at: null }, orderBy: { position: 'asc' } });
 
     const used: Record<string, number> = {};
     const entries: { name: string; abs: string }[] = [];
@@ -90,7 +108,6 @@ export class DocumentsController {
   // ---- writes (screen:transactions,edit) ----
   @Put('transactions/:transaction/documents')
   @Screen('transactions', 'edit')
-  @UseGuards(AuthGuard, ScreenGuard)
   bulkUpdate(@CurrentUser() user: AuthUserRecord | undefined, @Param('transaction', ParseIntPipe) txnId: number, @Body() body: Res0): Promise<Res0> {
     return this.docs.bulkUpdate(u(user), txnId, body ?? {});
   }
@@ -98,7 +115,6 @@ export class DocumentsController {
   @Post('transactions/:transaction/documents/send-reminders')
   @HttpCode(200)
   @Screen('transactions', 'edit')
-  @UseGuards(AuthGuard, ScreenGuard)
   sendReminders(@CurrentUser() user: AuthUserRecord | undefined, @Param('transaction', ParseIntPipe) txnId: number): Promise<Res0> {
     return this.docs.sendReminders(u(user), txnId);
   }
@@ -106,7 +122,6 @@ export class DocumentsController {
   @Post('transactions/:transaction/documents/:document/file')
   @HttpCode(200)
   @Screen('transactions', 'edit')
-  @UseGuards(AuthGuard, ScreenGuard)
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MB20 } }))
   uploadFile(@CurrentUser() user: AuthUserRecord | undefined, @Param('transaction', ParseIntPipe) txnId: number, @Param('document', ParseIntPipe) docId: number, @UploadedFile() file: Express.Multer.File): Promise<Res0> {
     return this.docs.uploadFile(u(user), txnId, docId, file);
@@ -115,7 +130,6 @@ export class DocumentsController {
   @Post('transactions/:transaction/documents/:document/files')
   @HttpCode(200)
   @Screen('transactions', 'edit')
-  @UseGuards(AuthGuard, ScreenGuard)
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MB20 } }))
   uploadDocFile(@CurrentUser() user: AuthUserRecord | undefined, @Param('transaction', ParseIntPipe) txnId: number, @Param('document', ParseIntPipe) docId: number, @UploadedFile() file: Express.Multer.File, @Body() body: Res0): Promise<Res0> {
     const client = body?.client_name;
@@ -124,7 +138,6 @@ export class DocumentsController {
 
   @Delete('transactions/:transaction/documents/:document/files/:index')
   @Screen('transactions', 'edit')
-  @UseGuards(AuthGuard, ScreenGuard)
   deleteDocFile(@CurrentUser() user: AuthUserRecord | undefined, @Param('transaction', ParseIntPipe) txnId: number, @Param('document', ParseIntPipe) docId: number, @Param('index', ParseIntPipe) index: number): Promise<Res0> {
     return this.docs.deleteDocFile(u(user), txnId, docId, index);
   }
@@ -132,7 +145,6 @@ export class DocumentsController {
   @Post('transactions/:transaction/documents/:document/validation-file')
   @HttpCode(200)
   @Screen('transactions', 'edit')
-  @UseGuards(AuthGuard, ScreenGuard)
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MB20 } }))
   uploadValidationFile(@CurrentUser() user: AuthUserRecord | undefined, @Param('transaction', ParseIntPipe) txnId: number, @Param('document', ParseIntPipe) docId: number, @UploadedFile() file: Express.Multer.File): Promise<Res0> {
     return this.docs.uploadValidationFile(u(user), txnId, docId, file);
@@ -140,24 +152,14 @@ export class DocumentsController {
 
   @Delete('transactions/:transaction/documents/:document/validation-file')
   @Screen('transactions', 'edit')
-  @UseGuards(AuthGuard, ScreenGuard)
   deleteValidationFile(@CurrentUser() user: AuthUserRecord | undefined, @Param('transaction', ParseIntPipe) txnId: number, @Param('document', ParseIntPipe) docId: number): Promise<Res0> {
     return this.docs.deleteValidationFile(u(user), txnId, docId);
   }
 
   @Delete('documents/:document')
   @Screen('transactions', 'edit')
-  @UseGuards(AuthGuard, ScreenGuard)
   destroy(@CurrentUser() user: AuthUserRecord | undefined, @Param('document', ParseIntPipe) docId: number): Promise<{ message: string }> {
     return this.docs.destroy(u(user), docId);
-  }
-
-  @Post('documents/:document/restore')
-  @HttpCode(200)
-  @Screen('transactions', 'edit')
-  @UseGuards(AuthGuard, ScreenGuard)
-  restore(@CurrentUser() user: AuthUserRecord | undefined, @Param('document', ParseIntPipe) docId: number): Promise<{ message: string }> {
-    return this.docs.restore(u(user), docId);
   }
 
   // ---- helpers ----

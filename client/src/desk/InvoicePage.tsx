@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { getInvoices, getInvoice, getCustomers, getCompanySettings, listAgents, deleteInvoice } from '../lib/api';
 import { formatCurrency, typeLabel } from './format';
@@ -9,6 +9,9 @@ import InvoiceEditorModal from './InvoiceEditorModal';
 import InvoicePreviewModal from './InvoicePreviewModal';
 import CommissionAnalytics from './CommissionAnalytics';
 import type { CompanySettings, Invoice } from '../types';
+
+/** Rows per page. The server caps this at 200. */
+const PER_PAGE = 25;
 
 const STATUS_PILL: Record<string, string> = {
   Paid: 'ok', 'Partially Paid': 'warn', Unpaid: 'info', Overdue: 'bad', Void: 'bad', Draft: 'info', Due: 'info',
@@ -34,6 +37,10 @@ export default function InvoicePage() {
   const canEdit = can('invoice', 'edit');
 
   const [invoices, setInvoices] = useState<Invoice[]>([]);
+  /** Ledger-wide figures for the tiles — every invoice, not this page and not the filter. */
+  const [totals, setTotals] = useState({ count: 0, outstanding: 0, paid_count: 0 });
+  const [page, setPage] = useState(1);
+  const [lastPage, setLastPage] = useState(1);
   const [customers, setCustomers] = useState<unknown[]>([]);
   const [settings, setSettings] = useState<CompanySettings | null>(null);
   const [agents, setAgents] = useState<string[]>([]);
@@ -52,14 +59,39 @@ export default function InvoicePage() {
     if (openId) { setEditorId(Number(openId)); params.delete('open'); setParams(params, { replace: true }); }
   }, [params, setParams]);
 
-  const loadInvoices = () => getInvoices().then(setInvoices).catch(() => toast('Could not load invoices', 'bad'));
+  /**
+   * Fetch one page. `seq` guards against out-of-order responses — changing the status filter
+   * quickly leaves several requests in flight, and a slow early reply must not repaint the table
+   * over a fast later one.
+   */
+  const seq = useRef(0);
+  const loadInvoices = (toPage = page, status = filter) => {
+    const mine = ++seq.current;
+    return getInvoices({ page: toPage, per_page: PER_PAGE, status })
+      .then((res) => {
+        if (mine !== seq.current) return;
+        setInvoices(res.data);
+        setTotals(res.totals);
+        setLastPage(res.meta.last_page);
+        // A filter can shrink the set past the page you were on.
+        if (toPage > res.meta.last_page) setPage(res.meta.last_page);
+      })
+      .catch(() => { if (mine === seq.current) toast('Could not load invoices', 'bad'); });
+  };
 
   useEffect(() => {
-    Promise.all([getInvoices(), getCustomers().catch(() => []), getCompanySettings(), listAgents().catch(() => [])])
-      .then(([inv, cust, set, ag]) => { setInvoices(inv); setCustomers(cust); setSettings(set); setAgents(ag); })
+    Promise.all([loadInvoices(1, ''), getCustomers().catch(() => []), getCompanySettings(), listAgents().catch(() => [])])
+      .then(([, cust, set, ag]) => { setCustomers(cust); setSettings(set); setAgents(ag); })
       .catch(() => toast('Could not load invoice module', 'bad'))
       .finally(() => setLoading(false));
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // The status filter and the page are applied by the database now, so each change refetches.
+  const firstRun = useRef(true);
+  useEffect(() => {
+    if (firstRun.current) { firstRun.current = false; return; }
+    loadInvoices(page, filter);
+  }, [page, filter]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const openPdf = async (inv: Invoice) => {
     try { setPreview(await getInvoice(inv.id)); } catch { toast('Could not load invoice', 'bad'); }
@@ -79,8 +111,9 @@ export default function InvoicePage() {
     finally { setDeleting(false); }
   };
 
-  const list = invoices.filter((i) => !filter || i.display_status === filter);
-  const totalOutstanding = invoices.reduce((s, i) => s + Number(i.balance_due || 0), 0);
+  // The rows ARE the page: filtering moved to the database, where it can see every invoice rather
+  // than the twenty-five in front of it.
+  const list = invoices;
 
   if (loading) return <div className="centered">Loading invoices…</div>;
 
@@ -88,13 +121,13 @@ export default function InvoicePage() {
     <>
       <CommissionAnalytics />
       <div className="tiles">
-        <div className="stat-card"><div className="lbl">Invoices</div><div className="val">{invoices.length}</div></div>
-        <div className="stat-card"><div className="lbl">Outstanding Balance</div><div className="val" style={{ color: 'var(--brand)' }}>{formatCurrency(totalOutstanding)}</div></div>
-        <div className="stat-card"><div className="lbl">Paid</div><div className="val" style={{ color: 'var(--ok-ink)' }}>{invoices.filter((i) => i.status === 'Paid').length}</div></div>
+        <div className="stat-card"><div className="lbl">Invoices</div><div className="val">{totals.count}</div></div>
+        <div className="stat-card"><div className="lbl">Outstanding Balance</div><div className="val" style={{ color: 'var(--brand)' }}>{formatCurrency(totals.outstanding)}</div></div>
+        <div className="stat-card"><div className="lbl">Paid</div><div className="val" style={{ color: 'var(--ok-ink)' }}>{totals.paid_count}</div></div>
       </div>
 
       <div className="toolbar"><div className="toolbar-row">
-        <select value={filter} onChange={(e) => setFilter(e.target.value)}>
+        <select value={filter} onChange={(e) => { setPage(1); setFilter(e.target.value); }}>
           <option value="">All statuses</option>
           <option>Draft</option><option>Unpaid</option><option>Partially Paid</option><option>Paid</option><option>Overdue</option><option>Void</option>
         </select>
@@ -149,6 +182,17 @@ export default function InvoicePage() {
           ))}
         </tbody>
       </table>
+
+      {/* Pager. Hidden when everything fits on one page, so a short ledger looks exactly as before. */}
+      {lastPage > 1 && (
+        <div className="toolbar" style={{ display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'flex-end', marginTop: 10 }}>
+          <button className="btn ghost sm" disabled={page <= 1} onClick={() => setPage(1)}>« First</button>
+          <button className="btn ghost sm" disabled={page <= 1} onClick={() => setPage(page - 1)}>‹ Prev</button>
+          <span style={{ fontSize: 12 }}>Page {page} of {lastPage}</span>
+          <button className="btn ghost sm" disabled={page >= lastPage} onClick={() => setPage(page + 1)}>Next ›</button>
+          <button className="btn ghost sm" disabled={page >= lastPage} onClick={() => setPage(lastPage)}>Last »</button>
+        </div>
+      )}
 
       {editorId !== undefined && (
         <InvoiceEditorModal

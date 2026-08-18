@@ -85,6 +85,23 @@ describe('the capabilities restate the decisions they came from', () => {
      */
     'leads.rewrite-identity': ['admin', 'manager'],
     /*
+     * THE CRM'S LEAD DATA SCOPE — who reaches the leads the BROKERAGE owns.
+     *
+     * EVERY ROLE EXCEPT `agent`, which is the business rule in one line: an agent has a personal
+     * book, everybody else is brokerage staff. It is deliberately the same split that decides
+     * OWNERSHIP at intake — `ownerAtIntake` asks `isAgent` — and the two must partition the roles
+     * identically, or a role could create leads it cannot then see. `lead-ownership-scope.spec.ts`
+     * asserts that correspondence directly.
+     *
+     * Listed rather than written as `role !== 'agent'` so a role invented later has to opt in
+     * instead of inheriting the brokerage's whole lead book by default.
+     *
+     * Holding it never reaches an agent's PRIVATE book. That is not expressible in this table
+     * because it is a property of `leadScopeWhere`, which has no branch that drops the owner
+     * clause; `lead-ownership-scope.spec.ts` is what proves it.
+     */
+    'leads.brokerage-scope': ['admin', 'manager', 'accounting', 'documentation', 'crm'],
+    /*
      * The brokerage's own banking details.
      *
      * `accounting` and `documentation` are IN, and that is deliberate rather than a loose
@@ -117,6 +134,25 @@ describe('the capabilities restate the decisions they came from', () => {
      * filters, duplicate removal and malformed-address exclusion all still run, for everyone.
      */
     'campaigns.brokerage-audience': ['admin', 'manager', 'crm'],
+    /*
+     * The Invoice module — brokerage financial records, and the second capability that has to be a
+     * NAMED SET rather than a rank.
+     *
+     * `accounting` is IN because invoicing is its job. `documentation` is OUT and shares
+     * accounting's rank of 60, so no threshold can separate them: `ROLE_RANK.accounting` would let
+     * Documentation in by arithmetic, and anything stricter would lock Accounting out of the module
+     * it exists to run.
+     *
+     * `agent` and `crm` are OUT, and this is the finding it was added for: the module was protected
+     * by the `invoice` screen permission alone, while `InvoicesService.index()` filters on
+     * `deleted_at` and nothing else. One mistaken override in Roles & Permissions
+     * (`agent → invoice: view`) therefore published the brokerage's entire invoice ledger. A role is
+     * not a dial an administrator can turn by accident.
+     *
+     * DELIBERATELY NOT RECORD-SCOPED. Invoices are the brokerage's billing rather than an agent's
+     * own work, so "an agent sees their own invoices" is the wrong model: an agent sees none.
+     */
+    'invoices.access': ['admin', 'manager', 'accounting'],
   };
 
   it.each(Object.keys(EXPECTED) as Capability[])('%s is held by exactly the right roles', (cap) => {

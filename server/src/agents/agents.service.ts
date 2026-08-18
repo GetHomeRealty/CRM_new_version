@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { isAgent } from '../core/authz';
 import { parseJsonObject, phpEmpty, phpFloat, round2, toDateString, toFloat } from '../common/serialize';
 
 interface Repayment {
@@ -24,9 +25,33 @@ export interface AgentLoan {
   repayments: Repayment[];
 }
 
+/** Just enough of the signed-in user to decide whose rows they may read. */
+type Viewer = { name?: string | null; role?: string | null } | null;
+
 @Injectable()
 export class AgentsService {
   constructor(private readonly prisma: PrismaService) {}
+
+  /**
+   * Narrow a name-keyed map to the caller's own entry when the caller is an agent.
+   *
+   * These three maps carry money — commission splits, loan balances, contact addresses — and were
+   * returned whole to every authenticated caller. An agent has a legitimate need for exactly one
+   * row of each: their own, which is what the Team Split and Financial screens read to show them
+   * their default split. Everyone above agent works across the brokerage by definition and keeps
+   * the full map.
+   *
+   * Keyed by NAME because that is the shape the screens consume; the caller's own name is not an
+   * authorization decision here, only a lookup of the row they are already entitled to. A namesake
+   * collision therefore discloses nothing that is not already ambiguous in the underlying data —
+   * unlike the transaction scope, where the id rule is what keeps two people apart.
+   */
+  private mine<T>(map: Record<string, T>, viewer: Viewer): Record<string, T> {
+    if (!viewer || !isAgent(viewer)) return map;
+    const name = (viewer.name ?? '').trim();
+    const own = name === '' ? undefined : map[name];
+    return own === undefined ? {} : { [name]: own };
+  }
 
   /** Active Agent-role users, case-insensitively by name (matches MySQL ci ordering). */
   async listNames(): Promise<string[]> {
@@ -41,18 +66,18 @@ export class AgentsService {
       .sort((a, b) => a.localeCompare(b, 'en', { sensitivity: 'base' }));
   }
 
-  /** Map of user name => email (users with an email), in id order. */
-  async emails(): Promise<Record<string, string>> {
+  /** Map of user name => email (users with an email), in id order. Agents get their own only. */
+  async emails(viewer: Viewer = null): Promise<Record<string, string>> {
     const rows = await this.prisma.users.findMany({ select: { name: true, email: true }, orderBy: { id: 'asc' } });
     const map: Record<string, string> = {};
     for (const u of rows) {
       if (u.email) map[u.name] = u.email;
     }
-    return map;
+    return this.mine(map, viewer);
   }
 
-  /** Map of name => registered default commission split from the user profile. */
-  async commissions(): Promise<Record<string, AgentCommission>> {
+  /** Map of name => registered default commission split. Agents get their own row only. */
+  async commissions(viewer: Viewer = null): Promise<Record<string, AgentCommission>> {
     const rows = await this.prisma.users.findMany({ select: { name: true, profile: true }, orderBy: { id: 'asc' } });
     const map: Record<string, AgentCommission> = {};
     for (const u of rows) {
@@ -65,11 +90,11 @@ export class AgentsService {
         lease_pct: lease === null || lease === undefined || lease === '' ? null : phpFloat(lease),
       };
     }
-    return map;
+    return this.mine(map, viewer);
   }
 
-  /** Per-agent loan position: actual loan minus loan-repayment adjustments across deals. */
-  async loans(): Promise<Record<string, AgentLoan>> {
+  /** Per-agent loan position. Agents get their own row only — see `mine`. */
+  async loans(viewer: Viewer = null): Promise<Record<string, AgentLoan>> {
     const users = await this.prisma.users.findMany({ select: { name: true, profile: true }, orderBy: { id: 'asc' } });
     const loans: Record<string, LoanAgg> = {};
     for (const u of users) {
@@ -116,6 +141,6 @@ export class AgentsService {
         repayments: v.repayments,
       };
     }
-    return out;
+    return this.mine(out, viewer);
   }
 }

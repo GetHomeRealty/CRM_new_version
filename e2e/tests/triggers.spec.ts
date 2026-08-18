@@ -1,169 +1,122 @@
 import { test, expect } from '@playwright/test';
-import { signIn, apiGet, apiSend, API_BASE } from './helpers';
+import { signIn, apiGet, apiSend } from './helpers';
 
 /**
- * CRM › Triggers — the client-side findings of the 2026-08-04 audit.
+ * The CRM Triggers module is gone; Transaction Desk Triggers is not.
  *
- * The server-side ones are pinned in `crm-triggers-findings.spec.ts`; these three can only be seen
- * in a browser: a screen that never re-reads, a kill switch that asked nothing, and a session
- * expiry reported in the framework's own word for it.
+ * WHAT THIS FILE USED TO BE. Four describes exercising `/crm/triggers` — that the screen re-read
+ * itself on focus (T-M3), that it did not re-read over unsaved edits, that the brokerage kill switch
+ * asked before switching CRM email off for everybody (T-M5), and that an expired session said so
+ * (T-M9). Every one of them was about a screen that no longer exists.
+ *
+ * WHAT REPLACES THEM. The controls moved rather than went, so the tests follow them: the personal
+ * switches and the brokerage card are now on CRM → Communications and are covered in
+ * `crm-communications.spec.ts`, including the confirmation before the master switch goes off. What
+ * belongs HERE is the boundary this cleanup had to hold — the CRM half is unreachable and the
+ * Transaction Desk half is untouched. Those are the two things a regression would break.
  */
 
-test.describe('T-M3 — the screen re-reads when you come back to it', () => {
-  test('picks up a brokerage change made elsewhere, without a manual reload', async ({ page, context }) => {
+test.describe('the CRM Triggers module is gone', () => {
+  test('/crm/triggers no longer serves a CRM Triggers screen', async ({ page }) => {
     await signIn(page, 'superAdmin');
     await page.goto('/crm/triggers');
-    await expect(page.getByRole('heading', { name: 'CRM Triggers' })).toBeVisible({ timeout: 15_000 });
-
-    const before = await apiGet(page, '/api/crm-settings/email-settings');
-    const original = (before.body as Record<string, unknown>).autoSendEnabled;
 
     /*
-     * Another administrator turns CRM email off for the brokerage. Measured during the audit: the
-     * open screen went on showing the old state indefinitely, because nothing ever re-read it.
+     * `triggers` is a real screen that now belongs to the Desk, so `AreaFallback` redirects rather
+     * than showing a stub — an existing bookmark lands somewhere that works. Asserted on the URL
+     * because that is the observable promise: you do not stay in the CRM.
      */
-    const other = await context.newPage();
-    await signIn(other, 'superAdmin');
-    await apiSend(other, 'PUT', '/api/crm-settings/email-settings', { autoSendEnabled: false });
-
-    try {
-      /*
-       * The `focus` event is what the browser raises when a tab is returned to, and dispatching it
-       * is what a headless run can actually do — `bringToFront()` does not raise it in headless
-       * Chromium, which is why this reads as an event rather than as a gesture.
-       */
-      await page.evaluate(() => { window.dispatchEvent(new Event('focus')); });
-      await expect(page.getByText(/switched off for the whole brokerage/i)).toBeVisible({ timeout: 10_000 });
-    } finally {
-      await apiSend(other, 'PUT', '/api/crm-settings/email-settings', { autoSendEnabled: original });
-      await other.close();
-    }
+    await expect(page).toHaveURL(/\/desk\/triggers/, { timeout: 15_000 });
+    await expect(page.getByRole('heading', { name: 'CRM Triggers' })).toHaveCount(0);
   });
 
-  test('does NOT re-read over unsaved edits', async ({ page }) => {
-    // Refreshing while somebody has half-flipped switches would throw their work away to fix a
-    // display problem — a worse bug than the one being fixed.
+  test('the CRM sidebar offers no Triggers entry', async ({ page }) => {
     await signIn(page, 'superAdmin');
-    await page.goto('/crm/triggers');
-    await expect(page.getByRole('heading', { name: 'CRM Triggers' })).toBeVisible({ timeout: 15_000 });
+    await page.goto('/crm/dashboard');
+    /*
+     * Scoped to the navigation: "Triggers" appears in prose elsewhere, and matching that would make
+     * this pass or fail on wording rather than on navigation.
+     *
+     * `button`, NOT `link` — the sidebar navigates with `onClick`, so there is not an anchor in it.
+     * An earlier version asked for a link and asserted zero of them, which passed because there are
+     * zero links whatever the menu contains: an assertion that could not fail. The `Leads` check
+     * below is what keeps this one honest — same locator, same nav, one entry that must be there.
+     */
+    const nav = page.locator('nav, .sidebar, aside').first();
+    await expect(nav.getByRole('button', { name: /^Leads?$/ })).toHaveCount(1);
+    await expect(nav.getByRole('button', { name: /^Triggers$/ })).toHaveCount(0);
+  });
 
-    const box = page.locator('.card').filter({ has: page.getByRole('heading', { name: 'CRM Triggers' }) }).locator('.crm-toggle input[type=checkbox]').first();
-    const was = await box.isChecked();
-    await box.setChecked(!was);
-    await expect(page.getByRole('button', { name: /^Save \d+ change/ })).toBeVisible();
+  test('the CRM per-user trigger endpoints are gone', async ({ page }) => {
+    await signIn(page, 'superAdmin');
+    /*
+     * 404, not 403. A 403 would mean the route still exists and refused this caller, which is a
+     * different (and reversible) state — the point of the cleanup is that there is no route.
+     */
+    expect((await apiGet(page, '/api/crm-settings/triggers')).status).toBe(404);
+    expect((await apiSend(page, 'PUT', '/api/crm-settings/triggers', { triggers: { custom: true } })).status).toBe(404);
+  });
 
-    await page.evaluate(() => { window.dispatchEvent(new Event('focus')); });
-    await page.waitForTimeout(1200);
+  test('Wedding Congratulations cannot be sent by any surviving route', async ({ page }) => {
+    await signIn(page, 'superAdmin');
 
-    // The edit survived the focus event.
-    expect(await box.isChecked()).toBe(!was);
-    await expect(page.getByRole('button', { name: /^Save \d+ change/ })).toBeVisible();
+    // The action is unknown to the dispatcher rather than a no-op that reports success.
+    const direct = await apiSend(page, 'POST', '/api/crm-settings/email-settings', {
+      action: 'sendWeddingEmail', leadName: 'X', leadEmail: 'x@example.test', weddingDate: '2026-09-01',
+    });
+    expect(JSON.stringify(direct.body)).toMatch(/invalid action/i);
+
+    // Nor through the bulk sender, which had its own `wedding` case.
+    const bulk = await apiSend(page, 'POST', '/api/crm-settings/email-settings', {
+      action: 'bulkSend', emailType: 'wedding', leads: [{ name: 'X', email: 'x@example.test' }], emailData: {},
+    });
+    expect(JSON.stringify(bulk.body)).not.toMatch(/"success":\s*true.*sent":\s*[1-9]/);
+
+    // And it is not offered as a communication, so no switch can bring it back.
+    const comms = await apiGet(page, '/api/crm-communications');
+    const keys = (comms.body as { communications: { key: string }[] }).communications.map((c) => c.key);
+    expect(keys).not.toContain('wedding');
+
+    // The brokerage defaults will not accept it either.
+    const put = await apiSend(page, 'PUT', '/api/crm-communications/brokerage', { defaults: { wedding: true } });
+    expect(put.status).toBe(400);
   });
 });
 
-/**
- * The switch has moved SCREENS, and the behaviour asserted below is unchanged by the move.
- *
- * "Email Campaigns" was removed from CRM Settings as a duplicate of the Campaigns screen, and this
- * control — the only writable path to `crm_email_settings.auto_send_enabled` — went with it by
- * accident. It now sits in a "Brokerage" card at the top of THIS screen, which was already the one
- * reporting it: the notice below used to tell an administrator to go to CRM Settings to act on a
- * warning they were reading here.
- *
- * It is still gated on `settings`, not on `triggers`. Everything else on this screen is one row per
- * person, which is why `triggers` was safe to widen to every agent; this switch is one row for the
- * whole brokerage, so an agent sees the notice and no control. `write-authorization.spec.ts` is
- * where that boundary is proved against the API — the card being absent is a courtesy, not the gate.
- *
- * Selectors here are scoped to their card. Both cards render `.crm-toggle`, so an unscoped `.first()`
- * silently means the brokerage switch, and a test meaning to flip a personal trigger would instead
- * be changing what every colleague can send.
- */
-test.describe('T-M5 — the brokerage kill switch asks first', () => {
-  test('switching CRM email off for everyone is confirmed', async ({ page }) => {
+test.describe('Transaction Desk Triggers is untouched', () => {
+  test('/desk/triggers still opens the Desk trigger screen', async ({ page }) => {
     await signIn(page, 'superAdmin');
-
+    await page.goto('/desk/triggers');
     /*
-     * ON BEFORE THE PAGE LOADS, not after — the subject is the TRANSITION to off, so the screen has
-     * to have been opened on a brokerage that allows CRM email. Ticking the box in the browser
-     * cannot establish that: it changes the pending value, while the confirmation compares against
-     * what the screen loaded with. This test used to do exactly that and passed only as long as the
-     * flag happened to already be on, which the `settings-*` files do not guarantee.
+     * The heading is built from `AREA_LABEL.desk`, which is "Transaction Management" — not
+     * "Transaction Desk", the name used for the area everywhere else in conversation. Asserted with
+     * the string the screen actually renders; an earlier version guessed and failed here before
+     * reaching the line below, which is the one that proves the panel itself loaded.
      */
-    const original = ((await apiGet(page, '/api/crm-settings/email-settings')).body as { autoSendEnabled?: boolean }).autoSendEnabled ?? true;
-    await apiSend(page, 'PUT', '/api/crm-settings/email-settings', { autoSendEnabled: true });
-
-    await page.goto('/crm/triggers');
-    await page.waitForLoadState('networkidle');
-
-    const master = page.locator('.crm-toggle', { hasText: "Allow the CRM's per-lead emails" }).locator('input[type=checkbox]');
-    await expect(master).toBeVisible({ timeout: 15_000 });
-    await expect(master).toBeChecked();
-
-    try {
-      await master.setChecked(false);
-      await page.getByRole('button', { name: /Save CRM Email/i }).click();
-
-      // The whole point: a dialog, not a silent save.
-      await expect(page.getByText(/Switch off CRM email for the whole brokerage/i)).toBeVisible({ timeout: 10_000 });
-
-      // Backing out leaves it alone. Scoped to the dialog: 'Cancel' also appears on other
-      // cards of this screen, and clicking the wrong one proves nothing.
-      await page.locator('.modal, [role=dialog]').getByRole('button', { name: 'Cancel' }).click();
-      // Still on — cancelling a confirmation must not be a slower way of agreeing to it. Compared
-      // against the value this test established above, not against whatever it inherited.
-      const after = await apiGet(page, '/api/crm-settings/email-settings');
-      expect((after.body as Record<string, unknown>).autoSendEnabled).toBe(true);
-    } finally {
-      await apiSend(page, 'PUT', '/api/crm-settings/email-settings', { autoSendEnabled: original });
-    }
+    await expect(page.getByText(/Transaction Management Triggers/i)).toBeVisible({ timeout: 15_000 });
+    // The panel's own content, so this fails if the route survived but the panel did not.
+    await expect(page.getByText(/Automations that run on transaction activity/i)).toBeVisible();
   });
 
-  test('turning it back ON is not confirmed', async ({ page }) => {
-    // A confirmation on every save is one people learn to click through. Only the off transition.
+  test('the Desk sidebar still offers Triggers', async ({ page }) => {
     await signIn(page, 'superAdmin');
-    await apiSend(page, 'PUT', '/api/crm-settings/email-settings', { autoSendEnabled: false });
-    await page.goto('/crm/triggers');
-    await page.waitForLoadState('networkidle');
-
-    const master = page.locator('.crm-toggle', { hasText: "Allow the CRM's per-lead emails" }).locator('input[type=checkbox]');
-    await expect(master).toBeVisible({ timeout: 15_000 });
-    await master.setChecked(true);
-    await page.getByRole('button', { name: /Save CRM Email/i }).click();
-
-    await expect(page.getByText(/Switch off CRM email for the whole brokerage/i)).toHaveCount(0);
-    await expect(page.getByText(/Settings updated successfully/i)).toBeVisible({ timeout: 10_000 });
+    await page.goto('/desk/dashboard');
+    // `button` for the same reason as the CRM test above — the sidebar has no anchors in it.
+    const nav = page.locator('nav, .sidebar, aside').first();
+    await expect(nav.getByRole('button', { name: /^Triggers$/ })).toHaveCount(1);
   });
-});
 
-test.describe('T-M9 — an expired session says what happened', () => {
-  test('a save after the cookies are gone does not report "Unauthenticated."', async ({ page }) => {
+  test('the Desk trigger endpoints still answer', async ({ page }) => {
     await signIn(page, 'superAdmin');
-    await page.goto('/crm/triggers');
-    await expect(page.getByRole('heading', { name: 'CRM Triggers' })).toBeVisible({ timeout: 15_000 });
-
-    const box = page.locator('.card').filter({ has: page.getByRole('heading', { name: 'CRM Triggers' }) }).locator('.crm-toggle input[type=checkbox]').first();
-    await box.setChecked(!(await box.isChecked()));
-
-    // The session ends underneath them, which is what a timeout looks like from the page's side.
-    await page.context().clearCookies();
-    await page.getByRole('button', { name: /^Save \d+ change/ }).click();
-
-    await expect(page.getByText(/Your session has ended/i)).toBeVisible({ timeout: 10_000 });
-    await expect(page.getByText(/^Unauthenticated\.?$/)).toHaveCount(0);
+    // What DeskTriggersPanel loads. Neither is a CRM endpoint and neither should have moved.
+    expect((await apiGet(page, '/api/company-settings')).status).toBe(200);
+    expect((await apiGet(page, '/api/email-templates')).status).toBe(200);
   });
 
-  test('the API really does answer 401 there, so the test above is not asserting on nothing', async ({ playwright }) => {
-    /*
-     * A BRAND-NEW request context, never signed in. An earlier version of this cleared the page's
-     * cookies and reused `page.request`, which answered 200 — not because the endpoint is open, but
-     * because that context carries its own session state. The assertion was testing Playwright
-     * rather than the application; a fresh context tests the application.
-     */
-    const ctx = await playwright.request.newContext();
-    try {
-      const res = await ctx.get(`${API_BASE}/api/crm-settings/triggers`);
-      expect(res.status()).toBe(401);
-    } finally { await ctx.dispose(); }
+  test('the `triggers` permission still exists, because the Desk screen needs it', async ({ page }) => {
+    await signIn(page, 'superAdmin');
+    const res = await apiGet(page, '/api/users/catalog');
+    expect(res.status).toBe(200);
+    expect(JSON.stringify(res.body)).toMatch(/"triggers"/);
   });
 });

@@ -22,6 +22,29 @@ export interface NotificationRequest {
   /**
    * Idempotency handle. Two deliveries with the same key for the same person are the same
    * notification, and the second is dropped — which is what makes a retried job safe.
+   *
+   * IT IDENTIFIES AN OCCURRENCE, so it must carry the entity AND when: `lead-task-due:4182:
+   * 2026-08-15` says which follow-up and which day it fell due. A key of just the entity would
+   * notify once and never again; a key that changes every pass would not dedupe at all.
+   *
+   * Enforced in `notification_deliveries`, per channel, independently of any preference — see
+   * `claim` below.
+   *
+   * ================================================================================================
+   * SETTLED POLICY: NO KEY MEANS NO DEDUPLICATION, AND NO KEY IS EVER INVENTED FOR YOU. A request
+   * without one is delivered every time it is made, writes nothing to the ledger, and behaves
+   * exactly as it did before the ledger existed.
+   *
+   * That is correct for an event raised BY something happening — a campaign finishing, a person
+   * approving a change, somebody being mentioned. Each call is a distinct event, and a synthesised
+   * key (a hash of the payload, say) would silently merge two real occurrences that happened to look
+   * alike, which is a worse failure than a duplicate because nothing records it.
+   *
+   * SO ANY CALLER A SWEEP CAN INVOKE MORE THAN ONCE FOR THE SAME THING MUST PASS A STABLE KEY, and
+   * it is the caller's job to build one, because only the caller knows what "the same thing" means.
+   * Every scheduler-driven site currently does: `lead-task-due:{task}:{due date}`,
+   * `{kind}-{txn}-{day}`, `calendar-reminder-{reminder}`, `inbox-{account}-{uid}`.
+   * ================================================================================================
    */
   dedupeKey?: string;
   /** Overrides for the email body, when the plain title/body would read poorly as a message. */
@@ -65,9 +88,27 @@ export interface DispatchResult {
  *
  *   module → dispatch({ category, userId, title, … })
  *              ↓
+ *            claim (user, category, occurrence, channel) in the delivery ledger
+ *              ↓
  *            preferences for (user, category)
  *              ↓
  *            in-app · email · push — whichever are supported AND enabled
+ *
+ * DEDUPLICATION IS THE LEDGER'S JOB, AND IT IS NOT ANY CHANNEL'S. It used to be a side effect of the
+ * unique index on `notifications(user_id, dedupe_key)`, which made "have we sent this?" a question
+ * only the in-app row could answer. Two failures followed from that, and both were live:
+ *
+ *   MUTING IN-APP DISABLED DEDUPE. No in-app row is written for a muted channel, so nothing recorded
+ *   that the notification had happened — and a recipient who kept email on received it again on
+ *   every pass, precisely because they had turned off the channel that was doing the bookkeeping.
+ *
+ *   EMAIL AND PUSH WERE NEVER DEDUPED. Only `sendInApp` consulted the key at all. Any sweep that
+ *   re-selects a row — a follow-up still overdue because nobody has done it yet — re-sent on both.
+ *
+ * `notification_deliveries` now records one row per (recipient, category, occurrence, channel), for
+ * every channel including muted ones, claimed BEFORE the send. So the rule is the same for all three
+ * channels, it survives any preference change, and it holds for every category without a scheduler
+ * having to implement anything of its own.
  *
  * NOTHING HERE THROWS AT THE CALLER. A notification is a side effect of somebody's real work: a
  * closing does not fail because a phone was unreachable. Every channel is attempted independently
@@ -114,10 +155,29 @@ export class NotificationDispatcher {
       : NOTIFICATION_CHANNELS;
 
     for (const channel of requested) {
+      /*
+       * THE CLAIM COMES FIRST — BEFORE THE PREFERENCE, NOT AFTER IT.
+       *
+       * This ordering is the entire fix and it is easy to undo by accident. If the mute check ran
+       * first, a muted channel would `continue` without writing anything, and the ledger would once
+       * again be a record only of what was DELIVERED rather than of what was HANDLED. A recipient
+       * with everything muted would leave no trace at all, so every later pass would treat the
+       * occurrence as new — which is how a scheduler that reads the ledger starves.
+       *
+       * Claiming first means the row exists whatever happens next, and `status` carries the outcome.
+       */
+      const claim = await this.claim(user.id, request, channel);
+      if (claim === 'duplicate') {
+        result.skipped.push({ channel, reason: 'duplicate' });
+        continue;
+      }
+
       if (!choices[channel]) {
         // `channelsFor` returns false both for "muted" and for "this category has no such channel";
         // the second is reported distinctly so a caller can tell a choice from a limitation.
-        result.skipped.push({ channel, reason: this.unsupported(request.category, channel) ? 'unsupported' : 'muted' });
+        const reason: SkipReason = this.unsupported(request.category, channel) ? 'unsupported' : 'muted';
+        result.skipped.push({ channel, reason });
+        await this.settle(claim, reason);
         continue;
       }
 
@@ -125,10 +185,30 @@ export class NotificationDispatcher {
         const outcome = await this.send(channel, request, user);
         if (outcome === true) result.delivered.push(channel);
         else result.skipped.push({ channel, reason: outcome });
+        await this.settle(claim, outcome === true ? 'sent' : outcome);
       } catch (err) {
         const message = (err as Error)?.message ?? String(err);
         result.failed.push({ channel, error: message });
         this.log.warn(`Could not deliver "${request.category}" to user #${user.id} by ${channel}: ${message}`);
+        /*
+         * ============================================================================================
+         * SETTLED POLICY: A FAILED DELIVERY KEEPS ITS CLAIM. Do not release or delete it here, and do
+         * not let a scheduler retry it by re-selecting the row on the next pass.
+         *
+         * The reasoning is the same one the CRM greeting sweeps already follow: given a notification
+         * that arrives twice and one that does not arrive, the duplicate is what people report as a
+         * fault, and the miss is visible — right here, with `status = 'failed'` and the reason beside
+         * it. Releasing the claim would turn one transient SMTP error into a repeat send on every
+         * pass for as long as the underlying row stays selectable, which for an overdue follow-up is
+         * indefinitely.
+         *
+         * IF RETRIES ARE WANTED LATER, they must be a controlled mechanism and not the absence of
+         * this line: an attempt count, a next-retry time, a maximum, and a terminal failed state —
+         * the shape `calendar_event_reminders` already uses. Deleting the claim is not that
+         * mechanism; it is unbounded retry with no record.
+         * ============================================================================================
+         */
+        await this.settle(claim, 'failed', message);
       }
     }
 
@@ -157,6 +237,85 @@ export class NotificationDispatcher {
     const user = await this.recipient(userId);
     if (!user) return false;
     return (await this.prefs.channelsFor(user.id, category))[channel] === true;
+  }
+
+  // ========================================================================== the delivery ledger
+
+  /**
+   * Take ownership of one (recipient, category, occurrence, channel) before sending on it.
+   *
+   * Returns the ledger row's id when this call won the claim, `'duplicate'` when somebody already
+   * holds it, and `null` when the request carries no `dedupeKey` and is therefore not deduped at
+   * all — in which case nothing is recorded and behaviour is exactly what it was before the ledger.
+   *
+   * ================================================================================================
+   * WHY `createMany({ skipDuplicates })` RATHER THAN "look, then insert".
+   *
+   * Read-then-write has a window between the two, and two processes in that window both read
+   * "nothing there" and both send. The window is small and a thirty-minute sweep across two
+   * instances hits it eventually, which is the definition of a bug that only ever appears in
+   * production. `skipDuplicates` compiles to ON CONFLICT DO NOTHING, so the database decides, once.
+   *
+   * It also must not RAISE on the collision. In PostgreSQL a unique violation aborts the enclosing
+   * transaction, and every later statement then fails with 25P02 — so a caller that creates a record
+   * and notifies inside one transaction would have its real work rolled back by a duplicate
+   * notification. `count === 0` is how a loss is detected, and nothing is thrown.
+   * ================================================================================================
+   *
+   * A FAILURE HERE DOES NOT STOP THE SEND. If the ledger write itself errors, the notification is
+   * still delivered and simply not deduped — the same behaviour as before this table existed. A
+   * bookkeeping table must not be able to silence the thing it books.
+   */
+  private async claim(
+    userId: number,
+    request: NotificationRequest,
+    channel: NotificationChannel,
+  ): Promise<number | 'duplicate' | null> {
+    const key = request.dedupeKey?.slice(0, 190);
+    if (!key) return null;
+
+    const now = new Date();
+    try {
+      const written = await this.prisma.notification_deliveries.createMany({
+        data: [{
+          user_id: userId,
+          category: request.category,
+          dedupe_key: key,
+          channel,
+          status: 'pending',
+          created_at: now,
+          updated_at: now,
+        }],
+        skipDuplicates: true,
+      });
+      if (written.count === 0) return 'duplicate';
+
+      const row = await this.prisma.notification_deliveries.findFirst({
+        where: { user_id: userId, category: request.category, dedupe_key: key, channel },
+        select: { id: true },
+      });
+      return row?.id ?? null;
+    } catch (err) {
+      this.log.warn(
+        `Delivery ledger unavailable for "${request.category}" to user #${userId} by ${channel}; `
+        + `sending without deduplication: ${(err as Error)?.message ?? String(err)}`,
+      );
+      return null;
+    }
+  }
+
+  /** Record what became of a claimed channel. A no-op for an unclaimed (undeduped) request. */
+  private async settle(claim: number | 'duplicate' | null, status: string, detail?: string): Promise<void> {
+    if (typeof claim !== 'number') return;
+    try {
+      await this.prisma.notification_deliveries.update({
+        where: { id: claim },
+        data: { status, detail: detail?.slice(0, 2000) ?? null, updated_at: new Date() },
+      });
+    } catch {
+      // The claim is what prevents a duplicate; the status is only for reading afterwards. Losing
+      // the second must not undo the first, and must not fail the caller's real work.
+    }
   }
 
   /** Several recipients, one event. Independent: one person's failure does not stop the others. */
@@ -192,9 +351,11 @@ export class NotificationDispatcher {
   /**
    * In-app: a row in `notifications`, which the Notification Centre reads as a fifth source.
    *
-   * The unique `(user_id, dedupe_key)` index is what makes this idempotent. A duplicate is reported
-   * as skipped rather than raised — a job retried after a partial failure re-sending everything is
-   * normal, and it must not leave somebody two copies or a stack trace.
+   * ITS UNIQUE INDEX IS NO LONGER THE DEDUPE MECHANISM — `notification_deliveries` is, and it has
+   * already run by the time this is called. The index stays because a second copy of an in-app
+   * notification is wrong regardless of how it came about, and because rows written before the
+   * ledger existed are still out there; it is now a backstop rather than the rule. A duplicate is
+   * reported as skipped rather than raised, as before.
    *
    * WHY `createMany({ skipDuplicates })` RATHER THAN `create` IN A TRY/CATCH. Catching the P2002 is
    * not enough, and the difference is not cosmetic: in PostgreSQL a unique violation ABORTS THE

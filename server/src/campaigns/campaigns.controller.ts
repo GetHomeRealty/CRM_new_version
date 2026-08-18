@@ -6,6 +6,7 @@ import { CurrentUser, Screen } from '../auth/decorators';
 import type { AuthUserRecord } from '../auth/auth.types';
 import { CampaignsService } from './campaigns.service';
 import { CampaignAudienceService, type AudienceFilter } from './campaign-audience.service';
+import { CampaignTemplatesService } from './campaign-templates.service';
 import { LeadImportJobService } from '../leads/lead-import-job.service';
 import { PrismaService } from '../prisma/prisma.service';
 import {
@@ -30,9 +31,18 @@ export class CampaignsController {
   @Get('options')
   @Screen('campaigns', 'view')
   async options(@CurrentUser() user: AuthUserRecord): Promise<Record<string, unknown>> {
-    // The Campaigns module's own template library — not Email Settings' transactional templates.
+    /*
+     * The Campaigns module's own template library — not Email Settings' transactional templates.
+     *
+     * SCOPED THE SAME WAY THE LIBRARY IS. This listed every active row regardless of owner, so the
+     * picker offered two things the Templates screen does not: the shipped built-ins, which the
+     * brokerage has decided are not campaign templates, and OTHER AGENTS' private drafts, which
+     * `visibleWhere` has always treated as theirs alone. Either way a campaign could be built from
+     * something its author could not find, edit or preview. `authoredWhere` is the one definition
+     * both now use.
+     */
     const templates = await this.prisma.campaign_templates.findMany({
-      where: { is_active: true, deleted_at: null },
+      where: { is_active: true, deleted_at: null, ...CampaignTemplatesService.authoredWhere(user) },
       select: { id: true, name: true, subject: true, category: true, content: true, _count: { select: { attachments: true } } },
       orderBy: [{ category: 'asc' }, { name: 'asc' }],
     });

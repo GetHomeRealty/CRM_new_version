@@ -2,6 +2,7 @@ import { PrismaClient } from '@prisma/client';
 import type { PrismaService } from '../prisma/prisma.service';
 import { InboxController } from './inbox.controller';
 import { InboxService } from './inbox.service';
+import { InboxEventsService } from './inbox-events.service';
 import type { AuthUserRecord } from '../auth/auth.types';
 
 /**
@@ -33,7 +34,7 @@ async function inRollback(fn: (tx: PrismaService) => Promise<void>) {
 }
 
 const asUser = (id: number) => ({ id, name: 'probe', role: 'agent' } as unknown as AuthUserRecord);
-const controller = (tx: PrismaService) => new InboxController(new InboxService(tx), {} as never, tx);
+const controller = (tx: PrismaService) => new InboxController(new InboxService(tx), {} as never, tx, new InboxEventsService());
 
 /** One agent with a primary CRM account holding `count` messages, newest last. */
 async function mailboxOf(tx: PrismaService, count: number) {

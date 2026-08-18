@@ -1,24 +1,37 @@
 import { useEffect, useRef, useState } from 'react';
-import { fetchOnboardingAttachment, fetchOnboardingDocument, getOnboardingPreview, sendOnboardingEmail, type OnboardingAttachment, type OnboardingPreview } from '../lib/api';
+import { fetchOnboardingAttachment, fetchOnboardingDocument, getOnboardingPreview, sendOnboardingEmail, type OnboardingAttachment, type OnboardingKind, type OnboardingPreview } from '../lib/api';
 import RichTextEditor, { type RichTextHandle } from './RichTextEditor';
 import { useToast } from './toast';
 import { apiErrorMessage } from '../lib/apiError';
 
 /**
- * Review before sending — for the onboarding guide and the contract agreement.
+ * Review before sending — for each of the letters a new agent receives from the Users screen.
  *
- * Both buttons used to raise a toast and send nothing. They now open the message as it will
- * actually arrive for this agent, with the variables already filled in and the template's
- * attachments listed, and it can be edited before it goes.
+ * The buttons open the message as it will actually arrive for this agent, with the variables
+ * already filled in and the template's attachments listed, and it can be edited before it goes.
  *
  * The edit applies to this send only. Adjusting a sentence for one agent must not quietly rewrite
  * what every future agent receives — Settings → Templates is where the template itself changes,
  * and that is said on screen so the distinction is not a surprise.
  */
 
-const KIND_LABEL: Record<string, string> = {
+/**
+ * The heading over the review.
+ *
+ * `onboard` is deliberately not named "Fresher" or "Experienced" here: which of the two it is comes
+ * back with the preview, and a heading guessed on this side could contradict the message under it.
+ */
+const KIND_LABEL: Record<OnboardingKind, string> = {
   onboard: 'Onboarding Email',
   contract: 'Contract Agreement',
+  accounting: 'Accounting Onboarding Email',
+  training: 'Training Onboarding Email',
+};
+
+/** Said under the heading, so which of the two onboarding guides this is can be read at a glance. */
+const EVENT_LABEL: Record<string, string> = {
+  'user.onboard_email': 'experienced agent',
+  'user.onboard_email_fresher': 'fresher',
 };
 
 /**
@@ -41,7 +54,7 @@ async function fileErrorMessage(e: unknown): Promise<string> {
 
 export default function OnboardingEmailModal({ userId, kind, onClose }: {
   userId: number;
-  kind: 'onboard' | 'contract';
+  kind: OnboardingKind;
   onClose: () => void;
 }) {
   const toast = useToast();
@@ -173,7 +186,22 @@ export default function OnboardingEmailModal({ userId, kind, onClose }: {
         <button className="close" onClick={onClose}>✕</button>
         <div className="modal-h" style={{ marginBottom: 2 }}>{KIND_LABEL[kind]}</div>
         <div style={{ fontSize: 12, color: 'var(--muted)', margin: '0 0 12px' }}>
-          {loading ? 'Building the preview…' : <>To <strong>{preview?.to || '—'}</strong>{preview?.sender ? <> · from {preview.sender}</> : null}</>}
+          {loading ? 'Building the preview…' : (
+            <>
+              To <strong>{preview?.to || '—'}</strong>
+              {preview?.sender ? <> · from {preview.sender}</> : null}
+              {/* Which of the two guides was chosen from the agent's record, so a letter meant for a
+                  transferring agent is not sent to a fresher without it being visible first. */}
+              {preview && EVENT_LABEL[preview.event_key] ? <> · {EVENT_LABEL[preview.event_key]} version</> : null}
+              {/* For the contract, which of the brokerage's five agreements these terms are — read
+                  from the same splits the wording below is built from. */}
+              {kind === 'contract' ? (
+                preview?.contract_variant
+                  ? <> · <strong>{preview.contract_variant}</strong> agreement</>
+                  : <> · non-standard split</>
+              ) : null}
+            </>
+          )}
         </div>
 
         {loading ? <div className="centered">Loading…</div> : preview && (

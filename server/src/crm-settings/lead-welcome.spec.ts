@@ -3,6 +3,7 @@ import type { PrismaService } from '../prisma/prisma.service';
 import { LeadWelcomeService } from './lead-welcome.service';
 import { CrmAdvancedEmailService, type WelcomeSender } from './crm-advanced-email.service';
 import { CrmTriggersService } from './crm-triggers.service';
+import { NotificationPreferenceService } from '../notifications/notification-preference.service';
 import type { MailAccountService } from '../email/mail-account.service';
 import type { MailerService } from '../email/mailer.service';
 
@@ -430,7 +431,7 @@ describe('the welcome send', () => {
     } as unknown as MailerService;
     const senderFor = jest.fn(async () => account);
     const accounts = { senderFor } as unknown as MailAccountService;
-    const service = new CrmAdvancedEmailService(tx, mailer, accounts, new CrmTriggersService(tx));
+    const service = new CrmAdvancedEmailService(tx, mailer, accounts, new CrmTriggersService(tx, new NotificationPreferenceService(tx)));
     return { service, sent, senderFor };
   }
 

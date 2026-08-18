@@ -1,7 +1,6 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { listTransactions } from '../lib/api';
+import { useEffect, useState, type ReactNode } from 'react';
+import { getDeskAnalytics } from '../lib/api';
 import { formatCurrency } from './format';
-import type { Transaction } from '../types';
 
 interface TileProps {
   bg: string;
@@ -22,31 +21,46 @@ function Tile({ bg, bd, fg, label, value, sub }: TileProps) {
   );
 }
 
-// Pending vs Paid commissions across all transactions.
+/**
+ * Pending vs Paid commissions across all transactions — read as four numbers, not as a deal book.
+ *
+ * MEASURED, at 8,000 deals: `listTransactions()` (the unpaged mode of the transactions endpoint)
+ * took 860 ms, put 14.5 MB on the wire and pushed the Node heap to 394 MB, to produce the six
+ * figures below. The Invoice screen paid that on every visit. `/api/dashboard/analytics` returns
+ * the same figures in 5 KB, computed where the data is.
+ *
+ * BEFORE HST, like every other commission figure — HST is collected and remitted, not earned. The
+ * invoice totals beside this panel legitimately include it; they are billings rather than earnings.
+ */
 export default function CommissionAnalytics() {
-  const [rows, setRows] = useState<Transaction[]>([]);
-  useEffect(() => { listTransactions().then(setRows).catch(() => {}); }, []);
+  const [stats, setStats] = useState({ paidAmount: 0, pendingAmount: 0, paidCount: 0, pendingCount: 0, total: 0, paidPct: 0 });
 
-  const stats = useMemo(() => {
-    let paidAmount = 0, pendingAmount = 0, paidCount = 0, pendingCount = 0;
-    rows.forEach((t) => {
-      const amt = t.commission?.amount || 0;
-      if (t.commission?.paid) { paidAmount += amt; paidCount++; }
-      else { pendingAmount += amt; pendingCount++; }
-    });
-    const total = paidAmount + pendingAmount;
-    const paidPct = total > 0 ? Math.round((paidAmount / total) * 100) : 0;
-    return { paidAmount, pendingAmount, paidCount, pendingCount, total, paidPct };
-  }, [rows]);
+  useEffect(() => {
+    getDeskAnalytics()
+      .then((d) => {
+        const total = d.totals.total;
+        setStats({
+          paidAmount: d.totals.paid,
+          pendingAmount: d.totals.pending,
+          paidCount: d.totals.paid_count,
+          pendingCount: d.totals.pending_count,
+          total,
+          paidPct: total > 0 ? Math.round((d.totals.paid / total) * 100) : 0,
+        });
+      })
+      .catch(() => { /* the panel is a summary; the invoice list below it still stands */ });
+  }, []);
 
   return (
     <div className="analytics-dash" style={{ background: 'linear-gradient(135deg,#fff 0%,var(--surface-2) 100%)', border: '1px solid var(--line)', borderRadius: 'var(--r-lg)', padding: '14px 16px', marginBottom: 14, boxShadow: 'var(--shadow-sm)' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 10 }}>
         <div>
           <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.06em' }}>Analytics Dashboard</div>
-          <div style={{ fontSize: 14, color: 'var(--text-2)', marginTop: 2 }}>Pending vs Paid commissions across all transactions</div>
+          <div style={{ fontSize: 14, color: 'var(--text-2)', marginTop: 2 }}>Pending vs Paid commissions across all transactions · before HST</div>
         </div>
-        <span className="pill ok" style={{ fontSize: 11 }}>{rows.length} deals tracked</span>
+        {/* The deal count is the sum of the two buckets, so the badge and the tiles beside it
+            cannot disagree — and no deal list has to be downloaded to produce it. */}
+        <span className="pill ok" style={{ fontSize: 11 }}>{stats.paidCount + stats.pendingCount} deals tracked</span>
       </div>
       <div className="tiles" style={{ marginBottom: 0 }}>
         <Tile bg="var(--ok-bg)" bd="var(--ok-ring-2)" fg="var(--ok-ink)" label="Paid" value={formatCurrency(stats.paidAmount)} sub={`${stats.paidCount} deal${stats.paidCount === 1 ? '' : 's'}`} />

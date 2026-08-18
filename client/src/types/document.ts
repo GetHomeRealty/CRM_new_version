@@ -44,7 +44,6 @@ export interface ClientIdentification {
 export interface DocumentsResponse {
   documents?: DeskDocument[];
   clients?: string[];
-  deleted_documents?: DeskDocument[];
   reco_audit_ready?: string;
   reco_audit_remarks?: string;
   [key: string]: unknown;

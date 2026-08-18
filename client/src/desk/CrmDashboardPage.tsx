@@ -161,13 +161,18 @@ export default function CrmDashboardPage() {
             { n: data.tasks.due_today, label: 'due today', tone: 'info' },
             { n: data.tasks.overdue, label: 'overdue', tone: 'bad' },
           ]} />} />
-        {/* The count of campaigns, and only that. The sub-line used to carry sent/opened/failed,
-            which are delivery statistics rather than a campaign count and made the card read as a
-            performance summary. Those figures are unchanged and still on the Campaigns screen. */}
+        {/* Counts of campaigns, not delivery statistics. The sub-line used to carry
+            sent/opened/failed, which made the card read as a performance summary; those figures are
+            unchanged and still on the Campaigns screen.
+
+            `scheduled` belongs here for the opposite reason: it is a COUNT OF CAMPAIGNS, and it is
+            the one that is about to do something without being asked. A campaign waiting to go out
+            is the only state on this card that changes on its own. */}
         <Tile label="Campaigns" value={data.campaigns.total} sub={
-          <span className="tile-breakdown"><span className="tile-part">
-            {data.campaigns.total === 1 ? 'campaign' : 'campaigns'} created
-          </span></span>
+          <Breakdown parts={[
+            { n: data.campaigns.total, label: 'created' },
+            { n: data.campaigns.scheduled, label: 'scheduled', tone: 'info' },
+          ]} />
         } />
         {/* Two counts that do not overlap: today, and the thirty days after it. The headline is
             today's, because that is the one that changes what somebody does this morning. */}

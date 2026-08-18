@@ -1,10 +1,9 @@
 import { useArea } from './AreaContext';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { createEvent, updateEvent, suggestFollowUps, type FollowUpSuggestion } from '../lib/calendarApi';
-import { listTransactions } from '../lib/api';
 import { apiErrorMessage } from '../lib/apiError';
 import { useToast } from './toast';
-import type { CalendarEvent, CalendarEventInput, CalendarOptions, EventStatus, EventType, Transaction } from '../types';
+import type { CalendarEvent, CalendarEventInput, CalendarOptions, EventStatus, EventType } from '../types';
 
 /** Fallbacks if /calendar/options hasn't loaded — keeps the form usable either way. */
 const FALLBACK_TYPES: { value: EventType; label: string }[] = [
@@ -49,7 +48,6 @@ interface Form {
   property_details: string;
   notes: string;
   enable_reminder: boolean;
-  transaction_id: string;
 }
 
 /** The next half-hour, as HH:MM — the default time for a new event. */
@@ -79,13 +77,17 @@ const toForm = (e: CalendarEvent | null, defaultDate: string): Form => ({
   property_details: e?.property_details ?? '',
   notes: e?.notes ?? '',
   enable_reminder: e?.enable_reminder ?? false,
-  transaction_id: e?.transaction_id ? String(e.transaction_id) : '',
 });
 
 /**
  * Create or edit a calendar event. Field-level errors returned by the API are shown against
  * the field that caused them rather than as one opaque message.
+ *
+ * NO RELATED DEAL PICKER. It was removed by request. An appointment's `transaction_id` is still
+ * carried by the record, still shown as the "deal" shortcut on the calendar list, and still what
+ * the transaction activity log is written against — this form simply no longer sets or clears it.
  */
+
 export default function EventEditorModal({ event, defaultDate, options, onClose, onSaved }: {
   event: CalendarEvent | null;
   defaultDate: string;
@@ -100,7 +102,6 @@ export default function EventEditorModal({ event, defaultDate, options, onClose,
   const [form, setForm] = useState<Form>(() => toForm(event, defaultDate));
   const [errors, setErrors] = useState<Record<string, string[]>>({});
   const [saving, setSaving] = useState(false);
-  const [deals, setDeals] = useState<Transaction[]>([]);
   // Set when the server refuses a save because the slot is taken. Back-to-back showings at one
   // address are legitimate, so the answer is a warning with a way through, not a wall.
   const [clash, setClash] = useState<string | null>(null);
@@ -126,8 +127,6 @@ export default function EventEditorModal({ event, defaultDate, options, onClose,
       setIdeasBusy(false);
     }
   };
-
-  useEffect(() => { listTransactions().then(setDeals).catch(() => { /* linking is optional */ }); }, []);
 
   const set = <K extends keyof Form>(k: K, v: Form[K]) => {
     setForm((f) => ({ ...f, [k]: v }));
@@ -156,7 +155,15 @@ export default function EventEditorModal({ event, defaultDate, options, onClose,
       property_details: form.property_details.trim(),
       notes: form.notes.trim(),
       enable_reminder: form.enable_reminder,
-      transaction_id: form.transaction_id ? Number(form.transaction_id) : null,
+      /*
+       * `transaction_id` is deliberately NOT sent, rather than sent as null.
+       *
+       * The Related Deal picker was removed from this form, and the obvious follow-through — send
+       * null because the field is gone — would UNLINK every already-linked appointment the moment
+       * somebody edited it for an unrelated reason, silently. The server only writes the column
+       * when the key is present (`has('transaction_id')` in CalendarService), so omitting it leaves
+       * an existing link exactly as it was. Removing a control must not rewrite the data behind it.
+       */
       ...(allowOverlap ? { allow_overlap: true } : {}),
       // The version this editor was opened on. The server refuses the save if the event has moved
       // on since, rather than letting this write erase whatever the other person just saved.
@@ -286,17 +293,6 @@ export default function EventEditorModal({ event, defaultDate, options, onClose,
               <input id="event-attendees" value={form.attendees} onChange={(e) => set('attendees', e.target.value)} placeholder="Names, comma separated" />
               {err('attendees')}
             </div>
-            <div className="field">
-              <label htmlFor="event-deal">Related Deal</label>
-              <select id="event-deal" value={form.transaction_id} onChange={(e) => set('transaction_id', e.target.value)}>
-                <option value="">Not linked</option>
-                {deals.map((d) => (
-                  <option key={d.id} value={d.id}>#{d.trade_no} — {d.property || 'No address'}</option>
-                ))}
-              </select>
-              {err('transaction_id')}
-            </div>
-
             <div className="field">
               <label htmlFor="event-phone">Contact Phone</label>
               <input id="event-phone" type="tel" value={form.contact_phone} onChange={(e) => set('contact_phone', e.target.value)} />

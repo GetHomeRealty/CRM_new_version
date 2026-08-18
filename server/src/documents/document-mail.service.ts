@@ -98,7 +98,7 @@ export class DocumentMailService {
       }
 
       const docs = await this.prisma.documents.findMany({
-        where: { transaction_id: txnId, deleted_at: null, pending_delete: false },
+        where: { transaction_id: txnId, deleted_at: null },
         orderBy: { position: 'asc' },
         select: { title: true, validation: true, remarks: true },
       });

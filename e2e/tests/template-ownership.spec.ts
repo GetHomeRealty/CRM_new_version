@@ -71,39 +71,98 @@ test.describe('an agent’s template is private to them', () => {
   }
 });
 
-test.describe('what administrators keep', () => {
-  test('a Super Admin may still edit a built-in template', async ({ page }) => {
-    // The counterpart: the rule must not have locked administrators out of the shared set.
+/**
+ * The campaign template library holds templates somebody created for a campaign, and nothing else.
+ *
+ * WHAT THESE REPLACE. Three tests here asserted the opposite — that an agent still SEES the shipped
+ * built-ins, that a Super Admin may edit one, that an agent may not. Those were correct about a
+ * screen that offered two groups, the second of which was headed "CRM Templates" and did not contain
+ * a single CRM template: the rows are `campaign_templates`, seeded marketing starters, while the
+ * CRM's own Birthday, Anniversary, Seasonal, New Lead and Lead Assigned emails live in
+ * `email_templates` and have never been reachable from Campaigns at all.
+ *
+ * The brokerage's decision is that this library lists only what somebody authored for a campaign. So
+ * the built-ins are no longer served by the list, no longer offered by the builder's picker, and no
+ * longer accepted by the send endpoint. The rows themselves are untouched, which is why the last
+ * test below can still assert that a campaign already built on one is unaffected.
+ */
+test.describe('only templates authored for campaigns are offered', () => {
+  for (const who of ['superAdmin', 'agent'] as const) {
+    test(`${who} is not shown the shipped built-ins`, async ({ page }) => {
+      await signIn(page, who);
+      const list = await apiGet(page, '/api/campaigns/templates');
+      const rows = (((list.body as { data?: Record<string, unknown>[] })?.data
+        ?? (list.body as Record<string, unknown>[])) ?? []) as Record<string, unknown>[];
+      expect(findBuiltIn(rows), `${who} was still shown a built-in in the library`).toBeUndefined();
+    });
+
+    test(`${who} is not offered a built-in by the campaign builder`, async ({ page }) => {
+      // The picker and the library must agree. They did not: `options` listed every active row
+      // regardless of owner, so a template the Templates screen refused to show was still selectable.
+      await signIn(page, who);
+      const opts = await apiGet(page, '/api/campaigns/options');
+      const templates = ((opts.body as { templates?: Record<string, unknown>[] })?.templates ?? []);
+      expect(findBuiltIn(templates), `${who} was offered a built-in in the builder`).toBeUndefined();
+    });
+  }
+
+  test('every template the builder offers is one the library also lists', async ({ page }) => {
+    /*
+     * The general form of the two assertions above, and the one that keeps holding after the seed
+     * names change. A picker offering anything the library does not list is the class of bug this
+     * change closes, whatever the reason for the extra row.
+     */
+    await signIn(page, 'agent');
+    const list = await apiGet(page, '/api/campaigns/templates');
+    const rows = (((list.body as { data?: Record<string, unknown>[] })?.data
+      ?? (list.body as Record<string, unknown>[])) ?? []) as Record<string, unknown>[];
+    const listed = new Set(rows.map((r) => r.id));
+
+    const opts = await apiGet(page, '/api/campaigns/options');
+    const offered = ((opts.body as { templates?: Record<string, unknown>[] })?.templates ?? []);
+    // `is_active: false` templates are listed but not offered, so this is one-directional.
+    for (const t of offered) {
+      expect(listed.has(t.id), `the builder offered template #${t.id}, which the library does not list`).toBe(true);
+    }
+  });
+
+  test('a campaign cannot be built from a template that is not the caller’s', async ({ page, browser }) => {
+    // The endpoint has to refuse what the picker no longer offers, or the choice was only hidden.
+    const id = await agentTemplate(page);
+    const ctx = await browser.newContext();
+    try {
+      const other = await ctx.newPage();
+      await signIn(other, 'agent2');
+      const res = await apiSend(other, 'POST', '/api/campaigns', {
+        name: `${TAG} cross-owner ${Date.now()}`, template_id: id, leadStatus: '',
+      });
+      expect(res.status, 'another agent sent a campaign from a template they cannot see').toBe(404);
+    } finally {
+      await ctx.close();
+      await apiSend(page, 'DELETE', `/api/campaigns/templates/${id}`);
+    }
+  });
+
+  test('campaigns already built on a built-in still read back intact', async ({ page }) => {
+    /*
+     * The rows were filtered out of two lists, not deleted. A campaign snapshots its subject and
+     * body at create time and resolves attachments by `template_id` alone, so its history and any
+     * send still in flight are unaffected — which is the whole reason this was a filter.
+     */
     await signIn(page, 'superAdmin');
-    const list = await apiGet(page, '/api/campaigns/templates');
-    const rows = (((list.body as { data?: Record<string, unknown>[] })?.data
-      ?? (list.body as Record<string, unknown>[])) ?? []) as Record<string, unknown>[];
-    const builtIn = findBuiltIn(rows);
-    test.skip(!builtIn, 'no built-in template visible to assert against');
-
-    const original = String(builtIn!.name);
-    const res = await apiSend(page, 'PUT', `/api/campaigns/templates/${builtIn!.id}`, { name: original });
+    const res = await apiGet(page, '/api/campaigns');
     expect(res.status).toBe(200);
-  });
-
-  test('an agent may not edit a built-in template', async ({ page }) => {
-    await signIn(page, 'agent');
-    const list = await apiGet(page, '/api/campaigns/templates');
-    const rows = (((list.body as { data?: Record<string, unknown>[] })?.data
-      ?? (list.body as Record<string, unknown>[])) ?? []) as Record<string, unknown>[];
-    const builtIn = findBuiltIn(rows);
-    test.skip(!builtIn, 'no built-in template visible to assert against');
-
-    const res = await apiSend(page, 'PUT', `/api/campaigns/templates/${builtIn!.id}`, { name: 'agent edit' });
-    expect(res.status).toBe(403);
-  });
-
-  test('an agent still sees the built-ins', async ({ page }) => {
-    // Privacy must not have hidden the shared starting set from the people who need it.
-    await signIn(page, 'agent');
-    const list = await apiGet(page, '/api/campaigns/templates');
-    const rows = (((list.body as { data?: Record<string, unknown>[] })?.data
-      ?? (list.body as Record<string, unknown>[])) ?? []) as Record<string, unknown>[];
-    expect(rows.filter((r) => BUILT_IN.test(String(r.name ?? ''))).length).toBeGreaterThan(0);
+    const rows = (((res.body as { data?: Record<string, unknown>[] })?.data
+      ?? (res.body as Record<string, unknown>[])) ?? []) as Record<string, unknown>[];
+    /*
+     * `template_name` rather than `subject`: the list summary carries the former and not the
+     * latter. It is the snapshot that matters here anyway — it is written at create time from the
+     * template and never re-read from it, so a campaign built on a template this change stopped
+     * listing still names it.
+     */
+    for (const c of rows) {
+      if (c.template_id == null) continue;   // a campaign whose template row was hard-deleted
+      expect(String(c.template_name ?? ''), `campaign #${c.id} lost its stored template name`).not.toBe('');
+    }
   });
 });

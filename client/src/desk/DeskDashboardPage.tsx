@@ -125,9 +125,10 @@ export default function DeskDashboardPage() {
             sub={`${comm.t4a.pending_count} deal${comm.t4a.pending_count === 1 ? '' : 's'}`} color="var(--warn-ink)" />
           <Tile label="Upcoming Commissions" value={money(comm.t4a.upcoming_total)}
             sub={`${comm.t4a.upcoming_count} open deal${comm.t4a.upcoming_count === 1 ? '' : 's'}`} color="var(--info-700)" />
+          {/* Before HST on both sides: HST is collected and remitted, not earned. */}
           <Tile label="Overall Commission"
             value={money(isAgent ? comm.t4a.overall_total : comm.gross.overall_total)}
-            sub={isAgent ? 'your total T4A' : 'brokerage gross (incl. HST)'} />
+            sub={isAgent ? 'your commission, before HST' : 'brokerage gross, before HST'} />
           {!isAgent && (
             <Tile label="External Referral" value={money(comm.referrals.external_total)}
               sub="paid to outside brokerages" />

@@ -12,6 +12,7 @@ import { CoreModule } from './core/core.module';
 import { AppController } from './app.controller';
 import { HealthController } from './observability/health.controller';
 import { RequestLogInterceptor } from './observability/request-log.interceptor';
+import { MetricsAccessGuard } from './observability/metrics-access.guard';
 import { ErrorLogFilter } from './observability/error-log.filter';
 import { AuditModule } from './audit/audit.module';
 import { AuthModule } from './auth/auth.module';
@@ -30,6 +31,7 @@ import { InvoicesModule } from './invoices/invoices.module';
 import { AuditLogModule } from './audit-log/audit-log.module';
 import { UsersModule } from './users/users.module';
 import { RecycleBinModule } from './recycle-bin/recycle-bin.module';
+import { RetentionModule } from './retention/retention.module';
 import { EmailModule } from './email/email.module';
 import { DocumentsModule } from './documents/documents.module';
 import { FintracModule } from './fintrac/fintrac.module';
@@ -85,7 +87,7 @@ import { TwilioVoiceModule } from './twilio-voice/twilio-voice.module';
     InvoicesModule,
     AuditLogModule,
     UsersModule,
-    RecycleBinModule,
+    RecycleBinModule, RetentionModule,
     EmailModule,
     DocumentsModule,
     FintracModule,
@@ -118,6 +120,9 @@ import { TwilioVoiceModule } from './twilio-voice/twilio-voice.module';
     // webhooks during a bulk send, Meta lead deliveries — opt out with @SkipThrottle on their
     // controllers, since throttling those drops real data rather than turning away an attacker.
     { provide: APP_GUARD, useClass: IdentityThrottlerGuard },
+    // Route-scoped, NOT an APP_GUARD: only `HealthController` mounts it, on the two diagnostic
+    // endpoints. It lives here because that controller is declared here.
+    MetricsAccessGuard,
   ],
 })
 export class AppModule {}

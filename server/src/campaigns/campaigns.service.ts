@@ -73,6 +73,17 @@ export interface SendCampaignInput {
   tags?: unknown;
   /** Absolute, publicly reachable base URL for tracking links. */
   baseUrl: string;
+  /**
+   * The client's name for ONE commit attempt, so a repeat cannot become a second campaign.
+   *
+   * Generated once when the builder opens and reused for every retry of that same commit — a
+   * double-click, a request the browser replayed, a second tab, a resend after a timeout. A NEW
+   * campaign gets a NEW key, which is what keeps two deliberately identical campaigns a week apart
+   * from being collapsed into one.
+   *
+   * Optional: a caller that sends none is not de-duplicated, exactly as before this existed.
+   */
+  idempotency_key?: unknown;
 }
 
 @Injectable()
@@ -112,6 +123,80 @@ export class CampaignsService {
    */
   private ownerScope(user: AuthUserRecord): Record<string, unknown> {
     return { created_by_id: user.id ?? -1 };
+  }
+
+  // ------------------------------------------------- idempotent commit
+
+  /**
+   * A campaign this caller already committed under this key, if there is one.
+   *
+   * SCOPED TO THE CALLER, and that is a security property rather than tidiness. The key is chosen by
+   * the client, so a lookup on the key alone would hand back somebody else's campaign — including
+   * its name, audience size and recipients — to anyone who guessed or observed one. `ownerScope` is
+   * the same rule `list` and `get` already apply, so a replay can only ever be answered to the
+   * account that made the original.
+   */
+  private async findByIdempotencyKey(key: string, user: AuthUserRecord) {
+    return this.prisma.campaigns.findFirst({
+      where: { idempotency_key: key, ...this.ownerScope(user) },
+      include: { recipients: { orderBy: { id: 'asc' } } },
+    });
+  }
+
+  /**
+   * Insert the campaign, or discover that a concurrent request already did.
+   *
+   * ================================================================================================
+   * THIS IS THE HALF THE UP-FRONT LOOKUP CANNOT DO. Two requests arriving together both look, both
+   * find nothing, and both proceed — which is precisely what a double-click on a slow connection
+   * produces. Only the database can break that tie, and `campaigns_creator_idempotency_key` does:
+   * one insert succeeds, the other raises P2002, and the loser is handed the winner's row.
+   *
+   * The unique index is on `(created_by_id, idempotency_key)`. NULLs are never equal in PostgreSQL,
+   * so every campaign created before this existed — and every caller that sends no key — coexists
+   * freely under it and is simply not de-duplicated. That is the previous behaviour, unchanged.
+   *
+   * P2002 IS CAUGHT NARROWLY. Only a collision on this index means "somebody else got there first";
+   * any other unique violation is a real fault and is rethrown rather than being quietly turned into
+   * a success.
+   * ================================================================================================
+   *
+   * DO NOT WRAP `createAndSend` IN AN OUTER TRANSACTION. This recovery depends on being able to run
+   * a query AFTER the failed insert, and in PostgreSQL a unique violation ABORTS THE ENCLOSING
+   * TRANSACTION: every later statement then fails with 25P02, "current transaction is aborted", so
+   * the lookup below would fail and the caller would get that error instead of the winner's row.
+   *
+   * Today nothing wraps it — `campaigns.create` is its own implicit transaction, a collision rolls
+   * back that statement alone, and the connection is clean for the lookup. Adding an outer one means
+   * redesigning this first (a savepoint, or moving the claim to its own connection). This was found
+   * rather than predicted: the race test failed on exactly this until it was moved out of the
+   * rollback wrapper the other specs use — see `campaign-idempotency.spec.ts`. The same hazard is
+   * documented on `NotificationDispatcher.sendInApp`, which is where it was first measured.
+   */
+  private async createOnce(
+    key: string | null,
+    user: AuthUserRecord,
+    data: Prisma.campaignsCreateInput | Record<string, unknown>,
+  ): Promise<{ campaign: Awaited<ReturnType<CampaignsService['findByIdempotencyKey']>> & object; replayed: boolean }> {
+    try {
+      const campaign = await this.prisma.campaigns.create({
+        data: data as Prisma.campaignsCreateInput,
+        include: { recipients: { orderBy: { id: 'asc' } } },
+      });
+      return { campaign, replayed: false };
+    } catch (err) {
+      const collision = key
+        && err instanceof Prisma.PrismaClientKnownRequestError
+        && err.code === 'P2002'
+        && String((err.meta as { target?: unknown })?.target ?? '').includes('idempotency');
+      if (!collision) throw err;
+
+      const winner = await this.findByIdempotencyKey(key, user);
+      // The row must exist — the constraint just said so — but if it somehow does not, failing is
+      // safer than falling through and sending a second time.
+      if (!winner) throw err;
+      return { campaign: winner, replayed: true };
+    }
   }
 
   // ------------------------------------------------------------------ read
@@ -193,6 +278,39 @@ export class CampaignsService {
    * sending stalls, and each recipient's outcome is recorded individually.
    */
   async createAndSend(input: SendCampaignInput, user: AuthUserRecord): Promise<Record<string, unknown>> {
+    /*
+     * ============================================================================================
+     * IDEMPOTENCY FIRST, BEFORE ANY WORK IS DONE OR ANY ROW IS WRITTEN.
+     *
+     * Sending is fan-out and irreversible, so a repeated request must not become a second campaign.
+     * The builder still disables its own button — that is the right thing for the person watching —
+     * but a disabled button is defeated by a network retry, a replayed request, a second tab or a
+     * direct call to this endpoint, so the decision cannot live there.
+     *
+     * TWO CHECKS, NOT ONE, AND BOTH ARE NEEDED:
+     *
+     *   THE LOOKUP below answers the ordinary case — the second request arrives after the first has
+     *   finished — cheaply, and without resolving an audience or touching the mailer.
+     *
+     *   THE UNIQUE INDEX answers the case the lookup cannot: two requests in flight at once, where
+     *   both look, both find nothing, and both proceed. That race is exactly what a double-click on
+     *   a slow connection produces. `create` then raises P2002 for the loser, which is caught at the
+     *   insert below and turned into the same answer the winner got.
+     *
+     * A REPLAY RETURNS THE ORIGINAL, it does not error. The caller asked for one campaign and there
+     * is one campaign; answering 409 would leave a correct client showing a failure for a send that
+     * happened.
+     * ============================================================================================
+     */
+    const idempotencyKey = String(input.idempotency_key ?? '').trim().slice(0, 64) || null;
+    if (idempotencyKey) {
+      const existing = await this.findByIdempotencyKey(idempotencyKey, user);
+      if (existing) {
+        this.log.log(`Campaign commit replayed (key ${idempotencyKey}) — returning #${existing.id} rather than creating a second.`);
+        return this.summary(existing);
+      }
+    }
+
     const name = String(input.name ?? '').trim();
     if (!name) throw new BadRequestException({ message: 'Campaign name is required.' });
     /*
@@ -211,9 +329,23 @@ export class CampaignsService {
     if (!Number.isInteger(templateId) || templateId <= 0) {
       throw new BadRequestException({ message: 'A valid template must be selected.' });
     }
-    // Campaign templates only — Email Settings' transactional templates are a separate library
-    // and must never be sent as marketing mail.
-    const template = await this.prisma.campaign_templates.findFirst({ where: { id: templateId, deleted_at: null } });
+    /*
+     * Campaign templates only — Email Settings' transactional templates are a separate library
+     * and must never be sent as marketing mail.
+     *
+     * AND ONLY ONE THE CALLER COULD HAVE PICKED. This matched any row in the table, so the two
+     * things the builder's picker no longer offers — the shipped built-ins and another agent's
+     * private drafts — were still sendable by anyone who knew or guessed an id. A screen that
+     * removes a choice while the endpoint behind it still accepts it has not removed the choice.
+     *
+     * Existing campaigns are untouched by this: it guards the CREATE path only. A campaign already
+     * built on a built-in keeps its own snapshot of the subject and body, and `attachmentsForSend`
+     * resolves attachments by `template_id` with no ownership test, so resuming or finishing one
+     * behaves exactly as before.
+     */
+    const template = await this.prisma.campaign_templates.findFirst({
+      where: { id: templateId, deleted_at: null, ...CampaignTemplatesService.authoredWhere(user) },
+    });
     if (!template) throw new NotFoundException({ message: 'Template not found.' });
 
     const filter: AudienceFilter = {
@@ -239,31 +371,40 @@ export class CampaignsService {
     const tokens = recipients.map(() => this.audience.newRecipientToken());
     const tags = Array.isArray(input.tags) ? (input.tags as unknown[]).map(String).map((t) => t.trim()).filter(Boolean) : [];
 
-    const campaign = await this.prisma.campaigns.create({
-      data: {
-        name,
-        template_id: template.id,
-        template_name: template.name,
-        category: template.category,
-        subject: template.subject,
-        content: template.content,
-        audience: JSON.stringify(filter),
-        tags: JSON.stringify(tags),
-        status: 'sending',
-        total: recipients.length,
-        created_by: user.name,
-        created_by_id: user.id ?? null,
-        created_at: now,
-        updated_at: now,
-        recipients: {
-          create: recipients.map((r, i) => ({
-            lead_id: r.leadId, name: r.name, email: r.email, token: tokens[i], vars: JSON.stringify(r.vars ?? {}),
-            status: 'pending', created_at: now, updated_at: now,
-          })),
-        },
+    const outcome = await this.createOnce(idempotencyKey, user, {
+      name,
+      template_id: template.id,
+      template_name: template.name,
+      category: template.category,
+      subject: template.subject,
+      content: template.content,
+      audience: JSON.stringify(filter),
+      tags: JSON.stringify(tags),
+      status: 'sending',
+      total: recipients.length,
+      created_by: user.name,
+      created_by_id: user.id ?? null,
+      idempotency_key: idempotencyKey,
+      created_at: now,
+      updated_at: now,
+      recipients: {
+        create: recipients.map((r, i) => ({
+          lead_id: r.leadId, name: r.name, email: r.email, token: tokens[i], vars: JSON.stringify(r.vars ?? {}),
+          status: 'pending', created_at: now, updated_at: now,
+        })),
       },
-      include: { recipients: { orderBy: { id: 'asc' } } },
     });
+
+    /*
+     * The other request won the race. It is already delivering (or scheduled) the very campaign this
+     * one was about to build, so this request stops here and hands back that row — it must not fall
+     * through and start a second delivery loop over the same recipients.
+     */
+    if (outcome.replayed) {
+      this.log.log(`Campaign commit raced (key ${idempotencyKey}) — returning #${outcome.campaign.id}.`);
+      return this.summary(outcome.campaign);
+    }
+    const campaign = outcome.campaign;
 
     const agentVars = await this.agentVarsFor(user);
     // Loaded once and reused for every recipient — re-reading the blobs per send would pull the

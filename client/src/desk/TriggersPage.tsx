@@ -1,38 +1,35 @@
-import CrmTriggersPanel from './CrmTriggersPanel';
 import DeskTriggersPanel from './DeskTriggersPanel';
-import { useArea } from './AreaContext';
 import { AREA_LABEL } from './area';
 
 /**
- * Triggers — automations that fire on their own.
+ * Triggers — the Transaction Desk's automations, the ones that fire on their own.
  *
- * Two independent modules, not one screen with two sections. The CRM's triggers are reachable only
- * from the CRM and the Transaction Desk's only from the Desk, which is what section 13 asks for: a
- * screen listing both invites configuring one from the other, and that is how a CRM automation ends
- * up acting on a transaction.
+ * THIS SCREEN USED TO SERVE BOTH AREAS. It branched on the active area: the Desk got the panel
+ * below, and the CRM got a list of switches deciding which CRM emails an agent could send by hand.
+ * The comment here argued for two independent modules rather than one screen listing both, and that
+ * reasoning still holds — it is simply that there is only one module left to serve.
  *
- * The "CRM Triggers" section button is gone with the split — there is one module per area now, so it
- * was a switcher with a single option. So is the "Other automations" note that said transaction
- * triggers were not built: the ones that do exist are now shown, and what is genuinely missing is
- * stated inside the Desk panel where someone looking for it will be.
+ * WHERE THE CRM HALF WENT. All of it, to CRM → Communications: an agent's own switches, the
+ * brokerage-wide master switch, and the brokerage defaults those switches inherit. Nothing was
+ * dropped in the move and nothing was duplicated — Communications writes the same
+ * `crm_trigger_settings` and `crm_email_settings` rows the Triggers screen wrote, through the same
+ * services. `area.ts` now maps `triggers` to the Desk alone, so `/crm/triggers` redirects to
+ * `/desk/triggers` and no CRM sidebar offers it.
+ *
+ * The Desk's triggers are unchanged: same panel, same endpoints, same permission.
  */
 export default function TriggersPage() {
-  const { area } = useArea();
-
   return (
     <>
       <div className="toolbar"><div className="toolbar-row" style={{ gap: 10, flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 13, fontWeight: 700 }}>{'⚡'} {AREA_LABEL[area]} Triggers</span>
+        <span style={{ fontSize: 13, fontWeight: 700 }}>{'⚡'} {AREA_LABEL.desk} Triggers</span>
         <span className="muted" style={{ fontSize: 12 }}>
-          {/* Was "Automatic emails sent on lead activity", which contradicted the panel directly
-              beneath it — nothing sends a CRM email on its own. The Desk's wording is unchanged. */}
-          {area === 'crm'
-            ? 'Which CRM emails may be sent by hand. The Transaction Desk keeps its own triggers.'
-            : 'Automations that run on transaction activity. The CRM keeps its own triggers.'}
+          Automations that run on transaction activity. CRM emails are managed under CRM →
+          Communications.
         </span>
       </div></div>
 
-      {area === 'crm' ? <CrmTriggersPanel /> : <DeskTriggersPanel />}
+      <DeskTriggersPanel />
     </>
   );
 }

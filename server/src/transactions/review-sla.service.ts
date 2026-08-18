@@ -70,6 +70,7 @@ export class ReviewSlaService {
         orderBy: { created_at: 'asc' },
         take: MAX_PER_SWEEP,
         include: { transactions: { select: { id: true, trade_no: true, property: true, deleted_at: true } } },
+        // `agent_user_id` rides along: it is who the reminder is addressed to. See `remind`.
       });
 
       for (const item of due) {
@@ -104,7 +105,7 @@ export class ReviewSlaService {
 
   /** The agent, and on the last rung the office too. */
   private async remind(
-    item: { id: number; field_label: string | null; reason: string | null; agent_name: string | null; actor_name: string | null; created_at: Date | null; transactions: { id: number; trade_no: string | null; property: string | null } },
+    item: { id: number; field_label: string | null; reason: string | null; agent_name: string | null; agent_user_id: number | null; actor_name: string | null; created_at: Date | null; transactions: { id: number; trade_no: string | null; property: string | null } },
     openFor: string,
     escalate: boolean,
   ): Promise<void> {
@@ -127,7 +128,7 @@ export class ReviewSlaService {
       company_name: company,
     };
 
-    const agentAddress = await this.addressFor(item.agent_name);
+    const agentAddress = await this.addressFor(item.agent_user_id, item.agent_name);
     if (agentAddress) {
       await this.mailer.send('transaction.review_reminder', vars, redirectTo() ?? agentAddress);
     } else {
@@ -144,13 +145,17 @@ export class ReviewSlaService {
     }
   }
 
-  private async addressFor(name: string | null): Promise<string | null> {
+  /**
+   * Who the reminder goes to — by user id where the review has one.
+   *
+   * The reminder quotes the rejected field and the reason it was rejected, so sending it to the
+   * wrong namesake discloses one agent's correction to another. `PersonResolver` prefers the id and
+   * only falls back to the name for review rows written before `agent_user_id` existed.
+   */
+  private async addressFor(userId: number | null, name: string | null): Promise<string | null> {
     const n = (name ?? '').trim();
-    if (!n) return null;
-    // Through PersonResolver so two people sharing a name resolve the same way everywhere, and
-    // deterministically: Active wins, ties break on the lowest id. This was a findFirst with no
-    // orderBy, so the planner decided which colleague got the mail.
-    const user = await this.people.resolve(null, n, { activeOnly: true });
+    if (userId === null && !n) return null;
+    const user = await this.people.resolve(userId, n || null, { activeOnly: true });
     return (user?.email ?? '').trim() || null;
   }
 

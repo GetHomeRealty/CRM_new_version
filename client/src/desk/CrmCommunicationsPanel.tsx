@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useToast } from './toast';
+import { crmPath } from './area';
 import { apiErrorMessage } from '../lib/apiError';
+import ConfirmDialog, { useConfirm } from './ConfirmDialog';
 import {
-  createCrmTemplate, getCrmCommunications, previewCrmTemplate, setCrmPreference,
+  createCrmTemplate, getCrmCommunications, previewCrmTemplate, setCrmBrokerage, setCrmPreference,
   type CrmChannel, type CrmCommunicationRow, type CrmCommunicationsOverview,
 } from '../lib/crmCommunicationsApi';
 
@@ -34,11 +37,13 @@ const CHANNEL_LABEL: Record<CrmChannel, string> = { email: 'Email', in_app: 'In-
  */
 export default function CrmCommunicationsPanel({ standalone = false }: { standalone?: boolean }) {
   const toast = useToast();
+  const navigate = useNavigate();
   const [data, setData] = useState<CrmCommunicationsOverview | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState('');
   const [preview, setPreview] = useState<{ name: string; subject: string; html: string } | null>(null);
   const [creating, setCreating] = useState(false);
+  const { confirm, askDelete, closeConfirm } = useConfirm();
 
   const load = useCallback(() => {
     setLoading(true);
@@ -77,6 +82,65 @@ export default function CrmCommunicationsPanel({ standalone = false }: { standal
     }
   };
 
+  /**
+   * Save one brokerage control. Only the field that moved is sent — the server leaves the rest.
+   *
+   * Not optimistic, unlike the personal toggles above. These are brokerage-wide: one row, one
+   * value, every colleague's sending. A switch that appears to move and then silently reverts is
+   * survivable for your own preference and is not for a control an administrator reaches for during
+   * a complaint, so this one waits for the server and re-seats from its answer.
+   */
+  const saveBrokerage = async (body: { auto_send_enabled?: boolean; defaults?: Record<string, boolean> }, id: string) => {
+    setBusy(id);
+    try {
+      setData(await setCrmBrokerage(body));
+      toast('Brokerage controls saved', 'ok');
+    } catch (e) {
+      toast(apiErrorMessage(e, 'Could not save the brokerage controls'), 'bad');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  /**
+   * Turning the master switch OFF is confirmed; turning it on is not.
+   *
+   * The blast radius is the reason. Off means no CRM email of any kind leaves for anybody —
+   * colleagues included, whatever their own choices say — and the sending screen then refuses
+   * without explaining why. Turning it back on restores the status quo and needs no ceremony, and a
+   * confirmation people meet in both directions is one they learn to click through.
+   */
+  const toggleMaster = (next: boolean) => {
+    if (next) { void saveBrokerage({ auto_send_enabled: true }, 'brokerage:master'); return; }
+    askDelete({
+      title: 'Switch off CRM email for the whole brokerage?',
+      message: 'No CRM email will send for anybody — not yours, not any colleague’s — whatever their own preferences say. The sending screen will refuse without explaining why. Campaigns are not affected; those are stopped on the Campaigns screen.',
+      note: 'You can turn it back on here at any time.',
+      // Named, because this dialog's default affirmative is "Delete" and nothing is being deleted.
+      // See `ConfirmOptions.confirmLabel`: a dialog whose only affirmative reads "Delete" over the
+      // words "no CRM email will send for anybody" asks the reader to press the wrong verb.
+      confirmLabel: 'Switch it off',
+      onConfirm: () => { closeConfirm(); void saveBrokerage({ auto_send_enabled: false }, 'brokerage:master'); },
+    });
+  };
+
+  /**
+   * Open this communication's own template in the editor that already owns it.
+   *
+   * CRM → Settings → Templates, with the row's id, rather than an editor built here. Those are the
+   * same `email_templates` rows behind the same `/api/email-templates` endpoints, so a second
+   * editor would be a second copy of the subject, body, sender, attachment and Active/Off handling
+   * — free to drift, and free to disagree about which row a communication means. Sending the id
+   * instead means there is exactly one editor and exactly one row: nothing here creates a template,
+   * and nothing here can create a duplicate of one.
+   *
+   * `id` comes from `template.id` on the row, which the server resolved from the registry's
+   * `templateEventKey`, so the mapping is the registry's and is not restated in this file.
+   */
+  const editTemplate = (id: number) => {
+    navigate(`${crmPath('settings')}?tab=crm&section=templates&template=${id}`);
+  };
+
   const openPreview = async (id: number, name: string) => {
     try {
       const p = await previewCrmTemplate(id);
@@ -97,6 +161,18 @@ export default function CrmCommunicationsPanel({ standalone = false }: { standal
       <td>
         <strong>{c.name}</strong>
         <div className="muted" style={{ fontSize: 12 }}>{c.description}</div>
+        {/*
+          What the brokerage would give you, for the rows that have a brokerage layer. The Triggers
+          screen distinguished "I chose this" from "I am following the office", and losing that on
+          the move would have made an inherited value look like a decision somebody had made.
+          Stated as the default rather than as your status, because the server sends the effective
+          answer and not whether a row exists — the honest thing to show is what it falls back to.
+        */}
+        {c.brokerage_default !== null && (
+          <div className="muted" style={{ fontSize: 11 }}>
+            Brokerage default: {c.brokerage_default ? 'on' : 'off'}
+          </div>
+        )}
       </td>
       {(['email', 'in_app', 'push'] as CrmChannel[]).map((ch) => (
         <td key={ch} style={{ textAlign: 'center' }}>
@@ -122,7 +198,8 @@ export default function CrmCommunicationsPanel({ standalone = false }: { standal
             <button className="btn ghost sm" type="button" onClick={() => void openPreview(c.template!.id, c.name)}>👁 Preview</button>
             {c.template.can_edit && (
               <button className="btn ghost sm" type="button" style={{ marginLeft: 6 }}
-                onClick={() => toast('Edit the wording under the template editor on this screen.', 'ok')}>
+                title={`Edit "${c.template.name}" in CRM Settings → Templates`}
+                onClick={() => editTemplate(c.template!.id)}>
                 ✏️ Edit Template
               </button>
             )}
@@ -150,31 +227,98 @@ export default function CrmCommunicationsPanel({ standalone = false }: { standal
         </div>
       )}
 
-      {/* ------------------------------------------------ brokerage controls */}
+      {/*
+        ------------------------------------------------ brokerage controls
+
+        FIRST, BECAUSE THE MASTER SWITCH OVERRIDES EVERYTHING BELOW IT. A control that can make the
+        rest of the screen inert should not sit underneath it.
+
+        This is where the CRM Triggers screen's "Brokerage" card went, whole: the master switch and
+        the per-communication defaults, on the same `crm_email_settings` row, behind the same
+        `settings: edit` permission. It is a change of location, not a second copy — there is no
+        other screen and no other endpoint offering these two values.
+      */}
       <div className="card">
         <div className="modal-sub" style={{ marginTop: 0 }}>Brokerage Controls</div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-          <span className={`pill ${data.brokerage.auto_send_enabled ? 'ok' : 'bad'}`}>
-            {data.brokerage.auto_send_enabled ? 'Active' : 'Off'}
-          </span>
-          <div>
+        <p className="help" style={{ marginTop: 0 }}>
+          These apply to <strong>everybody</strong>, not just you.
+        </p>
+
+        <label className="crm-toggle">
+          <span className="crm-toggle-text">
             <strong>Allow CRM per-lead emails</strong>
-            <div className="muted" style={{ fontSize: 12 }}>
+            <em>
               Brokerage-wide. When this is off, no CRM email sends for anybody, whatever their own
-              preferences say.
-            </div>
-          </div>
-        </div>
+              preferences say. Email campaigns are not affected; those are stopped on the Campaigns
+              screen.
+            </em>
+          </span>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+            <span className={`pill ${data.brokerage.auto_send_enabled ? 'ok' : 'bad'}`}>
+              {data.brokerage.auto_send_enabled ? 'Active' : 'Off'}
+            </span>
+            <input
+              type="checkbox"
+              checked={data.brokerage.auto_send_enabled}
+              disabled={!data.brokerage.can_edit || busy === 'brokerage:master'}
+              aria-label="Allow CRM per-lead emails — brokerage-wide"
+              onChange={(e) => toggleMaster(e.target.checked)}
+            />
+          </span>
+        </label>
+
+        {/*
+          The defaults. Shown only to somebody who may change them: to everyone else they are not a
+          control but a fact about a value they cannot reach, and the row's own "Following the
+          brokerage default" note already tells an agent what they inherit.
+        */}
+        {data.brokerage.can_edit && (
+          <>
+            <div className="modal-sub">Brokerage defaults</div>
+            <p className="help" style={{ marginTop: 0 }}>
+              What a colleague gets when they have not chosen for themselves. Changing one moves
+              everybody who is still following it, and nobody who is not.
+            </p>
+            {data.brokerage.default_keys.map((key) => {
+              const row = data.communications.find((c) => c.key === key);
+              return (
+                <label className="crm-toggle" key={key}>
+                  <span className="crm-toggle-text">
+                    <strong>{row?.name ?? key}</strong>
+                    {row?.description && <em>{row.description}</em>}
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={data.brokerage.defaults[key] ?? false}
+                    disabled={busy === `brokerage:${key}`}
+                    aria-label={`Brokerage default for ${row?.name ?? key}`}
+                    onChange={(e) => void saveBrokerage({ defaults: { [key]: e.target.checked } }, `brokerage:${key}`)}
+                  />
+                </label>
+              );
+            })}
+            {(data.brokerage.updated_at || data.brokerage.updated_by) && (
+              <p className="help" style={{ marginTop: 10 }}>
+                Last changed by {data.brokerage.updated_by ?? 'an administrator'}
+                {data.brokerage.updated_at ? ` on ${data.brokerage.updated_at.replace('T', ' ').slice(0, 16)}` : ''}.
+              </p>
+            )}
+          </>
+        )}
+
         {!data.brokerage.can_edit && (
           <p className="help" style={{ marginTop: 8 }}>
-            Only an administrator can change this. It is shown here so you can see why a
-            communication may not be sending.
+            <strong>Read-only.</strong> Changing this needs the Settings permission at <em>Edit</em>.
+            It is shown here so you can see why a communication may not be sending.
           </p>
         )}
-        {data.brokerage.can_edit && (
-          <p className="help" style={{ marginTop: 8 }}>
-            Changed under Triggers → CRM Triggers, which remains the one place this switch is set.
-          </p>
+
+        {!data.brokerage.auto_send_enabled && (
+          <div className="reminder-warn" style={{ marginTop: 8 }}>
+            <strong>CRM email is switched off for the whole brokerage.</strong> The preferences below
+            are saved, but nothing can send until{' '}
+            {data.brokerage.can_edit ? 'you switch it back on above.' : 'an administrator switches it back on.'}
+          </div>
         )}
       </div>
 
@@ -259,6 +403,7 @@ export default function CrmCommunicationsPanel({ standalone = false }: { standal
         </div>
       )}
 
+      <ConfirmDialog confirm={confirm} onClose={closeConfirm} />
       {preview && <PreviewModal {...preview} onClose={() => setPreview(null)} />}
       {creating && (
         <CreateTemplateModal

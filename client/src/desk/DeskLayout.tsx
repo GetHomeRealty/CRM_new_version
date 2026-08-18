@@ -158,6 +158,15 @@ const NAV: NavItem[] = [
   // Agent's own settings — profile, their email accounts, signature. Admins have the admin
   // Settings above instead, so this is shown to agents only.
   { key: 'account', label: 'Settings', ico: 'settings', agentOnly: true },
+  /*
+   * Transaction Desk only, and it needs no flag here to be so: `visibleNav` filters every top-level
+   * entry through `screenInArea`, so mapping `triggers` to the Desk in `area.ts` is what removes it
+   * from the CRM sidebar. One declaration, honoured by the navigation, the router and the redirect
+   * alike — a second `area` on this entry would be a place for them to disagree.
+   *
+   * The CRM's half of this screen moved to CRM → Settings → Communications, and to the personal
+   * `communications` entry above.
+   */
   { key: 'triggers', label: 'Triggers', ico: 'zap' },
   { key: 'recycle-bin', label: 'Recycle Bin', ico: 'trash', superAdmin: true },
 ];

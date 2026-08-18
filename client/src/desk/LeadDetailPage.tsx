@@ -13,6 +13,7 @@ import TwilioDialer from './TwilioDialer';
 import { useToast } from './toast';
 import { useAuth } from '../context/AuthContext';
 import LeadEditorModal, { label, prefHeading } from './LeadEditorModal';
+import { identityLocked } from '../lib/leadIdentity';
 import { createEvent } from '../lib/calendarApi';
 import type {
   CalendarEventInput, LeadCall, LeadDetail, LeadOptions, MessageStatus, SmsGatewayStatus,
@@ -243,7 +244,8 @@ export default function LeadDetailPage() {
         <LeadEditorModal
           lead={lead}
           options={options}
-          lockIdentity={user?.role === 'agent' && lead.owner_user_id != null && lead.owner_user_id !== user.id}
+          // One definition, shared with the Leads list and matching the server. See `leadIdentity`.
+          lockIdentity={identityLocked(lead, user)}
           onClose={() => setEditorOpen(false)}
           onSaved={() => { setEditorOpen(false); void load(true); }}
         />

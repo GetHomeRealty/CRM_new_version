@@ -134,6 +134,60 @@ describe('CRM dashboard — campaign counting', () => {
       expect(dash.campaigns.sent).toBe(7);
     });
   });
+
+  /*
+   * The scheduled count is read from the SAME groupBy as the total, so the two cannot disagree —
+   * which is the property this asserts: three campaigns in three different states, one headline of
+   * three, and only the scheduled one counted as scheduled.
+   */
+  it('counts campaigns waiting to go out, without disturbing the total', async () => {
+    await inRollback(async (tx) => {
+      const mine = await makeUser(tx, 'agent');
+      const now = new Date();
+      const make = (name: string, status: string) => tx.campaigns.create({
+        data: {
+          name: `${name} ${tag()}`, created_by_id: mine.id, subject: 's', content: 'body',
+          status, created_at: now, updated_at: now,
+        },
+      });
+      await make('Waiting', 'scheduled');
+      await make('Done', 'completed');
+      await make('Draft', 'draft');
+
+      const dash = await crmFor(tx, mine);
+      expect(dash.campaigns.total).toBe(3);
+      expect(dash.campaigns.scheduled).toBe(1);
+    });
+  });
+
+  it('reports no scheduled campaigns as 0 rather than undefined', async () => {
+    await inRollback(async (tx) => {
+      const mine = await makeUser(tx, 'agent');
+      const now = new Date();
+      await tx.campaigns.create({
+        data: { name: `Sent ${tag()}`, created_by_id: mine.id, subject: 's', content: 'body', status: 'completed', created_at: now, updated_at: now },
+      });
+
+      // `groupBy` only returns statuses that exist, so the empty bucket has to be filled in — this
+      // value goes straight to the screen.
+      const dash = await crmFor(tx, mine);
+      expect(dash.campaigns.scheduled).toBe(0);
+    });
+  });
+
+  it('does not count another user\'s scheduled campaign', async () => {
+    await inRollback(async (tx) => {
+      const mine = await makeUser(tx, 'agent');
+      const theirs = await makeUser(tx, 'manager');
+      const now = new Date();
+      await tx.campaigns.create({
+        data: { name: `Theirs ${tag()}`, created_by_id: theirs.id, subject: 's', content: 'body', status: 'scheduled', created_at: now, updated_at: now },
+      });
+
+      const dash = await crmFor(tx, mine);
+      expect(dash.campaigns.scheduled).toBe(0);
+    });
+  });
 });
 
 describe('CRM dashboard — lead task counting', () => {

@@ -17,6 +17,15 @@ const isListingFinancial = (type: string): boolean => isListingType(type) || typ
 export class CommissionService {
   constructor(private readonly people: PersonResolver) {}
 
+  /**
+   * The resolver this engine resolves names with.
+   *
+   * Exposed so a bulk caller can PRE-LOAD profiles through the same rule rather than inventing its
+   * own — see `ReportDataService.profileCache`, which got a different answer for a namesake by
+   * building its map with a plain `findMany` and letting the last row win.
+   */
+  get personResolver(): PersonResolver { return this.people; }
+
   private readonly r = round2;
   /** PHP is_numeric($v) ? (float)$v : 0 (used for adjustment amounts). */
   private num(v: unknown): number {

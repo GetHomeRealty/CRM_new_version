@@ -51,6 +51,33 @@ export class CampaignTemplatesService {
   }
 
   /**
+   * What the Campaigns module OFFERS: templates somebody authored for a campaign, and nothing else.
+   *
+   * NARROWER THAN `visibleWhere`, AND DELIBERATELY SO. `visibleWhere` answers "may you touch this
+   * row" and still admits the shipped built-ins (`user_id` null) — which is what keeps an existing
+   * campaign's attachments resolvable and what the ownership rules are written against. This answers
+   * a different question: "does this belong in the campaign template library?" The brokerage's
+   * decision is that the library is for templates created for campaigns, so the built-ins are not
+   * listed and not selectable.
+   *
+   * NOT A DELETE. The rows stay, `get`/`update`/`remove`/attachments still resolve them by id, and a
+   * campaign already built on one keeps sending — campaigns snapshot the subject and body at create
+   * time and `attachmentsForSend` looks attachments up by `template_id` alone. So no history is
+   * rewritten and no send in flight changes; the built-ins simply stop being offered.
+   *
+   * CRM communication templates were never in this table and are not what this excludes. Those live
+   * in `email_templates` under CRM → Settings → Templates and have never been reachable from
+   * Campaigns — see the class comment.
+   *
+   * STATIC because the builder's own picker (`GET /api/campaigns/options`) has to apply the same
+   * rule, and a library that lists one set while the picker offers another is the exact disagreement
+   * this whole change exists to remove. One definition, both callers.
+   */
+  static authoredWhere(user: AuthUserRecord): Record<string, unknown> {
+    return { user_id: user.id ?? -1 };
+  }
+
+  /**
    * Refuse to change a template that is not this person's to change.
    *
    * Two separate rules, and they point in opposite directions for the two kinds of template:
@@ -76,8 +103,9 @@ export class CampaignTemplatesService {
   }
 
 
+  /** The campaign template library — see `authoredWhere` for why the built-ins are not in it. */
   async list(category: string | undefined, user: AuthUserRecord): Promise<Record<string, unknown>[]> {
-    const where: Record<string, unknown> = { deleted_at: null, ...this.visibleWhere(user) };
+    const where: Record<string, unknown> = { deleted_at: null, ...CampaignTemplatesService.authoredWhere(user) };
     const cat = str(category);
     if (cat && cat !== 'all' && isCategory(cat)) where.category = cat;
 

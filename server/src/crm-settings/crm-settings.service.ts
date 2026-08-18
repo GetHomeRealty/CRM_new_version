@@ -252,6 +252,26 @@ export class CrmSettingsService {
   }
 
   // -------------------------------------------------------- email settings
+  /**
+   * The brokerage's stored defaults, filled out with the compiled ones.
+   *
+   * Its own method because three callers need the same answer and each getting it slightly wrong in
+   * its own way is how the stores drifted before: unreadable JSON must mean "use the compiled
+   * defaults", never "no defaults at all", or a save would write `{}` over a brokerage's choices.
+   */
+  async brokerageToggles(): Promise<Record<string, boolean>> {
+    const row = await this.prisma.crm_email_settings.findFirst({ orderBy: { id: 'asc' } });
+    if (!row?.template_toggles) return { ...DEFAULT_TRIGGERS };
+    try {
+      const parsed = JSON.parse(row.template_toggles) as Record<string, unknown>;
+      const out: Record<string, boolean> = { ...DEFAULT_TRIGGERS };
+      for (const key of TRIGGER_KEYS) if (typeof parsed[key] === 'boolean') out[key] = parsed[key] as boolean;
+      return out;
+    } catch {
+      return { ...DEFAULT_TRIGGERS };
+    }
+  }
+
   async getEmailSettings(): Promise<Record<string, unknown>> {
     const row = await this.prisma.crm_email_settings.findFirst({ orderBy: { id: 'asc' } });
     return {
@@ -329,9 +349,27 @@ export class CrmSettingsService {
       });
     }
 
-    const toggles: Record<string, boolean> = {};
+    /*
+     * MERGE THE BROKERAGE DEFAULTS, DO NOT REBUILD THEM.
+     *
+     * This read `bool(given[key], DEFAULT_TRIGGERS[key])` for every key, so a caller that sent no
+     * `emailTemplates` — or sent only the one switch it had changed — silently reset every absent
+     * default to the compiled value. While the Triggers screen was the only caller that was hidden,
+     * because it posted the whole row back on every save. It is not the only caller now: the
+     * Brokerage Controls card on Communications sets one switch at a time, and a brokerage that had
+     * turned Birthday on would have had it turned off again by an unrelated save of the SMTP host.
+     *
+     * ABSENT IS UNCHANGED, PRESENT-AND-INVALID FALLS BACK — the same rule `CrmTriggersService`
+     * already applies to a person's own switches, for the same reason: a request that forgets a
+     * field must not be read as an instruction about it.
+     */
+    const existingToggles = await this.brokerageToggles();
+    const toggles: Record<string, boolean> = { ...existingToggles };
     const given = (body.emailTemplates ?? {}) as Record<string, unknown>;
-    for (const key of TRIGGER_KEYS) toggles[key] = bool(given[key], DEFAULT_TRIGGERS[key]);
+    for (const key of TRIGGER_KEYS) {
+      if (given[key] === undefined) continue;
+      toggles[key] = bool(given[key], existingToggles[key] ?? DEFAULT_TRIGGERS[key]);
+    }
 
     const now = new Date();
     const data = {

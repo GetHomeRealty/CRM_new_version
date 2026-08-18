@@ -85,6 +85,21 @@ export const SCREEN_AREA: Record<string, ScreenArea> = {
   // Desk. Both redirect there instead, and nobody's saved favourites are affected.
   mls: 'desk',
   favorites: 'desk',
+  /*
+   * TRIGGERS IS THE TRANSACTION DESK'S ALONE NOW. It was `'both'`, and the Triggers page branched on
+   * the area: the Desk got its transaction automations, the CRM got a screen of switches deciding
+   * which CRM emails an agent could send.
+   *
+   * That CRM half has moved, whole, to CRM → Communications — the personal switches, the brokerage
+   * master switch and the brokerage defaults — so keeping the entry would leave the CRM with two
+   * screens for one set of controls, which is exactly what the move was for. `/crm/triggers` now
+   * redirects to `/desk/triggers` through `AreaFallback`, so an existing bookmark lands on the
+   * screen that still exists rather than on a stub.
+   *
+   * The Desk's own Triggers screen, panel, route, sidebar entry and `triggers` permission are all
+   * untouched. Nothing about Transaction Management changed here.
+   */
+  triggers: 'desk',
 
   // Present in both, with each area getting its own view.
   //
@@ -96,7 +111,6 @@ export const SCREEN_AREA: Record<string, ScreenArea> = {
   dashboard: 'both',
   calendar: 'both',
   audit: 'both',
-  triggers: 'both',
   settings: 'both',
 
   // Present in both, showing the same shared records either way.

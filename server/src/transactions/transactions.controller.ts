@@ -17,8 +17,23 @@ import { ListTransactionsDto } from './dto/list-transactions.dto';
 const toResourceUser = (u: AuthUserRecord | undefined): ResourceUser | null =>
   u ? { id: u.id, role: u.role, name: u.name } : null;
 
+/*
+ * EVERY ROUTE HERE IS BEHIND THE `transactions` SCREEN PERMISSION, DECLARED ONCE ON THE CLASS.
+ *
+ * It was declared per method, and only on the writes — so `GET /api/transactions`, the detail
+ * endpoint and everything hanging off them answered to anybody with a session. The `crm` role's
+ * permission map says `transactions: 'none'` and it could still read every deal in the brokerage,
+ * including the commission breakdown; so could a user whose access had been deliberately revoked.
+ * The navigation hid the screen and nothing else did.
+ *
+ * Declared on the CLASS so the default is closed: a route added later inherits `view` without
+ * anybody remembering to decorate it, and a write route overrides it with `edit` — `ScreenGuard`
+ * reads the handler's metadata first (`getAllAndOverride`). `ScreenGuard` also enforces module
+ * access for the screen's area, so a login without Transaction Management is refused here too.
+ */
 @Controller('transactions')
-@UseGuards(AuthGuard)
+@UseGuards(AuthGuard, ScreenGuard)
+@Screen('transactions', 'view')
 export class TransactionsController {
   constructor(
     private readonly transactions: TransactionsService,
@@ -32,7 +47,6 @@ export class TransactionsController {
   @Post()
   @HttpCode(201)
   @Screen('transactions', 'edit')
-  @UseGuards(AuthGuard, ScreenGuard)
   store(
     @CurrentUser() user: AuthUserRecord | undefined,
     @Body() body: Record<string, unknown>,
@@ -42,7 +56,6 @@ export class TransactionsController {
 
   @Put(':transaction')
   @Screen('transactions', 'edit')
-  @UseGuards(AuthGuard, ScreenGuard)
   update(
     @CurrentUser() user: AuthUserRecord | undefined,
     @Param('transaction', ParseIntPipe) id: number,
@@ -53,7 +66,6 @@ export class TransactionsController {
 
   @Delete(':transaction')
   @Screen('transactions', 'edit')
-  @UseGuards(AuthGuard, ScreenGuard)
   destroy(
     @CurrentUser() user: AuthUserRecord | undefined,
     @Param('transaction', ParseIntPipe) id: number,
@@ -183,7 +195,6 @@ export class TransactionsController {
    */
   @Get('reminders/history')
   @Screen('transactions', 'view')
-  @UseGuards(AuthGuard, ScreenGuard)
   reminderHistory(
     @CurrentUser() user: AuthUserRecord | undefined,
     @Query() query: { transaction_id?: string; page?: string; per_page?: string },
@@ -212,6 +223,21 @@ export class TransactionsController {
     @Query() query: ListTransactionsDto,
   ): Promise<TransactionListResult> {
     return this.transactions.index(toResourceUser(user), query);
+  }
+
+  /**
+   * The ids of every deal matching the current filters — "Select all N matching".
+   *
+   * Declared BEFORE `:transaction` so Nest does not read `matching-ids` as a transaction id. Same
+   * filters, same order and same visibility scope as the list itself; it is the list's `where`
+   * answered on demand instead of on every page load. See `TransactionsService.matchingIds`.
+   */
+  @Get('matching-ids')
+  matchingIds(
+    @CurrentUser() user: AuthUserRecord | undefined,
+    @Query() query: ListTransactionsDto,
+  ): Promise<{ ids: number[] }> {
+    return this.transactions.matchingIds(toResourceUser(user), query);
   }
 
   @Get(':transaction')

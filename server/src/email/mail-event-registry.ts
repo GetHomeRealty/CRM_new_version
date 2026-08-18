@@ -24,6 +24,63 @@ export interface MailEvent {
  * it changes if the office moves or the tagline does.
  */
 const RED = '#c8102e';
+/** For the one congratulatory line in the fresher letter. Dark enough to stay legible on white. */
+const GREEN = '#137333';
+
+/**
+ * The brokerage's address, on every letter that does not name its own.
+ *
+ * This is the address Company Settings holds and the one printed on all five signed contracts. The
+ * letterhead used to read #405-218 Export Blvd, L6R 0M8 — the address on the letters Recruitment had
+ * been sending — and the two contradicted each other in an obvious way for anyone who received both.
+ * Settled on 2026-08-14 in favour of the one the contracts carry.
+ */
+const BROKERAGE_ADDRESS = '#101-218 Export Blvd, Mississauga ON L5S 0A7, CANADA';
+
+/**
+ * The letterhead every letter from the brokerage ends with: the logo with the department that sent
+ * it captioned underneath, and the contact block beside it.
+ *
+ * ONE block for all four letters, in the Accounts design, which is the one the brokerage settled on.
+ * It carries no person and no job title — a signature naming an individual would have to be kept
+ * current in four templates every time somebody changed desks, and the letters are from departments
+ * rather than from people. The department caption and the mailbox are what differ, so those are the
+ * arguments; everything else is fixed, which is the point of having one letterhead.
+ */
+const signature = (department: string, email: string): string =>
+  '<p style="margin:0 0 14px">Yours Truly,</p>'
+  // A table because it is the one layout primitive every mail client agrees on, and
+  // `{{ logo_img }}` rather than an <img> because the tag has to disappear entirely when no logo is
+  // uploaded — an alt-text box where the brand should be is worse than a signature without one.
+  + '<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse">'
+  + '<tr>'
+  + '<td style="vertical-align:middle;padding:0 18px 0 0;text-align:center">'
+  + '{{ logo_img }}'
+  + `<p style="margin:14px 0 0;font-size:13.5px;color:#111827">${department}</p>`
+  + '</td>'
+  + '<td style="vertical-align:middle;border-left:3px solid #1f3b73;padding:0 0 0 14px;font-size:12.5px;line-height:1.55;color:#111827">'
+  + '<p style="margin:0 0 8px;font-style:italic">Get Home Realty Inc.</p>'
+  + '<p style="margin:0"><strong>O:</strong> 905-565-9933</p>'
+  + `<p style="margin:0"><strong>E:</strong> <a href="mailto:${email}" style="color:#1d4ed8">${email}</a></p>`
+  + `<p style="margin:0 0 10px"><strong>A:</strong> ${BROKERAGE_ADDRESS}</p>`
+  + `<p style="margin:0;font-style:italic;color:${RED}">Get Home Realty Inc., Brokerage &ndash; &ldquo;A Tradition of Trust&rdquo;</p>`
+  + '<p style="margin:0 0 8px"><strong>Best Commission Split&nbsp; |&nbsp; Low Fees&nbsp; |&nbsp; Superior Support</strong></p>'
+  + '<p style="margin:0"><a href="https://www.gethomerealty.ca" style="color:#1d4ed8"><strong>www.GetHomeRealty.ca</strong></a></p>'
+  // Named rather than pictured: no icon artwork ships with this application, and the sent copy of
+  // the accounting letter shows why it matters — its four icons arrive as four broken-image boxes.
+  + '<p style="margin:8px 0 0;color:#4b5563">Facebook&nbsp; &middot;&nbsp; YouTube&nbsp; &middot;&nbsp; LinkedIn&nbsp; &middot;&nbsp; Instagram</p>'
+  + '</td>'
+  + '</tr>'
+  + '</table>';
+
+/**
+ * The mailbox each department answers on. The only thing that changes between the four signatures,
+ * so a reply lands with the people who asked for it.
+ */
+const RECRUITMENT_SIGNATURE = signature('Department of Recruitment', 'Recruitment@GetHomeRealty.ca');
+const TRAINING_SIGNATURE = signature('Department of Training', 'training@gethomerealty.ca');
+const ACCOUNTS_SIGNATURE = signature('Accounts Department', 'Commissionpayouts@gethomerealty.ca');
+
 const ONBOARD_EMAIL_BODY: string =
   '<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.6;color:#111827">'
   + `<p style="margin:0 0 12px"><strong>Dear {{ agent_name }},</strong></p>`
@@ -63,27 +120,7 @@ const ONBOARD_EMAIL_BODY: string =
   + '<p style="margin:0 0 12px"><em>Kindly confirm having received this onboarding email, along with the {{ attachment_count }} attached documents.</em></p>'
   + '<p style="margin:0 0 16px">Thank you again for choosing us as your new brokerage!</p>'
 
-  + '<p style="margin:0;color:#6b7280">--</p>'
-  + `<p style="margin:0 0 14px">Appreciatively,<br><strong style="color:${RED}">Department of Recruitment</strong></p>`
-
-  // Logo beside the details, divided by the rule, as the letter has it. A table because it is the
-  // one layout primitive every mail client agrees on, and `{{ logo_img }}` rather than an <img>
-  // here because the tag has to disappear entirely when no logo is uploaded — an alt-text box
-  // where the brand should be is worse than a signature that starts at the rule.
-  + '<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse">'
-  + '<tr>'
-  + '<td style="vertical-align:middle;padding:0 18px 0 0">{{ logo_img }}</td>'
-  + '<td style="vertical-align:middle;border-left:3px solid #1f3b73;padding:0 0 0 14px;font-size:12.5px;line-height:1.55;color:#111827">'
-  + '<p style="margin:0"><strong>O:</strong>(905) 565-9933</p>'
-  + '<p style="margin:0"><strong>E:</strong> <a href="mailto:Recruitment@GetHomeRealty.ca" style="color:#1d4ed8">Recruitment@GetHomeRealty.ca</a></p>'
-  + '<p style="margin:0 0 10px"><strong>A:</strong> #405-218 Export Blvd, Mississauga ON L6R 0M8 CANADA</p>'
-  + '<p style="margin:0"><strong>Get Home Realty Inc., Brokerage &ndash; &ldquo;A Tradition of Trust&rdquo;</strong></p>'
-  + '<p style="margin:0 0 10px"><em>Canada&rsquo;s Leading Independent Brokerage - Celebrating 10 years of success</em></p>'
-  + '<p style="margin:0 0 8px"><strong>Best Commission Split&nbsp; |&nbsp; Low Fees&nbsp; |&nbsp; Superior Support</strong></p>'
-  + '<p style="margin:0"><a href="https://www.gethomerealty.ca" style="color:#1d4ed8"><strong>www.gethomerealty.ca</strong></a></p>'
-  + '</td>'
-  + '</tr>'
-  + '</table>'
+  + RECRUITMENT_SIGNATURE
   + '</div>';
 
 /**
@@ -105,7 +142,10 @@ const CONTRACT_AGREEMENT_BODY: string =
   + `<p style="margin:0 0 16px;text-align:center;font-size:18px;font-weight:700;color:${RED};letter-spacing:.3px">INDEPENDENT CONTRACTOR AGREEMENT</p>`
   + '<p style="margin:0 0 12px">This Agreement is entered into on {{ agreement_day }} day of {{ agreement_month }}, {{ agreement_year }} by and between:</p>'
   + '<p style="margin:0 0 8px">1. <strong>{{ company_name }} BROKERAGE</strong> (the &lsquo;Brokerage&rsquo;), having an office at {{ company_address }}.</p>'
-  + '<p style="margin:0 0 8px">2. <strong>{{ agent_name }}</strong> [Agent&rsquo;s Full Name], residing at {{ agent_address }} [Agent&rsquo;s Address]</p>'
+  // Without the paper form's field labels. "[Agent's Full Name]" is there to tell someone filling in
+  // a blank what belongs in it; printed after the name it is already filled with, it reads as though
+  // the agreement is unsure who it is about.
+  + '<p style="margin:0 0 8px">2. <strong>{{ agent_name }}</strong>, residing at {{ agent_address }}</p>'
   + '<p style="margin:0 0 14px"><strong>Agent Type:</strong> {{ agent_type }}</p>'
 
   + '<p style="margin:0 0 4px"><strong>Key Terms:</strong></p>'
@@ -171,13 +211,229 @@ const CONTRACT_AGREEMENT_BODY: string =
   + '</table>'
   + '</div>';
 
+/**
+ * The onboarding guide for a NEWLY LICENSED agent, in the wording of the letter Recruitment sends
+ * them — the other half of `ONBOARD_EMAIL_BODY`, which addresses an agent transferring in.
+ *
+ * They are separate templates rather than one with a condition inside it because they share almost
+ * nothing: a fresher has no brokerage to resign from and no transfer to wait on, and instead has to
+ * register with RECO and TREB from scratch. A single body carrying both would be edited in Settings
+ * with half of it invisible.
+ *
+ * The registration particulars are literal — the employer number, the brokerage id, RECO's
+ * registration address — because they identify the brokerage to an outside registry and are not
+ * ours to interpolate from a settings row that happens to hold a display name.
+ */
+const ONBOARD_EMAIL_FRESHER_BODY: string =
+  '<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.6;color:#111827">'
+  + '<p style="margin:0 0 12px"><strong>Dear {{ agent_name }},</strong></p>'
+  + `<p style="margin:0 0 16px;color:${RED}">Welcome to {{ company_name }}! We&rsquo;re excited to have you join our team of experienced professionals. To ensure a smooth and efficient transition, we&rsquo;ve outlined a simple step-by-step onboarding process for you:</p>`
+  + `<p style="margin:0 0 16px;color:${GREEN}"><strong>First of all, Congratulations on successfully finishing all your Real Estate Courses. Step into the exciting journey of the real estate world!</strong></p>`
+
+  + '<p style="margin:0 0 4px"><strong>Step 1: After obtaining the criminal record check, the next step is to complete the RECO registration.</strong></p>'
+  + '<ul style="margin:0 0 14px;padding-left:22px">'
+  + '<li>To register with RECO, kindly generate your login using your student ID on the RECO website (<a href="https://myweb.reco.on.ca/members/Account/Register" style="color:#1d4ed8">https://myweb.reco.on.ca/members/Account/Register</a>).</li>'
+  + '<li>To Complete Criminal Background Check on the RECO website.</li>'
+  + '<li>Upon successful login, complete the online application for a new salesperson. Following the submission of the application, it will undergo review by the {{ company_name }} Broker of Record.</li>'
+  + '<li>Ensure you input the following employer details during the application:'
+  + '<ul style="margin:4px 0 0;padding-left:22px">'
+  + '<li>Employer #: <strong>5029774</strong></li>'
+  + '<li>Employer Name: <strong>Get Home Realty Inc</strong></li>'
+  + '</ul></li>'
+  + '<li>The RECO processing time for the application is 1 to 3 business days. Once the RECO process is finalized, follow the instructions below to submit the criminal record and TREB registration.</li>'
+  + '</ul>'
+
+  + '<p style="margin:0 0 4px"><strong>Step 2: Send a Copy of Criminal Record</strong></p>'
+  + '<ul style="margin:0 0 14px;padding-left:22px">'
+  + '<li>Kindly send a copy of your Criminal Record and Judicial Matters Check to <a href="mailto:Registration@reco.on.ca" style="color:#1d4ed8">Registration@reco.on.ca</a>, ensuring your full name and Student ID are included in the email content and subject line.</li>'
+  + '</ul>'
+
+  + '<p style="margin:0 0 4px"><strong>Step 3: TREB Registration</strong></p>'
+  + '<ul style="margin:0 0 14px;padding-left:22px">'
+  + '<li>Use the enclosed link to access the TREB online application form &gt;&gt;&gt; <a href="https://member.trreb.ca/NC__Login?startURL=%2F" style="color:#1d4ed8">https://member.trreb.ca/NC__Login?startURL=%2F</a></li>'
+  + '<li>Log in as a &lsquo;NON-MEMBER&rsquo; using your email address and complete the online registration.</li>'
+  + `<li>After completing the &lsquo;NON-MEMBER&rsquo; login registration, proceed to register as a salesperson or broker. Once you fill in your personal details, enter <strong style="color:${RED}">&ldquo;Get Home Realty&rdquo;</strong> in the brokerage section.</li>`
+  + '<li>Brokerage Id#: <strong>402600</strong></li>'
+  + '<li>Additionally, attach a screenshot of your RECO registration from the online portal along with your confirmation of completing the TREB online registration.</li>'
+  + '</ul>'
+
+  + '<p style="margin:0 0 4px"><strong>Step 4: Providing your Basic Details</strong></p>'
+  + '<ul style="margin:0 0 14px;padding-left:22px">'
+  + '<li>Please provide your essential information, including your full name (First &amp; Last names), contact details, personal email ID and a professional headshot.</li>'
+  + '<li>Along with, provide your PREC / SP bank account details for upcoming commission payouts to our accounts team along with Proof documents at <a href="mailto:{{ accounts_email }}" style="color:#1d4ed8">{{ accounts_email }}</a></li>'
+  + '</ul>'
+
+  + '<p style="margin:0 0 4px"><strong>Step 5: Business Cards &amp; Signage</strong></p>'
+  + '<ul style="margin:0 0 16px;padding-left:22px">'
+  + '<li>You will be issued with your personalized business cards.</li>'
+  + '</ul>'
+
+  + '<p style="margin:0 0 12px">Should you have any further questions during this process, feel free to reach out. We&rsquo;re here to support you every step of the way and look forward to your success with {{ company_name }}.</p>'
+  + '<p style="margin:0 0 16px">Thank you for choosing us as your new brokerage!</p>'
+
+  + RECRUITMENT_SIGNATURE
+  + '</div>';
+
+/**
+ * Accounts&rsquo; request for the banking details a commission payout is made against, in the wording
+ * the Accounts Department sends it in.
+ *
+ * It asks for the documents rather than collecting them: there is nowhere in this application to put
+ * a SIN or a void cheque, and a template that implied otherwise would be inviting the agent to reply
+ * with them into a mailbox nobody decided should hold them. The reply goes to Accounts, as it does
+ * today.
+ *
+ * Sent from the accounts mailbox rather than Recruitment&rsquo;s, which is a sender to set on this
+ * template in Settings &rarr; Templates — the letterhead below only signs it.
+ */
+const ACCOUNTING_ONBOARD_BODY: string =
+  '<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.6;color:#111827">'
+  + '<p style="margin:0 0 12px"><strong>Dear {{ agent_name }},</strong></p>'
+  + '<p style="margin:0 0 12px">I hope this email finds you well.</p>'
+  + '<p style="margin:0 0 12px">As part of our onboarding and accounting process for <strong>upcoming commission payouts</strong>, we request you to provide the following details based on your business structure to generate tax-related documents under your business name.</p>'
+  + '<p style="margin:0 0 14px">Please review the applicable section below and submit the required information.</p>'
+
+  + '<hr style="border:0;border-top:1px solid #d1d5db;margin:0 0 14px">'
+  + '<p style="margin:0 0 8px"><strong>1. If you are operating under a PREC (Personal Real Estate Corporation):</strong></p>'
+  + '<p style="margin:0 0 8px">A PREC means your commissions are paid to your incorporated business.</p>'
+  + '<p style="margin:0 0 4px">Please provide:</p>'
+  + '<ul style="margin:0 0 14px;padding-left:22px">'
+  + '<li>Incorporation Document</li>'
+  + '<li>HST Number</li>'
+  + '<li>Void Cheque or Direct Deposit Form (in Corporation Name)'
+  + '<ul style="margin:4px 0 0;padding-left:22px">'
+  + '<li>Bank Name</li>'
+  + '<li>Institution Number</li>'
+  + '<li>Transit Number</li>'
+  + '<li>Account Number</li>'
+  + '</ul></li>'
+  + '<li>Registered Business Address</li>'
+  + '</ul>'
+
+  + '<hr style="border:0;border-top:1px solid #d1d5db;margin:0 0 14px">'
+  + '<p style="margin:0 0 8px"><strong>2. If you are operating as a Sole Proprietor (Individual / Not Incorporated):</strong></p>'
+  + '<p style="margin:0 0 8px">A Sole Proprietor means commissions are paid directly to you as an individual.</p>'
+  + '<p style="margin:0 0 4px">Please provide:</p>'
+  + '<ul style="margin:0 0 12px;padding-left:22px">'
+  + '<li>Full Legal Name (as per government ID)</li>'
+  + '<li>SIN (Social Insurance Number &ndash; required for T4A)</li>'
+  + '<li>HST Number</li>'
+  + '<li>Void Cheque or Direct Deposit Form (in your legal name as per bank records)'
+  + '<ul style="margin:4px 0 0;padding-left:22px">'
+  + '<li>Bank Name</li>'
+  + '<li>Institution Number</li>'
+  + '<li>Transit Number</li>'
+  + '<li>Account Number</li>'
+  + '</ul></li>'
+  + '<li>Residential Address</li>'
+  + '</ul>'
+  + `<p style="margin:0 0 14px;color:${RED}"><em>Please confirm that the provided bank account is registered under your name and that you authorize its use for commission payouts as a Sole Proprietor.</em></p>`
+
+  + '<hr style="border:0;border-top:1px solid #d1d5db;margin:0 0 14px">'
+  + '<p style="margin:0 0 4px"><strong>Important Notes:</strong></p>'
+  + '<ul style="margin:0 0 16px;padding-left:22px">'
+  + '<li>Providing complete and accurate details is <strong>mandatory</strong> to ensure timely and compliant commission payouts.</li>'
+  + '<li>Payments will only be processed once all required documentation is received and verified.</li>'
+  + '<li>Please ensure that the bank account name matches your legal name or registered corporation name, as applicable.</li>'
+  + '<li>All information will be kept strictly confidential and used solely for accounting, tax reporting, and payment processing purposes.</li>'
+  + '</ul>'
+
+  + '<hr style="border:0;border-top:1px solid #d1d5db;margin:0 0 14px">'
+  + '<p style="margin:0 0 12px">Kindly submit the above details and documents at your earliest convenience.</p>'
+  + '<p style="margin:0 0 12px">Your prompt cooperation in providing this information will help us facilitate smooth and efficient commission payouts. If you have any questions or require assistance, please feel free to reach out to us.</p>'
+  + '<p style="margin:0 0 16px">Thank you for your cooperation and have a great day!</p>'
+
+  + ACCOUNTS_SIGNATURE
+  + '</div>';
+
+/**
+ * The Training Department&rsquo;s welcome, listing the subjects the onboarding programme covers.
+ *
+ * The letter that goes out today carries this list as a designed banner image. It is set as text
+ * here because the artwork is not among this application&rsquo;s assets, and because a mail client
+ * that blocks images — most of them, by default, from an unknown sender — would otherwise show a new
+ * agent an empty rectangle where their training programme should be. Attaching the real banner to
+ * this template in Settings &rarr; Templates is the way to send the designed version as well.
+ */
+/**
+ * The subjects set as text, for when the designed banner is not available.
+ *
+ * Rendered into `{{ training_banner }}` by `UserOnboardingService` whenever no banner artwork is
+ * installed, so the letter always shows the programme rather than a gap where a picture should be.
+ */
+export const TRAINING_BANNER_FALLBACK: string =
+  '<div style="margin:0 0 18px;padding:16px 18px;border:1px solid #e5e7eb;border-left:6px solid ' + RED + ';background:#fafafa">'
+  + '<div style="margin:0 0 10px">{{ logo_img }}</div>'
+  + '<p style="margin:0 0 10px;font-size:26px;line-height:1.15;font-weight:700;color:#111827">Onboard<br>Trainings</p>'
+  + '<ul style="margin:0;padding-left:18px;list-style:none">'
+  // Written out in the case they are set in, rather than upper-cased here: `toUpperCase()` would
+  // reach the HTML entities as well and turn `&amp;` into `&AMP;`, which no client decodes.
+  + [
+    'EXPLORING MLS',
+    'ULTIMATE SHOWINGS',
+    'DOCUMENTATION',
+    'NEGOTIATION SKILLS',
+    'LISTING PRESENTATION',
+    'TOOLS &amp; SOFT SPOKEN SKILLS',
+    'MARKETING &amp; ADVERTISING',
+    'PRE-CONSTRUCTIONS',
+    'COMMERCIAL',
+  ].map((subject) => `<li style="margin:0 0 4px;font-weight:600;letter-spacing:.02em"><span style="color:${RED}">&#10033;</span> ${subject}</li>`).join('')
+  + '</ul>'
+  + '</div>';
+
+const TRAINING_ONBOARD_BODY: string =
+  '<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.6;color:#111827">'
+  // The designed banner when the brokerage has installed one, the subjects as text when it has not.
+  + '{{ training_banner }}'
+
+  + '<p style="margin:0 0 12px">Welcome to <strong>{{ company_name }}</strong></p>'
+  + '<p style="margin:0 0 12px">On behalf of our Training Department and the entire team, we are pleased to welcome you to the brokerage.</p>'
+  + '<p style="margin:0 0 12px">At {{ company_name }}, our goal is to provide you with the training, resources, tools, and ongoing support you need to build a successful real estate career. From your initial onboarding and training to your continued professional growth, our team is committed to supporting you at every stage.</p>'
+  // No full stop after the name: the brokerage's registered name ends in one ("GET HOME REALTY
+  // INC."), and adding another produced "…with GET HOME REALTY INC..".
+  + '<p style="margin:0 0 12px">We look forward to working with you, supporting your development, and seeing you achieve your goals with {{ company_name }}</p>'
+  // The sign-off that closes this wording — "Yours truly, / Training Department / GET HOME REALTY
+  // INC." — is not written here: the shared signature below already renders all three of those
+  // lines. Repeating them would sign the letter twice.
+  + '<p style="margin:0 0 16px">Wishing you a successful and rewarding journey ahead.</p>'
+
+  + TRAINING_SIGNATURE
+  + '</div>';
+
 export const MAIL_EVENTS: Record<string, MailEvent> = {
+  // The two onboarding guides are one button on the Users screen; which of them is sent is decided
+  // by the agent's own Fresher / Experienced field. They are separate rows here so each can be
+  // edited, switched off and given its own attachments without disturbing the other.
   'user.onboard_email': {
     module: 'Onboarding',
-    label: 'Agent — Onboarding Guide',
+    label: 'Agent — Onboarding Guide (Experienced)',
     variables: ['agent_name', 'agent_email', 'company_name', 'broker_of_record', 'broker_email', 'accounts_email', 'attachment_count', 'logo_img', 'onboard_date', 'current_date'],
     default_subject: 'Welcome, {{ agent_name }}! Here’s your onboarding guide to {{ company_name }}',
     default_body_html: ONBOARD_EMAIL_BODY,
+  },
+  'user.onboard_email_fresher': {
+    module: 'Onboarding',
+    label: 'Agent — Onboarding Guide (Fresher)',
+    // No `attachment_count`: this letter refers to no attachments, so nothing asks the agent to
+    // confirm a number of them.
+    variables: ['agent_name', 'agent_email', 'company_name', 'broker_of_record', 'broker_email', 'accounts_email', 'logo_img', 'onboard_date', 'current_date'],
+    default_subject: 'Welcome, {{ agent_name }}! Here’s your onboarding guide to {{ company_name }}',
+    default_body_html: ONBOARD_EMAIL_FRESHER_BODY,
+  },
+  'user.accounting_onboard_email': {
+    module: 'Onboarding',
+    label: 'Agent — Accounting Onboarding (Bank Details)',
+    variables: ['agent_name', 'agent_email', 'company_name', 'accounts_email', 'logo_img', 'onboard_date', 'current_date'],
+    default_subject: 'Onboarding: Request for Bank Details for Commission Payout Setup',
+    default_body_html: ACCOUNTING_ONBOARD_BODY,
+  },
+  'user.training_onboard_email': {
+    module: 'Onboarding',
+    label: 'Agent — Training Onboarding',
+    variables: ['agent_name', 'agent_email', 'company_name', 'logo_img', 'training_banner', 'onboard_date', 'current_date'],
+    default_subject: 'Onboarding: Training Department',
+    default_body_html: TRAINING_ONBOARD_BODY,
   },
   'user.contract_agreement': {
     module: 'Onboarding',
@@ -658,22 +914,71 @@ export const MAIL_EVENTS: Record<string, MailEvent> = {
  */
 export const SUPERSEDED_BODY_HASHES: Record<string, string[]> = {
   // The paraphrase of the recruitment letter, shipped until 2026-07-30, when the letter's own
-  // wording, signature block and logo replaced it.
-  'user.onboard_email': ['2e89930be4e11d4fdb33552fdec7b0894b18eda3359ac68b01e88cff17a04c3e'],
+  // wording, signature block and logo replaced it; then that version, whose letterhead still gave
+  // the #405-218 / L6R 0M8 address, until it was settled in favour of the contracts' address.
+  'user.onboard_email': [
+    '2e89930be4e11d4fdb33552fdec7b0894b18eda3359ac68b01e88cff17a04c3e',
+    '069203e53e38e551ab6da01f7f7146058efead094284a0b39e35168b067da6f5',
+    // Recruitment's own letterhead, before all four letters moved to the shared Accounts design.
+    '255e67d6b94e7ef6280a8f0577a1e14c76af01d599cae18ec26e28cb2eacfe91',
+  ],
   // The covering note that referred to an attached agreement, shipped until 2026-07-30, when the
-  // agreement itself — filled in from the agent's profile — replaced it.
-  'user.contract_agreement': ['152ec34e4ebccf846b57799efb8ebcf34b78f2a6d53f56c1331536a1bda6b767'],
+  // agreement itself — filled in from the agent's profile — replaced it; then that version, which
+  // still printed the paper form's "[Agent's Full Name]" and "[Agent's Address]" labels beside the
+  // details they had already been filled in with.
+  'user.contract_agreement': [
+    '152ec34e4ebccf846b57799efb8ebcf34b78f2a6d53f56c1331536a1bda6b767',
+    'd307fe3d8e5655b0cf82d8bca4abde82d1969cfe0b14b7502c2579a9230f3755',
+  ],
+  // The fresher letter as first shipped on 2026-08-14, with the congratulations line in plain black.
+  // It is green from later the same day.
+  'user.onboard_email_fresher': [
+    '458219b5fddfaa4c16f699903ad34d29086aa61fbe6d565b8be5bfe976b8c548',
+    // Green congratulations line, letterhead still on the #405-218 / L6R 0M8 address.
+    '66c72b3d9b2ab16208bba98d040652d3381616416db8294c991a45db1b6f0915',
+    // Before the shared signature.
+    'dfe81a9dacdb452b0a91e1b308cec3f7601a3e38a4ec35db9ac9af4728a8ccd5',
+  ],
+  // As first shipped on 2026-08-14; then with the contracts' address on the letterhead, until the
+  // subjects became `{{ training_banner }}` and the sign-off became the Department of Training.
+  'user.training_onboard_email': [
+    '2b1ca76f221094b3ef017b8437edc932de690af3ab2acb446763602cc2917419',
+    '0a08e12253cd055c32265ec71337b18dcfcb2669b4db76ed54a89528f1078549',
+    // Before the shared signature.
+    '5f93baa7b472e14c0ce313d81b32fd1eb5efe7b668c1c956ad53164758159e28',
+    // On the shared signature, still answering on Recruitment's mailbox rather than Training's own.
+    'b5348ef31c23c3d49b56dad3a71aa9b7ee4f19589788e0768d89e97619d2d59a',
+    // The original three-paragraph welcome, before the Training Department's own wording replaced it.
+    '2a0f4dc1f3b0a38dc00d4ea316b71892765454807635d553d633d75671f98145',
+  ],
+  // The accounting letter as first shipped on 2026-08-14, signed off by "Accounts Department" on
+  // Recruitment's letterhead; then with Kalyani Sappa's signature on the shared letterhead, until
+  // the sent copy showed the closing paragraphs and the department's own signature block.
+  'user.accounting_onboard_email': [
+    '7c1035222d6a8b6a672d5cb420c7d7dcedce0ede7ff6d25ae55820fc2a5cee73',
+    'f7abd571b0eea88fd4d3ad92c99ae5e1edd3993b94cf1e3b0cf919bbe816ecc1',
+    // With Kalyani Sappa's name and title, before the signature lost them.
+    '2f7a2b9a3656ab43c861f84975da93dda0f43048bbe2adde78b3214a036d2bbb',
+  ],
 };
 
 export const variablesFor = (key: string): string[] => MAIL_EVENTS[key]?.variables ?? [];
 
 /**
- * The four merge variables whose value IS markup, and which must therefore not be escaped.
+ * The merge variables whose value IS markup, and which must therefore not be escaped.
  *
  * This list is the whole risk of escaping by default, so it is enumerated rather than guessed at,
  * and each entry names what builds it:
  *
  *   logo_img           `<img …>` for the brand logo — user-onboarding.service.ts `logoImg()`
+ *   training_banner    the Onboard Trainings banner, or the subjects as text when no artwork is
+ *                      installed — user-onboarding.service.ts `trainingBanner()`
+ *   commission_terms   the `<li>` lines of the agreement's Commission Structure —
+ *                      user-onboarding.service.ts `commissionTerms()`
+ *   agent_address      the agent's address, or a ruled blank — user-onboarding.service.ts `vars()`
+ *   company_address    the brokerage's address, or a ruled blank — same
+ *   agent_type         "Fresher Agent" / "Experienced Agent [Past Brokerage …]", the brokerage name
+ *                      or a ruled blank inside it — user-onboarding.service.ts `agentType()`
  *   documents_table    a `<tr>`-per-document table — document-mail.service.ts `outcomeTable()`
  *                      and document-reminder.service.ts
  *   pending_docs       a `<ul>` of outstanding documents — documents.service.ts
@@ -684,9 +989,26 @@ export const variablesFor = (key: string): string[] => MAIL_EVENTS[key]?.variabl
  * ADDING TO THIS LIST IS A SECURITY DECISION. A variable named here is trusted to be safe HTML, so
  * whatever builds it owns that guarantee. Note that `logoImg()` already strips `[<>"&]` from the
  * company name before interpolating it into the `alt` attribute — that is the shape a builder on
- * this list has to have.
+ * this list has to have. `trainingBanner()` meets it the same way: everything it emits is either
+ * fixed markup from this file or base64 read off disk, with nothing a user typed reaching it. So does
+ * `commissionTerms()`, which interpolates only numbers — every value it prints has been through
+ * `Number()` and `Math.floor`, and no free text from the profile reaches the markup.
+ *
+ * The three agreement variables that CARRY TYPED TEXT — `agent_address`, `company_address` and the
+ * past-brokerage name inside `agent_type` — are escaped by the service that builds them, before the
+ * ruled blank is put around them. That is the only reason they can be on this list: the markup in
+ * them is this file's, and the data in them has already been made safe.
+ *
+ * The whole contract group was missing from this list until 2026-08-14, and the consequence was
+ * visible in every agreement sent: the Commission Structure arrived as `&lt;li&gt;Flat 95-05% split…`
+ * and a missing address as `&lt;span style=…&gt;______&lt;/span&gt;`, in the email and in the signed
+ * PDF generated from it.
  */
-const HTML_VARIABLES = new Set(['logo_img', 'documents_table', 'pending_docs', 'transaction_button']);
+const HTML_VARIABLES = new Set([
+  'logo_img', 'training_banner',
+  'commission_terms', 'agent_address', 'company_address', 'agent_type',
+  'documents_table', 'pending_docs', 'transaction_button',
+]);
 
 /** The five characters that change the meaning of HTML. */
 function escapeHtml(value: string): string {

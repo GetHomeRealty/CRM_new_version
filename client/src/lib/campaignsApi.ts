@@ -30,7 +30,18 @@ export const previewAudience = (filter: AudienceFilter): Promise<AudiencePreview
  * goes out instead of erroring about a moment that has gone.
  */
 export const sendCampaign = (
-  body: AudienceFilter & { name: string; template_id: number; tags?: string[]; scheduled_for?: string | null },
+  body: AudienceFilter & {
+    name: string; template_id: number; tags?: string[]; scheduled_for?: string | null;
+    /**
+     * Names THIS commit attempt, so a repeat cannot become a second campaign.
+     *
+     * The server keys on it and hands back the original rather than creating again — see
+     * `CampaignsService.createOnce`. Generate it once when the builder opens and send the SAME value
+     * for every retry of that commit; a genuinely new campaign gets a new one, which is what keeps
+     * two deliberately identical campaigns a week apart from collapsing into one.
+     */
+    idempotency_key?: string;
+  },
 ): Promise<CampaignSummary> =>
   api.post<CampaignSummary>('/api/campaigns', body).then((r) => r.data);
 

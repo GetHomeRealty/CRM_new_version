@@ -1,5 +1,6 @@
+import type { Prisma } from '@prisma/client';
 import type { ReportColumn, ReportFilterDef, ReportCategory, ReportSectionDef, ReportFilters, ReportRow } from './report.types';
-import type { EnrichedTxn } from './report-data.service';
+import type { EnrichedTxn, ReportNeeds } from './report-data.service';
 import { col, baseRow, HEAD, HEAD_MULTI } from './report-columns';
 import { isAmendment, remainingTime } from './report-documents';
 
@@ -30,7 +31,92 @@ export interface ReportDef {
   expandable?: boolean;
   /** Non-transaction data source (Agent Loan report / reminder history). */
   custom?: 'loans' | 'reminders';
+
+  /**
+   * Which documentation relations this report reads. Absent means NONE of them.
+   *
+   * Every report used to be handed documents, conditions and clients whether it looked at them or
+   * not — at 80,000 deals that is 800,000 document rows fetched and discarded to print a commission
+   * summary. Declaring it per report is what lets the loader skip them.
+   *
+   * GET THIS WRONG AND THE REPORT IS WRONG, NOT SLOW: an un-fetched relation arrives empty, so a
+   * report that reads `docs` without declaring them reports zero pending documents rather than
+   * failing. `report-needs.spec.ts` runs every report both ways and requires identical output.
+   */
+  needs?: ReportNeeds;
+
+  /**
+   * A database predicate for this report, applied before anything is enriched.
+   *
+   * MUST BE A SUPERSET of `predicate` above — it narrows what is READ, and the exact predicate still
+   * runs afterwards on whatever comes back. A clause that is too generous costs a little work; one
+   * that is too strict deletes rows from somebody's report with no error. Reports whose predicate
+   * depends on values derived from `admin_activities` (payment status, balances) deliberately have
+   * none: there is no honest superset for those short of everything.
+   */
+  sqlWhere?: (f: ReportFilters) => Prisma.transactionsWhereInput | null;
+
+  /**
+   * Whether `sqlWhere` EXACTLY expresses `predicate` for these filters — not merely a superset.
+   *
+   * This is what unlocks the fast path in `ReportsService.runFast`, and the distinction is the whole
+   * safety property. A superset is fine for narrowing what gets read, because the exact predicate
+   * then runs in JavaScript on the result. It is useless for COUNTING: if the database thinks 900
+   * deals match and the truth is 850, the footer totals 900 deals and the pager offers pages of rows
+   * that do not exist.
+   *
+   * Declare it only where you can say, of the given filters, that a deal matches the SQL if and only
+   * if it matches `predicate`. Absent means no — which is the safe answer, and the one that leaves
+   * the report on the original path.
+   */
+  sqlExact?: (f: ReportFilters) => boolean;
+
+  /**
+   * Column keys whose TOTAL means something different on this report than on the base row.
+   *
+   * `deal-list-price-comparison` is the only one so far: its `listing_price` column shows the stored
+   * listing price OR the closed price when there is none, while every other report's base row shows
+   * the stored value and leaves it blank. Totalling one as the other is a wrong number on a screen,
+   * so the report that redefines it says so.
+   *
+   * The value is the field name in `reportTotalsSql`'s output.
+   */
+  sqlTotalOverrides?: Record<string, string>;
 }
+
+/**
+ * "This deal has at least one document that is not Valid" — the superset behind every
+ * pending-or-invalid predicate.
+ *
+ * `docStatus` reads only `validation`, trimmed and lower-cased: 'invalid' and 'valid' are
+ * themselves, everything else is Pending. `NOT equals 'Valid'` is case-insensitive but not
+ * whitespace-insensitive, so a stored ' Valid ' survives this filter and is then dropped by the
+ * exact predicate — generous in the safe direction, which is the requirement.
+ */
+const HAS_UNVALIDATED_DOC: Prisma.transactionsWhereInput = {
+  documents: { some: { deleted_at: null, NOT: { validation: { equals: 'Valid', mode: 'insensitive' } } } },
+};
+
+/**
+ * The adjustments and admin-activity reports, narrowed by MENTION rather than by value.
+ *
+ * Four reports exist only for deals that carry something in a JSON blob — an advance payment, a
+ * client cashback, an external referral, an agent who has been paid. Every one of them was reading
+ * and enriching the whole brokerage to find the handful that do: measured at 80,000 deals, 8.2 s
+ * each to return, in this corpus, no rows at all.
+ *
+ * These clauses test only that the KEY APPEARS IN THE TEXT of the blob. That is a deliberately weak
+ * test and it is the point: `sqlWhere` is required to be a SUPERSET of the report's real predicate,
+ * never an equivalent, and the exact predicate still runs afterwards on whatever comes back. A deal
+ * whose `advance_payment` is 'Yes' cannot fail to contain the string `advance_payment`, so nothing
+ * can be dropped — while a deal whose adjustments are `{}`, which is most of them, is never read.
+ *
+ * Matching on `"advance_payment":"Yes"` instead would be faster still and WRONG: it assumes how the
+ * blob was serialised, and a row written with spaces, with the keys in another order, or by an older
+ * version of the app would silently vanish from a financial report.
+ */
+const MENTIONS = (column: 'adjustments' | 'admin_activities' | 'activity_tracker', key: string): Prisma.transactionsWhereInput =>
+  ({ [column]: { contains: key } }) as Prisma.transactionsWhereInput;
 
 /**
  * Agent commission payment statuses, as derived in ReportDataService.agentPaymentStatus():
@@ -82,6 +168,8 @@ export const REPORTS: ReportDef[] = [
     ],
     filters: [],
     defaultSort: { key: 'closing_date', dir: 'desc' },
+    // No predicate: every deal in scope is in the report, so the SQL count is the true count.
+    sqlExact: () => true,
   },
   // 2 -----------------------------------------------------------------
   {
@@ -96,6 +184,16 @@ export const REPORTS: ReportDef[] = [
     ],
     filters: [],
     defaultSort: { key: 'closing_date', dir: 'desc' },
+    /*
+     * `is_team` counts agent LINES, and a preconstruction deal produces one line PER TERM.
+     *
+     * So a precon deal with a single agent and three terms has three lines and reports as a team
+     * deal — with no team member rows at all. Filtering on `team_members: { some: {} }` alone looked
+     * obviously right and silently dropped exactly those deals; `report-needs.spec.ts` caught it by
+     * comparing against the unfiltered run. Everything else yields one line per member, so team rows
+     * OR preconstruction is the necessary condition.
+     */
+    sqlWhere: () => ({ OR: [{ team_members: { some: {} } }, { type: 'Preconstruction' }] }),
     predicate: (t) => t.is_team,
     /**
      * One row per split agent ("Split 1 of 3", "Split 2 of 3", …). Agent + brokerage figures
@@ -126,6 +224,12 @@ export const REPORTS: ReportDef[] = [
     ],
     filters: [{ key: 'split_ratio', label: 'Split Ratio', type: 'multiselect', dynamic: true }],
     defaultSort: { key: 'closing_date', dir: 'desc' },
+    /*
+     * Exact only with NO ratio selected, when the predicate is trivially true for every deal.
+     * A selected ratio is a property of the commission split, which is computed during enrichment
+     * and has no column to count from.
+     */
+    sqlExact: (f) => (f.split_ratio ?? []).length === 0,
     predicate: (t, f) => {
       const sel = f.split_ratio ?? [];
       return sel.length === 0 || t.splits.some((s) => sel.includes(s.ratio));
@@ -146,6 +250,10 @@ export const REPORTS: ReportDef[] = [
     ],
     filters: [],
     defaultSort: { key: 'lead_converted_date', dir: 'desc' },
+    // Both halves are stored columns, so this narrowing is exact rather than merely safe — which is
+    // also what lets the totals be counted from it.
+    sqlWhere: () => ({ lead_source: { contains: 'broker', mode: 'insensitive' }, lead_converted_date: { not: null } }),
+    sqlExact: () => true,
     predicate: (t) => !!t.lead_source && /broker/i.test(t.lead_source) && !!t.lead_converted_date,
     map: (t) => ({ ...baseRow(t), lead_source: t.lead_source, lead_assigned_date: t.lead_assigned_date, lead_converted_date: t.lead_converted_date }),
   },
@@ -164,6 +272,8 @@ export const REPORTS: ReportDef[] = [
     ],
     filters: [statusFilter('Balance Status', ['Paid', 'Pending']), dateRange('advance_paid', 'Advance Paid Date')],
     defaultSort: { key: 'advance_date', dir: 'desc' },
+    // advance > 0 requires adjustments.advance_payment === 'Yes'. See MENTIONS.
+    sqlWhere: () => MENTIONS('adjustments', 'advance_payment'),
     predicate: (t, f) => {
       if (t.advance <= 0) return false;
       const s = t.agent_balance <= 0 ? 'Paid' : 'Pending';
@@ -186,6 +296,14 @@ export const REPORTS: ReportDef[] = [
     ],
     filters: [],
     defaultSort: { key: 'closing_date', dir: 'desc' },
+    /*
+     * 'Paid' has exactly two sources — the Agent FAQ Center flag, or a Paid payment row for every
+     * split agent — so a deal that answers Paid must mention one of them. The CTA side is the
+     * ABSENCE of a transfer and has no superset, so it is not narrowed.
+     */
+    sqlWhere: () => ({
+      OR: [MENTIONS('activity_tracker', 'agent_commission_paid_status'), MENTIONS('admin_activities', 'Paid')],
+    }),
     // Agent commission fully paid (Agent FAQ Center), but the CTA → BA transfer has not been
     // done (Admin Activities → CTA to BA = No; a null/blank CTA row is treated as "No").
     predicate: (t) => t.agent_payment_status === 'Paid' && t.cta_to_ba === 'No',
@@ -229,6 +347,8 @@ export const REPORTS: ReportDef[] = [
     ],
     filters: [statusFilter('Cashback Status', ['Completed', 'Scheduled', 'Pending']), dateRange('cashback', 'Cashback Paid Date')],
     defaultSort: { key: 'closing_date', dir: 'desc' },
+    // cashback.total > 0 requires adjustments.client_referral === 'Yes'. See MENTIONS.
+    sqlWhere: () => MENTIONS('adjustments', 'client_referral'),
     predicate: (t, f) => {
       if (t.cashback.total <= 0) return false;
       return !f.status || cashbackStatus(t) === f.status;
@@ -260,6 +380,8 @@ export const REPORTS: ReportDef[] = [
     ],
     filters: [statusFilter('Referral Status', ['Completed', 'Scheduled', 'Pending']), dateRange('referral', 'Referral Paid Date')],
     defaultSort: { key: 'closing_date', dir: 'desc' },
+    // referral is null unless adjustments.ext_referral === 'Yes'. See MENTIONS.
+    sqlWhere: () => MENTIONS('adjustments', 'ext_referral'),
     predicate: (t, f) => {
       if (!t.referral) return false;
       return !f.status || t.referral.status === f.status;
@@ -290,6 +412,9 @@ export const REPORTS: ReportDef[] = [
     ],
     filters: [statusFilter('Payment Status', AGENT_PAYMENT_STATUSES)],
     defaultSort: { key: 'closing_date', dir: 'desc' },
+    // Exact only with no status filter: `agent_payment_status` is derived from `admin_activities`
+    // during enrichment and cannot be counted in SQL.
+    sqlExact: (f) => !f.status,
     predicate: (t, f) => !f.status || t.agent_payment_status === f.status,
     map: (t) => {
       const ratio = t.agentComm.total > 0 ? t.agent_paid / t.agentComm.total : 0;
@@ -361,6 +486,10 @@ export const REPORTS: ReportDef[] = [
     ],
     filters: [],
     defaultSort: { key: 'closing_date', dir: 'desc' },
+    sqlExact: () => true,
+    // This report shows the listing price OR the closed price when there is none — see the map
+    // below — so its total must be summed the same way rather than over the stored column.
+    sqlTotalOverrides: { listing_price: 'listing_price_or_closed' },
     map: (t) => ({ ...baseRow(t), listing_price: t.listing_price ?? t.closed_price }),
   },
   // 14 ----------------------------------------------------------------
@@ -382,6 +511,11 @@ export const REPORTS: ReportDef[] = [
     ],
     filters: [statusFilter('Status', ['Review Email Sent', 'Review Received', 'Gift Coupon Issued', 'Review Pending', 'Coupon Pending'])],
     defaultSort: { key: 'closing_date', dir: 'desc' },
+    // The four columns the `has` test below reads, straight from the row.
+    sqlWhere: () => ({ OR: [
+      { review_email_sent_at: { not: null } }, { review_received_at: { not: null } },
+      { gift_coupon_issued_at: { not: null } }, { gift_coupon_value: { not: null } },
+    ] }),
     predicate: (t, f) => {
       const has = !!t.review_email_sent_at || !!t.review_received_at || !!t.gift_coupon_issued_at || t.gift_coupon_value != null;
       if (!has) return false;
@@ -416,6 +550,9 @@ export const REPORTS: ReportDef[] = [
     ],
     filters: [statusFilter('Documentation Status', DOCUMENTATION_STATUSES)],
     defaultSort: { key: 'pending_docs', dir: 'desc' },
+    needs: { documents: true, clients: true },
+    // Every branch of the predicate below requires at least one document that is not Valid.
+    sqlWhere: () => HAS_UNVALIDATED_DOC,
     // Pending and Invalid documentation are the two reportable categories (§1).
     predicate: (t, f) => {
       if (t.doc_counts.total === 0) return false;
@@ -442,6 +579,17 @@ export const REPORTS: ReportDef[] = [
     // "RECO Audit Ready" — All / Yes / No (§2)
     filters: [{ key: 'reco_ready', label: 'RECO Audit Ready', type: 'select', options: [{ value: '', label: 'All' }, { value: 'Yes', label: 'Yes' }, { value: 'No', label: 'No' }] }],
     defaultSort: { key: 'closing_date', dir: 'desc' },
+    needs: { documents: true },
+    /*
+     * Only the `Yes` filter can be narrowed, and only by the stored flag.
+     *
+     * `recoReady` is the flag AND a clean documentation state, so requiring the flag cannot drop a
+     * deal that would have answered Yes. Filtering for `No` is the complement of a derived value and
+     * has no superset short of everything, so it gets none — which is the honest answer.
+     */
+    sqlWhere: (f) => (f.reco_ready === 'Yes'
+      ? { reco_audit_ready: { in: ['Yes', 'yes', 'Y', 'y', '1', 'true'] } }
+      : null),
     expandable: true,
     predicate: (t, f) => !f.reco_ready || recoReady(t) === f.reco_ready,
     map: (t) => ({ ...baseRow(t), reco_audit_ready: recoReady(t), reco_ready_date: recoReady(t) === 'Yes' ? t.reco_review_at : null }),
@@ -460,6 +608,14 @@ export const REPORTS: ReportDef[] = [
     ],
     filters: [statusFilter('Amendment Status', ['Pending', 'Invalid', 'Valid', 'Missing'])],
     defaultSort: { key: 'doc_uploaded_at', dir: 'desc' },
+    needs: { documents: true },
+    /*
+     * `Missing` is the ABSENCE of an amendment document, so it cannot be narrowed by requiring one —
+     * that would return exactly the deals the filter excludes. Every other case needs at least one.
+     */
+    sqlWhere: (f) => (f.status === 'Missing'
+      ? null
+      : { documents: { some: { deleted_at: null, title: { contains: 'amend', mode: 'insensitive' } } } }),
     predicate: (t, f) => {
       const amendments = t.docs.filter((d) => isAmendment(d.title));
       if (f.status === 'Missing') return amendments.length === 0;
@@ -502,6 +658,9 @@ export const REPORTS: ReportDef[] = [
     ],
     filters: [statusFilter('Expiry Status', EXPIRY_STATUSES)],
     defaultSort: { key: 'condition_expiry', dir: 'asc' },
+    needs: { documents: true, conditions: true },
+    // `conditional_offer` on the enriched row is the stored flag OR the presence of condition rows.
+    sqlWhere: () => ({ OR: [{ conditional_offer: true }, { conditions: { some: {} } }] }),
     predicate: (t, f) => {
       if (t.conditional_offer !== 'Yes') return false;
       if (!f.status) return true;
@@ -555,6 +714,8 @@ export const REPORTS: ReportDef[] = [
     noSort: true,
     // rows set their own section (per document); this is the fallback for a row that doesn't
     section: () => 'pending',
+    needs: { documents: true, clients: true },
+    sqlWhere: () => HAS_UNVALIDATED_DOC,
     predicate: (t) => t.doc_counts.pending > 0 || t.doc_counts.invalid > 0,
     expand: (t) => t.docs
       .filter((d) => d.status === 'Pending' || d.status === 'Invalid')

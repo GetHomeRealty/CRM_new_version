@@ -423,7 +423,7 @@ describe('lead import engine', () => {
 
       const rows2 = engineFor(tx).parseCsv(csvOf([{ email }]));
       const asAdmin = await engineFor(tx).runBatch(
-        rows2, { tag: 'x', userName: 'Boss', userId: 999003, userIsSuperAdmin: true }, new Set());
+        rows2, { tag: 'x', userName: 'Boss', userId: 999003, userHasBrokerageScope: true }, new Set());
       expect(asAdmin.tagged).toBe(1);
     });
   });

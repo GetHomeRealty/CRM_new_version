@@ -2,7 +2,6 @@ import { ForbiddenException, Injectable, Logger, NotFoundException } from '@nest
 import { PrismaService } from '../prisma/prisma.service';
 import { MetaConnectionService } from '../meta/meta-connection.service';
 import { LeadTransferService } from '../leads/lead-transfer.service';
-import { META_LEAD_SOURCE, brokerageLeadWhere } from '../leads/lead.constants';
 import { isSuperAdmin } from '../core/authz';
 import type { AuthUserRecord } from '../auth/auth.types';
 
@@ -88,22 +87,31 @@ export class OffboardingService {
         },
         {
           key: 'brokerage-leads',
-          label: 'Their brokerage leads return to the brokerage',
+          label: 'Brokerage leads they are working return to the pool',
           count: counts.brokerage,
           detail: counts.brokerage
-            ? `${counts.brokerage} lead${counts.brokerage === 1 ? '' : 's'} become unassigned and appear in `
-              + 'unattributed intake, where you can hand them to whoever picks the work up.'
-            : 'No brokerage leads to return.',
+            ? `${counts.brokerage} brokerage lead${counts.brokerage === 1 ? '' : 's'} lose their assignment and go `
+              + 'back to the unassigned pool, where you can hand them to whoever picks the work up. The '
+              + 'brokerage owns them throughout — nothing is deleted and nothing changes hands.'
+            : 'No brokerage leads assigned to them.',
         },
         {
           key: 'personal-leads',
-          label: 'Their Meta leads stay with them',
+          label: 'Their own leads stay theirs',
           count: counts.personal,
+          /*
+           * SAYS PLAINLY THAT THE BROKERAGE DOES NOT INHERIT THEM, because the previous wording
+           * described the opposite behaviour and an administrator reading this is deciding whether
+           * to press the button. It also says the account can still be switched off regardless,
+           * since the commonest question at this point is whether the leads have to be dealt with
+           * first. They do not.
+           */
           detail: counts.personal
-            ? `${counts.personal} lead${counts.personal === 1 ? '' : 's'} came through their own Meta account and `
-              + 'are personal, so they are not moved. Note that nobody can see them while the account is '
-              + 'inactive; they come back if the account is reactivated.'
-            : 'No Meta leads.',
+            ? `${counts.personal} lead${counts.personal === 1 ? '' : 's'} belong to them personally. They are NOT `
+              + 'transferred to the brokerage and remain private — nobody else can see them, then or later. '
+              + 'They do not prevent this account being switched off. If they should be handed over, ask '
+              + 'them to export or clear their leads before they go.'
+            : 'They own no leads of their own.',
         },
       ],
     };
@@ -131,12 +139,13 @@ export class OffboardingService {
     }
 
     try {
-      const { returned, kept } = await this.transfers.returnToBrokerage(userId);
-      if (returned) parts.push(`${returned} brokerage lead${returned === 1 ? '' : 's'} returned to the brokerage`);
-      if (kept) parts.push(`${kept} Meta lead${kept === 1 ? '' : 's'} kept with them`);
+      const { unassigned, keptPrivate } = await this.transfers.returnToBrokerage(userId);
+      if (unassigned) parts.push(`${unassigned} assigned lead${unassigned === 1 ? '' : 's'} released back to the brokerage pool`);
+      // Said explicitly, because the important half of this operation is what it did NOT do.
+      if (keptPrivate) parts.push(`${keptPrivate} private lead${keptPrivate === 1 ? '' : 's'} left with them, still theirs`);
     } catch (e) {
-      this.log.error(`Could not return ${name}'s brokerage leads (#${userId}): ${(e as Error).message}`);
-      parts.push('brokerage leads could NOT be returned — move them by hand');
+      this.log.error(`Could not release ${name}'s lead assignments (#${userId}): ${(e as Error).message}`);
+      parts.push('lead assignments could NOT be released — clear them by hand');
     }
 
     return parts.length ? parts.join('; ') : null;
@@ -212,18 +221,30 @@ export class OffboardingService {
    */
   async leadCounts(userId: number): Promise<{ personal: number; brokerage: number }> {
     const [personal, brokerage] = await Promise.all([
-      this.prisma.leads.count({ where: { owner_user_id: userId, deleted_at: null, source: META_LEAD_SOURCE } }),
-      this.prisma.leads.count({ where: { owner_user_id: userId, deleted_at: null, ...brokerageLeadWhere() } }),
+      this.prisma.leads.count({ where: { owner_user_id: userId, deleted_at: null } }),
+      this.prisma.leads.count({ where: { owner_user_id: null, assigned_to: userId, deleted_at: null } }),
     ]);
     return { personal, brokerage };
   }
 
+  /**
+   * How a departing person's leads split, under the ownership model rather than the old source one.
+   *
+   * `personal`  — leads they OWN. Every one of them, however it arrived. These stay theirs.
+   * `brokerage` — leads the BROKERAGE owns that are merely ASSIGNED to them. These lose the
+   *               assignment and return to the pool.
+   *
+   * The split used to be `source = 'facebook_meta'` versus everything else, which was the right
+   * question when ownership was decided at departure. It is the wrong question now: ownership is
+   * decided at intake, so "whose is it?" is already recorded in `owner_user_id` and does not have to
+   * be inferred from how the lead arrived.
+   */
   private async counts(userId: number): Promise<{ connected: boolean; forms: number; personal: number; brokerage: number }> {
     const [connection, forms, personal, brokerage] = await Promise.all([
       this.prisma.meta_connections.findFirst({ where: { user_id: userId, is_active: true }, select: { id: true } }),
       this.prisma.meta_lead_forms.count({ where: { user_id: userId, is_active: true } }),
-      this.prisma.leads.count({ where: { owner_user_id: userId, deleted_at: null, source: META_LEAD_SOURCE } }),
-      this.prisma.leads.count({ where: { owner_user_id: userId, deleted_at: null, ...brokerageLeadWhere() } }),
+      this.prisma.leads.count({ where: { owner_user_id: userId, deleted_at: null } }),
+      this.prisma.leads.count({ where: { owner_user_id: null, assigned_to: userId, deleted_at: null } }),
     ]);
     return { connected: connection !== null, forms, personal, brokerage };
   }

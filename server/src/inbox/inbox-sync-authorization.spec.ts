@@ -2,6 +2,7 @@ import { PrismaClient } from '@prisma/client';
 import type { PrismaService } from '../prisma/prisma.service';
 import { InboxController } from './inbox.controller';
 import { InboxService } from './inbox.service';
+import { InboxEventsService } from './inbox-events.service';
 import { NotFoundException } from '@nestjs/common';
 import type { AuthUserRecord } from '../auth/auth.types';
 
@@ -78,7 +79,7 @@ function controller(tx: PrismaService, calls: { userId: number; accountId: numbe
       return { fetched: 0, matched: 0, error: null };
     },
   } as never;
-  return new InboxController(new InboxService(tx), imap, tx);
+  return new InboxController(new InboxService(tx), imap, tx, new InboxEventsService());
 }
 
 describe('a sync cannot be triggered on somebody else\'s mail account', () => {

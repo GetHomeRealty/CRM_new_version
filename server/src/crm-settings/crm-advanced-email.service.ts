@@ -8,7 +8,7 @@ import { EMAIL_SHAPE, MAX_BULK_RECIPIENTS } from './crm-settings.constants';
 import { CrmTriggersService } from './crm-triggers.service';
 // The same rule the Leads screen applies, so this path cannot reach further than the screens
 // beside it. Restating it here would be a second copy free to drift.
-import { leadScopeWhere } from '../common/lead-scope';
+import { hasBrokerageLeadScope, leadScopeWhere } from '../common/lead-scope';
 // "May this person act on records that are not their own?" — the same question the rest of the
 // application asks, rather than a second list of which roles count as administrators.
 import { can } from '../core/authz';
@@ -189,18 +189,16 @@ ${sig ? `<hr style="border:0;border-top:1px solid #e5e7eb;margin:24px 0 12px"><d
   }
 
   // ---------------------------------------------------------------- sends
-  async sendWeddingCongratulations(leadName: string, leadEmail: string, weddingDate: string, user: AuthUserRecord, signature?: string): Promise<SendOutcome> {
-    if (!(await this.triggers.isEnabledFor(user, 'wedding'))) return this.refuse('wedding', leadName, leadEmail, user);
-    const when = str(weddingDate);
-    const t = await this.fromTemplate('crm.wedding_congratulations', {
-      lead_name: leadName || 'there',
-      agent_name: user.name ?? '',
-      // Carries its own leading " on " so the sentence reads correctly when no date is stored, and
-      // the template does not need conditional logic it has no way to express.
-      wedding_date: when ? ` on ${when}` : '',
-    }, signature);
-    return this.dispatch('wedding', leadName, leadEmail, t.subject, t.html, user);
-  }
+  /*
+   * WEDDING CONGRATULATIONS HAS BEEN RETIRED. `sendWeddingCongratulations` stood here, gated on a
+   * `wedding` trigger, reachable from the `sendWeddingEmail` action and from `bulkSend`. The
+   * brokerage's decision is that Anniversary Greeting — which fires on the date the couple actually
+   * recorded, on a schedule, rather than needing somebody to remember — covers what it was for.
+   *
+   * Every route to it is gone: the button, the action, this method, the trigger key and the
+   * registry entry. `crm_email_log` and `audit_logs` rows for weddings already sent are untouched,
+   * and so is the `crm.wedding_congratulations` template — see the note in the registry.
+   */
 
   /*
    * The two date-driven greetings. Same shape as every other send here — trigger check, then
@@ -280,7 +278,7 @@ ${sig ? `<hr style="border:0;border-top:1px solid #e5e7eb;margin:24px 0 12px"><d
    */
   async welcomeBlockedReason(userId: number | null): Promise<string | null> {
     if (!(await this.autoSendEnabled())) {
-      return 'the CRM\'s per-lead emails are switched off for the brokerage (Triggers → CRM Triggers)';
+      return 'the CRM\'s per-lead emails are switched off for the brokerage (CRM → Communications → Brokerage Controls)';
     }
     const template = await this.prisma.email_templates.findUnique({ where: { event_key: 'crm.lead_welcome' } });
     if (template && !template.is_active) {
@@ -493,8 +491,9 @@ ${offer?.description ? `<p>${esc(offer.description)}</p>` : ''}
         if (!EMAIL_SHAPE.test(email)) throw new Error('Not a valid email address');
         let outcome: SendOutcome;
         switch (emailType) {
-          case 'wedding':
-            outcome = await this.sendWeddingCongratulations(name, email, str(emailData.weddingDate), user, signature); break;
+          // `wedding` was here. Retired — see the note above `sendSeasonalWishes`. An old client
+          // asking for it falls through to the `default` below and is told the type is unknown,
+          // rather than silently sending nothing and reporting success.
           case 'seasonal':
             outcome = await this.sendSeasonalWishes(name, email, str(emailData.season), str(emailData.year), user, signature); break;
           case 'promotional':
@@ -531,7 +530,10 @@ ${offer?.description ? `<p>${esc(offer.description)}</p>` : ''}
    */
   private async refuse(kind: string, leadName: string, leadEmail: string, user: AuthUserRecord): Promise<SendOutcome> {
     const label = kind.charAt(0).toUpperCase() + kind.slice(1);
-    const message = `Not sent — your "${label}" trigger is switched off. Turn it back on under CRM › Triggers.`;
+    // Names where the switch actually is. It said "CRM › Triggers" while that screen existed; the
+    // switch moved to Communications with the rest of it, and a refusal that sends somebody to a
+    // screen that no longer exists is worse than one that gives no direction at all.
+    const message = `Not sent — your "${label}" trigger is switched off. Turn it back on under CRM › Communications.`;
     this.log.warn(`CRM ${kind} email to ${leadEmail} refused: ${user.name ?? 'the caller'} has this trigger off.`);
     await this.record(kind, leadName, str(leadEmail), null, false, message, user, null);
     return { success: false, message };
@@ -556,12 +558,22 @@ ${offer?.description ? `<p>${esc(offer.description)}</p>` : ''}
    * ever going to be given, and the seven trigger switches, the referral generator and the send log
    * were all scaffolding on a feature that could not run.
    *
-   * So the question asked is the one the rest of the application already asks — `data.read-all`,
-   * "may this person act on records belonging to someone other than themselves", which `manager`
-   * and above hold and nobody below does. An agent reaching this path is still confined to their
-   * own book; an administrator can email a lead on somebody's desk, which is the job the screen
-   * exists to do. Expressed as a capability rather than a role so it stays correct for roles nobody
-   * has invented yet.
+   * The fix for that was `data.read-all` — "may this person act on records belonging to someone
+   * other than themselves" — and it went one step too far. `data.read-all` is unscoped: it resolved
+   * ANY lead in the database, so a Manager could email an agent's private client. The problem it
+   * was solving was narrower than that. The administrator needs THE BROKERAGE'S leads, which is a
+   * category this database already distinguishes and which `leadScopeWhere` now returns.
+   *
+   * SO THE TEST IS THE SAME ONE THE LEADS SCREEN APPLIES, and deliberately nothing more:
+   *
+   *   permission to send   `settings` / the screen guard, decided before this runs
+   *   AND
+   *   target in scope      this function
+   *
+   * Both must pass. Holding the first has never been a reason to skip the second — that is exactly
+   * how "Manager can email every agent's private lead" happened. An administrator can still email a
+   * lead sitting on an agent's desk when the BROKERAGE owns it, which is the case the card exists
+   * for; what they can no longer do is reach into a book that is not the brokerage's.
    *
    * The refusals are deliberately worded the same way whether the lead does not exist or belongs to
    * a colleague. Distinguishing them would turn this into the address-enumeration oracle that the
@@ -573,7 +585,7 @@ ${offer?.description ? `<p>${esc(offer.description)}</p>` : ''}
       where: {
         email: { equals: address, mode: 'insensitive' },
         deleted_at: null,
-        ...(can(user, 'data.read-all') ? {} : leadScopeWhere(user)),
+        ...leadScopeWhere(user),
       },
       select: { id: true, name: true },
     });
@@ -670,10 +682,10 @@ ${offer?.description ? `<p>${esc(offer.description)}</p>` : ''}
      * card, worked correctly — so the screen offered one gate that held and one that did not, with
      * the ineffective one labelled as the stronger.
      *
-     * WHERE IT LIVES NOW: Triggers → CRM Triggers, in the "Brokerage" card above the personal
-     * switches, behind the `settings` permission this endpoint's siblings already enforce. It moved
-     * off CRM Settings because the Triggers screen was the one already REPORTING it — the notice
-     * there used to tell an administrator to go elsewhere to act on a warning they were reading.
+     * WHERE IT LIVES NOW: CRM → Communications → Brokerage Controls, above the per-communication
+     * rows it can make inert, behind the `settings: edit` permission this endpoint's siblings
+     * already enforce. It went to the Triggers screen first, then here with the rest of that
+     * screen's controls, so that one place answers "what can the CRM send, and why is it not?".
      *
      * NOT checked before the trigger, despite what this comment claimed until 2026-08-08. Each of
      * the five entry points calls `triggers.isEnabledFor` and returns before `dispatch` is reached,
@@ -682,7 +694,7 @@ ${offer?.description ? `<p>${esc(offer.description)}</p>` : ''}
      * is reported, and rearranging it would rewrite the meaning of existing `crm_email_log` rows.
      */
     if (!(await this.autoSendEnabled())) {
-      const message = 'Not sent — the CRM\'s per-lead emails are switched off for the brokerage. Turn them back on under Triggers → CRM Triggers.';
+      const message = 'Not sent — the CRM\'s per-lead emails are switched off for the brokerage. Turn them back on under CRM → Communications → Brokerage Controls.';
       this.log.warn(`CRM ${kind} email to ${email} refused: CRM sending is switched off.`);
       await this.record(kind, leadName, email, subject, false, message, user, null);
       return { success: false, message };
@@ -694,8 +706,14 @@ ${offer?.description ? `<p>${esc(offer.description)}</p>` : ''}
       ? await this.resolveNamedLead(email, forLeadId)
       : await this.resolveRecipient(email, user);
     if (!recipient) {
-      const message = can(user, 'data.read-all')
-        ? 'Not sent — no lead in the CRM has this address. Add them as a lead first; CRM emails only go to people the brokerage already has a record of.'
+      /*
+       * The wording follows the SAME test the lookup just applied, so the message can never describe
+       * a rule the code is not enforcing. It says what the reader can act on and no more — neither
+       * branch reveals whether the address exists on somebody else's book, which would make this an
+       * enumeration oracle.
+       */
+      const message = hasBrokerageLeadScope(user)
+        ? 'Not sent — no brokerage lead has this address. CRM emails only go to people the brokerage already has a record of; a lead in an agent\'s own book must be emailed by that agent.'
         : 'Not sent — this address is not one of your leads. Add them as a lead first, or ask an administrator to reassign the lead to you.';
       this.log.warn(`CRM ${kind} email to ${email} refused: not a lead ${user.name ?? 'the caller'} may contact.`);
       await this.record(kind, leadName, email, subject, false, message, user, null);
@@ -769,16 +787,44 @@ ${offer?.description ? `<p>${esc(offer.description)}</p>` : ''}
   }
 
   /**
-   * The send log — everyone's, for whoever may read across desks; otherwise your own.
+   * The send log — filtered by WHO MAY READ ACROSS DESKS *and* by WHOSE LEAD each row is about.
    *
-   * It was unfiltered. Every holder of `settings: view` saw every user's sends, including the
-   * EMAIL ADDRESSES of leads on other people's desks — the one place lead addresses escaped the
-   * `leadScopeWhere` rule that governs every other screen. Defensible while only Admin and Super
-   * Admin reach it, and indefensible the moment the `settings` permission is granted to anybody
-   * else, which is a screen the product ships to do.
+   * ================================================================================================
+   * TWO CONDITIONS, AND THE SECOND IS THE ONE THAT WAS MISSING.
    *
-   * Asked as `data.read-all` — "may this person see records that are not their own" — so the answer
-   * stays right for roles nobody has invented yet, rather than naming today's two.
+   *   1. the log permission   `data.read-all` — everyone's sends, or only your own
+   *   2. the lead scope       every row names a client; may this person see that client?
+   *
+   * `data.read-all` alone used to decide it, which made this the one surface where lead identities
+   * escaped `leadScopeWhere`. A Manager could not open an agent's private lead — 404 from the Leads
+   * module, from search, from campaigns and from direct email — and could then read that same
+   * client's NAME, EMAIL ADDRESS and SUBJECT LINES here, one row at a time. A permission about
+   * reading OTHER PEOPLE'S SENDS was acting as permission to read OTHER PEOPLE'S CLIENTS.
+   *
+   * A broad permission may widen which senders you see. It may not widen which clients you see.
+   * ================================================================================================
+   *
+   * HOW A ROW IS MATCHED TO A LEAD. `crm_email_log` carries no lead id — only `recipient`, the
+   * address — so the address is resolved back to leads and the caller's own scope decides. Three
+   * outcomes, and the middle one is the case that keeps this correct rather than merely strict:
+   *
+   *   the address is nobody's lead      → shown. Not about a client at all: a test send, or a lead
+   *                                        long since purged. Nothing private to protect.
+   *   the address is a lead they CAN    → shown. They can already read that client's name and
+   *     see, even if other people also     address on the Leads screen, so the log discloses
+   *     hold a lead at that address       nothing new. The same person legitimately appears in two
+   *                                        books — that is why `leads_owner_email_key` is per book.
+   *   every lead at that address is     → HIDDEN ENTIRELY. Not redacted field by field: the row's
+   *     out of scope                      existence, kind, subject and timestamp would each say
+   *                                        something about a client they may not know exists.
+   *
+   * DELETED LEADS COUNT AS LEADS on both sides of that test. A private lead moved to the bin must
+   * not have its correspondence become readable by the brokerage, so the lookup ignores `deleted_at`
+   * — and the owner keeps seeing their own for the same reason.
+   *
+   * A PAGE MAY THEREFORE RETURN FEWER ROWS THAN `limit`, and that is the honest behaviour: the
+   * alternative is telling the reader how many rows were withheld, which is itself a disclosure that
+   * private correspondence exists.
    */
   async listLog(user: AuthUserRecord, limit = 100): Promise<Record<string, unknown>[]> {
     const rows = await this.prisma.crm_email_log.findMany({
@@ -786,10 +832,49 @@ ${offer?.description ? `<p>${esc(offer.description)}</p>` : ''}
       orderBy: { id: 'desc' },
       take: Math.min(500, limit),
     });
-    return rows.map((r) => ({
-      id: r.id, kind: r.kind, lead_name: r.lead_name, recipient: r.recipient,
-      subject: r.subject, success: r.success, error: r.error, redirected: r.redirected,
-      sent_by: r.sent_by, created_at: r.created_at?.toISOString() ?? null,
-    }));
+    if (!rows.length) return [];
+
+    const visible = await this.readableRecipients(user, rows.map((r) => r.recipient));
+    return rows
+      .filter((r) => visible.has(r.recipient.trim().toLowerCase()))
+      .map((r) => ({
+        id: r.id, kind: r.kind, lead_name: r.lead_name, recipient: r.recipient,
+        subject: r.subject, success: r.success, error: r.error, redirected: r.redirected,
+        sent_by: r.sent_by, created_at: r.created_at?.toISOString() ?? null,
+      }));
+  }
+
+  /**
+   * Of these addresses, which may this person be shown correspondence for?
+   *
+   * Two lookups rather than one, because "in scope" and "not a lead at all" are different answers
+   * that both permit the row, and only their combination is safe:
+   *
+   *   known    every address that belongs to ANY lead, in or out of the bin. Used only to decide
+   *            whether an address is a client's at all — never returned, so it discloses nothing.
+   *   mine     the subset the caller's own `leadScopeWhere` admits.
+   *
+   * An address is readable when it is in `mine`, or in neither. Scope is asked through the shared
+   * rule, so this cannot drift from what the Leads screen, campaigns and direct email decide.
+   */
+  private async readableRecipients(user: AuthUserRecord, recipients: string[]): Promise<Set<string>> {
+    const wanted = [...new Set(recipients.map((r) => r.trim().toLowerCase()).filter(Boolean))];
+    if (!wanted.length) return new Set();
+
+    const [known, mine] = await Promise.all([
+      this.prisma.leads.findMany({
+        where: { email: { in: wanted, mode: 'insensitive' } },
+        select: { email: true },
+      }),
+      this.prisma.leads.findMany({
+        where: { AND: [{ email: { in: wanted, mode: 'insensitive' } }, leadScopeWhere(user)] },
+        select: { email: true },
+      }),
+    ]);
+
+    const lower = (rows: { email: string }[]) => new Set(rows.map((r) => r.email.trim().toLowerCase()));
+    const knownSet = lower(known);
+    const mineSet = lower(mine);
+    return new Set(wanted.filter((a) => mineSet.has(a) || !knownSet.has(a)));
   }
 }

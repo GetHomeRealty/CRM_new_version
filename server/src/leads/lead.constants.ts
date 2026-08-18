@@ -75,27 +75,23 @@ export const WEBSITE_ENQUIRY_SOURCES = ['google ads', 'meta'] as const;
  */
 export const META_LEAD_SOURCE = 'facebook_meta';
 
-/**
- * "Not one of the agent's own Meta leads" — everything the brokerage owns and may reassign.
+/*
+ * `brokerageLeadWhere()` LIVED HERE AND HAS BEEN REMOVED. Recorded because its absence is a
+ * decision, and because anything reintroducing it would be reintroducing a bug.
  *
- * THIS CANNOT BE WRITTEN AS `source: { not: META_LEAD_SOURCE }`, which is the obvious form and is
- * wrong. That compiles to SQL `source != 'facebook_meta'`, and in SQL a comparison against NULL is
- * NULL rather than true — so every lead with no source recorded fails the test and is treated as
- * personal. The effect was that those leads could not be transferred and would have stayed with a
- * departing agent for ever, invisible to everybody. There were 18 such leads in the development
- * database when this was found, and the existing lead-transfer spec caught it because its fixtures
- * do not set `source` at all.
+ * It meant "not one of the agent's own Meta leads", and it answered an OWNERSHIP question from the
+ * `source` column back when ownership was decided at departure rather than at intake: an agent's
+ * book held both their own Meta leads and the brokerage's walk-ins, and this was how the two were
+ * told apart.
  *
- * A lead with no source recorded is a lead somebody entered without saying where it came from. It
- * is not an agent's personal Meta lead — only the Meta importer writes that — so the brokerage
- * keeps it. Absence of evidence is not evidence of personal ownership.
+ * Ownership is now recorded directly. `owner_user_id IS NULL` is the brokerage's lead and
+ * `owner_user_id = X` is X's own, whatever the source — so every caller that used this predicate
+ * either had it as a redundant second filter or, in the case of Lead Books' eligible pool, was
+ * actively excluding brokerage-owned Meta leads from ever being handed on. Both call sites now ask
+ * about the owner. See `LeadTransferService.eligibleWhere` and `returnToBrokerage`.
  *
- * Returned fresh each call rather than shared, so a caller merging it into a larger `where` cannot
- * mutate the copy everybody else uses.
+ * `META_LEAD_SOURCE` above is still meaningful and still used: it records how a lead arrived.
  */
-export function brokerageLeadWhere(): { OR: [{ source: null }, { source: { not: string } }] } {
-  return { OR: [{ source: null }, { source: { not: META_LEAD_SOURCE } }] };
-}
 
 /**
  * Sentinel meaning "only records where this field was never filled in". It travels as an

@@ -35,10 +35,21 @@ export const DEFAULT_PREFERENCES = {
   theme: 'light',
 };
 
-/** CRM `DEFAULT_EMAIL_SETTINGS.templates` — per-trigger copy and scheduling. */
+/**
+ * CRM `DEFAULT_EMAIL_SETTINGS.templates` — per-trigger copy and scheduling.
+ *
+ * READ BY NOTHING THAT SENDS. This is the CRM's own legacy `settings.templates` blob, carried over
+ * verbatim so the migrated payload kept its shape. What actually decides whether an email may go is
+ * `TRIGGER_KEYS` below, resolved through `crm_email_settings` and `crm_trigger_settings`. The two
+ * never even named the same things — measured during the CRM › Triggers audit, `weddingGreetings.
+ * enabled` saved as false and the wedding email went out anyway.
+ *
+ * `weddingGreetings` is gone from it with the rest of Wedding Congratulations. It is dropped rather
+ * than kept for shape: a stored `templates.weddingGreetings` simply stops being echoed back, and
+ * nothing read it in either position.
+ */
 export const DEFAULT_TRIGGER_TEMPLATES = {
   birthdayWishes: { enabled: false, daysBefore: 1, template: 'Happy Birthday!' },
-  weddingGreetings: { enabled: false, template: 'Congratulations on your wedding!' },
   seasonalWishes: { enabled: false, template: 'Happy Holidays!' },
   promotionalOffers: { enabled: false, template: 'Special offer for you!' },
   referralCodes: { enabled: false, template: 'Here is your referral code!' },
@@ -59,12 +70,32 @@ export const DEFAULT_TRIGGER_TEMPLATES = {
  * a person presses a button; these fire on a timer, at whatever the stored dates say, without
  * anybody present. An upgrade that silently began emailing a brokerage's whole book on a schedule
  * nobody chose would be the wrong default whatever the feature. Switch them on under
- * Triggers → CRM Triggers when the brokerage wants them.
+ * CRM → Communications → Brokerage Controls when the brokerage wants them.
  */
 export const TRIGGER_KEYS = [
-  'wedding', 'seasonal', 'promotional', 'referral', 'custom', 'birthday', 'anniversary', 'welcome',
+  'seasonal', 'promotional', 'referral', 'custom', 'birthday', 'anniversary', 'welcome',
 ] as const;
 export type TriggerKey = (typeof TRIGGER_KEYS)[number];
+
+/**
+ * The three greetings whose PERSONAL layer has moved to `notification_preferences`.
+ *
+ * WHAT MOVED AND WHAT DID NOT. Only the per-user answer moved. The brokerage layer for these three
+ * is still `crm_email_settings.template_toggles`, read through `brokerageDefaultFor`, because it is
+ * a brokerage-wide default and `notification_preferences` has no row that could hold one. So the
+ * three levels are unchanged in shape — kill switch, personal choice, brokerage default — and only
+ * the middle one changed table.
+ *
+ * ABSENT IN THE MAP MEANS "STILL OWNED BY `crm_trigger_settings`". `welcome`, `promotional`,
+ * `referral` and `custom` are deliberately not here: welcome has no verified migration yet, and the
+ * three manual emails are permanent residents of that table — they are a switch on a button, not a
+ * notification somebody receives, so there is no per-channel answer for them to hold.
+ */
+export const GREETING_CATEGORY: Partial<Record<TriggerKey, string>> = {
+  birthday: 'crm_birthday',
+  anniversary: 'crm_anniversary',
+  seasonal: 'crm_seasonal',
+};
 
 /**
  * `welcome` defaults to FALSE, with birthday and anniversary and for the same reason.
@@ -73,10 +104,10 @@ export type TriggerKey = (typeof TRIGGER_KEYS)[number];
  * pressed send, so the switch is about whether that button works. The three that default to false
  * are timer-driven — nobody is watching when they go — and an upgrade that quietly began emailing
  * every lead who arrives is not a decision this file gets to make on a brokerage's behalf. Turning
- * it on is one switch under Triggers → CRM Triggers.
+ * it on is one switch under CRM → Communications.
  */
 export const DEFAULT_TRIGGERS: Record<string, boolean> = {
-  wedding: true, seasonal: true, promotional: true, referral: true, custom: true,
+  seasonal: true, promotional: true, referral: true, custom: true,
   birthday: false, anniversary: false, welcome: false,
 };
 

@@ -35,7 +35,13 @@ export const ROLE_RANK: Record<string, number> = {
 const UNKNOWN_RANK = 0;
 
 export interface Principal {
-  id?: number;
+  /**
+   * Nullable because callers hold identities from several shapes — `AuthUserRecord` (always has
+   * one), the scoped-user shape used by `common/transaction-scope.ts` (may not), and hand-built
+   * principals in tests. Widening costs nothing: every predicate here reads `role` and none of them
+   * reads `id`, so no existing decision changes.
+   */
+  id?: number | null;
   role?: string | null;
   name?: string | null;
 }
@@ -89,6 +95,43 @@ export const CAPABILITIES = {
   /** Read data belonging to people other than yourself. */
   'data.read-all': ROLE_RANK.manager,
   /**
+   * THE CRM'S DATA SCOPE FOR LEADS: may this person work with the leads the BROKERAGE owns?
+   *
+   * This is a data-scope capability, not an action permission, and the distinction is the whole
+   * point. `lead: view/edit` says which lead SCREENS you may open; this says which lead ROWS are
+   * yours to open. Both must pass. Before this existed the CRM answered the row question in three
+   * different places and got three different answers — see `common/lead-scope.ts`.
+   *
+   * WHAT A BROKERAGE LEAD IS. `owner_user_id IS NULL`. That is not a new marking invented here: it
+   * is what unattributed intake has always looked like in this database, what `LeadTransferService`
+   * calls "the brokerage's own pool", and what `leads_owner_email_key` COALESCEs to book 0. A lead
+   * with an owner belongs to that person; a lead without one belongs to the brokerage.
+   *
+   * WHAT IT DOES NOT GRANT, and this is the reason it is a separate capability rather than a rank:
+   * it never reaches a lead somebody OWNS. An agent's private book is invisible to every holder of
+   * this capability, at every rank, on every screen. Widening to the brokerage's own leads and
+   * widening to everybody's leads are different changes, and only the first is wanted.
+   *
+   * WHO HOLDS IT: EVERY ROLE EXCEPT `agent`. That is the business rule in one line — an agent has a
+   * personal book, and everybody else is brokerage staff working the brokerage's leads. It is the
+   * same line that decides OWNERSHIP at intake (`LeadsService.create`, the CSV importer and the
+   * Meta sync all ask `isAgent`), and the two must agree: a role that creates brokerage leads and
+   * cannot then see them would be a trap, which is exactly what happens if these two lists drift.
+   *
+   * WRITTEN OUT RATHER THAN AS `role !== 'agent'`, deliberately. A negative predicate hands the
+   * brokerage's whole lead book to any role invented later, before anyone has decided that it
+   * should. Listing today's five keeps the rule reviewable and makes a new role opt IN.
+   *
+   * `admin` is listed rather than special-cased. Super Admin already reached unattributed intake
+   * through `isSuperAdmin`, which is what this replaces, so their scope is unchanged by this entry —
+   * and CRM data visibility now comes from a capability the business can reason about rather than
+   * from being the top of the ladder. See the comment on `leadScopeWhere`.
+   *
+   * Still reaches NO agent's private book, at any rank. `leadScopeWhere` has no branch that drops
+   * the owner clause.
+   */
+  'leads.brokerage-scope': ['admin', 'manager', 'accounting', 'documentation', 'crm'],
+  /**
    * Work with the brokerage's whole marketing audience: select leads across the brokerage rather
    * than only your own, and see the whole opt-out list.
    *
@@ -107,6 +150,28 @@ export const CAPABILITIES = {
    * the pool is not the same as bypassing the rules that narrow it.
    */
   'campaigns.brokerage-audience': ['admin', 'manager', 'crm'],
+  /**
+   * Open the Invoice module at all — read or write, list or detail, and every financial route
+   * hanging off it.
+   *
+   * A NAMED SET, NOT A THRESHOLD, and this is the case that shows why the two forms both have to
+   * exist. Invoices are brokerage financial records. The three roles that need them are Super Admin,
+   * Admin and Accounting; `documentation` shares Accounting's rank of 60 and must NOT have them, so
+   * no threshold can express the answer — `ROLE_RANK.accounting` would admit `documentation` by
+   * arithmetic, and anything higher would lock Accounting out of the module it exists to run.
+   *
+   * WHY THIS IS A CAPABILITY AND NOT JUST THE `invoice` SCREEN PERMISSION. The screen permission is
+   * an administrator's per-user dial, and dials get turned by mistake: granting `invoice: view` to
+   * an agent through Roles & Permissions used to hand them the brokerage's whole invoice ledger,
+   * because `InvoicesService.index()` filters on nothing but `deleted_at`. The role is not a dial.
+   * Both are now required — the permission says which screens you may open, this says whether the
+   * money is any of your business — so a mistaken override grants nothing.
+   *
+   * Deliberately NOT scoped per record. Invoices are the brokerage's billing, not an agent's own
+   * work, so "an agent sees their own invoices" is the wrong model and is not offered: an agent sees
+   * none.
+   */
+  'invoices.access': ['admin', 'manager', 'accounting'],
   /**
    * Change the identity of a lead the brokerage assigned to you — its name, email, phone, source
    * and assignment — or delete it.

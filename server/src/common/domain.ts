@@ -120,6 +120,16 @@ export function auditDomain(input: { category?: string | null; section?: string 
     // filed as common were moved with them by 20260730170000, so this function still explains every
     // stored domain — the property that makes the trail checkable at all.
     'Marketing Inventory': 'desk', Inventory: 'desk', MLS: 'desk', Favorites: 'desk',
+    /*
+     * The retention sweep's own record of what it purged.
+     *
+     * `desk`, not `common`, for two reasons that both matter. It is a Transaction Desk policy — the
+     * sweep never touches a CRM row — so the entry belongs in the Desk's trail and would be noise in
+     * the CRM's. And filing it as `desk` makes the record subject to the same six months as
+     * everything it removes; left unclassified it would be the one Desk row the policy could never
+     * reach, accumulating for ever inside the table it exists to prune.
+     */
+    Retention: 'desk',
     Users: 'common',
     /*
      * A record that something was sent to an AI provider belongs to neither area, like Users.

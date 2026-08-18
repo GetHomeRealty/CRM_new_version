@@ -1,6 +1,6 @@
 import type { AxiosRequestConfig } from 'axios';
 import api from './axios';
-import type { EmailTemplateAttachment, AgentChangeNotif, AgentCommissionMap, AgentLoanMap, AuditLogPage, BrokerageSuggestion, ChatMessage, ClientIdentification, CompanySettings, DashboardCommissions, DealHistoryEntry, DeletionLogEntry, DocNotif, DocumentsResponse, EmailTemplate, EmailTemplatesResponse, GenerateInvoicesResult, Invoice, LawyerSuggestion, MailAccount, ManagedRole, ManagedUser, NoticeOfSaleData, SendResult, TemplatePreview, TestMailResult, Transaction, TrashedDocument, TrashedInvoice, TrashedPayment, TrashedResponse, TrashedRowItem, TrashedTransaction, UsersCatalog, CrmDashboard, DeskDashboard } from '../types';
+import type { EmailTemplateAttachment, AgentChangeNotif, AgentCommissionMap, AgentLoanMap, AuditLogPage, BrokerageSuggestion, ChatMessage, ClientIdentification, CompanySettings, DashboardCommissions, DealHistoryEntry, DeletionLogEntry, DocNotif, DocumentsResponse, EmailTemplate, EmailTemplatesResponse, GenerateInvoicesResult, Invoice, LawyerSuggestion, MailAccount, ManagedRole, ManagedUser, NoticeOfSaleData, SendResult, TemplatePreview, TestMailResult, Transaction, TrashedDocument, TrashedInvoice, TrashedPayment, TrashedResponse, TrashedRowItem, TrashedTransaction, UsersCatalog, CrmDashboard, DeskDashboard, DeskAnalytics } from '../types';
 
 /** Route parameter identifiers (Laravel accepts numeric or string ids). */
 type Id = number | string;
@@ -14,8 +14,14 @@ type Id = number | string;
 const MULTIPART = { headers: { 'Content-Type': undefined } } as unknown as AxiosRequestConfig;
 
 // --- Agent onboarding emails (Users screen) ---
+/**
+ * Which letter is being previewed or sent. `onboard` is one kind, not two: whether the fresher or
+ * the experienced-agent guide goes out is decided on the server from the agent's own record.
+ */
+export type OnboardingKind = 'onboard' | 'contract' | 'accounting' | 'training';
+
 export interface OnboardingPreview {
-  kind: 'onboard' | 'contract';
+  kind: OnboardingKind;
   event_key: string;
   subject: string;
   html: string;
@@ -27,6 +33,11 @@ export interface OnboardingPreview {
    * contract. Its size is not known until it is rendered, so only the name comes back.
    */
   generated_document: string | null;
+  /**
+   * Which of the brokerage's five standard agreements this agent's splits correspond to — contract
+   * only, and null when the recorded terms are not one of the five.
+   */
+  contract_variant: string | null;
   sender: string | null;
   /** Anything that would make the send fail or arrive incomplete. */
   warning: string | null;
@@ -35,7 +46,7 @@ export interface OnboardingPreview {
 }
 
 /** The message as it would arrive for this agent — read-only, nothing is sent. */
-export const getOnboardingPreview = (userId: Id, kind: 'onboard' | 'contract'): Promise<OnboardingPreview> =>
+export const getOnboardingPreview = (userId: Id, kind: OnboardingKind): Promise<OnboardingPreview> =>
   api.get<OnboardingPreview>(`/api/users/${userId}/onboarding/${kind}`).then((r) => r.data);
 
 /** A file attached to one send only — not stored on the template. */
@@ -49,7 +60,7 @@ export interface OnboardingAttachment {
 /** Send it. Subject/body are the reviewed version and win over the stored template. */
 export const sendOnboardingEmail = (
   userId: Id,
-  kind: 'onboard' | 'contract',
+  kind: OnboardingKind,
   edited: { subject?: string; html?: string; attachments?: OnboardingAttachment[] },
 ): Promise<{ message: string; to: string }> =>
   api.post(`/api/users/${userId}/onboarding/${kind}`, edited).then((r) => r.data);
@@ -92,8 +103,6 @@ export interface TransactionPage {
     per_page: number;
     last_page: number;
     total: number;
-    /** Ids of everything matching the filters, not just this page — for "select all". */
-    ids: number[];
     years: string[];
     pending_deletions: Transaction[];
     /** Review counters for the rows on this page, keyed by transaction id. Absent on older APIs. */
@@ -115,6 +124,23 @@ export const listTransactionsPage = (query: TransactionQuery): Promise<Transacti
   return api.get<TransactionPage>('/api/transactions', { params }).then((r) => r.data);
 };
 
+/**
+ * The ids of every deal matching these filters — what "Select all N matching" selects.
+ *
+ * Fetched when the button is pressed rather than travelling on every page load. It used to arrive
+ * as `meta.ids` on each list response: at brokerage scale that is a full id scan and hundreds of
+ * kilobytes of JSON, paid for by every load, every filter change and every page turn, to serve a
+ * button most of them never touch. The selection it produces is unchanged.
+ */
+export const getMatchingTransactionIds = (query: TransactionQuery): Promise<number[]> => {
+  const params: Record<string, string> = {};
+  for (const [k, v] of Object.entries(query)) {
+    if (k === 'page' || k === 'per_page') continue;
+    if (typeof v === 'string' && v.trim() !== '') params[k] = v.trim();
+  }
+  return api.get<{ ids: number[] }>('/api/transactions/matching-ids', { params }).then((r) => r.data.ids);
+};
+
 export const getDashboardCommissions = (): Promise<DashboardCommissions> =>
   api.get<DashboardCommissions>('/api/dashboard/commissions').then((r) => r.data);
 
@@ -127,6 +153,58 @@ export const getCrmDashboard = (): Promise<CrmDashboard> =>
 
 export const getDeskDashboard = (): Promise<DeskDashboard> =>
   api.get<DeskDashboard>('/api/dashboard/desk').then((r) => r.data);
+
+/**
+ * The Analytics screen's figures. Its own endpoint rather than a slice of the dashboard: the two
+ * screens carry different permissions, and the dashboard should not compute what nobody asked for.
+ */
+/** The Analytics filters. Blank values are dropped so they never arrive as empty strings. */
+export interface AnalyticsQuery {
+  from?: string;
+  to?: string;
+  agent_user_id?: number | '';
+  type?: string;
+  status?: string;
+}
+
+const analyticsParams = (q: AnalyticsQuery): Record<string, string | number> => {
+  const params: Record<string, string | number> = {};
+  for (const [k, v] of Object.entries(q)) {
+    if (v !== undefined && v !== null && v !== '') params[k] = v as string | number;
+  }
+  return params;
+};
+
+export const getDeskAnalytics = (q: AnalyticsQuery = {}): Promise<DeskAnalytics> =>
+  api.get<DeskAnalytics>('/api/dashboard/analytics', { params: analyticsParams(q) }).then((r) => r.data);
+
+/**
+ * The values the filter controls offer.
+ *
+ * `agents` is answered by the server, and for an agent it is their own single entry — the roster is
+ * not published to somebody who may not filter by it. `locked_agent_id` is non-null for an agent,
+ * which is what locks the control; the server refuses another agent's id regardless.
+ */
+export interface AnalyticsFilterOptions {
+  agents: { id: number; name: string }[];
+  types: string[];
+  statuses: string[];
+  locked_agent_id: number | null;
+}
+
+export const getDeskAnalyticsOptions = (): Promise<AnalyticsFilterOptions> =>
+  api.get<AnalyticsFilterOptions>('/api/dashboard/analytics/filter-options').then((r) => r.data);
+
+/** Download the CURRENT filtered Analytics result as a spreadsheet. */
+export const exportDeskAnalytics = async (q: AnalyticsQuery = {}): Promise<void> => {
+  const res = await api.post('/api/dashboard/analytics/export/xlsx', analyticsParams(q), { responseType: 'blob' });
+  const url = URL.createObjectURL(res.data as Blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'Transaction Desk Analytics.xlsx';
+  a.click();
+  URL.revokeObjectURL(url);
+};
 
 export const getTransaction = (id: Id): Promise<Transaction> =>
   api.get<{ data: Transaction }>(`/api/transactions/${id}`).then((r) => r.data.data);
@@ -340,7 +418,12 @@ export const uploadDocumentFile = (txnId: Id, docId: Id, file: File): Promise<Do
 };
 
 export const deleteDocument = (docId: Id): Promise<unknown> => api.delete(`/api/documents/${docId}`).then((r) => r.data);
-export const restoreDocument = (docId: Id): Promise<unknown> => api.post(`/api/documents/${docId}/restore`).then((r) => r.data);
+/*
+ * `restoreDocument` was here, pointing at `POST /api/documents/:id/restore`. Both are gone: the
+ * endpoint cleared a `pending_delete` flag nothing ever set, on a query that excluded deleted
+ * documents, so it could not restore anything. Restoring a document is `restoreTrashedDocument`
+ * below — the Recycle Bin route, which works.
+ */
 
 // --- Notice of Sale ---
 export const getNoticeOfSale = (txnId: Id): Promise<NoticeOfSaleData> => api.get<NoticeOfSaleData>(`/api/transactions/${txnId}/notice-of-sale`).then((r) => r.data);
@@ -416,7 +499,7 @@ export const downloadAllDocuments = (txnId: Id): Promise<void> => fetchFileBlob(
  * unlike the viewers above; it still has to come through the authenticated instance, because a plain
  * cross-origin link carries no session.
  */
-export const fetchOnboardingAttachment = (kind: 'onboard' | 'contract', attachmentId: Id): Promise<Blob> =>
+export const fetchOnboardingAttachment = (kind: OnboardingKind, attachmentId: Id): Promise<Blob> =>
   api.get<Blob>(`/api/onboarding/${kind}/attachments/${attachmentId}`, { responseType: 'blob' }).then((r) => r.data);
 
 /**
@@ -424,7 +507,7 @@ export const fetchOnboardingAttachment = (kind: 'onboard' | 'contract', attachme
  * read here is the copy the agent receives, including an edit made a moment ago. The body is sent
  * with the request, which is why this is a POST; nothing is stored and nothing is sent.
  */
-export const fetchOnboardingDocument = (userId: Id, kind: 'onboard' | 'contract', html: string): Promise<Blob> =>
+export const fetchOnboardingDocument = (userId: Id, kind: OnboardingKind, html: string): Promise<Blob> =>
   api.post<Blob>(`/api/users/${userId}/onboarding/${kind}/document`, { html }, { responseType: 'blob' }).then((r) => r.data);
 
 // --- Document notifications (agent upload → admin; admin review → agent) ---
@@ -484,7 +567,24 @@ export const transferLeadBook = (toUserId: Id, count?: number): Promise<{ moved:
   api.post('/api/leads/transfer-ownership', { to_user_id: toUserId, ...(count ? { count } : {}) }).then((r) => r.data);
 
 // --- Invoice module ---
-export const getInvoices = (): Promise<Invoice[]> => api.get<Invoice[]>('/api/invoices').then((r) => r.data);
+/**
+ * One page of the invoice ledger, with the ledger-wide tile figures.
+ *
+ * `totals` describes EVERY invoice, not the page and not the status filter — the tiles above the
+ * table have always meant that, and the server computes them with aggregates so they stay true now
+ * that the table only carries one page. See `InvoicesService.index`.
+ */
+export interface InvoicePage {
+  data: Invoice[];
+  meta: { current_page: number; per_page: number; last_page: number; total: number };
+  totals: { count: number; outstanding: number; paid_count: number };
+}
+
+export const getInvoices = (query: { page?: number; per_page?: number; status?: string } = {}): Promise<InvoicePage> => {
+  const params: Record<string, string | number> = { page: query.page ?? 1, per_page: query.per_page ?? 25 };
+  if (query.status && query.status.trim() !== '') params.status = query.status.trim();
+  return api.get<InvoicePage>('/api/invoices', { params }).then((r) => r.data);
+};
 export const getInvoice = (id: Id): Promise<Invoice> => api.get<Invoice>(`/api/invoices/${id}`).then((r) => r.data);
 export const createInvoice = (payload: unknown): Promise<Invoice> => api.post<Invoice>('/api/invoices', payload).then((r) => r.data);
 export const generateTransactionInvoices = (txnId: Id): Promise<GenerateInvoicesResult> => api.post<GenerateInvoicesResult>(`/api/transactions/${txnId}/invoices`).then((r) => r.data);

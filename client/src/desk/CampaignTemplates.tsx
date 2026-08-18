@@ -116,34 +116,30 @@ export default function CampaignTemplates({ options, onChanged, onUse }: {
   });
 
   /*
-   * TWO LISTS, ONE TABLE, NO NEW COLUMN.
+   * ONE LIST: templates created for campaigns.
    *
-   * The distinction already exists in the data: a built-in template is seeded with no author, which
-   * is why the card has always been able to print "Built-in template" instead of "By <name>". So
-   * `created_by === null` IS the type, and reusing it means no migration, no backfill, and no risk
-   * of a template ending up in neither group because a new flag was never set on it.
+   * This used to render two groups, splitting on `created_by === null` to put the shipped built-ins
+   * under a heading reading "CRM Templates". That heading was wrong in a way worth recording,
+   * because it is what made this screen look like it held two kinds of thing: those rows are not CRM
+   * communication templates and never were. CRM's Birthday, Anniversary, Seasonal, New Lead and
+   * Lead Assigned emails live in `email_templates` under CRM → Settings → Templates, a different
+   * table reached by different endpoints, and no version of this screen has ever shown one.
    *
-   * Splitting on render rather than fetching twice keeps one request and one search box, and
-   * guarantees the two lists partition the set — every template is in exactly one, so none can be
-   * duplicated across the groups or dropped from both.
+   * The brokerage's decision is that this library holds only templates somebody created for a
+   * campaign, so the built-ins are no longer served here or offered by the campaign builder — see
+   * `CampaignTemplatesService.authoredWhere`. The split is gone with them; the server now returns
+   * exactly what belongs on this screen, so there is nothing left to partition on render.
    */
-  const crmTemplates = shown.filter((t) => !t.created_by);
-  const campaignTemplates = shown.filter((t) => !!t.created_by);
 
   /*
    * A render FUNCTION, called directly, rather than a nested component used as `<TemplateGroup/>`.
    * A component declared inside a render gets a new identity every pass, so React unmounts and
    * remounts its whole subtree — here that would tear down and reload every thumbnail iframe on
-   * each keystroke in the search box. Calling it keeps the cards mounted, and the markup inside is
-   * unchanged from the single grid it replaced.
+   * each keystroke in the search box. Calling it keeps the cards mounted.
    */
-  const templateGroup = (title: string, note: string, empty: string, items: CampaignTemplateDetail[]) => (
-    <div className="tpl-group" key={title}>
-      <div className="modal-sub" style={{ marginTop: 18 }}>
-        {title} <span className="sec-count">{items.length}</span>
-      </div>
-      <div className="muted tpl-sub" style={{ marginBottom: 10 }}>{note}</div>
-      {items.length === 0 ? <p className="help">{empty}</p> : (
+  const templateGrid = (items: CampaignTemplateDetail[]) => (
+    <div className="tpl-group">
+      {items.length === 0 ? null : (
         <div className="tpl-grid">
           {items.map((t) => (
             <div key={t.id} className="tpl-card">
@@ -161,7 +157,10 @@ export default function CampaignTemplates({ options, onChanged, onUse }: {
                 </div>
                 <div className="muted tpl-card-subject">{t.subject}</div>
                 <div className="tpl-card-foot">
-                  {t.created_by ? `By ${t.created_by}` : 'Built-in template'}
+                  {/* Every template on this screen has an author now, so the "Built-in template"
+                      fallback is gone with the group it labelled. `created_by` is still guarded:
+                      it is nullable on the row, and a blank byline beats the string "null". */}
+                  {t.created_by ? `By ${t.created_by}` : ''}
                   {t.attachments.length > 0 && <span className="pill warn" style={{ marginLeft: 6 }}>📎 {t.attachments.length}</span>}
                 </div>
               </div>
@@ -183,9 +182,13 @@ export default function CampaignTemplates({ options, onChanged, onUse }: {
     <div className="card">
       <div className="tpl-head">
         <div>
-          <div className="modal-h" style={{ margin: 0 }}>Email Templates</div>
+          {/* Named for what it holds. "Email Templates" was the heading over a screen that also
+              showed a group called "CRM Templates", which is how it came to read as the home of
+              every template in the product. It is one library with one kind of thing in it. */}
+          <div className="modal-h" style={{ margin: 0 }}>Campaign Templates</div>
           <div className="muted tpl-sub">
-            Create and manage reusable email templates for your leads and clients.
+            Reusable marketing templates you create for campaigns. The CRM&apos;s automatic emails
+            are edited under CRM Settings → Templates.
           </div>
         </div>
         {canEdit && <button className="btn primary" type="button" onClick={() => setEditing('new')}>+ Create Template</button>}
@@ -209,26 +212,7 @@ export default function CampaignTemplates({ options, onChanged, onUse }: {
           {canEdit && !search.trim() ? ' Create one to send a campaign.' : ''}
         </p>
       ) : (
-        <>
-          {/*
-            The two groups, always in this order and always labelled, so the boundary is visible
-            rather than implied. A group with nothing in it still prints its heading and says so —
-            an absent heading would read as "this kind does not exist" rather than "none yet",
-            and the whole point of the split is that both kinds are always a thing.
-          */}
-          {templateGroup(
-            'CRM Templates',
-            'Built into the CRM. Available to every user; editing one changes it wherever the CRM uses it.',
-            'No built-in templates match.',
-            crmTemplates,
-          )}
-          {templateGroup(
-            'Campaign Templates',
-            'Created by you and your team for campaigns.',
-            canEdit ? 'None yet — use “+ Create Template” to add one.' : 'None yet.',
-            campaignTemplates,
-          )}
-        </>
+        templateGrid(shown)
       )}
 
       {previewing && (

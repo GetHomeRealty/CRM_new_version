@@ -1,62 +1,169 @@
-import { useEffect, useMemo, useState } from 'react';
-import { listTransactions } from '../lib/api';
+import { useEffect, useState } from 'react';
+import {
+  getDeskAnalytics, getDeskAnalyticsOptions, exportDeskAnalytics,
+  type AnalyticsQuery, type AnalyticsFilterOptions,
+} from '../lib/api';
 import { formatCurrency, typeClass } from './format';
 import { useToast } from './toast';
-import type { Transaction } from '../types';
+import { apiErrorMessage } from '../lib/apiError';
+import type { DeskAnalytics } from '../types';
 
-interface Bucket { count: number; total: number; }
+/**
+ * Transaction Desk Analytics.
+ *
+ * The screen is unchanged — the same three figures, the same commission-by-month bars, the same two
+ * tables. What changed is where the arithmetic happens. It used to call `listTransactions()`, which
+ * with no query returns EVERY transaction the caller can see, fully serialised — statuses, clients,
+ * co-operating brokerage and its agents, delete requests, unread counts — and then reduced all of
+ * that in the browser to fourteen numbers. Opening Analytics therefore cost one full copy of the
+ * brokerage's deal book over the wire and in memory, growing with the brokerage.
+ *
+ * `GET /api/dashboard/analytics` computes the same values where the data is and returns only them.
+ *
+ * EVERY FIGURE IS BEFORE HST. Commission is what the brokerage earns; HST is collected on its
+ * behalf and remitted, so counting it as revenue overstates performance by 13%. This screen used to
+ * mix the two — paid and pending before HST, the three groupings after, and a tile labelled
+ * "incl. HST" over figures that excluded it. One basis now, stated on the tile.
+ *
+ * THE FILTERS DO NOT FILTER HERE. Each one is sent to the server and applied to the aggregate, so
+ * the figures are computed over the filtered set rather than computed over everything and then
+ * trimmed. Filtering in the browser would mean fetching the unfiltered brokerage to do it — the
+ * exact thing this screen was moved off — and the totals would stop being totals OF the rows shown.
+ *
+ * THE AGENT SELECTOR IS NOT A SECURITY CONTROL. It is hidden for an agent because there is nothing
+ * for them to choose, not to protect anything: the server locks an agent to their own figures and
+ * refuses another agent's id whatever the browser sends.
+ */
+const EMPTY: AnalyticsQuery = { from: '', to: '', agent_user_id: '', type: '', status: '' };
 
 export default function AnalyticsPage() {
   const toast = useToast();
-  const [rows, setRows] = useState<Transaction[]>([]);
+  const [data, setData] = useState<DeskAnalytics | null>(null);
+  const [options, setOptions] = useState<AnalyticsFilterOptions | null>(null);
+  const [filters, setFilters] = useState<AnalyticsQuery>(EMPTY);
   const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [exporting, setExporting] = useState(false);
+
+  const load = (f: AnalyticsQuery) => {
+    setBusy(true);
+    return getDeskAnalytics(f)
+      .then(setData)
+      .catch((e) => toast(apiErrorMessage(e, 'Could not load analytics'), 'bad'))
+      .finally(() => { setBusy(false); setLoading(false); });
+  };
 
   useEffect(() => {
-    listTransactions().then(setRows).catch(() => toast('Could not load analytics', 'bad')).finally(() => setLoading(false));
+    getDeskAnalyticsOptions().then(setOptions).catch(() => setOptions(null));
+    load(EMPTY);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const data = useMemo(() => {
-    const byAgent: Record<string, Bucket> = {}, byType: Record<string, Bucket> = {}, byMonth: Record<string, number> = {};
-    let paid = 0, pending = 0;
-    rows.forEach((t) => {
-      const total = t.commission?.total || 0;
-      const amt = t.commission?.amount || 0;
-      if (t.commission?.paid) paid += amt; else pending += amt;
-      const ag = t.agent || 'Unassigned';
-      byAgent[ag] = byAgent[ag] || { count: 0, total: 0 };
-      byAgent[ag].count++; byAgent[ag].total += total;
-      byType[t.type] = byType[t.type] || { count: 0, total: 0 };
-      byType[t.type].count++; byType[t.type].total += total;
-      const m = (t.closing_date || t.offer_date || '').slice(0, 7) || '—';
-      byMonth[m] = (byMonth[m] || 0) + total;
-    });
-    return { byAgent, byType, byMonth, paid, pending, total: paid + pending };
-  }, [rows]);
+  const set = (patch: Partial<AnalyticsQuery>) => setFilters((f) => ({ ...f, ...patch }));
+
+  /*
+   * The range is checked here too, so an obvious mistake is answered instantly rather than by a
+   * round trip. The server checks it as well and is the authority — this is a courtesy, not the
+   * validation.
+   */
+  const rangeBackwards = !!filters.from && !!filters.to && filters.from > filters.to;
+
+  const apply = () => { if (!rangeBackwards) void load(filters); };
+  const clear = () => { setFilters(EMPTY); void load(EMPTY); };
+
+  const download = () => {
+    if (rangeBackwards) return;
+    setExporting(true);
+    exportDeskAnalytics(filters)
+      .catch((e) => toast(apiErrorMessage(e, 'Could not export analytics'), 'bad'))
+      .finally(() => setExporting(false));
+  };
+
+  /** An agent has nothing to choose: the server locks them to themselves. */
+  const agentLocked = options?.locked_agent_id != null;
 
   if (loading) return <div className="centered">Loading analytics…</div>;
+  if (!data) return <div className="card stub"><h2>Nothing to show</h2><p className="help">Analytics could not be loaded. Try Refresh.</p></div>;
 
-  const agents = Object.entries(data.byAgent).sort((a, b) => b[1].total - a[1].total);
-  const types = Object.entries(data.byType).sort((a, b) => b[1].total - a[1].total);
-  const months = Object.entries(data.byMonth).filter(([m]) => m !== '—').sort();
-  const maxMonth = Math.max(1, ...months.map(([, v]) => v));
+  const { totals, by_month: months, by_agent: agents, by_type: types } = data;
+  const maxMonth = Math.max(1, ...months.map((m) => m.total));
 
   return (
     <>
+      {/* Filters. Applied by the server; see the note at the top of this file. */}
+      <div className="toolbar">
+        <div className="toolbar-row" style={{ flexWrap: 'wrap', gap: 8, alignItems: 'flex-end' }}>
+          <label className="field" style={{ minWidth: 150 }}>
+            <span className="lbl">From</span>
+            <input type="date" value={filters.from ?? ''} onChange={(e) => set({ from: e.target.value })} />
+          </label>
+          <label className="field" style={{ minWidth: 150 }}>
+            <span className="lbl">To</span>
+            <input type="date" value={filters.to ?? ''} onChange={(e) => set({ to: e.target.value })} />
+          </label>
+
+          {!agentLocked && (
+            <label className="field" style={{ minWidth: 190 }}>
+              <span className="lbl">Agent</span>
+              <select
+                value={String(filters.agent_user_id ?? '')}
+                onChange={(e) => set({ agent_user_id: e.target.value === '' ? '' : Number(e.target.value) })}
+              >
+                <option value="">All agents</option>
+                {(options?.agents ?? []).map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+              </select>
+            </label>
+          )}
+
+          <label className="field" style={{ minWidth: 190 }}>
+            <span className="lbl">Transaction type</span>
+            <select value={filters.type ?? ''} onChange={(e) => set({ type: e.target.value })}>
+              <option value="">All types</option>
+              {(options?.types ?? []).map((t) => <option key={t} value={t}>{t}</option>)}
+            </select>
+          </label>
+
+          <label className="field" style={{ minWidth: 170 }}>
+            <span className="lbl">Status</span>
+            <select value={filters.status ?? ''} onChange={(e) => set({ status: e.target.value })}>
+              <option value="">All statuses</option>
+              {(options?.statuses ?? []).map((t) => <option key={t} value={t}>{t}</option>)}
+            </select>
+          </label>
+
+          <div style={{ flex: 1 }} />
+          <button className="btn primary sm" disabled={busy || rangeBackwards} onClick={apply}>
+            {busy ? 'Applying…' : 'Apply'}
+          </button>
+          <button className="btn ghost sm" disabled={busy} onClick={clear}>Clear</button>
+          <button className="btn sm" disabled={exporting || rangeBackwards} onClick={download}>
+            {exporting ? 'Exporting…' : 'Export'}
+          </button>
+        </div>
+        {rangeBackwards && (
+          <p className="help" style={{ color: 'var(--bad-ink)' }}>
+            The end date is before the start date.
+          </p>
+        )}
+        {agentLocked && (
+          <p className="help">Showing your own transactions.</p>
+        )}
+      </div>
+
       <div className="stat-grid">
-        <div className="stat-card"><div className="lbl">Total Commission (incl. HST)</div><div className="val">{formatCurrency(data.total)}</div></div>
-        <div className="stat-card"><div className="lbl">Paid</div><div className="val" style={{ color: 'var(--ok-ink)' }}>{formatCurrency(data.paid)}</div></div>
-        <div className="stat-card"><div className="lbl">Pending</div><div className="val" style={{ color: 'var(--warn-ink)' }}>{formatCurrency(data.pending)}</div></div>
+        <div className="stat-card"><div className="lbl">Total Commission</div><div className="val">{formatCurrency(totals.total)}</div><div className="help">before HST</div></div>
+        <div className="stat-card"><div className="lbl">Paid</div><div className="val" style={{ color: 'var(--ok-ink)' }}>{formatCurrency(totals.paid)}</div><div className="help">before HST</div></div>
+        <div className="stat-card"><div className="lbl">Pending</div><div className="val" style={{ color: 'var(--warn-ink)' }}>{formatCurrency(totals.pending)}</div><div className="help">before HST</div></div>
       </div>
 
       <div className="card">
-        <div className="modal-h" style={{ fontSize: 14 }}>Commission by Closing Month</div>
-        {months.length === 0 ? <div className="help">No dated transactions yet.</div> : months.map(([m, v]) => (
-          <div key={m} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '5px 0' }}>
-            <span style={{ width: 70, fontSize: 12, color: 'var(--muted)' }}>{m}</span>
+        <div className="modal-h" style={{ fontSize: 14 }}>Commission by Closing Month <span className="help" style={{ fontWeight: 400 }}>· before HST</span></div>
+        {months.length === 0 ? <div className="help">No dated transactions yet.</div> : months.map((m) => (
+          <div key={m.month} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '5px 0' }}>
+            <span style={{ width: 70, fontSize: 12, color: 'var(--muted)' }}>{m.month}</span>
             <div style={{ flex: 1, background: 'var(--surface-3)', height: 16, borderRadius: 6, overflow: 'hidden' }}>
-              <div style={{ height: '100%', width: `${(v / maxMonth) * 100}%`, background: 'linear-gradient(90deg,#c8102e,#9c0c24)' }} />
+              <div style={{ height: '100%', width: `${(m.total / maxMonth) * 100}%`, background: 'linear-gradient(90deg,#c8102e,#9c0c24)' }} />
             </div>
-            <strong style={{ width: 110, textAlign: 'right', fontSize: 12 }}>{formatCurrency(v)}</strong>
+            <strong style={{ width: 110, textAlign: 'right', fontSize: 12 }}>{formatCurrency(m.total)}</strong>
           </div>
         ))}
       </div>
@@ -67,7 +174,7 @@ export default function AnalyticsPage() {
           <table className="list-table"><thead><tr><th>Agent</th><th>Deals</th><th>Commission</th></tr></thead>
             <tbody>
               {agents.length === 0 && <tr><td colSpan={3} style={{ textAlign: 'center', color: 'var(--muted)', padding: 14 }}>No data.</td></tr>}
-              {agents.map(([a, v]) => <tr key={a}><td>{a}</td><td>{v.count}</td><td>{formatCurrency(v.total)}</td></tr>)}
+              {agents.map((a) => <tr key={a.agent}><td>{a.agent}</td><td>{a.count}</td><td>{formatCurrency(a.total)}</td></tr>)}
             </tbody>
           </table>
         </div>
@@ -76,7 +183,7 @@ export default function AnalyticsPage() {
           <table className="list-table"><thead><tr><th>Type</th><th>Deals</th><th>Commission</th></tr></thead>
             <tbody>
               {types.length === 0 && <tr><td colSpan={3} style={{ textAlign: 'center', color: 'var(--muted)', padding: 14 }}>No data.</td></tr>}
-              {types.map(([t, v]) => <tr key={t}><td><span className={`pill ${typeClass(t)}`}>{t}</span></td><td>{v.count}</td><td>{formatCurrency(v.total)}</td></tr>)}
+              {types.map((t) => <tr key={t.type}><td><span className={`pill ${typeClass(t.type)}`}>{t.type}</span></td><td>{t.count}</td><td>{formatCurrency(t.total)}</td></tr>)}
             </tbody>
           </table>
         </div>

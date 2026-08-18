@@ -11,6 +11,7 @@ import type { AuthUserRecord } from '../auth/auth.types';
 import { STORAGE_ROOT } from '../config/storage';
 
 import { isAgent } from '../core/authz';
+import { ownsTransaction, teamMemberIdentity } from '../common/transaction-scope';
 const FIELDS = ['full_legal_name', 'address', 'dob', 'occupation', 'id_type', 'id_number', 'issuing_jurisdiction', 'country', 'expiry_date'] as const;
 type Actor = AuthUserRecord | null;
 type FileEntry = { client_name?: string | null; file_path?: string | null };
@@ -23,12 +24,16 @@ export class ClientIdentificationService {
     private readonly extractor: IdExtractionService,
   ) {}
 
-  private async guard(user: Actor, txnId: number): Promise<{ id: number; agent: string | null }> {
+  private async guard(user: Actor, txnId: number): Promise<{ id: number; agent: string | null; agent_user_id: number | null }> {
     const t = await this.prisma.transactions.findFirst({ where: { id: txnId, deleted_at: null } });
     if (!t) throw new NotFoundException({ message: `No query results for model [App\\Models\\Transaction] ${txnId}.` });
     if (user && isAgent(user)) {
-      const member = await this.prisma.team_members.findFirst({ where: { transaction_id: txnId, name: user.name } });
-      if (t.agent !== user.name && !member) throw new ForbiddenException({ message: 'You do not have access to this transaction.' });
+      // Identity by id where the row has one — see `common/transaction-scope.ts`. Identification
+      // documents are the most sensitive thing on a deal, so this must not turn on a name.
+      const member = await this.prisma.team_members.findFirst({
+        where: { transaction_id: txnId, ...teamMemberIdentity(user) },
+      });
+      if (!ownsTransaction(user, t) && !member) throw new ForbiddenException({ message: 'You do not have access to this transaction.' });
     }
     return t;
   }

@@ -473,7 +473,22 @@ test.describe('recycle bin pagination', () => {
 
 // ------------------------------------------------------------------ audit health
 test.describe('audit trail health', () => {
-  test('failed audit writes are reported on the health endpoint', async ({ page }) => {
+  /**
+   * SIGNED IN AS A SUPER ADMIN, because `/api/health/workers` is no longer public.
+   *
+   * It used to be, and this test relied on that. The endpoint carries every scheduler's `last_error`
+   * — raw exception text, naming whatever threw — alongside the process memory and event-loop
+   * profile, so it now sits behind `MetricsAccessGuard`: a Super Admin session, or the monitoring
+   * token in `METRICS_TOKEN`. A monitor uses the token; a person uses their session, which is what
+   * this does.
+   *
+   * The assertions below are unchanged. What is being tested is that the audit-failure signal
+   * REACHES the surface a monitor reads — not that anyone at all may read it.
+   */
+  test('failed audit writes are reported on the health endpoint', async ({ page, context }) => {
+    await context.clearCookies();
+    await signIn(page, 'superAdmin');
+
     // Audit writes never fail a user action, so nothing else in the system would report a broken
     // compliance trail. This is the surface the monitor reads.
     const res = await apiGet(page, '/api/health/workers');

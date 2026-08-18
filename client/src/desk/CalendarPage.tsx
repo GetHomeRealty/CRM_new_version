@@ -461,7 +461,15 @@ export default function CalendarPage() {
           month grid down the page for the common visit, which is somebody checking tomorrow. */}
       <PushRemindersToggle />
 
-      <CalendarAnalyticsPanel />
+      {/*
+        * Transaction Desk only, by request.
+        *
+        * Removed from the CRM's calendar rather than deleted: the panel, its endpoint and the Desk's
+        * use of it are untouched, and `/api/calendar/analytics` is still asked the same question
+        * with `area=desk`. Scoped on `area` for the same reason every other cross-area difference on
+        * this page is — the two calendars are one component and one route, told apart by this value.
+        */}
+      {area === 'desk' && <CalendarAnalyticsPanel />}
 
       {/*
         Every appointment on one day, opened from "+N more".

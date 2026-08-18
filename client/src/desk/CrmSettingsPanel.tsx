@@ -328,11 +328,10 @@ export default function CrmSettingsPanel() {
         become a second place to configure something owned elsewhere.
 
         ONE CONTROL IN THAT CARD WAS NOT A DUPLICATE, and it is not here either: the brokerage-wide
-        kill switch on `crm_email_settings.auto_send_enabled`. It went to Triggers → CRM Triggers,
-        which is the screen that already reported it — an administrator read "an administrator must
-        turn this back on under CRM Settings" and had to navigate here to act on their own warning.
-        The switch is now at the top of that screen, behind the same `settings` permission this
-        card asked for, so agents still see only the notice. `saveCrmEmailSettings` is unchanged.
+        kill switch on `crm_email_settings.auto_send_enabled`. It went to Triggers → CRM Triggers
+        first, and moved again with that whole screen: it is now CRM → Communications → Brokerage
+        Controls, beside the per-communication defaults it can make inert, behind the same
+        `settings: edit` permission this card asked for. Agents see the notice and no switch.
       */}
 
       {/* Trigger templates moved to the Triggers screen (Triggers -> CRM Triggers), where an
@@ -543,15 +542,22 @@ function ReferralGenerator({ onGenerated }: { onGenerated: () => Promise<void> }
 /** Just enough of a lead to offer it as a recipient. */
 interface LeadOption { id: number; name: string; email: string }
 
-/** The CRM's advanced-email actions: wedding, seasonal, promotional, referral and custom. */
+/**
+ * The CRM's advanced-email actions: seasonal, promotional, referral and custom.
+ *
+ * Wedding Congratulations was the fifth and has been retired — Anniversary Greeting covers it, and
+ * unlike Wedding it sends on the date by itself rather than waiting for somebody to remember. The
+ * type is gone from the list below, the date field with it, and the server no longer answers
+ * `sendWeddingEmail`.
+ */
 function SendEmailCard({ seasons, onSent }: { seasons: string[]; onSent: () => Promise<void> }) {
   const toast = useToast();
-  const [kind, setKind] = useState('wedding');
+  const [kind, setKind] = useState('seasonal');
   const [busy, setBusy] = useState(false);
   const [leadMatches, setLeadMatches] = useState<LeadOption[]>([]);
   const [searchingLeads, setSearchingLeads] = useState(false);
   const [form, setForm] = useState({
-    leadName: '', leadEmail: '', weddingDate: '',
+    leadName: '', leadEmail: '',
     season: seasons[0] ?? 'Holiday Season', year: String(new Date().getFullYear()),
     offerTitle: '', offerDescription: '', offerDiscount: '', offerValidUntil: '', offerCode: '',
     referralCode: '', referralDiscount: '10', referralMaxUsage: '5', referralValidUntil: '',
@@ -589,15 +595,15 @@ function SendEmailCard({ seasons, onSent }: { seasons: string[]; onSent: () => P
     return () => { cancelled = true; clearTimeout(t); setSearchingLeads(false); };
   }, [form.leadEmail]);
 
+  // Drives the Type dropdown as well as the dispatch, so a type removed here disappears from both.
   const actionFor: Record<string, string> = {
-    wedding: 'sendWeddingEmail', seasonal: 'sendSeasonalEmail',
+    seasonal: 'sendSeasonalEmail',
     promotional: 'sendPromotionalEmail', referral: 'sendReferralEmail', custom: 'sendCustomEmail',
   };
 
   const payload = (): Record<string, unknown> => {
     const base = { leadName: form.leadName, leadEmail: form.leadEmail };
     switch (kind) {
-      case 'wedding': return { ...base, weddingDate: form.weddingDate };
       case 'seasonal': return { ...base, season: form.season, year: form.year };
       case 'promotional': return { ...base, offer: {
         title: form.offerTitle, description: form.offerDescription,
@@ -669,13 +675,6 @@ function SendEmailCard({ seasons, onSent }: { seasons: string[]; onSent: () => P
           </span>
         </div>
       </div>
-
-      {kind === 'wedding' && (
-        <div className="field">
-          <label htmlFor="crm-wedding-date">Wedding Date</label>
-          <input id="crm-wedding-date" type="date" value={form.weddingDate} onChange={(e) => set('weddingDate', e.target.value)} />
-        </div>
-      )}
 
       {kind === 'seasonal' && (
         <div className="g2">

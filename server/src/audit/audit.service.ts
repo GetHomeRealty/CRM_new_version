@@ -1,4 +1,5 @@
 import { auditDomain } from '../common/domain';
+import { currentRequest } from '../observability/log';
 import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -24,6 +25,32 @@ interface SnapEntry {
   section: string;
   field: string;
   value: string;
+}
+
+/**
+ * Where the action came from, for the entries where that matters.
+ *
+ * WHY. The trail answered who and what and when, and could not answer "from where". For a
+ * commission figure, a permanent deletion or a Super Admin override — the entries somebody
+ * eventually has to defend — the address and the client are the difference between a record and an
+ * account of what happened. There is no other copy: the web server's access log, where this would
+ * otherwise be reconstructed from, has no idea which audit row a request produced.
+ *
+ * Read from the request context rather than passed in, so no call site can forget it and background
+ * work correctly records nothing. `request_id` is the same id the structured log stamps on every
+ * line and returns in `X-Request-Id`, which is what makes an audit row joinable to the logs of the
+ * request that wrote it.
+ *
+ * ADDITIVE AND SHARED. `audit_logs` serves both areas; three nullable columns change no existing
+ * behaviour, no existing query and no export column, and CRM rows get the same context for free.
+ */
+function requestContext(): { ip: string | null; user_agent: string | null; request_id: string | null } {
+  const ctx = currentRequest();
+  return {
+    ip: ctx?.ip ?? null,
+    user_agent: ctx?.userAgent ?? null,
+    request_id: ctx?.id ?? null,
+  };
 }
 
 /** The acting user (from the request), or null → "System". */
@@ -129,6 +156,7 @@ export class AuditService {
         action: a.action ?? 'Updated',
         source: a.source ?? 'Manual',
         details: a.details ?? null,
+        ...requestContext(),
         created_at: now,
         updated_at: now,
       },
@@ -155,6 +183,7 @@ export class AuditService {
         action: a.action ?? 'Updated',
         source: a.source ?? 'Manual',
         details: a.details ?? null,
+        ...requestContext(),
         created_at: now,
         updated_at: now,
       },

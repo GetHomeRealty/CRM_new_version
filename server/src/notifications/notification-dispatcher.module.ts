@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { NotificationDispatcher } from './notification-dispatcher.service';
+import { NotificationRetentionService } from './notification-retention.service';
 import { CrmEventNotifier } from './crm-events.service';
 import { NotificationPreferenceModule } from './notification-preference.module';
 
@@ -16,9 +17,15 @@ import { NotificationPreferenceModule } from './notification-preference.module';
  * outbound senders are resolved through `ModuleRef` — see the service for why). That is what makes
  * it safe for anything at all to import.
  */
+/*
+ * `NotificationRetentionService` lives here rather than in the Desk retention module for the reason
+ * that module states about itself: it is Transaction Desk's, and "every CRM table — none appears in
+ * this file". The ledger spans both, so it is swept beside the thing it belongs to. The WINDOW is
+ * still shared — the service imports `RETENTION_MONTHS` so the two policies cannot drift.
+ */
 @Module({
   imports: [NotificationPreferenceModule],
-  providers: [NotificationDispatcher, CrmEventNotifier],
-  exports: [NotificationDispatcher, CrmEventNotifier],
+  providers: [NotificationDispatcher, CrmEventNotifier, NotificationRetentionService],
+  exports: [NotificationDispatcher, CrmEventNotifier, NotificationRetentionService],
 })
 export class NotificationDispatcherModule {}

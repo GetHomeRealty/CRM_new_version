@@ -1,6 +1,7 @@
 import { Body, Controller, Get, HttpCode, Param, ParseIntPipe, Post, Query, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '../auth/guards/auth.guard';
-import { CurrentUser } from '../auth/decorators';
+import { ScreenGuard } from '../auth/guards/screen.guard';
+import { CurrentUser, Screen } from '../auth/decorators';
 import type { AuthUserRecord } from '../auth/auth.types';
 import { MessagesService, type ChatMessage } from './messages.service';
 import { PostMessageDto } from './dto/post-message.dto';
@@ -10,8 +11,15 @@ import { MentionService, type MentionCandidate } from './mention.service';
 const toResourceUser = (u: AuthUserRecord | undefined): ResourceUser | null =>
   u ? { id: u.id, role: u.role, name: u.name } : null;
 
+/*
+ * Behind the `transactions` screen permission, declared once on the class — same reasoning as
+ * `TransactionsController`: these routes hang off a deal, so a role that may not open the
+ * Transactions screen must not reach them either. Reading needs `view`; the services apply their
+ * own role and ownership rules on top.
+ */
 @Controller('transactions')
-@UseGuards(AuthGuard)
+@UseGuards(AuthGuard, ScreenGuard)
+@Screen('transactions', 'view')
 export class MessagesController {
   constructor(
     private readonly messages: MessagesService,

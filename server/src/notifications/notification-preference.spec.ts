@@ -177,11 +177,61 @@ describe('notification preferences', () => {
     expect(pending).toEqual([]);
 
     /*
-     * The one deliberate gap, pinned so it cannot be "fixed" by accident: emailing somebody to tell
-     * them they have an email is a loop nobody wants.
+     * The deliberate gaps, pinned so none can be "fixed" by accident.
+     *
+     * `inbox_new_mail:email` — emailing somebody to tell them they have an email is a loop nobody
+     * wants.
+     *
+     * The three `crm_*` greetings on in-app and push — these are sent to a CLIENT, who has no
+     * in-app inbox and no browser subscription because they do not use the product. Unlike the pair
+     * above these are not a decision that could be revisited: there is nothing to deliver to.
      */
     const unsupported = NOTIFICATION_CATEGORIES.flatMap((c) =>
       NOTIFICATION_CHANNELS.filter((ch) => c.channels[ch] === 'unsupported').map((ch) => `${c.key}:${ch}`));
-    expect(unsupported).toEqual(['inbox_new_mail:email']);
+    expect(unsupported).toEqual([
+      'inbox_new_mail:email',
+      'crm_birthday:in_app', 'crm_birthday:push',
+      'crm_anniversary:in_app', 'crm_anniversary:push',
+      'crm_seasonal:in_app', 'crm_seasonal:push',
+    ]);
+  });
+
+  /**
+   * The greetings are stored here and offered on NO Notification Preferences screen.
+   *
+   * `areas: []` is what does it, and it is load-bearing rather than incidental: CRM →
+   * Communications is the single user-facing place for CRM communications, and listing these three
+   * on the preferences screen as well would rebuild the duplication that retiring CRM Triggers was
+   * meant to end. The field's documented meaning is "which area's screen offers this category" —
+   * the answer here is neither, and it governs the screen rather than delivery.
+   */
+  it('keeps the CRM greetings out of both Notification Preferences screens', () => {
+    for (const key of ['crm_birthday', 'crm_anniversary', 'crm_seasonal']) {
+      const category = NOTIFICATION_CATEGORIES.find((c) => c.key === key);
+      // Registered, or Communications could not write a category `set()` would reject; and offered on
+      // no preferences screen, or the duplication this cleanup removed would be rebuilt there.
+      expect({ key, registered: !!category, areas: category?.areas }).toEqual({ key, registered: true, areas: [] });
+      // Still email-capable, or the migration would have moved answers into a dead category.
+      expect(category!.channels.email).toBe('live');
+    }
+  });
+
+  /**
+   * Every category a CRM communication claims must exist here.
+   *
+   * The registry names a `preferenceCategory` and `NotificationPreferenceService.set()` validates
+   * against this list, so a name in one and not the other is a preference the Communications screen
+   * shows and cannot save. That is precisely what `crm_welcome` was before this cleanup — claimed
+   * by the registry, absent here, and never created by the migration.
+   */
+  it('registers every category the CRM communication registry points at', () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { CRM_COMMUNICATIONS } = require('../crm-settings/crm-communications.registry');
+    const known = new Set(NOTIFICATION_CATEGORIES.map((c) => c.key));
+    for (const comm of CRM_COMMUNICATIONS as { key: string; preferenceCategory: string | null }[]) {
+      if (!comm.preferenceCategory) continue;
+      expect({ key: comm.key, category: comm.preferenceCategory, known: known.has(comm.preferenceCategory) })
+        .toEqual({ key: comm.key, category: comm.preferenceCategory, known: true });
+    }
   });
 });

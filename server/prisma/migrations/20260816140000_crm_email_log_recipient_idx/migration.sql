@@ -1,0 +1,23 @@
+-- An index for the "has this address already had this email?" exclusion.
+--
+-- WHY NOW. The birthday, anniversary and welcome sweeps used to fetch a batch of eligible leads and
+-- then ask, per lead, whether the email had already gone — which starved every lead beyond the batch
+-- limit. The exclusion has moved into the query as a NOT EXISTS against `crm_email_log`, so that
+-- lookup is now on the hot path of three schedulers instead of being one findFirst per lead.
+--
+-- WHAT IT SERVES, exactly:
+--     WHERE kind = $1 AND lower(recipient) = lower(leads.email) [AND created_at >= $2]
+-- `lower(recipient)` is an EXPRESSION, so a plain index on `recipient` cannot serve it: the existing
+-- @@index([kind]) narrows to a whole year of one kind and then filters every row. This is the
+-- expression index that makes the exclusion a lookup.
+--
+-- `created_at` is the third column rather than the second because the greetings filter it as a RANGE
+-- (this calendar year) while the welcome does not filter it at all — so it must come after both
+-- equality columns for either query to use the index.
+--
+-- SAFE: additive, no data touched, no constraint. CONCURRENTLY is deliberately NOT used — Prisma
+-- runs migrations inside a transaction and CONCURRENTLY cannot run in one. This table is small
+-- (one row per CRM email ever sent) so the brief lock is not a production concern; on a very large
+-- table it would be worth building by hand instead.
+CREATE INDEX IF NOT EXISTS "crm_email_log_kind_recipient_created_idx"
+  ON "crm_email_log" ("kind", lower("recipient"), "created_at");

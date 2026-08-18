@@ -3,7 +3,7 @@ import { randomBytes } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { schedulersEnabled, schedulerSkipReason } from '../common/schedulers';
 import { IMPORT_BATCH_SIZE, LeadImportEngine, emptyTally } from './lead-import.engine';
-import { isSuperAdmin } from '../core/authz';
+import { hasBrokerageLeadScope, ownerAtIntake } from '../common/lead-scope';
 import type { AuthUserRecord } from '../auth/auth.types';
 
 /** Above this the file is refused outright rather than accepted and run for an hour. */
@@ -171,14 +171,19 @@ export class LeadImportJobService implements OnModuleInit {
 
     try {
       const rows = this.engine.parseCsv(job.payload);
-      // The requester's rank, read once per job: the engine needs it to decide which existing
-      // leads are theirs to tag. Cheap, and it keeps the rule identical to the Leads module's.
+      // The requester's data scope, read once per job: the engine needs it to decide which existing
+      // leads are theirs to tag. Cheap, and it keeps the rule identical to the Leads module's — the
+      // import runs on a timer with no request in context, so the role has to be fetched here.
       const requester = job.requested_by_id
         ? await this.prisma.users.findUnique({ where: { id: job.requested_by_id! }, select: { role: true } })
         : null;
+      const principal = { id: job.requested_by_id, role: requester?.role ?? '' };
       const ctx = {
         tag: job.tag ?? '', userName: job.requested_by, userId: job.requested_by_id,
-        userIsSuperAdmin: isSuperAdmin({ role: requester?.role ?? '' }),
+        // Ownership and scope are both decided from the requester's role, once, here — the import
+        // runs on a timer with no request in context.
+        ownerId: ownerAtIntake(principal),
+        userHasBrokerageScope: hasBrokerageLeadScope(principal),
       };
       // Spans batches, so a duplicate address either side of a boundary is still caught.
       const seen = new Set<string>();

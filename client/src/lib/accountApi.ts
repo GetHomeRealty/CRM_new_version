@@ -187,6 +187,160 @@ export const getInboxMessage = (area: Area, id: number): Promise<InboxMessage> =
 export const markInboxSeen = (area: Area, id: number, seen: boolean): Promise<{ seen: boolean }> =>
   api.put<{ seen: boolean }>(`/api/account/inbox/${id}/seen`, { seen }, { params: { area } }).then((r) => r.data);
 
+/* ------------------------------------------------------------------ mailbox */
+/**
+ * The WRITABLE mailbox — compose, reply, forward, drafts, sent, search, archive and trash.
+ *
+ * Separate from `listInbox` above, which is the original read-only list and stays as it is. Every
+ * call carries the AREA, because the CRM and Transaction Desk mailboxes are two views over two sets
+ * of connected accounts even when the same address serves both. The server scopes by the signed-in
+ * user and by that area; nothing here identifies a user, and there is no administrator override.
+ */
+export type MailboxFolder = 'inbox' | 'archive' | 'trash' | 'drafts' | 'sent';
+
+export interface MailboxRow {
+  id: number;
+  kind: 'received' | 'draft' | 'sent';
+  from_email?: string | null;
+  from_name?: string | null;
+  to_email?: string | null;
+  subject: string | null;
+  snippet?: string | null;
+  date: string | null;
+  seen?: boolean;
+  status?: string;
+  error?: string | null;
+  thread_key?: string | null;
+  has_attachments?: boolean;
+}
+
+export interface MailboxList {
+  data: MailboxRow[];
+  meta: { page: number; per_page: number; total: number; last_page: number };
+  unread: number;
+  folder: MailboxFolder;
+  /** The primary account for this area, so the screen can name the mailbox it is showing. */
+  mailbox: { address: string; is_primary: boolean; auto_sync: boolean } | null;
+}
+
+export interface MailboxAttachment { id: number; filename: string; mime: string | null; size_bytes: number }
+
+/**
+ * An image the body refers to by `cid:` — a signature logo, an embedded photo.
+ *
+ * Deliberately not a `MailboxAttachment`: it carries no size because nothing offers it as a
+ * download, and it carries `content_id` because that string is the only thing that ties it to the
+ * `<img src="cid:…">` in the HTML.
+ */
+export interface MailboxInlineImage { id: number; content_id: string | null; mime: string | null; filename: string }
+
+export interface MailboxMessage extends MailboxRow {
+  body_text?: string | null;
+  body_html?: string | null;
+  lead_id?: number | null;
+  lead_name?: string | null;
+  attachments?: MailboxAttachment[];
+  inline_images?: MailboxInlineImage[];
+  archived?: boolean;
+  deleted?: boolean;
+}
+
+export interface MailboxDraft {
+  id: number;
+  status: string;
+  to: string | null;
+  cc: string | null;
+  bcc: string | null;
+  subject: string | null;
+  body_html: string | null;
+  in_reply_to: string | null;
+  sent_at: string | null;
+  error: string | null;
+  attachments: MailboxAttachment[];
+}
+
+/** What the composer opens with for a reply, reply-all or forward — built on the server. */
+export interface ComposePrefill {
+  to: string;
+  cc: string;
+  bcc: string;
+  subject: string;
+  body_html: string;
+  in_reply_to_id: number | null;
+  attachments: MailboxAttachment[];
+}
+
+export interface ComposeBody {
+  to?: string;
+  cc?: string;
+  bcc?: string;
+  subject?: string;
+  body_html?: string;
+  in_reply_to_id?: number | null;
+  /** Base64, without the data: prefix. Bounded by the server at 10 MB each and 25 MB in total. */
+  attachments?: { filename: string; mime: string; data: string }[];
+}
+
+export const listMailbox = (
+  area: Area,
+  opts: { folder?: MailboxFolder; page?: number; q?: string; unread?: boolean } = {},
+): Promise<MailboxList> => {
+  const params: Record<string, string | number> = { area, folder: opts.folder ?? 'inbox' };
+  if (opts.page) params.page = opts.page;
+  if (opts.q && opts.q.trim()) params.q = opts.q.trim();
+  if (opts.unread) params.unread = 1;
+  return api.get<MailboxList>('/api/account/mailbox', { params }).then((r) => r.data);
+};
+
+export const getMailboxMessage = (area: Area, id: number): Promise<MailboxMessage> =>
+  api.get<MailboxMessage>(`/api/account/mailbox/message/${id}`, { params: { area } }).then((r) => r.data);
+
+export const getComposePrefill = (area: Area, id: number, mode: 'reply' | 'reply_all' | 'forward'): Promise<ComposePrefill> =>
+  api.get<ComposePrefill>(`/api/account/mailbox/message/${id}/${mode}`, { params: { area } }).then((r) => r.data);
+
+export const moveMailboxMessage = (area: Area, id: number, action: 'archive' | 'unarchive' | 'trash' | 'restore'): Promise<unknown> =>
+  api.post(`/api/account/mailbox/message/${id}/${action}`, {}, { params: { area } }).then((r) => r.data);
+
+export const saveMailboxDraft = (area: Area, body: ComposeBody, id?: number): Promise<MailboxDraft> =>
+  (id
+    ? api.put<MailboxDraft>(`/api/account/mailbox/drafts/${id}`, body, { params: { area } })
+    : api.post<MailboxDraft>('/api/account/mailbox/drafts', body, { params: { area } })
+  ).then((r) => r.data);
+
+export const getMailboxDraft = (area: Area, id: number): Promise<MailboxDraft> =>
+  api.get<MailboxDraft>(`/api/account/mailbox/drafts/${id}`, { params: { area } }).then((r) => r.data);
+
+export const deleteMailboxDraft = (area: Area, id: number): Promise<unknown> =>
+  api.delete(`/api/account/mailbox/drafts/${id}`, { params: { area } }).then((r) => r.data);
+
+export const sendMailboxMessage = (area: Area, body: ComposeBody, draftId?: number): Promise<MailboxDraft> =>
+  (draftId
+    ? api.post<MailboxDraft>(`/api/account/mailbox/drafts/${draftId}/send`, body, { params: { area } })
+    : api.post<MailboxDraft>('/api/account/mailbox/send', body, { params: { area } })
+  ).then((r) => r.data);
+
+/** Download one attachment. The server checks the message belongs to this user before reading it. */
+export const downloadMailboxAttachment = async (area: Area, kind: 'received' | 'draft', id: number, filename: string): Promise<void> => {
+  const res = await api.get(`/api/account/mailbox/attachment/${kind}/${id}`, { params: { area }, responseType: 'blob' });
+  const url = URL.createObjectURL(res.data as Blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+};
+
+/**
+ * One attachment's bytes, to RENDER rather than to save — the inline images in a message body.
+ *
+ * The same route as the download above, which is the point: the ownership check that decides who
+ * may read an attachment stays in one place on the server. Only what the caller does with the
+ * bytes differs.
+ */
+export const fetchMailboxAttachmentBlob = (area: Area, kind: 'received' | 'draft', id: number): Promise<Blob> =>
+  api.get(`/api/account/mailbox/attachment/${kind}/${id}`, { params: { area }, responseType: 'blob' })
+    .then((r) => r.data as Blob);
+
 export interface SyncResult { fetched: number; matched: number; error: string | null; message: string }
 export const syncMailAccount = (area: Area, accountId: number): Promise<SyncResult> =>
   api.post<SyncResult>(`/api/account/inbox/sync/${accountId}`, {}, { params: { area } }).then((r) => r.data);

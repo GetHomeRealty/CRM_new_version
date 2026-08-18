@@ -32,6 +32,11 @@ export interface CrmCommunicationRow {
   channels: Record<CrmChannel, boolean>;
   /** This viewer's own answers, for the channels they have. */
   preferences: Partial<Record<CrmChannel, boolean>>;
+  /**
+   * The brokerage default this row falls back to when the viewer has expressed nothing. Null for
+   * the staff notifications, which have no brokerage layer.
+   */
+  brokerage_default: boolean | null;
   template: CrmCommunicationTemplate | null;
 }
 
@@ -44,8 +49,26 @@ export interface UnmappedTemplate {
   can_edit: boolean;
 }
 
+/**
+ * The brokerage-wide controls, moved here from the retired CRM Triggers screen.
+ *
+ * `can_edit` is the `settings: edit` permission as the SERVER evaluates it, not a role check in the
+ * browser — the same permission `PUT /api/crm-communications/brokerage` enforces. Reading it from
+ * the payload rather than re-deriving it here is what stops the button and the endpoint drifting.
+ */
+export interface CrmBrokerageControls {
+  auto_send_enabled: boolean;
+  /** One default per communication key, inherited by anyone who has not chosen for themselves. */
+  defaults: Record<string, boolean>;
+  /** The keys this screen may offer, from the server's compiled list. */
+  default_keys: string[];
+  can_edit: boolean;
+  updated_by: string | null;
+  updated_at: string | null;
+}
+
 export interface CrmCommunicationsOverview {
-  brokerage: { auto_send_enabled: boolean; can_edit: boolean };
+  brokerage: CrmBrokerageControls;
   is_admin: boolean;
   communications: CrmCommunicationRow[];
   unmapped_templates: UnmappedTemplate[];
@@ -59,6 +82,17 @@ export const getCrmCommunications = (): Promise<CrmCommunicationsOverview> =>
 /** Always sets the CALLER's own preference — the endpoint has no way to name anyone else. */
 export const setCrmPreference = (key: string, channel: CrmChannel, enabled: boolean): Promise<unknown> =>
   api.put(`/api/crm-communications/preferences/${key}/${channel}`, { enabled }).then((r) => r.data);
+
+/**
+ * Set the brokerage-wide controls. An absent field is left alone by the server, so this sends only
+ * what actually changed — the semantics the Triggers screen lacked, where flipping one switch
+ * posted the whole `crm_email_settings` row back and reverted anything changed elsewhere.
+ */
+export const setCrmBrokerage = (body: {
+  auto_send_enabled?: boolean;
+  defaults?: Record<string, boolean>;
+}): Promise<CrmCommunicationsOverview & { message: string }> =>
+  api.put<CrmCommunicationsOverview & { message: string }>('/api/crm-communications/brokerage', body).then((r) => r.data);
 
 export const previewCrmTemplate = (id: number): Promise<{ subject: string; html: string }> =>
   api.post<{ subject: string; html: string }>(`/api/crm-communications/templates/${id}/preview`).then((r) => r.data);

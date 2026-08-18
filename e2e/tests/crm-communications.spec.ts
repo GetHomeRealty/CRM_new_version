@@ -109,6 +109,71 @@ test.describe('CRM Communications — what an administrator may do', () => {
     expect(body.brokerage.can_edit).toBe(true);
   });
 
+  /**
+   * The brokerage controls, at the HTTP boundary.
+   *
+   * These moved here from the retired CRM Triggers screen, and they are the one part of this screen
+   * that is not personal: one row, one value, every colleague's sending. So they get the same
+   * treatment as the template routes — an agent is refused by the API and not merely by the absence
+   * of a button.
+   */
+  test('an administrator can set the master switch and a brokerage default, and both persist', async ({ page }) => {
+    await signIn(page, 'superAdmin');
+    const before = (await apiGet(page, '/api/crm-communications')).body as
+      { brokerage: { auto_send_enabled: boolean; defaults: Record<string, boolean> } };
+
+    try {
+      const off = await apiSend(page, 'PUT', '/api/crm-communications/brokerage', { auto_send_enabled: false });
+      expect(off.status).toBe(200);
+      expect(((await apiGet(page, '/api/crm-communications')).body as { brokerage: { auto_send_enabled: boolean } })
+        .brokerage.auto_send_enabled).toBe(false);
+
+      const flipped = !before.brokerage.defaults.seasonal;
+      const def = await apiSend(page, 'PUT', '/api/crm-communications/brokerage', { defaults: { seasonal: flipped } });
+      expect(def.status).toBe(200);
+      const after = (await apiGet(page, '/api/crm-communications')).body as
+        { brokerage: { auto_send_enabled: boolean; defaults: Record<string, boolean> } };
+      expect(after.brokerage.defaults.seasonal).toBe(flipped);
+      // Setting a default did not disturb the master switch, and vice versa.
+      expect(after.brokerage.auto_send_enabled).toBe(false);
+    } finally {
+      // Leave the brokerage exactly as it was — this row is shared by every other test in the run.
+      await apiSend(page, 'PUT', '/api/crm-communications/brokerage', {
+        auto_send_enabled: before.brokerage.auto_send_enabled,
+        defaults: before.brokerage.defaults,
+      });
+    }
+  });
+
+  test('setting one brokerage value leaves the CRM SMTP fields alone', async ({ page }) => {
+    /*
+     * The Triggers screen posted the whole `crm_email_settings` row back on every save, so flipping
+     * a switch silently rewrote the SMTP host an administrator had set elsewhere (T-H2). This
+     * endpoint sends one field; nothing else may move.
+     */
+    await signIn(page, 'superAdmin');
+    const before = (await apiGet(page, '/api/crm-settings/email-settings')).body as Record<string, unknown>;
+
+    await apiSend(page, 'PUT', '/api/crm-communications/brokerage', { defaults: { custom: true } });
+
+    const after = (await apiGet(page, '/api/crm-settings/email-settings')).body as Record<string, unknown>;
+    expect(after.smtpHost).toBe(before.smtpHost);
+    expect(after.smtpPort).toBe(before.smtpPort);
+    expect(after.smtpUser).toBe(before.smtpUser);
+    expect(after.adminEmail).toBe(before.adminEmail);
+  });
+
+  test('an agent CANNOT set the brokerage controls', async ({ page }) => {
+    await signIn(page, 'agent');
+    const body = (await apiGet(page, '/api/crm-communications')).body as { brokerage: { can_edit: boolean } };
+    expect(body.brokerage.can_edit).toBe(false);
+
+    for (const payload of [{ auto_send_enabled: false }, { defaults: { birthday: true } }]) {
+      const res = await apiSend(page, 'PUT', '/api/crm-communications/brokerage', payload);
+      expect(res.status).toBe(403);
+    }
+  });
+
   test('creating an unmapped template makes something that cannot send', async ({ page }) => {
     await signIn(page, 'superAdmin');
     const res = await apiSend(page, 'POST', '/api/crm-communications/templates', {
@@ -234,5 +299,196 @@ test.describe('CRM Communications — the screen', () => {
     await page.goto('/crm/communications');
     await expect(page.getByText('Template Library')).toBeVisible();
     await expect(page.getByText('Automated CRM Communications')).toBeVisible();
+  });
+
+  /** The brokerage card is writable for an administrator and read-only for everybody else. */
+  test('an administrator sees a writable brokerage card; an agent sees a read-only one', async ({ page }) => {
+    await signIn(page, 'superAdmin');
+    await page.goto('/crm/communications');
+    const master = page.getByRole('checkbox', { name: /Allow CRM per-lead emails/i });
+    await expect(master).toBeVisible();
+    await expect(master).toBeEnabled();
+    await expect(page.getByText('Brokerage defaults')).toBeVisible();
+
+    await signIn(page, 'agent');
+    await page.goto('/crm/communications');
+    await expect(page.getByRole('checkbox', { name: /Allow CRM per-lead emails/i })).toBeDisabled();
+    await expect(page.getByText('Brokerage defaults')).toHaveCount(0);
+    await expect(page.getByText(/Read-only/i)).toBeVisible();
+  });
+
+  /**
+   * Switching CRM email off for everybody asks first; switching it back on does not.
+   *
+   * Carried over from the retired Triggers screen's T-M5, because the control it guarded came with
+   * it. The asymmetry is the point: the confirmation exists for the direction that stops every
+   * colleague's mail, and one you meet in both directions is one you learn to click through.
+   */
+  test('turning the master switch off is confirmed; turning it on is not', async ({ page }) => {
+    await signIn(page, 'superAdmin');
+
+    // Start from ON, so the OFF transition is the one under test.
+    await apiSend(page, 'PUT', '/api/crm-communications/brokerage', { auto_send_enabled: true });
+    await page.goto('/crm/communications');
+
+    const master = page.getByRole('checkbox', { name: /Allow CRM per-lead emails/i });
+    const sending = async () => ((await apiGet(page, '/api/crm-communications')).body as
+      { brokerage: { auto_send_enabled: boolean } }).brokerage.auto_send_enabled;
+
+    /*
+     * `click()`, NOT `uncheck()`, and the difference is the behaviour under test.
+     *
+     * The box is controlled by the stored value, so clicking it opens the confirmation and leaves
+     * the box alone — the state changes only once the server has agreed. `uncheck()` asserts the
+     * state flipped on click and therefore fails against a control that asks first, which is
+     * exactly the control this test exists to prove. Measured: "Clicking the checkbox did not
+     * change its state".
+     */
+    await master.click();
+    await expect(page.getByText(/Switch off CRM email for the whole brokerage\?/i)).toBeVisible();
+    // Still on, because nothing has been confirmed yet.
+    expect(await sending()).toBe(true);
+
+    await page.getByRole('button', { name: 'Switch it off' }).click();
+    await expect.poll(sending).toBe(false);
+    await expect(master).not.toBeChecked();
+
+    // Back on, with no question asked.
+    await master.click();
+    await expect(page.getByText(/Switch off CRM email for the whole brokerage\?/i)).toHaveCount(0);
+    await expect.poll(sending).toBe(true);
+  });
+
+  test('the Edit Template deep link opens that template in CRM Settings → Templates', async ({ page }) => {
+    await signIn(page, 'superAdmin');
+    await page.goto('/crm/communications');
+
+    const edit = page.getByRole('button', { name: /Edit Template/i }).first();
+    test.skip(await edit.count() === 0, 'no CRM template seeded yet on this database');
+    await edit.click();
+
+    await expect(page).toHaveURL(/tab=crm&section=templates&template=\d+/, { timeout: 15_000 });
+    // The editor is open on a template, not merely the list.
+    await expect(page.getByLabel('Subject')).toBeVisible({ timeout: 15_000 });
+  });
+});
+
+/**
+ * Preference storage, end to end.
+ *
+ * These are the properties the Triggers removal had to preserve, asserted where they are now set.
+ * They are HTTP-level because that is where the guarantee has to hold — a screen that hides a
+ * control is presentation, and a preference that survives only until the next login is not stored.
+ */
+test.describe('CRM Communications — preferences survive and stay personal', () => {
+  test('a preference persists across sign out and back in', async ({ page }) => {
+    await signIn(page, 'agent');
+    const before = ((await apiGet(page, '/api/crm-communications')).body as
+      { communications: { key: string; preferences: { email: boolean } }[] })
+      .communications.find((c) => c.key === 'seasonal')!.preferences.email;
+
+    try {
+      await apiSend(page, 'PUT', '/api/crm-communications/preferences/seasonal/email', { enabled: !before });
+      await page.context().clearCookies();
+      await signIn(page, 'agent');
+
+      const after = ((await apiGet(page, '/api/crm-communications')).body as
+        { communications: { key: string; preferences: { email: boolean } }[] })
+        .communications.find((c) => c.key === 'seasonal')!.preferences.email;
+      expect(after).toBe(!before);
+    } finally {
+      await apiSend(page, 'PUT', '/api/crm-communications/preferences/seasonal/email', { enabled: before });
+    }
+  });
+
+  /**
+   * One agent's switch moves theirs and nobody else's.
+   *
+   * WRITES ONLY AS `agent`, AND THAT RESTRAINT IS THE POINT RATHER THAN TIDINESS. An earlier version
+   * set the preference for both accounts and then "restored" each to what it had read back. For a
+   * lead-facing row that read is the EFFECTIVE answer — which, for somebody who has chosen nothing,
+   * is the inherited brokerage default. Birthday's default is off, so restoring wrote an explicit
+   * `false` for agent2 where no row had existed, turning "following the office" into "opted out".
+   * `notification-preferences.spec.ts` caught it, correctly, one file later.
+   *
+   * So this asserts the property without touching the other account: agent2's answer is read before
+   * and after and must not have moved. The stronger simultaneous case — A off while B is on — is
+   * proven in `crm-communications.service.spec.ts`, which runs inside a rollback transaction and can
+   * therefore write for both without leaving anything behind.
+   */
+  test('one agent switching Off does not move another agent', async ({ page, browser }) => {
+    const ctx = await browser.newContext();
+    try {
+      const other = await ctx.newPage();
+      await signIn(other, 'agent2');
+      await signIn(page, 'agent');
+
+      const read = async (p: typeof page) => ((await apiGet(p, '/api/crm-communications')).body as
+        { communications: { key: string; preferences: { email: boolean } }[] })
+        .communications.find((c) => c.key === 'birthday')!.preferences.email;
+
+      const mineBefore = await read(page);
+      const theirsBefore = await read(other);
+
+      try {
+        await apiSend(page, 'PUT', '/api/crm-communications/preferences/birthday/email', { enabled: false });
+        expect(await read(page)).toBe(false);
+        expect(await read(other)).toBe(theirsBefore);
+
+        await apiSend(page, 'PUT', '/api/crm-communications/preferences/birthday/email', { enabled: true });
+        expect(await read(page)).toBe(true);
+        expect(await read(other)).toBe(theirsBefore);
+      } finally {
+        // `agent` is written to by this file already, so restoring its effective value here changes
+        // nothing that was not already explicit.
+        await apiSend(page, 'PUT', '/api/crm-communications/preferences/birthday/email', { enabled: mineBefore });
+      }
+    } finally {
+      await ctx.close();
+    }
+  });
+
+  /**
+   * Every communication the CRM has is offered here, on the channels it actually supports.
+   *
+   * The list is the contract: this is now the single user-facing place for CRM communications, so
+   * anything missing from it is a control nobody can reach. Named individually rather than counted,
+   * because a count passes when one is swapped for another.
+   */
+  test('offers every automated communication and every manual email', async ({ page }) => {
+    await signIn(page, 'agent');
+    const body = (await apiGet(page, '/api/crm-communications')).body as
+      { communications: { key: string; kind: string; preferences: Record<string, boolean> }[] };
+    const keys = body.communications.map((c) => c.key);
+
+    for (const key of [
+      'lead_new', 'lead_assigned', 'lead_task_due', 'lead_meta', 'campaign_completed', 'campaign_failed',
+      'welcome', 'birthday', 'anniversary', 'seasonal',
+    ]) expect(keys, `${key} must be offered`).toContain(key);
+
+    for (const key of ['promotional', 'referral', 'custom']) {
+      const row = body.communications.find((c) => c.key === key)!;
+      expect(row.kind).toBe('manual');
+      // One switch each — there is no schedule to mute and no in-app equivalent of a hand-written email.
+      expect(Object.keys(row.preferences)).toEqual(['email']);
+    }
+  });
+
+  /** Manual CRM emails are settable from this screen, which is now their only screen. */
+  test('a manual CRM email can be switched off and on from Communications', async ({ page }) => {
+    await signIn(page, 'agent');
+    const read = async () => ((await apiGet(page, '/api/crm-communications')).body as
+      { communications: { key: string; preferences: { email: boolean } }[] })
+      .communications.find((c) => c.key === 'promotional')!.preferences.email;
+
+    const before = await read();
+    try {
+      expect((await apiSend(page, 'PUT', '/api/crm-communications/preferences/promotional/email', { enabled: false })).status).toBe(200);
+      expect(await read()).toBe(false);
+      await apiSend(page, 'PUT', '/api/crm-communications/preferences/promotional/email', { enabled: true });
+      expect(await read()).toBe(true);
+    } finally {
+      await apiSend(page, 'PUT', '/api/crm-communications/preferences/promotional/email', { enabled: before });
+    }
   });
 });

@@ -29,6 +29,17 @@ export interface RequestContext {
   path?: string;
   userId?: number;
   role?: string | null;
+  /**
+   * Where the request came from, and what made it.
+   *
+   * Carried here rather than passed down because the code that needs them is nowhere near the
+   * request: `AuditService.record` is called from inside services, transactions and background
+   * sweeps, and threading an address through forty call sites is how half of them end up without
+   * one. Both are optional and absent for background work, which is the honest answer — nobody
+   * pressed anything.
+   */
+  ip?: string | null;
+  userAgent?: string | null;
 }
 
 const storage = new AsyncLocalStorage<RequestContext>();

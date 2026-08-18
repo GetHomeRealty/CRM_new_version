@@ -32,7 +32,8 @@ export interface CrmTriggerTemplate {
 
 export interface CrmTriggerTemplates {
   birthdayWishes: CrmTriggerTemplate;
-  weddingGreetings: CrmTriggerTemplate;
+  // `weddingGreetings` was here and is gone with Wedding Congratulations. Nothing read it — see
+  // `DEFAULT_TRIGGER_TEMPLATES` on the server for why this whole shape is inert.
   seasonalWishes: CrmTriggerTemplate;
   promotionalOffers: CrmTriggerTemplate;
   referralCodes: CrmTriggerTemplate;
@@ -146,23 +147,8 @@ export interface CrmSendResult {
   redirected?: string | null;
 }
 
-/**
- * One person's own CRM email triggers.
- *
- * `triggers` is what they effectively send today; `customised` says which of those they set
- * themselves as opposed to inheriting from `brokerage_defaults`. The distinction is what lets the
- * screen tell somebody "this is the brokerage's choice, and you have not changed it" rather than
- * presenting an inherited value as their own decision.
+/*
+ * `CrmMyTriggers` was here — the payload of `GET /api/crm-settings/triggers`, which the CRM
+ * Triggers screen rendered. Screen, endpoint and type are gone together; `CrmCommunicationsOverview`
+ * in `lib/crmCommunicationsApi.ts` is what describes these controls now.
  */
-export interface CrmMyTriggers {
-  triggers: Record<string, boolean>;
-  customised: Record<string, boolean>;
-  brokerage_defaults: Record<string, boolean>;
-  /** The brokerage kill switch. Read-only here — it lives on CRM Settings. */
-  sending_allowed: boolean;
-  trigger_keys: string[];
-  updated_by: string | null;
-  updated_at: string | null;
-  /** Stored choices could not be read. Every send is refused until they are saved again. */
-  unreadable: boolean;
-}

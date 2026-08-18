@@ -2,6 +2,8 @@ import { PrismaClient } from '@prisma/client';
 import type { PrismaService } from '../prisma/prisma.service';
 import { CrmCommunicationsService } from './crm-communications.service';
 import { CrmTriggersService } from './crm-triggers.service';
+import { CrmSettingsService } from './crm-settings.service';
+import { PermissionService } from '../auth/permission.service';
 import { NotificationPreferenceService } from '../notifications/notification-preference.service';
 import { ACTIVE_CRM_COMMUNICATIONS } from './crm-communications.registry';
 import type { AuthUserRecord } from '../auth/auth.types';
@@ -33,8 +35,24 @@ async function inRollback(fn: (tx: PrismaService) => Promise<void>) {
 
 const tag = (): string => { seq += 1; return `${Date.now()}-${seq}`; };
 
+/*
+ * `CrmSettingsService` is constructed with no mailer and no mail accounts, because the only method
+ * this service calls on it is `brokerageToggles()`, which reads one row and nothing else. Passing
+ * real ones would mean this suite could send mail, which is the last thing a preference test should
+ * be able to do by accident.
+ *
+ * `PermissionService` takes no arguments and falls back to its compiled role defaults when no store
+ * has been attached — see its own comment — so it answers `settings: edit` here exactly as it does
+ * in the running application for a role with no database override.
+ */
 const svc = (tx: PrismaService) =>
-  new CrmCommunicationsService(tx, new NotificationPreferenceService(tx), new CrmTriggersService(tx));
+  new CrmCommunicationsService(
+    tx,
+    new NotificationPreferenceService(tx),
+    new CrmTriggersService(tx, new NotificationPreferenceService(tx)),
+    new CrmSettingsService(tx, null as never, null as never),
+    new PermissionService(),
+  );
 
 async function makeUser(tx: PrismaService, role: string): Promise<AuthUserRecord> {
   const now = new Date();
@@ -191,18 +209,218 @@ describe('CRM Communications — preference isolation', () => {
     });
   });
 
-  it('writes greetings to the store that still governs sending', async () => {
+  /**
+   * The migrated greetings write to `notification_preferences`, and the send path reads them there.
+   *
+   * WHAT THIS REPLACES. It asserted the opposite — that a greeting written here landed in
+   * `crm_trigger_settings`, because that was still the store the send path consulted. The migration
+   * has run; this is the same property stated against the store that now governs sending. Written
+   * as "the switch and the send agree" rather than "a row exists", because a row in the right table
+   * that the sender does not consult is the failure mode worth catching.
+   */
+  it('writes a migrated greeting to notification_preferences, and the send path reads it there', async () => {
     await inRollback(async (tx) => {
       const a = await makeUser(tx, 'agent');
       await svc(tx).setPreference(a, 'birthday', 'email', false);
 
-      // Until the migration runs, crm_trigger_settings is what the send path reads. A preference
-      // written anywhere else would be a switch that governs nothing.
-      const row = await tx.crm_trigger_settings.findUnique({ where: { user_id: a.id! } });
-      expect(JSON.parse(row!.template_toggles!).birthday).toBe(false);
+      const row = await tx.notification_preferences.findUnique({
+        where: { user_id_category_channel: { user_id: a.id!, category: 'crm_birthday', channel: 'email' } },
+      });
+      expect(row?.enabled).toBe(false);
 
-      // And the old screen agrees, because it is the same row.
-      expect(await new CrmTriggersService(tx).isEnabledFor(a, 'birthday')).toBe(false);
+      // Nothing was written to the old store — a second answer there could only ever disagree.
+      const legacy = await tx.crm_trigger_settings.findUnique({ where: { user_id: a.id! } });
+      expect(legacy).toBeNull();
+
+      // And the sender agrees, because `isEnabledFor` is what both this screen and the sweep ask.
+      const triggers = new CrmTriggersService(tx, new NotificationPreferenceService(tx));
+      expect(await triggers.isEnabledFor(a, 'birthday')).toBe(false);
+    });
+  });
+
+  /**
+   * Absence still means the brokerage default, not "on".
+   *
+   * The single most dangerous thing about moving these three: `NotificationPreferenceService`
+   * answers TRUE when no row exists, because failing open is right for a staff notification.
+   * Birthday, Anniversary and Seasonal default to OFF precisely because they fire on a timer with
+   * nobody watching, so inheriting that fail-open would have turned the migration into an event
+   * that began emailing every brokerage's whole book. `storedChoice` is what keeps them apart.
+   */
+  it('an agent who has never chosen still inherits the brokerage default, not a fail-open true', async () => {
+    await inRollback(async (tx) => {
+      const a = await makeUser(tx, 'agent');
+      const triggers = new CrmTriggersService(tx, new NotificationPreferenceService(tx));
+
+      const brokerageDefault = await triggers.brokerageDefaultFor('birthday');
+      expect(await triggers.isEnabledFor(a, 'birthday')).toBe(brokerageDefault);
+      // The screen shows the same answer the sender would give — not `channelsFor`'s optimistic one.
+      expect(commRow(await svc(tx).overview(a), 'birthday').preferences.email).toBe(brokerageDefault);
+    });
+  });
+
+  /**
+   * Welcome and the manual emails still write to `crm_trigger_settings`.
+   *
+   * The counterpart to the greeting test above: the migration moved three rows and no more, and
+   * this is what proves the other four were not swept along with them. Welcome in particular is a
+   * lead-facing automated email like the greetings, so nothing about its shape would have stopped
+   * it moving by accident.
+   */
+  it('keeps Welcome and the manual emails in crm_trigger_settings', async () => {
+    await inRollback(async (tx) => {
+      const a = await makeUser(tx, 'agent');
+      const s = svc(tx);
+
+      await s.setPreference(a, 'welcome', 'email', false);
+      await s.setPreference(a, 'custom', 'email', false);
+
+      const row = await tx.crm_trigger_settings.findUnique({ where: { user_id: a.id! } });
+      const stored = JSON.parse(row!.template_toggles!);
+      expect(stored.welcome).toBe(false);
+      expect(stored.custom).toBe(false);
+
+      // Nothing leaked into the notification table for either of them.
+      const leaked = await tx.notification_preferences.findMany({
+        where: { user_id: a.id!, category: { in: ['crm_welcome', 'crm_custom'] } },
+      });
+      expect(leaked).toHaveLength(0);
+
+      expect(commRow(await s.overview(a), 'welcome').preferences.email).toBe(false);
+      expect(commRow(await s.overview(a), 'custom').preferences.email).toBe(false);
+    });
+  });
+
+  /**
+   * Setting one switch must not clear the others in the same row.
+   *
+   * `crm_trigger_settings` holds all four remaining keys in one JSON column, so a write that
+   * rebuilt the object rather than merging into it would silently reset whatever the caller did not
+   * mention. That is T-H3 from the CRM › Triggers audit, and it is worth a test now that a single
+   * toggle on a screen full of toggles is the only way these are ever written.
+   */
+  it('setting one crm_trigger_settings switch leaves the others alone', async () => {
+    await inRollback(async (tx) => {
+      const a = await makeUser(tx, 'agent');
+      const s = svc(tx);
+
+      await s.setPreference(a, 'welcome', 'email', false);
+      await s.setPreference(a, 'referral', 'email', false);
+      await s.setPreference(a, 'custom', 'email', true);
+
+      const stored = JSON.parse((await tx.crm_trigger_settings.findUnique({ where: { user_id: a.id! } }))!.template_toggles!);
+      expect(stored).toMatchObject({ welcome: false, referral: false, custom: true });
+    });
+  });
+});
+
+/**
+ * The brokerage controls, moved here from the retired CRM Triggers screen.
+ *
+ * Two properties matter and they pull in opposite directions: an administrator must be able to set
+ * them from this screen, and an agent must not be able to set them from anywhere.
+ */
+describe('CRM Communications — brokerage controls', () => {
+  it('an administrator can turn the master switch off and on', async () => {
+    await inRollback(async (tx) => {
+      const admin = await makeUser(tx, 'admin');
+      const s = svc(tx);
+
+      await s.setBrokerage(admin, { auto_send_enabled: false });
+      expect((await tx.crm_email_settings.findFirst({ orderBy: { id: 'asc' } }))!.auto_send_enabled).toBe(false);
+      expect(((await s.overview(admin)).brokerage as { auto_send_enabled: boolean }).auto_send_enabled).toBe(false);
+
+      await s.setBrokerage(admin, { auto_send_enabled: true });
+      expect(((await s.overview(admin)).brokerage as { auto_send_enabled: boolean }).auto_send_enabled).toBe(true);
+    });
+  });
+
+  it('an administrator can change a brokerage default, and a colleague inherits it', async () => {
+    await inRollback(async (tx) => {
+      const admin = await makeUser(tx, 'admin');
+      const agent = await makeUser(tx, 'agent');
+      const s = svc(tx);
+      const triggers = new CrmTriggersService(tx, new NotificationPreferenceService(tx));
+
+      await s.setBrokerage(admin, { defaults: { birthday: true } });
+      expect(await triggers.brokerageDefaultFor('birthday')).toBe(true);
+      // The agent has chosen nothing, so they follow it.
+      expect(await triggers.isEnabledFor(agent, 'birthday')).toBe(true);
+
+      await s.setBrokerage(admin, { defaults: { birthday: false } });
+      expect(await triggers.isEnabledFor(agent, 'birthday')).toBe(false);
+    });
+  });
+
+  /**
+   * ABSENT IS UNCHANGED. The Triggers screen posted the whole `crm_email_settings` row back on
+   * every save, so one switch also rewrote the SMTP host and every other default (T-H2). This
+   * endpoint can only touch what it was given.
+   */
+  it('leaves untouched every field the request did not name', async () => {
+    await inRollback(async (tx) => {
+      const admin = await makeUser(tx, 'admin');
+      const s = svc(tx);
+      const now = new Date();
+
+      await tx.crm_email_settings.deleteMany({});
+      await tx.crm_email_settings.create({
+        data: {
+          smtp_host: 'smtp.keepme.test', smtp_port: '2525', smtp_user: 'keep', admin_email: 'keep@x.test',
+          auto_send_enabled: true, template_toggles: JSON.stringify({ birthday: true, custom: false }),
+          created_at: now, updated_at: now,
+        },
+      });
+
+      await s.setBrokerage(admin, { defaults: { seasonal: false } });
+
+      const row = (await tx.crm_email_settings.findFirst({ orderBy: { id: 'asc' } }))!;
+      expect(row.smtp_host).toBe('smtp.keepme.test');
+      expect(row.smtp_port).toBe('2525');
+      expect(row.admin_email).toBe('keep@x.test');
+      expect(row.auto_send_enabled).toBe(true);
+      const toggles = JSON.parse(row.template_toggles!);
+      expect(toggles.seasonal).toBe(false);   // what was asked for
+      expect(toggles.birthday).toBe(true);    // and nothing else moved
+      expect(toggles.custom).toBe(false);
+    });
+  });
+
+  it('refuses an agent, at the service and not only in the screen', async () => {
+    await inRollback(async (tx) => {
+      const agent = await makeUser(tx, 'agent');
+      const s = svc(tx);
+      await expect(s.setBrokerage(agent, { auto_send_enabled: false })).rejects.toThrow(/Settings permission/i);
+      await expect(s.setBrokerage(agent, { defaults: { birthday: true } })).rejects.toThrow(/Settings permission/i);
+      expect(((await s.overview(agent)).brokerage as { can_edit: boolean }).can_edit).toBe(false);
+    });
+  });
+
+  it('refuses a key this application does not send, rather than storing it', async () => {
+    await inRollback(async (tx) => {
+      const admin = await makeUser(tx, 'admin');
+      const s = svc(tx);
+      // `wedding` is retired — the clearest case of a key that must not come back through the door.
+      await expect(s.setBrokerage(admin, { defaults: { wedding: true } })).rejects.toThrow(/not a CRM communication/i);
+      await expect(s.setBrokerage(admin, { defaults: { birthday: 'yes' as never } })).rejects.toThrow(/true or false/i);
+    });
+  });
+
+  /** The master switch stops every send, whatever anybody's personal choice says. */
+  it('the master switch overrides a personal preference that is on', async () => {
+    await inRollback(async (tx) => {
+      const admin = await makeUser(tx, 'admin');
+      const agent = await makeUser(tx, 'agent');
+      const s = svc(tx);
+
+      await s.setPreference(agent, 'birthday', 'email', true);
+      await s.setBrokerage(admin, { auto_send_enabled: false });
+
+      // The personal switch is untouched — the kill switch sits above it rather than rewriting it.
+      const triggers = new CrmTriggersService(tx, new NotificationPreferenceService(tx));
+      expect(await triggers.isEnabledFor(agent, 'birthday')).toBe(true);
+      // And the screen reports the brokerage state so nobody is left guessing why nothing sends.
+      expect(((await s.overview(agent)).brokerage as { auto_send_enabled: boolean }).auto_send_enabled).toBe(false);
     });
   });
 });

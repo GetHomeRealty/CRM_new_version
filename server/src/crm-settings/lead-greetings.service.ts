@@ -107,18 +107,48 @@ export class LeadGreetingsService implements OnModuleInit, OnModuleDestroy {
        * are numbers this method computed from a Date — never request input — and `column` is chosen
        * by a literal switch above, not passed in.
        */
+      /*
+       * ============================================================================================
+       * THE ALREADY-GREETED EXCLUSION IS IN THE QUERY, NOT IN THE LOOP BELOW. THIS IS THE WHOLE
+       * POINT OF THE `NOT EXISTS` AND IT MUST NOT BE MOVED OUT AGAIN.
+       *
+       * It used to select the first 200 eligible leads and THEN ask, per lead, whether a greeting
+       * had already gone. Those two hundred stayed eligible for the rest of the day, so every later
+       * pass fetched the same two hundred, discovered all of them were done, and stopped. A
+       * brokerage with 201 birthdays on one date greeted two hundred people and silently never
+       * reached the two hundred and first — and the day ended, so it never reached them at all.
+       *
+       * Raising the limit does not fix that; it moves the cliff. Excluding the processed rows BEFORE
+       * the limit does fix it: each pass sees only the work that is left, so the set drains.
+       * ============================================================================================
+       *
+       * THE PREDICATE IS `alreadyGreeted` TRANSLITERATED, and the two must stay in step — that
+       * method is still called in the loop and is what stops two lead rows sharing one address both
+       * being greeted in a single pass. Same kind, same case-insensitive address, same
+       * calendar-year floor. `lower()` on both sides matches Prisma's `mode: 'insensitive'` and is
+       * what the supporting index is built on.
+       */
+      const yearStart = new Date(today.getFullYear(), 0, 1, 0, 0, 0, 0);
       const rows = await this.prisma.$queryRawUnsafe<{ id: number }[]>(
-        `SELECT id FROM leads
-          WHERE deleted_at IS NULL
-            AND unsubscribed = false
-            AND email IS NOT NULL AND email <> ''
-            AND ${column} IS NOT NULL
-            AND EXTRACT(MONTH FROM ${column}) = $1
-            AND EXTRACT(DAY   FROM ${column}) = $2
-          ORDER BY id
+        `SELECT l.id FROM leads l
+          WHERE l.deleted_at IS NULL
+            AND l.unsubscribed = false
+            AND l.email IS NOT NULL AND l.email <> ''
+            AND l.${column} IS NOT NULL
+            AND EXTRACT(MONTH FROM l.${column}) = $1
+            AND EXTRACT(DAY   FROM l.${column}) = $2
+            AND NOT EXISTS (
+              SELECT 1 FROM crm_email_log g
+               WHERE g.kind = $3
+                 AND lower(g.recipient) = lower(l.email)
+                 AND g.created_at >= $4
+            )
+          ORDER BY l.id
           LIMIT ${MAX_PER_PASS}`,
         month,
         day,
+        kind,
+        yearStart,
       );
       if (rows.length === 0) continue;
 

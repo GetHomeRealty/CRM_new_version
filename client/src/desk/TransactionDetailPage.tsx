@@ -1363,7 +1363,7 @@ export default function TransactionDetailPage() {
         />
       )}
       {docsOpen && (
-        <DocsModal open={docsOpen} onClose={() => setDocsOpen(false)} transactionId={id} txn={txn} restrictTitles={docRestrict} hideTitles={stMutualRelease ? [] : ['mutual release']} readOnly={isAgent ? false : (isDocumentation ? false : view)} agentMode={isAgent} canDeleteConditionDocs={isSuperAdmin} canReviewDeleted={isAdminOrAbove} onSaved={reloadTxn} />
+        <DocsModal open={docsOpen} onClose={() => setDocsOpen(false)} transactionId={id} txn={txn} restrictTitles={docRestrict} hideTitles={stMutualRelease ? [] : ['mutual release']} readOnly={isAgent ? false : (isDocumentation ? false : view)} agentMode={isAgent} canDeleteConditionDocs={isSuperAdmin} onSaved={reloadTxn} />
       )}
       {invoiceOpen && txn && (
         <InvoiceModal open={invoiceOpen} onClose={() => setInvoiceOpen(false)} txn={txn} />

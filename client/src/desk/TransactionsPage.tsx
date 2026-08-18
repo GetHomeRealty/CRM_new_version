@@ -1,7 +1,7 @@
 import { deskPath } from './area';
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { listTransactionsPage, deleteTransaction, requestTransactionDeletion, type TransactionQuery } from '../lib/api';
+import { listTransactionsPage, getMatchingTransactionIds, deleteTransaction, requestTransactionDeletion, type TransactionQuery } from '../lib/api';
 import { formatPrice, typeClass, typeLabel, TRANSACTION_TYPES } from './format';
 import { useToast } from './toast';
 import { apiErrorMessage } from '../lib/apiError';
@@ -85,7 +85,8 @@ export default function TransactionsPage() {
   const [page, setPage] = useState(1);
   const [lastPage, setLastPage] = useState(1);
   const [total, setTotal] = useState(0);
-  const [matchingIds, setMatchingIds] = useState<number[]>([]);
+  /** True while "Select all N matching" is fetching the ids it selects. */
+  const [selectingAll, setSelectingAll] = useState(false);
   const [years, setYears] = useState<string[]>([]);
   const [pendingDeletions, setPendingDeletions] = useState<Transaction[]>([]);
   /** Review counters for the rows on this page, keyed by transaction id. */
@@ -138,7 +139,6 @@ export default function TransactionsPage() {
         setRows(res.data);
         setLastPage(res.meta.last_page);
         setTotal(res.meta.total);
-        setMatchingIds(res.meta.ids);
         setYears(res.meta.years);
         setPendingDeletions(res.meta.pending_deletions);
         setReviewCounts(res.meta.review_counts ?? {});
@@ -147,6 +147,20 @@ export default function TransactionsPage() {
       })
       .catch(() => { if (mine === seq.current) toast('Could not load transactions', 'bad'); })
       .finally(() => { if (mine === seq.current) setLoading(false); });
+  };
+
+  /**
+   * Select every deal matching the current filters, not just this page.
+   *
+   * The ids are fetched here rather than arriving with every list response — see
+   * `getMatchingTransactionIds`. Same filters, same order, same selection as before.
+   */
+  const selectAllMatching = () => {
+    setSelectingAll(true);
+    getMatchingTransactionIds(toQuery(filters))
+      .then(setSelected)
+      .catch(() => toast('Could not select all matching transactions', 'bad'))
+      .finally(() => setSelectingAll(false));
   };
 
   // Filters are applied by the database now, so each change refetches. Text inputs wait for a
@@ -290,8 +304,8 @@ export default function TransactionsPage() {
         <div className="report-bulkbar">
           <strong>{selected.length}</strong> transaction{selected.length === 1 ? '' : 's'} selected
           {selected.length < total && (
-            <button className="btn ghost sm" onClick={() => setSelected(matchingIds)}>
-              Select all {total} matching
+            <button className="btn ghost sm" disabled={selectingAll} onClick={selectAllMatching}>
+              {selectingAll ? 'Selecting…' : `Select all ${total} matching`}
             </button>
           )}
           <span className="spacer" />

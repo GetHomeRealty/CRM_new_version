@@ -1,6 +1,8 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { isAdminOrAbove, isAgent, isSuperAdmin } from './authz';
+import { isAdminOrAbove, isAgent } from './authz';
+import { ownsTransaction, teamMemberIdentity } from '../common/transaction-scope';
+import { hasBrokerageLeadScope, isBrokerageLead } from '../common/lead-scope';
 
 /**
  * Ownership — the authorization question no blanket filter can answer.
@@ -37,18 +39,22 @@ export class ResourceAccessService {
   async assertTransaction(user: { id?: number; name?: string | null; role?: string | null } | null, transactionId: number): Promise<void> {
     const txn = await this.prisma.transactions.findFirst({
       where: { id: transactionId, deleted_at: null },
-      select: { id: true, agent: true },
+      select: { id: true, agent: true, agent_user_id: true },
     });
     if (!txn) {
       throw new NotFoundException({ message: `No query results for model [App\\Models\\Transaction] ${transactionId}.` });
     }
     if (!user || !isAgent(user)) return;
 
-    const name = user.name ?? '';
+    // Identity is the user id wherever the row carries one; the name decides only the legacy rows
+    // that never resolved to an account. See `common/transaction-scope.ts` for why.
     // An unassigned deal has no agent to be, so team rows on it grant nothing.
     const allowed =
-      txn.agent === name ||
-      (!!txn.agent && (await this.prisma.team_members.findFirst({ where: { transaction_id: txn.id, name } })) !== null);
+      ownsTransaction(user, txn) ||
+      (!!txn.agent &&
+        (await this.prisma.team_members.findFirst({
+          where: { transaction_id: txn.id, ...teamMemberIdentity(user) },
+        })) !== null);
 
     if (!allowed) {
       throw new ForbiddenException({ message: 'You do not have access to this transaction.' });
@@ -115,13 +121,21 @@ export class ResourceAccessService {
     if (!lead) throw notFound;
     if (!user) return;
 
-    // No role is exempt. A manager cannot read an agent's book, and an agent cannot read another's
-    // until it is assigned to them. The administrator sees the brokerage's leads because the
-    // brokerage owns them, and unattributed intake so that it lands somewhere.
+    /*
+     * No role is exempt from the private half. A manager cannot read an agent's book, and an agent
+     * cannot read another's until it is assigned to them.
+     *
+     * The brokerage's own leads — `owner_user_id IS NULL` — are a different category, not an
+     * exemption: they belong to the brokerage, so the roles holding `leads.brokerage-scope` reach
+     * them, and so does whoever they are assigned to. Asked through the shared helper rather than
+     * spelled out here, because this guard protects every activity hanging off a lead (notes,
+     * tasks, showings, calls, email) and it must not be possible for it to answer differently from
+     * the list the lead was opened from.
+     */
     const id = user.id ?? -1;
     const mine = lead.owner_user_id === id || lead.assigned_to === id;
-    const unattributedIntake = lead.owner_user_id === null && isSuperAdmin(user);
-    if (!mine && !unattributedIntake) throw notFound;
+    const brokerages = isBrokerageLead(lead) && hasBrokerageLeadScope(user);
+    if (!mine && !brokerages) throw notFound;
   }
 
   /**

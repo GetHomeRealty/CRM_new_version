@@ -1,3 +1,5 @@
+import cluster from 'node:cluster';
+import { cpus } from 'node:os';
 import { Logger, ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
@@ -54,6 +56,7 @@ async function bootstrap(): Promise<void> {
   // rate limiting meaningful: without it every request appears to come from the proxy's address
   // and the whole site would share one bucket.
   app.set('trust proxy', 1);
+
 
   // Security response headers: HSTS, nosniff, no referrer leakage, framing and CSP.
   app.use(
@@ -127,4 +130,77 @@ async function bootstrap(): Promise<void> {
   installShutdownHandlers(app, sessionPool);
 }
 
-void bootstrap();
+/**
+ * How many worker processes serve HTTP. One means "exactly as before, no cluster at all".
+ *
+ * WHY THIS EXISTS. Node runs JavaScript on one thread, so one process uses one core however many
+ * the machine has. Measured on a twelve-core box at 80,000 transactions, throughput saturated at
+ * roughly 60 requests per second and stayed there whether 100, 300 or 600 users were signed in —
+ * the extra users queued rather than failed. That ceiling is the single thread, not the database:
+ * PostgreSQL was at 26 connections of 100 with no lock waits.
+ *
+ * `WEB_CONCURRENCY` is the conventional name for this (Heroku, Foreman, gunicorn). `0` or `max`
+ * means one worker per core.
+ *
+ * Env: WEB_CONCURRENCY
+ */
+function workerCount(): number {
+  const raw = (process.env.WEB_CONCURRENCY ?? '1').trim().toLowerCase();
+  const cores = cpus().length;
+  if (raw === 'max' || raw === '0') return Math.max(1, cores);
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 1 ? Math.min(Math.floor(n), cores * 2) : 1;
+}
+
+/**
+ * Fork the workers, and make sure EXACTLY ONE of them runs the schedulers.
+ *
+ * That last part is the whole reason this is not just `cluster.fork()` in a loop. The IMAP poller,
+ * the reminder sweeps, the export sweeper and the retention sweep are timers inside the process, not
+ * distributed jobs — four workers with the default `RUN_SCHEDULERS=true` would mean four IMAP syncs
+ * racing on one mailbox and four copies of every reminder arriving at a real client. Only worker 0
+ * inherits the configured value; the others are told no, and cannot be told otherwise by the
+ * environment.
+ *
+ * Node's cluster module shares ONE listening socket across the workers, so this needs no proxy and
+ * changes no URL: the operating system distributes accepted connections. Sessions live in
+ * PostgreSQL (`connect-pg-simple`), so a request landing on a different worker than the one that
+ * signed the user in is already the normal case and needs nothing here.
+ *
+ * A worker that dies is replaced. A worker that dies DURING SHUTDOWN is not — otherwise stopping the
+ * service would fork forever.
+ */
+function runCluster(workers: number): void {
+  const log = new Logger('Cluster');
+  log.log(`Starting ${workers} worker processes (WEB_CONCURRENCY). Schedulers run on worker 1 only.`);
+
+  let stopping = false;
+  for (const signal of ['SIGTERM', 'SIGINT'] as const) {
+    process.on(signal, () => {
+      stopping = true;
+      for (const w of Object.values(cluster.workers ?? {})) w?.kill(signal);
+    });
+  }
+
+  const forked: number[] = [];
+  const fork = (index: number): void => {
+    // Only the first worker keeps whatever RUN_SCHEDULERS was configured as; the rest are off.
+    const worker = cluster.fork({ RUN_SCHEDULERS: index === 0 ? (process.env.RUN_SCHEDULERS ?? 'true') : 'false' });
+    forked[worker.id] = index;
+  };
+  for (let i = 0; i < workers; i += 1) fork(i);
+
+  cluster.on('exit', (worker, code, signal) => {
+    const index = forked[worker.id] ?? 0;
+    if (stopping) return;
+    log.error(`Worker ${worker.process.pid} (#${index + 1}) exited (${signal ?? code}); replacing it.`);
+    fork(index);
+  });
+}
+
+const workers = workerCount();
+if (workers > 1 && cluster.isPrimary) {
+  runCluster(workers);
+} else {
+  void bootstrap();
+}

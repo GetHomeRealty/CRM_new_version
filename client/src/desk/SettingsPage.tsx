@@ -213,6 +213,24 @@ export default function SettingsPage() {
     return <Navigate to={`${areaPath(foreign.area!, 'settings')}?${q.toString()}`} replace />;
   }
 
+  /*
+   * `?template=<id>` — the deep link CRM → Communications uses for "Edit Template".
+   *
+   * Read here and handed to whichever Templates section is showing, then dropped from the URL the
+   * moment it has been honoured. Dropping it matters: left in place, closing the editor and
+   * refreshing would re-open it, and the address bar would go on claiming a template was open long
+   * after it was not. `replace` so it does not add a history entry the Back button has to walk.
+   *
+   * NOT resolved to a template here. This component knows nothing about `email_templates`, and
+   * giving it a lookup would be a second place that decides which template a link means.
+   */
+  const openTemplateId = Number(params.get('template')) || undefined;
+  const clearOpenTemplate = () => {
+    const next = new URLSearchParams(params);
+    next.delete('template');
+    setParams(next, { replace: true });
+  };
+
   const go = (key: string, section?: string) => {
     setTab(key);
     if (section) setSub(section);
@@ -222,6 +240,9 @@ export default function SettingsPage() {
     // and the Back button steps through sections the same way on either side.
     if (sectionsFor(key).length) next.set('section', section ?? sectionsFor(key)[0].key);
     else next.delete('section');
+    // A deep link names one template on one screen. Navigating by hand is leaving that request
+    // behind, so it must not ride along and re-open an editor on wherever you went next.
+    next.delete('template');
     setParams(next, { replace: true });
   };
 
@@ -252,7 +273,10 @@ export default function SettingsPage() {
 
           {sub === 'integrations' && <IntegrationsPanel />}
           {/* `desk` scope = every module EXCEPT CRM. The CRM group now lives under CRM Settings. */}
-          {sub === 'templates' && <TemplatesTab toast={toast} scope="desk" />}
+          {sub === 'templates' && (
+            <TemplatesTab toast={toast} scope="desk"
+              openTemplateId={openTemplateId} onOpened={clearOpenTemplate} />
+          )}
         </>
       )}
 
@@ -279,7 +303,10 @@ export default function SettingsPage() {
               and the write endpoints refuse anything beyond that on the server. */}
           {sub === 'communications' ? <CrmCommunicationsPanel />
             : sub === 'two-step' ? <TwoFactorCard />
-              : sub === 'templates' && isSuperAdmin ? <TemplatesTab toast={toast} scope="crm" />
+              : sub === 'templates' && isSuperAdmin ? (
+                <TemplatesTab toast={toast} scope="crm"
+                  openTemplateId={openTemplateId} onOpened={clearOpenTemplate} />
+              )
                 : <CrmSettingsPanel />}
         </>
       )}

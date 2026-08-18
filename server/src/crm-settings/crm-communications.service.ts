@@ -1,9 +1,13 @@
 import { BadRequestException, ForbiddenException, Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificationPreferenceService, type NotificationChannel } from '../notifications/notification-preference.service';
+import { PermissionService } from '../auth/permission.service';
 import { CrmTriggersService } from './crm-triggers.service';
+import { CrmSettingsService } from './crm-settings.service';
 import { MAIL_EVENTS } from '../email/mail-event-registry';
+import { auditDomain } from '../common/domain';
 import { isSuperAdmin } from '../core/authz';
+import { TRIGGER_KEYS } from './crm-settings.constants';
 import type { AuthUserRecord } from '../auth/auth.types';
 import {
   ACTIVE_CRM_COMMUNICATIONS, byKey, variablesFor,
@@ -46,7 +50,23 @@ export class CrmCommunicationsService {
     private readonly prisma: PrismaService,
     private readonly prefs: NotificationPreferenceService,
     private readonly triggers: CrmTriggersService,
+    private readonly settings: CrmSettingsService,
+    private readonly permissions: PermissionService,
   ) {}
+
+  /**
+   * May this person change the brokerage's controls?
+   *
+   * `settings: edit`, THE SAME PERMISSION THE ENDPOINT ENFORCES, and not `isSuperAdmin`. The two
+   * are different populations — `permission.service.ts` gives the Admin role `settings: view` on
+   * purpose, and a brokerage can grant `settings: edit` to a role through Roles & Permissions — so
+   * deciding the button from the role while the route decides from the permission is how you get
+   * either a control that 403s on click or a grant nobody can exercise. Both have happened on this
+   * screen's predecessors; both are recorded in the CRM › Triggers audit.
+   */
+  private canEditBrokerage(user: AuthUserRecord): boolean {
+    return this.permissions.can(user.role || 'agent', user.user_permissions ?? [], 'settings', 'edit');
+  }
 
   // ------------------------------------------------------------------ read
 
@@ -56,9 +76,11 @@ export class CrmCommunicationsService {
    */
   async overview(user: AuthUserRecord): Promise<Record<string, unknown>> {
     const admin = isSuperAdmin(user);
-    const [brokerage, templates] = await Promise.all([
+    const canSetBrokerage = this.canEditBrokerage(user);
+    const [brokerage, templates, defaults] = await Promise.all([
       this.prisma.crm_email_settings.findFirst({ orderBy: { id: 'asc' } }),
       this.prisma.email_templates.findMany({ where: { module: 'CRM' }, orderBy: { name: 'asc' } }),
+      this.settings.brokerageToggles(),
     ]);
     const byEventKey = new Map(templates.map((t) => [t.event_key, t]));
 
@@ -75,7 +97,16 @@ export class CrmCommunicationsService {
           /** This person's own answers. Absent channels are simply not offered. */
           preferences: await this.preferencesFor(user, comm),
           /** Where this row's preference is stored today — shown in no UI, useful in support. */
-          preference_source: comm.preferenceCategory && comm.audience === 'staff' ? 'notification_preferences' : 'crm_triggers',
+          preference_source: comm.preferenceCategory ? 'notification_preferences' : 'crm_triggers',
+          /**
+           * The brokerage default this row falls back to when the person has expressed nothing.
+           *
+           * Lead-facing only, and null for the staff notifications, which are personal all the way
+           * down and have no brokerage layer to inherit from. The registry key IS the brokerage
+           * default key for every lead-facing communication — see `TRIGGER_KEYS` — so there is no
+           * second mapping to keep in step.
+           */
+          brokerage_default: comm.audience === 'lead' ? defaults[comm.key] ?? null : null,
           template: template && {
             id: template.id,
             event_key: template.event_key,
@@ -111,7 +142,17 @@ export class CrmCommunicationsService {
       brokerage: {
         /** The existing brokerage-wide switch. Not a new one — see CrmTriggersService. */
         auto_send_enabled: brokerage?.auto_send_enabled ?? true,
-        can_edit: admin,
+        /**
+         * The brokerage's per-communication defaults, from the same `crm_email_settings` row the
+         * send path reads. Moved here from Triggers → CRM Triggers with nothing duplicated: this is
+         * a second PLACE to set one value, replacing the first, not a second value.
+         */
+        defaults,
+        /** Which of those keys this screen may offer — the compiled list, never typed by a client. */
+        default_keys: [...TRIGGER_KEYS],
+        can_edit: canSetBrokerage,
+        updated_by: brokerage?.updated_by ?? null,
+        updated_at: brokerage?.updated_at?.toISOString() ?? null,
       },
       is_admin: admin,
       communications: rows,
@@ -123,11 +164,36 @@ export class CrmCommunicationsService {
     };
   }
 
-  /** This person's stored choices for one communication, read from its current owner. */
+  /**
+   * This person's effective choices for one communication, read from its current owner.
+   *
+   * THE OWNER IS `preferenceCategory` IF THERE IS ONE, ELSE `legacyTriggerKey` — audience no longer
+   * decides it. It used to: staff rows read `notification_preferences` and everything else read
+   * `crm_trigger_settings`. That held only while every lead-facing row was in the old store, and
+   * stopped being true the moment the greetings migrated. Keying on the registry field that names
+   * the store is what makes the next migration a change to one entry rather than to this method.
+   */
   private async preferencesFor(user: AuthUserRecord, comm: CrmCommunication): Promise<Record<string, boolean>> {
     const out: Record<string, boolean> = {};
 
-    if (comm.audience === 'staff' && comm.preferenceCategory) {
+    if (comm.preferenceCategory) {
+      /*
+       * LEAD-FACING ROWS RESOLVE THROUGH THE SEND PATH'S OWN ANSWER, not through `channelsFor`.
+       *
+       * `channelsFor` reports absence as ON, which is right for a staff notification and wrong for
+       * a greeting: those inherit a brokerage default that is OFF by default, so a screen built on
+       * `channelsFor` would show Birthday "Active" to every agent who had never touched it while
+       * the scheduler sent nothing. That is the precise failure this file's header warns about —
+       * a control that governs nothing, showing the opposite of the truth.
+       *
+       * `isEnabledFor` is the same method the sweep calls, so the switch and the send agree by
+       * construction rather than by two implementations happening to match.
+       */
+      if (comm.audience === 'lead') {
+        out.email = await this.triggers.isEnabledFor(user, comm.key as never);
+        return out;
+      }
+
       const choices = await this.prefs.channelsFor(user.id ?? -1, comm.preferenceCategory);
       for (const channel of ['email', 'in_app', 'push'] as NotificationChannel[]) {
         if (comm.channels[channel]) out[channel] = choices[channel];
@@ -135,7 +201,7 @@ export class CrmCommunicationsService {
       return out;
     }
 
-    // Lead-facing: one email switch, still owned by crm_triggers until the migration lands.
+    // Still owned by `crm_trigger_settings`: Welcome, and the three manual emails.
     if (comm.legacyTriggerKey) {
       out.email = await this.triggers.isEnabledFor(user, comm.legacyTriggerKey as never);
     }
@@ -159,7 +225,11 @@ export class CrmCommunicationsService {
       throw new BadRequestException({ message: `${comm.name} cannot be delivered by ${channel}.` });
     }
 
-    if (comm.audience === 'staff' && comm.preferenceCategory) {
+    if (comm.preferenceCategory) {
+      /*
+       * Writes go to the same table the read came from, whichever it is — see `preferencesFor`.
+       * The greetings write here now; Welcome and the three manual emails still write below.
+       */
       await this.prefs.set(user.id ?? -1, comm.preferenceCategory, channel, enabled);
     } else if (comm.legacyTriggerKey) {
       /*
@@ -172,6 +242,122 @@ export class CrmCommunicationsService {
     }
 
     return { ok: true, key, channel, enabled, preferences: await this.preferencesFor(user, comm) };
+  }
+
+  // ------------------------------------------------------------- brokerage
+
+  /**
+   * Set the brokerage-wide controls: the master switch, and the per-communication defaults.
+   *
+   * ONE FIELD AT A TIME, AND ABSENT MEANS UNCHANGED. This is the semantics the Triggers screen did
+   * NOT have — it posted the entire `crm_email_settings` row back on every save, so flipping one
+   * switch also wrote the SMTP host, the port and the admin address, and a stale copy of the screen
+   * silently reverted an administrator's change made elsewhere (T-H2 in the CRM › Triggers audit).
+   * Nothing here can touch a field the caller did not name.
+   *
+   * THE PERMISSION IS ENFORCED HERE AS WELL AS ON THE ROUTE. `@Screen('settings','edit')` refuses
+   * the request first; this refuses it again if the method is ever called from somewhere else. The
+   * control is brokerage-wide — one row, one value, every colleague's sending — which is exactly
+   * the kind that should not depend on a single check in a single place.
+   */
+  async setBrokerage(user: AuthUserRecord, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+    if (!this.canEditBrokerage(user)) {
+      throw new ForbiddenException({ message: 'Changing the brokerage controls needs the Settings permission at Edit.' });
+    }
+
+    const hasSwitch = body.auto_send_enabled !== undefined;
+    const givenDefaults = (body.defaults ?? undefined) as Record<string, unknown> | undefined;
+    if (!hasSwitch && givenDefaults === undefined) {
+      throw new BadRequestException({ message: 'Send `auto_send_enabled`, `defaults`, or both.' });
+    }
+    if (hasSwitch && typeof body.auto_send_enabled !== 'boolean') {
+      throw new BadRequestException({
+        message: '`auto_send_enabled` must be true or false.',
+        errors: { auto_send_enabled: ['Must be true or false.'] },
+      });
+    }
+    if (givenDefaults !== undefined && (typeof givenDefaults !== 'object' || Array.isArray(givenDefaults))) {
+      throw new BadRequestException({ message: '`defaults` must be an object of trigger keys.' });
+    }
+
+    const before = await this.settings.brokerageToggles();
+    const next = { ...before };
+    for (const [key, value] of Object.entries(givenDefaults ?? {})) {
+      if (!(TRIGGER_KEYS as readonly string[]).includes(key)) {
+        // Named, not ignored. A key this application does not send is a mistake in the caller, and
+        // swallowing it would leave somebody believing they had set something.
+        throw new BadRequestException({
+          message: `"${key}" is not a CRM communication. Valid keys: ${TRIGGER_KEYS.join(', ')}.`,
+          errors: { defaults: [`Unknown key: ${key}.`] },
+        });
+      }
+      if (typeof value !== 'boolean') {
+        throw new BadRequestException({
+          message: `"${key}" must be true or false.`,
+          errors: { [`defaults.${key}`]: ['Must be true or false.'] },
+        });
+      }
+      next[key] = value;
+    }
+
+    const existing = await this.prisma.crm_email_settings.findFirst({ orderBy: { id: 'asc' } });
+    const wasSending = existing ? existing.auto_send_enabled : true;
+    const nowSending = hasSwitch ? (body.auto_send_enabled as boolean) : wasSending;
+    const stamp = new Date();
+    const data = {
+      auto_send_enabled: nowSending,
+      template_toggles: JSON.stringify(next),
+      updated_by: user.name,
+      updated_at: stamp,
+    };
+
+    if (existing) await this.prisma.crm_email_settings.update({ where: { id: existing.id }, data });
+    else await this.prisma.crm_email_settings.create({ data: { ...data, created_at: stamp } });
+
+    await this.auditBrokerage(user, wasSending, nowSending, before, next);
+    return { ...(await this.overview(user)), message: 'Brokerage controls saved' };
+  }
+
+  /**
+   * One audit row per control that actually moved, carrying what it was and what it became.
+   *
+   * Per-field rather than one "settings updated" line, matching what `CrmTriggersService` already
+   * writes for a person's own switches. These are the brokerage-wide ones, so "who turned CRM email
+   * off for everybody, and when" is the question the trail has to be able to answer.
+   */
+  private async auditBrokerage(
+    user: AuthUserRecord, wasSending: boolean, nowSending: boolean,
+    before: Record<string, boolean>, after: Record<string, boolean>,
+  ): Promise<void> {
+    const rows: { field: string; old: boolean; now: boolean; what: string }[] = [];
+    if (wasSending !== nowSending) {
+      rows.push({ field: 'auto_send_enabled', old: wasSending, now: nowSending, what: "the CRM's per-lead emails" });
+    }
+    for (const key of TRIGGER_KEYS) {
+      if (before[key] !== after[key]) {
+        rows.push({ field: `default.${key}`, old: !!before[key], now: !!after[key], what: `the brokerage default for "${key}"` });
+      }
+    }
+
+    for (const row of rows) {
+      try {
+        const stamp = new Date();
+        await this.prisma.audit_logs.create({
+          data: {
+            category: 'Settings', transaction_id: null, who: user.name, user_id: user.id ?? null,
+            section: 'CRM Communications', action: 'CRM brokerage control changed', source: 'Manual',
+            domain: auditDomain({ category: 'Settings', section: 'CRM Communications' }),
+            field: row.field,
+            old_value: row.old ? 'on' : 'off',
+            new_value: row.now ? 'on' : 'off',
+            details: `${user.name ?? 'Someone'} turned ${row.what} ${row.now ? 'on' : 'off'} for the brokerage`,
+            created_at: stamp, updated_at: stamp,
+          },
+        });
+      } catch (err) {
+        this.log.warn(`CRM brokerage audit write failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
   }
 
   // -------------------------------------------------------------- template

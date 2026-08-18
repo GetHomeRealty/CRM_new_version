@@ -3,7 +3,10 @@ import Icon from '../ui/Icon';
 import { useSearchParams } from 'react-router-dom';
 import {
   campaignOptions, listCampaigns, getCampaign, deleteCampaign, cancelScheduledCampaign,
-  previewAudience, sendCampaign, trackingHealth, previewSegment, tagSegment, sendTestEmail,
+  // `previewSegment` and `tagSegment` are no longer imported: the only caller was the Tag Leads
+  // modal removed below. Both are still exported by `campaignsApi`, and the routes behind them
+  // still exist — this screen simply no longer uses them.
+  previewAudience, sendCampaign, trackingHealth, sendTestEmail,
 } from '../lib/campaignsApi';
 import { apiErrorMessage } from '../lib/apiError';
 import { csvCell } from '../lib/csv';
@@ -103,13 +106,26 @@ export default function CampaignsPage() {
   const [audience, setAudience] = useState<AudiencePreview | null>(null);
   const [previewing, setPreviewing] = useState(false);
   const [sending, setSending] = useState(false);
+  /*
+   * NAMES ONE COMMIT ATTEMPT, so a repeat cannot become a second campaign.
+   *
+   * `disabled={sending}` on the button below is still there and still worth having — it is what the
+   * person watching the screen experiences. It is not, however, protection: a network retry, a
+   * replayed request, a second tab or a direct call to the API all defeat it, and a duplicate
+   * campaign means every recipient is emailed twice. So the server is authoritative, and this is
+   * the handle it de-duplicates on.
+   *
+   * Minted when the builder OPENS, not per click: every retry of the same commit must send the same
+   * key, while a genuinely new campaign gets a new one. That is what keeps two deliberately
+   * identical campaigns a week apart from being collapsed into a single send.
+   */
+  const [commitKey, setCommitKey] = useState('');
 
   const [detail, setDetail] = useState<CampaignDetail | null>(null);
   const [detailView, setDetailView] = useState<'all' | 'opened' | 'unsubscribed' | 'bounced'>('all');
   const [sentEmail, setSentEmail] = useState<CampaignDetail | null>(null);
   const [toDelete, setToDelete] = useState<CampaignSummary | null>(null);
   const [toCancel, setToCancel] = useState<CampaignSummary | null>(null);
-  const [tagOpen, setTagOpen] = useState(false);
 
   // Pre-flight SMTP check — send one test email through the account a campaign would use.
   const [testOpen, setTestOpen] = useState(false);
@@ -228,13 +244,18 @@ export default function CampaignsPage() {
   const scheduled = useMemo(() => campaigns.filter((c) => c.status === 'scheduled'), [campaigns]);
   const history = useMemo(() => campaigns.filter((c) => c.status !== 'scheduled'), [campaigns]);
 
-  const openBuilder = () => { setForm(emptyForm); setAudience(null); setBuilder(true); refreshOptions(); };
+  const newCommitKey = () => (globalThis.crypto?.randomUUID?.() ?? `c-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+
+  const openBuilder = () => {
+    setForm(emptyForm); setAudience(null); setCommitKey(newCommitKey()); setBuilder(true); refreshOptions();
+  };
 
   /** "Send" on a template card — jump to the campaign builder with that template preselected. */
   const useTemplate = (templateId: number) => {
     setTab('campaigns');
     setForm({ ...emptyForm, template_id: String(templateId) });
     setAudience(null);
+    setCommitKey(newCommitKey());
     setBuilder(true);
     refreshOptions();
   };
@@ -265,6 +286,7 @@ export default function CampaignsPage() {
         ...toFilter(form),
         tags: form.tag === ANY ? [] : [form.tag],
         scheduled_for: at ? at.toISOString() : null,
+        idempotency_key: commitKey,
       });
       if (c.status === 'scheduled') {
         toast(`Campaign scheduled for ${when(c.scheduled_for)} — ${c.stats.total} recipient${c.stats.total === 1 ? '' : 's'}`, 'ok');
@@ -366,8 +388,12 @@ export default function CampaignsPage() {
             <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               {/* Import Leads removed from Campaigns by request. Importing still lives on the Leads
                   screen, which is untouched — this only stops the same action being offered from a
-                  screen about sending to an audience. */}
-              {canEdit && <button className="btn ghost" onClick={() => setTagOpen(true)}><Icon name="tag" size={14} /> Tag Leads</button>}
+                  screen about sending to an audience.
+
+                  Tag Leads removed by request for the same reason. Tagging by SELECTION is still on
+                  the Leads screen and is untouched; what has gone is tagging a whole segment from
+                  here. The endpoint behind it is left in place — see the note at TagLeadsModal's
+                  old position — so nothing that already calls it breaks. */}
               {canEdit && <button className="btn primary" onClick={openBuilder}>+ Create Campaign</button>}
             </div>
           )}
@@ -533,6 +559,19 @@ export default function CampaignsPage() {
                 <option value="">Choose a template to send</option>
                 {visibleTemplates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
               </select>
+              {/*
+                An empty picker has to say why. This library now offers only templates somebody
+                created for a campaign — the shipped built-ins are no longer among them — so a
+                brokerage that had never written one meets a dropdown with nothing in it. Left
+                unexplained that reads as a broken screen rather than as a step they have not taken
+                yet, and the step is one click away on the tab beside this one.
+              */}
+              {options.templates.length === 0 && (
+                <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+                  You have no campaign templates yet. Create one under{' '}
+                  <strong>Campaigns → Templates → + Create Template</strong>.
+                </div>
+              )}
               {template && <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>Subject: {template.subject}</div>}
               {unfillable.length > 0 && (
                 <div className="reminder-warn" style={{ marginTop: 8 }}>
@@ -723,7 +762,6 @@ export default function CampaignsPage() {
         </div>
       )}
 
-      {tagOpen && options && <TagLeadsModal options={options} onClose={() => setTagOpen(false)} onDone={() => { setTagOpen(false); refreshOptions(); }} />}
 
       {testOpen && (
         <div className="overlay open" onMouseDown={(e) => { if (e.target === e.currentTarget && !testBusy) setTestOpen(false); }}>
@@ -792,75 +830,15 @@ export default function CampaignsPage() {
   );
 }
 
-/** Apply or remove a tag across every lead in a segment. */
-function TagLeadsModal({ options, onClose, onDone }: { options: CampaignOptions; onClose: () => void; onDone: () => void }) {
-  const toast = useToast();
-  const [f, setF] = useState({ leadStatus: ANY, leadType: ANY, leadSource: ANY, clientType: ANY, tag: ANY });
-  const [tagToApply, setTag] = useState('');
-  const [mode, setMode] = useState<'add' | 'remove'>('add');
-  const [count, setCount] = useState<number | null>(null);
-  const [busy, setBusy] = useState(false);
-  const anyFilter = Object.values(f).some((v) => v !== ANY);
-
-  useEffect(() => {
-    let cancelled = false;
-    const t = setTimeout(() => {
-      previewSegment(toFilter(f)).then((r) => { if (!cancelled) setCount(r.count); }).catch(() => {});
-    }, 300);
-    return () => { cancelled = true; clearTimeout(t); };
-  }, [f]);
-
-  const sel = (label: string, key: keyof typeof f, opts: string[]) => (
-    <label className="report-field"><span>{label}</span>
-      <select value={f[key]} onChange={(e) => setF((p) => ({ ...p, [key]: e.target.value }))}>
-        <option value={ANY}>Any</option>
-        {opts.map((o) => <option key={o} value={o}>{o}</option>)}
-      </select>
-    </label>
-  );
-
-  const apply = async () => {
-    if (!anyFilter) return toast('Select at least one filter', 'bad');
-    if (!tagToApply.trim()) return toast('Enter a tag to apply', 'bad');
-    setBusy(true);
-    try { const r = await tagSegment(toFilter(f), tagToApply.trim(), mode); toast(r.message, 'ok'); onDone(); }
-    catch (e) { toast(apiErrorMessage(e, 'Could not tag leads'), 'bad'); setBusy(false); }
-  };
-
-  return (
-    <div className="overlay open" onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}>
-      <div className="modal" style={{ maxWidth: 620 }}>
-        <button className="close" onClick={onClose} disabled={busy}><Icon name="close" size={15} /></button>
-        <div className="modal-h">Tag Leads by Segment</div>
-        <p className="muted" style={{ fontSize: 13 }}>Pick a segment, then apply a tag to every matching lead so you can target them later.</p>
-        <div className="report-filters">
-          {sel('Status', 'leadStatus', options.lead_status)}
-          {sel('Type', 'leadType', options.lead_type)}
-          {sel('Source', 'leadSource', options.lead_source)}
-          {sel('Client type', 'clientType', options.client_type)}
-          {sel('Existing tag', 'tag', options.tags)}
-        </div>
-        <div className="camp-audience">
-          {!anyFilter ? <span className="muted">Select at least one filter above.</span>
-            : <span><strong>{count ?? 0}</strong> lead{(count ?? 0) === 1 ? '' : 's'} match this segment</span>}
-        </div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
-          <div className="field" style={{ flex: 1, marginBottom: 0 }}>
-            <label>Tag</label>
-            <input value={tagToApply} onChange={(e) => setTag(e.target.value)} placeholder="e.g. Priority, Q3-Newsletter" />
-          </div>
-          <select value={mode} onChange={(e) => setMode(e.target.value as 'add' | 'remove')} style={{ width: 'auto' }}>
-            <option value="add">Add</option>
-            <option value="remove">Remove</option>
-          </select>
-        </div>
-        <div className="actions">
-          <button className="btn ghost" onClick={onClose} disabled={busy}>Cancel</button>
-          <button className="btn primary" onClick={apply} disabled={busy || !anyFilter || !tagToApply.trim()}>
-            {busy ? 'Working…' : mode === 'remove' ? 'Remove tag' : `Tag ${count ?? 0} lead(s)`}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
+/*
+ * `TagLeadsModal` — "Tag Leads by Segment" — was removed from this screen by request.
+ *
+ * WHAT WENT: only the control. The route it called (`POST /campaigns/segment/tag`, reached through
+ * `tagSegment` in `lib/campaignsApi.ts`) is deliberately LEFT IN PLACE. Deleting a working endpoint
+ * because the button in front of it went away is a larger change than was asked for, and it is the
+ * kind that breaks a caller nobody remembered.
+ *
+ * WHAT DID NOT GO: tagging leads by SELECTION on the Leads screen, which is a different feature in
+ * a different module and is untouched. What is gone is applying a tag to a whole segment from the
+ * Campaigns screen.
+ */

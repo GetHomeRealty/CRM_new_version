@@ -182,6 +182,24 @@ export class MailerService {
   }
 
   /**
+   * Send from ONE NAMED ACCOUNT, with CC, BCC and threading headers, and report the Message-ID.
+   *
+   * For the Transaction Desk Inbox, which knows exactly which mailbox it is writing from — the
+   * account is passed, never resolved, because "resolve the best available sender" is precisely the
+   * behaviour that would let a Transaction Desk reply leave from a CRM address. The caller has
+   * already established that the account belongs to this user and this area.
+   */
+  async sendFromAccount(
+    account: mail_accounts,
+    opts: {
+      to: string[]; cc?: string[]; bcc?: string[]; subject: string; html: string;
+      attachments?: MailAttachment[]; headers?: Record<string, string>;
+    },
+  ): Promise<{ messageId: string | null }> {
+    return this.dispatch(account, opts.to, opts.subject, opts.html, opts.cc ?? [], opts.attachments ?? [], opts.headers, opts.bcc ?? []);
+  }
+
+  /**
    * Pick the mail account a campaign/direct send would use for this user, most specific first:
    *   1. an explicitly chosen account,
    *   2. the sending user's own default account, then any of their active accounts — so an
@@ -226,7 +244,18 @@ export class MailerService {
     await this.dispatch(account, to, subject, body);
   }
 
-  private async dispatch(account: mail_accounts, to: string | string[], subject: string, body: string, cc: string[] = [], attachments: MailAttachment[] = [], headers?: Record<string, string>): Promise<void> {
+  /**
+   * `bcc` and the returned Message-ID were added for the Transaction Desk Inbox.
+   *
+   * Both are additive: every existing caller passes neither and ignores the return value, so their
+   * behaviour is byte-identical. The inbox needs the id because a sent message has to carry the same
+   * Message-ID the recipient's reply will name in `In-Reply-To` — without it a reply to our reply
+   * cannot be threaded back to the conversation.
+   *
+   * BCC IS DROPPED WHEN MAIL IS REDIRECTED, exactly as CC already is. A staging environment
+   * diverting everything to one address must not also quietly copy the real blind recipients.
+   */
+  private async dispatch(account: mail_accounts, to: string | string[], subject: string, body: string, cc: string[] = [], attachments: MailAttachment[] = [], headers?: Record<string, string>, bcc: string[] = []): Promise<{ messageId: string | null }> {
     const transport = account.encryption === 'oauth'
       // Google OAuth account: `password` holds the encrypted refresh token. Nodemailer mints a
       // fresh access token from it (via the app's client id/secret) for each send with XOAUTH2.
@@ -280,6 +309,7 @@ export class MailerService {
       from: account.from_name ? { name: account.from_name, address: account.from_email } : account.from_email,
       to: redirect || to,
       cc: redirect ? undefined : (cc.length ? cc : undefined),
+      bcc: redirect ? undefined : (bcc.length ? bcc : undefined),
       subject: redirect ? `[redirected from ${realTo}] ${subject}` : subject,
       html: body,
       attachments: attachments.map((a) => ({
@@ -306,9 +336,9 @@ export class MailerService {
     let lastError: unknown;
     for (let attempt = 1; attempt <= SEND_ATTEMPTS; attempt++) {
       try {
-        await transport.sendMail(message);
+        const info = (await transport.sendMail(message)) as { messageId?: string } | undefined;
         if (attempt > 1) this.log.log(`Delivery to ${realTo} succeeded on attempt ${attempt}.`);
-        return;
+        return { messageId: info?.messageId ?? null };
       } catch (err) {
         lastError = err;
         if (attempt === SEND_ATTEMPTS || !isTransient(err)) break;

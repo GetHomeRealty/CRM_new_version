@@ -144,15 +144,35 @@ export const CRM_COMMUNICATIONS: CrmCommunication[] = [
    * browser subscription for somebody who does not use the product. The per-user switch decides
    * whether THIS AGENT'S leads receive them, which is why they carry a preference at all.
    */
+  /*
+   * WELCOME IS NOT MIGRATED, AND ITS REGISTRY ENTRY SAYS SO RATHER THAN IMPLYING OTHERWISE.
+   *
+   * It carried `preferenceCategory: 'crm_welcome'` while no such category existed in the
+   * notification catalogue and the Phase 1 migration deliberately did not create one — so the field
+   * named a destination nothing had moved to. Now that `preferenceCategory` is what decides which
+   * store a row is read from, leaving it would have silently switched Welcome to a table holding no
+   * answer for it, and every agent who had switched it off would have started sending again.
+   *
+   * `legacyTriggerKey` alone, therefore: `crm_trigger_settings` is where Welcome's per-user answer
+   * genuinely lives. Migrating it is a separate decision with its own dry run; the category name is
+   * recorded in the comment rather than in a field that would act on it.
+   */
   {
     key: 'welcome',
     name: 'New Lead Welcome Email',
     description: 'Sent once to a new lead shortly after they arrive, however they arrived.',
     kind: 'automated', audience: 'lead', channels: leadEmailOnly,
-    preferenceCategory: 'crm_welcome',
+    preferenceCategory: null,
     templateEventKey: 'crm.lead_welcome',
     legacyTriggerKey: 'welcome',
   },
+  /*
+   * The three migrated greetings. `legacyTriggerKey` is GONE from all three, and its absence is the
+   * statement: the per-user answer is `notification_preferences` now, in the category named below,
+   * and there is no longer a second store for these that could disagree. The brokerage DEFAULT they
+   * inherit is still `crm_email_settings.template_toggles` — a brokerage-wide value that
+   * `notification_preferences` has no row shape to hold. See `GREETING_CATEGORY`.
+   */
   {
     key: 'birthday',
     name: 'Birthday Greeting',
@@ -160,7 +180,6 @@ export const CRM_COMMUNICATIONS: CrmCommunication[] = [
     kind: 'automated', audience: 'lead', channels: leadEmailOnly,
     preferenceCategory: 'crm_birthday',
     templateEventKey: 'crm.birthday_greeting',
-    legacyTriggerKey: 'birthday',
   },
   {
     key: 'anniversary',
@@ -169,7 +188,6 @@ export const CRM_COMMUNICATIONS: CrmCommunication[] = [
     kind: 'automated', audience: 'lead', channels: leadEmailOnly,
     preferenceCategory: 'crm_anniversary',
     templateEventKey: 'crm.anniversary_greeting',
-    legacyTriggerKey: 'anniversary',
   },
   {
     key: 'seasonal',
@@ -178,7 +196,6 @@ export const CRM_COMMUNICATIONS: CrmCommunication[] = [
     kind: 'automated', audience: 'lead', channels: leadEmailOnly,
     preferenceCategory: 'crm_seasonal',
     templateEventKey: 'crm.seasonal_wishes',
-    legacyTriggerKey: 'seasonal',
   },
 
   // ------------------------------------------------------------ manual, to leads
@@ -219,23 +236,24 @@ export const CRM_COMMUNICATIONS: CrmCommunication[] = [
     legacyTriggerKey: 'custom',
   },
 
-  // ------------------------------------------------------------ retired
   /*
-   * Wedding Congratulations. Still has a template and a live send path from CRM Settings, so it is
-   * registered rather than deleted — a communication that can still be sent must be describable.
-   * `retired` keeps it out of the Communications list and out of the Phase 1 migration. Removing
-   * the send path is a later decision, and this entry is what makes that decision visible.
+   * ------------------------------------------------------------ retired
+   *
+   * WEDDING CONGRATULATIONS IS GONE, and this note is what is left of it.
+   *
+   * It was registered here with `retired: true` while it still had a live send path, because a
+   * communication that can be sent must be describable even when it is unwanted. That is no longer
+   * true of it: the brokerage's decision is that Anniversary Greeting covers the need, so the
+   * button, the `sendWeddingEmail` action, the service method, the trigger key and this entry have
+   * all gone. Nothing in the application can send it.
+   *
+   * WHAT DELIBERATELY REMAINS. `crm.wedding_congratulations` stays registered in `MAIL_EVENTS` and
+   * any `email_templates` row keyed to it is left alone — as are the `crm_email_log` and
+   * `audit_logs` rows recording weddings that really were sent. Those are history, and the record
+   * of an email a brokerage sent to a client is not ours to delete because the feature was retired.
+   * Keeping the mail-registry entry is also what stops that orphaned template row surfacing on the
+   * Communications screen as an "unmapped" template somebody should do something about.
    */
-  {
-    key: 'wedding',
-    name: 'Wedding Congratulations',
-    description: 'Retired. Still sendable by hand; not offered as a managed communication.',
-    kind: 'manual', audience: 'lead', channels: leadEmailOnly,
-    preferenceCategory: null,
-    templateEventKey: 'crm.wedding_congratulations',
-    legacyTriggerKey: 'wedding',
-    retired: true,
-  },
 ];
 
 /** Everything the Communications screen should list — registered, minus anything retired. */

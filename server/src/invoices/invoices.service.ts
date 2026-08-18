@@ -2,6 +2,7 @@ import { Injectable, NotFoundException, UnprocessableEntityException } from '@ne
 import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CompanySettingsService } from '../settings/company-settings.service';
+import { MailerService, type MailAttachment } from '../email/mailer.service';
 import { AuditService, type ActingUser } from '../audit/audit.service';
 import { throwValidation } from '../common/laravel-exceptions';
 import { jsonField, phpJsonNormalize, round2, toDateString, toDateTimeString, toIso8601String } from '../common/serialize';
@@ -12,7 +13,43 @@ import { TransactionInvoiceService } from './transaction-invoice.service';
 
 const num = (d: Prisma.Decimal | number | null): number => (d === null ? 0 : Number(d));
 
-type InvoiceSummaryRow = Prisma.invoicesGetPayload<{ include: { transactions: true } }>;
+/** Invoices per page. The screen asks for 25; 200 is the ceiling a caller may raise it to. */
+const PER_PAGE_DEFAULT = 25;
+const PER_PAGE_MAX = 200;
+
+/**
+ * The columns a LIST ROW needs from the linked deal — which is one date.
+ *
+ * `include: { transactions: true }` pulled every column of the transaction onto every invoice row:
+ * the adjustments and admin-activities blobs, all the lawyer and builder fields, the whole
+ * commission configuration. `summary()` reads `closing_date` and `deleted_at` from it and nothing
+ * else. At 22,857 invoices that was most of a nine-megabyte response.
+ */
+const TXN_FOR_SUMMARY = { select: { closing_date: true, deleted_at: true } } as const;
+
+/** What `summary()` reads: the invoice row plus the two transaction columns above (or none). */
+type InvoiceSummaryRow = Prisma.invoicesGetPayload<object> & {
+  transactions: { closing_date: Date | null; deleted_at: Date | null } | null;
+};
+
+/** One page of invoices, with the ledger-wide figures the tiles show. */
+export interface InvoiceListPage {
+  data: Record<string, unknown>[];
+  meta: { current_page: number; per_page: number; last_page: number; total: number };
+  /**
+   * COMPUTED OVER THE WHOLE LEDGER, not the page and not the filter — the three tiles above the
+   * table have always described every invoice, and paging the table must not quietly redefine them.
+   */
+  totals: { count: number; outstanding: number; paid_count: number };
+}
+
+/** Query accepted by the paginated list. */
+export interface InvoiceListQuery {
+  page?: number;
+  per_page?: number;
+  /** One of the DISPLAY statuses, including the derived `Overdue`. */
+  status?: string;
+}
 type InvoiceDetailRow = Prisma.invoicesGetPayload<{
   include: {
     customers: true;
@@ -31,15 +68,86 @@ export class InvoicesService {
     private readonly numbers: InvoiceNumberService,
     private readonly audit: AuditService,
     private readonly txnInvoices: TransactionInvoiceService,
+    private readonly mailer: MailerService,
   ) {}
 
-  async index(): Promise<Record<string, unknown>[]> {
-    const invoices = await this.prisma.invoices.findMany({
-      where: { deleted_at: null },
-      orderBy: [{ created_at: 'desc' }, { id: 'asc' }],
-      include: { customers: true, transactions: true },
-    });
-    return invoices.map((i) => this.summary(i));
+  /**
+   * One page of the invoice ledger, plus the three ledger-wide figures the tiles show.
+   *
+   * WHAT THIS REPLACES. Every invoice, in one array, with `customers` and the ENTIRE linked
+   * transaction attached to each. Measured at 22,857 invoices: 9.0 MB in one response, 2.8 s single
+   * user, 8.3 s median under a hundred concurrent — the largest payload in the Transaction Desk. The
+   * screen then filtered and rendered it in the browser, so every byte past the first twenty-five
+   * rows was parsed and discarded.
+   *
+   * Three things were wrong and all three are fixed here:
+   *
+   *   · IT RETURNED EVERYTHING. It now returns the requested page.
+   *   · IT LOADED `customers` FOR NOTHING. `summary()` does not read that relation — not one field.
+   *   · IT LOADED THE WHOLE TRANSACTION for one date. `TXN_FOR_SUMMARY` selects the two columns
+   *     actually read.
+   *
+   * THE TILES DO NOT CHANGE MEANING. Invoice count, outstanding balance and paid count have always
+   * described the whole ledger rather than the visible rows, so they are computed by three
+   * aggregates over the whole ledger rather than by summing an array that happens to hold all of it.
+   * The status filter narrows the TABLE, exactly as the client-side filter did, and never the tiles.
+   */
+  async index(query: InvoiceListQuery = {}): Promise<InvoiceListPage> {
+    const page = Math.max(1, Number(query.page ?? 1) || 1);
+    const perPage = Math.min(PER_PAGE_MAX, Math.max(1, Number(query.per_page ?? PER_PAGE_DEFAULT) || PER_PAGE_DEFAULT));
+
+    const where: Prisma.invoicesWhereInput = { deleted_at: null, ...this.displayStatusWhere(query.status) };
+
+    const [total, rows, ledger, paidCount] = await Promise.all([
+      this.prisma.invoices.count({ where }),
+      this.prisma.invoices.findMany({
+        where,
+        orderBy: [{ created_at: 'desc' }, { id: 'asc' }],
+        skip: (page - 1) * perPage,
+        take: perPage,
+        include: { transactions: TXN_FOR_SUMMARY },
+      }),
+      this.prisma.invoices.aggregate({
+        where: { deleted_at: null },
+        _count: { _all: true },
+        _sum: { balance_due: true },
+      }),
+      this.prisma.invoices.count({ where: { deleted_at: null, status: 'Paid' } }),
+    ]);
+
+    return {
+      data: rows.map((i) => this.summary(i)),
+      meta: { current_page: page, per_page: perPage, last_page: Math.max(1, Math.ceil(total / perPage)), total },
+      totals: {
+        count: ledger._count._all,
+        outstanding: round2(num(ledger._sum.balance_due)),
+        paid_count: paidCount,
+      },
+    };
+  }
+
+  /**
+   * A DISPLAY status as a query predicate — including `Overdue`, which is derived and not stored.
+   *
+   * `displayStatus()` below reports Overdue for an Unpaid or Partially Paid invoice past its due
+   * date with a balance outstanding. Filtering used to happen in the browser against that derived
+   * value, so moving the filter into the database means spelling the same rule as SQL — and, just as
+   * importantly, spelling its INVERSE: asking for "Unpaid" must not return the unpaid invoices that
+   * the screen is displaying as Overdue, which is exactly what a bare `status = 'Unpaid'` would do.
+   */
+  private displayStatusWhere(status: string | undefined): Prisma.invoicesWhereInput {
+    const want = (status ?? '').trim();
+    if (want === '') return {};
+
+    const overdue: Prisma.invoicesWhereInput = {
+      status: { in: ['Unpaid', 'Partially Paid'] },
+      due_date: { lt: new Date() },
+      balance_due: { gt: 0 },
+    };
+    if (want === 'Overdue') return overdue;
+    // The two statuses that can be displayed as something else must exclude that case.
+    if (want === 'Unpaid' || want === 'Partially Paid') return { status: want, NOT: overdue };
+    return { status: want };
   }
 
   async show(id: number): Promise<Record<string, unknown>> {
@@ -262,25 +370,70 @@ export class InvoicesService {
     return this.show(id);
   }
 
-  async recordReminder(actor: ActingUser | null, id: number): Promise<Record<string, unknown>> {
+  /**
+   * Chase payment on an invoice — the email FIRST, the record of it second.
+   *
+   * Same ordering rule as `send` below and for the same reason: "Reminder sent" is a claim about
+   * the outside world. The reminder log is what the office reads when deciding whether to telephone
+   * somebody, so an entry recording a message nobody received is worse than no entry at all.
+   */
+  async recordReminder(actor: ActingUser | null, id: number, pdf: MailAttachment | null = null, at: Date = new Date()): Promise<Record<string, unknown>> {
     const invoice = await this.prisma.invoices.findFirst({ where: { id, deleted_at: null } });
     if (!invoice) throw new NotFoundException({ message: `No query results for model [App\\Models\\Invoice] ${id}.` });
+
+    const to = await this.deliver('invoice.reminder', invoice, 'reminder', pdf);
+
+    /*
+     * `at` DEFAULTS TO NOW AND IS PASSED BY THE AUTO-REMINDER SWEEP.
+     *
+     * The sweep decides an invoice is due by comparing today against this history, then calls here
+     * to record the send. If the two read the clock separately they can disagree: a pass that starts
+     * at 23:59:59 and records at 00:00:01 writes a history entry for a different day than the one it
+     * evaluated, and the next pass — seeing nothing for "today" — sends again. One timestamp, chosen
+     * by the caller, closes that window. A person pressing Send gets `new Date()` exactly as before.
+     */
     const reminders = ((jsonField(invoice.reminders) as unknown[]) ?? []) as Record<string, unknown>[];
-    reminders.push({ date: toDateTimeString(new Date()), by: actor?.name ?? null });
+    reminders.push({ date: toDateTimeString(at), by: actor?.name ?? null, to });
     await this.prisma.invoices.update({ where: { id }, data: { reminders: JSON.stringify(phpJsonNormalize(reminders)), updated_at: new Date() } });
     const updated = await this.prisma.invoices.findUniqueOrThrow({ where: { id } });
-    await this.auditInvoice(id, updated.transaction_id, actor, { field: `Invoice ${updated.invoice_no} — Reminder`, action: 'Reminder sent', new: `Reminder #${reminders.length}` });
-    this.emailInvoice();
+    await this.auditInvoice(id, updated.transaction_id, actor, { field: `Invoice ${updated.invoice_no} — Reminder`, action: 'Reminder sent', new: `Reminder #${reminders.length}`, details: `Emailed to ${to}` });
     return this.show(id);
   }
 
-  async send(actor: ActingUser | null, id: number): Promise<Record<string, unknown>> {
+  /**
+   * Issue the invoice to the customer.
+   *
+   * THE EMAIL IS SENT BEFORE ANYTHING IS RECORDED, and that ordering is the whole fix. This method
+   * used to stamp `sent_at`, write "Invoice sent" to the audit trail, answer 200 — and then call
+   * `emailInvoice()`, a method with an empty body. Nothing was ever sent. The screen said "Sent",
+   * the deal said "Sent", the audit trail said an administrator sent it on a date, and the
+   * Transaction Desk Triggers page listed `invoice.send` as a live trigger. The customer had never
+   * heard of it. Every one of those was a record of something that did not happen.
+   *
+   * `MailerService.send` throws unless the message was accepted by the SMTP server, so the writes
+   * below are only reached on success. On failure nothing is stamped, nothing is audited, the
+   * invoice is untouched, and the caller gets a message naming the reason — so pressing Send again
+   * is a safe and obvious thing to do.
+   *
+   * RESENDING IS ALLOWED and deliberately does not move `sent_at`: the date on the record is when
+   * the invoice was first issued, which is what the customer's copy is dated and what the payment
+   * terms run from. Each later send is its own audit entry instead.
+   */
+  async send(actor: ActingUser | null, id: number, pdf: MailAttachment | null = null): Promise<Record<string, unknown>> {
     const invoice = await this.prisma.invoices.findFirst({ where: { id, deleted_at: null } });
     if (!invoice) throw new NotFoundException({ message: `No query results for model [App\\Models\\Invoice] ${id}.` });
-    if (!invoice.sent_at) await this.prisma.invoices.update({ where: { id }, data: { sent_at: new Date(), updated_at: new Date() } });
+
+    const to = await this.deliver('invoice.send', invoice, 'invoice', pdf);
+
+    const resend = !!invoice.sent_at;
+    if (!resend) await this.prisma.invoices.update({ where: { id }, data: { sent_at: new Date(), updated_at: new Date() } });
     const updated = await this.prisma.invoices.findUniqueOrThrow({ where: { id } });
-    await this.auditInvoice(id, updated.transaction_id, actor, { field: updated.invoice_no, action: 'Invoice sent', new: toDateString(updated.sent_at) });
-    this.emailInvoice();
+    await this.auditInvoice(id, updated.transaction_id, actor, {
+      field: updated.invoice_no,
+      action: resend ? 'Invoice resent' : 'Invoice sent',
+      new: toDateString(updated.sent_at),
+      details: `Emailed to ${to}`,
+    });
     return this.show(id);
   }
 
@@ -290,12 +443,12 @@ export class InvoicesService {
     if (!isInvoiceableType(t.type)) {
       throw new UnprocessableEntityException({ message: 'Invoices can only be generated for: ' + INVOICEABLE_TYPES.join(', ') + '.' });
     }
-    const existing = await this.prisma.invoices.findMany({ where: { transaction_id: txnId, deleted_at: null }, include: { transactions: true } });
+    const existing = await this.prisma.invoices.findMany({ where: { transaction_id: txnId, deleted_at: null }, include: { transactions: TXN_FOR_SUMMARY } });
     if (existing.length > 0) {
       return { count: 0, existing: true, invoices: existing.map((i) => this.summary(i)) };
     }
     const created = await this.prisma.$transaction((tx) => this.txnInvoices.generate(tx, txnId, actor, false));
-    const withTxn = await this.prisma.invoices.findMany({ where: { id: { in: created.map((c) => c.id) } }, orderBy: { id: 'asc' }, include: { transactions: true } });
+    const withTxn = await this.prisma.invoices.findMany({ where: { id: { in: created.map((c) => c.id) } }, orderBy: { id: 'asc' }, include: { transactions: TXN_FOR_SUMMARY } });
     return { count: created.length, existing: false, invoices: withTxn.map((i) => this.summary(i)) };
   }
 
@@ -310,9 +463,76 @@ export class InvoicesService {
     }
   }
 
-  private emailInvoice(): void {
-    // Templated email delivery is handled by the mail module (email settings); it is
-    // best-effort and never affects the API response, matching Laravel's try/catch.
+  /**
+   * Send one of the invoice emails, and refuse the operation if it cannot be sent.
+   *
+   * NOT BEST-EFFORT, unlike most mail in this application. A document reminder or a review
+   * notification is a courtesy: losing one is a nuisance and the underlying record is true either
+   * way. An invoice email IS the act — "sent" is a fact about the customer, it starts the payment
+   * terms, and it is what the office points at when chasing. So a failure fails the request rather
+   * than being swallowed, and the caller is told which of the three things went wrong: no
+   * recipient, no active template or sender, or the send itself.
+   *
+   * `MAIL_REDIRECT_TO` diverts the message exactly as the reminder sweeps and the review ladder
+   * honour it, so a staging environment cannot mail a real client. The address the invoice WOULD
+   * have gone to is still what gets audited.
+   */
+  private async deliver(
+    event: 'invoice.send' | 'invoice.reminder',
+    invoice: { invoice_no: string; total: Prisma.Decimal | number; due_date: Date | null; customer_name: string | null; customer_email: string | null; trade_number: string | null; transaction_id: number | null },
+    what: 'invoice' | 'reminder',
+    pdf: MailAttachment | null,
+  ): Promise<string> {
+    const to = await this.recipientFor(invoice);
+    if (!to) {
+      throw new UnprocessableEntityException({
+        message: `There is no email address on invoice ${invoice.invoice_no} to send the ${what} to. `
+          + 'Add a customer email, or set the co-operating brokerage\'s invoice email on the transaction.',
+        errors: { customer_email: ['An email address is required to send.'] },
+      });
+    }
+
+    const settings = await this.settings.current();
+    const vars = {
+      invoice_number: invoice.invoice_no,
+      invoice_total: this.numberFormat(num(invoice.total)),
+      due_date: toDateString(invoice.due_date) ?? '-',
+      customer_name: invoice.customer_name ?? 'there',
+      transaction_number: invoice.trade_number ?? '-',
+      company_name: settings.name,
+    };
+
+    const redirect = (process.env.MAIL_REDIRECT_TO ?? '').trim();
+    try {
+      await this.mailer.send(event, vars, redirect || to, [], pdf ? [pdf] : []);
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      throw new UnprocessableEntityException({
+        message: `Invoice ${invoice.invoice_no} was NOT sent: ${reason}`,
+        errors: { send: [reason] },
+      });
+    }
+    return to;
+  }
+
+  /**
+   * Who the invoice goes to: its own customer email, or the co-operating brokerage's invoice email
+   * from the transaction it was generated from.
+   *
+   * The fallback matters because a transaction-generated invoice copies the brokerage's details at
+   * the moment it is created — so if the brokerage was filled in afterwards, the invoice's own copy
+   * is blank while the deal has the address. Reading through to the deal means nobody has to retype
+   * something the system already knows.
+   */
+  private async recipientFor(invoice: { customer_email: string | null; transaction_id: number | null }): Promise<string | null> {
+    const own = (invoice.customer_email ?? '').trim();
+    if (own) return own;
+    if (!invoice.transaction_id) return null;
+    const brokerage = await this.prisma.brokerages.findUnique({
+      where: { transaction_id: invoice.transaction_id },
+      select: { invoice_email: true, email: true },
+    });
+    return (brokerage?.invoice_email ?? '').trim() || (brokerage?.email ?? '').trim() || null;
   }
 
   private mapFields(data: Record<string, unknown>, settings: { default_tax_rate: Prisma.Decimal | number }): Record<string, unknown> {

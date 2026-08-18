@@ -1,4 +1,6 @@
 import { CallHandler, ExecutionContext, Injectable, NestInterceptor } from '@nestjs/common';
+import { SSE_METADATA } from '@nestjs/common/constants';
+import { Reflector } from '@nestjs/core';
 import { randomBytes } from 'crypto';
 import type { Request, Response } from 'express';
 import { Observable } from 'rxjs';
@@ -29,6 +31,8 @@ import { metrics } from './metrics';
  */
 @Injectable()
 export class RequestLogInterceptor implements NestInterceptor {
+  constructor(private readonly reflector: Reflector) {}
+
   intercept(context: ExecutionContext, next: CallHandler): Observable<unknown> {
     if (context.getType() !== 'http') return next.handle();
 
@@ -39,9 +43,64 @@ export class RequestLogInterceptor implements NestInterceptor {
     // Honour an id from a proxy or load balancer so a trace survives the hop.
     const id = String(req.headers['x-request-id'] ?? '') || randomBytes(6).toString('hex');
     const started = Date.now();
-    const ctx = { id, method: req.method, path: req.originalUrl?.split('?')[0] };
+    // `ip` honours the trust-proxy setting Express is configured with, so behind a load balancer
+    // this is the client rather than the balancer. Both are clipped: they end up in a varchar, and
+    // a header is attacker-controlled length.
+    const ctx = {
+      id,
+      method: req.method,
+      path: req.originalUrl?.split('?')[0],
+      ip: (req.ip ?? '').slice(0, 45) || null,
+      userAgent: String(req.headers['user-agent'] ?? '').slice(0, 255) || null,
+    };
 
-    res.setHeader('X-Request-Id', id);
+    /*
+     * ================================================================================================
+     * THIS METHOD RUNS AT SUBSCRIBE TIME, NOT WHEN THE ROUTE IS CALLED — AND FOR A STREAM THAT IS
+     * AFTER THE RESPONSE HEADERS HAVE ALREADY GONE OUT.
+     *
+     * Nest wraps the interceptor chain in rxjs `defer()`, so nothing in here executes until Nest
+     * subscribes to the returned observable. For an ordinary route that is immediately, and the
+     * difference never shows. For a Server-Sent-Events route Nest does this, in this order:
+     *
+     *     const stream = new SseStream(req);
+     *     stream.pipe(res);        // writeHead(200) + flushHeaders() -- headers are now SENT
+     *     result.subscribe(...);   // <- only now does this method run
+     *
+     * So `res.setHeader(...)` here threw ERR_HTTP_HEADERS_SENT, rxjs delivered it as the
+     * observable's error, and Nest wrote it to the client as `event: error / data: Cannot set
+     * headers after they are sent to the client` before closing the stream. Every SSE endpoint in
+     * the application was dead on arrival, and the message named the symptom rather than the cause.
+     *
+     * Diagnosed by wrapping `res.setHeader` in a probe that logged a stack whenever it was called
+     * with `headersSent` already true; the stack named this line, reached through `defer`.
+     * ================================================================================================
+     *
+     * GUARDED RATHER THAN MOVED. The check is `headersSent`, not "is this SSE", because the deferred
+     * execution is general: any future route that writes to the response before this subscribes has
+     * the same problem, and a rule that only knows about SSE would not cover it. An SSE response
+     * therefore carries no `X-Request-Id` — the header was already on the wire before this code got
+     * to run, and a correlation id is not worth failing a request for.
+     */
+    if (!res.headersSent) res.setHeader('X-Request-Id', id);
+
+    /*
+     * A SERVER-SENT-EVENT ROUTE IS ALSO PASSED STRAIGHT THROUGH, which is a separate point from the
+     * header guard above and would be worth doing even if headers were never an issue.
+     *
+     * This logs a request when its observable COMPLETES, which for a stream is when the browser
+     * disconnects — minutes or hours later. Every open Inbox would sit unlogged, then record a
+     * "request" whose duration is how long somebody had the tab open, and `metrics.record` would
+     * carry that into the latency figures. Logging it as it opens is the only honest moment a
+     * long-lived stream has.
+     *
+     * Returning `next.handle()` unwrapped also leaves Nest's own observable intact, which is what
+     * the SSE machinery is built to consume.
+     */
+    if (this.reflector.get<boolean>(SSE_METADATA, context.getHandler())) {
+      log.info(`${req.method} ${ctxPath(req)} stream opened`, 'HTTP', { status: 200, ms: 0 });
+      return next.handle();
+    }
 
     return new Observable((subscriber) =>
       withRequestContext(ctx, () =>

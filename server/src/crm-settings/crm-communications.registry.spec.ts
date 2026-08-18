@@ -29,12 +29,24 @@ describe('CRM communications registry — shape', () => {
     expect(ACTIVE_CRM_COMMUNICATIONS.filter((c) => c.kind === 'manual')).toHaveLength(3);
   });
 
-  it('keeps Wedding registered but retired, so it stays out of the list and the migration', () => {
-    const wedding = byKey('wedding');
-    expect(wedding?.retired).toBe(true);
+  /**
+   * Wedding Congratulations is GONE, not merely hidden.
+   *
+   * It was registered here with `retired: true` while it still had a live send path, on the rule
+   * that a communication somebody can still send has to be describable. Retiring it removed the
+   * send path — the `sendWeddingEmail` action, `sendWeddingCongratulations`, the `bulkSend` case,
+   * the Send a CRM Email type and the `wedding` trigger key — so there is nothing left to describe.
+   *
+   * Asserted as absent from BOTH lists, and absent from `TRIGGER_KEYS`, because a leftover in
+   * either would be a route back to sending it.
+   */
+  it('has retired Wedding completely — no entry, no trigger key, nothing to send', () => {
+    expect(byKey('wedding')).toBeUndefined();
+    expect(CRM_COMMUNICATIONS.find((c) => c.key === 'wedding')).toBeUndefined();
     expect(ACTIVE_CRM_COMMUNICATIONS.find((c) => c.key === 'wedding')).toBeUndefined();
-    // Still has a template, because it can still be sent by hand. Registered ≠ offered.
-    expect(wedding?.templateEventKey).toBe('crm.wedding_congratulations');
+    expect(TRIGGER_KEYS as readonly string[]).not.toContain('wedding');
+    // No surviving entry points at the retired template either.
+    expect(CRM_COMMUNICATIONS.some((c) => c.templateEventKey === 'crm.wedding_congratulations')).toBe(false);
   });
 
   it('never offers a channel a communication cannot actually use', () => {
@@ -85,10 +97,48 @@ describe('CRM communications registry — cross-references resolve', () => {
     }
   });
 
-  it('the greeting categories are the ones the Phase 1 migration writes', () => {
+  it('the greeting categories are the ones the migration wrote', () => {
     expect(byKey('birthday')?.preferenceCategory).toBe('crm_birthday');
     expect(byKey('anniversary')?.preferenceCategory).toBe('crm_anniversary');
     expect(byKey('seasonal')?.preferenceCategory).toBe('crm_seasonal');
+  });
+
+  /**
+   * The migration is COMPLETE for the three greetings, and `legacyTriggerKey` is how you can tell.
+   *
+   * Its presence means "this row's per-user answer still lives in `crm_trigger_settings`" — that is
+   * what `CrmCommunicationsService` branches on. Leaving it on a migrated greeting would have left
+   * the screen reading a store the send path had stopped consulting: two answers, one of them
+   * ignored, and the switch showing whichever one was wrong.
+   */
+  it('leaves no legacy trigger key on a migrated greeting', () => {
+    for (const key of ['birthday', 'anniversary', 'seasonal']) {
+      // Named in the loop below rather than in an assertion message — jest's `expect` takes none.
+      expect({ key, legacy: byKey(key)?.legacyTriggerKey }).toEqual({ key, legacy: undefined });
+    }
+  });
+
+  /**
+   * Welcome and the three manual emails have NOT migrated, and say so.
+   *
+   * Welcome carried `preferenceCategory: 'crm_welcome'` while no such category existed and the
+   * migration deliberately did not create one — a field naming a destination nothing had moved to.
+   * Now that `preferenceCategory` decides which store is read, that would have silently switched it
+   * to a table holding no answer, and every agent who had turned Welcome off would have resumed
+   * sending. Exactly one of the two fields may be set on any row.
+   */
+  it('keeps Welcome and the manual emails on crm_trigger_settings, with no phantom category', () => {
+    for (const key of ['welcome', 'promotional', 'referral', 'custom']) {
+      const comm = byKey(key)!;
+      expect({ key, legacy: comm.legacyTriggerKey, category: comm.preferenceCategory })
+        .toEqual({ key, legacy: key, category: null });
+    }
+  });
+
+  it('never sets both a preference category and a legacy trigger key on one row', () => {
+    for (const c of CRM_COMMUNICATIONS) {
+      expect({ key: c.key, both: !!(c.preferenceCategory && c.legacyTriggerKey) }).toEqual({ key: c.key, both: false });
+    }
   });
 
   it('exposes each communication\'s variables from the mail registry rather than re-listing them', () => {

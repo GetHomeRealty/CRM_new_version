@@ -28,7 +28,11 @@ async function post(ctx: APIRequestContext, path: string, data?: unknown) {
 const signIn = (ctx: APIRequestContext, email: string) =>
   post(ctx, '/api/login', { username: email, password: PASSWORD });
 
-interface Item { key: string; source: string; transaction_id: number; unread: boolean; link: string }
+/** `notification_id` is present only on `direct` rows, which are addressed by their own id. */
+interface Item {
+  key: string; source: string; transaction_id: number; unread: boolean; link: string;
+  notification_id?: number;
+}
 
 test.describe('the merged feed', () => {
   test('answers with a shaped feed for a signed-in agent', async ({ playwright }) => {
@@ -44,11 +48,29 @@ test.describe('the merged feed', () => {
       expect(typeof body.unread).toBe('number');
       expect(body.limit).toBeGreaterThan(0);
 
+      /*
+       * TWO SHAPES, NOT ONE. This loop asserted a single shape — `key === source:transaction_id`,
+       * a `/desk/transactions/…` link, and one of the four Desk sources — which was true when the
+       * only notifications were about deals.
+       *
+       * `direct` was added to `NotificationSource` when the in-app notification platform shipped,
+       * and a direct row is deliberately different: it is not about a deal, so `transaction_id` is
+       * 0 and it is addressed by its OWN id (`source:notification_id`) — see
+       * `notification-center.service.ts`. Any CRM in-app notification (a lead assigned, a campaign
+       * finished) is one of these, so the old assertion failed the moment a seeded agent had one.
+       * It was passing on the absence of CRM notifications rather than on a property of the feed.
+       */
       for (const item of body.items as Item[]) {
-        // Every row must be addressable and openable — those are the two things the screen does.
-        expect(item.key).toBe(`${item.source}:${item.transaction_id}`);
-        expect(item.link).toBe(`/desk/transactions/${item.transaction_id}`);
-        expect(['agent-change', 'doc-review', 'review-decision', 'reminder']).toContain(item.source);
+        expect(['agent-change', 'doc-review', 'review-decision', 'reminder', 'direct']).toContain(item.source);
+        // Every row must be addressable and openable, whichever kind it is.
+        expect(item.key).toBe(`${item.source}:${item.source === 'direct' ? item.notification_id : item.transaction_id}`);
+        if (item.source === 'direct') {
+          expect(item.transaction_id).toBe(0);
+          expect(typeof item.link).toBe('string');
+          expect(item.link.length).toBeGreaterThan(0);
+        } else {
+          expect(item.link).toBe(`/desk/transactions/${item.transaction_id}`);
+        }
       }
     } finally { await ctx.dispose(); }
   });
@@ -139,14 +161,29 @@ test.describe('who sees what', () => {
       const mine = await (await a.get(`${API_BASE}/api/notifications?filter=all&limit=100`)).json();
       const theirs = await (await b.get(`${API_BASE}/api/notifications?filter=all&limit=100`)).json();
 
-      // Whatever each is shown, they must be able to open every deal in their own list.
-      for (const item of (mine.items as Item[]).slice(0, 5)) {
+      /*
+       * Only the DEAL-ANCHORED rows can be checked this way. A `direct` row is not about a
+       * transaction at all — `transaction_id` is 0 — so asking for `/api/transactions/0` proves
+       * nothing and 404s. The isolation this test defends is unchanged: every deal a person is
+       * notified about must be one they can open. Direct rows are scoped by `user_id` in the query
+       * that produces them, which the `an agent is not shown the administrator feed` test covers.
+       */
+      const deals = (items: Item[]) => items.filter((i) => i.source !== 'direct' && i.transaction_id > 0);
+
+      for (const item of deals(mine.items as Item[]).slice(0, 5)) {
         const res = await a.get(`${API_BASE}/api/transactions/${item.transaction_id}`);
         expect(res.status(), `agent must be able to open ${item.transaction_id} from their own feed`).toBeLessThan(400);
       }
-      for (const item of (theirs.items as Item[]).slice(0, 5)) {
+      for (const item of deals(theirs.items as Item[]).slice(0, 5)) {
         const res = await b.get(`${API_BASE}/api/transactions/${item.transaction_id}`);
         expect(res.status()).toBeLessThan(400);
+      }
+
+      // And a direct row must never be somebody else's: the two feeds share no direct key.
+      const directKeys = (items: Item[]) => new Set(items.filter((i) => i.source === 'direct').map((i) => i.key));
+      const mineDirect = directKeys(mine.items as Item[]);
+      for (const key of directKeys(theirs.items as Item[])) {
+        expect(mineDirect.has(key), `direct notification ${key} appeared in both agents' feeds`).toBe(false);
       }
     } finally { await a.dispose(); await b.dispose(); }
   });

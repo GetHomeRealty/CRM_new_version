@@ -165,6 +165,46 @@ export const NOTIFICATION_CATEGORIES: readonly NotificationCategory[] = [
     description: 'A campaign you own stops before it could finish.',
     channels: { in_app: 'live', email: 'live', push: 'live' },
   },
+  /*
+   * ------------------------------------------------------------- CRM greetings, sent to a LEAD
+   *
+   * The three whose per-user answer moved out of `crm_trigger_settings` — see the Phase 1
+   * migration in `scripts/migrate-crm-greeting-prefs.cjs`. They are registered here because this
+   * table is where their answer now lives, and `set()` validates against this list: without an
+   * entry, the Communications screen could not write one.
+   *
+   * EMAIL ONLY, AND THAT IS NOT AN OVERSIGHT. These go to a CLIENT. There is no in-app inbox and no
+   * browser subscription for somebody who does not use the product, so the other two channels are
+   * `unsupported` rather than `pending` — nothing is coming for them.
+   *
+   * `areas: []` — SHOWN ON NO PREFERENCES SCREEN, ON PURPOSE. The field's documented meaning is
+   * "which area's Notification Preferences screen offers this category", and the answer for these
+   * three is neither: they are offered on CRM → Communications, which is the single user-facing
+   * place for CRM communications. Listing them here as well would rebuild, on a second screen, the
+   * exact duplication that removing CRM Triggers was meant to end. As the field's own comment says,
+   * this governs the SCREEN and not delivery: the rows are stored, read and honoured either way.
+   */
+  {
+    key: 'crm_birthday',
+    label: 'Birthday greetings to your leads',
+    description: "Sent to your lead on their birthday, if a date of birth is on file.",
+    channels: { in_app: 'unsupported', email: 'live', push: 'unsupported' },
+    areas: [],
+  },
+  {
+    key: 'crm_anniversary',
+    label: 'Anniversary greetings to your leads',
+    description: 'Sent to your lead on their wedding anniversary, if a date is on file.',
+    channels: { in_app: 'unsupported', email: 'live', push: 'unsupported' },
+    areas: [],
+  },
+  {
+    key: 'crm_seasonal',
+    label: 'Seasonal wishes to your leads',
+    description: 'Seasonal greetings sent to your leads.',
+    channels: { in_app: 'unsupported', email: 'live', push: 'unsupported' },
+    areas: [],
+  },
   {
     key: 'chat_mentions',
     label: 'Team chat mentions',
@@ -229,6 +269,35 @@ export class NotificationPreferenceService {
       return row ? row.enabled : true;
     } catch {
       return true;
+    }
+  }
+
+  /**
+   * What this person actually STORED for one pair, distinguishing "off" from "never said".
+   *
+   * WHY THIS EXISTS BESIDE `isEnabled`. That method collapses the two into `true`, because failing
+   * open is right for a staff notification: an alert somebody meant to mute is an annoyance, a
+   * swallowed closing reminder is a missed closing. The CRM greetings run the other way — they are
+   * timer-driven email to a CLIENT, they default to OFF, and they inherit a brokerage default when
+   * nobody has expressed a choice. Answering `true` for absence would have started sending on
+   * everybody's behalf the moment the send path switched tables.
+   *
+   * So this returns `null` for "no row", and the caller decides what absence means. It never
+   * decides on the caller's behalf, which is the whole point of it being a separate method.
+   *
+   * A database error also answers `null` — the caller falls back to its own default rather than
+   * inheriting a guess from this layer.
+   */
+  async storedChoice(userId: number, category: string, channel: NotificationChannel): Promise<boolean | null> {
+    if (!userId || userId < 0) return null;
+    try {
+      const row = await this.prisma.notification_preferences.findUnique({
+        where: { user_id_category_channel: { user_id: userId, category, channel } },
+        select: { enabled: true },
+      });
+      return row ? row.enabled : null;
+    } catch {
+      return null;
     }
   }
 

@@ -26,14 +26,44 @@ function base(where: Record<string, unknown>): Record<string, unknown> {
   return (and ? and[0] : where) as Record<string, unknown>;
 }
 
-describe('who may select the whole brokerage', () => {
-  it.each(['admin', 'manager', 'crm'])('%s selects across the brokerage', (role) => {
-    expect(ownerClause(svc.buildAudienceWhere({}, as(role)))).toBeNull();
+describe('who may select the brokerage’s leads', () => {
+  /**
+   * WHAT THESE EXPECTATIONS USED TO BE, AND WHY THEY CHANGED.
+   *
+   * This block asserted `ownerClause(...)` was **null** for the three marketing roles — meaning the
+   * audience query carried NO owner clause at all. That is `{}`, and `{}` is every lead in the
+   * database, including every agent's private book. Measured on the running application: a Manager
+   * whose Leads screen showed 0 leads could build a campaign against 81, of which 14 were agents'
+   * private clients.
+   *
+   * "Select across the brokerage" was the right intent and the wrong implementation: it widened to
+   * EVERYTHING rather than to the brokerage's OWN leads, which this database distinguishes by
+   * `owner_user_id IS NULL`. The audience now resolves through `leadScopeWhere`, so the clause is
+   * present for every role — what differs is whether the brokerage's leads are inside it.
+   */
+  it.each(['admin', 'manager', 'crm', 'accounting', 'documentation'])(
+    '%s selects the brokerage’s own leads as well as their own', (role) => {
+      const clause = ownerClause(svc.buildAudienceWhere({}, as(role, 7))) as { OR?: unknown[] };
+      expect(clause?.OR).toEqual([{ assigned_to: 7 }, { owner_user_id: 7 }, { owner_user_id: null }]);
+    });
+
+  it('an agent is capped to their own leads — the one role with a private book', () => {
+    const clause = ownerClause(svc.buildAudienceWhere({}, as('agent', 7))) as { OR?: unknown[] };
+    expect(clause?.OR).toEqual([{ assigned_to: 7 }, { owner_user_id: 7 }]);
   });
 
-  it.each(['agent', 'accounting', 'documentation'])('%s is capped to their own leads', (role) => {
-    const clause = ownerClause(svc.buildAudienceWhere({}, as(role, 7))) as { OR?: unknown[] };
-    expect(clause?.OR).toEqual([{ assigned_to: 7 }, { owner_user_id: 7 }]);
+  it('no role gets an empty owner clause — that would be every agent’s book', () => {
+    // The property, stated directly, because losing it is the specific regression this file exists
+    // for. An absent clause is not "brokerage-wide"; it is unscoped.
+    for (const role of ['admin', 'manager', 'crm', 'agent', 'accounting', 'documentation']) {
+      expect(ownerClause(svc.buildAudienceWhere({}, as(role, 7)))).not.toBeNull();
+    }
+  });
+
+  it('a brokerage-scoped role still cannot select a NAMED agent’s leads', () => {
+    // `owner_user_id: null` is the brokerage's leads. There is no clause admitting owner_user_id 42.
+    const clause = ownerClause(svc.buildAudienceWhere({}, as('manager', 7))) as { OR?: Record<string, unknown>[] };
+    expect(clause.OR!.some((c) => c.owner_user_id === 42 || c.assigned_to === 42)).toBe(false);
   });
 
   it('fails closed with no user at all', () => {

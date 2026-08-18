@@ -17,7 +17,8 @@ import { parseJson, toDateString } from '../common/serialize';
 import type { AuthUserRecord } from '../auth/auth.types';
 import { STORAGE_ROOT } from '../config/storage';
 
-import { assertCan, can, isAgent } from '../core/authz';
+import { can, isAgent } from '../core/authz';
+import { ownsTransaction, teamMemberIdentity } from '../common/transaction-scope';
 import { ResourceAccessService } from '../core/resource-access.service';
 const SECTION = 'Legal & Documents';
 type Actor = AuthUserRecord | null;
@@ -43,17 +44,22 @@ export class DocumentsService {
 
   private actor(u: Actor): ActingUser | null { return u ? { id: u.id, name: u.name } : null; }
 
-  private async txnOr404(id: number): Promise<{ id: number; type: string; agent: string | null; property: string | null; trade_no: string; conditional_offer: boolean; reco_audit_ready: string | null; reco_audit_remarks: string | null }> {
+  private async txnOr404(id: number): Promise<{ id: number; type: string; agent: string | null; agent_user_id: number | null; property: string | null; trade_no: string; conditional_offer: boolean; reco_audit_ready: string | null; reco_audit_remarks: string | null }> {
     const t = await this.prisma.transactions.findFirst({ where: { id, deleted_at: null } });
     if (!t) throw new NotFoundException({ message: `No query results for model [App\\Models\\Transaction] ${id}.` });
     return t;
   }
 
-  private async guardAgent(user: Actor, txn: { id: number; agent: string | null }): Promise<void> {
+  /**
+   * Identity by id where the row has one, name only for legacy rows — the same rule the
+   * transaction list and `ResourceAccessService` apply. See `common/transaction-scope.ts`.
+   */
+  private async guardAgent(user: Actor, txn: { id: number; agent: string | null; agent_user_id: number | null }): Promise<void> {
     if (user && isAgent(user)) {
-      const name = user.name;
-      const isMember = (await this.prisma.team_members.findFirst({ where: { transaction_id: txn.id, name } })) !== null;
-      if (txn.agent !== name && !isMember) throw new ForbiddenException({ message: 'You do not have access to this transaction.' });
+      const isMember = (await this.prisma.team_members.findFirst({
+        where: { transaction_id: txn.id, ...teamMemberIdentity(user) },
+      })) !== null;
+      if (!ownsTransaction(user, txn) && !isMember) throw new ForbiddenException({ message: 'You do not have access to this transaction.' });
     }
   }
 
@@ -90,7 +96,21 @@ export class DocumentsService {
       for (let i = 0; i < rows.length; i++) await this.createDoc(txnId, { title: rows[i].title, mandatory: rows[i].mandatory, position: i });
     }
 
-    await this.prisma.documents.updateMany({ where: { transaction_id: txnId, deleted_at: null, mandatory: true }, data: { mandatory: false } });
+    /*
+     * WHAT USED TO BE HERE: `updateMany({ where: { mandatory: true }, data: { mandatory: false } })`.
+     *
+     * Every load of the document list cleared the flag on every document of the deal. So the column
+     * existed, the administrator's Mandatory checkbox wrote to it, `bulkUpdate` saved it — and the
+     * next time anybody opened Legal & Documents it was gone. Three things downstream read it and
+     * were therefore structurally always zero: the Dashboard's "mandatory missing" tile, the
+     * reports' `missing_mandatory` measure, and the "Required" column on the documentation reports.
+     * A compliance figure that cannot be anything but zero is worse than no figure, because it
+     * reads as "nothing outstanding".
+     *
+     * Nothing replaces it: a load is a READ. Whether a document is mandatory is decided when it is
+     * seeded (`DocumentDefaultsService`) or when an administrator ticks the box, and neither of
+     * those is "somebody opened the screen".
+     */
 
     await this.stripFormNumberPrefixes(txnId);
     await this.ensureStatusDocs(txn);
@@ -243,7 +263,7 @@ export class DocumentsService {
     }
 
     // Remove client-deleted rows (soft-delete, keep files). Condition rows + agent-flagged excluded.
-    const toRemove = await this.prisma.documents.findMany({ where: { transaction_id: txnId, deleted_at: null, condition_id: null, pending_delete: false, id: { notIn: keep.length ? keep : [0] } }, orderBy: { position: 'asc' } });
+    const toRemove = await this.prisma.documents.findMany({ where: { transaction_id: txnId, deleted_at: null, condition_id: null, id: { notIn: keep.length ? keep : [0] } }, orderBy: { position: 'asc' } });
     for (const d of toRemove) {
       await this.audit.record(txnId, this.actor(user), { section: SECTION, field: d.title, action: 'Document removed' });
       await this.prisma.documents.update({ where: { id: d.id }, data: { deleted_at: new Date(), updated_at: new Date() } });
@@ -260,7 +280,7 @@ export class DocumentsService {
     }
 
     if (reviewed) {
-      const fresh = await this.prisma.documents.findMany({ where: { transaction_id: txnId, deleted_at: null, pending_delete: false } });
+      const fresh = await this.prisma.documents.findMany({ where: { transaction_id: txnId, deleted_at: null } });
       const validCount = fresh.filter((d) => d.validation === 'Valid').length;
       const invalid = fresh.filter((d) => d.validation === 'Invalid');
       const parts = [`${validCount} valid`];
@@ -474,18 +494,17 @@ export class DocumentsService {
     return { message: 'Document deleted' };
   }
 
-  async restore(user: Actor, docId: number): Promise<{ message: string }> {
-    assertCan(user, 'documents.administer');
-    const document = await this.prisma.documents.findFirst({ where: { id: docId, deleted_at: null } });
-    if (!document) throw new NotFoundException({ message: `No query results for model [App\\Models\\Document] ${docId}.` });
-    await this.prisma.documents.update({ where: { id: docId }, data: { pending_delete: false, deleted_by: null, updated_at: new Date() } });
-    const txn = await this.prisma.transactions.findFirst({ where: { id: document.transaction_id, deleted_at: null } });
-    if (txn) {
-      await this.audit.record(txn.id, this.actor(user), { section: SECTION, field: document.title, action: 'Document restored' });
-      await this.docsValidation.sync(txn.id, this.actor(user));
-    }
-    return { message: 'Document restored' };
-  }
+  /*
+   * `restore()` WAS HERE, AND IT COULD NOT WORK.
+   *
+   * It looked up a document with `deleted_at: null` — a LIVE document — and cleared `pending_delete`
+   * on it. Since nothing ever set that flag, it found live documents and changed nothing about
+   * them. It could not restore a soft-deleted document, because its own query excluded exactly
+   * those rows.
+   *
+   * Restoring a deleted document is `POST /api/trash/documents/:id/restore` in the Recycle Bin,
+   * which clears `deleted_at`, is Super Admin only, and works. That is the one route.
+   */
 
   // ---- reminders ----
 
@@ -493,7 +512,7 @@ export class DocumentsService {
     const txn = await this.txnOr404(txnId);
     if (user && isAgent(user)) throw new ForbiddenException({ message: 'Only an administrator can send document reminders.' });
 
-    const all = await this.docs(txnId, { reminder: true, pending_delete: false });
+    const all = await this.docs(txnId, { reminder: true });
     const docs = all.filter((d) => d.status !== 'Received' || d.validation === 'Invalid');
     if (docs.length === 0) throw new UnprocessableEntityException({ message: 'No documents are flagged for a reminder. Tick 🔔 on the pending/invalid documents first, Save, then send.' });
 
@@ -592,9 +611,22 @@ export class DocumentsService {
 
   async payload(txnId: number): Promise<Record<string, unknown>> {
     const txn = await this.prisma.transactions.findUnique({ where: { id: txnId }, select: { reco_audit_ready: true, reco_audit_remarks: true } });
-    const allDocs = await this.docs(txnId);
-    const deletedDocs = allDocs.filter((d) => d.pending_delete);
-    const docs = allDocs.filter((d) => !d.pending_delete);
+    /*
+     * `pending_delete` USED TO PARTITION THIS LIST. Nothing ever set it.
+     *
+     * The column exists, six queries filtered on it, the payload carried a `deleted_documents`
+     * array, the screen rendered a "Deleted Documents — pending review" panel with Restore and
+     * Delete-permanently buttons, and `POST /api/documents/:id/restore` existed to serve it. No
+     * code path in the application ever wrote `pending_delete = true`, so every one of those was
+     * unreachable: the array was always empty, the panel never appeared, and the endpoint could
+     * only ever no-op.
+     *
+     * Retired rather than completed. Document deletion already has a working route — soft delete
+     * (`deleted_at`) → Recycle Bin → Super Admin restores or destroys — and building a SECOND
+     * review queue beside it would be new workflow, not a repair. The column is left in the
+     * database; dropping it is a migration with nothing to gain.
+     */
+    const docs = await this.docs(txnId);
     const total = docs.length;
     const mandatory = docs.filter((d) => d.mandatory).length;
     const received = docs.filter((d) => d.status === 'Received').length;
@@ -636,13 +668,6 @@ export class DocumentsService {
           file_count: files.length,
         };
       }),
-      deleted_documents: deletedDocs.map((d) => ({
-        id: d.id,
-        title: d.title,
-        deleted_by: d.deleted_by,
-        has_file: !!d.file_path,
-        file_count: ((parseJson<FileEntry[]>(d.files) ?? []) as FileEntry[]).length,
-      })),
       stats: { total, mandatory, received, pending, pct: total > 0 ? Math.round((received / total) * 100) : 0 },
     };
   }

@@ -30,13 +30,50 @@ test('opens a message and shows its body', async ({ page }) => {
   await expect(page.getByText(/deposit is due on acceptance/)).toBeVisible();
 });
 
-test('renders the body as text, never as HTML', async ({ page }) => {
-  // Every stored body carries markup. If any of it reached the DOM as elements rather than text,
-  // a stranger's email would be running markup inside our own origin.
+/**
+ * A STRANGER'S HTML IS ISOLATED, NOT DELETED — and this test used to assert the opposite.
+ *
+ * ================================================================================================
+ * WHAT CHANGED AND WHY THE OLD ASSERTION HAD TO GO. The reader used to strip every tag and print the
+ * result in a `<pre>`, and this test checked for that `<pre>`. Stripping is safe and unreadable: a
+ * mail with a logo, a table of figures or a photo arrived as a wall of text with bare URLs where the
+ * links had been. `MailBody` replaced it, and the old assertion then failed on a screen that was
+ * working better than before — a stale test reporting a regression that was an improvement.
+ *
+ * THE CONCERN THE OLD TEST HELD IS STILL RIGHT: a stranger's markup must never run in our origin.
+ * The answer is now isolation rather than deletion, so this asserts the isolation:
+ *
+ *   `sandbox` WITHOUT `allow-scripts`      no script in the message runs at all
+ *   `sandbox` WITHOUT `allow-same-origin`  the frame is an opaque origin — it cannot read our
+ *                                          cookies, storage or DOM, and cannot call our API even
+ *                                          though the browser would attach the session
+ *
+ * Those two absences are the entire security boundary, and they are enforced by the browser rather
+ * than by our code — which is why they are worth pinning by name. `allow-popups` and
+ * `allow-popups-to-escape-sandbox` are present on purpose: without them a link in a message does
+ * nothing at all, because a sandboxed frame may not navigate its parent.
+ * ================================================================================================
+ */
+test('renders the body in a sandboxed frame that can neither script nor reach our origin', async ({ page }) => {
   await page.getByText('Re: 12 Elm Street — offer question').click();
   const modal = page.locator('.modal').first();
-  await expect(modal.locator('pre')).toBeVisible();
-  expect(await modal.locator('pre p').count()).toBe(0);
+
+  const frame = modal.locator('iframe.inbox-html');
+  await expect(frame).toBeVisible();
+
+  const sandbox = (await frame.getAttribute('sandbox')) ?? '';
+  // The two that must be ABSENT. Either one alone would undo the isolation.
+  expect(sandbox).not.toContain('allow-scripts');
+  expect(sandbox).not.toContain('allow-same-origin');
+  // And the two that must be PRESENT, or links stop working.
+  expect(sandbox).toContain('allow-popups');
+  expect(sandbox).toContain('allow-popups-to-escape-sandbox');
+
+  // The body is carried in `srcdoc`, so nothing is fetched from a third party to render it.
+  expect(await frame.getAttribute('srcdoc')).toBeTruthy();
+
+  // The message still READS — isolation was not bought by losing the content.
+  await expect(frame.contentFrame().getByText(/deposit is due on acceptance/)).toBeVisible();
 });
 
 /**

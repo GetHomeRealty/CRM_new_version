@@ -103,9 +103,17 @@ test.describe('Account Settings shows the Google Calendar card for THIS area onl
     const pills = page.locator('.intg-card .pill');
     await expect(pills).toHaveCount(1);
 
-    const text = (await pills.first().innerText()).trim();
-    expect(text.length).toBeGreaterThan(0);
-    expect(text).not.toBe('Checking…');
+    /*
+     * A RETRYING ASSERTION, because "resolves" is a thing that happens over time.
+     *
+     * This used to read `innerText` once, immediately after the card appeared — but the card renders
+     * with the placeholder in it and is filled in when `/api/google/calendar/status` answers, so the
+     * single read was racing that request. It won most of the time and lost about one run in four,
+     * which is the worst possible failure rate: frequent enough to erode trust in the suite, rare
+     * enough to look like something real. `not.toHaveText` polls until the timeout instead.
+     */
+    await expect(pills.first()).not.toHaveText('Checking…');
+    await expect(pills.first()).not.toBeEmpty();
   });
 });
 

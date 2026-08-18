@@ -1,4 +1,6 @@
-import { Controller, Get, Header, HttpCode } from '@nestjs/common';
+import { Controller, Get, Header, HttpCode, Req, UseGuards } from '@nestjs/common';
+import type { Request } from 'express';
+import { MetricsAccessGuard } from './metrics-access.guard';
 import * as fs from 'fs/promises';
 import { join } from 'path';
 import { PrismaService } from '../prisma/prisma.service';
@@ -25,9 +27,21 @@ import { workerSnapshot } from './worker-health';
  *   /api/health/metrics What it has been doing: throughput, latency percentiles, error rate, the
  *                       slowest routes and the last errors seen.
  *
- * All three are unauthenticated by design — a monitor that needs credentials is a monitor that stops
- * working when authentication breaks, which is exactly when you need it. They expose no business
- * data: counts, timings, route patterns and error messages, never a record.
+ * WHO MAY READ WHAT, and why it is not the same answer for all of them.
+ *
+ * LIVENESS and READINESS stay open, because the original reasoning holds for them: a monitor that
+ * needs credentials stops working exactly when authentication is what has broken, and a restarter or
+ * a load balancer must keep getting an answer then. What they RETURN to an anonymous caller is now
+ * trimmed — readiness reports which dependency is unhealthy, never the exception text, because
+ * "database: not ok" is everything a load balancer needs and the message beneath it named a host, a
+ * table or a path.
+ *
+ * METRICS and WORKERS are restricted, because "no business data" was true and not sufficient. They
+ * carry the ten busiest route patterns, the last twenty-five 5xx messages at up to 300 characters
+ * each — whatever happened to throw, including Prisma errors naming tables and columns — the process
+ * memory and event-loop profile, and whether the audit trail is failing to write. That is a map and
+ * a load profile for anyone probing. They now need a Super Admin session or the monitoring token;
+ * see `MetricsAccessGuard`, which keeps the credential-free path available to infrastructure.
  */
 @Controller('health')
 export class HealthController {
@@ -52,7 +66,7 @@ export class HealthController {
   @Get('ready')
   @Header('Cache-Control', 'no-store')
   @HttpCode(200)
-  async ready(): Promise<Record<string, unknown>> {
+  async ready(@Req() req: Request): Promise<Record<string, unknown>> {
     const checks: Record<string, { ok: boolean; ms?: number; detail?: string }> = {};
 
     // Database: a real round trip, not a connection-pool guess. System context because this asks
@@ -119,10 +133,36 @@ export class HealthController {
     }
 
     const ok = Object.values(checks).every((c) => c.ok);
-    return { status: ok ? 'ready' : 'degraded', checks, uptime_s: Math.round((Date.now() - metrics.startedAt) / 1000) };
+
+    /*
+     * THE `detail` STRINGS ARE FOR A PRIVILEGED CALLER ONLY.
+     *
+     * Each is up to 160 characters of an exception — a Prisma error naming a table, a filesystem
+     * path, the host in a failed connection string. A load balancer needs to know THAT the database
+     * is unhealthy, never why, so an anonymous caller gets the same shape with the reasons removed:
+     * same keys, same `ok` flags, same status code, nothing to read.
+     *
+     * THE MONITORING TOKEN IS THE ONLY WAY TO THE DETAIL HERE, and a Super Admin session is not —
+     * which is a consequence of this route being deliberately unguarded, not an oversight. Nothing
+     * but `AuthGuard` populates `req.authUser`, and `AuthGuard` does not run on a route a load
+     * balancer must reach without credentials; a role test here would read `undefined` on every
+     * request that has ever been made and quietly always strip. Rather than leave a branch that
+     * cannot be taken, the check is the one that works. The reasons are also in the log, where an
+     * operator looking at a degraded deployment is already looking.
+     */
+    const shown = MetricsAccessGuard.tokenMatches(req)
+      ? checks
+      : Object.fromEntries(Object.entries(checks).map(([k, c]) => [k, { ok: c.ok, ms: c.ms }]));
+
+    return { status: ok ? 'ready' : 'degraded', checks: shown, uptime_s: Math.round((Date.now() - metrics.startedAt) / 1000) };
   }
 
+  /**
+   * Throughput, latency, the slowest routes and the last errors — RESTRICTED. See the class note and
+   * `MetricsAccessGuard`: a Super Admin session or the monitoring token.
+   */
   @Get('metrics')
+  @UseGuards(MetricsAccessGuard)
   @Header('Cache-Control', 'no-store')
   snapshot(): Record<string, unknown> {
     return metrics.snapshot();
@@ -138,9 +178,12 @@ export class HealthController {
    * notice. `/ready` answers "should traffic come here"; this answers "is everything actually
    * getting done".
    *
-   * Unauthenticated like its siblings, and exposes no business data: counts, ages and states.
+   * RESTRICTED, for the same reasons as `metrics` — see the class note and `MetricsAccessGuard`. It
+   * carries no business data, but the process profile and the scheduler `last_error` strings are
+   * the same category of internal detail, and a monitor reaching one reaches the other.
    */
   @Get('workers')
+  @UseGuards(MetricsAccessGuard)
   @Header('Cache-Control', 'no-store')
   async workers(): Promise<Record<string, unknown>> {
     const cpu = process.cpuUsage();

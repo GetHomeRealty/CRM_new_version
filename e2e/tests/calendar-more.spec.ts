@@ -293,3 +293,49 @@ test.describe('"+N more" — the day, the owner, and the small screen', () => {
   });
 });
 
+
+// ============================================================================ analytics placement
+/**
+ * Calendar analytics belongs to the Transaction Desk, not the CRM.
+ *
+ * Removed from the CRM calendar by request. It is a REMOVAL FROM ONE AREA, not a deletion: the
+ * panel, its endpoint and the Desk's use of it are all untouched. Both halves are asserted here,
+ * because a change that quietly took it off the Desk too would satisfy the first assertion alone.
+ *
+ * The two calendars are one component behind one route, told apart by `area` — which is exactly why
+ * this is worth pinning. A future edit to the shared page has no obvious reminder that the panel is
+ * meant to appear on only one side of it.
+ */
+test.describe('calendar analytics is Transaction Desk only', () => {
+  const panel = (page: import('@playwright/test').Page) =>
+    page.getByText('Calendar analytics', { exact: true });
+
+  test('the CRM calendar does not offer it', async ({ page }) => {
+    await signIn(page, 'agent');
+    await page.goto(`/crm/calendar?month=${MONTH}`);
+
+    // The page itself still works — this is a removal, not a broken screen.
+    await expect(page.getByText("Today's Events")).toBeVisible();
+    await expect(panel(page)).toHaveCount(0);
+  });
+
+  test('the Transaction Desk calendar still offers it', async ({ page }) => {
+    await signIn(page, 'agent');
+    await page.goto(`/desk/calendar?month=${MONTH}`);
+
+    await expect(panel(page)).toBeVisible();
+  });
+
+  test('the endpoint is untouched and still answers for both areas', async ({ page }) => {
+    /*
+     * The panel was taken off one screen; nothing was removed from the API. A CRM caller asking
+     * directly still gets an answer — which is what makes this a presentation change rather than a
+     * capability being withdrawn.
+     */
+    await signIn(page, 'agent');
+    for (const area of ['crm', 'desk']) {
+      const res = await apiGet(page, `/api/calendar/analytics?area=${area}&from=${MONTH}-01&to=${MONTH}-28`);
+      expect(res.status).toBe(200);
+    }
+  });
+});

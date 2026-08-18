@@ -1,8 +1,9 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { auditDomain } from '../common/domain';
 import { PrismaService } from '../prisma/prisma.service';
+import { NotificationPreferenceService } from '../notifications/notification-preference.service';
 import type { AuthUserRecord } from '../auth/auth.types';
-import { DEFAULT_TRIGGERS, TRIGGER_KEYS, type TriggerKey } from './crm-settings.constants';
+import { DEFAULT_TRIGGERS, TRIGGER_KEYS, GREETING_CATEGORY, type TriggerKey } from './crm-settings.constants';
 
 /**
  * CRM email triggers — ONE PERSON'S OWN.
@@ -33,7 +34,10 @@ import { DEFAULT_TRIGGERS, TRIGGER_KEYS, type TriggerKey } from './crm-settings.
 export class CrmTriggersService {
   private readonly log = new Logger(CrmTriggersService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly prefs: NotificationPreferenceService,
+  ) {}
 
   /** The brokerage's defaults, or the compiled ones when nothing is configured. */
   private async brokerageDefaults(): Promise<Record<string, boolean>> {
@@ -222,11 +226,44 @@ export class CrmTriggersService {
   }
 
   async isEnabledFor(user: AuthUserRecord, key: TriggerKey): Promise<boolean> {
+    /*
+     * THE GREETINGS ARE ANSWERED FROM `notification_preferences` NOW, and this is the single point
+     * where that switch happened. Every send path already asked this method, so routing the three
+     * migrated keys here means the move needed no change at any call site — and no call site can be
+     * left behind reading the old store, which is the failure this shape exists to make impossible.
+     */
+    const category = GREETING_CATEGORY[key];
+    if (category) return this.greetingEnabledFor(user, key, category);
+
     const overrides = await this.ownOverrides(user.id ?? -1);
     if (overrides === null) return false;
     const own = overrides[key];
     if (own !== undefined) return own;
     const defaults = await this.brokerageDefaults();
     return defaults[key] ?? true;
+  }
+
+  /**
+   * A migrated greeting: this person's stored answer, else the brokerage default.
+   *
+   * WHY NOT `prefs.isEnabled`. That method answers **true** when no row exists, and failing open is
+   * right for what it was built for — a missed closing reminder costs more than an unwanted one.
+   * It is wrong here in the most expensive possible direction. Birthday, Anniversary and Seasonal
+   * default to OFF precisely because they fire on a timer, at whatever the stored dates say, with
+   * nobody watching; answering "true, nobody has said otherwise" would have turned the migration
+   * into an event that began emailing every brokerage's whole book on a schedule nobody chose.
+   *
+   * So absence is not an answer here — it is the absence of one, and it falls through to the
+   * brokerage default exactly as an unset `crm_trigger_settings` key always did. The migration
+   * copied every explicitly-set value across first, so nobody who had expressed a choice is
+   * resolved this way.
+   */
+  private async greetingEnabledFor(user: AuthUserRecord, key: TriggerKey, category: string): Promise<boolean> {
+    const userId = user.id ?? -1;
+    if (userId > 0) {
+      const stored = await this.prefs.storedChoice(userId, category, 'email');
+      if (stored !== null) return stored;
+    }
+    return this.brokerageDefaultFor(key);
   }
 }

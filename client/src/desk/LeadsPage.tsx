@@ -12,6 +12,7 @@ import { runLeadImport, type ImportJob } from '../lib/leadImportApi';
 import ImportProgress from '../components/ImportProgress';
 import { useToast } from './toast';
 import { useAuth } from '../context/AuthContext';
+import { identityLocked } from '../lib/leadIdentity';
 import Icon from '../ui/Icon';
 import ConfirmDialog, { useConfirm } from './ConfirmDialog';
 import LeadEditorModal, { label } from './LeadEditorModal';
@@ -106,8 +107,15 @@ export default function LeadsPage() {
   const toast = useToast();
   const navigate = useNavigate();
   const { can, user } = useAuth();
-  // An agent working a lead the brokerage created cannot delete it or change its identity fields.
-  // owner_user_id is the creator; a lead the agent created themselves is fully theirs.
+  /*
+   * WHETHER AN AGENT MAY DELETE THIS LEAD. Named for what it decides, because it no longer decides
+   * the identity lock — that moved to `identityLocked`, which follows the server's rule and answers
+   * differently for a brokerage lead (null owner) and for the roles below manager.
+   *
+   * Deleting keeps this narrower test on purpose: `LeadsService.remove` scopes by visibility alone,
+   * so an agent may delete a brokerage lead they can see, and only somebody else's lead is out of
+   * bounds. Widening it here would hide a control the server permits.
+   */
   const isBrokerageLead = (l: Lead): boolean =>
     user?.role === 'agent' && l.owner_user_id != null && l.owner_user_id !== user.id;
   const canEdit = can('lead', 'edit');
@@ -500,7 +508,8 @@ export default function LeadsPage() {
         <LeadEditorModal
           lead={editing}
           options={options}
-          lockIdentity={editing ? isBrokerageLead(editing) : false}
+          // Same helper the detail page uses, so the two screens cannot drift apart again.
+          lockIdentity={identityLocked(editing, user)}
           onClose={() => setEditorOpen(false)}
           onSaved={() => { setEditorOpen(false); void load(); void loadTags(); }}
         />

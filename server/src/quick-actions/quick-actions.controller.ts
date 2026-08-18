@@ -10,8 +10,23 @@ import { ResourceAccessService } from '../core/resource-access.service';
 type Res = Record<string, unknown>;
 const u = (x: AuthUserRecord | undefined): AuthUserRecord | null => x ?? null;
 
+/*
+ * EVERY ROUTE HERE IS BEHIND THE `transactions` SCREEN PERMISSION, DECLARED ONCE ON THE CLASS.
+ *
+ * It was declared per method, and only on the writes — so `GET /api/transactions`, the detail
+ * endpoint and everything hanging off them answered to anybody with a session. The `crm` role's
+ * permission map says `transactions: 'none'` and it could still read every deal in the brokerage,
+ * including the commission breakdown; so could a user whose access had been deliberately revoked.
+ * The navigation hid the screen and nothing else did.
+ *
+ * Declared on the CLASS so the default is closed: a route added later inherits `view` without
+ * anybody remembering to decorate it, and a write route overrides it with `edit` — `ScreenGuard`
+ * reads the handler's metadata first (`getAllAndOverride`). `ScreenGuard` also enforces module
+ * access for the screen's area, so a login without Transaction Management is refused here too.
+ */
 @Controller()
-@UseGuards(AuthGuard)
+@UseGuards(AuthGuard, ScreenGuard)
+@Screen('transactions', 'view')
 export class QuickActionsController {
   constructor(
     private readonly notice: NoticeOfSaleService,
@@ -33,7 +48,6 @@ export class QuickActionsController {
 
   @Put('transactions/:transaction/notice-of-sale')
   @Screen('transactions', 'edit')
-  @UseGuards(AuthGuard, ScreenGuard)
   saveNotice(@CurrentUser() user: AuthUserRecord | undefined, @Param('transaction', ParseIntPipe) txnId: number, @Body() body: Res): Promise<Res> {
     return this.notice.save(u(user), txnId, body ?? {});
   }
@@ -41,7 +55,6 @@ export class QuickActionsController {
   @Post('transactions/:transaction/notice-of-sale/send')
   @HttpCode(200)
   @Screen('transactions', 'edit')
-  @UseGuards(AuthGuard, ScreenGuard)
   sendNotice(@CurrentUser() user: AuthUserRecord | undefined, @Param('transaction', ParseIntPipe) txnId: number, @Body() body: Res): Promise<Res> {
     return this.notice.send(u(user), txnId, body ?? {});
   }
@@ -49,7 +62,6 @@ export class QuickActionsController {
   @Post('transactions/:transaction/deposit-receipt/send')
   @HttpCode(200)
   @Screen('transactions', 'edit')
-  @UseGuards(AuthGuard, ScreenGuard)
   sendDeposit(@CurrentUser() user: AuthUserRecord | undefined, @Param('transaction', ParseIntPipe) txnId: number, @Body() body: Res): Promise<Res> {
     return this.quick.depositReceipt(u(user), txnId, body ?? {});
   }
@@ -57,7 +69,6 @@ export class QuickActionsController {
   @Post('transactions/:transaction/trade-sheet/send')
   @HttpCode(200)
   @Screen('transactions', 'edit')
-  @UseGuards(AuthGuard, ScreenGuard)
   sendTradeSheet(@CurrentUser() user: AuthUserRecord | undefined, @Param('transaction', ParseIntPipe) txnId: number, @Body() body: Res): Promise<Res> {
     return this.quick.tradeSheet(u(user), txnId, body ?? {});
   }

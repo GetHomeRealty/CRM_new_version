@@ -192,18 +192,38 @@ describe('campaign templates are the author\'s, and the built-ins are nobody\'s'
     });
   }
 
-  it('shows an agent the built-ins and their own, and nobody else\'s', async () => {
+  it('lists an agent\'s own templates, and nobody else\'s — including the built-ins', async () => {
     await inRollback(async (tx) => {
       const { owner, colleague } = await people(tx);
       const mine = await template(tx, owner.id, `mine ${seq}`);
       const theirs = await template(tx, colleague.id, `theirs ${seq}`);
+      /*
+       * A built-in seeded BY THIS TEST, rather than an assertion about rows 1–6.
+       *
+       * It used to be checked by asserting that the six templates migration
+       * 20260727100000_seed_campaign_templates ships still had ids 1–6 in whatever database the
+       * suite happened to run against. They are ordinary rows: somebody deleted all six through the
+       * UI of this development database on 2026-08-06 and 2026-08-10 (soft-deleted, `deleted_at`
+       * set), and the test began failing on a service that was behaving perfectly. Seeding one here
+       * tests the rule instead of the fixture, and cannot be made green or red by anyone's data.
+       *
+       * THE RULE CHANGED, AND THIS IS WHICH RULE IT NOW IS. `list()` used to answer "may you touch
+       * this row", which admitted a template owned by nobody. It now answers "does this belong in
+       * the campaign template library", and the brokerage's decision is that the library holds only
+       * templates somebody created for a campaign. So a built-in is NOT listed.
+       *
+       * That is a change to what is OFFERED, not to what may be touched: `visibleWhere` is
+       * unchanged, so the two tests below — an agent may not edit a built-in, an administrator may
+       * — still describe live behaviour, and a campaign already built on one still resolves it.
+       */
+      const builtIn = await template(tx, null, `built-in ${seq}`);
 
       const list = await svc(tx).list(undefined, as(owner)) as { id: number; name: string }[];
       const ids = list.map((t) => t.id);
       expect(ids).toContain(mine.id);
       expect(ids).not.toContain(theirs.id);
-      // The six that ship with the application are visible to everyone.
-      expect(list.filter((t) => [1, 2, 3, 4, 5, 6].includes(t.id)).length).toBeGreaterThan(0);
+      // Owned by nobody, so not a campaign template, so not in the library.
+      expect(ids).not.toContain(builtIn.id);
     });
   });
 

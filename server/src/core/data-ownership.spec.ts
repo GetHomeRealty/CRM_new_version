@@ -88,6 +88,11 @@ const DERIVED: Record<string, string> = {
   notification_preferences: 'users',
   // In-app notifications the dispatcher delivers. One person's, reached no other way.
   notifications: 'users',
+  // What the dispatcher has already handled, per recipient, occurrence and channel. Derived from
+  // the recipient for the same reason `notifications` is: every row names one person, and nobody
+  // else has any business reading it. Cascades with the user, so a deleted account takes its
+  // delivery history with it.
+  notification_deliveries: 'users',
   /*
    * Two-factor authentication. Every one of these belongs to a person, not to the brokerage: a
    * factor is enrolled by its owner, a recovery code redeemed by its owner, a device trusted by its
@@ -129,6 +134,17 @@ const DERIVED: Record<string, string> = {
   campaign_links: 'campaigns', campaign_clicks: 'campaigns',
   email_templates: 'mail_accounts', email_template_attachments: 'email_templates',
   inbound_emails: 'mail_accounts', meta_pages: 'meta_connections',
+  /*
+   * The writable mailbox, added with the Transaction Desk Inbox.
+   *
+   * All three hang off `mail_accounts`, which is the right parent for the same reason
+   * `inbound_emails` does: the ACCOUNT is what carries both the owner and the area (`scope`), so a
+   * draft, a sent message and an attachment inherit "whose, and which side of the product" from the
+   * mailbox they belong to rather than restating it.
+   */
+  inbound_email_attachments: 'inbound_emails',
+  outbound_emails: 'mail_accounts',
+  outbound_email_attachments: 'outbound_emails',
   // via roles
   role_permissions: 'roles',
 };

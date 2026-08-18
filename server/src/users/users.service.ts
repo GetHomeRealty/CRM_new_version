@@ -233,18 +233,33 @@ export class UsersService {
       throw new UnprocessableEntityException({
         message: `${user.name} still has ${summary}. Deleting the account would leave those records pointing at `
           + 'somebody who no longer exists — their calendar in particular would be reachable by nobody. '
-          + 'Deactivate the account instead: that disconnects Meta, returns their brokerage leads to the '
-          + 'brokerage, keeps their own leads with them, and ends their access immediately.',
+          + 'Deactivate the account instead: that ends their access immediately, releases the brokerage '
+          + 'leads they were working back to the pool, and leaves their own leads private with them.',
       });
     }
 
+    /*
+     * A REAL DATABASE DEPENDENCY, NAMED RATHER THAN WORKED AROUND.
+     *
+     * `leads.owner_user_id` is a bare integer with no foreign key and `users` has no soft delete, so
+     * removing the row would leave these leads owned by an id that resolves to nobody: invisible on
+     * every screen, outside every scope, and unrecoverable.
+     *
+     * THE OBVIOUS WORKAROUND IS FORBIDDEN. Nulling the owner would make the delete succeed and would
+     * hand the departing agent's private clients to the brokerage — the exact conversion this work
+     * removed. Deletion is refused instead, and the remedy is stated: the agent exports or clears
+     * their own leads, or the account is deactivated, which never needed the leads dealt with first.
+     *
+     * The message says what it is holding, without naming a single client.
+     */
     const { personal } = await this.offboarding.leadCounts(id);
     if (personal > 0) {
       throw new UnprocessableEntityException({
-        message: `${user.name} has ${personal} lead${personal === 1 ? '' : 's'} that arrived through their own `
-          + 'Meta account. Those are personal and stay with them, so deleting the account would leave them '
-          + 'owned by nobody and unrecoverable. Deactivate the account instead — that disconnects Meta and '
-          + 'returns the brokerage leads, and keeps their own leads with them.',
+        message: `${user.name} still owns ${personal} lead${personal === 1 ? '' : 's'} of their own. Deleting the `
+          + 'account would leave those leads owned by nobody and unrecoverable, and they will not be handed '
+          + 'to the brokerage — an agent\'s own leads stay private. Ask them to export or remove their leads '
+          + 'first, or deactivate the account instead, which ends their access immediately and does not '
+          + 'require the leads to be dealt with at all.',
       });
     }
 

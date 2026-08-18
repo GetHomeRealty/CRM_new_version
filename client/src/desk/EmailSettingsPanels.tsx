@@ -207,8 +207,23 @@ const CRM_MODULE = 'CRM';
  * The split is a PARTITION, not a filter: `crm` shows the CRM group and `desk` shows everything
  * else, so every group appears on exactly one screen. Nothing is hidden from both, and nothing is
  * offered twice — which is what makes "moved" true rather than "copied".
+ *
+ * `openTemplateId` IS THE DEEP LINK, and it is what lets Communications keep its promise.
+ *
+ * "Edit Template" on CRM → Communications used to raise a toast telling the reader to find the
+ * editor themselves, which is not an edit — it is a signpost with no road. It now navigates here
+ * with the template's id, and this opens THAT row in the existing editor. Deliberately the same
+ * editor, the same rows and the same endpoints: a second editor over `email_templates` is how the
+ * two would drift, and how one screen would start creating rows the other already had.
  */
-export function TemplatesTab({ toast, scope }: { toast: ToastFn; scope: 'crm' | 'desk' }) {
+export function TemplatesTab({ toast, scope, openTemplateId, onOpened }: {
+  toast: ToastFn;
+  scope: 'crm' | 'desk';
+  /** Open this template in the editor as soon as the list has loaded. */
+  openTemplateId?: number;
+  /** Called once the deep link has been honoured, so the caller can drop it from the URL. */
+  onOpened?: () => void;
+}) {
   const [groups, setGroups] = useState<TemplateGroup[]>([]);
   const [accounts, setAccounts] = useState<MailAccount[]>([]);
   const [loading, setLoading] = useState(true);
@@ -223,9 +238,32 @@ export function TemplatesTab({ toast, scope }: { toast: ToastFn; scope: 'crm' | 
     .catch(() => toast('Could not load templates', 'bad')).finally(() => setLoading(false));
   useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  if (loading) return <div className="centered">Loading templates…</div>;
-
   const shown = groups.filter((g) => (scope === 'crm' ? g.module === CRM_MODULE : g.module !== CRM_MODULE));
+
+  /*
+   * Honour the deep link ONCE, and only for a template this screen actually lists.
+   *
+   * Scoped to `shown` rather than to every group on purpose. An id belonging to the other half of
+   * the partition must not open here — that is exactly the cross-wiring the `scope` split exists to
+   * prevent, and it would let a CRM link open a Transaction Desk template inside CRM Settings.
+   *
+   * `handled` is a ref rather than state so re-opening is impossible after the editor is closed: a
+   * `useEffect` keyed on the id alone would re-fire on the next render that still carried it and
+   * yank the editor back open under somebody who had just dismissed it. `onOpened` clears the URL
+   * so a refresh does not re-open it either, and the ref covers the render between the two.
+   */
+  const deepLinked = useRef<number | null>(null);
+  useEffect(() => {
+    if (loading || !openTemplateId || deepLinked.current === openTemplateId) return;
+    deepLinked.current = openTemplateId;
+    const found = shown.flatMap((g) => g.templates).find((t) => t.id === openTemplateId);
+    if (found) setEditing(found);
+    else toast('That template is not in this list — it may have been removed.', 'bad');
+    onOpened?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, openTemplateId, groups]);
+
+  if (loading) return <div className="centered">Loading templates…</div>;
 
   /*
    * A template row is created the first time its event fires, so a group can legitimately be

@@ -1,7 +1,7 @@
 import { AREAS, AREA_LABEL, type Area } from './area';
 import { useEffect, useRef, useState } from 'react';
 import Icon from '../ui/Icon';
-import { getUsers, getUsersCatalog, createUser, updateUser, deleteUser, getUserDealHistory, getAgentLoans, uploadUserPhoto, getOffboarding, type OffboardingChecklist } from '../lib/api';
+import { getUsers, getUsersCatalog, createUser, updateUser, deleteUser, getUserDealHistory, getAgentLoans, uploadUserPhoto, getOffboarding, type OffboardingChecklist, type OnboardingKind } from '../lib/api';
 import { fileToBase64 } from '../lib/importApi';
 import { roleLabel, formatCurrency } from './format';
 import { useToast } from './toast';
@@ -287,7 +287,7 @@ function UserDetailsModal({ user, catalog, isMe, photoVersion, onClose, onEdit }
   );
 }
 
-const COMM_PRESETS = ['90-10%', '95-5%', '60-40%', '70-30%'];
+const COMM_PRESETS = ['90-10%', '95-5%', '60-40%', '70-30%', '50-50%'];
 const todayStr = () => new Date().toISOString().slice(0, 10);
 
 interface UserForm {
@@ -415,6 +415,24 @@ function UserModal({ catalog, existing, onClose, onSaved }: UserModalProps) {
   };
   const setLeadAgentSplit = (v: string) => setForm((f) => ({ ...f, brokerage_lead_pct: v, brokerage_lead_brok_pct: v === '' ? '' : Math.max(0, 100 - (parseFloat(v) || 0)) }));
 
+  /*
+   * The same picker for the split that takes over once the deal count is reached.
+   *
+   * Unlike the two above it, this one keeps no label of its own on the profile — the record holds
+   * the two percentages and nothing else. So the menu reads its selection back OUT of them rather
+   * than from a stored string: a pair that matches a preset shows that preset, a pair that does not
+   * is a custom split, and no pair at all leaves the menu unset. That way an agent's upgrade split
+   * shows correctly whether it was picked here or typed in before this menu existed, and no field
+   * has to be added to the profile to support it.
+   */
+  const upgradePair = form.upgrade_agent_pct === '' ? '' : `${form.upgrade_agent_pct}-${form.upgrade_brok_pct}%`;
+  const upgradeStructure = upgradePair === '' ? '' : (COMM_PRESETS.includes(upgradePair) ? upgradePair : 'custom');
+  const onUpgradeStructure = (v: string) => {
+    const m = v.match(/^(\d+)-(\d+)/);
+    if (m) setForm((f) => ({ ...f, upgrade_agent_pct: m[1], upgrade_brok_pct: m[2] }));
+    else setForm((f) => ({ ...f, upgrade_agent_pct: '', upgrade_brok_pct: '' }));
+  };
+
   // Loan entries
   const addLoan = () => set('loan_entries', [...form.loan_entries, { amount: '', date: todayStr(), remarks: '' }]);
   const setLoan = (i: number, k: keyof LoanEntry, v: string) => set('loan_entries', form.loan_entries.map((e, idx) => idx === i ? { ...e, [k]: v } : e));
@@ -425,7 +443,7 @@ function UserModal({ catalog, existing, onClose, onSaved }: UserModalProps) {
   const savedLoanCount = (p.loan_entries || []).length;
   const lockedLoan = { background: 'var(--surface-3)', cursor: 'not-allowed' };
 
-  const [onboarding, setOnboarding] = useState<'onboard' | 'contract' | null>(null);
+  const [onboarding, setOnboarding] = useState<OnboardingKind | null>(null);
 
   /*
    * What this person still holds, shown the moment Status is switched to Inactive.
@@ -661,11 +679,14 @@ function UserModal({ catalog, existing, onClose, onSaved }: UserModalProps) {
           <div className="g3">
             <div className="field"><label>Brokerage Lead Split (Split %)</label>
               <select value={form.brokerage_lead_structure} onChange={(e) => onLeadStructure(e.target.value)}>
-                <option value="">Same as above</option>
+                {/* No "Same as above" here: it read as an arrangement of its own when it only ever
+                    meant the field was left alone. Blank is still allowed and still means exactly
+                    that — nothing separate is recorded, so nothing separate applies. */}
+                <option value="">Select brokerage lead split</option>
                 {COMM_PRESETS.map((c) => <option key={c} value={c}>{c}</option>)}
                 <option value="custom">Add custom split…</option>
               </select>
-              <span className="help">Applies when the brokerage provides the lead.</span></div>
+              <span className="help">Applies when the brokerage provides the lead. Leave blank if there is no separate arrangement.</span></div>
             <div className="field"><label>Agent % (brokerage lead)</label>
               <input type="number" min="0" max="100" value={form.brokerage_lead_pct} onChange={(e) => setLeadAgentSplit(e.target.value)} />
               <span className="help">Agent + Brokerage = 100.</span></div>
@@ -673,10 +694,16 @@ function UserModal({ catalog, existing, onClose, onSaved }: UserModalProps) {
               <input value={form.brokerage_lead_brok_pct} readOnly style={{ background: 'var(--surface-2)' }} /></div>
           </div>
 
+          <div className="field"><label>Existing Split Deals Count</label>
+            <input type="number" min="0" value={form.completed_deals} onChange={(e) => set('completed_deals', e.target.value)} />
+            <span className="help">After this many deals close with the agent as primary, the split below is applied.</span></div>
           <div className="g3">
-            <div className="field" style={{ marginBottom: 0 }}><label>Existing Split Deals Count</label>
-              <input type="number" min="0" value={form.completed_deals} onChange={(e) => set('completed_deals', e.target.value)} />
-              <span className="help">After this many deals close with the agent as primary, the split below is applied.</span></div>
+            <div className="field" style={{ marginBottom: 0 }}><label>New Split (Split %)</label>
+              <select value={upgradeStructure} onChange={(e) => onUpgradeStructure(e.target.value)}>
+                <option value="">Select new split</option>
+                {COMM_PRESETS.map((c) => <option key={c} value={c}>{c}</option>)}
+                <option value="custom">Add custom split…</option>
+              </select></div>
             <div className="field" style={{ marginBottom: 0 }}><label>Agent % (new split)</label>
               <input type="number" min="0" max="100" value={form.upgrade_agent_pct} onChange={(e) => { const v = e.target.value; setForm((f) => ({ ...f, upgrade_agent_pct: v, upgrade_brok_pct: v === '' ? '' : Math.max(0, 100 - (parseFloat(v) || 0)) })); }} /></div>
             <div className="field" style={{ marginBottom: 0 }}><label>Brokerage % (new split)</label>
@@ -815,22 +842,42 @@ function UserModal({ catalog, existing, onClose, onSaved }: UserModalProps) {
           {/*
             TRANSACTION MANAGEMENT ONLY, alongside the finance fields above.
 
-            Both send a document about the agent's ENGAGEMENT with the brokerage — the onboarding
-            guide and the contract agreement — which is Transaction Management's business, the same
-            side that owns their commission split, loan and deal history (`showAgentFinance`). The
-            CRM's interest in a user is who owns which leads; it has no part in contracting them.
+            What a new agent receives — Recruitment's onboarding guide, Accounts' request for
+            banking details, the Training Department's welcome, and the contract agreement itself.
+            All four are about the agent's ENGAGEMENT with the brokerage, which is Transaction
+            Management's business, the same side that owns their commission split, loan and deal
+            history (`showAgentFinance`). The CRM's interest in a user is who owns which leads; it
+            has no part in contracting them.
 
             Hidden, not removed: the buttons, the modal and the endpoints behind them are unchanged
             and still reachable from Transaction Management. Nothing about who may send them moved.
 
-            Both open a review first: the message as it will arrive for this agent, editable before
+            Each opens a review first: the message as it will arrive for this agent, editable before
             it goes. Only for a saved user — there is nobody to address it to otherwise.
+
+            The onboarding guide is one button, not two: which letter goes is read from the agent's
+            own Fresher / Experienced field, so the wrong one cannot be picked by hand.
           */}
           {isAgent && area === 'desk' && (
             <button className="btn ghost" disabled={!existing}
-              title={existing ? 'Preview and send the onboarding guide' : 'Save the agent first'}
+              title={existing
+                ? `Preview and send the ${form.experience === 'Fresher' ? 'fresher' : 'experienced agent'} onboarding guide`
+                : 'Save the agent first'}
               onClick={() => setOnboarding('onboard')}><Icon name="mail" size={13} /> Send Onboard Email</button>
           )}
+          {isAgent && area === 'desk' && (
+            <button className="btn ghost" disabled={!existing}
+              title={existing ? 'Preview and send Accounts’ request for PREC / Sole Proprietor banking details' : 'Save the agent first'}
+              onClick={() => setOnboarding('accounting')}><Icon name="mail" size={13} /> Send Accounting Onboard Email</button>
+          )}
+          {isAgent && area === 'desk' && (
+            <button className="btn ghost" disabled={!existing}
+              title={existing ? 'Preview and send the Training Department welcome' : 'Save the agent first'}
+              onClick={() => setOnboarding('training')}><Icon name="mail" size={13} /> Send Training Onboard Email</button>
+          )}
+          {/* Last of the four, and the only one that is not a letter: it sends the agreement itself,
+              filled in from this agent's commission split, with a signable PDF built from the same
+              message. */}
           {isAgent && area === 'desk' && (
             <button className="btn ghost" disabled={!existing}
               title={existing ? 'Preview and send the contract agreement' : 'Save the agent first'}

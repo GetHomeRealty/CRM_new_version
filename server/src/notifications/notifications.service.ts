@@ -5,6 +5,7 @@ import type { ResourceUser } from '../transactions/transaction.resource';
 
 
 import { isAdminOrAbove, isAgent } from '../core/authz';
+import { ownsTransaction, teamMemberIdentity, transactionScopeWhere } from '../common/transaction-scope';
 interface Feed {
   count: number;
   items: Record<string, unknown>[];
@@ -48,13 +49,15 @@ export class NotificationsService {
   /** Agent bell: transactions where an admin reviewed the agent's documents. */
   async docNotifications(user: ResourceUser | null): Promise<Feed> {
     if (!user || !isAgent(user)) return { count: 0, items: [] };
-    const name = user.name;
 
     const txns = await this.prisma.transactions.findMany({
       where: {
-        deleted_at: null,
-        OR: [{ agent: name }, { team_members: { some: { name } } }],
-        audit_logs: { some: { source: 'DocReview' } },
+        AND: [
+          { deleted_at: null, audit_logs: { some: { source: 'DocReview' } } },
+          // The same visibility rule the Transactions screen applies, by id — a namesake must not
+          // be told what was reviewed on somebody else's deal.
+          transactionScopeWhere(user),
+        ],
       },
       orderBy: { id: 'asc' },
       include: { audit_logs: { where: { source: 'DocReview' }, orderBy: [{ created_at: 'desc' }, { id: 'asc' }] } },
@@ -96,9 +99,13 @@ export class NotificationsService {
     const t = await this.prisma.transactions.findFirst({ where: { id: txnId, deleted_at: null } });
     if (!t) throw new NotFoundException({ message: `No query results for model [App\\Models\\Transaction] ${txnId}.` });
     if (user && isAgent(user)) {
+      // Identity by id where the row has one — see `common/transaction-scope.ts`. This one WRITES
+      // (it marks review rows handled), so a wrong answer clears somebody else's queue.
       const allowed =
-        t.agent === user.name ||
-        (await this.prisma.team_members.findFirst({ where: { transaction_id: txnId, name: user.name } })) !== null;
+        ownsTransaction(user, t) ||
+        (await this.prisma.team_members.findFirst({
+          where: { transaction_id: txnId, ...teamMemberIdentity(user) },
+        })) !== null;
       if (!allowed) throw new ForbiddenException({ message: 'You do not have access to this transaction.' });
     }
     await this.prisma.audit_logs.updateMany({

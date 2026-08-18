@@ -3,7 +3,8 @@ import { jsonField, toDateString, toDateTimeString, toIso8601String } from '../c
 import { normalizeCommissionTxn } from './commission.loader';
 import type { CommissionService } from './commission.service';
 
-import { isAgent } from '../core/authz';
+import { can, isAgent } from '../core/authz';
+import { ownsTransaction, teamMemberIdentity } from '../common/transaction-scope';
 const isPrecon = (type: string): boolean => type === 'Preconstruction';
 
 // Deterministic ordering (Laravel's own order for these is index-plan-dependent
@@ -39,6 +40,26 @@ export const txnShowInclude = {
   transaction_edit_requests: { orderBy: EDITREQ_ORDER },
   transaction_delete_requests: { orderBy: DELREQ_ORDER },
 } satisfies Prisma.transactionsInclude;
+
+/**
+ * The detail include for one caller — the same relations, minus what they will not be sent.
+ *
+ * `audit_logs` is the whole reason this exists. It is the only unbounded collection in the detail
+ * payload: a deal accumulates a row per changed field for ever, and the include has no `take`, so
+ * opening a long-running transaction reads its entire history. An AGENT is then handed none of it —
+ * `transactionResource` withholds the audit rows and `agent_changes` from them — so every one of
+ * those rows was read from disk, serialised by Prisma and thrown away.
+ *
+ * Dropping it for agents changes no response: the field is already absent from what they receive.
+ * The office keeps it, because `AuditTrailModal` renders it from this payload; moving that to its
+ * own paged endpoint would be the real fix and is a change to how the screen works, not to how fast
+ * it is, so it is left alone and recorded as an open item.
+ */
+export function txnShowIncludeFor(user: { role?: string | null } | null | undefined): Prisma.transactionsInclude {
+  if (!isAgent(user)) return txnShowInclude;
+  const { audit_logs: _dropped, ...rest } = txnShowInclude;
+  return rest;
+}
 
 type FullTxn = Prisma.transactionsGetPayload<{ include: typeof txnShowInclude }>;
 /** A transaction with any subset of the resource relations loaded. */
@@ -97,17 +118,28 @@ function statusList(t: LoadedTxn): string[] {
   return list.length ? list : ['Open'];
 }
 
+/**
+ * Identity is the user id wherever the row carries one; the name decides only rows that never
+ * resolved to an account. Same rule as `common/transaction-scope.ts` — restated here for the
+ * in-memory case because the team rows are already loaded and re-querying them would be a third
+ * round trip per transaction.
+ */
+const isMyMemberRow = (m: { user_id: number | null; name: string }, user: ResourceUser): boolean =>
+  m.user_id !== null ? m.user_id === user.id : m.name === user.name;
+
 async function myTeamAccess(t: LoadedTxn, ctx: ResourceCtx): Promise<string | null> {
   const user = ctx.user;
   if (!user || !isAgent(user)) return null;
-  if (t.agent === user.name) return 'full';
+  if (ownsTransaction(user, t)) return 'full';
   let member: { access: string } | null | undefined;
   if (t.team_members !== undefined) {
-    member = t.team_members.find((m) => m.name === user.name) ?? null;
+    member = t.team_members.find((m) => isMyMemberRow(m, user)) ?? null;
   } else if (ctx.bulk) {
     return ctx.bulk.teamAccess.get(t.id) ?? null;
   } else {
-    member = await ctx.prisma.team_members.findFirst({ where: { transaction_id: t.id, name: user.name } });
+    member = await ctx.prisma.team_members.findFirst({
+      where: { transaction_id: t.id, ...teamMemberIdentity(user) },
+    });
   }
   return member?.access ?? null;
 }
@@ -307,8 +339,20 @@ export async function transactionResource(t: LoadedTxn, ctx: ResourceCtx): Promi
       : null;
   }
 
-  // invoices + invoice_admin (whenLoaded invoices)
-  if (t.invoices !== undefined) {
+  /*
+   * invoices + invoice_admin (whenLoaded invoices) — ONLY for a caller who may open the Invoice
+   * module.
+   *
+   * These two blocks are Invoice-module data travelling on a Transaction response: invoice numbers,
+   * totals, sent state, and the commission-received date and method. An agent holds
+   * `invoice: 'none'` and is refused every invoice endpoint, yet every deal they opened carried
+   * this. Withholding it at the module and serving it here is not a restriction, it is a detour.
+   *
+   * Gated on the same `invoices.access` capability the Invoice API enforces — one rule, so the two
+   * cannot drift. Absent rather than blanked, so a client can tell "not yours" from "none yet";
+   * `AgentFaqModal` already falls back to the `admin_activities` values for the two fields it shows.
+   */
+  if (t.invoices !== undefined && can(ctx.user, 'invoices.access')) {
     out.invoices = t.invoices.map((inv) => ({
       id: inv.id,
       invoice_no: inv.invoice_no,
@@ -319,8 +363,26 @@ export async function transactionResource(t: LoadedTxn, ctx: ResourceCtx): Promi
     out.invoice_admin = invoiceAdmin(t);
   }
 
-  // audit_logs + agent_changes (whenLoaded auditLogs)
-  if (t.audit_logs !== undefined) {
+  /*
+   * audit_logs + agent_changes (whenLoaded auditLogs) — WITHHELD FROM AGENTS.
+   *
+   * The Transaction Desk Audit Trail is an administrator's screen: `audit: 'none'` for agents,
+   * `/api/audit-logs` refuses them, and the per-deal Audit Trail button is hidden from them on
+   * `TransactionDetailPage`. The rows travelled on the transaction payload anyway — every field the
+   * office has ever changed, with its old and new value: commission percentages and amounts, agent
+   * and brokerage splits, trust payable, adjustments, approval decisions, who overrode what and the
+   * reason they gave. Hiding the button and sending the data is not a restriction.
+   *
+   * `agent_changes` goes with it. It is the office's review QUEUE — what an administrator has been
+   * asked to approve or reject, including other people's pending edits on a team deal — and the
+   * banner that renders it is `isAdminOrAbove` already. What an agent legitimately needs is the
+   * DECISION, and that arrives through `transaction_reviews` on its own endpoint, which is
+   * ownership-scoped and which they still read in full.
+   *
+   * Absent rather than emptied: an empty array would read as "nothing has ever happened on this
+   * deal", which is a different and worse untruth than the field not being there.
+   */
+  if (t.audit_logs !== undefined && !isAgent(ctx.user)) {
     const logs = t.audit_logs;
     out.audit_logs = logs.map((a) => ({
       id: a.id,

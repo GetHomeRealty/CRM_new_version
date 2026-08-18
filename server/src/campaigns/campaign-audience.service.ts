@@ -3,7 +3,7 @@ import * as crypto from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { EMAIL_SHAPE, FILLABLE_TOKENS, MAX_RECIPIENTS } from './campaign.constants';
 import type { AuthUserRecord } from '../auth/auth.types';
-import { can } from '../core/authz';
+import { leadScopeWhere } from '../common/lead-scope';
 
 /** The lead-segment filter a campaign targets. */
 export interface AudienceFilter {
@@ -61,10 +61,27 @@ export class CampaignAudienceService {
    * The comment this replaces claimed "staff and admins see the whole book", which was not true of
    * the code — every role was capped, including the one whose job is brokerage-wide marketing.
    */
+  /**
+   * WHOSE LEADS MAY BE MAILED — resolved through the CRM's one lead-scope rule, never re-decided.
+   *
+   * WHAT THIS REPLACED, because it was the CRM's largest scope defect. The brokerage-audience
+   * capability short-circuited to `return {}` — no owner clause at all — so `admin`, `manager` and
+   * `crm` could build a campaign against EVERY lead in the database, including every agent's
+   * private book. Measured: a Manager whose Leads screen showed 0 leads could select 81 as a
+   * campaign audience, 14 of which were agents' private clients. Marketing permission was acting as
+   * a data-scope grant, which it is not.
+   *
+   * Widening the pool to the BROKERAGE'S leads is the legitimate need behind that capability, and
+   * `leadScopeWhere` now serves it directly: brokerage-scope holders get the brokerage's leads plus
+   * their own. What they no longer get is other people's books. An agent is unaffected — their
+   * clause was already own-plus-assigned and still is.
+   *
+   * Every control that NARROWS the audience is untouched and still runs after this: consent and
+   * unsubscribe state, the campaign's own segment filters, address validity, de-duplication and the
+   * brokerage suppression list.
+   */
   private ownerScope(user?: AuthUserRecord | null): Record<string, unknown> {
-    if (can(user, 'campaigns.brokerage-audience')) return {};
-    const id = user?.id ?? -1;
-    return { OR: [{ assigned_to: id }, { owner_user_id: id }] };
+    return leadScopeWhere(user ?? null) as Record<string, unknown>;
   }
 
   /** Build the lead query for a segment. Always excludes opt-outs and malformed emails. */

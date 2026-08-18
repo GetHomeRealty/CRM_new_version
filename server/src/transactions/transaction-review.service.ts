@@ -7,6 +7,7 @@ import { MailerService } from '../email/mailer.service';
 import { CompanySettingsService } from '../settings/company-settings.service';
 import { MessagesService } from './messages.service';
 import { isAdminOrAbove, isAgent } from '../core/authz';
+import { ownsTransaction, reviewScopeWhere, teamMemberIdentity } from '../common/transaction-scope';
 import { toDateTimeString } from '../common/serialize';
 import { areaPath } from '../common/domain';
 import type { AuthUserRecord } from '../auth/auth.types';
@@ -125,6 +126,9 @@ export class TransactionReviewService {
       old_value: clip(input.oldValue),
       new_value: clip(input.newValue),
       agent_name: input.agentName,
+      // The authorization key, taken from the DEAL rather than from the name on the audit row: the
+      // review is about whoever owns the transaction, and the deal already carries a resolved id.
+      agent_user_id: await this.agentUserIdFor(input.txnId),
       actor_name: input.actor?.name ?? null,
       auto_reverted: input.autoReverted,
       auto_revert_result: input.autoReverted ? REVERT_OK : REVERT_UNSUPPORTED,
@@ -155,6 +159,7 @@ export class TransactionReviewService {
       old_value: null,
       new_value: null,
       agent_name: agentName,
+      agent_user_id: await this.agentUserIdFor(txnId),
       actor_name: actor?.name ?? null,
       auto_reverted: false,
       auto_revert_result: null,
@@ -223,6 +228,21 @@ export class TransactionReviewService {
     return done.count;
   }
 
+  /**
+   * The user id of the agent on a deal — the review's authorization key.
+   *
+   * Read from `transactions.agent_user_id`, which the transaction scope already treats as
+   * authoritative. Null when the deal itself never resolved to an account; the review then falls
+   * back to its name exactly as every row written before this did.
+   */
+  private async agentUserIdFor(txnId: number): Promise<number | null> {
+    const t = await this.prisma.transactions.findUnique({
+      where: { id: txnId },
+      select: { agent_user_id: true },
+    });
+    return t?.agent_user_id ?? null;
+  }
+
   private async create(data: Prisma.transaction_reviewsUncheckedCreateInput): Promise<transaction_reviews> {
     const now = new Date();
     return this.prisma.transaction_reviews.create({ data: { ...data, created_at: now, updated_at: now } });
@@ -260,12 +280,16 @@ export class TransactionReviewService {
      * fails — the review is the record, and the notification is the courtesy.
      */
     try {
-      if (this.dispatcher && review.agent_name) {
-        const agent = await this.prisma.users.findFirst({
-          where: { name: review.agent_name, status: 'Active' },
-          select: { id: true },
-          orderBy: { id: 'asc' },
-        });
+      if (this.dispatcher && (review.agent_user_id !== null || review.agent_name)) {
+        /*
+         * WHO IS TOLD is decided by the id where the review has one.
+         *
+         * This looked the recipient up by NAME, so with two active accounts sharing one, a push
+         * about a rejected commission figure could go to the wrong person — and the payload carries
+         * the field label and the reason. `PersonResolver` prefers the id and falls back to the name
+         * only when there is none, with a deterministic tie-break either way.
+         */
+        const agent = await this.people.resolve(review.agent_user_id, review.agent_name, { activeOnly: true });
         if (agent) {
           await this.dispatcher.dispatch({
             category: 'transaction_approvals',
@@ -314,11 +338,14 @@ export class TransactionReviewService {
     if (!txn) return;
 
     const name = (review.agent_name ?? txn.agent ?? '').trim();
-    if (!name) return;
-    // Through PersonResolver so two people sharing a name resolve the same way everywhere, and
-    // deterministically: Active wins, ties break on the lowest id. This was a findFirst with no
-    // orderBy, so the planner decided which colleague got the mail.
-    const user = await this.people.resolve(null, name, { activeOnly: true });
+    if (review.agent_user_id === null && !name) return;
+    /*
+     * The ID FIRST, then the name. `PersonResolver` prefers whichever it is given and breaks a name
+     * tie deterministically (Active wins, then lowest id) — but a deterministic answer to an
+     * ambiguous question is still a guess, and this decides who receives a rejection reason and the
+     * old and new values of a field. Passing the id makes it not a guess.
+     */
+    const user = await this.people.resolve(review.agent_user_id, name || null, { activeOnly: true });
     const to = (user?.email ?? '').trim();
     if (!to) {
       this.log.warn(`Review ${review.id}: no email on file for "${name}" — nothing sent.`);
@@ -501,7 +528,9 @@ export class TransactionReviewService {
    * answer is five numbers.
    */
   async stats(user: AuthUserRecord | null): Promise<Record<string, unknown>> {
-    const mine = user && isAgent(user) ? { agent_name: user.name ?? '' } : {};
+    // By id where the row has one — see `reviewScopeWhere`. Scoping these by name gave one of two
+    // same-named agents the other's open, corrected and overdue counts.
+    const mine = reviewScopeWhere(user);
     const overdueBefore = new Date(Date.now() - OVERDUE_HOURS * 3600_000);
 
     const [open, corrected, overdue, byAgent, byStaff, resolvedRows] = await Promise.all([
@@ -566,7 +595,7 @@ export class TransactionReviewService {
    * correction took.
    */
   async recurringErrors(user: AuthUserRecord | null, opts: { month?: string } = {}): Promise<Record<string, unknown>> {
-    const mine = user && isAgent(user) ? { agent_name: user.name ?? '' } : {};
+    const mine = reviewScopeWhere(user);
     const window = this.errorWindow(opts.month);
 
     const rows = await this.prisma.transaction_reviews.findMany({
@@ -738,7 +767,7 @@ export class TransactionReviewService {
     if (!user || !isAgent(user)) return { count: 0, items: [] };
 
     const rows = await this.prisma.transaction_reviews.findMany({
-      where: { agent_name: user.name, agent_seen_at: null },
+      where: { ...reviewScopeWhere(user), agent_seen_at: null },
       orderBy: [{ created_at: 'desc' }, { id: 'desc' }],
       take: 40,
       include: { transactions: { select: { id: true, trade_no: true, property: true, deleted_at: true } } },
@@ -763,7 +792,7 @@ export class TransactionReviewService {
   async markSeen(user: ResourceUser | null, txnId: number): Promise<{ ok: boolean }> {
     if (!user || !isAgent(user)) return { ok: true };
     await this.prisma.transaction_reviews.updateMany({
-      where: { transaction_id: txnId, agent_name: user.name, agent_seen_at: null },
+      where: { transaction_id: txnId, ...reviewScopeWhere(user), agent_seen_at: null },
       data: { agent_seen_at: new Date() },
     });
     return { ok: true };
@@ -778,15 +807,17 @@ export class TransactionReviewService {
   private async assertMayRead(user: AuthUserRecord | null, txnId: number): Promise<void> {
     const txn = await this.prisma.transactions.findFirst({
       where: { id: txnId, deleted_at: null },
-      select: { id: true, agent: true },
+      select: { id: true, agent: true, agent_user_id: true },
     });
     if (!txn) throw new NotFoundException({ message: `No query results for model [App\\Models\\Transaction] ${txnId}.` });
     if (!user || !isAgent(user)) return;
 
-    const name = user.name ?? '';
+    // Identity by id where the row has one — see `common/transaction-scope.ts`.
     const allowed =
-      txn.agent === name ||
-      (await this.prisma.team_members.findFirst({ where: { transaction_id: txnId, name } })) !== null;
+      ownsTransaction(user, txn) ||
+      (await this.prisma.team_members.findFirst({
+        where: { transaction_id: txnId, ...teamMemberIdentity(user) },
+      })) !== null;
     if (!allowed) throw new ForbiddenException({ message: 'You do not have access to this transaction.' });
   }
 

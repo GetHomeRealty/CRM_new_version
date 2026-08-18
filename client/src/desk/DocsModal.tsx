@@ -1,7 +1,7 @@
 import { useEffect, useState, type CSSProperties } from 'react';
 import Icon from '../ui/Icon';
 import {
-  getDocuments, saveDocuments, uploadDocumentFile, deleteDocument, restoreDocument,
+  getDocuments, saveDocuments, uploadDocumentFile, deleteDocument,
   uploadDocClientFile, deleteDocClientFile,
   uploadDocValidationFile, deleteDocValidationFile,
   viewDocumentFile, downloadDocumentFile, viewDocClientFile, downloadDocClientFile,
@@ -26,11 +26,10 @@ interface DocsModalProps {
   readOnly?: boolean;
   agentMode?: boolean;
   canDeleteConditionDocs?: boolean;
-  canReviewDeleted?: boolean;
   onSaved?: (() => void) | null;
 }
 
-export default function DocsModal({ open, onClose, transactionId, txn = null, restrictTitles = null, hideTitles = [], readOnly = false, agentMode = false, canDeleteConditionDocs = false, canReviewDeleted = false, onSaved = null }: DocsModalProps) {
+export default function DocsModal({ open, onClose, transactionId, txn = null, restrictTitles = null, hideTitles = [], readOnly = false, agentMode = false, canDeleteConditionDocs = false, onSaved = null }: DocsModalProps) {
   const toast = useToast();
   const { isSuperAdmin } = useAuth();
   const { confirm, askDelete, closeConfirm } = useConfirm();
@@ -41,7 +40,6 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
   const validLocked = (d: DeskDocument) => d.validation === 'Valid' && !isSuperAdmin;
   const [docs, setDocs] = useState<DeskDocument[]>([]);
   const [f630Client, setF630Client] = useState<string | null>(null); // FINTRACK → open Form 630 for this client
-  const [deletedDocs, setDeletedDocs] = useState<DeskDocument[]>([]); // agent-flagged deletions (admin review)
   // §5.1 — Mutual Release / Void limit the visible checklist to specific documents.
   const docVisible = (d: DeskDocument) => {
     const t = (d.title || '').toLowerCase();
@@ -60,22 +58,19 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
   const load = (showSpin = true) => {
     if (showSpin) setLoading(true);
     getDocuments(transactionId)
-      .then((d) => { setDocs(d.documents || []); setClients(d.clients || []); setDeletedDocs(d.deleted_documents || []); setRecoReady(d.reco_audit_ready || ''); setRecoRemarks(d.reco_audit_remarks || ''); })
+      .then((d) => { setDocs(d.documents || []); setClients(d.clients || []); setRecoReady(d.reco_audit_ready || ''); setRecoRemarks(d.reco_audit_remarks || ''); })
       .catch(() => toast('Could not load documents', 'bad'))
       .finally(() => setLoading(false));
   };
-  const onRestoreDeleted = async (doc: DeskDocument) => {
-    try { if (doc.id) await restoreDocument(doc.id); toast('Document restored', 'ok'); load(false); }
-    catch { toast('Could not restore', 'bad'); }
-  };
-  const onPurgeDeleted = (doc: DeskDocument) => askDelete({
-    title: `Delete "${doc.title}"?`,
-    message: 'Remove this document. A Super Admin can restore it from the Recycle Bin.',
-    onConfirm: async () => {
-      try { if (doc.id) await deleteDocument(doc.id); toast('Document deleted', 'ok'); load(false); }
-      catch { toast('Could not delete', 'bad'); }
-    },
-  });
+  /*
+   * `onRestoreDeleted` and `onPurgeDeleted` were here, driving a "Deleted Documents — pending
+   * review" panel further down. Both are gone with the panel: it was fed by `deleted_documents`,
+   * which the API built from the `pending_delete` column, which nothing in the application ever
+   * set. The panel never rendered and `restoreDocument` could not restore anything.
+   *
+   * Deleting a document is unchanged and still works: soft delete → Recycle Bin → a Super Admin
+   * restores or destroys it.
+   */
   useEffect(() => { if (open) load(); }, [open, transactionId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!open) return null;
@@ -346,7 +341,9 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
                     {d.kind === 'per_client' && <span><Icon name="users" size={11} /> Per-client uploads</span>}
                     {single && (d.has_file
                       ? <span style={{ fontSize: 11.5, color: 'var(--ok-600)', fontWeight: 600 }}><Icon name="check" size={11} /> Uploaded</span>
-                      : <input type="file" onChange={(e) => { onSingle(d, e.target.files?.[0]); e.target.value = ''; }} style={{ fontSize: 12 }} />)}
+                      : validLocked(d)
+                        ? <span style={{ fontSize: 11, color: 'var(--muted-2)' }} title="Marked Valid — only a Super Admin can upload over it"><Icon name="lock" size={11} /> Locked (Valid)</span>
+                        : <input type="file" onChange={(e) => { onSingle(d, e.target.files?.[0]); e.target.value = ''; }} style={{ fontSize: 12 }} />)}
                   </>)}
                 </div>
                 {/* Status / Validation — agents may view but not change these. */}
@@ -406,10 +403,16 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
                 )}
                 {/* Replace — shown only while a file exists and is NOT yet Valid. */}
                 <div style={{ textAlign: 'center' }}>
-                  {single && d.has_file && !uploadBlocked && d.validation !== 'Valid'
+                  {/*
+                    `validLocked`, not `validation !== 'Valid'`. The backend lets a Super Admin
+                    replace a document marked Valid (`documents.override-valid`); the old test hid
+                    the control from them too, so the one role that may do it could not. Everyone
+                    else sees the padlock and is told why, instead of discovering it through a 403.
+                  */}
+                  {single && d.has_file && !uploadBlocked && !validLocked(d)
                     ? <label className="btn ghost sm" style={{ cursor: 'pointer' }}>Replace
                         <input type="file" style={{ display: 'none' }} onChange={(e) => { onSingle(d, e.target.files?.[0]); e.target.value = ''; }} /></label>
-                    : <span style={{ color: 'var(--muted-2)' }} title={d.validation === 'Valid' ? 'Valid — replacing is locked' : undefined}>{d.validation === 'Valid' && d.has_file ? <Icon name="lock" size={12} /> : '—'}</span>}
+                    : <span style={{ color: 'var(--muted-2)' }} title={validLocked(d) ? 'Marked Valid — only a Super Admin can replace it' : undefined}>{validLocked(d) && d.has_file ? <Icon name="lock" size={12} /> : '—'}</span>}
                 </div>
                 {/* Delete — admins only (hidden for agents); locked to Super Admin once Valid. */}
                 {!agentMode && (
@@ -469,8 +472,10 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
                     <strong style={{ fontSize: 12.5 }}>📎 {d.title} — files</strong>
                     {uploadBlocked
                       ? <span style={{ fontSize: 11, color: 'var(--muted-2)' }}><Icon name="alert" size={11} /> Upload disabled (not accepted)</span>
-                      : <label className="btn primary sm" style={{ cursor: 'pointer' }}>+ Add File
-                          <input type="file" style={{ display: 'none' }} onChange={(e) => { onMulti(d, e.target.files?.[0]); e.target.value = ''; }} /></label>}
+                      : validLocked(d)
+                        ? <span style={{ fontSize: 11, color: 'var(--muted-2)' }} title="Marked Valid — only a Super Admin can add to it"><Icon name="lock" size={11} /> Locked (Valid)</span>
+                        : <label className="btn primary sm" style={{ cursor: 'pointer' }}>+ Add File
+                            <input type="file" style={{ display: 'none' }} onChange={(e) => { onMulti(d, e.target.files?.[0]); e.target.value = ''; }} /></label>}
                   </div>
                   {(d.files || []).length === 0 && <div className="help">No files added yet.</div>}
                   {(d.files || []).map((file) => (
@@ -509,25 +514,14 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
 
         </fieldset>
 
-        {/* Agent-flagged deletions — admins decide to restore or permanently delete. */}
-        {canReviewDeleted && deletedDocs.length > 0 && (
-          <div className="card" style={{ borderLeft: '4px solid #d97706', background: 'var(--warn-bg-2)', marginTop: 12 }}>
-            <div className="modal-sub" style={{ marginTop: 0, color: 'var(--warn-ink)' }}>Deleted Documents — pending review ({deletedDocs.length})</div>
-            <div className="help" style={{ marginTop: -4, marginBottom: 8 }}>An agent removed these. Restore them to the checklist, or delete them permanently.</div>
-            {deletedDocs.map((d) => (
-              <div key={d.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, padding: '6px 8px', borderBottom: '1px solid #fde68a' }}>
-                <div style={{ minWidth: 0 }}>
-                  <div style={{ fontWeight: 600, color: 'var(--warn-900)', wordBreak: 'break-word' }}>{d.title}</div>
-                  <div style={{ fontSize: 11, color: 'var(--warn-ink)' }}>Deleted by {d.deleted_by || 'agent'}{d.has_file || d.file_count ? ' · has file(s)' : ''}</div>
-                </div>
-                <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
-                  <button className="btn ghost sm" onClick={() => onRestoreDeleted(d)}>↺ Restore</button>
-                  <button className="btn sm" style={{ background: 'var(--bad)', color: '#fff' }} onClick={() => onPurgeDeleted(d)}>🗑 Delete permanently</button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
+        {/*
+          A "Deleted Documents — pending review" panel used to sit here, with Restore and Delete
+          permanently for documents an agent had removed. It never rendered: `deleted_documents` was
+          built from the `pending_delete` column, and nothing in the application ever set it.
+          Removed rather than wired up — document deletion already has a working route (soft delete
+          → Recycle Bin → Super Admin restores or destroys), and a second review queue beside it
+          would be new workflow rather than a repair.
+        */}
 
         <div className="actions">
           <button className="btn ghost" onClick={onClose}>Close</button>
