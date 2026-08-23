@@ -28,6 +28,26 @@ async function inRollback(fn: (tx: PrismaService) => Promise<void>) {
 
 const tag = (): string => { seq += 1; return `${Date.now()}-${seq}`; };
 
+/**
+ * What this user's dashboard already counts, before the test adds anything of its own.
+ *
+ * The assertions here are the product's real claims — a manager sees none of another agent's book,
+ * a promotion widens the answer — but a dashboard total is GLOBAL within a scope, and a manager's
+ * scope legitimately includes every brokerage-owned lead. On the shared development database that
+ * is not zero, so `toBe(0)` read `3`: the test was measuring the environment, not the rule.
+ *
+ * Asserting the DELTA keeps every claim exactly as strong — one lead added to an agent's book must
+ * move that agent's tile by one and the manager's by zero — while surviving whatever else the
+ * database holds. An off-by-one still fails.
+ *
+ * Deliberately NOT done by emptying the leads table first: that is ~2,000 rows updated inside each
+ * test's transaction, which held locks long enough to time out this suite's own hooks and to
+ * disturb the specs running beside it.
+ */
+async function leadBaseline(tx: PrismaService, user: Parameters<typeof crmFor>[1]): Promise<number> {
+  return (await crmFor(tx, user)).leads.total;
+}
+
 async function makeUser(tx: PrismaService, role: string): Promise<AuthUserRecord> {
   const now = new Date();
   const u = await tx.users.create({
@@ -72,32 +92,36 @@ describe('CRM dashboard — lead counting', () => {
   it('counts a lead an agent OWNS but was never assigned', async () => {
     await inRollback(async (tx) => {
       const agent = await makeUser(tx, 'agent');
+      const base_agent = await leadBaseline(tx, agent);
       await makeLead(tx, { owner_user_id: agent.id, assigned_to: null });
 
       // Scoping by `assigned_to` alone made this read 0 — an agent handed a book saw none of it.
-      expect((await crmFor(tx, agent)).leads.total).toBe(1);
+      expect((await crmFor(tx, agent)).leads.total).toBe(base_agent + 1);
     });
   });
 
   it('does not show one agent another agent\'s leads', async () => {
     await inRollback(async (tx) => {
       const mine = await makeUser(tx, 'agent');
+      const base_mine = await leadBaseline(tx, mine);
       const theirs = await makeUser(tx, 'agent');
       await makeLead(tx, { owner_user_id: theirs.id, assigned_to: theirs.id });
 
-      expect((await crmFor(tx, mine)).leads.total).toBe(0);
+      expect((await crmFor(tx, mine)).leads.total).toBe(base_mine + 0);
     });
   });
 
   it('does not hand a manager the whole brokerage', async () => {
     await inRollback(async (tx) => {
       const agent = await makeUser(tx, 'agent');
+      const base_agent = await leadBaseline(tx, agent);
       const manager = await makeUser(tx, 'manager');
+      const base_manager = await leadBaseline(tx, manager);
       await makeLead(tx, { owner_user_id: agent.id, assigned_to: agent.id });
 
       // A manager is not exempt from the Leads module's rule; their tile must say what their
       // Leads screen says, which is that another person's book is not theirs to read.
-      expect((await crmFor(tx, manager)).leads.total).toBe(0);
+      expect((await crmFor(tx, manager)).leads.total).toBe(base_manager + 0);
     });
   });
 });
@@ -106,6 +130,7 @@ describe('CRM dashboard — campaign counting', () => {
   it('counts only the campaigns the signed-in user created', async () => {
     await inRollback(async (tx) => {
       const mine = await makeUser(tx, 'agent');
+      const base_mine = await leadBaseline(tx, mine);
       const theirs = await makeUser(tx, 'manager');
       const now = new Date();
       await tx.campaigns.create({
@@ -124,6 +149,7 @@ describe('CRM dashboard — campaign counting', () => {
   it('counts a campaign the user did create', async () => {
     await inRollback(async (tx) => {
       const mine = await makeUser(tx, 'agent');
+      const base_mine = await leadBaseline(tx, mine);
       const now = new Date();
       await tx.campaigns.create({
         data: { name: `Mine ${tag()}`, created_by_id: mine.id, subject: 'Mine subject', content: 'body', sent: 7, opened: 3, failed: 0, created_at: now, updated_at: now },
@@ -143,6 +169,7 @@ describe('CRM dashboard — campaign counting', () => {
   it('counts campaigns waiting to go out, without disturbing the total', async () => {
     await inRollback(async (tx) => {
       const mine = await makeUser(tx, 'agent');
+      const base_mine = await leadBaseline(tx, mine);
       const now = new Date();
       const make = (name: string, status: string) => tx.campaigns.create({
         data: {
@@ -163,6 +190,7 @@ describe('CRM dashboard — campaign counting', () => {
   it('reports no scheduled campaigns as 0 rather than undefined', async () => {
     await inRollback(async (tx) => {
       const mine = await makeUser(tx, 'agent');
+      const base_mine = await leadBaseline(tx, mine);
       const now = new Date();
       await tx.campaigns.create({
         data: { name: `Sent ${tag()}`, created_by_id: mine.id, subject: 's', content: 'body', status: 'completed', created_at: now, updated_at: now },
@@ -178,6 +206,7 @@ describe('CRM dashboard — campaign counting', () => {
   it('does not count another user\'s scheduled campaign', async () => {
     await inRollback(async (tx) => {
       const mine = await makeUser(tx, 'agent');
+      const base_mine = await leadBaseline(tx, mine);
       const theirs = await makeUser(tx, 'manager');
       const now = new Date();
       await tx.campaigns.create({
@@ -213,6 +242,7 @@ describe('CRM dashboard — lead task counting', () => {
   it('ignores tasks on another person\'s lead', async () => {
     await inRollback(async (tx) => {
       const mine = await makeUser(tx, 'agent');
+      const base_mine = await leadBaseline(tx, mine);
       const theirs = await makeUser(tx, 'agent');
       const lead = await makeLead(tx, { owner_user_id: theirs.id, assigned_to: theirs.id });
       const now = new Date();
@@ -297,6 +327,15 @@ describe('CRM dashboard — per-user caching', () => {
   it('keys on the one role that widens the scope, so a promotion is not served the narrower answer', async () => {
     await inRollback(async (tx) => {
       const someone = await makeUser(tx, 'agent');
+      /*
+       * The Super-Admin baseline, taken BEFORE this test adds anything. That scope includes every
+       * brokerage-owned lead on the database, which on the shared development database is not zero
+       * — so the promoted assertion below is a delta. The agent's own figure needs no baseline: a
+       * user created a line ago owns nothing.
+       */
+      const baseAdmin = (await new AreaDashboardService(tx, new PermissionService(), fakeCache().service as never)
+        .crm({ ...someone, role: 'admin' } as AuthUserRecord)).leads.total;
+
       await makeLead(tx, { owner_user_id: someone.id, assigned_to: someone.id });
       // Unattributed intake: no owner, no assignee. Invisible to everyone below the top tier.
       await makeLead(tx, { owner_user_id: null, assigned_to: null });
@@ -309,7 +348,8 @@ describe('CRM dashboard — per-user caching', () => {
       // The same id, now Super Admin — the unowned lead comes into view on the next request rather
       // than whenever the narrower entry happens to expire.
       const promoted = { ...someone, role: 'admin' } as AuthUserRecord;
-      expect((await svc.crm(promoted)).leads.total).toBe(2);
+      // Their own lead plus the unattributed one, on top of whatever the brokerage already held.
+      expect((await svc.crm(promoted)).leads.total).toBe(baseAdmin + 2);
 
       expect(new Set(cache.keys).size).toBe(2);
     });

@@ -39,6 +39,31 @@ async function inRollback(fn: (tx: PrismaService) => Promise<void>) {
   }
 }
 
+/**
+ * Start each test with an EMPTY brokerage pool.
+ *
+ * WHY THIS IS NEEDED, and why it is not loosening anything. `eligibleWhere()` is deliberately
+ * GLOBAL — the pool genuinely is "every lead nobody owns and nobody is working", with no scope to
+ * one test's rows. That is the product being right, and these assertions are the product's real
+ * claims: hand over three, three move.
+ *
+ * But those claims are only checkable when the pool contains nothing else, and this suite runs
+ * against the shared development database, which accumulates unowned leads over time. So the tests
+ * were silently measuring the environment: `toBe(3)` became `Received: 4` the moment somebody
+ * imported a lead nobody owned.
+ *
+ * Parking the pre-existing rows inside the transaction gives every test the clean pool it was
+ * written for. `deleted_at` is used because it is the one field `eligibleWhere()` already filters
+ * on, so nothing about the query under test is bypassed — and the whole thing is inside a
+ * transaction that always rolls back, so no development row is changed for even a moment beyond it.
+ */
+async function emptyPool(tx: PrismaService): Promise<void> {
+  await tx.leads.updateMany({
+    where: { deleted_at: null, owner_user_id: null, assigned_to: null },
+    data: { deleted_at: new Date() },
+  });
+}
+
 const audits: { action: string; subject: string; details: string }[] = [];
 const auditStub = { record: async (_u: unknown, action: string, subject: string, details = '') => { audits.push({ action, subject, details }); } } as never;
 
@@ -91,6 +116,7 @@ describe('unassigned brokerage leads can be handed out', () => {
    */
   it('assigns the pool to the chosen person while the brokerage keeps ownership', async () => {
     await inRollback(async (tx) => {
+      await emptyPool(tx);
       const { successor, admin } = await scene(tx, 3);
       const result = await new LeadTransferService(tx, auditStub).transfer(as(admin), successor.id);
 
@@ -106,8 +132,12 @@ describe('unassigned brokerage leads can be handed out', () => {
 
   it('makes them reachable by the person who received them', async () => {
     await inRollback(async (tx) => {
+      await emptyPool(tx);
       const { successor, admin } = await scene(tx, 1);
-      const lead = await tx.leads.findFirst({ where: { owner_user_id: null, assigned_to: null }, select: { id: true } });
+      // `deleted_at: null` so this picks the lead the SERVICE would pick. Without it the test
+      // selected a parked development row, transferred a different one, and then asked whether
+      // the successor could reach the row nobody had moved.
+      const lead = await tx.leads.findFirst({ where: { deleted_at: null, owner_user_id: null, assigned_to: null }, select: { id: true } });
       await new LeadTransferService(tx, auditStub).transfer(as(admin), successor.id);
 
       await expect(new ResourceAccessService(tx).assertLead(as(successor), lead!.id)).resolves.toBeUndefined();
@@ -116,9 +146,12 @@ describe('unassigned brokerage leads can be handed out', () => {
 
   it('hands over only as many as asked for, oldest first', async () => {
     await inRollback(async (tx) => {
+      await emptyPool(tx);
       const { successor, admin } = await scene(tx, 5);
       const oldest = await tx.leads.findMany({
-        where: { owner_user_id: null, assigned_to: null }, select: { id: true }, orderBy: { id: 'asc' }, take: 2,
+        // Mirrors `eligibleWhere()` exactly, `deleted_at` included — an expectation that asks a
+        // DIFFERENT question from the code under test is not checking that code.
+        where: { deleted_at: null, owner_user_id: null, assigned_to: null }, select: { id: true }, orderBy: { id: 'asc' }, take: 2,
       });
 
       const result = await new LeadTransferService(tx, auditStub).transfer(as(admin), successor.id, 2);
@@ -133,6 +166,7 @@ describe('unassigned brokerage leads can be handed out', () => {
 
   it('reports only counts, never the leads themselves', async () => {
     await inRollback(async (tx) => {
+      await emptyPool(tx);
       const { successor, admin } = await scene(tx, 2);
       const result = await new LeadTransferService(tx, auditStub).transfer(as(admin), successor.id);
       expect(Object.keys(result).sort()).toEqual(['moved', 'remaining', 'to']);
@@ -141,6 +175,7 @@ describe('unassigned brokerage leads can be handed out', () => {
 
   it('refuses when there is nothing waiting, rather than reporting a silent success', async () => {
     await inRollback(async (tx) => {
+      await emptyPool(tx);
       const { agent, successor, admin } = await scene(tx, 0);
       await ownedLead(tx, agent.id);   // exists, but is not the brokerage's to give
 
@@ -155,6 +190,7 @@ describe('an agent\'s own leads are out of reach', () => {
 
   it('never counts a lead somebody owns as available', async () => {
     await inRollback(async (tx) => {
+      await emptyPool(tx);
       const { agent, admin } = await scene(tx, 2);
       await ownedLead(tx, agent.id);
       await ownedLead(tx, agent.id);
@@ -167,6 +203,7 @@ describe('an agent\'s own leads are out of reach', () => {
 
   it('leaves an agent\'s leads exactly where they are when the pool is handed over', async () => {
     await inRollback(async (tx) => {
+      await emptyPool(tx);
       const { agent, successor, admin } = await scene(tx, 1);
       const theirs = await ownedLead(tx, agent.id);
 
@@ -181,6 +218,7 @@ describe('an agent\'s own leads are out of reach', () => {
 
   it('will not take a lead that is unowned but assigned to somebody', async () => {
     await inRollback(async (tx) => {
+      await emptyPool(tx);
       const { agent, successor, admin } = await scene(tx, 0);
       // No owner, but it is on a named person's list. Taking it would be the same intrusion by
       // another route.
@@ -207,6 +245,7 @@ describe('an agent\'s own leads are out of reach', () => {
    */
   it("takes an unowned Meta lead — nobody owns it, so it is the brokerage's to hand out", async () => {
     await inRollback(async (tx) => {
+      await emptyPool(tx);
       const { successor, admin } = await scene(tx, 0);
       const now = new Date();
       const meta = await tx.leads.create({
@@ -228,6 +267,7 @@ describe('an agent\'s own leads are out of reach', () => {
 
   it("will NOT take an agent's own Meta lead — that one has an owner", async () => {
     await inRollback(async (tx) => {
+      await emptyPool(tx);
       const { successor, admin } = await scene(tx, 0);
       const now = new Date();
       const agent = await tx.users.create({
@@ -255,6 +295,7 @@ describe('an agent\'s own leads are out of reach', () => {
 describe('no agent-level statistics leave this screen', () => {
   it('returns a pool size and a list of names, and nothing per person', async () => {
     await inRollback(async (tx) => {
+      await emptyPool(tx);
       const { agent, admin } = await scene(tx, 2);
       await ownedLead(tx, agent.id);
       await ownedLead(tx, agent.id);
@@ -284,6 +325,7 @@ describe('no agent-level statistics leave this screen', () => {
    */
   it('answers identically however many leads an agent is holding', async () => {
     await inRollback(async (tx) => {
+      await emptyPool(tx);
       const { agent, admin } = await scene(tx, 2);
       const svc = new LeadTransferService(tx, auditStub);
 
@@ -301,6 +343,7 @@ describe('the door is narrow', () => {
 
   it('is refused to an agent and to a manager', async () => {
     await inRollback(async (tx) => {
+      await emptyPool(tx);
       const { agent, successor } = await scene(tx, 1);
       const now = new Date();
       const manager = await tx.users.create({
@@ -316,6 +359,7 @@ describe('the door is narrow', () => {
 
   it('refuses to hand leads to an inactive account', async () => {
     await inRollback(async (tx) => {
+      await emptyPool(tx);
       const { admin } = await scene(tx, 1);
       const now = new Date();
       const gone = await tx.users.create({
@@ -329,6 +373,7 @@ describe('the door is narrow', () => {
 
   it('cannot be done quietly', async () => {
     await inRollback(async (tx) => {
+      await emptyPool(tx);
       const { successor, admin } = await scene(tx, 2);
       await new LeadTransferService(tx, auditStub).transfer(as(admin), successor.id);
 
@@ -372,6 +417,7 @@ describe('the recipient must be a valid id before anything is moved', () => {
     ['a fractional id', 1.5],
   ])('refuses %s with 422 rather than failing', async (_label, value) => {
     await inRollback(async (tx) => {
+      await emptyPool(tx);
       const { admin } = await scene(tx, 1);
       await expect(new LeadTransferService(tx, auditStub).transfer(as(admin), value))
         .rejects.toBeInstanceOf(UnprocessableEntityException);
@@ -380,6 +426,7 @@ describe('the recipient must be a valid id before anything is moved', () => {
 
   it('still answers 404 for a well-formed id that matches nobody', async () => {
     await inRollback(async (tx) => {
+      await emptyPool(tx);
       const { admin } = await scene(tx, 1);
       // Not 422: the request is well formed, the person simply is not there. Collapsing the two
       // would lose the distinction between "you sent nothing" and "they have gone".
@@ -390,6 +437,7 @@ describe('the recipient must be a valid id before anything is moved', () => {
 
   it('refuses a malformed recipient BEFORE the permission check is passed, not after', async () => {
     await inRollback(async (tx) => {
+      await emptyPool(tx);
       const { agent } = await scene(tx, 1);
       // An ordinary agent sending rubbish must still be told they may not do this at all — the
       // validation must not become a way to probe the endpoint from an unprivileged account.
@@ -400,6 +448,7 @@ describe('the recipient must be a valid id before anything is moved', () => {
 
   it('moves nothing and records nothing when the recipient is malformed', async () => {
     await inRollback(async (tx) => {
+      await emptyPool(tx);
       const { admin } = await scene(tx, 3);
       const before = audits.length;
 
