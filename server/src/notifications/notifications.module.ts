@@ -6,6 +6,7 @@ import { NotificationCenterService } from './notification-center.service';
 import { NotificationDispatcherModule } from './notification-dispatcher.module';
 import { TransactionsModule } from '../transactions/transactions.module';
 import { NotificationPreferenceModule } from './notification-preference.module';
+import { NotificationEventsService } from './notification-events.service';
 
 @Module({
   // TransactionsModule exports TransactionReviewService, which owns the agent's review feed.
@@ -16,6 +17,6 @@ import { NotificationPreferenceModule } from './notification-preference.module';
    */
   imports: [AuthModule, TransactionsModule, NotificationPreferenceModule, NotificationDispatcherModule],
   controllers: [NotificationsController],
-  providers: [NotificationCenterService, NotificationsService],
+  providers: [NotificationEventsService, NotificationCenterService, NotificationsService],
 })
 export class NotificationsModule {}

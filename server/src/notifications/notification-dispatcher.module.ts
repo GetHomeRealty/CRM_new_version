@@ -3,6 +3,7 @@ import { NotificationDispatcher } from './notification-dispatcher.service';
 import { NotificationRetentionService } from './notification-retention.service';
 import { CrmEventNotifier } from './crm-events.service';
 import { NotificationPreferenceModule } from './notification-preference.module';
+import { NotificationEventsService } from './notification-events.service';
 
 /**
  * The dispatcher, in its own module — for exactly the reason `NotificationPreferenceModule` is.
@@ -25,7 +26,7 @@ import { NotificationPreferenceModule } from './notification-preference.module';
  */
 @Module({
   imports: [NotificationPreferenceModule],
-  providers: [NotificationDispatcher, CrmEventNotifier, NotificationRetentionService],
-  exports: [NotificationDispatcher, CrmEventNotifier, NotificationRetentionService],
+  providers: [NotificationEventsService, NotificationDispatcher, CrmEventNotifier, NotificationRetentionService],
+  exports: [NotificationEventsService, NotificationDispatcher, CrmEventNotifier, NotificationRetentionService],
 })
 export class NotificationDispatcherModule {}

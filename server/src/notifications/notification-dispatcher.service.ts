@@ -8,6 +8,7 @@ import {
   NotificationPreferenceService,
   type NotificationChannel,
 } from './notification-preference.service';
+import { NotificationEventsService } from './notification-events.service';
 
 /** What a module hands the dispatcher when something happens. */
 export interface NotificationRequest {
@@ -384,6 +385,24 @@ export class NotificationDispatcher {
       }],
       skipDuplicates: true,
     });
+
+    /*
+     * TOLD AFTER THE ROW IS COMMITTED, AND ONLY WHEN A ROW WAS ACTUALLY WRITTEN.
+     *
+     * `count === 0` is how this method already detects a duplicate the ledger let through — raising
+     * an event for it would wake every open tab to refetch a list that has not changed, and on a
+     * retried job that is exactly the case that repeats.
+     *
+     * The event carries no content and creates nothing; the browser refetches through the ordinary
+     * endpoint. So a reconnect, a repeated event and the fallback poll all resolve to the same
+     * refetch of the same rows, and none of them can produce a duplicate notification.
+     *
+     * Resolved lazily like the other optional collaborators here, so a module that does not provide
+     * it still dispatches — a missing event bus must never fail a notification.
+     */
+    if (written.count > 0) {
+      this.resolve(NotificationEventsService)?.raised(user.id, request.category);
+    }
 
     return written.count > 0 ? true : 'duplicate';
   }
