@@ -12,6 +12,7 @@ import {
 } from '../lib/notificationCenterApi';
 import { apiErrorMessage } from '../lib/apiError';
 import { useToast } from './toast';
+import { useNotificationStream } from './useNotificationStream';
 
 /**
  * The Notification Centre.
@@ -54,6 +55,16 @@ export default function NotificationCenterPage() {
   }, [filter, source, search, offset, toast]);
 
   useEffect(() => { void load(); }, [load]);
+
+  /*
+   * LIVE UPDATES, THROUGH THE SAME `load()` THE PAGE ALREADY USES.
+   *
+   * Refetching rather than splicing an event into state is the whole point: `load()` carries the
+   * current filter, source, search and offset, so a live update cannot show a row the active view
+   * would have excluded, and cannot disturb the paging. The event itself carries no notification —
+   * it only says "ask again".
+   */
+  useNotificationStream(() => { void load(); });
 
   // Any change of view starts at the first page — staying on page 3 of a list that now has one page
   // shows an empty screen and reads as "nothing here".

@@ -1,4 +1,4 @@
-import { Suspense, useEffect, useRef, useState } from 'react';
+import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { companyLogoUrl, getAgentChangeNotifications, getDocNotifications, getReviewNotifications, markDocNotificationsSeen } from '../lib/api';
@@ -9,6 +9,7 @@ import ErrorBoundary from '../components/ErrorBoundary';
 import Icon from '../ui/Icon';
 import { AREA_LABEL, AREA_SHORT, AREA_TAB, DEFAULT_AREA, areaPath, screenInArea, type Area } from './area';
 import { AreaProvider } from './AreaContext';
+import { useNotificationStream } from './useNotificationStream';
 
 interface NavItem {
   key: string;
@@ -194,13 +195,22 @@ export default function DeskLayout({ area = DEFAULT_AREA }: { area?: Area }) {
   const docBellRef = useRef<HTMLDivElement>(null);
 
   // Poll agent-change notifications (admins/managers only); refresh on navigation.
+  const loadAgentNotif = useCallback(
+    () => { void getAgentChangeNotifications().then(setNotif).catch(() => {}); },
+    [],
+  );
   useEffect(() => {
     if (!isAdminOrAbove) return undefined;
-    const load = () => getAgentChangeNotifications().then(setNotif).catch(() => {});
-    load();
-    const t = setInterval(load, 60000);
+    loadAgentNotif();
+    // KEPT. The sixty-second poll is the fallback for a browser with no EventSource, a proxy that
+    // buffers the stream, or a multi-instance deployment where the event was raised elsewhere.
+    // SSE makes it prompt; this makes it certain.
+    const t = setInterval(loadAgentNotif, 60000);
     return () => clearInterval(t);
-  }, [isAdminOrAbove, location.pathname]);
+  }, [isAdminOrAbove, location.pathname, loadAgentNotif]);
+
+  // Live: refetch the moment the server says something was raised for this user.
+  useNotificationStream(loadAgentNotif, isAdminOrAbove);
 
   /**
    * The agent's bell: document reviews and change reviews, in one list.
@@ -220,9 +230,12 @@ export default function DeskLayout({ area = DEFAULT_AREA }: { area?: Area }) {
   useEffect(() => {
     if (!isAgent) return undefined;
     loadDocNotif();
+    // Kept as the fallback, for the same reasons as the admin bell above.
     const t = setInterval(loadDocNotif, 60000);
     return () => clearInterval(t);
   }, [isAgent, location.pathname]);
+
+  useNotificationStream(() => { void loadDocNotif(); }, isAgent);
 
   useEffect(() => {
     if (!bellOpen && !docBellOpen) return undefined;
