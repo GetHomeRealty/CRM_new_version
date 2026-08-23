@@ -132,8 +132,25 @@ describe('the window is the brokerage’s one retention policy', () => {
     }
   });
 
+/**
+ * Force the sweep OFF for a test that is about the disabled behaviour.
+ *
+ * These two used to assert "deletes nothing" while simply not setting `RETENTION_ENABLED` — which
+ * passed only for as long as no deployment set it. The brokerage has now chosen a retention policy
+ * and turned it on in `.env`, and both tests failed: they were asserting a default, not a rule.
+ * Setting it explicitly makes each test state the condition it is actually testing.
+ */
+async function withRetentionDisabled<T>(fn: () => Promise<T>): Promise<T> {
+  const saved = process.env.RETENTION_ENABLED;
+  process.env.RETENTION_ENABLED = 'false';
+  try { return await fn(); } finally {
+    if (saved === undefined) delete process.env.RETENTION_ENABLED;
+    else process.env.RETENTION_ENABLED = saved;
+  }
+}
+
   it('deletes nothing until RETENTION_ENABLED is set, however old the rows are', async () => {
-    await inRollback(async (tx) => {
+    await withRetentionDisabled(async () => inRollback(async (tx) => {
       const user = await makeUser(tx);
       await ledger(tx, user, 'campaign_completed', 'campaign-completed:1:1', LONG_AGO);
 
@@ -141,11 +158,11 @@ describe('the window is the brokerage’s one retention policy', () => {
 
       expect(result).toEqual({ deliveries: 0, notifications: 0, skipped: true });
       expect(await tx.notification_deliveries.count({ where: { user_id: user } })).toBe(3);
-    });
+    }));
   });
 
   it('reports what it would remove, without removing it', async () => {
-    await inRollback(async (tx) => {
+    await withRetentionDisabled(async () => inRollback(async (tx) => {
       const user = await makeUser(tx);
       await ledger(tx, user, 'campaign_completed', 'campaign-completed:1:1', LONG_AGO);
       await ledger(tx, user, 'campaign_completed', 'campaign-completed:2:1', RECENTLY);
@@ -156,7 +173,7 @@ describe('the window is the brokerage’s one retention policy', () => {
       expect(plan.months).toBe(6);
       expect(plan.deliveries).toBe(3);
       expect(await tx.notification_deliveries.count({ where: { user_id: user } })).toBe(6);
-    });
+    }));
   });
 });
 
