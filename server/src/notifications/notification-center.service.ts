@@ -47,6 +47,14 @@ export interface NotificationFeed {
   unread: number;
   limit: number;
   offset: number;
+  /**
+   * Whether a source still had rows beyond what this page needed.
+   *
+   * Not an error and not the old bug: the next page will reach them. It exists so a caller can
+   * tell "you have seen everything" from "there is more", without the API ever discarding rows
+   * without saying so — which is precisely what the fixed 100-per-source cap used to do.
+   */
+  truncated?: boolean;
 }
 
 /**
@@ -108,7 +116,17 @@ export class NotificationCenterService {
     const limit = Math.min(Math.max(1, options.limit ?? NotificationCenterService.DEFAULT_LIMIT), NotificationCenterService.MAX_LIMIT);
     const offset = Math.max(0, options.offset ?? 0);
 
-    let items = await this.collect(user, filter !== 'unread');
+    /*
+     * FETCH TO THE DEPTH THIS PAGE NEEDS, rather than to a fixed 100 per source.
+     *
+     * `offset + limit` is sufficient AND necessary: an item on the global page must sit within the
+     * first `offset + limit` of its own source, because merging only ever pushes an item later in
+     * the order. One extra row is taken so the response can say honestly whether anything was left
+     * behind rather than dropping it silently, which is what the old fixed cap did.
+     */
+    const depth = offset + limit + 1;
+    let items = await this.collect(user, filter !== 'unread', depth);
+    const truncated = items.length > depth;
 
     if (options.source) items = items.filter((i) => i.source === options.source);
     if (filter === 'unread') items = items.filter((i) => i.unread);
@@ -124,12 +142,20 @@ export class NotificationCenterService {
     // "just now", and showing it at the top would push real news down.
     items.sort((a, b) => (b.at ?? '').localeCompare(a.at ?? ''));
 
+    /*
+     * THE COUNTS ARE NOT TAKEN FROM THIS PAGE. `unreadCount` reads every unread row uncapped, so a
+     * person with 250 unread sees 250 while looking at a page of 25 — the number is a statement
+     * about their mailbox, not about the slice on screen.
+     */
+    const counts = await this.unreadCount(user);
+
     return {
       items: items.slice(offset, offset + limit),
       total: items.length,
-      unread: items.filter((i) => i.unread).length,
+      unread: counts.unread,
       limit,
       offset,
+      truncated,
     };
   }
 
@@ -142,6 +168,8 @@ export class NotificationCenterService {
   async unreadCount(user: ResourceUser | null): Promise<{ unread: number; by_source: Record<NotificationSource, number> }> {
     if (!user) return { unread: 0, by_source: this.emptyCounts() };
 
+    // No depth: a badge computed from a capped fetch under-reports the moment somebody passes the
+    // cap, and a wrong badge is worse than a slow one. Unread sets are small by nature.
     const items = (await this.collect(user, false)).filter((i) => i.unread);
     const bySource = this.emptyCounts();
     for (const item of items) bySource[item.source] += 1;
@@ -186,6 +214,79 @@ export class NotificationCenterService {
   }
 
   /**
+   * Put a notification back to unread.
+   *
+   * ONLY THE `direct` SOURCE CAN DO THIS, and the restriction is real rather than an omission.
+   * The other four are PROJECTIONS: their read state is not a flag on a notification, it is a fact
+   * recorded in the system they come from — `handled` on an audit-log row, `seen` on a transaction
+   * reminder. Un-setting those would not "mark a notification unread", it would rewrite history to
+   * say a document review was never looked at, and the audit trail is the one thing in this
+   * application that must not be edited to suit a screen.
+   *
+   * So a projected item answers `supported: false` and the UI does not offer the action for it,
+   * rather than the endpoint silently doing nothing and leaving somebody clicking a dead button.
+   */
+  async markUnread(user: ResourceUser | null, source: NotificationSource, id: number): Promise<{ ok: boolean; supported: boolean }> {
+    if (!user) return { ok: false, supported: false };
+    if (source !== 'direct') return { ok: false, supported: false };
+
+    // Scoped by `user_id` in the update itself, so guessing another person's id changes nothing.
+    const done = await this.prisma.notifications.updateMany({
+      where: { id, user_id: user.id, read_at: { not: null } },
+      data: { read_at: null },
+    });
+    return { ok: done.count > 0, supported: true };
+  }
+
+  /**
+   * Remove one notification.
+   *
+   * THE DISTINCTION THIS METHOD EXISTS TO ENFORCE. A `direct` row lives in `notifications` and is
+   * this application's own record of "we told somebody something" — deleting it loses nothing else.
+   * The other four sources are windows onto `audit_logs`, `transaction_reminders` and the review
+   * trail; those rows are the brokerage's history and are referenced by screens that have nothing
+   * to do with notifications. Deleting one to tidy a list would destroy a record somebody may later
+   * need to produce.
+   *
+   * So "delete" means delete only for `direct`. For everything else the honest equivalent is
+   * "dismiss" — mark it handled/seen, which is what `markRead` already does, and which removes it
+   * from the unread view without touching the underlying record. That is what this returns
+   * `dismissed: true` to say.
+   */
+  async remove(user: ResourceUser | null, source: NotificationSource, id: number): Promise<{ ok: boolean; deleted: boolean; dismissed: boolean }> {
+    if (!user) return { ok: false, deleted: false, dismissed: false };
+
+    if (source === 'direct') {
+      const done = await this.prisma.notifications.deleteMany({ where: { id, user_id: user.id } });
+      return { ok: done.count > 0, deleted: done.count > 0, dismissed: false };
+    }
+
+    // A projection: dismissing is marking it handled in the system it belongs to. The source record
+    // is left exactly as it is.
+    const r = await this.markRead(user, source, id);
+    return { ok: r.ok, deleted: false, dismissed: r.ok };
+  }
+
+  /**
+   * Clear the list.
+   *
+   * DELETES ONLY THIS PERSON'S `direct` ROWS. Everything else is dismissed by being marked read,
+   * for the reason above — a "Clear all" that quietly deleted audit-log rows would be the most
+   * destructive button in the application, and it would look like housekeeping.
+   *
+   * Reports the two numbers separately so the screen can say what actually happened rather than
+   * implying everything was thrown away.
+   */
+  async clearAll(user: ResourceUser | null): Promise<{ deleted: number; dismissed: number }> {
+    if (!user) return { deleted: 0, dismissed: 0 };
+
+    const removed = await this.prisma.notifications.deleteMany({ where: { user_id: user.id } });
+    // Whatever remains visible belongs to another system; mark it handled instead.
+    const rest = await this.markAllRead(user);
+    return { deleted: removed.count, dismissed: rest.marked };
+  }
+
+  /**
    * Mark everything currently unread as read.
    *
    * Built on `markRead` per item rather than four blanket `updateMany`s. That is slower and
@@ -222,13 +323,30 @@ export class NotificationCenterService {
   // ========================================================================== sources
 
   /** Every source, normalised. `includeRead` is false when only the unread count is wanted. */
-  private async collect(user: ResourceUser, includeRead: boolean): Promise<NotificationItem[]> {
+  /**
+   * Gather every source.
+   *
+   * `depth` is how many rows to take FROM EACH SOURCE, and passing it correctly is the whole of the
+   * pagination fix. Each source was capped at a hard 100 before being merged, so a user with 150
+   * items in one source could never reach the last 50 — they were dropped before the merge and
+   * nothing said so.
+   *
+   * To render the global page [offset, offset+limit) it is sufficient, and necessary, to take
+   * `offset + limit` from each source: any item on that page must be within the first
+   * `offset + limit` of its own source, because the merge only ever moves an item LATER in the
+   * order. So the fetch depth follows the page rather than a fixed ceiling, and no item on any
+   * reachable page can be lost.
+   *
+   * `undefined` means NO cap, which is what the unread counter uses — a badge computed from a
+   * capped fetch stops counting at the cap and quietly under-reports.
+   */
+  private async collect(user: ResourceUser, includeRead: boolean, depth?: number): Promise<NotificationItem[]> {
     const [agentChanges, docReviews, decisions, reminders, direct] = await Promise.all([
       this.notifications.agentChangeNotifications(user),
       this.notifications.docNotifications(user),
-      this.reviewDecisions(user, includeRead),
-      this.reminderItems(user, includeRead),
-      this.directItems(user, includeRead),
+      this.reviewDecisions(user, includeRead, depth),
+      this.reminderItems(user, includeRead, depth),
+      this.directItems(user, includeRead, depth),
     ]);
 
     const out: NotificationItem[] = [];
@@ -269,7 +387,7 @@ export class NotificationCenterService {
    * read, and the Centre has to be able to show it again. The ownership condition is the same one
    * that method uses (`agent_name` is the caller), so nothing is loosened.
    */
-  private async reviewDecisions(user: ResourceUser, includeRead: boolean): Promise<NotificationItem[]> {
+  private async reviewDecisions(user: ResourceUser, includeRead: boolean, depth?: number): Promise<NotificationItem[]> {
     if (!isAgent(user)) return [];
 
     const rows = await this.prisma.transaction_reviews.findMany({
@@ -277,7 +395,7 @@ export class NotificationCenterService {
       // namesake the other person's rejected fields, reasons and old/new values.
       where: { ...reviewScopeWhere(user), ...(includeRead ? {} : { agent_seen_at: null }) },
       orderBy: [{ created_at: 'desc' }, { id: 'desc' }],
-      take: 100,
+      take: depth,
       include: { transactions: { select: { id: true, trade_no: true, property: true, deleted_at: true } } },
     });
 
@@ -300,14 +418,14 @@ export class NotificationCenterService {
   }
 
   /** Scheduled reminders, including seen ones when history is wanted. Same shape of reasoning. */
-  private async reminderItems(user: ResourceUser, includeRead: boolean): Promise<NotificationItem[]> {
+  private async reminderItems(user: ResourceUser, includeRead: boolean, depth?: number): Promise<NotificationItem[]> {
     const name = (user.name ?? '').trim();
     if (!name) return [];
 
     const rows = await this.prisma.transaction_reminders.findMany({
       where: { recipient: name, delivery_method: 'in-app', ...(includeRead ? {} : { seen_at: null }) },
       orderBy: [{ scheduled_for: 'desc' }, { id: 'desc' }],
-      take: 100,
+      take: depth,
       include: { transactions: { select: { id: true, trade_no: true, property: true, deleted_at: true } } },
     });
 
@@ -334,11 +452,11 @@ export class NotificationCenterService {
    * `notification-dispatcher.service.ts` for why both kinds exist. Scoped by `user_id`, which is the
    * whole of its ownership rule: a direct notification belongs to exactly the person it was sent to.
    */
-  private async directItems(user: ResourceUser, includeRead: boolean): Promise<NotificationItem[]> {
+  private async directItems(user: ResourceUser, includeRead: boolean, depth?: number): Promise<NotificationItem[]> {
     const rows = await this.prisma.notifications.findMany({
       where: { user_id: user.id, ...(includeRead ? {} : { read_at: null }) },
       orderBy: [{ created_at: 'desc' }, { id: 'desc' }],
-      take: 100,
+      take: depth,
     });
 
     const visible = await this.primaryMailboxOnly(user, rows);
