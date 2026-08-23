@@ -856,7 +856,7 @@ function EmailComposer({ lead, onClose, onSent }: { lead: LeadDetail; onClose: (
                 {generating ? 'Generating…' : '✨ Generate'}
               </button>
             </div>
-            <div className="help" style={{ marginTop: 6 }}>💡 AI writes a complete HTML email with professional styling.</div>
+            <div className="help" style={{ marginTop: 6 }}>💡 AI drafts a short personal email — plain wording, no template or branding. Review and edit before sending.</div>
             <div className="help" style={{ marginTop: 4 }}>
               <span style={{ fontWeight: 600 }}>Examples:</span>
               {AI_EMAIL_EXAMPLES.map((ex) => (
@@ -935,11 +935,18 @@ const escapeHtml = (s: string): string =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
 /** Starter prompts shown under the AI email generator. */
+/*
+ * Prompts that ask for correspondence, not campaign copy.
+ *
+ * "Create a welcome email for a new client with a market update" invited exactly the newsletter the
+ * drafting prompt no longer produces, and an example is a stronger instruction than help text —
+ * it is the thing agents actually click. These read like a note one person sends another.
+ */
 const AI_EMAIL_EXAMPLES = [
-  "Send a follow-up email about yesterday's property showing",
-  'Create a welcome email for a new client with a market update',
-  'Write a thank-you email after closing a deal',
-  'Send a property recommendation with pricing details',
+  "Follow up on yesterday's showing and ask what they thought",
+  'Introduce myself and ask what they are looking for',
+  'Check in — we have not heard back in a couple of weeks',
+  'Thank them for their time and confirm the next step',
 ];
 
 const MAX_RECORDING_BYTES = 8 * 1024 * 1024;   // mirrors the server's limit, to fail before uploading

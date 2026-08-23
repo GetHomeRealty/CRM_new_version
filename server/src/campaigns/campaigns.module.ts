@@ -12,6 +12,7 @@ import { CampaignTemplatesController } from './campaign-templates.controller';
 import { CampaignTemplatesService } from './campaign-templates.service';
 import { MailDeliverabilityService } from './mail-deliverability.service';
 import { LeadsModule } from '../leads/leads.module';
+import { BounceIngestService } from './bounce-ingest.service';
 
 /**
  * Controller order matters: Express matches in registration order, and CampaignsController owns
@@ -25,6 +26,6 @@ import { LeadsModule } from '../leads/leads.module';
   // same path as the Leads screen so the two cannot drift apart again.
   imports: [NotificationDispatcherModule, AuthModule, EmailModule, LeadsModule],
   controllers: [CampaignTrackingController, CampaignTemplatesController, CampaignsController],
-  providers: [CampaignAuditService, CampaignResumeService, CampaignsService, CampaignAudienceService, CampaignTemplatesService, MailDeliverabilityService],
+  providers: [CampaignAuditService, CampaignResumeService, CampaignsService, CampaignAudienceService, CampaignTemplatesService, MailDeliverabilityService, BounceIngestService],
 })
 export class CampaignsModule {}

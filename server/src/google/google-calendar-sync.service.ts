@@ -1,6 +1,8 @@
 import { Injectable, Logger, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { GoogleService, type GoogleEvent } from './google.service';
+import {
+  GoogleService, isPermanentSyncFailure, isUnmanageableEvent, type GoogleEvent,
+} from './google.service';
 import { GoogleConnectionService } from './google-connection.service';
 import type { IntegrationScope } from '../email/mail-account.service';
 import { GOOGLE_ORIGIN_CREATED_BY, MAX_EVENTS_PER_SYNC, SYNC_WINDOW_FUTURE_DAYS, SYNC_WINDOW_PAST_DAYS } from './google.constants';
@@ -23,6 +25,27 @@ const FIRST_RETRY_DELAY_MS = 90 * 1000;
  */
 const RETRY_BATCH = 50;
 
+/**
+ * How often connected calendars are pulled FROM Google — the inbound half of the sync.
+ *
+ * WHY THIS EXISTS. The worker above is an OUTBOUND retry sweep and nothing else: it calls
+ * `retryFailedPushes`, which only ever re-sends events this application already owes Google. So
+ * `pull` — the entire Google → CRM direction — ran only when somebody pressed "Sync now" or
+ * finished the OAuth callback. An event created in Google Calendar simply never appeared in the CRM
+ * on its own, and the five-minute log line said "0 of 0 recovered" while doing exactly what it
+ * claimed: retrying nothing outbound.
+ *
+ * FIVE MINUTES, not one. Each pass is one HTTPS request per connected calendar, and `pull` sends
+ * the stored `syncToken` so Google returns only what changed since the last pass — cheap, but not
+ * free, and multiplied by every connected agent. Five minutes is well inside what people read as
+ * "it turns up by itself" and keeps a brokerage of fifty agents to ten requests a minute.
+ * `GOOGLE_PULL_SECONDS` overrides it; the floor stops a stray 0 from turning it into a hot loop.
+ */
+const PULL_INTERVAL_MS = Math.max(60, Number(process.env.GOOGLE_PULL_SECONDS ?? 300)) * 1000;
+
+/** Offset from the retry sweep's first pass, so a restart does not fire both at once. */
+const FIRST_PULL_DELAY_MS = 45 * 1000;
+
 export interface SyncResult { pulled: number; error: string | null }
 
 /**
@@ -42,6 +65,11 @@ export class GoogleCalendarSyncService implements OnModuleInit, OnModuleDestroy 
   private first: ReturnType<typeof setTimeout> | null = null;
   /** One pass at a time. A slow pass must not overlap the next tick and double every attempt. */
   private sweeping = false;
+
+  /** The inbound worker's own timers and re-entry guard, kept separate from the outbound sweep's. */
+  private pullTimer: ReturnType<typeof setInterval> | null = null;
+  private pullFirst: ReturnType<typeof setTimeout> | null = null;
+  private pulling = false;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -77,12 +105,99 @@ export class GoogleCalendarSyncService implements OnModuleInit, OnModuleDestroy 
       RETRY_INTERVAL_MS,
     );
     if (typeof this.timer.unref === 'function') this.timer.unref();
-    this.log.log(`Google Calendar retry sweep every ${RETRY_INTERVAL_MS / 1000}s (first pass in ${FIRST_RETRY_DELAY_MS / 1000}s)`);
+    this.log.log(`Google Calendar OUTBOUND retry sweep every ${RETRY_INTERVAL_MS / 1000}s (first pass in ${FIRST_RETRY_DELAY_MS / 1000}s)`);
+
+    /*
+     * THE INBOUND HALF, and a separate worker on purpose.
+     *
+     * It could have been folded into `sweep()`, and that would have been the shorter change and the
+     * wrong one. The two have nothing in common but a timer: the retry sweep is bounded by an
+     * attempt count and a backoff schedule and exists for outages, while a pull is unconditional,
+     * cheap because of the sync token, and needs to happen on a cadence somebody waiting for an
+     * appointment would call prompt. Sharing a pass would force one interval on both and make a slow
+     * pull delay the retry of an unrelated event.
+     *
+     * Its own `clusterTick` key, so in a multi-instance deployment exactly one process pulls and
+     * exactly one retries — and they need not be the same process.
+     */
+    this.pullFirst = setTimeout(() => { void this.pullAll(); }, FIRST_PULL_DELAY_MS);
+    if (typeof this.pullFirst.unref === 'function') this.pullFirst.unref();
+
+    registerWorker('google-calendar-pull', PULL_INTERVAL_MS);
+    this.pullTimer = setInterval(
+      this.redis && this.cache
+        ? clusterTick({ redis: this.redis, cache: this.cache }, 'google-calendar-pull', () => this.pullAll())
+        : trackedTick('google-calendar-pull', () => this.pullAll()),
+      PULL_INTERVAL_MS,
+    );
+    if (typeof this.pullTimer.unref === 'function') this.pullTimer.unref();
+    this.log.log(`Google Calendar INBOUND pull every ${PULL_INTERVAL_MS / 1000}s (first pass in ${FIRST_PULL_DELAY_MS / 1000}s)`);
   }
 
   onModuleDestroy(): void {
     if (this.first) clearTimeout(this.first);
     if (this.timer) clearInterval(this.timer);
+    if (this.pullFirst) clearTimeout(this.pullFirst);
+    if (this.pullTimer) clearInterval(this.pullTimer);
+  }
+
+  /**
+   * One inbound pass: pull every actively connected calendar into the CRM.
+   *
+   * DELEGATES TO `pull`, and does not reimplement any of it. That method owns the sync token, the
+   * event window, `applyGoogleEvent` and every rule inside it — the birthday and Gmail exclusions,
+   * the duplicate check that matches an existing row by (google id, area), the cancelled-event
+   * handling and the token refresh. Copying any of that here would create a second importer free to
+   * drift from the one the manual "Sync now" button uses, which is precisely the class of bug this
+   * codebase keeps recording.
+   *
+   * ONE CONNECTION'S FAILURE MUST NOT STOP THE OTHERS. `pull` already answers with `{ pulled,
+   * error }` rather than throwing, and records the error against the connection itself; the
+   * try/catch is for anything it cannot foresee, so a single bad row cannot end the pass for
+   * everybody else.
+   *
+   * INACTIVE CONNECTIONS ARE NOT ASKED. `is_active` is what a revoked grant clears, so this is the
+   * same filter that keeps a dead credential from being retried every five minutes for ever.
+   */
+  async pullAll(): Promise<{ connections: number; pulled: number; failed: number }> {
+    if (this.pulling) return { connections: 0, pulled: 0, failed: 0 };
+    this.pulling = true;
+    try {
+      const connected = await this.prisma.google_connections.findMany({
+        where: { is_active: true },
+        select: { user_id: true, scope: true },
+      });
+      let pulled = 0;
+      let failed = 0;
+
+      for (const c of connected) {
+        if (!c.user_id) continue;
+        try {
+          const r = await this.pull(c.user_id, (c.scope as IntegrationScope) ?? 'crm');
+          if (r.error) {
+            failed += 1;
+            this.log.warn(`Google Calendar inbound pull failed for user #${c.user_id} (${c.scope}): ${r.error}`);
+          } else {
+            pulled += r.pulled;
+          }
+        } catch (ex) {
+          failed += 1;
+          this.log.warn(`Google Calendar inbound pull threw for user #${c.user_id} (${c.scope}): ${(ex as Error).message}`);
+        }
+      }
+
+      // Logged only when it did something or something went wrong: a quiet pass every five minutes
+      // across every deployment is noise that trains people to stop reading the log.
+      if (pulled || failed) {
+        this.log.log(`Google Calendar INBOUND pull: ${pulled} event(s) from ${connected.length} connection(s), ${failed} failed.`);
+      }
+      return { connections: connected.length, pulled, failed };
+    } catch (ex) {
+      this.log.warn(`Google Calendar inbound pull pass failed: ${(ex as Error).message}`);
+      return { connections: 0, pulled: 0, failed: 0 };
+    } finally {
+      this.pulling = false;
+    }
   }
 
   /** One pass over every connection with a failed push to retry. */
@@ -118,7 +233,46 @@ export class GoogleCalendarSyncService implements OnModuleInit, OnModuleDestroy 
    * calendar screen and the manual retry all read it, so there is one fact rather than three that
    * can disagree.
    */
+  /**
+   * A refusal that will never become an acceptance: stop asking, and stop counting it as owed.
+   *
+   * WHAT WAS WRONG. Every push failure went to `recordSyncFailure`, which sets `google_sync_error`
+   * and schedules a retry. "Owed to Google" is *defined* as that column being non-null, and the
+   * screen counts it — so an event Google refuses on principle sat at "1 appointment has not reached
+   * Google yet" indefinitely. The background sweep did give up at `MAX_SYNC_ATTEMPTS`, but the
+   * Retry button resets the attempt count, so every press restarted a loop whose only possible
+   * outcome was "0 of 1 reached Google".
+   *
+   * WHAT THIS DOES INSTEAD. Clears the outstanding flag, so the count drops and neither the sweep
+   * nor the button will select the row again, and DETACHES the Google id — this application is not
+   * the manager of that entry and should not hold a pointer to it as though it were.
+   *
+   * IT DOES NOT TOUCH THE GOOGLE EVENT. Deleting the birthday from the person's calendar to make our
+   * own counter go down would be destroying somebody's data to tidy a number. The entry stays
+   * exactly where it is; we simply stop claiming it.
+   *
+   * The reason is kept in the log rather than the row, because the row's error column is precisely
+   * what "still owed" means — writing the explanation there is what caused the bug.
+   */
+  private async recordPermanentFailure(eventId: number, message: string): Promise<void> {
+    this.log.warn(
+      `Google Calendar refuses event #${eventId} permanently; giving up and releasing it. ${message.slice(0, 200)}`,
+    );
+    await this.prisma.calendar_events.update({
+      where: { id: eventId },
+      data: {
+        google_sync_error: null,
+        google_sync_next_retry_at: null,
+        google_sync_attempts: GoogleCalendarSyncService.MAX_SYNC_ATTEMPTS,
+        google_calendar_id: null,
+      },
+    }).catch(() => undefined);
+  }
+
   private async recordSyncFailure(eventId: number, message: string): Promise<void> {
+    // A permanent refusal is not a failed attempt to be tried again — see `recordPermanentFailure`.
+    if (isPermanentSyncFailure(message)) return this.recordPermanentFailure(eventId, message);
+
     const row = await this.prisma.calendar_events.findUnique({
       where: { id: eventId }, select: { google_sync_attempts: true },
     });
@@ -201,6 +355,25 @@ export class GoogleCalendarSyncService implements OnModuleInit, OnModuleDestroy 
    * (google id, area) is what identifies a row.
    */
   private async applyGoogleEvent(userId: number, ev: GoogleEvent, area: IntegrationScope): Promise<boolean> {
+    /*
+     * GOOGLE-GENERATED ENTRIES ARE NOT MIRRORED, and this is the fix for the outstanding
+     * appointment that could never clear.
+     *
+     * A Contact's birthday appears on the primary calendar as an ordinary-looking all-day event, so
+     * the pull imported it like anything else and gave the CRM row a `google_calendar_id`. The
+     * moment that row was deleted, the push tried to DELETE the birthday from Google and was
+     * refused with `eventTypeRestriction` — permanently, by design, for every caller.
+     *
+     * Skipping them at the boundary is the real cure: nothing downstream can attempt to modify an
+     * event that was never adopted. `isUnmanageableEvent` treats a missing `eventType` as `default`,
+     * so ordinary appointments — including out-of-office and focus-time entries a person actually
+     * created — are unaffected.
+     *
+     * Rows imported BEFORE this guard existed still carry the link; `recordPermanentFailure` below
+     * is what releases those.
+     */
+    if (isUnmanageableEvent(ev)) return false;
+
     const existing = await this.prisma.calendar_events.findFirst({
       // `domain: null` is included so an event that pre-dates the split is claimed and stamped by
       // the next pull rather than being duplicated alongside itself.
@@ -443,7 +616,9 @@ export class GoogleCalendarSyncService implements OnModuleInit, OnModuleDestroy 
       if (!after?.google_sync_error) recovered += 1;
     }
 
-    if (attempted) this.log.log(`Google Calendar retry: ${recovered} of ${attempted} recovered.`);
+    // "OUTBOUND" is not decoration: this line reading "0 of 0 recovered" every five minutes was
+    // read as evidence that calendar sync was running, when the inbound half did not exist at all.
+    if (attempted) this.log.log(`Google Calendar OUTBOUND retry: ${recovered} of ${attempted} recovered.`);
     return { attempted, recovered };
   }
 
@@ -471,7 +646,7 @@ export class GoogleCalendarSyncService implements OnModuleInit, OnModuleDestroy 
    * would otherwise be skipped by the same rule that stopped the sweep. `next_retry_at` is cleared
    * so nothing is waiting out a backoff either.
    */
-  async retryNow(userId: number, area: IntegrationScope = 'crm'): Promise<{ attempted: number; recovered: number }> {
+  async retryNow(userId: number, area: IntegrationScope = 'crm'): Promise<{ attempted: number; recovered: number; released: number }> {
     const mine = await this.prisma.calendar_events.findMany({
       where: {
         user_id: userId, google_sync_error: { not: null },
@@ -481,7 +656,7 @@ export class GoogleCalendarSyncService implements OnModuleInit, OnModuleDestroy 
       take: RETRY_BATCH,
       select: { id: true, deleted_at: true, google_calendar_id: true, domain: true },
     });
-    if (!mine.length) return { attempted: 0, recovered: 0 };
+    if (!mine.length) return { attempted: 0, recovered: 0, released: 0 };
 
     await this.prisma.calendar_events.updateMany({
       where: { id: { in: mine.map((m) => m.id) } },
@@ -489,17 +664,30 @@ export class GoogleCalendarSyncService implements OnModuleInit, OnModuleDestroy 
     });
 
     let recovered = 0;
+    /** Rows Google refuses permanently: no longer outstanding, but they never reached Google. */
+    let released = 0;
     for (const ev of mine) {
       if (ev.deleted_at) await this.removeEvent(userId, ev.google_calendar_id, ev.domain, ev.id);
       else if (!ev.google_calendar_id) await this.pushEvent(userId, ev.id);
       else await this.updateEvent(userId, ev.id);
 
       const after = await this.prisma.calendar_events.findUnique({
-        where: { id: ev.id }, select: { google_sync_error: true },
+        where: { id: ev.id }, select: { google_sync_error: true, google_sync_attempts: true },
       });
-      if (!after?.google_sync_error) recovered += 1;
+      /*
+       * CLEARED IS NOT THE SAME AS SYNCED.
+       *
+       * A permanent refusal also clears `google_sync_error` — that is how the row stops being
+       * outstanding — so counting "no error" as recovered would report an event Google flatly
+       * refused as having reached it. The two are told apart without a new column by the attempt
+       * count: `recordSyncSuccess` zeroes it, `recordPermanentFailure` pins it at the cap.
+       */
+      if (!after?.google_sync_error) {
+        if (after?.google_sync_attempts === GoogleCalendarSyncService.MAX_SYNC_ATTEMPTS) released += 1;
+        else recovered += 1;
+      }
     }
-    return { attempted: mine.length, recovered };
+    return { attempted: mine.length, recovered, released };
   }
 
   /**

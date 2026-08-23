@@ -56,7 +56,7 @@ import { RETENTION_MONTHS } from '../retention/retention.service';
  * before it existed were backfilled into it by the migration.
  *
  * DRY RUN IS THE DEFAULT, matching Transaction Desk retention exactly: `plan()` only counts, and
- * `sweep()` refuses to delete unless `RETENTION_ENABLED=true`. Deploying this starts deleting
+ * `sweep()` refuses to delete unless `NOTIFICATION_RETENTION_ENABLED=true`. Deploying this starts deleting
  * nothing, and a staging run reports what production would remove before anybody agrees to it.
  */
 @Injectable()
@@ -80,18 +80,34 @@ export class NotificationRetentionService implements OnModuleInit, OnModuleDestr
   ) {}
 
   /**
-   * The window, in months. Defaults to the SAME constant Transaction Desk retention uses so the two
-   * cannot drift apart — the policy is one policy, and a deployment that shortens one and forgets
-   * the other is the failure that import prevents. 0 disables this sweep entirely.
+   * The window, in months. `RETENTION_MONTHS` is the shared DEFAULT only — the two policies may
+   * differ, and this one is set independently by `NOTIFICATION_RETENTION_MONTHS`. 0 disables this
+   * sweep entirely.
    */
   static months(): number {
     const raw = Number(process.env.NOTIFICATION_RETENTION_MONTHS ?? RETENTION_MONTHS);
     return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : RETENTION_MONTHS;
   }
 
-  /** Whether this run may actually delete. Same switch the Desk sweep answers to. */
+  /**
+   * Whether this run may actually delete. Its OWN switch — and this is the important part.
+   *
+   * THIS AND THE DESK SWEEP USED TO READ THE SAME `RETENTION_ENABLED`. Two sweeps with wildly
+   * different blast radii behind one variable meant that turning on notification housekeeping —
+   * two tables of expired signals — also armed the Transaction Desk purge, which deletes trashed
+   * deals and cascades into twenty child tables including `transaction_reviews`, and removes
+   * `audit_logs` and `transaction_reminders` by age alone. Nobody enabling notification retention
+   * would expect to be agreeing to that, and the variable's name gave no hint of it.
+   *
+   * So each sweep now answers to a flag named after itself, and NEITHER reads the other's. The old
+   * shared flag is deliberately not consulted, not even as a fallback: production already has
+   * `RETENTION_ENABLED=true` set, so honouring it would carry the exact coupling this removes.
+   * `warnIfLegacyFlagSet` says so at boot rather than letting it look effective.
+   *
+   * Absent or malformed means FALSE. A destructive default must be the one that does nothing.
+   */
   static enabled(): boolean {
-    return (process.env.RETENTION_ENABLED ?? '').toLowerCase() === 'true';
+    return (process.env.NOTIFICATION_RETENTION_ENABLED ?? '').trim().toLowerCase() === 'true';
   }
 
   static cutoff(months = NotificationRetentionService.months(), now = new Date()): Date {
@@ -125,9 +141,19 @@ export class NotificationRetentionService implements OnModuleInit, OnModuleDestr
     );
     this.timer.unref?.();
 
+    /*
+     * Named, scoped and unambiguous. The previous line said only "notification history ... purged",
+     * which on a console beside the Desk sweep's own message left it unclear which system was
+     * armed. Anyone reading this must be able to tell WHICH retention is on, over WHAT, without
+     * consulting the code.
+     */
     this.log.log(
-      `Notification history and delivery ledger are purged after ${months} month(s)`
-      + `${NotificationRetentionService.enabled() ? '' : ' — DRY RUN, set RETENTION_ENABLED=true to act'}.`,
+      NotificationRetentionService.enabled()
+        ? `Notification retention: ENABLED (NOTIFICATION_RETENTION_ENABLED=true), ${months} month(s). `
+          + 'Scope: notifications and notification_deliveries ONLY. No Transaction Desk or CRM record is touched.'
+        : `Notification retention: DISABLED — DRY RUN, ${months} month(s). It will report what would be `
+          + 'removed from notifications and notification_deliveries and delete nothing. '
+          + 'Set NOTIFICATION_RETENTION_ENABLED=true to act.',
     );
   }
 
@@ -167,7 +193,7 @@ export class NotificationRetentionService implements OnModuleInit, OnModuleDestr
     };
   }
 
-  /** One pass. Deletes nothing unless `RETENTION_ENABLED=true`. */
+  /** One pass. Deletes nothing unless `NOTIFICATION_RETENTION_ENABLED=true`. */
   async sweep(now = new Date()): Promise<{ deliveries: number; notifications: number; skipped: boolean }> {
     const months = NotificationRetentionService.months();
     if (months === 0 || this.running) return { deliveries: 0, notifications: 0, skipped: true };

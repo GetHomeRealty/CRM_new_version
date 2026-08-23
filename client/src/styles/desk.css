@@ -1273,6 +1273,27 @@ input[type="number"],.numeric,.stat-card .val{font-variant-numeric:tabular-nums;
 .onb-preview p{margin:0 0 10px}
 .onb-preview ul,.onb-preview ol{margin:0 0 10px;padding-left:22px}
 .onb-preview a{color:var(--info)}
+/* A ruled blank on the contract, typed into in place. The line itself is an inline border set on
+   the element, so it survives into the email and the PDF; these rules only make it aimable on
+   screen. No underline here — that would double the one already drawn. */
+.onb-blank{cursor:text;border-radius:3px 3px 0 0}
+.onb-blank:hover{background:var(--info-050,#eff6ff)}
+.onb-blank:focus{outline:2px solid var(--info,#2563eb);outline-offset:1px;background:#fff;color:#111827}
+/* A tick box on the media agreement. The box itself is drawn by an inline border in the body so it
+   survives into the email and the PDF; these rules only make it feel clickable on screen. */
+.onb-check{cursor:pointer;user-select:none}
+.onb-check:hover{background:var(--info-050,#eff6ff);box-shadow:0 0 0 2px var(--info-050,#eff6ff)}
+.onb-check:focus{outline:2px solid var(--info,#2563eb);outline-offset:2px}
+/* A date line: not typed into, clicked to open the picker. */
+.onb-date{cursor:pointer}
+.onb-date:hover{background:var(--info-050,#eff6ff)}
+.onb-date:focus{outline:2px solid var(--info,#2563eb);outline-offset:1px}
+/* Signature and address lines. Deliberately inert: no pointer, no hover, no focus ring — nothing
+   that suggests it can be filled in, because it is signed by hand on the printed copy. */
+.onb-locked{cursor:default}
+/* The date field that appears over a date line while one is being picked. */
+.onb-datefield{font:inherit;font-size:13px;padding:2px 6px;border:1px solid var(--info,#2563eb);
+  border-radius:4px;background:#fff;color:#111827;box-shadow:0 4px 14px rgba(15,23,42,.18)}
 
 /* An attachment being read before it is sent, opened in place under the list rather than in another
    browser tab — the message and the document it refers to belong on screen together. The white

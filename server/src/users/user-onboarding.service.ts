@@ -25,7 +25,12 @@ import { renderContractPdf } from './contract-pdf';
  * screen is for.
  */
 
-export type OnboardingKind = 'onboard' | 'contract' | 'accounting' | 'training';
+/**
+ * `media` is not an onboarding letter. It is the per-listing Media & Marketing Fee Agreement, sent
+ * from the same screen because the same person sends it to the same agent — but it is signed once
+ * per LISTING rather than once when somebody joins, so expect it to be sent repeatedly.
+ */
+export type OnboardingKind = 'onboard' | 'contract' | 'accounting' | 'training' | 'media';
 
 /**
  * Which template each button sends.
@@ -51,7 +56,11 @@ const KIND_EVENT_KEYS: Record<OnboardingKind, string[]> = {
   contract: ['user.contract_agreement'],
   accounting: ['user.accounting_onboard_email'],
   training: [TRAINING_EMAIL],
+  media: ['user.listing_media_agreement'],
 };
+
+/** The kinds that carry a signable PDF built from the reviewed message. */
+const GENERATES_DOCUMENT: readonly OnboardingKind[] = ['contract', 'media'];
 
 /** A file picked in the review dialog, attached to this one send. */
 export interface AdHocAttachment {
@@ -86,6 +95,18 @@ const ACTION_PLAN = 'First 30 Days Action Plan.pdf';
  * preference, which reads the same either way.
  */
 const SAMPLE_HEADSHOTS = ['Sample Headshots - Male.pdf', 'Sample Headshots - Female.pdf'];
+
+/**
+ * The Onboard Trainings artwork, ALSO sent as a file.
+ *
+ * It already travels inside the message as the banner people read. Attaching it as well is not a
+ * duplicate for the sake of it: an inline image is awkward to save, forward or print, and this one
+ * is a list of the nine courses a new agent is booked onto — a thing they will want to keep.
+ *
+ * Named for the reader rather than for the disk. `onboard-trainings-banner.jpg` is what the file is
+ * called on the server; `Onboard Trainings.jpg` is what should appear in somebody's inbox.
+ */
+const TRAINING_BANNER_DOC = 'Onboard Trainings.jpg';
 
 /**
  * Files that go to some agents and not others, and the `gender` each one belongs to.
@@ -133,7 +154,7 @@ const SEEDED_DOCUMENTS: Record<string, string[]> = {
     ACTION_PLAN,
   ],
   [ONBOARD_FRESHER]: [...SAMPLE_HEADSHOTS],
-  [TRAINING_EMAIL]: [ACTION_PLAN],
+  [TRAINING_EMAIL]: [ACTION_PLAN, TRAINING_BANNER_DOC],
 };
 
 export interface OnboardingPreview {
@@ -189,6 +210,12 @@ const BANNER_MIME: Record<string, string> = {
   '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp',
 };
 const BANNER_CID = 'training-banner';
+
+/** What a seeded document should announce itself as. Everything but the artwork is a PDF. */
+const contentTypeFor = (filename: string): string => {
+  const ext = filename.slice(filename.lastIndexOf('.')).toLowerCase();
+  return BANNER_MIME[ext] ?? 'application/pdf';
+};
 /** Matches the banner however it reached the body — as the data: URI, or already swapped to cid:. */
 const BANNER_SRC = /src="(?:data:image\/[a-z+]+;base64,[^"]+|cid:training-banner)"/i;
 
@@ -265,12 +292,21 @@ const CONTRACT_VARIANTS = new Set([
 /** The deal count the tiered agreements are written for. A different one is a different document. */
 const TIERED_THRESHOLD = 10;
 
-const documentName = (agentName: string, variant: string | null): string => {
-  const who = agentName.replace(/[^\w\s.-]/g, '').trim().slice(0, 60) || 'Agent';
+const safeName = (agentName: string): string =>
+  agentName.replace(/[^\w\s.-]/g, '').trim().slice(0, 60) || 'Agent';
+
+const documentName = (agentName: string, variant: string | null): string =>
   // The split in the filename so a signed copy can be filed and found by the terms it is on, which
   // is how the brokerage's own five documents are named.
-  return `Independent Contractor Agreement${variant ? ` ${variant}` : ''} - ${who}.pdf`;
-};
+  `Independent Contractor Agreement${variant ? ` ${variant}` : ''} - ${safeName(agentName)}.pdf`;
+
+/*
+ * No split in this one's name, and no listing either. The property is a ruled blank the sender fills
+ * in, so it is not known here — naming the file after something this code cannot read would produce
+ * "… - .pdf" on every send. The agent's name is the one thing that is always known.
+ */
+const mediaDocumentName = (agentName: string): string =>
+  `Listing Media and Marketing Fee Agreement - ${safeName(agentName)}.pdf`;
 
 @Injectable()
 export class UserOnboardingService {
@@ -644,7 +680,9 @@ export class UserOnboardingService {
       to,
       variables: variablesFor(eventKey),
       attachments,
-      generated_document: kind === 'contract' ? documentName(name, variant) : null,
+      generated_document: kind === 'contract' ? documentName(name, variant)
+        : kind === 'media' ? mediaDocumentName(name)
+          : null,
       contract_variant: variant,
       sender: template.mail_accounts?.from_email ?? null,
       ...this.warningFor({ to, isActive: template.is_active }),
@@ -729,8 +767,8 @@ export class UserOnboardingService {
 
     // The agreement goes with it as a document, built from the same body the agent is about to read,
     // so there is something to print and sign rather than an email to scroll back through.
-    if (kind === 'contract') {
-      const document = await this.contractDocument(userId, html);
+    if (GENERATES_DOCUMENT.includes(kind)) {
+      const document = await this.agreementDocument(userId, kind, html);
       files.push({ data: document.data.toString('base64'), name: document.filename, mime: 'application/pdf' });
     }
 
@@ -760,13 +798,23 @@ export class UserOnboardingService {
    * somebody else is the worst possible thing to have on a template. Because it is rendered from the
    * reviewed HTML, a correction made in the dialog reaches the attachment as well as the email.
    */
-  async contractDocument(userId: number, html: string): Promise<{ filename: string; data: Buffer }> {
+  async agreementDocument(userId: number, kind: OnboardingKind, html: string): Promise<{ filename: string; data: Buffer }> {
+    if (!GENERATES_DOCUMENT.includes(kind)) {
+      throw new BadRequestException({ message: `No document is generated for "${kind}".` });
+    }
     const user = await this.prisma.users.findUnique({ where: { id: userId }, select: { name: true, profile: true } });
     if (!user) throw new NotFoundException({ message: `No query results for model [App\\Models\\User] ${userId}.` });
 
+    // The same renderer for both: the media agreement is the same kind of object as the contract —
+    // a one-page form on the brokerage's letterhead, built from the body being sent.
     const logo = await this.logoDataUri();
     const data = await renderContractPdf(html, logo);
-    return { filename: documentName(user.name, this.contractVariant(parseJsonObject(user.profile))), data };
+    return {
+      filename: kind === 'media'
+        ? mediaDocumentName(user.name)
+        : documentName(user.name, this.contractVariant(parseJsonObject(user.profile))),
+      data,
+    };
   }
 
   /** The brand logo as a data URI for the generated document, or null when none is uploaded. */
@@ -844,12 +892,23 @@ export class UserOnboardingService {
 
     for (const filename of filenames) {
       try {
-        const data = await fs.readFile(path.join(ONBOARD_DOC_DIR, filename));
+        /*
+         * The name in the inbox and the name on disk are not always the same. The banner is stored
+         * under a developer's filename and has to arrive under a reader's one, so the source is
+         * resolved separately from the name the attachment is given.
+         */
+        const source = filename === TRAINING_BANNER_DOC
+          ? (await this.bannerFile())?.abs
+          : path.join(ONBOARD_DOC_DIR, filename);
+        if (!source) continue; // no artwork installed — the letter still reads correctly without it
+        const data = await fs.readFile(source);
         await this.prisma.email_template_attachments.create({
           data: {
             template_id: templateId,
             filename,
-            content_type: 'application/pdf',
+            // Was hardcoded to application/pdf, which was true of every seeded document until this
+            // one. A JPEG announced as a PDF is a file the recipient's machine refuses to open.
+            content_type: contentTypeFor(filename),
             size: data.length,
             data: new Uint8Array(data),
             created_at: now,

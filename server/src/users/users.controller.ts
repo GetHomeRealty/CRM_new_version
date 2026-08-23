@@ -79,9 +79,11 @@ export class UsersController {
     @Req() req: Request,
     @Res() res: Response,
   ): Promise<void> {
-    if (kind !== 'contract') throw new BadRequestException({ message: `No document is generated for "${kind}".` });
-    const html = (body?.html ?? '').trim() || (await this.onboarding.preview(id, 'contract', publicBaseUrl(req))).html;
-    const file = await this.onboarding.contractDocument(id, html);
+    if (kind !== 'contract' && kind !== 'media') {
+      throw new BadRequestException({ message: `No document is generated for "${kind}".` });
+    }
+    const html = (body?.html ?? '').trim() || (await this.onboarding.preview(id, kind, publicBaseUrl(req))).html;
+    const file = await this.onboarding.agreementDocument(id, kind, html);
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename="${file.filename.replace(/"/g, '')}"`);
     res.end(file.data);

@@ -50,11 +50,34 @@ export class MailboxController {
     @Query('page') page?: string,
     @Query('q') q?: string,
     @Query('unread') unread?: string,
+    @Query('accountId') accountId?: string,
   ): Promise<unknown> {
+    /*
+     * `accountId` is the account switcher, and it is OPTIONAL. Omitted means "the default mailbox",
+     * which is what the screen asks for when nobody has chosen — never "all of them".
+     *
+     * A value that is not a whole number is refused rather than ignored: dropping it would answer a
+     * request for one mailbox with a different mailbox's mail, which is the same class of fault as
+     * the `?lead=abc` filter that `InboxController` refuses. The service is what checks the id
+     * actually belongs to this user in this area.
+     */
+    let account: number | undefined;
+    if (accountId !== undefined && accountId !== '') {
+      const n = Number(accountId);
+      if (!Number.isSafeInteger(n) || n < 1) {
+        throw new BadRequestException({
+          message: `"${accountId}" is not a mail account id.`,
+          errors: { accountId: ['Must be a whole number.'] },
+        });
+      }
+      account = n;
+    }
+
     return this.mailbox.folder(this.uid(user), parseArea(area), this.folderOf(folder), {
       page: Number(page) || 1,
       q,
       unread: unread === '1' || unread === 'true',
+      accountId: account,
     });
   }
 

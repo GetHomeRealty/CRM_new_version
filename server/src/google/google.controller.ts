@@ -97,13 +97,32 @@ export class GoogleController {
   async retrySync(@CurrentUser() user: AuthUserRecord, @Query('scope') scope?: string): Promise<Record<string, unknown>> {
     const r = await this.sync.retryNow(user.id ?? -1, parseScope(scope) ?? 'crm');
     const left = await this.sync.pendingSyncCount(user.id ?? -1, parseScope(scope) ?? 'crm');
+    /*
+     * NOTHING OUTSTANDING IS NOT THE SAME AS EVERYTHING SYNCED.
+     *
+     * `left === 0` used to print "All N appointments reached Google", which was true while the only
+     * way to stop being outstanding was to succeed. It no longer is: an event Google refuses
+     * permanently — a Contact birthday it will not let any client modify — is released rather than
+     * retried for ever, and that also drives the count to zero. Reporting it as "reached Google"
+     * would be claiming a delivery Google explicitly declined.
+     */
+    const parts: string[] = [];
+    if (r.recovered) parts.push(`${r.recovered} reached Google`);
+    if (r.released) {
+      parts.push(
+        `${r.released} cannot be synced — Google does not allow changes to `
+        + `${r.released === 1 ? 'it' : 'them'}, so ${r.released === 1 ? 'it is' : 'they are'} no longer listed as outstanding`,
+      );
+    }
+    if (left) parts.push(`${left} still outstanding — check the connection below`);
+
     return {
       ...r, pending_sync: left,
       message: r.attempted === 0
         ? 'Everything is already up to date with Google.'
-        : left === 0
-          ? `All ${r.attempted} appointment${r.attempted === 1 ? '' : 's'} reached Google.`
-          : `${r.recovered} of ${r.attempted} reached Google. ${left} still outstanding — check the connection below.`,
+        : parts.length
+          ? `${parts.join('. ')}.`
+          : `None of the ${r.attempted} could be sent to Google. Check the connection below.`,
     };
   }
 

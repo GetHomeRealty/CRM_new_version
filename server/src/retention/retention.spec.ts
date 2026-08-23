@@ -47,11 +47,11 @@ async function auditRows(tx: PrismaService) {
 
 describe('retention is a dry run until somebody says otherwise', () => {
   afterAll(async () => { await prisma.$disconnect(); });
-  const was = process.env.RETENTION_ENABLED;
-  afterEach(() => { if (was === undefined) delete process.env.RETENTION_ENABLED; else process.env.RETENTION_ENABLED = was; });
+  const was = process.env.DESK_RETENTION_ENABLED;
+  afterEach(() => { if (was === undefined) delete process.env.DESK_RETENTION_ENABLED; else process.env.DESK_RETENTION_ENABLED = was; });
 
-  it('deletes nothing when RETENTION_ENABLED is unset', async () => {
-    delete process.env.RETENTION_ENABLED;
+  it('deletes nothing when DESK_RETENTION_ENABLED is unset', async () => {
+    delete process.env.DESK_RETENTION_ENABLED;
     await inRollback(async (tx) => {
       const { deskOld } = await auditRows(tx);
       const r = await svc(tx).sweep();
@@ -65,7 +65,7 @@ describe('retention is a dry run until somebody says otherwise', () => {
 
   it('deletes nothing for any value other than the literal true', async () => {
     for (const v of ['1', 'yes', 'TRUE', '']) {
-      process.env.RETENTION_ENABLED = v;
+      process.env.DESK_RETENTION_ENABLED = v;
       await inRollback(async (tx) => {
         const { deskOld } = await auditRows(tx);
         await svc(tx).sweep();
@@ -75,7 +75,7 @@ describe('retention is a dry run until somebody says otherwise', () => {
   });
 
   it('plan() never writes, whatever the switch says', async () => {
-    process.env.RETENTION_ENABLED = 'true';
+    process.env.DESK_RETENTION_ENABLED = 'true';
     await inRollback(async (tx) => {
       const { deskOld } = await auditRows(tx);
       const plan = await svc(tx).plan();
@@ -87,9 +87,9 @@ describe('retention is a dry run until somebody says otherwise', () => {
 
 describe('retention removes the Transaction Desk past six months, and nothing else', () => {
   afterAll(async () => { await prisma.$disconnect(); });
-  const was = process.env.RETENTION_ENABLED;
-  beforeEach(() => { process.env.RETENTION_ENABLED = 'true'; });
-  afterEach(() => { if (was === undefined) delete process.env.RETENTION_ENABLED; else process.env.RETENTION_ENABLED = was; });
+  const was = process.env.DESK_RETENTION_ENABLED;
+  beforeEach(() => { process.env.DESK_RETENTION_ENABLED = 'true'; });
+  afterEach(() => { if (was === undefined) delete process.env.DESK_RETENTION_ENABLED; else process.env.DESK_RETENTION_ENABLED = was; });
 
   it('purges old DESK audit rows and spares crm, common and unclassified', async () => {
     await inRollback(async (tx) => {

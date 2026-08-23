@@ -267,7 +267,7 @@ describe('a failed push is recorded, retried, and visible', () => {
 
       const r = await syncService(tx, { ...ALIVE, insertEvent: async () => 'google-manual' }).retryNow(user.id, 'crm');
 
-      expect(r).toEqual({ attempted: 1, recovered: 1 });
+      expect(r).toEqual({ attempted: 1, recovered: 1, released: 0 });
       expect((await syncState(tx, ev.id))?.google_calendar_id).toBe('google-manual');
     });
   });
@@ -399,7 +399,7 @@ describe('the sweep does not spend passes on work that cannot succeed', () => {
       const user = await connectedUser(tx);
       const ev = await eventFor(tx, user.id, { google_sync_error: 'owed', google_sync_attempts: 5 });
       const r = await syncService(tx, { ...ALIVE, insertEvent: async () => 'google-back' }).retryNow(user.id, 'crm');
-      expect(r).toEqual({ attempted: 1, recovered: 1 });
+      expect(r).toEqual({ attempted: 1, recovered: 1, released: 0 });
       expect((await syncState(tx, ev.id))?.google_calendar_id).toBe('google-back');
     });
   });

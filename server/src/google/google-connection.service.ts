@@ -148,12 +148,38 @@ export class GoogleConnectionService {
    * method, which left every event ever pulled from that calendar sitting in `calendar_events` with
    * `deleted_at IS NULL`. The connection was gone, nothing would ever sync them again, and they
    * stayed on the agent's calendar for ever — the disconnect appeared to do nothing.
+   *
+   * ==============================================================================================
+   * THIS DISCONNECT IS LOCAL. IT MUST NOT TELL GOOGLE ANYTHING.
+   *
+   * It used to call `google.revoke()` on the way out, which looks like the tidy thing to do and is
+   * in fact the most destructive line this file could contain. Google's revoke endpoint does not
+   * revoke A TOKEN — it revokes THE GRANT: every token ever issued to that (Google account, OAuth
+   * client) pair, across every scope in it. One client currently serves both Calendar and Gmail
+   * here, so disconnecting the CRM calendar handed Google an instruction that also killed:
+   *
+   *   - the same user's Gmail connection, mid-send, with no warning
+   *   - the same user's Transaction Desk calendar, which nobody asked to disconnect
+   *
+   * The blast radius came from the one thing the user did NOT choose — the client being shared —
+   * so it would have widened silently the moment another feature reused that client. Note it fired
+   * on `access_token` too when no refresh token was stored: an access token revokes the same grant,
+   * so the fallback was not the gentler branch it appears to be.
+   *
+   * Disconnecting one area is a statement about THIS application, not about the user's Google
+   * account. Everything below is local: forget the row, hide what it pulled in, drop the cache.
+   * Google keeps the grant, which is what makes reconnecting a consent screen the user can click
+   * through rather than a full re-authorisation, and what makes this safe to do to one area while
+   * three others are live. A user who wants the grant itself gone revokes it at
+   * myaccount.google.com, where they can see precisely what they are withdrawing.
+   *
+   * `GoogleService.revoke` still exists for a deliberate whole-account revocation. It must not be
+   * called from here. See the warning on it.
+   * ==============================================================================================
    */
   async disconnect(userId: number, scope: IntegrationScope = DEFAULT_SCOPE): Promise<{ hidden: number }> {
     const conn = await this.find(userId, scope);
     if (!conn) return { hidden: 0 };
-    if (conn.refresh_token) await this.google.revoke(decryptToken(conn.refresh_token));
-    else if (conn.access_token) await this.google.revoke(decryptToken(conn.access_token));
     await this.prisma.google_connections.delete({ where: { user_id_scope: { user_id: userId, scope } } });
     const hidden = await this.hideSyncedEvents(userId, scope);
     await this.forgetDashboardTiles(userId);

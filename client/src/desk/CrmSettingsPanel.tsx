@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   crmEmailAction, crmIntegrations, crmOptions, getCrmProfile, getCrmSettings,
-  listCrmBroadcasts, listCrmEmailLog, listReferralCodes, saveCrmProfile,
+  deleteCrmBroadcast, deleteCrmEmailLog, listCrmBroadcasts, listCrmEmailLog, listReferralCodes, saveCrmProfile,
   saveCrmSettings, sendCrmBroadcast,
 } from '../lib/crmSettingsApi';
 import { Link } from 'react-router-dom';
@@ -44,6 +44,16 @@ const BROADCAST_STATUS: Record<string, string> = {
 const BROADCAST_PILL: Record<string, string> = {
   sending: 'info', completed: 'ok', partial: 'warn', failed: 'bad',
 };
+
+/**
+ * How often the Broadcasts list is refetched WHILE a send is in flight, and only then.
+ *
+ * Shorter than the panel refreshes elsewhere in the app (the Inbox and Campaigns use 30–60s)
+ * because this is progress somebody is watching finish, not a background list that merely has to
+ * be roughly current. A send takes one SMTP round trip per recipient, so five seconds is a few
+ * recipients' worth of movement per update — visible progress without polling for its own sake.
+ */
+const BROADCAST_POLL_MS = 5000;
 
 
 /**
@@ -92,7 +102,7 @@ export default function CrmSettingsPanel() {
   // Every section here has its own Save button, so an edit in one is easy to walk away from.
   const [dirty, setDirty] = useState(false);
   useUnsavedGuard(dirty);
-  const { confirm, closeConfirm } = useConfirm();
+  const { confirm, askDelete, closeConfirm } = useConfirm();
 
   /**
    * Only the first fetch shows a loading state; later refreshes swap the panels in place so the
@@ -120,9 +130,119 @@ export default function CrmSettingsPanel() {
   useEffect(() => { void load(); }, [load]);
 
   /**
+   * Follow a broadcast to its end, instead of showing the instant it started.
+   *
+   * WHAT WAS WRONG. Delivery runs off the request thread, so `POST /crm-settings/broadcasts`
+   * returns while the row still reads `sending`, and the single refresh `BroadcastForm` does on
+   * success lands milliseconds later — before anybody has been emailed. Nothing asked again after
+   * that, so the pill stayed on "Sending…" until the page was reloaded by hand, long after the send
+   * had actually finished. The server was already writing progress after EVERY recipient precisely
+   * so this list could show it; the asking was the half that was missing.
+   *
+   * KEYED ON A BOOLEAN, NOT ON `broadcasts`. Depending on the array would tear the interval down
+   * and build a new one on every poll, because each response is a new array — a fresh timer every
+   * five seconds for as long as the send lasts. `hasSending` is a primitive, so this runs once when
+   * a send begins and once when it ends: exactly one interval per send, however many broadcasts are
+   * in flight at the time.
+   *
+   * IT REFETCHES ONLY THE BROADCASTS. `load()` was the shorter call and the wrong one — it also
+   * refreshes settings, profile and integrations, and every section of this panel is edited in
+   * place with its own Save button. Polling all of it would overwrite whatever somebody was
+   * half-way through typing somewhere else, every five seconds.
+   */
+  const hasSending = broadcasts.some((b) => b.status === 'sending');
+
+  useEffect(() => {
+    if (!hasSending) return;
+
+    let cancelled = false;
+    let inFlight = false;
+
+    const tick = async () => {
+      // A response slower than the interval must not stack a second request on the first: two
+      // replies could then land out of order and the staler one would win.
+      if (inFlight) return;
+      inFlight = true;
+      try {
+        const latest = await listCrmBroadcasts();
+        // The unmount may have happened while this was in the air.
+        if (!cancelled) setBroadcasts(latest);
+      } catch (err) {
+        /*
+         * Silent on screen, on purpose. A toast every five seconds would bury the page in a
+         * failure the user cannot act on, and the list already rendered is still the best answer
+         * we have — clearing it would turn a refresh problem into a data-loss one. Polling
+         * continues: the next attempt may well succeed, and the send itself is unaffected either
+         * way, because it is running on the server and not in this tab.
+         */
+        console.error('Broadcast progress refresh failed:', err);
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    const timer = setInterval(() => { void tick(); }, BROADCAST_POLL_MS);
+    // Stops on unmount, on navigating away from the panel, and — via `hasSending` going false when
+    // a poll returns the final status — the moment nothing is sending any more.
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [hasSending]);
+
+  /**
    * Wraps a setter so touching any field marks the form dirty. The leave-warning reads this, and
    * `run` clears it the moment a save succeeds — a section that has been saved is not unsaved work.
    */
+  /**
+   * Deleting a broadcast, and deleting a send-log row.
+   *
+   * BOTH ARE PERMANENT — neither table has a soft-delete column — so both go through the same
+   * confirmation the rest of the application uses for irreversible actions, and both name what is
+   * being removed rather than asking "are you sure?" about an unspecified row.
+   *
+   * The list is updated from the response rather than re-fetched: the row is gone, and a refetch
+   * would pull the whole panel's seven endpoints to learn one thing this already knows. A failure
+   * leaves the list untouched and says why, so the screen never shows a row as deleted that is
+   * still there.
+   */
+  const removeBroadcast = (b: CrmBroadcast) => {
+    askDelete({
+      title: 'Delete this broadcast?',
+      message: 'It disappears from this list permanently. The emails already sent are unaffected — this removes the record, not the message.',
+      body: <p className="help" style={{ marginTop: 6 }}>“{b.message.slice(0, 160)}{b.message.length > 160 ? '…' : ''}”</p>,
+      note: 'The deletion is recorded in the audit trail.',
+      onConfirm: () => {
+        void (async () => {
+          try {
+            await deleteCrmBroadcast(b.id);
+            setBroadcasts((rows) => rows.filter((r) => r.id !== b.id));
+            toast('Broadcast deleted.', 'ok');
+          } catch (ex) {
+            toast(apiErrorMessage(ex, 'Could not delete the broadcast'), 'bad');
+          }
+        })();
+      },
+    });
+  };
+
+  const removeLogEntry = (r: CrmEmailLogRow) => {
+    askDelete({
+      title: 'Delete this log entry?',
+      message: 'It disappears from the send log permanently. The email itself was already sent and is unaffected.',
+      body: <p className="help" style={{ marginTop: 6 }}>{r.recipient}{r.subject ? ` — ${r.subject}` : ''}</p>,
+      note: 'The deletion is recorded in the audit trail.',
+      onConfirm: () => {
+        void (async () => {
+          try {
+            await deleteCrmEmailLog(r.id);
+            setLog((rows) => rows.filter((x) => x.id !== r.id));
+            toast('Log entry deleted.', 'ok');
+          } catch (ex) {
+            toast(apiErrorMessage(ex, 'Could not delete the log entry'), 'bad');
+          }
+        })();
+      },
+    });
+  };
+
   const markDirty = <T,>(setter: (v: T) => void) => (v: T) => { setDirty(true); setter(v); };
 
   const run = async (key: string, fn: () => Promise<unknown>, ok?: string) => {
@@ -255,6 +375,15 @@ export default function CrmSettingsPanel() {
                   {stamp(b.created_at)} · {b.recipients} of {b.attempted} delivered
                   {b.failed > 0 && ` · ${b.failed} failed`} · {b.sent_by ?? '—'}
                   {' '}<span className={`pill ${BROADCAST_PILL[b.status] ?? ''}`}>{BROADCAST_STATUS[b.status] ?? b.status}</span>
+                  {/* Not offered while the send is in flight: the delivery loop is still writing
+                      progress to this row, and the server refuses it anyway. Hiding the button is
+                      how the screen agrees with the rule rather than discovering it in a toast. */}
+                  {canEdit && b.status !== 'sending' && (
+                    <>
+                      {' '}
+                      <button type="button" className="btn ghost xs" onClick={() => removeBroadcast(b)}>Delete</button>
+                    </>
+                  )}
                 </div>
                 {b.error && <div className="muted" style={{ fontSize: 11 }}>{b.error}</div>}
               </li>
@@ -406,7 +535,7 @@ export default function CrmSettingsPanel() {
         {!showLog ? null : log.length === 0 ? <p className="help">Nothing sent from CRM Settings yet.</p> : (
           <div className="lead-scroll">
             <table className="list-table">
-              <thead><tr><th>When</th><th>Type</th><th>Recipient</th><th>Subject</th><th>Result</th><th>By</th></tr></thead>
+              <thead><tr><th>When</th><th>Type</th><th>Recipient</th><th>Subject</th><th>Result</th><th>By</th>{canEdit && <th />}</tr></thead>
               <tbody>
                 {log.map((r) => (
                   <tr key={r.id}>
@@ -419,6 +548,11 @@ export default function CrmSettingsPanel() {
                     <td className="muted">{r.subject ?? '—'}</td>
                     <td>{r.success ? <span className="pill ok">Sent</span> : <span className="pill bad" title={r.error ?? ''}>Failed</span>}</td>
                     <td className="muted">{r.sent_by ?? '—'}</td>
+                    {canEdit && (
+                      <td>
+                        <button type="button" className="btn ghost xs" onClick={() => removeLogEntry(r)}>Delete</button>
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>

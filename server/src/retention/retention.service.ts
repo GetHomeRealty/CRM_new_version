@@ -27,7 +27,7 @@ import { STORAGE_ROOT } from '../config/storage';
  *   · Every CRM table. None appears in this file.
  *
  * DRY RUN IS THE DEFAULT. `plan()` counts and returns; it writes nothing. `sweep()` refuses to
- * delete unless `RETENTION_ENABLED=true` is set in the environment — so deploying this code does
+ * delete unless `DESK_RETENTION_ENABLED=true` is set in the environment — so deploying this code does
  * not start deleting anything, and a staging run reports what production would remove before
  * anybody agrees to it. That ordering is the whole safety property.
  *
@@ -89,16 +89,33 @@ export class RetentionService {
     return d;
   }
 
-  /** Whether a sweep is allowed to delete. Off unless explicitly switched on. */
+  /**
+   * Whether a sweep is allowed to delete. Off unless explicitly switched on, by ITS OWN name.
+   *
+   * This used to read `RETENTION_ENABLED`, which the notification sweep also read. That put two
+   * very different operations behind one variable: notification housekeeping clears two tables of
+   * expired signals, while THIS deletes trashed deals and cascades into twenty child tables —
+   * `transaction_reviews` among them — and removes `audit_logs` and `transaction_reminders` by age
+   * alone. Enabling the small one silently armed the large one.
+   *
+   * `DESK_RETENTION_ENABLED` names what it switches on. The old flag is not read here, not even as
+   * a fallback: production has `RETENTION_ENABLED=true` set today, so a fallback would leave this
+   * sweep armed by exactly the value the separation exists to stop honouring.
+   *
+   * Absent or malformed means FALSE. This deletes business records; it must fail closed.
+   */
   enabled(): boolean {
-    return (process.env.RETENTION_ENABLED ?? '').trim() === 'true';
+    // Case-SENSITIVE, exactly as this sweep has always been: only the literal `true` arms it, so
+    // `TRUE` or `True` leaves it off. Kept deliberately — for the destructive sweep the stricter
+    // reading is the safer one, and its spec asserts it. Only the variable's NAME changed here.
+    return (process.env.DESK_RETENTION_ENABLED ?? '').trim() === 'true';
   }
 
   /**
    * What a sweep WOULD remove, counted and returned. Writes nothing, ever.
    *
    * This is the staging verification step: run it against a copy of production, read the numbers,
-   * and only then decide whether to set `RETENTION_ENABLED`.
+   * and only then decide whether to set `DESK_RETENTION_ENABLED`.
    */
   async plan(now: Date = new Date()): Promise<RetentionPlan> {
     const cut = this.cutoff(now);
@@ -138,7 +155,7 @@ export class RetentionService {
   }
 
   /**
-   * One pass. Deletes only when `RETENTION_ENABLED=true`; otherwise reports the plan and stops.
+   * One pass. Deletes only when `DESK_RETENTION_ENABLED=true`; otherwise reports the plan and stops.
    *
    * Order matters. Trashed TRANSACTIONS go first, because the cascade takes their documents,
    * invoices, reminders and audit rows with them — doing it the other way round would delete rows
@@ -157,7 +174,7 @@ export class RetentionService {
       this.log.log(
         `Retention DRY RUN (cutoff ${plan.cutoff.slice(0, 10)}): would remove `
         + Object.entries(plan.counts).map(([k, v]) => `${v} ${k}`).join(', ')
-        + `. Nothing deleted — set RETENTION_ENABLED=true to act. Out of scope and untouched: `
+        + `. Nothing deleted — set DESK_RETENTION_ENABLED=true to act. Out of scope and untouched: `
         + `${plan.excluded.audit_logs_crm} CRM, ${plan.excluded.audit_logs_common} shared, `
         + `${plan.excluded.audit_logs_unclassified} unclassified audit rows.`,
       );

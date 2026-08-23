@@ -95,6 +95,62 @@ export class MailboxService {
     return own;
   }
 
+  /**
+   * WHICH MAILBOX THE SCREEN IS SHOWING — one account, never a merge.
+   *
+   * THE BUG THIS FIXES. Every folder listed `account_id: { in: accountIds(...) }`, which is every
+   * account the user has connected in this area. So an agent with their own mailbox and the
+   * brokerage's saw both conversations interleaved in one Inbox, with no indication that two
+   * mailboxes were involved and no way to look at either on its own. `is_default` existed and was
+   * consulted — but only by `sendingAccount`, and by the line below that NAMES the list. The
+   * mailbox was labelled with the default account's address while showing everybody else's mail
+   * too, which is worse than not labelling it.
+   *
+   * THE ORDER, and why each step is what it is:
+   *
+   *   1. AN EXPLICIT CHOICE, validated against this user's accounts in this area. The account
+   *      switcher passes an id; a caller cannot name a colleague's mailbox, because an id outside
+   *      the permitted set resolves to nothing rather than to "show everything".
+   *   2. THE DEFAULT for this area, then a default with no area — the same order `sendingAccount`
+   *      uses, so what you read and what you send from are the same mailbox.
+   *   3. THE FIRST ACTIVE ACCOUNT, only when nothing is marked default. A brokerage that has never
+   *      set one still gets a working Inbox, and it is ONE mailbox rather than a merge of all of
+   *      them — "no default" must not silently mean "aggregate everything".
+   *
+   * Returns an ARRAY so the callers' `{ in: [...] }` shape is unchanged, and so "no mailbox at all"
+   * stays expressible as an empty list. It just never holds more than one id.
+   *
+   * DELIBERATELY NOT USED FOR ID LOOKUPS. Opening or moving a single message still authorises
+   * against `accountIds` — every account this user owns here. Narrowing that too would mean a
+   * message stopped being readable the moment it was not in the mailbox currently on screen, so
+   * switching accounts, or following a link to a message, would break. What a person may READ is a
+   * question about ownership; what the list SHOWS is a question about which mailbox they picked.
+   */
+  private async viewAccountIds(userId: number, area: Area, accountId?: number | null): Promise<number[]> {
+    const permitted = await this.accountIds(userId, area);
+    if (permitted.length === 0) return [];
+
+    if (accountId != null) {
+      return permitted.includes(accountId) ? [accountId] : [];
+    }
+
+    const chosen = (await this.prisma.mail_accounts.findFirst({
+      where: { user_id: userId, id: { in: permitted }, is_active: true, is_default: true, scope: area },
+      select: { id: true },
+    }))
+      ?? (await this.prisma.mail_accounts.findFirst({
+        where: { user_id: userId, id: { in: permitted }, is_active: true, is_default: true, scope: null },
+        select: { id: true },
+      }))
+      ?? (await this.prisma.mail_accounts.findFirst({
+        where: { user_id: userId, id: { in: permitted }, is_active: true },
+        orderBy: { id: 'asc' },
+        select: { id: true },
+      }));
+
+    return chosen ? [chosen.id] : [];
+  }
+
   /** The accounts this user may act through in this area — used to scope every id lookup. */
   private async accountIds(userId: number, area: Area): Promise<number[]> {
     const rows = await this.prisma.mail_accounts.findMany({
@@ -116,10 +172,18 @@ export class MailboxService {
     userId: number,
     area: Area,
     folder: Folder,
-    opts: { page?: number; q?: string; unread?: boolean } = {},
+    opts: { page?: number; q?: string; unread?: boolean; accountId?: number | null } = {},
   ): Promise<Record<string, unknown>> {
     const page = Math.min(MAX_PAGE, Math.max(1, Math.floor(Number(opts.page ?? 1)) || 1));
-    const accounts = await this.accountIds(userId, area);
+    /*
+     * ONE MAILBOX, not all of them — see `viewAccountIds`. Every folder goes through this, so the
+     * Inbox, Sent, Drafts, Trash and Archive all show the same account. Scoping only the Inbox
+     * would leave somebody reading one mailbox and looking at everybody's Sent items.
+     *
+     * The counts and the search below use this same list, so an unread badge counts the mailbox on
+     * screen and a search cannot return a message the list would never show.
+     */
+    const accounts = await this.viewAccountIds(userId, area, opts.accountId);
     if (accounts.length === 0) {
       return { data: [], meta: { page, per_page: PER_PAGE, total: 0, last_page: 1 }, folder };
     }
@@ -148,11 +212,17 @@ export class MailboxService {
       ...this.searchWhere(opts.q),
     };
 
-    // Which mailbox this is. The list is one area's accounts, so naming it is what stops a shorter
-    // list reading as lost mail — the same reason `InboxService.list` reports it.
+    /*
+     * Which mailbox this is — now the one actually being shown, not "whichever is default".
+     *
+     * This asked for `is_default: true` because the list used to span every account and the default
+     * was the nearest thing to a name for it. With `accounts` holding exactly the account in view,
+     * that condition would return nothing whenever somebody switched to a non-default mailbox, and
+     * the screen would lose its label at the precise moment the label matters most.
+     */
     const primary = await this.prisma.mail_accounts.findFirst({
-      where: { user_id: userId, id: { in: accounts }, is_default: true },
-      select: { from_email: true, inbound_enabled: true, imap_host: true },
+      where: { user_id: userId, id: { in: accounts } },
+      select: { from_email: true, inbound_enabled: true, imap_host: true, is_default: true },
     });
 
     const [rows, total, unread] = await Promise.all([
@@ -185,7 +255,9 @@ export class MailboxService {
       unread,
       folder,
       mailbox: primary
-        ? { address: primary.from_email, is_primary: true, auto_sync: primary.inbound_enabled && !!primary.imap_host }
+        // `is_primary` reports whether this is the DEFAULT mailbox, which it now can fail to be:
+        // hardcoding `true` was safe only while the list always spoke for the default account.
+        ? { address: primary.from_email, is_primary: primary.is_default, auto_sync: primary.inbound_enabled && !!primary.imap_host }
         : null,
     };
   }
@@ -338,8 +410,35 @@ export class MailboxService {
    * merely because it shares a `thread_key`.
    */
   async thread(userId: number, area: Area, threadKey: string): Promise<Record<string, unknown>> {
-    const accounts = await this.accountIds(userId, area);
-    if (accounts.length === 0) return { thread_key: threadKey, messages: [] };
+    const permitted = await this.accountIds(userId, area);
+    if (permitted.length === 0) return { thread_key: threadKey, messages: [] };
+
+    /*
+     * ONE ACCOUNT'S HALF OF THE CONVERSATION.
+     *
+     * `thread_key` is derived from the mail headers, so two of this user's mailboxes that were both
+     * copied on the same conversation carry the SAME key — and this method used to gather every
+     * permitted account, which merged them into one thread with the same message appearing twice
+     * under two different addresses.
+     *
+     * The account is taken from the thread itself rather than from a parameter: whichever of the
+     * user's mailboxes holds the earliest message under this key owns the conversation being read.
+     * That keeps the thread consistent with the message the reader opened, and needs nothing from
+     * the caller — a thread cannot be asked for in the wrong mailbox's context by accident.
+     */
+    const anchor = (await this.prisma.inbound_emails.findFirst({
+      where: { user_id: userId, account_id: { in: permitted }, thread_key: threadKey, deleted_at: null },
+      orderBy: { received_at: 'asc' },
+      select: { account_id: true },
+    }))
+      ?? (await this.prisma.outbound_emails.findFirst({
+        where: { user_id: userId, account_id: { in: permitted }, thread_key: threadKey, status: 'sent' },
+        orderBy: { sent_at: 'asc' },
+        select: { account_id: true },
+      }));
+    if (!anchor?.account_id) return { thread_key: threadKey, messages: [] };
+    const accounts = [anchor.account_id];
+
     const [received, sent] = await Promise.all([
       this.prisma.inbound_emails.findMany({
         where: { user_id: userId, account_id: { in: accounts }, thread_key: threadKey, deleted_at: null },

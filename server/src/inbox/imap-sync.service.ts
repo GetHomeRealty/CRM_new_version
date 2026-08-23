@@ -8,7 +8,12 @@ import { threadKeyFor } from './mailbox';
 import { PrismaService } from '../prisma/prisma.service';
 import { schedulersEnabled, schedulerSkipReason } from '../common/schedulers';
 import { LaravelCryptService } from '../common/laravel-crypt.service';
-import { GoogleService } from '../google/google.service';
+import { GoogleAuthError, GoogleService, isPermanentAuthFailure } from '../google/google.service';
+// Which OAuth client minted this token — the one fact that tells a real revocation apart from a
+// token being presented to the wrong Google client.
+import { mailClientId } from '../google/google.constants';
+// One-way fingerprint, so a log can prove WHICH credential was used without disclosing it.
+import { tokenFingerprint } from '../common/token-fingerprint';
 
 import { registerWorker } from '../observability/worker-health';
 import { clusterTick } from '../redis/cluster-tick';
@@ -97,6 +102,10 @@ type AccountRow = {
   imap_encryption: string | null; last_uid: number | null;
   /** Whether this is the owner's primary mailbox. Only that one raises a new-mail notification. */
   is_default: boolean;
+  /** When the stored credential was last written. Logged on refresh failure so a token can be
+   *  tied back to the reconnect that produced it. Optional: the rows are selected whole, but
+   *  callers constructing this type by hand should not be forced to supply it. */
+  updated_at?: Date | null;
 };
 
 /**
@@ -291,17 +300,50 @@ export class ImapSyncService implements OnModuleInit, OnModuleDestroy {
         const tok = await this.google.refresh(refresh, 'mail');
         auth.accessToken = tok.access_token;
       } catch (ex) {
-        // Distinguish the one cause that the user can actually do something about. Google
-        // revokes a refresh token when access is withdrawn, the password changes, or — most
-        // often here — the OAuth app is still in "Testing", where every refresh token expires
-        // after seven days. "Google token refresh failed: invalid_grant" gives no hint of that;
-        // the account simply has to be connected again.
-        const raw = (ex as Error).message;
-        const revoked = /invalid_grant|expired or revoked|Token has been expired/i.test(raw);
+        /*
+         * DECIDED ON GOOGLE'S CODE, AND WHAT GOOGLE ACTUALLY SAID IS RECORDED.
+         *
+         * This regex-matched Google's English (`/invalid_grant|expired or revoked/`) and replaced
+         * it with a fixed sentence blaming a seven-day Testing-mode expiry. Both halves were wrong
+         * in the way that costs days:
+         *
+         *   THE DECISION. `tokenRequest` already raises a `GoogleAuthError` carrying a
+         *   machine-readable `code`, precisely so nobody has to pattern-match prose — the comment
+         *   there says so. This path threw the code away and matched the sentence anyway, which is
+         *   the same bug in a second place.
+         *
+         *   THE EXPLANATION. It asserted a cause rather than reporting one. Once the OAuth app is
+         *   Internal there is no seven-day expiry at all, so the message confidently named a
+         *   mechanism that could not be operating and sent the investigation after it. An account
+         *   failing seconds after a fresh authorisation was still told it had "expired".
+         *
+         * The underlying Google answer is now logged with enough context to tell two mailboxes on
+         * the SAME client apart — which is the comparison that identifies an account-specific
+         * revocation. Deliberately no token, no secret, no authorisation code: the error code and
+         * Google's own description are what carry the diagnosis.
+         */
+        const code = ex instanceof GoogleAuthError ? ex.code : 'unknown';
+        const detail = (ex as Error).message;
+        /*
+         * The fingerprint is the point of this line. Compare it with the `refresh_fingerprint` on
+         * the "Gmail credential SAVED" line from the reconnect: if they MATCH, this row is using
+         * the credential the latest grant produced and Google is genuinely refusing it. If they
+         * DIFFER, the row is still holding a pre-revocation token and the reconnect never reached
+         * it — two different problems with two different fixes.
+         */
+        this.log.warn(
+          `Google token refresh FAILED — operation=imap.resolveAuth account=#${account.id} email=${account.from_email} `
+          + `oauth_client_project=${(mailClientId().split('-')[0] || 'unknown')} google_error=${code} `
+          + `google_description="${detail}" refresh_fingerprint=${tokenFingerprint(refresh)} `
+          + `credential_updated_at=${account.updated_at ? new Date(account.updated_at).toISOString() : 'unknown'} `
+          + `at=${new Date().toISOString()}`,
+        );
         return {
-          error: revoked
-            ? 'Google has revoked this connection — click Reconnect to sign in again. (Refresh tokens also expire after 7 days while the Google OAuth app is in Testing mode.)'
-            : `Google token refresh failed: ${raw}`,
+          error: isPermanentAuthFailure(ex)
+            // Says what happened and what to do, without inventing why it happened.
+            ? `Google refused this mailbox's saved authorisation (${code}). Reconnect it under Email Accounts. `
+              + 'If it fails again within a day, the cause is on the Google account rather than in this application.'
+            : `Google token refresh failed: ${detail}`,
         };
       }
     } else {

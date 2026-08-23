@@ -114,6 +114,22 @@ export const CRM_COMMUNICATIONS: CrmCommunication[] = [
     templateEventKey: 'crm.lead_task_due',
   },
   {
+    key: 'task_assigned',
+    name: 'Task Assigned',
+    description: 'Somebody assigns you a follow-up task on a lead.',
+    kind: 'automated', audience: 'staff', channels: staff,
+    preferenceCategory: 'task_assigned',
+    templateEventKey: 'crm.task_assigned',
+  },
+  {
+    key: 'showing_created',
+    name: 'Showing Scheduled',
+    description: 'A showing is booked on a lead in your book.',
+    kind: 'automated', audience: 'staff', channels: staff,
+    preferenceCategory: 'showing_created',
+    templateEventKey: 'crm.showing_created',
+  },
+  {
     key: 'lead_meta',
     name: 'Meta Lead Received',
     description: 'A new lead arrives from a Facebook lead form.',

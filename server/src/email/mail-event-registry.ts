@@ -24,6 +24,9 @@ export interface MailEvent {
  * it changes if the office moves or the tagline does.
  */
 const RED = '#c8102e';
+/* Advisory asides in the contract — a note about what may change, not a term. Distinct from RED,
+ * which marks the headings and the standing communications note. */
+const ORANGE = '#c2410c';
 /** For the one congratulatory line in the fresher letter. Dark enough to stay legible on white. */
 const GREEN = '#137333';
 
@@ -78,7 +81,7 @@ const signature = (department: string, email: string): string =>
  * so a reply lands with the people who asked for it.
  */
 const RECRUITMENT_SIGNATURE = signature('Department of Recruitment', 'Recruitment@GetHomeRealty.ca');
-const TRAINING_SIGNATURE = signature('Department of Training', 'training@gethomerealty.ca');
+const TRAINING_SIGNATURE = signature('Training Department', 'training@gethomerealty.ca');
 const ACCOUNTS_SIGNATURE = signature('Accounts Department', 'Commissionpayouts@gethomerealty.ca');
 
 const ONBOARD_EMAIL_BODY: string =
@@ -138,35 +141,62 @@ const ONBOARD_EMAIL_BODY: string =
  * form does, rather than as an empty gap that reads as though the term does not apply.
  */
 const CONTRACT_AGREEMENT_BODY: string =
-  '<div style="font-family:Arial,Helvetica,sans-serif;font-size:13.5px;line-height:1.6;color:#111827">'
+  '<div style="font-family:Arial,Helvetica,sans-serif;font-size:13.5px;line-height:1.6;color:#111827;text-align:justify">'
   + `<p style="margin:0 0 16px;text-align:center;font-size:18px;font-weight:700;color:${RED};letter-spacing:.3px">INDEPENDENT CONTRACTOR AGREEMENT</p>`
   + '<p style="margin:0 0 12px">This Agreement is entered into on {{ agreement_day }} day of {{ agreement_month }}, {{ agreement_year }} by and between:</p>'
   + '<p style="margin:0 0 8px">1. <strong>{{ company_name }} BROKERAGE</strong> (the &lsquo;Brokerage&rsquo;), having an office at {{ company_address }}.</p>'
   // Without the paper form's field labels. "[Agent's Full Name]" is there to tell someone filling in
   // a blank what belongs in it; printed after the name it is already filled with, it reads as though
   // the agreement is unsure who it is about.
-  + '<p style="margin:0 0 8px">2. <strong>{{ agent_name }}</strong>, residing at {{ agent_address }}</p>'
-  + '<p style="margin:0 0 14px"><strong>Agent Type:</strong> {{ agent_type }}</p>'
+  + '<p style="margin:0 0 8px;text-align:left">2. <strong>{{ agent_name }}</strong>, residing at {{ agent_address }}</p>'
+  + '<p style="margin:0 0 14px;text-align:left"><strong>Agent Type:</strong> {{ agent_type }}</p>'
 
   + '<p style="margin:0 0 4px"><strong>Key Terms:</strong></p>'
   + '<ul style="margin:0 0 14px;padding-left:22px">'
   + '<li>This is an independent contractor relationship. Agent is responsible for all taxes and no employee benefits provided.</li>'
   + '<li>Agent to comply with RECO, REBBA 2002, and Brokerage policies.</li>'
   + '<li>Agent to conduct all business under the Brokerage name and covers personal expenses unless otherwise agreed.</li>'
-  + '<li>Brokerage Provides Agent Marketing Materials &amp; Video Services, and a $299 Sale Listing Media Fee covering photography, walkthrough video and a virtual tour. This fee will be deducted from the agent&rsquo;s commission upon closing the transaction (either).</li>'
+  /*
+   * The media/marketing term points at a SEPARATE agreement rather than stating a fee.
+   *
+   * It used to name a $299 Sale Listing Media Fee deducted from commission on closing. Nothing in
+   * the application ever deducted it — no commission rule, no adjustment, no line item — so the
+   * agreement was committing the brokerage to an arithmetic the system did not perform. Referring
+   * to the "Listing Media & Marketing Fee Agreement" moves the number to the document that governs
+   * it, per instruction on 2026-08-18.
+   */
+  + '<li>The Brokerage provides Agents with marketing materials and video services in accordance with a separate &ldquo;<strong>Listing Media &amp; Marketing Fee Agreement</strong>&rdquo;. This separate agreement, including the applicable services, terms, and fees, will be provided to the Agent upon request for each individual listing.</li>'
   + '<li>Brokerage provides access to shared office, admin support, compliance tools, trainings and optional leads.</li>'
+  /*
+   * The own-deals clause, as a Key Term. Just the clause: the communications note that follows it on
+   * the signed form belongs under Other Remarks, which is where it sits below.
+   *
+   * WORDING ONLY. The minimum brokerage fee IS applied by the commission engine
+   * (`CommissionService`, 499 for sales / 250 for leases) and that engine has no notion of an "own
+   * deal", so nothing halves it automatically. This states the term; it does not implement it.
+   */
+  + '<li>For all own deals, the minimum brokerage fee shall be reduced by 50%, regardless of the type of transaction.</li>'
   + '</ul>'
 
   + '<p style="margin:0 0 4px"><strong>Commission Structure:</strong></p>'
   + '<ul style="margin:0 0 14px;padding-left:22px">'
   + '{{ commission_terms }}'
-  + '<li>Minimum Brokerage Commission: $499+HST (Sale Listing), $250+HST (Lease Listing), $200+HST (Buy/Lease).</li>'
+  + '<li>Minimum Brokerage Commission: $499+HST (Sale Listing), $250+HST (Lease Listing), $200+HST (Buy/Lease/Pre-construction).</li>'
   + '<li>Agent is entitled to 1000 Free Business Cards on Joining.</li>'
-  + '<li>No Monthly or Annual Brokerage Fee. (any future changes, if applicable, will be communicated in advance).</li>'
+  + '<li>No Monthly or Annual Brokerage Fee. '
+  + `<span style="color:${ORANGE};font-style:italic">(any future changes, if applicable, will be communicated in advance).</span></li>`
   + '<li>Commissions subject to HST and documentation compliance.</li>'
   + '</ul>'
 
-  + '<p style="margin:0 0 2px">Other Remarks: <span style="color:#9ca3af">______________________________________________________________</span></p>'
+  /*
+   * Other Remarks: a ruled blank for whatever is particular to one agreement, with the standing
+   * communications note printed under it — the order the signed form uses.
+   *
+   * The note is here and NOT in Key Terms bullet 6. It reads as a footnote to the whole agreement
+   * rather than as part of the own-deals term, and stating it in both places would leave two copies
+   * that can be edited apart until the contract disagrees with itself.
+   */
+  + '<p style="margin:0 0 2px;text-align:left">Other Remarks: <span style="color:#9ca3af">______________________________________________________________</span></p>'
   + `<p style="margin:0 0 14px;font-size:12px;font-style:italic;color:${RED}">Any further changes or updates in rules, policies, or implementations will be communicated to agents directly by the brokerage through official emails or other authorized communication channels.</p>`
 
   + '<p style="margin:0 0 4px"><strong>Termination:</strong></p>'
@@ -193,7 +223,7 @@ const CONTRACT_AGREEMENT_BODY: string =
 
   // Signature blocks side by side, as they are on the page. A table because a mail client will not
   // hold two columns any other way.
-  + '<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%;border-collapse:collapse;font-size:12.5px">'
+  + '<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%;border-collapse:collapse;font-size:12.5px;text-align:left">'
   + '<tr>'
   + '<td style="width:50%;vertical-align:top;border:1px solid #d1d5db;padding:10px 12px">'
   + '<p style="margin:0 0 10px"><strong>{{ company_name }} BROKERAGE</strong></p>'
@@ -206,6 +236,125 @@ const CONTRACT_AGREEMENT_BODY: string =
   + '<p style="margin:0 0 10px">Signature: <span style="color:#9ca3af">___________________________</span></p>'
   + '<p style="margin:0 0 10px">Name: {{ agent_name }}</p>'
   + '<p style="margin:0">Date: <span style="color:#9ca3af">_____________________</span></p>'
+  + '</td>'
+  + '</tr>'
+  + '</table>'
+  + '</div>';
+
+/**
+ * The Listing Media & Marketing Fee Agreement, in the wording of the signed form.
+ *
+ * The separate agreement the contract's Key Terms point at: the contract says media services are
+ * governed by this document and that it is provided per listing, and this is that document.
+ *
+ * WHAT IS BLANK AND WHY. Almost all of it is — the date, the property, the MLS number, both
+ * signature blocks. This form is filled in FOR ONE LISTING, not for an agent, so there is nothing on
+ * the agent's profile that could answer those, and a variable that resolves to nothing would read as
+ * though the term did not apply. Only the Listing Agent's name is filled, because the person the
+ * email is addressed to is the Listing Agent by definition. The blanks are the same ruled spans the
+ * contract uses, so the review dialog lets them be typed into before sending.
+ *
+ * THE TICK BOXES ARE DRAWN, NOT FORM CONTROLS. `<input type="checkbox">` is stripped or ignored by
+ * most mail clients and does not survive into a PDF, so each box is a bordered span carrying an `X`
+ * when ticked. `data-check` is what the review dialog toggles; it is inert everywhere else, which is
+ * what a printed form wants.
+ */
+const CHECK = (id: number): string =>
+  // Highlighted, so the boxes that have to be ticked are the first thing the eye finds on a page
+  // of dense terms — and so an untouched one is obviously untouched rather than merely small.
+  `<span data-check="${id}" style="display:inline-block;width:13px;height:13px;`
+  + 'border:1.5px solid #111827;background:#fde68a;text-align:center;line-height:13px;'
+  + 'font-size:11px;font-weight:700;vertical-align:middle"></span>';
+
+/* The signed media agreement's own two colours: navy for the numbered clause headings, and a
+ * lighter orange than the contract's ORANGE for "Complimentary" — both taken from the form. */
+const NAVY = '#1f3864';
+const MEDIA_ORANGE = '#ed7d31';
+
+const MEDIA_RULE = (chars: number): string => `<span style="color:#9ca3af">${'_'.repeat(chars)}</span>`;
+
+/** One row of the fee schedule. */
+const feeRow = (id: number, service: string, agent: string, coop: string, total: string, highlight = false): string =>
+  '<tr>'
+  + `<td style="border:1px solid #d1d5db;padding:6px 8px;text-align:center">${CHECK(id)}</td>`
+  + `<td style="border:1px solid #d1d5db;padding:6px 8px">${service}</td>`
+  + `<td style="border:1px solid #d1d5db;padding:6px 8px">${agent}</td>`
+  + `<td style="border:1px solid #d1d5db;padding:6px 8px">${coop}</td>`
+  + `<td style="border:1px solid #d1d5db;padding:6px 8px;font-weight:700${highlight ? `;color:${MEDIA_ORANGE}` : ''}">${total}</td>`
+  + '</tr>';
+
+const LISTING_MEDIA_BODY: string =
+  /*
+   * JUSTIFIED, like the signed form. The blocks that carry a ruled blank are left-aligned inside it:
+   * justification stretches every line but the last, so a label sitting alone above a wide blank is
+   * thrown to both margins ("Listing      Agent:"). Learned on the contract, applied here up front.
+   *
+   * The section numbers are red and the agreement's two names are bold, as the signed copy has them.
+   */
+  '<div style="font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:1.55;color:#111827;text-align:justify">'
+  /*
+   * LETTERHEAD: logo left, title right, a red rule under both — the masthead of the signed form.
+   *
+   * A table, because it is the only thing that holds two columns side by side in a mail client.
+   * `{{ logo_img }}` renders nothing at all when no logo is uploaded, so the title simply takes
+   * the full width rather than sitting beside an empty box.
+   */
+  + '<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%;border-collapse:collapse;margin:0 0 4px">'
+  + '<tr>'
+  + '<td style="vertical-align:middle;padding:0 12px 0 0;width:150px">{{ logo_img }}</td>'
+  + `<td style="vertical-align:middle;text-align:right">`
+  + `<div style="font-size:18px;font-weight:700;color:${RED};letter-spacing:.3px">LISTING MEDIA &amp; MARKETING FEE AGREEMENT</div>`
+  + '<div style="font-size:12px;font-style:italic;margin-top:2px">TEAM GHR MEDIA AND MARKETING</div>'
+  + '</td>'
+  + '</tr>'
+  + '</table>'
+  + `<div style="border-bottom:2px solid ${RED};margin:0 0 12px"></div>`
+
+  + `<p style="margin:0 0 10px">This Agreement is made on ${MEDIA_RULE(28)} between the Listing Agent named below (the &ldquo;Listing Agent&rdquo;) and <strong>{{ company_name }}</strong>, Brokerage (the &ldquo;Brokerage&rdquo;), acting through Team GHR Media and Marketing.</p>`
+  + '<p style="margin:0 0 8px;text-align:left"><strong>Listing Agent:</strong> <strong>{{ agent_name }}</strong></p>'
+  + `<p style="margin:0 0 2px;text-align:left"><strong>Listing Property Address:</strong> ${MEDIA_RULE(52)} <strong>MLS&reg; #:</strong> ${MEDIA_RULE(20)}</p>`
+  + '<p style="margin:0 0 14px;font-size:11.5px;font-style:italic;color:#4b5563">(the property at which the media services were performed &mdash; the &ldquo;Property&rdquo;)</p>'
+
+  + `<p style="margin:0 0 10px"><strong style="color:${NAVY}">1. Media Services:</strong> The Listing Agent confirms that professional media services have been arranged by Team GHR Media and Marketing as per the Listing Agent&rsquo;s requirements, for the purpose of marketing the above Property for sale or lease, including promotional materials such as flyers, posters, photos and/or video content. The Listing Agent further agrees to the following terms.</p>`
+
+  + `<p style="margin:0 0 6px"><strong style="color:${NAVY}"><span style="background:#fde68a">2. Fee Schedule</span>:</strong> Each media service is charged in two equal portions &mdash; one portion recovered from the Listing Agent&rsquo;s commission and the other from the co-operating brokerage&rsquo;s commission:</p>`
+  + '<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%;border-collapse:collapse;font-size:12.5px;margin:0 0 14px;text-align:left">'
+  + '<tr>'
+  + `<th style="border:1px solid #d1d5db;padding:6px 8px;background:${RED};color:#fff;text-align:center">Select</th>`
+  + `<th style="border:1px solid #d1d5db;padding:6px 8px;background:${RED};color:#fff;text-align:left">Media Service</th>`
+  + `<th style="border:1px solid #d1d5db;padding:6px 8px;background:${RED};color:#fff;text-align:left">Listing Agent Portion</th>`
+  + `<th style="border:1px solid #d1d5db;padding:6px 8px;background:${RED};color:#fff;text-align:left">Co-op Brokerage Portion</th>`
+  + `<th style="border:1px solid #d1d5db;padding:6px 8px;background:${RED};color:#fff;text-align:left">Total Fee</th>`
+  + '</tr>'
+  + feeRow(0, 'Professional Photoshoot', '$75.00', '$75.00', '$150.00')
+  + feeRow(1, 'Professional Video Shoot', '$75.00', '$75.00', '$150.00')
+  + feeRow(2, 'Drone Shoot (add-on)', '$25.00', '$25.00', '$50.00')
+  + feeRow(3, 'Single Property Website', 'Nil', 'Nil', 'Complimentary', true)
+  + '</table>'
+
+  + `<p style="margin:0 0 10px"><strong style="color:${NAVY}">3. Deduction from Listing Agent Commission.</strong> The Listing Agent authorizes the Brokerage to deduct the Listing Agent&rsquo;s portion of the applicable media fee directly from the commission payable to the Listing Agent on closing. If the commission payable to the Listing Agent on this transaction is nil, the Listing Agent agrees that the amount may be adjusted as a deduction against any other commission payable to that agent. Where the transaction is a Multiple Representation and either the listing side or the co-operating side commission is nil, both portions of the media fee may be deducted in full from whichever commission is payable.</p>`
+
+  + `<p style="margin:0 0 8px"><strong style="color:${NAVY}">4. Recovery from Co-operating Brokerage.</strong> The remaining portion is recovered from the co-operating brokerage&rsquo;s commission as a marketing fee deduction. By signing this Agreement, the Listing Agent agrees to state this marketing fee on the MLS&reg; listing at the time of listing as &ldquo;co-op commission % + HST - Marketing Fee&rdquo; &mdash; and is responsible for ensuring it is correctly published. If the marketing fee is not stated on the MLS&reg; listing, or is not collected from the co-operating brokerage for any reason, the full media fee will be deducted from the Listing Agent&rsquo;s commission.</p>`
+  + `<p style="margin:0 0 14px;padding-left:18px;text-align:left">${CHECK(4)} <strong>Elect not to publish the marketing fee on MLS&reg;.</strong> The Listing Agent elects that the co-operating brokerage commission be shown on MLS&reg; plainly with no marketing fee, and authorizes the entire media fee (both portions) to be deducted from the Listing Agent&rsquo;s commission only.</p>`
+
+  + `<p style="margin:0 0 10px"><strong style="color:${NAVY}">5. No Upfront Payment.</strong> No upfront payment is required for the selected media services. The media fee becomes payable only once the Property is successfully SOLD or LEASED, and is collected solely from commission on the completed transaction.</p>`
+  + `<p style="margin:0 0 14px"><strong style="color:${NAVY}">6. No Sale / No Lease, No Fee.</strong> If the Property does not sell or lease during the listing period, no media fee shall be payable, unless otherwise agreed in writing. All fees are exclusive of HST, where applicable.</p>`
+
+  + '<p style="margin:0 0 14px"><strong>By signing below, the Listing Agent confirms that they have read, understand and agree to all of the above terms and conditions.</strong></p>'
+
+  + '<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%;border-collapse:collapse;font-size:12.5px;text-align:left">'
+  + '<tr>'
+  + '<td style="width:50%;vertical-align:top;padding:0 12px 0 0">'
+  + `<p style="margin:0 0 10px;font-weight:700;color:${RED}">LISTING AGENT</p>`
+  + `<p style="margin:0 0 10px">Signature ${MEDIA_RULE(34)}</p>`
+  + `<p style="margin:0 0 10px">Print Name ${MEDIA_RULE(33)}</p>`
+  + `<p style="margin:0">Date ${MEDIA_RULE(38)}</p>`
+  + '</td>'
+  + '<td style="width:50%;vertical-align:top;padding:0 0 0 12px">'
+  + `<p style="margin:0 0 10px;font-weight:700;color:${RED}"><strong>{{ company_name }}</strong> &mdash; MEDIA &amp; MARKETING TEAM</p>`
+  + `<p style="margin:0 0 10px">Authorized Signature ${MEDIA_RULE(28)}</p>`
+  + `<p style="margin:0 0 10px">Print Name / Title ${MEDIA_RULE(30)}</p>`
+  + `<p style="margin:0">Date ${MEDIA_RULE(38)}</p>`
   + '</td>'
   + '</tr>'
   + '</table>'
@@ -384,16 +533,58 @@ export const TRAINING_BANNER_FALLBACK: string =
 
 const TRAINING_ONBOARD_BODY: string =
   '<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.6;color:#111827">'
-  // The designed banner when the brokerage has installed one, the subjects as text when it has not.
-  + '{{ training_banner }}'
-
-  + '<p style="margin:0 0 12px">Welcome to <strong>{{ company_name }}</strong></p>'
-  + '<p style="margin:0 0 12px">On behalf of our Training Department and the entire team, we are pleased to welcome you to the brokerage.</p>'
-  + '<p style="margin:0 0 12px">At {{ company_name }}, our goal is to provide you with the training, resources, tools, and ongoing support you need to build a successful real estate career. From your initial onboarding and training to your continued professional growth, our team is committed to supporting you at every stage.</p>'
+  /*
+   * NO BANNER IN THE BODY, by request — it is sent as the attached "Onboard Trainings.jpg" instead.
+   *
+   * `{{ training_banner }}` is left in this event's variable list rather than withdrawn, so it can be
+   * put back from Settings → Templates without a code change. Nothing is lost by its absence: the
+   * nine courses it pictured are written out as text below, which is the form that survives a mail
+   * client blocking images, a screen reader, and a printed copy.
+   */
+  + '<p style="margin:0 0 12px">Dear {{ agent_name }},</p>'
   // No full stop after the name: the brokerage's registered name ends in one ("GET HOME REALTY
   // INC."), and adding another produced "…with GET HOME REALTY INC..".
-  + '<p style="margin:0 0 12px">We look forward to working with you, supporting your development, and seeing you achieve your goals with {{ company_name }}</p>'
-  // The sign-off that closes this wording — "Yours truly, / Training Department / GET HOME REALTY
+  + '<p style="margin:0 0 12px">Welcome to <strong>{{ company_name }}</strong></p>'
+  + '<p style="margin:0 0 12px">On behalf of our <strong>Training Department</strong> and the entire team, we are pleased to welcome you to the brokerage.</p>'
+  + '<p style="margin:0 0 12px">As part of your onboarding, our comprehensive training program is designed to provide you with the knowledge, practical skills, tools, and ongoing support needed to build a successful real estate career.</p>'
+  + '<p style="margin:0 0 12px">Please review the key areas covered through our onboarding training program:</p>'
+
+  /*
+   * The subjects in TEXT as well as on the banner above.
+   *
+   * Not a duplication to tidy away: the banner is an image, and an image is what a mail client
+   * blocks, a screen reader cannot read and a printed copy can lose. The list below is the same nine
+   * courses in a form that always arrives.
+   */
+  + '<p style="margin:0 0 6px"><strong>Onboarding Training Includes:</strong></p>'
+  + '<ul style="margin:0 0 12px;padding-left:22px">'
+  + '<li>Exploring MLS</li>'
+  + '<li>Ultimate Showings</li>'
+  + '<li>Documentation</li>'
+  + '<li>Negotiation Skills</li>'
+  + '<li>Listing Presentations</li>'
+  + '<li>Tools &amp; Soft-Spoken Skills</li>'
+  + '<li>Marketing &amp; Advertising</li>'
+  + '<li>Pre-Construction</li>'
+  + '<li>Commercial Real Estate</li>'
+  + '</ul>'
+  + '<p style="margin:0 0 12px">These training sessions are designed to help you become confident in handling clients, transactions, marketing, negotiations, and day-to-day real estate activities.</p>'
+
+  + '<hr style="border:0;border-top:1px solid #e5e7eb;margin:18px 0">'
+  + '<p style="margin:0 0 6px"><strong>First 30 Days Action Plan</strong></p>'
+  + '<p style="margin:0 0 12px">Please review the attached <strong>First 30 Days Action Plan</strong>. This document will serve as a guide to help you stay organized, complete the important onboarding steps, and take the right actions during your first month with the brokerage.</p>'
+
+  + '<hr style="border:0;border-top:1px solid #e5e7eb;margin:18px 0">'
+  + '<p style="margin:0 0 6px"><strong>Important Notes:</strong></p>'
+  + '<ul style="margin:0 0 12px;padding-left:22px">'
+  + '<li>Active participation in training sessions is strongly encouraged.</li>'
+  + '<li>Please review all training materials and resources provided by the brokerage.</li>'
+  + '<li>Use the <strong>First 30 Days Action Plan</strong> to track your onboarding progress.</li>'
+  + '<li>Our team is available to provide ongoing guidance and support throughout your professional journey.</li>'
+  + '</ul>'
+
+  + '<p style="margin:0 0 12px">We look forward to supporting your professional growth and helping you achieve your goals with <strong>{{ company_name }}</strong></p>'
+  // The sign-off that closes this wording — "Yours Truly, / Training Department / GET HOME REALTY
   // INC." — is not written here: the shared signature below already renders all three of those
   // lines. Repeating them would sign the letter twice.
   + '<p style="margin:0 0 16px">Wishing you a successful and rewarding journey ahead.</p>'
@@ -441,6 +632,20 @@ export const MAIL_EVENTS: Record<string, MailEvent> = {
     variables: ['agent_name', 'agent_email', 'agent_address', 'agent_type', 'company_name', 'company_address', 'commission_terms', 'agreement_day', 'agreement_month', 'agreement_year', 'broker_of_record', 'contract_date', 'onboard_date', 'current_date'],
     default_subject: 'Your Independent Contractor Agreement with {{ company_name }}',
     default_body_html: CONTRACT_AGREEMENT_BODY,
+  },
+  /*
+   * The per-listing media agreement. Sent from the same Users screen as the contract, but it is not
+   * an onboarding letter: an agent signs one of these for each listing that has media done, so the
+   * button is expected to be used repeatedly for the same person rather than once when they join.
+   */
+  'user.listing_media_agreement': {
+    module: 'Onboarding',
+    label: 'Agent — Listing Media & Marketing Fee Agreement',
+    // Deliberately few: the property, the MLS number and the dates belong to a listing, not to the
+    // agent record, so they are ruled blanks filled in on the review screen rather than variables.
+    variables: ['agent_name', 'agent_email', 'company_name', 'company_address', 'logo_img', 'onboard_date', 'current_date'],
+    default_subject: 'Listing Media & Marketing Fee Agreement — {{ company_name }}',
+    default_body_html: LISTING_MEDIA_BODY,
   },
   'invoice.send': {
     module: 'Invoice',
@@ -863,6 +1068,36 @@ export const MAIL_EVENTS: Record<string, MailEvent> = {
       '<p>Hello {{ user_name }},</p>'
       + '<p><strong>{{ task_title }}</strong> on {{ lead_name }} is due {{ due_date }}.</p>'
       + '<p><a href="{{ open_link }}">Open the lead</a></p>',
+  },
+  /*
+   * A task being ASSIGNED, which is a different event from the same task falling DUE above.
+   * One fires once, when somebody hands you the work; the other fires when the date arrives, and
+   * can fire again on another day. Keeping them as two templates lets a brokerage word and disable
+   * them independently — switching off due reminders should not also silence the handover.
+   */
+  'crm.task_assigned': {
+    module: 'CRM',
+    label: 'CRM — Task Assigned To You',
+    variables: ['user_name', 'task_title', 'lead_name', 'due_date', 'actor_name', 'open_link', 'current_date', 'current_year'],
+    default_subject: 'New task assigned: {{ task_title }}',
+    default_body_html:
+      '<p>Hello {{ user_name }},</p>'
+      + '<p>You have been assigned <strong>{{ task_title }}</strong> on {{ lead_name }}{{ actor_name }}.</p>'
+      + '<p>Due: <strong>{{ due_date }}</strong></p>'
+      + '<p><a href="{{ open_link }}">Open the task</a></p>',
+  },
+  'crm.showing_created': {
+    module: 'CRM',
+    label: 'CRM — Showing Scheduled',
+    variables: ['user_name', 'property', 'lead_name', 'showing_date', 'showing_time', 'actor_name', 'open_link', 'current_date', 'current_year'],
+    default_subject: 'New showing scheduled: {{ property }}',
+    default_body_html:
+      '<p>Hello {{ user_name }},</p>'
+      + '<p>A showing has been scheduled{{ actor_name }} for <strong>{{ lead_name }}</strong>.</p>'
+      + '<p>Property: <strong>{{ property }}</strong><br>'
+      + 'Date: <strong>{{ showing_date }}</strong><br>'
+      + 'Time: <strong>{{ showing_time }}</strong></p>'
+      + '<p><a href="{{ open_link }}">Open the showing</a></p>',
   },
   'crm.meta_lead_received': {
     module: 'CRM',

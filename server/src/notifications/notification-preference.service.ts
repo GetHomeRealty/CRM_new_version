@@ -153,6 +153,27 @@ export const NOTIFICATION_CATEGORIES: readonly NotificationCategory[] = [
     description: 'A follow-up or task on one of your leads reaches its due date.',
     channels: { in_app: 'live', email: 'live', push: 'live' },
   },
+  /*
+   * A task HANDED TO YOU, which is not the same event as `lead_task_due` above.
+   *
+   * `lead_task_due` fires from the 30-minute sweep when the date arrives, and can fire again on
+   * another day. This fires once, at the moment somebody assigns the work, and only when the
+   * assignee is not the person doing the assigning. They are separate categories so that muting
+   * due reminders does not also silence the handover — which is exactly what would happen if the
+   * new event were folded into the existing key.
+   */
+  {
+    key: 'task_assigned',
+    label: 'Tasks assigned to you',
+    description: 'Somebody assigns you a follow-up task on a lead.',
+    channels: { in_app: 'live', email: 'live', push: 'live' },
+  },
+  {
+    key: 'showing_created',
+    label: 'Showings scheduled for you',
+    description: 'A showing is booked on a lead in your book.',
+    channels: { in_app: 'live', email: 'live', push: 'live' },
+  },
   {
     key: 'campaign_completed',
     label: 'Campaign finished',

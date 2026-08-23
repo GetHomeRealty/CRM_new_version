@@ -175,10 +175,17 @@ export class MailerService {
    * Gmail and Outlook both expect bulk senders to advertise a machine-readable opt-out, and they
    * weigh its absence against inbox placement — so omitting it makes legitimate campaign mail more
    * likely to land in spam, which then looks like a deliverability problem with the list.
+   *
+   * `text` supplies the `text/plain` half of a multipart/alternative message, and is the mirror
+   * image of `headers`: ADDITIVE AND OPT-IN. Every existing caller omits it and keeps sending
+   * exactly the HTML-only message it sent before — campaigns included, whose bodies are rendered
+   * templates with tracking and whose behaviour is deliberately untouched here. Only the one-to-one
+   * lead email passes it, because correspondence typed by a person is normally multipart and that
+   * is what this makes the message structurally resemble.
    */
-  async sendDirect(to: string, subject: string, html: string, accountId?: number | null, attachments: MailAttachment[] = [], userId?: number | null, headers?: Record<string, string>): Promise<void> {
+  async sendDirect(to: string, subject: string, html: string, accountId?: number | null, attachments: MailAttachment[] = [], userId?: number | null, headers?: Record<string, string>, text?: string | null): Promise<void> {
     const account = await this.resolveSender(accountId ?? null, userId ?? null);
-    await this.dispatch(account, to, subject, html, [], attachments, headers);
+    await this.dispatch(account, to, subject, html, [], attachments, headers, [], text ?? null);
   }
 
   /**
@@ -255,7 +262,7 @@ export class MailerService {
    * BCC IS DROPPED WHEN MAIL IS REDIRECTED, exactly as CC already is. A staging environment
    * diverting everything to one address must not also quietly copy the real blind recipients.
    */
-  private async dispatch(account: mail_accounts, to: string | string[], subject: string, body: string, cc: string[] = [], attachments: MailAttachment[] = [], headers?: Record<string, string>, bcc: string[] = []): Promise<{ messageId: string | null }> {
+  private async dispatch(account: mail_accounts, to: string | string[], subject: string, body: string, cc: string[] = [], attachments: MailAttachment[] = [], headers?: Record<string, string>, bcc: string[] = [], text?: string | null): Promise<{ messageId: string | null }> {
     const transport = account.encryption === 'oauth'
       // Google OAuth account: `password` holds the encrypted refresh token. Nodemailer mints a
       // fresh access token from it (via the app's client id/secret) for each send with XOAUTH2.
@@ -312,6 +319,9 @@ export class MailerService {
       bcc: redirect ? undefined : (bcc.length ? bcc : undefined),
       subject: redirect ? `[redirected from ${realTo}] ${subject}` : subject,
       html: body,
+      // Omitted unless the caller supplied one, so an HTML-only message stays byte-identical.
+      // Present, it makes the message multipart/alternative — see `sendDirect`.
+      ...(text && text.trim() ? { text } : {}),
       attachments: attachments.map((a) => ({
         filename: a.name ?? 'attachment.pdf',
         content: Buffer.from(a.data.replace(/^data:[^;]+;base64,/, ''), 'base64'),

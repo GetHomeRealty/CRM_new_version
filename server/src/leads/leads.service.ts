@@ -8,6 +8,8 @@ import { normalizePhone } from '../meta/meta-lead-mapper';
 import type { AuthUserRecord } from '../auth/auth.types';
 import { can } from '../core/authz';
 import { hasBrokerageLeadScope, isBrokerageLead, leadScopeWhere, ownerAtIntake } from '../common/lead-scope';
+// Age is derived from the date of birth, never stored as an independent fact — see age.ts.
+import { ageFromDateOfBirth } from './age';
 import { throwValidation } from '../common/laravel-exceptions';
 import {
   EMAIL_SHAPE, FEED_PER_PAGE, LEADS_PER_PAGE, MAX_PER_PAGE, MAX_EXPORT_ROWS, NONE_FILTER_VALUE,
@@ -1092,6 +1094,27 @@ export class LeadsService {
       else out[key] = d;
     }
 
+    /*
+     * --- age follows the date of birth, whenever one is given ---
+     *
+     * A date of birth ANSWERS the age question, so once it is present the typed age is no longer an
+     * independent fact — it is a second copy of the same one, free to disagree. Deriving it here
+     * rather than only in the form is what makes that true for every route in: the editor, the CSV
+     * import, the Meta lead sync and anything hitting the API directly all arrive at this method.
+     *
+     * The manual `age` field is untouched when no date of birth is on file, which is the common
+     * case for a lead who gave a rough age over the phone.
+     *
+     * `out.date_of_birth` is used rather than the raw input because the block above has already
+     * validated and normalised it — deriving from unvalidated text would let "2026-02-30" set an age.
+     */
+    if (has('date_of_birth') && out.date_of_birth instanceof Date) {
+      out.age = ageFromDateOfBirth(out.date_of_birth as Date);
+    } else if (has('date_of_birth') && out.date_of_birth === null) {
+      // The date was cleared. Leave whatever age was submitted alongside it — clearing a birthday
+      // is not the same as saying the person has no age, and wiping it would lose a typed value.
+    }
+
     // --- tags ---
     if (has('tags')) {
       const list = Array.isArray(input.tags) ? (input.tags as unknown[]).map(str).filter(Boolean) : [];
@@ -1183,7 +1206,17 @@ export class LeadsService {
       gender: r.gender,
       language: r.language,
       religion: r.religion,
-      age: r.age,
+      /*
+       * DERIVED AT READ TIME WHEN A BIRTHDAY IS KNOWN, so it cannot go stale.
+       *
+       * A stored age is correct on the day it is written and wrong from the lead's next birthday
+       * onwards — which for a feature whose whole point is "the age follows the date of birth"
+       * would mean shipping a number guaranteed to drift. Computing it on the way out costs
+       * nothing and removes the need for a nightly sweep over every lead.
+       *
+       * Leads with no date of birth keep whatever age was typed for them.
+       */
+      age: r.date_of_birth ? ageFromDateOfBirth(r.date_of_birth) : r.age,
       date_of_birth: date(r.date_of_birth),
       marriage_day: date(r.marriage_day),
       notes: r.notes,

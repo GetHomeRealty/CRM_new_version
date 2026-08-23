@@ -54,6 +54,8 @@ const CRM_KEYS = [
 const CRM_NOTIFICATION_KEYS = [
   'crm.lead_new', 'crm.lead_assigned', 'crm.lead_task_due', 'crm.meta_lead_received',
   'crm.campaign_completed', 'crm.campaign_failed',
+  // The two events added when task assignment and showings gained notifications.
+  'crm.task_assigned', 'crm.showing_created',
 ];
 
 describe('CRM templates — registration', () => {

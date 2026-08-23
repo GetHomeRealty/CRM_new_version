@@ -1,5 +1,6 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { randomBytes } from 'node:crypto';
+import { auditDomain } from '../common/domain';
 import { PrismaService } from '../prisma/prisma.service';
 import { MailerService } from '../email/mailer.service';
 import { MailAccountService } from '../email/mail-account.service';
@@ -826,6 +827,66 @@ ${offer?.description ? `<p>${esc(offer.description)}</p>` : ''}
    * alternative is telling the reader how many rows were withheld, which is itself a disclosure that
    * private correspondence exists.
    */
+  /**
+   * Records a CRM Settings action in the shared trail. Best-effort, exactly like the copy in
+   * `CrmSettingsService`: an audit write that throws must never fail the operation it describes,
+   * because the alternative is a delete that half-happened.
+   */
+  private async audit(user: AuthUserRecord, action: string, subject: string, details = ''): Promise<void> {
+    try {
+      const now = new Date();
+      await this.prisma.audit_logs.create({
+        data: {
+          category: 'Settings', transaction_id: null, who: user.name, user_id: user.id ?? null,
+          section: 'CRM Settings', action, source: 'Manual',
+          domain: auditDomain({ category: 'Settings', section: 'CRM Settings' }),
+          new_value: subject.slice(0, 255),
+          details: `${action}: ${subject}${details ? ` — ${details}` : ''}`,
+          created_at: now, updated_at: now,
+        },
+      });
+    } catch (err) {
+      this.log.warn(`CRM email-log audit write failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  /**
+   * Remove one row from the CRM send log.
+   *
+   * DELETION IS GATED ON THE SAME VISIBILITY AS READING, and that is the whole point of routing it
+   * through here rather than letting the controller call `delete` on an id. `listLog` narrows twice
+   * — to the caller's own sends unless they hold `data.read-all`, and then to recipients they are
+   * allowed to see — so an id that never appears in their list must not be deletable by guessing
+   * it. Answering "not found" rather than "forbidden" keeps the refusal from confirming that a row
+   * with that id exists at all, which is the same wording `listLog`'s filtering already implies.
+   *
+   * A hard delete, audited, for the same reason as `deleteBroadcast`: no `deleted_at` column exists,
+   * and the audit trail is what preserves the fact that a record was removed.
+   */
+  async deleteLogEntry(user: AuthUserRecord, id: number): Promise<{ deleted: boolean }> {
+    const row = await this.prisma.crm_email_log.findUnique({
+      where: { id },
+      select: { id: true, kind: true, recipient: true, subject: true, sent_by: true, created_at: true },
+    });
+    // Re-applies `listLog`'s first narrowing: your own sends, unless you may read everyone's.
+    if (!row || (!can(user, 'data.read-all') && row.sent_by !== (user.name ?? ''))) {
+      throw new NotFoundException({ message: 'That log entry no longer exists.' });
+    }
+    // …and its second: the recipient must be someone this person is allowed to see.
+    const visible = await this.readableRecipients(user, [row.recipient]);
+    if (!visible.has(row.recipient.trim().toLowerCase())) {
+      throw new NotFoundException({ message: 'That log entry no longer exists.' });
+    }
+
+    await this.prisma.crm_email_log.delete({ where: { id } });
+    await this.audit(
+      user, 'CRM email log entry deleted', row.recipient,
+      `${row.kind}${row.subject ? ` — ${row.subject.slice(0, 120)}` : ''}`
+      + ` — sent ${row.created_at?.toISOString().slice(0, 16).replace('T', ' ') ?? 'unknown'}`,
+    );
+    return { deleted: true };
+  }
+
   async listLog(user: AuthUserRecord, limit = 100): Promise<Record<string, unknown>[]> {
     const rows = await this.prisma.crm_email_log.findMany({
       where: can(user, 'data.read-all') ? {} : { sent_by: user.name ?? '' },

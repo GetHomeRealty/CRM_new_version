@@ -883,6 +883,14 @@ function UserModal({ catalog, existing, onClose, onSaved }: UserModalProps) {
               title={existing ? 'Preview and send the contract agreement' : 'Save the agent first'}
               onClick={() => setOnboarding('contract')}><Icon name="doc" size={13} /> Send Contract Agreement</button>
           )}
+          {/* Per LISTING, not per agent — unlike everything to its left, this one is expected to be
+              sent to the same person again and again. The property, the MLS number and the tick
+              boxes are filled in on the review screen, because none of them live on the profile. */}
+          {isAgent && area === 'desk' && (
+            <button className="btn ghost" disabled={!existing}
+              title={existing ? 'Preview and send the Listing Media & Marketing Fee Agreement' : 'Save the agent first'}
+              onClick={() => setOnboarding('media')}><Icon name="doc" size={13} /> Send Listing Shoots Media Agreement</button>
+          )}
           <div style={{ flex: 1 }} />
           <button className="btn ghost" onClick={onClose}>Close</button>
           <button className="btn primary" onClick={save} disabled={saving}>{saving ? 'Saving…' : (existing ? 'Save' : 'Create User')}</button>

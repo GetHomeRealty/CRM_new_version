@@ -3,7 +3,7 @@ import { crmPath } from './area';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  listMyMailAccounts, markInboxSeen,
+  listMyMailAccounts, markInboxSeen, type AccountMailAccount,
   listMailbox, getMailboxMessage, getComposePrefill, moveMailboxMessage,
   getMailboxDraft, downloadMailboxAttachment,
   type MailboxList, type MailboxMessage, type MailboxRow, type MailboxFolder,
@@ -76,19 +76,30 @@ export default function InboxPage() {
    * answer is still unknown, so the toggle is not flashed on screen and then withdrawn.
    */
   const [hasMailAccount, setHasMailAccount] = useState<boolean | undefined>(undefined);
+
+  /*
+   * WHICH MAILBOX IS ON SCREEN.
+   *
+   * `null` means "the default one", and that is deliberately not the same as an id: the server
+   * resolves the default itself, so the unswitched Inbox asks for no account and cannot drift from
+   * whatever Settings has marked as default. Picking an account sends its id and nothing else —
+   * there is no option that merges mailboxes, which is the behaviour this replaced.
+   */
+  const [accounts, setAccounts] = useState<AccountMailAccount[]>([]);
+  const [accountId, setAccountId] = useState<number | null>(null);
   const loadedOnce = useRef(false);
 
   const load = useCallback(async () => {
     if (!loadedOnce.current) setLoading(true);
     try {
-      setList(await listMailbox(area, { folder, page, q: search, unread: unreadOnly && folder === 'inbox' }));
+      setList(await listMailbox(area, { folder, page, q: search, unread: unreadOnly && folder === 'inbox', accountId }));
     } catch (ex) {
       toast(apiErrorMessage(ex, 'Could not load your inbox'), 'bad');
     } finally {
       loadedOnce.current = true;
       setLoading(false);
     }
-  }, [unreadOnly, page, folder, search, toast, area]);
+  }, [unreadOnly, page, folder, search, toast, area, accountId]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -101,8 +112,15 @@ export default function InboxPage() {
   useEffect(() => {
     let live = true;
     listMyMailAccounts(area === 'crm' ? 'crm' : 'desk')
-      .then((accts) => { if (live) setHasMailAccount(accts.length > 0); })
-      .catch(() => { if (live) setHasMailAccount(false); });
+      .then((accts) => {
+        if (!live) return;
+        setHasMailAccount(accts.length > 0);
+        setAccounts(accts);
+        // Switching area is switching mailboxes; carrying a CRM account id into the Desk would ask
+        // for an account that area cannot see, which the server answers with an empty list.
+        setAccountId(null);
+      })
+      .catch(() => { if (live) { setHasMailAccount(false); setAccounts([]); } });
     return () => { live = false; };
   }, [area]);
 
@@ -262,6 +280,24 @@ export default function InboxPage() {
                 onClick={() => { setUnreadOnly((v) => !v); setPage(1); }}>
                 {unreadOnly ? 'Showing unread' : 'All mail'}
               </button>
+            )}
+            {/*
+              THE ACCOUNT SWITCHER. Offered only with more than one mailbox — with a single account
+              a selector that can only pick that account is noise.
+
+              "Default mailbox" is a real choice, not a placeholder for "all": it asks the server to
+              resolve whichever account Settings marks default, so the Inbox follows that setting
+              instead of pinning an id that could later stop being the default. There is deliberately
+              no "All accounts" option; merging mailboxes is the behaviour this replaced.
+            */}
+            {accounts.length > 1 && (
+              <select value={accountId ?? ''} aria-label="Mailbox"
+                onChange={(e) => { setAccountId(e.target.value ? Number(e.target.value) : null); setPage(1); }}>
+                <option value="">Default mailbox</option>
+                {accounts.map((a) => (
+                  <option key={a.id} value={a.id}>{a.from_email}{a.is_default ? ' (default)' : ''}</option>
+                ))}
+              </select>
             )}
             {hasMailAccount && (
               <button className="btn primary" type="button" onClick={() => setComposing({})}>✉ New message</button>

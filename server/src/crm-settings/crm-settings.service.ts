@@ -1,5 +1,5 @@
 import { auditDomain } from '../common/domain';
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import type { AuthUserRecord } from '../auth/auth.types';
 import {
@@ -841,6 +841,41 @@ export class CrmSettingsService {
 
   // ------------------------------------------------------------------ audit
   /** Best-effort audit entry under the existing global trail. */
+  /**
+   * Remove one broadcast from the list.
+   *
+   * A HARD DELETE, because `crm_broadcasts` has no `deleted_at` and adding one to hide a row a
+   * person asked to remove would be a migration in service of a half-measure. The deletion is
+   * AUDITED instead: the row goes, the fact that somebody removed it does not. That keeps the one
+   * property that matters — nobody can quietly erase evidence that a message went to every member
+   * of staff — without pretending the record is still there.
+   *
+   * A SEND STILL IN FLIGHT IS REFUSED. Delivery runs off the request thread and writes progress
+   * back to this row after every recipient; deleting it mid-send would leave the loop updating a
+   * row that no longer exists and destroy the only record of how far it reached. Waiting a moment
+   * costs nothing — the row becomes deletable the instant it finishes.
+   */
+  async deleteBroadcast(user: AuthUserRecord, id: number): Promise<{ deleted: boolean }> {
+    const row = await this.prisma.crm_broadcasts.findUnique({
+      where: { id },
+      select: { id: true, message: true, status: true, attempted: true, recipients: true, created_at: true },
+    });
+    if (!row) throw new NotFoundException({ message: 'That broadcast no longer exists.' });
+    if (row.status === 'sending') {
+      throw new BadRequestException({
+        message: 'That broadcast is still going out. Wait for it to finish, then delete it.',
+      });
+    }
+
+    await this.prisma.crm_broadcasts.delete({ where: { id } });
+    await this.audit(
+      user, 'CRM broadcast deleted',
+      `${row.recipients} of ${row.attempted} delivered`,
+      `sent ${row.created_at?.toISOString().slice(0, 16).replace('T', ' ') ?? 'unknown'} — ${row.message.slice(0, 120)}`,
+    );
+    return { deleted: true };
+  }
+
   private async audit(user: AuthUserRecord, action: string, subject: string, details = ''): Promise<void> {
     try {
       const now = new Date();

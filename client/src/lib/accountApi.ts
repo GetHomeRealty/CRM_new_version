@@ -283,12 +283,18 @@ export interface ComposeBody {
 
 export const listMailbox = (
   area: Area,
-  opts: { folder?: MailboxFolder; page?: number; q?: string; unread?: boolean } = {},
+  opts: { folder?: MailboxFolder; page?: number; q?: string; unread?: boolean; accountId?: number | null } = {},
 ): Promise<MailboxList> => {
   const params: Record<string, string | number> = { area, folder: opts.folder ?? 'inbox' };
   if (opts.page) params.page = opts.page;
   if (opts.q && opts.q.trim()) params.q = opts.q.trim();
   if (opts.unread) params.unread = 1;
+  /*
+   * Omitted means "the default mailbox", which is what the server does with no `accountId`. Sending
+   * nothing is therefore the correct request for the unswitched Inbox — there is deliberately no
+   * value meaning "every account".
+   */
+  if (opts.accountId) params.accountId = opts.accountId;
   return api.get<MailboxList>('/api/account/mailbox', { params }).then((r) => r.data);
 };
 
@@ -374,7 +380,10 @@ export const googleCalendarSync = (scope?: IntegrationScope): Promise<{ pulled: 
 
 /** Try this user's outstanding pushes again, resetting the automatic attempt count. */
 export const googleCalendarRetrySync = (scope?: IntegrationScope): Promise<{
-  attempted: number; recovered: number; pending_sync: number; message: string;
+  attempted: number; recovered: number;
+  /** Refused permanently by Google (e.g. a Contact birthday): no longer outstanding, never synced. */
+  released?: number;
+  pending_sync: number; message: string;
 }> => api.post('/api/google/calendar/retry', {}, { params: scope ? { scope } : undefined }).then((r) => r.data);
 
 export const googleCalendarDisconnect = (scope?: IntegrationScope): Promise<{ disconnected: boolean }> =>

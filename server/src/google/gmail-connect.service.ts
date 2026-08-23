@@ -4,6 +4,10 @@ import { PrismaService } from '../prisma/prisma.service';
 import { LaravelCryptService } from '../common/laravel-crypt.service';
 import type { TokenResponse } from './google.service';
 import type { IntegrationScope } from '../email/mail-account.service';
+import { tokenFingerprint } from '../common/token-fingerprint';
+// Which OAuth client minted the token being stored — recorded so a saved credential can be
+// matched against the client it will later be refreshed with.
+import { mailClientId } from './google.constants';
 
 /**
  * Turns a completed Google OAuth (mail scope) into a personal `mail_accounts` row that sends and
@@ -39,7 +43,27 @@ export class GmailConnectService {
         where: { id: existing.id },
         data: { is_active: true, sync_error: null, updated_at: new Date(), ...(encRefresh ? { password: encRefresh } : {}) },
       });
-      this.log.log(`Reconnected Gmail account ${address} for user ${userId}`);
+      /*
+       * PROVES WHICH CREDENTIAL THIS ROW NOW HOLDS.
+       *
+       * A Google audit log showing REVOKE at 15:06:45 and GRANT at 15:07:00 does not say whether
+       * THIS row took the new token — and if it kept the revoked one, every later refresh fails
+       * with `invalid_grant` while the account looks freshly reconnected. The fingerprint is the
+       * only way to tell those apart without printing the token: compare it against the one logged
+       * at refresh time. Same fingerprint = same credential.
+       *
+       * `preserved` is the case to watch. Google omits the refresh token when consent was already
+       * standing, and the row then keeps whatever it had — which is correct when the old token is
+       * still good, and is exactly the trap when the user has just revoked it.
+       */
+      this.log.log(
+        `Gmail credential SAVED — operation=gmail.reconnect account=#${existing.id} email=${address} user=${userId} `
+        + `oauth_client_project=${mailClientId().split('-')[0] || 'unknown'} `
+        + `refresh_token_returned=${tokens.refresh_token ? 'yes' : 'no'} `
+        + `action=${encRefresh ? 'REPLACED' : 'PRESERVED-existing'} `
+        + `refresh_fingerprint=${tokenFingerprint(encRefresh ? tokens.refresh_token : this.crypt.decryptString(existing.password))} `
+        + `at=${new Date().toISOString()}`,
+      );
       return;
     }
 
@@ -71,6 +95,23 @@ export class GmailConnectService {
         created_at: now, updated_at: now,
       },
     });
+    /*
+     * A NEW ROW, not the one that was failing. Logged with the same fields as the reconnect branch
+     * so the two are comparable: the lookup above is keyed on `user_id`, so the SAME mailbox
+     * connected while signed in as a DIFFERENT CRM user lands here and creates a second row. The
+     * original row keeps its old credential and goes on failing, while the person who clicked
+     * Reconnect sees a healthy account. The account id in this line is what reveals that.
+     */
+    const created = await this.prisma.mail_accounts.findFirst({
+      where: { user_id: userId, scope, from_email: { equals: address, mode: 'insensitive' } },
+      orderBy: { id: 'desc' }, select: { id: true },
+    });
+    this.log.log(
+      `Gmail credential SAVED — operation=gmail.connect-new account=#${created?.id ?? '?'} email=${address} user=${userId} `
+      + `oauth_client_project=${mailClientId().split('-')[0] || 'unknown'} `
+      + `refresh_token_returned=${tokens.refresh_token ? 'yes' : 'no'} action=NEW-ROW `
+      + `refresh_fingerprint=${tokenFingerprint(tokens.refresh_token)} at=${new Date().toISOString()}`,
+    );
     this.log.log(`Connected Gmail account ${address} for user ${userId}`);
   }
 }

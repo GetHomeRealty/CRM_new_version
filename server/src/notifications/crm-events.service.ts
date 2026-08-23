@@ -325,6 +325,96 @@ export class CrmEventNotifier {
     });
   }
 
+  // ========================================================================== 4b. task assigned
+
+  /**
+   * Somebody has been handed a follow-up task on a lead.
+   *
+   * DELIBERATELY NOT `lead_task_due`. That one is raised by the 30-minute sweep when the date
+   * arrives and may legitimately fire again on a later day; this is raised once, at the moment of
+   * assignment. Folding them together would mean muting due reminders also silenced the handover,
+   * and a task assigned for next month would notify nobody until next month.
+   *
+   * SELF-ASSIGNMENT IS SILENT, matching `leadAssigned`: telling somebody they have given themselves
+   * a job is noise, and it is the commonest way a task is created.
+   *
+   * The key carries the task and the assignee, so re-saving the same task with the same assignee
+   * cannot notify twice, while genuinely reassigning it to somebody else can.
+   */
+  async taskAssigned(task: {
+    id: number; title?: string | null; due_date?: Date | null;
+  }, lead: {
+    id: number; first_name?: string | null; last_name?: string | null; email?: string | null;
+  }, assigneeUserId: number | null | undefined, actorUserId: number | null | undefined, actorName?: string | null): Promise<void> {
+    if (!assigneeUserId) return;
+    if (assigneeUserId === actorUserId) return;
+
+    const title = task.title?.trim() || 'A follow-up';
+    const when = task.due_date ? task.due_date.toISOString().slice(0, 10) : '';
+    const tpl = await this.templated('crm.task_assigned', {
+      user_name: await this.userName(assigneeUserId),
+      task_title: title,
+      lead_name: this.nameOf(lead),
+      due_date: when || 'no due date',
+      // Carries its own leading " by " so the sentence reads correctly with no actor recorded.
+      actor_name: actorName ? ` by ${actorName}` : '',
+      open_link: this.absoluteLink(this.leadLink(lead.id)),
+    });
+
+    await this.send({
+      ...tpl,
+      category: 'task_assigned',
+      userId: assigneeUserId,
+      title: 'New task assigned',
+      body: `${title} on ${this.nameOf(lead)}${when ? ` — due ${when}` : ''}${actorName ? `, assigned by ${actorName}` : ''}.`,
+      link: this.leadLink(lead.id),
+      dedupeKey: `task-assigned:${task.id}:${assigneeUserId}`,
+    });
+  }
+
+  // ========================================================================== 4c. showing created
+
+  /**
+   * A showing has been booked on somebody's lead.
+   *
+   * WHO IS TOLD: the person whose book the lead is in, not whoever typed the form. A showing has no
+   * assignee column of its own — `lead_showings.user_id` records who CREATED it — so the recipient
+   * is resolved from the lead's own ownership, which is the same question every other lead event
+   * asks. The creator is not notified of their own booking, for the same reason self-assignment is
+   * silent above.
+   */
+  async showingCreated(showing: {
+    id: number; property?: string | null; showing_date?: Date | null; time?: string | null;
+  }, lead: {
+    id: number; first_name?: string | null; last_name?: string | null; email?: string | null;
+  }, recipientUserId: number | null | undefined, actorUserId: number | null | undefined, actorName?: string | null): Promise<void> {
+    if (!recipientUserId) return;
+    if (recipientUserId === actorUserId) return;
+
+    const property = showing.property?.trim() || 'A property';
+    const when = showing.showing_date ? showing.showing_date.toISOString().slice(0, 10) : '';
+    const time = showing.time?.trim() || '';
+    const tpl = await this.templated('crm.showing_created', {
+      user_name: await this.userName(recipientUserId),
+      property,
+      lead_name: this.nameOf(lead),
+      showing_date: when || 'a date to be confirmed',
+      showing_time: time || 'time to be confirmed',
+      actor_name: actorName ? ` by ${actorName}` : '',
+      open_link: this.absoluteLink(this.leadLink(lead.id)),
+    });
+
+    await this.send({
+      ...tpl,
+      category: 'showing_created',
+      userId: recipientUserId,
+      title: 'New showing scheduled',
+      body: `${property} for ${this.nameOf(lead)}${when ? ` on ${when}` : ''}${time ? ` at ${time}` : ''}.`,
+      link: this.leadLink(lead.id),
+      dedupeKey: `showing-created:${showing.id}:${recipientUserId}`,
+    });
+  }
+
   // ========================================================================== 5/6. campaigns
 
   /** A campaign finished sending. */

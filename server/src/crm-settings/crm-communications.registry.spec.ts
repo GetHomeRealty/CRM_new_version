@@ -19,13 +19,13 @@ describe('CRM communications registry — shape', () => {
     expect(new Set(keys).size).toBe(keys.length);
   });
 
-  it('registers the ten automated communications plus the three manual ones', () => {
+  it('registers the twelve automated communications plus the three manual ones', () => {
     expect(ACTIVE_CRM_COMMUNICATIONS.map((c) => c.key).sort()).toEqual([
       'anniversary', 'birthday', 'campaign_completed', 'campaign_failed', 'custom',
       'lead_assigned', 'lead_meta', 'lead_new', 'lead_task_due', 'promotional', 'referral', 'seasonal',
-      'welcome',
+      'showing_created', 'task_assigned', 'welcome',
     ]);
-    expect(ACTIVE_CRM_COMMUNICATIONS.filter((c) => c.kind === 'automated')).toHaveLength(10);
+    expect(ACTIVE_CRM_COMMUNICATIONS.filter((c) => c.kind === 'automated')).toHaveLength(12);
     expect(ACTIVE_CRM_COMMUNICATIONS.filter((c) => c.kind === 'manual')).toHaveLength(3);
   });
 

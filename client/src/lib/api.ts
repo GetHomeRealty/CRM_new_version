@@ -18,7 +18,7 @@ const MULTIPART = { headers: { 'Content-Type': undefined } } as unknown as Axios
  * Which letter is being previewed or sent. `onboard` is one kind, not two: whether the fresher or
  * the experienced-agent guide goes out is decided on the server from the agent's own record.
  */
-export type OnboardingKind = 'onboard' | 'contract' | 'accounting' | 'training';
+export type OnboardingKind = 'onboard' | 'contract' | 'accounting' | 'training' | 'media';
 
 export interface OnboardingPreview {
   kind: OnboardingKind;

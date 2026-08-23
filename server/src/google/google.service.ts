@@ -39,6 +39,62 @@ export interface GoogleEvent {
   start?: { dateTime?: string; date?: string };
   end?: { dateTime?: string; date?: string };
   htmlLink?: string;
+  /**
+   * Google's own classification of the entry. Absent on older payloads, which is why every check
+   * treats a missing value as `default` — the overwhelming majority of events, and the only kind
+   * this application creates.
+   */
+  eventType?: string;
+}
+
+/**
+ * Event types Google generates and REFUSES to let the events API modify or delete.
+ *
+ * `birthday` is the one that bit us: Google manufactures a recurring all-day event from each
+ * Contact's birthday, it appears on the primary calendar like anything else, and a `DELETE` against
+ * it fails with HTTP 400 `eventTypeRestriction` — "Attempt made to modify 'birthday' event". No
+ * amount of retrying changes that answer, and no permission grants it.
+ *
+ * `fromGmail` is here for the same reason: flights and reservations Google extracts from mail are
+ * derived entries, not calendar records a client may edit.
+ *
+ * Deliberately NOT a list of everything non-default. `outOfOffice`, `focusTime` and
+ * `workingLocation` are ordinary user-created entries the API can manage, and excluding them would
+ * quietly stop syncing appointments somebody legitimately booked.
+ */
+export const UNMANAGEABLE_EVENT_TYPES = new Set(['birthday', 'fromGmail']);
+
+/** Whether Google will let this application modify or delete the entry at all. */
+export const isUnmanageableEvent = (ev: { eventType?: string } | null | undefined): boolean =>
+  UNMANAGEABLE_EVENT_TYPES.has((ev?.eventType ?? 'default').trim());
+
+/**
+ * Google `reason` codes that mean STOP, not "try again later".
+ *
+ * The sync treated every push failure as retryable, so a permanently refused event kept its
+ * outstanding flag for ever: the sweep gave up at the attempt cap, but the flag is what the screen
+ * counts, and the Retry button resets the count — so "1 appointment has not reached Google" could
+ * never clear and every press reported "0 of 1 reached Google".
+ */
+export const PERMANENT_SYNC_REASONS = new Set([
+  'eventTypeRestriction',
+  'forbiddenForServiceAccounts',
+  'invalidateSyncTokenOnCalendarChange',
+  'cannotChangeOrganizer',
+  'cannotChangeOrganizerOfInstance',
+]);
+
+/**
+ * Whether a Google Calendar write failure will still fail on the tenth attempt.
+ *
+ * Matched on the machine-readable `reason` Google puts in the error body, which `deleteEvent` and
+ * friends carry through in their message. A rate limit or a 5xx is explicitly NOT permanent — those
+ * are the cases retrying exists for.
+ */
+export function isPermanentSyncFailure(message: string): boolean {
+  const m = String(message ?? '');
+  for (const reason of PERMANENT_SYNC_REASONS) if (m.includes(reason)) return true;
+  return false;
 }
 
 /**
@@ -227,7 +283,7 @@ export class GoogleService {
     });
     if (!res.ok) {
       const body = await res.text().catch(() => '');
-      throw new Error(`Google Calendar insert failed (HTTP ${res.status}). ${body.slice(0, 160)}`);
+      throw new Error(`Google Calendar insert failed (HTTP ${res.status}). ${body.slice(0, 400)}`);
     }
     const json = await res.json().catch(() => ({})) as { id?: string };
     return json.id ?? null;
@@ -268,7 +324,10 @@ export class GoogleService {
     if (res.status === 404 || res.status === 410) return false;
     if (!res.ok) {
       const body = await res.text().catch(() => '');
-      throw new Error(`Google Calendar delete failed (HTTP ${res.status}). ${body.slice(0, 160)}`);
+      // 400, not 160: the machine-readable `reason` sits a little way into Google's error body,
+      // and `isPermanentSyncFailure` reads it from this message. Truncating it out would silently
+      // turn a permanent refusal back into an endlessly retried one.
+      throw new Error(`Google Calendar delete failed (HTTP ${res.status}). ${body.slice(0, 400)}`);
     }
     return true;
   }
@@ -300,7 +359,24 @@ export class GoogleService {
     return (await res.json()) as GoogleEvent;
   }
 
-  /** Best-effort revoke on disconnect; failure is logged, not surfaced. */
+  /**
+   * Withdraw the user's ENTIRE Google grant. Almost never what you want.
+   *
+   * NOT A PER-TOKEN OPERATION, whatever the argument name suggests. Google revokes the grant behind
+   * the token: every token ever issued to that (Google account, OAuth client) pair, for every scope
+   * it covers. Passing an access token does the same as passing a refresh token.
+   *
+   * So calling this to disconnect ONE integration takes out every other integration sharing that
+   * client — today that is Calendar and Gmail together, and the caller cannot see which others will
+   * join them later. `GoogleConnectionService.disconnect` called this and did exactly that; it is
+   * local-only now, and must stay that way.
+   *
+   * Use this only where the user has asked to withdraw Google access ALTOGETHER and understands
+   * that it covers everything. There is no such caller at present, and adding one to a per-area
+   * disconnect would reintroduce the defect this comment exists to prevent.
+   *
+   * Best-effort: failure is logged, not surfaced.
+   */
   async revoke(token: string): Promise<void> {
     try {
       await fetch(`${REVOKE_URL}?token=${encodeURIComponent(token)}`, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });

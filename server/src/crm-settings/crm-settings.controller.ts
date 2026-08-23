@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, Post, Put, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Param, ParseIntPipe, Post, Put, Query, UseGuards } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { BROADCAST_LIMIT, SETTINGS_WRITE_LIMIT } from '../config/rate-limits';
 import { AuthGuard } from '../auth/guards/auth.guard';
@@ -203,6 +203,28 @@ export class CrmSettingsController {
   @Screen('settings', 'view')
   broadcasts(@Query('limit') limit?: string): Promise<unknown> {
     return this.settings.listBroadcasts(Number(limit) || 50);
+  }
+
+  /**
+   * Remove one broadcast from the list. `edit`, not `view`: reading the history and erasing part of
+   * it are different powers, and this screen already draws that line everywhere else.
+   *
+   * A send still in flight is refused by the service — see `deleteBroadcast`.
+   */
+  @Delete('broadcasts/:id')
+  @Screen('settings', 'edit')
+  deleteBroadcast(@CurrentUser() user: AuthUserRecord, @Param('id', ParseIntPipe) id: number): Promise<unknown> {
+    return this.settings.deleteBroadcast(user, id);
+  }
+
+  /**
+   * Remove one row from the CRM send log. The service re-applies the SAME visibility `listLog`
+   * uses, so an id that never appears in the caller's list cannot be deleted by guessing it.
+   */
+  @Delete('email-log/:id')
+  @Screen('settings', 'edit')
+  deleteEmailLog(@CurrentUser() user: AuthUserRecord, @Param('id', ParseIntPipe) id: number): Promise<unknown> {
+    return this.email.deleteLogEntry(user, id);
   }
 
   // ---------------------------------------------------------- integrations

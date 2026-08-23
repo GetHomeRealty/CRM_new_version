@@ -67,14 +67,14 @@ const commRow = (overview: Record<string, unknown>, key: string) =>
     .find((c) => c.key === key)!;
 
 describe('CRM Communications — the list', () => {
-  it('offers the ten automated communications and the three manual ones, and no retired one', async () => {
+  it('offers the twelve automated communications and the three manual ones, and no retired one', async () => {
     await inRollback(async (tx) => {
       const agent = await makeUser(tx, 'agent');
       const o = await svc(tx).overview(agent);
       const keys = (o.communications as { key: string }[]).map((c) => c.key);
       expect(keys.sort()).toEqual(ACTIVE_CRM_COMMUNICATIONS.map((c) => c.key).sort());
       expect(keys).not.toContain('wedding');
-      expect(keys).toHaveLength(13);
+      expect(keys).toHaveLength(15);
     });
   });
 

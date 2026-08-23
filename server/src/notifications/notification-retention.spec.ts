@@ -102,11 +102,11 @@ const service = (tx: PrismaService) => new NotificationRetentionService(tx);
 
 /** Run a sweep with deletion switched on, then put the environment back. */
 async function withDeletionEnabled<T>(fn: () => Promise<T>): Promise<T> {
-  const saved = process.env.RETENTION_ENABLED;
-  process.env.RETENTION_ENABLED = 'true';
+  const saved = process.env.NOTIFICATION_RETENTION_ENABLED;
+  process.env.NOTIFICATION_RETENTION_ENABLED = 'true';
   try { return await fn(); } finally {
-    if (saved === undefined) delete process.env.RETENTION_ENABLED;
-    else process.env.RETENTION_ENABLED = saved;
+    if (saved === undefined) delete process.env.NOTIFICATION_RETENTION_ENABLED;
+    else process.env.NOTIFICATION_RETENTION_ENABLED = saved;
   }
 }
 
@@ -135,21 +135,21 @@ describe('the window is the brokerage’s one retention policy', () => {
 /**
  * Force the sweep OFF for a test that is about the disabled behaviour.
  *
- * These two used to assert "deletes nothing" while simply not setting `RETENTION_ENABLED` — which
+ * These two used to assert "deletes nothing" while simply not setting `NOTIFICATION_RETENTION_ENABLED` — which
  * passed only for as long as no deployment set it. The brokerage has now chosen a retention policy
  * and turned it on in `.env`, and both tests failed: they were asserting a default, not a rule.
  * Setting it explicitly makes each test state the condition it is actually testing.
  */
 async function withRetentionDisabled<T>(fn: () => Promise<T>): Promise<T> {
-  const saved = process.env.RETENTION_ENABLED;
-  process.env.RETENTION_ENABLED = 'false';
+  const saved = process.env.NOTIFICATION_RETENTION_ENABLED;
+  process.env.NOTIFICATION_RETENTION_ENABLED = 'false';
   try { return await fn(); } finally {
-    if (saved === undefined) delete process.env.RETENTION_ENABLED;
-    else process.env.RETENTION_ENABLED = saved;
+    if (saved === undefined) delete process.env.NOTIFICATION_RETENTION_ENABLED;
+    else process.env.NOTIFICATION_RETENTION_ENABLED = saved;
   }
 }
 
-  it('deletes nothing until RETENTION_ENABLED is set, however old the rows are', async () => {
+  it('deletes nothing until NOTIFICATION_RETENTION_ENABLED is set, however old the rows are', async () => {
     await withRetentionDisabled(async () => inRollback(async (tx) => {
       const user = await makeUser(tx);
       await ledger(tx, user, 'campaign_completed', 'campaign-completed:1:1', LONG_AGO);

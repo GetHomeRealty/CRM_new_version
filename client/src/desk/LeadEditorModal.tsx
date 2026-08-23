@@ -3,6 +3,7 @@ import { createLead, listLeadTags, updateLead } from '../lib/leadsApi';
 import { apiErrorMessage, apiFieldErrors } from '../lib/apiError';
 import { useToast } from './toast';
 import type { Lead, LeadOptions, LeadPropertyPreferences } from '../types';
+import { ageFromDateOfBirth } from './age';
 
 /** Title-case a stored vocabulary value for display ("first home buyer" → "First Home Buyer"). */
 export const label = (v: string): string =>
@@ -308,6 +309,23 @@ export default function LeadEditorModal({ lead, options, onClose, onSaved, lockI
   }, [lead]);
 
   const set = (k: keyof Form, v: string) => setForm((f) => ({ ...f, [k]: v }));
+
+  /**
+   * Picking a date of birth fills the age in.
+   *
+   * A DATE OF BIRTH ANSWERS THE AGE QUESTION, so leaving both fields to be typed independently
+   * invites them to disagree — and the one that disagrees is always the age, because it is the one
+   * that goes out of date. The server derives it too, on save and on read, so this is not the thing
+   * that makes it correct; it is what makes it VISIBLE while somebody is filling the form in, rather
+   * than a value that silently changes after they press Save.
+   *
+   * Clearing the date leaves the age alone: forgetting a birthday is not a statement that the person
+   * has no age, and wiping a number somebody typed would be the more annoying behaviour.
+   */
+  const setDateOfBirth = (v: string) => {
+    const age = ageFromDateOfBirth(v);
+    setForm((f) => ({ ...f, date_of_birth: v, ...(age === null ? {} : { age: String(age) }) }));
+  };
   const setPref = (i: number, patch: Partial<PrefForm>) =>
     setPrefs((list) => list.map((p, j) => (j === i ? { ...p, ...patch } : p)));
   const err = (k: string) => (errors[k]?.length ? <div className="field-err">{errors[k][0]}</div> : null);
@@ -513,6 +531,8 @@ export default function LeadEditorModal({ lead, options, onClose, onSaved, lockI
           <div className="g3">
             <div className="field">
               <label>Age</label>
+              {/* Editable, because plenty of leads give a rough age and no birthday. Entering a
+                  date of birth below fills this in and the server keeps it in step from then on. */}
               <input type="number" min={0} max={120} value={form.age} onChange={(e) => set('age', e.target.value)} />
               {err('age')}
             </div>
@@ -548,7 +568,7 @@ export default function LeadEditorModal({ lead, options, onClose, onSaved, lockI
             </div>
             <div className="field">
               <label>Date of Birth</label>
-              <input type="date" value={form.date_of_birth} onChange={(e) => set('date_of_birth', e.target.value)} />
+              <input type="date" value={form.date_of_birth} onChange={(e) => setDateOfBirth(e.target.value)} />
               {err('date_of_birth')}
             </div>
             <div className="field">

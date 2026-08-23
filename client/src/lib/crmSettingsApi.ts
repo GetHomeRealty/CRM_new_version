@@ -54,5 +54,14 @@ export const sendCrmBroadcast = (message: string, type = 'info'): Promise<{ reci
 export const listCrmBroadcasts = (): Promise<CrmBroadcast[]> =>
   api.get<CrmBroadcast[]>('/api/crm-settings/broadcasts').then((r) => r.data);
 
+/** Removes the row for good — there is no soft delete behind this. The server refuses a send still
+ *  in flight, and records the deletion in the audit trail. */
+export const deleteCrmBroadcast = (id: number): Promise<{ deleted: boolean }> =>
+  api.delete<{ deleted: boolean }>(`/api/crm-settings/broadcasts/${id}`).then((r) => r.data);
+
+/** Same: permanent, audited, and refused for a row the caller cannot see in the log. */
+export const deleteCrmEmailLog = (id: number): Promise<{ deleted: boolean }> =>
+  api.delete<{ deleted: boolean }>(`/api/crm-settings/email-log/${id}`).then((r) => r.data);
+
 export const crmIntegrations = (): Promise<CrmIntegrations> =>
   api.get<CrmIntegrations>('/api/crm-settings/integrations').then((r) => r.data);
