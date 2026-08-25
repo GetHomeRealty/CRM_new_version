@@ -7,7 +7,7 @@ import ChangePasswordModal from './ChangePasswordModal';
 import UserAvatar from './UserAvatar';
 import ErrorBoundary from '../components/ErrorBoundary';
 import Icon from '../ui/Icon';
-import { AREA_LABEL, AREA_SHORT, AREA_TAB, DEFAULT_AREA, areaPath, screenInArea, type Area } from './area';
+import { AREA_SHORT, AREA_TAB, DEFAULT_AREA, areaPath, screenInArea, type Area } from './area';
 import { AreaProvider } from './AreaContext';
 
 interface NavItem {
@@ -312,24 +312,23 @@ export default function DeskLayout({ area = DEFAULT_AREA }: { area?: Area }) {
    * icon rail. One definition, so the two placements cannot drift apart in behaviour.
    */
   const areaSwitch = (place: 'in-sidebar' | 'in-topbar') => (
-    // Only the modules this login has. With one module there is nothing to switch between, so the
-    // control is not rendered at all — a switcher with a single option is a button that cannot do
-    // anything, and it advertises a module the company may not have bought.
-    modules.length < 2 ? null : (
-    <div className={`area-switch ${place}`} role="group" aria-label="Application area">
-      {modules.map((a) => (
-        <button
-          key={a}
-          className={`area-btn ${a === area ? 'active' : ''}`}
-          aria-current={a === area ? 'page' : undefined}
-          title={AREA_LABEL[a]}
-          onClick={() => switchArea(a)}
-        >
-          {AREA_TAB[a]}
-        </button>
-      ))}
+    <div className={`area-switch ${place}`}>
+      {/* Internal areas remain licensing-aware. Preconstruction is a separate application, so it
+          stays available even when this login has only one CRM/Desk module. */}
+      <select
+        className="area-select"
+        aria-label="Application area; Precon/Canada opens in a new tab"
+        value={area}
+        onChange={(e) => {
+          const next = e.target.value;
+          if (next === 'precon') window.open('https://precon.gethomerealty.ca', '_blank', 'noopener,noreferrer');
+          else switchArea(next as Area);
+        }}
+      >
+        {modules.map((a) => <option key={a} value={a}>{AREA_TAB[a]}</option>)}
+        <option value="precon">Precon/Canada</option>
+      </select>
     </div>
-    )
   );
 
   const onLogout = async () => {
