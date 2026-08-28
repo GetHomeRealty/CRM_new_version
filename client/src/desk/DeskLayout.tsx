@@ -183,7 +183,6 @@ export default function DeskLayout({ area = DEFAULT_AREA }: { area?: Area }) {
   const [docNotif, setDocNotif] = useState<DocNotif>({ count: 0, items: [] });
   const [docBellOpen, setDocBellOpen] = useState(false);
   const docBellRef = useRef<HTMLDivElement>(null);
-  const [areaMenuOpen, setAreaMenuOpen] = useState(false);
 
   // Poll agent-change notifications (admins/managers only); refresh on navigation.
   useEffect(() => {
@@ -225,22 +224,6 @@ export default function DeskLayout({ area = DEFAULT_AREA }: { area?: Area }) {
     document.addEventListener('mousedown', onDoc);
     return () => document.removeEventListener('mousedown', onDoc);
   }, [bellOpen, docBellOpen]);
-
-  useEffect(() => {
-    if (!areaMenuOpen) return undefined;
-    const closeOnOutsideClick = (e: MouseEvent) => {
-      if (!(e.target as Element).closest('.area-switch')) setAreaMenuOpen(false);
-    };
-    const closeOnEscape = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setAreaMenuOpen(false);
-    };
-    document.addEventListener('mousedown', closeOnOutsideClick);
-    document.addEventListener('keydown', closeOnEscape);
-    return () => {
-      document.removeEventListener('mousedown', closeOnOutsideClick);
-      document.removeEventListener('keydown', closeOnEscape);
-    };
-  }, [areaMenuOpen]);
 
   // Both notifications are about transactions, so they always open in the Transaction Desk
   // regardless of which area the bell was rung in.
@@ -329,50 +312,26 @@ export default function DeskLayout({ area = DEFAULT_AREA }: { area?: Area }) {
    * icon rail. One definition, so the two placements cannot drift apart in behaviour.
    */
   const areaSwitch = (place: 'in-sidebar' | 'in-topbar') => (
-    <div className={`area-switch ${place}`}>
+    <div className={`area-switch ${place}`} role="group" aria-label="Applications">
+      {modules.map((a) => (
+        <button
+          type="button"
+          key={a}
+          className={`area-option ${a === area ? 'active' : ''}`}
+          aria-current={a === area ? 'page' : undefined}
+          onClick={() => switchArea(a)}
+        >
+          {AREA_TAB[a]}
+        </button>
+      ))}
       <button
         type="button"
-        className="area-trigger"
-        aria-label={`Switch application. Current application: ${AREA_TAB[area]}`}
-        aria-haspopup="menu"
-        aria-expanded={areaMenuOpen}
-        onClick={() => setAreaMenuOpen((open) => !open)}
+        className="area-option precon"
+        aria-label="Open Precon/Canada in a new tab"
+        onClick={() => window.open('https://precon.gethomerealty.ca', '_blank', 'noopener,noreferrer')}
       >
-        <span className={`area-mark ${area}`} aria-hidden="true" />
-        <span className="area-current">{AREA_TAB[area]}</span>
-        <span className="area-chevron" aria-hidden="true" />
+        <span>Precon/Canada</span><span className="area-external" aria-hidden="true">↗</span>
       </button>
-      {areaMenuOpen && (
-        <div className="area-menu" role="menu" aria-label="Applications">
-          {modules.map((a) => (
-            <button
-              type="button"
-              role="menuitemradio"
-              aria-checked={a === area}
-              className={a === area ? 'active' : ''}
-              key={a}
-              onClick={() => { setAreaMenuOpen(false); switchArea(a); }}
-            >
-              <span className={`area-mark ${a}`} aria-hidden="true" />
-              <span>{AREA_TAB[a]}</span>
-              {a === area && <span className="area-check" aria-hidden="true">✓</span>}
-            </button>
-          ))}
-          <span className="area-menu-separator" role="separator" />
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => {
-              setAreaMenuOpen(false);
-              window.open('https://precon.gethomerealty.ca', '_blank', 'noopener,noreferrer');
-            }}
-          >
-            <span className="area-mark precon" aria-hidden="true" />
-            <span>Precon/Canada</span>
-            <span className="area-external" aria-hidden="true">↗</span>
-          </button>
-        </div>
-      )}
     </div>
   );
 
