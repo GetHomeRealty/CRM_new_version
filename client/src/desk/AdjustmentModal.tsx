@@ -317,7 +317,7 @@ export default function AdjustmentModal({ open, onClose, transactionId, txn, onS
               <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Percentage (%)</label>
                 <input value={form.ext.pct ?? ''} onChange={(e) => {
                   const p = e.target.value;
-                  const amt = parseNumber(p) > 0 ? Math.round((parseNumber(txn.commission?.amount ?? 0) * parseNumber(p) / 100 + Number.EPSILON) * 100) / 100 : '';
+                  const amt = parseNumber(p) > 0 ? Math.round((parseNumber(txn.price) * parseNumber(p) / 100 + Number.EPSILON) * 100) / 100 : '';
                   setExt({ pct: p, amount: amt });
                 }} placeholder="e.g. 1.5" /></div>
               <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Amount</label><MoneyInput value={form.ext.amount} onChange={(v) => setExt({ amount: v, pct: '' })} placeholder="0.00" /></div>
