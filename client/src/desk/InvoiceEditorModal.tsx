@@ -16,7 +16,7 @@ import type { CompanySettings, Invoice } from '../types';
 
 const BRAND = 'var(--brand-red)';
 const TERM_DAYS: Record<string, number> = { 'Due on Receipt': 0, 'Net 7': 7, 'Net 15': 15, 'Net 30': 30 };
-const STATUSES = ['Unpaid', 'Paid', 'Overdue', 'Void', 'Due']; // §12.2
+export const STATUSES = ['Unpaid', 'Paid', 'Overdue', 'Void', 'Due']; // §12.2
 // Status colours: Due=blue, Overdue=red, Paid=green, Void=black.
 const STATUS_COLOR: Record<string, string> = { Due: 'var(--info)', Overdue: 'var(--bad)', Paid: 'var(--ok-600)', Void: 'var(--text)', Unpaid: 'var(--info)', 'Partially Paid': 'var(--warn)', Draft: 'var(--muted)' };
 const COMM_VIA = ['Bank Transfer', 'Cash', 'EFT', 'Interac e-Transfer', 'Cheque'];
