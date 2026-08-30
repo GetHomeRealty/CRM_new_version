@@ -36,6 +36,8 @@ const escapeLike = (term: string): string => term.replace(/[\\%_]/g, (c) => `\\$
 export interface AuditLogQuery {
   category?: string;
   user_id?: string;
+  /** TD-087 - narrow the trail to ONE deal. Declared here or the parameter never reaches buildWhere. */
+  transaction_id?: string;
   from?: string;
   to?: string;
   q?: string;
@@ -132,6 +134,20 @@ export class AuditLogService {
      * `new Date('garbage')` is an Invalid Date, which Prisma refuses — so `?from=garbage` and
      * `?to=2026-99-99` were both bare 500s. Refused with the field named, like every other filter.
      */
+    /*
+     * TD-087 - the deal filter reached the API and was never put into the query, so asking for one
+     * deal's history returned every deal's. Same treatment as user_id above: a value that cannot be
+     * honoured is refused with the field named, not quietly dropped.
+     */
+    const tid = query.transaction_id;
+    if (tid) {
+      const n = Number(tid);
+      if (!Number.isSafeInteger(n)) {
+        throw new BadRequestException({ message: `"${tid}" is not a transaction id.`, errors: { transaction_id: ['Must be a whole number.'] } });
+      }
+      and.push({ transaction_id: n });
+    }
+
     const from = query.from;
     if (from) and.push({ created_at: { gte: this.parseDay('from', from) } });
     const to = query.to;
