@@ -649,24 +649,35 @@ export class TransactionsWriteService {
   }
 
   private async syncConditions(tx: Tx, txnId: number, conditions: Record<string, unknown>[]): Promise<void> {
-    await tx.conditions.deleteMany({ where: { transaction_id: txnId } });
+    // TD-033: match existing rows by id and update in place. Deleting and recreating gave every
+    // condition a new id, which orphaned its generated document row - and syncConditionDocs then
+    // purged that row's uploaded file from disk. Identity has to survive an ordinary save.
+    const existing = await tx.conditions.findMany({ where: { transaction_id: txnId } });
+    const known = new Set(existing.map((r) => r.id));
     const now = new Date();
+    const keep = new Set<number>();
     let i = 0;
     for (const c of conditions) {
-      await tx.conditions.create({
-        data: {
-          transaction_id: txnId,
-          type: String(c.type ?? 'Financing'),
-          custom_name: (c.custom_name ?? null) as string | null,
-          deadline: c.deadline ? new Date(String(c.deadline).slice(0, 10) + 'T00:00:00.000Z') : null,
-          status: String(c.status ?? 'Pending'),
-          position: i,
-          created_at: now,
-          updated_at: now,
-        },
-      });
+      const values = {
+        type: String(c.type ?? 'Financing'),
+        custom_name: (c.custom_name ?? null) as string | null,
+        deadline: c.deadline ? new Date(String(c.deadline).slice(0, 10) + 'T00:00:00.000Z') : null,
+        status: String(c.status ?? 'Pending'),
+        position: i,
+        updated_at: now,
+      };
+      const id = Number(c.id ?? 0);
+      if (id && known.has(id)) {
+        await tx.conditions.update({ where: { id }, data: values });
+        keep.add(id);
+      } else {
+        const created = await tx.conditions.create({ data: { transaction_id: txnId, ...values, created_at: now } });
+        keep.add(created.id);
+      }
       i++;
     }
+    const removed = existing.filter((r) => !keep.has(r.id)).map((r) => r.id);
+    if (removed.length > 0) await tx.conditions.deleteMany({ where: { id: { in: removed } } });
   }
 
   private async syncInterBoard(tx: Tx, txnId: number, items: Record<string, unknown>[]): Promise<void> {
@@ -1043,7 +1054,7 @@ export class TransactionsWriteService {
     }
     if (rel === 'conditions') {
       const rows = await tx.conditions.findMany({ where: { transaction_id: txnId }, orderBy: { position: 'asc' } });
-      return rows.map((r) => ({ type: r.type, custom_name: r.custom_name, deadline: r.deadline ? r.deadline.toISOString().slice(0, 10) : null, status: r.status }));
+      return rows.map((r) => ({ id: r.id, type: r.type, custom_name: r.custom_name, deadline: r.deadline ? r.deadline.toISOString().slice(0, 10) : null, status: r.status }));
     }
     const rows = await tx.inter_board_listings.findMany({ where: { transaction_id: txnId }, orderBy: { position: 'asc' } });
     return rows.map((r) => ({ name: r.name, board_id: r.board_id, verified: r.verified }));
