@@ -16,7 +16,7 @@ import type { CompanySettings, Invoice } from '../types';
 
 const BRAND = 'var(--brand-red)';
 const TERM_DAYS: Record<string, number> = { 'Due on Receipt': 0, 'Net 7': 7, 'Net 15': 15, 'Net 30': 30 };
-const STATUSES = ['Paid', 'Overdue', 'Void', 'Due']; // §12.2
+const STATUSES = ['Unpaid', 'Paid', 'Overdue', 'Void', 'Due']; // §12.2
 // Status colours: Due=blue, Overdue=red, Paid=green, Void=black.
 const STATUS_COLOR: Record<string, string> = { Due: 'var(--info)', Overdue: 'var(--bad)', Paid: 'var(--ok-600)', Void: 'var(--text)', Unpaid: 'var(--info)', 'Partially Paid': 'var(--warn)', Draft: 'var(--muted)' };
 const COMM_VIA = ['Bank Transfer', 'Cash', 'EFT', 'Interac e-Transfer', 'Cheque'];
@@ -93,6 +93,7 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
   const [menu, setMenu] = useState(''); // '', 'status', 'reminder'
   const [edited, setEdited] = useState(false); // changed since the last send → shows "Resend"
   const [hstLocked, setHstLocked] = useState(true); // HST % locked at default until unlocked
+  const [payAmount, setPayAmount] = useState(''); // TD-121 - blank means the whole outstanding balance
 
   useEffect(() => {
     if (!open) return;
@@ -279,26 +280,35 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
   };
 
   // §12.2 — a recorded payment row, or the saved Commission Received date + method, count as recorded.
-  const paymentRecorded = !!(saved?.status === 'Paid' && ((saved?.payments || []).length > 0 || (saved?.commission_received_date && saved?.commission_received_via)));
+  // TD-121 — settled means the payments cover the balance, not that someone typed "Paid".
+  const paymentRecorded = !!(saved && (saved.payments || []).length > 0 && balanceDue <= 0);
   const recordCommissionPayment = async () => {
     if (!form.commission_received_date || !form.commission_received_via) {
       toast('Enter the Commission Received date and "Received via" method before recording payment.', 'bad');
       return;
     }
+    // A blank amount means the whole outstanding balance, which is the common case.
+    const amount = Math.round(parseNumber(payAmount === '' ? String(balanceDue) : payAmount) * 100) / 100;
+    if (!(amount > 0)) { toast('Enter an amount greater than zero.', 'bad'); return; }
+    if (amount > balanceDue + 0.005) {
+      toast('That is more than the outstanding balance of ' + formatCurrency(balanceDue) + '.', 'bad');
+      return;
+    }
     setSaving(true);
     try {
-      let d = await save('Paid'); // persist commission fields + mark Paid
+      // Persist the commission fields WITHOUT asserting a status. InvoiceCalculator.status
+      // on the server derives Paid or Partially Paid from the payment rows once this lands,
+      // so the client no longer decides whether an invoice is settled.
+      let d = await save();
       if (!d?.id) return;
-      // Record the actual payment for the outstanding balance (once) so Balance Due settles.
-      if (Number(d.balance_due) > 0 && !(d.payments || []).length) {
-        d = await recordInvoicePayment(d.id, {
-          paid_on: form.commission_received_date,
-          amount: Number(d.balance_due),
-          method: form.commission_received_via,
-        });
-        setForm(toForm(d)); setSaved(d); onSaved?.(d);
-      }
-      toast('Payment recorded.', 'ok');
+      d = await recordInvoicePayment(d.id, {
+        paid_on: form.commission_received_date,
+        amount,
+        method: form.commission_received_via,
+      });
+      setForm(toForm(d)); setSaved(d); onSaved?.(d);
+      setPayAmount('');
+      toast('Payment of ' + formatCurrency(amount) + ' recorded.', 'ok');
     } catch (e) {
       toast(apiErrorMessage(e, 'Could not record payment'), 'bad');
     } finally { setSaving(false); }
@@ -366,16 +376,27 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
             )}
           </div>
 
-          {/* §12.2 — when Paid, capture Commission Received date + via right here */}
-          {form.status === 'Paid' && (
+          {/* §12.2 / TD-104 — capture Commission Received date + via, and record payments.
+              Shown on any invoice that is not Void. A payment arrives BEFORE an invoice is
+              settled, so gating this on status === 'Paid' hid it from the only people who
+              needed it, and three UAT journeys concluded it did not exist. */}
+          {form.status !== 'Void' && (
             <div style={{ border: '1px solid #bbf7d0', background: 'var(--ok-bg)', borderRadius: 8, padding: 10, margin: '2px 0 6px' }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--ok-ink)', marginBottom: 6 }}>Commission Received</div>
+              {amountPaid > 0 && (
+                <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 6 }}>
+                  Recorded so far: {formatCurrency(amountPaid)} · Outstanding: {formatCurrency(balanceDue)}
+                </div>
+              )}
               <label style={{ fontSize: 11, color: 'var(--text-3)', display: 'block', marginBottom: 2 }}>Date</label>
               <input type="date" value={form.commission_received_date} onChange={(e) => set('commission_received_date', e.target.value)} style={{ width: '100%', marginBottom: 8, border: '1px solid var(--line)', borderRadius: 6, padding: '6px 8px' }} />
               <label style={{ fontSize: 11, color: 'var(--text-3)', display: 'block', marginBottom: 2 }}>Received via</label>
-              <select value={form.commission_received_via} onChange={(e) => set('commission_received_via', e.target.value)} style={{ width: '100%', border: '1px solid var(--line)', borderRadius: 6, padding: '6px 8px' }}>
+              <select value={form.commission_received_via} onChange={(e) => set('commission_received_via', e.target.value)} style={{ width: '100%', marginBottom: 8, border: '1px solid var(--line)', borderRadius: 6, padding: '6px 8px' }}>
                 <option value="">Select</option>{COMM_VIA.map((v) => <option key={v}>{v}</option>)}
               </select>
+              {/* TD-121 — leave blank to record the whole outstanding balance. */}
+              <label style={{ fontSize: 11, color: 'var(--text-3)', display: 'block', marginBottom: 2 }}>Amount</label>
+              <input type="number" step="0.01" min="0" value={payAmount} placeholder={balanceDue.toFixed(2)} onChange={(e) => setPayAmount(e.target.value)} style={{ width: '100%', border: '1px solid var(--line)', borderRadius: 6, padding: '6px 8px' }} />
               {paymentRecorded ? (
                 <button className="btn sm" style={{ marginTop: 8, width: '100%', background: 'var(--ok-600)', borderColor: 'var(--ok-600)', color: '#fff', fontWeight: 700, cursor: 'default' }} disabled><Icon name="check" size={13} /> Payment Recorded</button>
               ) : (
