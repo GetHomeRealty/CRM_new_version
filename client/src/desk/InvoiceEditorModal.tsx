@@ -123,8 +123,8 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
     setForm((f) => {
       if (!f) return f;
       const next: InvoiceForm = { ...f, [k]: v };
-      if (k === 'terms' && v !== 'Custom') next.due_date = addDays(next.invoice_date, TERM_DAYS[String(v)] ?? 0);
-      if (k === 'invoice_date' && next.terms !== 'Custom') next.due_date = addDays(String(v), TERM_DAYS[next.terms] ?? 0);
+      if (k === 'terms' && v !== 'Custom' && v !== 'Due on Closing') next.due_date = addDays(next.invoice_date, TERM_DAYS[String(v)] ?? 0);
+      if (k === 'invoice_date' && next.terms !== 'Custom' && next.terms !== 'Due on Closing') next.due_date = addDays(String(v), TERM_DAYS[next.terms] ?? 0);
       return next;
     });
   }
