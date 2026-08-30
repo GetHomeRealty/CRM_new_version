@@ -7,7 +7,7 @@ import { CommissionService } from './commission.service';
 import { PaymentCacheService } from './payment-cache.service';
 import { normalizeCommissionTxn } from './commission.loader';
 import { parseJsonObject, phpEmpty, phpFloat, phpJsonNormalize, round2, toFloat } from '../common/serialize';
-import { isInvoiceableType, isListingType, SECURED_DEAL_TYPES, statusSetProblem } from '../reference/transaction.constants';
+import { isInvoiceableType, isListingType, SECURED_DEAL_TYPES, statusSetProblem, TRANSACTION_TYPES } from '../reference/transaction.constants';
 import { TradeNumberService } from './trade-number.service';
 import { TransactionLawyerReminderService } from './transaction-lawyer-reminder.service';
 import { TransactionReviewService } from './transaction-review.service';
@@ -349,6 +349,47 @@ export class TransactionsWriteService {
      * and that is a decision to be stated rather than inferred. This rejects only what is
      * self-contradictory or does not exist for the type.
      */
+    /*
+     * TD-068 and TD-014 - the type drives everything on a deal: which statuses it may hold, which
+     * documents it generates, how its commission is worked out. It was required when a deal was
+     * created, then free to be blanked or replaced with anything at all on update.
+     */
+    if (Object.prototype.hasOwnProperty.call(data, 'type')) {
+      const submittedType = String(data.type ?? '').trim();
+      if (!submittedType) {
+        const m = 'A transaction must have a type. It is required when the deal is created and cannot be cleared afterwards.';
+        throw new UnprocessableEntityException({ message: m, errors: { type: [m] } });
+      }
+      if (!(TRANSACTION_TYPES as readonly string[]).includes(submittedType)) {
+        const m = `"${submittedType}" is not a transaction type this system offers. Allowed: ${TRANSACTION_TYPES.join(', ')}.`;
+        throw new UnprocessableEntityException({ message: m, errors: { type: [m] } });
+      }
+    }
+
+    /*
+     * TD-055 - money that cannot exist. A negative price is not a discount, and a deposit larger
+     * than the price is not a deposit. Both saved, and both reach the reports and the invoices.
+     */
+    const readMoney = (v: unknown): number => { const n = Number(String(v ?? '').replace(/,/g, '')); return Number.isFinite(n) ? n : 0; };
+    const pricePresent = Object.prototype.hasOwnProperty.call(data, 'price');
+    const depositPresent = Object.prototype.hasOwnProperty.call(data, 'deposit');
+    if (pricePresent || depositPresent) {
+      const priceIn = pricePresent ? readMoney(data.price) : readMoney(t.price);
+      const depositIn = depositPresent ? readMoney(data.deposit) : readMoney(t.deposit);
+      if (pricePresent && priceIn < 0) {
+        const m = 'The purchase price cannot be negative.';
+        throw new UnprocessableEntityException({ message: m, errors: { price: [m] } });
+      }
+      if (depositPresent && depositIn < 0) {
+        const m = 'The deposit cannot be negative.';
+        throw new UnprocessableEntityException({ message: m, errors: { deposit: [m] } });
+      }
+      if (priceIn > 0 && depositIn > priceIn) {
+        const m = 'The deposit cannot be larger than the purchase price.';
+        throw new UnprocessableEntityException({ message: m, errors: { deposit: [m] } });
+      }
+    }
+
     if (Object.prototype.hasOwnProperty.call(data, 'statuses')) {
       const submitted = [...new Set((data.statuses as unknown[]).filter(Boolean).map(String))];
       const changed = submitted.length !== statuses.length || submitted.some((s) => !statuses.includes(s));
