@@ -78,6 +78,9 @@ export default function TransactionsPage() {
   const canEdit = can('transactions', 'edit');
   const isAgent = user?.role === 'agent';
   const [rows, setRows] = useState<Transaction[]>([]);
+  // TD-030 - a failed load and an empty account must not render the same. The toast below is
+  // right but transient; without this the table keeps saying "no transactions found" long after it.
+  const [loadFailed, setLoadFailed] = useState(false);
   const [loading, setLoading] = useState(true);
   // Whole-result-set facts the server reports alongside the page: the ids behind "select all",
   // the year options, the deletion-request banner, and the total. None can be derived from the
@@ -137,6 +140,7 @@ export default function TransactionsPage() {
       .then((res) => {
         if (mine !== seq.current) return;
         setRows(res.data);
+        setLoadFailed(false);
         setLastPage(res.meta.last_page);
         setTotal(res.meta.total);
         setYears(res.meta.years);
@@ -145,7 +149,7 @@ export default function TransactionsPage() {
         // A filter (or a deletion) can shrink the set past the page you were on.
         if (toPage > res.meta.last_page) setPage(res.meta.last_page);
       })
-      .catch(() => { if (mine === seq.current) toast('Could not load transactions', 'bad'); })
+      .catch(() => { if (mine === seq.current) { setLoadFailed(true); toast('Could not load transactions', 'bad'); } })
       .finally(() => { if (mine === seq.current) setLoading(false); });
   };
 
@@ -331,6 +335,12 @@ export default function TransactionsPage() {
         <tbody>
           {loading ? (
             <tr><td colSpan={10} className="centered">Loading…</td></tr>
+          ) : loadFailed ? (
+            <tr><td colSpan={10} style={{ textAlign: 'center', padding: 20 }}>
+              <b style={{ color: 'var(--bad)' }}>Your transactions could not be loaded.</b><br />
+              <span style={{ color: 'var(--muted)' }}>This is a problem reaching the server, not an empty list — nothing has been lost.</span>{' '}
+              <button className="btn sm" style={{ marginLeft: 6 }} onClick={() => load()}>Try again</button>
+            </td></tr>
           ) : rows.length === 0 ? (
             <tr><td colSpan={10} style={{ textAlign: 'center', color: 'var(--muted)', padding: 20 }}>
               {/* With filters on, an empty table means "nothing matched", not "nothing exists". */}
