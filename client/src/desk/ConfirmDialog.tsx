@@ -17,6 +17,20 @@ export interface ConfirmOptions {
    * member of staff" asks the reader to press the wrong verb to get the right outcome.
    */
   confirmLabel?: ReactNode;
+  /**
+   * What KIND of action is being confirmed, which decides the button's colour.
+   *
+   * `destructive` is the DEFAULT, deliberately. This component began as the delete confirmation and
+   * most of its three dozen callers still are one, so defaulting the other way would have quietly
+   * turned every existing warning into an ordinary button - a much worse failure than the one being
+   * fixed. Non-destructive callers opt in, and every existing call site keeps exactly the styling it
+   * has today without being touched.
+   *
+   * THE COLOUR IS THE MESSAGE. A dialog that paints "Confirm Send" in the same red as "Delete
+   * Forever" teaches people that red means "the button you press to continue", which is precisely
+   * how a warning stops working.
+   */
+  variant?: 'destructive' | 'primary';
   onConfirm?: () => void;
 }
 
@@ -37,6 +51,9 @@ export function useConfirm() {
 
 export default function ConfirmDialog({ confirm, onClose }: { confirm: ConfirmOptions | null; onClose: () => void }) {
   if (!confirm) return null;
+  // Destructive unless a caller says otherwise — see `variant` on ConfirmOptions for why round
+  // that way.
+  const destructive = (confirm.variant ?? 'destructive') === 'destructive';
   // Rendered through a portal to <body> so the fixed overlay always centres on the VIEWPORT and can
   // never be trapped by a transformed/animated ancestor (e.g. the parent modal). Without this, when
   // opened from inside another modal the dialog anchored to that modal and drifted above the screen
@@ -46,7 +63,7 @@ export default function ConfirmDialog({ confirm, onClose }: { confirm: ConfirmOp
       style={{ position: 'fixed', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 4000 }}>
       <div className="modal" style={{ maxWidth: 480, margin: 0 }}>
         <button className="close" onClick={onClose}>✕</button>
-        <div className="modal-h" style={{ color: 'var(--bad)' }}>{confirm.title}</div>
+        <div className="modal-h" style={destructive ? { color: 'var(--bad)' } : undefined}>{confirm.title}</div>
         <p style={{ fontSize: 13, marginTop: 4 }}>{confirm.message}</p>
         {confirm.body}
         {confirm.linked && confirm.linked.length > 0 && (
@@ -60,8 +77,18 @@ export default function ConfirmDialog({ confirm, onClose }: { confirm: ConfirmOp
         )}
         <div className="actions">
           <button className="btn ghost" onClick={onClose}>Cancel</button>
-          <button className="btn primary" style={{ background: 'var(--bad)', borderColor: 'var(--bad)' }}
-            onClick={() => { confirm.onConfirm?.(); onClose(); }}>{confirm.confirmLabel ?? 'Delete'}</button>
+          {/*
+            `data-variant` is rendered whichever way this goes, so the styling can be asserted by a
+            test rather than by reading a colour out of a screenshot.
+          */}
+          <button
+            className="btn primary"
+            data-variant={destructive ? 'destructive' : 'primary'}
+            style={destructive ? { background: 'var(--bad)', borderColor: 'var(--bad)' } : undefined}
+            onClick={() => { confirm.onConfirm?.(); onClose(); }}
+          >
+            {confirm.confirmLabel ?? 'Delete'}
+          </button>
         </div>
       </div>
     </div>,

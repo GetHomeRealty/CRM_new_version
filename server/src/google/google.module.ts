@@ -22,6 +22,8 @@ import { IcalController } from './ical.controller';
   imports: [AuthModule, PrismaModule],
   controllers: [GooglePublicController, GoogleController, GoogleMailController, IcalController],
   providers: [GoogleService, GoogleStateService, GoogleConnectionService, GoogleCalendarSyncService, GmailConnectService, LaravelCryptService, IcalFeedService],
-  exports: [GoogleCalendarSyncService, GoogleService],
+  // `GoogleConnectionService` is exported so the CRM Settings summary can ASK whether Calendar is
+  // connected instead of asserting it. It used to answer from a hard-coded string.
+  exports: [GoogleCalendarSyncService, GoogleService, GoogleConnectionService],
 })
 export class GoogleModule {}

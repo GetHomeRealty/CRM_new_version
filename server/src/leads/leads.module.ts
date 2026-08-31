@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { NotificationDispatcherModule } from '../notifications/notification-dispatcher.module';
 import { AuthModule } from '../auth/auth.module';
+import { CrmSettingsModule } from '../crm-settings/crm-settings.module';
 import { LeadsController } from './leads.controller';
 import { LeadsService } from './leads.service';
 import { LeadActivityService } from './lead-activity.service';
@@ -21,7 +22,10 @@ import { EmailModule } from '../email/email.module';
  * reads it as an audience — so neither module may change the vocabulary spellings alone.
  */
 @Module({
-  imports: [NotificationDispatcherModule, AuthModule, SmsModule, EmailModule],
+  // CrmSettingsModule for the import preflight: the import window has to be able to say whether
+  // processing the file will email everybody in it, and that answer belongs to the CRM email
+  // service rather than to a second copy of the rule here.
+  imports: [NotificationDispatcherModule, AuthModule, SmsModule, EmailModule, CrmSettingsModule],
   controllers: [LeadsController],
   providers: [LeadRetentionService, LeadTaskReminderService, LeadsService, LeadActivityService, LeadAuditService, LeadNotificationService, LeadTransferService, LeadImportEngine, LeadImportJobService, RecordingStorageService, AiDisclosureService],
   // Campaigns imports leads through the same engine and the same queue. Exporting them is what

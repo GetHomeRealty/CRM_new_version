@@ -68,10 +68,19 @@ describe('an emailed bounce reaches the recipient it names', () => {
     expect((campaignUpdates[0].data as { opened: { decrement: number } }).opened).toEqual({ decrement: 1 });
   });
 
-  it('does not touch the campaign counter when there was no open to reverse', async () => {
+  it('leaves the OPEN counter alone when there was no open to reverse', async () => {
+    /*
+     * This asserted `campaignUpdates` was EMPTY, which encoded the gap rather than a rule: the
+     * campaign row was touched only to reverse a false open, so a bounce with no open moved none of
+     * the campaign's counters and the results card went on reporting the message as delivered.
+     *
+     * The campaign is now always corrected; what must stay untouched is `opened` specifically,
+     * because decrementing a counter that was never incremented would drive it negative.
+     */
     const { svc, campaignUpdates } = harness([{ id: 7, campaign_id: 3, opened: false }]);
     await svc.sweep();
-    expect(campaignUpdates).toHaveLength(0);
+    expect(campaignUpdates).toHaveLength(1);
+    expect(campaignUpdates[0].data as Record<string, unknown>).not.toHaveProperty('opened');
   });
 
   it('suppresses a hard-bounced address with the vocabulary the table expects', async () => {
@@ -113,5 +122,74 @@ describe('an emailed bounce reaches the recipient it names', () => {
     const r = await svc.sweep();
     expect(r.reports).toBe(0);
     expect(recipientUpdates).toHaveLength(0);
+  });
+});
+
+describe('the campaign card follows the recipient', () => {
+  /**
+   * THE DEFECT. The results card does not aggregate recipients — it reads denormalised columns on
+   * the `campaigns` row. So marking a recipient bounced and stopping left the card unchanged: the
+   * campaign still reported the message delivered and `bounced` stayed where the send had left it.
+   * Every ASYNCHRONOUS bounce — which is most of them, because a relay accepts first and reports
+   * minutes later — was invisible on the screen that exists to show it.
+   */
+  const campaignData = (updates: Record<string, unknown>[]) =>
+    updates.map((u) => (u as { data: Record<string, unknown> }).data);
+
+  it('moves the message out of sent and into failed and bounced', async () => {
+    const h = harness([{ id: 11, campaign_id: 900, opened: false }]);
+
+    await h.svc.sweep(new Date('2026-08-22T12:00:00Z'));
+
+    const data = campaignData(h.campaignUpdates);
+    expect(data).toHaveLength(1);
+    /*
+     * All three move together. The query only selects rows that are `sent` and not yet bounced, so
+     * each one was counted in `sent` when the campaign ran — leaving it there would overstate
+     * delivery for ever, and `sent + failed` would stop equalling the audience.
+     */
+    expect(data[0]).toMatchObject({
+      sent: { decrement: 1 },
+      failed: { increment: 1 },
+      bounced: { increment: 1 },
+    });
+  });
+
+  it('reverses a false open in the SAME correction', async () => {
+    const h = harness([{ id: 12, campaign_id: 901, opened: true }]);
+
+    await h.svc.sweep(new Date('2026-08-22T12:00:00Z'));
+
+    const data = campaignData(h.campaignUpdates);
+    // One write per recipient, carrying the whole correction — not a bounce update and a separate
+    // open update that could half-apply.
+    expect(data).toHaveLength(1);
+    expect(data[0]).toMatchObject({
+      sent: { decrement: 1 },
+      failed: { increment: 1 },
+      bounced: { increment: 1 },
+      opened: { decrement: 1 },
+    });
+  });
+
+  it('does not touch opened when the message was never opened', async () => {
+    const h = harness([{ id: 13, campaign_id: 902, opened: false }]);
+
+    await h.svc.sweep(new Date('2026-08-22T12:00:00Z'));
+
+    // Decrementing a counter that was never incremented would drive it negative.
+    expect(campaignData(h.campaignUpdates)[0]).not.toHaveProperty('opened');
+  });
+
+  it('corrects every campaign the address was on, once each', async () => {
+    const h = harness([
+      { id: 21, campaign_id: 910, opened: false },
+      { id: 22, campaign_id: 911, opened: true },
+    ]);
+
+    await h.svc.sweep(new Date('2026-08-22T12:00:00Z'));
+
+    const updates = h.campaignUpdates as { where: { id: number } }[];
+    expect(updates.map((u) => u.where.id).sort()).toEqual([910, 911]);
   });
 });

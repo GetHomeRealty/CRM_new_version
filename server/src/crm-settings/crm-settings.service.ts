@@ -1,6 +1,8 @@
 import { auditDomain } from '../common/domain';
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { GoogleConnectionService } from '../google/google-connection.service';
+import { isConfigured as isGoogleConfigured } from '../google/google.constants';
 import type { AuthUserRecord } from '../auth/auth.types';
 import {
   BROADCAST_TYPES, CRM_ADMIN_ROLES, CURRENCIES, DATE_FORMATS, DEFAULT_EMAIL_SETTINGS,
@@ -39,6 +41,14 @@ export class CrmSettingsService {
     private readonly prisma: PrismaService,
     private readonly mailer: MailerService,
     private readonly accounts: MailAccountService,
+    /**
+     * The Google connection, asked rather than assumed.
+     *
+     * Optional so every existing construction of this service - including its specs - keeps
+     * working. Absent means the summary says "state unknown" rather than inventing one, which is
+     * the failure this whole entry is about.
+     */
+    private readonly googleConnections?: GoogleConnectionService,
   ) {}
 
   isAdmin(user: AuthUserRecord): boolean {
@@ -806,24 +816,118 @@ export class CrmSettingsService {
 
   // ---------------------------------------------------------- integrations
   /** Live status of each integration the CRM Settings screen surfaced. */
+  /**
+   * Google Calendar's real state for the CRM area.
+   *
+   * Three answers, not two: not set up on the server at all, set up but not connected by this
+   * person, and connected - with the last sync, because "connected" alone does not say whether it
+   * is still working.
+   */
+  private async calendarState(user: AuthUserRecord): Promise<Record<string, unknown>> {
+    if (!isGoogleConfigured()) {
+      return {
+        connected: false,
+        detail: 'Not set up on this server — Google Calendar needs GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET.',
+      };
+    }
+    if (!this.googleConnections) {
+      // Honest about not knowing rather than asserting the old answer.
+      return { connected: false, detail: 'Connection state unavailable.' };
+    }
+
+    const conn = await this.googleConnections.find(user.id ?? -1, 'crm');
+    const connected = !!(conn && conn.is_active);
+    if (!connected) {
+      return { connected: false, detail: 'Not connected — open the Calendar card above to connect your Google account.' };
+    }
+    const when = conn?.last_sync ? conn.last_sync.toISOString().slice(0, 16).replace('T', ' ') : null;
+    return {
+      connected: true,
+      detail: `Connected as ${conn?.google_email ?? 'your Google account'}`
+        + `${when ? ` · last sync ${when}` : ''}`
+        + `${conn?.connect_error ? ` · ${conn.connect_error}` : ''}`,
+    };
+  }
+
+  /** How far back a send failure still counts as "this is broken now". */
+  private static readonly SEND_HEALTH_DAYS = 14;
+
   async integrations(user: AuthUserRecord): Promise<Record<string, unknown>> {
-    const [accounts, activeAccounts, meta] = await Promise.all([
+    /*
+     * `sync_error` IS NOT A SEND ERROR, and that gap is the whole of CRM-016.
+     *
+     * This reported email as connected on one question only - are there active accounts - while
+     * three brokerage-wide broadcasts had failed outright with `535 Username and Password not
+     * accepted` and `invalid_grant: Token has been expired or revoked`. Every account still read
+     * `sync_error: null`, because that field records a failed IMAP POLL and says nothing about
+     * whether a message could be sent. About forty-four automated welcome emails to real new leads
+     * failed in one day and every health surface in the application said fine.
+     *
+     * NOTHING NEW IS RECORDED HERE. The failures were already written down - in the broadcast rows
+     * and in the CRM email log's error column - so this asks the records that already exist rather
+     * than adding another. That is also why it needs no migration: the information was never
+     * missing, only unread.
+     *
+     * OAUTH TOKENS EXPIRE AGAIN. The point is not to explain the outage of 5-20 August, which is
+     * over and whose accounts were replaced; it is that the next one must not be equally silent.
+     */
+    const since = new Date(Date.now() - CrmSettingsService.SEND_HEALTH_DAYS * 24 * 60 * 60 * 1000);
+    const [accounts, activeAccounts, meta, failedSends, lastSendFailure, failedBroadcast] = await Promise.all([
       this.prisma.mail_accounts.count(),
       this.prisma.mail_accounts.count({ where: { is_active: true } }),
       this.prisma.meta_connections.findFirst({ where: { user_id: user.id ?? -1, is_active: true }, select: { facebook_user_name: true, last_sync: true } }),
+      this.prisma.crm_email_log.count({ where: { success: false, created_at: { gte: since } } }),
+      this.prisma.crm_email_log.findFirst({
+        where: { success: false, created_at: { gte: since }, error: { not: null } },
+        orderBy: { id: 'desc' },
+        select: { error: true, created_at: true },
+      }),
+      this.prisma.crm_broadcasts.findFirst({
+        where: { status: 'failed', created_at: { gte: since } },
+        orderBy: { id: 'desc' },
+        select: { error: true, failed: true, created_at: true },
+      }),
     ]);
+
+    // Either record is enough. A broadcast that reached nobody and a welcome email that was refused
+    // are the same fault seen from two places, and a brokerage needs to be told by whichever it hit.
+    const sendFailure = lastSendFailure?.error ?? failedBroadcast?.error ?? null;
+    const sendsFailing = failedSends > 0 || !!failedBroadcast;
+
     return {
       email: {
-        connected: activeAccounts > 0,
-        detail: activeAccounts > 0
-          ? `${activeAccounts} active account${activeAccounts === 1 ? '' : 's'} of ${accounts} configured`
-          : 'No active SMTP account — add one under Mail Accounts above.',
+        /*
+         * FALSE WHEN SENDS ARE FAILING, not merely when nothing is configured.
+         *
+         * A summary whose green light means "an account row exists" answers a question nobody is
+         * asking. The one being asked is "can this brokerage email its clients", and for a fortnight
+         * the honest answer was no while this said yes.
+         */
+        connected: activeAccounts > 0 && !sendsFailing,
+        failing: sendsFailing,
+        detail: activeAccounts === 0
+          ? 'No active SMTP account — add one under Mail Accounts above.'
+          : sendsFailing
+            ? `${activeAccounts} active account${activeAccounts === 1 ? '' : 's'}, but sending is failing`
+              + `${failedSends ? ` — ${failedSends} message${failedSends === 1 ? '' : 's'} refused in the last ${CrmSettingsService.SEND_HEALTH_DAYS} days` : ''}`
+              // The transport's own words: "535 Username and Password not accepted" tells somebody
+              // what to do, where "email is not working" does not.
+              + `${sendFailure ? `. Most recent error: ${sendFailure.slice(0, 300)}` : ''}`
+            : `${activeAccounts} active account${activeAccounts === 1 ? '' : 's'} of ${accounts} configured`,
       },
-      google_calendar: {
-        connected: false,
-        // Stated plainly rather than shown as a dead button.
-        detail: 'Not available — Google Calendar OAuth was not part of the migrated code and needs Google API credentials.',
-      },
+      /*
+       * READ FROM THE CONNECTION, NOT FROM A STRING.
+       *
+       * This was hard-coded to "Not available - Google Calendar OAuth was not part of the migrated
+       * code and needs Google API credentials." That was true when it was written and stopped being
+       * true when Calendar was built; nothing updated it. So the panel told a brokerage that a
+       * working, syncing integration did not exist - and the cost of that is not a broken feature
+       * but somebody paying to build a second one.
+       *
+       * SCOPED TO 'crm' EXPLICITLY. CRM and the Transaction Desk hold independent connections and
+       * this panel is the CRM's, so it must not report the Desk's state under a CRM heading.
+       */
+      google_calendar: await this.calendarState(user),
       meta: {
         connected: !!meta,
         detail: meta

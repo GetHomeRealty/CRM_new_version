@@ -1,7 +1,7 @@
 import { useArea } from './AreaContext';
 import { crmPath } from './area';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   listMyMailAccounts, markInboxSeen, type AccountMailAccount,
   listMailbox, getMailboxMessage, getComposePrefill, moveMailboxMessage,
@@ -191,6 +191,39 @@ export default function InboxPage() {
     es.addEventListener('inbox', onInbox);
     return () => { es?.removeEventListener('inbox', onInbox); es?.close(); };
   }, [load]);
+
+  /*
+   * ?message=<id> — opening the exact mail a notification was about.
+   *
+   * The new-mail notification linked to `/crm/inbox` and stopped there, leaving the reader to find
+   * the message themselves. That is easy with one new mail and steadily less so as the list moves
+   * on, which is the moment the notification was most worth following.
+   *
+   * The parameter is CONSUMED once and removed from the URL, for two reasons: a refresh should not
+   * reopen a message the reader has already closed, and the address bar should not keep pointing at
+   * one message after they have moved to another. `replace` so it does not add a history entry —
+   * Back belongs to whatever they were doing before the Inbox.
+   *
+   * A bad or unreachable id fails the way clicking a row would: the reader lands in the Inbox with
+   * an explanation, not on an error page. The server still authorises the fetch, so an id belonging
+   * to somebody else's mailbox opens nothing.
+   */
+  const [params, setParams] = useSearchParams();
+  const requested = params.get('message');
+  const consumedRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!requested || consumedRef.current === requested) return;
+    consumedRef.current = requested;
+    const id = Number(requested);
+    const next = new URLSearchParams(params);
+    next.delete('message');
+    setParams(next, { replace: true });
+    if (!Number.isInteger(id) || id <= 0) return;
+    void getMailboxMessage(area, id)
+      .then((m) => { setOpen(m); void load(); })
+      .catch((ex) => toast(apiErrorMessage(ex, 'That message could not be opened — it may have been deleted'), 'bad'));
+  }, [requested, params, setParams, area, load, toast]);
 
   const openMessage = async (row: MailboxRow) => {
     try {

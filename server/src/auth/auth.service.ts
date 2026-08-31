@@ -320,7 +320,15 @@ export class AuthService {
    * changed; failing the request because the tidy-up failed would tell the caller it did not work
    * and send them back to retry with a password that is no longer current.
    */
-  private async endSessionsFor(userId: number): Promise<number> {
+  /**
+   * PUBLIC so the password-reset flow can end the same sessions this does.
+   *
+   * A reset has to revoke access obtained with the old password — that is most of the point of
+   * resetting one — and the alternative was a third copy of this DELETE (`UsersService` already
+   * holds a second). One definition of "end this person's sessions" is worth more than a private
+   * modifier here.
+   */
+  async endSessionsFor(userId: number): Promise<number> {
     try {
       return await this.prisma.$executeRaw`
         DELETE FROM user_sessions WHERE (sess -> 'userId')::text = ${String(userId)}

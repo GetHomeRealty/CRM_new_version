@@ -30,6 +30,9 @@ function csvFor(stamp: string): string {
   return [
     'name,email,phone,location,property,lead status,lead type,lead source,lead response,client type',
     `Ada Import,ada-${stamp}@import.test,416-555-0101,Toronto,12 Elm St,hot,buyer,website,active,first home buyer`,
+    // DELIBERATELY THE LEGACY SPELLING. Real spreadsheets exported from the old system carry
+    // 'refferal', and an import that rejected them would be a worse defect than the typo. The
+    // value is normalised to 'referral' on the way in - see lead-source-spelling.spec.ts.
     `Bob Import,bob-${stamp}@import.test,416-555-0102,Ajax,7 Oak Ave,warm,seller,refferal,inactive,Investor`,
   ].join('\r\n');
 }

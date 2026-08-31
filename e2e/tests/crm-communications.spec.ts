@@ -15,11 +15,35 @@ test.describe('CRM Communications — what an agent may do', () => {
     const res = await apiGet(page, '/api/crm-communications');
     expect(res.status).toBe(200);
 
-    const body = res.body as { communications: { key: string }[]; is_admin: boolean };
+    const body = res.body as { communications: { key: string; kind: string; audience: string }[]; is_admin: boolean };
     expect(body.is_admin).toBe(false);
-    // Ten automated plus three manual; the retired one is not offered.
-    expect(body.communications).toHaveLength(13);
+
+    /*
+     * THE WHOLE CATALOGUE, BY NAME, rather than a count.
+     *
+     * This asserted `toHaveLength(13)` under a comment reading "ten automated plus three manual".
+     * Two automated communications were added afterwards - `task_assigned` and `showing_created` -
+     * and the test went red saying only "expected 13, received 15", which tells whoever finds it
+     * nothing about what changed or whether it was meant.
+     *
+     * Naming them makes the failure legible AND makes updating it a deliberate act: a new entry
+     * with `audience: 'lead'` is a new email to CLIENTS, and adding one should cost somebody a
+     * moment's thought rather than a number bump. That is the same reason CRM-021 exists.
+     */
+    expect(body.communications.map((c) => c.key).sort()).toEqual([
+      'anniversary', 'birthday', 'campaign_completed', 'campaign_failed', 'custom',
+      'lead_assigned', 'lead_meta', 'lead_new', 'lead_task_due', 'promotional',
+      'referral', 'seasonal', 'showing_created', 'task_assigned', 'welcome',
+    ]);
+
+    // The retired one is still not offered.
     expect(body.communications.map((c) => c.key)).not.toContain('wedding');
+
+    // Twelve automated, three manual — stated so the split is visible without counting the list.
+    expect(body.communications.filter((c) => c.kind === 'automated')).toHaveLength(12);
+    expect(body.communications.filter((c) => c.kind === 'manual')).toHaveLength(3);
+    // Four of the automated ones reach CLIENTS rather than staff. See CRM-021.
+    expect(body.communications.filter((c) => c.kind === 'automated' && c.audience === 'lead')).toHaveLength(4);
   });
 
   test('an agent can set their OWN preference', async ({ page }) => {

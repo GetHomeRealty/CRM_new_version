@@ -44,3 +44,42 @@ export function ageFromDateOfBirth(dob: unknown, now: Date = new Date()): number
   if (age < 0 || age > 120) return null;
   return age;
 }
+
+/**
+ * The date-of-birth window that produces an age within [min, max] on `now`.
+ *
+ * WHY THE FILTER NEEDS THIS AT ALL. The leads list DISPLAYS an age derived from `date_of_birth`
+ * (see `present`), while the Age Range filter queried the stored `age` COLUMN. Those are two
+ * different numbers whenever a lead has a birthday on file, and the difference is invisible from
+ * outside: the API never exposes the raw stored value, so comparing what the API returns against
+ * what the birthday implies compares the derived number with itself and always agrees.
+ *
+ * The consequences were exactly what the audit measured. A lead with a birthday and NO stored age
+ * shows an age on screen and cannot be found at any age at all. A lead whose stored age is a year
+ * behind its birthday — because a stored age is right on the day it is written and wrong from the
+ * next birthday onwards — is findable only at the stale number.
+ *
+ * THE ARITHMETIC, and it is worth stating because the boundaries are where this goes wrong:
+ *   age >= min  ⟺  born on or before  now - min years
+ *   age <= max  ⟺  born strictly after now - (max + 1) years
+ * The second is exclusive: somebody born exactly `max + 1` years ago today has just had that
+ * birthday and is `max + 1`, not `max`.
+ *
+ * UTC throughout, because `ageFromDateOfBirth` is UTC — mixing the two would move every boundary by
+ * up to a day depending on where the server is standing.
+ */
+export function dateOfBirthWindow(
+  min: number | null,
+  max: number | null,
+  now: Date = new Date(),
+): { lte?: Date; gt?: Date } {
+  const shiftYears = (years: number): Date => new Date(Date.UTC(
+    now.getUTCFullYear() - years, now.getUTCMonth(), now.getUTCDate(),
+    now.getUTCHours(), now.getUTCMinutes(), now.getUTCSeconds(), now.getUTCMilliseconds(),
+  ));
+
+  const window: { lte?: Date; gt?: Date } = {};
+  if (min !== null && Number.isFinite(min)) window.lte = shiftYears(min);
+  if (max !== null && Number.isFinite(max)) window.gt = shiftYears(max + 1);
+  return window;
+}

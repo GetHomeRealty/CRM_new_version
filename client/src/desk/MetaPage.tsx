@@ -3,14 +3,14 @@ import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   disconnectMeta, metaAuthUrl, metaDiagnostics, metaForms, metaLeads, metaPages, metaStatus,
-  refreshMetaPages, syncMetaLeads, toggleMetaForm,
+  metaWebhookHealth, refreshMetaPages, syncMetaLeads, toggleMetaForm,
 } from '../lib/metaApi';
 import { apiErrorMessage } from '../lib/apiError';
 import { useToast } from './toast';
 import { useAuth } from '../context/AuthContext';
 import ConfirmDialog, { useConfirm } from './ConfirmDialog';
 import type {
-  MetaDiagnostics, MetaForm, MetaLeadRow, MetaPage as MetaPageInfo, MetaStatus,
+  MetaDiagnostics, MetaForm, MetaLeadRow, MetaPage as MetaPageInfo, MetaStatus, MetaWebhookHealth,
 } from '../types';
 
 /** What each `meta_error` code from the OAuth callback means to a person. */
@@ -40,11 +40,24 @@ export default function MetaPage() {
   const [leads, setLeads] = useState<MetaLeadRow[]>([]);
   const [leadStats, setLeadStats] = useState({ total: 0, today: 0, week: 0 });
   const [diagnostics, setDiagnostics] = useState<MetaDiagnostics | null>(null);
+  /*
+   * THE STATUS ENDPOINT CANNOT ANSWER THIS, which is why it is fetched separately.
+   *
+   * `/api/meta/status` reports the CONNECTION: token valid, permissions granted, pages readable.
+   * All of that can be perfectly true while not one lead has ever been delivered - and it was, for
+   * as long as this integration has existed. This screen showed Account, Pages, Connected, Last
+   * sync and Leads synced, every one of them green, and never mentioned that the push had never
+   * fired. `/api/meta/webhook-health` is the only endpoint that knows, and nothing consulted it.
+   */
+  const [webhook, setWebhook] = useState<MetaWebhookHealth | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState('');
 
   const loadStatus = useCallback(async () => {
     try { setStatus(await metaStatus()); } catch (ex) { toast(apiErrorMessage(ex, 'Could not read Meta status'), 'bad'); }
+    // Silent on failure: this is a supplementary warning, and a screen that cannot reach one
+    // endpoint should not lose the connection panel it came for.
+    try { setWebhook(await metaWebhookHealth(5)); } catch { /* warning is supplementary */ }
   }, [toast]);
 
   const loadLeads = useCallback(async () => {
@@ -162,6 +175,22 @@ export default function MetaPage() {
         <div className="card meta-alert warn">
           <strong>APP_KEY is not set.</strong>
           <p>Facebook access tokens would be stored without encryption. Set <code>APP_KEY</code> before connecting.</p>
+        </div>
+      )}
+      {/*
+        * Beside the connection banners, because this is the failure somebody actually has to act
+        * on: a connection that is healthy in every respect except the one that matters. The API
+        * writes the reason itself and names the likely cause, so it is shown verbatim rather than
+        * paraphrased into something vaguer.
+        */}
+      {webhook?.stalled && webhook.stalled_reason && (
+        <div className="card meta-alert warn">
+          <strong>Connected, but new leads are not being pushed.</strong>
+          <p>{webhook.stalled_reason}</p>
+          <p>
+            Leads are still collected by the scheduled sync, so nothing is lost - but they arrive on
+            that cadence rather than within seconds of the form being submitted.
+          </p>
         </div>
       )}
 

@@ -1,11 +1,12 @@
 import { crmPath } from './area';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   addCallRecording, addLeadCall, addLeadMessage, addLeadNote, addLeadShowing, addLeadTask,
   callRecordingUrl, deleteCallRecording, generateLeadEmail, getLead, leadOptions, placeLeadCall, sendLeadEmail, smsGatewayStatus, updateLeadMessage, voiceCallStatus,
   updateLeadNote, updateLeadShowing, updateLeadTask,
-  deleteLeadShowing, deleteLeadNote, deleteLeadTask, deleteLeadCall, deleteLeadMessage,
+  deleteLeadShowing, deleteLeadNote, deleteLeadTask, deleteLeadCall, deleteLeadMessage, deleteLeadEmail,
 } from '../lib/leadsApi';
 import ConfirmDialog, { useConfirm } from './ConfirmDialog';
 import { apiErrorMessage } from '../lib/apiError';
@@ -16,7 +17,7 @@ import LeadEditorModal, { label, prefHeading } from './LeadEditorModal';
 import { identityLocked } from '../lib/leadIdentity';
 import { createEvent } from '../lib/calendarApi';
 import type {
-  CalendarEventInput, LeadCall, LeadDetail, LeadOptions, MessageStatus, SmsGatewayStatus,
+  CalendarEventInput, LeadCall, LeadDetail, LeadOptions, LeadShowing, MessageStatus, SmsGatewayStatus,
 } from '../types';
 
 const stamp = (iso: string | null): string => (iso ? iso.replace('T', ' ').slice(0, 16) : '—');
@@ -280,10 +281,20 @@ type Run = (fn: () => Promise<unknown>, ok: string) => Promise<void>;
 type Ask = (title: string, message: string, onConfirm: () => void) => void;
 
 /*
- * The activity panels below — Notes, Tasks, Showings, Call Log and the SMS conversation — are
- * append-only from the UI: entries can be added and their state changed, but not deleted. That
- * was a deliberate request; the lead's history is a record of what happened. The delete
- * endpoints still exist for administrative cleanup, they are simply not reachable from here.
+ * The activity panels below — Notes, Tasks, Showings, Call Log, the SMS conversation and Email
+ * History — each offer deletion.
+ *
+ * THIS USED TO SAY THE OPPOSITE, and the note is kept rather than simply replaced because the
+ * original reasoning still applies to how deletion behaves. Append-only was a deliberate request:
+ * a lead's history is a record of what happened, and the delete endpoints existed for
+ * administrative cleanup without being reachable here. They were then asked for one at a time —
+ * Email History last, to clear repeated failed sends from a broken mailbox — until the comment
+ * described none of the code beneath it.
+ *
+ * WHAT SURVIVES OF THE ORIGINAL RULE: every one of these deletions writes the removed CONTENT to
+ * the audit trail, not merely the fact that something went. That is what keeps "the record of what
+ * happened" true while letting the panel be tidied, and it is the part to preserve if another of
+ * these grows a delete.
  */
 
 // ------------------------------------------------------------------- notes
@@ -436,11 +447,83 @@ function TasksPanel({ lead, options, canEdit, run, ask }: { lead: LeadDetail; op
   );
 }
 
+/*
+ * CRM-042: Reschedule asks where the showing is moving to.
+ *
+ * WHAT IT DID. The button sent `{ status: 'scheduled' }` and nothing else, so a completed showing
+ * flipped back to Scheduled at the slot it already had. It did not reschedule anything — it
+ * un-completed. And since it was the only control on a showing that mentioned moving one, an agent
+ * needing to shift a viewing had nowhere to go: the date and time boxes at the top belong to the
+ * ADD form, so using those makes a SECOND showing. The workaround people are left with is delete
+ * and recreate, which throws away the original record.
+ *
+ * WHY NOT JUST RENAME IT "REOPEN". That was the cheap fix, and it was the wrong one twice over.
+ * The comment on the old button records that Reopen was removed on request, so putting the word
+ * back would undo a decision somebody already made deliberately; and renaming leaves the real gap
+ * exactly where it was — there would still be no way to move a viewing to another day.
+ *
+ * PRE-FILLED WITH THE CURRENT SLOT, which is what keeps the old behaviour intact. Confirming
+ * without touching anything does precisely what the button did before — returns the showing to
+ * Scheduled, unmoved — so undoing a mis-clicked Complete still takes one extra keypress and no
+ * thought. Changing the date or time reschedules it for real.
+ */
+function RescheduleModal({ showing, onClose, onConfirm }: {
+  showing: LeadShowing;
+  onClose: () => void;
+  onConfirm: (next: { showing_date: string; time: string }) => void;
+}) {
+  const [date, setDate] = useState(showing.showing_date);
+  const [time, setTime] = useState(showing.time);
+  const moved = date !== showing.showing_date || time !== showing.time;
+
+  return createPortal(
+    <div className="overlay open" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      style={{ position: 'fixed', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 4000 }}>
+      <div className="modal" style={{ maxWidth: 420, margin: 0 }}>
+        <button className="close" type="button" onClick={onClose} aria-label="Close">✕</button>
+        <div className="modal-h">Reschedule this showing</div>
+        <p style={{ fontSize: 13, marginTop: 4 }}>
+          <strong>{showing.property || 'Property showing'}</strong> is currently{' '}
+          {showing.showing_date} at {clock(showing.time)}.
+        </p>
+        <div className="lead-add-grid" style={{ marginTop: 10 }}>
+          <label style={{ fontSize: 12 }}>Date
+            <input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+          </label>
+          <label style={{ fontSize: 12 }}>Time
+            <input type="time" value={time} onChange={(e) => setTime(e.target.value)} />
+          </label>
+        </div>
+        {/*
+          Says which of the two things the button is about to do. The dialog covers both a real move
+          and the undo-a-mis-click case, and those deserve different sentences rather than one
+          wording that half-fits each.
+        */}
+        <p className="help" style={{ marginTop: 8 }}>
+          {moved
+            ? `The showing moves to ${date} at ${clock(time)} and returns to Scheduled.`
+            : 'Nothing has been changed, so the showing returns to Scheduled at the same slot.'}
+        </p>
+        <div className="actions">
+          <button className="btn ghost" onClick={onClose}>Cancel</button>
+          <button className="btn primary" disabled={!date || !time}
+            onClick={() => { onConfirm({ showing_date: date, time }); onClose(); }}>
+            {moved ? 'Reschedule' : 'Return to Scheduled'}
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+
 // ---------------------------------------------------------------- showings
 function ShowingsPanel({ lead, canEdit, run, ask }: { lead: LeadDetail; canEdit: boolean; run: Run; ask: Ask }) {
   const [date, setDate] = useState(today());
   const [time, setTime] = useState('12:00');
   const [property, setProperty] = useState('');
+  const [rescheduling, setRescheduling] = useState<LeadShowing | null>(null);
 
   return (
     <div className="card">
@@ -487,9 +570,10 @@ function ShowingsPanel({ lead, canEdit, run, ask }: { lead: LeadDetail; canEdit:
                         Cancel
                       </button>
                     )}
+                    {/* Opens the dialog rather than firing. See RescheduleModal for why. */}
                     {s.status !== 'scheduled' && (
                       <button className="btn ghost sm" type="button"
-                        onClick={() => void run(() => updateLeadShowing(lead.id, s.id, { status: 'scheduled' }), 'Showing rescheduled.')}>
+                        onClick={() => setRescheduling(s)}>
                         Reschedule
                       </button>
                     )}
@@ -507,6 +591,22 @@ function ShowingsPanel({ lead, canEdit, run, ask }: { lead: LeadDetail; canEdit:
             </li>
           ))}
         </ul>
+      )}
+      {/*
+        One mount for the whole list: the dialog is about the showing held in `rescheduling`, so a
+        per-row mount would put N copies of it in the tree to no purpose.
+      */}
+      {rescheduling && (
+        <RescheduleModal
+          showing={rescheduling}
+          onClose={() => setRescheduling(null)}
+          onConfirm={(next) => void run(
+            () => updateLeadShowing(lead.id, rescheduling.id, { ...next, status: 'scheduled' }),
+            next.showing_date === rescheduling.showing_date && next.time === rescheduling.time
+              ? 'Showing returned to Scheduled.'
+              : 'Showing rescheduled.',
+          )}
+        />
       )}
     </div>
   );
@@ -676,6 +776,24 @@ function CommunicationPanel({ lead, canEdit, run, ask, onSent }: {
                     {e.status === 'sent' ? 'Sent' : 'Failed'}
                   </span>
                   <span className="muted">{stamp(e.sent_at)} · to {e.recipient}{e.sent_by ? ` · ${e.sent_by}` : ''}</span>
+                  {/*
+                    * Mostly used to clear repeated FAILED sends — a broken mailbox can leave five
+                    * identical `invalid_grant` rows sitting on top of the correspondence that
+                    * matters. The confirm says the record is kept in the audit trail, because
+                    * deleting proof that a client was contacted is a different act from tidying,
+                    * and the person clicking should know which one this is.
+                    */}
+                  {canEdit && (
+                    <button className="btn ghost sm" type="button" title="Delete this email record"
+                      onClick={() => ask(
+                        'Delete this email record?',
+                        `"${e.subject}" (${e.status === 'sent' ? 'sent' : 'failed'}) to ${e.recipient} will be removed from this lead's history. `
+                        + 'It does not unsend anything, and the full record is kept in the audit trail.',
+                        () => void run(() => deleteLeadEmail(lead.id, e.id), 'Email record deleted.'),
+                      )}>
+                      Delete
+                    </button>
+                  )}
                 </div>
               </li>
             ))}
@@ -813,7 +931,10 @@ function EmailComposer({ lead, onClose, onSent }: { lead: LeadDetail; onClose: (
       setBody(res.html);
       setSeed(res.html);        // a new draft is the one time the preview is rebuilt from scratch
       setIsHtml(true);
-      toast('Draft generated — review and send.', 'ok');
+      // Says which it is. A starter the server produced because the model was unavailable must not
+      // read as "drafted for this lead" — the agent is about to send it to a real client.
+      if (res.fallback) toast(res.reason ?? 'The AI service was unavailable — here is a blank starter to write in.', 'bad');
+      else toast('Draft generated — review and send.', 'ok');
     } catch (ex) {
       toast(apiErrorMessage(ex, 'Could not generate the email'), 'bad');
     } finally {

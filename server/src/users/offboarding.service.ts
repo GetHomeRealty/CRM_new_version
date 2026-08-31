@@ -6,7 +6,7 @@ import { isSuperAdmin } from '../core/authz';
 import type { AuthUserRecord } from '../auth/auth.types';
 
 export interface OffboardingEffect {
-  key: 'meta' | 'brokerage-leads' | 'personal-leads';
+  key: 'meta' | 'brokerage-leads' | 'personal-leads' | 'reactivation';
   label: string;
   detail: string;
   /** How many records this will touch, when that is a meaningful thing to say. */
@@ -90,9 +90,21 @@ export class OffboardingService {
           label: 'Brokerage leads they are working return to the pool',
           count: counts.brokerage,
           detail: counts.brokerage
-            ? `${counts.brokerage} brokerage lead${counts.brokerage === 1 ? '' : 's'} lose their assignment and go `
-              + 'back to the unassigned pool, where you can hand them to whoever picks the work up. The '
-              + 'brokerage owns them throughout — nothing is deleted and nothing changes hands.'
+            /*
+             * WRITTEN OUT IN BOTH NUMBERS rather than patched with a plural `s`.
+             *
+             * The original read "1 brokerage lead lose their assignment and go back… hand them to…"
+             * — three disagreements in one sentence, because only the plural was ever written. Two
+             * whole sentences are longer than a clever fragment and read correctly in both cases,
+             * which is the only thing the reader cares about.
+             */
+            ? (counts.brokerage === 1
+              ? '1 brokerage lead loses its assignment and goes back to the unassigned pool, where '
+                + 'you can hand it to whoever picks the work up. The brokerage owns it throughout — '
+                + 'nothing is deleted and nothing changes hands.'
+              : `${counts.brokerage} brokerage leads lose their assignment and go back to the `
+                + 'unassigned pool, where you can hand them to whoever picks the work up. The '
+                + 'brokerage owns them throughout — nothing is deleted and nothing changes hands.')
             : 'No brokerage leads assigned to them.',
         },
         {
@@ -112,6 +124,46 @@ export class OffboardingService {
               + 'They do not prevent this account being switched off. If they should be handed over, ask '
               + 'them to export or clear their leads before they go.'
             : 'They own no leads of their own.',
+        },
+        {
+          /*
+           * CRM-044: WHAT SWITCHING THE ACCOUNT BACK ON DOES NOT UNDO.
+           *
+           * The preview described three consequences well and said nothing about reversing them,
+           * which is exactly where a reader forms an expectation. A broker deactivating somebody for
+           * a month's leave would reasonably assume the action reverses; the panel's own words —
+           * brokerage leads "lose their assignment and go back to the unassigned pool" — describe
+           * something that switching the account back on does not restore. Somebody has to hand
+           * those leads out again by hand, from Lead books.
+           *
+           * THE SCREEN USED TO CARRY HALF OF THIS as a fixed sentence under the list: "Reactivating
+           * them later restores their own leads, but not their Meta connection." True as far as it
+           * went, and it went past the one consequence that lands on an agent's book. It is built
+           * here now so there is ONE statement of the rule rather than two that can drift, and so
+           * the API says it too — the audit that found this read the payload, and a screen is not
+           * the only reader.
+           *
+           * COUNTS-AWARE like the others: telling somebody their brokerage leads will not come back
+           * when they have none is noise, and noise is what stops the rest being read.
+           */
+          key: 'reactivation',
+          label: 'Switching the account back on does not undo all of this',
+          count: null,
+          detail: [
+            'Their own leads come back with them, still private.',
+            counts.connected
+              ? 'Meta is NOT reconnected — they sign in to Meta again so a fresh authorisation is granted.'
+              : null,
+            counts.brokerage
+              ? (counts.brokerage === 1
+                ? 'The brokerage lead that loses its assignment does NOT return to them: it stays in '
+                  + 'the unassigned pool until somebody hands it out again from Lead books, and if it '
+                  + 'has already been handed to another agent it stays with them.'
+                : `The ${counts.brokerage} brokerage leads that lose their assignment do NOT return to `
+                  + 'them: they stay in the unassigned pool until somebody hands them out again from '
+                  + 'Lead books, and any already handed to another agent stay with that person.')
+              : null,
+          ].filter(Boolean).join(' '),
         },
       ],
     };

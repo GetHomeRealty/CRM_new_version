@@ -65,6 +65,16 @@ export const listSuppressions = (q: { page?: number; limit?: number; search?: st
  * The address is a path segment, so it is encoded — an unencoded `+` in a Gmail alias would
  * otherwise arrive as a space and delete nothing, or delete the wrong row.
  */
+/**
+ * Record an opt-out somebody gave by telephone, in person, or in a reply.
+ *
+ * The only route onto this list used to be the client clicking the unsubscribe link, so a brokerage
+ * asked to stop by any other means had no way to comply.
+ */
+export const addSuppression = (email: string, reason: string): Promise<{ added: boolean; already: boolean }> =>
+  api.post<{ added: boolean; already: boolean }>('/api/campaigns/suppressions', { email, reason })
+    .then((r) => r.data);
+
 export const removeSuppression = (email: string): Promise<{ removed: boolean }> =>
   api.delete<{ removed: boolean }>(`/api/campaigns/suppressions/${encodeURIComponent(email)}`).then((r) => r.data);
 

@@ -89,6 +89,26 @@ export function countNewUids(found: number[] | false | null | undefined, lastUid
  * them buried the line that mattered under the ones they only keep for reference. The other
  * mailboxes still sync and their mail still arrives in the Inbox; what stops is the interruption.
  */
+/**
+ * Where the "new mail" notification should take the reader.
+ *
+ * STRAIGHT TO THE MESSAGE when there is exactly one. This always pointed at `/crm/inbox`, which
+ * opened the mailbox and left them to find the message the notification was about — easy with one
+ * new mail, steadily less so once the list has moved on, which is the moment the notification was
+ * most worth following.
+ *
+ * A BATCH KEEPS THE PLAIN LINK, deliberately. "You have 3 new emails" has no single message to
+ * open, and picking one of the three would be a guess presented as a destination.
+ *
+ * Exported and pure for the same reason `shouldNotifyNewMail` is: it is a decision worth asserting
+ * directly rather than through a mailbox, an IMAP connection and a dispatcher.
+ */
+export function newMailLink(fetched: number, savedId: number | null): string {
+  return fetched === 1 && savedId !== null && Number.isInteger(savedId) && savedId > 0
+    ? `/crm/inbox?message=${savedId}`
+    : '/crm/inbox';
+}
+
 export function shouldNotifyNewMail(
   account: { user_id: number | null; is_default: boolean },
   fetched: number,
@@ -388,6 +408,8 @@ export class ImapSyncService implements OnModuleInit, OnModuleDestroy {
     });
 
     let fetched = 0, matched = 0, maxUid = account.last_uid ?? 0;
+    /** The id of the last message stored this run, so a one-message batch can link to it. */
+    let savedId: number | null = null;
     try {
       await client.connect();
       const lock = await client.getMailboxLock('INBOX');
@@ -462,6 +484,8 @@ export class ImapSyncService implements OnModuleInit, OnModuleDestroy {
             // insert — and failing to store one does not lose the message itself.
             if (record.attachments.length) await this.storeAttachments(saved.id, record.attachments);
             fetched++;
+            // Only meaningful when `fetched === 1`; a larger batch has no single message to open.
+            savedId = saved.id;
           } catch (ex) {
             // P2002 = unique violation on (account_id, uid): someone else got there first.
             if ((ex as { code?: string }).code !== 'P2002') throw ex;
@@ -510,7 +534,7 @@ export class ImapSyncService implements OnModuleInit, OnModuleDestroy {
           userId: account.user_id as number,
           title: fetched === 1 ? 'You have a new email' : `You have ${fetched} new emails`,
           body: account.from_email || undefined,
-          link: '/crm/inbox',
+          link: newMailLink(fetched, savedId),
           /*
            * Keyed to the account and the highest UID in this batch, so a poll that runs twice over
            * the same window — a retry, or a second process before the cluster lock was added — does

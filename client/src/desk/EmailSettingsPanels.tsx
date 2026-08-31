@@ -327,6 +327,25 @@ interface TemplateEditorProps {
   toast: ToastFn;
 }
 
+/**
+ * Would a reader see anything in this body?
+ *
+ * Mirrors `hasVisibleContent` on the server, which is the authority — this exists so the refusal
+ * appears immediately rather than after a round trip. An image counts: a template that is one
+ * banner and nothing else is a real template, and refusing it would be a worse fault than the one
+ * being fixed.
+ */
+function hasVisibleContent(html: string): boolean {
+  if (/<(img|video|iframe)\b/i.test(html)) return true;
+  return html
+    .replace(/<(script|style)\b[\s\S]*?<\/\1>/gi, ' ')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&(amp|lt|gt|quot|#39);/gi, 'x')
+    .replace(/\s+/g, ' ')
+    .trim().length > 0;
+}
+
 function TemplateEditor({ template, accounts, onClose, onSaved, toast }: TemplateEditorProps) {
   const [form, setForm] = useState<TemplateForm>({
     subject: template.subject, body_html: template.body_html,
@@ -393,17 +412,48 @@ function TemplateEditor({ template, accounts, onClose, onSaved, toast }: Templat
   };
 
   const save = async () => {
-    if (!form.subject.trim() || !form.body_html.trim()) { toast('Subject and body are required', 'bad'); return; }
+    /*
+     * `.trim()` WAS NOT ENOUGH, and that is the whole of CRM-041.
+     *
+     * Clearing the message leaves `<br>` behind — what a rich-text field yields when it is emptied —
+     * and `'<br>'.trim()` is truthy, so this check passed and an automatic customer email was stored
+     * with nothing in it. These send on their own to real clients.
+     *
+     * The server refuses it now too, which is where the rule belongs. This stays so the refusal
+     * arrives as a sentence next to the field rather than as a validation error after a round trip.
+     */
+    if (!form.subject.trim()) { toast('Subject and body are required', 'bad'); return; }
+    if (!hasVisibleContent(form.body_html)) {
+      toast('The message is empty — write the email body before saving', 'bad');
+      return;
+    }
     setSaving(true);
     try { await doSave(); toast('Template saved', 'ok'); onSaved(); }
     catch (e) { toast(apiErrorMessage(e, 'Could not save'), 'bad'); }
     finally { setSaving(false); }
   };
 
-  // Save first so the preview reflects the current edits, then render server-side.
+  /*
+   * PREVIEW SHOWS; SAVE SAVES.
+   *
+   * This called `doSave()` first — deliberately, so the preview would reflect the current edits —
+   * and the comment that said so is the only place it was ever written down. The effect was that
+   * pressing Preview committed unsaved changes to one of fourteen LIVE customer-facing automatic
+   * templates, with no confirmation, no toast, and the Save button still sitting there unpressed.
+   * Clearing the body and pressing Preview stored an empty template; `doSave` also skips the
+   * "subject and body are required" check that `save` performs, so nothing refused it.
+   *
+   * The edits are sent to be rendered instead of stored. The preview is still produced by the
+   * server — the same renderer the real email uses, so it stays a true preview rather than a
+   * second implementation that could drift from what actually goes out.
+   */
   const doPreview = async () => {
-    try { await doSave(); const r = await previewEmailTemplate(template.id); setPreview(r); }
-    catch { toast('Could not preview', 'bad'); }
+    try {
+      const r = await previewEmailTemplate(template.id, {
+        subject: form.subject, body_html: form.body_html,
+      });
+      setPreview(r);
+    } catch { toast('Could not preview', 'bad'); }
   };
 
   return (

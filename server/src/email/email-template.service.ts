@@ -25,6 +25,31 @@ export const MAX_TEMPLATE_ATTACHMENT_BYTES = 5 * 1024 * 1024;
 export const MAX_TEMPLATE_ATTACHMENTS = 5;
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
+/**
+ * Would a reader see anything in this body?
+ *
+ * NOT `html.trim() !== ''`. An emptied rich-text field yields `<br>`, and a body of `<p>&nbsp;</p>`
+ * or a stray empty `<div>` is just as blank to the person receiving it. The question is whether the
+ * email carries content, not whether the string carries characters.
+ *
+ * AN IMAGE COUNTS. A template that is one banner and nothing else is a real template, and a rule
+ * that demanded text would refuse it — turning a fix for empty emails into a refusal of legitimate
+ * ones, which is the worse failure of the two.
+ */
+export function hasVisibleContent(html: unknown): boolean {
+  const raw = String(html ?? '');
+  // Media is content even with no words around it.
+  if (/<(img|video|iframe)\b/i.test(raw)) return true;
+  const text = raw
+    .replace(/<(script|style)\b[\s\S]*?<\/\1>/gi, ' ')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&(amp|lt|gt|quot|#39);/gi, 'x')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return text.length > 0;
+}
+
 @Injectable()
 export class EmailTemplateService {
   constructor(
@@ -69,11 +94,35 @@ export class EmailTemplateService {
     return this.resource(fresh);
   }
 
-  async preview(id: number): Promise<{ subject: string; html: string }> {
+  /**
+   * Render a template with sample values.
+   *
+   * `draft` RENDERS WHAT IS ON SCREEN WITHOUT STORING IT, and that is the whole of CRM-040.
+   *
+   * The editor's Preview button used to SAVE the form and then ask for this - a deliberate choice,
+   * with a comment reading "save first so the preview reflects the current edits". It did reflect
+   * them, by committing them to the live template real clients receive: fourteen customer-facing
+   * automatic emails, changed by the one button a careful person presses BECAUSE it sounds safe,
+   * with no confirmation and no toast. Clearing the body and pressing Preview left the stored
+   * template empty.
+   *
+   * The event key still comes from the stored row: sample values depend on which event this
+   * template serves, and that is not something the form can change.
+   */
+  async preview(
+    id: number,
+    draft?: { subject?: unknown; body_html?: unknown },
+  ): Promise<{ subject: string; html: string }> {
     const t = await this.prisma.email_templates.findUnique({ where: { id } });
     if (!t) throw new NotFoundException({ message: `No query results for model [App\\Models\\EmailTemplate] ${id}.` });
     const vars = await this.sampleVars(t.event_key);
-    return { subject: renderTemplate(t.subject, vars), html: renderTemplate(t.body_html, vars) };
+
+    // Only a string counts as supplied, so a caller sending nothing still previews what is stored.
+    const pick = (given: unknown, stored: string): string => (typeof given === 'string' ? given : stored);
+    return {
+      subject: renderTemplate(pick(draft?.subject, t.subject), vars),
+      html: renderTemplate(pick(draft?.body_html, t.body_html), vars),
+    };
   }
 
   events(): Record<string, MailEvent> {
@@ -147,6 +196,21 @@ export class EmailTemplateService {
 
     if (empty(body.body_html)) push('body_html', 'The body html field is required.');
     else if (typeof body.body_html !== 'string') push('body_html', 'The body html field must be a string.');
+    /*
+     * "REQUIRED" HAS TO MEAN "HAS SOMETHING IN IT", not "is not the empty string".
+     *
+     * Clearing the message in the editor leaves `<br>` behind - what a rich-text field yields when
+     * it is emptied - and `<br> !== ''`, so this check passed and an automatic customer email was
+     * stored with no content. These templates send on their own initiative to real clients: an
+     * empty one is a message from the brokerage with a subject line and nothing under it.
+     *
+     * CHECKED HERE AS WELL AS ON THE SCREEN. The editor refuses it too, but a screen is not a rule -
+     * and this exact save also arrived through a path that skipped the screen's check entirely
+     * (CRM-040).
+     */
+    else if (!hasVisibleContent(body.body_html)) {
+      push('body_html', 'The message is empty. Write the email body before saving — this template sends to clients on its own.');
+    }
 
     if (!empty(body.mail_account_id)) {
       const exists = await this.prisma.mail_accounts.findUnique({ where: { id: Number(body.mail_account_id) } });

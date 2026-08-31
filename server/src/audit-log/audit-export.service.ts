@@ -76,7 +76,16 @@ export class AuditExportService {
     { key: 'details', header: 'Description', width: 40 },
     { key: 'source', header: 'Source', width: 14 },
     { key: 'domain', header: 'Domain', width: 10 },
-    { key: 'created_at', header: 'Created', width: 20 },
+    /*
+     * "Recorded At", not "Created".
+     *
+     * The header read as "created BY" and the column holds a timestamp, so it was taken for a
+     * person's name — the name is two columns to the left, under `User`. The value is the full
+     * `YYYY-MM-DD HH:MM:SS`, which is `Date` and `Time` joined; it is kept rather than dropped
+     * because one sortable column is what a spreadsheet filter actually wants, and only the label
+     * was wrong.
+     */
+    { key: 'created_at', header: 'Recorded At', width: 20 },
   ];
 
   /**

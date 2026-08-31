@@ -24,6 +24,25 @@ export interface LeadBookPool {
   recipients: LeadBookRecipient[];
 }
 
+/** One lead the confirmation is about to move, named so it can be recognised. */
+export interface LeadBookCandidate {
+  id: number;
+  name: string;
+  /** ISO date. The dialog orders by this, so showing it lets a reader check the claim. */
+  created_at: string | null;
+}
+
+/**
+ * What a hand-over of `count` would actually move, for the confirmation to name.
+ *
+ * `moving` is the leads themselves, in the order they will be taken. `available` is the size of the
+ * pool, so the dialog can say "3 of 40" without a second call.
+ */
+export interface LeadBookPreview {
+  moving: LeadBookCandidate[];
+  available: number;
+}
+
 /**
  * Lead Books — the brokerage's own unassigned leads, and handing them to somebody.
  *
@@ -127,6 +146,73 @@ export class LeadTransferService {
   }
 
   /**
+   * OLDEST FIRST, MEANING OLDEST - and this is a correction, not a restatement.
+   *
+   * The selection ordered by `id: 'asc'` while the confirmation promised "Oldest first, so the
+   * longest-waiting enquiry goes over first". Those are not the same sort. Ids are assigned on
+   * insert, and this table's ids do not run in creation order: on the development database 220 pairs
+   * of live leads have the LOWER id and the LATER `created_at`. A capped hand-over therefore took a
+   * set that was not the longest-waiting, while the dialog said it was.
+   *
+   * `created_at` is the field the promise is about. `id` follows it only as a tie-break, so two
+   * leads recorded in the same instant still come out in a fixed order and a capped hand-over is
+   * repeatable rather than left to whatever the planner returns.
+   */
+  private eligibleOrder(): Prisma.leadsOrderByWithRelationInput[] {
+    return [{ created_at: 'asc' }, { id: 'asc' }];
+  }
+
+  /**
+   * THE ONE PLACE THAT DECIDES WHICH LEADS MOVE.
+   *
+   * Both the preview and the hand-over call this, because a confirmation that names its leads is
+   * worth nothing if it is a second implementation of the choice - the two would agree until the day
+   * they did not, and the day they did not is the day somebody relies on the dialog.
+   */
+  private async pick(limit?: number): Promise<{ id: number; name: string | null; created_at: Date | null }[]> {
+    return this.prisma.leads.findMany({
+      where: this.eligibleWhere(),
+      select: { id: true, name: true, created_at: true },
+      orderBy: this.eligibleOrder(),
+      ...(limit ? { take: limit } : {}),
+    });
+  }
+
+  /**
+   * The leads a hand-over of `count` would move, named.
+   *
+   * WHY THIS EXISTS. The confirmation stated a number, a recipient and the ordering rule, and never
+   * which lead. The consequence is permanent - nothing in the application moves an assigned lead
+   * back to the pool - so the one fact needed to judge the risk was the one fact withheld, and the
+   * system already knew it, because that is how it chooses. On the brokerage that reported this the
+   * pool held four leads, of which the oldest was a real client and the other three were test
+   * records: handing over "just one" moved the real client, and the dialog gave no way to see it.
+   *
+   * IT RETURNS LEAD CONTENT, WHICH THIS SERVICE OTHERWISE DOES NOT, and the exception is narrow on
+   * purpose. Every lead it can name is unowned and unassigned by definition of `eligibleWhere` -
+   * that is what makes it the brokerage's to hand out - so no agent's book is exposed by it. The
+   * rule this screen was built around is that an administrator learns nothing here about what any
+   * NAMED PERSON holds, and naming leads that belong to nobody does not touch that. Super Admin
+   * only, like everything else on this screen.
+   */
+  async preview(actor: AuthUserRecord | null, count?: number): Promise<LeadBookPreview> {
+    this.assertMayTransfer(actor);
+    const limit = Number.isFinite(count) && (count as number) > 0 ? Math.floor(count as number) : undefined;
+    const [moving, available] = await Promise.all([
+      this.pick(limit),
+      this.prisma.leads.count({ where: this.eligibleWhere() }),
+    ]);
+    return {
+      moving: moving.map((l) => ({
+        id: l.id,
+        name: l.name ?? `Lead #${l.id}`,
+        created_at: l.created_at ? l.created_at.toISOString() : null,
+      })),
+      available,
+    };
+  }
+
+  /**
    * Hand brokerage leads out of the pool to one person.
    *
    * WHAT CHANGED, AND WHY IT IS NOT THE SAME OPERATION. This was "move person A's book to person
@@ -182,14 +268,13 @@ export class LeadTransferService {
     }
 
     const limit = Number.isFinite(count) && (count as number) > 0 ? Math.floor(count as number) : undefined;
-    // Ids are selected first so a capped hand-over takes a definite set rather than whatever an
-    // unordered updateMany happens to touch. Oldest first: the longest-waiting enquiry goes first.
-    const picked = await this.prisma.leads.findMany({
-      where: this.eligibleWhere(),
-      select: { id: true },
-      orderBy: { id: 'asc' },
-      ...(limit ? { take: limit } : {}),
-    });
+    /*
+     * Selected first so a capped hand-over takes a definite set rather than whatever an unordered
+     * updateMany happens to touch - and selected through `pick`, the SAME call the confirmation
+     * used to name these leads. That shared call is the fix for CRM-043: a dialog that names its
+     * leads has to be naming the ones that will actually move.
+     */
+    const picked = await this.pick(limit);
 
     if (!picked.length) {
       throw new UnprocessableEntityException({
@@ -231,6 +316,9 @@ export class LeadTransferService {
       'Brokerage leads assigned',
       `→ ${to.name}`,
       `${moved.count} unassigned brokerage lead${moved.count === 1 ? '' : 's'} handed to ${to.name}. `
+      // WHICH ones, not just how many. There is no control anywhere that moves an assigned lead
+      // back to the pool, so this entry is the only record of what a hand-over actually did.
+      + `Leads: ${picked.map((p) => `#${p.id} ${p.name ?? ''}`.trim()).join(', ')}. `
       + `${remaining} left in the brokerage pool. `
       + 'The brokerage remains the owner — these were assigned, not given away, so they stay visible '
       + 'to the brokerage and can be reassigned. '

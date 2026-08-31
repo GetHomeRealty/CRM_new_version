@@ -9,6 +9,7 @@ import { ScreenGuard } from '../auth/guards/screen.guard';
 import { CurrentUser, Screen } from '../auth/decorators';
 import type { AuthUserRecord } from '../auth/auth.types';
 import { PrismaService } from '../prisma/prisma.service';
+import { liveLeadWhere } from '../common/lead-scope';
 import { MetaConnectionService } from './meta-connection.service';
 import { MetaGraphService, GraphError } from './meta-graph.service';
 import { MetaSyncService } from './meta-sync.service';
@@ -50,9 +51,23 @@ export class MetaController {
   @Screen('meta', 'view')
   async status(@CurrentUser() user: AuthUserRecord, @Req() req: Request): Promise<Record<string, unknown>> {
     const conn = await this.connections.find(user.id ?? 0);
-    // Only this user's own Meta leads — each person connects their own Meta account and never
-    // sees another's imports, admins and super-admins included.
-    const leadsCount = await this.prisma.leads.count({ where: { source: 'facebook_meta', deleted_at: null, owner_user_id: user.id ?? -1 } });
+    /*
+     * COUNTED THE SAME WAY THE LEAD PAGE COUNTS, which is the whole fix.
+     *
+     * This asked for `owner_user_id = you` alone. A Meta lead does not necessarily arrive owned:
+     * the importer writes brokerage-owned rows with an ASSIGNEE, so a lead handed straight to the
+     * person who is looking at this screen — and who was pushed a notification about it — matched
+     * nothing and the card read 0. Observed exactly that: "Misha Abayev" landed with
+     * `owner_user_id = null, assigned_to = 10108`, and every one of the three tiles stayed at zero
+     * while the Lead page listed it.
+     *
+     * `liveLeadWhere` is the rule the Lead list, the dashboard and the task counters already share
+     * — assigned to you, or owned by you, plus the brokerage's own when your role includes them.
+     * Borrowed rather than restated, so this card cannot disagree with the page it links to again.
+     */
+    const leadsCount = await this.prisma.leads.count({
+      where: { AND: [{ source: 'facebook_meta' }, liveLeadWhere(user)] },
+    });
     const meta = conn ? await this.connections.meta(user.id ?? 0) : null;
     const forms = conn ? await this.prisma.meta_lead_forms.count({ where: { user_id: user.id ?? 0, is_active: true } }) : 0;
 
@@ -297,9 +312,9 @@ export class MetaController {
   @Screen('meta', 'view')
   async leads(@CurrentUser() user: AuthUserRecord, @Query('limit') limit?: string): Promise<Record<string, unknown>> {
     const take = Math.min(200, Math.max(1, Number(limit) || 50));
-    // Scoped to the signed-in user's own Meta leads — a Meta lead is owned by whoever's connected
-    // account received it, and is private to them.
-    const where = { source: 'facebook_meta', deleted_at: null, owner_user_id: user.id ?? -1 };
+    // Same scope as the card above, for the same reason: the list and the tiles counting it must
+    // answer one question. `liveLeadWhere` already excludes deleted rows.
+    const where = { AND: [{ source: 'facebook_meta' }, liveLeadWhere(user)] };
     const startOfDay = new Date(); startOfDay.setHours(0, 0, 0, 0);
     const startOfWeek = new Date(startOfDay); startOfWeek.setDate(startOfWeek.getDate() - startOfWeek.getDay());
 

@@ -19,6 +19,23 @@ import type {
 import OnboardingEmailModal from './OnboardingEmailModal';
 import { useArea } from './AreaContext';
 
+/**
+ * Whether an account can still be signed into.
+ *
+ * ONE DEFINITION, used by the list and by the details view beside it. The details view had its own
+ * copy of this expression and the list had none at all, which is how the list came to be missing a
+ * status it already held. Two copies of a rule is how they end up disagreeing; nought copies is how
+ * a screen ends up silent about something it knows.
+ *
+ * Anything that is not "Active" reads as inactive, deliberately: an unrecognised status is a reason
+ * to look, not a reason to render nothing.
+ */
+function StatusPill({ status, style }: { status?: string | null; style?: React.CSSProperties }) {
+  if (!status) return null;
+  const active = String(status).toLowerCase() === 'active';
+  return <span className={`pill ${active ? 'ok' : 'bad'}`} style={style}>{status}</span>;
+}
+
 export default function UsersPage() {
   const toast = useToast();
   const { user: me, setUser } = useAuth();
@@ -106,7 +123,15 @@ export default function UsersPage() {
       </div></div>
 
       <table className="list-table">
-        <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Screen Access</th><th>Actions</th></tr></thead>
+        {/*
+          STATUS IS A COLUMN NOW.
+          The list showed name, email, role and screen access, so the one thing you could not learn
+          by looking was who still had access - you opened each record in turn to find out. The row
+          object already carried `status`; the details view beside this table rendered it and the
+          editor initialised from it. It was a column missing from a table, not a feature missing
+          from the application.
+        */}
+        <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Screen Access</th><th>Actions</th></tr></thead>
         <tbody>
           {users.map((u) => (
             <tr key={u.id}>
@@ -118,6 +143,7 @@ export default function UsersPage() {
               </td>
               <td>{u.email}</td>
               <td><span className={`pill ${roleP(u.role)}`}>{roleLabel(u.role)}</span></td>
+              <td><StatusPill status={u.status} /></td>
               <td><span className="help" style={{ margin: 0 }}>{u.is_admin ? 'Full access (all screens)' : accessSummary(u.permissions)}</span></td>
               <td>
                 <button className="btn ghost sm" onClick={() => setEditing(u)}>Edit</button>
@@ -235,11 +261,7 @@ function UserDetailsModal({ user, catalog, isMe, photoVersion, onClose, onEdit }
             <div className="muted" style={{ fontSize: 12.5 }}>{user.email}</div>
             <div style={{ marginTop: 4 }}>
               <span className="pill info">{roleLabel(user.role)}</span>
-              {user.status && (
-                <span className={`pill ${String(user.status).toLowerCase() === 'active' ? 'ok' : 'bad'}`} style={{ marginLeft: 6 }}>
-                  {user.status}
-                </span>
-              )}
+              <StatusPill status={user.status} style={{ marginLeft: 6 }} />
             </div>
           </div>
         </div>
@@ -580,10 +602,18 @@ function UserModal({ catalog, existing, onClose, onSaved }: UserModalProps) {
                   </li>
                 ))}
               </ul>
-              <span className="help" style={{ marginTop: 6, display: 'block' }}>
-                Reactivating them later restores their own leads, but not their Meta connection —
-                they sign in to Meta again so a fresh authorisation is granted.
-              </span>
+              {/*
+                CRM-044: the reactivation sentence used to live here, hard-coded, and read
+                "Reactivating them later restores their own leads, but not their Meta connection."
+                True as far as it went — and it went past the consequence that lands on an agent's
+                book: a brokerage lead that loses its assignment does not come back when the account
+                is switched on again, and somebody has to hand it out by hand from Lead books.
+
+                It is now the fourth effect in the list above, built by the server alongside the
+                three it is qualifying and from the same counts. One statement of the rule rather
+                than two that can drift, and the API says it too — the audit that found this read
+                the payload rather than the screen.
+              */}
             </div>
           )}
           <div className="field"><label>Department</label>

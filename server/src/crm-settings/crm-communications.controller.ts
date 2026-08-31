@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, Param, ParseIntPipe, Post, Put, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Param, ParseIntPipe, Post, Put, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '../auth/guards/auth.guard';
 import { AdminGuard } from '../auth/guards/admin.guard';
 import { ScreenGuard } from '../auth/guards/screen.guard';
@@ -108,5 +108,21 @@ export class CrmCommunicationsController {
   @UseGuards(AdminGuard)
   create(@CurrentUser() user: AuthUserRecord, @Body() body: Res): Promise<Res> {
     return this.comms.createTemplate(user, body ?? {});
+  }
+
+  /**
+   * Remove one template from the CRM Template Library.
+   *
+   * Same `AdminGuard` as creating and editing one — being able to write the brokerage's outgoing
+   * wording and being able to remove it are the same power.
+   *
+   * The service scopes to `module: 'CRM'`, so a Transaction Desk or campaign template cannot be
+   * deleted through this route by naming its id: they are separate products on separate screens and
+   * share only the table.
+   */
+  @Delete('templates/:id')
+  @UseGuards(AdminGuard)
+  remove(@CurrentUser() user: AuthUserRecord, @Param('id', ParseIntPipe) id: number): Promise<Res> {
+    return this.comms.deleteTemplate(user, id);
   }
 }

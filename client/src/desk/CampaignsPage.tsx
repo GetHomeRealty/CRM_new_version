@@ -49,6 +49,46 @@ const earliestSend = () => toLocalInput(new Date(Date.now() + 60_000));
 /** The three sections of this module, held in `?tab=`. */
 type Tab = 'campaigns' | 'templates' | 'suppressions';
 
+/**
+ * Whether ANY axis has been narrowed.
+ *
+ * `ANY` on every filter resolves to an omitted filter, which the API correctly reads as "the whole
+ * lead book" - so the composer's OPENING state was the entire brokerage, selected by nobody. This
+ * is what tells "I have not chosen yet" apart from "I chose everyone", which the filters alone
+ * cannot express.
+ */
+const hasNarrowed = (f: Pick<Form, 'leadStatus' | 'leadType' | 'leadSource' | 'clientType' | 'tag'>): boolean =>
+  [f.leadStatus, f.leadType, f.leadSource, f.clientType, f.tag].some((v) => v !== ANY);
+
+/**
+ * The first readable words of a template body, for showing what is about to be sent.
+ *
+ * TAGS STRIPPED, because the point is the MESSAGE. A campaign body is styled HTML - header, panels,
+ * a call-to-action, a footer - and the thing that went out to two real clients reading "Write your
+ * message here." was surrounded by all of it. Rendering the markup would have shown a convincing
+ * email; the text is what reveals an empty one.
+ */
+export const bodyExcerpt = (html: string | undefined, max = 220): string => {
+  const text = String(html ?? '')
+    .replace(/<(script|style)[\s\S]*?<\/>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return text.length > max ? `${text.slice(0, max).trimEnd()}…` : text;
+};
+
+/**
+ * Whether a template still reads like the one it shipped as.
+ *
+ * NOT A BLOCK, A WARNING. A brokerage may have a legitimate reason to send something terse, and a
+ * product that refuses to send what it was told to send is worse than one that asks. This only has
+ * to be loud enough that nobody presses Send past it by accident, which is exactly what happened.
+ */
+export const looksUnwritten = (html: string | undefined): boolean =>
+  /write your (message|content) here/i.test(bodyExcerpt(html, 400));
+
 /** "any" is the UI's placeholder; the API expects an omitted filter. */
 const toFilter = (f: Pick<Form, 'leadStatus' | 'leadType' | 'leadSource' | 'clientType' | 'tag'>): AudienceFilter => ({
   leadStatus: f.leadStatus === ANY ? '' : f.leadStatus,
@@ -99,11 +139,56 @@ export default function CampaignsPage() {
   };
   const [tracking, setTracking] = useState<TrackingHealth | null>(null);
   const [checkingTracking, setCheckingTracking] = useState(false);
+  /*
+   * WHETHER THE OPEN FIGURES BELOW MEAN ANYTHING.
+   *
+   * The banner already says when tracking is broken, but it only renders on the campaigns tab -
+   * and the detail modal opens straight from a notification link, so somebody can reach a
+   * campaign's numbers having never passed the warning. Every place that prints an open count
+   * therefore has to carry its own caveat, or a zero reads as "nobody opened it" when it means
+   * "we did not measure". Those two lead to opposite decisions about a template.
+   *
+   * ONLY WHEN WE POSITIVELY KNOW. `tracking` is null while the check is in flight and if the
+   * request failed, and "we could not ask" is not "it is broken" - claiming the figures are
+   * unmeasured on a network blip would be its own kind of wrong.
+   *
+   * THE ERROR ONLY RUNS ONE WAY, which is what the wording has to respect. A pixel that cannot
+   * load can only UNDERCOUNT: an open that IS recorded really did happen. So these figures are a
+   * floor, not a fiction, and the caveat says 'at least' rather than 'unreliable'.
+   */
+  const opensUnmeasured = !!tracking && !tracking.ok;
   const [loading, setLoading] = useState(true);
 
   const [builder, setBuilder] = useState(false);
   const [form, setForm] = useState<Form>(emptyForm);
   const [audience, setAudience] = useState<AudiencePreview | null>(null);
+  /*
+   * DELIBERATELY SENDING TO EVERYBODY, as against arriving at it by opening the window.
+   *
+   * The composer opened pre-armed: every filter at "any", the count showing the whole lead table
+   * and the primary button live and reading "Send to 10". Nobody had chosen that audience - it was
+   * simply where the screen started, one careless click from mailing the entire database on a
+   * screen whose only purpose is sending.
+   *
+   * Narrowing any axis is itself a choice, so it arms on its own. An unfiltered send is still
+   * perfectly legitimate - a seasonal mailing to the whole book is the point of the feature - and
+   * it stays available behind this one deliberate tick rather than being removed.
+   */
+  const [sendToEveryone, setSendToEveryone] = useState(false);
+  /*
+   * THE LAST THING BETWEEN THE BUTTON AND A HUNDRED CLIENTS.
+   *
+   * Every other irreversible act in this module asks first - deleting a campaign, cancelling a
+   * schedule - while the one that actually mails people went straight out on a single click. This
+   * holds what is about to happen so it can be read back: how many, whose leads, from which address
+   * and under what subject.
+   *
+   * Null means no send is pending. Set only after every validation below has passed, so the dialog
+   * cannot appear and then be refused for a missing name.
+   */
+  const [toSend, setToSend] = useState<null | {
+    count: number; audience: string; sender: string; subject: string; opening: string; at: Date | null;
+  }>(null);
   const [previewing, setPreviewing] = useState(false);
   const [sending, setSending] = useState(false);
   /*
@@ -247,12 +332,16 @@ export default function CampaignsPage() {
   const newCommitKey = () => (globalThis.crypto?.randomUUID?.() ?? `c-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 
   const openBuilder = () => {
+    // `setSendToEveryone(false)` on BOTH open paths: a tick left over from the last campaign would
+    // re-arm this one before anybody had looked at it, which is the defect wearing a hat.
+    setSendToEveryone(false);
     setForm(emptyForm); setAudience(null); setCommitKey(newCommitKey()); setBuilder(true); refreshOptions();
   };
 
   /** "Send" on a template card — jump to the campaign builder with that template preselected. */
   const useTemplate = (templateId: number) => {
     setTab('campaigns');
+    setSendToEveryone(false);
     setForm({ ...emptyForm, template_id: String(templateId) });
     setAudience(null);
     setCommitKey(newCommitKey());
@@ -260,10 +349,50 @@ export default function CampaignsPage() {
     refreshOptions();
   };
 
+  /**
+   * Check everything, then ASK - the send itself is `send()` below, unchanged.
+   *
+   * The validations are repeated rather than moved so that `send()` stays exactly what it was: a
+   * confirmation step must not become a place where the rules quietly changed. They are cheap, and
+   * running them here means a dialog never opens on a campaign that could not go anyway.
+   */
+  const requestSend = () => {
+    if (!form.name.trim()) return toast('Name your campaign', 'bad');
+    if (!form.template_id) return toast('Select a template', 'bad');
+    if (!audience?.count) return toast('No recipients match this audience', 'bad');
+    if (!hasNarrowed(form) && !sendToEveryone) {
+      return toast('Choose an audience first, or tick the box to send to everyone', 'bad');
+    }
+    const scheduling = form.sendMode === 'later';
+    if (scheduling && !form.sendAt) return toast('Pick the date and time to send at', 'bad');
+    const at = scheduling ? new Date(form.sendAt) : null;
+    if (at && Number.isNaN(at.getTime())) return toast('That send time could not be read', 'bad');
+    if (at && at.getTime() < Date.now() - 60_000) return toast('Pick a time in the future', 'bad');
+
+    return setToSend({
+      // The server's count, not a local tally: `audience.count` is what `previewAudience` returned
+      // for these exact filters, and it is the same query the send resolves against.
+      count: audience.count,
+      // The server's answer too - `brokerage_audience` is the capability the send path consults.
+      audience: options?.brokerage_audience ? 'Brokerage-wide' : 'Your leads only',
+      sender: options?.sender_email ?? 'the brokerage account',
+      subject: template?.subject ?? '(the template subject)',
+      // The opening words, so somebody who skipped the pane still sees the message at the moment
+      // they commit to sending it.
+      opening: bodyExcerpt(template?.content, 160),
+      at,
+    });
+  };
+
   const send = async () => {
     if (!form.name.trim()) return toast('Name your campaign', 'bad');
     if (!form.template_id) return toast('Select a template', 'bad');
     if (!audience?.count) return toast('No recipients match this audience', 'bad');
+    // Belt as well as braces: the button is disabled, but a keyboard submit or a stale render must
+    // not be the only thing standing between an unchosen audience and the whole lead book.
+    if (!hasNarrowed(form) && !sendToEveryone) {
+      return toast('Choose an audience first, or tick the box to send to everyone', 'bad');
+    }
 
     const scheduling = form.sendMode === 'later';
     if (scheduling && !form.sendAt) return toast('Pick the date and time to send at', 'bad');
@@ -342,13 +471,22 @@ export default function CampaignsPage() {
       r.bounce_type === 'hard' ? 'Hard bounce (suppressed)'
         : r.bounce_type === 'soft' ? (r.status === 'pending' ? 'Soft bounce — retrying' : 'Soft bounce — gave up')
           : r.bounce_type === 'unknown' ? 'Send error (our mail account)'
-            : r.unsubscribed ? 'Unsubscribed' : r.opened ? 'Opened' : r.status === 'sent' ? 'Delivered' : r.status;
+            : r.unsubscribed ? 'Unsubscribed' : r.opened ? 'Opened' : r.status === 'sent' ? 'Sent' : r.status;
     const summary = [
       ['Campaign', c.name], ['Subject', c.subject], ['Status', c.status], ['Sent at', c.sent_at ?? ''],
-      ['Recipients', c.stats.total], ['Delivered', c.stats.sent], ['Opened', c.stats.opened],
+      // "Sent", not "Delivered": SMTP accepts a message, it does not confirm it arrived. Bounces are
+      // tracked separately, so the pair is honest — but on its own "Delivered" claims a receipt this
+      // system has never had.
+      ['Recipients', c.stats.total], ['Sent', c.stats.sent],
+      // The caveat travels WITH the number, on the row above it. A spreadsheet outlives the screen
+      // it was exported from, and this one gets mailed on to people who never saw the banner.
+      ...(opensUnmeasured
+        ? [['Open tracking', 'NOT WORKING when this report was produced - the Opened figures below are a minimum, not a count']]
+        : []),
+      [opensUnmeasured ? 'Opened (not measured)' : 'Opened', c.stats.opened],
       ['Bounced', c.stats.bounced], ['Unsubscribed', c.stats.unsubscribed],
     ].map((p) => p.map(esc).join(','));
-    const header = ['Name', 'Email', 'Status', 'Delivered', 'Opened', 'Bounced', 'Unsubscribed', 'Note'].map(esc).join(',');
+    const header = ['Name', 'Email', 'Status', 'Sent', 'Opened', 'Bounced', 'Unsubscribed', 'Note'].map(esc).join(',');
     const rows = c.recipients.map((r) => [
       r.name, r.email, rowStatus(r),
       r.status === 'sent' && !r.bounced ? 'Yes' : 'No',
@@ -519,9 +657,35 @@ export default function CampaignsPage() {
                 {c.template_name ?? 'Template'}{c.tags[0] ? ` · ${c.tags[0]}` : ''}
               </div>
               <div className="camp-stats">
-                <span title="sent to"><span className="camp-ico"><Icon name="users" size={12} /></span><strong>{c.stats.total}</strong> sent to</span>
-                <span className="good" title="delivered"><span className="camp-ico"><Icon name="check" size={12} /></span><strong>{c.stats.sent}</strong> delivered</span>
-                <span className="info" title="opened"><span className="camp-ico">✉️</span><strong>{c.stats.opened}</strong> opened</span>
+                {/*
+                  EACH FIGURE UNDER ITS OWN NAME.
+                  `stats.total` is the AUDIENCE and `stats.sent` is what actually went, and the card
+                  used to label the first of them "sent to" — so a cancelled draft read "2 sent to ·
+                  0 delivered" for a mailing that reached nobody, and a half-failed send of a hundred
+                  read "100 sent to · 60 delivered" when forty never left.
+                  Both readings mislead, and in opposite directions: one sends somebody chasing a
+                  delivery problem that does not exist, the other persuades them a mailing went out
+                  when it did not — and the natural response to that is to send it again, to real
+                  clients.
+                  An earlier pass made "sent to" conditional on `sent_at`, which fixed the draft and
+                  left the partial-failure case wrong. Naming the audience an audience fixes both,
+                  and needs no condition at all.
+                */}
+                <span title="how many people this campaign is addressed to">
+                  <span className="camp-ico"><Icon name="users" size={12} /></span>
+                  <strong>{c.stats.total}</strong> recipient{c.stats.total === 1 ? '' : 's'}
+                </span>
+                {/* "Sent", not "Delivered": SMTP accepts a message, it does not confirm arrival. */}
+                <span className="good" title="accepted for delivery — bounces are counted separately">
+                  <span className="camp-ico"><Icon name="check" size={12} /></span><strong>{c.stats.sent}</strong> sent
+                </span>
+                <span className={opensUnmeasured ? 'muted' : 'info'}
+                  title={opensUnmeasured
+                    ? 'Open tracking is not working, so this is the number of opens that happened to be recorded - the real figure is higher and cannot be measured until tracking is fixed.'
+                    : 'opened'}>
+                  <span className="camp-ico">✉️</span><strong>{c.stats.opened}</strong> opened
+                  {opensUnmeasured && ' (not measured)'}
+                </span>
                 <span className="bad" title="bounced"><span className="camp-ico"><Icon name="alert" size={12} /></span><strong>{c.stats.bounced}</strong> bounced</span>
                 <span className="warn" title="unsubscribed"><span className="camp-ico"><Icon name="close" size={12} /></span><strong>{c.stats.unsubscribed}</strong> unsub</span>
               </div>
@@ -573,6 +737,40 @@ export default function CampaignsPage() {
                 </div>
               )}
               {template && <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>Subject: {template.subject}</div>}
+              {/*
+                WHAT IS ACTUALLY GOING OUT.
+                The composer named a message and offered a Send button without ever showing the
+                message - which is how a template still holding its shipped placeholder reached two
+                real clients, who both opened it. Shown as TEXT rather than rendered markup: the
+                styling around that placeholder was perfect, and it was the styling that made it
+                look like a finished email.
+              */}
+              {template && (
+                <div style={{ marginTop: 8 }}>
+                  {looksUnwritten(template.content) && (
+                    <div className="import-error" style={{ marginBottom: 6 }}>
+                      <strong>This template still has its placeholder text.</strong>
+                      <p>
+                        It reads like the message was never written. Sending it now would deliver
+                        that text to every recipient — edit it under Campaigns → Templates first.
+                      </p>
+                    </div>
+                  )}
+                  <div className="help" style={{ marginBottom: 4 }}>Message preview</div>
+                  <div
+                    className="camp-preview"
+                    style={{
+                      fontSize: 12.5, lineHeight: 1.5, maxHeight: 120, overflowY: 'auto',
+                      border: '1px solid var(--line)', borderRadius: 8, padding: '8px 10px',
+                      background: 'var(--surface-2, #fafafa)', whiteSpace: 'pre-wrap',
+                    }}
+                  >
+                    {template.content === undefined
+                      ? 'The message could not be loaded — open the template to check it before sending.'
+                      : bodyExcerpt(template.content, 600) || '(this template has no message body at all)'}
+                  </div>
+                </div>
+              )}
               {unfillable.length > 0 && (
                 <div className="reminder-warn" style={{ marginTop: 8 }}>
                   This template uses variables that can’t be auto-filled and will send blank:{' '}
@@ -614,11 +812,44 @@ export default function CampaignsPage() {
               <div className="camp-audience">
                 {previewing ? <span className="muted">Counting recipients…</span> : (
                   <span>
-                    <strong>{audience?.count ?? 0}</strong> recipient{(audience?.count ?? 0) === 1 ? '' : 's'} match this segment
+                    {/* The verb agrees too: "1 recipient match" was written only in the plural. */}
+                    <strong>{audience?.count ?? 0}</strong> recipient{(audience?.count ?? 0) === 1 ? ' matches' : 's match'} this segment
                     {audience?.sample?.length ? <span className="muted"> — e.g. {audience.sample.slice(0, 3).map((s) => s.name || s.email).join(', ')}</span> : null}
                   </span>
                 )}
               </div>
+              {/*
+                WHOSE LEADS THESE ARE, said plainly to the people it limits.
+                An agent's campaigns reach their own book and no further, which is deliberate - but
+                the screen was identical to the broker's and never mentioned it, so a recipient count
+                with no stated scope read as though it might be the whole database. Only shown to
+                those it actually constrains; telling a broker their reach is brokerage-wide is
+                noise.
+              */}
+              {options.brokerage_audience === false && (
+                <p className="help" style={{ marginTop: 6 }}>
+                  Your campaigns reach <strong>your own leads only</strong> — the count above is from
+                  your book, not the brokerage's.
+                </p>
+              )}
+              {/*
+                Shown only while nothing has been narrowed, which is the state that used to be armed
+                by default. The count is still displayed above - knowing how large the book is is
+                useful - but it is not a SELECTION until somebody says so here.
+              */}
+              {!hasNarrowed(form) && (
+                <label className="camp-audience-all" style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginTop: 8 }}>
+                  <input
+                    type="checkbox" checked={sendToEveryone}
+                    onChange={(e) => setSendToEveryone(e.target.checked)}
+                  />
+                  <span>
+                    <strong>No audience filter is set.</strong>{' '}
+                    Tick to send to all {audience?.count ?? 0} lead{(audience?.count ?? 0) === 1 ? '' : 's'} you can reach,
+                    or narrow the segment above.
+                  </span>
+                </label>
+              )}
             </div>
 
             {/*
@@ -663,7 +894,10 @@ export default function CampaignsPage() {
 
             <div className="actions">
               <button className="btn ghost" onClick={() => setBuilder(false)} disabled={sending}>Cancel</button>
-              <button className="btn primary" onClick={send} disabled={sending || !audience?.count}>
+              <button
+                className="btn primary" onClick={requestSend}
+                disabled={sending || !audience?.count || (!hasNarrowed(form) && !sendToEveryone)}
+              >
                 {sending ? (form.sendMode === 'later' ? 'Scheduling…' : 'Sending…')
                   : form.sendMode === 'later' ? `Schedule for ${audience?.count ?? 0}` : `Send to ${audience?.count ?? 0}`}
               </button>
@@ -694,11 +928,20 @@ export default function CampaignsPage() {
               </div>
               <div className="camp-tiles">
                 {tile('all', detail.stats.total, 'Recipients', '')}
-                {tile('all', detail.stats.sent, 'Delivered', 'good')}
-                {tile('opened', detail.stats.opened, 'Opened', 'info')}
+                {tile('all', detail.stats.sent, 'Sent', 'good')}
+                {tile('opened', detail.stats.opened, opensUnmeasured ? 'Opened (not measured)' : 'Opened', opensUnmeasured ? '' : 'info')}
                 {tile('bounced', detail.stats.bounced, 'Bounced', 'bad')}
                 {tile('unsubscribed', detail.stats.unsubscribed, 'Unsubscribed', 'warn')}
               </div>
+              {opensUnmeasured && (
+                /* Said here as well as on the tile, because this modal is reachable from a
+                   notification link without passing the banner on the page behind it. */
+                <div className="help" style={{ color: 'var(--warn-ink-alt)' }}>
+                  ⚠ Open tracking is not working, so the Opened figure counts only what happened to
+                  be recorded. Treat it as a minimum, not a result - and do not compare it with a
+                  campaign sent while tracking was working.
+                </div>
+              )}
               <div className="muted" style={{ fontSize: 13 }}><strong>Subject:</strong> {detail.subject}</div>
               <div className="camp-list">
                 {list.length === 0 ? <div className="help">No one in this group yet.</div> : list.map((x) => (
@@ -808,6 +1051,45 @@ export default function CampaignsPage() {
           </div>
         </div>
       )}
+
+      {/*
+        WHAT IS ABOUT TO LEAVE THE BUILDING, in the four terms somebody would want to check.
+        Every figure here comes from the server: the count from `previewAudience`, the scope from
+        the capability the send path consults, the sender from the mailer's own resolution. A dialog
+        that described the send from the browser's assumptions could reassure somebody about a
+        campaign that was going somewhere else.
+      */}
+      <ConfirmDialog
+        confirm={toSend ? {
+          title: toSend.at ? 'Schedule this campaign?' : 'Send this campaign?',
+          message: `You are sending this campaign to ${toSend.count} lead${toSend.count === 1 ? '' : 's'}.`,
+          body: (
+            <dl className="camp-confirm" style={{ margin: '10px 0 0', fontSize: 13, display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '6px 12px' }}>
+              <dt className="muted">Audience</dt><dd style={{ margin: 0 }}>{toSend.audience}</dd>
+              <dt className="muted">Sender</dt><dd style={{ margin: 0 }}>{toSend.sender}</dd>
+              <dt className="muted">Subject</dt><dd style={{ margin: 0 }}>{toSend.subject}</dd>
+              {toSend.opening && (
+                <>
+                  <dt className="muted">Opens with</dt>
+                  <dd style={{ margin: 0 }}>{toSend.opening}</dd>
+                </>
+              )}
+              {toSend.at && (<><dt className="muted">Goes out</dt><dd style={{ margin: 0 }}>{toSend.at.toLocaleString()}</dd></>)}
+            </dl>
+          ),
+          confirmLabel: toSend.at ? 'Confirm schedule' : 'Confirm Send',
+          // Sending a campaign is a normal action, not a destruction. Painting it in the same red
+          // as Delete Forever teaches people that red simply means "press this to continue".
+          variant: 'primary',
+          onConfirm: () => {
+            // `sending` is re-checked because the dialog is not the only guard: the server also
+            // de-duplicates on `idempotency_key`, and both matter. Nothing here re-implements the
+            // send - it calls the same function the button used to.
+            if (!sending) void send();
+          },
+        } : null}
+        onClose={() => setToSend(null)}
+      />
 
       <ConfirmDialog
         confirm={toDelete ? {

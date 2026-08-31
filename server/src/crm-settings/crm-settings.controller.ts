@@ -181,8 +181,14 @@ export class CrmSettingsController {
 
   @Get('email-log')
   @Screen('settings', 'view')
-  emailLog(@CurrentUser() user: AuthUserRecord, @Query('limit') limit?: string): Promise<unknown> {
-    return this.email.listLog(user, Number(limit) || 100);
+  emailLog(
+    @CurrentUser() user: AuthUserRecord,
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
+    /** A single kind, or `transactional` for everything that is not a campaign mailing. */
+    @Query('kind') kind?: string,
+  ): Promise<unknown> {
+    return this.email.listLogPage(user, { limit: Number(limit) || 50, offset: Number(offset) || 0, kind });
   }
 
   // ------------------------------------------------------------ broadcasts

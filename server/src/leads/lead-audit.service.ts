@@ -17,8 +17,27 @@ export class LeadAuditService {
 
   constructor(private readonly prisma: PrismaService) {}
 
-  /** Best-effort: a lead change must never fail because the audit write did. */
-  async record(user: AuthUserRecord, action: string, subject: string, details = ''): Promise<void> {
+  /**
+   * Best-effort: a lead change must never fail because the audit write did.
+   *
+   * `change` carries the BEFORE AND AFTER of one field, and exists because a trail that records
+   * only which field moved cannot answer the question it is kept for. "Aswini changed lead_status
+   * on this lead" does not tell a broker whether a live client was quietly marked cold, and on a
+   * dispute that is the whole question. `audit_logs` has had `field`, `old_value` and `new_value`
+   * columns all along, and the Audit Trail screen already renders them as their own columns - this
+   * writer simply never filled them, and put the lead's NAME in `new_value` instead, so the New
+   * value column showed a person rather than a value.
+   *
+   * Omitted for create, delete, restore and purge: nothing changed FROM anything on those, and the
+   * subject-in-new_value shape those rows already have is left exactly as it was.
+   */
+  async record(
+    user: AuthUserRecord,
+    action: string,
+    subject: string,
+    details = '',
+    change?: { field: string; old: string; new: string },
+  ): Promise<void> {
     try {
       const now = new Date();
       await this.prisma.audit_logs.create({
@@ -31,9 +50,13 @@ export class LeadAuditService {
           who: user.name,
           user_id: user.id ?? null,
           section: 'Leads',
+          field: change?.field ?? null,
           action,
           source: 'Manual',
-          new_value: subject.slice(0, 255),
+          // Clipped to the column, exactly as the subject already is. A truncated value is still
+          // evidence of a change; a failed insert would be none.
+          old_value: change ? change.old.slice(0, 255) : null,
+          new_value: (change ? change.new : subject).slice(0, 255),
           details: `${action}: ${subject}${details ? ` — ${details}` : ''}`,
           created_at: now,
           updated_at: now,

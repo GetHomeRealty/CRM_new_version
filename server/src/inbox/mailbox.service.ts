@@ -6,6 +6,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { MailerService } from '../email/mailer.service';
 import { STORAGE_ROOT } from '../config/storage';
 import type { Area } from '../common/domain';
+import { permittedAccountIds, visibleAccountIds } from './mailbox-scope';
 import {
   MAX_RECIPIENTS, parseAddresses, prefixSubject, quoteBody, replyRecipients, splitLoose, threadKeyFor,
 } from './mailbox';
@@ -127,37 +128,14 @@ export class MailboxService {
    * question about ownership; what the list SHOWS is a question about which mailbox they picked.
    */
   private async viewAccountIds(userId: number, area: Area, accountId?: number | null): Promise<number[]> {
-    const permitted = await this.accountIds(userId, area);
-    if (permitted.length === 0) return [];
-
-    if (accountId != null) {
-      return permitted.includes(accountId) ? [accountId] : [];
-    }
-
-    const chosen = (await this.prisma.mail_accounts.findFirst({
-      where: { user_id: userId, id: { in: permitted }, is_active: true, is_default: true, scope: area },
-      select: { id: true },
-    }))
-      ?? (await this.prisma.mail_accounts.findFirst({
-        where: { user_id: userId, id: { in: permitted }, is_active: true, is_default: true, scope: null },
-        select: { id: true },
-      }))
-      ?? (await this.prisma.mail_accounts.findFirst({
-        where: { user_id: userId, id: { in: permitted }, is_active: true },
-        orderBy: { id: 'asc' },
-        select: { id: true },
-      }));
-
-    return chosen ? [chosen.id] : [];
+    // Shared with the CRM dashboard's unread-mail card, which must count exactly what this shows.
+    // See `mailbox-scope.ts` for why that is defined once rather than restated there.
+    return visibleAccountIds(this.prisma, userId, area, accountId);
   }
 
   /** The accounts this user may act through in this area — used to scope every id lookup. */
   private async accountIds(userId: number, area: Area): Promise<number[]> {
-    const rows = await this.prisma.mail_accounts.findMany({
-      where: { user_id: userId, OR: [{ scope: area }, { scope: null }] },
-      select: { id: true },
-    });
-    return rows.map((r) => r.id);
+    return permittedAccountIds(this.prisma, userId, area);
   }
 
   // ------------------------------------------------------------------ folders
@@ -426,14 +404,31 @@ export class MailboxService {
      * That keeps the thread consistent with the message the reader opened, and needs nothing from
      * the caller — a thread cannot be asked for in the wrong mailbox's context by accident.
      */
+    /*
+     * `id` BREAKS THE TIE, and without it this was not deterministic.
+     *
+     * `received_at` and `sent_at` are both `Timestamp(0)` — SECOND precision. Two mailboxes copied
+     * on the same conversation receive their copies in the same second essentially always, so
+     * ordering on that column alone leaves the winner to the database. Which mailbox "owns" the
+     * thread then varies between identical calls, and the whole point of the anchor is that one
+     * mailbox owns it consistently.
+     *
+     * That was not theoretical: the spec asserting two accounts do not merge failed on exactly this
+     * tie, returning the second mailbox's copy where it had previously returned the first, with no
+     * code change between the two runs.
+     *
+     * `id` ascending resolves it to the copy that arrived FIRST, which is what "earliest" already
+     * meant — the sequence is insertion order — so this sharpens the existing rule rather than
+     * inventing one.
+     */
     const anchor = (await this.prisma.inbound_emails.findFirst({
       where: { user_id: userId, account_id: { in: permitted }, thread_key: threadKey, deleted_at: null },
-      orderBy: { received_at: 'asc' },
+      orderBy: [{ received_at: 'asc' }, { id: 'asc' }],
       select: { account_id: true },
     }))
       ?? (await this.prisma.outbound_emails.findFirst({
         where: { user_id: userId, account_id: { in: permitted }, thread_key: threadKey, status: 'sent' },
-        orderBy: { sent_at: 'asc' },
+        orderBy: [{ sent_at: 'asc' }, { id: 'asc' }],
         select: { account_id: true },
       }));
     if (!anchor?.account_id) return { thread_key: threadKey, messages: [] };

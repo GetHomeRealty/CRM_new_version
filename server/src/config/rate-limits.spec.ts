@@ -30,16 +30,26 @@ describe('rate limit configuration', () => {
   it('applies the strict limit at the endpoints instead, where it can be scoped', () => {
     const auth = read('../auth/auth.controller.ts');
     /*
-     * Five endpoints, and every one of them checks a secret:
-     *   login, register, password change — the original three; and
-     *   login/mfa, login/mfa/send      — the two-factor challenge and its resend.
+     * Seven endpoints, and every one of them handles a secret:
+     *   login, register, password change — the original three;
+     *   login/mfa, login/mfa/send      — the two-factor challenge and its resend; and
+     *   forgot-password, reset-password — the reset flow, which is UNAUTHENTICATED by necessity.
      *
      * The challenge needs this as much as sign-in does. A six-digit code is a million possibilities,
      * which is not many at HTTP speed; the per-code attempt ceiling in `MfaService` bounds one
      * issued code, and this bounds how fast codes can be thrown at the endpoint at all. The resend
      * is here because without a limit it is a free way to make this application send mail and SMS.
+     *
+     * The two reset endpoints are the newest and the most exposed: anyone on the internet can call
+     * them without a session. `forgot-password` sends mail, so unthrottled it is a way to make this
+     * application email somebody repeatedly; `reset-password` accepts a token, so unthrottled it is
+     * somewhere to guess one.
+     *
+     * ASSERTED AS A COUNT DELIBERATELY. A new unauthenticated auth endpoint that forgets the
+     * decorator fails this test, which is the point — the number is a tripwire, not a fact worth
+     * knowing. Raise it only alongside the reason, as here.
      */
-    expect(auth.match(/@Throttle\(\{ default: AUTH_LIMIT \}\)/g)).toHaveLength(5);
+    expect(auth.match(/@Throttle\(\{ default: AUTH_LIMIT \}\)/g)).toHaveLength(7);
   });
 
   it('rate-limits the two-factor management endpoints too', () => {

@@ -290,6 +290,76 @@ export class HealthController {
       result.mail_sync = { ok: false, detail: (e as Error).message.slice(0, 160) };
     }
 
+    // Outgoing mail.
+    //
+    // WHY THIS IS SEPARATE FROM `mail_sync`. That block reports INBOUND freshness — whether IMAP is
+    // still pulling. Sending fails independently of it: a revoked Google refresh token stops every
+    // outbound message while the same mailbox keeps polling perfectly, so `mail_sync` stays green
+    // throughout.
+    //
+    // WHY THE SCHEDULERS ABOVE DO NOT COVER IT EITHER. A sweep that records a failed send has done
+    // its job and returns normally, so its `failures` counter stays at zero. On 2026-08-20 that
+    // combination hid 43 sends that were both failing and being diverted, for 36 minutes, while
+    // every indicator on this endpoint read healthy. Nothing here reported it because nothing here
+    // looked at what the sweeps actually produced.
+    //
+    // `redirected` deserves its own number rather than being folded into failures. A diverted send
+    // SUCCEEDS — the provider accepts it and the log records success — so it can never appear in a
+    // failure count. In production a non-zero value has one meaning: MAIL_REDIRECT_TO reached a
+    // live server and client mail is going to a sink instead of to clients.
+    try {
+      const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      const recent = await this.prisma.crm_email_log.findMany({
+        where: { created_at: { gte: dayAgo } },
+        select: { success: true, error: true, redirected: true, sent_by: true },
+      });
+
+      const failed = recent.filter((r) => !r.success);
+      const diverted = recent.filter((r) => !!r.redirected);
+      // Auth failures are called out on their own because they are the recurring one, they take the
+      // whole mailbox down rather than one message, and a reconnect is the fix. Anything else here
+      // is usually a single bad recipient.
+      const auth = failed.filter((r) => /invalid_grant|expired or revoked|invalid_client|unauthoriz/i.test(r.error ?? ''));
+
+      // Which sending identity is failing. Each mailbox holds its own refresh token, so one agent's
+      // automated mail can be dead while everyone else's is fine — invisible in any total.
+      const bySender = new Map<string, number>();
+      for (const r of auth) bySender.set(r.sent_by ?? '(unknown)', (bySender.get(r.sent_by ?? '(unknown)') ?? 0) + 1);
+
+      // Age of the last send that actually left. The most useful single number when volume is low:
+      // zero failures in 24 h means nothing if nothing was attempted.
+      const lastOk = await this.prisma.crm_email_log.findFirst({
+        where: { success: true },
+        orderBy: { created_at: 'desc' },
+        select: { created_at: true },
+      });
+
+      result.mail_send = {
+        ok: failed.length === 0 && diverted.length === 0,
+        sent_24h: recent.length - failed.length,
+        failed_24h: failed.length,
+        auth_failures_24h: auth.length,
+        // Never legitimate on a production host.
+        redirected_24h: diverted.length,
+        redirected_to: diverted.length ? diverted[0].redirected : null,
+        senders_failing_auth: [...bySender].slice(0, 10).map(([name, count]) => ({ name, count })),
+        // `created_at` is nullable in the schema, so a row can exist without one. Treat that as
+        // "unknown age" rather than reporting a nonsense figure derived from the epoch.
+        last_success_age_s: lastOk?.created_at
+          ? Math.round((Date.now() - lastOk.created_at.getTime()) / 1000)
+          : null,
+        detail: diverted.length
+          ? `${diverted.length} send(s) diverted to ${diverted[0].redirected} — MAIL_REDIRECT_TO is set on this server and client mail is not being delivered`
+          : auth.length
+            ? `${auth.length} send(s) refused by the mail provider — reconnect the affected mailbox`
+            : failed.length
+              ? `${failed.length} send(s) failed in the last 24 h`
+              : 'no outgoing mail failed in the last 24 h',
+      };
+    } catch (e) {
+      result.mail_send = { ok: false, detail: (e as Error).message.slice(0, 160) };
+    }
+
     return result;
   }
 }

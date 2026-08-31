@@ -10,10 +10,39 @@ export const LEAD_RESPONSE = [
   'active', 'inactive', 'not answering', 'not actively answering', 'always responding',
 ] as const;
 
-// 'refferal' is spelt that way in the source system and in existing rows, so it stays as the
-// stored value; the UI labels it "Referral". 'website' was added when the Dashboard started
-// reporting leads by source — there was no way to record a website enquiry before.
-export const LEAD_SOURCE = ['google ads', 'meta', 'website', 'refferal', 'linkedin', 'youtube'] as const;
+/*
+ * 'referral' IS NOW THE CANONICAL SPELLING, and 'refferal' is a legacy value that still matches.
+ *
+ * The list used to offer 'refferal', and the comment here claimed "the UI labels it Referral". It
+ * did not: the only transformation applied to these values is title-casing, so the dropdown read
+ * "Refferal" on a screen agents use all day, and a filter for referral leads returned nothing while
+ * the referral business sat under the typo.
+ *
+ * BOTH SPELLINGS REMAIN ACCEPTED, which is what makes fixing this safe before the data is migrated.
+ * A lead already stored as 'refferal' still validates, still filters, still displays as "Referral";
+ * anything saved from now on is stored correctly. Correcting the list without that would have
+ * stranded every existing referral - the precise cost the report warned about.
+ *
+ * 'website' was added when the Dashboard started reporting leads by source — there was no way to
+ * record a website enquiry before.
+ */
+export const LEAD_SOURCE = ['google ads', 'meta', 'website', 'referral', 'linkedin', 'youtube'] as const;
+
+/** The misspelling as it exists in stored rows. Accepted on input, matched on filter, never offered. */
+export const LEGACY_REFERRAL = 'refferal';
+
+/** Canonical form of a source value: the legacy spelling collapses onto the correct one. */
+export const canonicalLeadSource = (v: string): string =>
+  (v.trim().toLowerCase() === LEGACY_REFERRAL ? 'referral' : v);
+
+/**
+ * Every stored spelling a source filter should match.
+ *
+ * Asking for 'referral' has to find the rows written as 'refferal', or the fix would leave the
+ * brokerage's referrals exactly as unfindable as the typo did.
+ */
+export const leadSourceMatches = (v: string): string[] =>
+  (v.trim().toLowerCase() === 'referral' ? ['referral', LEGACY_REFERRAL] : [v]);
 
 /**
  * The sources the Dashboard's Total Leads card breaks out, in display order. Anything else —
@@ -24,7 +53,9 @@ export const DASHBOARD_LEAD_SOURCES = [
   { key: 'google', value: 'google ads', label: 'google' },
   { key: 'meta', value: 'meta', label: 'meta' },
   { key: 'website', value: 'website', label: 'website' },
-  { key: 'referral', value: 'refferal', label: 'referral' },
+  // Counted through `leadSourceMatches`, so the bucket covers both spellings while rows remain in
+  // the old one. It was always keyed correctly here - the arithmetic was never the problem.
+  { key: 'referral', value: 'referral', label: 'referral' },
 ] as const;
 
 export const LEAD_TYPE = [
@@ -57,8 +88,20 @@ export const CALL_OUTCOME = [
   'connected', 'no answer', 'voicemail', 'wrong number', 'callback requested',
 ] as const;
 
-/** Sources counted as inbound website enquiries on the list header. */
-export const WEBSITE_ENQUIRY_SOURCES = ['google ads', 'meta'] as const;
+/*
+ * `WEBSITE_ENQUIRY_SOURCES` WAS REMOVED, and it is worth saying what it was.
+ *
+ * It read `['google ads', 'meta']` under a comment calling it "sources counted as inbound website
+ * enquiries" - a constant named for the website that contained neither the website nor anything
+ * from it. It fed a `stats.websiteEnquiries` figure that therefore counted PAID ADS, disagreed with
+ * `bySource.website` in the same response (3 against a correct 4), and was shipped to the browser
+ * on every leads request while no screen displayed it. The Website Enquiries tile renders
+ * `bySource.website` and always did.
+ *
+ * Deleted rather than corrected: a fixed duplicate would still be two figures answering one
+ * question, which is how they drift apart again. `DASHBOARD_LEAD_SOURCES` above already breaks out
+ * website, google, meta and referral separately, and that is the one source of the answer.
+ */
 
 /**
  * `leads.source` for a submission that arrived through an agent's own Meta connection.
@@ -154,7 +197,9 @@ const has = <T extends readonly string[]>(list: T, v: string): v is T[number] =>
 
 export const isLeadStatus = (v: string): boolean => has(LEAD_STATUS, v);
 export const isLeadResponse = (v: string): boolean => has(LEAD_RESPONSE, v);
-export const isLeadSource = (v: string): boolean => has(LEAD_SOURCE, v);
+// The legacy spelling still validates: a lead stored as 'refferal' must remain editable and
+// re-savable without the form rejecting a value it did not choose.
+export const isLeadSource = (v: string): boolean => has(LEAD_SOURCE, v) || v === LEGACY_REFERRAL;
 export const isLeadType = (v: string): boolean => has(LEAD_TYPE, v);
 export const isClientType = (v: string): boolean => has(CLIENT_TYPE, v);
 export const isGender = (v: string): boolean => has(GENDERS, v);

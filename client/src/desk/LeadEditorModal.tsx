@@ -7,7 +7,13 @@ import { ageFromDateOfBirth } from './age';
 
 /** Title-case a stored vocabulary value for display ("first home buyer" → "First Home Buyer"). */
 export const label = (v: string): string =>
-  v.replace(/\b[a-z]/g, (c) => c.toUpperCase());
+  // SPELT CORRECTLY ON THE WAY OUT. The server's comment claimed the UI already labelled this
+  // "Referral"; it did not - title-casing a typo gives "Refferal", which is what agents saw in
+  // the Source dropdown all day. New leads store `referral`, so this only affects older rows,
+  // and it costs one line to stop showing people a spelling mistake.
+  (v.trim().toLowerCase() === 'refferal'
+    ? 'Referral'
+    : v.replace(/\b[a-z]/g, (c) => c.toUpperCase()));
 
 const lockNote = 'The brokerage assigned this lead to you, so its contact details, source and assignment are locked. Ask an administrator to change them.';
 
