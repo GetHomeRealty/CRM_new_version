@@ -9,6 +9,8 @@ import { CampaignAudienceService, type AudienceFilter } from './campaign-audienc
 import { CampaignTemplatesService } from './campaign-templates.service';
 import { LeadImportJobService } from '../leads/lead-import-job.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { can } from '../core/authz';
+import { MailDeliverabilityService } from './mail-deliverability.service';
 import {
   LEAD_STATUS, LEAD_TYPE, LEAD_SOURCE, CLIENT_TYPE, TAG_OPTIONS,
   CAMPAIGN_CATEGORIES, FILLABLE_TOKENS, LEAD_SOURCED_TOKENS, MAX_RECIPIENTS,
@@ -25,6 +27,7 @@ export class CampaignsController {
     private readonly audience: CampaignAudienceService,
     private readonly imports: LeadImportJobService,
     private readonly prisma: PrismaService,
+    private readonly deliverability: MailDeliverabilityService,
   ) {}
 
   /** Vocabularies + templates for the campaign builder. */
@@ -56,12 +59,43 @@ export class CampaignsController {
       fillable_tokens: FILLABLE_TOKENS,
       lead_sourced_tokens: LEAD_SOURCED_TOKENS,
       max_recipients: MAX_RECIPIENTS,
+      /*
+       * WHOSE LEADS THIS PERSON'S CAMPAIGNS CAN REACH.
+       *
+       * The Campaigns screen looks identical to an agent and to the broker, and an agent had no way
+       * to learn that their audience stops at their own book - they saw a composer, a recipient
+       * count, and no statement of what the count was counted from. The limit is real and
+       * deliberate (`campaigns.brokerage-audience` names admin, manager and crm, and agent is
+       * absent on purpose), but a limit nobody is told about reads as a screen that might mail the
+       * whole database.
+       *
+       * Sent from the server rather than worked out from the role in the browser: this is the same
+       * capability `resolveRecipients` consults, so the screen cannot describe a boundary different
+       * from the one that will be enforced.
+       */
+      brokerage_audience: can(user, 'campaigns.brokerage-audience'),
+      // The address the send will really leave from, so the confirmation names the sender rather
+      // than the screen assuming it. Null when the deployment has no active mail account.
+      sender_email: await this.campaigns.senderEmail(user),
       tags: await this.campaigns.leadTags(user),
       // Each template's tokens, so the builder can warn about ones that can't be filled.
       templates: templates.map((t) => ({
         id: t.id, name: t.name, subject: t.subject, category: t.category,
         attachment_count: t._count.attachments,
         variables: this.audience.extractTokens(t.subject, t.content),
+        /*
+         * THE BODY, so the composer can show what is about to be sent.
+         *
+         * It was already being SELECTED here to extract the tokens and then thrown away, so the
+         * screen offered a message by NAME and a Send button and never the message. That is how a
+         * template still carrying its shipped placeholder - "Write your message here." - went to
+         * two real clients, who both opened it. The brokerage has since written that template; the
+         * composer showing nothing is the part that would let it happen again.
+         *
+         * Sent whole rather than as an excerpt: the preview is the point, and truncating server-side
+         * would decide for the screen how much of its own message somebody may look at.
+         */
+        content: t.content,
       })),
     };
   }
@@ -210,6 +244,42 @@ export class CampaignsController {
     return this.campaigns.tagSegment(filter, tag, body.mode === 'remove' ? 'remove' : 'add', user);
   }
 
+  /**
+   * Whether this brokerage's mail is set up to be delivered at all.
+   *
+   * Answers the question that was previously only answerable with `nslookup`: is SPF published, is
+   * DKIM signing on, does DMARC do anything. Those decide SPAM-folder placement and are objective.
+   *
+   * The optional `html` adds the content signals that CORRELATE with Gmail's Promotions tab — kept
+   * separate, and never described as a guarantee, because tab placement is undocumented and decided
+   * per recipient.
+   *
+   * Declared before `@Get(':id')` for the same reason as the routes below: Express matches in
+   * registration order, so a literal path after it would be captured as an id.
+   */
+  @Get('deliverability')
+  @Screen('campaigns', 'view')
+  async deliverabilityReport(
+    @CurrentUser() user: AuthUserRecord,
+    @Query('domain') domain?: string,
+    @Query('html') html?: string,
+  ): Promise<Record<string, unknown>> {
+    /*
+     * The domain defaults to the address this user's campaigns would actually leave from, rather
+     * than to something typed in — checking a domain nobody sends from is a report about nothing.
+     */
+    const sender = await this.prisma.mail_accounts.findFirst({
+      where: { user_id: user.id ?? -1, is_active: true },
+      orderBy: [{ is_default: 'desc' }, { id: 'asc' }],
+      select: { from_email: true },
+    });
+    const host = (domain ?? sender?.from_email?.split('@')[1] ?? '').trim();
+    if (!host) {
+      return { error: 'No sending mailbox is connected, so there is no domain to check.' };
+    }
+    return this.deliverability.report(host, html);
+  }
+
   // NOTE: declared before `@Get(':id')`. Express matches in order, so `/campaigns/suppressions`
   // would otherwise be read as a campaign id — ParseIntPipe then rejects "suppressions" and the
   // screen gets a 400 for a route that exists. Same trap the Leads controller documents.
@@ -231,7 +301,21 @@ export class CampaignsController {
     return this.campaigns.listSuppressions(user, { page, limit, search });
   }
 
-  /** Resuming mail to someone who opted out. Edit rights, and logged. */
+  /**
+   * Recording an opt-out given by telephone, in person, or in a reply.
+   *
+   * `campaigns:edit`, deliberately wider than the DELETE beside it: the agent who took the call is
+   * who should be able to act on it, and honouring a request to stop must never be the harder of
+   * the two directions.
+   */
+  @Post('suppressions')
+  @HttpCode(201)
+  @Screen('campaigns', 'edit')
+  addSuppression(@CurrentUser() user: AuthUserRecord, @Body() body: Record<string, unknown>): Promise<unknown> {
+    return this.campaigns.addSuppression(str(body.email), user, str(body.reason));
+  }
+
+  /** Resuming mail to someone who opted out. Marketing rights, and logged. */
   @Delete('suppressions/:email')
   @Screen('campaigns', 'edit')
   removeSuppression(@CurrentUser() user: AuthUserRecord, @Param('email') email: string): Promise<unknown> {

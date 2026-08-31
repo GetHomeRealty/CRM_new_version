@@ -1,6 +1,7 @@
 import { Module, type OnModuleInit } from '@nestjs/common';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
+import { PasswordResetService } from './password-reset.service';
 import { AccountLockoutService } from './account-lockout.service';
 import { PasswordHashService } from './password-hash.service';
 import { PermissionService } from './permission.service';
@@ -40,6 +41,7 @@ import { AuditModule } from '../audit/audit.module';
    */
   providers: [
     AuthService, AccountLockoutService, PasswordHashService, PermissionService,
+    PasswordResetService,
     AuthGuard, AdminGuard, ScreenGuard,
     MfaService, MfaPolicyService, RecoveryCodeService, TrustedDeviceService,
     OtpDeliveryService, EmailOtpProvider, SmsOtpProvider,

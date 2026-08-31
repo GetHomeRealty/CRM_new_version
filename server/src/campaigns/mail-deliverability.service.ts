@@ -1,7 +1,12 @@
 import { Injectable, Logger } from '@nestjs/common';
+import {
+  analyseContent, checkDkim, checkDmarc, checkSpf, spamRisk,
+  type AuthCheck, type ContentReport, type SpamRisk,
+} from './deliverability-report';
 
 // DNS record types in the DNS-over-HTTPS JSON response.
 const DNS_TYPE_A = 1;
+const DNS_TYPE_TXT = 16;
 const DNS_TYPE_MX = 15;
 const DOH_TIMEOUT_MS = 4000;
 
@@ -54,7 +59,71 @@ export class MailDeliverabilityService {
     return deliverable;
   }
 
-  private async dohQuery(name: string, type: 'MX' | 'A'): Promise<{ Status?: number; Answer?: { type: number; data?: string }[] } | null> {
+  /**
+   * Selectors to probe for DKIM.
+   *
+   * DNS cannot be asked "which selectors exist" — a selector is only discoverable from a message
+   * that has already been signed. So the common providers' are tried by name, and a miss is
+   * reported as "none of these resolved" rather than as proof of absence.
+   */
+  private static readonly DKIM_SELECTORS = [
+    'google', 'default', 'selector1', 'selector2', 'k1', 'k2', 'dkim', 's1', 's2', 'mail', 'zoho', 'mandrill',
+  ];
+
+  /**
+   * The deliverability of one sending domain, plus optional campaign HTML.
+   *
+   * READ-ONLY and safe to call from a screen: three kinds of DNS lookup and some string work. It
+   * sends nothing and writes nothing.
+   */
+  async report(domain: string, html?: string): Promise<{
+    domain: string;
+    auth: AuthCheck[];
+    content: ContentReport | null;
+    risk: SpamRisk;
+    checked_at: string;
+  }> {
+    const host = String(domain ?? '').trim().toLowerCase().replace(/^@/, '');
+    const [rootTxt, dmarcTxt, dkim] = await Promise.all([
+      this.txtRecords(host),
+      this.txtRecords(`_dmarc.${host}`),
+      this.findDkim(host),
+    ]);
+
+    const auth = [
+      checkSpf(rootTxt),
+      checkDkim(dkim, MailDeliverabilityService.DKIM_SELECTORS),
+      checkDmarc(dmarcTxt),
+    ];
+    const content = html ? analyseContent(html) : null;
+    // With no HTML supplied there is nothing to weigh on the content side, so an empty report keeps
+    // the verdict driven by authentication alone rather than crediting content that was not seen.
+    const risk = spamRisk(auth, content ?? { links: 0, images: 0, textRatio: 1, imageOnly: false, signals: [] });
+
+    return { domain: host, auth, content, risk, checked_at: new Date().toISOString() };
+  }
+
+  /** Every TXT string published at a name. Empty on any lookup failure — see the fail-open note. */
+  private async txtRecords(name: string): Promise<string[]> {
+    const res = await this.dohQuery(name, 'TXT');
+    if (!res || res.Status !== 0 || !Array.isArray(res.Answer)) return [];
+    return res.Answer
+      .filter((a) => a.type === DNS_TYPE_TXT && a.data)
+      // A long TXT record arrives as adjacent quoted chunks that must be joined, not listed.
+      .map((a) => String(a.data).replace(/"\s+"/g, '').replace(/^"|"$/g, ''));
+  }
+
+  private async findDkim(host: string): Promise<{ selector: string; record: string }[]> {
+    const hits = await Promise.all(
+      MailDeliverabilityService.DKIM_SELECTORS.map(async (selector) => {
+        const records = await this.txtRecords(`${selector}._domainkey.${host}`);
+        return records.length ? { selector, record: records.join('') } : null;
+      }),
+    );
+    return hits.filter((h): h is { selector: string; record: string } => h !== null);
+  }
+
+  private async dohQuery(name: string, type: 'MX' | 'A' | 'TXT'): Promise<{ Status?: number; Answer?: { type: number; data?: string }[] } | null> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), DOH_TIMEOUT_MS);
     try {

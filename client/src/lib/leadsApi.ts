@@ -21,6 +21,16 @@ export const leadOptions = (): Promise<LeadOptions> =>
 export const listLeads = (filters: Partial<LeadFilters>, page = 1, limit = 50): Promise<LeadListResponse> =>
   api.get<LeadListResponse>('/api/leads', { params: params(filters, { page, limit }) }).then((r) => r.data);
 
+/**
+ * The stage a lead was at before it was closed, or null when that is genuinely unknown.
+ *
+ * Reopening used to set a hard-coded `hot`, quietly promoting a Cold lead to the top of a list it
+ * did not belong on. Null for any lead closed before per-field history was recorded, in which case
+ * the screen asks rather than guessing.
+ */
+export const leadStatusBeforeClose = (id: number): Promise<{ status: string | null }> =>
+  api.get<{ status: string | null }>(`/api/leads/${id}/previous-status`).then((r) => r.data);
+
 export const getLead = (id: number): Promise<LeadDetail> =>
   api.get<LeadDetail>(`/api/leads/${id}`).then((r) => r.data);
 
@@ -181,6 +191,10 @@ export const updateLeadNote = (leadId: number, noteId: number, body: Partial<Lea
 export const deleteLeadNote = (leadId: number, noteId: number): Promise<void> =>
   api.delete(`/api/leads/${leadId}/notes/${noteId}`).then(() => undefined);
 
+/** Remove one entry from a lead's email history. The server records its content in the audit trail. */
+export const deleteLeadEmail = (leadId: number, emailId: number): Promise<void> =>
+  api.delete(`/api/leads/${leadId}/emails/${emailId}`).then(() => undefined);
+
 export const addLeadTask = (leadId: number, body: Partial<LeadTask>): Promise<LeadTask> =>
   api.post<LeadTask>(`/api/leads/${leadId}/tasks`, body).then((r) => r.data);
 
@@ -256,8 +270,13 @@ export const sendLeadEmail = (leadId: number, body: { subject: string; body: str
   api.post<LeadEmail>(`/api/leads/${leadId}/email`, body).then((r) => r.data);
 
 /** Draft an email with AI from a plain-language prompt. Returns a subject + styled HTML; sends nothing. */
-export const generateLeadEmail = (leadId: number, prompt: string): Promise<{ subject: string; html: string }> =>
-  api.post<{ subject: string; html: string }>(`/api/leads/${leadId}/email/generate`, { prompt }).then((r) => r.data);
+/**
+ * `fallback` is set when the AI provider was unavailable and the server returned an editable
+ * starter instead of a draft. Surfaced rather than swallowed: the agent must not send a template
+ * believing a model wrote it for this lead.
+ */
+export const generateLeadEmail = (leadId: number, prompt: string): Promise<{ subject: string; html: string; fallback?: boolean; reason?: string }> =>
+  api.post<{ subject: string; html: string; fallback?: boolean; reason?: string }>(`/api/leads/${leadId}/email/generate`, { prompt }).then((r) => r.data);
 
 /** Whether the server can send SMS for real. No credentials are ever returned. */
 export const smsGatewayStatus = (): Promise<SmsGatewayStatus> =>

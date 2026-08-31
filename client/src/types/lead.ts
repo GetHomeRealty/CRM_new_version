@@ -86,6 +86,15 @@ export interface Lead {
    * be deleted. Compare to the signed-in user id to decide. The server enforces this regardless.
    */
   owner_user_id: number | null;
+  /**
+   * Whether THIS user may delete THIS lead, decided by the server rule that will refuse it.
+   *
+   * Sent because the screen kept getting it wrong on its own: it hid Delete only when a lead had an
+   * owner who was somebody else, while `remove()` refuses whenever the agent is not the owner - and
+   * with every lead here owned by nobody, the two never agreed. Optional so an older response, or a
+   * surface that does not send it, keeps the button rather than silently losing it.
+   */
+  can_delete?: boolean;
   call_count: number;
   task_count: number;
   pending_task_count: number;
@@ -220,7 +229,6 @@ export interface LeadDetail extends Lead {
 export interface LeadStats {
   total: number;
   noCalls: number;
-  websiteEnquiries: number;
   recent: number;
   byStatus: { hot: number; warm: number; cold: number; mild: number; closed: number };
   /** Lead counts by source for the Dashboard. `other` absorbs everything not broken out. */
@@ -250,6 +258,13 @@ export interface LeadFilters {
   maxAge: string;
   assignedTo: string;
   recent: string;
+  /**
+   * 'true' narrows to leads with no logged call.
+   *
+   * The No Calls tile counted these and then filtered nothing - it cleared the Recent filter and
+   * raised a toast, so the list showed everybody while the message named a smaller number.
+   */
+  noCalls: string;
 }
 
 export interface LeadOptions {

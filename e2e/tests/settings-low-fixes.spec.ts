@@ -194,7 +194,9 @@ test.describe('L10 — a CRM email leaves from a CRM mailbox', () => {
     // A send that did not happen is still something an administrator has to be able to look up.
     await signIn(page, 'superAdmin');
     const log = await apiGet(page, '/api/crm-settings/email-log?limit=10');
-    const rows = (log.body as any[]) ?? [];
+    // `{ data, meta }` since the log learned to report how much it is withholding; the bare array
+    // could not say whether a short page was the end of the log or the end of the request.
+    const rows = (log.body as { data?: any[] })?.data ?? [];
     expect(rows.some((r) => r.subject?.includes('L10')), 'the probe sends must appear in the log').toBe(true);
   });
 });

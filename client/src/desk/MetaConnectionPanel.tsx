@@ -269,17 +269,30 @@ export default function MetaConnectionPanel({ compact = false }: { compact?: boo
           </ul>
         </>
       )}
+      {/*
+        * NOT GATED ON `compact`, and that was the whole defect rather than a styling preference.
+        *
+        * A webhook stops silently, and "no deliveries" looks exactly like "a quiet week", so this
+        * warning is the only thing in the application that says leads are arriving a quarter of an
+        * hour late. It used to sit inside the `!compact` block below - and the ONLY place this
+        * panel is mounted passes `compact`. The warning was unreachable in the running app: every
+        * screen a person could open reported the integration healthy while no webhook had ever been
+        * delivered.
+        *
+        * The detail underneath it stays compact-gated. A summary may reasonably omit the event
+        * list; it may not omit the one signal that says the thing is broken.
+        *
+        * Polling still collects the leads, so this warns rather than alarms.
+        */}
+      {webhook?.stalled && webhook.stalled_reason && (
+        <div className="meta-alert warn" style={{ padding: '10px 12px', marginBottom: 8 }}>
+          <strong>Connected, but nothing is arriving</strong>
+          <p>{webhook.stalled_reason}</p>
+        </div>
+      )}
       {!compact && webhook && (
         <>
           <div className="modal-sub">Webhook Health</div>
-          {/* A webhook stops silently, and "no deliveries" looks exactly like "a quiet week".
-              Polling still collects the leads, so this warns rather than alarms. */}
-          {webhook.stalled && webhook.stalled_reason && (
-            <div className="meta-alert warn" style={{ padding: '10px 12px', marginBottom: 8 }}>
-              <strong>Connected, but nothing is arriving</strong>
-              <p>{webhook.stalled_reason}</p>
-            </div>
-          )}
           <p className="help">
             {webhook.total} delivery(ies) received{webhook.failed > 0 ? `, ${webhook.failed} failed` : ''} ·
             last {stamp(webhook.last_received_at)}

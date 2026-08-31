@@ -45,8 +45,20 @@ export const crmEmailAction = <T = CrmSendResult>(action: string, data: Record<s
 export const listReferralCodes = (): Promise<CrmReferralCode[]> =>
   api.get<CrmReferralCode[]>('/api/crm-settings/referral-codes').then((r) => r.data);
 
-export const listCrmEmailLog = (limit = 50): Promise<CrmEmailLogRow[]> =>
-  api.get<CrmEmailLogRow[]>('/api/crm-settings/email-log', { params: { limit } }).then((r) => r.data);
+/**
+ * One page of the CRM send log, with the count the screen needs to say what it is NOT showing.
+ *
+ * The endpoint used to answer with a bare array, so a capped request looked identical to a complete
+ * one - which on this brokerage's data hid a fortnight, failures included.
+ */
+export interface CrmEmailLogPage {
+  data: CrmEmailLogRow[];
+  meta: { total: number; limit: number; offset: number; complete: boolean; kind?: string | null };
+}
+
+export const listCrmEmailLog = (limit = 50, offset = 0, kind = ''): Promise<CrmEmailLogPage> =>
+  api.get<CrmEmailLogPage>('/api/crm-settings/email-log', { params: { limit, offset, kind: kind || undefined } })
+    .then((r) => r.data);
 
 export const sendCrmBroadcast = (message: string, type = 'info'): Promise<{ recipients: number; message: string }> =>
   api.post<{ recipients: number; message: string }>('/api/crm-settings/broadcasts', { message, type }).then((r) => r.data);

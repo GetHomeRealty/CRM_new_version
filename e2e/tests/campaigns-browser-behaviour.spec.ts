@@ -90,6 +90,18 @@ async function fillBuilder(page: Page, name: string): Promise<number> {
     return Number(/(\d+)\s+recipient/.exec(txt)?.[1] ?? 0);
   }, { timeout: 15_000 }).toBeGreaterThan(0);
 
+  /*
+   * ARM THE UNFILTERED AUDIENCE, which is now a deliberate act rather than the opening state.
+   *
+   * These tests send to the whole of the caller's own book, and until CRM-011 that needed no
+   * choosing: the composer opened with every filter at "any", the count showing the entire lead
+   * table and the commit button already live. That was the defect - one careless click from mailing
+   * the database - so an unfiltered send now asks first. Narrowing any axis would arm it too; these
+   * tests want everybody, so they tick the box, exactly as a person would.
+   */
+  const everyone = b.getByRole('checkbox');
+  if (await everyone.count()) await everyone.first().check();
+
   const txt = await b.locator('.camp-audience').innerText();
   return Number(/(\d+)\s+recipient/.exec(txt)?.[1] ?? 0);
 }
@@ -112,6 +124,26 @@ async function scheduleFor(page: Page, daysAhead = 3) {
 const commitButton = (page: Page) =>
   builder(page).getByRole('button', { name: /^(Send to|Schedule for)\s+\d+/ });
 
+/** The send confirmation, which now stands between the commit button and the campaign. */
+const confirmDialog = (page: Page) =>
+  page.locator('.modal').filter({ hasText: /Send this campaign\?|Schedule this campaign\?/ });
+
+const confirmButton = (page: Page) =>
+  confirmDialog(page).getByRole('button', { name: /^Confirm (Send|schedule)$/ });
+
+/**
+ * Commit the campaign: press the button, then confirm.
+ *
+ * COMMITTING IS TWO STEPS NOW. Sending used to happen on the one click these tests made; a
+ * confirmation naming the count, the audience, the sender and the subject was added because
+ * mailing clients was the last irreversible act in this module that never asked. The tests keep
+ * doing what a person does, which is now one more press.
+ */
+async function commit(page: Page): Promise<void> {
+  await commitButton(page).click();
+  await confirmButton(page).click();
+}
+
 // ================================================================ create
 
 test.describe('creating a campaign', () => {
@@ -125,7 +157,7 @@ test.describe('creating a campaign', () => {
     expect(count).toBeGreaterThan(0);
 
     await scheduleFor(page);
-    await commitButton(page).click();
+    await commit(page);
     await expect(builder(page)).toBeHidden({ timeout: 30_000 });
 
     const rows = await findByName(page, name);
@@ -195,7 +227,13 @@ test.describe('pressing the commit button twice', () => {
     await fillBuilder(page, name);
     await scheduleFor(page);
 
-    await commitButton(page).dblclick({ delay: 0 });
+    /*
+     * THE DOUBLE CLICK MOVED WITH THE COMMIT. Double-clicking the button now only opens the
+     * confirmation twice, which is harmless and proves nothing; the press that can create a
+     * campaign is the confirm, so that is the one to hit twice.
+     */
+    await commitButton(page).click();
+    await confirmButton(page).dblclick({ delay: 0 });
     await expect(builder(page)).toBeHidden({ timeout: 30_000 });
 
     const rows = await findByName(page, name);
@@ -215,7 +253,7 @@ test.describe('campaign state and navigation', () => {
     const name = unique('ToCancel');
     await fillBuilder(page, name);
     await scheduleFor(page);
-    await commitButton(page).click();
+    await commit(page);
     await expect(builder(page)).toBeHidden({ timeout: 30_000 });
 
     const rows = await findByName(page, name);
@@ -262,7 +300,7 @@ test.describe('sessions and stale tabs', () => {
 
     // The session ends while the builder is open.
     await context.clearCookies();
-    await commitButton(page).click();
+    await commit(page);
     await page.waitForTimeout(2000);
 
     const check = await browser.newContext();
@@ -285,7 +323,7 @@ test.describe('sessions and stale tabs', () => {
       const name = unique('DeletedElsewhere');
       await fillBuilder(tabA, name);
       await scheduleFor(tabA);
-      await commitButton(tabA).click();
+      await commit(tabA);
       await expect(builder(tabA)).toBeHidden({ timeout: 30_000 });
 
       const id = (await findByName(tabA, name))[0].id;
@@ -322,7 +360,7 @@ test.describe('sessions and stale tabs', () => {
       const name = unique('AgentAOnly');
       await fillBuilder(a, name);
       await scheduleFor(a);
-      await commitButton(a).click();
+      await commit(a);
       await expect(builder(a)).toBeHidden({ timeout: 30_000 });
 
       const mine = await findByName(a, name);

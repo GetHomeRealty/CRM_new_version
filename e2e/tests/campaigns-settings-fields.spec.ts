@@ -205,6 +205,15 @@ test.describe('every campaign audience filter reaches the stored campaign', () =
       await builder(page).locator('input[type="datetime-local"]')
         .fill(new Date(Date.now() + 3 * 86_400_000).toISOString().slice(0, 16));
       await commit.click();
+      /*
+       * THE COMMIT BUTTON OPENS A CONFIRMATION NOW, for a scheduled send as well as an immediate
+       * one — see CRM-030. Without this the builder is still on screen behind the dialog and the
+       * wait below times out, which is what this test did until it was re-run against that change.
+       */
+      // This suite schedules, so the dialog reads "Schedule this campaign?" / "Confirm schedule";
+      // an immediate send says "Send this campaign?" / "Confirm Send". Both are matched.
+      await page.locator('.modal').filter({ hasText: /(Send|Schedule) this campaign\?/ })
+        .getByRole('button', { name: /^Confirm (Send|schedule)$/ }).click();
       await expect(builder(page)).toBeHidden({ timeout: 30_000 });
 
       const list = await apiGet(page, '/api/campaigns');
@@ -256,6 +265,9 @@ test.describe('every campaign audience filter reaches the stored campaign', () =
     await builder(page).locator('input[type="datetime-local"]')
       .fill(new Date(Date.now() + 3 * 86_400_000).toISOString().slice(0, 16));
     await commit.click();
+    // Same confirmation step as above — see CRM-030.
+    await page.locator('.modal').filter({ hasText: /(Send|Schedule) this campaign\?/ })
+      .getByRole('button', { name: /^Confirm (Send|schedule)$/ }).click();
     await expect(builder(page)).toBeHidden({ timeout: 30_000 });
 
     const list = await apiGet(page, '/api/campaigns');

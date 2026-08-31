@@ -20,6 +20,8 @@ import { AuthService } from './auth.service';
 import { AuthGuard } from './guards/auth.guard';
 import { CurrentUser } from './decorators';
 import { LoginDto } from './dto/login.dto';
+import { ForgotPasswordDto, ResetPasswordDto } from './dto/password-reset.dto';
+import { PasswordResetService } from './password-reset.service';
 import { RegisterDto } from './dto/register.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import type { AuthPayload, AuthUserRecord } from './auth.types';
@@ -51,6 +53,7 @@ export class AuthController {
     private readonly mfa: MfaService,
     private readonly policy: MfaPolicyService,
     private readonly devices: TrustedDeviceService,
+    private readonly reset: PasswordResetService,
   ) {}
 
   /**
@@ -323,6 +326,39 @@ export class AuthController {
     if (!user) throw new UnauthorizedException({ message: 'Unauthenticated.' });
     await this.auth.changePassword(user, dto.current_password, dto.password, dto.password_confirmation);
     return { message: 'Password updated' };
+  }
+
+  /**
+   * "I have forgotten my password" — send a link.
+   *
+   * UNAUTHENTICATED BY NECESSITY, which is what shapes it. Throttled with the same limit as sign-in,
+   * and the response is identical whether the address exists, does not exist, or belongs to a
+   * disabled account: an endpoint anybody can call must not be able to answer "is this a customer".
+   */
+  @Post('forgot-password')
+  @Throttle({ default: AUTH_LIMIT })
+  @HttpCode(200)
+  async forgotPassword(@Body() dto: ForgotPasswordDto): Promise<{ message: string }> {
+    // Read through `ConfigService`, as every other setting on this controller is.
+    const frontendUrl = this.config.get<AppConfig['frontendUrl']>('frontendUrl') ?? '';
+    return this.reset.request(dto.email, frontendUrl);
+  }
+
+  /**
+   * Spend the link and set a new password.
+   *
+   * `endSessionsFor` is handed in rather than reached for, so the reset ends every session opened
+   * with the OLD password — the same thing changing a password from inside the application does,
+   * and most of the point when somebody believes theirs was stolen.
+   */
+  @Post('reset-password')
+  @Throttle({ default: AUTH_LIMIT })
+  @HttpCode(200)
+  async resetPassword(@Body() dto: ResetPasswordDto): Promise<{ message: string }> {
+    return this.reset.reset(
+      dto.email, dto.token, dto.password, dto.password_confirmation,
+      (userId) => this.auth.endSessionsFor(userId),
+    );
   }
 
   @Get('registration-open')

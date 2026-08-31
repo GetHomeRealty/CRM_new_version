@@ -1,5 +1,6 @@
 import { useArea } from './AreaContext';
 import { crmPath, AREA_LABEL, AREA_SHORT, type Area } from './area';
+import ConfirmDialog, { useConfirm } from './ConfirmDialog';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -25,6 +26,15 @@ const PHOTO_MAX_MB = 4;
  * else's account from this screen.
  */
 export default function AccountSettingsPage() {
+  /*
+   * THE SAME UNCONFIRMED DELETE AS THE CRM ACCOUNT SCREEN, on a second page.
+   *
+   * The audit found it once, on CRM > Account. The identical row - Sync, Make primary, Test, Edit,
+   * Delete, every one `btn ghost sm` - is rendered here too, and this file imported no confirmation
+   * component either. Fixing one and not the other would have left the habit intact on the screen
+   * most people reach through their own profile.
+   */
+  const { confirm, askDelete, closeConfirm } = useConfirm();
   const { area, link } = useArea();
   const toast = useToast();
   const navigate = useNavigate();
@@ -346,7 +356,21 @@ export default function AccountSettingsPage() {
                     onClick={() => void act(a.id, () => testMyMailAccount(a.id).then((r) => toast(r.message, 'ok')), 'Test sent.')}>Test</button>
                   {a.encryption !== 'oauth' && <button className="btn ghost sm" type="button" onClick={() => setEditing(a)}>Edit</button>}
                   <button className="btn ghost sm" type="button" disabled={busy === a.id}
-                    onClick={() => void act(a.id, () => deleteMyMailAccount(a.id), 'Account removed.')}>Delete</button>
+                    onClick={() => askDelete({
+                      title: `Remove ${a.from_email}?`,
+                      message: a.is_default
+                        ? `This is the primary ${AREA_LABEL[(a.scope ?? area) as Area]} account. Automated email has no address of its own and falls back to the primary, so removing it stops those messages until another is made primary.`
+                        : 'Mail already sent from this address is unaffected.',
+                      linked: a.is_default
+                        ? ['Welcome emails, reminders and campaigns sent for this area', 'Anything scheduled to go out from this address']
+                        : undefined,
+                      note: 'You can connect the address again afterwards, but its stored credentials are not kept.',
+                      confirmLabel: 'Remove account',
+                      onConfirm: () => {
+                        void act(a.id, () => deleteMyMailAccount(a.id), 'Account removed.');
+                        closeConfirm();
+                      },
+                    })}>Delete</button>
                 </div>
               </li>
             ))}
@@ -427,6 +451,7 @@ export default function AccountSettingsPage() {
           onSaved={() => { setEditing(null); void load(); }}
         />
       )}
+      <ConfirmDialog confirm={confirm} onClose={closeConfirm} />
     </>
   );
 }

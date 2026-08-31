@@ -78,6 +78,24 @@ export default function MailComposer({ area, initial, onClose, onDone }: Props) 
     return picked.map((p) => ({ filename: p.filename, mime: p.mime, data: p.data }));
   };
 
+  /*
+   * WHETHER THERE IS ANYBODY TO SEND TO.
+   *
+   * The Send button was live from the moment the composer opened - no recipient, no subject, no
+   * body, and still pressable. On its own that only earns a refusal from the server, but this is the
+   * one screen in the CRM where somebody types a free-text address and mails it from the
+   * brokerage's own account with attachments, and a button that invites a press it cannot honour is
+   * a poor thing to have on that path.
+   *
+   * ANY OF THE THREE FIELDS COUNTS. A message addressed only by BCC is a real thing people send, so
+   * requiring `to` specifically would refuse legitimate mail to fix an empty form.
+   *
+   * PRESENCE, NOT VALIDITY. The threshold is deliberately "something has been typed" rather than "a
+   * well-formed address": disabling Send while somebody is half-way through typing an address reads
+   * as the application being broken, and the server is the authority on whether an address is real.
+   */
+  const hasRecipient = [to, cc, bcc].some((v) => v.trim().length > 0);
+
   const payload = (): ComposeBody => ({
     to, cc, bcc, subject,
     body_html: body,
@@ -113,6 +131,12 @@ export default function MailComposer({ area, initial, onClose, onDone }: Props) 
   };
 
   const send = async () => {
+    // Belt as well as braces: the button is disabled, but a keyboard submit or a stale render must
+    // not be the only thing standing between an empty form and a send attempt.
+    if (!hasRecipient) {
+      toast('Add a recipient before sending', 'bad');
+      return;
+    }
     setBusy('send');
     try {
       await sendMailboxMessage(area, payload(), draftId);
@@ -210,7 +234,10 @@ export default function MailComposer({ area, initial, onClose, onDone }: Props) 
           <button className="btn sm" disabled={busy !== null} onClick={save}>
             {busy === 'save' ? 'Saving…' : 'Save draft'}
           </button>
-          <button className="btn primary sm" disabled={busy !== null} onClick={send}>
+          <button
+            className="btn primary sm" disabled={busy !== null || !hasRecipient} onClick={send}
+            title={hasRecipient ? undefined : 'Add a recipient first'}
+          >
             {busy === 'send' ? 'Sending…' : 'Send'}
           </button>
         </div>

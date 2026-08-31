@@ -32,13 +32,29 @@ export interface EmailLimit {
 export async function emailLimitFor(prisma: PrismaService, userId: number, area: Area): Promise<EmailLimit> {
   const user = await prisma.users.findUnique({ where: { id: userId }, select: { role: true } });
   const max = LIMITS[String(user?.role ?? '')] ?? null;
-  if (max === null) return { max: null, used: 0, canAdd: true };
 
-  // Counted within the area only. An account with no scope pre-dates the split and is deliberately
-  // NOT counted against either area's limit: it is already visible on both sides, and counting it
-  // twice would leave an agent unable to connect anywhere until they had assigned it.
+  /*
+   * `used` IS COUNTED EVEN WHEN THERE IS NO LIMIT.
+   *
+   * An unlimited role used to short-circuit here and return `used: 0` without counting, so an
+   * administrator with two CRM accounts and two Desk accounts was told none were in use, at every
+   * scope. The number was simply untrue, and it is published by an endpoint whose stated contract
+   * is how many accounts are in use.
+   *
+   * IT WAS NEVER A CORRECTNESS FAULT, and it is worth being exact about that rather than
+   * overstating it: the short-circuit only ran when `max` was null, and with no maximum `canAdd` is
+   * true whatever `used` says. Nothing was ever wrongly allowed or refused. The reported figure was
+   * the only casualty - which is why this is Trivial, and why the fix is to count rather than to
+   * delete the field as its sibling defect required.
+   *
+   * Counted within the area only. An account with no scope pre-dates the split and is deliberately
+   * NOT counted against either area's limit: it is already visible on both sides, and counting it
+   * twice would leave an agent unable to connect anywhere until they had assigned it.
+   */
   const used = await prisma.mail_accounts.count({ where: { user_id: userId, scope: area } });
-  return { max, used, canAdd: used < max };
+
+  // `canAdd` still comes from the limit, not from the count: no maximum means no ceiling to reach.
+  return { max, used, canAdd: max === null || used < max };
 }
 
 /**

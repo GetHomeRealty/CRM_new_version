@@ -145,22 +145,43 @@ describe('unassigned brokerage leads can be handed out', () => {
   });
 
   it('hands over only as many as asked for, oldest first', async () => {
+    /*
+     * THE FIXTURE MAKES THE TWO SORTS DISAGREE, which is the only way this test can check the rule
+     * it is named after.
+     *
+     * As written it built its expectation with `orderBy: { id: 'asc' }` — the same sort the code
+     * used — so it checked the implementation against itself and would have passed whichever rule
+     * was in force. `scene()` also gave every pool lead the same `created_at`, so the two orders
+     * could not have diverged even if the expectation had asked for a different one.
+     *
+     * They diverge in real data: on the development database 220 pairs of live leads have the LOWER
+     * id and the LATER creation date. So these four are created in ascending id order with
+     * DESCENDING dates, and "oldest first" now names a set that id order would not.
+     */
     await inRollback(async (tx) => {
       await emptyPool(tx);
-      const { successor, admin } = await scene(tx, 5);
-      const oldest = await tx.leads.findMany({
-        // Mirrors `eligibleWhere()` exactly, `deleted_at` included — an expectation that asks a
-        // DIFFERENT question from the code under test is not checking that code.
-        where: { deleted_at: null, owner_user_id: null, assigned_to: null }, select: { id: true }, orderBy: { id: 'asc' }, take: 2,
-      });
+      const { successor, admin } = await scene(tx, 0);
+
+      const day = (d: number) => new Date(Date.UTC(2026, 0, d));
+      const made: { id: number; day: number }[] = [];
+      for (const d of [40, 30, 20, 10]) {                    // newest inserted first
+        const lead = await tx.leads.create({
+          data: { name: `Pool day ${d}`, email: `pool-order-${Date.now()}-${d}@x.test`, created_at: day(d), updated_at: day(d) },
+        });
+        made.push({ id: lead.id, day: d });
+      }
+      // Ascending ids, descending age: the last one inserted is the longest-waiting.
+      expect(made.map((m) => m.id)).toEqual([...made.map((m) => m.id)].sort((a, b) => a - b));
+      const oldestTwo = [...made].sort((a, b) => a.day - b.day).slice(0, 2).map((m) => m.id);
 
       const result = await new LeadTransferService(tx, auditStub).transfer(as(admin), successor.id, 2);
 
       expect(result.moved).toBe(2);
-      expect(result.remaining).toBe(3);
-      // Identified by ASSIGNMENT now, not ownership — the brokerage still owns all five.
-      const moved = await tx.leads.findMany({ where: { assigned_to: successor.id }, select: { id: true }, orderBy: { id: 'asc' } });
-      expect(moved.map((m) => m.id)).toEqual(oldest.map((o) => o.id));
+      expect(result.remaining).toBe(2);
+      // Identified by ASSIGNMENT now, not ownership — the brokerage still owns all four.
+      const moved = await tx.leads.findMany({ where: { assigned_to: successor.id }, select: { id: true } });
+      // THE DEFECT: `id: 'asc'` took the two NEWEST here, while the dialog promised the opposite.
+      expect(moved.map((m) => m.id).sort((a, b) => a - b)).toEqual([...oldestTwo].sort((a, b) => a - b));
     });
   });
 

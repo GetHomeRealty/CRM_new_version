@@ -212,9 +212,36 @@ export default function CalendarPage() {
 
   const today = iso(new Date());
   const todayEvents = byDate.get(today) ?? [];
+  /**
+   * How far "Upcoming" looks ahead. Tomorrow and the day after — two days, not two entries.
+   */
+  const UPCOMING_DAYS = 2;
+
+  /** The last date Upcoming includes, inclusive. Local calendar days, never UTC-shifted. */
+  const upcomingUntil = useMemo(() => {
+    const d = new Date();
+    d.setDate(d.getDate() + UPCOMING_DAYS);
+    return iso(d);
+  }, [today]);
+
+  /**
+   * The next two days' appointments.
+   *
+   * This listed the next EIGHT appointments whenever they fell — which on a quiet calendar reached
+   * weeks ahead and on a busy one stopped part-way through tomorrow. Neither is what a person
+   * glancing at "Upcoming" beside today's list is asking; they want to know what is coming next,
+   * and a fixed count answers a different question depending on how full the diary is.
+   *
+   * NO COUNT CAP ANY MORE, deliberately. The window is the limit now, so a cap could only hide
+   * appointments that fall INSIDE the range being asked for — silently, with nothing on screen to
+   * say so. That is the same defect the month grid's "+N more" was built to fix, and reintroducing
+   * it here would be worse: this panel has no "more" to click.
+   */
   const upcoming = useMemo(
-    () => events.filter((e) => e.date > today).sort((a, b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time)).slice(0, 8),
-    [events, today],
+    () => events
+      .filter((e) => e.date > today && e.date <= upcomingUntil)
+      .sort((a, b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time)),
+    [events, today, upcomingUntil],
   );
   // Holidays + festivals in the month currently shown, listed under Upcoming Events.
   const monthHolidays = useMemo(
@@ -412,9 +439,15 @@ export default function CalendarPage() {
           */}
           <div className="cal-below">
             <div className="card">
+              {/*
+                * The window is named in the heading and in the empty state. Without it, a known
+                * appointment three days out is simply absent and the panel gives no reason —
+                * which reads as a bug rather than as a boundary.
+                */}
               <div className="modal-h" style={{ fontSize: 14 }}>Upcoming Events<span className="sec-count">{upcoming.length}</span></div>
+              <div className="help" style={{ marginTop: -4 }}>Next {UPCOMING_DAYS} days</div>
               {upcoming.length === 0
-                ? <div className="help">Nothing upcoming.</div>
+                ? <div className="help">Nothing in the next {UPCOMING_DAYS} days.</div>
                 : (
                   <div className="cal-scroll">
                     {upcoming.map((e) => <EventRow key={e.id} e={e} showDate canEdit={canEdit} onEdit={() => setEditing(e)} onDelete={() => setToDelete(e)} onDeal={() => navigate(`${deskPath(`transactions/${e.transaction_id}`)}?mode=view`)} />)}
@@ -524,6 +557,22 @@ export default function CalendarPage() {
           options={options}
           onClose={() => setEditing(null)}
           onSaved={() => { setEditing(null); load(); }}
+          /*
+           * Hands the editor the SAME deletion the event rows use, rather than a second one. The
+           * confirm dialog below is what asks whether a repeating appointment loses just this
+           * occurrence or this one and every later one, so routing through `setToDelete` keeps that
+           * question — and its answer — identical wherever the delete was started from.
+           *
+           * The editor is closed first: the confirm is a dialog in its own right, and stacking it on
+           * top of an open form leaves the appointment being edited visible behind the thing asking
+           * whether to destroy it.
+           *
+           * Undefined for a new event and for a viewer without `calendar: edit`, which is what stops
+           * the button rendering at all.
+           */
+          onDelete={canEdit && editing !== 'new'
+            ? () => { const target = editing as CalendarEvent; setEditing(null); setToDelete(target); }
+            : undefined}
         />
       )}
 

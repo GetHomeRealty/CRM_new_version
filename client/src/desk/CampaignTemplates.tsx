@@ -299,6 +299,31 @@ function TemplateAttachments({ template, canEdit, onChanged }: {
     }
   };
 
+  /*
+   * ITS OWN CONFIRMATION — the third component in this codebase to have needed one.
+   *
+   * `CampaignTemplates` above mounts a `ConfirmDialog` and the template delete goes through it.
+   * This is a SEPARATE component, so none of that was in scope, and the attachment Remove beside it
+   * fired on a single click. The same shape as the recycle bin's Delete Forever and the Tags
+   * window's tag delete: the machinery exists, and the component that needed it did not have it.
+   *
+   * AN ATTACHMENT IS REPLACEABLE, which is why this is the mildest of the three. It is worth asking
+   * anyway because of WHEN it is pressed: a file removed shortly before a send means the mailing
+   * goes out incomplete to every recipient, and nothing on the send screen shows an attachment that
+   * is no longer there.
+   */
+  const { confirm, askDelete, closeConfirm } = useConfirm();
+
+  const confirmDrop = (attachmentId: number, name: string) => askDelete({
+    title: `Remove “${name}”?`,
+    message: 'It is deleted from the server. Every campaign built from this template afterwards goes out without it.',
+    note: 'The original file is still wherever it came from — you would need to attach it again.',
+    confirmLabel: 'Remove file',
+    onConfirm: async () => {
+      try { await drop(attachmentId, name); } finally { closeConfirm(); }
+    },
+  });
+
   const drop = async (attachmentId: number, name: string) => {
     setBusy(true);
     try {
@@ -324,7 +349,7 @@ function TemplateAttachments({ template, canEdit, onChanged }: {
               <span className="tpl-file-name" title={a.filename}>📎 {a.filename}</span>
               <span className="muted">{kb(a.size)}</span>
               {canEdit && (
-                <button className="btn ghost sm" type="button" disabled={busy} onClick={() => void drop(a.id, a.filename)}>Remove</button>
+                <button className="btn ghost sm" type="button" disabled={busy} onClick={() => confirmDrop(a.id, a.filename)}>Remove</button>
               )}
             </li>
           ))}
@@ -337,6 +362,7 @@ function TemplateAttachments({ template, canEdit, onChanged }: {
         </label>
       )}
       <span className="help">Every attachment is sent with every recipient's copy of this template.</span>
+      <ConfirmDialog confirm={confirm} onClose={closeConfirm} />
     </div>
   );
 }
@@ -363,6 +389,23 @@ function TemplateEditor({ template, options, onClose, onSaved }: {
   const [showPreview, setShowPreview] = useState(false);
   const [blocks, setBlocks] = useState<Block[]>(() => (template ? [] : starterDesign().blocks));
   const [styles, setStyles] = useState<Styles>(() => (template ? BLANK_STYLES : starterDesign().styles));
+  /*
+   * WHETHER THE BUILDER'S BLOCKS ARE THE REAL BODY, or merely what an empty canvas would produce.
+   *
+   * The builder can only read templates it wrote — it finds them by a marker it leaves in the body.
+   * Opening a hand-written HTML template in it produced an EMPTY canvas, indistinguishable from a
+   * template with nothing in it, and switching back to HTML wrote that empty design over the body:
+   * 147 bytes of real content replaced by 352 bytes of `{"v":2,"blocks":[],...}`, with Update
+   * Template sitting there ready to make it permanent.
+   *
+   * Nothing said the parse had failed, so the natural reading was "this template is blank" and the
+   * natural response was to build one and save it.
+   *
+   * This flag is what the body-writing toggle checks. It is true only when the blocks genuinely
+   * came from this template, or when somebody has been told the HTML will be replaced and said yes.
+   */
+  const [designOwnsBody, setDesignOwnsBody] = useState(!template);
+  const { confirm: rebuild, askDelete: askRebuild, closeConfirm: closeRebuild } = useConfirm();
 
   // The list response omits the body to stay small; fetch it when the editor opens.
   useEffect(() => {
@@ -372,11 +415,56 @@ function TemplateEditor({ template, options, onClose, onSaved }: {
         setForm((f) => ({ ...f, content: full.content }));
         // If it was built with the visual builder, reopen it there; otherwise stay in HTML.
         const parsed = parseBuilder(full.content);
-        if (parsed) { setBlocks(parsed.blocks); setStyles(parsed.styles); setMode('design'); }
+        if (parsed) {
+          setBlocks(parsed.blocks); setStyles(parsed.styles); setMode('design');
+          // Built here, so the builder's blocks ARE the body and may write it back.
+          setDesignOwnsBody(true);
+        }
       })
       .catch(() => toast('Could not load the template body', 'bad'))
       .finally(() => setLoading(false));
   }, [template, toast]);
+
+  /**
+   * Open the visual builder, or explain why it cannot open this template.
+   *
+   * Three cases, and only the last one used to happen silently:
+   *   · the body was built here — reopen it with its blocks;
+   *   · the body is empty — there is nothing to lose, so start designing;
+   *   · the body is HTML the builder did not write — say so, and let the person decide.
+   */
+  const openBuilder = () => {
+    if (designOwnsBody) { setMode('design'); return; }
+
+    const parsed = parseBuilder(form.content);
+    if (parsed) {
+      setBlocks(parsed.blocks); setStyles(parsed.styles);
+      setDesignOwnsBody(true); setMode('design');
+      return;
+    }
+    if (!form.content.trim()) {
+      setBlocks(starterDesign().blocks); setStyles(starterDesign().styles);
+      setDesignOwnsBody(true); setMode('design');
+      return;
+    }
+
+    askRebuild({
+      title: 'The visual builder cannot open this template',
+      message: 'It was written as HTML, and the builder can only edit templates it made itself. '
+        + 'Starting a design here replaces the HTML below with a blank canvas.',
+      linked: ['Everything in the current body — headings, paragraphs, colours and layout'],
+      note: 'Your saved template is untouched either way until you press Update Template. '
+        + 'Choose Keep the HTML to go on editing it in the HTML view.',
+      confirmLabel: 'Replace it with a new design',
+      onConfirm: () => {
+        setBlocks(starterDesign().blocks);
+        setStyles(starterDesign().styles);
+        setDesignOwnsBody(true);
+        setMode('design');
+        closeRebuild();
+      },
+    });
+  };
 
   const set = (k: keyof typeof form, v: string) => setForm((f) => ({ ...f, [k]: v }));
   const err = (k: string) => (errors[k]?.length ? <div className="field-err">{errors[k][0]}</div> : null);
@@ -474,9 +562,15 @@ function TemplateEditor({ template, options, onClose, onSaved }: {
               <label style={{ margin: 0 }}>Body *</label>
               <div className="seg">
                 <button type="button" className={`seg-btn${mode === 'design' ? ' on' : ''}`}
-                  onClick={() => setMode('design')}>🎨 Visual builder</button>
+                  onClick={() => openBuilder()}>🎨 Visual builder</button>
                 <button type="button" className={`seg-btn${mode === 'html' ? ' on' : ''}`}
-                  onClick={() => { setForm((f) => ({ ...f, content })); setMode('html'); }}>{'</>'} HTML</button>
+                  onClick={() => {
+                    // ONLY WRITES THE BODY WHEN THE DESIGN IS THE BODY. This line is what destroyed
+                    // a hand-written template: in design mode `content` is the rendered blocks, so
+                    // an empty canvas overwrote real HTML on the way back.
+                    if (designOwnsBody) setForm((f) => ({ ...f, content }));
+                    setMode('html');
+                  }}>{'</>'} HTML</button>
               </div>
               {/* Preview REPLACES the builder rather than sitting beside it. A half-width preview
                   answers "does this look right?" with a squeezed column that is not the shape the
@@ -556,6 +650,11 @@ function TemplateEditor({ template, options, onClose, onSaved }: {
           </div>
         </form>
       </div>
+      {/*
+        The editor's own confirmation. `CampaignTemplates` above mounts one, but this is a separate
+        component — the third time in this codebase that a child modal has needed its own.
+      */}
+      <ConfirmDialog confirm={rebuild} onClose={closeRebuild} />
     </div>,
     document.body,
   );

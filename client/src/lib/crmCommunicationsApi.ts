@@ -104,3 +104,11 @@ export const createCrmTemplate = (body: {
   name: string; subject: string; body_html: string; event_key?: string; mail_account_id?: number | null;
 }): Promise<{ id: number; mapped: boolean; notice: string | null }> =>
   api.post<{ id: number; mapped: boolean; notice: string | null }>('/api/crm-communications/templates', body).then((r) => r.data);
+
+/**
+ * Remove a CRM template. `was_connected` distinguishes the two very different outcomes: an
+ * unconnected draft simply goes, while a connected one resets that email to its built-in default
+ * wording — the event keeps sending either way.
+ */
+export const deleteCrmTemplate = (id: number): Promise<{ deleted: boolean; was_connected: boolean; name: string }> =>
+  api.delete<{ deleted: boolean; was_connected: boolean; name: string }>(`/api/crm-communications/templates/${id}`).then((r) => r.data);

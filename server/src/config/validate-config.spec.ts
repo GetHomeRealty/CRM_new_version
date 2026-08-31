@@ -105,6 +105,18 @@ describe('production configuration guard', () => {
       expect(productionConfigProblems({ ...good(), frontendUrl: '' }).join(' ')).toContain('FRONTEND_URL');
     });
 
+    it('refuses plain http, because password-reset links are built from it', () => {
+      /*
+       * This is where "the reset URL must be HTTPS" is actually ENFORCED. `PasswordResetService`
+       * builds its link by concatenating this value, so it cannot make the link safer than the
+       * origin it is handed - a single-use credential would ride over cleartext, readable by
+       * anything between the recipient and the site. Refusing the boot is the only place the rule
+       * can live, so this test is what stops it being quietly deleted.
+       */
+      const cfg = { ...good(), frontendUrl: 'http://gethomehub.ca' };
+      expect(productionConfigProblems(cfg).join(' ')).toContain('is not https');
+    });
+
     it('rejects a trailing slash, which would produce "//" in every generated link', () => {
       expect(productionConfigProblems({ ...good(), frontendUrl: 'https://gethomehub.ca/' }).join(' ')).toContain('trailing slash');
     });
