@@ -122,6 +122,16 @@ export class TransactionsWriteService {
   async store(user: AuthUserRecord | null, body: Record<string, unknown>): Promise<{ data: Record<string, unknown> }> {
     const type = String(body.type ?? '');
     this.req(body, 'type');
+    /*
+     * TD-068 ON CREATE. The catalogue check existed only on update; creation required a type to be
+     * PRESENT and then stored whatever arrived - POST with 'Sale Listing', and even 'zzz-not-a-type',
+     * both returned 201. Every later rule keys off the type: which statuses it may hold, which
+     * documents it generates, how its commission is worked out. Found by REG-TR-027 on 2026-08-31.
+     */
+    if (!(TRANSACTION_TYPES as readonly string[]).includes(type)) {
+      const m = `"${type}" is not a transaction type this system offers. Allowed: ${TRANSACTION_TYPES.join(', ')}.`;
+      throw new UnprocessableEntityException({ message: m, errors: { type: [m] } });
+    }
     this.req(body, 'property');
     this.req(body, 'status');
     const isListing = isListingType(type);
