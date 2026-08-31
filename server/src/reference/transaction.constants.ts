@@ -86,6 +86,16 @@ export const defaultStatusFor = (type: string): string =>
  * `Sold` and `Leased` are deliberately absent — they mark the deal as having been transacted, not
  * finished, and `Sold + Closed` is the ordinary end state of a listing.
  */
+/**
+ * The statuses that say a deal is STILL RUNNING. None may sit beside a terminal status.
+ *
+ * TD-027: "Active" and "Closed" were both accepted on one deal - still on the market and finished
+ * at the same time. `Sold`, `Leased` and `Secured Firm` are deliberately absent: those mark a deal
+ * as transacted rather than still running, and `Sold + Closed` is the ordinary end of a listing.
+ * Confirmed with the brokerage 2026-08-30.
+ */
+export const IN_PROGRESS_STATUSES = ['Active', 'Open', 'Sold Conditional', 'Lease Conditional', 'Secured Conditional', 'Suspended'] as const;
+
 export const TERMINAL_STATUSES = ['Closed', 'DFT', 'Void', 'Mutual Release', 'Terminated', 'Expired'] as const;
 
 export const isTerminalStatus = (status: string): boolean =>
@@ -121,6 +131,13 @@ export function statusSetProblem(type: string, statuses: readonly string[]): str
   if (terminal.length > 1) {
     return `A transaction cannot be ${terminal.map((s) => `"${s}"`).join(' and ')} at the same time — `
       + 'these describe different ways of ending, so only one may be set.';
+  }
+
+  const running = set.filter((s) => (IN_PROGRESS_STATUSES as readonly string[]).includes(s));
+  if (terminal.length && running.length) {
+    return `A transaction cannot be ${running.map((s) => `"${s}"`).join(' and ')} and `
+      + `${terminal.map((s) => `"${s}"`).join(' and ')} at the same time — the first says the deal is `
+      + 'still running and the second says it has ended.';
   }
 
   return null;

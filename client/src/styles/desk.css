@@ -1319,29 +1319,22 @@ input[type="number"],.numeric,.stat-card .val{font-variant-numeric:tabular-nums;
 .tb2-heading-input{font-size:16px;font-weight:600;padding:10px 12px;line-height:1.35}
 .tb2-para-input{min-height:150px;font-size:13.5px;line-height:1.6;padding:10px 12px;resize:vertical}
 
-/* ------------------------------------------------- area switcher
-   Customer Relationship Management / Transaction Management. The two options sit side by side rather
-   than in a dropdown so the other half of the application is always visibly there — a collapsed menu
-   would make the split look like a mode you can get stuck in.
-
-   It is rendered twice and shown once: beside the navigation it governs while the sidebar is full
-   width, and in the topbar once the sidebar collapses to its 64px icon rail. That rail, with its own
-   scrollbar, leaves about 20px of usable width — not enough for two legible labels, and an icon-only
-   version cropped its glyph, since an emoji's advance width depends on whichever font the machine
-   resolves it to. */
-.area-switch{display:flex;gap:4px;padding:6px;background:var(--surface-2);border:1px solid var(--line);border-radius:11px}
-.area-switch .area-btn{flex:1 1 0;min-width:0;padding:7px 6px;border:0;border-radius:8px;background:none;color:var(--muted);font:inherit;font-size:11.5px;font-weight:600;letter-spacing:.01em;text-align:center;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;transition:background .14s ease,color .14s ease}
-.area-switch .area-btn:hover:not(.active){background:var(--surface);color:var(--text)}
-.area-switch .area-btn.active{background:var(--brand);color:#fff;box-shadow:0 1px 3px rgba(15,23,42,.18)}
-/* Keyboard focus must stay visible against the filled active state. */
-.area-switch .area-btn:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
+/* ------------------------------------------------- visible application switcher */
+.area-switch{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px;padding:5px;border:1px solid var(--line);border-radius:13px;background:var(--surface-2)}
+.area-option{min-width:0;padding:10px 7px;border:0;border-radius:9px;background:transparent;color:var(--muted);font:inherit;font-size:11.5px;font-weight:700;text-align:center;white-space:nowrap;cursor:pointer;transition:background .14s ease,color .14s ease,box-shadow .14s ease}
+.area-option:hover:not(.active){background:var(--surface);color:var(--text)}
+.area-option.active{background:var(--brand);color:#fff;box-shadow:0 3px 9px color-mix(in srgb,var(--brand) 25%,transparent)}
+.area-option:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
+.area-option.precon{grid-column:1/-1;display:flex;align-items:center;justify-content:center;gap:5px;color:var(--text)}
+.area-option.precon:hover{color:var(--brand)}
+.area-external{color:var(--muted);font-size:10px;font-weight:800}
 .area-switch.in-sidebar{margin:0 10px 10px}
 /* Wide screens: the sidebar copy is the live one. */
 .area-switch.in-topbar{display:none}
 @media(max-width:1100px){
   .area-switch.in-sidebar{display:none}
-  .area-switch.in-topbar{display:flex;flex:0 0 auto;margin:0 12px 0 0;padding:4px}
-  .area-switch.in-topbar .area-btn{flex:0 0 auto;padding:6px 10px;font-size:12px}
+  .area-switch.in-topbar{display:grid;flex:0 0 220px;margin:0 12px 0 0;padding:4px;gap:3px}
+  .area-switch.in-topbar .area-option{padding:6px 5px;font-size:10.5px}
 }
 
 /* ------------------------------------------------- breadcrumbs

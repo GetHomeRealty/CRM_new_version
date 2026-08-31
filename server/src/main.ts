@@ -15,6 +15,10 @@ import { laravelValidationExceptionFactory } from './common/laravel-exceptions';
 import { installShutdownHandlers } from './common/shutdown';
 
 import { StructuredLogger } from './observability/log';
+// Runtime-generated CRM files contain private client data.
+// 0077 makes new files owner-only and new directories owner-only.
+process.umask(0o077);
+
 async function bootstrap(): Promise<void> {
   // `rawBody` keeps the exact bytes of each request alongside the parsed body. The Meta webhook
   // needs them: its HMAC signature is computed over the raw payload, and re-serialising the
@@ -148,7 +152,7 @@ async function bootstrap(): Promise<void> {
     }),
   );
 
-  await app.listen(appCfg.port);
+  await app.listen(appCfg.port, '127.0.0.1');
   // eslint-disable-next-line no-console
   console.log(`Transaction Desk API listening on http://localhost:${appCfg.port}`);
 

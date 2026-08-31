@@ -573,7 +573,7 @@ export class InvoicesService {
   }
 
   private dueDate(invoiceDate: Date, terms: string, custom: string | null): Date | null {
-    if (terms === 'Custom') return custom ? this.toDate(custom) : null;
+    if (terms === 'Custom' || terms === 'Due on Closing') return custom ? this.toDate(custom) : null;
     const days = InvoiceCalculator.TERM_DAYS[terms];
     if (days !== undefined) {
       const d = new Date(invoiceDate);

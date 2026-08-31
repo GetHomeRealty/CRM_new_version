@@ -130,7 +130,7 @@ function buildPayload(form: DetailForm): Record<string, unknown> {
     statuses: form.statuses,
     clients: form.clients.map((c) => ({ name: c.name, email: c.email || null, phone: c.phone || null })),
     conditions: form.conditional_offer
-      ? form.conditions.map((c) => ({ type: c.type, custom_name: c.custom_name || null, deadline: dOrNull(c.deadline), status: c.status }))
+      ? form.conditions.map((c) => ({ id: c.id, type: c.type, custom_name: c.custom_name || null, deadline: dOrNull(c.deadline), status: c.status }))
       : [],
     inter_board_listings: form.inter_board_enabled
       ? form.inter_board_listings.map((i) => ({ name: i.name || null, board_id: i.board_id || null, verified: !!i.verified }))
