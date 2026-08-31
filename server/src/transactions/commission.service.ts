@@ -258,22 +258,47 @@ export class CommissionService {
     const payableToClient = isLease ? deposit - totalWithHst : Math.max(deposit - totalWithHst, 0);
     const receivableFromLawyer = Math.min(deposit - totalWithHst, 0);
     const splitTotal = this.r(listTotal - extAmt * g);
-    const brokerageFloor = Math.max(splitTotal * brokerageSplit, minBrok * g);
-    const agentPool = Math.max(Math.min(splitTotal * agentSplit, splitTotal - brokerageFloor), 0);
+    /*
+     * TD-025 - EACH MEMBER IS PAID AT THEIR OWN RATE.
+     *
+     * This took members[0].agent_pct as one deal-level rate, built a single pool from it and sliced
+     * that pool by each member's share - so two agents on a listing could never be on different
+     * plans, and the per-member agent_pct in the response was reported but never used. Buying deals
+     * have always paid per member. The brokerage confirmed on 2026-08-31 that rates may differ.
+     *
+     * IDENTICAL RESULTS WHERE EVERY MEMBER IS ON THE SAME RATE, which is every deal on this system
+     * today: sum(slice x rate) equals splitTotal x rate. The client referral is still taken
+     * pro-rata by share AFTER the rate, exactly as the pool version did, so that matches too.
+     *
+     * THE OLD PERCENTAGE FLOOR WAS A NO-OP: splitTotal minus splitTotal x (1 - agentSplit) IS
+     * splitTotal x agentSplit, so the Math.min compared a value with itself. Only the absolute
+     * minimum ever bound, and that is what is kept here.
+     */
+    const brokerageFloor = this.r(minBrok * g);
+    const memberEarn = members.map((m) => {
+      const share = m.split / 100;
+      const rate = this.num(m.agent_pct) / 100;
+      return { m, share, raw: splitTotal * share * rate - clientReferral * share };
+    });
+    const rawAgentTotal = memberEarn.reduce((s, x) => s + x.raw, 0);
+    const maxAgentTotal = Math.max(splitTotal - brokerageFloor, 0);
+    const floorScale = rawAgentTotal > maxAgentTotal && rawAgentTotal > 0 ? maxAgentTotal / rawAgentTotal : 1;
+    const agentPool = Math.max(rawAgentTotal * floorScale, 0);
     const brokerageKeep = splitTotal - agentPool;
+    const agentSplitEffective = splitTotal > 0 ? agentPool / splitTotal : agentSplit;
 
     const line = (wo: number): Triple => ({ commission: this.r(wo), hst: this.r(wo * hst), total: this.r(wo * g) });
     const memberRows: Record<string, unknown>[] = [];
     const agents: Record<string, unknown>[] = [];
     for (const m of members) {
       const teamShare = m.split / 100;
-      const earned = (agentPool - clientReferral) * teamShare;
+      const earned = Math.max((memberEarn.find((x) => x.m === m)?.raw ?? 0) * floorScale, 0);
       const commission = earned / g;
       const mHst = commission * hst;
       const advance = this.memberAdvance(adj, m.name);
       const deduction = this.memberDeduction(adj, m, null);
       const cashToPay = earned - deduction;
-      const brokFromMember = brokerageKeep * teamShare;
+      const brokFromMember = splitTotal * teamShare - earned;
 
       memberRows.push({
         name: m.name,
@@ -320,7 +345,7 @@ export class CommissionService {
       },
       coop_payout: this.r(coopPayout),
       split: {
-        agent_split: agentSplit,
+        agent_split: agentSplitEffective,
         brokerage_split: brokerageSplit,
         agent_pool: this.r(agentPool),
         brokerage_keep: this.r(brokerageKeep),
