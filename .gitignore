@@ -3,6 +3,17 @@
 .env
 .env.backup
 .env.production
+
+# Every VARIANT, not just the exact names above. Eleven .env.backup-* files holding production
+# secrets sat untracked and unignored, because `.env.backup` matches only a file called exactly
+# that - never `.env.backup-before-google-oauth-change`. One `git add -A` would have pushed them
+# to GitHub. Added 2026-08-31. The `!client/.env.production` exception below still wins, being later.
+.env.*
+# .env.example is a TEMPLATE and is committed on purpose - it lists the variables the server needs
+# with placeholder values so a new machine can be set up without guessing. It is already tracked, so
+# the rule above does not affect it today; this exception makes that deliberate rather than luck, and
+# keeps it working if the file is ever removed and re-added.
+!server/.env.example
 # client/.env.production is committed on purpose: it holds no secrets, and keeping it in the
 # repository makes a production build correct on any machine instead of depending on someone
 # creating the file first. Keep this exception.
