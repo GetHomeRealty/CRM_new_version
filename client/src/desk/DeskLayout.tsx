@@ -7,7 +7,7 @@ import ChangePasswordModal from './ChangePasswordModal';
 import UserAvatar from './UserAvatar';
 import ErrorBoundary from '../components/ErrorBoundary';
 import Icon from '../ui/Icon';
-import { AREA_LABEL, AREA_SHORT, AREA_TAB, DEFAULT_AREA, areaPath, screenInArea, type Area } from './area';
+import { AREA_SHORT, AREA_TAB, DEFAULT_AREA, areaPath, screenInArea, type Area } from './area';
 import { AreaProvider } from './AreaContext';
 import { useNotificationStream } from './useNotificationStream';
 
@@ -202,14 +202,16 @@ export default function DeskLayout({ area = DEFAULT_AREA }: { area?: Area }) {
   useEffect(() => {
     if (!isAdminOrAbove) return undefined;
     loadAgentNotif();
-    // KEPT. The sixty-second poll is the fallback for a browser with no EventSource, a proxy that
-    // buffers the stream, or a multi-instance deployment where the event was raised elsewhere.
-    // SSE makes it prompt; this makes it certain.
+    // RESTORED 2026-08-31, having been removed during the SSE migration. The stream below makes
+    // this PROMPT; the timer makes it CERTAIN. EventSource reconnects a DROPPED connection by
+    // itself, but a proxy that accepts the stream and then buffers it never drops - it simply goes
+    // quiet, and the bell would stay quiet with nothing to say so. useNotificationStream coalesces
+    // refetches, so the stream and this timer cannot fetch twice for the same event.
     const t = setInterval(loadAgentNotif, 60000);
     return () => clearInterval(t);
   }, [isAdminOrAbove, location.pathname, loadAgentNotif]);
 
-  // Live: refetch the moment the server says something was raised for this user.
+  // Live: refetch the moment the server says something
   useNotificationStream(loadAgentNotif, isAdminOrAbove);
 
   /**
@@ -230,7 +232,7 @@ export default function DeskLayout({ area = DEFAULT_AREA }: { area?: Area }) {
   useEffect(() => {
     if (!isAgent) return undefined;
     loadDocNotif();
-    // Kept as the fallback, for the same reasons as the admin bell above.
+    // Restored as the fallback, for the same reason as the admin bell above.
     const t = setInterval(loadDocNotif, 60000);
     return () => clearInterval(t);
   }, [isAgent, location.pathname]);
@@ -334,24 +336,27 @@ export default function DeskLayout({ area = DEFAULT_AREA }: { area?: Area }) {
    * icon rail. One definition, so the two placements cannot drift apart in behaviour.
    */
   const areaSwitch = (place: 'in-sidebar' | 'in-topbar') => (
-    // Only the modules this login has. With one module there is nothing to switch between, so the
-    // control is not rendered at all — a switcher with a single option is a button that cannot do
-    // anything, and it advertises a module the company may not have bought.
-    modules.length < 2 ? null : (
-    <div className={`area-switch ${place}`} role="group" aria-label="Application area">
+    <div className={`area-switch ${place}`} role="group" aria-label="Applications">
       {modules.map((a) => (
         <button
+          type="button"
           key={a}
-          className={`area-btn ${a === area ? 'active' : ''}`}
+          className={`area-option ${a === area ? 'active' : ''}`}
           aria-current={a === area ? 'page' : undefined}
-          title={AREA_LABEL[a]}
           onClick={() => switchArea(a)}
         >
           {AREA_TAB[a]}
         </button>
       ))}
+      <button
+        type="button"
+        className="area-option precon"
+        aria-label="Open Precon/Canada in a new tab"
+        onClick={() => window.open('https://precon.gethomerealty.ca', '_blank', 'noopener,noreferrer')}
+      >
+        <span>Precon/Canada</span><span className="area-external" aria-hidden="true">↗</span>
+      </button>
     </div>
-    )
   );
 
   const onLogout = async () => {
