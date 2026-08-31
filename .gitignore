@@ -52,3 +52,11 @@ e2e/.testdb
 # away from the history. A pushed dump is not undone by deleting it: it stays in every clone and
 # every fork. Same reasoning as the line above.
 backups-qa/
+
+# --- local deploy backups: never commit ---
+dist-backup-*/
+server-backups/
+server_backup_*/
+*.backup
+*.backup-*
+*.before-*
