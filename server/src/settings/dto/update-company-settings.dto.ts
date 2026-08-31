@@ -106,6 +106,7 @@ export class UpdateCompanySettingsDto {
    */
   @IsOptional() @Transform(trimmed) @IsString() thank_you_note?: string | null;
   @IsOptional() @Transform(trimmed) @IsString() deposit_heading?: string | null;
+  @IsOptional() @Transform(trimmed) @IsString() deposit_signatory?: string | null;
 
   /** Cadence (days) for recurring lawyer-detail reminders. 0 = off. Stored in feature_flags. */
   @IsOptional() @IsInt() @Min(0) @Max(365) lawyer_reminder_days?: number | null;
