@@ -32,6 +32,9 @@ export class TransactionInvoiceService {
     const settings = await db.company_settings.findUnique({ where: { id: 1 } });
     const defaultTerms = settings?.default_terms ?? 'Due on Receipt';
     const defaultTaxRate = Number(settings?.default_tax_rate ?? 13);
+    // TD-117 — the configured prefix, read once here with the other settings and passed down,
+    // so the Invoice Prefix field in Company Settings describes the invoices it claims to.
+    const invoicePrefix = settings?.invoice_prefix ?? undefined;
     const breakdown = await this.commission.breakdown(normalizeCommissionTxn(t));
     const brok = t.brokerages;
     const brokAgents = brok ? brok.brokerage_agents.map((a) => a.name).filter(Boolean).join(', ') : '';
@@ -41,14 +44,14 @@ export class TransactionInvoiceService {
       const terms = Array.isArray(breakdown.terms) ? (breakdown.terms as Record<string, unknown>[]) : [];
       if (terms.length === 0) {
         const master = breakdown.master as { commission?: number } | undefined;
-        created.push(await this.make(db, t, brok, defaultTerms, defaultTaxRate, brokAgents, actor, null, Number(master?.commission ?? 0)));
+        created.push(await this.make(db, t, brok, defaultTerms, defaultTaxRate, brokAgents, actor, null, Number(master?.commission ?? 0), invoicePrefix));
       } else {
         for (const term of terms) {
-          created.push(await this.make(db, t, brok, defaultTerms, defaultTaxRate, brokAgents, actor, Number(term.term_no), Number(term.commission)));
+          created.push(await this.make(db, t, brok, defaultTerms, defaultTaxRate, brokAgents, actor, Number(term.term_no), Number(term.commission), invoicePrefix));
         }
       }
     } else {
-      created.push(await this.make(db, t, brok, defaultTerms, defaultTaxRate, brokAgents, actor, null, Number((breakdown as { commission?: number }).commission ?? 0)));
+      created.push(await this.make(db, t, brok, defaultTerms, defaultTaxRate, brokAgents, actor, null, Number((breakdown as { commission?: number }).commission ?? 0), invoicePrefix));
     }
 
     for (const inv of created) {
@@ -70,6 +73,7 @@ export class TransactionInvoiceService {
     actor: ActingUser | null,
     termNo: number | null,
     commission: number,
+    invoicePrefix?: string,
   ): Promise<invoices> {
     const now = new Date();
     const invoiceDate = new Date(now.toISOString().slice(0, 10) + 'T00:00:00.000Z');
@@ -78,7 +82,7 @@ export class TransactionInvoiceService {
 
     const invoice = await db.invoices.create({
       data: {
-        invoice_no: this.numbers.forTransaction(t.trade_no, termNo) ?? (await this.numbers.next(db)),
+        invoice_no: this.numbers.forTransaction(t.trade_no, termNo, invoicePrefix) ?? (await this.numbers.next(db)),
         transaction_id: t.id,
         source: 'transaction',
         transaction_type: t.type,

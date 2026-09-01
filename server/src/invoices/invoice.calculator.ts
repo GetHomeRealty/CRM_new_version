@@ -34,6 +34,20 @@ export class InvoiceCalculator {
       data: {
         sub_total: round2(subTotal),
         tax_total: taxTotal,
+        /*
+         * TD-093 — the rate that produced `tax_total`, stored alongside it.
+         *
+         * Every invoice carried the right tax and no way to prove which rate made it: the column
+         * existed and was never written, so `tax_rate` came back null on a record whose arithmetic
+         * reconciled to the cent. An applied-but-unrecorded rate cannot be evidenced later, and
+         * becomes a real problem the day the rate changes.
+         *
+         * Written HERE rather than at each call site, because this is the one place that actually
+         * applies it. Every caller — auto-generation, manual create, update, and the two payment
+         * recalcs — already passes the rate it resolved, so the stored value is the applied value
+         * by construction, not by a second assignment that could drift from it.
+         */
+        tax_rate: taxRate,
         total,
         amount_paid: paid,
         balance_due: balance,
