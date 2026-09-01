@@ -164,7 +164,7 @@ export const REPORTS: ReportDef[] = [
     category: 'Deal Reports',
     columns: [
       ...HEAD(), col.tradeNo(), col.commission(),
-      ...TOTAL3(), ...AGENT3(), ...BROK3(), col.agentPaymentStatus(), col.paymentType(),
+      ...TOTAL3(), ...AGENT3(), ...BROK3(), col.coopWo(), col.agentPaymentStatus(), col.paymentType(),
     ],
     filters: [],
     defaultSort: { key: 'closing_date', dir: 'desc' },
@@ -180,7 +180,7 @@ export const REPORTS: ReportDef[] = [
     columns: [
       ...HEAD(), col.tradeNo(),
       { key: 'split_no', label: 'Split', type: 'text', default: true, width: 11 },
-      col.splitRatio(), ...AGENT3(), ...TOTAL3(), ...BROK3(), col.paymentStatus(), col.paymentType(),
+      col.splitRatio(), ...AGENT3(), ...TOTAL3(), ...BROK3(), col.coopWo(), col.paymentStatus(), col.paymentType(),
     ],
     filters: [],
     defaultSort: { key: 'closing_date', dir: 'desc' },
