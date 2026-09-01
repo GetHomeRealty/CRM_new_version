@@ -31,6 +31,16 @@ export interface ConfirmOptions {
    * how a warning stops working.
    */
   variant?: 'destructive' | 'primary';
+  /**
+   * Blocks the confirm button while the dialog's own `body` is incomplete — e.g. a required reason
+   * that has not been typed yet. Optional and undefined by default, so every existing caller keeps
+   * an enabled button and is untouched by this.
+   *
+   * It exists because the confirm button ALWAYS closes the dialog. Without it, a caller needing a
+   * required field has to accept the click, discover the field is empty, close, and report the
+   * failure through a toast - which throws away whatever the user had already typed.
+   */
+  confirmDisabled?: boolean;
   onConfirm?: () => void;
 }
 
@@ -84,6 +94,7 @@ export default function ConfirmDialog({ confirm, onClose }: { confirm: ConfirmOp
           <button
             className="btn primary"
             data-variant={destructive ? 'destructive' : 'primary'}
+            disabled={confirm.confirmDisabled}
             style={destructive ? { background: 'var(--bad)', borderColor: 'var(--bad)' } : undefined}
             onClick={() => { confirm.onConfirm?.(); onClose(); }}
           >

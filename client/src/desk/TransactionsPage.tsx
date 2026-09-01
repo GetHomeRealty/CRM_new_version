@@ -2,7 +2,7 @@ import { deskPath } from './area';
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { listTransactionsPage, getMatchingTransactionIds, deleteTransaction, requestTransactionDeletion, type TransactionQuery } from '../lib/api';
-import { formatPrice, typeClass, typeLabel, TRANSACTION_TYPES } from './format';
+import { formatPrice, typeClass, typeLabel, TRANSACTION_TYPES, ALL_STATUSES } from './format';
 import { useToast } from './toast';
 import { apiErrorMessage } from '../lib/apiError';
 import { useAuth } from '../context/AuthContext';
@@ -12,6 +12,7 @@ import { queueExport } from '../lib/exportCentreApi';
 import AddTransactionModal from './AddTransactionModal';
 import ChatModal from './ChatModal';
 import BulkExportModal from './BulkExportModal';
+import ConfirmDialog from './ConfirmDialog';
 import type { Transaction } from '../types';
 
 interface Filters {
@@ -74,7 +75,7 @@ function ReviewBadges({ counts }: { counts?: { open: number; corrected: number; 
 export default function TransactionsPage() {
   const navigate = useNavigate();
   const toast = useToast();
-  const { can, user, isAdminOrAbove } = useAuth();
+  const { can, user, isAdminOrAbove, isSuperAdmin } = useAuth();
   const canEdit = can('transactions', 'edit');
   const isAgent = user?.role === 'agent';
   const [rows, setRows] = useState<Transaction[]>([]);
@@ -96,6 +97,14 @@ export default function TransactionsPage() {
   const [reviewCounts, setReviewCounts] = useState<Record<number, { open: number; corrected: number; resolved: number }>>({});
   const [addOpen, setAddOpen] = useState(false);
   const [chatTxn, setChatTxn] = useState<Transaction | null>(null); // transaction whose chat is open
+  /**
+   * TD-016 — the deal the row's trash button is asking about, and the reason an agent is typing.
+   * The dialog is built inline in the render rather than through `useConfirm`, because that hook
+   * stores the dialog's contents as a snapshot: a controlled textarea held inside it would not
+   * re-render as the agent types.
+   */
+  const [toDelete, setToDelete] = useState<Transaction | null>(null);
+  const [deleteReason, setDeleteReason] = useState('');
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
   const [showRibbon, setShowRibbon] = useState(false);
   // bulk selection + export/download
@@ -199,17 +208,37 @@ export default function TransactionsPage() {
   const goto = (p: number) => { const n = Math.min(Math.max(1, p), lastPage); setPage(n); load(n); };
   const clearRibbon = () => setFilters((p) => ({ ...p, offerFrom: '', offerTo: '', closingFrom: '', closingTo: '', payout: '', client: '', brokerage: '' }));
 
-  const onDelete = async (t: Transaction) => {
-    // Agents cannot delete — they raise a deletion request (routed to Admin → Super Admin).
-    if (isAgent) {
-      const reason = window.prompt(`Reason for requesting deletion of transaction #${t.trade_no}:`);
-      if (reason === null) return;
-      if (!reason.trim()) { toast('A reason is required', 'bad'); return; }
-      try { await requestTransactionDeletion(t.id, reason.trim()); toast('Deletion request sent to Admin', 'ok'); }
-      catch (e) { toast(apiErrorMessage(e, 'Could not send request'), 'bad'); }
-      return;
-    }
-    if (!window.confirm(`Delete transaction #${t.trade_no}?`)) return;
+  /**
+   * TD-017 — may THIS user edit THIS deal, rather than the transactions module in general.
+   *
+   * `canEdit` is the role's module permission and says nothing about a single deal, so a member
+   * added to a colleague's transaction with 'docs' access was offered Edit and Delete on the row
+   * and got a 403 on using them. The server's rule is owner-or-full-member
+   * (`transactions-write.service.ts`), and it is already correct — this only stops the list
+   * offering what that rule will refuse.
+   *
+   * Ownership is checked two ways for the same reason the detail page does it: `my_team_access`
+   * already resolves to 'full' for an owner, and the name comparison is the belt-and-braces that
+   * keeps an agent's own deal editable even if that field is ever absent from the payload.
+   */
+  const canEditRow = (t: Transaction) =>
+    canEdit && (!isAgent || t.my_team_access === 'full' || (!!t.agent && t.agent === user?.name));
+
+  /**
+   * TD-016 — opens the app's own confirmation instead of asking the browser. Both branches used a
+   * native dialog (`confirm` for staff, `prompt` for an agent's reason), and a browser set to
+   * suppress those — or any embedded webview that ignores them — returns "cancelled" without ever
+   * showing anything, so the row's trash button did nothing at all and said nothing about why.
+   */
+  const onDelete = (t: Transaction) => { setDeleteReason(''); setToDelete(t); };
+
+  /** Agents cannot delete — they raise a deletion request (routed to Admin → Super Admin). */
+  const doRequestDeletion = async (t: Transaction, reason: string) => {
+    try { await requestTransactionDeletion(t.id, reason.trim()); toast('Deletion request sent to Admin', 'ok'); }
+    catch (e) { toast(apiErrorMessage(e, 'Could not send request'), 'bad'); }
+  };
+
+  const doDelete = async (t: Transaction) => {
     try {
       await deleteTransaction(t.id);
       setSelected((sel) => sel.filter((x) => x !== t.id));
@@ -261,7 +290,14 @@ export default function TransactionsPage() {
           <option value="">Commission: any</option><option>Received</option><option>Not received</option>
         </select>
         <select value={filters.status} onChange={(e) => setF('status', e.target.value)}>
-          <option value="">All statuses</option><option>Open</option><option>Active</option><option>Closed</option><option>Sold</option><option>Leased</option><option>Mutual Release</option><option>DFT</option><option>Void</option><option>Suspended</option><option>Terminated</option><option>Expired</option>
+          {/*
+            TD-029 — derived from the status vocabulary rather than a hardcoded eleven, which
+            offered Open and Leased on types that reject them and omitted Sold Conditional,
+            Lease Conditional, Secured Firm and Secured Conditional entirely — so conditional and
+            secured deals could not be filtered for at all.
+          */}
+          <option value="">All statuses</option>
+          {ALL_STATUSES.map((s) => <option key={s}>{s}</option>)}
         </select>
         <button className={`btn ${showRibbon || activeRibbonCount ? 'primary' : 'ghost'} sm`} onClick={() => setShowRibbon((s) => !s)}>
           <Icon name="filter" size={13} /> Add Filter{activeRibbonCount ? ` (${activeRibbonCount})` : ''} {showRibbon ? <Icon name="chevronDown" size={12} className="flip" /> : <Icon name="chevronDown" size={12} />}
@@ -271,7 +307,16 @@ export default function TransactionsPage() {
           {downloadingAll ? <><Icon name="clock" size={13} /> Preparing…</> : <><Icon name="download" size={13} /> Download All Transactions</>}
         </button>
         <button className="btn ghost sm" onClick={() => navigate(deskPath('transactions/downloads'))} title="Past and queued exports"><Icon name="download" size={13} /> Download Centre</button>
-        {canEdit && <button className="btn ghost sm" onClick={() => navigate(deskPath('transactions/import'))} title="Create many transactions from a spreadsheet"><Icon name="upload" size={13} /> Bulk Import</button>}
+        {/*
+          TD-103 — offered to the tier that can actually use it. The endpoints are now Super Admin
+          only, and a button that every `transactions: edit` holder can see but only one tier can
+          use is the affordance mismatch of TD-017 all over again.
+
+          This is NOT all of TD-057, which is still open: an agent who types /desk/transactions/import
+          still reaches the page, because the route is gated on the transactions SCREEN rather than
+          on the tier, and still discovers the refusal only after uploading a file.
+        */}
+        {isSuperAdmin && <button className="btn ghost sm" onClick={() => navigate(deskPath('transactions/import'))} title="Create many transactions from a spreadsheet"><Icon name="upload" size={13} /> Bulk Import</button>}
         {canEdit && <button className="btn primary sm" onClick={() => setAddOpen(true)}>+ Add Transaction</button>}
       </div>
 
@@ -366,7 +411,8 @@ export default function TransactionsPage() {
                 <td><span className={`pill ${stPill(primary)}`}>{primary}</span></td>
                 <td>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'nowrap', whiteSpace: 'nowrap' }}>
-                    <button className="btn ghost sm" onClick={() => navigate(`${deskPath(`transactions/${t.id}`)}?mode=${canEdit ? 'edit' : 'view'}`)}>{canEdit ? 'Edit' : 'View'}</button>
+                    {/* TD-017 — per-deal, not per-role: a 'docs' member gets View, and lands in view mode. */}
+                    <button className="btn ghost sm" onClick={() => navigate(`${deskPath(`transactions/${t.id}`)}?mode=${canEditRow(t) ? 'edit' : 'view'}`)}>{canEditRow(t) ? 'Edit' : 'View'}</button>
                     {/* Per-transaction chat with an unread-message badge. */}
                     <button className="btn ghost sm" onClick={() => setChatTxn(t)} style={{ position: 'relative' }} title="Open chat">
                       <Icon name="message" size={14} />
@@ -376,7 +422,17 @@ export default function TransactionsPage() {
                         </span>
                       )}
                     </button>
-                    {canEdit && <button className="btn ghost sm" onClick={() => onDelete(t)}><Icon name="trash" size={14} /></button>}
+                    {/*
+                      TD-017 — withheld from a 'docs' member. For an agent this button raises a
+                      deletion REQUEST rather than deleting, and the server accepts that request
+                      from anyone who can view the deal — so the title says which of the two the
+                      trash can is about to do, instead of leaving the icon to imply the worse one.
+                    */}
+                    {canEditRow(t) && (
+                      <button className="btn ghost sm" onClick={() => onDelete(t)} title={isAgent ? 'Request deletion' : 'Delete transaction'}>
+                        <Icon name="trash" size={14} />
+                      </button>
+                    )}
                   </div>
                 </td>
               </tr>
@@ -412,6 +468,43 @@ export default function TransactionsPage() {
       {bulk && (
         <BulkExportModal mode={bulk} transactionIds={selected} onClose={() => setBulk(null)} />
       )}
+
+      {/*
+        TD-016 — the delete confirmation, in the app's own dialog. The two branches ask genuinely
+        different questions, so they are not merged into one: staff are destroying a deal now and
+        get the red button, while an agent is asking somebody else to, which is a request and is
+        painted as one.
+      */}
+      <ConfirmDialog
+        confirm={toDelete ? (isAgent ? {
+          title: `Request deletion of transaction #${toDelete.trade_no}?`,
+          message: `An Admin reviews the request before anything is removed. ${toDelete.property || 'This deal'} stays exactly as it is until they decide.`,
+          body: (
+            <label style={{ display: 'block', marginTop: 10, fontSize: 13 }}>
+              Reason for the request
+              <textarea
+                className="inp"
+                rows={3}
+                autoFocus
+                value={deleteReason}
+                onChange={(e) => setDeleteReason(e.target.value)}
+                placeholder="Why should this transaction be removed?"
+                style={{ width: '100%', marginTop: 4, resize: 'vertical' }}
+              />
+            </label>
+          ),
+          confirmLabel: 'Send request',
+          // Nothing is destroyed by asking — the red of a delete would misdescribe it.
+          variant: 'primary' as const,
+          confirmDisabled: !deleteReason.trim(),
+          onConfirm: () => { void doRequestDeletion(toDelete, deleteReason); },
+        } : {
+          title: `Delete transaction #${toDelete.trade_no}?`,
+          message: `${toDelete.property || 'This transaction'} moves to the Recycle Bin, where it can be restored.`,
+          onConfirm: () => { void doDelete(toDelete); },
+        }) : null}
+        onClose={() => setToDelete(null)}
+      />
     </>
   );
 }
