@@ -1,6 +1,6 @@
 import { DEFAULT_AREA, areaPath } from '../desk/area';
 import { useState, type ChangeEvent, type FormEvent } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { apiErrorMessage } from '../lib/apiError';
 import { companyLogoUrl } from '../lib/api';
@@ -11,6 +11,7 @@ import { isChallenge, type MfaChallenge as MfaChallengeView } from '../lib/mfaAp
 export default function Login() {
   const { login } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
   const [form, setForm] = useState({ username: '', password: '' });
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -19,6 +20,14 @@ export default function Login() {
    * rather than hidden — there is no session yet, and nothing else on this screen is usable.
    */
   const [challenge, setChallenge] = useState<MfaChallengeView | null>(null);
+
+  // Only an internal SSO handoff route may override the normal landing page. The value comes from
+  // router state rather than a public `return_to=https://...` query, so this login cannot become an
+  // open redirect to an attacker-controlled website.
+  const requested = (location.state as { returnTo?: unknown } | null)?.returnTo;
+  const destination = typeof requested === 'string' && requested.startsWith('/sso/authorize?')
+    ? requested
+    : areaPath(DEFAULT_AREA);
 
   const update = (e: ChangeEvent<HTMLInputElement>) => setForm({ ...form, [e.target.name]: e.target.value });
 
@@ -34,7 +43,7 @@ export default function Login() {
         setChallenge(outcome.challenge);
         return;
       }
-      navigate(areaPath(DEFAULT_AREA));
+      navigate(destination, { replace: true });
     } catch (err) {
       setError(apiErrorMessage(err, 'Login failed. Check your credentials.'));
     } finally {
@@ -62,7 +71,7 @@ export default function Login() {
       {challenge ? (
         <MfaChallenge
           challenge={challenge}
-          onSignedIn={() => navigate(areaPath(DEFAULT_AREA))}
+          onSignedIn={() => navigate(destination, { replace: true })}
           onCancel={abandonChallenge}
         />
       ) : (
