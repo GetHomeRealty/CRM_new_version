@@ -2653,6 +2653,7 @@ model users {
   transaction_message_reads transaction_message_reads[]
   user_permissions          user_permissions[]
   user_modules              user_modules[]
+  sso_authorization_codes   sso_authorization_codes[]
 
   /// The brokerage this row belongs to. See src/core/tenancy.spec.ts for why this table carries one.
   push_subscriptions       push_subscriptions[]
@@ -2673,6 +2674,31 @@ model users {
   /// which let `PRIYA@X.CA` and `priya@x.ca` both exist as separate accounts. Do not drop either
   /// index believing `@unique` covers it — `users-validation.spec.ts` fails if they go missing.
 
+}
+
+/// Short-lived, single-use authorization codes issued by the shared CRM sign-in service.
+///
+/// Only a SHA-256 hash of the code is stored. The raw code exists just long enough to travel
+/// through the user's browser to an allowlisted application's callback, where that application's
+/// server exchanges it. `code_challenge` binds the exchange to the browser that started it (PKCE),
+/// while `consumed_at` makes a captured callback URL useless after its first successful exchange.
+///
+/// This is authentication infrastructure rather than brokerage data, like `user_sessions`, so it
+/// is intentionally not tenant-scoped. The user relation is the authority for account status.
+model sso_authorization_codes {
+  id             Int       @id @default(autoincrement())
+  code_hash      String    @unique @db.VarChar(64)
+  user_id        Int
+  client_id      String    @db.VarChar(64)
+  redirect_uri   String    @db.VarChar(2048)
+  code_challenge String    @db.VarChar(128)
+  expires_at     DateTime  @db.Timestamp(0)
+  consumed_at    DateTime? @db.Timestamp(0)
+  created_at     DateTime  @default(now()) @db.Timestamp(0)
+  users          users     @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@index([user_id])
+  @@index([expires_at])
 }
 
 /// Which application modules a user may open.
