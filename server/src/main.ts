@@ -15,6 +15,10 @@ import { laravelValidationExceptionFactory } from './common/laravel-exceptions';
 import { installShutdownHandlers } from './common/shutdown';
 
 import { StructuredLogger } from './observability/log';
+// Runtime-generated CRM files contain private client data.
+// 0077 makes new files owner-only and new directories owner-only.
+process.umask(0o077);
+
 async function bootstrap(): Promise<void> {
   // `rawBody` keeps the exact bytes of each request alongside the parsed body. The Meta webhook
   // needs them: its HMAC signature is computed over the raw payload, and re-serialising the
@@ -87,6 +91,33 @@ async function bootstrap(): Promise<void> {
   // database session driver. The session payload (user id + XSRF token) is unchanged.
   const PgStore = connectPgSimple(session);
   const sessionPool = new Pool({ connectionString: appCfg.databaseUrl });
+
+  /*
+   * WITHOUT THIS LISTENER THE PROCESS DIES WHENEVER POSTGRES HICCUPS.
+   *
+   * `pg.Pool` is an EventEmitter, and it emits `error` on behalf of IDLE clients — a Postgres
+   * restart, a failover, an admin `pg_terminate_backend`, an `idle_in_transaction_session_timeout`,
+   * or a network blip all reach us this way, with no query in flight to reject and no `await` to
+   * catch it. An `error` event with no listener is thrown by EventEmitter itself, which lands in
+   * `uncaughtException`; that handler treats the process as untrustworthy — correctly, in the
+   * general case — and shuts down with exit code 1, so the supervisor restarts the app.
+   *
+   * The result is a healthy process being recycled by something that is not its fault and that it
+   * had already recovered from: the pool discards the dead client and opens another on the next
+   * request. So this is NOT swallowing a fatal error to keep a restart count down — the event is
+   * genuinely non-fatal, and the crash was an artefact of nobody listening. It is logged at `error`
+   * so a real database problem is still loud, and repeated lines still say "Postgres keeps dropping
+   * connections" to anyone reading.
+   *
+   * Registered immediately after construction, before `app.use` can put the pool to work, so there
+   * is no window in which the pool is live and unlistened.
+   */
+  const poolLog = new Logger('SessionStore');
+  sessionPool.on('error', (err: Error) => {
+    poolLog.error(`Idle session-store connection dropped by Postgres: ${err.message}. `
+      + 'The pool will open a new connection on the next request; the process is left running.');
+  });
+
   app.use(
     session({
       store: new PgStore({ pool: sessionPool, tableName: 'user_sessions', createTableIfMissing: true, pruneSessionInterval: 60 * 15 }),
@@ -121,7 +152,7 @@ async function bootstrap(): Promise<void> {
     }),
   );
 
-  await app.listen(appCfg.port);
+  await app.listen(appCfg.port, '127.0.0.1');
   // eslint-disable-next-line no-console
   console.log(`Transaction Desk API listening on http://localhost:${appCfg.port}`);
 

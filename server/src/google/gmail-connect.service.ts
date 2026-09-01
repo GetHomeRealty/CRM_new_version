@@ -37,11 +37,46 @@ export class GmailConnectService {
     });
 
     if (existing) {
-      // Reconnect: refresh the stored token only if Google returned a new one (it omits the refresh
-      // token when the user had already granted consent), and re-enable the account.
+      /*
+       * Reconnect: take the refresh token only if Google returned a NEW one. Google omits it when
+       * consent was already standing, in which case this row keeps the credential it already had.
+       *
+       * WHY `sync_error` IS NOT BLANKET-CLEARED ANY MORE.
+       *
+       * It used to be cleared on every reconnect, including the branch where no new token arrived.
+       * That reported a repair that had not happened: the row kept the SAME credential — possibly
+       * the very one Google had revoked — while the screen showed a freshly connected account with
+       * no error. Reconnecting then looked like it worked, failed again on the next poll minutes
+       * later, and the obvious response was to reconnect again. Observed on this deployment:
+       * `precon@` reconnected at 05:42 and rejected by Google with `invalid_grant` on a credential
+       * stored the same morning.
+       *
+       * So the error is cleared only when a NEW token actually replaced the old one. When the token
+       * was preserved and the account was already failing, the message is replaced with the one
+       * instruction that does resolve it — Google only re-issues a refresh token after the app's
+       * access is removed, so consenting again to a grant that already exists cannot help.
+       *
+       * A preserved token on a HEALTHY account is left completely alone: nothing changed, so
+       * nothing is claimed either way, and the next successful poll keeps it clear.
+       */
+      const preservedAfterFailure = !encRefresh && !!existing.sync_error;
       await this.prisma.mail_accounts.update({
         where: { id: existing.id },
-        data: { is_active: true, sync_error: null, updated_at: new Date(), ...(encRefresh ? { password: encRefresh } : {}) },
+        data: {
+          is_active: true,
+          updated_at: new Date(),
+          ...(encRefresh
+            ? { password: encRefresh, sync_error: null }
+            : preservedAfterFailure
+              ? {
+                sync_error:
+                  'Google did not issue a new authorisation for this mailbox, so it is still using the '
+                  + 'one that was already failing. Signing in again cannot replace it while that access '
+                  + 'is still granted. Remove this app at myaccount.google.com (Security -> '
+                  + 'Third-party apps with account access), then connect the mailbox again.',
+              }
+              : {}),
+        },
       });
       /*
        * PROVES WHICH CREDENTIAL THIS ROW NOW HOLDS.

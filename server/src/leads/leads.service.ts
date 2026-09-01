@@ -9,11 +9,11 @@ import type { AuthUserRecord } from '../auth/auth.types';
 import { can } from '../core/authz';
 import { hasBrokerageLeadScope, isBrokerageLead, leadScopeWhere, ownerAtIntake } from '../common/lead-scope';
 // Age is derived from the date of birth, never stored as an independent fact — see age.ts.
-import { ageFromDateOfBirth } from './age';
+import { ageFromDateOfBirth, dateOfBirthWindow } from './age';
 import { throwValidation } from '../common/laravel-exceptions';
 import {
   EMAIL_SHAPE, FEED_PER_PAGE, LEADS_PER_PAGE, MAX_PER_PAGE, MAX_EXPORT_ROWS, NONE_FILTER_VALUE,
-  RECENT_LEAD_DAYS, WEBSITE_ENQUIRY_SOURCES, DASHBOARD_LEAD_SOURCES,
+  RECENT_LEAD_DAYS, DASHBOARD_LEAD_SOURCES, canonicalLeadSource, leadSourceMatches,
   isClientType, isConversion, isGender, isLeadResponse, isLeadSource, isLeadStatus, isLeadType, isTaskStatus,
 } from './lead.constants';
 
@@ -54,10 +54,29 @@ export interface LeadQuery {
   clientType?: string; leadConversion?: string; tag?: string;
   gender?: string; language?: string; religion?: string;
   minAge?: string; maxAge?: string; assignedTo?: string; recent?: string;
+  /** 'true' narrows to leads nobody has logged a call against. */
+  noCalls?: string;
 }
 
 @Injectable()
 export class LeadsService {
+  /** Columns the service computes for itself, so they are never reported as a person's edit. */
+  private static readonly DERIVED_FIELDS = new Set(['phone_normalized']);
+
+  /**
+   * "Nobody has rung them yet" - the tile's count and the tile's filter, from one place.
+   *
+   * The No Calls tile counted with this predicate and then filtered with nothing at all: its click
+   * handler cleared the Recent filter and raised a toast. So the screen showed every lead while the
+   * message named a smaller number, and an agent looking for the people nobody had called had no
+   * way to tell which ones those were.
+   *
+   * Named rather than written twice because a count and a filter that disagree is the specific
+   * failure this module keeps producing - the dashboard tile and the Inbox, the Delete button and
+   * the server. A tile must answer exactly what clicking it shows.
+   */
+  private static readonly NO_CALLS: Prisma.leadsWhereInput = { lead_calls: { none: {} } };
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: LeadAuditService,
@@ -159,7 +178,7 @@ export class LeadsService {
     const assignees = await this.assigneeNames(rows.map((r) => r.assigned_to));
 
     return {
-      data: rows.map((r) => this.present(r, assignees)),
+      data: rows.map((r) => this.present(r, assignees, user)),
       meta: { current_page: page, per_page: limit, last_page: Math.max(1, Math.ceil(total / limit)), total },
       stats,
     };
@@ -205,7 +224,7 @@ export class LeadsService {
       this.prisma.leads.groupBy({ by: ['lead_source'], where, _count: { _all: true } }),
       // The one counter that cannot join the others: an anti-join against lead_calls is a different
       // question about a different table, not a bucket of this one.
-      count({ lead_calls: { none: {} } }),
+      count(LeadsService.NO_CALLS),
       count({ created_at: { gte: since } }),
     ]);
 
@@ -216,22 +235,23 @@ export class LeadsService {
     const status = (k: string): number => statusCounts.get(k) ?? 0;
     const source = (k: string): number => sourceCounts.get(k) ?? 0;
 
-    // Derived rather than counted: this was its own query asking what the source buckets already
-    // answer. Same definition, same constant, one fewer scan.
-    const websiteEnquiries = WEBSITE_ENQUIRY_SOURCES.reduce((sum, s) => sum + source(s), 0);
-
     const bySource: Record<string, number> = {};
-    for (const s of DASHBOARD_LEAD_SOURCES) bySource[s.key] = source(s.value);
+    // Summed across every spelling of the value, so the referral bucket stays right while stored
+    // rows are a mixture of the two.
+    for (const s of DASHBOARD_LEAD_SOURCES) {
+      bySource[s.key] = leadSourceMatches(s.value).reduce((sum, v) => sum + source(v), 0);
+    }
     // The total across every bucket, including sources not broken out and leads with none recorded.
     const total = [...sourceCounts.values()].reduce((a, b) => a + b, 0);
     // "other" absorbs linkedin, youtube and leads with no source recorded, so the parts of the
     // Dashboard breakdown always add up to the total rather than silently losing rows.
-    bySource.other = total - DASHBOARD_LEAD_SOURCES.reduce((sum, s) => sum + source(s.value), 0);
+    bySource.other = total - DASHBOARD_LEAD_SOURCES.reduce(
+      (sum, s) => sum + leadSourceMatches(s.value).reduce((n, v) => n + source(v), 0), 0,
+    );
 
     return {
       total,
       noCalls,
-      websiteEnquiries,
       recent,
       byStatus: {
         hot: status('hot'), warm: status('warm'), cold: status('cold'),
@@ -389,7 +409,7 @@ export class LeadsService {
     const assignees = await this.assigneeNames(ids);
 
     return {
-      ...this.present(row, assignees),
+      ...this.present(row, assignees, user),
       notes_history: row.lead_notes.map((n) => ({
         id: n.id, content: n.content, pinned: n.pinned,
         created_by: n.created_by, created_at: n.created_at?.toISOString() ?? null,
@@ -505,7 +525,7 @@ export class LeadsService {
       );
     }
 
-    return this.present(row, await this.assigneeNames([row.assigned_to]));
+    return this.present(row, await this.assigneeNames([row.assigned_to]), user);
   }
 
   /**
@@ -561,9 +581,44 @@ export class LeadsService {
       include: { _count: { select: { lead_calls: true, lead_tasks: true } } },
     }).catch((err: unknown) => this.rethrowEmailClash(err, str(data.email) || str(existing.email), existing.owner_user_id));
 
-    // Record the fields that actually changed, so the trail is readable.
-    const changed = Object.keys(data).filter((k) => String((existing as Record<string, unknown>)[k] ?? '') !== String((row as Record<string, unknown>)[k] ?? ''));
-    await this.audit.record(user, 'Lead updated', row.name, changed.length ? `Changed: ${changed.join(', ')}` : 'No field values changed');
+    /*
+     * ONE ROW PER FIELD THAT ACTUALLY MOVED, each carrying what it moved from and to.
+     *
+     * This used to write a single row reading `Changed: lead_status` - the field's NAME and nothing
+     * else. That establishes who touched the record and when, which is most of the way there, but
+     * not what a dispute actually turns on: whether a client's phone number was corrected or
+     * replaced, whether a live lead was quietly marked cold. `audit_logs` carries `field`,
+     * `old_value` and `new_value`, and the Audit Trail screen gives each its own column, so the
+     * shape for this already existed and simply was not filled in.
+     *
+     * Per field rather than one combined row because that is what those three columns can express,
+     * and it is how the Transaction Desk side has always written its own changes.
+     */
+    const changed = Object.keys(data)
+      /*
+       * DERIVED COLUMNS ARE NOT CHANGES SOMEBODY MADE. `phone_normalized` is computed from `phone`
+       * to give Meta's importer a digits-only form to match on, so it moves whenever the phone does
+       * - and a trail reading "changed phone_normalized from 4165550000 to 4165551111" beside the
+       * identical phone row is noise in the one record that has to stay readable. Caught by its own
+       * test rather than by review: the first version of this wrote three rows for two edits.
+       */
+      .filter((k) => !LeadsService.DERIVED_FIELDS.has(k))
+      .filter((k) => String((existing as Record<string, unknown>)[k] ?? '') !== String((row as Record<string, unknown>)[k] ?? ''));
+    if (!changed.length) {
+      // Still recorded: somebody opened the record and pressed save, and that they changed nothing
+      // is itself an answer to "who has been in this file".
+      await this.audit.record(user, 'Lead updated', row.name, 'No field values changed');
+    } else {
+      for (const field of changed) {
+        const from = String((existing as Record<string, unknown>)[field] ?? '');
+        const to = String((row as Record<string, unknown>)[field] ?? '');
+        await this.audit.record(
+          user, 'Lead updated', row.name,
+          `Changed ${field}: ${from || '(empty)'} to ${to || '(empty)'}`,
+          { field, old: from, new: to },
+        );
+      }
+    }
 
     /*
      * ASSIGNMENT NOTIFICATION — only when the assignee ACTUALLY CHANGED.
@@ -583,10 +638,55 @@ export class LeadsService {
       );
     }
 
-    return this.present(row, await this.assigneeNames([row.assigned_to]));
+    return this.present(row, await this.assigneeNames([row.assigned_to]), user);
   }
 
   /** Soft delete — the lead moves to Recently Deleted and drops out of every list query. */
+  /**
+   * The stage a lead was at immediately before it was most recently closed.
+   *
+   * WHY THIS CAN BE ANSWERED AT ALL. Reopening used to set the stage to a hard-coded `hot`, so a
+   * Cold lead closed and reopened came back Hot - promoting itself to the top of a list it did not
+   * belong on, silently, with no undo. The audit trail now records every field change with its
+   * before and after (CRM-006), so the answer is in the record rather than needing a new column.
+   *
+   * NULL WHEN IT IS GENUINELY UNKNOWN, which is the honest answer for any lead closed before that
+   * recording existed. The screen then asks rather than guessing - a wrong stage is worse than an
+   * absent one, because a wrong one gets acted upon.
+   *
+   * SCOPED like every other read of a lead: somebody who cannot open the lead cannot learn its
+   * history either.
+   */
+  async statusBeforeClose(id: number, user: AuthUserRecord): Promise<{ status: string | null }> {
+    const lead = await this.prisma.leads.findFirst({
+      where: { id, deleted_at: null, ...this.scopeWhere(user) },
+      select: { id: true, name: true },
+    });
+    if (!lead) throw new NotFoundException({ message: 'Lead not found.' });
+
+    /*
+     * The most recent row that recorded this lead moving INTO `closed`. Matched on the lead's name
+     * because that is what `LeadAuditService` writes as the subject - the trail is keyed to a
+     * readable subject rather than to an id, which is a limitation of the writer rather than a
+     * choice here.
+     */
+    const row = await this.prisma.audit_logs.findFirst({
+      where: {
+        category: 'Lead',
+        field: 'lead_status',
+        new_value: 'closed',
+        details: { contains: lead.name },
+      },
+      orderBy: { id: 'desc' },
+      select: { old_value: true },
+    });
+
+    const previous = String(row?.old_value ?? '').trim();
+    // Only a stage this application still recognises: a value retired since the close was recorded
+    // would be refused by the update that follows, which is a worse outcome than asking.
+    return { status: previous && isLeadStatus(previous) && previous !== 'closed' ? previous : null };
+  }
+
   async remove(id: number, user: AuthUserRecord): Promise<{ deleted: boolean }> {
     const existing = await this.prisma.leads.findFirst({ where: { id, deleted_at: null, ...this.scopeWhere(user) } });
     if (!existing) throw new NotFoundException({ message: 'Lead not found.' });
@@ -910,7 +1010,15 @@ export class LeadsService {
     };
     field('lead_status', q.leadStatus);
     field('lead_type', q.leadType);
-    field('lead_source', q.leadSource);
+    /*
+     * SOURCE IS MATCHED ACROSS BOTH SPELLINGS rather than by the single-value helper above.
+     *
+     * "Filtering leadSource=referral returns 0 rows" was half the defect, and it would still be
+     * true of every lead written before the migration if this asked for one exact value.
+     */
+    const source = str(q.leadSource);
+    if (source === NONE_FILTER_VALUE) and.push({ OR: [{ lead_source: null }, { lead_source: '' }] });
+    else if (source) and.push({ lead_source: { in: leadSourceMatches(source) } });
     field('lead_response', q.leadResponse);
     field('client_type', q.clientType);
     field('lead_conversion', q.leadConversion);
@@ -927,9 +1035,43 @@ export class LeadsService {
       and.push({ tags: { contains: JSON.stringify(tag) } });
     }
 
+    /*
+     * AGE IS MATCHED THE WAY IT IS SHOWN, which it previously was not.
+     *
+     * The list derives a lead's age from `date_of_birth` when there is one and falls back to the
+     * stored `age` column otherwise. This filter asked the stored column alone, so:
+     *
+     *   · a lead with a birthday and no stored age displayed an age and could be found at NONE;
+     *   · a lead whose stored age had gone stale since it was typed was findable only at the old
+     *     number - the "recorded as 24, findable only at 23" case in the report.
+     *
+     * Both are now asked the same question the screen answers: leads WITH a birthday are matched by
+     * the date window that produces that age range, and leads without one keep the stored column.
+     * The two halves are an OR because they are two populations, not two conditions.
+     */
     const minAge = Number(q.minAge), maxAge = Number(q.maxAge);
-    if (Number.isFinite(minAge) && str(q.minAge)) and.push({ age: { gte: minAge } });
-    if (Number.isFinite(maxAge) && str(q.maxAge)) and.push({ age: { lte: maxAge } });
+    const hasMin = Number.isFinite(minAge) && str(q.minAge) !== '';
+    const hasMax = Number.isFinite(maxAge) && str(q.maxAge) !== '';
+
+    if (hasMin || hasMax) {
+      const window = dateOfBirthWindow(hasMin ? minAge : null, hasMax ? maxAge : null);
+      const dob: Prisma.DateTimeFilter = {};
+      if (window.lte) dob.lte = window.lte;
+      if (window.gt) dob.gt = window.gt;
+
+      const stored: Prisma.IntFilter = {};
+      if (hasMin) stored.gte = minAge;
+      if (hasMax) stored.lte = maxAge;
+
+      and.push({
+        OR: [
+          { date_of_birth: dob },
+          // Only where there is no birthday to derive from — otherwise a lead with BOTH could be
+          // matched on a stale stored age the screen never shows.
+          { AND: [{ date_of_birth: null }, { age: stored }] },
+        ],
+      });
+    }
 
     const assigned = str(q.assignedTo);
     if (assigned === 'unassigned') and.push({ assigned_to: null });
@@ -938,6 +1080,9 @@ export class LeadsService {
     if (str(q.recent) === 'true') {
       and.push({ created_at: { gte: new Date(Date.now() - RECENT_LEAD_DAYS * 24 * 60 * 60 * 1000) } });
     }
+
+    // The same predicate the tile counts with, so pressing it shows exactly the number it showed.
+    if (str(q.noCalls) === 'true') and.push(LeadsService.NO_CALLS);
 
     return { AND: and };
   }
@@ -1067,7 +1212,10 @@ export class LeadsService {
       const v = str(input[key]);
       if (v === '') out[field] = null;
       else if (!valid(v)) add(field, `That is not a recognised ${label}.`);
-      else out[field] = v;
+      // NORMALISED ON THE WAY IN, so the misspelling stops spreading even before the stored rows
+      // are migrated. A form that submits the legacy value - an old tab, a CSV, an integration -
+      // is accepted and written correctly rather than refused.
+      else out[field] = field === 'lead_source' ? canonicalLeadSource(v) : v;
     }
 
     // --- age ---
@@ -1183,7 +1331,11 @@ export class LeadsService {
 
 
   // ---------------------------------------------------------------- output
-  private present(r: Record<string, unknown>, assignees: Map<number, string>): Record<string, unknown> {
+  private present(
+    r: Record<string, unknown>,
+    assignees: Map<number, string>,
+    user: AuthUserRecord,
+  ): Record<string, unknown> {
     const counts = r._count as { lead_calls: number; lead_tasks: number } | undefined;
     const pending = Array.isArray(r.lead_tasks) ? (r.lead_tasks as unknown[]).length : undefined;
     const assignedTo = r.assigned_to as number | null;
@@ -1191,6 +1343,22 @@ export class LeadsService {
 
     return {
       id: r.id,
+      /*
+       * WHETHER THE DELETE BUTTON CAN POSSIBLY WORK, answered by the rule that will decide it.
+       *
+       * The leads list used to work this out for itself, and asked a different question from the
+       * one `remove()` asks. The list hid Delete only when a lead had an OWNER who was somebody
+       * else; the server refuses whenever the agent is not the owner - and on this brokerage's data
+       * every lead has `owner_user_id = null`, so the list's test never fired and the server's
+       * always did. The same lead was offered a Delete button and then refused, 403, every time.
+       *
+       * Sent from here so there is one rule rather than two that agree by accident. A control that
+       * can never succeed should not be shown, and only the server knows that reliably.
+       */
+      can_delete: !this.isBrokerageAssigned(
+        { owner_user_id: (r.owner_user_id ?? null) as number | null },
+        user,
+      ),
       name: r.name,
       email: r.email,
       phone: r.phone,

@@ -8,6 +8,7 @@ import {
 import { apiErrorMessage } from '../lib/apiError';
 import { useToast } from './toast';
 import MailAccountModal from './MailAccountModal';
+import ConfirmDialog, { useConfirm } from './ConfirmDialog';
 
 /**
  * Email Integration card for CRM Settings → Integrations — the same shape as the Google Calendar
@@ -63,6 +64,36 @@ export default function EmailIntegrationCard({ scope = 'crm' }: { scope?: Integr
 
   const active = (accounts ?? []).filter((a) => a.is_active);
   const def = (accounts ?? []).find((a) => a.is_default);
+  /*
+   * THE FOURTH DESTRUCTIVE CONTROL IN THIS CRM TO FIRE UNCONFIRMED, and the one with the widest
+   * reach. This file imported no confirmation component at all: Delete sat between Test and Make
+   * primary, all three `btn ghost sm`, none distinguished by colour, and pressing it removed the
+   * account immediately.
+   *
+   * WHAT MAKES IT WORTH ASKING is not that the account is hard to recreate - it is that the
+   * brokerage's automated client email has no account of its own and falls back to whichever one is
+   * PRIMARY for the area. Deleting that one stops welcome messages, reminders and campaigns for
+   * everybody, and nothing on this screen said so before the click.
+   */
+  const { confirm, askDelete, closeConfirm } = useConfirm();
+
+  /** Ask before removing a sending account, and say what leans on it. */
+  const confirmDelete = (account: { id: number; from_email: string; is_default?: boolean }) => askDelete({
+    title: `Remove ${account.from_email}?`,
+    message: account.is_default
+      ? `This is the primary ${AREA_LABEL[scope]} account. Automated email has no address of its own and falls back to the primary, so removing it stops those messages until another is made primary.`
+      : `Mail already sent from this address is unaffected. The account is removed from ${AREA_LABEL[scope]}.`,
+    linked: account.is_default
+      ? ['Welcome emails, reminders and campaigns sent for this area', 'Anything scheduled to go out from this address']
+      : undefined,
+    note: 'You can connect the address again afterwards, but its stored credentials are not kept.',
+    confirmLabel: 'Remove account',
+    onConfirm: () => {
+      // The same call the button made before; the step in front of it is the whole change.
+      void act(account.id, () => deleteMyMailAccount(account.id), 'Account removed.');
+      closeConfirm();
+    },
+  });
   const connected = active.length > 0;
   const atLimit = limit ? !limit.canAdd : false;
   const subtitle = !accounts ? 'Checking…'
@@ -117,7 +148,7 @@ export default function EmailIntegrationCard({ scope = 'crm' }: { scope?: Integr
                   onClick={() => void act(a.id, () => testMyMailAccount(a.id).then((r) => toast(r.message, 'ok')), 'Test sent.')}>Test</button>
                 {a.encryption !== 'oauth' && <button className="btn ghost sm" type="button" onClick={() => setEditing(a)}>Edit</button>}
                 <button className="btn ghost sm" type="button" disabled={busy === a.id}
-                  onClick={() => void act(a.id, () => deleteMyMailAccount(a.id), 'Account removed.')}>Delete</button>
+                  onClick={() => confirmDelete(a)}>Delete</button>
               </div>
             </li>
           ))}
@@ -147,6 +178,7 @@ export default function EmailIntegrationCard({ scope = 'crm' }: { scope?: Integr
           onSaved={() => { setEditing(null); load(); }}
         />
       )}
+      <ConfirmDialog confirm={confirm} onClose={closeConfirm} />
     </div>
   );
 }

@@ -92,6 +92,11 @@ export default function Login() {
             </button>
           </form>
           <p className="muted">
+            {/* Beneath the form, not beside the password field: it is a way out of a dead end, not
+                a step in signing in. */}
+            <Link to="/forgot-password">Forgot your password?</Link>
+          </p>
+          <p className="muted">
             No account? <Link to="/register">Create one</Link>
           </p>
         </>

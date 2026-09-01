@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificationPreferenceService, type NotificationChannel } from '../notifications/notification-preference.service';
 import { PermissionService } from '../auth/permission.service';
@@ -325,6 +325,59 @@ export class CrmCommunicationsService {
    * writes for a person's own switches. These are the brokerage-wide ones, so "who turned CRM email
    * off for everybody, and when" is the question the trail has to be able to answer.
    */
+  /**
+   * Remove one CRM template from the library.
+   *
+   * SCOPED TO `module: 'CRM'`, and that is load-bearing rather than tidy. `email_templates` also
+   * holds Transaction Desk templates and campaign templates; those are separate products managed on
+   * separate screens, and an id from either of them must not be deletable through this one. An id
+   * outside the CRM set resolves to "no longer exists" rather than to somebody else's row.
+   *
+   * WHAT DELETING A **CONNECTED** TEMPLATE ACTUALLY DOES, checked rather than assumed: the event
+   * keeps sending. `CrmAdvancedEmailService.render` re-creates a missing template from the built-in
+   * default the next time that email goes out. So this resets the wording to the brokerage default;
+   * it does not silence the email. The caller is told which case it was so the screen can say so —
+   * "deleted" and "reset to the default text" are very different things to have just done.
+   *
+   * Attachments are `Bytes` in the database with `onDelete: Cascade`, so nothing is left on disk.
+   */
+  async deleteTemplate(user: AuthUserRecord, id: number): Promise<{ deleted: boolean; was_connected: boolean; name: string }> {
+    const row = await this.prisma.email_templates.findFirst({
+      where: { id, module: 'CRM' },
+      select: { id: true, name: true, subject: true, event_key: true },
+    });
+    if (!row) throw new NotFoundException({ message: 'That template no longer exists.' });
+
+    // A draft carries the namespaced key minted above; anything else is mapped to a real CRM event.
+    const wasConnected = !row.event_key.startsWith('crm.draft.');
+
+    await this.prisma.email_templates.delete({ where: { id: row.id } });
+
+    const stamp = new Date();
+    try {
+      await this.prisma.audit_logs.create({
+        data: {
+          category: 'Settings', transaction_id: null, who: user.name, user_id: user.id ?? null,
+          section: 'CRM Communications', action: 'CRM template deleted', source: 'Manual',
+          domain: auditDomain({ category: 'Settings', section: 'CRM Communications' }),
+          field: row.event_key,
+          old_value: `${row.name} — ${row.subject ?? ''}`.slice(0, 250),
+          new_value: wasConnected ? 'reset to the built-in default' : 'removed',
+          // The template body is not copied here: it can be long, and the name, subject and event
+          // are what identify which one went. The wording of a connected one is recoverable anyway,
+          // because the default is what replaces it.
+          details: `${user.name ?? 'Someone'} deleted the CRM template "${row.name}"`
+            + (wasConnected ? ` — ${row.event_key} now sends its built-in default text` : ' (an unconnected draft)'),
+          created_at: stamp, updated_at: stamp,
+        },
+      });
+    } catch (err) {
+      this.log.warn(`CRM template delete audit write failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+
+    return { deleted: true, was_connected: wasConnected, name: row.name };
+  }
+
   private async auditBrokerage(
     user: AuthUserRecord, wasSending: boolean, nowSending: boolean,
     before: Record<string, boolean>, after: Record<string, boolean>,

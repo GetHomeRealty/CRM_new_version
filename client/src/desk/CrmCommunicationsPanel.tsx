@@ -5,8 +5,15 @@ import { crmPath } from './area';
 import { apiErrorMessage } from '../lib/apiError';
 import ConfirmDialog, { useConfirm } from './ConfirmDialog';
 import {
-  createCrmTemplate, getCrmCommunications, previewCrmTemplate, setCrmBrokerage, setCrmPreference,
-  type CrmChannel, type CrmCommunicationRow, type CrmCommunicationsOverview,
+  createCrmTemplate,
+  deleteCrmTemplate,
+  getCrmCommunications,
+  previewCrmTemplate,
+  setCrmBrokerage,
+  setCrmPreference,
+  type CrmChannel,
+  type CrmCommunicationRow,
+  type CrmCommunicationsOverview,
 } from '../lib/crmCommunicationsApi';
 
 /**
@@ -140,6 +147,30 @@ export default function CrmCommunicationsPanel({ standalone = false }: { standal
   const editTemplate = (id: number) => {
     navigate(`${crmPath('settings')}?tab=crm&section=templates&template=${id}`);
   };
+
+  /**
+   * Remove a template from the library.
+   *
+   * The confirm says what actually happens, because the two cases differ and only one of them is
+   * reversible by simply making a new one: an unconnected draft is gone, while a CONNECTED template
+   * resets that email to its built-in default wording — the event carries on sending either way.
+   * "Delete" reading as "this email will stop going out" would be the wrong thing to believe.
+   */
+  const removeTemplate = (id: number, name: string) => askDelete({
+    title: `Delete "${name}"?`,
+    message: 'This template is not connected to a CRM event, so removing it changes nothing that sends. '
+      + 'The deletion is recorded in the audit trail.',
+    onConfirm: () => {
+      void deleteCrmTemplate(id)
+        .then((r) => {
+          toast(r.was_connected
+            ? `"${r.name}" deleted — that email now sends its built-in default wording.`
+            : `"${r.name}" deleted.`, 'ok');
+          load();
+        })
+        .catch((e) => toast(apiErrorMessage(e, 'Could not delete that template'), 'bad'));
+    },
+  });
 
   const openPreview = async (id: number, name: string) => {
     try {
@@ -392,7 +423,10 @@ export default function CrmCommunicationsPanel({ standalone = false }: { standal
                         <td><strong>{t.name}</strong><div className="muted" style={{ fontSize: 11 }}>{t.event_key}</div></td>
                         <td>{t.subject}</td>
                         <td><span className="pill bad">Not connected</span></td>
-                        <td><button className="btn ghost sm" type="button" onClick={() => void openPreview(t.id, t.name)}>👁 Preview</button></td>
+                        <td>
+                          <button className="btn ghost sm" type="button" onClick={() => void openPreview(t.id, t.name)}>👁 Preview</button>
+                          <button className="btn ghost sm danger" type="button" onClick={() => removeTemplate(t.id, t.name)}>Delete</button>
+                        </td>
                       </tr>
                     ))}
                   </tbody>

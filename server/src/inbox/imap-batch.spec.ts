@@ -1,4 +1,4 @@
-import { selectSyncBatch, shouldNotifyNewMail } from './imap-sync.service';
+import { newMailLink, selectSyncBatch, shouldNotifyNewMail } from './imap-sync.service';
 
 /**
  * The batch a poll pulls from a mailbox.
@@ -102,5 +102,36 @@ describe('shouldNotifyNewMail', () => {
   it('treats user 0 as a real owner rather than as absent', () => {
     // `account.user_id &&` was the previous shape, and it would have dropped this one silently.
     expect(shouldNotifyNewMail(box({ user_id: 0 }), 3)).toBe(true);
+  });
+});
+
+describe('where the new-mail notification points', () => {
+  /**
+   * It pointed at `/crm/inbox` and stopped there, so following a notification meant opening the
+   * mailbox and then hunting for the message it was about.
+   */
+  it('links to the message itself when exactly one arrived', () => {
+    expect(newMailLink(1, 4821)).toBe('/crm/inbox?message=4821');
+  });
+
+  it('links to the mailbox for a batch, because there is no single message to open', () => {
+    // "You have 3 new emails" — choosing one of the three would be a guess dressed as a destination.
+    expect(newMailLink(3, 4821)).toBe('/crm/inbox');
+    expect(newMailLink(12, 99)).toBe('/crm/inbox');
+  });
+
+  it('falls back to the mailbox when no id was captured', () => {
+    // A concurrent poll can win the insert, leaving a count with no row of this run's own.
+    expect(newMailLink(1, null)).toBe('/crm/inbox');
+  });
+
+  it('refuses a nonsensical id rather than building a link that cannot resolve', () => {
+    expect(newMailLink(1, 0)).toBe('/crm/inbox');
+    expect(newMailLink(1, -5)).toBe('/crm/inbox');
+    expect(newMailLink(1, 1.5)).toBe('/crm/inbox');
+  });
+
+  it('never produces a link for a run that stored nothing', () => {
+    expect(newMailLink(0, null)).toBe('/crm/inbox');
   });
 });

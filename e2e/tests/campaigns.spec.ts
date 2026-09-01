@@ -397,6 +397,17 @@ test.describe('suppression list', () => {
   });
 
   test('removing an address that is not suppressed is a 404, not a silent success', async ({ page }) => {
+    /*
+     * SIGNED IN AS AN ADMINISTRATOR, because the agent seat this block otherwise uses is no longer
+     * permitted to remove a suppression at all (CRM-027) and now receives 403 before the address is
+     * looked up. That ordering is deliberate - a refusal that reported "not on the list" would let
+     * somebody who may not read the list probe who is on it.
+     *
+     * The claim under test is unchanged: a missing address is reported, not silently accepted. It
+     * simply has to be asked by somebody allowed to ask. The agent's refusal is covered by
+     * `suppression-removal-scope.spec.ts`.
+     */
+    await signIn(page, 'superAdmin');
     const res = await apiSend(page, 'DELETE', `/api/campaigns/suppressions/${encodeURIComponent('nobody@example.test')}`);
     expect(res.status).toBe(404);
   });
@@ -425,9 +436,16 @@ test.describe('suppression list', () => {
     const search = page.getByPlaceholder('Search an email address…');
     await expect(search).toBeVisible();
     await search.fill('definitely-not-on-the-list@example.test');
-    // Either wording is correct — the point is that a search returning nothing says so rather than
-    // showing a stale page of results.
-    await expect(page.getByText(/No suppressed address matches|Nobody is suppressed/i)).toBeVisible();
+    /*
+     * Any of these wordings is correct — the point is that a search returning nothing says so rather
+     * than showing a stale page of results.
+     *
+     * An agent is shown the opt-outs among their OWN leads (see `listSuppressions`), and CRM-045
+     * made the empty state say which list it is talking about: "Nobody is suppressed" was displayed
+     * to an agent at a moment when the brokerage did have a suppressed address, which is a claim
+     * rather than an absence.
+     */
+    await expect(page.getByText(/No suppressed address( among your leads)? matches|Nobody is suppressed/i)).toBeVisible();
   });
 
   test('the sidebar offers the suppression list as a section of Campaigns', async ({ page }) => {

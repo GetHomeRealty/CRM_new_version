@@ -5,7 +5,7 @@ import { formatCurrency, typeLabel } from './format';
 import { useToast } from './toast';
 import { apiErrorMessage } from '../lib/apiError';
 import { useAuth } from '../context/AuthContext';
-import InvoiceEditorModal from './InvoiceEditorModal';
+import InvoiceEditorModal, { STATUSES } from './InvoiceEditorModal';
 import InvoicePreviewModal from './InvoicePreviewModal';
 import CommissionAnalytics from './CommissionAnalytics';
 import type { CompanySettings, Invoice } from '../types';
@@ -129,7 +129,8 @@ export default function InvoicePage() {
       <div className="toolbar"><div className="toolbar-row">
         <select value={filter} onChange={(e) => { setPage(1); setFilter(e.target.value); }}>
           <option value="">All statuses</option>
-          <option>Draft</option><option>Unpaid</option><option>Partially Paid</option><option>Paid</option><option>Overdue</option><option>Void</option>
+          {/* TD-063 - the filter must offer every status an invoice can HOLD: everything the editor can SET, plus Draft and Partially Paid which the server derives. A second hard-coded list is what let 'Due' fall out of it. */}
+          {[...new Set(['Draft', 'Unpaid', 'Partially Paid', ...STATUSES])].map((s) => <option key={s}>{s}</option>)}
         </select>
         <div style={{ flex: 1 }} />
         {canEdit && <button className="btn primary sm" onClick={() => setEditorId(null)}>+ New Invoice</button>}

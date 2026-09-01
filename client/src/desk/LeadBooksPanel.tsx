@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
-import { getLeadBooks, transferLeadBook, type LeadBookPool } from '../lib/api';
+import {
+  getLeadBooks, previewLeadBookHandover, transferLeadBook,
+  type LeadBookPool, type LeadBookPreview,
+} from '../lib/api';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from './toast';
 import Icon from '../ui/Icon';
@@ -20,6 +23,15 @@ import Icon from '../ui/Icon';
  * leads nobody personally holds, but it is still an administrator moving work about, and the design
  * does not make that quiet.
  */
+/**
+ * How many leads the confirmation names before it summarises.
+ *
+ * A hand-over of four hundred cannot list four hundred names in a dialog somebody will read, and
+ * a list nobody reads protects nobody. Ten is enough to recognise the front of the queue - which
+ * is where the risk is, since the order is oldest first - and the audit entry carries the rest.
+ */
+const PREVIEW_LIMIT = 10;
+
 export default function LeadBooksPanel() {
   const { isSuperAdmin } = useAuth();
   const toast = useToast();
@@ -28,6 +40,15 @@ export default function LeadBooksPanel() {
   const [count, setCount] = useState('');
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  /*
+   * WHICH LEADS THE CONFIRMATION IS ABOUT.
+   *
+   * `null` while it is being fetched, so the dialog can say it is still finding out rather than
+   * render an empty list that reads as "none" - the same false-zero this panel was reported for
+   * elsewhere. `error` distinguishes "could not look them up" from "there are none".
+   */
+  const [preview, setPreview] = useState<LeadBookPreview | null>(null);
+  const [previewFailed, setPreviewFailed] = useState(false);
 
   const load = useCallback(async () => {
     try { setPool(await getLeadBooks()); } catch { setPool({ available: 0, recipients: [] }); }
@@ -45,6 +66,29 @@ export default function LeadBooksPanel() {
   const wanted = Math.min(Number(count) > 0 ? Math.floor(Number(count)) : available, available);
   const ready = !!target && available > 0 && wanted > 0;
 
+  /**
+   * Open the confirmation, and find out what it is about.
+   *
+   * THE DEFECT THIS FIXES. The dialog stated a count, a recipient and the ordering rule, and
+   * never which lead. "Oldest first" is doing real work: on the brokerage that reported this the
+   * pool held four leads, of which the oldest was a real client and the other three were test
+   * records - so handing over "just one" moved the real client's file, permanently, and the
+   * window a broker reads before confirming gave them no way to see it.
+   *
+   * FETCHED WHEN THE DIALOG OPENS, not on page load: the answer depends on the count that was
+   * typed, and reading it early would name a set that no longer applies by the time it is read.
+   */
+  async function openConfirm() {
+    setPreview(null);
+    setPreviewFailed(false);
+    setConfirming(true);
+    try {
+      setPreview(await previewLeadBookHandover(Number(count) > 0 ? Math.floor(Number(count)) : undefined));
+    } catch {
+      setPreviewFailed(true);
+    }
+  }
+
   async function run() {
     if (!target) return;
     setBusy(true);
@@ -52,6 +96,7 @@ export default function LeadBooksPanel() {
       const r = await transferLeadBook(target.user_id, Number(count) > 0 ? Math.floor(Number(count)) : undefined);
       toast(`${r.moved} brokerage lead${r.moved === 1 ? '' : 's'} handed to ${r.to}. ${r.remaining} left in the pool.`, 'ok');
       setConfirming(false);
+      setPreview(null);
       setTo(''); setCount('');
       await load();
     } catch (e) {
@@ -110,7 +155,7 @@ export default function LeadBooksPanel() {
                   ))}
                 </select>
               </label>
-              <button className="btn primary" disabled={!ready || busy} onClick={() => setConfirming(true)}>
+              <button className="btn primary" disabled={!ready || busy} onClick={() => void openConfirm()}>
                 Hand over
               </button>
             </div>
@@ -133,14 +178,56 @@ export default function LeadBooksPanel() {
                 <strong>{target.name}&rsquo;s</strong> to work. Oldest first, so the
                 longest-waiting enquiry goes over first.
               </p>
+
+              {/*
+                THE LEADS THEMSELVES. The consequence is permanent — nothing in the application moves
+                an assigned lead back to the pool — so the one fact needed to judge it should not be
+                the one fact withheld. Named rather than counted, and dated, so "oldest first" is a
+                claim the reader can check rather than take.
+              */}
+              {previewFailed ? (
+                <p className="help" style={{ margin: '0 0 10px', color: 'var(--bad)' }}>
+                  These leads could not be looked up just now, so this window cannot say which they
+                  are. Cancel and try again rather than handing over leads you cannot see.
+                </p>
+              ) : preview === null ? (
+                <p className="help" style={{ margin: '0 0 10px' }}>Finding out which leads these are…</p>
+              ) : preview.moving.length === 0 ? (
+                <p className="help" style={{ margin: '0 0 10px' }}>
+                  There is nothing waiting in the pool now — it may have been handed over already.
+                </p>
+              ) : (
+                <div className="book-preview">
+                  <ul style={{ margin: '0 0 8px', paddingLeft: 18, fontSize: 13 }}>
+                    {preview.moving.slice(0, PREVIEW_LIMIT).map((l) => (
+                      <li key={l.id} style={{ marginBottom: 2 }}>
+                        {l.name} <span className="help">#{l.id}{l.created_at ? ` · waiting since ${l.created_at.slice(0, 10)}` : ''}</span>
+                      </li>
+                    ))}
+                  </ul>
+                  {preview.moving.length > PREVIEW_LIMIT && (
+                    <p className="help" style={{ margin: '0 0 8px' }}>
+                      …and {preview.moving.length - PREVIEW_LIMIT} more. The full list is written to the
+                      audit trail when you confirm.
+                    </p>
+                  )}
+                </div>
+              )}
+
               <p className="help" style={{ margin: 0 }}>
                 Only leads nobody holds are eligible — no agent loses anything. Recorded in the audit
-                trail with the name and the number moved.
+                trail with the name and the leads moved.
               </p>
             </div>
             <div className="modal-f">
               <button className="btn ghost" onClick={() => setConfirming(false)} disabled={busy}>Cancel</button>
-              <button className="btn primary" onClick={() => void run()} disabled={busy}>
+              {/*
+                Held until the list has arrived. Confirming a permanent hand-over while the window is
+                still saying "finding out which leads these are" would leave the dialog exactly as
+                uninformative as it was before.
+              */}
+              <button className="btn primary" onClick={() => void run()}
+                disabled={busy || preview === null || previewFailed || preview.moving.length === 0}>
                 {busy ? 'Handing over…' : `Hand over ${wanted} lead${wanted === 1 ? '' : 's'}`}
               </button>
             </div>

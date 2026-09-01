@@ -114,7 +114,7 @@ describe('CRM dashboard — lead counting', () => {
   it('does not hand a manager the whole brokerage', async () => {
     await inRollback(async (tx) => {
       const agent = await makeUser(tx, 'agent');
-      const base_agent = await leadBaseline(tx, agent);
+      await leadBaseline(tx, agent);
       const manager = await makeUser(tx, 'manager');
       const base_manager = await leadBaseline(tx, manager);
       await makeLead(tx, { owner_user_id: agent.id, assigned_to: agent.id });
@@ -130,7 +130,7 @@ describe('CRM dashboard — campaign counting', () => {
   it('counts only the campaigns the signed-in user created', async () => {
     await inRollback(async (tx) => {
       const mine = await makeUser(tx, 'agent');
-      const base_mine = await leadBaseline(tx, mine);
+      await leadBaseline(tx, mine);
       const theirs = await makeUser(tx, 'manager');
       const now = new Date();
       await tx.campaigns.create({
@@ -149,7 +149,7 @@ describe('CRM dashboard — campaign counting', () => {
   it('counts a campaign the user did create', async () => {
     await inRollback(async (tx) => {
       const mine = await makeUser(tx, 'agent');
-      const base_mine = await leadBaseline(tx, mine);
+      await leadBaseline(tx, mine);
       const now = new Date();
       await tx.campaigns.create({
         data: { name: `Mine ${tag()}`, created_by_id: mine.id, subject: 'Mine subject', content: 'body', sent: 7, opened: 3, failed: 0, created_at: now, updated_at: now },
@@ -169,7 +169,7 @@ describe('CRM dashboard — campaign counting', () => {
   it('counts campaigns waiting to go out, without disturbing the total', async () => {
     await inRollback(async (tx) => {
       const mine = await makeUser(tx, 'agent');
-      const base_mine = await leadBaseline(tx, mine);
+      await leadBaseline(tx, mine);
       const now = new Date();
       const make = (name: string, status: string) => tx.campaigns.create({
         data: {
@@ -190,7 +190,7 @@ describe('CRM dashboard — campaign counting', () => {
   it('reports no scheduled campaigns as 0 rather than undefined', async () => {
     await inRollback(async (tx) => {
       const mine = await makeUser(tx, 'agent');
-      const base_mine = await leadBaseline(tx, mine);
+      await leadBaseline(tx, mine);
       const now = new Date();
       await tx.campaigns.create({
         data: { name: `Sent ${tag()}`, created_by_id: mine.id, subject: 's', content: 'body', status: 'completed', created_at: now, updated_at: now },
@@ -206,7 +206,7 @@ describe('CRM dashboard — campaign counting', () => {
   it('does not count another user\'s scheduled campaign', async () => {
     await inRollback(async (tx) => {
       const mine = await makeUser(tx, 'agent');
-      const base_mine = await leadBaseline(tx, mine);
+      await leadBaseline(tx, mine);
       const theirs = await makeUser(tx, 'manager');
       const now = new Date();
       await tx.campaigns.create({
@@ -242,7 +242,7 @@ describe('CRM dashboard — lead task counting', () => {
   it('ignores tasks on another person\'s lead', async () => {
     await inRollback(async (tx) => {
       const mine = await makeUser(tx, 'agent');
-      const base_mine = await leadBaseline(tx, mine);
+      await leadBaseline(tx, mine);
       const theirs = await makeUser(tx, 'agent');
       const lead = await makeLead(tx, { owner_user_id: theirs.id, assigned_to: theirs.id });
       const now = new Date();

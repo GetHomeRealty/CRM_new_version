@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { CrmSettingsModule } from '../crm-settings/crm-settings.module';
 import { NotificationDispatcherModule } from '../notifications/notification-dispatcher.module';
 import { AuthModule } from '../auth/auth.module';
 import { EmailModule } from '../email/email.module';
@@ -24,7 +25,9 @@ import { BounceIngestService } from './bounce-ingest.service';
 @Module({
   // LeadsModule for the shared import engine and queue — Campaigns imports leads through the
   // same path as the Leads screen so the two cannot drift apart again.
-  imports: [NotificationDispatcherModule, AuthModule, EmailModule, LeadsModule],
+  // CrmSettingsModule for the CRM email log: a campaign test send is a real email leaving the
+  // brokerage and has to be recorded where every other one is.
+  imports: [NotificationDispatcherModule, AuthModule, EmailModule, LeadsModule, CrmSettingsModule],
   controllers: [CampaignTrackingController, CampaignTemplatesController, CampaignsController],
   providers: [CampaignAuditService, CampaignResumeService, CampaignsService, CampaignAudienceService, CampaignTemplatesService, MailDeliverabilityService, BounceIngestService],
 })

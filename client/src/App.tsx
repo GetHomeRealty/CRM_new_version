@@ -43,6 +43,8 @@ const DownloadCentrePage = lazy(() => import('./desk/DownloadCentrePage'));
 const CampaignsPage = lazy(() => import('./desk/CampaignsPage'));
 const LeadsPage = lazy(() => import('./desk/LeadsPage'));
 const LeadDetailPage = lazy(() => import('./desk/LeadDetailPage'));
+const ForgotPassword = lazy(() => import('./pages/ForgotPassword'));
+const ResetPassword = lazy(() => import('./pages/ResetPassword'));
 const MetaPage = lazy(() => import('./desk/MetaPage'));
 const AccountSettingsPage = lazy(() => import('./desk/AccountSettingsPage'));
 const NotificationPreferencesPage = lazy(() => import('./desk/NotificationPreferencesPage'));
@@ -250,6 +252,9 @@ export default function App() {
         <ToastProvider>
           <Routes>
             <Route path="/login" element={<Login />} />
+            {/* Both are public by necessity: somebody locked out has no session to authenticate with. */}
+            <Route path="/forgot-password" element={<ForgotPassword />} />
+            <Route path="/reset-password" element={<ResetPassword />} />
             <Route path="/register" element={<Register />} />
             <Route path="/sso/authorize" element={<SsoAuthorize />} />
 

@@ -152,6 +152,25 @@ function ProviderForm({ mode, email, onBack, onClose, onSaved, scope }: {
   const [smtpPort, setSmtpPort] = useState(587);
   const [errors, setErrors] = useState<Record<string, string[]>>({});
   const [saving, setSaving] = useState(false);
+  /*
+   * WHETHER THIS BECOMES THE ACCOUNT THIS AREA SENDS FROM - asked, rather than decided.
+   *
+   * Both submit paths hard-coded `is_default: true`, and the form had no control for it. So
+   * connecting a second mailbox silently re-pointed every automated email for this area - welcome,
+   * birthday, anniversary, seasonal - at the new address, because none of those communications
+   * carries an account of its own; they all follow the default.
+   *
+   * THE BLAST RADIUS IS THIS USER, not the brokerage: `makeSoleDefault` clears the previous default
+   * only where `user_id` and `scope` both match, so it cannot displace a colleague's or the
+   * brokerage mailbox. That was the open question the audit could not settle from outside, and it
+   * is why this is a nuisance rather than a serious fault - but a nuisance that changes where a
+   * client's mail appears to come from is still worth asking about.
+   *
+   * DEFAULTED OFF. The server promotes the FIRST account in an area regardless, so an area never
+   * ends up with no sender - leaving this unticked is safe, and the note on screen says so.
+   */
+  const [makeDefault, setMakeDefault] = useState(false);
+  const [pullInbound, setPullInbound] = useState(true);
   const err = (k: string) => (errors[k]?.length ? <div className="field-err">{errors[k][0]}</div> : null);
 
   const submit = async (e: React.FormEvent) => {
@@ -161,12 +180,12 @@ function ProviderForm({ mode, email, onBack, onClose, onSaved, scope }: {
     try {
       const common = { name: email, from_email: email, username: email, password };
       const body: MailAccountInput = mode === 'gmail'
-        ? { ...common, ...GMAIL, is_default: true, inbound_enabled: true }
+        ? { ...common, ...GMAIL, is_default: makeDefault, inbound_enabled: pullInbound }
         : {
             ...common, host: smtpHost.trim(), port: Number(smtpPort), encryption: 'tls',
             // Reasonable IMAP guess from the SMTP host (smtp.x → imap.x), so inbound works too.
             imap_host: smtpHost.trim().replace(/^smtp\./i, 'imap.'),
-            imap_port: 993, imap_encryption: 'ssl', inbound_enabled: true, is_default: true,
+            imap_port: 993, imap_encryption: 'ssl', inbound_enabled: pullInbound, is_default: makeDefault,
           };
       await addMyMailAccount({ ...body, ...(scope ? { scope } : {}) });
       toast('Email account added.', 'ok');
@@ -217,6 +236,37 @@ function ProviderForm({ mode, email, onBack, onClose, onSaved, scope }: {
           </div>
         </div>
       )}
+
+      {/*
+        THE TWO THINGS THIS FORM USED TO DECIDE FOR YOU.
+        Both were hard-coded true, with nothing on screen about either.
+      */}
+      <div className="field" style={{ marginTop: 4 }}>
+        <label className="acct-toggle" style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+          <input type="checkbox" checked={makeDefault} onChange={(e) => setMakeDefault(e.target.checked)} />
+          <span>
+            Send this area&apos;s mail from this address
+            <div className="help" style={{ marginTop: 2 }}>
+              Automated messages — welcome, birthday, anniversary and seasonal — have no address of
+              their own and go from whichever account this is set to. Leave it unticked to connect
+              the mailbox without changing that. Your first account for an area becomes its sender
+              automatically, whether this is ticked or not.
+            </div>
+          </span>
+        </label>
+      </div>
+
+      <div className="field">
+        <label className="acct-toggle" style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+          <input type="checkbox" checked={pullInbound} onChange={(e) => setPullInbound(e.target.checked)} />
+          <span>
+            Read this mailbox&apos;s incoming mail into the CRM inbox
+            <div className="help" style={{ marginTop: 2 }}>
+              Turn this off to send from the address without its received mail appearing here.
+            </div>
+          </span>
+        </label>
+      </div>
 
       <div className="modal-foot">
         <button className="btn ghost" type="button" onClick={onBack}>← Back</button>

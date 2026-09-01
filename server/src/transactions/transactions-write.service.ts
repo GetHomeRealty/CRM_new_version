@@ -7,7 +7,7 @@ import { CommissionService } from './commission.service';
 import { PaymentCacheService } from './payment-cache.service';
 import { normalizeCommissionTxn } from './commission.loader';
 import { parseJsonObject, phpEmpty, phpFloat, phpJsonNormalize, round2, toFloat } from '../common/serialize';
-import { isInvoiceableType, isListingType, SECURED_DEAL_TYPES, statusSetProblem } from '../reference/transaction.constants';
+import { isInvoiceableType, isListingType, SECURED_DEAL_TYPES, statusSetProblem, TRANSACTION_TYPES } from '../reference/transaction.constants';
 import { TradeNumberService } from './trade-number.service';
 import { TransactionLawyerReminderService } from './transaction-lawyer-reminder.service';
 import { TransactionReviewService } from './transaction-review.service';
@@ -122,6 +122,16 @@ export class TransactionsWriteService {
   async store(user: AuthUserRecord | null, body: Record<string, unknown>): Promise<{ data: Record<string, unknown> }> {
     const type = String(body.type ?? '');
     this.req(body, 'type');
+    /*
+     * TD-068 ON CREATE. The catalogue check existed only on update; creation required a type to be
+     * PRESENT and then stored whatever arrived - POST with 'Sale Listing', and even 'zzz-not-a-type',
+     * both returned 201. Every later rule keys off the type: which statuses it may hold, which
+     * documents it generates, how its commission is worked out. Found by REG-TR-027 on 2026-08-31.
+     */
+    if (!(TRANSACTION_TYPES as readonly string[]).includes(type)) {
+      const m = `"${type}" is not a transaction type this system offers. Allowed: ${TRANSACTION_TYPES.join(', ')}.`;
+      throw new UnprocessableEntityException({ message: m, errors: { type: [m] } });
+    }
     this.req(body, 'property');
     this.req(body, 'status');
     const isListing = isListingType(type);
@@ -349,6 +359,47 @@ export class TransactionsWriteService {
      * and that is a decision to be stated rather than inferred. This rejects only what is
      * self-contradictory or does not exist for the type.
      */
+    /*
+     * TD-068 and TD-014 - the type drives everything on a deal: which statuses it may hold, which
+     * documents it generates, how its commission is worked out. It was required when a deal was
+     * created, then free to be blanked or replaced with anything at all on update.
+     */
+    if (Object.prototype.hasOwnProperty.call(data, 'type')) {
+      const submittedType = String(data.type ?? '').trim();
+      if (!submittedType) {
+        const m = 'A transaction must have a type. It is required when the deal is created and cannot be cleared afterwards.';
+        throw new UnprocessableEntityException({ message: m, errors: { type: [m] } });
+      }
+      if (!(TRANSACTION_TYPES as readonly string[]).includes(submittedType)) {
+        const m = `"${submittedType}" is not a transaction type this system offers. Allowed: ${TRANSACTION_TYPES.join(', ')}.`;
+        throw new UnprocessableEntityException({ message: m, errors: { type: [m] } });
+      }
+    }
+
+    /*
+     * TD-055 - money that cannot exist. A negative price is not a discount, and a deposit larger
+     * than the price is not a deposit. Both saved, and both reach the reports and the invoices.
+     */
+    const readMoney = (v: unknown): number => { const n = Number(String(v ?? '').replace(/,/g, '')); return Number.isFinite(n) ? n : 0; };
+    const pricePresent = Object.prototype.hasOwnProperty.call(data, 'price');
+    const depositPresent = Object.prototype.hasOwnProperty.call(data, 'deposit');
+    if (pricePresent || depositPresent) {
+      const priceIn = pricePresent ? readMoney(data.price) : readMoney(t.price);
+      const depositIn = depositPresent ? readMoney(data.deposit) : readMoney(t.deposit);
+      if (pricePresent && priceIn < 0) {
+        const m = 'The purchase price cannot be negative.';
+        throw new UnprocessableEntityException({ message: m, errors: { price: [m] } });
+      }
+      if (depositPresent && depositIn < 0) {
+        const m = 'The deposit cannot be negative.';
+        throw new UnprocessableEntityException({ message: m, errors: { deposit: [m] } });
+      }
+      if (priceIn > 0 && depositIn > priceIn) {
+        const m = 'The deposit cannot be larger than the purchase price.';
+        throw new UnprocessableEntityException({ message: m, errors: { deposit: [m] } });
+      }
+    }
+
     if (Object.prototype.hasOwnProperty.call(data, 'statuses')) {
       const submitted = [...new Set((data.statuses as unknown[]).filter(Boolean).map(String))];
       const changed = submitted.length !== statuses.length || submitted.some((s) => !statuses.includes(s));
@@ -649,24 +700,35 @@ export class TransactionsWriteService {
   }
 
   private async syncConditions(tx: Tx, txnId: number, conditions: Record<string, unknown>[]): Promise<void> {
-    await tx.conditions.deleteMany({ where: { transaction_id: txnId } });
+    // TD-033: match existing rows by id and update in place. Deleting and recreating gave every
+    // condition a new id, which orphaned its generated document row - and syncConditionDocs then
+    // purged that row's uploaded file from disk. Identity has to survive an ordinary save.
+    const existing = await tx.conditions.findMany({ where: { transaction_id: txnId } });
+    const known = new Set(existing.map((r) => r.id));
     const now = new Date();
+    const keep = new Set<number>();
     let i = 0;
     for (const c of conditions) {
-      await tx.conditions.create({
-        data: {
-          transaction_id: txnId,
-          type: String(c.type ?? 'Financing'),
-          custom_name: (c.custom_name ?? null) as string | null,
-          deadline: c.deadline ? new Date(String(c.deadline).slice(0, 10) + 'T00:00:00.000Z') : null,
-          status: String(c.status ?? 'Pending'),
-          position: i,
-          created_at: now,
-          updated_at: now,
-        },
-      });
+      const values = {
+        type: String(c.type ?? 'Financing'),
+        custom_name: (c.custom_name ?? null) as string | null,
+        deadline: c.deadline ? new Date(String(c.deadline).slice(0, 10) + 'T00:00:00.000Z') : null,
+        status: String(c.status ?? 'Pending'),
+        position: i,
+        updated_at: now,
+      };
+      const id = Number(c.id ?? 0);
+      if (id && known.has(id)) {
+        await tx.conditions.update({ where: { id }, data: values });
+        keep.add(id);
+      } else {
+        const created = await tx.conditions.create({ data: { transaction_id: txnId, ...values, created_at: now } });
+        keep.add(created.id);
+      }
       i++;
     }
+    const removed = existing.filter((r) => !keep.has(r.id)).map((r) => r.id);
+    if (removed.length > 0) await tx.conditions.deleteMany({ where: { id: { in: removed } } });
   }
 
   private async syncInterBoard(tx: Tx, txnId: number, items: Record<string, unknown>[]): Promise<void> {
@@ -1043,7 +1105,7 @@ export class TransactionsWriteService {
     }
     if (rel === 'conditions') {
       const rows = await tx.conditions.findMany({ where: { transaction_id: txnId }, orderBy: { position: 'asc' } });
-      return rows.map((r) => ({ type: r.type, custom_name: r.custom_name, deadline: r.deadline ? r.deadline.toISOString().slice(0, 10) : null, status: r.status }));
+      return rows.map((r) => ({ id: r.id, type: r.type, custom_name: r.custom_name, deadline: r.deadline ? r.deadline.toISOString().slice(0, 10) : null, status: r.status }));
     }
     const rows = await tx.inter_board_listings.findMany({ where: { transaction_id: txnId }, orderBy: { position: 'asc' } });
     return rows.map((r) => ({ name: r.name, board_id: r.board_id, verified: r.verified }));

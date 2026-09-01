@@ -1,5 +1,5 @@
 import { PrismaClient, Prisma } from '@prisma/client';
-import { DASHBOARD_LEAD_SOURCES, RECENT_LEAD_DAYS, WEBSITE_ENQUIRY_SOURCES } from './lead.constants';
+import { DASHBOARD_LEAD_SOURCES, RECENT_LEAD_DAYS } from './lead.constants';
 
 /**
  * The Leads header counters, computed the old way and the new way, against the same rows.
@@ -31,10 +31,11 @@ async function statsTheOldWay(where: Prisma.leadsWhereInput, db: Client = prisma
   const since = new Date(Date.now() - RECENT_LEAD_DAYS * 24 * 60 * 60 * 1000);
   const count = (extra: Prisma.leadsWhereInput) => db.leads.count({ where: { AND: [where, extra] } });
 
-  const [total, noCalls, websiteEnquiries, recent, hot, warm, cold, mild, closed, ...sourceCounts] = await Promise.all([
+  // `websiteEnquiries` is gone from both implementations: it counted paid ads under a website name
+  // and disagreed with `bySource.website` in the same response. See `lead.constants.ts`.
+  const [total, noCalls, recent, hot, warm, cold, mild, closed, ...sourceCounts] = await Promise.all([
     db.leads.count({ where }),
     count({ lead_calls: { none: {} } }),
-    count({ lead_source: { in: [...WEBSITE_ENQUIRY_SOURCES] } }),
     count({ created_at: { gte: since } }),
     count({ lead_status: 'hot' }),
     count({ lead_status: 'warm' }),
@@ -48,7 +49,7 @@ async function statsTheOldWay(where: Prisma.leadsWhereInput, db: Client = prisma
   DASHBOARD_LEAD_SOURCES.forEach((s, i) => { bySource[s.key] = sourceCounts[i]; });
   bySource.other = total - sourceCounts.reduce((a, b) => a + b, 0);
 
-  return { total, noCalls, websiteEnquiries, recent, byStatus: { hot, warm, cold, mild, closed }, bySource };
+  return { total, noCalls, recent, byStatus: { hot, warm, cold, mild, closed }, bySource };
 }
 
 /** The implementation as it stands now, copied from `LeadsService.statsGrouped`. */
@@ -68,14 +69,13 @@ async function statsTheNewWay(where: Prisma.leadsWhereInput, db: Client = prisma
   const status = (k: string): number => statusCounts.get(k) ?? 0;
   const source = (k: string): number => sourceCounts.get(k) ?? 0;
 
-  const websiteEnquiries = WEBSITE_ENQUIRY_SOURCES.reduce((sum, s) => sum + source(s), 0);
   const bySource: Record<string, number> = {};
   for (const s of DASHBOARD_LEAD_SOURCES) bySource[s.key] = source(s.value);
   const total = [...sourceCounts.values()].reduce((a, b) => a + b, 0);
   bySource.other = total - DASHBOARD_LEAD_SOURCES.reduce((sum, s) => sum + source(s.value), 0);
 
   return {
-    total, noCalls, websiteEnquiries, recent,
+    total, noCalls, recent,
     byStatus: {
       hot: status('hot'), warm: status('warm'), cold: status('cold'),
       mild: status('mild'), closed: status('closed'),

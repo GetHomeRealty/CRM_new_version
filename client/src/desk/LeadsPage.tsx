@@ -3,12 +3,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   bulkDeleteLeads, createLeadTag, deleteLead, deleteLeadTag, exportLeads,
-  leadOptions, listDeletedLeads, listLeadTags, listLeads, purgeLead, restoreLead, tagLeads,
+  leadOptions, leadStatusBeforeClose, listDeletedLeads, listLeadTags, listLeads, purgeLead, restoreLead, tagLeads,
   updateLead,
 } from '../lib/leadsApi';
 import { apiErrorMessage } from '../lib/apiError';
 import { downloadCsv, objectsToCsv } from '../lib/csv';
-import { runLeadImport, type ImportJob } from '../lib/leadImportApi';
+import { leadImportPreflight, runLeadImport, type ImportJob } from '../lib/leadImportApi';
 import ImportProgress from '../components/ImportProgress';
 import { useToast } from './toast';
 import { useAuth } from '../context/AuthContext';
@@ -25,11 +25,11 @@ const PAGE_SIZE = 50;
 const EMPTY_FILTERS: LeadFilters = {
   search: '', leadStatus: '', leadType: '', leadSource: '', leadResponse: '',
   clientType: '', leadConversion: '', tag: '', gender: '', language: '', religion: '',
-  minAge: '', maxAge: '', assignedTo: '', recent: '',
+  minAge: '', maxAge: '', assignedTo: '', recent: '', noCalls: '',
 };
 
 const EMPTY_STATS: LeadStats = {
-  total: 0, noCalls: 0, websiteEnquiries: 0, recent: 0,
+  total: 0, noCalls: 0, recent: 0,
   byStatus: { hot: 0, warm: 0, cold: 0, mild: 0, closed: 0 },
   bySource: { google: 0, meta: 0, website: 0, referral: 0, other: 0 },
 };
@@ -108,16 +108,19 @@ export default function LeadsPage() {
   const navigate = useNavigate();
   const { can, user } = useAuth();
   /*
-   * WHETHER AN AGENT MAY DELETE THIS LEAD. Named for what it decides, because it no longer decides
-   * the identity lock — that moved to `identityLocked`, which follows the server's rule and answers
-   * differently for a brokerage lead (null owner) and for the roles below manager.
+   * THE DELETE BUTTON NOW ASKS THE SERVER, and the local rule it used to ask is gone.
    *
-   * Deleting keeps this narrower test on purpose: `LeadsService.remove` scopes by visibility alone,
-   * so an agent may delete a brokerage lead they can see, and only somebody else's lead is out of
-   * bounds. Widening it here would hide a control the server permits.
+   * There was an `isBrokerageLead` here that hid Delete only when a lead had an OWNER who was
+   * somebody else, with a comment explaining that `LeadsService.remove` scoped by visibility alone
+   * so an agent could delete any brokerage lead they could see. That had stopped being true:
+   * `remove()` refuses whenever the agent is not the owner, and nobody updated this.
+   *
+   * The two questions disagree on exactly the rows this brokerage has. The old test needed an owner
+   * who was somebody else; the server needs only that the owner is not you; and every lead here has
+   * no owner at all. So the button appeared on every lead and was refused on every lead, 403.
+   *
+   * `can_delete` comes from the server per row - one rule, not two that agree by accident.
    */
-  const isBrokerageLead = (l: Lead): boolean =>
-    user?.role === 'agent' && l.owner_user_id != null && l.owner_user_id !== user.id;
   const canEdit = can('lead', 'edit');
   const { confirm, askDelete, closeConfirm } = useConfirm();
 
@@ -278,15 +281,42 @@ export default function LeadsPage() {
     },
   });
 
-  const toggleClosed = async (lead: Lead) => {
-    const next = lead.lead_status === 'closed' ? 'hot' : 'closed';
+  /** The stage Reopen will restore, chosen in the dialog below. */
+  const [reopening, setReopening] = useState<{ lead: Lead; remembered: string | null } | null>(null);
+  const [reopenTo, setReopenTo] = useState('');
+
+  const setStatus = async (lead: Lead, next: string, done: string) => {
     try {
       await updateLead(lead.id, { lead_status: next });
-      toast(next === 'closed' ? 'Lead closed.' : 'Lead reopened.', 'ok');
+      toast(done, 'ok');
       void load();
     } catch (ex) {
       toast(apiErrorMessage(ex, 'Could not update the lead'), 'bad');
     }
+  };
+
+  /*
+   * CLOSING IS STILL ONE CLICK. It is reversible and it loses nothing.
+   *
+   * REOPENING ASKS, because it cannot be reversed by pressing the button again — and because it
+   * used to answer for you. `'hot'` was hard-coded, so a Cold lead closed and reopened came back
+   * Hot: it promoted itself to the top of the list an agent works first, silently, with a genuinely
+   * hot lead pushed below it. A wrong stage is worse than an absent one, because it gets acted on.
+   *
+   * The previous stage is offered when the audit trail knows it and simply asked for when it does
+   * not — which is the honest answer for any lead closed before that history was recorded.
+   */
+  const toggleClosed = async (lead: Lead) => {
+    if (lead.lead_status !== 'closed') {
+      await setStatus(lead, 'closed', 'Lead closed.');
+      return;
+    }
+    let remembered: string | null = null;
+    try {
+      remembered = (await leadStatusBeforeClose(lead.id)).status;
+    } catch { /* unknown is a fine answer; the dialog asks */ }
+    setReopenTo(remembered ?? '');
+    setReopening({ lead, remembered });
   };
 
   return (
@@ -299,8 +329,16 @@ export default function LeadsPage() {
               onClick={() => setFilter('recent', filters.recent === 'true' ? '' : 'true')}>
               🆕 Recent Leads <strong>{stats.recent}</strong>
             </button>
-            <button className="lead-counter as-btn" type="button" title="Leads with no logged call"
-              onClick={() => { setFilter('recent', ''); toast(`${stats.noCalls} lead(s) have no logged call.`, 'info'); }}>
+            {/*
+              A REAL FILTER NOW, like the three beside it.
+              It was styled identically to the working tiles and invited the same click, but its
+              handler cleared the Recent filter and raised a toast - so pressing "No Calls 9" undid
+              whatever narrowing you had, showed all ten leads, and announced a number the list on
+              screen contradicted. The server filters on the same predicate it counts with.
+            */}
+            <button className={`lead-counter as-btn${filters.noCalls === 'true' ? ' on' : ''}`} type="button"
+              title="Leads with no logged call"
+              onClick={() => setFilter('noCalls', filters.noCalls === 'true' ? '' : 'true')}>
               <Icon name="phone" size={13} /> No Calls <strong>{stats.noCalls}</strong>
             </button>
             <button className={`lead-counter as-btn${filters.leadSource === 'website' ? ' on' : ''}`} type="button" title="Leads from the website"
@@ -485,7 +523,7 @@ export default function LeadsPage() {
                         {l.lead_status === 'closed' ? <Icon name="refresh" size={15} /> : <Icon name="check" size={15} />}
                       </button>
                     )}
-                    {canEdit && !isBrokerageLead(l) && <button className="icon-btn danger" type="button" title="Delete" aria-label="Delete" onClick={() => doDelete(l)}><Icon name="trash" size={15} /></button>}
+                    {canEdit && l.can_delete !== false && <button className="icon-btn danger" type="button" title="Delete" aria-label="Delete" onClick={() => doDelete(l)}><Icon name="trash" size={15} /></button>}
                   </td>
                 </tr>
               ))}
@@ -536,6 +574,41 @@ export default function LeadsPage() {
       )}
       {binOpen && <RecycleModal canEdit={canEdit} onClose={() => setBinOpen(false)} onChanged={() => void load()} />}
 
+      {/*
+        REOPENING, WITH THE STAGE STATED.
+        The old handler chose `hot` for you and told you nothing; this offers the stage the lead
+        actually had when it was closed, and asks when that is not on record.
+      */}
+      <ConfirmDialog
+        confirm={reopening ? {
+          title: `Reopen ${reopening.lead.name}?`,
+          message: reopening.remembered
+            ? `It was ${reopening.remembered} when it was closed. Reopen it at that stage, or choose another.`
+            : 'There is no record of the stage it was at when it was closed, so choose the one it should come back at.',
+          body: (
+            <label className="field" style={{ marginTop: 8, display: 'block' }}>
+              <span className="help">Reopen at stage</span>
+              <select value={reopenTo} onChange={(e) => setReopenTo(e.target.value)} aria-label="Reopen at stage">
+                <option value="">Choose a stage…</option>
+                {(options?.lead_status ?? []).filter((v) => v !== 'closed')
+                  .map((v) => <option key={v} value={v}>{label(v)}</option>)}
+              </select>
+            </label>
+          ),
+          confirmLabel: 'Reopen lead',
+          // Reopening is not a destruction; the colour should not say it is (CRM-030).
+          variant: 'primary',
+          onConfirm: () => {
+            const target = reopenTo.trim();
+            // The dialog closes on confirm whatever happens, so refuse here rather than reopening
+            // at a stage nobody chose — which is the defect this whole change is about.
+            if (!target) { toast('Choose the stage to reopen at', 'bad'); return; }
+            void setStatus(reopening.lead, target, `Lead reopened as ${label(target)}.`);
+          },
+        } : null}
+        onClose={() => { setReopening(null); setReopenTo(''); }}
+      />
+
       <ConfirmDialog confirm={confirm} onClose={closeConfirm} />
     </>
   );
@@ -566,6 +639,25 @@ function ImportModal({ onClose, onDone, tags }: { onClose: () => void; onDone: (
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<ImportJob | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  /*
+   * WHETHER THIS IMPORT WILL EMAIL EVERYBODY IN THE FILE.
+   *
+   * Importing a spreadsheet does not only create records - every new lead becomes eligible for the
+   * welcome sweep, so a five-hundred-row file is five hundred members of the public emailed by the
+   * brokerage. The window said nothing about it, the job report never mentioned it, and the sweep
+   * runs on a delay, so an operator who saw "500 imported" and closed the window had no reason to
+   * think anything had been sent and was gone before it started.
+   *
+   * Asked of the server rather than assumed, because the answer depends on four things this screen
+   * cannot see: the per-user trigger, the brokerage kill switch, the template, and whether a
+   * mailbox is connected at all.
+   */
+  const [willEmail, setWillEmail] = useState<{ will_email: boolean; reason: string | null } | null>(null);
+  const [emailAcknowledged, setEmailAcknowledged] = useState(false);
+
+  useEffect(() => {
+    leadImportPreflight().then(setWillEmail).catch(() => setWillEmail(null));
+  }, []);
   // Read by the poll loop, which outlives a render — a state flag would be captured stale.
   const closedRef = useRef(false);
   /*
@@ -622,7 +714,7 @@ function ImportModal({ onClose, onDone, tags }: { onClose: () => void; onDone: (
     const csvText = [
       'name,email,phone,location,property,lead status,lead type,lead source,lead response,client type',
       'Jane Doe,jane.doe@example.com,416-555-0100,Toronto,12 Example St,hot,buyer,website,active,first home buyer',
-      'John Smith,john.smith@example.com,905-555-0142,Mississauga,,warm,seller,refferal,not answering,Investor',
+      'John Smith,john.smith@example.com,905-555-0142,Mississauga,,warm,seller,referral,not answering,Investor',
       'Priya Patel,priya.patel@example.com,647-555-0188,,,,,,,',
     ].join('\r\n');
     // BOM, so Excel opens it as UTF-8 rather than mangling accented names. The importer strips it.
@@ -636,6 +728,11 @@ function ImportModal({ onClose, onDone, tags }: { onClose: () => void; onDone: (
   };
 
   const run = async () => {
+    // Belt as well as braces: the button is disabled, but a stale render must not be the only thing
+    // between one click and a mailing to everybody in the file.
+    if (willEmail?.will_email && !emailAcknowledged) {
+      return toast('Confirm that everybody in this file will be emailed', 'bad');
+    }
     setBusy(true);
     setProgress(null);
     try {
@@ -706,6 +803,32 @@ function ImportModal({ onClose, onDone, tags }: { onClose: () => void; onDone: (
           <datalist id="import-tags">{tags.map((t) => <option key={t} value={t} />)}</datalist>
         </div>
         {progress && <ImportProgress job={progress} />}
+        {/*
+          SAID BEFORE THE FILE IS PROCESSED, not in the report afterwards.
+          The sweep that sends these runs on a delay, so an operator who imports and closes the
+          window is usually gone before the first message leaves. A note in the result would arrive
+          after the decision it was meant to inform.
+        */}
+        {willEmail?.will_email && !busy && (
+          <div className="import-error" style={{ marginBottom: 10 }}>
+            <strong>Everybody in this file will be emailed.</strong>
+            <p>
+              Each imported lead is sent the brokerage&apos;s welcome message automatically, a few
+              minutes after the import finishes
+              {csvRowCount > 0 ? ` — about ${csvRowCount} message${csvRowCount === 1 ? '' : 's'} from this file` : ''}.
+              They are then included in the automated birthday, anniversary and seasonal greetings
+              that are switched on.
+            </p>
+            <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginTop: 6 }}>
+              <input type="checkbox" checked={emailAcknowledged} onChange={(e) => setEmailAcknowledged(e.target.checked)} />
+              <span>I have permission to email these people.</span>
+            </label>
+            <p className="help" style={{ marginTop: 6 }}>
+              To import without emailing anyone, switch the welcome email off first in
+              CRM Settings → Communications.
+            </p>
+          </div>
+        )}
         <div className="actions">
           {/* Deliberately NOT disabled while importing. The work is on the server now, so closing
               only stops this tab watching it — there is no reason to trap somebody in a modal for
@@ -713,7 +836,10 @@ function ImportModal({ onClose, onDone, tags }: { onClose: () => void; onDone: (
           <button className="btn ghost" type="button" onClick={onClose}>
             {busy ? 'Close — the import keeps running' : 'Cancel'}
           </button>
-          <button className="btn primary" type="button" onClick={() => void run()} disabled={busy || csv.trim() === ''}>
+          <button
+            className="btn primary" type="button" onClick={() => void run()}
+            disabled={busy || csv.trim() === '' || (!!willEmail?.will_email && !emailAcknowledged)}
+          >
             {busy ? 'Importing…' : 'Import'}
           </button>
         </div>
@@ -731,6 +857,15 @@ function TagsModal({ data, canEdit, onClose, onChanged, onFilter }: {
   const [busy, setBusy] = useState(false);
   // Keeps the last delete undoable — the API returns the leads the tag was pulled from.
   const [undo, setUndo] = useState<{ tag: string; leadIds: number[] } | null>(null);
+  /*
+   * ITS OWN CONFIRMATION, for the same structural reason as the recycle bin's.
+   *
+   * `LeadsPage` mounts a `ConfirmDialog` and every delete on the list goes through it. This is a
+   * SEPARATE component, so none of that was in scope here — and deleting a tag reaches further than
+   * deleting a lead does: it strips the tag from every lead carrying it, in one click, on rows the
+   * operator cannot see from this window.
+   */
+  const { confirm, askDelete, closeConfirm } = useConfirm();
 
   const create = async () => {
     setBusy(true);
@@ -755,6 +890,36 @@ function TagsModal({ data, canEdit, onClose, onChanged, onFilter }: {
       toast(apiErrorMessage(ex, 'Could not delete the tag'), 'bad');
     } finally { setBusy(false); }
   };
+
+  /**
+   * Ask before stripping a tag from every lead that carries it.
+   *
+   * THE COUNT IS THE POINT. The tag list already knows how many leads hold each tag — it renders
+   * the number beside every row — so the one fact the operator needed was on screen and simply
+   * never made it into the decision. "Delete this tag?" and "remove this from 340 leads?" are
+   * different questions.
+   *
+   * CAMPAIGNS IS NAMED because the window's own footer says tags are shared with them: a deleted
+   * tag quietly changes who a future mailing reaches, which is discovered when the mailing goes to
+   * the wrong people rather than when the tag goes.
+   */
+  const confirmRemove = (tag: string, count: number) => askDelete({
+    title: `Delete the tag “${tag}”?`,
+    message: count
+      ? `It will be removed from ${count} lead${count === 1 ? '' : 's'}.`
+      : 'No leads currently carry this tag.',
+    linked: count
+      ? [
+        'Campaign audiences built on this tag will no longer match those leads',
+        'The tag is removed from every lead carrying it, not only the ones you can see here',
+      ]
+      : undefined,
+    note: 'A Restore option appears afterwards, but only until you leave this page.',
+    confirmLabel: 'Delete tag',
+    onConfirm: async () => {
+      try { await remove(tag); } finally { closeConfirm(); }
+    },
+  });
 
   const restoreTag = async () => {
     if (!undo) return;
@@ -800,13 +965,14 @@ function TagsModal({ data, canEdit, onClose, onChanged, onFilter }: {
                 <li key={t.name}>
                   <button className="prop-link" type="button" onClick={() => onFilter(t.name)}>{t.name}</button>
                   <span className="pill info">{t.count} {t.count === 1 ? 'lead' : 'leads'}</span>
-                  {canEdit && <button className="btn ghost sm" type="button" disabled={busy} onClick={() => void remove(t.name)}>Delete</button>}
+                  {canEdit && <button className="btn ghost sm" type="button" disabled={busy} onClick={() => confirmRemove(t.name, t.count)}>Delete</button>}
                 </li>
               ))}
             </ul>
           )}
         <p className="help">Tags are shared with Campaigns — the audience builder targets these same names.</p>
       </div>
+      <ConfirmDialog confirm={confirm} onClose={closeConfirm} />
     </div>
   );
 }
@@ -845,6 +1011,17 @@ function TagSelectedModal({ count, tags, onClose, onApply }: {
 // -------------------------------------------------------- recently deleted
 function RecycleModal({ canEdit, onClose, onChanged }: { canEdit: boolean; onClose: () => void; onChanged: () => void }) {
   const toast = useToast();
+  /*
+   * ITS OWN CONFIRMATION, because this modal cannot borrow the page's.
+   *
+   * `LeadsPage` above mounts a `ConfirmDialog` and every delete on the list goes through it. This
+   * is a SEPARATE component, so none of that machinery was in scope here - which is why the one
+   * irreversible action in the module was also the only one that never asked. The soft delete on
+   * the list, which is fully reversible, confirms; Delete Forever, which is not, did not.
+   *
+   * The dialog portals to <body>, so opening it from inside this modal is safe.
+   */
+  const { confirm, askDelete, closeConfirm } = useConfirm();
   const [rows, setRows] = useState<DeletedLead[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<number | null>(null);
@@ -895,6 +1072,33 @@ function RecycleModal({ canEdit, onClose, onChanged }: { canEdit: boolean; onClo
     } finally { setBusy(null); }
   };
 
+  /**
+   * Name what is about to be destroyed, and say plainly that it cannot be undone.
+   *
+   * The lead is NAMED because this table has no ID column - name, contact, date and who deleted it
+   * are all somebody has to tell two rows apart, and `Restore` sits one button-width away in
+   * identical styling.
+   *
+   * The child records are listed because they are the part people do not expect: the deletion
+   * cascades to six tables, and an agent looking at a row showing a name and an email has no way
+   * to know that a year of correspondence goes with it.
+   */
+  const confirmPurge = (row: DeletedLead) => askDelete({
+    title: `Delete ${row.name} permanently?`,
+    message: 'This cannot be undone. The lead will not go back to Recently Deleted - it is removed '
+      + 'from the system entirely, and nothing in the application can bring it back.',
+    linked: [
+      'Every note, task, showing and call logged against this lead',
+      'The whole email and message history with them',
+    ],
+    note: 'Press Cancel if you meant Restore.',
+    // Named rather than left as the default 'Delete', so the red button says what it really does.
+    confirmLabel: 'Delete permanently',
+    onConfirm: async () => {
+      try { await act(row.id, 'purge'); } finally { closeConfirm(); }
+    },
+  });
+
   return (
     <div className="overlay open" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="modal lg">
@@ -922,7 +1126,7 @@ function RecycleModal({ canEdit, onClose, onChanged }: { canEdit: boolean; onClo
                     <td className="muted">{r.deleted_by ?? '—'}</td>
                     <td className="lead-actions">
                       {canEdit && <button className="btn ghost sm" type="button" disabled={busy === r.id} onClick={() => void act(r.id, 'restore')}>Restore</button>}
-                      {canEdit && <button className="btn ghost sm" type="button" disabled={busy === r.id} onClick={() => void act(r.id, 'purge')}>Delete Forever</button>}
+                      {canEdit && <button className="btn ghost sm" type="button" disabled={busy === r.id} onClick={() => confirmPurge(r)}>Delete Forever</button>}
                     </td>
                   </tr>
                 ))}
@@ -942,6 +1146,7 @@ function RecycleModal({ canEdit, onClose, onChanged }: { canEdit: boolean; onClo
           </div>
         )}
       </div>
+      <ConfirmDialog confirm={confirm} onClose={closeConfirm} />
     </div>
   );
 }

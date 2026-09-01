@@ -41,6 +41,16 @@ export const startLeadImport = (csv: string, tag: string, source: ImportSource =
 export const leadImportStatus = (jobId: string, source: ImportSource = 'leads'): Promise<ImportJob> =>
   api.get<ImportJob>(`${base(source)}/${jobId}`).then((r) => r.data);
 
+/**
+ * Whether importing will EMAIL the people in the file.
+ *
+ * The import creates records and also makes every new lead eligible for the welcome sweep, which
+ * runs on a delay — so the operator is usually gone before the first message leaves. The window
+ * asks this before it starts, so it can say so while somebody is still there to decide.
+ */
+export const leadImportPreflight = (): Promise<{ will_email: boolean; reason: string | null }> =>
+  api.get<{ will_email: boolean; reason: string | null }>('/api/leads/import/preflight').then((r) => r.data);
+
 /** Imports the caller has run recently, so a reloaded page can pick a running one back up. */
 export const recentLeadImports = (): Promise<ImportJob[]> =>
   api.get<ImportJob[]>('/api/leads/imports/recent').then((r) => r.data);

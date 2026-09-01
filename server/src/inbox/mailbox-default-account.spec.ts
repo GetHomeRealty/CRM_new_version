@@ -290,6 +290,10 @@ describe('threads stay within one mailbox', () => {
 
       const messageId = `<shared-${++seq}@spec.test>`;
       const key = threadKeyFor({ messageId });
+      // `threadKeyFor` is nullable by contract — it returns null when a message carries no
+      // usable header. This fixture always supplies a message id, so a null here means the
+      // helper changed under the test rather than the test being wrong about types.
+      if (!key) throw new Error('threadKeyFor returned null for a message that has an id');
       const boxes: [number, string][] = [[dflt.id, 'COPY IN DEFAULT'], [other.id, 'COPY IN OTHER']];
       for (const [accountId, subject] of boxes) {
         await tx.inbound_emails.create({

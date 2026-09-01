@@ -65,7 +65,13 @@ export class EmailController {
 
   @Post('email-templates/:emailTemplate/preview')
   @HttpCode(200)
-  templatePreview(@Param('emailTemplate', ParseIntPipe) id: number): Promise<{ subject: string; html: string }> { return this.templates.preview(id); }
+  templatePreview(
+    @Param('emailTemplate', ParseIntPipe) id: number,
+    /** Unsaved edits to render. Absent means preview the template exactly as stored. */
+    @Body() body?: Res,
+  ): Promise<{ subject: string; html: string }> {
+    return this.templates.preview(id, body ?? {});
+  }
 
   // ---- Template attachments ----
   @Post('email-templates/:emailTemplate/attachments')

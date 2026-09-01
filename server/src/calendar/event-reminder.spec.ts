@@ -2,6 +2,22 @@ import { PrismaClient } from '@prisma/client';
 import type { PrismaService } from '../prisma/prisma.service';
 import { EventReminderService } from './event-reminder.service';
 
+/*
+ * MAIL_REDIRECT_TO IS NEUTRALISED FOR THIS FILE, deliberately.
+ *
+ * These cases assert WHICH RECIPIENT the sweep resolves — the owner, the billing contact, or nobody.
+ * This service is one of the four that honour `MAIL_REDIRECT_TO` themselves, so with a redirect
+ * configured every expectation here becomes the sink address and the rule under test is invisible.
+ *
+ * Left inherited, the result would depend on the developer's own `.env`: green on a machine that
+ * sends real mail, red on one configured safely. Pinning it makes the test about the code. Diversion
+ * itself is covered by `email/mail-delivery-mode.spec.ts`, where it is the subject rather than noise.
+ */
+const savedRedirect = process.env.MAIL_REDIRECT_TO;
+beforeAll(() => { delete process.env.MAIL_REDIRECT_TO; });
+afterAll(() => { if (savedRedirect === undefined) delete process.env.MAIL_REDIRECT_TO; else process.env.MAIL_REDIRECT_TO = savedRedirect; });
+
+
 /**
  * Appointment reminders.
  *

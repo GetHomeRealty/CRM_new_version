@@ -90,12 +90,44 @@ async function pickOption(select: Locator): Promise<string> {
   return chosen;
 }
 
+/**
+ * The age the birthday below implies today.
+ *
+ * Computed rather than written down, so this fixture cannot expire again the way the hard-coded 43
+ * did on 17 April 2026. Mirrors `ageFromDateOfBirth` on the server: UTC, and one fewer completed
+ * year when this year's birthday has not arrived yet.
+ */
+const DOB = '1982-04-17';
+function ageOnRecord(now: Date = new Date()): number {
+  const d = new Date(`${DOB}T00:00:00.000Z`);
+  const years = now.getUTCFullYear() - d.getUTCFullYear();
+  const m = now.getUTCMonth() - d.getUTCMonth();
+  const day = now.getUTCDate() - d.getUTCDate();
+  return m < 0 || (m === 0 && day < 0) ? years - 1 : years;
+}
+
 /** Text and date fields, with the value each is given. Optional ones are cleared in phase 4. */
-const TEXT_FIELDS: { label: string; value: string; api: string; optional: boolean }[] = [
+const TEXT_FIELDS: {
+  label: string; value: string; api: string; optional: boolean;
+  /** Read back as a value computed from another field rather than as what was typed. */
+  derivedFromDob?: boolean;
+}[] = [
   { label: 'Phone', value: '416-555-8899', api: 'phone', optional: true },
   { label: 'Location', value: 'Etobicoke', api: 'location', optional: true },
   { label: 'Property of Interest', value: 'Semi-detached', api: 'property', optional: true },
-  { label: 'Age', value: '43', api: 'age', optional: true },
+  /*
+   * AGE IS DERIVED FROM THE BIRTHDAY, so it is not asserted as a typed value.
+   *
+   * This paired a hard-coded `43` with a date of birth of 1982-04-17, and the API returns the age
+   * DERIVED from that birthday whenever one is on file — see `present` — so the pair stopped
+   * agreeing on 17 April 2026 and this test has been failing ever since. A fixture whose
+   * correctness expires on a particular date is a time bomb, not a fixture.
+   *
+   * The field is still typed and still cleared in phase 4; what it is checked against now comes
+   * from the birthday, below, so it cannot go stale again. This is the same confusion CRM-034 was
+   * about: a stored age beside a date of birth, where only one of them is what anybody sees.
+   */
+  { label: 'Age', value: '43', api: 'age', optional: true, derivedFromDob: true },
   { label: 'Date of Birth', value: '1982-04-17', api: 'date_of_birth', optional: true },
   { label: 'Marriage Day', value: '2010-09-02', api: 'marriage_day', optional: true },
 ];
@@ -127,7 +159,8 @@ test.describe('every lead field survives save, reload and read-back', () => {
     await field(page, 'Email *').locator('input').first().fill(email);
     for (const f of TEXT_FIELDS) {
       await field(page, f.label).locator('input').first().fill(f.value);
-      expected[f.api] = f.value;
+      // A derived field is read back as what the birthday implies TODAY, not as what was typed.
+      expected[f.api] = f.derivedFromDob ? String(ageOnRecord()) : f.value;
     }
     for (const f of SELECT_FIELDS) {
       const select = field(page, f.label).locator('select').first();
@@ -165,7 +198,7 @@ test.describe('every lead field survives save, reload and read-back', () => {
     const notShown: string[] = [];
     for (const f of TEXT_FIELDS) {
       const actual = await field(page, f.label).locator('input').first().inputValue();
-      const want = f.api.includes('date') || f.api === 'marriage_day' ? f.value : f.value;
+      const want = f.derivedFromDob ? String(ageOnRecord()) : f.value;
       if (actual.slice(0, want.length) !== want) notShown.push(`${f.label}: shows "${actual}", saved "${want}"`);
     }
     for (const f of SELECT_FIELDS) {

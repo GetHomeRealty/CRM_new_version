@@ -304,12 +304,14 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
     brok: { commission: r2(mr.brokerageFromMember / (1 + HST)), hst: r2(mr.brokerageFromMember - mr.brokerageFromMember / (1 + HST)), total: mr.brokerageFromMember },
     adj: memberDeduct[i], // { agentAdjust, advance, total } → "Less adjustment + advance" note
   }));
-  // Agent/Brokerage % is a single deal-level split for listings — editing any card updates all members.
-  const setListMember = (i: number, k: FinMemberKey, v: string) => {
-    if (k === 'agent_pct') return setMembers((ms) => ms.map((m) => ({ ...m, agent_pct: v, brok_pct: r2(clampPct(100 - parseNumber(v))) })));
-    if (k === 'brok_pct') return setMembers((ms) => ms.map((m) => ({ ...m, brok_pct: v, agent_pct: r2(clampPct(100 - parseNumber(v))) })));
-    return setMember(i, k, v);
-  };
+  // TD-025 - EACH MEMBER KEEPS THEIR OWN RATE. This used to broadcast agent_pct and brok_pct to
+  // every member on a listing, so setting one agent to 70 silently moved everybody to 70 and two
+  // agents could never be on different plans. It was deliberate - the old comment called the split
+  // "a single deal-level split for listings" - but the brokerage confirmed on 2026-08-31 that rates
+  // may be equal or different and that editing one must never change another. setMember already
+  // updates only the card being edited, which is how every other field on this panel behaves and
+  // how buying deals have always worked.
+  const setListMember = (i: number, k: FinMemberKey, v: string) => setMember(i, k, v);
   // Trust Verification: Deposit − Total Commissions − Receivable from Lawyer − Payable to Client.
   // Receivable is the signed value (≤ 0 when the trust is short), so a balanced deal nets to 0 = PASS.
   const tvReceivable = lb.trust.receivableFromLawyer;

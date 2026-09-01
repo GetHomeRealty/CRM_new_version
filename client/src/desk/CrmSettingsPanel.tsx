@@ -87,6 +87,36 @@ export default function CrmSettingsPanel() {
   const [codes, setCodes] = useState<CrmReferralCode[]>([]);
   const [broadcasts, setBroadcasts] = useState<CrmBroadcast[]>([]);
   const [log, setLog] = useState<CrmEmailLogRow[]>([]);
+  /*
+   * How many entries EXIST, as against how many are on screen.
+   *
+   * Without this the panel could not tell the difference between "that is everything" and "that is
+   * the first 25", and it showed the second as though it were the first. The log is the brokerage's
+   * record of what was sent to whom, so the entries it quietly withheld - the older ones, where the
+   * failures are - are exactly the ones somebody investigating a complaint came to find.
+   */
+  const [logMeta, setLogMeta] = useState<{ total: number; complete: boolean }>({ total: 0, complete: true });
+  const [loadingMore, setLoadingMore] = useState(false);
+
+  /** How many more rows one press of "Show more" reveals. */
+  const LOG_PAGE = 25;
+
+  /*
+   * WHAT THE LOG IS SHOWING.
+   *
+   * Campaign sends write one row per recipient, so a thousand-person mailing fills the whole scan
+   * window and a brokerage looking for last week's welcome emails finds nothing but campaign rows.
+   * The filter is applied in the QUERY, so choosing one gives a full window of it rather than a
+   * window of discarded rows.
+   */
+  const [logKind, setLogKind] = useState('');
+
+  /** Re-read the log from the top at the given depth, so the count and the rows stay in step. */
+  const loadLog = async (count: number, kind = logKind) => {
+    const page = await listCrmEmailLog(count, 0, kind);
+    setLog(page.data);
+    setLogMeta({ total: page.meta.total, complete: page.meta.complete });
+  };
   /**
    * Whether the send log is expanded.
    *
@@ -118,7 +148,8 @@ export default function CrmSettingsPanel() {
         listReferralCodes(), listCrmBroadcasts(), listCrmEmailLog(25), crmOptions(),
       ]);
       setSettings(s); setProfile(p); setIntegrations(i);
-      setCodes(c); setBroadcasts(b); setLog(l); setSeasons(o.seasons);
+      setCodes(c); setBroadcasts(b); setSeasons(o.seasons);
+      setLog(l.data); setLogMeta({ total: l.meta.total, complete: l.meta.complete });
     } catch (ex) {
       toast(apiErrorMessage(ex, 'Could not load CRM settings'), 'bad');
     } finally {
@@ -472,7 +503,7 @@ export default function CrmSettingsPanel() {
       {canEdit && (
         <SendEmailCard
           seasons={seasons}
-          onSent={async () => { setLog(await listCrmEmailLog(25)); }}
+          onSent={async () => { await loadLog(Math.max(LOG_PAGE, log.length)); }}
         />
       )}
 
@@ -512,6 +543,25 @@ export default function CrmSettingsPanel() {
           Connect the outside services the CRM works with. Each connection is scoped to your own login.
         </p>
 
+        {/*
+          MAIL HEALTH, SAID OUT LOUD.
+          This panel already fetched `integrations` and rendered none of it, so when three
+          brokerage-wide broadcasts failed on `535 Username and Password not accepted` there was
+          genuinely nothing here that could have said so - the accounts all reported `sync_error:
+          null`, which records a failed IMAP poll and nothing about sending. Roughly forty-four
+          welcome emails to real new leads were refused in a day and every surface said fine.
+        */}
+        {integrations?.email?.failing && (
+          <div className="import-error" style={{ marginBottom: 10 }}>
+            <strong>Email is configured, but messages are being refused.</strong>
+            <p>{integrations.email.detail}</p>
+            <p>
+              Reconnect the affected account below. Until then automated email — welcome messages,
+              reminders and campaigns — is not reaching clients.
+            </p>
+          </div>
+        )}
+
         {/* Mail Configuration — connect your own Gmail / SMTP sending + inbox account. */}
         <EmailIntegrationCard scope="crm" />
 
@@ -529,8 +579,25 @@ export default function CrmSettingsPanel() {
           <h3 className="modal-h" style={{ margin: 0 }}>CRM Email Log</h3>
           <button className="btn ghost sm" type="button" style={{ marginLeft: 'auto' }}
             aria-expanded={showLog} onClick={() => setShowLog((v) => !v)}>
-            {showLog ? 'Hide' : `View${log.length ? ` (${log.length})` : ''}`}
+            {showLog ? 'Hide' : `View${logMeta.total ? ` (${logMeta.total})` : ''}`}
           </button>
+          {showLog && (
+            <select
+              className="inp" style={{ maxWidth: 190 }} value={logKind}
+              aria-label="Filter the log by kind"
+              onChange={(e) => {
+                const next = e.target.value;
+                setLogKind(next);
+                void loadLog(LOG_PAGE, next).catch(() => toast('Could not filter the log', 'bad'));
+              }}
+            >
+              <option value="">All messages</option>
+              <option value="transactional">Everything except campaigns</option>
+              <option value="campaign">Campaign sends</option>
+              <option value="campaign_test">Campaign test sends</option>
+              <option value="welcome">Welcome emails</option>
+            </select>
+          )}
         </div>
         {!showLog ? null : log.length === 0 ? <p className="help">Nothing sent from CRM Settings yet.</p> : (
           <div className="lead-scroll">
@@ -557,6 +624,27 @@ export default function CrmSettingsPanel() {
                 ))}
               </tbody>
             </table>
+            {/* Says what is on screen against what exists, and offers the rest. Shown even when
+                everything is loaded, so "25 of 25" reads as complete rather than as silence. */}
+            <div className="toolbar-row" style={{ justifyContent: 'space-between', marginTop: 8 }}>
+              <span className="help">
+                Showing {log.length} of {logMeta.total}{logMeta.complete ? '' : '+'} entries
+                {logMeta.complete ? '' : ' — more exist than this count covers'}
+              </span>
+              {log.length < logMeta.total && (
+                <button
+                  type="button" className="btn ghost sm" disabled={loadingMore}
+                  onClick={async () => {
+                    setLoadingMore(true);
+                    try { await loadLog(log.length + LOG_PAGE); }
+                    catch (ex) { toast(apiErrorMessage(ex, 'Could not load more of the log'), 'bad'); }
+                    finally { setLoadingMore(false); }
+                  }}
+                >
+                  {loadingMore ? 'Loading…' : `Show ${Math.min(LOG_PAGE, logMeta.total - log.length)} more`}
+                </button>
+              )}
+            </div>
           </div>
         )}
       </div>
@@ -609,6 +697,8 @@ function BroadcastForm({ onSent }: { onSent: () => Promise<void> }) {
       ),
       note: 'Everyone with an active account and an email address will receive it.',
       confirmLabel: 'Send',
+      // Also a send rather than a delete. Same reasoning as the campaign confirmation.
+      variant: 'primary' as const,
       onConfirm: () => { closeConfirm(); void send(); },
     });
   };

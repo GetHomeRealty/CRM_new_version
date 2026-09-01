@@ -215,18 +215,84 @@ export class MailerService {
    * Throws when nothing is configured, so callers surface the same "add an account" message.
    */
   async resolveSender(accountId: number | null, userId: number | null): Promise<mail_accounts> {
-    const account = (accountId
-      ? await this.prisma.mail_accounts.findFirst({ where: { id: accountId, is_active: true } })
-      : null)
+    /*
+     * A CHOSEN ACCOUNT MUST BELONG TO THE PERSON CHOOSING IT.
+     *
+     * This looked up `{ id: accountId, is_active: true }` and nothing else, trusting every caller to
+     * have checked ownership first. `LeadActivityService.sendEmail` does not: it validates that
+     * `account_id` is a positive integer and passes it straight through. So an agent could name a
+     * COLLEAGUE'S mailbox id and the message went out from that colleague's address, signed with
+     * that colleague's OAuth token, with the send logged against it. Nothing in the request had to
+     * be forged — the id is an ordinary number in the body.
+     *
+     * `user_id: null` stays permitted because that is the BROKERAGE mailbox, which everyone may
+     * legitimately send through — it is the shared fallback this chain already reaches for below.
+     *
+     * When no `userId` is supplied the caller is the system rather than a person — onboarding
+     * templates naming their own `mail_account_id`, OTP, notifications — and there is no user to
+     * check the account against, so the id is honoured as before.
+     */
+    const chosen = accountId
+      ? await this.prisma.mail_accounts.findFirst({
+        where: {
+          id: accountId,
+          is_active: true,
+          ...(userId ? { OR: [{ user_id: userId }, { user_id: null }] } : {}),
+        },
+      })
+      : null;
+
+    const account = chosen
       ?? (userId
         ? (await this.prisma.mail_accounts.findFirst({ where: { user_id: userId, is_active: true, is_default: true } })
           ?? await this.prisma.mail_accounts.findFirst({ where: { user_id: userId, is_active: true } }))
         : null)
       ?? await this.prisma.mail_accounts.findFirst({ where: { user_id: null, is_active: true, is_default: true } })
-      ?? await this.prisma.mail_accounts.findFirst({ where: { user_id: null, is_active: true } })
+      ?? await this.prisma.mail_accounts.findFirst({ where: { user_id: null, is_active: true } });
+    if (account) return account;
+
+    /*
+     * THE LAST RESORT: SOMEBODY ELSE'S PERSONAL MAILBOX.
+     *
+     * Everything above has failed — this person has no mailbox and the brokerage has none either —
+     * so the only account left belongs to a colleague. The message then goes out from THEIR address
+     * with THEIR credentials, and this used to happen with nothing recorded anywhere.
+     *
+     * IT IS NOT REMOVED, and the measurement is why: 77 of the 79 active users on this deployment
+     * have no mailbox of their own and there is no brokerage account, so this line is currently the
+     * one that sends nearly all of their mail. Deleting it would stop lead email for the brokerage,
+     * and the system paths — OTP, notifications, reminders — reach it too, with no user to fall back
+     * on. That is a configuration problem, and the fix is a brokerage mailbox (`user_id = null`):
+     * once one exists the branch above claims every one of these sends and this never runs again.
+     *
+     * So the behaviour is unchanged and the condition is merely made visible. It was invisible
+     * before, which is the part that could not be defended.
+     */
+    /*
+     * PREFER A MAILBOX THAT IS NOT ALREADY FAILING.
+     *
+     * This was an unordered `findFirst`, so it returned whichever active account the database
+     * offered first — and on this deployment that was one whose Google token had been revoked. A
+     * password reset therefore failed with `invalid_grant` while three healthy mailboxes sat beside
+     * it, which reads as "the reset feature is broken" rather than "one old account needs
+     * reconnecting".
+     *
+     * `sync_error` is the only health signal stored, and it is a good one here: SMTP and IMAP share
+     * the same OAuth token, so a mailbox whose last poll was refused with `invalid_grant` cannot
+     * send either. Preferring a clean one is not a guarantee — the error is from the last poll, not
+     * from this instant — so a failing account is still used rather than none at all.
+     */
+    const borrowed = await this.prisma.mail_accounts.findFirst({ where: { is_active: true, sync_error: null } })
       ?? await this.prisma.mail_accounts.findFirst({ where: { is_active: true } });
-    if (!account) throw new Error('No active SMTP account is configured. Add one under Settings.');
-    return account;
+    if (borrowed) {
+      this.log.warn(
+        `Sending through ANOTHER USER'S mailbox — account #${borrowed.id} (user ${borrowed.user_id ?? 'brokerage'}) `
+        + `was used for ${userId ? `user ${userId}` : 'a system message'}, who has no mailbox of their own. `
+        + 'The recipient sees that mailbox owner as the sender. Add a brokerage mail account (no owner) to stop this.',
+      );
+      return borrowed;
+    }
+    throw new Error('No active SMTP account is configured. Add one under Settings.');
   }
 
   /**

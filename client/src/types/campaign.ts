@@ -67,6 +67,13 @@ export interface CampaignTemplate {
   category: string;
   /** Every {{TOKEN}} the template uses. */
   variables: string[];
+  /**
+   * The message body, so the composer can show what is about to go out.
+   *
+   * Optional only because an older response would not carry it; when it is absent the composer says
+   * it cannot show a preview rather than implying the message is empty.
+   */
+  content?: string;
   /** How many files ride along with each send. */
   attachment_count?: number;
 }
@@ -104,6 +111,21 @@ export interface CampaignOptions {
   categories: { value: string; label: string }[];
   fillable_tokens: string[];
   lead_sourced_tokens: string[];
+  /**
+   * Whether this person's campaigns can reach the whole brokerage's leads, or only their own.
+   *
+   * From the server, because it is the same capability the send path consults - the screen must not
+   * be able to describe a boundary different from the one that will be enforced. Optional so an
+   * older response says nothing rather than claiming the narrower answer.
+   */
+  brokerage_audience?: boolean;
+  /**
+   * The address campaigns from this account will go out from, as the mailer resolves it.
+   *
+   * Null when the deployment has no active mail account. Optional so an older response leaves the
+   * confirmation saying nothing about the sender rather than naming the wrong one.
+   */
+  sender_email?: string | null;
   max_recipients: number;
   tags: string[];
   templates: CampaignTemplate[];
@@ -142,7 +164,20 @@ export interface Suppression {
 
 export interface SuppressionPage {
   data: Suppression[];
-  meta: { page: number; per_page: number; total: number; last_page: number };
+  meta: {
+    page: number; per_page: number; total: number; last_page: number;
+    /**
+     * Whether THIS person may take an address off the list, decided by the server rule that will
+     * refuse it. Removing a suppression resumes mail to somebody who asked it to stop, so it is
+     * restricted to the roles accountable for the brokerage's marketing rather than to everyone who
+     * may build a campaign.
+     *
+     * Optional so an older response leaves the control as it was rather than silently hiding it.
+     */
+    can_remove?: boolean;
+  /** True when this is the viewer's own slice rather than the brokerage-wide list. */
+  scoped?: boolean;
+  };
 }
 
 /** Whether tracking pixels can actually be reached from the internet. */

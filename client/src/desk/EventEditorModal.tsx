@@ -88,12 +88,24 @@ const toForm = (e: CalendarEvent | null, defaultDate: string): Form => ({
  * the transaction activity log is written against — this form simply no longer sets or clears it.
  */
 
-export default function EventEditorModal({ event, defaultDate, options, onClose, onSaved }: {
+export default function EventEditorModal({ event, defaultDate, options, onClose, onSaved, onDelete }: {
   event: CalendarEvent | null;
   defaultDate: string;
   options: CalendarOptions | null;
   onClose: () => void;
   onSaved: () => void;
+  /**
+   * Remove this appointment. OPTIONAL, and absent in three cases that must not offer it: a new
+   * event that does not exist yet, a viewer without `calendar: edit`, and any caller that has no
+   * deletion flow of its own.
+   *
+   * Deliberately a callback rather than a delete implemented here. The calendar already owns that
+   * journey — a confirm dialog that asks whether a REPEATING appointment should lose this
+   * occurrence or this one and every later one, and which never touches earlier ones. Re-implementing
+   * it behind this button would be a second, quieter answer to the same question, and the one most
+   * likely to get the recurrence rule wrong.
+   */
+  onDelete?: () => void;
 }) {
   // The event is created in, and saved to, the area whose calendar is on screen — which also
   // decides which connected Google calendar it is mirrored to.
@@ -437,6 +449,27 @@ export default function EventEditorModal({ event, defaultDate, options, onClose,
           )}
 
           <div className="actions">
+            {/*
+              * Delete lives here because this is where somebody looking at an appointment already is.
+              * It existed only on the event ROWS behind this dialog, so opening an event to change it
+              * and then deciding to remove it meant closing the form and hunting for the row again.
+              *
+              * `marginRight: 'auto'` rather than a change to `.actions`: that class is shared by every
+              * modal in the application, and pushing one button left there would move a button in all
+              * of them. Separated from Save and Cancel so the destructive action is not adjacent to
+              * the one people click without looking.
+              */}
+            {event && onDelete && (
+              <button
+                className="btn ghost danger"
+                type="button"
+                style={{ marginRight: 'auto' }}
+                disabled={saving}
+                onClick={onDelete}
+              >
+                Delete
+              </button>
+            )}
             <button className="btn ghost" type="button" onClick={onClose} disabled={saving}>Cancel</button>
             {clash && (
               <button className="btn ghost" type="button" disabled={saving} onClick={(e) => void save(e as unknown as React.FormEvent, true)}>

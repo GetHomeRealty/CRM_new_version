@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { LeadAuditService } from './lead-audit.service';
 import type { AuthUserRecord } from '../auth/auth.types';
@@ -51,6 +51,8 @@ function normalizeCallStatus(raw: string): string | null {
  */
 @Injectable()
 export class LeadActivityService {
+  private readonly log = new Logger(LeadActivityService.name);
+
   constructor(
     private readonly access: ResourceAccessService,
     private readonly prisma: PrismaService,
@@ -168,6 +170,40 @@ export class LeadActivityService {
     await this.audit.record(
       user, 'Lead note deleted', `Lead #${leadId}`,
       `By ${existing.created_by ?? 'unknown'}: ${existing.content.slice(0, 200)}`,
+    );
+    return { deleted: true };
+  }
+
+  /**
+   * Remove one entry from a lead's email history.
+   *
+   * THE RECORD IS NOT LOST, IT MOVES. `lead_emails` has no `deleted_at`, so this is a hard delete —
+   * and an email row is evidence that the brokerage did or did not contact a client, which is the
+   * kind of thing somebody asks about months later. So the whole of it goes into the audit trail
+   * first: recipient, subject, outcome, when, and who sent it. "An email was deleted" would answer
+   * none of the questions that get asked afterwards, and the same reasoning already governs note
+   * deletion a few methods above.
+   *
+   * FAILED SENDS ARE THE COMMON CASE for this. Five of the six entries on the lead that prompted
+   * this were `invalid_grant` failures from one broken mailbox, repeated — noise sitting on top of
+   * the correspondence that matters. Clearing them is tidying, not concealment, which is exactly
+   * why the trail keeps a copy.
+   *
+   * Scoped by `lead_id` as well as `id`: an email id from another lead resolves to nothing rather
+   * than deleting somebody else's record through a lead the caller happens to be allowed to see.
+   */
+  async removeEmail(leadId: number, emailId: number, user: AuthUserRecord): Promise<{ deleted: boolean }> {
+    await this.access.assertLead(user, leadId);
+    const existing = await this.prisma.lead_emails.findFirst({ where: { id: emailId, lead_id: leadId } });
+    if (!existing) throw new NotFoundException({ message: 'That email is not on this lead.' });
+
+    await this.prisma.lead_emails.delete({ where: { id: emailId } });
+
+    await this.audit.record(
+      user, 'Lead email deleted', `Lead #${leadId}`,
+      `${existing.status} to ${existing.recipient} on ${existing.sent_at.toISOString().slice(0, 16).replace('T', ' ')}`
+      + ` by ${existing.sent_by ?? 'unknown'} — "${existing.subject}"`
+      + (existing.error ? ` (${existing.error.slice(0, 200)})` : ''),
     );
     return { deleted: true };
   }
@@ -298,7 +334,22 @@ export class LeadActivityService {
     }
 
     const showing = await this.prisma.lead_showings.update({ where: { id: showingId }, data });
-    await this.audit.record(user, 'Lead showing updated', showing.property ?? `Lead #${leadId}`, `Status: ${showing.status}`);
+    /*
+     * Say what MOVED, not just where it ended up. A showing that changes day is the substantive
+     * edit here - CRM-042 gave Reschedule a date and time to send - and an entry reading only
+     * "Status: scheduled" records the half of it nobody needs to look up later. The OLD slot is in
+     * the line because the question this record exists to answer is "when was this viewing before
+     * somebody moved it".
+     *
+     * Same `toISOString().slice(0, 10)` the API uses for `showing_date`, so the audit trail and the
+     * screen name a date the same way.
+     */
+    const day = (d: Date): string => d.toISOString().slice(0, 10);
+    const moved = day(existing.showing_date) !== day(showing.showing_date) || existing.time !== showing.time;
+    const detail = moved
+      ? `Moved from ${day(existing.showing_date)} ${existing.time} to ${day(showing.showing_date)} ${showing.time}. Status: ${showing.status}`
+      : `Status: ${showing.status}`;
+    await this.audit.record(user, 'Lead showing updated', showing.property ?? `Lead #${leadId}`, detail);
     return this.presentShowing(showing);
   }
 
@@ -472,6 +523,29 @@ export class LeadActivityService {
     const accountId = body.account_id == null || body.account_id === '' ? null : Number(body.account_id);
     if (accountId !== null && (!Number.isInteger(accountId) || accountId <= 0)) {
       throw new BadRequestException({ message: 'That is not a valid mail account.' });
+    }
+    /*
+     * THE CHOSEN SENDER HAS TO BE ONE OF THEIRS.
+     *
+     * A well-formed id was the whole of the check, and the id then went to the mailer unexamined —
+     * so naming a colleague's mailbox sent the message from THEIR address with THEIR OAuth token,
+     * and logged it against them. `resolveSender` now refuses that too, but it refuses by falling
+     * back to this user's own default, which would send the message from a different address than
+     * the one the sender picked and say nothing. Refusing here instead keeps the two answers the
+     * same and makes the reason visible.
+     *
+     * `user_id: null` is the brokerage mailbox, which everybody may legitimately send through.
+     */
+    if (accountId !== null) {
+      const allowed = await this.prisma.mail_accounts.findFirst({
+        where: { id: accountId, is_active: true, OR: [{ user_id: user.id ?? -1 }, { user_id: null }] },
+        select: { id: true },
+      });
+      if (!allowed) {
+        throw new BadRequestException({
+          message: 'That mailbox is not one you can send from. Choose one of your own connected accounts.',
+        });
+      }
     }
 
     let status = 'sent';
@@ -806,7 +880,7 @@ export class LeadActivityService {
    * of Anthropic, OpenAI or Google Gemini — whichever key is configured (see `resolveEmailAi`). It
    * only drafts; nothing is sent here.
    */
-  async generateEmail(leadId: number, prompt: string, user: AuthUserRecord): Promise<{ subject: string; html: string }> {
+  async generateEmail(leadId: number, prompt: string, user: AuthUserRecord): Promise<{ subject: string; html: string; fallback?: boolean; reason?: string }> {
     await this.access.assertLead(user, leadId);
     const cfg = resolveEmailAi();
     if (!cfg) {
@@ -879,7 +953,42 @@ export class LeadActivityService {
       cfg,
     );
 
-    const raw = await draftEmailWithAi(cfg, system, userText);
+    /*
+     * A DRAFT TO EDIT, RATHER THAN NOTHING, WHEN THE PROVIDER IS UNAVAILABLE.
+     *
+     * The agent came here to write to a client. When the model cannot answer — a used-up daily
+     * allowance being the case that prompted this, and the one that does not clear in a moment —
+     * the useful outcome is a plain opening they can rewrite, not an empty form and an apology.
+     *
+     * FLAGGED, never passed off as the model's work. `fallback` and `reason` travel with it so the
+     * screen can say where it came from; silently substituting a template for AI output would be
+     * the one thing worse than failing, because the agent would send it believing it had been
+     * drafted for this lead.
+     *
+     * A misconfigured request is NOT caught here. A wrong model name or a rejected key is a server
+     * problem somebody has to fix, and quietly papering over it with a template would hide it for
+     * as long as the feature appeared to work.
+     */
+    let raw: string;
+    try {
+      raw = await draftEmailWithAi(cfg, system, userText);
+    } catch (ex) {
+      if (ex instanceof ServiceUnavailableException) {
+        const reason = String((ex.getResponse() as { message?: string })?.message ?? 'The AI service is unavailable.');
+        this.log.warn(`AI draft unavailable for lead #${leadId}; returning an editable starter instead — ${reason}`);
+        return {
+          subject: FALLBACK_SUBJECT,
+          html: toPersonalHtml(`Hi ${firstName || 'there'},
+
+
+
+${user.name ?? ''}`),
+          fallback: true,
+          reason,
+        };
+      }
+      throw ex;
+    }
     let cleaned = raw.trim();
     if (cleaned.startsWith('```')) cleaned = cleaned.replace(/^```[a-z]*\s*/i, '').replace(/\s*```$/i, '');
     const m = /\{[\s\S]*\}/.exec(cleaned);

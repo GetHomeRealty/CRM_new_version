@@ -56,26 +56,66 @@ export class MentionService {
    * outside the deal. The author is included: seeing yourself in the list is unsurprising, and
    * mentioning yourself simply does not notify you (see `resolve`).
    */
+  /** How many names the autocomplete offers at once. */
+  static readonly MAX_CANDIDATES = 25;
+
+  /** Rows read per pass while looking for them. */
+  private static readonly PAGE = 100;
+
+  /**
+   * The furthest this will read before giving up.
+   *
+   * Reachability is one query per person, so an unbounded search would cost a query per member of
+   * staff on every keystroke. Five passes is the compromise: deep enough that the cap is not the
+   * thing deciding who appears, bounded enough that a brokerage of thousands cannot turn one
+   * autocomplete into a scan of the whole user table.
+   */
+  private static readonly MAX_SCAN = 500;
+
   async candidates(user: ResourceUser | null, txnId: number, search?: string): Promise<MentionCandidate[]> {
     await this.access.assertTransaction(user, txnId);
 
     const needle = (search ?? '').trim();
-    const people = await this.prisma.users.findMany({
-      where: {
-        status: 'Active',
-        ...(needle ? { name: { contains: needle, mode: 'insensitive' as const } } : {}),
-      },
-      select: { id: true, name: true, role: true },
-      orderBy: { name: 'asc' },
-      take: 100,
-    });
+    const where = {
+      status: 'Active',
+      ...(needle ? { name: { contains: needle, mode: 'insensitive' as const } } : {}),
+    };
 
+    /*
+     * PAGED, BECAUSE THE CAP USED TO DECIDE THE ANSWER.
+     *
+     * This read the first 100 active users by name and only THEN asked which of them could open the
+     * deal. Past a hundred staff, whether somebody appeared in the autocomplete depended on where
+     * their name fell in the alphabet rather than on whether they were on the deal: a colleague
+     * sorting after the hundredth name could never be offered, and nothing said so. It failed
+     * quietly, which is the worst way for a permissions-shaped list to fail.
+     *
+     * It became visible when this brokerage's active users reached exactly 100 and a test that
+     * creates a "ZZ ..." colleague started failing with no code change - the fixture sorted last, so
+     * it was always the first casualty.
+     *
+     * The filter is still applied after the read, because reachability is not expressible in the
+     * query. What changed is that a short page no longer ends the search.
+     */
     const reachable: MentionCandidate[] = [];
-    for (const person of people) {
-      if (await this.access.canReachTransaction(person, txnId)) {
-        reachable.push({ id: person.id, name: person.name });
+    for (let skip = 0; skip < MentionService.MAX_SCAN; skip += MentionService.PAGE) {
+      const people = await this.prisma.users.findMany({
+        where,
+        select: { id: true, name: true, role: true },
+        orderBy: { name: 'asc' },
+        skip,
+        take: MentionService.PAGE,
+      });
+      if (!people.length) break;
+
+      for (const person of people) {
+        if (await this.access.canReachTransaction(person, txnId)) {
+          reachable.push({ id: person.id, name: person.name });
+          if (reachable.length >= MentionService.MAX_CANDIDATES) return reachable;
+        }
       }
-      if (reachable.length >= 25) break;
+      // A short page is the end of the table, not the end of the budget.
+      if (people.length < MentionService.PAGE) break;
     }
     return reachable;
   }

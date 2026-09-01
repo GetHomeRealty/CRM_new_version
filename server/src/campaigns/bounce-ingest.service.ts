@@ -1,6 +1,10 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { parseNdr } from './ndr-parser';
+import { schedulersEnabled, schedulerSkipReason } from '../common/schedulers';
+import { clusterTick } from '../redis/cluster-tick';
+import { RedisService } from '../redis/redis.service';
+import { CacheService } from '../redis/cache.service';
 
 /** How far back a sweep looks for bounce reports it has not yet applied. */
 const LOOKBACK_HOURS = 72;
@@ -8,6 +12,17 @@ const LOOKBACK_HOURS = 72;
 const MATCH_WINDOW_DAYS = 14;
 /** Reports read per pass. A backlog drains over several passes rather than in one long transaction. */
 const BATCH = 200;
+
+/**
+ * How often the inbox is re-read for bounce reports.
+ *
+ * A relay accepts a message and reports the failure minutes later, so nothing is gained by
+ * looking more often than that — and `LOOKBACK_HOURS` is 72, so a pass that is missed entirely
+ * is picked up by the next one rather than lost.
+ */
+const SWEEP_INTERVAL_MS = 15 * 60 * 1000;
+/** Past boot, so a deploy is finished before the first pass reads the mailbox. */
+const FIRST_SWEEP_DELAY_MS = 5 * 60 * 1000;
 
 /**
  * Applies bounces that arrive as EMAIL to the campaign recipients they belong to.
@@ -34,10 +49,79 @@ const BATCH = 200;
  * no migration and no "processed" flag on the inbound message.
  */
 @Injectable()
-export class BounceIngestService {
+export class BounceIngestService implements OnModuleInit, OnModuleDestroy {
   private readonly log = new Logger(BounceIngestService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  private first: ReturnType<typeof setTimeout> | null = null;
+  private timer: ReturnType<typeof setInterval> | null = null;
+  /** Guards against a slow pass being overlapped by the next tick. */
+  private running = false;
+
+  constructor(
+    private readonly prisma: PrismaService,
+    /*
+     * Only used to decide whether THIS process runs a given pass. Optional so every existing
+     * construction — including this service's own specs — keeps working unchanged.
+     */
+    private readonly redis?: RedisService,
+    private readonly cache?: CacheService,
+  ) {}
+
+  /**
+   * ARMING THE SWEEP. It was written, registered as a provider, and never called by anything — so
+   * asynchronous bounces were parsed by nobody and the results screen showed every one of them as
+   * delivered.
+   *
+   * This reads `inbound_emails` that the mailbox poller has ALREADY stored; it opens no IMAP
+   * connection of its own. So it is safe to arm independently of the inbox settings: with no mail
+   * synced it simply finds no candidate reports and does nothing.
+   *
+   * `clusterTick` so only the lock holder runs a pass where Redis is present. Correctness does not
+   * depend on it — each pass only ever moves a recipient from `sent` to `bounced`, and the query
+   * excludes rows already bounced, so a second process running the same pass changes nothing twice.
+   */
+  onModuleInit(): void {
+    if (!schedulersEnabled()) {
+      this.log.log(`Campaign bounce ingestion not armed (${schedulerSkipReason()}).`);
+      return;
+    }
+
+    this.first = setTimeout(() => { void this.tick(); }, FIRST_SWEEP_DELAY_MS);
+    this.first.unref?.();
+
+    this.timer = setInterval(
+      this.redis && this.cache
+        ? clusterTick({ redis: this.redis, cache: this.cache }, 'campaign-bounce-ingest', () => this.tick())
+        : () => { void this.tick(); },
+      SWEEP_INTERVAL_MS,
+    );
+    this.timer.unref?.();
+    this.log.log(`Campaign bounce reports read from the inbox every ${SWEEP_INTERVAL_MS / 60000} minutes.`);
+  }
+
+  onModuleDestroy(): void {
+    if (this.first) clearTimeout(this.first);
+    if (this.timer) clearInterval(this.timer);
+  }
+
+  /** One pass. Housekeeping must never take the timer down, so the failure is logged and dropped. */
+  private async tick(): Promise<void> {
+    if (this.running) return;
+    this.running = true;
+    try {
+      const r = await this.sweep();
+      if (r.bounced || r.opensReversed) {
+        this.log.log(
+          `Bounce ingestion: ${r.bounced} recipient(s) marked bounced from ${r.reports} report(s)`
+          + `${r.opensReversed ? `, ${r.opensReversed} false open(s) reversed` : ''}.`,
+        );
+      }
+    } catch (err) {
+      this.log.error(`Bounce ingestion pass failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      this.running = false;
+    }
+  }
 
   /**
    * One pass: read recent delivery reports and mark whoever they name.
@@ -146,13 +230,35 @@ export class BounceIngestService {
           },
         }),
       ];
-      if (r.opened) {
-        opensReversed += 1;
-        writes.push(this.prisma.campaigns.update({
-          where: { id: r.campaign_id },
-          data: { opened: { decrement: 1 }, updated_at: now },
-        }));
-      }
+
+      /*
+       * THE CAMPAIGN'S OWN COUNTERS HAVE TO MOVE WITH THE RECIPIENT.
+       *
+       * The results card does not aggregate recipients — it reads denormalised columns on the
+       * `campaigns` row. So marking the recipient bounced and stopping left the card unchanged: the
+       * campaign still reported the message as delivered, and `bounced` stayed at whatever the send
+       * itself had counted. Every asynchronous bounce — which is most of them, since a relay accepts
+       * first and reports minutes later — was invisible on the screen that exists to show it.
+       *
+       * The query above only selects rows that are `status: 'sent'` and `bounced: false`, so each
+       * one was counted in `sent` when the campaign ran. Moving it means all three: out of `sent`,
+       * into `failed` and into `bounced` — which is exactly the transition the send path performs
+       * when it detects a hard bounce at send time, so the two routes leave the same totals.
+       */
+      writes.push(this.prisma.campaigns.update({
+        where: { id: r.campaign_id },
+        data: {
+          sent: { decrement: 1 },
+          failed: { increment: 1 },
+          bounced: { increment: 1 },
+          // A message that never arrived was never read; the reversal is counted here too so one
+          // transaction carries the whole correction for this recipient.
+          ...(r.opened ? { opened: { decrement: 1 } } : {}),
+          updated_at: now,
+        },
+      }));
+      if (r.opened) opensReversed += 1;
+
       await this.prisma.$transaction(writes as never);
     }
 

@@ -62,7 +62,7 @@ export class TransactionInvoiceService {
 
   private async make(
     db: Tx,
-    t: { id: number; type: string; trade_no: string; property: string | null; agent: string | null },
+    t: { id: number; type: string; trade_no: string; property: string | null; agent: string | null; closing_date: Date | null },
     brok: { name: string | null; phone: string | null; invoice_email: string | null; address: string | null } | null,
     defaultTerms: string,
     defaultTaxRate: number,
@@ -74,7 +74,7 @@ export class TransactionInvoiceService {
     const now = new Date();
     const invoiceDate = new Date(now.toISOString().slice(0, 10) + 'T00:00:00.000Z');
     const suffix = termNo ? ` — Term ${termNo}` : '';
-    const dueDate = this.dueDate(invoiceDate, defaultTerms);
+    const dueDate = this.dueDate(invoiceDate, defaultTerms, t.closing_date ?? null);
 
     const invoice = await db.invoices.create({
       data: {
@@ -121,7 +121,9 @@ export class TransactionInvoiceService {
     return (await db.invoices.findUnique({ where: { id: invoice.id } })) as invoices;
   }
 
-  private dueDate(invoiceDate: Date, terms: string | null): Date | null {
+  private dueDate(invoiceDate: Date, terms: string | null, closing?: Date | null): Date | null {
+    // TD-034 - a commission invoice is payable on closing, not on receipt.
+    if (terms === 'Due on Closing') return closing ?? null;
     if (!terms || terms === 'Custom') return null;
     const days = InvoiceCalculator.TERM_DAYS[terms];
     if (days === undefined) return null;

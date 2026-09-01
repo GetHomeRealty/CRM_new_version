@@ -1,5 +1,6 @@
 import { Module, type OnModuleInit } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
+import { GoogleModule } from '../google/google.module';
 import { EmailModule } from '../email/email.module';
 import { CrmSettingsController } from './crm-settings.controller';
 import { CrmSettingsService } from './crm-settings.service';
@@ -19,10 +20,13 @@ import { NotificationPreferenceModule } from '../notifications/notification-pref
  * Overlap between the two is expected at this stage and will be reconciled later.
  */
 @Module({
-  imports: [AuthModule, EmailModule, NotificationPreferenceModule],
+  // GoogleModule so the Integrations summary reads Calendar's real connection state.
+  imports: [AuthModule, EmailModule, NotificationPreferenceModule, GoogleModule],
   controllers: [CrmSettingsController, CrmCommunicationsController],
   providers: [CrmSettingsService, CrmAdvancedEmailService, CrmTriggersService, LeadGreetingsService, LeadWelcomeService, CrmCommunicationsService],
-  exports: [CrmSettingsService, CrmTriggersService],
+  // `CrmAdvancedEmailService` is exported for the campaign test send, which has to land in the CRM
+  // email log like every other outgoing message. See `recordExternalSend`.
+  exports: [CrmSettingsService, CrmTriggersService, CrmAdvancedEmailService],
 })
 export class CrmSettingsModule implements OnModuleInit {
   constructor(

@@ -212,6 +212,10 @@ export default function CompanySettingsPage() {
               <label htmlFor="cs-deposit_heading">Deposit Heading</label>
               <textarea id="cs-deposit_heading" rows={2} maxLength={2000} value={String(form.deposit_heading ?? '')} disabled={!canEdit} onChange={(e) => set('deposit_heading', e.target.value)} />
             </div>
+            <div className="field">
+              <label htmlFor="cs-deposit_signatory">Deposit Signatory</label>
+              <input id="cs-deposit_signatory" maxLength={255} value={String(form.deposit_signatory ?? '')} disabled={!canEdit} onChange={(e) => set('deposit_signatory', e.target.value)} placeholder="Broker of record" />
+            </div>
           </div>
         </div>
       </>)}

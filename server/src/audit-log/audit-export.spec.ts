@@ -92,6 +92,12 @@ describe('export formats', () => {
       expect(header(rows)).toContain('Date');
       expect(header(rows)).toContain('User');
       expect(header(rows)).toContain('Action');
+      /*
+       * "Recorded At", never "Created". The old label read as "created BY" beside a timestamp and
+       * was taken for a person's name — the name is under `User`.
+       */
+      expect(header(rows)).toContain('Recorded At');
+      expect(header(rows)).not.toContain('Created');
       expect(body(rows).length).toBeGreaterThan(0);
     });
   });

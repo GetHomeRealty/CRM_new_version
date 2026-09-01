@@ -98,7 +98,15 @@ describe('§7 agent single-email restriction', () => {
         await addAccount('crm');
         await addAccount('crm');
         await addAccount('crm');
-        expect(await emailLimitFor(tx, user.id, 'crm')).toEqual({ max: null, used: 0, canAdd: true });
+        /*
+         * UNRESTRICTED IS `max: null` AND `canAdd: true`, which is what this test is about.
+         *
+         * It also asserted `used: 0` after adding three accounts, which was the defect written down
+         * as an expectation: the function short-circuited for unlimited roles and reported nothing
+         * in use however many accounts existed. `used` now counts, so the figure is the truth and
+         * the freedom to add another comes from the absent maximum rather than from a zero.
+         */
+        expect(await emailLimitFor(tx, user.id, 'crm')).toEqual({ max: null, used: 3, canAdd: true });
         await expect(assertCanConnectEmail(tx, user.id, 'crm')).resolves.toBeUndefined();
       }
     });

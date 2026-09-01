@@ -1,6 +1,7 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { CrmEventNotifier } from '../notifications/crm-events.service';
 import { CampaignAuditService } from './campaign-audit.service';
+import { CrmAdvancedEmailService } from '../crm-settings/crm-advanced-email.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { MailerService, type MailAttachment } from '../email/mailer.service';
 import { CampaignAudienceService, type AudienceFilter } from './campaign-audience.service';
@@ -114,6 +115,11 @@ export class CampaignsService {
     private readonly crmEvents?: CrmEventNotifier,
     /** Also optional, for the same reason. Absent means no trail row, never a failed operation. */
     private readonly audit?: CampaignAuditService,
+    /**
+     * The CRM email log. Optional on the same terms as the two above, and for the same reason: this
+     * service is constructed directly in several specs that have no interest in the log.
+     */
+    private readonly emailLog?: CrmAdvancedEmailService,
   ) {}
 
   /**
@@ -531,7 +537,7 @@ export class CampaignsService {
       const addresses = [...new Set(own.map((l) => (l.email ?? '').trim().toLowerCase()).filter(Boolean))];
       // No leads means no suppressions to show — an empty `in` would match everything.
       if (!addresses.length) {
-        return { data: [], meta: { page, per_page: limit, total: 0, last_page: 1 } };
+        return { data: [], meta: { page, per_page: limit, total: 0, last_page: 1, can_remove: false, scoped: true } };
       }
       where = { ...searchWhere, email: { in: addresses, mode: 'insensitive' as const } };
     }
@@ -554,7 +560,31 @@ export class CampaignsService {
         created_at: r.created_at?.toISOString() ?? null,
         updated_at: r.updated_at?.toISOString() ?? null,
       })),
-      meta: { page, per_page: limit, total, last_page: Math.max(1, Math.ceil(total / limit)) },
+      meta: {
+        page, per_page: limit, total, last_page: Math.max(1, Math.ceil(total / limit)),
+        /*
+         * WHETHER THIS PERSON MAY UNDO AN OPT-OUT, answered by the rule that will decide it.
+         *
+         * The screen offered Remove on `campaigns:edit`, which an agent holds, while the server now
+         * requires the marketing capability - so without this the button would be shown and then
+         * refused, which is the exact shape of CRM-012. One rule, sent from where it lives.
+         */
+        can_remove: can(user, 'campaigns.brokerage-audience'),
+        /*
+         * WHETHER THIS IS THE WHOLE LIST OR THIS PERSON'S SLICE OF IT - CRM-045.
+         *
+         * An agent's view said '0 addresses suppressed' and 'Nobody is suppressed' at a moment
+         * when the brokerage HAD a suppressed address. The screen was faithfully rendering what
+         * it was given; what it was never given was the fact that it was looking at a slice.
+         * 'Nobody is suppressed' is a claim, and it was a false one, on the one page a brokerage
+         * would open to answer a compliance question.
+         *
+         * Sent from here rather than inferred from the viewer's role, for the same reason
+         * `can_remove` is: the rule that decides the scope is in this method, and a screen that
+         * works it out separately is a second copy of it waiting to disagree.
+         */
+        scoped: !can(user, 'campaigns.brokerage-audience'),
+      },
     };
   }
 
@@ -567,7 +597,97 @@ export class CampaignsService {
    * leaving them would produce the confusing half-state where the address is no longer suppressed
    * but the lead is still excluded from every audience.
    */
+  /**
+   * Record an opt-out somebody gave by any means - telephone, in person, or a reply.
+   *
+   * WHY THIS HAD TO EXIST. The only route onto the suppression list was the client clicking the
+   * link in an email. So a brokerage told "stop emailing me" on the telephone had no way to comply:
+   * the lead's Unsubscribed badge is display-only, the editor has no field for it, and the
+   * suppression API offered only read and delete. The one way to stop mailing somebody was to keep
+   * mailing them until they clicked. Canadian anti-spam law expects a withdrawal of consent to be
+   * honoured however it is expressed, not only when expressed through one particular link.
+   *
+   * THE ENFORCEMENT HALF WAS ALREADY BUILT and works: once an address is on this list the campaign
+   * audience drops it and the per-lead Send button disables itself with a reason. Only the recording
+   * was missing.
+   *
+   * DELIBERATELY EASIER THAN UNDOING IT. `removeSuppression` requires the marketing capability
+   * because resuming mail to somebody who asked for silence is a compliance act. Recording the
+   * request is the safe direction and stays on `campaigns:edit`, which an ordinary agent holds -
+   * the agent who took the telephone call is exactly who should be able to act on it, and a rule
+   * that made them find an administrator first would mean the brokerage kept mailing meanwhile.
+   *
+   * THE LEAD FLAG IS SET TOO, in the same breath. `resolveRecipients` reads both the suppression
+   * list and `leads.unsubscribed`, and the per-lead Send button reads only the second - so writing
+   * one without the other would honour the opt-out in campaigns and not on the lead's own page.
+   * This is the exact mirror of what `removeSuppression` undoes.
+   */
+  async addSuppression(
+    email: string, user: AuthUserRecord, reason?: string,
+  ): Promise<{ added: boolean; already: boolean }> {
+    const address = String(email ?? '').trim().toLowerCase();
+    if (!address || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address)) {
+      throw new BadRequestException({ message: 'Enter the email address that asked to be removed.' });
+    }
+
+    const existing = await this.prisma.email_suppressions.findUnique({ where: { email: address } });
+    const now = new Date();
+    // `note` rather than a free vocabulary: the reason is written by staff and read by whoever asks
+    // "why is this person on the list", so it is stored as given and clipped to the column.
+    const note = String(reason ?? '').trim().slice(0, 190);
+
+    await this.prisma.email_suppressions.upsert({
+      where: { email: address },
+      create: {
+        email: address,
+        reason: note ? `staff: ${note}` : 'staff',
+        created_at: now,
+        updated_at: now,
+      },
+      // An address already on the list stays as it was: the FIRST record of an opt-out is the one
+      // that matters, and overwriting its reason would lose why they originally asked.
+      update: {},
+    });
+
+    await this.prisma.$executeRaw`UPDATE "leads" SET "unsubscribed" = true, "unsubscribed_at" = ${now}, "updated_at" = ${now} WHERE LOWER("email") = ${address} AND "unsubscribed" = false`;
+
+    this.log.warn(`Opt-out recorded for ${address} by ${user.name ?? 'unknown'}${note ? ` — ${note}` : ''}.`);
+    await this.audit?.record(
+      user, 'Opt-out recorded', address,
+      note ? `Recorded by staff — ${note}` : 'Recorded by staff, received outside the unsubscribe link',
+    );
+    return { added: true, already: !!existing };
+  }
+
   async removeSuppression(email: string, user: AuthUserRecord): Promise<{ removed: boolean }> {
+    /*
+     * UNDOING AN OPT-OUT IS NOT AN ORDINARY CAMPAIGN EDIT.
+     *
+     * This was guarded by `campaigns:edit` alone - which an ordinary agent holds - so an agent could
+     * take somebody off the suppression list and mail to them would resume. Confirmed live rather
+     * than inferred: the agent seat received `200 {"removed":true}`.
+     *
+     * The suppression list is the brokerage's record of who has said stop. Reversing an entry is the
+     * one action in this module whose consequence lands outside the system, on a person who asked to
+     * be left alone, and under CASL "who authorised that" has a legal answer. It belongs with the
+     * roles accountable for the brokerage's marketing rather than with everyone who may build a
+     * campaign.
+     *
+     * `campaigns.brokerage-audience` IS THE RIGHT RULE, not a new one. Its own documentation already
+     * covers working with the brokerage's whole marketing audience "and see the whole opt-out list",
+     * and it names admin, manager and crm for precisely this reason - marketing responsibility does
+     * not run along the seniority ladder. An agent keeps every other campaign right they had.
+     *
+     * CHECKED HERE RATHER THAN ONLY ON THE ROUTE, so a second caller cannot reach it unguarded.
+     */
+    if (!can(user, 'campaigns.brokerage-audience')) {
+      throw new ForbiddenException({
+        message: 'Removing an address from the suppression list is restricted to marketing and '
+          + 'administrative roles. Ask an administrator — reversing an opt-out resumes mail to '
+          + 'somebody who asked for it to stop.',
+      });
+    }
+
     const address = String(email ?? '').trim().toLowerCase();
     if (!address) throw new BadRequestException({ message: 'An email address is required.' });
 
@@ -846,6 +966,12 @@ export class CampaignsService {
       this.log.warn(`Campaign #${campaign.id}: could not register links for click tracking — ${err instanceof Error ? err.message : String(err)}`);
     }
 
+    /*
+     * Resolved ONCE for the whole run rather than per recipient: it reads the environment, it cannot
+     * change mid-send, and the log wants the same answer against every row of one campaign.
+     */
+    const mailRedirect = MailerService.redirectTarget();
+
     for (let i = 0; i < recipients.length; i++) {
       const r = recipients[i];
       const row = campaign.recipients[i];
@@ -926,10 +1052,21 @@ export class CampaignsService {
         );
         sent++;
         await this.markRecipient(row.id, { status: 'sent', bounced: false, error: null, bounce_type: null, next_retry_at: null });
+        /*
+         * THE CRM EMAIL LOG, which campaigns never reached.
+         *
+         * A client could receive a message from the brokerage and leave no mark on the one screen
+         * built to show what the brokerage has sent - so anybody auditing "what did we send this
+         * person" had to know to check two places, and nothing said so. The campaign's own record
+         * was always complete; it was simply not where people look.
+         */
+        await this.logCampaignSend(user, r.email, subject, true, null, mailRedirect);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         const verdict = classifyBounce(message);
         const attempt = (row.retry_count ?? 0) + 1;
+        // A deferral is not an outcome yet — see `logCampaignSend`.
+        let deferredForRetry = false;
 
         if (verdict.type === 'soft' && attempt <= MAX_SOFT_RETRIES) {
           /*
@@ -939,6 +1076,7 @@ export class CampaignsService {
            * be wrong, and reporting it as sent would be a lie.
            */
           deferred++;
+          deferredForRetry = true;
           const due = nextRetryAt(attempt);
           await this.markRecipient(row.id, {
             status: 'pending', bounced: false, bounce_type: 'soft',
@@ -976,6 +1114,9 @@ export class CampaignsService {
           failed++;
           await this.markRecipient(row.id, { status: 'failed', bounced: false, bounce_type: 'unknown', error: message });
         }
+
+        // Recorded once the outcome is settled, so one eventual delivery is one row.
+        if (!deferredForRetry) await this.logCampaignSend(user, r.email, subject, false, message, mailRedirect);
 
         // A missing/broken mail account fails every recipient — stop rather than hammer it.
         if (/no active smtp account/i.test(message)) {
@@ -1119,12 +1260,89 @@ export class CampaignsService {
    * use, so credentials can be verified before a real send. Never throws — the SMTP result
    * (success, or a message like Gmail's "535 BadCredentials") is returned for the UI to show.
    */
+  /**
+   * The address this person's campaigns will actually go out from.
+   *
+   * ASKED OF THE MAILER, not guessed from the user, because the answer is a chain: their default
+   * account, then any active account of theirs, then the brokerage mailbox, and finally - when a
+   * deployment has none of those - a COLLEAGUE'S mailbox, which is the case worth showing somebody
+   * before they mail a hundred clients. `sendDirect` resolves it exactly this way at send time.
+   *
+   * Null rather than throwing when no account exists at all: this feeds a confirmation dialog, and
+   * a screen that cannot name the sender should say so rather than fail to open.
+   */
+  async senderEmail(user: AuthUserRecord): Promise<string | null> {
+    try {
+      const account = await this.mailer.resolveSender(null, user.id ?? null);
+      return account.from_email || null;
+    } catch {
+      return null;
+    }
+  }
+
   async sendTest(user: AuthUserRecord, to: string): Promise<{ ok: boolean; from?: string; account?: string; error?: string }> {
+    /*
+     * A TEST SEND IS A REAL EMAIL, and it was leaving no trace.
+     *
+     * The CRM email log is where somebody looks to prove what the brokerage sent and to whom. Every
+     * other outgoing message lands there; this one did not, so a test that went to the wrong
+     * address - or reached a client who should not have received it - left nothing behind at all.
+     *
+     * BOTH OUTCOMES ARE RECORDED. A refused send is as much a part of "what happened on this
+     * account" as a delivered one, and the other writers to this log already record their failures.
+     *
+     * THE INTENDED RECIPIENT IS LOGGED, with `redirected` naming where it actually went - the same
+     * pair the per-lead sends record. On a developer machine every message is diverted, and a log
+     * showing only the diversion target would say nothing about who was aimed at.
+     */
+    const redirect = MailerService.redirectTarget();
     try {
       const res = await this.mailer.testForUser(user.id ?? null, to);
+      await this.logTest(user, to, true, null, redirect);
       return { ok: true, from: res.from, account: res.account };
     } catch (err) {
-      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      const message = err instanceof Error ? err.message : String(err);
+      await this.logTest(user, to, false, message, redirect);
+      return { ok: false, error: message };
+    }
+  }
+
+  /**
+   * Record one campaign message in the CRM email log.
+   *
+   * WHY A ROW PER RECIPIENT rather than one per campaign. The log answers "what did we send this
+   * client, and did it arrive?" - a question asked about a person, not about a mailing. A single
+   * summary row could not answer it, and the log already keeps per-recipient rows for every
+   * automated message, so a campaign summary would be the odd shape out.
+   *
+   * WHAT IS NOT LOGGED, deliberately: a soft-retry deferral. A mailbox that is full at eleven and
+   * fine at noon produces one delivery, and writing a row per attempt would make the log read as
+   * several messages to one person. Only terminal outcomes are recorded - it went, or it did not.
+   *
+   * Failures here are swallowed for the same reason as everywhere else in this file: the email has
+   * already left, and a log that cannot be written must not turn that into a failed send.
+   */
+  private async logCampaignSend(
+    user: AuthUserRecord, to: string, subject: string,
+    ok: boolean, error: string | null, redirect: string | null,
+  ): Promise<void> {
+    try {
+      await this.emailLog?.recordExternalSend('campaign', to, subject, ok, error, user, redirect);
+    } catch {
+      /* the log is a record, not a gate */
+    }
+  }
+
+  /** Never let the record of a send turn a sent email into a failed request. */
+  private async logTest(
+    user: AuthUserRecord, to: string, ok: boolean, error: string | null, redirect: string | null,
+  ): Promise<void> {
+    try {
+      await this.emailLog?.recordExternalSend(
+        'campaign_test', to, 'Test email', ok, error, user, redirect,
+      );
+    } catch {
+      /* the log is a record, not a gate */
     }
   }
 

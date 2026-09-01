@@ -28,10 +28,17 @@ import { signIn, apiGet } from './helpers';
  * deal's chat — and are no longer offered on the CRM's screen, where none of them can occur. The
  * preferences themselves are untouched and every sender still honours them; only the screen split.
  *
- * Desk sees all thirteen categories: 13 x 3 = 39 pairs, less the one unsupported (emailing somebody
- * to say they have an email) = 38 live.
+ * DERIVED FROM THE LISTS BELOW, NOT WRITTEN OUT, and that is a repair rather than a tidy-up. Both
+ * figures were literals — 38 for the Desk, and eight shared categories for the CRM — and the
+ * registry grew past them: `task_assigned` and `showing_created` arrived carrying no `areas` key,
+ * which means BOTH screens. The CRM assertion then expected 23 checkboxes against 29 rendered, and
+ * the Desk assertion was wrong in the same way and never evaluated, because the CRM one failed
+ * first.
+ *
+ * A literal cannot fail loudly when the thing it describes changes; it just stops being true. These
+ * now move with the lists, so adding a category to a list is enough, and adding one to the REGISTRY
+ * without adding it here fails the count — which is the gate this file's header says it means to be.
  */
-const LIVE_PAIRS = 38;   // Transaction Desk: every category on every channel that has a sender
 /**
  * None. Every category now has a sender on every channel it supports.
  *
@@ -53,12 +60,17 @@ const SHARED = [
   'Calendar reminders', 'New inbox emails',
   // The CRM lead and campaign events.
   'New leads', 'Leads assigned to you', 'Facebook leads', 'Follow-ups falling due',
+  // Assignment and booking, which are their own events on purpose: muting the due reminder must
+  // not also silence the handover.
+  'Tasks assigned to you', 'Showings scheduled for you',
   'Campaign finished', 'Campaign problems',
 ];
 
 const CATEGORIES = [...SHARED, ...DESK_ONLY];
-/** CRM: eight categories x three channels, less the one unsupported pair. */
+/** CRM: every shared category on three channels, less the one unsupported pair. */
 const CRM_LIVE_PAIRS = SHARED.length * 3 - UNSUPPORTED_PAIRS;
+/** Transaction Desk: every category, shared and its own, on the same three channels. */
+const LIVE_PAIRS = CATEGORIES.length * 3 - UNSUPPORTED_PAIRS;
 
 /**
  * One cell of the matrix.

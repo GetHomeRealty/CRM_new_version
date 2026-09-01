@@ -9,6 +9,7 @@ import type { AuthUserRecord } from '../auth/auth.types';
 import { LeadsService, type LeadInput, type LeadQuery } from './leads.service';
 import { LeadActivityService } from './lead-activity.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { CrmAdvancedEmailService } from '../crm-settings/crm-advanced-email.service';
 import { LeadTransferService } from './lead-transfer.service';
 import { LeadImportJobService } from './lead-import-job.service';
 import {
@@ -37,6 +38,8 @@ export class LeadsController {
     private readonly activity: LeadActivityService,
     private readonly imports: LeadImportJobService,
     private readonly prisma: PrismaService,
+    // For the import preflight only: whether an import will email the people in the file.
+    private readonly email: CrmAdvancedEmailService,
   ) {}
 
   /**
@@ -47,6 +50,20 @@ export class LeadsController {
   @Get('books')
   booksOwned(@CurrentUser() u: AuthUserRecord): Promise<unknown> {
     return this.transfer.books(u);
+  }
+
+  /**
+   * The leads a hand-over of `count` WOULD move, named, so the confirmation can show them.
+   *
+   * Sits beside `books` and before the `:id` routes for the same reason it does - Nest would
+   * otherwise read "books" as a lead id.
+   *
+   * Reads nothing and moves nothing: a Super Admin can open this as often as they like, and it is
+   * the same selection the hand-over itself uses, so what it names is what would go.
+   */
+  @Get('books/preview')
+  booksPreview(@CurrentUser() u: AuthUserRecord, @Query('count') count?: string): Promise<unknown> {
+    return this.transfer.preview(u, count === undefined || count === '' ? undefined : Number(count));
   }
 
   /**
@@ -229,6 +246,22 @@ export class LeadsController {
     return this.leads.bulkDelete(ids(body.lead_ids), user);
   }
 
+  /**
+   * What an import is about to do, beyond creating rows.
+   *
+   * Read by the import window so it can say so BEFORE the file is processed. The import itself is
+   * unchanged; what was missing was any statement that it emails everybody in the file.
+   *
+   * DECLARED BEFORE `@Get(':id')`, because a two-segment literal path and a parameterised one are
+   * matched in declaration order.
+   */
+  @Get('import/preflight')
+  @Screen('lead', 'edit')
+  async importPreflight(@CurrentUser() user: AuthUserRecord): Promise<Record<string, unknown>> {
+    const { willEmail, reason } = await this.email.importWillEmail(user);
+    return { will_email: willEmail, reason };
+  }
+
   // ----------------------------------------------------------------- leads
   @Get()
   @Screen('lead', 'view')
@@ -241,6 +274,20 @@ export class LeadsController {
   @Screen('lead', 'edit')
   create(@CurrentUser() user: AuthUserRecord, @Body() body: LeadInput): Promise<unknown> {
     return this.leads.create(body ?? {}, user);
+  }
+
+  /**
+   * The stage this lead was at before it was closed, so Reopen can offer it.
+   *
+   * DECLARED BEFORE `@Get(':id')`: a literal second segment and a parameterised route are matched
+   * in declaration order, and putting this after would make it unreachable. The decorators sit
+   * directly above their own method — inserting a method between a decorator and the function it
+   * decorates silently reassigns it, which is a mistake this file has already seen once.
+   */
+  @Get(':id/previous-status')
+  @Screen('lead', 'view')
+  previousStatus(@CurrentUser() user: AuthUserRecord, @Param('id', ParseIntPipe) id: number): Promise<unknown> {
+    return this.leads.statusBeforeClose(id, user);
   }
 
   @Get(':id')
@@ -279,6 +326,12 @@ export class LeadsController {
   @Screen('lead', 'edit')
   removeNote(@CurrentUser() u: AuthUserRecord, @Param('id', ParseIntPipe) id: number, @Param('noteId', ParseIntPipe) noteId: number): Promise<unknown> {
     return this.activity.removeNote(id, noteId, u);
+  }
+
+  @Delete(':id/emails/:emailId')
+  @Screen('lead', 'edit')
+  removeEmail(@CurrentUser() u: AuthUserRecord, @Param('id', ParseIntPipe) id: number, @Param('emailId', ParseIntPipe) emailId: number): Promise<unknown> {
+    return this.activity.removeEmail(id, emailId, u);
   }
 
   @Post(':id/tasks')

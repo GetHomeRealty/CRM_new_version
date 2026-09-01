@@ -525,7 +525,7 @@ export const deleteUser = (id: Id): Promise<unknown> => api.delete(`/api/users/$
 // --- Offboarding (Super Admin) ---
 // What somebody still holds before their account is switched off. Counts only, never lead content.
 export interface OffboardingEffect {
-  key: 'meta' | 'brokerage-leads' | 'personal-leads';
+  key: 'meta' | 'brokerage-leads' | 'personal-leads' | 'reactivation';
   label: string;
   detail: string;
   count: number | null;
@@ -563,6 +563,28 @@ export interface LeadBookPool {
   recipients: LeadBookRecipient[];
 }
 export const getLeadBooks = (): Promise<LeadBookPool> => api.get('/api/leads/books').then((r) => r.data);
+
+/** One lead a hand-over is about to move, named so a reader can recognise it. */
+export interface LeadBookCandidate {
+  id: number;
+  name: string;
+  created_at: string | null;
+}
+
+/** What a hand-over of `count` would move, and how big the pool is. */
+export interface LeadBookPreview {
+  moving: LeadBookCandidate[];
+  available: number;
+}
+
+/**
+ * The leads a hand-over would actually move, for the confirmation to name.
+ *
+ * Reads the same selection the hand-over itself uses, so what the dialog shows is what would go.
+ * Moves nothing, and can be called again whenever the count changes.
+ */
+export const previewLeadBookHandover = (count?: number): Promise<LeadBookPreview> =>
+  api.get('/api/leads/books/preview', { params: count ? { count } : {} }).then((r) => r.data);
 export const transferLeadBook = (toUserId: Id, count?: number): Promise<{ moved: number; to: string; remaining: number }> =>
   api.post('/api/leads/transfer-ownership', { to_user_id: toUserId, ...(count ? { count } : {}) }).then((r) => r.data);
 
@@ -761,5 +783,29 @@ export const deleteEmailTemplateAttachment = (id: Id, attachmentId: number): Pro
 /** Download URL — relative, so it resolves against whatever host serves the app. */
 export const emailTemplateAttachmentUrl = (id: Id, attachmentId: number): string =>
   `${api.defaults.baseURL ?? ''}/api/email-templates/${id}/attachments/${attachmentId}`;
-export const previewEmailTemplate = (id: Id): Promise<TemplatePreview> => api.post(`/api/email-templates/${id}/preview`).then((r) => r.data);
+/**
+ * Render a template with sample values, WITHOUT saving it.
+ *
+ * `draft` carries the unsaved subject and body. Preview used to save the form first, which
+ * committed edits to live customer-facing templates from a button nobody expects to write.
+ */
+export const previewEmailTemplate = (
+  id: Id,
+  draft?: { subject: string; body_html: string },
+): Promise<TemplatePreview> => api.post(`/api/email-templates/${id}/preview`, draft ?? {}).then((r) => r.data);
 export const getMailEvents = (): Promise<unknown> => api.get('/api/mail-events').then((r) => r.data);
+
+/**
+ * Ask for a password reset link.
+ *
+ * The reply is deliberately the same whether or not the address belongs to an account — the server
+ * will not confirm who exists to an unauthenticated caller, so the screen must not imply otherwise.
+ */
+export const forgotPassword = (email: string): Promise<{ message: string }> =>
+  api.post<{ message: string }>('/api/forgot-password', { email }).then((r) => r.data);
+
+/** Spend a reset link and set the new password. */
+export const resetPassword = (body: {
+  email: string; token: string; password: string; password_confirmation: string;
+}): Promise<{ message: string }> =>
+  api.post<{ message: string }>('/api/reset-password', body).then((r) => r.data);

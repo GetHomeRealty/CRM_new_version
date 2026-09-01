@@ -5,6 +5,7 @@ import type { AuthUserRecord } from '../auth/auth.types';
 
 import { can, isSuperAdmin } from '../core/authz';
 import { leadTaskScopeWhere, liveLeadWhere } from '../common/lead-scope';
+import { unreadInboxCount } from '../inbox/mailbox-scope';
 import { PermissionService } from '../auth/permission.service';
 import { CacheService } from '../redis/cache.service';
 import { transactionScopeWhere } from '../common/transaction-scope';
@@ -210,10 +211,20 @@ export class AreaDashboardService {
        */
       this.prisma.campaigns.groupBy({ by: ['status'], _count: { _all: true }, where: campaignWhere }),
 
-      // The CRM's own mailbox: mail from accounts connected under CRM Settings.
-      this.prisma.inbound_emails.count({
-        where: { user_id: userId, seen: false, mail_account: { is: { OR: [{ scope: 'crm' }, { scope: null }] } } },
-      }),
+      /*
+       * THE SAME QUESTION THE INBOX ANSWERS, asked through the Inbox's own definition.
+       *
+       * This used to count `seen = false` across every CRM-scoped account, which is not what the
+       * screen behind the card shows. The Inbox displays ONE mailbox — the active default — and
+       * only mail still in the inbox folder. On real data that gap read 416 on the card against 50
+       * in the Inbox, the missing 366 belonging to a DISABLED mailbox that cannot be opened from
+       * anywhere in the application. A card whose number cannot be reached by clicking it is worse
+       * than no card.
+       *
+       * `unreadInboxCount` is the Inbox's scoping, imported rather than restated, so the two cannot
+       * drift apart again. Counting only — no row is written or removed.
+       */
+      unreadInboxCount(this.prisma, userId, 'crm'),
 
       /*
        * NEXT 30 DAYS STARTS TOMORROW. This counted from `today`, so every appointment today was in

@@ -132,6 +132,14 @@ export interface CrmBroadcast {
 export interface CrmIntegrationState {
   connected: boolean;
   detail: string;
+  /**
+   * Set on `email` when messages are being REFUSED, as against no account being configured.
+   *
+   * `connected` covers both, because a summary whose green light means "an account row exists"
+   * answers a question nobody asks. This distinguishes the two for anything that wants to word them
+   * differently. Optional: an older response simply says nothing.
+   */
+  failing?: boolean;
 }
 
 export interface CrmIntegrations {

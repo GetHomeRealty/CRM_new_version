@@ -260,6 +260,26 @@ ${sig ? `<hr style="border:0;border-top:1px solid #e5e7eb;margin:24px 0 12px"><d
    * asking `isEnabledFor` with a null id would look up overrides for user -1 and get the same
    * answer by accident rather than on purpose.
    */
+  /**
+   * Would importing a file email the people in it?
+   *
+   * ASKED BY THE IMPORT WINDOW, before anything is imported. Importing a spreadsheet does not only
+   * create records: every new lead becomes eligible for the welcome sweep, so a five-hundred-row
+   * file is five hundred members of the public emailed by the brokerage - and the sweep runs on a
+   * delay, so the operator has usually closed the window before the first one goes.
+   *
+   * IT ASKS THE SAME QUESTIONS THE SEND WILL. The per-user trigger, the brokerage kill switch, the
+   * template and the connected mailbox - all four decide whether a welcome actually leaves, so a
+   * warning built on any subset would cry wolf or, worse, promise silence it cannot deliver.
+   */
+  async importWillEmail(user: AuthUserRecord): Promise<{ willEmail: boolean; reason: string | null }> {
+    if (!(await this.welcomeEnabledFor(user))) {
+      return { willEmail: false, reason: 'the welcome email is switched off' };
+    }
+    const blocked = await this.welcomeBlockedReason(user.id ?? null);
+    return blocked ? { willEmail: false, reason: blocked } : { willEmail: true, reason: null };
+  }
+
   private async welcomeEnabledFor(user: AuthUserRecord): Promise<boolean> {
     if (user.id) return this.triggers.isEnabledFor(user, 'welcome');
     return (await this.triggers.brokerageDefaultFor('welcome'));
@@ -770,6 +790,25 @@ ${offer?.description ? `<p>${esc(offer.description)}</p>` : ''}
     }
   }
 
+  /**
+   * Record an email that another module sent, in the log this one owns.
+   *
+   * WHY THIS EXISTS RATHER THAN A SECOND WRITER. A campaign TEST SEND is a real email leaving the
+   * brokerage, and it was reaching nobody's record of it: the log is where somebody looks to prove
+   * what was sent, and one whole class of outgoing mail was missing from it. Campaigns could have
+   * inserted its own row, but this table is a compliance surface and two independent writers to it
+   * would drift - one would gain the redirect column, or the scoping, and the other would not.
+   *
+   * Deliberately narrow: `kind`, who sent it, where it went and whether it worked. Everything the
+   * reader of `listLogPage` already expects to find on every other row.
+   */
+  async recordExternalSend(
+    kind: string, recipient: string, subject: string | null,
+    success: boolean, error: string | null, user: AuthUserRecord, redirected: string | null,
+  ): Promise<void> {
+    await this.record(kind, '', recipient, subject, success, error, user, redirected);
+  }
+
   private async record(
     kind: string, leadName: string, recipient: string, subject: string | null,
     success: boolean, error: string | null, user: AuthUserRecord, redirected: string | null,
@@ -887,22 +926,104 @@ ${offer?.description ? `<p>${esc(offer.description)}</p>` : ''}
     return { deleted: true };
   }
 
+  /** How deep one scan of the log goes. The existing clamp, named so the paging can report it. */
+  private static readonly LOG_SCAN = 500;
+
   async listLog(user: AuthUserRecord, limit = 100): Promise<Record<string, unknown>[]> {
+    return (await this.readableLog(user, limit)).rows;
+  }
+
+  /**
+   * The log this person may see, and whether that is all of it.
+   *
+   * `reachedCap` is the honest half. Rows are filtered for readability AFTER the database has been
+   * asked for a page of them, so the number returned is not the number that exist and a caller
+   * cannot infer a total from a short page. When the scan hits its cap there may be more behind it,
+   * and a screen that said "showing 25 of 63" off the back of a capped scan would be inventing the
+   * 63.
+   */
+  /**
+   * The `kind` filter, and why it is applied in the QUERY rather than afterwards.
+   *
+   * Campaign sends write one row per recipient - correctly, because the log answers "what did we
+   * send this person". But the scan window is 500 rows, so a thousand-recipient mailing fills it
+   * entirely and a brokerage looking for last week's welcome emails finds nothing but campaign
+   * rows. Filtering after the scan would not help: the window would still be full of the rows being
+   * discarded. In the WHERE, choosing a kind gives a full window OF THAT KIND.
+   *
+   * `transactional` is the one named value that is not a kind: it means everything the CRM sent on
+   * its own initiative or on somebody's instruction, as opposed to a mailing - which is the
+   * question people actually arrive with, and it should not cost them a guess at which of half a
+   * dozen kinds to try.
+   */
+  private static kindWhere(kind?: string): Record<string, unknown> {
+    const k = String(kind ?? '').trim();
+    if (!k) return {};
+    if (k === 'transactional') return { kind: { notIn: ['campaign', 'campaign_test'] } };
+    return { kind: k };
+  }
+
+  private async readableLog(
+    user: AuthUserRecord,
+    limit: number,
+    kind?: string,
+  ): Promise<{ rows: Record<string, unknown>[]; reachedCap: boolean }> {
+    const take = Math.min(CrmAdvancedEmailService.LOG_SCAN, limit);
     const rows = await this.prisma.crm_email_log.findMany({
-      where: can(user, 'data.read-all') ? {} : { sent_by: user.name ?? '' },
+      where: {
+        ...(can(user, 'data.read-all') ? {} : { sent_by: user.name ?? '' }),
+        ...CrmAdvancedEmailService.kindWhere(kind),
+      },
       orderBy: { id: 'desc' },
-      take: Math.min(500, limit),
+      take,
     });
-    if (!rows.length) return [];
+    if (!rows.length) return { rows: [], reachedCap: false };
 
     const visible = await this.readableRecipients(user, rows.map((r) => r.recipient));
-    return rows
-      .filter((r) => visible.has(r.recipient.trim().toLowerCase()))
-      .map((r) => ({
-        id: r.id, kind: r.kind, lead_name: r.lead_name, recipient: r.recipient,
-        subject: r.subject, success: r.success, error: r.error, redirected: r.redirected,
-        sent_by: r.sent_by, created_at: r.created_at?.toISOString() ?? null,
-      }));
+    return {
+      reachedCap: rows.length >= take,
+      rows: rows
+        .filter((r) => visible.has(r.recipient.trim().toLowerCase()))
+        .map((r) => ({
+          id: r.id, kind: r.kind, lead_name: r.lead_name, recipient: r.recipient,
+          subject: r.subject, success: r.success, error: r.error, redirected: r.redirected,
+          sent_by: r.sent_by, created_at: r.created_at?.toISOString() ?? null,
+        })),
+    };
+  }
+
+  /**
+   * One page of the log, and how much of it there is.
+   *
+   * THE SCREEN COULD NOT SAY WHAT IT WAS HIDING. It asked for a fixed number of rows and the
+   * endpoint answered with a bare array - no total, no next page, nothing a "showing 25 of 63"
+   * could be built from. On this brokerage's data that silently withheld a fortnight, and the
+   * withheld part is where the failures are: an email log is the record of what was sent to whom,
+   * so the window that matters to somebody investigating a complaint is precisely the older one.
+   *
+   * `listLog` is left exactly as it was. It is what the lead-ownership scope tests drive, and those
+   * assert who may see whose correspondence - not a shape worth disturbing for a paging change.
+   */
+  async listLogPage(
+    user: AuthUserRecord,
+    opts: { limit?: number; offset?: number; kind?: string } = {},
+  ): Promise<{ data: Record<string, unknown>[]; meta: Record<string, unknown> }> {
+    const limit = Math.min(200, Math.max(1, Math.trunc(opts.limit ?? 50) || 50));
+    const offset = Math.max(0, Math.trunc(opts.offset ?? 0) || 0);
+    const { rows, reachedCap } = await this.readableLog(user, CrmAdvancedEmailService.LOG_SCAN, opts.kind);
+    return {
+      data: rows.slice(offset, offset + limit),
+      meta: {
+        total: rows.length,
+        limit,
+        offset,
+        // False means "there may be older entries than this total accounts for" - said plainly
+        // rather than letting the screen present a capped scan as a complete count.
+        complete: !reachedCap,
+        // Echoed so the screen can show what it is looking at rather than inferring it.
+        kind: String(opts.kind ?? '').trim() || null,
+      },
+    };
   }
 
   /**
