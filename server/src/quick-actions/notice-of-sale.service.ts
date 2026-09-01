@@ -49,7 +49,22 @@ export class NoticeOfSaleService {
     for (const [name, row] of Object.entries(inAgents)) {
       const existing = current.agents[name] ?? {};
       current.agents[name] = {
-        signature: row.signature ?? existing.signature ?? null,
+        /*
+         * AN EXPLICIT null OR '' MEANS "REMOVE THIS SIGNATURE" AND MUST NOT FALL THROUGH.
+         *
+         * This read `row.signature ?? existing.signature ?? null`, so a cleared signature was
+         * restored by the very save that was meant to clear it. The form's delete button sets
+         * `signature: null` (NoticeOfSaleModal.clearSig) and persist() posts the whole agents
+         * object, so the button cleared the screen and the server put the signature straight back.
+         * The audit branch below for `!hasSig && hadSig` - "Document deleted" - could never fire,
+         * which is how long this had been true.
+         *
+         * The ?? was there to protect PARTIAL saves, and that still holds: an absent key keeps
+         * whatever is stored. Only a key that is actually present is allowed to clear.
+         */
+        signature: Object.prototype.hasOwnProperty.call(row, 'signature')
+          ? (row.signature || null)
+          : (existing.signature ?? null),
         signed_date: row.signed_date ?? existing.signed_date ?? null,
         sent_at: existing.sent_at ?? null,
       };
@@ -67,8 +82,59 @@ export class NoticeOfSaleService {
     }
 
     await this.store(txnId, current);
+    await this.syncDocument(txnId, current);
     const fresh = await this.txnOr404(txnId);
     return this.present(this.normalize(fresh.notice_of_sale));
+  }
+
+  /*
+   * A NOTICE OF SALE BECOMES A DOCUMENT ONCE EVERY SALESPERSON ON IT HAS SIGNED.
+   *
+   * WHO COUNTS AS "EVERY SALESPERSON" IS DERIVED HERE, NOT TAKEN FROM THE REQUEST. The form renders
+   * one signature block per team member, falling back to the deal's own agent when there is no team
+   * (NoticeOfSaleModal: `team = txn.team.length ? txn.team : [{ name: txn.agent }]`). Reading the
+   * roster from the deal reproduces that exactly AND makes the rule unfalsifiable from the client:
+   * a caller that posted only the agents who had signed would otherwise satisfy "all signed" with
+   * one signature.
+   *
+   * THE ROW IS NEVER REMOVED. When a signature is later deleted the document stays and goes back to
+   * Pending. Silently withdrawing a row from a compliance checklist is how TD-033 and TD-070 caused
+   * their damage - a row that changes state leaves a trace, a row that disappears does not.
+   *
+   * IT IS FIND-OR-CREATE, BECAUSE ON A REFERRAL DEAL THE ROW ALREADY EXISTS: defaultsFor('referral')
+   * seeds 'Notice of Sale' as an ordinary upload slot. Blindly inserting would give those deals two.
+   * And if somebody has attached a FILE to that row it is theirs, not ours - the status is left
+   * alone, so a manual upload is never stamped over by this.
+   */
+  private async syncDocument(txnId: number, notice: Notice): Promise<void> {
+    const TITLE = 'Notice of Sale';
+    const members = await this.prisma.team_members.findMany({ where: { transaction_id: txnId }, select: { name: true } });
+    let roster = members.map((m) => String(m.name ?? '').trim()).filter((n) => n !== '');
+    if (roster.length === 0) {
+      const t = await this.prisma.transactions.findUnique({ where: { id: txnId }, select: { agent: true } });
+      const solo = String(t?.agent ?? '').trim();
+      if (solo) roster = [solo];
+    }
+    const complete = roster.length > 0 && roster.every((n) => !!notice.agents[n]?.signature);
+
+    const existing = await this.prisma.documents.findFirst({
+      where: { transaction_id: txnId, deleted_at: null, condition_id: null, title: { equals: TITLE, mode: 'insensitive' } },
+    });
+    const now = new Date();
+
+    if (!existing) {
+      if (!complete) return;
+      const max = await this.prisma.documents.aggregate({ where: { transaction_id: txnId, deleted_at: null }, _max: { position: true } });
+      await this.prisma.documents.create({ data: { transaction_id: txnId, title: TITLE, status: 'Received', validation: 'Pending', position: (max._max.position ?? 0) + 1, created_at: now, updated_at: now } });
+      await this.audit.record(txnId, null, { section: SECTION, field: TITLE, action: 'Document uploaded', source: 'Quick Action', new: 'All ' + roster.length + ' salesperson(s) signed' });
+      return;
+    }
+
+    if (existing.file_name) return;
+    const want = complete ? 'Received' : 'Pending';
+    if (existing.status === want) return;
+    await this.prisma.documents.update({ where: { id: existing.id }, data: { status: want, updated_at: now } });
+    await this.audit.record(txnId, null, { section: SECTION, field: TITLE, action: 'Updated', source: 'Quick Action', old: existing.status, new: want });
   }
 
   async send(user: Actor, txnId: number, body: Record<string, unknown>): Promise<Record<string, unknown>> {
