@@ -9,6 +9,7 @@ import {
   type ImportField, type ChildSheet,
 } from './import-template';
 
+import { isSuperAdmin } from '../core/authz';
 import type { AuthUserRecord } from '../auth/auth.types';
 
 /** Child column lists, resolved once, for the per-area format checks. */
@@ -113,9 +114,21 @@ export class TransactionImportService {
     private readonly write: TransactionsWriteService,
   ) {}
 
-  /** Importing creates transactions, so it needs the same authority as creating one. */
+  /**
+   * TD-103 — bulk import is Super Admin work.
+   *
+   * This refused `agent` and nothing else, so every other role holding `transactions: edit` —
+   * manager, accounting and documentation — passed both this and the controller's screen guard and
+   * could run a real import. A billing seat could create transactions in bulk.
+   *
+   * Kept as well as `AdminGuard` on the controller rather than removed in favour of it. The guard
+   * is what actually answers the request today, including on `template` and `sample` which take no
+   * user; this is the same rule stated where the work happens, so a route added later without the
+   * guard is refused rather than quietly open. Both ask `isSuperAdmin`, so there is one definition
+   * of the tier and two places that consult it.
+   */
   private assertCanImport(user: AuthUserRecord): void {
-    if ((user.role ?? 'agent') === 'agent') {
+    if (!isSuperAdmin(user)) {
       throw new ForbiddenException({ message: 'You do not have permission to bulk import transactions.' });
     }
   }
@@ -136,12 +149,21 @@ export class TransactionImportService {
     const ws = wb.addWorksheet('Transactions');
     this.writeHeader(ws, [REF_COLUMN, ...IMPORT_FIELDS.map((f) => f.column)],
       [undefined, ...IMPORT_FIELDS.map((f) => f)]);
-    const example = ws.addRow(['1', ...IMPORT_FIELDS.map((f) => f.example)]);
+    const example = ws.addRow(['1', ...this.mainExampleRow()]);
     example.eachCell((cell) => {
       cell.font = { italic: true, color: { argb: 'FF64748B' } };
       cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFC' } };
     });
-    ws.getCell(`A${example.number}`).note = 'This example row is ignored on import — overwrite it or delete it.\n\nRef ties the child sheets to this transaction. Any unique value works; 1, 2, 3… is easiest.';
+    /*
+     * TD-098 — the note said the row is "ignored on import". It is not: the importer reads it,
+     * validates it and reports it like any other row. Saying otherwise invited somebody to upload
+     * the template untouched and be told their file was invalid. It says what actually happens now.
+     *
+     * A cell note is also only half of it — it appears on hover and lives outside the workbook's
+     * shared strings, so a reader scanning the file never sees it. The Instructions sheet carries
+     * the same point in plain sight; see `writeGuide`.
+     */
+    ws.getCell(`A${example.number}`).note = 'Row 2 is an example. Type over it or delete it before importing — it is read like any other row, not skipped.\n\nRef ties the child sheets to this transaction. Any unique value works; 1, 2, 3… is easiest.';
     ws.getColumn(1).width = 8;
     IMPORT_FIELDS.forEach((f, i) => { ws.getColumn(i + 2).width = Math.max(16, Math.min(34, f.column.length + 6)); });
     ws.views = [{ state: 'frozen', ySplit: 1, xSplit: 1 }];
@@ -361,6 +383,10 @@ export class TransactionImportService {
 
     head('How to fill this template in');
     guide.addRow(['']);
+    // TD-098 — said first, and on the sheet rather than in a hover note, because a reader who
+    // misses it uploads the scaffold row and is told their own file is invalid.
+    guide.addRow(['', 'Row 2 of every sheet is a greyed-out EXAMPLE. Type over it or delete it before you import — it is read like any other row, not skipped, and it will be reported as invalid if left as it is.']);
+    guide.addRow(['']);
     guide.addRow(['', 'Option A — multi-sheet (recommended): fill the Transactions sheet, then add rows to Financial, Team Split, Clients, Adjustments and Conditions. Tie every child row to its transaction with the Ref column. No limit on how many children a deal can have.']);
     guide.addRow(['', 'Option B — one sheet: fill the "One-Sheet (CSV)" sheet only, and save it as .csv or .xlsx. Repeating data goes in numbered columns. This is the only layout plain CSV can express.']);
     guide.addRow(['', 'Upload whichever you used — the importer detects the layout automatically. Do not mix the two in one file.']);
@@ -397,9 +423,47 @@ export class TransactionImportService {
     ]) guide.addRow(['', note]);
   }
 
+  /**
+   * TD-098 — the demonstration row, obeying the rules the same workbook states.
+   *
+   * `f.example` is ONE value per column and has two jobs that pull against each other: illustrating
+   * the column on the Instructions sheet, where 'Listing Contract Date → 2026-03-01' is exactly
+   * what a reader wants, and filling row 2 of the Transactions sheet, where the same value is wrong
+   * because that row is a 'Residential Buying'. Row 2 shipped with listing dates the Instructions
+   * sheet reserves for listing types, and a Deal Status of 'Open' the bound Reference sheet does not
+   * list for the type. Uploaded unmodified it came back 0 VALID / 1 INVALID, with the importer
+   * correctly naming faults the workbook had itself introduced — a mis-taught pattern at the exact
+   * moment a firm is learning the format.
+   *
+   * So the Instructions sheet keeps every `example` unchanged, and the ROW is derived from them
+   * through the validator's own rules:
+   *
+   *   - `forbiddenColumnsFor` blanks whatever the row's type may not carry, so the row can never
+   *     again contradict a rule without that rule changing too;
+   *   - Deal Status falls back to the type's own vocabulary when the generic example is not in it;
+   *   - the two roster columns are blanked, because no workbook shipped with the product can know a
+   *     brokerage's agents and a name that matches nobody is refused. They are documented optional
+   *     and still illustrated on the Instructions sheet, which is where a name belongs.
+   */
+  private mainExampleRow(): string[] {
+    const type = String(IMPORT_FIELDS.find((f) => f.column === 'Transaction Type')?.example ?? TRANSACTION_TYPES[0]);
+    const forbidden = new Set(forbiddenColumnsFor(type));
+    const statuses = statusOptionsFor(type);
+    const roster = new Set(['Primary Agent', 'Split Agents']);
+    return IMPORT_FIELDS.map((f) => {
+      if (forbidden.has(f.column) || roster.has(f.column)) return '';
+      if (f.column === 'Deal Status') {
+        const shown = String(f.example ?? '');
+        return statuses.includes(shown) ? shown : (defaultStatusFor(type) || statuses[0] || '');
+      }
+      return String(f.example ?? '');
+    });
+  }
+
   /** The example row for the one-sheet layout: main + financial + one filled child of each. */
   private flatExampleRow(): string[] {
-    const out: string[] = [...IMPORT_FIELDS.map((f) => f.example), ...FINANCIAL_FIELDS.map((f) => f.example)];
+    // TD-098 — the same corrected main-sheet row, so the two layouts cannot disagree.
+    const out: string[] = [...this.mainExampleRow(), ...FINANCIAL_FIELDS.map((f) => f.example)];
     for (const child of CHILD_SHEETS) {
       for (let n = 1; n <= child.flatMax; n++) {
         for (const f of child.fields) out.push(n === 1 ? f.example : '');
@@ -709,8 +773,35 @@ export class TransactionImportService {
         }
       }
 
-      // ---- formats on the main sheet ----
-      this.checkFormats(IMPORT_FIELDS, rec.main, add, '');
+      /*
+       * ---- formats on the main sheet ----
+       *
+       * TD-052 - one problem, reported once.
+       *
+       * A bad Transaction Type produced TWO rows in the validation table: 'Not a valid transaction
+       * type.' from the dedicated rule above, and 'Not an accepted value for Transaction Type.'
+       * from the generic enum check below, both carrying the identical suggested correction. The
+       * INVALID counter stayed right because it counts rows, but a file with one mistake read as a
+       * file with two - and on a fifty-row import that is the difference between a report somebody
+       * works through and one they give up on.
+       *
+       * The DEDICATED RULE WINS, which is the right way round: it is worded for the field it is
+       * about, it already handles the empty case, and it is where a better message would be added.
+       * A generic "not an accepted value" is the fallback for fields nothing else speaks for.
+       *
+       * ONLY THE MAIN SHEET GETS THIS. The child-sheet calls below pass many rows through one
+       * `checkFormats`, and every issue they raise carries the PARENT row number - so two Condition
+       * rows with the same bad column are two genuine problems that look identical to a
+       * field-level filter. Suppressing there would hide the second one.
+       */
+      const addMainFormat = (
+        field: string, value: string, message: string, fix: string,
+        severity?: RowIssue['severity'], section?: string,
+      ): void => {
+        if (issues.some((x) => x.field === field)) return;
+        add(field, value, message, fix, severity, section);
+      };
+      this.checkFormats(IMPORT_FIELDS, rec.main, addMainFormat, '');
       for (const col of ['Lawyer Email', 'Co-Op Brokerage Email']) {
         const v = get(col);
         if (v && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) {

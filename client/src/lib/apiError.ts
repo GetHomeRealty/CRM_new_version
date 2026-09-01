@@ -37,6 +37,18 @@ export function apiErrorMessage(err: unknown, fallback: string): string {
   return fallback;
 }
 
+/**
+ * TD-114 — whether a failed read failed because the caller is not allowed to make it.
+ *
+ * Lives here with the other two narrowings rather than in the screen that needed it, so `axios`
+ * stays this module's dependency and a second screen asking the same question asks it the same way.
+ * The distinction earns its place: a refusal is settled and retrying achieves nothing, where most
+ * other failures are worth offering a Try again for.
+ */
+export function isForbidden(err: unknown): boolean {
+  return axios.isAxiosError(err) && err.response?.status === 403;
+}
+
 /** Laravel 422 field errors ({ field: [msg, …] }) from an axios error, or null. */
 export function apiFieldErrors(err: unknown): Record<string, string[]> | null {
   if (axios.isAxiosError(err)) {

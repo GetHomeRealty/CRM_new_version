@@ -5,7 +5,7 @@ import {
   downloadImportTemplate, downloadImportSample, downloadImportErrors, fileToBase64,
   validateImport, confirmImport, importHistory,
 } from '../lib/importApi';
-import { apiErrorMessage } from '../lib/apiError';
+import { apiErrorMessage, isForbidden } from '../lib/apiError';
 import { useToast } from './toast';
 import type { ImportPreview, ImportResult, ImportBatch, ImportIssue } from '../types';
 
@@ -28,8 +28,27 @@ export default function BulkImportPage() {
   const [history, setHistory] = useState<ImportBatch[]>([]);
   const [dragging, setDragging] = useState(false);
 
+  /**
+   * TD-114 — why the history is not showing, when it is not showing.
+   *
+   * The catch here discarded the error and left `history` empty, so the panel rendered
+   * "No imports yet." A 403 became a reassuring statement about the DATA when it was a statement
+   * about the PERMISSION, and the reader had no way to tell the two apart. Same family as TD-030
+   * and TD-115: a failure dressed as an ordinary empty state.
+   *
+   * 'denied' is kept apart from 'failed' because the two ask different things of the reader. A
+   * permission refusal is settled — retrying achieves nothing and the answer is to ask an
+   * administrator. Anything else may well be transient and is worth a Try again.
+   */
+  const [historyError, setHistoryError] = useState<'denied' | 'failed' | null>(null);
   const loadHistory = useCallback(() => {
-    importHistory().then(setHistory).catch(() => { /* history is informational */ });
+    setHistoryError(null);
+    importHistory()
+      .then((h) => { setHistory(h); })
+      .catch((e) => {
+        setHistory([]);
+        setHistoryError(isForbidden(e) ? 'denied' : 'failed');
+      });
   }, []);
   useEffect(loadHistory, [loadHistory]);
 
@@ -216,7 +235,19 @@ export default function BulkImportPage() {
       {/* history */}
       <div className="card">
         <h3 style={{ marginTop: 0 }}>Import History</h3>
-        {history.length === 0 ? <div className="muted">No imports yet.</div> : (
+        {/* TD-114 — three distinct answers, because "no imports" and "not allowed" are not the same fact. */}
+        {historyError === 'denied' ? (
+          <div>
+            <b style={{ color: 'var(--bad)' }}>You do not have permission to view the import history.</b><br />
+            <span className="muted">Bulk import is restricted to a Super Admin. This is not an empty history — ask an administrator if you need to see it.</span>
+          </div>
+        ) : historyError === 'failed' ? (
+          <div>
+            <b style={{ color: 'var(--bad)' }}>The import history could not be loaded.</b><br />
+            <span className="muted">This is a problem reaching the server, not an empty history — nothing has been lost.</span>{' '}
+            <button className="btn sm" style={{ marginLeft: 6 }} onClick={loadHistory}>Try again</button>
+          </div>
+        ) : history.length === 0 ? <div className="muted">No imports yet.</div> : (
           <div className="report-table-wrap">
             <table className="list-table">
               <thead>
