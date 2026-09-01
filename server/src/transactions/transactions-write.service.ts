@@ -177,6 +177,21 @@ export class TransactionsWriteService {
     const missing = required.filter((f) => blank(body[f]));
     for (const f of missing) errors[f] = [`The ${label(f)} field is required.`];
 
+    /*
+     * TD-068 ON CREATE. The catalogue check existed only on update; creation required a type to be
+     * PRESENT and then stored whatever arrived - POST with 'Sale Listing', and even 'zzz-not-a-type',
+     * both returned 201. Every later rule keys off the type: which statuses it may hold, which
+     * documents it generates, how its commission is worked out. Found by REG-TR-027 on 2026-08-31.
+     *
+     * Kept exactly as strict, but reported through the same collection as everything else (TD-113)
+     * rather than thrown on sight, so a caller who sent an unknown type AND left fields out learns
+     * both in one reply. A blank type is already covered above as a missing field, so this only
+     * speaks when something was actually supplied.
+     */
+    if (!blank(body.type) && !knownType) {
+      errors.type = [`"${type}" is not a transaction type this system offers. Allowed: ${TRANSACTION_TYPES.join(', ')}.`];
+    }
+
     // The status the deal is being opened with has to exist for the type. Creation takes a single
     // status, so the only rule that can bite here is the vocabulary one — but a deal created
     // through the API with `status: 'Expired'` on a Residential Buying was accepted, and every

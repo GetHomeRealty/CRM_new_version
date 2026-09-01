@@ -21,6 +21,7 @@ export const col = {
   totalHst: (): ReportColumn => ({ key: 'total_hst', label: 'HST', type: 'currency', default: true, total: true, width: 14 }),
   totalW: (): ReportColumn => ({ key: 'total_w', label: 'Total Commission', type: 'currency', default: true, total: true, width: 16 }),
   agentWo: (): ReportColumn => ({ key: 'agent_wo', label: 'Agent Commission', type: 'currency', default: true, total: true, width: 16 }),
+  coopWo: (): ReportColumn => ({ key: 'coop_wo', label: 'Co-op Payout', type: 'currency', default: true, total: true, width: 14 }),
   agentHst: (): ReportColumn => ({ key: 'agent_hst', label: 'Agent HST', type: 'currency', default: true, total: true, width: 14 }),
   agentW: (): ReportColumn => ({ key: 'agent_w', label: 'Total Agent Commission', type: 'currency', default: true, total: true, width: 16 }),
   brokWo: (): ReportColumn => ({ key: 'brok_wo', label: 'Brokerage Commission', type: 'currency', default: true, total: true, width: 16 }),
@@ -105,6 +106,9 @@ export function baseRow(t: EnrichedTxn): ReportRow {
     brok_wo: t.brokerageComm.commission,
     brok_hst: t.brokerageComm.hst,
     brok_w: t.brokerageComm.total,
+    coop_wo: t.coopOut.commission,
+    coop_hst: t.coopOut.hst,
+    coop_w: t.coopOut.total,
     agent_payment_status: t.agent_payment_status,
     payment_status: t.agent_payment_status,
     // every split agent's ratio (single-agent deals show one; teams show all, in order)

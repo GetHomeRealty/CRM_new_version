@@ -116,6 +116,7 @@ function sanitizeSvg(buf: Buffer): Buffer {
 const SEED_ON_CREATE: Record<string, string> = {
   thank_you_note: 'Thank you for the payment. You just made our day.',
   deposit_heading: 'Beneficiary Bank Account Detail:',
+  deposit_signatory: '',
 };
 
 /**
@@ -145,6 +146,7 @@ const FIELD_LABELS: Record<string, string> = {
   default_terms: 'Default Terms',
   thank_you_note: 'Thank-you Note',
   deposit_heading: 'Deposit Heading',
+  deposit_signatory: 'Deposit Signatory',
   lawyer_reminder_days: 'Lawyer Reminder (days)',
 };
 
@@ -248,6 +250,7 @@ export class CompanySettingsService {
     const notes: [keyof UpdateCompanySettingsDto, string | null, string][] = [
       ['thank_you_note', cur.thank_you_note, 'Thank-you Note'],
       ['deposit_heading', cur.deposit_heading, 'Deposit Heading'],
+      ['deposit_signatory', cur.deposit_signatory, 'Deposit Signatory'],
     ];
     for (const [key, stored, label] of notes) {
       const next = dto[key];
@@ -495,6 +498,7 @@ export class CompanySettingsService {
       default_terms: s.default_terms,
       thank_you_note: s.thank_you_note,
       deposit_heading: s.deposit_heading,
+      deposit_signatory: s.deposit_signatory,
       // Recurring lawyer-detail reminder cadence (days) — surfaced from feature_flags for the UI.
       lawyer_reminder_days: (() => { const n = Number(parseJsonObject(s.feature_flags).lawyer_reminder_days); return Number.isFinite(n) ? Math.max(0, Math.floor(n)) : 3; })(),
       created_at: laravelJsonDate(s.created_at),

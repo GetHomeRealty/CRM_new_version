@@ -54,6 +54,25 @@ export function totalCommission(bd: Obj): Triple {
   return { commission: num(bd.commission), hst: num(bd.hst), total: num(bd.total) };
 }
 
+/**
+ * The co-op side, which on a LISTING is paid OUT to the co-operating brokerage.
+ *
+ * TD-072 and TD-105: both reports printed the deal's TOTAL commission beside agent and brokerage
+ * shares taken from the listing side, and omitted this figure. The row then looked as though money
+ * had gone missing, and both defects were raised as the agent being underpaid from one side only.
+ * THEY ARE NOT. commission.service.ts divides `splitTotal` - the listing side - precisely because
+ * the co-op side is not the brokerage's money, and its own balance_check reconciles to the cent.
+ * What was missing was this column, not the cash. Paying agents from the combined pool instead
+ * would hand them money the brokerage never received.
+ *
+ * Zero for every other variant: on a buying deal the brokerage RECEIVES the co-op side rather than
+ * paying it, and a preconstruction deal has no co-op side at all.
+ */
+export function coopPayout(bd: Obj): Triple {
+  if (bd.variant !== 'listing') return { ...ZERO_TRIPLE };
+  return tripleOf(bd.coop);
+}
+
 /** Agent commission totals (§9B) — sum of every split agent's agent-side commission. */
 export function agentCommission(bd: Obj): Triple {
   return agentLines(bd).reduce<Triple>((acc, l) => addTriple(acc, tripleOf(l.agent)), { ...ZERO_TRIPLE });

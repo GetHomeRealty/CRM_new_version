@@ -16,6 +16,8 @@ import { RecoveryCodeService } from './mfa/recovery-code.service';
 import { TrustedDeviceService } from './mfa/trusted-device.service';
 import { EmailOtpProvider, OtpDeliveryService, SmsOtpProvider } from './mfa/otp-delivery.service';
 import { AuditModule } from '../audit/audit.module';
+import { SsoAuthorizationService } from './sso-authorization.service';
+import { SsoController } from './sso.controller';
 
 /**
  * Authentication + authorization. Provides the Sanctum-contract session auth,
@@ -33,7 +35,7 @@ import { AuditModule } from '../audit/audit.module';
    * and `e2e/tests/mfa.spec.ts` asserts the resolution really works against a running application.
    */
   imports: [AuditModule],
-  controllers: [AuthController, MfaController, MfaAdminController],
+  controllers: [AuthController, MfaController, MfaAdminController, SsoController],
   /*
    * `PasswordHashService` is exported because UsersModule needs it: an administrator creating an
    * account or resetting a password must hash at the same cost as every other path. It was the
@@ -45,11 +47,13 @@ import { AuditModule } from '../audit/audit.module';
     AuthGuard, AdminGuard, ScreenGuard,
     MfaService, MfaPolicyService, RecoveryCodeService, TrustedDeviceService,
     OtpDeliveryService, EmailOtpProvider, SmsOtpProvider,
+    SsoAuthorizationService,
   ],
   exports: [
     AuthService, AccountLockoutService, PasswordHashService, PermissionService,
     AuthGuard, AdminGuard, ScreenGuard,
     MfaService, MfaPolicyService,
+    SsoAuthorizationService,
   ],
 })
 export class AuthModule implements OnModuleInit {

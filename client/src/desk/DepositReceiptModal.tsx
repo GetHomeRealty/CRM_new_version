@@ -79,7 +79,7 @@ export default function DepositReceiptModal({ open, onClose, txn, settings = nul
     date_transfer: '',
     balance_due: '',
     listing_agent: txn.agent || '',
-    signatory_name: 'Anand Pericherla',
+    signatory_name: settings?.deposit_signatory ?? '',
     signature: '',
     // Send To = Co-op Brokerage Information → Agent Email.
     recipient_email: txn.brokerage?.agent_email || txn.brokerage?.invoice_email || txn.brokerage?.email || (txn.clients && txn.clients[0]?.email) || '',
@@ -98,6 +98,18 @@ export default function DepositReceiptModal({ open, onClose, txn, settings = nul
       });
     }).catch(() => {});
   }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /*
+   * TD-086 - the broker of record is a brokerage SETTING, not a constant. This field held the
+   * literal 'Anand Pericherla': correct today, and silently wrong the day the broker of record
+   * changes, on a signed document that reaches clients. Settings can arrive after this modal
+   * mounts, so fill it when they do - and never overwrite a name somebody has already typed.
+   */
+  useEffect(() => {
+    const n = settings?.deposit_signatory ?? '';
+    if (!n) return;
+    setF((p) => (p.signatory_name ? p : { ...p, signatory_name: n }));
+  }, [settings]); // eslint-disable-line react-hooks/exhaustive-deps
   // Deposit slips — seeded from the Agent Payment Readiness uploads; each is individually
   // selectable for the receipt. Editing here (rotate/crop) is local to the receipt.
   const [slips, setSlips] = useState<Slip[]>(() =>

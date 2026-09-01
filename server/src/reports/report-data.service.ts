@@ -6,7 +6,7 @@ import { CommissionService } from '../transactions/commission.service';
 import { commissionInclude, normalizeCommissionTxn } from '../transactions/commission.loader';
 import { parseJsonObject, phpFloat } from '../common/serialize';
 import {
-  Triple, ZERO_TRIPLE, num, money, sum, brokerageCommission,
+  Triple, ZERO_TRIPLE, num, money, sum, brokerageCommission, coopPayout,
   splitRatios, agentPaymentsPaid, advancePayments, cashback, referral, loanRepayments,
   type CashbackInfo, type ReferralInfo, agentLines, addTriple,
 } from './report-financials';
@@ -64,6 +64,7 @@ export interface EnrichedTxn {
   total: Triple;                // transaction total commission (§9A)
   agentComm: Triple;            // agent commission totals (§9B, scoped)
   brokerageComm: Triple;        // brokerage split totals, excl. min brokerage (§9D)
+  coopOut: Triple;              // co-op side paid to the other brokerage (TD-072/TD-105)
   agent_payment_status: string; // from Agent Payment Readiness agent_commission_paid_status
   agent_paid: number;           // agent commission actually paid (admin_activities)
   agent_paid_date: string | null;
@@ -433,6 +434,7 @@ export class ReportDataService {
 
     const agentComm = scopedLines.reduce<Triple>((a, l) => addTriple(a, { commission: num((l.agent as Record<string, unknown>)?.commission), hst: num((l.agent as Record<string, unknown>)?.hst), total: num((l.agent as Record<string, unknown>)?.total) }), { ...ZERO_TRIPLE });
     const brokerageComm = lockedAgent ? scopedLines.reduce<Triple>((a, l) => addTriple(a, { commission: num((l.brokerage as Record<string, unknown>)?.commission), hst: num((l.brokerage as Record<string, unknown>)?.hst), total: num((l.brokerage as Record<string, unknown>)?.total) }), { ...ZERO_TRIPLE }) : brokerageCommission(bd);
+    const coopOut = coopPayout(bd);
 
     const paid = agentPaymentsPaid(admin, scopedNames);
     const adv = advancePayments(adjustments, lockedAgent ? [lockedAgent] : null);
@@ -506,6 +508,7 @@ export class ReportDataService {
       total: { commission: money(summary.amount), hst: money(summary.hst), total: money(summary.total) },
       agentComm,
       brokerageComm,
+      coopOut,
       agent_payment_status: this.agentPaymentStatus(tracker, statuses, paid, scopedNames, agentComm.total),
       agent_paid: paid.totalPaid,
       agent_paid_date: paid.lastPaidDate,
