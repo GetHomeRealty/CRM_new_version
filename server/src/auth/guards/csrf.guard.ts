@@ -34,6 +34,9 @@ const CSRF_EXEMPT_PATHS = new Set([
   '/api/twilio/voice',
   // Google redirects the browser here after consent; trusted via the signed OAuth `state`.
   '/api/google/callback',
+  // Precon's SERVER exchanges a one-time code here, so there is no browser session or CSRF cookie.
+  // The request is authenticated by its client secret and PKCE verifier, and the code is single-use.
+  '/api/sso/token',
 ]);
 
 /**

@@ -25,6 +25,7 @@ const good = (): AppConfig => ({
     sameSite: 'lax',
     domain: undefined,
   },
+  sso: { clientId: 'precon', clientSecret: '', redirectUris: [], codeLifetimeSeconds: 60 },
   idExtraction: { provider: 'anthropic', apiKey: '', model: 'claude-sonnet-5' },
 });
 
