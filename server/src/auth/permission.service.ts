@@ -138,11 +138,22 @@ export class PermissionService {
           ...this.fill('view'),
           lead: 'edit',
           reviews: 'edit',
-          // Which CRM emails THIS PERSON sends. Triggers are per-user, so the grant cannot reach
-          // anyone else's account — see `crm_trigger_settings`. Before this, `triggers` was the
-          // permission that opened a screen whose API asked for `settings` instead, so four roles
-          // were offered a screen that refused them.
-          triggers: 'edit',
+          /*
+           * TD-061 — 'view', because that is what this role can actually do with Triggers.
+           *
+           * This was 'edit', and the reason above it was "which CRM emails THIS PERSON sends".
+           * That is no longer what `triggers` opens: the CRM half moved to CRM → Communications,
+           * which is an `open` route needing no permission at all, and `area.ts` now maps
+           * `triggers` to the Desk alone. What is left behind this key is the brokerage-wide
+           * automation panel — lawyer-reminder cadence and Desk message templates — which writes
+           * through the company-settings and email-template endpoints and is therefore gated on
+           * `settings: 'edit'` by the server.
+           *
+           * So the grant had stopped granting anything and only misdescribed the role. Nothing
+           * changes in practice: this role holds `settings: 'none'`, so it could never edit that
+           * panel. The matrix now says so.
+           */
+          triggers: 'view',
           /*
            * Marketing IS this role's job — it prepares campaigns for agents, sends mass
            * communications and runs lead nurturing. It held `campaigns: 'view'` inherited from
@@ -182,10 +193,27 @@ export class PermissionService {
           // never the brokerage's or another agent's.
           campaigns: 'edit',
           meta: 'edit',
-          // An agent decides which CRM emails they themselves send. Per-user, like the campaigns
-          // and Meta grants above it and for the same reason: `crm_trigger_settings` is one row per
-          // person, so this cannot change what any colleague or administrator sends.
-          triggers: 'edit',
+          /*
+           * TD-061 — 'view'. The matrix said 'edit' and the screen refused them, so an
+           * administrator reading the matrix to answer "can our agents retime the brokerage's
+           * reminder emails?" was told yes when the answer is no.
+           *
+           * THE SCREEN WAS RIGHT AND THE MATRIX WAS WRONG, which is the direction this is fixed
+           * in. `DeskTriggersPanel` gates editing on `settings: 'edit'`, and it is correct to:
+           * the panel saves through `updateCompanySettings` and `updateEmailTemplate`, so the
+           * SERVER enforces `settings` on the write. Re-gating the panel on `triggers` instead
+           * would have handed agents a Save button that the API answers with a 403 — the affordance
+           * mismatch of TD-017, reintroduced deliberately.
+           *
+           * The grant's own justification had also moved out from under it. It read "an agent
+           * decides which CRM emails they themselves send", and that screen is now CRM →
+           * Communications, an `open` route reached with no permission at all. `triggers` today
+           * opens the Desk's brokerage-wide automations and nothing else.
+           *
+           * 'view' rather than 'none' so the sidebar entry and the screen stay exactly where they
+           * are — an agent can still read the reminder cadence, which is what they can do today.
+           */
+          triggers: 'view',
           invoice: 'none',
           audit: 'none',
           users: 'none',

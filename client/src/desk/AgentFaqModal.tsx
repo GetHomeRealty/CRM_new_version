@@ -13,7 +13,8 @@ import type {
 const lbl: CSSProperties = { fontSize: 11.5, color: 'var(--text-2)', fontWeight: 600, marginBottom: 5, display: 'block' };
 const editLine: CSSProperties = { border: '1px solid #e6e8ef', borderRadius: 4, padding: '2px 6px', fontSize: 13, minWidth: 180 };
 
-// Listing types that use the redesigned Agent FAQ Center (upload cards + breakdown summaries).
+// Listing types that use the redesigned Agent Payment Readiness panel (upload cards + breakdown
+// summaries). The `Faq` identifiers here are the panel's old name — see TD-049 below.
 const FAQ_V2_TYPES = [
   'Residential Sale Listing',
   'Residential Lease Listing',
@@ -372,7 +373,14 @@ export default function AgentFaqModal({ open, onClose, transactionId, txn, onSav
     <div className="overlay open" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="modal xl">
         <button className="close" onClick={onClose}>✕</button>
-        <div className="modal-h">Agent FAQ Center</div>
+        {/*
+          TD-049 — named for what it does. This panel holds no FAQ and never did: it is the
+          agent-payment readiness workflow (docs cleared, final validation, ready to process,
+          commission paid). Filed under "FAQ" nobody looking for a payment status would open it.
+          The stored identifiers keep their old names on purpose — see the note in
+          `TransactionDetailPage`'s Quick Actions button.
+        */}
+        <div className="modal-h">Agent Payment Readiness</div>
 
         {dftNA && (
           <div className="card" style={{ borderLeft: '4px solid var(--bad)', background: '#fff7ed', marginBottom: 12 }}>

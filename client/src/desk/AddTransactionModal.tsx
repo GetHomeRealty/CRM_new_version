@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { createTransaction, listAgents } from '../lib/api';
-import { TRANSACTION_TYPES, typeLabel, isListingType, parseNumber, statusOptionsFor } from './format';
+import { TRANSACTION_TYPES, typeLabel, isListingType, parseNumber, pickableStatusesFor } from './format';
 import { useToast } from './toast';
 import { apiErrorMessage } from '../lib/apiError';
 import { useAuth } from '../context/AuthContext';
@@ -142,8 +142,15 @@ export default function AddTransactionModal({ open, onClose, onCreated }: AddTra
   const listing = isListingType(form.type);
   const isLease = form.type === 'Residential Lease';
   const referral = form.type === 'Referral';
-  // "Closed" can't be chosen at creation (only Expired is otherwise excluded — it's auto).
-  const statusOpts = form.type ? statusOptionsFor(form.type).filter((s) => s !== 'Expired' && s !== 'Closed') : [];
+  /*
+   * TD-029 — the type's own vocabulary, from the one place that defines it.
+   *
+   * This used to exclude 'Closed' as well as 'Expired', which is why a Sale Listing offered eight
+   * statuses here, the API accepted ten, and a deal could not be filed as Closed on the screen even
+   * though `POST /api/transactions` accepts exactly that. 'Expired' is still withheld — a listing
+   * expiry sets it — and that rule now lives in `pickableStatusesFor` with everything else.
+   */
+  const statusOpts = form.type ? pickableStatusesFor(form.type) : [];
   const today = new Date().toISOString().slice(0, 10);
   const set = (k: keyof TransactionForm, v: string) => setForm((f) => ({ ...f, [k]: v }));
 

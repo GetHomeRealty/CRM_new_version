@@ -66,4 +66,42 @@ export class TradeNumberService {
     }
     return String(candidate) + s.suffix;
   }
+
+  /** The band a type belongs to, for callers validating a manually-chosen number. */
+  seriesFor(type: string): Series {
+    return SERIES[BY_TYPE[type] ?? 'buying'];
+  }
+
+  /*
+   * Why this hand-picked trade number cannot be used, or null if it can.
+   *
+   * A number may be chosen by hand - filing a historical deal under the number it already
+   * carried - but it must still belong to its type's band, or the bands stop meaning anything
+   * and the next automatic allocation walks into it. Three ways it can be wrong, each answered
+   * separately, because "invalid" tells somebody nothing about which of the three they hit.
+   *
+   * Returns a SENTENCE, not a boolean: the caller shows it to a person who has just typed a
+   * number, or puts it in the import review table beside the row that carried it.
+   */
+  async manualProblem(db: Tx, type: string, raw: unknown): Promise<string | null> {
+    const s = this.seriesFor(type);
+    const value = String(raw ?? '').trim();
+    if (!value) return null;
+    const m = /^(\d{6})(_NB)?$/.exec(value);
+    const shape = s.suffix ? `six digits followed by ${s.suffix}` : 'six digits';
+    if (!m) return `"${value}" is not a trade number. Use ${shape} - for example ${s.start}${s.suffix}.`;
+    if ((m[2] ?? '') !== s.suffix) {
+      return `"${value}" has the wrong form for a ${s.label} deal. Use ${shape} - for example ${s.start}${s.suffix}.`;
+    }
+    const n = parseInt(m[1], 10);
+    if (n < s.start || n > s.end) {
+      return `${value} is outside the ${s.label} series (${s.start}-${s.end}). Each transaction type keeps its own range, so a ${s.label} deal cannot take a number from another one.`;
+    }
+    const taken = await db.transactions.findFirst({ where: { trade_no: value }, select: { property: true } });
+    if (taken) {
+      const where = taken.property ? ` (${taken.property})` : '';
+      return `Trade number ${value} is already assigned${where}. Choose another, or leave it blank to have one allocated.`;
+    }
+    return null;
+  }
 }

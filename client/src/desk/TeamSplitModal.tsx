@@ -83,7 +83,7 @@ export default function TeamSplitModal({ open, onClose, transactionId, primaryAg
     message: `Remove team member "${members[i]?.name || `#${i + 1}`}" from the split?`,
     linked: [
       'Commission splits & per-agent totals in Financial Information',
-      'Agent breakdown / per-agent status in the Agent FAQ Center',
+      'Agent breakdown / per-agent status in Agent Payment Readiness',
       'Signatories on the Notice of Sale',
     ],
     note: 'Remaining splits may no longer total 100% — adjust before saving.',

@@ -11,6 +11,8 @@ export interface TrashedTransaction {
   agent?: string;
   price?: number | string;
   deleted_at?: string;
+  /** TD-091 — who actually removed it, resolved from the audit trail. Null on pre-trail rows. */
+  deleted_by?: string | null;
   requested_by?: string;
   reason?: string;
   [key: string]: unknown;
@@ -80,6 +82,8 @@ export interface DeletionLogEntry {
   field?: string;
   details?: string;
   old_value?: string | null;
+  /** TD-019 — a `common`-domain deletion, shown in both areas' logs rather than owned by either. */
+  shared?: boolean;
   transaction_id?: number | string | null;
   trade_no?: number | string;
   transaction_trashed?: boolean;

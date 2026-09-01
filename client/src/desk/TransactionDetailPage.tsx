@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties, type Reac
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { getTransaction, updateTransaction, listAgents, generateTransactionInvoices, getCompanySettings, getCustomers, getBrokerageSuggestions, requestTransactionEdit, approveEditRequest, rejectEditRequest, reviewAgentChanges, rejectAgentChange, requestTransactionDeletion, forwardDeleteRequest, approveDeleteRequest, rejectDeleteRequest, getDocuments, markTransactionReviewsSeen, bulkReviewAction, type OpenReviewItem } from '../lib/api';
 import ReviewHistoryPanel from './ReviewHistoryPanel';
-import { typeClass, typeLabel, isListingType, isListingFinancialType, isListingStatusFamily, isPreconType, isCommercialLeaseType, isInvoiceableType, emailLooksValid, parseNumber, TRANSACTION_TYPES, statusOptionsFor, normalizeStatus, defaultStatusFor } from './format';
+import { typeClass, typeLabel, isListingType, isListingFinancialType, isListingStatusFamily, isPreconType, isCommercialLeaseType, isInvoiceableType, emailLooksValid, phoneLooksValid, parseNumber, TRANSACTION_TYPES, statusOptionsFor, normalizeStatus, defaultStatusFor } from './format';
 import { useToast } from './toast';
 import { apiErrorMessage } from '../lib/apiError';
 import { useAuth } from '../context/AuthContext';
@@ -170,6 +170,9 @@ function validateForm(form: DetailForm): string | null {
   for (const c of form.clients) {
     if (!c.name?.trim()) return 'Each client needs a name';
     if (c.email && !emailLooksValid(c.email)) return 'Invalid client email';
+    // TD-028 — phone was the one field on this row nobody checked, so 'abc-not-a-phone' saved and
+    // then went out on a Deposit Receipt. Same rule the API applies, so the two cannot disagree.
+    if (c.phone && !phoneLooksValid(c.phone)) return 'Invalid client phone number';
   }
   return null;
 }
@@ -478,7 +481,7 @@ export default function TransactionDetailPage() {
   const rmClient = (i: number) => askDelete({
     title: 'Delete client?',
     message: `Remove client "${form.clients[i]?.name || `#${i + 1}`}" from this transaction?`,
-    linked: ['Notice of Sale buyers/sellers', 'Invoice customer details', 'Agent FAQ document clearance'],
+    linked: ['Notice of Sale buyers/sellers', 'Invoice customer details', 'Document clearance in Agent Payment Readiness'],
     note: 'The change is saved automatically a moment after you confirm.',
     onConfirm: () => setForm((f) => (f ? { ...f, clients: f.clients.filter((_, idx) => idx !== i) } : f)),
   });
@@ -489,7 +492,7 @@ export default function TransactionDetailPage() {
   const rmCond = (i: number) => askDelete({
     title: 'Delete condition?',
     message: `Remove condition "${form.conditions[i]?.custom_name || form.conditions[i]?.type || `#${i + 1}`}"?`,
-    linked: ['Its matching row in Legal & Documentation (and any files uploaded to it)', 'Document clearance / Final Validation in Agent FAQ'],
+    linked: ['Its matching row in Legal & Documentation (and any files uploaded to it)', 'Document clearance / Final Validation in Agent Payment Readiness'],
     note: 'The change is saved automatically a moment after you confirm.',
     onConfirm: () => setForm((f) => (f ? { ...f, conditions: f.conditions.filter((_, idx) => idx !== i) } : f)),
   });
@@ -602,7 +605,7 @@ export default function TransactionDetailPage() {
   const slHideBasic = stActive || stTerminated; // hide Offer/Closing dates, Co-op Brokerage, Conditional Offer
   const slHideLawyer = stActive || stSoldCond || stTerminated;
   const slMarkVerifiedHidden = stActive || stTerminated; // Sold Conditional / Sold keep Mark Verified
-  const slNoSections = stTerminated; // no Admin / Financial / Agent FAQ; hide Team Split
+  const slNoSections = stTerminated; // no Admin / Financial / Agent Payment Readiness; hide Team Split
 
   // §5.1 — DFT / Closed lock direct edits; Admins request, Super Admin approves.
   const stClosed = form.statuses.includes('Closed');
@@ -1102,7 +1105,19 @@ export default function TransactionDetailPage() {
               {!isAgent && !docsOnly && !slNoSections && canEdit && <button className="btn ghost sm" style={{ textAlign: 'left' }} onClick={() => setAdminOpen(true)}><Icon name="wrench" size={13} /> Admin</button>}
               {!docsOnly && !slNoSections && canEdit && <button className="btn ghost sm" style={{ textAlign: 'left' }} onClick={() => setFinOpen(true)}><Icon name="dollar" size={13} /> Financial</button>}
               {!isAgent && !docsOnly && canEdit && <button className="btn ghost sm" style={{ textAlign: 'left' }} onClick={() => setAdjOpen(true)}><Icon name="scale" size={13} /> Adjustment</button>}
-              {!docsOnly && !slNoSections && canEdit && <button className="btn ghost sm" style={{ textAlign: 'left' }} onClick={() => setFaqOpen(true)}><Icon name="analytics" size={13} /> Agent FAQ Center</button>}
+              {/*
+                TD-049 — was "Agent FAQ Center", which described nothing in it. The panel is the
+                agent-payment readiness workflow, and under the old name the people who needed it
+                had no reason to open it.
+
+                THE RENAME IS THE LABEL ONLY, deliberately. `AgentFaqModal`, `setFaqOpen` and the
+                rest keep their names, and so do two stored strings: the audit entries written with
+                section 'Quick Actions — Agent FAQ', because renaming those would leave new rows
+                disagreeing with years of history in the one record that exists to be consistent;
+                and the `agent_faq.batch_review` mail template, whose key identifies saved
+                templates in the database.
+              */}
+              {!docsOnly && !slNoSections && canEdit && <button className="btn ghost sm" style={{ textAlign: 'left' }} onClick={() => setFaqOpen(true)}><Icon name="analytics" size={13} /> Agent Payment Readiness</button>}
               {!isAgent && <button className="btn ghost sm" style={{ textAlign: 'left' }} onClick={() => setAuditOpen(true)}><Icon name="clipboard" size={13} /> Audit Trail</button>}
               {!canEdit && <span className="help" style={{ margin: '4px 0 0' }}>Read-only access — editing actions are hidden.</span>}
             </div>

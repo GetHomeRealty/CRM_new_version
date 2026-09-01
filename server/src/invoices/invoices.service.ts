@@ -560,7 +560,21 @@ export class InvoicesService {
       customer_phone: (data.customer_phone ?? null) as string | null,
       customer_email: (data.customer_email ?? null) as string | null,
       discount: (data.discount ?? 0) as number,
-      tax_rate: data.tax_rate !== undefined && data.tax_rate !== null && data.tax_rate !== '' ? Number(data.tax_rate) : null,
+      /*
+       * TD-093 — `undefined` when the caller sends nothing, so Prisma leaves the column alone.
+       *
+       * This was `null`, and every other field here follows that same absent-means-clear rule. The
+       * rate cannot: an edit that did not mention tax sent null, `this.rate(null, default)` below
+       * then fell back to whatever the CURRENT company default is, and the invoice was silently
+       * restated at a rate it was never raised at. Changing `default_tax_rate` and then touching an
+       * old invoice would have rewritten its tax — which is exactly the risk this defect's remarks
+       * asked to be checked.
+       *
+       * Clearing it is not offered because it is no longer a field anyone fills in: `recalculate`
+       * always records the rate it applied. An explicit value still wins, so a deliberate override
+       * works as before.
+       */
+      tax_rate: data.tax_rate !== undefined && data.tax_rate !== null && data.tax_rate !== '' ? Number(data.tax_rate) : undefined,
       customer_notes: (data.customer_notes ?? null) as string | null,
       terms_conditions: (data.terms_conditions ?? null) as string | null,
       signature_path: (data.signature_path ?? null) as string | null,

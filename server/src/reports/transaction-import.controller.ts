@@ -2,6 +2,7 @@ import { BadRequestException, Body, Controller, Get, HttpCode, Param, Post, Quer
 import type { Response } from 'express';
 import { AuthGuard } from '../auth/guards/auth.guard';
 import { ScreenGuard } from '../auth/guards/screen.guard';
+import { AdminGuard } from '../auth/guards/admin.guard';
 import { CurrentUser, Screen } from '../auth/decorators';
 import type { AuthUserRecord } from '../auth/auth.types';
 import { TransactionImportService } from './transaction-import.service';
@@ -11,13 +12,29 @@ const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.s
 const MAX_UPLOAD_BYTES = 8 * 1024 * 1024;
 
 /**
- * Bulk transaction import. Creating transactions requires the `transactions` edit
- * permission — importing is simply doing that many times, so it is gated identically.
+ * Bulk transaction import — SUPER ADMIN ONLY (TD-103).
+ *
+ * This comment used to say that importing is creating transactions many times, so it is gated
+ * identically on `transactions: edit`. That was never quite what the code did — the service already
+ * singled out agents and refused them — and it is not the intent the product documents: TD-057 and
+ * TD-103 both record bulk import as Super Admin work.
+ *
+ * Under the old rule FOUR roles could run a real import, because `transactions: edit` is held by
+ * admin, manager, agent, accounting and documentation. Agents were refused in the service; nobody
+ * else was. Accounting — a billing seat — could create transactions in bulk, and the three read
+ * routes answered 200 to it: the history names who uploaded what and when, and `template`/`sample`
+ * took no user at all, so nothing could have refused them.
+ *
+ * `AdminGuard` is the fix because it covers EVERY route on the controller, including those two that
+ * have no `@CurrentUser()` to check, and it answers with the same 'Administrator access required.'
+ * that `/api/users` already gives this role. `ScreenGuard` is kept in front of it rather than
+ * replaced: a seat with no transactions access at all should be turned away by the module gate, not
+ * by the tier gate.
  */
 // NOT mounted under /transactions — a bare GET there would be swallowed by the
 // TransactionsController's `:transaction` route and return a single transaction instead.
 @Controller('transaction-imports')
-@UseGuards(AuthGuard, ScreenGuard)
+@UseGuards(AuthGuard, ScreenGuard, AdminGuard)
 @Screen('transactions', 'edit')
 export class TransactionImportController {
   constructor(private readonly imports: TransactionImportService) {}

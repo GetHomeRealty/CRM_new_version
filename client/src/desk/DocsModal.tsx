@@ -124,7 +124,7 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
       const res = await saveDocuments(transactionId, docPayload(), { reco_audit_ready: recoReady || null, reco_audit_remarks: recoReady === 'No' ? recoRemarks : null });
       setDocs(res.documents || []); setClients(res.clients || []);
       setRecoReady(res.reco_audit_ready || ''); setRecoRemarks(res.reco_audit_remarks || '');
-      // Refresh the parent transaction so the Agent FAQ "Valid Docs Cleared" flag is never stale.
+      // Refresh the parent transaction so Agent Payment Readiness' "Valid Docs Cleared" flag is never stale.
       onSaved?.();
       toast(agentMode ? 'Documents submitted — the admin team has been notified.' : 'Documents saved', 'ok');
     } catch { toast('Could not save documents', 'bad'); } finally { setSaving(false); }

@@ -123,6 +123,36 @@ export function statusOptionsFor(type: string): string[] {
   return STATUS_DEAL;
 }
 
+/**
+ * TD-029 — statuses a person may PICK for a type: the type's vocabulary, less the automatic ones.
+ *
+ * The create modal used to carry its own `.filter(s => s !== 'Expired' && s !== 'Closed')`, which is
+ * how a deal became impossible to file as Closed even though the API accepts it. Only `Expired`
+ * is genuinely unpickable, because a listing expiry sets it; excluding `Closed` was a rule nothing
+ * else in the system shared.
+ */
+export const pickableStatusesFor = (type: string): string[] =>
+  statusOptionsFor(type).filter((s) => !AUTO_STATUSES.includes(s));
+
+/**
+ * TD-029 — every status any transaction type can hold, for filtering a list that mixes them.
+ *
+ * Derived rather than typed out. The list filter used to hold its own hardcoded eleven, which
+ * disagreed with the vocabulary in both directions: it offered `Open` and `Leased` on types that
+ * reject them, and — the half nobody noticed — it had no `Sold Conditional`, `Lease Conditional`,
+ * `Secured Firm` or `Secured Conditional`, so conditional and secured deals could not be filtered
+ * for at all. `Expired` is included here, unlike `pickableStatusesFor`: it cannot be chosen, but a
+ * deal certainly reaches it and has to be findable.
+ *
+ * Sorted, not in first-seen order. Fifteen statuses drawn from every type do not share a lifecycle
+ * — one type's `Secured Firm` has no position relative to another's `Sold Conditional` — so the
+ * sequence would be an artefact of the order the types happen to be declared in. Alphabetical is
+ * the order somebody can predict while looking for one entry, which is what a filter is for.
+ */
+export const ALL_STATUSES: string[] = Array.from(
+  new Set(TRANSACTION_TYPES.flatMap((t) => statusOptionsFor(t))),
+).sort((a, b) => a.localeCompare(b));
+
 // Secured deal types start with NO status (the user picks Secured Firm/Conditionally).
 export const defaultStatusFor = (type: string): string =>
   (isListingStatusFamily(type) ? 'Active' : (SECURED_DEAL_TYPES.includes(type) ? '' : 'Open'));
@@ -172,6 +202,17 @@ export function normalizeStatus(type: string, s: string): string {
 }
 
 export const emailLooksValid = (s: string | null | undefined): boolean => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test((s || '').trim());
+
+/**
+ * TD-028 — at least seven digits, however they are punctuated.
+ *
+ * The same rule and the same threshold as the API's check in `transactions-write.service.ts`, which
+ * in turn takes it from `normalizePhone`. A digit count rather than a pattern, so international
+ * numbers and extensions are not refused: the point is to catch text that is not a number at all,
+ * not to impose a North-American format on a brokerage that does not only write them that way.
+ */
+export const phoneLooksValid = (s: string | null | undefined): boolean =>
+  (s || '').replace(/\D/g, '').length >= 7;
 
 // ISO week number (ported from getWeekNumber in app.js).
 function isoWeek(d: Date): number {

@@ -26,6 +26,23 @@ import { isAdminOrAbove, isAgent, isSuperAdmin } from '../core/authz';
 import { ownsTransaction, teamMemberIdentity } from '../common/transaction-scope';
 type Tx = Prisma.TransactionClient;
 
+/**
+ * TD-028 — the same shape the Calendar and the browser already use, so a client email is judged by
+ * one rule wherever it is entered.
+ */
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/**
+ * TD-028 — the fewest digits that can be a telephone number.
+ *
+ * Seven is `normalizePhone`'s own threshold (`meta/meta-lead-mapper.ts`), reused so the Desk and the
+ * CRM do not disagree about what a phone number is. Deliberately a digit COUNT and not a pattern:
+ * the brokerage takes international numbers and numbers with extensions, and a stricter rule would
+ * reject real ones — which is a worse outcome than accepting an oddly-punctuated real number. It
+ * still refuses what this defect was raised for, because 'abc-not-a-phone' contains no digits.
+ */
+const PHONE_MIN_DIGITS = 7;
+
 const REVERT_BOOL = new Set(['comm_adjust_enabled', 'listing_adj_enabled', 'coop_adj_enabled', 'precon_net_of_hst', 'mls_verified', 'conditional_offer', 'inter_board_enabled']);
 const REVERT_DATE = new Set(['offer_date', 'closing_date', 'listing_contract_date', 'listing_expiry_date']);
 const isListingFinancial = (type: string): boolean => isListingType(type) || type === 'Business Sale';
@@ -121,48 +138,102 @@ export class TransactionsWriteService {
   /** Create a transaction (port of TransactionController::store). */
   async store(user: AuthUserRecord | null, body: Record<string, unknown>): Promise<{ data: Record<string, unknown> }> {
     const type = String(body.type ?? '');
-    this.req(body, 'type');
+    const isListing = isListingType(type);
+
+    /*
+     * TD-113 - every problem this can see, in one reply.
+     *
+     * The checks ran one at a time and threw on the first, so a create carrying only a type came
+     * back naming ONLY the property - while price, offer date, closing date and commission type
+     * were missing too. An integration or a migration script discovered the required fields one
+     * round trip at a time. The product already does better in the importer, which reports every
+     * fault on a row together with a correction for each, so this was inconsistent as well as
+     * unhelpful.
+     *
+     * WHICH FIELDS ARE ASKED FOR DEPENDS ON THE TYPE, so an unknown type reports only the three
+     * that every deal needs. Listing the deal-side fields as "required" next to a type error would
+     * be inventing requirements the caller may not have — a listing needs none of them — and the
+     * type error is the one to fix first anyway.
+     *
+     * The status VOCABULARY check joins the same reply rather than following in a later one, but
+     * only when it can be judged: a status can only be wrong for a type that is known.
+     */
+    /*
+     * The KEYS in `errors` stay exactly as they are — they are the API's contract and callers match
+     * on them. Only the human label changes, and only for the two that read as jargon: underscore
+     * stripping alone turns `comm_type` into "comm type", which was tolerable when it appeared
+     * alone and reads badly in a list of seven. "Commission Type" is what the screen and the import
+     * template already call it.
+     */
+    const LABELS: Record<string, string> = { comm_type: 'commission type', comm_value: 'commission value' };
+    const label = (f: string): string => LABELS[f] ?? f.replace(/_/g, ' ');
+    const blank = (v: unknown): boolean => v === undefined || v === null || v === '';
+    const knownType = (TRANSACTION_TYPES as readonly string[]).includes(type);
+
+    const required = ['type', 'property', 'status'];
+    if (knownType && !isListing) required.push('comm_type', 'comm_value', 'price', 'offer_date', 'closing_date');
+
+    const errors: Record<string, string[]> = {};
+    const missing = required.filter((f) => blank(body[f]));
+    for (const f of missing) errors[f] = [`The ${label(f)} field is required.`];
+
     /*
      * TD-068 ON CREATE. The catalogue check existed only on update; creation required a type to be
      * PRESENT and then stored whatever arrived - POST with 'Sale Listing', and even 'zzz-not-a-type',
      * both returned 201. Every later rule keys off the type: which statuses it may hold, which
      * documents it generates, how its commission is worked out. Found by REG-TR-027 on 2026-08-31.
-     */
-    if (!(TRANSACTION_TYPES as readonly string[]).includes(type)) {
-      const m = `"${type}" is not a transaction type this system offers. Allowed: ${TRANSACTION_TYPES.join(', ')}.`;
-      throw new UnprocessableEntityException({ message: m, errors: { type: [m] } });
-    }
-    this.req(body, 'property');
-    this.req(body, 'status');
-    const isListing = isListingType(type);
-    /*
-     * A LISTING THAT HAS SOLD CARRIES ITS MONEY. An unsold listing does not.
      *
-     * Creation used to force price, offer date and closing date to nothing for EVERY listing,
-     * on the reasoning that a listing has no offer terms - true while it is on the market, and
-     * false the moment it sells. update() has always allowed those fields, so the only effect
-     * was to make you create the deal and immediately edit it to add what you already knew.
-     * It also made bulk import unable to bring in historical sold listings at all: they arrived
-     * priced at zero, and a listing commission is a percentage OF THE PRICE, so they arrived
-     * earning nothing.
-     *
-     * Sold, Leased and Closed mean the deal transacted. Active, Suspended, Terminated, Expired
-     * and Void do not, and on those a sale price would be a number describing nothing.
+     * Kept exactly as strict, but reported through the same collection as everything else (TD-113)
+     * rather than thrown on sight, so a caller who sent an unknown type AND left fields out learns
+     * both in one reply. A blank type is already covered above as a missing field, so this only
+     * speaks when something was actually supplied.
      */
-    const LISTING_TRANSACTED = ['Sold', 'Leased', 'Closed'];
-    const soldListing = isListing && LISTING_TRANSACTED.includes(String(body.status ?? '').trim());
-    const noOfferTerms = isListing && !soldListing;
-    if (!isListing) {
-      for (const f of ['comm_type', 'comm_value', 'price', 'offer_date', 'closing_date']) this.req(body, f);
+    if (!blank(body.type) && !knownType) {
+      errors.type = [`"${type}" is not a transaction type this system offers. Allowed: ${TRANSACTION_TYPES.join(', ')}.`];
     }
+
     // The status the deal is being opened with has to exist for the type. Creation takes a single
     // status, so the only rule that can bite here is the vocabulary one — but a deal created
     // through the API with `status: 'Expired'` on a Residential Buying was accepted, and every
     // later save inherited it.
-    if (body.status !== undefined && body.status !== null && body.status !== '') {
+    if (knownType && !blank(body.status)) {
       const problem = statusSetProblem(type, [String(body.status)]);
-      if (problem) throw new UnprocessableEntityException({ message: problem, errors: { status: [problem] } });
+      if (problem) errors.status = [problem];
     }
+
+    if (Object.keys(errors).length) {
+      const sentences: string[] = [];
+      if (missing.length === 1) sentences.push(`The ${label(missing[0])} field is required.`);
+      else if (missing.length > 1) {
+        const names = missing.map(label);
+        sentences.push(`The ${names.slice(0, -1).join(', ')} and ${names[names.length - 1]} fields are required.`);
+      }
+      // Anything that is not a missing-field message, so `message` says as much as `errors` does —
+      // a caller that only displays `message` should not have to ask twice either.
+      for (const [field, msgs] of Object.entries(errors)) if (!missing.includes(field)) sentences.push(...msgs);
+      throw new UnprocessableEntityException({ message: sentences.join(' '), errors });
+    }
+
+    /*
+     * A LISTING THAT HAS SOLD CARRIES ITS MONEY. An unsold listing does not.
+     *
+     * Creation forced price, deposit, offer date and closing date to nothing for EVERY listing,
+     * on the reasoning that a listing has no offer terms - true while it is on the market, and
+     * false the moment it sells. update() has always allowed those fields, so the only effect was
+     * to make somebody create the deal and immediately edit it. It also made bulk import unable to
+     * carry a historical sold listing: it arrived priced at zero, and a listing commission is a
+     * percentage OF THE PRICE, so it arrived earning nothing (TD-126).
+     *
+     * This sits alongside the required-field rule above rather than contradicting it. A listing
+     * REQUIRES none of these - that is why they are pushed onto `required` only for non-listings -
+     * and a SOLD one may nonetheless carry them. Not required and not forbidden are compatible.
+     *
+     * Sold, Leased and Closed mean the deal transacted. Active, Suspended, Terminated, Expired and
+     * Void do not, and on those a sale price would be a number describing nothing.
+     */
+    const LISTING_TRANSACTED = ['Sold', 'Leased', 'Closed'];
+    const soldListing = isListing && LISTING_TRANSACTED.includes(String(body.status ?? '').trim());
+    const noOfferTerms = isListing && !soldListing;
 
     const creatorAgent = user && isAgent(user) ? user.name : null;
     const commType = isListing ? '%' : String(body.comm_type ?? '%');
@@ -247,11 +318,11 @@ export class TransactionsWriteService {
     return this.loadResource(txnId, user, ['mls_type', 'precon_listing_type', 'precon_details_of_terms']);
   }
 
-  private req(body: Record<string, unknown>, field: string): void {
-    if (body[field] === undefined || body[field] === null || body[field] === '') {
-      throw new UnprocessableEntityException({ message: `The ${field.replace(/_/g, ' ')} field is required.`, errors: { [field]: [`The ${field.replace(/_/g, ' ')} field is required.`] } });
-    }
-  }
+  /*
+   * TD-113 — `req()` stood here: one field, throwing immediately. Removed rather than left unused,
+   * because a throw-on-first helper sitting beside a collect-then-throw one is an invitation to
+   * reintroduce the defect on the next required field somebody adds.
+   */
 
   /**
    * Extract distinguishing address features that must NOT be fuzzed over: directional
@@ -416,6 +487,39 @@ export class TransactionsWriteService {
         const m = 'The deposit cannot be larger than the purchase price.';
         throw new UnprocessableEntityException({ message: m, errors: { deposit: [m] } });
       }
+    }
+
+    /*
+     * TD-028 - client records, checked by the API rather than only by the browser.
+     *
+     * The sub-form refuses a nameless client and an invalid email, and the API refused nothing at
+     * all: an empty name stored with a 200, 'not-an-email' stored with a 200, and a phone of
+     * 'abc-not-a-phone' stored verbatim. So every rule the screen enforced could be walked past by
+     * an import, an integration or a direct call - and these values are not decorative, they are
+     * what a Deposit Receipt and a Notice of Sale are addressed with.
+     *
+     * The row is NAMED IN THE MESSAGE. A payload carrying four clients that fails on the third is
+     * useless feedback if the reply only says "a client is invalid", and this endpoint is the one
+     * an integration talks to.
+     *
+     * Only when `clients` is submitted, like every rule above: a save that does not touch the
+     * clients is not the place to litigate rows somebody else stored years ago.
+     */
+    if (Object.prototype.hasOwnProperty.call(data, 'clients')) {
+      const submittedClients = Array.isArray(data.clients) ? (data.clients as Record<string, unknown>[]) : [];
+      submittedClients.forEach((c, idx) => {
+        const where = String(c?.name ?? '').trim() || `Client ${idx + 1}`;
+        const fail = (m: string): never => {
+          throw new UnprocessableEntityException({ message: m, errors: { clients: [m] } });
+        };
+        if (!String(c?.name ?? '').trim()) fail(`Client ${idx + 1} needs a name.`);
+        const email = String(c?.email ?? '').trim();
+        if (email && !EMAIL_RE.test(email)) fail(`"${email}" is not a valid email address (${where}).`);
+        const phone = String(c?.phone ?? '').trim();
+        if (phone && phone.replace(/\D/g, '').length < PHONE_MIN_DIGITS) {
+          fail(`"${phone}" is not a valid phone number (${where}). It needs at least ${PHONE_MIN_DIGITS} digits.`);
+        }
+      });
     }
 
     if (Object.prototype.hasOwnProperty.call(data, 'statuses')) {

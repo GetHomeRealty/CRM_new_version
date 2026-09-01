@@ -6,6 +6,7 @@ import { AuditService } from '../audit/audit.service';
 import { InvoiceCalculator } from '../invoices/invoice.calculator';
 import { CompanySettingsService } from '../settings/company-settings.service';
 import { parseJson, round2, toDateString, toDateTimeString } from '../common/serialize';
+import { domainFilter } from '../common/domain';
 import type { AuthUserRecord } from '../auth/auth.types';
 import { STORAGE_ROOT } from '../config/storage';
 
@@ -50,6 +51,28 @@ export class RecycleBinService {
 
   // ---- Transactions ----------------------------------------------------
 
+  /**
+   * TD-091 — the bin names who removed each record, not only what and when.
+   *
+   * A row carried the trade number, the property and a precise timestamp, and `null` for the actor:
+   * `requested_by` is filled from a delete REQUEST, which only exists when an agent asked, so an
+   * administrator's own deletion named nobody. The retention screen could not answer the retention
+   * question without someone knowing to cross-reference the Deletion Log.
+   *
+   * NOTHING NEW IS RECORDED — the actor was always written, just not returned here. Both delete
+   * paths audit `action: 'Record removed'` against the transaction with the actor's name
+   * (`transactions-write.service.ts` for a direct delete, `delete-requests.service.ts` for an
+   * approved request), so this reads what is already stored. That matters beyond tidiness: no
+   * column is added, so there is no `ALTER TABLE` and nothing here depends on the application's
+   * database user owning the table.
+   *
+   * `requested_by` and `deleted_by` are BOTH kept and are genuinely different people on an approved
+   * request — the agent who asked, and the administrator who agreed. Collapsing them would lose
+   * half of the accountability the screen exists to show.
+   *
+   * The LATEST removal wins. A transaction can be deleted, restored and deleted again; the row is
+   * only in the bin because of the most recent one.
+   */
   async transactions(user: Actor): Promise<{ count: number; items: Record<string, unknown>[] }> {
     this.guard(user);
     const rows = await this.prisma.transactions.findMany({
@@ -57,6 +80,21 @@ export class RecycleBinService {
       include: { transaction_delete_requests: { orderBy: [{ created_at: 'desc' }, { id: 'desc' }] } },
       orderBy: [{ deleted_at: 'desc' }, { id: 'desc' }],
     });
+
+    // One query for the whole page rather than one per row.
+    const deletedBy = new Map<number, string>();
+    if (rows.length) {
+      const removals = await this.prisma.audit_logs.findMany({
+        where: { transaction_id: { in: rows.map((t) => t.id) }, action: 'Record removed' },
+        select: { transaction_id: true, who: true },
+        orderBy: [{ created_at: 'desc' }, { id: 'desc' }],
+      });
+      // Ordered newest first, so the first entry seen for an id is the removal that put it here.
+      for (const r of removals) {
+        if (r.transaction_id != null && r.who && !deletedBy.has(r.transaction_id)) deletedBy.set(r.transaction_id, r.who);
+      }
+    }
+
     const items = rows.map((t) => {
       const req = t.transaction_delete_requests[0] ?? null;
       return {
@@ -68,6 +106,9 @@ export class RecycleBinService {
         price: Number(t.price),
         closing_date: toDateString(t.closing_date),
         deleted_at: toDateTimeString(t.deleted_at),
+        // Null only for a record removed before the trail carried the actor — the screen says
+        // "Not recorded" there rather than inventing a name.
+        deleted_by: deletedBy.get(t.id) ?? null,
         requested_by: req?.requested_by_name ?? null,
         reason: req?.reason ?? null,
       };
@@ -264,6 +305,23 @@ export class RecycleBinService {
 
   // ---- Deletion log ----------------------------------------------------
 
+  /**
+   * TD-019 — the Transaction Desk's Deletion Log, scoped to the Transaction Desk.
+   *
+   * This asked `audit_logs` for every row whose action mentions deleting or removing, with no area
+   * restriction at all, so CRM deletions ('Campaign deleted: welcome…') were listed beside
+   * transaction deletions in a log the Recycle Bin presents as this module's own history.
+   *
+   * `domainFilter('desk')` is the rule the Audit Trail already applies, reused rather than
+   * restated — this area's rows, the genuinely shared ones (`common`, e.g. a user account), and
+   * anything still unclassified. The last two matter: dropping to `{ domain: 'desk' }` would hide
+   * rows written before the domain split from BOTH logs, which is a worse failure than the one
+   * being fixed. Rows kept because they are shared are marked as such in the payload below, so the
+   * log does not silently imply a user deletion happened inside the Desk.
+   *
+   * It goes into the existing `AND` rather than being spread into `where`: each element owns its
+   * own `OR` key, and spreading would replace the action filter above it.
+   */
   async deletions(user: Actor): Promise<{ count: number; items: Record<string, unknown>[] }> {
     this.guard(user);
     const logs = await this.prisma.audit_logs.findMany({
@@ -271,6 +329,7 @@ export class RecycleBinService {
         AND: [
           { OR: [{ action: { contains: 'delet', mode: 'insensitive' } }, { action: { contains: 'remov', mode: 'insensitive' } }] },
           { OR: [{ field: null }, { NOT: { field: { contains: 'Deletion Request', mode: 'insensitive' } } }] },
+          domainFilter('desk'),
         ],
       },
       include: { transactions: true },
@@ -286,6 +345,9 @@ export class RecycleBinService {
       details: a.details,
       old_value: a.old_value,
       source: a.source,
+      // TD-019 — 'common' rows belong to both areas; the screen marks them so a shared deletion is
+      // not read as a Transaction Desk one. `desk` and unclassified rows need no marking.
+      shared: a.domain === 'common',
       stamp: toDateTimeString(a.created_at),
       transaction_id: a.transaction_id,
       trade_no: a.transactions?.trade_no ?? null,
