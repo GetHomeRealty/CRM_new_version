@@ -179,6 +179,33 @@ function screenRoutes(area: Area): ReactElement[] {
 }
 
 /**
+ * TD-115 — addresses that name a real screen by the wrong word.
+ *
+ * A module's route key and the word people write for it are not always the same: the sidebar says
+ * "Invoice" and the module lives at `/desk/invoice`, but `/desk/invoices` is what a person types
+ * and what old links hold. That segment matched no screen, so it fell through to `StubPage`, which
+ * has no entry for it and defaults to "Coming soon."
+ *
+ * THE SAME WRONG ADDRESS TOLD TWO DIFFERENT UNTRUTHS. An agent, who genuinely has no invoice
+ * access, was told the feature does not exist yet — a module the brokerage uses daily. An
+ * ACCOUNTING user, who has full access, got a page with a working sidebar, no invoice rows and no
+ * message at all: a billing clerk arriving from a bookmark saw a brokerage with no invoices.
+ *
+ * Resolving the address fixes both, and needs no new screen. Once `/desk/invoices` lands on the
+ * real route, `RequireScreen` answers the agent with the 🔒 No access panel it already gives every
+ * other denied screen, and the accounting user simply gets their invoices. THE PERMISSION GATE IS
+ * NOT TOUCHED — it was correct throughout and only the address was wrong.
+ *
+ * `audit-trail` is here for the same reason and is separately complained about: the old address
+ * still showed "Coming soon" while the built screen sat at `/desk/audit`.
+ */
+const SCREEN_ALIASES: Record<string, string> = {
+  invoices: 'invoice',
+  leads: 'lead',
+  'audit-trail': 'audit',
+};
+
+/**
  * A segment this area does not serve.
  *
  * If it is a real screen that lives in the other area, go there rather than showing a stub —
@@ -188,8 +215,12 @@ function screenRoutes(area: Area): ReactElement[] {
 function AreaFallback({ area }: { area: Area }) {
   const { page } = useParams();
   const location = useLocation();
-  const name = page ?? '';
-  if (name && KNOWN_SCREENS.has(name) && !screenInArea(name, area)) {
+  const typed = page ?? '';
+  const name = SCREEN_ALIASES[typed] ?? typed;
+  // Redirect when the segment was an alias (wherever the real screen lives), or when it names a
+  // screen this area does not serve. An alias for a screen in THIS area still has to move, which
+  // is the case the second half alone did not cover.
+  if (name && KNOWN_SCREENS.has(name) && (name !== typed || !screenInArea(name, area))) {
     const rest = location.pathname.split('/').slice(3).join('/');
     const target = areaPath(areaFor(name), rest ? `${name}/${rest}` : name);
     return <Navigate to={`${target}${location.search}${location.hash}`} replace />;

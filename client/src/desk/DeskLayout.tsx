@@ -298,7 +298,23 @@ export default function DeskLayout({ area = DEFAULT_AREA }: { area?: Area }) {
 
   // ['', area, screen, …] — the area occupies the first segment, so the screen is still index 2.
   const seg = location.pathname.split('/')[2] || '';
-  const title = location.pathname.includes('/transactions/') ? 'Transaction Detail' : (TITLES[seg] || AREA_SHORT[area]);
+  /*
+   * TD-059 — the named sub-routes of Transactions title themselves.
+   *
+   * Anything under `/transactions/` was headed 'Transaction Detail', so Bulk Import and the
+   * Download Centre both announced themselves as a screen they are not, while the breadcrumb
+   * directly beneath correctly read 'Transactions > import' and 'Transactions > downloads'.
+   *
+   * Keyed off the sub-route rather than the presence of an id: `App.tsx` declares 'import' and
+   * 'downloads' ahead of ':id' precisely so they are not read as transaction ids, and this reads
+   * the same three paths in the same way. The titles are the ones each page already prints in its
+   * own body, so the top bar and the page agree.
+   */
+  const sub = location.pathname.split('/')[3] || '';
+  const TXN_SUB_TITLES: Record<string, string> = { import: 'Bulk Transaction Import', downloads: 'Export & Download Centre' };
+  const title = location.pathname.includes('/transactions/')
+    ? (TXN_SUB_TITLES[sub] ?? 'Transaction Detail')
+    : (TITLES[seg] || AREA_SHORT[area]);
 
   const go = (key: string) => navigate(areaPath(area, key));
 

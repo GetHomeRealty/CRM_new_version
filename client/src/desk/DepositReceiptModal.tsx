@@ -98,7 +98,7 @@ export default function DepositReceiptModal({ open, onClose, txn, settings = nul
       });
     }).catch(() => {});
   }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
-  // Deposit slips — seeded from the Agent FAQ Center uploads; each is individually
+  // Deposit slips — seeded from the Agent Payment Readiness uploads; each is individually
   // selectable for the receipt. Editing here (rotate/crop) is local to the receipt.
   const [slips, setSlips] = useState<Slip[]>(() =>
     (txn.activity_tracker?.deposit_slips || []).filter((s) => s && s.data)
@@ -270,7 +270,7 @@ export default function DepositReceiptModal({ open, onClose, txn, settings = nul
           <input type="text" value={f.cc} onChange={(e) => set('cc', e.target.value)} placeholder="Listing agent email(s), comma separated" style={{ ...inp, width: 'auto', flex: 1, minWidth: 220 }} />
         </div>
 
-        {/* Deposit slip selection (from Agent FAQ Center uploads) */}
+        {/* Deposit slip selection (from Agent Payment Readiness uploads) */}
         <div style={{ border: '1px solid var(--line)', borderRadius: 8, padding: 12, marginBottom: 14, background: '#fcfcfd' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
             <strong style={{ fontSize: 13 }}>Deposit Slips <span style={{ fontWeight: 400, color: 'var(--muted)', fontSize: 12 }}>({selectedSlips.length} selected)</span></strong>
@@ -280,7 +280,7 @@ export default function DepositReceiptModal({ open, onClose, txn, settings = nul
           </div>
           <div className="help" style={{ marginBottom: 8 }}>Tick the slip(s) to include on the receipt. Click a slip name to view it.</div>
           {slips.length === 0 ? (
-            <div className="help">No deposit slips. Upload them in the Agent FAQ Center, or attach one here.</div>
+            <div className="help">No deposit slips. Upload them in Agent Payment Readiness, or attach one here.</div>
           ) : slips.map((s, i) => (
             <div key={i} style={{ border: `1px solid ${s.included ? 'var(--brand)' : 'var(--line)'}`, borderRadius: 6, marginBottom: 6, background: '#fff' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 10px' }}>

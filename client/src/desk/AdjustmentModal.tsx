@@ -24,8 +24,8 @@ interface AdjustmentForm {
 
 // Linked-impact note shown per adjustment list when deleting a row.
 const ADJ_LINKED: Record<RowKey, string[]> = {
-  adjustment_rows: ['Agent Commission (deducted from the agent total in Financial Information)', 'Agent breakdown in the Agent FAQ Center'],
-  advance_rows: ['Agent cash-to-pay (advance is deducted in Financial Information)', 'Agent breakdown in the Agent FAQ Center'],
+  adjustment_rows: ['Agent Commission (deducted from the agent total in Financial Information)', 'Agent breakdown in Agent Payment Readiness'],
+  advance_rows: ['Agent cash-to-pay (advance is deducted in Financial Information)', 'Agent breakdown in Agent Payment Readiness'],
   client_rows: ['“Commissions after client referral” in Financial Information', 'Client referral totals'],
 };
 const ADJ_TITLE: Record<RowKey, string> = { adjustment_rows: 'agent adjustment', advance_rows: 'advance payment', client_rows: 'client referral' };

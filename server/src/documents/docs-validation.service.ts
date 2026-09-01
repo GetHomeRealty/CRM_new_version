@@ -6,7 +6,9 @@ import { parseJsonObject, phpJsonNormalize } from '../common/serialize';
 interface DocRow { status: string; validation: string }
 
 /**
- * Keeps the Agent FAQ Center in sync with the Legal & Documentation checklist
+ * Keeps Agent Payment Readiness (TD-049: the panel formerly labelled Agent FAQ Center, whose
+ * stored audit section still reads 'Agent FAQ' so history stays consistent) in sync with the
+ * Legal & Documentation checklist
  * (port of DocsValidationService). When every document is Received + Valid,
  * "Valid Docs Cleared from Agent" auto-sets to Yes; reverts to No otherwise.
  */

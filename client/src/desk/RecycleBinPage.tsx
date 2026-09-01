@@ -123,9 +123,15 @@ export default function RecycleBinPage() {
         <>
           {tab === 'transactions' && (
             <table className="list-table">
-              <thead><tr><th>Trade #</th><th>Type</th><th>Property</th><th>Agent</th><th>Price</th><th>Deleted</th><th>Requested by</th><th>Actions</th></tr></thead>
+              {/*
+                TD-091 — 'Deleted by' sits beside 'Deleted', so the bin answers what, when AND who
+                without a trip to the Deletion Log. It is a separate column from 'Requested by':
+                on an approved agent request those are two different people, the agent who asked
+                and the administrator who agreed.
+              */}
+              <thead><tr><th>Trade #</th><th>Type</th><th>Property</th><th>Agent</th><th>Price</th><th>Deleted</th><th>Deleted by</th><th>Requested by</th><th>Actions</th></tr></thead>
               <tbody>
-                {data.transactions.length === 0 ? <tr><td colSpan={8} className="empty-cell">No deleted transactions. 🎉</td></tr>
+                {data.transactions.length === 0 ? <tr><td colSpan={9} className="empty-cell">No deleted transactions. 🎉</td></tr>
                   : data.transactions.map((t) => (
                     <tr key={t.id}>
                       <td><strong>{t.trade_no}</strong></td>
@@ -134,6 +140,8 @@ export default function RecycleBinPage() {
                       <td>{t.agent || '—'}</td>
                       <td>{formatCurrency(t.price)}</td>
                       <td style={{ whiteSpace: 'nowrap' }}>{t.deleted_at || '—'}</td>
+                      {/* "Not recorded" rather than an em dash: an unknown actor is a fact about the record, not an empty cell. */}
+                      <td>{t.deleted_by || <span className="muted" style={{ fontSize: 12 }}>Not recorded</span>}</td>
                       <td>{t.requested_by || '—'}{t.reason ? <div style={{ fontSize: 11, color: 'var(--muted)' }} title={t.reason}>{t.reason.length > 40 ? `${t.reason.slice(0, 40)}…` : t.reason}</div> : null}</td>
                       <td>{actions('transactions', t.id, `Trade #${t.trade_no}`, ['Documents, invoices, adjustments, admin activities and history for this transaction'])}</td>
                     </tr>
@@ -228,7 +236,8 @@ export default function RecycleBinPage() {
 
           {tab === 'log' && (
             <>
-              <div className="help" style={{ margin: '0 0 10px 2px' }}>A read-only history of everything admins or agents deleted across the app. Recover items from their tab: <strong>Transactions</strong>, <strong>Documents</strong>, <strong>Invoices</strong>, and <strong>Payments</strong> (which also holds deleted commission &amp; adjustment rows).</div>
+              {/* TD-019 — "across the app" was the old, unscoped behaviour; say what this log covers now. */}
+              <div className="help" style={{ margin: '0 0 10px 2px' }}>A read-only history of what admins or agents deleted in the Transaction Desk, plus shared records such as user accounts (marked <strong>Shared</strong>). CRM deletions are in the CRM&apos;s own trail. Recover items from their tab: <strong>Transactions</strong>, <strong>Documents</strong>, <strong>Invoices</strong>, and <strong>Payments</strong> (which also holds deleted commission &amp; adjustment rows).</div>
               <table className="list-table">
                 <thead><tr><th>When</th><th>Who</th><th>What</th><th>Item</th><th>Detail</th><th>Transaction</th></tr></thead>
                 <tbody>
@@ -237,7 +246,12 @@ export default function RecycleBinPage() {
                       <tr key={e.id}>
                         <td style={{ whiteSpace: 'nowrap', fontSize: 12 }}>{e.stamp || '—'}</td>
                         <td>{e.who || '—'}</td>
-                        <td><span className="pill bad" style={{ fontSize: 10 }}>{e.action}</span>{e.section ? <div style={{ fontSize: 11, color: 'var(--muted)' }}>{e.section}</div> : null}</td>
+                        <td>
+                          <span className="pill bad" style={{ fontSize: 10 }}>{e.action}</span>
+                          {/* TD-019 — a shared record belongs to both areas; say so rather than let it read as a Desk deletion. */}
+                          {e.shared && <span className="pill info" style={{ fontSize: 10, marginLeft: 4 }} title="A shared record — this deletion also appears in the CRM's log">Shared</span>}
+                          {e.section ? <div style={{ fontSize: 11, color: 'var(--muted)' }}>{e.section}</div> : null}
+                        </td>
                         <td>{e.field || '—'}</td>
                         <td style={{ maxWidth: 220, fontSize: 12, color: 'var(--muted)' }}>{e.details || e.old_value || '—'}</td>
                         <td>{txnCell(e.transaction_id, e.trade_no, e.transaction_trashed)}</td>

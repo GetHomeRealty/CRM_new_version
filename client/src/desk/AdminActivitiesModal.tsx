@@ -13,7 +13,7 @@ import type {
   PaidLawyer, RecvLawyer, TaCta, TeamMemberData, Transaction,
 } from '../types';
 
-const PAY_LINKED = ['Agent payment / T4A history in Admin Activities', 'Agent breakdown in the Agent FAQ Center'];
+const PAY_LINKED = ['Agent payment / T4A history in Admin Activities', 'Agent breakdown in Agent Payment Readiness'];
 
 const lbl: CSSProperties = { fontSize: 11.5, color: 'var(--text-2)', fontWeight: 600, marginBottom: 5, display: 'block' };
 

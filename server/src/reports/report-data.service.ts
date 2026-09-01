@@ -64,7 +64,7 @@ export interface EnrichedTxn {
   total: Triple;                // transaction total commission (§9A)
   agentComm: Triple;            // agent commission totals (§9B, scoped)
   brokerageComm: Triple;        // brokerage split totals, excl. min brokerage (§9D)
-  agent_payment_status: string; // from Agent FAQ Center agent_commission_paid_status
+  agent_payment_status: string; // from Agent Payment Readiness agent_commission_paid_status
   agent_paid: number;           // agent commission actually paid (admin_activities)
   agent_paid_date: string | null;
   any_agent_paid: boolean;
@@ -680,7 +680,7 @@ export class ReportDataService {
   }
 
   /**
-   * Agent payment status. Source of truth is Agent FAQ Center → Agent Commission Paid Status;
+   * Agent payment status. Source of truth is Agent Payment Readiness → Agent Commission Paid Status;
    * where that is unset we derive a transaction-level status across every split agent:
    *   all agents paid → Paid · some paid → Partially Paid · none paid → Pending (Upcoming
    *   while the deal is still open) · no commission payable → Not Applicable.

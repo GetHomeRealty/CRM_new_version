@@ -120,7 +120,7 @@ const MENTIONS = (column: 'adjustments' | 'admin_activities' | 'activity_tracker
 
 /**
  * Agent commission payment statuses, as derived in ReportDataService.agentPaymentStatus():
- * Agent FAQ Center → Agent Commission Paid Status, else all/some/no split agents paid.
+ * Agent Payment Readiness → Agent Commission Paid Status, else all/some/no split agents paid.
  */
 export const AGENT_PAYMENT_STATUSES = ['Paid', 'Partially Paid', 'Pending', 'Upcoming', 'Not Applicable'];
 
@@ -297,14 +297,14 @@ export const REPORTS: ReportDef[] = [
     filters: [],
     defaultSort: { key: 'closing_date', dir: 'desc' },
     /*
-     * 'Paid' has exactly two sources — the Agent FAQ Center flag, or a Paid payment row for every
+     * 'Paid' has exactly two sources — the Agent Payment Readiness flag, or a Paid payment row for every
      * split agent — so a deal that answers Paid must mention one of them. The CTA side is the
      * ABSENCE of a transfer and has no superset, so it is not narrowed.
      */
     sqlWhere: () => ({
       OR: [MENTIONS('activity_tracker', 'agent_commission_paid_status'), MENTIONS('admin_activities', 'Paid')],
     }),
-    // Agent commission fully paid (Agent FAQ Center), but the CTA → BA transfer has not been
+    // Agent commission fully paid (Agent Payment Readiness), but the CTA → BA transfer has not been
     // done (Admin Activities → CTA to BA = No; a null/blank CTA row is treated as "No").
     predicate: (t) => t.agent_payment_status === 'Paid' && t.cta_to_ba === 'No',
     map: (t) => ({ ...baseRow(t), cta_to_ba: t.cta_to_ba, brokerage_balance: t.brokerageComm.total }),
