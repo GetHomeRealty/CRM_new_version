@@ -5,6 +5,7 @@ import { ToastProvider } from './desk/toast';
 import ProtectedRoute from './components/ProtectedRoute';
 import Login from './pages/Login';
 import Register from './pages/Register';
+import SsoAuthorize from './pages/SsoAuthorize';
 import DeskLayout from './desk/DeskLayout';
 import { RequireScreen, LandingRedirect } from './desk/guards';
 import { AREAS, DEFAULT_AREA, areaFor, areaPath, screenInArea, type Area } from './desk/area';
@@ -255,6 +256,7 @@ export default function App() {
             <Route path="/forgot-password" element={<ForgotPassword />} />
             <Route path="/reset-password" element={<ResetPassword />} />
             <Route path="/register" element={<Register />} />
+            <Route path="/sso/authorize" element={<SsoAuthorize />} />
 
             <Route element={<ProtectedRoute />}>
               {/*
@@ -284,4 +286,3 @@ export default function App() {
     </BrowserRouter>
   );
 }
-

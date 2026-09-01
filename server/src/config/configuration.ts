@@ -37,6 +37,12 @@ export interface AppConfig {
     sameSite: SameSite;
     domain: string | undefined;
   };
+  sso: {
+    clientId: string;
+    clientSecret: string;
+    redirectUris: string[];
+    codeLifetimeSeconds: number;
+  };
   idExtraction: {
     provider: string;
     apiKey: string;
@@ -74,6 +80,12 @@ export default (): AppConfig => {
       secure: bool(process.env.COOKIE_SECURE, false),
       sameSite,
       domain: process.env.COOKIE_DOMAIN || undefined,
+    },
+    sso: {
+      clientId: process.env.SSO_PRECON_CLIENT_ID ?? 'precon',
+      clientSecret: process.env.SSO_PRECON_CLIENT_SECRET ?? '',
+      redirectUris: list(process.env.SSO_PRECON_REDIRECT_URIS),
+      codeLifetimeSeconds: int(process.env.SSO_CODE_LIFETIME_SECONDS, 60),
     },
     idExtraction: {
       provider: process.env.ID_EXTRACTION_PROVIDER ?? 'anthropic',
