@@ -214,6 +214,27 @@ export class TransactionsWriteService {
       throw new UnprocessableEntityException({ message: sentences.join(' '), errors });
     }
 
+    /*
+     * A LISTING THAT HAS SOLD CARRIES ITS MONEY. An unsold listing does not.
+     *
+     * Creation forced price, deposit, offer date and closing date to nothing for EVERY listing,
+     * on the reasoning that a listing has no offer terms - true while it is on the market, and
+     * false the moment it sells. update() has always allowed those fields, so the only effect was
+     * to make somebody create the deal and immediately edit it. It also made bulk import unable to
+     * carry a historical sold listing: it arrived priced at zero, and a listing commission is a
+     * percentage OF THE PRICE, so it arrived earning nothing (TD-126).
+     *
+     * This sits alongside the required-field rule above rather than contradicting it. A listing
+     * REQUIRES none of these - that is why they are pushed onto `required` only for non-listings -
+     * and a SOLD one may nonetheless carry them. Not required and not forbidden are compatible.
+     *
+     * Sold, Leased and Closed mean the deal transacted. Active, Suspended, Terminated, Expired and
+     * Void do not, and on those a sale price would be a number describing nothing.
+     */
+    const LISTING_TRANSACTED = ['Sold', 'Leased', 'Closed'];
+    const soldListing = isListing && LISTING_TRANSACTED.includes(String(body.status ?? '').trim());
+    const noOfferTerms = isListing && !soldListing;
+
     const creatorAgent = user && isAgent(user) ? user.name : null;
     const commType = isListing ? '%' : String(body.comm_type ?? '%');
     const commValue = isListing ? 0 : toFloat(body.comm_value ?? 0);
@@ -258,10 +279,11 @@ export class TransactionsWriteService {
           // 20260803010000_person_user_ids. Null when the name matches no account, which is the
           // same position rows written before this were in.
           agent_user_id: (await this.people.resolve(null, agentName))?.id ?? null,
-          price: isListing ? 0 : ((body.price ?? 0) as number),
-          deposit: isListing ? 0 : ((body.deposit ?? 0) as number),
-          offer_date: isListing ? null : toDate(body.offer_date),
-          closing_date: isListing ? null : toDate(body.closing_date),
+          price: noOfferTerms ? 0 : ((body.price ?? 0) as number),
+          deposit: noOfferTerms ? 0 : ((body.deposit ?? 0) as number),
+          offer_date: noOfferTerms ? null : toDate(body.offer_date),
+          closing_date: noOfferTerms ? null : toDate(body.closing_date),
+          listing_price: phpEmpty(body.listing_price) ? null : toFloat(body.listing_price),
           listing_contract_date: isListing ? toDate(body.listing_contract_date) : null,
           listing_expiry_date: isListing ? toDate(body.listing_expiry_date) : null,
           comm_type: commType,

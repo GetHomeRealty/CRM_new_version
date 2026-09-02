@@ -45,6 +45,34 @@ export interface SyncResult {
   error: string | null;
 }
 
+/** Make parsed email text safe for Prisma's JSON protocol and PostgreSQL text columns. */
+export function normalizeInboundText(value: string, maxLength?: number): string {
+  const clean = (input: string): string => {
+    let output = '';
+    for (let i = 0; i < input.length; i += 1) {
+      const code = input.charCodeAt(i);
+      if (code === 0) continue;
+      if (code >= 0xd800 && code <= 0xdbff) {
+        const next = input.charCodeAt(i + 1);
+        if (next >= 0xdc00 && next <= 0xdfff) {
+          output += input[i] + input[i + 1];
+          i += 1;
+        } else {
+          output += '\ufffd';
+        }
+      } else if (code >= 0xdc00 && code <= 0xdfff) {
+        output += '\ufffd';
+      } else {
+        output += input[i];
+      }
+    }
+    return output;
+  };
+
+  const cleaned = clean(value);
+  return maxLength === undefined ? cleaned : clean(cleaned.slice(0, maxLength));
+}
+
 /**
  * Which of the UIDs a SEARCH returned to pull on this pass.
  *
@@ -571,7 +599,7 @@ export class ImapSyncService implements OnModuleInit, OnModuleDestroy {
     const p = await simpleParser(msg.source);
     const fromAddr = p.from?.value?.[0];
     const toText = Array.isArray(p.to) ? p.to.map((t) => t.text).join(', ') : p.to?.text ?? null;
-    const text = (p.text ?? '').trim();
+    const text = normalizeInboundText((p.text ?? '').trim());
 
     /*
      * THREADING AND ATTACHMENTS ARE READ HERE BECAUSE THE PARSE ALREADY HAPPENED.
@@ -583,14 +611,15 @@ export class ImapSyncService implements OnModuleInit, OnModuleDestroy {
      * `references` arrives as a string or an array depending on the sender, so both are normalised
      * to one space-separated string.
      */
-    const references = Array.isArray(p.references) ? p.references.join(' ') : (p.references ?? null);
-    const inReplyTo = p.inReplyTo ? p.inReplyTo.slice(0, 512) : null;
+    const rawReferences = Array.isArray(p.references) ? p.references.join(' ') : (p.references ?? null);
+    const references = rawReferences ? normalizeInboundText(rawReferences) : null;
+    const inReplyTo = p.inReplyTo ? normalizeInboundText(p.inReplyTo, 512) : null;
     const attachments = (p.attachments ?? [])
       .filter((a) => a.content && Buffer.isBuffer(a.content))
       .map((a) => ({
-        filename: String(a.filename ?? 'attachment').replace(/[\\/:*?"<>|]+/g, ' ').trim().slice(0, 255) || 'attachment',
-        mime: String(a.contentType ?? 'application/octet-stream').slice(0, 255),
-        contentId: a.cid ? `<${String(a.cid).replace(/^<|>$/g, '')}>`.slice(0, 255) : null,
+        filename: normalizeInboundText(String(a.filename ?? 'attachment').replace(/[\\/:*?"<>|]+/g, ' ').trim(), 255) || 'attachment',
+        mime: normalizeInboundText(String(a.contentType ?? 'application/octet-stream'), 255),
+        contentId: a.cid ? normalizeInboundText(`<${String(a.cid).replace(/^<|>$/g, '')}>`, 255) : null,
         content: a.content as Buffer,
       }));
 
@@ -599,14 +628,14 @@ export class ImapSyncService implements OnModuleInit, OnModuleDestroy {
       references_header: references,
       thread_key: threadKeyFor({ references, inReplyTo, messageId: p.messageId ?? null }),
       attachments,
-      message_id: p.messageId ? p.messageId.slice(0, 512) : null,
-      from_email: fromAddr?.address ? fromAddr.address.toLowerCase().slice(0, 320) : null,
-      from_name: fromAddr?.name ? fromAddr.name.slice(0, 255) : null,
-      to_email: toText ? toText.slice(0, 320) : null,
-      subject: p.subject ? p.subject.slice(0, 998) : null,
-      snippet: text ? text.replace(/\s+/g, ' ').slice(0, 300) : null,
+      message_id: p.messageId ? normalizeInboundText(p.messageId, 512) : null,
+      from_email: fromAddr?.address ? normalizeInboundText(fromAddr.address.toLowerCase(), 320) : null,
+      from_name: fromAddr?.name ? normalizeInboundText(fromAddr.name, 255) : null,
+      to_email: toText ? normalizeInboundText(toText, 320) : null,
+      subject: p.subject ? normalizeInboundText(p.subject, 998) : null,
+      snippet: text ? normalizeInboundText(text.replace(/\s+/g, ' '), 300) : null,
       body_text: text || null,
-      body_html: typeof p.html === 'string' ? p.html : null,
+      body_html: typeof p.html === 'string' ? normalizeInboundText(p.html) : null,
       received_at: p.date ?? new Date(),
     };
   }

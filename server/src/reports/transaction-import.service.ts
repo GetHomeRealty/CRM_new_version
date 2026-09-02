@@ -768,8 +768,23 @@ export class TransactionImportService {
             add(col, '', `${col} is required for ${type}.`, `Enter a value — ${f.hint}`);
           }
         }
+        /*
+         * A SOLD LISTING CARRIES ITS MONEY, so the offer-side block is lifted for one.
+         * Commission Type and Commission Value stay refused even then: a listing's commission
+         * is worked out from Listing Commission % and Co-Op Commission %, and the calculation
+         * never reads comm_value for a listing - allowing them would invite somebody to fill a
+         * cell that does nothing.
+         */
+        const SOLD_LISTING_ALLOWS = ['Price', 'Offer Date', 'Closing Date'];
+        const soldListing = listing && ['Sold', 'Leased', 'Closed'].includes(get('Deal Status'));
         for (const col of forbiddenColumnsFor(type)) {
-          if (get(col)) add(col, get(col), `${col} must be empty for ${type}.`, listing ? 'Listing types carry no offer/commission terms — clear this cell.' : 'This column applies to listing types only — clear this cell.');
+          if (soldListing && SOLD_LISTING_ALLOWS.includes(col)) continue;
+          if (!get(col)) continue;
+          const why = !listing ? 'This column applies to listing types only — clear this cell.'
+            : SOLD_LISTING_ALLOWS.includes(col)
+              ? 'A listing carries a price and dates only once it has sold — clear this cell, or set Deal Status to Sold, Leased or Closed.'
+              : 'A listing takes its commission from Listing Commission % and Co-Op Commission % — clear this cell.';
+          add(col, get(col), `${col} must be empty for ${type}.`, why);
         }
       }
 
@@ -955,7 +970,7 @@ export class TransactionImportService {
     const body: Record<string, unknown> = {};
     const get = (col: string) => String(rec[col] ?? '').trim();
     // store() only understands the create-time subset; everything else is applied by update().
-    for (const key of ['type', 'property', 'price', 'deposit', 'offer_date', 'closing_date',
+    for (const key of ['type', 'property', 'price', 'deposit', 'offer_date', 'closing_date', 'listing_price',
       'listing_contract_date', 'listing_expiry_date', 'comm_type', 'comm_value']) {
       const f = IMPORT_FIELDS.find((x) => x.key === key);
       if (!f) continue;

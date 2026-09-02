@@ -31,6 +31,9 @@ export interface ImportField {
   required?: boolean;
   /** Required only for non-listing deal types (price, dates, commission). */
   requiredForDeals?: boolean;
+  /** Listing types only: allowed on a listing, refused on an offer-side deal. Unlike
+   *  requiredForListings this does not make the column mandatory. */
+  listingOnly?: boolean;
   /** Required only for listing types. */
   requiredForListings?: boolean;
   options?: readonly string[];
@@ -59,6 +62,7 @@ export const IMPORT_FIELDS: ImportField[] = [
   { column: 'Deal Status', key: 'status', type: 'text', hint: 'Must be valid for the transaction type (see the Reference sheet). Blank uses the type default.', example: 'Open' },
   { column: 'Primary Agent', key: 'primary_agent', type: 'text', hint: 'Must match an active agent name exactly. Blank leaves the deal unassigned.', example: 'Ramesh Gollu' },
   { column: 'Split Agents', key: 'team_members', type: 'list', hint: 'Other agents on the deal, separated by commas. Requires Primary Agent. For per-agent split %, use the Team Split sheet instead.', example: 'Veena Marpina, ashwini' },
+  { column: 'List Price', key: 'listing_price', type: 'number', listingOnly: true, hint: 'Listing types only. The asking price. Numbers only. Reports read this, or the sale price once the deal has sold.', example: '1150000' },
   { column: 'Price', key: 'price', type: 'number', requiredForDeals: true, hint: 'Numbers only — no $ or commas. Listing types must leave this blank.', example: '850000' },
   { column: 'Deposit', key: 'deposit', type: 'number', hint: 'Numbers only', example: '25000' },
   { column: 'Offer Date', key: 'offer_date', type: 'date', requiredForDeals: true, hint: 'YYYY-MM-DD. Listing types must leave this blank.', example: '2026-03-14' },
@@ -222,7 +226,7 @@ export function requiredColumnsFor(type: string): string[] {
 /** Columns that must be EMPTY for a given type (listing deals carry no price/offer terms). */
 export function forbiddenColumnsFor(type: string): string[] {
   const listing = isListingType(type);
-  return IMPORT_FIELDS.filter((f) => (listing ? f.requiredForDeals : f.requiredForListings)).map((f) => f.column);
+  return IMPORT_FIELDS.filter((f) => (listing ? f.requiredForDeals : (f.requiredForListings || f.listingOnly))).map((f) => f.column);
 }
 
 /** Valid deal statuses per transaction type, for the template's Reference sheet. */
