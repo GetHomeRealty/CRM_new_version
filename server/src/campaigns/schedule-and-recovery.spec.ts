@@ -47,7 +47,7 @@ function services(db: PrismaService, sent: string[], behave: 'ok' | 'throw' = 'o
     db, audience, new CampaignTemplatesService(db, audience),
     { domainCanReceiveMail: async () => true } as never,
     {
-      sendDirect: async (to: string) => {
+      resolveSenderInArea: async () => ({ id: 1, from_email: 'crm@test.local' }), sendFromAccount(this: { sendDirect: (t: string) => unknown }, _a: unknown, o: { to: string[] }) { return this.sendDirect(o.to[0]); }, sendDirect: async (to: string) => {
         sent.push(to);
         if (behave === 'throw') throw new Error('smtp down');
         return { ok: true };

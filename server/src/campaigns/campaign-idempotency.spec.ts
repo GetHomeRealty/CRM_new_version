@@ -56,7 +56,7 @@ const uniq = () => `${Date.now()}-${++seq}`;
 function service(tx: PrismaService, sent: string[]) {
   const audience = new CampaignAudienceService(tx);
   const mailer = {
-    sendDirect: async (to: string) => { sent.push(to); return { ok: true }; },
+    resolveSenderInArea: async () => ({ id: 1, from_email: 'crm@test.local' }), sendFromAccount(this: { sendDirect: (t: string) => unknown }, _a: unknown, o: { to: string[] }) { return this.sendDirect(o.to[0]); }, sendDirect: async (to: string) => { sent.push(to); return { ok: true }; },
   } as never;
   const deliverable = { check: async () => ({ ok: true }), assertSendable: async () => undefined } as never;
   return new CampaignsService(tx, audience, new CampaignTemplatesService(tx, audience), deliverable, mailer);

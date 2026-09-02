@@ -39,7 +39,7 @@ function serviceFor(tx: PrismaService, reply: (to: string) => void) {
     { attachmentsForSend: async () => [] } as never,
     // The domain check passes: this suite is about what the receiving SERVER says, not DNS.
     { domainCanReceiveMail: async () => true } as never,
-    { sendDirect: async (to: string) => { reply(to); } } as never,
+    { resolveSenderInArea: async () => ({ id: 1, from_email: 'crm@test.local' }), sendFromAccount(this: { sendDirect: (t: string) => unknown }, _a: unknown, o: { to: string[] }) { return this.sendDirect(o.to[0]); }, sendDirect: async (to: string) => { reply(to); } } as never,
   );
 }
 

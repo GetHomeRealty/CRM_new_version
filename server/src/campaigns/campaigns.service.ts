@@ -972,6 +972,23 @@ export class CampaignsService {
      */
     const mailRedirect = MailerService.redirectTarget();
 
+    /*
+     * THE MAILBOX THIS CAMPAIGN SENDS FROM, resolved once and IN THE CRM AREA.
+     *
+     * It was resolved per recipient through `sendDirect`, which ignores `scope` - so a CRM
+     * campaign left from whatever mailbox that person happened to have, including a Transaction
+     * Desk one, and in the last-resort case from a COLLEAGUE'S. CRM Account Settings meanwhile
+     * told the reader that each area keeps its own accounts, which was true of every other CRM
+     * send and false of this one.
+     *
+     * Resolving once also removes a per-recipient database round trip, and guarantees one
+     * campaign cannot change sender halfway through a run.
+     *
+     * A failure here throws before any message is sent, which is the right moment: no mailbox
+     * means nothing should go out, rather than the first half going out from the wrong address.
+     */
+    const senderAccount = await this.mailer.resolveSenderInArea(user.id ?? null, 'crm');
+
     for (let i = 0; i < recipients.length; i++) {
       const r = recipients[i];
       const row = campaign.recipients[i];
@@ -1038,18 +1055,25 @@ export class CampaignsService {
       }
 
       try {
-        // Pass the sending user's id so the campaign goes from THEIR own connected account (their
-        // default, then any active one) and only falls back to the brokerage account if they have
-        // none — matching how the rest of the app scopes mail. Without this every campaign used the
-        // brokerage default regardless of who sent it.
-        await this.mailer.sendDirect(
-          r.email, subject, html, null, attachments, user.id ?? null,
+        /*
+         * Sent from the account resolved above, by name, rather than re-resolved per recipient.
+         *
+         * `sendDirect` would answer "which mailbox does this person use" with no regard for area;
+         * naming the account keeps every message of one campaign on the CRM mailbox the
+         * confirmation dialog showed. Both now come from `resolveSenderInArea`, so the dialog and
+         * the send cannot describe different mailboxes.
+         */
+        await this.mailer.sendFromAccount(senderAccount, {
+          to: [r.email],
+          subject,
+          html,
+          attachments,
           // RFC 2369 / RFC 8058. Gmail and Outlook weigh a missing List-Unsubscribe against inbox
           // placement for bulk senders, so its absence makes legitimate campaign mail look like
           // spam — which then reads as a list problem. One-Click points at the POST endpoint,
           // which is why that endpoint had to exist as a POST.
-          unsubHeaders(baseUrl, campaign.id, tokens[i]),
-        );
+          headers: unsubHeaders(baseUrl, campaign.id, tokens[i]),
+        });
         sent++;
         await this.markRecipient(row.id, { status: 'sent', bounced: false, error: null, bounce_type: null, next_retry_at: null });
         /*
@@ -1273,7 +1297,13 @@ export class CampaignsService {
    */
   async senderEmail(user: AuthUserRecord): Promise<string | null> {
     try {
-      const account = await this.mailer.resolveSender(null, user.id ?? null);
+      /*
+       * THE SAME CALL THE SEND MAKES, in the same area. It used to be `resolveSender`, which
+       * ignores `scope` - so the confirmation named a Transaction Desk mailbox and the send then
+       * used it, truthfully and wrongly. A dialog that reports the sender has to ask the
+       * question the send will ask, or it is describing a different send.
+       */
+      const account = await this.mailer.resolveSenderInArea(user.id ?? null, 'crm');
       return account.from_email || null;
     } catch {
       return null;

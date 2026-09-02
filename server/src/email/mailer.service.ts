@@ -4,7 +4,7 @@ import { type mail_accounts } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { LaravelCryptService } from '../common/laravel-crypt.service';
 import { MAIL_EVENTS, renderTemplate } from './mail-event-registry';
-import { MailAccountService } from './mail-account.service';
+import { MailAccountService, type IntegrationScope } from './mail-account.service';
 import { mailClientId, mailClientSecret } from '../google/google.constants';
 
 const e = (s: string): string => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
@@ -183,6 +183,30 @@ export class MailerService {
    * lead email passes it, because correspondence typed by a person is normally multipart and that
    * is what this makes the message structurally resemble.
    */
+  /**
+   * The mailbox a person's mail should leave from WITHIN ONE AREA.
+   *
+   * `resolveSender` answers "which mailbox does this person use" and never looks at `scope`,
+   * so it will happily hand a CRM send a Transaction Desk mailbox - the exact cross-wiring the
+   * `scope` column exists to prevent, and the gap already described on
+   * `MailAccountService.senderFor`. It also falls back, as a last resort, to ANY active mailbox
+   * belonging to anyone, so a CRM campaign could go out from a colleague's address.
+   *
+   * This asks the area-aware question instead, and REFUSES when the area has no mailbox rather
+   * than borrowing one from somewhere else. That refusal is the existing rule for CRM mail -
+   * `CrmAdvancedEmailService` already declines rather than borrowing - so this makes campaigns
+   * behave the way the rest of the CRM already does, and the way CRM Account Settings already
+   * tells people it behaves.
+   */
+  async resolveSenderInArea(userId: number | null, scope: IntegrationScope): Promise<mail_accounts> {
+    const account = await this.accounts.senderFor(userId, scope);
+    if (account) return account;
+    throw new Error(
+      `No active ${scope === 'crm' ? 'CRM' : 'Transaction Desk'} email account is connected. `
+      + 'Connect one under Settings before sending from this area.',
+    );
+  }
+
   async sendDirect(to: string, subject: string, html: string, accountId?: number | null, attachments: MailAttachment[] = [], userId?: number | null, headers?: Record<string, string>, text?: string | null): Promise<void> {
     const account = await this.resolveSender(accountId ?? null, userId ?? null);
     await this.dispatch(account, to, subject, html, [], attachments, headers, [], text ?? null);

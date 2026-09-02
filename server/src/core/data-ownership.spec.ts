@@ -76,6 +76,14 @@ const ROOT = [
 const DERIVED: Record<string, string> = {
   // via users
   audit_logs: 'users', google_connections: 'users', ical_feeds: 'users', crm_settings: 'users',
+  /*
+   * Short-lived Precon shared sign-in codes. DERIVED rather than GLOBAL, and the distinction is
+   * the presence of a real owner: unlike `password_reset_tokens`, which is keyed by an email
+   * address and has no foreign key, each row here names a `user_id` and cascades when that
+   * person is deleted. A code IS somebody's - it authorises a sign-in AS them - so leaving it
+   * unowned would say the opposite of what the column enforces.
+   */
+  sso_authorization_codes: 'users',
   // One row per person, holding which CRM emails that person may send. Derived via `users` for the
   // same reason `crm_settings` is: the brokerage does not own the row, the person does — reached
   // only as "this user's triggers", never as "the brokerage's triggers".

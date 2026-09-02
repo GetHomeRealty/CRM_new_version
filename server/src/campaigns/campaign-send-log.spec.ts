@@ -50,7 +50,7 @@ function harness(emails: string[], deliver: (to: string) => void) {
     $executeRaw: async () => 1,
   } as unknown as PrismaService;
 
-  const mailer = { sendDirect: async (to: string) => { deliver(to); } };
+  const mailer = { resolveSenderInArea: async () => ({ id: 1, from_email: 'crm@test.local' }), sendFromAccount(this: { sendDirect: (t: string) => unknown }, _a: unknown, o: { to: string[] }) { return this.sendDirect(o.to[0]); }, sendDirect: async (to: string) => { deliver(to); } };
   const emailLog = {
     recordExternalSend: async (
       kind: string, recipient: string, subject: string | null,
@@ -133,7 +133,7 @@ describe('a sent campaign is recorded where the brokerage looks', () => {
   it('works when no log service was injected at all', async () => {
     const svc = new CampaignsService(
       {} as unknown as PrismaService, null as never, null as never, null as never,
-      { sendDirect: async () => undefined } as never,
+      { resolveSenderInArea: async () => ({ id: 1, from_email: 'crm@test.local' }), sendFromAccount(this: { sendDirect: (t: string) => unknown }, _a: unknown, o: { to: string[] }) { return this.sendDirect(o.to[0]); }, sendDirect: async () => undefined } as never,
     );
     expect(svc).toBeTruthy();
   });

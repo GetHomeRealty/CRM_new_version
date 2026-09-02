@@ -71,7 +71,7 @@ function controller(tx: PrismaService) {
   const svc = new CampaignsService(
     tx, audience, new CampaignTemplatesService(tx, audience),
     { domainCanReceiveMail: async () => true } as never,
-    { sendDirect: async () => ({ ok: true }) } as never,
+    { resolveSenderInArea: async () => ({ id: 1, from_email: 'crm@test.local' }), sendFromAccount(this: { sendDirect: (t: string) => unknown }, _a: unknown, o: { to: string[] }) { return this.sendDirect(o.to[0]); }, sendDirect: async () => ({ ok: true }) } as never,
   );
   return new CampaignTrackingController(svc);
 }
