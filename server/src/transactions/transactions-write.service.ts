@@ -505,6 +505,36 @@ export class TransactionsWriteService {
     }
 
     /*
+     * TD-129 - the terms divide the deal's commission, so together they cannot come to more
+     * than it. The brokerage states this as the governing condition for preconstruction.
+     * The figure was already derived and returned as terms_pct_valid, and then ignored by
+     * both surfaces: the screen warned and left Save enabled, and the API did not warn at
+     * all. A term is what a builder is invoiced for, so it is refused at the point of save.
+     *
+     * THE MASTER IS READ FROM THIS REQUEST WHERE THIS REQUEST CHANGES IT. Taking it only
+     * from the stored row would let one save lower the deal's percentage and raise the terms
+     * together and pass - the exact shape this exists to stop.
+     *
+     * A FIXED-FEE DEAL IS NOT GUARDED HERE, deliberately rather than by oversight. It has no
+     * percentage to compare against, and a term cannot hold an amount at all (TD-130). It is
+     * left unchecked rather than checked wrongly.
+     */
+    const typeForTerms = String(data.type ?? t.type ?? '');
+    if (/precon/i.test(typeForTerms) && Object.prototype.hasOwnProperty.call(data, 'precon_terms')) {
+      const masterPct = Object.prototype.hasOwnProperty.call(data, 'precon_comm_pct')
+        ? readMoney(data.precon_comm_pct)
+        : readMoney(t.precon_comm_pct);
+      if (masterPct > 0) {
+        const sumPct = asArray(data.precon_terms).reduce(
+          (acc, term) => acc + readMoney((term as Record<string, unknown>).pct), 0);
+        if (sumPct > masterPct + 1e-9) {
+          const m = `The commission terms add up to ${round2(sumPct)}% of the deal, which is more than the deal's own ${round2(masterPct)}%. The terms divide the commission between them; together they cannot exceed it.`;
+          throw new UnprocessableEntityException({ message: m, errors: { precon_terms: [m] } });
+        }
+      }
+    }
+
+    /*
      * TD-028 - client records, checked by the API rather than only by the browser.
      *
      * The sub-form refuses a nameless client and an invalid email, and the API refused nothing at
