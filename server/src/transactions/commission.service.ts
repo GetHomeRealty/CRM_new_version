@@ -113,7 +113,7 @@ export class CommissionService {
       adjAfter,
       this.clientReferralAmount(adj),
     );
-    const agentCtx = { acComm: afterClient.commission, acTotal: afterClient.total, minBrokComm: 200, adjBefore, adjAfter };
+    const agentCtx = { acComm: afterClient.commission, acTotal: afterClient.total, minBrokComm: 200, adjBefore, adjAfter, pool: afterClient.pool, entitlements: afterClient.entitlements };
 
     return {
       variant: 'standard',
@@ -414,7 +414,7 @@ export class CommissionService {
     commissionWoHst: number,
     adjustments: Record<string, unknown>,
     term: number | null,
-    agentCtx: { acTotal: number } | null,
+    agentCtx: { acTotal: number; pool?: number; entitlements?: Map<CommMember, number> } | null,
   ): Record<string, unknown>[] {
     const line = (wo: number): Triple => ({
       commission: wo,
@@ -455,10 +455,15 @@ export class CommissionService {
     });
   }
 
-  private agentCommissionLine(m: CommMember, ctx: { acTotal: number }, deduction: number): Triple {
+  private agentCommissionLine(m: CommMember, ctx: { acTotal: number; pool?: number; entitlements?: Map<CommMember, number> }, deduction: number): Triple {
     const g = 1 + HST_RATE;
-    const split = m.split / 100;
-    const total = this.r((ctx.acTotal ?? 0) * split - deduction);
+    // TD-025: share the pool by each member's OWN entitlement. Paying by split alone gave every
+    // member the weighted-average rate, so on a mixed-plan team the 90/10 member was short and
+    // the 70/30 member over by the same amount. Falls back to split when entitlements are
+    // absent - which is exactly the previous behaviour, never a zero or negative cheque.
+    const own = ctx.entitlements?.get(m);
+    const share = own !== undefined && ctx.pool !== undefined && ctx.pool > 0 ? own / ctx.pool : m.split / 100;
+    const total = this.r((ctx.acTotal ?? 0) * share - deduction);
     const commission = this.r(total / g);
     const hst = this.r(total - commission);
     return { commission, hst, total };
@@ -537,9 +542,13 @@ export class CommissionService {
     adjBefore: number,
     adjAfter: number,
     clientReferral: number,
-  ): Triple {
+  ): Triple & { pool: number; entitlements: Map<CommMember, number> } {
     const g = 1 + HST_RATE;
     const minBrokTotal = minBrokComm * g;
+    // TD-025: keep each member's OWN entitlement, not only the sum. Keyed by the member OBJECT
+    // rather than by index or name, so a later filter, re-sort or duplicate name cannot hand one
+    // person another's share.
+    const entitlements = new Map<CommMember, number>();
     let pool = 0;
     for (const m of members) {
       const a = m.agent_pct / 100;
@@ -547,11 +556,13 @@ export class CommissionService {
       const split = m.split / 100;
       const brokRaw = Math.max(lc * b * split, minBrokTotal);
       const floor = lc === 0 ? 0 : brokRaw - (adjBefore * g - adjAfter);
-      pool += Math.max(0, Math.min(lc * a * split, lc - floor));
+      const own = Math.max(0, Math.min(lc * a * split, lc - floor));
+      entitlements.set(m, own);
+      pool += own;
     }
     const total = this.r(pool * g - clientReferral);
     const commission = this.r(total / g);
     const hst = this.r(total - commission);
-    return { commission, hst, total };
+    return { commission, hst, total, pool, entitlements };
   }
 }
