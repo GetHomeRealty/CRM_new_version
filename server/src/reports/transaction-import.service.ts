@@ -925,6 +925,11 @@ export class TransactionImportService {
       // taken between review and import is still refused.
       const tradeRaw = get('Trade Number');
       if (tradeRaw) {
+        // Two rows in one file claiming the same number BOTH pass the database check - neither is
+        // assigned yet - and the second then dies at import. Catch it against the rows already
+        // reviewed, so the clash shows in the preview like every other row error.
+        const clash = out.find((o) => o.valid && String((o.data as Record<string, unknown>).trade_no ?? '') === tradeRaw);
+        if (clash) add('Trade Number', tradeRaw, `Trade number ${tradeRaw} is already claimed by row ${clash.row} of this file.`, 'Give one of the two rows a different number, or clear it to have one allocated automatically.');
         const tradeProblem = await this.write.tradeNumberProblem(type, tradeRaw);
         if (tradeProblem) add('Trade Number', tradeRaw, tradeProblem, 'Clear the cell to have a number allocated automatically, or choose a free number from this range.');
       }
