@@ -294,7 +294,42 @@ export default function DeskLayout({ area = DEFAULT_AREA }: { area?: Area }) {
    * of where you are.
    */
   const [openNav, setOpenNav] = useState<Record<string, boolean>>({});
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const mobileCloseRef = useRef<HTMLButtonElement>(null);
+  const mobileDrawerRef = useRef<HTMLElement>(null);
+  const mobileToggleRef = useRef<HTMLButtonElement>(null);
   const toggleNav = (key: string) => setOpenNav((o) => ({ ...o, [key]: !(o[key] ?? false) }));
+  const openMobileNav = () => {
+    setMobileNavOpen(true);
+    window.setTimeout(() => mobileCloseRef.current?.focus(), 0);
+  };
+
+  useEffect(() => {
+    if (!mobileNavOpen) return undefined;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setMobileNavOpen(false);
+      if (event.key !== 'Tab') return;
+      const focusable = [...(mobileDrawerRef.current?.querySelectorAll<HTMLElement>('button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])') ?? [])];
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener('keydown', onKeyDown);
+      mobileToggleRef.current?.focus();
+    };
+  }, [mobileNavOpen]);
 
   // ['', area, screen, …] — the area occupies the first segment, so the screen is still index 2.
   const seg = location.pathname.split('/')[2] || '';
@@ -380,6 +415,42 @@ export default function DeskLayout({ area = DEFAULT_AREA }: { area?: Area }) {
     navigate('/login');
   };
 
+  const navigation = (mobile = false) => (
+    <nav className="nav" aria-label={mobile ? 'Mobile navigation' : 'Primary navigation'}>
+      {visibleNav.map((n) => {
+        if (!n.children) {
+          return (
+            <button key={n.key} className={seg === n.key ? 'active' : ''} onClick={() => { go(n.key); if (mobile) setMobileNavOpen(false); }}>
+              <span className="ico"><Icon name={n.ico} size={17} /></span><span>{n.label}</span>
+            </button>
+          );
+        }
+        const onModule = seg === n.key;
+        const open = openNav[n.key] ?? onModule;
+        return (
+          <div key={n.key} className="nav-group">
+            <button className={`nav-parent ${onModule ? 'active' : ''}`} onClick={() => { toggleNav(n.key); if (!onModule) go(n.key); }} aria-expanded={open}>
+              <span className="ico"><Icon name={n.ico} size={17} /></span>
+              <span>{n.label}</span>
+              <span className={`nav-caret ${open ? 'open' : ''}`}><Icon name="chevronDown" size={12} /></span>
+            </button>
+            {open && n.children.map((c) => {
+              const active = onModule && (c.match ? c.match(location.pathname, location.search) : false);
+              return (
+                <button key={c.key} className={`nav-child ${active ? 'active' : ''}`} onClick={() => { navigate(areaPath(area, c.path ?? c.key)); if (mobile) setMobileNavOpen(false); }}>
+                  <span className="ico"><Icon name={c.ico ?? ''} size={16} /></span><span>{c.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        );
+      })}
+      <button onClick={() => { setMobileNavOpen(false); void onLogout(); }}>
+        <span className="ico"><Icon name="logout" size={17} /></span><span>Logout</span>
+      </button>
+    </nav>
+  );
+
 
   return (
     <>
@@ -404,51 +475,42 @@ export default function DeskLayout({ area = DEFAULT_AREA }: { area?: Area }) {
             there is.
           */}
           {areaSwitch('in-sidebar')}
-          <nav className="nav">
-            {visibleNav.map((n) => {
-              if (!n.children) {
-                return (
-                  <button key={n.key} className={seg === n.key ? 'active' : ''} onClick={() => go(n.key)}>
-                    <span className="ico"><Icon name={n.ico} size={17} /></span><span>{n.label}</span>
-                  </button>
-                );
-              }
-              const onModule = seg === n.key;
-              // Open if explicitly toggled, otherwise whenever the current page is inside it.
-              const open = openNav[n.key] ?? onModule;
-              return (
-                <div key={n.key} className="nav-group">
-                  <button
-                    className={`nav-parent ${onModule ? 'active' : ''}`}
-                    onClick={() => { toggleNav(n.key); if (!onModule) go(n.key); }}
-                    aria-expanded={open}
-                  >
-                    <span className="ico"><Icon name={n.ico} size={17} /></span>
-                    <span>{n.label}</span>
-                    <span className={`nav-caret ${open ? 'open' : ''}`}><Icon name="chevronDown" size={12} /></span>
-                  </button>
-                  {open && n.children!.map((c) => {
-                    const active = onModule && (c.match ? c.match(location.pathname, location.search) : false);
-                    return (
-                      <button
-                        key={c.key}
-                        className={`nav-child ${active ? 'active' : ''}`}
-                        onClick={() => navigate(areaPath(area, c.path ?? c.key))}
-                      >
-                        <span className="ico"><Icon name={c.ico ?? ''} size={16} /></span><span>{c.label}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              );
-            })}
-            <button onClick={onLogout}>
-              <span className="ico"><Icon name="logout" size={17} /></span><span>Logout</span>
+          {navigation()}
+        </aside>
+        <button type="button" className={`mobile-nav-backdrop ${mobileNavOpen ? 'open' : ''}`} aria-label="Close navigation menu" tabIndex={mobileNavOpen ? 0 : -1} onClick={() => setMobileNavOpen(false)} />
+        <aside
+          ref={mobileDrawerRef}
+          id="mobile-navigation"
+          className={`mobile-nav-drawer ${mobileNavOpen ? 'open' : ''}`}
+          aria-label="Mobile navigation panel"
+          aria-hidden={!mobileNavOpen}
+          onTransitionEnd={(event) => {
+            if (mobileNavOpen && event.target === event.currentTarget) mobileCloseRef.current?.focus();
+          }}
+        >
+          <div className="mobile-nav-head">
+            <strong>{AREA_SHORT[area]}</strong>
+            <button ref={mobileCloseRef} type="button" className="icon-btn" aria-label="Close navigation menu" autoFocus={mobileNavOpen} onClick={() => setMobileNavOpen(false)}>
+              <Icon name="close" size={19} />
             </button>
-          </nav>
+          </div>
+          {navigation(true)}
         </aside>
         <main className="main">
           <div className="topbar">
+            <button
+              ref={mobileToggleRef}
+              type="button"
+              className="mobile-nav-toggle"
+              aria-label="Open navigation menu"
+              aria-controls="mobile-navigation"
+              aria-expanded={mobileNavOpen}
+              onClick={openMobileNav}
+            >
+              <span aria-hidden="true" />
+              <span aria-hidden="true" />
+              <span aria-hidden="true" />
+            </button>
             {/* Below 1100px the sidebar becomes a 64px icon rail — and with its own scrollbar there
                 are barely 20px of usable width, too little for two legible labels. The switcher
                 moves up here instead, where the labels fit in full. Exactly one of the two is
