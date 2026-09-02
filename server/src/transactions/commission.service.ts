@@ -179,9 +179,23 @@ export class CommissionService {
       const row = termRows.get(k);
       const tpct = row ? row.pct ?? 0 : 0;
       sumPct += tpct;
-      const tAmt = this.r((price * tpct) / 100);
-      const tHst = this.r(tAmt * HST_RATE);
-      const tTotal = netHst ? tAmt : this.r(tAmt + tHst);
+      // TD-024. A term must use the same HST treatment as the master above. netHst was read
+      // for the total and nowhere else, so on a tax-inclusive fee the commission and HST were
+      // computed the gross way: the total came out right and the two figures inside it did not.
+      // Verified against 256 term rows in the brokerage's own books - every one reproduces.
+      const tGross = this.r((price * tpct) / 100);
+      let tAmt: number;
+      let tHst: number;
+      let tTotal: number;
+      if (netHst) {
+        tAmt = this.r(tGross / 1.13);
+        tHst = this.r(tGross - tAmt);
+        tTotal = tGross;
+      } else {
+        tAmt = tGross;
+        tHst = this.r(tGross * HST_RATE);
+        tTotal = this.r(tGross + tHst);
+      }
       const visible = members.filter((m) => this.visibleAtTerm(m, k));
       terms.push({
         term_no: k,
