@@ -1113,13 +1113,48 @@ export class TransactionsWriteService {
     const log = await this.prisma.audit_logs.findFirst({ where: { id: auditId, transaction_id: txnId, source: 'Agent', handled: false } });
     if (!log) throw new NotFoundException({ message: 'Change not found.' });
 
-    const reverted = await this.revertAgentChange(txnId, log);
+    // TD-038. A rejection must never write over a value somebody has changed since. The audit ids
+    // answer that where comparing values cannot: a field changed away and back reads identical,
+    // but the agent's edit is no longer what is standing.
+    //
+    // GROUPED FIELDS ARE CHECKED AS A WHOLE ROW. Adding a client writes one entry per subfield and
+    // rejecting any one of them removes the entire row, so a sibling corrected since must block it.
+    const fam = /^((?:Client|Condition|Inter-Board) #\d+) /.exec(String(log.field ?? ''));
+    const fieldWhere = fam ? { startsWith: fam[1] + ' ' } : log.field;
+
+    const newer = await this.prisma.audit_logs.findFirst({
+      where: { transaction_id: txnId, id: { gt: log.id }, field: fieldWhere },
+      orderBy: { id: 'asc' }, select: { id: true },
+    });
+    const earlierPending = await this.prisma.audit_logs.findFirst({
+      where: { transaction_id: txnId, id: { lt: log.id }, source: 'Agent', handled: false, field: fieldWhere },
+      orderBy: { id: 'desc' }, select: { id: true },
+    });
+
+    // Belt and braces for anything written without an audit entry. Both sides normalised, so a
+    // field the agent CLEARED (null against '') is not mistaken for a change.
+    const norm = (v: unknown): string => (v === null || v === undefined ? '' : String(v));
+    const snapNow = await this.audit.snapshot(txnId);
+    const entry = Object.values(snapNow).find((e) => e.section === log.section && e.field === log.field);
+    const valueMoved = entry !== undefined && norm(entry.value) !== norm(log.new_value);
+
+    const blockedBy = !log.field ? 'this entry does not name a field'
+      : newer ? 'it has been changed since'
+      : earlierPending ? 'an earlier change to it is still awaiting review'
+      : valueMoved ? 'it no longer holds the value this change made'
+      : null;
+
+    const reverted = blockedBy ? false : await this.revertAgentChange(txnId, log);
+    // VarChar(255): truncate, so a long field name cannot 500 the request after handled is set.
+    const skipNote = blockedBy
+      ? `Not restored - ${log.field ?? log.section ?? 'this field'} was left as it is because ${blockedBy}. The rejection has been recorded.`.slice(0, 250)
+      : undefined;
     const actor: ActingUser | null = user ? { id: user.id, name: user.name } : null;
     await this.prisma.audit_logs.update({ where: { id: log.id }, data: { handled: true, updated_at: new Date() } });
     await this.audit.record(txnId, actor, {
       section: log.section,
       field: log.field,
-      action: reverted ? 'Agent change rejected (reverted)' : 'Agent change rejected (value kept — agent to correct)',
+      action: reverted ? 'Agent change rejected (reverted)' : blockedBy ? 'Agent change rejected (not reverted — value left as it stands)' : 'Agent change rejected (value kept — agent to correct)',
       source: 'Manual',
       old: log.new_value,
       new: reverted ? log.old_value : log.new_value,
@@ -1137,6 +1172,7 @@ export class TransactionsWriteService {
       newValue: log.new_value,
       agentName: log.who ?? null,
       autoReverted: reverted,
+      autoRevertNote: skipNote,
     });
     return this.loadResource(txnId, user);
   }

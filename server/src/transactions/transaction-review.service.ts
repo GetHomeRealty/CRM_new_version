@@ -108,6 +108,8 @@ export class TransactionReviewService {
     newValue: string | null;
     agentName: string | null;
     autoReverted: boolean;
+    /** TD-038: set when the revert was skipped, so the note can say why. */
+    autoRevertNote?: string | null;
   }): Promise<transaction_reviews> {
     const reason = String(input.reason ?? '').trim();
     if (!reason) {
@@ -131,7 +133,7 @@ export class TransactionReviewService {
       agent_user_id: await this.agentUserIdFor(input.txnId),
       actor_name: input.actor?.name ?? null,
       auto_reverted: input.autoReverted,
-      auto_revert_result: input.autoReverted ? REVERT_OK : REVERT_UNSUPPORTED,
+      auto_revert_result: input.autoRevertNote ?? (input.autoReverted ? REVERT_OK : REVERT_UNSUPPORTED),
       resolution_status: 'Open',
     });
 
