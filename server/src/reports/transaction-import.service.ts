@@ -919,6 +919,16 @@ export class TransactionImportService {
         seen.push({ type, price: priceNum, offer, property: get('Property Address'), row: rowNo });
       }
 
+      // A hand-picked trade number is checked HERE, at review time, so a bad one turns its own row
+      // red in the preview instead of dying half way through the import - which is the failure
+      // TD-097 describes. store() checks it again when the row is actually written, so a number
+      // taken between review and import is still refused.
+      const tradeRaw = get('Trade Number');
+      if (tradeRaw) {
+        const tradeProblem = await this.write.tradeNumberProblem(type, tradeRaw);
+        if (tradeProblem) add('Trade Number', tradeRaw, tradeProblem, 'Clear the cell to have a number allocated automatically, or choose a free number from this range.');
+      }
+
       const hasError = issues.some((x) => x.severity === 'error');
       out.push({
         row: rowNo, ref: rec.ref, reference,
@@ -970,7 +980,7 @@ export class TransactionImportService {
     const body: Record<string, unknown> = {};
     const get = (col: string) => String(rec[col] ?? '').trim();
     // store() only understands the create-time subset; everything else is applied by update().
-    for (const key of ['type', 'property', 'price', 'deposit', 'offer_date', 'closing_date', 'listing_price',
+    for (const key of ['type', 'trade_no', 'property', 'price', 'deposit', 'offer_date', 'closing_date', 'listing_price',
       'listing_contract_date', 'listing_expiry_date', 'comm_type', 'comm_value']) {
       const f = IMPORT_FIELDS.find((x) => x.key === key);
       if (!f) continue;

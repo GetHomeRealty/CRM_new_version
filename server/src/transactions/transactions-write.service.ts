@@ -1177,6 +1177,17 @@ export class TransactionsWriteService {
     return this.loadResource(txnId, user);
   }
 
+  /**
+   * Why a hand-picked trade number cannot be used, or null if it can.
+   *
+   * Exposed for the bulk importer, which validates a whole file BEFORE writing anything and so
+   * needs the answer without attempting a create. store() applies the same check again at write
+   * time, so a number taken between review and import is still caught.
+   */
+  async tradeNumberProblem(type: string, raw: unknown): Promise<string | null> {
+    return this.tradeNumbers.manualProblem(this.prisma, type, raw);
+  }
+
   private async assertExists(txnId: number): Promise<void> {
     const t = await this.prisma.transactions.findFirst({ where: { id: txnId, deleted_at: null }, select: { id: true } });
     if (!t) throw new NotFoundException({ message: `No query results for model [App\\Models\\Transaction] ${txnId}.` });
