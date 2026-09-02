@@ -235,6 +235,21 @@ export class TransactionsWriteService {
     const soldListing = isListing && LISTING_TRANSACTED.includes(String(body.status ?? '').trim());
     const noOfferTerms = isListing && !soldListing;
 
+    /*
+     * A TRADE NUMBER MAY BE CHOSEN BY HAND, which filing a historical deal needs - it already
+     * carries a number, and inventing a second one for the same trade helps nobody. Left blank,
+     * one is allocated as before, so nothing changes for anybody who does not care.
+     *
+     * It is validated BEFORE the create rather than left to the unique index, because the index
+     * answers with a Prisma error naming a constraint. That is what TD-127 surfaced to users, and
+     * it tells somebody who mistyped a number nothing about what to do next.
+     */
+    const manualTrade = String(body.trade_no ?? '').trim();
+    if (manualTrade) {
+      const problem = await this.tradeNumbers.manualProblem(this.prisma, type, manualTrade);
+      if (problem) throw new UnprocessableEntityException({ message: problem, errors: { trade_no: [problem] } });
+    }
+
     const creatorAgent = user && isAgent(user) ? user.name : null;
     const commType = isListing ? '%' : String(body.comm_type ?? '%');
     const commValue = isListing ? 0 : toFloat(body.comm_value ?? 0);
@@ -270,7 +285,7 @@ export class TransactionsWriteService {
       const now = new Date();
       const t = await tx.transactions.create({
         data: {
-          trade_no: await this.tradeNumbers.next(tx, type),
+          trade_no: manualTrade || await this.tradeNumbers.next(tx, type),
           type,
           property: (body.property ?? null) as string | null,
           agent: agentName,
