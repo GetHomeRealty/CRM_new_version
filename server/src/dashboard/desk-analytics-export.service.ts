@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { DeskAnalyticsService, type DeskAnalytics } from './desk-analytics.service';
 import { ReportExportService } from '../reports/report-export.service';
 import { CompanySettingsService } from '../settings/company-settings.service';
+import { PrismaService } from '../prisma/prisma.service';
 import type { AnalyticsFilters } from './desk-analytics.filters';
 import type { ScopedUser } from '../common/transaction-scope';
 import type { ExportPayload, ReportColumn, ReportRow } from '../reports/report.types';
@@ -41,6 +42,8 @@ export class DeskAnalyticsExportService {
     private readonly analytics: DeskAnalyticsService,
     private readonly exporter: ReportExportService,
     private readonly settings: CompanySettingsService,
+    // TD-064 - to name the agent the caller actually filtered by, rather than guessing from rows.
+    private readonly prisma: PrismaService,
   ) {}
 
   async xlsx(user: ScopedUser | null, filters: AnalyticsFilters): Promise<{ buffer: Buffer; filename: string }> {
@@ -48,20 +51,34 @@ export class DeskAnalyticsExportService {
     const branding = (await this.settings.current()).name;
     const generatedAt = new Date();
 
+    // TD-064 - built once. The rows are the sheet, the section counts and the record count, and
+    // deriving them three times invited the three to disagree.
+    const rows = this.rows(data);
+
     const payload: ExportPayload = {
       reportName: 'Transaction Desk Analytics',
       generatedAt,
       generatedBy: (user?.name ?? '').trim() || 'Unknown',
-      appliedFilters: this.appliedFilters(filters, data),
+      appliedFilters: await this.appliedFilters(filters),
       dealTypeHeading: filters.type ?? null,
       columns: COLUMNS,
-      rows: this.rows(data),
+      rows,
       // The footer totals the two figures that ARE additive down the sheet. `count` is not summed
       // here because the same deal appears in the month block and again in the agent block; the
       // deal count for the filtered set is stated once, in the Summary block above.
-      totals: { count: 0 },
+      /*
+       * TD-064 - the number of rows this sheet actually carries.
+       *
+       * This was `0`, with a comment explaining that deal counts must not be summed down the sheet
+       * because the same deal appears in the month block and again in the agent block. That
+       * reasoning is right, but it was applied to the wrong thing: the Deals column is not declared
+       * `total`, so it was never going to print a column total, and `totals.count` feeds only the
+       * record count in the footer - which the renderer reads as `p.totals.count ?? p.rows.length`.
+       * `??` does not fall back on 0, so a populated workbook signed off "Totals (0 records)".
+       */
+      totals: { count: rows.length },
       branding,
-      sections: SECTIONS.map((s) => ({ ...s, count: this.rows(data).filter((r) => r.section === s.key).length })),
+      sections: SECTIONS.map((s) => ({ ...s, count: rows.filter((r) => r.section === s.key).length })),
     };
 
     return {
@@ -90,7 +107,7 @@ export class DeskAnalyticsExportService {
   }
 
   /** The filter chips printed in the workbook header, so the file says what it is a view of. */
-  private appliedFilters(f: AnalyticsFilters, a: DeskAnalytics): { label: string; value: string }[] {
+  private async appliedFilters(f: AnalyticsFilters): Promise<{ label: string; value: string }[]> {
     const out: { label: string; value: string }[] = [
       { label: 'Basis', value: 'Commission figures are before HST' },
     ];
@@ -98,10 +115,24 @@ export class DeskAnalyticsExportService {
     if (f.type) out.push({ label: 'Deal Type', value: f.type });
     if (f.status) out.push({ label: 'Status', value: f.status });
     if (f.agent_user_id !== undefined) {
-      // The name is taken from the result rather than looked up again: `by_agent` is already scoped
-      // and already filtered, so it names exactly whose figures these are — and an export that had
-      // to re-resolve an id could name somebody the rows do not belong to.
-      out.push({ label: 'Agent', value: a.by_agent[0]?.agent ?? `#${f.agent_user_id}` });
+      /*
+       * TD-064 - the agent the caller FILTERED BY, resolved from the id they selected.
+       *
+       * This read `by_agent[0].agent`, and the comment here argued that taking the name from the
+       * result was safer than re-resolving the id. It is not: `by_agent` groups by the deal's agent
+       * NAME, which is free text (TD-045), so the first row is whichever name sorts first among the
+       * scoped deals - not the person who was asked for. Measured 2026-08-21, a workbook filtered to
+       * Aswini carried the header "Agent: Sai".
+       *
+       * The id IS the filter, and `parseAnalyticsFilters` has already refused an agent asking for
+       * anyone else's figures, so resolving it names exactly who was asked for. The id remains the
+       * fallback when the account no longer exists, so the header is never silently blank.
+       */
+      const named = await this.prisma.users.findUnique({
+        where: { id: f.agent_user_id },
+        select: { name: true },
+      });
+      out.push({ label: 'Agent', value: named?.name?.trim() || `#${f.agent_user_id}` });
     }
     return out;
   }

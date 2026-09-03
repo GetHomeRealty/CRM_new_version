@@ -49,6 +49,8 @@ const exportFor = (tx: PrismaService) =>
     new ReportExportService(),
     // The audit collaborator is unused on this path: the export only READS the brokerage name.
     new CompanySettingsService(tx, null as never),
+    // TD-064 — the header resolves the filtered agent's name by id.
+    tx,
   );
 
 const office: ScopedUser = { id: 1, name: 'Office Boss', role: 'admin' };
@@ -205,6 +207,61 @@ describe('the Analytics export contains the filtered result and nothing else', (
        * value tests that the figure is the screen's.
        */
       expect(await numbersIn(buffer)).toContain(screen.totals.total);
+    });
+  });
+});
+
+/**
+ * The header block and the footer are what a reader trusts when the file has outlived the screen it
+ * came from — an export sent to an accountant, or kept for an audit, states on its face whose
+ * figures it holds and how many rows it carries. Both were wrong.
+ */
+describe('the export header names the filter, and the footer counts the rows (TD-064)', () => {
+  it('names the agent that was FILTERED, not whichever name sorts first in the rows', async () => {
+    await inRollback(async (tx) => {
+      // Two agents whose names sort the other way round from the filter, which is exactly the shape
+      // that produced 'Agent: Sai' on a workbook filtered to Aswini: `by_agent` groups by the deal's
+      // free-text agent NAME, so its first row is not the person who was asked for.
+      const wanted = await makeAgent(tx, 'Xp Zeta Wanted');
+      const other = await makeAgent(tx, 'Xp Alpha Other');
+      await makeDeal(tx, wanted, '2025-06-10');
+      await makeDeal(tx, other, '2025-06-11');
+
+      const { buffer } = await exportFor(tx).xlsx(office, { agent_user_id: wanted.id });
+      const text = await readAll(buffer);
+      expect(text).toContain('agent: xp zeta wanted');
+      expect(text).not.toContain('agent: xp alpha other');
+    });
+  });
+
+  it('falls back to the id when the filtered account no longer exists', async () => {
+    await inRollback(async (tx) => {
+      const a = await makeAgent(tx, 'Xp Gone');
+      await makeDeal(tx, a, '2025-06-12');
+      // A deleted or unknown id must still say what was asked for rather than leaving it blank.
+      const { buffer } = await exportFor(tx).xlsx(office, { agent_user_id: 99_000_001 });
+      expect(await readAll(buffer)).toContain('agent: #99000001');
+    });
+  });
+
+  it('states the real record count instead of "Totals (0 records)"', async () => {
+    await inRollback(async (tx) => {
+      const a = await makeAgent(tx, 'Xp Counted');
+      await makeDeal(tx, a, '2025-06-13');
+
+      const text = await readAll(await exportFor(tx).xlsx(office, { agent_user_id: a.id }).then((r) => r.buffer));
+      // The sheet carries populated Summary, By Month, By Agent and By Transaction Type blocks, and
+      // used to sign off claiming none of them existed.
+      expect(text).not.toContain('totals (0 records)');
+      expect(text).toMatch(/totals \(\d+ records?\)/);
+    });
+  });
+
+  it('still omits the agent label when no agent is filtered', async () => {
+    await inRollback(async (tx) => {
+      const a = await makeAgent(tx, 'Xp Unfiltered');
+      await makeDeal(tx, a, '2025-06-14');
+      expect(await readAll(await exportFor(tx).xlsx(office, {}).then((r) => r.buffer))).not.toContain('agent:');
     });
   });
 });
