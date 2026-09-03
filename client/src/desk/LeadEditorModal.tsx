@@ -264,6 +264,12 @@ export default function LeadEditorModal({ lead, options, onClose, onSaved, lockI
   const [prefs, setPrefs] = useState<PrefForm[]>([{ ...EMPTY_PREF }]);
   const [errors, setErrors] = useState<Record<string, string[]>>({});
   const [saving, setSaving] = useState(false);
+  const [languagePopoverOpen, setLanguagePopoverOpen] = useState(false);
+  const [customLanguage, setCustomLanguage] = useState('');
+  const [customLanguageError, setCustomLanguageError] = useState('');
+  const languagePickerRef = useRef<HTMLDivElement>(null);
+  const languageInputRef = useRef<HTMLInputElement>(null);
+  const previousLanguageRef = useRef('');
 
   const vocabulary = options?.property_types ?? [];
 
@@ -299,15 +305,76 @@ export default function LeadEditorModal({ lead, options, onClose, onSaved, lockI
   };
 
   useEffect(() => {
-    setForm(lead ? toForm(lead) : EMPTY);
+    const nextForm = lead ? toForm(lead) : EMPTY;
+    setForm(nextForm);
     setPrefs(lead ? toPrefForms(lead, vocabulary) : [{ ...EMPTY_PREF }]);
     setErrors({});
+    const needsCustomLanguage = nextForm.language.toLowerCase() === 'other';
+    previousLanguageRef.current = needsCustomLanguage ? nextForm.language : '';
+    setLanguagePopoverOpen(needsCustomLanguage);
+    setCustomLanguage('');
+    setCustomLanguageError('');
     // The vocabulary only decides which stored values read as custom; re-splitting on every
     // options load would discard whatever the user has typed since.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lead]);
 
   const set = (k: keyof Form, v: string) => setForm((f) => ({ ...f, [k]: v }));
+
+  const closeLanguagePopover = () => {
+    setLanguagePopoverOpen(false);
+    setCustomLanguage('');
+    setCustomLanguageError('');
+    setForm((current) => current.language === 'Other'
+      ? { ...current, language: previousLanguageRef.current }
+      : current);
+  };
+
+  useEffect(() => {
+    if (!languagePopoverOpen) return undefined;
+    languageInputRef.current?.focus();
+    const onMouseDown = (event: MouseEvent) => {
+      if (!languagePickerRef.current?.contains(event.target as Node)) closeLanguagePopover();
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeLanguagePopover();
+      }
+    };
+    document.addEventListener('mousedown', onMouseDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onMouseDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [languagePopoverOpen]);
+
+  const chooseLanguage = (value: string) => {
+    if (value !== 'Other') {
+      set('language', value);
+      setLanguagePopoverOpen(false);
+      return;
+    }
+    previousLanguageRef.current = form.language === 'Other' ? '' : form.language;
+    set('language', 'Other');
+    setCustomLanguage('');
+    setCustomLanguageError('');
+    setLanguagePopoverOpen(true);
+  };
+
+  const applyCustomLanguage = () => {
+    const value = customLanguage.trim();
+    if (!value) {
+      setCustomLanguageError('Enter a language.');
+      languageInputRef.current?.focus();
+      return;
+    }
+    set('language', value);
+    setLanguagePopoverOpen(false);
+    setCustomLanguage('');
+    setCustomLanguageError('');
+  };
   const setPref = (i: number, patch: Partial<PrefForm>) =>
     setPrefs((list) => list.map((p, j) => (j === i ? { ...p, ...patch } : p)));
   const err = (k: string) => (errors[k]?.length ? <div className="field-err">{errors[k][0]}</div> : null);
@@ -532,11 +599,34 @@ export default function LeadEditorModal({ lead, options, onClose, onSaved, lockI
               A fixed list is also what these fields are for. They feed segmentation, so a lead typed
               as "Punjabi" and another as "punjabi" are two groups; the datalist invited exactly that.
             */}
-            <div className="field">
+            <div className="field language-picker" ref={languagePickerRef}>
               <label>Language</label>
-              <select value={form.language} onChange={(e) => set('language', e.target.value)}>
+              <select value={form.language} onChange={(e) => chooseLanguage(e.target.value)}
+                onClick={() => {
+                  if (form.language.toLowerCase() === 'other' && !languagePopoverOpen) {
+                    previousLanguageRef.current = form.language;
+                    setLanguagePopoverOpen(true);
+                  }
+                }}
+                aria-expanded={languagePopoverOpen} aria-controls="custom-language-popover">
                 {pick(options?.languages, 'Not set', form.language)}
               </select>
+              {languagePopoverOpen && (
+                <div id="custom-language-popover" className="language-popover" role="dialog"
+                  aria-label="Specify another language">
+                  <label htmlFor="custom-language-input">Which language?</label>
+                  <input id="custom-language-input" ref={languageInputRef} value={customLanguage}
+                    placeholder="Enter language" autoComplete="off"
+                    onChange={(e) => { setCustomLanguage(e.target.value); setCustomLanguageError(''); }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') { e.preventDefault(); applyCustomLanguage(); }
+                    }} />
+                  {customLanguageError && <div className="field-err">{customLanguageError}</div>}
+                  <div className="language-popover-actions">
+                    <button className="btn primary sm" type="button" onClick={applyCustomLanguage}>Apply</button>
+                  </div>
+                </div>
+              )}
               {err('language')}
             </div>
             <div className="field">
