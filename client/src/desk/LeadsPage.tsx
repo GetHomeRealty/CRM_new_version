@@ -68,12 +68,13 @@ const typePill = (t: string | null): string => {
 
 const SOURCE_PILL: Record<string, string> = { meta: 'info', 'google ads': 'warn', website: 'ok' };
 
-type InlineField = 'lead_status' | 'lead_type' | 'lead_source' | 'tags';
+type InlineField = 'lead_status' | 'lead_type' | 'lead_source' | 'lead_response' | 'tags';
 
 const INLINE_COPY: Record<InlineField, { empty: string; saved: string }> = {
   lead_status: { empty: 'Set status', saved: 'Status updated.' },
   lead_type: { empty: 'Set type', saved: 'Type updated.' },
   lead_source: { empty: 'Set source', saved: 'Source updated.' },
+  lead_response: { empty: 'Set response', saved: 'Lead response updated.' },
   tags: { empty: 'Add tags', saved: 'Tags updated.' },
 };
 
@@ -82,6 +83,12 @@ const valuePill = (field: InlineField, value: string): string => {
   if (field === 'lead_type') return typePill(value);
   if (field === 'lead_source') return SOURCE_PILL[value] ?? 'neutral';
   return '';
+};
+
+const inlineSearchLabel = (field: InlineField): string => {
+  if (field === 'lead_type') return 'types';
+  if (field === 'lead_source') return 'sources';
+  return 'responses';
 };
 
 /**
@@ -212,7 +219,7 @@ function InlineLeadCell({
             <div className="lead-inline-search">
               <Icon name="search" size={14} />
               <input ref={searchRef} value={query} onChange={(event) => { setQuery(event.target.value); setActive(0); }}
-                placeholder={isTags ? 'Search tags…' : `Search ${field === 'lead_type' ? 'types' : 'sources'}…`}
+                placeholder={isTags ? 'Search tags…' : `Search ${inlineSearchLabel(field)}…`}
                 aria-label={isTags ? 'Search tags' : 'Search options'} />
             </div>
           )}
@@ -654,6 +661,7 @@ export default function LeadsPage() {
                 <th>Status</th>
                 <th>Type</th>
                 <th>Source</th>
+                <th>Lead Response</th>
                 <th>Tags</th>
                 <th>Assigned To</th>
                 <th>Created</th>
@@ -661,9 +669,9 @@ export default function LeadsPage() {
               </tr>
             </thead>
             <tbody>
-              {loading && <tr><td colSpan={10} className="empty-cell">Loading leads…</td></tr>}
+              {loading && <tr><td colSpan={11} className="empty-cell">Loading leads…</td></tr>}
               {!loading && leads.length === 0 && (
-                <tr><td colSpan={10} className="empty-cell">
+                <tr><td colSpan={11} className="empty-cell">
                   No leads match these filters.{canEdit ? ' Add one, or import a CSV.' : ''}
                 </td></tr>
               )}
@@ -693,6 +701,10 @@ export default function LeadsPage() {
                     <InlineLeadCell lead={l} field="lead_source" options={options?.lead_source ?? []}
                       disabled={!canEdit || isBrokerageLead(l)} saving={savingCell === `${l.id}:lead_source`} onSave={(field, value) => saveInline(l, field, value)} />
                     <SourceAttribution lead={l} />
+                  </td>
+                  <td className="lead-inline-cell">
+                    <InlineLeadCell lead={l} field="lead_response" options={options?.lead_response ?? []}
+                      disabled={!canEdit} saving={savingCell === `${l.id}:lead_response`} onSave={(field, value) => saveInline(l, field, value)} />
                   </td>
                   <td>
                     <InlineLeadCell lead={l} field="tags" options={[]} tagOptions={tagData.tags}
