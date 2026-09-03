@@ -203,7 +203,23 @@ export class DocumentsService {
     }
     // Orphans: condition removed → purge files + hard-delete.
     for (const orphan of existing.values()) {
-      await this.purgeFiles(orphan);
+      /*
+       * TD-120 - removing a condition must not destroy what was uploaded against it.
+       *
+       * This purged the files from disk and HARD-deleted the row, and syncConditionDocs runs on
+       * every load of Legal & Documents. Unticking "Conditional Offer" empties the condition list,
+       * so every condition document becomes an orphan at once and its uploads are unlinked from
+       * disk - no warning, no Recycle Bin, nothing to restore.
+       *
+       * An EMPTY row is still removed outright: nothing is lost, and leaving it would clutter the
+       * checklist with a condition that no longer exists. A row CARRYING A FILE is soft-deleted
+       * with its files left in place, so it reaches the Recycle Bin like every other deletion.
+       */
+      const orphanFiles = (parseJson<FileEntry[]>(orphan.files) ?? []) as FileEntry[];
+      if (orphan.file_path || orphan.validation_file_path || orphanFiles.length > 0) {
+        await this.prisma.documents.update({ where: { id: orphan.id }, data: { deleted_at: new Date(), updated_at: new Date() } });
+        continue;
+      }
       await this.prisma.documents.delete({ where: { id: orphan.id } });
     }
   }
@@ -704,11 +720,17 @@ export class DocumentsService {
 
   // ---- helpers ----
 
-  private async purgeFiles(d: DocRow): Promise<void> {
-    await this.deleteFile(d.file_path);
-    await this.deleteFile(d.validation_file_path);
-    for (const f of (parseJson<FileEntry[]>(d.files) ?? []) as FileEntry[]) await this.deleteFile(f.file_path);
-  }
+  /*
+   * `purgeFiles()` WAS HERE, AND IS DELIBERATELY GONE (TD-120).
+   *
+   * It unlinked a document's uploads from disk, and its ONLY caller was the orphan sweep in
+   * syncConditionDocs - which runs on every load of Legal & Documents and destroyed every
+   * condition upload the moment "Conditional Offer" was unticked.
+   *
+   * The compiler flagging it as unused is the proof it existed only for that path. Deletion in
+   * this system is a soft delete into the Recycle Bin; nothing else ever wanted a method that
+   * removes a client's file with no record that it was ever there.
+   */
 
   private requireFile(file: UploadedFile | undefined): void {
     if (!file) throwValidation({ file: ['The file field is required.'] });
