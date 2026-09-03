@@ -113,8 +113,14 @@ scoped AS (
     t.calc_paid_total::numeric          AS calc_paid_total,
     (t.type ~* 'lease')                 AS is_lease,
     EXISTS (
+      -- TD-084. 'is_closed' really means 'has ended' - it drives the upcoming figures, which must
+      -- shed a deal the moment it dies, not only when it closes. This tested status = 'Closed'
+      -- alone, so a deal moved to DFT / Mutual Release / Terminated / Void kept its commission in
+      -- the agent's upcoming total and stayed in the pipeline count. Broadened to every ending
+      -- status; the name is left as is to avoid churning its consumers.
       SELECT 1 FROM transaction_statuses st
-      WHERE st.transaction_id = t.id AND st.status = 'Closed'
+      WHERE st.transaction_id = t.id
+        AND st.status IN ('Closed', 'DFT', 'Mutual Release', 'Terminated', 'Void')
     )                                   AS is_closed
   FROM transactions t
   WHERE t.deleted_at IS NULL AND ${scope} AND ${typeFilter}
