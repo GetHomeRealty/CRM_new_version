@@ -1,3 +1,4 @@
+import { AuditService } from '../audit/audit.service';
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -44,6 +45,7 @@ export class TransactionsService {
     private readonly prisma: PrismaService,
     private readonly commission: CommissionService,
     private readonly reviews: TransactionReviewService,
+    private readonly audit: AuditService,
   ) {}
 
   /**
@@ -333,13 +335,49 @@ export class TransactionsService {
    * Listing-side auto-status: once the listing expiry date passes, the status
    * becomes Expired automatically. Terminal states are left untouched.
    */
-  private async applyExpiry(t: LoadedTxn): Promise<void> {
+  /*
+   * TD-074 - the derivation has to run BOTH ways.
+   *
+   * applyExpiry() deleted every status and wrote 'Expired' once the date had passed, and 'Expired'
+   * is itself terminal - so the next load returned early and nothing ever undid it. A typo in the
+   * expiry date therefore expired a live listing permanently: correcting the date did not bring it
+   * back, and recovering it needed a status change an agent cannot make once the deal is locked.
+   *
+   * ONLY A LISTING SITTING ON 'Expired' ALONE IS RESTORED. If a person has set any other status the
+   * deal is left as it is - the same restraint the forward pass shows by refusing to touch a
+   * terminal status. A listing that is Expired while its expiry date is in the future is a
+   * contradiction that only this derivation can have created.
+   */
+  private async restoreIfAutoExpired(t: LoadedTxn): Promise<void> {
+    const current = (t.transaction_statuses ?? []).map((x) => x.status);
+    if (current.length !== 1 || current[0] !== 'Expired') return;
+    await this.prisma.transaction_statuses.deleteMany({ where: { transaction_id: t.id } });
+    await this.prisma.transaction_statuses.create({ data: { transaction_id: t.id, status: 'Active' } });
+    await this.audit.record(t.id, null, {
+      section: 'Status', field: 'Status', action: 'Listing automatically reactivated', source: 'System',
+      old: 'Expired', new: 'Active',
+      details: `Status automatically changed back to Active because the listing expiry date (${t.listing_expiry_date?.toISOString().slice(0, 10)}) has not been reached.`,
+    });
+    t.transaction_statuses = await this.prisma.transaction_statuses.findMany({
+      where: { transaction_id: t.id },
+      orderBy: { status: 'asc' },
+    });
+  }
+
+  async applyExpiry(t: LoadedTxn): Promise<void> {
     if (!isListingStatusFamily(t.type) || !t.listing_expiry_date) return;
-    if (!(t.listing_expiry_date < new Date())) return;
+    if (!(t.listing_expiry_date < new Date())) { await this.restoreIfAutoExpired(t); return; }
     const current = (t.transaction_statuses ?? []).map((s) => s.status);
     if (current.some((s) => TERMINAL.includes(s))) return;
     await this.prisma.transaction_statuses.deleteMany({ where: { transaction_id: t.id } });
     await this.prisma.transaction_statuses.create({ data: { transaction_id: t.id, status: 'Expired' } });
+    // TD-074, second half: the change is RECORDED, the way the hourly sweep always did it.
+    // Silent before - a status rewritten on load with no trace on the deal or in the Audit Trail.
+    await this.audit.record(t.id, null, {
+      section: 'Status', field: 'Status', action: 'Listing automatically expired', source: 'System',
+      old: current.join(', '), new: 'Expired',
+      details: `Status automatically changed to Expired because the listing expiry date (${t.listing_expiry_date?.toISOString().slice(0, 10)}) has passed.`,
+    });
     t.transaction_statuses = await this.prisma.transaction_statuses.findMany({
       where: { transaction_id: t.id },
       orderBy: { status: 'asc' },

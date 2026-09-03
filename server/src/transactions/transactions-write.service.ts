@@ -1,3 +1,4 @@
+import { TransactionsService } from './transactions.service';
 import { ForbiddenException, Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -141,6 +142,7 @@ export class TransactionsWriteService {
     private readonly reviews: TransactionReviewService,
     private readonly reminders: ReminderSweepService,
     private readonly paymentCache: PaymentCacheService,
+    private readonly txns: TransactionsService,
   ) {}
 
   /**
@@ -452,7 +454,7 @@ export class TransactionsWriteService {
     return key in flags ? !!flags[key] : def;
   }
 
-  async update(user: AuthUserRecord | null, txnId: number, body: Record<string, unknown>): Promise<{ data: Record<string, unknown> }> {
+  async update(user: AuthUserRecord | null, txnId: number, body: Record<string, unknown>): Promise<{ data: Record<string, unknown>; message?: string }> {
     const t = await this.prisma.transactions.findFirst({ where: { id: txnId, deleted_at: null } });
     if (!t) throw new NotFoundException({ message: `No query results for model [App\\Models\\Transaction] ${txnId}.` });
 
@@ -580,6 +582,19 @@ export class TransactionsWriteService {
      * A FIXED-FEE DEAL IS NOT GUARDED HERE, deliberately rather than by oversight. It has no
      * percentage to compare against, and a term cannot hold an amount at all (TD-130). It is
      * left unchecked rather than checked wrongly.
+     */
+    /*
+     * TD-095 - THE BROKERAGE RULED ON 2026-09-03 THAT ACCOUNTING MAY CHANGE THE MONEY.
+     *
+     * A guard was written here refusing price, deposit and the commission settings for this role,
+     * and it was withdrawn the same morning: the brokerage's rule is that Accounting CAN make the
+     * change, provided it is recorded. So the control is not the problem - the record is.
+     *
+     * The edit is already written to the Audit Trail in full: who, which field, old value, new
+     * value and timestamp. What it does not reach is the DEAL'S OWN history, which carries only
+     * agent_changes - that gap is TD-082 and affects every non-agent role, not just this one.
+     *
+     * Do not re-add a role block here without asking again.
      */
     const typeForTerms = String(data.type ?? t.type ?? '');
     if (/precon/i.test(typeForTerms) && Object.prototype.hasOwnProperty.call(data, 'precon_terms')) {
@@ -780,7 +795,25 @@ export class TransactionsWriteService {
 
     const full = (await this.prisma.transactions.findUnique({ where: { id: txnId }, include: txnShowIncludeFor(user) })) as unknown as LoadedTxn;
     const ctx = { user: user ? ({ id: user.id, role: user.role, name: user.name } as ResourceUser) : null, commission: this.commission, prisma: this.prisma };
-    return { data: await transactionResource(full, ctx) };
+    /*
+     * TD-074, the announcing half: the save that causes the automatic status change is the one
+     * that says so. applyExpiry is the SAME rule the list uses - called, not re-spelled - and it
+     * no-ops for anything that is not a listing with an expiry date. If it moved the status, the
+     * response says which way and why, and the returned deal already carries the new status.
+     */
+    const statusRows = () => ((full as unknown as { transaction_statuses?: { status: string }[] }).transaction_statuses ?? []).map((x) => x.status).join(', ');
+    const statusesBefore = statusRows();
+    await this.txns.applyExpiry(full as never);
+    const statusesAfter = statusRows();
+    let statusNotice: string | undefined;
+    if (statusesBefore !== statusesAfter) {
+      const xd = (full as unknown as { listing_expiry_date?: Date | null }).listing_expiry_date;
+      const d = xd ? xd.toISOString().slice(0, 10) : '';
+      statusNotice = statusesAfter === 'Expired'
+        ? `The status was changed to Expired because the listing expiry date (${d}) has passed. Correcting the date restores it.`
+        : `The status was returned to Active because the listing expiry date (${d}) has not been reached.`;
+    }
+    return { data: await transactionResource(full, ctx), ...(statusNotice ? { message: statusNotice } : {}) };
   }
 
   // ---- fill normalization -------------------------------------------------

@@ -164,7 +164,54 @@ export class ReminderSweepService {
    * is left alone. Sold, Leased, Closed, Suspended, Terminated, Mutual Release, DFT and Void all
    * describe something a person decided, and a date passing is not evidence that they were wrong.
    */
+  /*
+   * TD-074 - the automatic expiry has to be reversible.
+   *
+   * autoExpire() moved Active -> Expired once the date had passed, and nothing ever moved it back.
+   * So a typo in the expiry date expired a live listing PERMANENTLY: correcting the date did not
+   * restore it, and recovering it needed a deliberate status change an agent cannot make once the
+   * deal is locked.
+   *
+   * ONLY WHAT THIS SWEEP EXPIRED IS RESTORED. A listing somebody expired on purpose stays expired -
+   * the same principle as the forward pass, whose comment reads "anything but Active is somebody's
+   * decision - leave it". The test is the deal's own audit trail: the most recent Status entry must
+   * be this job's own automatic expiry. If a person has touched the status since, theirs stands.
+   */
+  private async autoUnexpire(today: Date): Promise<void> {
+    const rows = await this.prisma.transactions.findMany({
+      where: { deleted_at: null, listing_expiry_date: { gt: dbDay(startOfDay(today)) } },
+      select: { id: true, listing_expiry_date: true, transaction_statuses: { select: { id: true, status: true } } },
+    });
+
+    for (const t of rows) {
+      const expired = t.transaction_statuses.find((x) => x.status === 'Expired');
+      if (!expired) continue;
+
+      const last = await this.prisma.audit_logs.findFirst({
+        where: { transaction_id: t.id, section: 'Status' },
+        orderBy: { id: 'desc' },
+        select: { action: true },
+      });
+      if (!last || last.action !== 'Listing automatically expired') continue;
+
+      const now = new Date();
+      await this.prisma.transaction_statuses.update({ where: { id: expired.id }, data: { status: 'Active', updated_at: now } });
+      await this.prisma.transactions.update({ where: { id: t.id }, data: { updated_at: now } });
+
+      await this.audit.record(t.id, SYSTEM_ACTOR, {
+        section: 'Status',
+        field: 'Status',
+        action: 'Listing automatically reactivated',
+        source: 'Scheduler',
+        old: 'Expired',
+        new: 'Active',
+        details: `Transaction status automatically changed back from Expired to Active because the listing expiry date is now ${toDateString(t.listing_expiry_date)}, which has not been reached.`,
+      });
+    }
+  }
+
   private async autoExpire(today: Date, result: SweepResult): Promise<void> {
+    await this.autoUnexpire(today);
     const yesterday = new Date(startOfDay(today).getFullYear(), startOfDay(today).getMonth(), startOfDay(today).getDate() - 1);
 
     const rows = await this.prisma.transactions.findMany({
