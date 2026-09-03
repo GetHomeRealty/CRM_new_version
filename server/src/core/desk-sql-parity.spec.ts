@@ -307,7 +307,9 @@ describe('the Analytics aggregate matches summing the same rows in TypeScript', 
       await makeDeal(tx, { agent: 'Large', comm_pct: null, comm_type: 'Fixed', comm_value: 9_000 });
       const out = await analyticsFor(tx).summary(null);
       const totals = out.by_agent.map((r) => r.total);
-      expect([...totals].sort((a, b) => b - a)).toEqual(totals);
+      // TD-002 made by_agent.total nullable - it is null only for an agent viewer, and this
+      // parity check runs as an administrator, so the ?? 0 is for the compiler, not the data.
+      expect([...totals].sort((a, b) => (b ?? 0) - (a ?? 0))).toEqual(totals);
     });
   });
 
