@@ -1,5 +1,6 @@
 import { crmPath } from './area';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import {
   bulkDeleteLeads, createLeadTag, deleteLead, deleteLeadTag, exportLeads,
@@ -66,25 +67,190 @@ const typePill = (t: string | null): string => {
 
 const SOURCE_PILL: Record<string, string> = { meta: 'info', 'google ads': 'warn', website: 'ok' };
 
+type InlineField = 'lead_status' | 'lead_type' | 'lead_source' | 'tags';
+
+const INLINE_COPY: Record<InlineField, { empty: string; saved: string }> = {
+  lead_status: { empty: 'Set status', saved: 'Status updated.' },
+  lead_type: { empty: 'Set type', saved: 'Type updated.' },
+  lead_source: { empty: 'Set source', saved: 'Source updated.' },
+  tags: { empty: 'Add tags', saved: 'Tags updated.' },
+};
+
+const valuePill = (field: InlineField, value: string): string => {
+  if (field === 'lead_status') return statusPill(value);
+  if (field === 'lead_type') return typePill(value);
+  if (field === 'lead_source') return SOURCE_PILL[value] ?? 'neutral';
+  return '';
+};
+
+/**
+ * An editor that behaves like part of the table until it is opened. The menu is portalled because
+ * the horizontally-scrollable table would otherwise clip it at the bottom of the card.
+ */
+function InlineLeadCell({
+  lead, field, options, tagOptions, disabled, saving, onSave,
+}: {
+  lead: Lead;
+  field: InlineField;
+  options: string[];
+  tagOptions?: string[];
+  disabled?: boolean;
+  saving: boolean;
+  onSave: (field: InlineField, value: string | string[], createdTags?: string[]) => Promise<boolean>;
+}) {
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const [active, setActive] = useState(0);
+  const [draftTags, setDraftTags] = useState<string[]>(lead.tags);
+  const [menuStyle, setMenuStyle] = useState<React.CSSProperties>({});
+  const isTags = field === 'tags';
+  const current = isTags ? lead.tags : [lead[field] as string | null].filter(Boolean) as string[];
+  const allOptions = isTags ? (tagOptions ?? []) : options;
+  const filtered = allOptions.filter((item) => label(item).toLowerCase().includes(query.trim().toLowerCase()));
+  const canCreate = isTags && query.trim() !== ''
+    && !allOptions.some((item) => item.toLowerCase() === query.trim().toLowerCase());
+  const itemCount = filtered.length + (canCreate ? 1 : 0);
+
+  const close = useCallback(() => {
+    setOpen(false);
+    setQuery('');
+    setActive(0);
+    setDraftTags(lead.tags);
+  }, [lead.tags]);
+
+  const placeMenu = useCallback(() => {
+    const rect = buttonRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const width = Math.max(220, Math.min(300, rect.width + 80));
+    setMenuStyle({ top: rect.bottom + 4, left: Math.min(rect.left, window.innerWidth - width - 10), width });
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    placeMenu();
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (!buttonRef.current?.contains(target) && !(target instanceof Element && target.closest('.lead-inline-menu'))) close();
+    };
+    const onPosition = () => placeMenu();
+    document.addEventListener('pointerdown', onPointerDown);
+    window.addEventListener('resize', onPosition);
+    window.addEventListener('scroll', onPosition, true);
+    window.setTimeout(() => (field === 'lead_status' ? menuRef.current : searchRef.current)?.focus(), 0);
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown);
+      window.removeEventListener('resize', onPosition);
+      window.removeEventListener('scroll', onPosition, true);
+    };
+  }, [close, open, placeMenu]);
+
+  const choose = async (value: string) => {
+    if (isTags) {
+      setDraftTags((tags) => tags.some((tag) => tag.toLowerCase() === value.toLowerCase())
+        ? tags.filter((tag) => tag.toLowerCase() !== value.toLowerCase())
+        : [...tags, value]);
+      return;
+    }
+    close();
+    if (current[0] !== value) await onSave(field, value);
+  };
+
+  const createTag = () => {
+    const value = query.trim();
+    if (!value) return;
+    setDraftTags((tags) => [...tags, value]);
+    setQuery('');
+    setActive(0);
+  };
+
+  const done = async () => {
+    const created = draftTags.filter((tag) => !(tagOptions ?? []).some((known) => known.toLowerCase() === tag.toLowerCase()));
+    const changed = draftTags.length !== lead.tags.length || draftTags.some((tag, index) => tag !== lead.tags[index]);
+    if (!changed) { close(); return; }
+    const next = [...draftTags];
+    close();
+    await onSave(field, next, created);
+  };
+
+  const onMenuKeyDown = (event: React.KeyboardEvent) => {
+    if (event.key === 'Escape') { event.preventDefault(); close(); buttonRef.current?.focus(); return; }
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      setActive((index) => itemCount ? (index + (event.key === 'ArrowDown' ? 1 : -1) + itemCount) % itemCount : 0);
+      return;
+    }
+    if (event.key === 'Enter' && (document.activeElement === searchRef.current || document.activeElement === menuRef.current) && itemCount) {
+      event.preventDefault();
+      if (canCreate && active === filtered.length) createTag(); else void choose(filtered[active]);
+    }
+  };
+
+  const display = isTags ? (
+    lead.tags.length ? <div className="lead-tags">{lead.tags.slice(0, 3).map((tag) => <span key={tag} className="lead-tag">{tag}</span>)}{lead.tags.length > 3 && <span className="lead-tag more">+{lead.tags.length - 3}</span>}</div> : null
+  ) : current[0] ? <span className={`pill ${valuePill(field, current[0])}`}>{label(current[0])}</span> : null;
+
+  return (
+    <div className={`lead-inline-wrap${open ? ' open' : ''}`}>
+      <button ref={buttonRef} type="button" className={`lead-inline-trigger${current.length ? ' populated' : ' empty'}`}
+        disabled={disabled || saving} aria-haspopup="listbox" aria-expanded={open}
+        aria-label={`${current.length ? 'Change' : INLINE_COPY[field].empty} for ${lead.name}`}
+        onClick={(event) => { event.stopPropagation(); setDraftTags(lead.tags); setOpen((value) => !value); }}
+        onKeyDown={(event) => { if (event.key === 'Escape') close(); }}>
+        {saving ? <span className="lead-inline-saving" aria-label="Saving" /> : <>
+          <span className="lead-inline-value">{display ?? <><span className="lead-inline-dash">—</span><span className="lead-inline-prompt">{INLINE_COPY[field].empty}</span></>}</span>
+          <span className="lead-inline-icon"><Icon name={current.length ? 'chevronDown' : 'edit'} size={13} /></span>
+        </>}
+      </button>
+      {open && createPortal(
+        <div ref={menuRef} className="lead-inline-menu" style={menuStyle} role="listbox" tabIndex={-1} aria-multiselectable={isTags || undefined}
+          onClick={(event) => event.stopPropagation()} onKeyDown={onMenuKeyDown}>
+          {field !== 'lead_status' && (
+            <div className="lead-inline-search">
+              <Icon name="search" size={14} />
+              <input ref={searchRef} value={query} onChange={(event) => { setQuery(event.target.value); setActive(0); }}
+                placeholder={isTags ? 'Search tags…' : `Search ${field === 'lead_type' ? 'types' : 'sources'}…`}
+                aria-label={isTags ? 'Search tags' : 'Search options'} />
+            </div>
+          )}
+          <div className="lead-inline-options">
+            {filtered.map((option, index) => {
+              const selected = isTags ? draftTags.some((tag) => tag.toLowerCase() === option.toLowerCase()) : current[0] === option;
+              return <button key={option} type="button" role="option" aria-selected={selected}
+                className={`lead-inline-option${active === index ? ' active' : ''}`}
+                onMouseEnter={() => setActive(index)} onClick={() => void choose(option)}>
+                {isTags && <span className={`lead-inline-check${selected ? ' checked' : ''}`}>{selected && <Icon name="check" size={11} />}</span>}
+                {!isTags && <span className={`pill ${valuePill(field, option)}`}>{label(option)}</span>}
+                {isTags && <span>{option}</span>}
+              </button>;
+            })}
+            {canCreate && <button type="button" role="option" aria-selected="false"
+              className={`lead-inline-option create${active === filtered.length ? ' active' : ''}`}
+              onMouseEnter={() => setActive(filtered.length)} onClick={createTag}><Icon name="plus" size={13} /> Create tag “{query.trim()}”</button>}
+            {!filtered.length && !canCreate && <div className="lead-inline-no-results">No matches</div>}
+          </div>
+          {isTags && <div className="lead-inline-footer"><button type="button" className="btn primary sm" onClick={() => void done()}>Done</button></div>}
+        </div>, document.body,
+      )}
+    </div>
+  );
+}
+
 /**
  * The Source cell: a pill for the channel and, underneath, the exact form the lead came through.
  * Only Meta leads carry a form/page name (`meta.form_name` / `meta.page_name`); website and Google
  * leads have no form recorded in the data, so they show just the channel.
  */
-function SourceCell({ lead }: { lead: Lead }) {
-  const src = lead.lead_source;
-  if (!src) return <span className="muted">—</span>;
+function SourceAttribution({ lead }: { lead: Lead }) {
   const form = lead.meta?.form_name;
   const page = lead.meta?.page_name;
+  if (!form && !page) return null;
   return (
-    <>
-      <span className={`pill ${SOURCE_PILL[src] ?? ''}`}>{label(src)}</span>
-      {(form || page) && (
-        <div className="muted lead-form-name" title={[page, form].filter(Boolean).join(' · ')}>
-          {form ? <><Icon name="clipboard" size={12} /> {form}</> : <><Icon name="doc" size={12} /> {page}</>}
-        </div>
-      )}
-    </>
+    <div className="muted lead-form-name" title={[page, form].filter(Boolean).join(' · ')}>
+      {form ? <><Icon name="clipboard" size={12} /> {form}</> : <><Icon name="doc" size={12} /> {page}</>}
+    </div>
   );
 }
 
@@ -133,6 +299,7 @@ export default function LeadsPage() {
   const [tagsOpen, setTagsOpen] = useState(false);
   const [tagSelectedOpen, setTagSelectedOpen] = useState(false);
   const [binOpen, setBinOpen] = useState(false);
+  const [savingCell, setSavingCell] = useState<string | null>(null);
 
   // Search is debounced so typing doesn't fire a request per keystroke.
   useEffect(() => {
@@ -278,6 +445,27 @@ export default function LeadsPage() {
       void load();
     } catch (ex) {
       toast(apiErrorMessage(ex, 'Could not update the lead'), 'bad');
+    }
+  };
+
+  const saveInline = async (lead: Lead, field: InlineField, value: string | string[], createdTags: string[] = []): Promise<boolean> => {
+    const key = `${lead.id}:${field}`;
+    const previous = leads.find((item) => item.id === lead.id) ?? lead;
+    setSavingCell(key);
+    try {
+      await Promise.all(createdTags.map((tag) => createLeadTag(tag)));
+      const updated = await updateLead(lead.id, { [field]: value });
+      setLeads((rows) => rows.map((item) => item.id === lead.id ? { ...item, ...updated } : item));
+      toast(INLINE_COPY[field].saved, 'ok');
+      if (field === 'tags') void loadTags();
+      void load();
+      return true;
+    } catch (ex) {
+      setLeads((rows) => rows.map((item) => item.id === lead.id ? previous : item));
+      toast(apiErrorMessage(ex, `Could not update ${field.replace('lead_', '')}`), 'bad');
+      return false;
+    } finally {
+      setSavingCell(null);
     }
   };
 
@@ -438,7 +626,7 @@ export default function LeadsPage() {
                   <td className="lead-sel-col">
                     <input type="checkbox" checked={selected.has(l.id)} onChange={() => toggle(l.id)} aria-label={`Select ${l.name}`} />
                   </td>
-                  <td>
+                  <td className="lead-inline-cell">
                     <button className="prop-link" type="button" onClick={() => navigate(crmPath(`lead/${l.id}`))}>{l.name}</button>
                     {l.unsubscribed && <span className="pill bad lead-unsub" title="Opted out of email — excluded from campaigns">Unsubscribed</span>}
                   </td>
@@ -447,19 +635,22 @@ export default function LeadsPage() {
                     <div className="muted">{l.phone || '—'}</div>
                     <div className="muted">{l.location || 'No location'}</div>
                   </td>
-                  <td>{l.lead_status ? <span className={`pill ${statusPill(l.lead_status)}`}>{label(l.lead_status)}</span> : <span className="muted">—</span>}</td>
-                  <td>{l.lead_type ? <span className={`pill ${typePill(l.lead_type)}`}>{label(l.lead_type)}</span> : <span className="muted">—</span>}</td>
-                  <td><SourceCell lead={l} /></td>
+                  <td className="lead-inline-cell">
+                    <InlineLeadCell lead={l} field="lead_status" options={options?.lead_status ?? ['hot', 'warm', 'cold', 'mild', 'closed']}
+                      disabled={!canEdit} saving={savingCell === `${l.id}:lead_status`} onSave={(field, value) => saveInline(l, field, value)} />
+                  </td>
+                  <td className="lead-inline-cell">
+                    <InlineLeadCell lead={l} field="lead_type" options={options?.lead_type ?? []}
+                      disabled={!canEdit} saving={savingCell === `${l.id}:lead_type`} onSave={(field, value) => saveInline(l, field, value)} />
+                  </td>
+                  <td className="lead-inline-cell">
+                    <InlineLeadCell lead={l} field="lead_source" options={options?.lead_source ?? []}
+                      disabled={!canEdit || isBrokerageLead(l)} saving={savingCell === `${l.id}:lead_source`} onSave={(field, value) => saveInline(l, field, value)} />
+                    <SourceAttribution lead={l} />
+                  </td>
                   <td>
-                    {l.tags.length === 0 ? <span className="muted">—</span> : (
-                      <div className="lead-tags">
-                        {l.tags.slice(0, 3).map((t) => (
-                          <button key={t} type="button" className="lead-tag" title={`Filter by "${t}"`}
-                            onClick={() => setFilter('tag', t)}>{t}</button>
-                        ))}
-                        {l.tags.length > 3 && <span className="lead-tag more">+{l.tags.length - 3}</span>}
-                      </div>
-                    )}
+                    <InlineLeadCell lead={l} field="tags" options={[]} tagOptions={tagData.tags}
+                      disabled={!canEdit} saving={savingCell === `${l.id}:tags`} onSave={(field, value, createdTags) => saveInline(l, field, value, createdTags)} />
                   </td>
                   <td>{l.assigned_to_name ?? <span className="muted">Unassigned</span>}</td>
                   <td>{shortDate(l.created_at)}</td>
