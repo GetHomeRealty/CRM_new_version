@@ -58,6 +58,7 @@ export const ADJUSTMENT_SECTIONS = ['Agent Adjustment', 'Advance Payment', 'Clie
  */
 export const IMPORT_FIELDS: ImportField[] = [
   { column: 'Transaction Type', key: 'type', type: 'enum', required: true, options: TRANSACTION_TYPES, hint: 'One of: ' + TRANSACTION_TYPES.join(' | '), example: 'Residential Buying' },
+  { column: 'Trade Number', key: 'trade_no', type: 'text', hint: 'Optional. Six digits inside the range for this deal type - Listing 100000-199999, Buying 200000-299999, Preconstruction 300000-399999, Lease 400000-499999, Referral 500000-599999 with _NB. Leave blank to have the next number allocated automatically.', example: '' },
   { column: 'Property Address', key: 'property', type: 'text', required: true, hint: 'Free text, max 255 characters', example: '123 Main Street, Toronto, ON' },
   { column: 'Deal Status', key: 'status', type: 'text', hint: 'Must be valid for the transaction type (see the Reference sheet). Blank uses the type default.', example: 'Open' },
   { column: 'Primary Agent', key: 'primary_agent', type: 'text', hint: 'Must match an active agent name exactly. Blank leaves the deal unassigned.', example: 'Ramesh Gollu' },
