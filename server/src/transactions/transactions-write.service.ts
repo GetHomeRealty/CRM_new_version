@@ -596,6 +596,44 @@ export class TransactionsWriteService {
      *
      * Do not re-add a role block here without asking again.
      */
+    /*
+     * TD-107 - an agent is not paid out of money the brokerage has not collected.
+     *
+     * The payout lives in admin_activities.agents[name].payments[], a row counting as paid when
+     * paid_status === 'Paid' (see agentPaymentsPaid). Nothing checked the deal had actually
+     * received its commission first, so two clicks recorded a payout - Paid Type, a batch number -
+     * against a deal that had collected nothing. It was masked only while the payout failed to
+     * persist (TD-081); with that fixed it saves, and with TD-106 the commission-received date is
+     * now reliably set when a payment settles the invoice, so 'nothing collected' is a real test.
+     *
+     * Refused when a payout row goes from not-Paid to Paid AND no linked invoice carries a
+     * commission-received date. An existing paid row that is merely re-saved is left alone, so this
+     * never blocks editing a deal whose agents were already, legitimately, paid.
+     */
+    if (Object.prototype.hasOwnProperty.call(data, 'admin_activities')) {
+      const wasPaid = (blob: unknown): Set<string> => {
+        const out = new Set<string>();
+        const agents = asObject(asObject(blob).agents);
+        for (const [name, info] of Object.entries(agents)) {
+          for (const pay of asArray(asObject(info).payments)) {
+            if (String(asObject(pay).paid_status) === 'Paid') out.add(name + '|' + JSON.stringify(asObject(pay).paid_date ?? '') + '|' + String(asObject(pay).amount ?? ''));
+          }
+        }
+        return out;
+      };
+      const before = wasPaid(parseJsonObject(t.admin_activities));
+      const nowPaid = wasPaid(data.admin_activities);
+      const newlyPaid = [...nowPaid].some((k) => !before.has(k));
+      if (newlyPaid) {
+        const invs = await this.prisma.invoices.findMany({ where: { transaction_id: txnId, deleted_at: null }, select: { commission_received_date: true } });
+        const collected = invs.some((i) => i.commission_received_date !== null);
+        if (!collected) {
+          const m = 'This deal has not received its commission yet, so an agent payout cannot be recorded against it. Record the commission payment on the invoice first - the received date fills in automatically - then pay the agent.';
+          throw new UnprocessableEntityException({ message: m, errors: { admin_activities: [m] } });
+        }
+      }
+    }
+
     const typeForTerms = String(data.type ?? t.type ?? '');
     if (/precon/i.test(typeForTerms) && Object.prototype.hasOwnProperty.call(data, 'precon_terms')) {
       const masterPct = Object.prototype.hasOwnProperty.call(data, 'precon_comm_pct')
