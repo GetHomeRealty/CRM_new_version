@@ -328,7 +328,11 @@ export default function DeskLayout({ area = DEFAULT_AREA }: { area?: Area }) {
         type="button"
         className="area-option precon"
         aria-label="Open Precon/Canada in a new tab"
-        onClick={() => window.open('https://precon.gethomerealty.ca', '_blank', 'noopener,noreferrer')}
+        onClick={() => window.open(
+          'https://precon.gethomerealty.ca/api/auth/crm/start?next=%2Fcommunities',
+          '_blank',
+          'noopener,noreferrer',
+        )}
       >
         <span>Precon/Canada</span><span className="area-external" aria-hidden="true">↗</span>
       </button>
