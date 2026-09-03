@@ -63,6 +63,16 @@ export default function AddTransactionModal({ open, onClose, onCreated }: AddTra
   const [form, setForm] = useState<TransactionForm>(EMPTY);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  /**
+   * TD-056 — which field is wrong, said next to that field.
+   *
+   * The date rules were enforced by returning early from `submit`, so a broken pair produced no
+   * request and nothing durable on screen — the modal simply sat there, and the usual reaction is
+   * to assume the application is broken and keep clicking. The hints under the inputs already
+   * state both rules; this puts the failure where the reader is already looking, the way the
+   * Client Information sub-form and the Calendar's end-time check both already do.
+   */
+  const [fieldErrors, setFieldErrors] = useState<Partial<Record<keyof TransactionForm, string>>>({});
 
   // Team option (bottom of the modal). Agent 1 (primary) defaults to the creator.
   const [teamMode, setTeamMode] = useState('solo'); // 'solo' | 'team'
@@ -152,7 +162,11 @@ export default function AddTransactionModal({ open, onClose, onCreated }: AddTra
    */
   const statusOpts = form.type ? pickableStatusesFor(form.type) : [];
   const today = new Date().toISOString().slice(0, 10);
-  const set = (k: keyof TransactionForm, v: string) => setForm((f) => ({ ...f, [k]: v }));
+  const set = (k: keyof TransactionForm, v: string) => {
+    setForm((f) => ({ ...f, [k]: v }));
+    // TD-056 — an error about a field stops being true the moment that field is edited.
+    setFieldErrors((e) => (e[k] ? { ...e, [k]: undefined } : e));
+  };
 
   const reset = () => { setForm(EMPTY); setError(''); setTeamMode('solo'); setTeamMembers([]); setPrimaryAgent(isAgent ? (user?.name || '') : ''); };
   const close = () => { reset(); onClose(); };
@@ -162,6 +176,7 @@ export default function AddTransactionModal({ open, onClose, onCreated }: AddTra
 
   const submit = async () => {
     setError('');
+    setFieldErrors({});
     if (!form.type || !form.property.trim()) { toast('Please fill all required fields', 'bad'); return; }
     if (!form.status) { toast('Please select a Status', 'bad'); return; }
     const payload: Record<string, unknown> = { type: form.type, property: form.property.trim(), status: form.status };
@@ -176,8 +191,20 @@ export default function AddTransactionModal({ open, onClose, onCreated }: AddTra
         toast('Please fill all required fields', 'bad'); return;
       }
       if (form.comm_type === '%' && commValue > 100) { toast('Commission % cannot exceed 100', 'bad'); return; }
-      if (form.offer_date > today) { toast('Offer date cannot be a future date', 'bad'); return; }
-      if (form.closing_date < form.offer_date) { toast('Closing date cannot be before the offer date', 'bad'); return; }
+      /*
+       * TD-056 — BOTH date rules are collected before returning, so a form with two broken dates
+       * does not send the user round twice. The toast stays for the case where the offending field
+       * has been scrolled out of view; the inline message is what actually explains it. The wording
+       * matches the API's, so the same mistake reads the same whichever half catches it.
+       */
+      const dateErrors: Partial<Record<keyof TransactionForm, string>> = {};
+      if (form.offer_date > today) dateErrors.offer_date = 'The offer date cannot be in the future.';
+      if (form.closing_date < form.offer_date) dateErrors.closing_date = 'The closing date cannot be before the offer date.';
+      if (Object.keys(dateErrors).length) {
+        setFieldErrors(dateErrors);
+        toast(Object.values(dateErrors)[0] as string, 'bad');
+        return;
+      }
       Object.assign(payload, {
         comm_type: form.comm_type,
         comm_value: commValue,
@@ -305,10 +332,15 @@ export default function AddTransactionModal({ open, onClose, onCreated }: AddTra
                 <div className="g2">
                   <div className="field"><label>Offer Date <span className="req">*</span></label>
                     <input type="date" max={today} value={form.offer_date} onChange={(e) => set('offer_date', e.target.value)} />
-                    <span className="help">Cannot be a future date.</span></div>
+                    {/* TD-056 — the rule, or the reason this value breaks it. Never both at once. */}
+                    {fieldErrors.offer_date
+                      ? <span className="help" style={{ color: 'var(--bad)' }}>{fieldErrors.offer_date}</span>
+                      : <span className="help">Cannot be a future date.</span>}</div>
                   <div className="field"><label>Closing Date <span className="req">*</span></label>
                     <input type="date" min={form.offer_date || undefined} value={form.closing_date} onChange={(e) => set('closing_date', e.target.value)} />
-                    <span className="help">Cannot be before the offer date.</span></div>
+                    {fieldErrors.closing_date
+                      ? <span className="help" style={{ color: 'var(--bad)' }}>{fieldErrors.closing_date}</span>
+                      : <span className="help">Cannot be before the offer date.</span>}</div>
                 </div>
               </>
             )}

@@ -66,3 +66,47 @@ describe('a refused create reports every problem at once (TD-113)', () => {
     expect(r.errors.status[0]).toContain('is not a status a Residential Sale Listing transaction can have');
   });
 });
+
+/**
+ * TD-056 — the date rules, on the endpoint the browser is not the only caller of.
+ *
+ * The Add Transaction form has always stated both rules under its inputs and refused a save that
+ * broke them. The API accepted anything: a closing date before the offer date returned 200 and
+ * stored it. A rule enforced only in the browser is a rule any import, integration or direct call
+ * walks past.
+ */
+describe('deal date rules are enforced by the API (TD-056)', () => {
+  const base = {
+    type: 'Residential Buying', property: '1 ZZ-TEST Rd', status: 'Secured Firm',
+    comm_type: '%', comm_value: 2.5, price: 500000,
+  };
+  const day = (offsetDays: number): string =>
+    new Date(Date.now() + offsetDays * 86_400_000).toISOString().slice(0, 10);
+
+  it('refuses an offer date in the future', async () => {
+    const r = await refusal({ ...base, offer_date: day(30), closing_date: day(60) });
+    expect(r.errors.offer_date?.[0]).toBe('The offer date cannot be in the future.');
+  });
+
+  it('refuses a closing date before the offer date', async () => {
+    const r = await refusal({ ...base, offer_date: day(-10), closing_date: day(-40) });
+    expect(r.errors.closing_date?.[0]).toBe('The closing date cannot be before the offer date.');
+  });
+
+  it('reports both broken dates at once, like every other rule on this endpoint', async () => {
+    const r = await refusal({ ...base, offer_date: day(30), closing_date: day(10) });
+    expect(Object.keys(r.errors).sort()).toEqual(['closing_date', 'offer_date']);
+  });
+
+  it('accepts the ordinary case — offer in the past, closing after it', async () => {
+    // Passes validation and then fails on a stub, which is how we know it got past the rules.
+    await expect(refusal({ ...base, offer_date: day(-10), closing_date: day(20) }))
+      .rejects.toThrow();
+  });
+
+  it('says nothing about dates a listing does not carry', async () => {
+    const r = await refusal({ type: 'Residential Sale Listing', status: 'Active' });
+    expect(r.errors.offer_date).toBeUndefined();
+    expect(r.errors.closing_date).toBeUndefined();
+  });
+});

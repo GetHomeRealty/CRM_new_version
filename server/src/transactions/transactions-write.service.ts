@@ -43,6 +43,38 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
  */
 const PHONE_MIN_DIGITS = 7;
 
+/** A stored or submitted date reduced to its day, so two of them compare as ISO strings. */
+const asDay = (v: unknown): string => {
+  if (v instanceof Date) return v.toISOString().slice(0, 10);
+  return String(v ?? '').trim().slice(0, 10);
+};
+
+/**
+ * TD-056 — the deal date rules, enforced where they can actually be relied on.
+ *
+ * These are not new rules. The Add Transaction form states both of them under the inputs
+ * ("Cannot be a future date", "Cannot be before the offer date") and refuses a save that breaks
+ * them. THE API DID NOT: measured 2026-08-22, a PUT with a closing date of 2026-01-01 against an
+ * offer date of 2026-08-22 returned 200 and stored it, as did a closing date of 3000-12-31. So the
+ * browser silently refused saves the API would have accepted, and anything writing to the API
+ * directly - an import, an integration, a script - could store dates the UI would never allow.
+ *
+ * Only the two rules the application already states are implemented here. The listing contract and
+ * expiry dates are deliberately NOT ordered against each other: no screen in the product states
+ * that rule, and inventing it would be a business decision rather than a fix. It is worth asking
+ * for, and TD-074 is the entry that shows what a mistyped expiry date does today.
+ *
+ * UTC day, matching `toDateString` and `startOfToday` elsewhere in the codebase, so a date compares
+ * the same way wherever it is read.
+ */
+function dateRuleProblems(offer: string, closing: string): Record<string, string> {
+  const problems: Record<string, string> = {};
+  const today = new Date().toISOString().slice(0, 10);
+  if (offer && offer > today) problems.offer_date = 'The offer date cannot be in the future.';
+  if (offer && closing && closing < offer) problems.closing_date = 'The closing date cannot be before the offer date.';
+  return problems;
+}
+
 const REVERT_BOOL = new Set(['comm_adjust_enabled', 'listing_adj_enabled', 'coop_adj_enabled', 'precon_net_of_hst', 'mls_verified', 'conditional_offer', 'inter_board_enabled']);
 const REVERT_DATE = new Set(['offer_date', 'closing_date', 'listing_contract_date', 'listing_expiry_date']);
 const isListingFinancial = (type: string): boolean => isListingType(type) || type === 'Business Sale';
@@ -199,6 +231,12 @@ export class TransactionsWriteService {
     if (knownType && !blank(body.status)) {
       const problem = statusSetProblem(type, [String(body.status)]);
       if (problem) errors.status = [problem];
+    }
+
+    // TD-056 — the same two date rules the form states, joining the same reply. On create every
+    // date is newly supplied, so both can be judged and both are reported.
+    for (const [field, message] of Object.entries(dateRuleProblems(asDay(body.offer_date), asDay(body.closing_date)))) {
+      errors[field] = [message];
     }
 
     if (Object.keys(errors).length) {
@@ -486,6 +524,30 @@ export class TransactionsWriteService {
       if (priceIn > 0 && depositIn > priceIn) {
         const m = 'The deposit cannot be larger than the purchase price.';
         throw new UnprocessableEntityException({ message: m, errors: { deposit: [m] } });
+      }
+    }
+
+    /*
+     * TD-056 - the deal date rules, on the endpoint the browser is not the only caller of.
+     *
+     * Read like the money rules above: a date that is being changed is judged against the one that
+     * is not, so submitting only a closing date is still checked against the stored offer date.
+     *
+     * ONLY A FIELD THE CALLER ACTUALLY SUBMITTED IS REFUSED. Deals already holding a broken pair
+     * exist - the defect proves several were stored - and complaining about a stored offer date
+     * when somebody is trying to correct the closing date would lock them out of the fix. Same
+     * reasoning as the status rules below, which litigate a set only when it is being changed.
+     */
+    const offerPresent = Object.prototype.hasOwnProperty.call(data, 'offer_date');
+    const closingPresent = Object.prototype.hasOwnProperty.call(data, 'closing_date');
+    if (offerPresent || closingPresent) {
+      const problems = dateRuleProblems(
+        asDay(offerPresent ? data.offer_date : t.offer_date),
+        asDay(closingPresent ? data.closing_date : t.closing_date),
+      );
+      const submitted: Record<string, boolean> = { offer_date: offerPresent, closing_date: closingPresent };
+      for (const [field, m] of Object.entries(problems)) {
+        if (submitted[field]) throw new UnprocessableEntityException({ message: m, errors: { [field]: [m] } });
       }
     }
 
