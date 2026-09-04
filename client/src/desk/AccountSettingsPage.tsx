@@ -63,7 +63,7 @@ export default function AccountSettingsPage() {
       // CRM's mailboxes alongside its own and the CRM's listed the Desk's. The two areas are
       // meant to be separate — the server has always taken a scope for exactly this, and the
       // Integrations card next door already passes one. Only this screen did not.
-      getAccountProfile(), getAccountSettings(), listMyMailAccounts(area), getMyPhoto(),
+      getAccountProfile(), getAccountSettings(), listMyMailAccounts(), getMyPhoto(),
     ]);
 
     if (p.status === 'fulfilled') { setName(p.value.name); setUsername(p.value.username); setPhone(p.value.phone); }
@@ -282,7 +282,7 @@ export default function AccountSettingsPage() {
 
         {accounts.length === 0 ? (
           <div className="acct-empty">
-            <p className="help">No email accounts connected for {AREA_LABEL[area]} yet.</p>
+            <p className="help">No Hub email account connected yet.</p>
             <p className="help">Add your first email account to get started.</p>
           </div>
         ) : (
@@ -430,4 +430,3 @@ export default function AccountSettingsPage() {
     </>
   );
 }
-

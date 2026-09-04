@@ -33,20 +33,16 @@ export class InboxService {
   constructor(private readonly prisma: PrismaService) {}
 
   /**
-   * The account whose mail this area's inbox shows: the one marked primary in Integrations.
-   *
-   * The area's own primary first, an unassigned-scope primary only as a fallback — an account that
-   * pre-dates the split must not outrank a deliberate choice made inside the area. Null when the area
-   * has no primary at all.
+   * The user's Hub-wide primary mailbox. Both CRM and Transactions resolve the same account.
    */
-  private async primaryAccount(userId: number, area: Area) {
+  private async primaryAccount(userId: number, _area: Area) {
     const pick = { id: true, from_email: true, inbound_enabled: true, imap_host: true };
-    return (await this.prisma.mail_accounts.findFirst({ where: { user_id: userId, is_default: true, scope: area }, select: pick }))
-      ?? (await this.prisma.mail_accounts.findFirst({ where: { user_id: userId, is_default: true, scope: null }, select: pick }));
+    return (await this.prisma.mail_accounts.findFirst({ where: { user_id: userId, is_default: true }, select: pick }))
+      ?? (await this.prisma.mail_accounts.findFirst({ where: { user_id: userId, is_active: true }, select: pick, orderBy: { id: 'asc' } }));
   }
 
   /**
-   * The message filter for one area.
+   * The message filter for the user's shared Hub mailbox.
    *
    * One account's mail, not every connected address: pouring them all into one list makes the inbox a
    * place to search rather than a place to work, and marking one primary is how you say which mailbox
@@ -60,8 +56,8 @@ export class InboxService {
    *
    * Takes the already-resolved primary so a single request does not look it up twice.
    */
-  private scopeFor(primary: { id: number } | null, area: Area): Prisma.inbound_emailsWhereInput {
-    return primary ? { account_id: primary.id } : { mail_account: { is: { OR: [{ scope: area }, { scope: null }] } } };
+  private scopeFor(primary: { id: number } | null, _area: Area): Prisma.inbound_emailsWhereInput {
+    return primary ? { account_id: primary.id } : {};
   }
 
   /** The message list, newest first, without the heavy bodies. */
