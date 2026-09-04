@@ -32,7 +32,7 @@ export const LEAD_TYPE = [
 ] as const;
 
 export const CLIENT_TYPE = [
-  'Investor', 'custom buyer', 'first home buyer', 'seasonal investor', 'commercial buyer',
+  'Investor', 'custom buyer', 'first home buyer', 'move-up buyer', 'seasonal investor', 'commercial buyer',
 ] as const;
 
 export const GENDERS = ['male', 'female', 'other', 'prefer not to say'] as const;
