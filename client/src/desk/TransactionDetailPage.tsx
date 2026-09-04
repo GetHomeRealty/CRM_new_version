@@ -221,6 +221,8 @@ export default function TransactionDetailPage() {
   const [txn, setTxn] = useState<Transaction | null>(null); // raw API object (carries team + financial breakdown)
   const [mode, setMode] = useState<'view' | 'edit'>(params.get('mode') === 'edit' && canEdit ? 'edit' : 'view');
   const [agents, setAgents] = useState<string[]>([]);
+  // TD-045 - true when the agent on this deal is an external/co-op name rather than an account.
+  const [externalAgent, setExternalAgent] = useState(false);
   const [saving, setSaving] = useState(false);
   const [teamOpen, setTeamOpen] = useState(false);
   const [finOpen, setFinOpen] = useState(false);
@@ -1179,8 +1181,26 @@ export default function TransactionDetailPage() {
                 {isAgent
                   ? <input value={form.agent} readOnly style={{ background: 'var(--surface-2)', cursor: 'not-allowed' }} title="The agent who creates the transaction is its primary agent." />
                   : (<>
-                    <input list="agentList" value={form.agent} disabled={ro} onChange={(e) => set('agent', e.target.value)} placeholder="Search Agent..." />
-                    <datalist id="agentList">{agents.map((a) => <option key={a} value={a} />)}</datalist>
+                    {/* TD-045 - the agent is PICKED, not typed. This was an <input list> with a
+                      * <datalist>, which only SUGGESTS: any text was accepted and saved, so one
+                      * agent could appear several times in Analytics under different spellings.
+                      * A deal may still name an external or co-op agent who has no account, so
+                      * that stays possible - but as a deliberate choice rather than a typo. */}
+                    <select
+                      value={externalAgent || (!!form.agent && !agents.includes(form.agent)) ? '__external__' : (form.agent || '')}
+                      disabled={ro}
+                      onChange={(e) => {
+                        if (e.target.value === '__external__') { setExternalAgent(true); set('agent', ''); }
+                        else { setExternalAgent(false); set('agent', e.target.value); }
+                      }}
+                    >
+                      <option value="">Select agent</option>
+                      {agents.map((a) => <option key={a} value={a}>{a}</option>)}
+                      <option value="__external__">External / co-op agent…</option>
+                    </select>
+                    {(externalAgent || (!!form.agent && !agents.includes(form.agent))) && (
+                      <input value={form.agent} disabled={ro} onChange={(e) => set('agent', e.target.value)} placeholder="External agent name" style={{ marginTop: 6 }} />
+                    )}
                   </>)}
               </Field>
               <Field label="Property Address" req><input value={form.property} disabled={ro} onChange={(e) => set('property', e.target.value)} /></Field>
@@ -1260,6 +1280,10 @@ export default function TransactionDetailPage() {
             </Field>
             <Field label="Commission Agent">
               <input list="agentList" value={form.commission_agent} disabled={ro} onChange={(e) => set('commission_agent', e.target.value)} placeholder="Search Agent..." />
+              {/* Kept beside the field that uses it: TD-045 turned Agent Name into a <select> and
+                * removed the shared <datalist> this input had been borrowing, silently breaking
+                * its suggestions - so it now owns the list it points at. */}
+              <datalist id="agentList">{agents.map((a) => <option key={a} value={a} />)}</datalist>
             </Field>
             <Field label="Commission Receivable in Terms">
               <input type="number" min="0" max="200" value={form.precon_term_count} disabled={ro} onChange={(e) => set('precon_term_count', e.target.value)} placeholder="e.g. 3" />

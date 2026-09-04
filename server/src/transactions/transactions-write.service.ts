@@ -803,6 +803,20 @@ export class TransactionsWriteService {
         }
       }
 
+      /*
+       * TD-045 - the link follows the name, on update exactly as it already does on create.
+       *
+       * create() resolves agent_user_id beside the name and stores NULL when the name matches no
+       * account - an external or co-op agent, which the brokerage has confirmed is legitimate.
+       * update() did not: it wrote `agent` straight through FILL_KEYS, so editing the name left the
+       * id pointing at the previous person. Same resolver, same client, same rule.
+       */
+      if (Object.prototype.hasOwnProperty.call(fill, 'agent')) {
+        const typed = fill.agent === null || fill.agent === undefined ? '' : String(fill.agent).trim();
+        fill.agent = typed === '' ? null : typed;
+        fill.agent_user_id = typed === '' ? null : ((await this.people.resolve(null, typed, { client: tx }))?.id ?? null);
+      }
+
       await this.captureRemovedRows(tx, t, actor, data);
 
       /*
@@ -1464,6 +1478,13 @@ export class TransactionsWriteService {
       }
 
       const column = this.audit.columnForLabel(field);
+      if (column === 'agent') {
+        // TD-045 - reverting the name must re-resolve the link, or agent_user_id keeps pointing at
+        // the person whose name was just undone. SCALAR_MAP exposes this column as 'Assigned Agent'.
+        const back = old === null || old === undefined ? '' : String(old).trim();
+        await tx.transactions.update({ where: { id: txnId }, data: { agent: back === '' ? null : back, agent_user_id: back === '' ? null : ((await this.people.resolve(null, back, { client: tx }))?.id ?? null), updated_at: now } });
+        return true;
+      }
       if (column) {
         let value: unknown;
         if (REVERT_BOOL.has(column)) value = old === 'Yes';
