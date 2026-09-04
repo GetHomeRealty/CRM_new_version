@@ -21,7 +21,21 @@ export class MlsService {
   private ensureConfigured(): void {
     if (!this.configured) {
       throw new ServiceUnavailableException({
-        error: 'MLS is not configured. Set MLS_API_URL and MLS_ACCESS_TOKEN in the API environment, then restart.',
+        /*
+         * TD-031 - the reply names the problem, not the server's configuration.
+         *
+         * This body was returned verbatim to whoever asked, including agents: it named two
+         * environment variables and told the reader to restart the API. That is a deployment
+         * instruction handed to somebody who cannot act on it, and it describes the shape of the
+         * server's configuration to a user who has no business knowing it. All three MLS routes
+         * returned it, so an agent met it simply by opening the module.
+         *
+         * The variable names have not been lost, only moved to where they are useful: they are in
+         * this file, three lines below, for whoever wires the integration up.
+         *
+         * MLS_API_URL and MLS_ACCESS_TOKEN are the two settings this needs.
+         */
+        error: 'MLS is not connected yet. An administrator needs to finish setting it up before listings and Favorites can be used.',
       });
     }
   }
