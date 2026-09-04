@@ -217,12 +217,12 @@ export class DeskAnalyticsService {
       // on the key is not cosmetic: without it two agents on identical totals could swap places
       // between requests, and a table that reorders itself for no reason reads as a bug.
       this.prisma.$queryRawUnsafe<GroupRow[]>(`
-        // TD-045 - one agent, one row, keyed on IDENTITY rather than on the typed name. Grouping
-        // on the resolved NAME would be worse: two accounts sharing a name would pool their
-        // commission, and a rename would split one agent's history across the old and new label.
-        // So the GROUP BY is the account id where there is one, and only the DISPLAY is the name.
-        // A deal with no id falls back to its trimmed, case-folded name - an external/co-op agent,
-        // which is legitimate. An ambiguous name is left alone rather than guessed at.
+        -- TD-045 - one agent, one row, keyed on IDENTITY rather than on the typed name. Grouping
+        -- on the resolved NAME would be worse: two accounts sharing a name would pool their
+        -- commission, and a rename would split one agent's history across the old and new label.
+        -- So the GROUP BY is the account id where there is one, and only the DISPLAY is the name.
+        -- A deal with no id falls back to its trimmed, case-folded name - an external/co-op agent,
+        -- which is legitimate. An ambiguous name is left alone rather than guessed at.
         SELECT COALESCE(NULLIF(btrim(au.name), ''), NULLIF(btrim(t.agent), ''), 'Unassigned') AS key,
                COUNT(*) AS count, COALESCE(SUM(${AMOUNT}), 0) AS total
         FROM transactions t
