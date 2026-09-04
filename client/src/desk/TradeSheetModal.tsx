@@ -3,6 +3,7 @@ import { loadPdfLib } from './heavyLibs';
 import { formatCurrency, commissionSummary, isListingFinancialType } from './format';
 import { sendTradeSheet } from '../lib/api';
 import { bytesToBase64 } from './pdf';
+import { splitPropertyAddress } from './propertyAddress';
 import { useToast } from './toast';
 import { apiErrorMessage } from '../lib/apiError';
 import type { BrokerageLite, ClientLite, FinancialAgentLine, NumericInput, Transaction } from '../types';
@@ -12,6 +13,34 @@ import type { BrokerageLite, ClientLite, FinancialAgentLine, NumericInput, Trans
 const PDF_URL = '/forms/trade-record-sheet-640.pdf';
 
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+
+/*
+ * TD-036 — A VALUE THAT DOES NOT FIT ITS BOX MUST NOT VANISH.
+ *
+ * Every field on Form 640 carries a `maxLength`, and pdf-lib THROWS when a longer value is set:
+ * "Attempted to set text with length=51 for TextField with maxLength=50". The fill loop wrapped
+ * `setText` in `catch {}` to skip radio buttons and checkboxes, so that throw was swallowed too and
+ * the field was left blank — which is the whole of this defect. The Property line was not unbound;
+ * it was refused, silently, for any address over fifty characters.
+ *
+ * It is not only the address. `txtp_commission*` allow ten characters, so a commission of
+ * "1,234,567.89" is twelve and disappears; `txtp_deposit` allows twelve; the phone boxes allow
+ * fourteen. This is a trade record — a figure that is silently absent is worse than one that is
+ * abbreviated, because nothing on the page says anything is missing.
+ *
+ * SEPARATORS GO BEFORE DIGITS DO. For anything that looks like a number, the grouping commas are
+ * dropped first — "1,234,567.89" becomes "1234567.89" and fits — so the figure stays exact. Only
+ * text that still will not fit is cut, and cutting text loses the end of a name or a street, which
+ * is legible as an abbreviation rather than misreadable as a different amount.
+ */
+function fitToField(value: string, maxLength: number | undefined): string {
+  if (!maxLength || maxLength <= 0 || value.length <= maxLength) return value;
+  if (/^[\d,.\s$-]+$/.test(value)) {
+    const compact = value.replace(/[,\s]/g, '');
+    if (compact.length <= maxLength) return compact;
+  }
+  return value.slice(0, maxLength);
+}
 
 // Fill OREA Form 640 by its exact AcroForm field names.
 async function fillPdf(buf: ArrayBuffer, txn: Transaction): Promise<Uint8Array> {
@@ -35,6 +64,7 @@ async function fillPdf(buf: ArrayBuffer, txn: Transaction): Promise<Uint8Array> 
   const yy = String(d.getFullYear()).slice(-2);
   const sellerC = listing ? clients : [];
   const buyerC = listing ? [] : clients;
+  const addr = splitPropertyAddress(txn.property);
   // Fill BOTH the Seller and Buyer lawyer blocks from their dedicated fields; fall back
   // to the legacy (mirrored primary) lawyer_* for the side that matches this deal.
   const lawyerSide: Record<string, string> = {
@@ -53,8 +83,13 @@ async function fillPdf(buf: ArrayBuffer, txn: Transaction): Promise<Uint8Array> 
     txtdatedat1_d: pad(d.getDate()),
     txtdatedat1_m: pad(d.getMonth() + 1),
     txtdatedat1_y: yy,
-    // Property
-    txtp_street: txn.property || '',
+    // Property — six boxes on one line, not one. See `splitPropertyAddress` and TD-036.
+    txtp_streetnum: addr.streetnum,
+    txtp_street: addr.street,
+    txtp_UnitNumber: addr.unit,
+    txtp_city: addr.city,
+    txtp_state: addr.state,
+    txtp_zipcode: addr.zip,
     // Sale No / MLS No (shared page 1 + 2)
     txtsale_no: String(txn.trade_no || ''),
     txtmlsnumber: txn.mls_num || '',
@@ -111,9 +146,11 @@ async function fillPdf(buf: ArrayBuffer, txn: Transaction): Promise<Uint8Array> 
   fields.forEach((field) => {
     const value = map[field.getName()];
     // pdf-lib's dynamic field API: only PDFTextField exposes setText.
-    const textField = field as { setText?: (t: string) => void };
+    const textField = field as { setText?: (t: string) => void; getMaxLength?: () => number | undefined };
     if (value && typeof textField.setText === 'function') {
-      try { textField.setText(String(value)); } catch { /* skip non-text */ }
+      let maxLength: number | undefined;
+      try { maxLength = textField.getMaxLength?.(); } catch { maxLength = undefined; }
+      try { textField.setText(fitToField(String(value), maxLength)); } catch { /* skip non-text */ }
     }
   });
 

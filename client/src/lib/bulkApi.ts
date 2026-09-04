@@ -1,4 +1,5 @@
 import api from './axios';
+import { filenameFromDisposition, saveBlob } from './download';
 import type { BulkSelection, BulkSummary } from '../types';
 
 /** Bulk transaction data export and document ZIP download. */
@@ -9,14 +10,8 @@ export const bulkSummary = (sel: BulkSelection): Promise<BulkSummary> =>
 /** POST a selection and download whatever the server streams back. */
 async function downloadPost(url: string, body: unknown, fallbackName: string): Promise<void> {
   const res = await api.post(url, body, { responseType: 'blob' });
-  const dispo = String(res.headers['content-disposition'] ?? '');
-  const m = /filename="?([^";]+)"?/i.exec(dispo);
-  const objectUrl = URL.createObjectURL(res.data as Blob);
-  const a = document.createElement('a');
-  a.href = objectUrl;
-  a.download = m ? m[1] : fallbackName;
-  document.body.appendChild(a); a.click(); a.remove();
-  setTimeout(() => URL.revokeObjectURL(objectUrl), 120_000);
+  // TD-046 — one reader for the server's filename, shared with every other download path.
+  saveBlob(res.data as Blob, filenameFromDisposition(res.headers, fallbackName), 120_000);
 }
 
 export const exportTransactionsXlsx = (sel: BulkSelection): Promise<void> =>

@@ -9,6 +9,7 @@ import { ReportsService } from './reports.service';
 import { ReportExportService } from './report-export.service';
 import { DocumentReminderService, type ReminderRequest, type ReminderScope } from './document-reminder.service';
 import type { ReportFilters, ReportQuery } from './report.types';
+import { contentDisposition } from '../common/content-disposition';
 
 /** Reports API — all endpoints require the `reports` screen (agents are auto-scoped in the service). */
 @Controller('reports')
@@ -87,7 +88,7 @@ export class ReportsController {
   private download(res: Response, buf: Buffer, name: string, stamp: string, ext: string, mime: string): void {
     const file = `${name.replace(/[^\w]+/g, '_').replace(/^_+|_+$/g, '')}_${stamp}.${ext}`;
     res.setHeader('Content-Type', mime);
-    res.setHeader('Content-Disposition', `attachment; filename="${file}"`);
+    res.setHeader('Content-Disposition', contentDisposition(file));
     res.setHeader('Content-Length', String(buf.length));
     res.end(buf);
   }

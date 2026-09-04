@@ -6,6 +6,7 @@ import { Screen } from '../auth/decorators';
 import { AuditLogService, type AuditLogQuery } from './audit-log.service';
 import { AuditExportService, type ExportFormat } from './audit-export.service';
 import type { Response } from 'express';
+import { contentDisposition } from '../common/content-disposition';
 
 @Controller('audit-logs')
 @UseGuards(AuthGuard, ScreenGuard, AreaGuard)
@@ -55,7 +56,7 @@ export class AuditLogController {
     const file = await this.exports.export(query ?? {}, format);
 
     res.setHeader('Content-Type', file.contentType);
-    res.setHeader('Content-Disposition', `attachment; filename="${file.filename}"`);
+    res.setHeader('Content-Disposition', contentDisposition(file.filename));
     res.setHeader('Content-Length', String(file.body.length));
     // Read by the client so it can tell somebody their export was cut short, rather than handing
     // them a file that looks complete.

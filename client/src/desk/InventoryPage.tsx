@@ -9,7 +9,7 @@ import {
 } from '../lib/marketingInventoryApi';
 import {
   MARKETING_ITEM_TYPES, balanceFor, countAsOnDateFor, deriveStatusFor, displayType,
-  hasBeenReturned, isReturnScheduled, normalizeAssignments, outstandingQty, totalAssignedQty,
+  hasBeenReturned, isReturnScheduled, normalizeAssignments, outstandingQty, todayKey, totalAssignedQty,
   type MarketingInventoryItem,
 } from './marketingInventory';
 
@@ -17,7 +17,11 @@ type AssignmentRow = { assignedTo: string; qty: string; assignedDate: string; re
 const EMPTY_ASSIGNMENT: AssignmentRow = { assignedTo: '', qty: '', assignedDate: '', returnedDate: '' };
 
 const emptyForm = () => ({
-  asOnDate: new Date().toISOString().slice(0, 10),
+  // TD-043 — the local calendar day, not the UTC one. `toISOString()` is a UTC clock: west of
+  // Greenwich after 20:00 it names TOMORROW, so the field that says "today" pre-filled a date the
+  // user had not reached yet. `todayKey` is the same local-day rule the return-date logic already
+  // uses, so the form's idea of today and the list's cannot disagree.
+  asOnDate: todayKey(),
   type: MARKETING_ITEM_TYPES[0] as string,
   customType: '',
   count: '1',
@@ -28,8 +32,32 @@ type Form = ReturnType<typeof emptyForm>;
 
 const stPill = (s: string) => (s === 'Returned' ? 'ok' : s === 'Not Returned' ? 'warn' : 'info');
 
+/*
+ * TD-043 — A DATE-ONLY VALUE IS NEVER PARSED AS A TIMESTAMP.
+ *
+ * `as_on_date`, `assigned_date` and `returned_date` are stored as `VARCHAR(10)` — the calendar day
+ * somebody typed, with no time and no zone. `new Date('2026-09-01')` reads that as UTC MIDNIGHT,
+ * and `toLocaleDateString` then prints it in the browser's zone: Toronto is UTC-4 in September, so
+ * the cell rendered 2026-08-31 for a row saved as 2026-09-01. Every date in the list was a day
+ * early, while the edit modal showed the right one — it slices the string instead of parsing it.
+ *
+ * So this reads the day out of the value rather than converting it. There is nothing to convert:
+ * the stored string IS the answer, and `en-CA` was already printing it in that same YYYY-MM-DD
+ * shape, so the column looks exactly as before and is now a day later — i.e. correct.
+ *
+ * A `2026-09-01T00:00:00.000Z` — what an API sends if these columns ever become dates rather than
+ * strings — takes the same path and reads the same day, which is the point: these three fields are
+ * calendar days on every surface. This helper renders only those three. The parse fallback is left
+ * for anything else that reaches it, and nothing here has a time of day worth showing.
+ *
+ * WORTH KNOWING WHEN RE-TESTING: this defect is invisible at UTC or east of it, where UTC midnight
+ * and the local day agree. It is not intermittent — it is a function of the tester's timezone.
+ */
+const DATE_ONLY = /^(\d{4}-\d{2}-\d{2})(?:$|[T\s])/;
 const fmtDate = (value?: string) => {
   if (!value) return '—';
+  const dateOnly = DATE_ONLY.exec(value);
+  if (dateOnly) return dateOnly[1];
   const d = new Date(value);
   return isNaN(d.getTime()) ? value : d.toLocaleDateString('en-CA');
 };

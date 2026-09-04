@@ -1,5 +1,6 @@
 import type { AxiosRequestConfig } from 'axios';
 import api from './axios';
+import { filenameFromDisposition, saveBlob } from './download';
 import type { EmailTemplateAttachment, AgentChangeNotif, AgentCommissionMap, AgentLoanMap, AuditLogPage, BrokerageSuggestion, ChatMessage, ClientIdentification, CompanySettings, DashboardCommissions, DealHistoryEntry, DeletionLogEntry, DocNotif, DocumentsResponse, EmailTemplate, EmailTemplatesResponse, GenerateInvoicesResult, Invoice, LawyerSuggestion, MailAccount, ManagedRole, ManagedUser, NoticeOfSaleData, SendResult, TemplatePreview, TestMailResult, Transaction, TrashedDocument, TrashedInvoice, TrashedPayment, TrashedResponse, TrashedRowItem, TrashedTransaction, UsersCatalog, CrmDashboard, DeskDashboard, DeskAnalytics } from '../types';
 
 /** Route parameter identifiers (Laravel accepts numeric or string ids). */
@@ -195,15 +196,25 @@ export interface AnalyticsFilterOptions {
 export const getDeskAnalyticsOptions = (): Promise<AnalyticsFilterOptions> =>
   api.get<AnalyticsFilterOptions>('/api/dashboard/analytics/filter-options').then((r) => r.data);
 
-/** Download the CURRENT filtered Analytics result as a spreadsheet. */
+/*
+ * Download the CURRENT filtered Analytics result as a spreadsheet.
+ *
+ * TD-046 — the server already names this file, and it names it BETTER: the generator returns
+ * `Transaction Desk Analytics 2026-09-04_12-00.xlsx`, stamped with the moment it ran, and sends it
+ * on `Content-Disposition`. This threw that away for a fixed literal, so two exports of different
+ * filters on the same day arrived as the same name and the browser disambiguated them with
+ * "(1)" — the user could no longer tell which was which.
+ *
+ * The literal is kept as the fallback, because the header is only readable when the SPA and the
+ * API share an origin or the API exposes it (it now does — see `enableCors` in `main.ts`).
+ *
+ * `saveBlob` rather than a hand-rolled anchor: it appends the link before clicking, which some
+ * browsers require, and defers `revokeObjectURL` to the next tick. Revoking synchronously — as
+ * this did — can cancel the very download it just started.
+ */
 export const exportDeskAnalytics = async (q: AnalyticsQuery = {}): Promise<void> => {
   const res = await api.post('/api/dashboard/analytics/export/xlsx', analyticsParams(q), { responseType: 'blob' });
-  const url = URL.createObjectURL(res.data as Blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = 'Transaction Desk Analytics.xlsx';
-  a.click();
-  URL.revokeObjectURL(url);
+  saveBlob(res.data as Blob, filenameFromDisposition(res.headers, 'Transaction Desk Analytics.xlsx'));
 };
 
 export const getTransaction = (id: Id): Promise<Transaction> =>
@@ -431,6 +442,14 @@ export const saveNoticeOfSale = (txnId: Id, payload: unknown): Promise<NoticeOfS
 export const sendNoticeOfSale = (txnId: Id, agents: unknown, extra: Record<string, unknown> = {}): Promise<NoticeOfSaleData> => api.post<NoticeOfSaleData>(`/api/transactions/${txnId}/notice-of-sale/send`, { agents, ...extra }).then((r) => r.data);
 
 // --- Deposit Receipt ---
+/**
+ * TD-037 — the Cc addresses this deal's send would use, resolved by the server the same way the
+ * send itself resolves them (team-member id first, an unresolved name matched only against active
+ * agents). Replaces a client-side lookup against `/api/agent-emails`, a company-wide name→email
+ * map with no relationship to any one transaction — which is how the Cc box could resolve a team
+ * member's name to an unrelated person's account.
+ */
+export const getDepositReceiptCcSuggestions = (txnId: Id): Promise<string[]> => api.get<string[]>(`/api/transactions/${txnId}/deposit-receipt/cc-suggestions`).then((r) => r.data);
 export const sendDepositReceipt = (txnId: Id, email: string, cc?: unknown): Promise<SendResult> => api.post<SendResult>(`/api/transactions/${txnId}/deposit-receipt/send`, { email, cc }).then((r) => r.data);
 export const sendTradeSheet = (txnId: Id, email: string, extra: Record<string, unknown> = {}): Promise<SendResult> => api.post<SendResult>(`/api/transactions/${txnId}/trade-sheet/send`, { email, ...extra }).then((r) => r.data);
 
@@ -473,9 +492,10 @@ export const docValidationFileUrl = (docId: Id): string => `${apiBase}/api/docum
 // failed to view/download after deployment.
 const fetchFileBlob = async (path: string, { inline = false }: { inline?: boolean } = {}): Promise<void> => {
   const res = await api.get<Blob>(path, { responseType: 'blob' });
-  const dispo = String(res.headers['content-disposition'] ?? '');
-  const m = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(dispo);
-  const name = m ? decodeURIComponent(m[1]) : 'download';
+  // TD-046 — the server names the file; `download` is only what a stripped or hidden header
+  // leaves us with, and it is deliberately the one fallback here that cannot carry an extension,
+  // because this route serves whatever type the document happens to be.
+  const name = filenameFromDisposition(res.headers, 'download');
   const url = URL.createObjectURL(res.data);
   if (inline) {
     window.open(url, '_blank', 'noopener');
@@ -716,9 +736,7 @@ export const exportAuditLogs = async (
 
   // Prefer the server's filename; fall back to something sensible if the header is unreadable
   // (a proxy that strips it, say) rather than saving a file called "blob".
-  const disposition = String(res.headers['content-disposition'] ?? '');
-  const match = /filename="?([^";]+)"?/i.exec(disposition);
-  const filename = match?.[1] ?? `audit-export.${format}`;
+  const filename = filenameFromDisposition(res.headers, `audit-export.${format}`);
 
   return {
     blob: res.data as Blob,
@@ -728,18 +746,14 @@ export const exportAuditLogs = async (
   };
 };
 
-/** Hand a blob to the browser as a download, then release the object URL. */
-export const saveBlob = (blob: Blob, filename: string): void => {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  // Revoked on the next tick: revoking synchronously can cancel the download in some browsers.
-  setTimeout(() => URL.revokeObjectURL(url), 0);
-};
+/**
+ * Hand a blob to the browser as a download, then release the object URL.
+ *
+ * TD-046 — the implementation moved to `./download` so every download path shares it rather than
+ * re-deriving the anchor-and-revoke dance; re-exported here because this is where callers know it
+ * from.
+ */
+export { saveBlob, filenameFromDisposition };
 
 // --- Reference data ---
 export const listAgents = (): Promise<string[]> => api.get<string[]>('/api/agents').then((r) => r.data);

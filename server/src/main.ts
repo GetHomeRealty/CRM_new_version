@@ -10,6 +10,7 @@ import helmet from 'helmet';
 import { AppModule } from './app.module';
 import configuration from './config/configuration';
 import { assertProductionConfig } from './config/validate-config';
+import { corsOptions } from './config/cors';
 import { STORAGE_ROOT, checkStorageRoot } from './config/storage';
 import { laravelValidationExceptionFactory } from './common/laravel-exceptions';
 import { installShutdownHandlers } from './common/shutdown';
@@ -79,11 +80,9 @@ async function bootstrap(): Promise<void> {
     }),
   );
 
-  // CORS for the React SPA — credentials required for cookie auth.
-  app.enableCors({
-    origin: appCfg.corsOrigins,
-    credentials: true,
-  });
+  // CORS for the React SPA — credentials required for cookie auth, and the export headers
+  // the download helpers read (TD-046). See `config/cors.ts`.
+  app.enableCors(corsOptions(appCfg.corsOrigins));
 
   // Server-side sessions (cookie-based), emulating the Sanctum SPA contract.
   // Persisted in Postgres (connect-pg-simple → `user_sessions` table) so sessions

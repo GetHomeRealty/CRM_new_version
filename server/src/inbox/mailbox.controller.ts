@@ -8,6 +8,7 @@ import { CurrentUser } from '../auth/decorators';
 import type { AuthUserRecord } from '../auth/auth.types';
 import { MailboxService, type Folder } from './mailbox.service';
 import { parseArea } from '../common/domain';
+import { contentDisposition } from '../common/content-disposition';
 
 /**
  * The writable Inbox — compose, reply, forward, drafts, sent, search, archive and trash.
@@ -211,7 +212,7 @@ export class MailboxController {
     const file = await this.mailbox.attachment(this.uid(user), parseArea(area), kind, id);
     res.setHeader('Content-Type', file.mime);
     res.setHeader('Content-Length', String(file.body.length));
-    res.setHeader('Content-Disposition', `attachment; filename="${file.filename.replace(/"/g, '')}"`);
+    res.setHeader('Content-Disposition', contentDisposition(file.filename));
     res.end(file.body);
   }
 }

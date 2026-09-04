@@ -5,6 +5,7 @@ import { ScreenGuard } from '../auth/guards/screen.guard';
 import { CurrentUser, Screen } from '../auth/decorators';
 import type { AuthUserRecord } from '../auth/auth.types';
 import { BulkExportService, type BulkSelection, type DocFilter } from './bulk-export.service';
+import { contentDisposition } from '../common/content-disposition';
 
 const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
@@ -82,7 +83,7 @@ export class BulkExportController {
 
   private send(res: Response, buf: Buffer, name: string, mime: string): void {
     res.setHeader('Content-Type', mime);
-    res.setHeader('Content-Disposition', `attachment; filename="${name}"`);
+    res.setHeader('Content-Disposition', contentDisposition(name));
     res.setHeader('Content-Length', String(buf.length));
     res.end(buf);
   }

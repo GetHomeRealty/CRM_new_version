@@ -52,10 +52,27 @@ export class ReportExportService {
   }
   fileStamp(d: Date): string { return d.toISOString().slice(0, 16).replace('T', '_').replace(':', '-'); }
 
+  /*
+   * TD-041 — the exported total is formatted like the column it sits under, not always as money.
+   *
+   * The screen had the same defect and the same fix (`totalText` in `ReportDetailPage.tsx`): the
+   * body cell branched on `c.type` while the totals row called the money formatter on anything
+   * carrying `total: true`. A column of document counts printed "$44.00", which on an exported RECO
+   * compliance report reads as a dollar figure to whoever opens the file.
+   *
+   * Counts keep their thousands separators and no forced decimals — 128, not 128.00.
+   */
+  private plain(n: number): string { return Number(n).toLocaleString('en-CA', { maximumFractionDigits: 2 }); }
+  private totalText(c: ReportColumn, n: number): string {
+    if (c.type === 'currency') return this.money(n);
+    if (c.type === 'percent') return Number(n).toLocaleString('en-CA', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + '%';
+    return this.plain(n);
+  }
+
   /** Totals row cells — the record count lives here (not in the header). */
   private totalCell(totals: ReportTotals, count: number, c: ReportColumn, first: boolean): string {
     if (first) return `Totals (${count} record${count === 1 ? '' : 's'})`;
-    if (c.total && totals[c.key] !== undefined) return this.money(totals[c.key]);
+    if (c.total && totals[c.key] !== undefined) return this.totalText(c, totals[c.key]);
     if (c.average && totals[c.key] !== undefined) return 'Avg ' + totals[c.key].toLocaleString('en-CA', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + '%';
     return '';
   }
@@ -132,7 +149,16 @@ export class ReportExportService {
         cell.border = { top: { style: 'thin' } };
         cell.alignment = { horizontal: 'left', vertical: 'middle' };
       });
-      p.columns.forEach((c, i) => { if (c.total) row.getCell(i + 1).numFmt = '$#,##0.00'; });
+      // TD-041 — the cell's number format follows the column type, exactly as the body cells above
+      // do. A totalled COUNT column formatted as currency turned 128 documents into $128.00 in the
+      // spreadsheet, where the value is also the one a reader sums or charts.
+      p.columns.forEach((c, i) => {
+        if (!c.total && !c.average) return;
+        const cell = row.getCell(i + 1);
+        if (c.type === 'currency') cell.numFmt = '$#,##0.00';
+        else if (c.type === 'percent') cell.numFmt = '0.00"%"';
+        else cell.numFmt = '#,##0.##';
+      });
     };
 
     const blocks = this.blocks(p);

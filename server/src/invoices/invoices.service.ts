@@ -7,6 +7,7 @@ import { AuditService, type ActingUser } from '../audit/audit.service';
 import { throwValidation } from '../common/laravel-exceptions';
 import { jsonField, phpJsonNormalize, round2, toDateString, toDateTimeString, toIso8601String } from '../common/serialize';
 import { INVOICEABLE_TYPES, isInvoiceableType } from '../reference/transaction.constants';
+import { INVOICE_STATUSES, INVOICE_TERMS, MAX_TAX_RATE, isInvoiceStatus, isInvoiceTerm } from '../reference/invoice.constants';
 import { InvoiceCalculator } from './invoice.calculator';
 import { InvoiceNumberService } from './invoice.numbers';
 import { TransactionInvoiceService } from './transaction-invoice.service';
@@ -280,15 +281,16 @@ export class InvoicesService {
 
   // ---- writes -------------------------------------------------------------
   async store(actor: ActingUser | null, body: Record<string, unknown>): Promise<Record<string, unknown>> {
-    this.requireField(body, 'invoice_date');
-    this.requireField(body, 'terms');
+    // TD-004 — replaces the two presence checks that were the whole of this endpoint's validation.
+    // The required-field messages they produced are still emitted, now alongside the rest.
+    this.validateInvoiceInput(body, this.lineSubTotal(this.asArray(body.line_items)));
     const settings = await this.settings.current();
     const now = new Date();
 
     const inv = await this.prisma.$transaction(async (tx) => {
       const created = await tx.invoices.create({
         data: {
-          ...(this.mapFields(body, settings) as Prisma.invoicesCreateInput),
+          ...(this.mapFields(body, settings, 'create') as Prisma.invoicesCreateInput),
           invoice_no: await this.numbers.next(tx),
           source: 'manual',
           created_by: actor?.id ?? null,
@@ -306,15 +308,24 @@ export class InvoicesService {
   }
 
   async update(actor: ActingUser | null, id: number, body: Record<string, unknown>): Promise<Record<string, unknown>> {
-    this.requireField(body, 'invoice_date');
-    this.requireField(body, 'terms');
     const invoice = await this.prisma.invoices.findFirst({ where: { id, deleted_at: null } });
     if (!invoice) throw new NotFoundException({ message: `No query results for model [App\\Models\\Invoice] ${id}.` });
+    /*
+     * TD-004 — the sub-total a discount is judged against comes from whichever lines this save will
+     * leave on the invoice: the submitted ones when `line_items` is present, the stored ones when it
+     * is not. `mapFields` writes the discount either way, so validating only the submitted case
+     * would leave an edit that changes the discount alone — the smallest possible request — as the
+     * one that could still drive the total negative.
+     */
+    const subTotal = Object.prototype.hasOwnProperty.call(body, 'line_items')
+      ? this.lineSubTotal(this.asArray(body.line_items))
+      : num(invoice.sub_total);
+    this.validateInvoiceInput(body, subTotal);
     const settings = await this.settings.current();
     const oldStatus = invoice.status;
 
     await this.prisma.$transaction(async (tx) => {
-      await tx.invoices.update({ where: { id }, data: { ...(this.mapFields(body, settings) as Prisma.invoicesUpdateInput), updated_at: new Date() } });
+      await tx.invoices.update({ where: { id }, data: { ...(this.mapFields(body, settings, 'update') as Prisma.invoicesUpdateInput), updated_at: new Date() } });
       if (Object.prototype.hasOwnProperty.call(body, 'line_items')) await this.syncLines(tx, id, this.asArray(body.line_items));
       const cur = await tx.invoices.findUnique({ where: { id }, select: { tax_rate: true } });
       await this.calc.recalculate(tx, id, this.rate(cur?.tax_rate ?? null, settings.default_tax_rate));
@@ -535,55 +546,98 @@ export class InvoicesService {
     return (brokerage?.invoice_email ?? '').trim() || (brokerage?.email ?? '').trim() || null;
   }
 
-  private mapFields(data: Record<string, unknown>, settings: { default_tax_rate: Prisma.Decimal | number }): Record<string, unknown> {
+  /**
+   * TD-006 — a field the caller did not mention is LEFT ALONE on update, not blanked.
+   *
+   * Every column here was written unconditionally, with `?? null` / `?? 'Canada'` / `?? 'Draft'`
+   * supplying a value whenever the body did not. On a create that is right — the row is being
+   * established and an unmentioned column genuinely has no value. On an UPDATE it meant a PUT
+   * carrying `invoice_date`, `terms` and `line_items` — the three the endpoint demands — wiped
+   * `customer_name`, `customer_email`, `subject`, `trade_number` and `listing_agent` to NULL, reset
+   * the discount to 0, forced the country back to 'Canada', and forced `status` to 'Draft', which
+   * silently UN-VOIDS a voided invoice.
+   *
+   * `mode` is what separates the two. On 'update' a key absent from the body is omitted from the
+   * result, so Prisma does not name that column in the UPDATE at all. An explicitly sent `null`
+   * still clears — "absent" and "sent as empty" are different requests and now read differently.
+   *
+   * TD-093 ALREADY FOUND THIS, for one column. Its comment observes that "every other field here
+   * follows that same absent-means-clear rule" and carves `tax_rate` out of it. That carve-out is
+   * now the rule and the note below is kept for the reasoning specific to the rate.
+   *
+   * Latent through the UI, which spreads the whole form on every save, so this was only ever
+   * reachable by an API consumer, an integration, or a future partial-save on the screen.
+   * `TransactionsWriteService.update` has always done it this way; invoices now match.
+   */
+  private mapFields(
+    data: Record<string, unknown>,
+    settings: { default_tax_rate: Prisma.Decimal | number },
+    mode: 'create' | 'update',
+  ): Record<string, unknown> {
     void settings;
+    const sent = (k: string): boolean => Object.prototype.hasOwnProperty.call(data, k);
+    /** Write this column when creating, or when the caller actually mentioned it. */
+    const writing = (k: string): boolean => mode === 'create' || sent(k);
+
+    const out: Record<string, unknown> = {};
+    const put = (k: string, value: unknown): void => { if (writing(k)) out[k] = value; };
+
+    // Both are required by `validateInvoiceInput` on either path, so they are always present.
     const invoiceDate = this.toDate(data.invoice_date)!;
     const terms = String(data.terms);
-    const dueDate = this.dueDate(invoiceDate, terms, (data.due_date ?? null) as string | null);
-    return {
-      transaction_id: (data.transaction_id ?? null) as number | null,
-      property_reference: (data.property_reference ?? null) as string | null,
-      customer_id: (data.customer_id ?? null) as number | null,
-      customer_name: (data.customer_name ?? null) as string | null,
-      customer_address: (data.customer_address ?? null) as string | null,
-      customer_city: (data.customer_city ?? null) as string | null,
-      customer_province: (data.customer_province ?? null) as string | null,
-      customer_postal_code: (data.customer_postal_code ?? null) as string | null,
-      customer_country: (data.customer_country ?? 'Canada') as string,
-      invoice_date: invoiceDate,
-      terms,
-      due_date: dueDate,
-      trade_number: (data.trade_number ?? null) as string | null,
-      listing_agent: (data.listing_agent ?? null) as string | null,
-      coop_salesperson: (data.coop_salesperson ?? null) as string | null,
-      subject: (data.subject ?? null) as string | null,
-      customer_phone: (data.customer_phone ?? null) as string | null,
-      customer_email: (data.customer_email ?? null) as string | null,
-      discount: (data.discount ?? 0) as number,
-      /*
-       * TD-093 — `undefined` when the caller sends nothing, so Prisma leaves the column alone.
-       *
-       * This was `null`, and every other field here follows that same absent-means-clear rule. The
-       * rate cannot: an edit that did not mention tax sent null, `this.rate(null, default)` below
-       * then fell back to whatever the CURRENT company default is, and the invoice was silently
-       * restated at a rate it was never raised at. Changing `default_tax_rate` and then touching an
-       * old invoice would have rewritten its tax — which is exactly the risk this defect's remarks
-       * asked to be checked.
-       *
-       * Clearing it is not offered because it is no longer a field anyone fills in: `recalculate`
-       * always records the rate it applied. An explicit value still wins, so a deliberate override
-       * works as before.
-       */
-      tax_rate: data.tax_rate !== undefined && data.tax_rate !== null && data.tax_rate !== '' ? Number(data.tax_rate) : undefined,
-      customer_notes: (data.customer_notes ?? null) as string | null,
-      terms_conditions: (data.terms_conditions ?? null) as string | null,
-      signature_path: (data.signature_path ?? null) as string | null,
-      broker_name: (data.broker_name ?? null) as string | null,
-      commission_received_date: this.toDate(data.commission_received_date),
-      commission_received_via: (data.commission_received_via ?? null) as string | null,
-      auto_reminder: data.auto_reminder !== undefined && data.auto_reminder !== null ? JSON.stringify(phpJsonNormalize(data.auto_reminder)) : null,
-      status: (data.status ?? 'Draft') as string,
-    };
+    out.invoice_date = invoiceDate;
+    out.terms = terms;
+
+    /*
+     * The due date follows the terms, EXCEPT for the two that cannot compute one.
+     *
+     * 'Net 30' and friends derive it from the invoice date, so a save that sets the terms has
+     * necessarily decided the due date too and it is recomputed. 'Custom' and 'Due on Closing'
+     * take it from the body — so if the body did not carry one, there is nothing to recompute
+     * FROM, and writing the null `dueDate()` returns would erase a date that is still correct.
+     */
+    const computesDueDate = InvoiceCalculator.TERM_DAYS[terms] !== undefined;
+    if (mode === 'create' || computesDueDate || sent('due_date')) {
+      out.due_date = this.dueDate(invoiceDate, terms, (data.due_date ?? null) as string | null);
+    }
+
+    for (const k of [
+      'transaction_id', 'property_reference', 'customer_id', 'customer_name', 'customer_address',
+      'customer_city', 'customer_province', 'customer_postal_code', 'trade_number', 'listing_agent',
+      'coop_salesperson', 'subject', 'customer_phone', 'customer_email', 'customer_notes',
+      'terms_conditions', 'signature_path', 'broker_name', 'commission_received_via',
+    ]) {
+      put(k, data[k] ?? null);
+    }
+
+    // The three defaults that belong to a NEW invoice and must not be re-imposed on an old one.
+    put('customer_country', data.customer_country ?? 'Canada');
+    put('discount', data.discount ?? 0);
+    put('status', data.status ?? 'Draft');
+
+    put('commission_received_date', this.toDate(data.commission_received_date));
+    put('auto_reminder', data.auto_reminder !== undefined && data.auto_reminder !== null
+      ? JSON.stringify(phpJsonNormalize(data.auto_reminder))
+      : null);
+
+    /*
+     * TD-093 — `undefined` when the caller sends nothing, so Prisma leaves the column alone.
+     *
+     * The rate needs more than the absent-means-leave-alone rule above, because an EXPLICIT null is
+     * not a request to clear it either: `this.rate(null, default)` below would fall back to whatever
+     * the CURRENT company default is, and the invoice would be silently restated at a rate it was
+     * never raised at. Changing `default_tax_rate` and then touching an old invoice would have
+     * rewritten its tax.
+     *
+     * Clearing it is not offered because it is no longer a field anyone fills in: `recalculate`
+     * always records the rate it applied. An explicit value still wins, so a deliberate override
+     * works as before.
+     */
+    if (data.tax_rate !== undefined && data.tax_rate !== null && data.tax_rate !== '') {
+      out.tax_rate = Number(data.tax_rate);
+    }
+
+    return out;
   }
 
   private dueDate(invoiceDate: Date, terms: string, custom: string | null): Date | null {
@@ -624,6 +678,112 @@ export class InvoicesService {
     if (body[field] === undefined || body[field] === null || body[field] === '') {
       throwValidation({ [field]: [`The ${field.replace(/_/g, ' ')} field is required.`] });
     }
+  }
+
+  /**
+   * TD-004 — what an invoice is allowed to say, checked before any of it is written.
+   *
+   * The endpoints validated PRESENCE and nothing else: `invoice_date` and `terms` had to be there,
+   * and every value then went to the database as it arrived. A negative rate stored a −5,650
+   * invoice; a discount of 999,999 against a 100 invoice stored a total of −999,886; `terms:
+   * "NOT_A_TERM"` stored with a NULL due date, which removes the invoice from the overdue view
+   * (`due_date: { lt: now }` cannot match NULL) and from the reminder sweep, so it is never chased;
+   * `status: "Hacked"` stored verbatim. Negative totals flow straight into the dashboard's billed
+   * and outstanding figures and into every commission report.
+   *
+   * Two of the seven cases came back as 500 rather than 422 — an unparseable `invoice_date`, and
+   * `tax_rate: 9999` overflowing `Decimal(5,2)`. Those were the DATABASE refusing what the
+   * application never looked at. Both are now field messages.
+   *
+   * EVERY FAULT IN ONE REPLY, the same way `TransactionsWriteService.store` answers (TD-113):
+   * a caller fixing an invoice by API should not discover its problems one round trip at a time.
+   *
+   * WHY HERE AND NOT IN A DTO. The global `ValidationPipe` in `main.ts` is already wired for the
+   * Laravel 422 shape and would cover the per-field types, but three of these rules are
+   * cross-field — a discount is only wrong RELATIVE to the lines it discounts, and on update the
+   * lines may not have been submitted at all — and a DTO cannot see the stored invoice. Splitting
+   * the rules across two mechanisms would leave two places to look. `subTotal` is passed in by the
+   * caller, which is what knows whether the lines came from the request or from the record.
+   */
+  private validateInvoiceInput(body: Record<string, unknown>, subTotal: number): void {
+    const errors: Record<string, string[]> = {};
+    const blank = (v: unknown): boolean => v === undefined || v === null || v === '';
+    const present = (f: string): boolean => !blank(body[f]);
+
+    for (const f of ['invoice_date', 'terms']) {
+      if (blank(body[f])) errors[f] = [`The ${f.replace(/_/g, ' ')} field is required.`];
+    }
+
+    /*
+     * A date that does not parse reached `new Date(...)` as `Invalid Date` and went to Prisma,
+     * which is where the 500 came from. Checked for every date column this body can set, not only
+     * the one the defect happened to probe.
+     */
+    for (const f of ['invoice_date', 'due_date', 'commission_received_date']) {
+      if (!present(f)) continue;
+      const raw = String(body[f]).slice(0, 10);
+      const parsed = new Date(`${raw}T00:00:00.000Z`);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(raw) || Number.isNaN(parsed.getTime())) {
+        errors[f] = [`The ${f.replace(/_/g, ' ')} must be a date in YYYY-MM-DD form.`];
+      }
+    }
+
+    if (present('terms') && !isInvoiceTerm(String(body.terms))) {
+      errors.terms = [`"${String(body.terms)}" is not a payment term this system offers. Allowed: ${INVOICE_TERMS.join(', ')}.`];
+    }
+
+    if (present('status') && !isInvoiceStatus(String(body.status))) {
+      errors.status = [`"${String(body.status)}" is not an invoice status. Allowed: ${INVOICE_STATUSES.join(', ')}.`];
+    }
+
+    /*
+     * Money that cannot exist, judged the way the transactions endpoint judges a price (TD-055):
+     * a negative rate is not a credit and a negative quantity is not a return. Neither has ever had
+     * a meaning on this screen, and both produce a negative invoice that the dashboard then adds up.
+     */
+    const money = (v: unknown): number => Number(String(v ?? '').replace(/,/g, ''));
+    const lines = this.asArray(body.line_items);
+    lines.forEach((it, i) => {
+      for (const f of ['qty', 'rate'] as const) {
+        if (it[f] === undefined || it[f] === null || it[f] === '') continue;
+        const n = money(it[f]);
+        if (!Number.isFinite(n)) errors[`line_items.${i}.${f}`] = [`The ${f} must be a number.`];
+        else if (n < 0) errors[`line_items.${i}.${f}`] = [`The ${f} cannot be negative.`];
+      }
+    });
+
+    if (present('discount')) {
+      const d = money(body.discount);
+      if (!Number.isFinite(d)) errors.discount = ['The discount must be a number.'];
+      else if (d < 0) errors.discount = ['The discount cannot be negative.'];
+      /*
+       * Compared against the SUB-TOTAL rather than the total, deliberately. The total is
+       * `subTotal + tax − discount`, so bounding by the sub-total guarantees a total that cannot
+       * go negative, and it does so without this check having to predict which lines are taxable
+       * and at what rate — a second copy of the calculator's arithmetic, able to disagree with it.
+       */
+      else if (d > subTotal) {
+        errors.discount = [`The discount cannot be more than the invoice sub-total of ${subTotal.toFixed(2)}.`];
+      }
+    }
+
+    if (present('tax_rate')) {
+      const r = money(body.tax_rate);
+      if (!Number.isFinite(r)) errors.tax_rate = ['The tax rate must be a number.'];
+      else if (r < 0) errors.tax_rate = ['The tax rate cannot be negative.'];
+      else if (r > MAX_TAX_RATE) errors.tax_rate = [`The tax rate cannot be more than ${MAX_TAX_RATE}%.`];
+    }
+
+    if (Object.keys(errors).length) throwValidation(errors);
+  }
+
+  /** The sub-total a body's line items would produce — what a discount has to be judged against. */
+  private lineSubTotal(items: Record<string, unknown>[]): number {
+    return round2(items.reduce((sum, it) => {
+      const qty = Number(it.qty ?? 1);
+      const rate = Number(it.rate ?? 0);
+      return sum + (Number.isFinite(qty) && Number.isFinite(rate) ? round2(qty * rate) : 0);
+    }, 0));
   }
   private asArray(v: unknown): Record<string, unknown>[] {
     return Array.isArray(v) ? (v as Record<string, unknown>[]) : [];

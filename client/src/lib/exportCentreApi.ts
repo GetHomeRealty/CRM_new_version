@@ -1,4 +1,5 @@
 import api from './axios';
+import { filenameFromDisposition, saveBlob } from './download';
 import type { BulkSelection, ExportJob } from '../types';
 
 /** Export & Download Centre — queue background exports and fetch their status. */
@@ -27,12 +28,6 @@ export const sweepExports = (): Promise<{ swept: number }> =>
 /** Download a completed export through its expiring token. */
 export async function downloadExport(token: string, fallbackName = 'export'): Promise<void> {
   const res = await api.get(`/api/export-centre/download/${token}`, { responseType: 'blob' });
-  const dispo = String(res.headers['content-disposition'] ?? '');
-  const m = /filename="?([^";]+)"?/i.exec(dispo);
-  const url = URL.createObjectURL(res.data as Blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = m ? m[1] : fallbackName;
-  document.body.appendChild(a); a.click(); a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 120_000);
+  // TD-046 — one reader for the server's filename, shared with every other download path.
+  saveBlob(res.data as Blob, filenameFromDisposition(res.headers, fallbackName), 120_000);
 }

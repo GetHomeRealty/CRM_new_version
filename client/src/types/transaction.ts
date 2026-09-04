@@ -232,6 +232,12 @@ export interface GenerateInvoicesResult { existing?: boolean; count?: number; in
 /** A transaction row/detail (superset; extended as feature components are typed). */
 export interface Transaction {
   id: number;
+  /**
+   * TD-003 — bumped by the server on every save. An editor sends back the version it loaded, and a
+   * save carrying a stale one is refused with a 409 instead of overwriting whoever saved first.
+   * Optional because a transaction reached through an older cached payload may not carry one.
+   */
+  version?: number;
   trade_no: number | string;
   type: string;
   property?: string;

@@ -11,6 +11,7 @@ import { parseAnalyticsFilters, ALL_STATUSES } from './desk-analytics.filters';
 import { DeskAnalyticsExportService } from './desk-analytics-export.service';
 import { TRANSACTION_TYPES } from '../reference/transaction.constants';
 import { TransactionReviewService } from '../transactions/transaction-review.service';
+import { contentDisposition } from '../common/content-disposition';
 
 /**
  * Every route here is behind `ScreenGuard` as well as `AuthGuard`.
@@ -107,7 +108,7 @@ export class DashboardController {
     const filters = parseAnalyticsFilters(body ?? {}, user ?? null);
     const { buffer, filename } = await this.analyticsExport.xlsx(user ?? null, filters);
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Disposition', contentDisposition(filename));
     res.setHeader('Content-Length', String(buffer.length));
     res.end(buffer);
   }

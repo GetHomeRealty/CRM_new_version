@@ -1,0 +1,15 @@
+-- TD-003 — a version counter on transactions, so a save can tell it is overwriting.
+--
+-- Two admins both opened deal 1838. The first raised the price to 2,900,000. The second saved a
+-- form loaded before that, changing only the property address, and got HTTP 200 — the whole object
+-- goes up on every save (`buildPayload` in TransactionDetailPage.tsx sends every field, not the
+-- edited one), so the stale price rode along and put 2,500,000 back. Neither person was told.
+--
+-- `updated_at` cannot serve as the token: it is Timestamp(0), so two saves inside the same second
+-- carry the identical value and the conflict would go unseen. An integer bumped on every write has
+-- no such gap. This is the same column, and the same reasoning, as
+-- 20260801060000_calendar_optimistic_locking — the module that already refuses this scenario.
+--
+-- DEFAULT 1 rather than 0 so existing rows read as "version 1" instead of looking unsaved, and
+-- NOT NULL so there is never a row whose version has to be guessed at.
+ALTER TABLE "transactions" ADD COLUMN IF NOT EXISTS "version" INTEGER NOT NULL DEFAULT 1;

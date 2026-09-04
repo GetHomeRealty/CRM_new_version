@@ -17,6 +17,7 @@ import {
   LEAD_STATUS, LEAD_TYPE, NONE_FILTER_VALUE, PROPERTY_TYPES, RELIGIONS, SHOWING_STATUS,
   TASK_PRIORITY, TASK_STATUS, RECENT_LEAD_DAYS,
 } from './lead.constants';
+import { contentDisposition } from '../common/content-disposition';
 
 const str = (v: unknown): string => String(v ?? '').trim();
 const ids = (v: unknown): number[] => (Array.isArray(v) ? v.map(Number).filter((n) => Number.isInteger(n) && n > 0) : []);
@@ -448,7 +449,7 @@ export class LeadsController {
     const file = await this.activity.getRecording(id, callId, user);
     res.setHeader('Content-Type', file.content_type);
     res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('Content-Disposition', `inline; filename="${file.filename.replace(/"/g, '')}"`);
+    res.setHeader('Content-Disposition', contentDisposition(file.filename, { inline: true }));
     res.setHeader('Content-Length', String(file.data.length));
     res.end(Buffer.from(file.data));
   }

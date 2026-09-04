@@ -59,6 +59,22 @@ type TxnForCommissions = Prisma.transactionsGetPayload<{ include: typeof COMMISS
 
 export interface DashboardCommissions {
   role: 'agent' | 'admin';
+  /*
+   * TD-047 — WHAT THE COUNTS ON THIS PAYLOAD ARE COUNTING.
+   *
+   * The dashboard reported "7 open deals" on a screen whose own Total Deals tile read 6, and the
+   * card was not wrong about its arithmetic: these counts are per COMMISSION LINE — one per team
+   * member per deal — because that is what a commission total is a sum of. A deal with three
+   * members contributes three. Counting deals instead would make the money and the count on the
+   * same tile describe different things, so the number stays and the payload now says what it is.
+   *
+   * It is not the same for everybody, which is why this is a field rather than a note. An agent's
+   * figures come from `commissionsSqlForAgent`, which LEFT JOINs each visible deal to that agent's
+   * own line — one row per deal, including deals they are not a member of, at zero. For them the
+   * count IS deals. It is derived from the same boolean that picks the query, so the two cannot
+   * drift apart.
+   */
+  count_basis: 'deals' | 'commission_lines';
   t4a: {
     closed_total: number;
     closed_paid: number;
@@ -77,6 +93,7 @@ export interface DashboardCommissions {
 /** What a caller who can see nothing is shown — zeros, not an error and not everybody's figures. */
 const emptyCommissions = (user: ResourceUser | null): DashboardCommissions => ({
   role: isAgent(user) ? 'agent' : 'admin',
+  count_basis: isAgent(user) ? 'deals' : 'commission_lines',
   t4a: {
     closed_total: 0, closed_paid: 0, closed_pending: 0, closed_count: 0,
     paid_count: 0, pending_count: 0, upcoming_total: 0, upcoming_count: 0, overall_total: 0,
@@ -200,6 +217,9 @@ export class DashboardService {
 
     return {
       role: agent ? 'agent' : 'admin',
+      // TD-047 — `agent` is the same boolean that chose between the per-deal and the per-line
+      // query a few lines above, so the basis reported here is the basis actually counted.
+      count_basis: agent ? 'deals' : 'commission_lines',
       t4a: {
         closed_total: round2(closedTotal),
         closed_paid: round2(paidTotal),
@@ -335,6 +355,9 @@ export class DashboardService {
 
     return {
       role: isAgent(user) ? 'agent' : 'admin',
+      // TD-047 — `isAgent` is what narrowed `members` to the caller's own line per deal above;
+      // the enrichment path and the SQL path therefore report the same basis for the same user.
+      count_basis: isAgent(user) ? 'deals' : 'commission_lines',
       t4a: {
         closed_total: round2(closedTotal),
         closed_paid: round2(paidTotal),

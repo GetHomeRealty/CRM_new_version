@@ -423,9 +423,30 @@ function cellClass(c: ReportColumn): string {
   if (c.type === 'date' || c.type === 'datetime') return 'col-date';
   return '';
 }
+/*
+ * TD-041 — A TOTAL IS THE SAME KIND OF THING AS THE COLUMN IT SITS UNDER.
+ *
+ * The body cell branched on `c.type`; this row did not — it called the money formatter on every
+ * column carrying `total: true` and never looked at the type at all. So a column of DOCUMENT COUNTS
+ * printed 44 in the body and "$44.00" in the totals row. On a RECO Audit Readiness report that is
+ * not just untidy: it invites the reader of a compliance document to take a count of pending
+ * documents for money owed.
+ *
+ * The rule is one line — format the total the way the column formats its cells — and it is stated
+ * once here for the footer, the section subtotals and (in `report-export.service.ts`) the XLSX and
+ * PDF exports, so the screen and the printed copy cannot disagree.
+ *
+ * A counted column keeps its thousands separators but no forced decimals: 128 pending documents is
+ * "128", not "128.00". Fractions are still shown if a totalled number column ever holds one.
+ */
+function totalText(c: ReportColumn, n: number): string {
+  if (c.type === 'currency') return formatCurrency(n);
+  if (c.type === 'percent') return Number(n).toLocaleString('en-CA', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + '%';
+  return Number(n).toLocaleString('en-CA', { maximumFractionDigits: 2 });
+}
 function footer(c: ReportColumn, totals: Record<string, number>, first: boolean, count: number, label?: string): string {
   if (first) return label ? `${label} (${count})` : `Totals (${count})`;
-  if (c.total && totals[c.key] !== undefined) return formatCurrency(totals[c.key]);
+  if (c.total && totals[c.key] !== undefined) return totalText(c, totals[c.key]);
   if (c.average && totals[c.key] !== undefined) return 'Avg ' + Number(totals[c.key]).toLocaleString('en-CA', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + '%';
   return '';
 }

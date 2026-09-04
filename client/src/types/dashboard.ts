@@ -1,6 +1,13 @@
 /** Shape of GET /api/dashboard/commissions (see DashboardController::commissions). */
 export interface DashboardCommissions {
   role: 'agent' | 'admin';
+  /**
+   * TD-047 — what the `_count` fields below count: one row per commission line (a team member's
+   * share of a deal) for the office, one per deal for an agent. The server derives it from the
+   * query it actually ran; the tiles caption themselves from it rather than guessing from the
+   * signed-in role.
+   */
+  count_basis: 'deals' | 'commission_lines';
   t4a: {
     closed_total: number;
     closed_paid: number;

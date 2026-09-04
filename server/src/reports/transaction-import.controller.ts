@@ -6,6 +6,7 @@ import { AdminGuard } from '../auth/guards/admin.guard';
 import { CurrentUser, Screen } from '../auth/decorators';
 import type { AuthUserRecord } from '../auth/auth.types';
 import { TransactionImportService } from './transaction-import.service';
+import { contentDisposition } from '../common/content-disposition';
 
 const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 /** Uploads arrive base64-encoded in JSON (same convention the mail attachments use). */
@@ -90,7 +91,7 @@ export class TransactionImportController {
   async errors(@CurrentUser() user: AuthUserRecord, @Param('batchId') batchId: string, @Res() res: Response): Promise<void> {
     const { buffer, fileName } = await this.imports.errorReport(batchId, user);
     res.setHeader('Content-Type', XLSX_MIME);
-    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+    res.setHeader('Content-Disposition', contentDisposition(fileName));
     res.setHeader('Content-Length', String(buffer.length));
     res.end(buffer);
   }

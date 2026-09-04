@@ -1,4 +1,4 @@
-import { ForbiddenException, Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { PersonResolver } from '../core/person-resolver.service';
@@ -452,9 +452,51 @@ export class TransactionsWriteService {
     return key in flags ? !!flags[key] : def;
   }
 
+  /**
+   * TD-003 — the one refusal for a save that is not wrong, only late.
+   *
+   * Built in one place because it is raised from two: the cheap read-time comparison and the
+   * write-time claim that closes the race between them. Both have to name the same numbers, or a
+   * screen would show one story for the common case and another for the narrow one.
+   */
+  private staleTransaction(sent: number, current: number | null, updatedAt: Date | null): ConflictException {
+    return new ConflictException({
+      message: 'Somebody else changed this transaction while you were editing it. Reload to see their version, then apply your change again.',
+      conflict: { current_version: current, your_version: sent, updated_at: updatedAt },
+    });
+  }
+
   async update(user: AuthUserRecord | null, txnId: number, body: Record<string, unknown>): Promise<{ data: Record<string, unknown> }> {
     const t = await this.prisma.transactions.findFirst({ where: { id: txnId, deleted_at: null } });
     if (!t) throw new NotFoundException({ message: `No query results for model [App\\Models\\Transaction] ${txnId}.` });
+
+    /*
+     * TD-003 — OPTIMISTIC LOCKING. Two people editing one deal both got 200 and the later write
+     * silently won.
+     *
+     * What makes this module worse than a normal last-write-wins is that the save is not a patch.
+     * The detail screen sends the ENTIRE object on every save (`buildPayload`), so the second
+     * person does not merely overwrite the field they touched — every field they are holding a
+     * stale copy of goes back too. The reported case changed only an address and reverted a
+     * $400,000 price change made minutes earlier, with nothing said to either person.
+     *
+     * The client sends back the version it read; if the row has moved on since, the save is
+     * refused with a 409 carrying the current state, so the screen can say what happened. Same
+     * shape the Calendar has used since 20260801060000 — see `CalendarService.update`.
+     *
+     * Absent `version` still saves, deliberately: an integration, a script or an older client
+     * should not start failing. Anything that sends one gets the protection.
+     */
+    let expectedVersion: number | null = null;
+    if (body.version !== undefined && body.version !== null && body.version !== '') {
+      const sent = Number(body.version);
+      if (!Number.isInteger(sent) || sent < 1) {
+        throw new BadRequestException({ message: 'That version is not valid.' });
+      }
+      if (sent !== t.version) throw this.staleTransaction(sent, t.version, t.updated_at);
+      // Kept for the WRITE, which is where the check has to be repeated — see below.
+      expectedVersion = sent;
+    }
 
     // Only "present" keys (Laravel validated() semantics).
     const data: Record<string, unknown> = {};
@@ -710,7 +752,43 @@ export class TransactionsWriteService {
 
       await this.captureRemovedRows(tx, t, actor, data);
 
-      await tx.transactions.update({ where: { id: txnId }, data: { ...(fill as Prisma.transactionsUpdateInput), updated_at: new Date() } });
+      /*
+       * THE VERSION IS CHECKED AGAIN HERE, IN THE WRITE ITSELF.
+       *
+       * The comparison in the preamble is a separate read, and under read-committed both of two
+       * simultaneous saves can finish it before either writes: both see version 4, both pass, both
+       * UPDATE, and the second silently erases the first — the very thing this defect is about,
+       * merely made narrower. `updateMany` with `version` in the WHERE makes the check and the
+       * write one statement: Postgres takes a row lock, the loser re-evaluates the predicate
+       * against the committed row, matches nothing, and reports `count: 0`.
+       *
+       * Losing here aborts the enclosing `$transaction`, so the status, client, condition and
+       * brokerage syncs below — and the audit rows `captureRemovedRows` just wrote — all roll back
+       * with it. A refused save leaves nothing behind.
+       *
+       * A caller that sent no version keeps the unconditional update, exactly as before. Either
+       * way the row's version moves, so everyone else's open form learns it is stale.
+       */
+      if (expectedVersion !== null) {
+        const claimed = await tx.transactions.updateMany({
+          where: { id: txnId, version: expectedVersion },
+          data: { ...(fill as Prisma.transactionsUpdateManyMutationInput), version: { increment: 1 }, updated_at: new Date() },
+        });
+        if (claimed.count === 0) {
+          // Somebody committed between the read above and this statement. Re-read on the outer
+          // connection — `tx` is about to roll back, and its snapshot cannot see their commit — so
+          // the reply carries the version they actually have to reconcile against.
+          const now = await this.prisma.transactions.findUnique({
+            where: { id: txnId }, select: { version: true, updated_at: true },
+          });
+          throw this.staleTransaction(expectedVersion, now?.version ?? null, now?.updated_at ?? null);
+        }
+      } else {
+        await tx.transactions.update({
+          where: { id: txnId },
+          data: { ...(fill as Prisma.transactionsUpdateInput), version: { increment: 1 }, updated_at: new Date() },
+        });
+      }
 
       if (Object.prototype.hasOwnProperty.call(data, 'team')) await this.syncTeam(tx, txnId, String(fill.type ?? t.type), asArray(data.team));
       if (Object.prototype.hasOwnProperty.call(data, 'precon_terms')) await this.syncPreconTerms(tx, txnId, asArray(data.precon_terms));

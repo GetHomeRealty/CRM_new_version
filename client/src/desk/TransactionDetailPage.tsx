@@ -165,6 +165,18 @@ function buildPayload(form: DetailForm): Record<string, unknown> {
   return payload;
 }
 
+/**
+ * TD-003 — the message for a save the server refused because somebody else saved first, or null
+ * when the failure was anything else. A 409 from this endpoint means exactly one thing, so the
+ * status is what identifies it; the body only supplies the wording.
+ */
+function staleSaveMessage(err: unknown): string | null {
+  const e = err as { response?: { status?: number; data?: { message?: string } } };
+  if (e?.response?.status !== 409) return null;
+  return e.response?.data?.message
+    ?? 'Somebody else changed this transaction while you were editing it.';
+}
+
 /** Why the form can't be persisted yet, or null when it's good to save. */
 function validateForm(form: DetailForm): string | null {
   for (const c of form.clients) {
@@ -285,6 +297,21 @@ export default function TransactionDetailPage() {
   // and flushed the moment a section opens or the page unmounts.
   const formRef = useRef<DetailForm | null>(null);
   const savedSnapRef = useRef<string | null>(null); // payload JSON as last persisted; null until loaded
+  /*
+   * TD-003 — the version this page is holding, refreshed from every server reply.
+   *
+   * A REF AND NOT PART OF `buildPayload`, deliberately, for two reasons. It is not something the
+   * user edited, so it must not make the form look dirty and trigger an auto-save on its own. And
+   * `flushAutoSave` reuses the snapshot it sent as the new baseline without refreshing `form` —
+   * that is on purpose, so a reply cannot yank the field being typed in — which means a version
+   * baked into the payload would still read as the pre-save one on the next keystroke and the
+   * page would 409 against its own last write.
+   */
+  const versionRef = useRef<number | null>(null);
+  // Set when the server says somebody else saved first. Auto-save stops while it is set: the
+  // version in hand cannot succeed, so retrying on every keystroke would only be a stream of
+  // failed writes. Cleared by reloading, which is the only thing that can resolve it.
+  const [conflict, setConflict] = useState<string | null>(null);
   const savingRef = useRef(false);
   const rerunRef = useRef(false);                   // an edit landed while a save was in flight
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -293,6 +320,19 @@ export default function TransactionDetailPage() {
   const [autoMsg, setAutoMsg] = useState('');
 
   useEffect(() => { formRef.current = form; }, [form]);
+
+  /**
+   * The payload plus the version this page loaded. Both save paths go through it so they cannot
+   * disagree about what they are writing against — an auto-save that skipped the check would
+   * reintroduce the whole defect through the back door.
+   *
+   * Omitted rather than sent as null when unknown: the server treats an absent version as "no
+   * opinion" and saves unconditionally, which is the right behaviour for a page that genuinely
+   * never received one, and the wrong behaviour to fake when it did.
+   */
+  const withVersion = useCallback((payload: Record<string, unknown>): Record<string, unknown> => (
+    versionRef.current === null ? payload : { ...payload, version: versionRef.current }
+  ), []);
 
   /** Persist now if there is anything to persist. Safe to call spuriously. */
   const flushAutoSave = useCallback(async (): Promise<void> => {
@@ -309,19 +349,25 @@ export default function TransactionDetailPage() {
     savingRef.current = true;
     setAutoState('saving'); setAutoMsg('');
     try {
-      const updated = await updateTransaction(id, JSON.parse(snap) as Record<string, unknown>);
+      const updated = await updateTransaction(id, withVersion(JSON.parse(snap) as Record<string, unknown>));
       savedSnapRef.current = snap;
+      versionRef.current = updated.version ?? null;
       // Refresh the raw transaction only — never `form`, which would fight whatever the
       // user is typing right now (cursor jumps, dropped keystrokes mid-flight).
       setTxn(updated);
       setAutoState('saved'); setAutoMsg('');
     } catch (err) {
-      setAutoState('error'); setAutoMsg(apiErrorMessage(err, 'Could not save'));
+      // A stale save is not "could not save" — the write was understood and deliberately refused,
+      // and the edit is still sitting in the form. Say so, and stop auto-saving until it is
+      // resolved; the banner carries the only action that can resolve it.
+      const stale = staleSaveMessage(err);
+      if (stale) { setConflict(stale); setAutoState('error'); setAutoMsg('Not saved — someone else saved first'); }
+      else { setAutoState('error'); setAutoMsg(apiErrorMessage(err, 'Could not save')); }
     } finally {
       savingRef.current = false;
       if (rerunRef.current) { rerunRef.current = false; void flushAutoSave(); }
     }
-  }, [id]);
+  }, [id, withVersion]);
 
   // Debounce: restart the clock on every edit, write once the user pauses.
   useEffect(() => {
@@ -351,6 +397,12 @@ export default function TransactionDetailPage() {
     setTxn(updated);
     // New baseline — without this the next render would look "dirty" and re-save.
     savedSnapRef.current = JSON.stringify(buildPayload(toForm(updated)));
+    // TD-003 — every server reply is also the freshest version this page has seen, whether it came
+    // from the initial load, a save, or a reload after a conflict. Taking it here means the one
+    // place that adopts the server's values is the same place that adopts its version, so the two
+    // can never describe different snapshots.
+    versionRef.current = updated.version ?? null;
+    setConflict(null);
   };
 
   const generateInvoices = async () => {
@@ -539,7 +591,7 @@ export default function TransactionDetailPage() {
     if (overrideReason) payload.review_override_reason = overrideReason;
     setSaving(true);
     try {
-      const updated = await updateTransaction(id, payload);
+      const updated = await updateTransaction(id, withVersion(payload));
       applyUpdated(updated);
       setMode('view');
       setAutoState('saved'); setAutoMsg('');
@@ -547,7 +599,16 @@ export default function TransactionDetailPage() {
       toast('Transaction saved', 'ok');
     } catch (err) {
       const body = (err as { response?: { data?: { unresolved_reviews?: unknown[]; message?: string } } })?.response?.data;
-      if (Array.isArray(body?.unresolved_reviews)) {
+      const stale = staleSaveMessage(err);
+      if (stale) {
+        // TD-003 — the edit is still on screen and still theirs; what is gone is the right to write
+        // it blind. The banner says so and offers the reload. Deliberately not a toast: it would
+        // fade while the user was still deciding what to do about it. The close-guard modal, if it
+        // is what triggered this save, comes down — its question is moot until this is settled.
+        setConflict(stale);
+        setCloseBlock(null);
+        setAutoState('error'); setAutoMsg('Not saved — someone else saved first');
+      } else if (Array.isArray(body?.unresolved_reviews)) {
         // Not an error to shrug at: show what is outstanding and ask for a reason to proceed.
         setCloseBlock({ items: body.unresolved_reviews as OpenReviewItem[], message: body.message ?? '', reason: '' });
       } else {
@@ -575,6 +636,25 @@ export default function TransactionDetailPage() {
   const stActive = saleListing && form.statuses.includes('Active');
   // A listing that's still Active has no price/deposit yet — hide those fields.
   const hidePriceDeposit = listing && form.statuses.includes('Active');
+  /*
+   * TD-035 — A DEPOSIT RECEIPT FOLLOWS THE DEPOSIT, NOT THE DEAL TYPE.
+   *
+   * The button was offered on `isListingFinancialType(form.type)` and nothing else, which is a
+   * question about which SIDE of a trade this is — it decides whether the header shows the
+   * listing-side documents or the Invoice. It says nothing about whether money was taken. So a
+   * Residential Buying deal holding a $28,000 deposit could not produce a receipt for it, while a
+   * Residential Sale Listing at $0 offered to write a receipt for nothing.
+   *
+   * Read from `form` rather than `txn` so the button follows what is on screen: entering a deposit
+   * offers the receipt immediately, and clearing it withdraws the offer, without a save in between.
+   * `parseNumber` is the same reader `buildPayload` uses, so the button and the saved value cannot
+   * disagree about what counts as a deposit.
+   *
+   * A NEGATIVE deposit is not a deposit either — the API refuses to store one (TD-055) but older
+   * rows can still hold one, and a receipt for minus eight hundred dollars is not a document
+   * anybody should be able to send.
+   */
+  const hasDeposit = parseNumber(form.deposit) > 0;
   const stSoldCond = saleListing && form.statuses.includes('Sold Conditional');
   const stTerminated = saleListing && form.statuses.includes('Terminated');
 
@@ -647,7 +727,11 @@ export default function TransactionDetailPage() {
   // Auto-save is allowed exactly when the Save button would have been offered — same
   // permission, role and lifecycle-lock gate, so it can never write where a manual
   // save was refused. Assigned during render; the effects above read it when they run.
+  // TD-003 — and never while a conflict is unresolved. Every write the page could make right now
+  // carries a version the server has already rejected, so leaving it on would turn one refusal
+  // into a failed PUT per keystroke while the user reads the banner explaining the first.
   const autoSaveOn = !view && canEdit && !isSplitViewer
+    && !conflict
     && !(stClosed && !isSuperAdmin)
     && !(lockedForUser && !approvedReq);
   autoOnRef.current = autoSaveOn;
@@ -760,10 +844,21 @@ export default function TransactionDetailPage() {
         </div>
         <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
           {/* Invoice / Trade Sheet / Notice of Sale are hidden for agents. */}
-          {!isAgent && (isListingFinancialType(form.type) ? (<>
+          {/*
+            * TD-035 — the Deposit Receipt is its own decision, taken on `hasDeposit`.
+            *
+            * It used to be the first arm of the type ternary below, which made "is there a deposit
+            * to receipt?" and "which side of the trade is this?" the same question. They are not,
+            * and the ternary is still correct for the two that ARE side questions: the Lawyer
+            * Statement belongs to the listing side, the Invoice to the other. Only the receipt has
+            * been lifted out; neither of those changes behaviour.
+          */}
+          {!isAgent && hasDeposit && (
             <button className="btn ghost sm" onClick={() => setDepositOpen(true)}><Icon name="receipt" size={13} /> Deposit Receipt</button>
-            {!hideStmtNos && <button className="btn ghost sm" onClick={() => setLawyerStmtOpen(true)}><Icon name="doc" size={13} /> Lawyer Statement</button>}
-          </>) : (
+          )}
+          {!isAgent && (isListingFinancialType(form.type) ? (
+            !hideStmtNos && <button className="btn ghost sm" onClick={() => setLawyerStmtOpen(true)}><Icon name="doc" size={13} /> Lawyer Statement</button>
+          ) : (
             !docsOnly && !isDocumentation && <button className="btn ghost sm" style={invoicePaid ? { color: 'var(--ok-ink)', borderColor: 'var(--ok-ring-2)', background: 'var(--ok-bg)', fontWeight: 700 } : undefined} onClick={openInvoice}><Icon name="receipt" size={13} /> Invoice{invoicePaid ? ' Paid' : (invoiceSent ? ' sent' : '')}</button>
           ))}
           {!isAgent && !docsOnly && !hideTradeSheet && <button className="btn ghost sm" onClick={() => setTsOpen(true)}><Icon name="clipboard" size={13} /> Trade Sheet{tradeSheetSent ? ' sent' : ''}</button>}
@@ -798,6 +893,32 @@ export default function TransactionDetailPage() {
           {isFullAgent && !deleteReq && <button className="btn ghost sm" style={{ color: 'var(--bad)' }} onClick={onRequestDelete}><Icon name="trash" size={13} /> Request Deletion</button>}
         </div>
       </div>
+
+      {/*
+        TD-003 — somebody else saved this deal while this form was open.
+
+        First banner on the page, because until it is dealt with nothing else here can be written.
+        It says what happened, that the edit is still on screen, and what reloading will cost —
+        the alternative was silence and a reverted price nobody noticed for weeks.
+
+        Reloading is offered as the only action, and there is deliberately no "save anyway": a
+        forced write here would put every stale field on this form back over the top of the other
+        person's work, which is precisely the defect. Anyone who needs their value to win can
+        reload and type it again, on top of what is actually stored.
+      */}
+      {conflict && (
+        <div className="card" style={{ borderLeft: '4px solid var(--bad)', background: 'var(--warn-bg)' }}>
+          <div style={{ fontWeight: 700, color: 'var(--warn-ink-alt)' }}><Icon name="alert" size={13} /> Not saved — someone else changed this transaction</div>
+          <div style={{ fontSize: 12.5, color: 'var(--warn-ink-deep)', marginTop: 2 }}>{conflict}</div>
+          <div style={{ fontSize: 12.5, color: 'var(--warn-ink-deep)', marginTop: 2 }}>
+            Your changes are still on screen and auto-save is paused. Reloading replaces them with
+            the saved version, so copy anything you need to keep before you reload.
+          </div>
+          <div style={{ marginTop: 8 }}>
+            <button className="btn primary sm" onClick={reloadTxn}><Icon name="refresh" size={13} /> Reload the saved version</button>
+          </div>
+        </div>
+      )}
 
       {/* Closed — fully locked: only a Super Admin may edit (no request workflow). */}
       {stClosed && (

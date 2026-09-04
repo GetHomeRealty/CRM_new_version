@@ -46,18 +46,59 @@ export class TradeNumberService {
    * that band, gaps left alone - because a trade number that has appeared on a client document
    * should not be handed to a second deal.
    */
+  /*
+   * TD-008. This read the WHOLE transactions table on every create — `findMany({ select: {
+   * trade_no: true } })` with no `where` — pulled every number into memory and scanned them in
+   * JavaScript, inside the create's transaction. Harmless at nine rows; a full table read per
+   * create at brokerage scale, holding a write transaction open while it happens.
+   *
+   * It is now one row: the highest number already issued in this series, found by the database.
+   *
+   * WHY A RANGE PREDICATE RATHER THAN A REGEX ALONE. `trade_no` is `@unique`, so it carries a
+   * btree index, and `>= '200000' AND < '300000'` is a range scan on that index. A regex cannot
+   * use the index and would scan regardless. The comparison is on text, but every value it can
+   * distinguish here is six digits of equal length, where lexicographic and numeric order
+   * coincide; the band's own boundary is settled by the FIRST character ('2' vs '3'), which no
+   * collation reorders.
+   *
+   * WHY `ORDER BY ... DESC LIMIT 1` AND NOT `MAX(...)`. Measured on 400,000 seeded numbers, the
+   * obvious `MAX(LEFT(trade_no, 6)::int)` used the index and still took 76 ms, reading all 100,000
+   * rows of the band: an aggregate over an EXPRESSION cannot use the index's ordering to stop
+   * early, so Postgres walks the whole range and computes the maximum row by row. Ordering by the
+   * bare indexed column instead walks the index backwards and stops at the first row — 0.1 ms, one
+   * heap fetch, and flat as the table grows. The six digits are parsed here rather than in SQL for
+   * the same reason: casting inside the query is what made it an expression.
+   *
+   * THE REGEX IS STILL NEEDED, as a filter on top: this table holds numbers like '001' from
+   * before the series existed, and nothing in the schema prevents a non-conforming value. '001'
+   * falls outside every band's range anyway, but a hypothetical '2abc' would sort inside one, and
+   * taking a lexicographic maximum without the shape check could hand back a number derived from
+   * it. With the filter, the backward scan simply skips such a row and takes the next.
+   *
+   * NOT A DATABASE SEQUENCE, though the defect offers one. A trade number may also be chosen BY
+   * HAND — `manualProblem` exists for exactly that, filing a historical deal under the number it
+   * already carried — and a sequence would not know about those, so it would eventually hand out
+   * a number a manual entry had already taken. Deriving from what is actually stored keeps manual
+   * and automatic allocation on the same line.
+   *
+   * Soft-deleted rows are still included, on purpose and as before: their numbers occupy the
+   * unique index, and a number that has been issued is spent whether or not the deal survived.
+   */
   async next(db: Tx, type: string): Promise<string> {
     const s = SERIES[BY_TYPE[type] ?? 'buying'];
-    // Soft-deleted rows are included on purpose: their numbers still occupy the unique index,
-    // and a number that has been issued is spent whether or not the deal survived.
-    const rows = await db.transactions.findMany({ select: { trade_no: true } });
-    let highest = s.start - 1;
-    for (const r of rows) {
-      const m = /^(\d{6})(_NB)?$/.exec(String(r.trade_no ?? '').trim());
-      if (!m) continue;
-      const n = parseInt(m[1], 10);
-      if (n >= s.start && n <= s.end && n > highest) highest = n;
-    }
+    const lo = String(s.start);
+    const hi = String(s.end + 1);
+    const rows = await db.$queryRaw<{ trade_no: string }[]>`
+      SELECT trade_no
+        FROM transactions
+       WHERE trade_no >= ${lo}
+         AND trade_no <  ${hi}
+         AND trade_no ~ '^[0-9]{6}(_NB)?$'
+       ORDER BY trade_no DESC
+       LIMIT 1
+    `;
+    const top = rows[0]?.trade_no;
+    const highest = top === undefined ? s.start - 1 : parseInt(top.slice(0, 6), 10);
     const candidate = highest + 1;
     if (candidate > s.end) {
       const msg = `The ${s.label} trade number series (${s.start}-${s.end}) is full. `

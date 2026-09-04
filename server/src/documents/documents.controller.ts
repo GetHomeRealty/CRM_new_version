@@ -14,6 +14,7 @@ import { STORAGE_ROOT } from '../config/storage';
 
 import { isAgent } from '../core/authz';
 import { ownsTransaction, teamMemberIdentity } from '../common/transaction-scope';
+import { contentDisposition } from '../common/content-disposition';
 type Res0 = Record<string, unknown>;
 const u = (x: AuthUserRecord | undefined): AuthUserRecord | null => x ?? null;
 const MB20 = 20480 * 1024;
@@ -98,7 +99,7 @@ export class DocumentsController {
     if (entries.length === 0) throw new NotFoundException({ message: 'No uploaded documents to download for this transaction.' });
 
     res.setHeader('Content-Type', 'application/zip');
-    res.setHeader('Content-Disposition', `attachment; filename="${folder}.zip"`);
+    res.setHeader('Content-Disposition', contentDisposition(`${folder}.zip`, { fallback: 'documents' }));
     const zip = createZip();
     zip.pipe(res);
     for (const en of entries) zip.file(en.abs, { name: en.name });
@@ -168,7 +169,7 @@ export class DocumentsController {
   }
 
   private stream(res: Response, absPath: string, name: string, inline: boolean): void {
-    res.setHeader('Content-Disposition', `${inline ? 'inline' : 'attachment'}; filename="${name.replace(/"/g, '')}"`);
+    res.setHeader('Content-Disposition', contentDisposition(name, { inline }));
     res.sendFile(absPath);
   }
 

@@ -26,6 +26,20 @@ export function Breakdown({ parts }: { parts: { n: number; label: string; tone?:
 }
 
 /**
+ * How many THINGS a tally covers — the sum of its counts, not how many groups it has.
+ *
+ * The headline of a card whose sub-line is a `TallyBreakdown` has to come from here rather than
+ * from `Object.keys(by).length`. That expression counts the DISTINCT STATUSES in use, which reads
+ * as a quantity of deals in the same typography as every neighbouring tile and is not one: a
+ * brokerage whose deals are all Pending scored 1, and validating some of them would have made the
+ * number go UP, to 2, by adding a second group. It is exported beside `TallyBreakdown` on purpose,
+ * so a headline and the breakdown under it are derived from the same map.
+ */
+export function tallyTotal(by: Record<string, number>): number {
+  return Object.values(by).reduce((sum, n) => sum + n, 0);
+}
+
+/**
  * A label→count map rendered as a breakdown, for the groupBy tallies the dashboards return.
  *
  * Sorted by count so the largest group reads first, and every key is shown: a status with a zero

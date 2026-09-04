@@ -7,6 +7,7 @@ import { EmailTemplateService } from './email-template.service';
 import { MailerService } from './mailer.service';
 import { throwValidation } from '../common/laravel-exceptions';
 import type { MailEvent } from './mail-event-registry';
+import { contentDisposition } from '../common/content-disposition';
 
 type Res = Record<string, unknown>;
 
@@ -90,7 +91,7 @@ export class EmailController {
     res.setHeader('Content-Type', file.contentType);
     // Always `attachment`: a stored HTML or SVG file must download rather than execute in
     // this origin, where it would sit alongside the session cookie.
-    res.setHeader('Content-Disposition', `attachment; filename="${file.filename.replace(/"/g, '')}"`);
+    res.setHeader('Content-Disposition', contentDisposition(file.filename));
     res.end(file.data);
   }
 

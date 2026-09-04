@@ -8,6 +8,7 @@ import { CurrentUser, Screen } from '../auth/decorators';
 import type { AuthUserRecord } from '../auth/auth.types';
 import { CampaignTemplatesService, type TemplateInput } from './campaign-templates.service';
 import { CAMPAIGN_CATEGORIES } from './campaign.constants';
+import { contentDisposition } from '../common/content-disposition';
 
 /**
  * Campaign email templates. Viewing needs `campaigns` view; writing needs `campaigns` edit.
@@ -88,7 +89,7 @@ export class CampaignTemplatesController {
     const file = await this.templates.getAttachment(id, attachmentId, user);
     res.setHeader('Content-Type', file.content_type);
     // `attachment` so a stored HTML or SVG file downloads instead of executing in our origin.
-    res.setHeader('Content-Disposition', `attachment; filename="${file.filename.replace(/"/g, '')}"`);
+    res.setHeader('Content-Disposition', contentDisposition(file.filename));
     res.setHeader('Content-Length', String(file.data.length));
     res.end(file.data);
   }

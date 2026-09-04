@@ -66,9 +66,37 @@ export class AgentsService {
       .sort((a, b) => a.localeCompare(b, 'en', { sensitivity: 'base' }));
   }
 
-  /** Map of user name => email (users with an email), in id order. Agents get their own only. */
+  /*
+   * TD-037 — this had NO `where` clause at all: every row in `users`, any role, any status,
+   * including people who left the brokerage.
+   *
+   * The one caller is the Deposit Receipt's Cc auto-fill, which looks up a deal's agent/team NAMES
+   * in this map with no further check. An unscoped map means the lookup can resolve to anyone in
+   * the company who happens to share that name — an admin, an accountant, someone inactive — and
+   * whatever email is on THEIR account, personal Gmail included, goes out Cc on a document
+   * carrying client and deposit figures. Reproduced: a deal's agent was "Akhil"; this database also
+   * holds an unrelated admin named "Akhilesh" whose account email is a personal Gmail address. One
+   * typo or a slightly different spelling in a team member's name is the entire distance between
+   * Ccing the right agent and Ccing a stranger.
+   *
+   * Scoped the same way `listNames()` above already is — ACTIVE AGENTS ONLY — because that is the
+   * only population this lookup has ever had a reason to search. It does not remove the underlying
+   * risk of two active agents sharing a name (a systemic property of a name-keyed map this codebase
+   * already accepts elsewhere, see `mine()`'s own comment on namesake collisions), but it removes
+   * every case that put a NON-agent's address — the shape this defect actually reported — into a
+   * transaction's outgoing mail.
+   *
+   * NOT THE ONLY FIX. `QuickSendService.agentEmails` resolves the SAME question again, independently,
+   * at send time — with the same unscoped bug, until fixed there too. That is the send that actually
+   * happens; this map only fills what the screen shows before somebody clicks Send.
+   */
+  /** Map of active agent name => email, in id order. Agents get their own only. */
   async emails(viewer: Viewer = null): Promise<Record<string, string>> {
-    const rows = await this.prisma.users.findMany({ select: { name: true, email: true }, orderBy: { id: 'asc' } });
+    const rows = await this.prisma.users.findMany({
+      where: { role: 'agent', status: 'Active' },
+      select: { name: true, email: true },
+      orderBy: { id: 'asc' },
+    });
     const map: Record<string, string> = {};
     for (const u of rows) {
       if (u.email) map[u.name] = u.email;

@@ -466,6 +466,10 @@ export async function transactionResource(t: LoadedTxn, ctx: ResourceCtx): Promi
   }
 
   out.created_at = toDateTimeString(t.created_at);
+  // TD-003 — the token the editor holds and sends back on save, so a write made against a snapshot
+  // somebody else has already replaced is refused rather than applied. Emitted on every read of a
+  // transaction, because every one of them is a form somebody may go on to save.
+  out.version = t.version;
 
   return out;
 }

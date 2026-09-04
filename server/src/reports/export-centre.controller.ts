@@ -7,6 +7,7 @@ import { CurrentUser, Screen } from '../auth/decorators';
 import type { AuthUserRecord } from '../auth/auth.types';
 import { ExportJobService, type ExportAction } from './export-job.service';
 import { parseSelection } from './bulk-export.controller';
+import { contentDisposition } from '../common/content-disposition';
 
 /**
  * Export & Download Centre. Queues bulk exports for background processing and serves the
@@ -48,7 +49,7 @@ export class ExportCentreController {
   async download(@CurrentUser() user: AuthUserRecord, @Param('token') token: string, @Res() res: Response): Promise<void> {
     const { abs, fileName, mime } = await this.jobs.download(token, user);
     res.setHeader('Content-Type', mime);
-    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+    res.setHeader('Content-Disposition', contentDisposition(fileName));
     // streamed, so a large ZIP is never held in memory
     createReadStream(abs).pipe(res);
   }

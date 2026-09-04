@@ -6,6 +6,7 @@ import { CompanySettingsService } from '../settings/company-settings.service';
 import { throwValidation, type FieldErrors } from '../common/laravel-exceptions';
 import { parseJsonObject, phpJsonNormalize } from '../common/serialize';
 import { isBuyingType } from '../transactions/lawyer-details';
+import { ResourceAccessService } from '../core/resource-access.service';
 import type { AuthUserRecord } from '../auth/auth.types';
 
 const SECTION = 'Quick Actions — Notice of Sale';
@@ -20,23 +21,45 @@ export class NoticeOfSaleService {
     private readonly audit: AuditService,
     private readonly mailer: MailerService,
     private readonly settings: CompanySettingsService,
+    private readonly access: ResourceAccessService,
   ) {}
 
   private actor(u: Actor): { id: number; name: string } | null { return u ? { id: u.id, name: u.name } : null; }
 
-  private async txnOr404(id: number): Promise<{ id: number; notice_of_sale: string | null; trade_no: string; property: string | null; price: unknown; deposit: unknown; closing_date: Date | null; agent: string | null }> {
+  /*
+   * TD-012 — LOADING A DEAL AND BEING ALLOWED TO IS ONE STEP, NOT TWO.
+   *
+   * Not one authorization call existed in this file. `PUT /transactions/:id/notice-of-sale` from an
+   * agent with no part in the deal returned 200 and PERSISTED the change to another agent's
+   * transaction; the send routes mailed its parties and figures onward. The class-level
+   * `@Screen('transactions','edit')` looked like protection and is not — a screen permission says
+   * which screens you may open, not which rows are yours, and every agent holds it.
+   *
+   * The check lives in the loader rather than at the top of each public method because that is the
+   * only version that stays true. Every method here begins by loading the deal, so a method added
+   * later cannot reach one without passing this — which is exactly what went wrong: `showNotice`
+   * was given the check and the four routes beside it were not, and nothing about the code made
+   * that visible. Renamed too, so the guarantee is stated at every call site.
+   *
+   * `assertTransaction` is the same rule `GET /api/transactions/:id`, documents and chat already
+   * apply — deliberately not restated here, so there is one definition of who may reach a deal. It
+   * 404s a transaction that does not exist whoever asks, so the reply cannot be used to find out
+   * which deals are real.
+   */
+  private async reachableTxnOr404(user: Actor, id: number): Promise<{ id: number; notice_of_sale: string | null; trade_no: string; property: string | null; price: unknown; deposit: unknown; closing_date: Date | null; agent: string | null }> {
+    await this.access.assertTransaction(user, id);
     const t = await this.prisma.transactions.findFirst({ where: { id, deleted_at: null } });
     if (!t) throw new NotFoundException({ message: `No query results for model [App\\Models\\Transaction] ${id}.` });
     return t;
   }
 
-  async show(txnId: number): Promise<Record<string, unknown>> {
-    const t = await this.txnOr404(txnId);
+  async show(user: Actor, txnId: number): Promise<Record<string, unknown>> {
+    const t = await this.reachableTxnOr404(user, txnId);
     return this.present(this.normalize(t.notice_of_sale));
   }
 
   async save(user: Actor, txnId: number, body: Record<string, unknown>): Promise<Record<string, unknown>> {
-    const t = await this.txnOr404(txnId);
+    const t = await this.reachableTxnOr404(user, txnId);
     this.validateSave(body);
     const previous = this.normalize(t.notice_of_sale);
     const current: Notice = { ...previous, agents: { ...previous.agents } };
@@ -83,7 +106,7 @@ export class NoticeOfSaleService {
 
     await this.store(txnId, current);
     await this.syncDocument(txnId, current);
-    const fresh = await this.txnOr404(txnId);
+    const fresh = await this.reachableTxnOr404(user, txnId);
     return this.present(this.normalize(fresh.notice_of_sale));
   }
 
@@ -138,7 +161,7 @@ export class NoticeOfSaleService {
   }
 
   async send(user: Actor, txnId: number, body: Record<string, unknown>): Promise<Record<string, unknown>> {
-    const t = await this.txnOr404(txnId);
+    const t = await this.reachableTxnOr404(user, txnId);
     this.validateSend(body);
     await this.requireBuyerLawyer(txnId);
     const agents = (body.agents as unknown[]).map(String);
@@ -165,7 +188,7 @@ export class NoticeOfSaleService {
       } catch { /* mail failure never blocks the send */ }
     }
 
-    const fresh = await this.txnOr404(txnId);
+    const fresh = await this.reachableTxnOr404(user, txnId);
     return this.present(this.normalize(fresh.notice_of_sale));
   }
 

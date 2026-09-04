@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { formatCurrency } from './format';
 import { printDoc } from './printDoc';
 import BrandMark, { brandMarkHtml } from './BrandMark';
-import { sendDepositReceipt, getAgentEmails, getDocuments, uploadDocClientFile } from '../lib/api';
+import { sendDepositReceipt, getDepositReceiptCcSuggestions, getDocuments, uploadDocClientFile } from '../lib/api';
 import { useToast } from './toast';
 import { apiErrorMessage } from '../lib/apiError';
 import type { CompanySettings, Transaction } from '../types';
@@ -86,18 +86,27 @@ export default function DepositReceiptModal({ open, onClose, txn, settings = nul
     cc: '',
   }));
   const [sending, setSending] = useState(false);
-  // Cc the listing agents (GHR deal agents) — look up their emails by name.
+  /*
+   * TD-037 — Cc the deal's own team, resolved by the server rather than matched here.
+   *
+   * This used to fetch a company-wide name→email dictionary and look up the deal's team/agent
+   * NAMES in it directly. Nothing about that lookup was scoped to this transaction: a team
+   * member's name matching, exactly or by typo, ANY user in the company — any role, any status —
+   * silently pre-filled that person's account email into a document carrying the client's deposit
+   * figures. Reproduced: a deal's agent was "Akhil"; the company also has an unrelated admin named
+   * "Akhilesh" whose account email is personal.
+   *
+   * `getDepositReceiptCcSuggestions` asks the server for THIS deal's team, resolved by
+   * `team_members.user_id` where the row has one — an exact identity, not a name string — and by
+   * name only as a fallback restricted to active agents. It is the same resolution
+   * `depositReceipt()` performs at send time, so what this box shows is what Send will actually Cc.
+   */
   useEffect(() => {
     if (!open) return;
-    getAgentEmails().then((map) => {
-      setF((p) => {
-        if (p.cc) return p; // don't override a manual edit
-        const names = (txn.team && txn.team.length ? txn.team.map((t) => t.name) : (txn.agent ? [txn.agent] : [])).filter((n): n is string => !!n);
-        const cc = names.map((n) => map[n]).filter(Boolean).join(', ');
-        return { ...p, cc };
-      });
+    getDepositReceiptCcSuggestions(txn.id).then((emails) => {
+      setF((p) => (p.cc ? p : { ...p, cc: emails.join(', ') })); // don't override a manual edit
     }).catch(() => {});
-  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [open, txn.id]);
 
   /*
    * TD-086 - the broker of record is a brokerage SETTING, not a constant. This field held the

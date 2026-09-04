@@ -1,4 +1,5 @@
 import api from './axios';
+import { filenameFromDisposition, saveBlob } from './download';
 import type { ImportPreview, ImportResult, ImportBatch } from '../types';
 
 /** Bulk transaction import API. Files are sent base64-encoded in JSON. */
@@ -6,14 +7,8 @@ import type { ImportPreview, ImportResult, ImportBatch } from '../types';
 /** Trigger a browser download for a blob response. */
 async function download(url: string, fallbackName: string): Promise<void> {
   const res = await api.get(url, { responseType: 'blob' });
-  const dispo = String(res.headers['content-disposition'] ?? '');
-  const m = /filename="?([^";]+)"?/i.exec(dispo);
-  const objectUrl = URL.createObjectURL(res.data as Blob);
-  const a = document.createElement('a');
-  a.href = objectUrl;
-  a.download = m ? m[1] : fallbackName;
-  document.body.appendChild(a); a.click(); a.remove();
-  setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+  // TD-046 — one reader for the server's filename, shared with every other download path.
+  saveBlob(res.data as Blob, filenameFromDisposition(res.headers, fallbackName), 60_000);
 }
 
 export const downloadImportTemplate = (): Promise<void> =>

@@ -15,6 +15,7 @@ import type { AuthUserRecord } from '../auth/auth.types';
 import type { ReportFilters } from './report.types';
 import type { DocRow } from './report-documents';
 import { STORAGE_ROOT } from '../config/storage';
+import { contentDisposition } from '../common/content-disposition';
 
 /**
  * Ceiling on one bulk operation — protects the API from an accidental "select everything".
@@ -604,7 +605,7 @@ export class BulkExportService {
     const company = (await this.settings.current()).name;
 
     res.setHeader('Content-Type', 'application/zip');
-    res.setHeader('Content-Disposition', `attachment; filename="Transaction_PDFs_${this.stamp()}.zip"`);
+    res.setHeader('Content-Disposition', contentDisposition(`Transaction_PDFs_${this.stamp()}.zip`));
     const zip = createZip({ zlib: { level: 6 } });
     zip.pipe(res);
     const used = new Set<string>();
@@ -748,7 +749,7 @@ export class BulkExportService {
     }
 
     res.setHeader('Content-Type', 'application/zip');
-    res.setHeader('Content-Disposition', `attachment; filename="Bulk_Transaction_Documents_${this.stamp()}.zip"`);
+    res.setHeader('Content-Disposition', contentDisposition(`Bulk_Transaction_Documents_${this.stamp()}.zip`));
     const zip = createZip({ zlib: { level: 6 } });
     // One unreadable file must not abort the whole download.
     zip.on('warning', () => { /* ENOENT on a vanished file — already recorded in the manifest */ });

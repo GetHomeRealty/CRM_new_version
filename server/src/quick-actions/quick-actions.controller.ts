@@ -6,7 +6,6 @@ import type { AuthUserRecord } from '../auth/auth.types';
 import { NoticeOfSaleService } from './notice-of-sale.service';
 import { QuickSendService } from './quick-send.service';
 
-import { ResourceAccessService } from '../core/resource-access.service';
 type Res = Record<string, unknown>;
 const u = (x: AuthUserRecord | undefined): AuthUserRecord | null => x ?? null;
 
@@ -31,19 +30,27 @@ export class QuickActionsController {
   constructor(
     private readonly notice: NoticeOfSaleService,
     private readonly quick: QuickSendService,
-    private readonly access: ResourceAccessService,
   ) {}
 
-  /**
-   * The only route here that took a transaction id without taking the caller, so nothing could
-   * check whether they had any part in the deal — an agent could read the notice of sale, with its
-   * parties and figures, for any transaction in the brokerage. The write and send routes beside it
-   * already had the user; this one was simply never given it.
+  /*
+   * TD-012 — THE PER-RECORD CHECK NOW LIVES IN THE SERVICES, FOR EVERY ROUTE ON THIS CONTROLLER.
+   *
+   * It used to be here, on this one route, and nowhere else: the four write and send routes below
+   * had no ownership check at all, so an agent could email another deal's financials to an address
+   * of their choosing and persist edits to its Notice of Sale. A guard that one handler remembers
+   * and its four neighbours forget is the failure this defect actually describes, and adding four
+   * more copies of the same line would leave the fifth omission just as easy.
+   *
+   * Both services now assert access inside the loader every one of their methods already calls, so
+   * a route cannot reach a deal unchecked — including a route added after this comment. The call
+   * that used to be on this line is gone rather than duplicated, so there is one place to look.
+   *
+   * The class-level `@Screen` above is a SCREEN permission and answers a different question:
+   * whether this person may open Transaction Management at all. Every agent holds it.
    */
   @Get('transactions/:transaction/notice-of-sale')
-  async showNotice(@CurrentUser() user: AuthUserRecord | undefined, @Param('transaction', ParseIntPipe) txnId: number): Promise<Res> {
-    await this.access.assertTransaction(u(user), txnId);
-    return this.notice.show(txnId);
+  showNotice(@CurrentUser() user: AuthUserRecord | undefined, @Param('transaction', ParseIntPipe) txnId: number): Promise<Res> {
+    return this.notice.show(u(user), txnId);
   }
 
   @Put('transactions/:transaction/notice-of-sale')
@@ -57,6 +64,17 @@ export class QuickActionsController {
   @Screen('transactions', 'edit')
   sendNotice(@CurrentUser() user: AuthUserRecord | undefined, @Param('transaction', ParseIntPipe) txnId: number, @Body() body: Res): Promise<Res> {
     return this.notice.send(u(user), txnId, body ?? {});
+  }
+
+  /*
+   * TD-037 — the Cc the Deposit Receipt editor offers before Send, resolved the same way the
+   * send itself resolves it. A `view` route, like `showNotice` above: it discloses nothing the
+   * send would not already mail, and gating it any tighter than the form that calls it would
+   * make the pre-fill unable to show what the button beside it is about to do.
+   */
+  @Get('transactions/:transaction/deposit-receipt/cc-suggestions')
+  depositCcSuggestions(@CurrentUser() user: AuthUserRecord | undefined, @Param('transaction', ParseIntPipe) txnId: number): Promise<string[]> {
+    return this.quick.ccSuggestions(u(user), txnId);
   }
 
   @Post('transactions/:transaction/deposit-receipt/send')

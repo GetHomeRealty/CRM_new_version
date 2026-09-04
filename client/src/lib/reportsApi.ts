@@ -1,4 +1,5 @@
 import api from './axios';
+import { filenameFromDisposition, saveBlob } from './download';
 import type {
   ReportListItem, ReportMeta, ReportResult, ReportFilterOptions, ReportSearchBody,
   ReportDocuments, ReminderRequest, ReminderPreview, ReminderResult,
@@ -33,12 +34,7 @@ export const sendReminders = (body: ReminderRequest): Promise<ReminderResult> =>
 /** POST the filter/column selection and download the returned XLSX/PDF blob (complete dataset). */
 export async function exportReport(type: string, format: 'xlsx' | 'pdf', body: ReportSearchBody): Promise<void> {
   const res = await api.post(`/api/reports/${type}/export/${format}`, body, { responseType: 'blob' });
-  const dispo = String(res.headers['content-disposition'] ?? '');
-  const m = /filename="?([^";]+)"?/i.exec(dispo);
-  const name = m ? m[1] : `${type}.${format}`;
-  const url = URL.createObjectURL(res.data as Blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = name;
-  document.body.appendChild(a); a.click(); a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  // TD-046 — one reader for the server's filename, shared with every other download path. The
+  // fallback still carries the extension, so a hidden header costs the report's name, not its type.
+  saveBlob(res.data as Blob, filenameFromDisposition(res.headers, `${type}.${format}`), 60_000);
 }

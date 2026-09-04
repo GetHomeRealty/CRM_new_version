@@ -9,7 +9,7 @@ import { apiErrorMessage } from '../lib/apiError';
 import TodoList from './TodoList';
 import ReviewWidgets from './ReviewWidgets';
 import ReviewErrorCharts from './ReviewErrorCharts';
-import { Breakdown, TallyBreakdown, Tile } from './DashboardTiles';
+import { Breakdown, TallyBreakdown, Tile, tallyTotal } from './DashboardTiles';
 import type { DashboardCommissions, DeskDashboard } from '../types';
 
 /**
@@ -24,6 +24,28 @@ import type { DashboardCommissions, DeskDashboard } from '../types';
  * What this screen no longer does is download the entire transactions list to count it in the
  * browser. Both requests return summaries.
  */
+/*
+ * TD-047 — THE CAPTION UNDER A COMMISSION TILE SAYS WHAT THE TILE COUNTED.
+ *
+ * All four of these read "N deals", and on an administrator's screen that was untrue: the counts
+ * are of COMMISSION LINES — one per team member per deal — which is what the dollar figure above
+ * them is a sum of. A brokerage with fourteen deals carrying twenty-one agent lines showed
+ * "20 open deals" beside a Total Deals tile reading 14, and the two cards looked like they
+ * disagreed about the same fact. They were answering different questions; only one of them said so.
+ *
+ * The count is not the thing to change. Counting deals here would leave the money and the count on
+ * one tile describing different sets, which is a worse defect and a silent one.
+ *
+ * An AGENT genuinely sees one row per deal — their own line on each visible deal, zero where they
+ * are not a member — so their caption is unchanged. `count_basis` comes from the server, derived
+ * from the query it ran, rather than from the role in this browser: the wording follows the numbers
+ * even if who-gets-which-query ever changes.
+ */
+function commissionCount(comm: DashboardCommissions, n: number, qualifier?: 'closed' | 'open'): string {
+  const noun = comm.count_basis === 'deals' ? 'deal' : 'commission line';
+  return `${n} ${qualifier ? qualifier + ' ' : ''}${noun}${n === 1 ? '' : 's'}`;
+}
+
 export default function DeskDashboardPage() {
   const toast = useToast();
   const navigate = useNavigate();
@@ -57,9 +79,21 @@ export default function DeskDashboardPage() {
       <div className="tiles">
         <Tile label="Total Deals" value={data.transactions.total}
           sub={<button className="prop-link" type="button" onClick={() => navigate(deskPath('transactions'))}>open transactions</button>} />
-        <Tile label="Validation" value={Object.keys(data.transactions.by_validation).length}
+        {/*
+          * Both headlines are the number of DEALS in the breakdown, not the number of statuses in
+          * it. They counted `Object.keys(...).length`, so a brokerage whose deals were all Pending
+          * read "Validation 1" over a sub-line saying "8 pending" — the card contradicting itself,
+          * in the row where "Total Deals" and "Closings Ahead" are genuine quantities. The count
+          * also moved the wrong way: validating a deal split one group into two and pushed the
+          * headline UP to 2.
+          *
+          * The CRM's "Leads by Stage" and "Lead Sources" keep counting keys, and are not the same
+          * mistake — those labels name the categories, so "5 sources" is what the number means.
+          * These two label a property of deals and sit beside deal counts.
+        */}
+        <Tile label="Validation" value={tallyTotal(data.transactions.by_validation)}
           sub={<TallyBreakdown by={data.transactions.by_validation} />} />
-        <Tile label="Commission Status" value={Object.keys(data.transactions.by_commission).length}
+        <Tile label="Commission Status" value={tallyTotal(data.transactions.by_commission)}
           sub={<TallyBreakdown by={data.transactions.by_commission} />} />
         <Tile label="Closings Ahead" value={data.closings.next_30_days}
           color={data.closings.overdue > 0 ? 'var(--bad-700)' : undefined}
@@ -118,13 +152,13 @@ export default function DeskDashboardPage() {
       {comm && (
         <div className="tiles">
           <Tile label="Pipeline" value={money(comm.t4a.closed_total)}
-            sub={`${comm.t4a.closed_count} closed deal${comm.t4a.closed_count === 1 ? '' : 's'}`} />
+            sub={commissionCount(comm, comm.t4a.closed_count, 'closed')} />
           <Tile label="Paid" value={money(comm.t4a.closed_paid)}
-            sub={`${comm.t4a.paid_count} deal${comm.t4a.paid_count === 1 ? '' : 's'}`} color="var(--ok-ink)" />
+            sub={commissionCount(comm, comm.t4a.paid_count)} color="var(--ok-ink)" />
           <Tile label="Pending" value={money(comm.t4a.closed_pending)}
-            sub={`${comm.t4a.pending_count} deal${comm.t4a.pending_count === 1 ? '' : 's'}`} color="var(--warn-ink)" />
+            sub={commissionCount(comm, comm.t4a.pending_count)} color="var(--warn-ink)" />
           <Tile label="Upcoming Commissions" value={money(comm.t4a.upcoming_total)}
-            sub={`${comm.t4a.upcoming_count} open deal${comm.t4a.upcoming_count === 1 ? '' : 's'}`} color="var(--info-700)" />
+            sub={commissionCount(comm, comm.t4a.upcoming_count, 'open')} color="var(--info-700)" />
           {/* Before HST on both sides: HST is collected and remitted, not earned. */}
           <Tile label="Overall Commission"
             value={money(isAgent ? comm.t4a.overall_total : comm.gross.overall_total)}

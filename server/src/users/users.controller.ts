@@ -7,6 +7,7 @@ import type { AuthUserRecord } from '../auth/auth.types';
 import { UsersService } from './users.service';
 import { UserOnboardingService, type AdHocAttachment, type OnboardingKind, type OnboardingPreview } from './user-onboarding.service';
 import { OffboardingService, type OffboardingChecklist } from './offboarding.service';
+import { contentDisposition } from '../common/content-disposition';
 
 /** Attachment types safe to render in the browser rather than download. */
 const INLINE_TYPES = new Set(['application/pdf', 'image/png', 'image/jpeg', 'image/gif', 'image/webp']);
@@ -85,7 +86,7 @@ export class UsersController {
     const html = (body?.html ?? '').trim() || (await this.onboarding.preview(id, kind, publicBaseUrl(req))).html;
     const file = await this.onboarding.agreementDocument(id, kind, html);
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `inline; filename="${file.filename.replace(/"/g, '')}"`);
+    res.setHeader('Content-Disposition', contentDisposition(file.filename, { inline: true }));
     res.end(file.data);
   }
 
@@ -100,7 +101,7 @@ export class UsersController {
     // Shown in the browser only for the formats a preview is useful for. Anything else downloads:
     // a stored HTML or SVG file rendered in this origin would run alongside the session cookie.
     const inline = INLINE_TYPES.has(file.contentType.toLowerCase().split(';')[0].trim());
-    res.setHeader('Content-Disposition', `${inline ? 'inline' : 'attachment'}; filename="${file.filename.replace(/"/g, '')}"`);
+    res.setHeader('Content-Disposition', contentDisposition(file.filename, { inline }));
     res.end(file.data);
   }
 

@@ -13,6 +13,7 @@ import { ReminderSweepService } from './reminder-sweep.service';
 import { isAdminOrAbove } from '../core/authz';
 import type { ResourceUser } from './transaction.resource';
 import { ListTransactionsDto } from './dto/list-transactions.dto';
+import { contentDisposition } from '../common/content-disposition';
 
 const toResourceUser = (u: AuthUserRecord | undefined): ResourceUser | null =>
   u ? { id: u.id, role: u.role, name: u.name } : null;
@@ -153,7 +154,7 @@ export class TransactionsController {
     res.setHeader('Content-Type', wantsPdf
       ? 'application/pdf'
       : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', `attachment; filename="${file.filename.replace(/"/g, '')}"`);
+    res.setHeader('Content-Disposition', contentDisposition(file.filename));
     res.end(file.buffer);
   }
 
@@ -185,7 +186,7 @@ export class TransactionsController {
   ): Promise<void> {
     const file = await this.thread.attachment(user ?? null, attachmentId);
     res.setHeader('Content-Type', file.contentType);
-    res.setHeader('Content-Disposition', `attachment; filename="${file.filename.replace(/"/g, '')}"`);
+    res.setHeader('Content-Disposition', contentDisposition(file.filename));
     res.end(file.data);
   }
 
