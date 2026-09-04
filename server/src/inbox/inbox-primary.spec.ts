@@ -52,15 +52,15 @@ async function seed(tx: PrismaClient) {
   return { user, account };
 }
 
-/** The filter the service builds: the area's primary, else an unassigned primary, else the whole area. */
-async function inboxFilter(tx: PrismaClient, userId: number, area: 'crm' | 'desk') {
+/** The filter the service builds: the Hub primary, else the oldest active account. */
+async function inboxFilter(tx: PrismaClient, userId: number, _area: 'crm' | 'desk') {
   const pick = { id: true, from_email: true, inbound_enabled: true, imap_host: true };
   const primary =
-    (await tx.mail_accounts.findFirst({ where: { user_id: userId, is_default: true, scope: area }, select: pick }))
-    ?? (await tx.mail_accounts.findFirst({ where: { user_id: userId, is_default: true, scope: null }, select: pick }));
+    (await tx.mail_accounts.findFirst({ where: { user_id: userId, is_default: true }, select: pick }))
+    ?? (await tx.mail_accounts.findFirst({ where: { user_id: userId, is_active: true }, select: pick, orderBy: { id: 'asc' } }));
   return primary
     ? { account_id: primary.id }
-    : { mail_account: { is: { OR: [{ scope: area }, { scope: null }] } } };
+    : {};
 }
 
 const countFor = async (tx: PrismaClient, userId: number, area: 'crm' | 'desk') =>
@@ -99,34 +99,33 @@ describe('the Inbox shows the primary account only', () => {
     });
   });
 
-  it("keeps the two areas' primaries independent", async () => {
+  it('shows the same Hub primary in both areas', async () => {
     await inRollback(async (tx) => {
       const { user, account } = await seed(tx);
       const crm = await account('crm', { is_default: true, is_active: true });
-      const desk = await account('desk', { is_default: true, is_active: true });
+      await account('desk', { is_active: true });
 
       expect(await inboxFilter(tx, user.id, 'crm')).toEqual({ account_id: crm.id });
-      expect(await inboxFilter(tx, user.id, 'desk')).toEqual({ account_id: desk.id });
+      expect(await inboxFilter(tx, user.id, 'desk')).toEqual({ account_id: crm.id });
     });
   });
 
-  it('falls back to the whole area rather than showing an empty inbox', async () => {
+  it('falls back to the oldest active Hub mailbox', async () => {
     await inRollback(async (tx) => {
       const { user, account } = await seed(tx);
+      const first = await account('desk', { is_active: true });
       await account('desk');
-      await account('desk');
-      // Nobody has chosen a primary. Two messages, both shown.
-      expect(await inboxFilter(tx, user.id, 'desk')).not.toHaveProperty('account_id');
-      expect(await countFor(tx, user.id, 'desk')).toBe(2);
+      expect(await inboxFilter(tx, user.id, 'desk')).toEqual({ account_id: first.id });
+      expect(await countFor(tx, user.id, 'desk')).toBe(1);
     });
   });
 
-  it("does not let an unassigned primary outrank the area's own", async () => {
+  it('uses the same primary regardless of its legacy scope', async () => {
     await inRollback(async (tx) => {
       const { user, account } = await seed(tx);
-      await account(null, { is_default: true, is_active: true });
-      const own = await account('desk', { is_default: true, is_active: true });
-      expect(await inboxFilter(tx, user.id, 'desk')).toEqual({ account_id: own.id });
+      const shared = await account(null, { is_default: true, is_active: true });
+      await account('desk', { is_active: true });
+      expect(await inboxFilter(tx, user.id, 'desk')).toEqual({ account_id: shared.id });
     });
   });
 

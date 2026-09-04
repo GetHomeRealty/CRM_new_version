@@ -31,9 +31,8 @@ export class GmailConnectService {
     const encRefresh = tokens.refresh_token ? this.crypt.encryptString(tokens.refresh_token) : null;
 
     const existing = await this.prisma.mail_accounts.findFirst({
-      // Scoped: CRM Settings and Transaction Desk Settings hold separate connections, so the
-      // same Gmail address connected on both sides is two independent rows, not one shared one.
-      where: { user_id: userId, scope, encryption: GmailConnectService.OAUTH, from_email: { equals: address, mode: 'insensitive' } },
+      // Reconnect the same Hub mailbox regardless of which area started OAuth.
+      where: { user_id: userId, encryption: GmailConnectService.OAUTH, from_email: { equals: address, mode: 'insensitive' } },
     });
 
     if (existing) {
@@ -115,7 +114,7 @@ export class GmailConnectService {
     await assertCanConnectEmail(this.prisma, userId, scope);
 
     // First personal account a user connects becomes their default sender.
-    const hasDefault = await this.prisma.mail_accounts.findFirst({ where: { user_id: userId, scope, is_default: true }, select: { id: true } });
+    const hasDefault = await this.prisma.mail_accounts.findFirst({ where: { user_id: userId, is_default: true }, select: { id: true } });
     const now = new Date();
     await this.prisma.mail_accounts.create({
       data: {
@@ -123,9 +122,8 @@ export class GmailConnectService {
         host: 'smtp.gmail.com', port: 587, username: address,
         password: encRefresh, encryption: GmailConnectService.OAUTH,
         is_active: true, is_default: !hasDefault, user_id: userId,
-        // Without this the account has no area and, because the lists match strictly, would
-        // show in neither CRM nor Transaction Desk — a connect that silently does nothing.
-        scope,
+        // Null is the shared Hub scope used by both CRM and Transactions.
+        scope: null,
         imap_host: 'imap.gmail.com', imap_port: 993, imap_encryption: 'ssl', inbound_enabled: true,
         created_at: now, updated_at: now,
       },
