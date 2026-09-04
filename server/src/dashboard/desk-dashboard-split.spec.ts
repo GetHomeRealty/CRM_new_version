@@ -59,6 +59,9 @@ const listFor = (tx: PrismaService) =>
     tx,
     new CommissionService(new PersonResolver(tx)),
     new TransactionReviewService(tx, new PersonResolver(tx), null as never, null as never, null as never),
+    // audit: a stub rather than null - applyExpiry now RECORDS the flip (TD-074), so a
+    // fixture sitting past its expiry would call it. A no-op keeps these tests about scope.
+    { record: async () => undefined } as never,
   );
 
 const asAgent = (u: { id: number; name: string }): AuthUserRecord =>

@@ -12,6 +12,7 @@ import { longDate, longStamp } from './report-export.service';
 import { IMPORT_FIELDS, FINANCIAL_FIELDS, CHILD_SHEETS, flatColumn } from './import-template';
 import { buildDownloadAllWorkbook, type ExportRow, type RawTxnRow } from './download-all-export';
 import type { AuthUserRecord } from '../auth/auth.types';
+import { isMyMemberRow } from '../transactions/transaction.resource';
 import type { ReportFilters } from './report.types';
 import type { DocRow } from './report-documents';
 import { STORAGE_ROOT } from '../config/storage';
@@ -550,6 +551,51 @@ export class BulkExportService {
       }
       rows.push(row);
     }
+    /*
+     * TD-054 - the export obeys the same access level the screen does.
+     *
+     * Row scoping was already enforced here (an agent gets only their own deals); FIELD scoping
+     * was not, so a docs-only member could download the rates and the deal totals in a file.
+     * Applied as a post-pass over the finished table so it depends on the column NAMES rather
+     * than on the order the row was assembled in.
+     *
+     * The member is matched with isMyMemberRow, the same rule the transaction resource uses -
+     * id first, name only for legacy rows. A second spelling of that rule is how a namesake ends
+     * up reading somebody else's money.
+     */
+    const MONEY = new Set([
+      'Commission % / Amount', 'Commission Type', 'Commission Value',
+      'Listing Commission %', 'Co-Op Commission %', 'Listing Commission Flat', 'Co-Op Commission Flat',
+      'Trust Payable', 'Total Commission (Excl HST)', 'Total Commission HST', 'Total Commission (Incl HST)',
+      'Agent Commission (Excl HST)', 'Agent Commission HST', 'Agent Commission (Incl HST)',
+      'Brokerage Commission (Excl HST)', 'Brokerage Commission HST', 'Brokerage Commission (Incl HST)',
+      'Adjustments Total', 'Cashback', 'Referral Fee', 'Advance Paid', 'Agent Paid', 'Agent Balance',
+      'Commission Adjust Before', 'Commission Adjust After',
+      'Listing Adjust Before', 'Listing Adjust After',
+      'Co-Op Adjust Before', 'Co-Op Adjust After',
+      'Precon Commission %', 'Precon Net of HST',
+    ]);
+    const hide = headers.map((h) => MONEY.has(h) || /^Team \d+ (Deal Share %|Agent %|Brokerage %)$/.test(h) || /^Adjustment \d+ Amount$/.test(h));
+    if ((user.role ?? 'agent') === 'agent' && hide.some(Boolean)) {
+      // The access level is read straight from team_members - the enriched row does not carry it.
+      // One query for the whole selection, matched with the same isMyMemberRow rule the screen uses.
+      const memberRows = await this.prisma.team_members.findMany({
+        where: { transaction_id: { in: txns.map((x) => x.id) } },
+        select: { transaction_id: true, user_id: true, name: true, access: true },
+      });
+      const docsOnly = new Set<number>();
+      for (const t of txns) {
+        const mine = memberRows.filter((m) => m.transaction_id === t.id).find((m) => isMyMemberRow(m, user));
+        if (mine && mine.access === 'docs') docsOnly.add(t.id);
+      }
+      if (docsOnly.size) {
+        for (const row of rows) {
+          if (!docsOnly.has(Number(row[0]))) continue;
+          for (let i = 0; i < row.length; i++) if (hide[i]) row[i] = '';
+        }
+      }
+    }
+
     return { headers, rows, txns };
   }
 

@@ -21,6 +21,22 @@ import { can, isAgent } from '../core/authz';
 import { ownsTransaction, teamMemberIdentity } from '../common/transaction-scope';
 import { ResourceAccessService } from '../core/resource-access.service';
 const SECTION = 'Legal & Documents';
+
+/*
+ * TD-023 - what may be filed as a transaction document.
+ *
+ * storeFile() keeps the extension from the uploaded name, and requireFile() only checked that
+ * a file was present, so an .svg carrying a script or an .html page was accepted as a document
+ * and served back by the download routes. An allow-list is used rather than a block-list: the
+ * set of things a brokerage files is small and known, and a block-list is only ever as good as
+ * the last extension somebody thought of.
+ */
+const ALLOWED_DOC_EXT = new Set([
+  '.pdf', '.jpg', '.jpeg', '.png', '.gif', '.webp', '.heic', '.heif',
+  '.doc', '.docx', '.xls', '.xlsx', '.csv', '.txt', '.rtf', '.odt', '.ods',
+  '.msg', '.eml',
+]);
+const MAX_DOC_BYTES = 25 * 1024 * 1024;
 type Actor = AuthUserRecord | null;
 type FileEntry = { client_name?: string | null; file_name?: string | null; file_path?: string | null };
 interface UploadedFile { originalname: string; buffer: Buffer }
@@ -187,7 +203,23 @@ export class DocumentsService {
     }
     // Orphans: condition removed → purge files + hard-delete.
     for (const orphan of existing.values()) {
-      await this.purgeFiles(orphan);
+      /*
+       * TD-120 - removing a condition must not destroy what was uploaded against it.
+       *
+       * This purged the files from disk and HARD-deleted the row, and syncConditionDocs runs on
+       * every load of Legal & Documents. Unticking "Conditional Offer" empties the condition list,
+       * so every condition document becomes an orphan at once and its uploads are unlinked from
+       * disk - no warning, no Recycle Bin, nothing to restore.
+       *
+       * An EMPTY row is still removed outright: nothing is lost, and leaving it would clutter the
+       * checklist with a condition that no longer exists. A row CARRYING A FILE is soft-deleted
+       * with its files left in place, so it reaches the Recycle Bin like every other deletion.
+       */
+      const orphanFiles = (parseJson<FileEntry[]>(orphan.files) ?? []) as FileEntry[];
+      if (orphan.file_path || orphan.validation_file_path || orphanFiles.length > 0) {
+        await this.prisma.documents.update({ where: { id: orphan.id }, data: { deleted_at: new Date(), updated_at: new Date() } });
+        continue;
+      }
       await this.prisma.documents.delete({ where: { id: orphan.id } });
     }
   }
@@ -264,6 +296,15 @@ export class DocumentsService {
 
     // Remove client-deleted rows (soft-delete, keep files). Condition rows + agent-flagged excluded.
     const toRemove = await this.prisma.documents.findMany({ where: { transaction_id: txnId, deleted_at: null, condition_id: null, id: { notIn: keep.length ? keep : [0] } }, orderBy: { position: 'asc' } });
+    // TD-070. A mandatory row is part of the compliance checklist, not a line an office can
+    // drop by leaving it out of the payload. Refused by name rather than silently retained,
+    // so the person saving finds out instead of believing the deletion worked.
+    const lockedOut = toRemove.filter((d) => d.mandatory);
+    if (lockedOut.length) {
+      throw new UnprocessableEntityException({
+        message: `${lockedOut.map((d) => d.title).join(', ')} ${lockedOut.length === 1 ? 'is a mandatory document and cannot be' : 'are mandatory documents and cannot be'} removed. Untick Mandatory first if it genuinely does not apply to this deal.`,
+      });
+    }
     for (const d of toRemove) {
       await this.audit.record(txnId, this.actor(user), { section: SECTION, field: d.title, action: 'Document removed' });
       await this.prisma.documents.update({ where: { id: d.id }, data: { deleted_at: new Date(), updated_at: new Date() } });
@@ -486,6 +527,11 @@ export class DocumentsService {
     const document = await this.prisma.documents.findFirst({ where: { id: docId, deleted_at: null } });
     if (!document) throw new NotFoundException({ message: `No query results for model [App\\Models\\Document] ${docId}.` });
     if (user && isAgent(user)) throw new ForbiddenException({ message: 'Only an administrator can delete documents.' });
+    // TD-070. The same rule as the bulk path above - deleting one row directly must not be a
+    // way around it.
+    if (document.mandatory) {
+      throw new UnprocessableEntityException({ message: `"${document.title}" is a mandatory document and cannot be deleted. Untick Mandatory first if it genuinely does not apply to this deal.` });
+    }
     this.guardValidLocked(user, document);
     const txn = await this.prisma.transactions.findUnique({ where: { id: document.transaction_id } });
     if (txn) await this.audit.record(txn.id, this.actor(user), { section: SECTION, field: document.title, action: 'Document deleted' });
@@ -674,14 +720,29 @@ export class DocumentsService {
 
   // ---- helpers ----
 
-  private async purgeFiles(d: DocRow): Promise<void> {
-    await this.deleteFile(d.file_path);
-    await this.deleteFile(d.validation_file_path);
-    for (const f of (parseJson<FileEntry[]>(d.files) ?? []) as FileEntry[]) await this.deleteFile(f.file_path);
-  }
+  /*
+   * `purgeFiles()` WAS HERE, AND IS DELIBERATELY GONE (TD-120).
+   *
+   * It unlinked a document's uploads from disk, and its ONLY caller was the orphan sweep in
+   * syncConditionDocs - which runs on every load of Legal & Documents and destroyed every
+   * condition upload the moment "Conditional Offer" was unticked.
+   *
+   * The compiler flagging it as unused is the proof it existed only for that path. Deletion in
+   * this system is a soft delete into the Recycle Bin; nothing else ever wanted a method that
+   * removes a client's file with no record that it was ever there.
+   */
 
   private requireFile(file: UploadedFile | undefined): void {
     if (!file) throwValidation({ file: ['The file field is required.'] });
+    // TD-023. Every upload route reaches this method, so the check belongs here rather than
+    // repeated at each of the three call sites where one could be forgotten.
+    const ext = path.extname(file!.originalname || '').toLowerCase();
+    if (!ext || !ALLOWED_DOC_EXT.has(ext)) {
+      throwValidation({ file: [`${ext ? '"' + ext + '" files are' : 'A file with no extension is'} not accepted as a transaction document. Allowed: ${[...ALLOWED_DOC_EXT].join(', ')}.`] });
+    }
+    if (file!.buffer && file!.buffer.length > MAX_DOC_BYTES) {
+      throwValidation({ file: [`This file is ${Math.round(file!.buffer.length / 1048576)} MB. The largest a document may be is 25 MB.`] });
+    }
   }
 
   private bool(v: unknown): boolean { return v === true || v === 1 || v === '1' || v === 'true'; }

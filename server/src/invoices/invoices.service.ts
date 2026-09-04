@@ -362,7 +362,27 @@ export class InvoicesService {
     });
     const settings = await this.settings.current();
     await this.calc.recalculate(this.prisma, id, this.rate(invoice.tax_rate, settings.default_tax_rate));
-    const updated = await this.prisma.invoices.findUniqueOrThrow({ where: { id } });
+    let updated = await this.prisma.invoices.findUniqueOrThrow({ where: { id } });
+
+    /*
+     * TD-106 - a payment that settles the invoice records WHEN the commission arrived and HOW.
+     *
+     * recordPayment moved the money (status, amount_paid, balance) and left commission_received_date
+     * and commission_received_via null, so the deal's Admin block - which derives them from this
+     * invoice and is read-only by design - had nothing to show, and the agent-payout block read the
+     * empty date as 'nothing collected' (TD-107). The manual route (the full invoice save) exists
+     * but demands the whole form; nothing wrote them on payment, which is when they are actually
+     * known. Set only when the invoice is now fully Paid, and only if not already recorded, so a
+     * later part-payment or a manual value is never overwritten. The date is the payment's own
+     * paid_on and the method its own method.
+     */
+    if (updated.status === 'Paid' && !updated.commission_received_date) {
+      updated = await this.prisma.invoices.update({
+        where: { id },
+        data: { commission_received_date: this.toDate(body.paid_on), commission_received_via: method, updated_at: new Date() },
+      });
+    }
+
     await this.auditInvoice(id, updated.transaction_id, actor, {
       field: `Invoice ${updated.invoice_no} — Payment`, action: 'Payment recorded',
       new: this.numberFormat(amount) + (method ? ` (${method})` : ''),

@@ -56,7 +56,7 @@ export interface DeskAnalytics {
   /** Ascending by month (`YYYY-MM`). Deals with neither date are omitted, as on the screen. */
   by_month: { month: string; total: number }[];
   /** Descending by commission. `Unassigned` covers deals with no agent, as on the screen. */
-  by_agent: { agent: string; count: number; total: number }[];
+  by_agent: { agent: string; count: number; total: number | null }[];
   by_type: { type: string; count: number; total: number }[];
 }
 
@@ -245,7 +245,24 @@ export class DeskAnalyticsService {
         pending_count: Number(row.pending_count),
       },
       by_month: byMonth.map((m) => ({ month: m.month, total: money(m.total) })),
-      by_agent: byAgent.map((r) => ({ agent: r.key ?? 'Unassigned', count: Number(r.count), total: money(r.total) })),
+      /*
+       * TD-002 - an agent sees who worked what, never what anyone earned.
+       *
+       * The brokerage's rule: another agent's NAME and DEAL COUNT are visible, their commission is
+       * not. HIDING ONLY THE OTHER ROWS WOULD NOT ACHIEVE THAT - the totals card is on the same
+       * screen, so one subtraction recovers the hidden figure exactly whenever two agents appear.
+       * So for an agent the column comes off the table entirely; they read their own commission
+       * from the totals, and nothing per-agent can be derived.
+       *
+       * NOT scoped by name-matching the viewer's own row. by_agent groups on t.agent, which is free
+       * text (TD-045), and this file already warns that the brokerage has two active accounts
+       * sharing a name - a namesake would be handed the other's figures by an exact string match.
+       */
+      by_agent: byAgent.map((r) => ({
+        agent: r.key ?? 'Unassigned',
+        count: Number(r.count),
+        total: isAgent(user) ? null : money(r.total),
+      })),
       by_type: byType.map((r) => ({ type: r.key ?? '', count: Number(r.count), total: money(r.total) })),
     };
   }

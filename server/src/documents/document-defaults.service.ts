@@ -22,24 +22,25 @@ import { Injectable } from '@nestjs/common';
 export class DocumentDefaultsService {
   defaultsFor(type: string): { title: string; mandatory: boolean }[] {
     const t = (type ?? '').toLowerCase();
-    const rows = (pairs: string[]): { title: string; mandatory: boolean }[] => pairs.map((title) => ({ title, mandatory: false }));
+    const optional = new Set<string>(t === 'preconstruction' ? ['Trade Sheet'] : t.includes('listing') ? (t.includes('lease') ? ['Offer Summary Document'] : []) : t.includes('lease') ? ['Offer Summary', 'Rental Application'] : []);
+    const rows = (pairs: string[]): { title: string; mandatory: boolean }[] => pairs.map((title) => ({ title, mandatory: !optional.has(title) }));
 
     if (t === 'referral') return rows(['Referral doc', 'Notice of Sale', 'Trade Sheet']);
-    if (t === 'preconstruction') return rows(['Agreement of Purchase and Sale (APS)', 'Broker Referral', 'Deposit Slip', 'Trade Sheet']);
+    if (t === 'preconstruction') return rows(['Agreement of Purchase and Sale (APS)', 'Broker Referral', 'Deposit Slip', 'RECO Guide', 'Trade Sheet']);
 
     if (t.includes('listing')) {
       const isLeaseListing = t.includes('lease');
       return rows([
         'Listing agreement', 'MLS data sheet', 'Client Photo IDs', 'FINTRACK', 'Offer Summary Document',
         isLeaseListing ? 'Agreement to Lease' : 'Agreement of Purchase & Sale',
-        'Confirmation of CO-OP', 'Schedule B', 'Deposit Receipt', 'MLS',
+        'Confirmation of CO-OP', 'Schedule B', 'Deposit Receipt', 'MLS', 'RECO Guide', 'Trade Sheet', 'Notice of Sale',
       ]);
     }
     if (t.includes('lease')) {
-      return rows(['Offer Summary', 'Agreement to Lease', 'Schedule B', 'Confirmation of CO-OP', 'Tenant Representation', 'ORTA', 'Deposit Receipt', 'Client Photo IDs', 'FINTRACK']);
+      return rows(['Offer Summary', 'Agreement to Lease', 'Schedule B', 'Confirmation of CO-OP', 'Tenant Representation', 'ORTA', 'Deposit Receipt', 'Client Photo IDs', 'FINTRACK', 'Rental Application', 'RECO Guide', 'Trade Sheet', 'Notice of Sale']);
     }
     if (t.includes('buy')) {
-      return rows(['Offer Summary', 'Agreement of Purchase and Sale', 'Schedule B', 'Confirmation of CO-OP', 'Buyer Representation', 'Deposit Receipt', 'MLS', 'Client Photo IDs', 'FINTRACK']);
+      return rows(['Offer Summary', 'Agreement of Purchase and Sale', 'Schedule B', 'Confirmation of CO-OP', 'Buyer Representation', 'Deposit Receipt', 'MLS', 'Client Photo IDs', 'FINTRACK', 'RECO Guide', 'Trade Sheet', 'Notice of Sale']);
     }
     return [];
   }

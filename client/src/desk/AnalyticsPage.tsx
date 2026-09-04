@@ -170,11 +170,14 @@ export default function AnalyticsPage() {
 
       <div className="g2">
         <div className="card">
-          <div className="modal-h" style={{ fontSize: 14 }}>Top Agents by Commission</div>
-          <table className="list-table"><thead><tr><th>Agent</th><th>Deals</th><th>Commission</th></tr></thead>
+          <div className="modal-h" style={{ fontSize: 14 }}>{agents.some((x) => typeof x.total === 'number') ? 'Top Agents by Commission' : 'Top Agents by Deals'}</div>
+          <table className="list-table">{/* TD-002. The column is drawn only when the API sends commission at all. Driven by the
+              data, not by the role: the server decides who may see money, and repeating that rule
+              here would be a second copy of it to drift out of step. */}
+            <thead><tr><th>Agent</th><th>Deals</th>{agents.some((x) => typeof x.total === 'number') && <th>Commission</th>}</tr></thead>
             <tbody>
-              {agents.length === 0 && <tr><td colSpan={3} style={{ textAlign: 'center', color: 'var(--muted)', padding: 14 }}>No data.</td></tr>}
-              {agents.map((a) => <tr key={a.agent}><td>{a.agent}</td><td>{a.count}</td><td>{formatCurrency(a.total)}</td></tr>)}
+              {agents.length === 0 && <tr><td colSpan={agents.some((x) => typeof x.total === 'number') ? 3 : 2} style={{ textAlign: 'center', color: 'var(--muted)', padding: 14 }}>No data.</td></tr>}
+              {agents.map((a) => <tr key={a.agent}><td>{a.agent}</td><td>{a.count}</td>{agents.some((x) => typeof x.total === 'number') && <td>{formatCurrency(a.total ?? 0)}</td>}</tr>)}
             </tbody>
           </table>
         </div>

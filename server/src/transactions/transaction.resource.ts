@@ -124,8 +124,29 @@ function statusList(t: LoadedTxn): string[] {
  * in-memory case because the team rows are already loaded and re-querying them would be a third
  * round trip per transaction.
  */
-const isMyMemberRow = (m: { user_id: number | null; name: string }, user: ResourceUser): boolean =>
+export const isMyMemberRow = (m: { user_id: number | null; name: string }, user: ResourceUser): boolean =>
   m.user_id !== null ? m.user_id === user.id : m.name === user.name;
+
+/*
+ * TD-054 - "docs only" means documents, not money.
+ *
+ * The access level was recorded and enforced on WRITES (a PUT returns 403) and never applied to
+ * what is read back, so a docs-only member was served the other agent's split and commission, the
+ * brokerage share, the deal totals and the full team matrix - and could export all of it.
+ *
+ * THE RATES GO WITH THE TOTALS. Removing the commission objects while leaving comm_value and the
+ * listing/co-op percentages beside the price would leave the totals a multiplication away, which
+ * is not withholding anything.
+ */
+const DOCS_ONLY_HIDDEN = [
+  'comm_type', 'comm_value', 'comm_pct', 'comm_amt',
+  'comm_adjust_enabled', 'comm_adjust_before', 'comm_adjust_after',
+  'listing_comm_pct', 'coop_comm_pct', 'listing_comm_flat', 'coop_comm_flat', 'trust_payable',
+  'listing_adj_enabled', 'listing_adj_before', 'listing_adj_after',
+  'coop_adj_enabled', 'coop_adj_before', 'coop_adj_after',
+  'precon_comm_pct', 'precon_comm_amt_manual', 'precon_net_of_hst',
+  'commission', 'financial',
+];
 
 async function myTeamAccess(t: LoadedTxn, ctx: ResourceCtx): Promise<string | null> {
   const user = ctx.user;
@@ -295,6 +316,18 @@ export async function transactionResource(t: LoadedTxn, ctx: ResourceCtx): Promi
   if (t.team_members !== undefined) {
     // The profile cache, when supplied, spares breakdown() a users lookup per agent name.
     out.financial = await ctx.commission.breakdown(commissionInput, ctx.bulk?.profiles);
+  }
+
+  // TD-054. Applied after `financial` is built, so it strips the result rather than trying to
+  // predict it. The team keeps its names, roles and access levels - who worked the deal is not
+  // the secret; what they earned is.
+  if (out.my_team_access === 'docs') {
+    for (const k of DOCS_ONLY_HIDDEN) delete (out as Record<string, unknown>)[k];
+    if (Array.isArray(out.team)) {
+      out.team = (out.team as Record<string, unknown>[]).map((m) => ({
+        id: m.id, name: m.name, is_primary: m.is_primary, access: m.access, scope: m.scope, terms: m.terms,
+      }));
+    }
   }
 
   // clients (whenLoaded)
