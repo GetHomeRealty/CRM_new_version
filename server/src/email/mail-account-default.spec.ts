@@ -81,7 +81,7 @@ describe('choosing the primary mail account', () => {
     });
   });
 
-  it('leaves the other area alone', async () => {
+  it('keeps one Hub-wide primary across legacy area stamps', async () => {
     await inRollback(async (tx) => {
       const userId = await makeUser(tx);
       const crm = await makeAccount(tx, { user_id: userId, scope: 'crm', is_default: true });
@@ -91,10 +91,7 @@ describe('choosing the primary mail account', () => {
       await svc(tx).setDefault(desk2.id);
 
       const left = await defaultsFor(tx, [crm.id, desk.id, desk2.id]);
-      expect(left).toContain(crm.id);     // the CRM primary is untouched
-      expect(left).toContain(desk2.id);   // the new Desk primary
-      expect(left).not.toContain(desk.id);
-      expect(left).toHaveLength(2);
+      expect(left).toEqual([desk2.id]);
     });
   });
 

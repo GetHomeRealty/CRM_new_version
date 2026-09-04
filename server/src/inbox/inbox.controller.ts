@@ -1,12 +1,12 @@
 import { AreaGuard } from '../core/area.guard';
-import { BadRequestException, Body, Controller, ForbiddenException, Get, NotFoundException, Param, ParseIntPipe, Post, Put, Query, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, NotFoundException, Param, ParseIntPipe, Post, Put, Query, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '../auth/guards/auth.guard';
 import { CurrentUser } from '../auth/decorators';
 import type { AuthUserRecord } from '../auth/auth.types';
 import { InboxService } from './inbox.service';
 import { ImapSyncService } from './imap-sync.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { AREA_LABEL, parseArea } from '../common/domain';
+import { parseArea } from '../common/domain';
 
 /**
  * A user's own inbox — the mail pulled from their connected accounts. Guarded by authentication
@@ -68,9 +68,8 @@ export class InboxController {
   async sync(
     @CurrentUser() user: AuthUserRecord,
     @Param('accountId', ParseIntPipe) accountId: number,
-    @Query('area') area?: string,
+    @Query('area') _area?: string,
   ): Promise<unknown> {
-    const want = parseArea(area);
     /*
      * SCOPED TO THE CALLER, AND THAT IS WHAT THIS LOOKUP WAS MISSING.
      *
@@ -100,12 +99,6 @@ export class InboxController {
      */
     if (!account) throw new NotFoundException({ message: 'That email account no longer exists.' });
     // A null scope pre-dates the split and is reachable from both areas, as everywhere else.
-    if (account.scope && account.scope !== want) {
-      throw new ForbiddenException({
-        message: `${account.from_email} is connected under ${AREA_LABEL[account.scope === 'crm' ? 'crm' : 'desk']} and cannot be synced from here.`,
-      });
-    }
-
     const result = await this.imap.syncForUser(user.id ?? -1, accountId);
     return {
       ...result,
