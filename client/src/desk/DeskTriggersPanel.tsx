@@ -137,6 +137,34 @@ export default function DeskTriggersPanel() {
           </div>
           {!canEdit && <span className="help">You do not have permission to change this.</span>}
         </div>
+
+        {/*
+          TD-009 - said here because this screen is where somebody comes to find out what runs on
+          its own. Listing them is not decoration: the entry was raised on the sentence at the
+          bottom of this page, and leaving that sentence standing while the reminders went out
+          would be the same defect with the truth reversed.
+
+          No switch beside them, deliberately. Each is governed per person in Notification
+          preferences - the brokerage-wide cadence field above belongs to the lawyer chase, which
+          is the one reminder that repeats until somebody does something.
+        */}
+        <div className="field" style={{ maxWidth: 520 }}>
+          <label>Closing-date reminders</label>
+          <p className="help" style={{ margin: 0 }}>
+            Every night, each deal that has not ended is counted down to its closing date from ten
+            days out, including the morning of the closing itself. The agent on the deal is told
+            in-app, by email and on their phone, once per day.
+          </p>
+        </div>
+
+        <div className="field" style={{ maxWidth: 520 }}>
+          <label>Condition deadlines</label>
+          <p className="help" style={{ margin: 0 }}>
+            Every night, conditions reaching their deadline within a week are collected per deal and
+            the agent is sent one message listing them - not one per condition. A condition marked
+            Fulfilled or Waived is not chased.
+          </p>
+        </div>
       </div>
 
       <div className="card">
@@ -185,10 +213,14 @@ export default function DeskTriggersPanel() {
       <div className="card">
         <div className="modal-h">Not built yet</div>
         <p className="help" style={{ marginTop: 0 }}>
-          There are no triggers on transaction status changes, offer or closing dates, document
-          deadlines, payments, commissions or compliance conditions. The closing and document figures
-          on the Dashboard are read when you open it — nothing watches them and acts. Adding those
-          means a new rules engine rather than a change to this screen.
+          There are no triggers on transaction status changes, offer dates, document deadlines,
+          payments or commissions. The document figures on the Dashboard are read when you open it —
+          nothing watches them and acts.
+        </p>
+        <p className="help" style={{ marginBottom: 0 }}>
+          The money ones are not simply unwritten: a deposit has no due date recorded against it, and
+          “commission received” could mean the trust deposit, the invoice being paid or the agent
+          being paid. Those are decisions to be made before anything can watch for them.
         </p>
       </div>
     </>

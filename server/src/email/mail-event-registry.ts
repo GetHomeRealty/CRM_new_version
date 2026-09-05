@@ -730,6 +730,55 @@ export const MAIL_EVENTS: Record<string, MailEvent> = {
       + '{{ transaction_button }}'
       + '<p>{{ company_name }}</p>',
   },
+  /**
+   * TD-009 — the run-up to a closing date, from ten days out.
+   *
+   * Same shape as the listing-expiry countdown beside it, because it is the same kind of message
+   * about the other date a deal keeps.
+   */
+  'transaction.closing_reminder': {
+    module: 'Transactions',
+    label: 'Transactions — Closing Date Reminder',
+    variables: ['agent_name', 'deal_number', 'property_address', 'transaction_type', 'closing_date', 'days_remaining', 'closing_phrase', 'transaction_button', 'company_name', 'current_date'],
+    default_subject: 'Deal {{ closing_phrase }} — {{ property_address }} ({{ deal_number }})',
+    default_body_html:
+      '<p>Hello {{ agent_name }},</p>'
+      + '<p>Your deal on <strong>{{ property_address }}</strong> is <strong>{{ closing_phrase }}</strong>.</p>'
+      + '<table style="border-collapse:collapse;font-size:14px;margin:10px 0">'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Transaction</td><td style="padding:4px 0;font-weight:600">{{ deal_number }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Property</td><td style="padding:4px 0;font-weight:600">{{ property_address }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Type</td><td style="padding:4px 0">{{ transaction_type }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Closing date</td><td style="padding:4px 0;font-weight:600">{{ closing_date }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Days remaining</td><td style="padding:4px 0;font-weight:600">{{ days_remaining }}</td></tr>'
+      + '</table>'
+      + '{{ transaction_button }}'
+      + '<p>{{ company_name }}</p>',
+  },
+  /**
+   * TD-009 — a condition on the deal is reaching its deadline, from a week out.
+   *
+   * One message per deal per day, listing every condition due, rather than one per condition: a
+   * deal whose financing and inspection fall on the same day is one thing to deal with, and three
+   * separate emails about it teach people to skim them.
+   */
+  'transaction.condition_deadline_reminder': {
+    module: 'Transactions',
+    label: 'Transactions — Condition Deadline Reminder',
+    variables: ['agent_name', 'deal_number', 'property_address', 'condition_list', 'condition_count', 'deadline_date', 'days_remaining', 'deadline_phrase', 'transaction_button', 'company_name', 'current_date'],
+    default_subject: 'Condition {{ deadline_phrase }} — {{ property_address }} ({{ deal_number }})',
+    default_body_html:
+      '<p>Hello {{ agent_name }},</p>'
+      + '<p>{{ condition_count }} condition(s) on <strong>{{ property_address }}</strong> are <strong>{{ deadline_phrase }}</strong>.</p>'
+      + '<table style="border-collapse:collapse;font-size:14px;margin:10px 0">'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Transaction</td><td style="padding:4px 0;font-weight:600">{{ deal_number }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Property</td><td style="padding:4px 0;font-weight:600">{{ property_address }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Conditions</td><td style="padding:4px 0;font-weight:600">{{ condition_list }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Deadline</td><td style="padding:4px 0;font-weight:600">{{ deadline_date }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Days remaining</td><td style="padding:4px 0;font-weight:600">{{ days_remaining }}</td></tr>'
+      + '</table>'
+      + '{{ transaction_button }}'
+      + '<p>{{ company_name }}</p>',
+  },
   /** Daily countdown to a listing's expiry date, from ten days out. */
   'transaction.listing_expiry_reminder': {
     module: 'Transactions',

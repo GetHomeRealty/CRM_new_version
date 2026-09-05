@@ -85,6 +85,26 @@ export const NOTIFICATION_CATEGORIES: readonly NotificationCategory[] = [
     areas: ['desk'],
   },
   {
+    key: 'closing_reminders',
+    label: 'Closing date reminders',
+    description: 'A deal you are on is approaching its closing date.',
+    /*
+     * TD-009 — the closing date raised nothing of its own until now. It was read only to decide how
+     * hard to chase for lawyer details, so a deal with both lawyers on file went quiet all the way
+     * to closing. Same sweep, same dispatcher, same delivery record as listing expiry.
+     */
+    channels: { in_app: 'live', email: 'live', push: 'live' },
+    areas: ['desk'],
+  },
+  {
+    key: 'condition_deadline',
+    label: 'Condition deadlines',
+    description: 'A condition on one of your deals is reaching its deadline.',
+    // TD-009. One message per deal per day covering every condition due, not one per condition.
+    channels: { in_app: 'live', email: 'live', push: 'live' },
+    areas: ['desk'],
+  },
+  {
     key: 'lawyer_details',
     label: 'Lawyer detail reminders',
     description: 'A deal has reached a phase where the lawyer’s details are still missing.',

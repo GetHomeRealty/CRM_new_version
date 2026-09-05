@@ -9,13 +9,14 @@ import { areaPath } from '../common/domain';
 import { toDateString } from '../common/serialize';
 import { missingLawyerParties, tracksBothLawyers } from './lawyer-details';
 import {
-  EXPIRY_WINDOW_DAYS, LAWYER_TEMPLATE, LAWYER_WINDOW_DAYS,
-  closingPhrase, daysBetween, expiryPhrase, expiryReminderFor, hasExpired,
-  lawyerReminderFor, lawyerVariant, startOfDay, calendarDay, dbDay,
+  CLOSING_WINDOW_DAYS, CONDITION_WINDOW_DAYS, EXPIRY_WINDOW_DAYS, LAWYER_TEMPLATE, LAWYER_WINDOW_DAYS,
+  closingPhrase, closingReminderFor, conditionReminderFor, daysBetween, deadlinePhrase, expiryPhrase,
+  expiryReminderFor, hasExpired, lawyerReminderFor, lawyerVariant, startOfDay, calendarDay, dbDay,
 } from './reminder-schedule';
 
 /**
- * The nightly reminder sweeps: listing expiry, automatic expiry, and lawyer details.
+ * The nightly reminder sweeps: listing expiry, automatic expiry, lawyer details, the run-up to a
+ * closing date, and condition deadlines.
  *
  * WHAT MAKES THIS SAFE TO RUN TWICE. Every reminder is written to `transaction_reminders` with the
  * DAY it was due, under a unique index on (transaction, kind, day, channel). The insert is therefore
@@ -37,6 +38,28 @@ const SYSTEM_ACTOR = null;
 const AUDIT_SECTION = 'Reminders';
 
 /**
+ * TD-009 — what each kind of reminder is called, in the two places it has to be named.
+ *
+ * These were a pair of `kind === 'lawyer' ? … : …` ternaries, which read as an exhaustive choice
+ * while there were two kinds and quietly mislabels every kind added afterwards: a closing reminder
+ * would have arrived in the audit trail as a listing expiry and been delivered under the listing
+ * expiry preference, so a person who had switched THAT off would have stopped receiving something
+ * they never turned off.
+ */
+const REMINDER_CATEGORY: Record<ReminderKind, string> = {
+  listing_expiry: 'listing_expiry',
+  lawyer: 'lawyer_details',
+  closing: 'closing_reminders',
+  condition: 'condition_deadline',
+};
+const REMINDER_LABEL: Record<ReminderKind, string> = {
+  listing_expiry: 'Listing expiry reminder',
+  lawyer: 'Lawyer details reminder',
+  closing: 'Closing date reminder',
+  condition: 'Condition deadline reminder',
+};
+
+/**
  * How hard a failed delivery is chased, and how long the gaps are.
  *
  * Four attempts over about seven hours, doubling each time: enough to ride out a mail server that
@@ -54,10 +77,38 @@ const redirectTo = (): string | null => {
   return v === '' ? null : v;
 };
 
+/** The kinds of reminder this sweep sends. Stored in `transaction_reminders.kind`. */
+export type ReminderKind = 'listing_expiry' | 'lawyer' | 'closing' | 'condition';
+
+/**
+ * TD-009 - a condition nobody is waiting on any more.
+ *
+ * The stored text is free-form: 'Fulfilled', 'Satisfied' and 'Completed' all appear, from the
+ * editor, from imports and from years of hand-typing. `report-documents.ts` settles the same
+ * question the same way, and the sweep must not chase somebody over a condition their own reports
+ * already show as done.
+ */
+export function conditionIsSettled(status: string | null | undefined): boolean {
+  const s = (status ?? '').trim().toLowerCase();
+  return s === 'fulfilled' || s === 'completed' || s === 'satisfied' || s === 'waived';
+}
+
+/** What to call a condition in a sentence: its own name where it has one, else its type. */
+export function conditionLabel(c: { type: string | null; custom_name: string | null }): string {
+  const custom = (c.custom_name ?? '').trim();
+  if (custom !== '') return custom;
+  const type = (c.type ?? '').trim();
+  return type === '' ? 'Condition' : type;
+}
+
 export interface SweepResult {
   expiryReminders: number;
   expired: number;
   lawyerReminders: number;
+  /** TD-009 — deals approaching their closing date. */
+  closingReminders: number;
+  /** TD-009 — conditions approaching their deadline. */
+  conditionReminders: number;
   skipped: number;
   failed: number;
   /** Failed deliveries attempted again this pass. */
@@ -85,17 +136,24 @@ export class ReminderSweepService {
 
   /** One night's work. `today` is injectable so the schedule can be tested across a whole run-up. */
   async sweep(today: Date = new Date()): Promise<SweepResult> {
-    const result: SweepResult = { expiryReminders: 0, expired: 0, lawyerReminders: 0, skipped: 0, failed: 0, retried: 0, recovered: 0 };
+    const result: SweepResult = {
+      expiryReminders: 0, expired: 0, lawyerReminders: 0, closingReminders: 0, conditionReminders: 0,
+      skipped: 0, failed: 0, retried: 0, recovered: 0,
+    };
     // Retries first: a reminder that failed last night is more urgent than tonight's new ones, and
     // clearing the backlog before adding to it keeps a bad evening from compounding.
     await this.retryFailed(today, result);
     await this.listingExpiry(today, result);
     await this.autoExpire(today, result);
     await this.lawyerDetails(today, result);
+    await this.closingApproaching(today, result);
+    await this.conditionDeadlines(today, result);
 
-    if (result.expiryReminders || result.expired || result.lawyerReminders || result.failed) {
+    if (result.expiryReminders || result.expired || result.lawyerReminders || result.closingReminders
+      || result.conditionReminders || result.failed) {
       this.log.log(
         `Reminders: ${result.expiryReminders} expiry, ${result.lawyerReminders} lawyer, `
+        + `${result.closingReminders} closing, ${result.conditionReminders} condition, `
         + `${result.expired} auto-expired, ${result.skipped} skipped, ${result.failed} failed, `
         + `${result.retried} retried (${result.recovered} recovered).`,
       );
@@ -311,6 +369,156 @@ export class ReminderSweepService {
     }
   }
 
+  // ---------------------------------------------------------------- closing date
+
+  /**
+   * TD-009 - tell the agent their deal is closing, from ten days out.
+   *
+   * NOTHING WATCHED THIS DATE. The sweep read `closing_date` only to decide how hard to chase for
+   * lawyer details, so a deal with both lawyers already on file - the well-run one - went silent all
+   * the way to closing, and the Dashboard's closing figures were only ever seen by somebody who
+   * happened to open the page.
+   *
+   * DATA-DRIVEN, like the listing pass beside it: any deal carrying a closing date that has not been
+   * settled. No list of types for anybody to keep up to date.
+   *
+   * A SETTLED DEAL IS NOT CHASED. Closed, Sold, Leased, Void, Terminated, Mutual Release and the
+   * rest all say somebody has decided; a date arriving is not a reason to reopen the question.
+   */
+  private async closingApproaching(today: Date, result: SweepResult): Promise<void> {
+    const from = startOfDay(today);
+    const to = new Date(from.getFullYear(), from.getMonth(), from.getDate() + CLOSING_WINDOW_DAYS);
+
+    const rows = await this.prisma.transactions.findMany({
+      // The same indexed range read the lawyer pass uses, over a shorter window.
+      where: { deleted_at: null, closing_date: { gte: dbDay(from), lte: dbDay(to) } },
+      select: {
+        id: true, trade_no: true, property: true, agent: true, type: true, closing_date: true,
+        transaction_statuses: { select: { status: true } },
+      },
+    });
+
+    for (const t of rows) {
+      if (!t.closing_date) continue;
+      if (this.isSettled(t.transaction_statuses)) { result.skipped++; continue; }
+
+      const { due, daysRemaining } = closingReminderFor(today, calendarDay(t.closing_date));
+      if (!due) continue;
+
+      await this.deliver({
+        txnId: t.id,
+        kind: 'closing',
+        variant: null,
+        day: dbDay(startOfDay(today)),
+        daysRemaining,
+        agentName: t.agent,
+        event: 'transaction.closing_reminder',
+        vars: this.closingVars(t, daysRemaining),
+        summary: ('Deal ' + closingPhrase(daysRemaining) + ' - ' + (t.property ?? t.trade_no ?? '')).trim(),
+        result,
+        onSent: () => { result.closingReminders++; },
+      });
+    }
+  }
+
+  /** The closing reminder's fields, in one place so a retry rebuilds exactly what was sent. */
+  private closingVars(
+    t: { id: number; trade_no: string | null; property: string | null; agent: string | null; type: string | null; closing_date: Date | null },
+    daysRemaining: number,
+  ): Record<string, string> {
+    return {
+      deal_number: t.trade_no ?? String(t.id),
+      property_address: t.property ?? '-',
+      transaction_type: t.type ?? '-',
+      closing_date: toDateString(t.closing_date) ?? '',
+      days_remaining: String(daysRemaining),
+      closing_phrase: closingPhrase(daysRemaining),
+      agent_name: t.agent ?? 'there',
+    };
+  }
+
+  // ---------------------------------------------------------------- condition deadlines
+
+  /**
+   * TD-009 - chase the conditions on a deal towards their deadline, from a week out.
+   *
+   * THE SHORTEST FUSE ON THE DEAL, and the one thing here nothing watched at all. A financing
+   * condition that lapses unsatisfied can cost a buyer their deposit, and the only warning was a
+   * date on a panel somebody had to open.
+   *
+   * ONE MESSAGE PER DEAL PER DAY, listing every condition due - which is also what the reminder
+   * table's unique key allows, since it is keyed by (deal, kind, day, channel). A deal whose
+   * financing and inspection fall together is one thing to deal with; three emails about it is how
+   * people learn to skim them.
+   *
+   * FULFILLED AND WAIVED ARE NOT CHASED, read through the same vocabulary the reports settle on:
+   * this text has been written by hand and by import for years, so 'satisfied' and 'completed' mean
+   * Fulfilled here exactly as they do in `report-documents.ts`.
+   */
+  private async conditionDeadlines(today: Date, result: SweepResult): Promise<void> {
+    const from = startOfDay(today);
+    const to = new Date(from.getFullYear(), from.getMonth(), from.getDate() + CONDITION_WINDOW_DAYS);
+
+    const rows = await this.prisma.conditions.findMany({
+      where: { deadline: { gte: dbDay(from), lte: dbDay(to) } },
+      select: {
+        deadline: true, status: true, type: true, custom_name: true,
+        transactions: {
+          select: {
+            id: true, trade_no: true, property: true, agent: true, deleted_at: true,
+            transaction_statuses: { select: { status: true } },
+          },
+        },
+      },
+      orderBy: [{ deadline: 'asc' }, { position: 'asc' }],
+    });
+
+    type DealTxn = NonNullable<(typeof rows)[number]['transactions']>;
+    // Grouped by deal: the message is about the deal, not about one row of it.
+    const byDeal = new Map<number, { txn: DealTxn; due: { label: string; deadline: Date; daysRemaining: number }[] }>();
+    for (const c of rows) {
+      const t = c.transactions;
+      if (!t || t.deleted_at || !c.deadline) continue;
+      if (conditionIsSettled(c.status)) continue;
+      if (this.isSettled(t.transaction_statuses)) continue;
+
+      const { due, daysRemaining } = conditionReminderFor(today, calendarDay(c.deadline));
+      if (!due) continue;
+
+      const entry = byDeal.get(t.id) ?? { txn: t, due: [] };
+      entry.due.push({ label: conditionLabel(c), deadline: c.deadline, daysRemaining });
+      byDeal.set(t.id, entry);
+    }
+
+    for (const { txn, due } of byDeal.values()) {
+      // The soonest one decides the wording: a deal is as urgent as its nearest deadline.
+      const soonest = due.reduce((a, b) => (b.daysRemaining < a.daysRemaining ? b : a));
+      const what = due.length === 1 ? due[0].label : String(due.length) + ' conditions';
+      await this.deliver({
+        txnId: txn.id,
+        kind: 'condition',
+        variant: null,
+        day: dbDay(startOfDay(today)),
+        daysRemaining: soonest.daysRemaining,
+        agentName: txn.agent,
+        event: 'transaction.condition_deadline_reminder',
+        vars: {
+          deal_number: txn.trade_no ?? String(txn.id),
+          property_address: txn.property ?? '-',
+          condition_list: due.map((d) => d.label).join(', '),
+          condition_count: String(due.length),
+          deadline_date: toDateString(soonest.deadline) ?? '',
+          days_remaining: String(soonest.daysRemaining),
+          deadline_phrase: deadlinePhrase(soonest.daysRemaining),
+          agent_name: txn.agent ?? 'there',
+        },
+        summary: (what + ' ' + deadlinePhrase(soonest.daysRemaining) + ' - ' + (txn.property ?? txn.trade_no ?? '')).trim(),
+        result,
+        onSent: () => { result.conditionReminders++; },
+      });
+    }
+  }
+
   // ---------------------------------------------------------------- retries
 
   /**
@@ -342,6 +550,9 @@ export class ReminderSweepService {
             closing_date: true, listing_expiry_date: true,
             buyer_lawyer_name: true, seller_lawyer_name: true,
             transaction_statuses: { select: { status: true } },
+            // TD-009 - a condition reminder is rebuilt from the conditions as they stand TONIGHT,
+            // so one satisfied since the failed attempt is not chased again.
+            conditions: { select: { deadline: true, status: true, type: true, custom_name: true }, orderBy: { position: 'asc' } },
           },
         },
       },
@@ -413,6 +624,7 @@ export class ReminderSweepService {
       closing_date: Date | null; listing_expiry_date: Date | null;
       buyer_lawyer_name: string | null; seller_lawyer_name: string | null;
       transaction_statuses: { status: string }[];
+      conditions?: { deadline: Date | null; status: string; type: string | null; custom_name: string | null }[];
     },
     today: Date,
   ): { event: string; vars: Record<string, string>; summary: string } | null {
@@ -432,6 +644,50 @@ export class ReminderSweepService {
           agent_name: t.agent ?? 'there',
         },
         summary: `Listing ${expiryPhrase(daysRemaining)} — ${t.property ?? t.trade_no ?? ''}`.trim(),
+      };
+    }
+
+    /*
+     * TD-009 - the two new kinds answer for themselves.
+     *
+     * The tail of this method is the LAWYER message, and it was reached by anything that was not a
+     * listing expiry. A closing or condition retry falling into it would have re-sent somebody a
+     * lawyer chase in place of the message that failed - so each kind is now asked its own question,
+     * and the fall-through is the last of four rather than the other of two.
+     */
+    if (kind === 'closing') {
+      if (!t.closing_date || this.isSettled(t.transaction_statuses)) return null;
+      const { due, daysRemaining } = closingReminderFor(today, calendarDay(t.closing_date));
+      if (!due) return null;
+      return {
+        event: 'transaction.closing_reminder',
+        vars: this.closingVars(t, daysRemaining),
+        summary: ('Deal ' + closingPhrase(daysRemaining) + ' - ' + (t.property ?? t.trade_no ?? '')).trim(),
+      };
+    }
+
+    if (kind === 'condition') {
+      if (this.isSettled(t.transaction_statuses)) return null;
+      const due = (t.conditions ?? [])
+        .filter((c) => c.deadline && !conditionIsSettled(c.status))
+        .map((c) => ({ label: conditionLabel(c), deadline: c.deadline as Date, ...conditionReminderFor(today, calendarDay(c.deadline as Date)) }))
+        .filter((c) => c.due);
+      if (due.length === 0) return null; // satisfied, waived or past - nothing left to chase
+      const soonest = due.reduce((a, b) => (b.daysRemaining < a.daysRemaining ? b : a));
+      const what = due.length === 1 ? due[0].label : String(due.length) + ' conditions';
+      return {
+        event: 'transaction.condition_deadline_reminder',
+        vars: {
+          deal_number: t.trade_no ?? String(t.id),
+          property_address: t.property ?? '-',
+          condition_list: due.map((d) => d.label).join(', '),
+          condition_count: String(due.length),
+          deadline_date: toDateString(soonest.deadline) ?? '',
+          days_remaining: String(soonest.daysRemaining),
+          deadline_phrase: deadlinePhrase(soonest.daysRemaining),
+          agent_name: t.agent ?? 'there',
+        },
+        summary: (what + ' ' + deadlinePhrase(soonest.daysRemaining) + ' - ' + (t.property ?? t.trade_no ?? '')).trim(),
       };
     }
 
@@ -501,7 +757,7 @@ export class ReminderSweepService {
    */
   private async deliver(job: {
     txnId: number;
-    kind: 'listing_expiry' | 'lawyer';
+    kind: ReminderKind;
     variant: string | null;
     day: Date;
     daysRemaining: number;
@@ -541,7 +797,7 @@ export class ReminderSweepService {
       const recipientId = await this.userIdFor(job.agentName);
       if (recipientId) {
         await this.dispatcher.dispatch({
-          category: job.kind === 'lawyer' ? 'lawyer_details' : 'listing_expiry',
+          category: REMINDER_CATEGORY[job.kind],
           userId: recipientId,
           title: job.summary,
           link: areaPath('desk', `transactions/${job.txnId}`),
@@ -637,7 +893,7 @@ export class ReminderSweepService {
   private async auditReminder(txnId: number, kind: string, action: string, subject: string, detail: string): Promise<void> {
     await this.audit.record(txnId, SYSTEM_ACTOR, {
       section: AUDIT_SECTION,
-      field: kind === 'lawyer' ? 'Lawyer details reminder' : 'Listing expiry reminder',
+      field: REMINDER_LABEL[kind as ReminderKind] ?? 'Reminder',
       action,
       source: 'Scheduler',
       new: subject,

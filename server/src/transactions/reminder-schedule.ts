@@ -73,6 +73,50 @@ export function hasExpired(today: Date, expiry: Date): boolean {
   return daysBetween(today, expiry) < 0;
 }
 
+// ---------------------------------------------------------------- closing & condition deadlines
+
+/**
+ * TD-009 — the two dates a deal keeps that nothing was watching.
+ *
+ * The sweep already chased a listing towards its expiry and an agent for lawyer details. A CLOSING
+ * DATE raised nothing of its own — it was read only to decide how hard to chase for a lawyer — and a
+ * CONDITION DEADLINE raised nothing at all, though it is the date with the shortest fuse on the
+ * whole deal: a financing condition that lapses unsatisfied can cost the buyer the deposit.
+ *
+ * THE WINDOWS ARE THE ONES ALREADY IN THE BUILDING. Ten days for closing is the listing-expiry
+ * run-up, because both are "this deal reaches its date soon" and a brokerage should not have to
+ * learn two cadences. Seven for a condition is deliberately shorter: conditions are written in days
+ * from the offer, not months, so a fortnight of chasing would be noise before it was ever useful.
+ */
+export const CLOSING_WINDOW_DAYS = 10;
+export const CONDITION_WINDOW_DAYS = 7;
+
+/**
+ * Whether a deal closing on `closing` should be announced today, and with what number.
+ *
+ * INCLUDES THE DAY ITSELF, unlike the listing-expiry countdown. That one stops at one day out
+ * because the auto-expiry pass acts on the day and a message saying "expires in 0 days" arrives
+ * after the fact. Nothing acts on a closing date, so the morning of a closing is precisely when
+ * somebody wants to be told about it.
+ */
+export function closingReminderFor(today: Date, closing: Date): { due: boolean; daysRemaining: number } {
+  const daysRemaining = daysBetween(today, closing);
+  return { due: daysRemaining >= 0 && daysRemaining <= CLOSING_WINDOW_DAYS, daysRemaining };
+}
+
+/** Whether a condition due on `deadline` should be chased today. The deadline day counts. */
+export function conditionReminderFor(today: Date, deadline: Date): { due: boolean; daysRemaining: number } {
+  const daysRemaining = daysBetween(today, deadline);
+  return { due: daysRemaining >= 0 && daysRemaining <= CONDITION_WINDOW_DAYS, daysRemaining };
+}
+
+/** "due today" / "due tomorrow" — the same reason closingPhrase exists. */
+export function deadlinePhrase(daysRemaining: number): string {
+  if (daysRemaining <= 0) return 'due today';
+  if (daysRemaining === 1) return 'due tomorrow';
+  return `due in ${daysRemaining} days`;
+}
+
 // ---------------------------------------------------------------- lawyer details
 
 /**

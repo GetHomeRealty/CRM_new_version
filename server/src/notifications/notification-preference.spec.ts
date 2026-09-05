@@ -156,7 +156,11 @@ describe('notification preferences', () => {
      * there is no event to push. It is a feature to build, not a call to add.
      */
     expect(livePush).toEqual([
-      'calendar_reminders', 'listing_expiry', 'lawyer_details',
+      'calendar_reminders', 'listing_expiry',
+      // TD-009 - the closing run-up and condition deadlines, dispatched from the same nightly sweep
+      // as the two either side of them, on the same claim-then-send path.
+      'closing_reminders', 'condition_deadline',
+      'lawyer_details',
       'document_review', 'transaction_approvals', 'inbox_new_mail',
       // The six CRM lead and campaign events, all dispatched from their own event sites.
       'lead_new', 'lead_assigned', 'lead_meta', 'lead_task_due',
