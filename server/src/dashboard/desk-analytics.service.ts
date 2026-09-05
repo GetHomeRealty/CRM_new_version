@@ -255,11 +255,19 @@ export class DeskAnalyticsService {
       // on the key is not cosmetic: without it two agents on identical totals could swap places
       // between requests, and a table that reorders itself for no reason reads as a bug.
       this.prisma.$queryRawUnsafe<GroupRow[]>(`
-        SELECT CASE WHEN t.agent IS NULL OR btrim(t.agent) = '' THEN 'Unassigned' ELSE t.agent END AS key,
+        -- TD-045 - one agent, one row, keyed on IDENTITY rather than on the typed name. Grouping
+        -- on the resolved NAME would be worse: two accounts sharing a name would pool their
+        -- commission, and a rename would split one agent's history across the old and new label.
+        -- So the GROUP BY is the account id where there is one, and only the DISPLAY is the name.
+        -- A deal with no id falls back to its trimmed, case-folded name - an external/co-op agent,
+        -- which is legitimate. An ambiguous name is left alone rather than guessed at.
+        SELECT COALESCE(NULLIF(btrim(au.name), ''), NULLIF(btrim(t.agent), ''), 'Unassigned') AS key,
                COUNT(*) AS count, COALESCE(SUM(${AMOUNT}), 0) AS total
         FROM transactions t
+        LEFT JOIN users au ON au.id = COALESCE(t.agent_user_id, (SELECT MIN(u2.id) FROM users u2 WHERE u2.name = btrim(t.agent) HAVING COUNT(*) = 1))
         WHERE t.deleted_at IS NULL AND ${scope}${narrowed}
-        GROUP BY 1
+        GROUP BY COALESCE(au.id::text, 'n:' || lower(btrim(COALESCE(t.agent, '')))),
+                 COALESCE(NULLIF(btrim(au.name), ''), NULLIF(btrim(t.agent), ''), 'Unassigned')
         ORDER BY 3 DESC, 1 ASC`, ...params),
 
       this.prisma.$queryRawUnsafe<GroupRow[]>(`

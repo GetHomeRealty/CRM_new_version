@@ -101,10 +101,10 @@ export class MailAccountService {
   async senderFor(userId: number | null, scope: IntegrationScope): Promise<mail_accounts | null> {
     if (userId) {
       const own = (await this.prisma.mail_accounts.findFirst({
-        where: { user_id: userId, scope, is_active: true, is_default: true },
+        where: { user_id: userId, is_active: true, is_default: true },
       }))
         ?? (await this.prisma.mail_accounts.findFirst({
-          where: { user_id: userId, scope, is_active: true }, orderBy: { id: 'asc' },
+          where: { user_id: userId, is_active: true }, orderBy: { id: 'asc' },
         }));
       if (own) return own;
     }
@@ -117,17 +117,12 @@ export class MailAccountService {
    * or change their own — never another user's, and never the brokerage's.
    */
   /**
-   * CRM Settings and Transaction Desk Settings are completely separate: an account belongs
-   * to exactly one of them and is only ever listed there. The match is strict — an account
-   * connected on one side never surfaces on the other, and there is no shared middle
-   * ground.
-   *
-   * Passing no scope returns every account, which is what the personal Settings screen and
-   * the sending pipeline want.
+   * Personal email is a Hub integration. The legacy scope argument remains accepted for API
+   * compatibility, but the same accounts are returned from CRM and Transactions.
    */
-  async indexForUser(userId: number, scope?: IntegrationScope): Promise<Record<string, unknown>[]> {
+  async indexForUser(userId: number, _scope?: IntegrationScope): Promise<Record<string, unknown>[]> {
     const rows = await this.prisma.mail_accounts.findMany({
-      where: { user_id: userId, ...(scope ? { scope } : {}) },
+      where: { user_id: userId },
     });
     // Ordered by area, then name — deliberately NOT by which one is the default.
     //
@@ -155,15 +150,11 @@ export class MailAccountService {
 
     const now = new Date();
     const account = await this.prisma.mail_accounts.create({
-      // A new account belongs to the area it was added from — that is the whole point of
-      // the split, so it is stamped at creation rather than left to be assigned later.
-      data: { ...(data as Prisma.mail_accountsCreateInput), user_id: userId, scope: scope ?? null, created_at: now, updated_at: now },
+      // Null is the shared Hub scope. Both CRM and Transactions use this row.
+      data: { ...(data as Prisma.mail_accountsCreateInput), user_id: userId, scope: null, created_at: now, updated_at: now },
     });
-    // The first account IN THIS AREA becomes that area's primary, so each side always has a
-    // sender. Counting the user's accounts across both areas left the second area without a
-    // primary: the count was already 2, so nothing was promoted and sending there fell back to
-    // the brokerage address.
-    const count = await this.prisma.mail_accounts.count({ where: { user_id: userId, scope: account.scope } });
+    // The first personal account becomes the user's Hub-wide primary sender.
+    const count = await this.prisma.mail_accounts.count({ where: { user_id: userId } });
     if (account.is_default || count === 1) {
       await this.prisma.mail_accounts.update({ where: { id: account.id }, data: { is_default: true } });
       await this.makeSoleDefault(account.id, userId, account.scope);
@@ -233,13 +224,14 @@ export class MailAccountService {
    * than promoting an account that is switched off.
    */
   private async reassignPrimary(userId: number, scope: string | null, excludeId: number): Promise<void> {
+    const group = userId === null ? { user_id: null, scope } : { user_id: userId };
     const already = await this.prisma.mail_accounts.findFirst({
-      where: { user_id: userId, scope, is_default: true, id: { not: excludeId } },
+      where: { ...group, is_default: true, id: { not: excludeId } },
       select: { id: true },
     });
     if (already) return;
     const next = await this.prisma.mail_accounts.findFirst({
-      where: { user_id: userId, scope, is_active: true, id: { not: excludeId } },
+      where: { ...group, is_active: true, id: { not: excludeId } },
       orderBy: { id: 'asc' },
       select: { id: true },
     });
@@ -325,8 +317,9 @@ export class MailAccountService {
    * and are not disturbed by a choice made inside an area.
    */
   private async makeSoleDefault(id: number, userId: number | null = null, scope: string | null = null): Promise<void> {
+    const group = userId === null ? { user_id: null, scope } : { user_id: userId };
     await this.prisma.mail_accounts.updateMany({
-      where: { id: { not: id }, is_default: true, user_id: userId, scope },
+      where: { id: { not: id }, is_default: true, ...group },
       data: { is_default: false },
     });
   }

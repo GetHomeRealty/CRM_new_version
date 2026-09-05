@@ -322,6 +322,21 @@ export class InvoicesService {
       ? this.lineSubTotal(this.asArray(body.line_items))
       : num(invoice.sub_total);
     this.validateInvoiceInput(body, subTotal, invoice);
+
+    /*
+     * TD-021 - an invoice is not Paid because somebody typed Paid.
+     *
+     * Setting the status to Paid without recording a payment left status 'Paid' beside
+     * amount_paid 0.00 and the full balance still owing, and that invoice then counted as settled
+     * everywhere it was read while the money was never collected. The calculator now re-derives
+     * Paid from the balance, so the label would silently revert - which is correct but tells the
+     * user nothing. This refuses it plainly instead, and names the action that does work.
+     */
+    if (String(body.status ?? '') === 'Paid' && invoice.status !== 'Paid' && num(invoice.balance_due) > 0) {
+      const m = 'This invoice still has ' + num(invoice.balance_due).toFixed(2)
+        + ' outstanding, so it cannot be marked Paid. Record a payment for the balance and the status updates itself.';
+      throw new UnprocessableEntityException({ message: m, errors: { status: [m] } });
+    }
     const settings = await this.settings.current();
     const oldStatus = invoice.status;
 

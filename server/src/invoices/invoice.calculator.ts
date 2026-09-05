@@ -58,7 +58,19 @@ export class InvoiceCalculator {
   }
 
   private status(current: string, total: number, paid: number, balance: number): string {
-    if (current === 'Void' || current === 'Paid' || current === 'Due' || current === 'Overdue') return current;
+    // TD-021 / TD-131 - 'Paid' is DERIVED from the money, not a label that outranks it.
+    //
+    // Paid used to sit in this terminal list, which had two consequences. An invoice marked Paid by
+    // hand kept that label with its full balance still owing, and an invoice that reached Paid
+    // honestly could never come back down when its payments were removed - the status froze while
+    // the money underneath moved. Void stays terminal because it is a deliberate decision about the
+    // document rather than a statement about the balance; Due and Overdue stay because they are
+    // chase states a person sets and no payment contradicts.
+    if (current === 'Void') return current;
+    if (current === 'Draft' && paid <= 0) return 'Draft';
+    if (total > 0 && balance <= 0) return 'Paid';
+    if (paid > 0) return 'Partially Paid';
+    if (current === 'Due' || current === 'Overdue') return current;
     if (current === 'Draft' && paid <= 0) return 'Draft';
     if (total > 0 && balance <= 0) return 'Paid';
     if (paid > 0) return 'Partially Paid';

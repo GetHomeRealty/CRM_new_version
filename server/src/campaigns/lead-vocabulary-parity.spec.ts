@@ -53,5 +53,6 @@ describe('Campaigns offers exactly the Leads vocabulary', () => {
     expect(campaigns.LEAD_STATUS).toContain('closed');
     expect(campaigns.LEAD_SOURCE).toContain('website');
     expect(campaigns.LEAD_TYPE).toContain('realtor');
+    expect(campaigns.CLIENT_TYPE).toContain('move-up buyer');
   });
 });

@@ -439,7 +439,6 @@ export class CommissionService {
     return members.map((m) => {
       const memberWoHst = this.r((commissionWoHst * m.split) / 100);
       const agentWoHst = this.r((memberWoHst * m.agent_pct) / 100);
-      const brokWoHst = this.r((memberWoHst * m.brok_pct) / 100);
       const deduction = this.memberDeduction(adjustments, m, term);
 
       let agent: Triple;
@@ -456,6 +455,27 @@ export class CommissionService {
         t4a = line(agentWoHst);
       }
 
+      /*
+       * TD-080 / TD-124 - the brokerage keeps what the agent does not, so the split always closes.
+       *
+       * This was `(memberWoHst * brok_pct) / 100` - a flat percentage that never consulted the
+       * minimum brokerage. The agent's side above DOES apply it (agentCommissionLine floors the
+       * share), so on a deal where the minimum binds the two halves were produced by different
+       * rules and only reconciled by luck. On the $3,200 lease the agent was floored to $3,000.00
+       * while the brokerage still reported 5% = $160.00, leaving $40.00 - the top-up from $160.00
+       * to the $200.00 minimum - belonging to nobody on screen and in every report row.
+       *
+       * Taking it as the REMAINDER of the member's share makes it correct by construction rather
+       * than by two calculations agreeing: $3,200.00 - $3,000.00 = $200.00. Where the minimum does
+       * not bind this is arithmetically identical to the percentage it replaces - $22,500.00 -
+       * $20,250.00 = $2,250.00, which is exactly 10% - so nothing moves on a normal deal.
+       *
+       * t4a rather than agent, because that is the share BEFORE any deduction. A deduction is a
+       * transfer out of the agent's own money, not a share of the commission, and charging it to
+       * the brokerage would hand them money the deal never earned.
+       */
+      const brokEffective = this.r(Math.max(memberWoHst - t4a.commission, 0));
+
       return {
         name: m.name,
         split: m.split,
@@ -463,7 +483,7 @@ export class CommissionService {
         brok_pct: m.brok_pct,
         adjustment: deduction,
         agent,
-        brokerage: line(brokWoHst),
+        brokerage: line(brokEffective),
         t4a,
       };
     });
@@ -558,7 +578,24 @@ export class CommissionService {
     clientReferral: number,
   ): Triple & { pool: number; entitlements: Map<CommMember, number> } {
     const g = 1 + HST_RATE;
-    const minBrokTotal = minBrokComm * g;
+    /*
+     * TD-080 / TD-124 - the minimum brokerage is compared on the SAME basis as the share it caps.
+     *
+     * This was `minBrokComm * g`, an HST-INCLUSIVE figure, and the line below compares it against
+     * `lc * b * split`, which is a percentage of `lc` and therefore EX-HST. On a $3,200 lease the
+     * brokerage's 5% is $160.00 ex-HST and the minimum is $200.00 ex-HST, but the comparison was
+     * $160.00 against $226.00, so $226.00 won and was charged to the agent out of an ex-HST pool.
+     *
+     * That single mismatch produced every figure in both entries: the agent received $2,974.00
+     * instead of $3,000.00, which is 92.94% of the commission while the panel beside it printed
+     * 95%, and $66.00 - exactly $226.00 minus $160.00 - was subtracted from the agent without ever
+     * being added to the brokerage, so the split stopped reconciling.
+     *
+     * Ex-HST against ex-HST: max($160.00, $200.00) is $200.00, the agent keeps $3,000.00, and the
+     * two sides add back to the $3,200.00 commission. The HST on the minimum is not lost - the
+     * whole pool is grossed up by `g` at the end of this function, as it always was.
+     */
+    const minBrokEx = minBrokComm;
     // TD-025: keep each member's OWN entitlement, not only the sum. Keyed by the member OBJECT
     // rather than by index or name, so a later filter, re-sort or duplicate name cannot hand one
     // person another's share.
@@ -568,7 +605,7 @@ export class CommissionService {
       const a = m.agent_pct / 100;
       const b = m.brok_pct / 100;
       const split = m.split / 100;
-      const brokRaw = Math.max(lc * b * split, minBrokTotal);
+      const brokRaw = Math.max(lc * b * split, minBrokEx);
       const floor = lc === 0 ? 0 : brokRaw - (adjBefore * g - adjAfter);
       const own = Math.max(0, Math.min(lc * a * split, lc - floor));
       entitlements.set(m, own);

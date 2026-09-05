@@ -1,16 +1,12 @@
 import { BadRequestException } from '@nestjs/common';
 import type { PrismaService } from '../prisma/prisma.service';
-import { AREA_LABEL, type Area } from '../common/domain';
+import type { Area } from '../common/domain';
 
 /**
- * How many email accounts one person may connect in one area.
+ * How many email accounts one person may connect across the Hub.
  *
- * An agent gets exactly one per area — one for the CRM and one for the Transaction Desk — and must
- * disconnect the current one before connecting a different address. Administrators and managers are
- * unrestricted, as they were before.
- *
- * The two areas are independent: an agent holding a CRM account is not thereby connected to the
- * Transaction Desk, and connecting one there is a separate act with its own limit of one.
+ * An agent gets one account shared by CRM and Transactions and must disconnect it before connecting
+ * a different address. Administrators and managers remain unrestricted.
  *
  * Declared as a function over Prisma rather than a method on either service because both routes
  * into account creation have to honour it — the manual SMTP form and the Gmail OAuth callback —
@@ -28,8 +24,8 @@ export interface EmailLimit {
   canAdd: boolean;
 }
 
-/** What the limit is for this user in this area, for showing on screen and for enforcing. */
-export async function emailLimitFor(prisma: PrismaService, userId: number, area: Area): Promise<EmailLimit> {
+/** What the Hub-wide limit is for this user, for showing on screen and enforcing. */
+export async function emailLimitFor(prisma: PrismaService, userId: number, _area: Area): Promise<EmailLimit> {
   const user = await prisma.users.findUnique({ where: { id: userId }, select: { role: true } });
   const max = LIMITS[String(user?.role ?? '')] ?? null;
 
@@ -47,11 +43,9 @@ export async function emailLimitFor(prisma: PrismaService, userId: number, area:
    * the only casualty - which is why this is Trivial, and why the fix is to count rather than to
    * delete the field as its sibling defect required.
    *
-   * Counted within the area only. An account with no scope pre-dates the split and is deliberately
-   * NOT counted against either area's limit: it is already visible on both sides, and counting it
-   * twice would leave an agent unable to connect anywhere until they had assigned it.
+   * Every personal account counts once across the Hub, regardless of its legacy area stamp.
    */
-  const used = await prisma.mail_accounts.count({ where: { user_id: userId, scope: area } });
+  const used = await prisma.mail_accounts.count({ where: { user_id: userId } });
 
   // `canAdd` still comes from the limit, not from the count: no maximum means no ceiling to reach.
   return { max, used, canAdd: max === null || used < max };
@@ -69,12 +63,12 @@ export async function assertCanConnectEmail(prisma: PrismaService, userId: numbe
   if (limit.canAdd) return;
 
   const existing = await prisma.mail_accounts.findFirst({
-    where: { user_id: userId, scope: area },
+    where: { user_id: userId },
     select: { from_email: true },
     orderBy: { id: 'asc' },
   });
   throw new BadRequestException({
-    message: `Your role allows one ${AREA_LABEL[area]} email account${existing?.from_email ? `, and ${existing.from_email} is already connected` : ''}. Disconnect it first, then connect the new address.`,
-    errors: { from_email: ['Only one email account can be connected here.'] },
+    message: `Your role allows one Hub email account${existing?.from_email ? `, and ${existing.from_email} is already connected` : ''}. Disconnect it first, then connect the new address.`,
+    errors: { from_email: ['Only one email account can be connected across CRM and Transactions.'] },
   });
 }

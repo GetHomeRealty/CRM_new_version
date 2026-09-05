@@ -52,7 +52,7 @@ async function seed(tx: PrismaService, role: string) {
 describe('§7 agent single-email restriction', () => {
   afterAll(async () => { await prisma.$disconnect(); });
 
-  it('gives an agent one account per area, counted per area', async () => {
+  it('gives an agent one account shared across the Hub', async () => {
     await inRollback(async (tx) => {
       const { user, addAccount } = await seed(tx, 'agent');
 
@@ -63,13 +63,8 @@ describe('§7 agent single-email restriction', () => {
       expect(await emailLimitFor(tx, user.id, 'crm')).toEqual({ max: 1, used: 1, canAdd: false });
       await expect(assertCanConnectEmail(tx, user.id, 'crm')).rejects.toBeInstanceOf(BadRequestException);
 
-      // The Transaction Desk is a separate configuration with its own allowance — holding a CRM
-      // account must not consume it.
-      expect(await emailLimitFor(tx, user.id, 'desk')).toEqual({ max: 1, used: 0, canAdd: true });
-      await expect(assertCanConnectEmail(tx, user.id, 'desk')).resolves.toBeUndefined();
-
-      await addAccount('desk');
       expect(await emailLimitFor(tx, user.id, 'desk')).toEqual({ max: 1, used: 1, canAdd: false });
+      await expect(assertCanConnectEmail(tx, user.id, 'desk')).rejects.toBeInstanceOf(BadRequestException);
     });
   });
 
@@ -112,14 +107,14 @@ describe('§7 agent single-email restriction', () => {
     });
   });
 
-  it('does not count an unassigned account against either area', async () => {
+  it('counts a shared unassigned account once across the Hub', async () => {
     await inRollback(async (tx) => {
       const { user, addAccount } = await seed(tx, 'agent');
       // Pre-dates the split: already visible on both sides. Counting it against both would leave
       // the agent unable to connect anywhere until they had assigned it.
       await addAccount(null);
-      expect((await emailLimitFor(tx, user.id, 'crm')).canAdd).toBe(true);
-      expect((await emailLimitFor(tx, user.id, 'desk')).canAdd).toBe(true);
+      expect((await emailLimitFor(tx, user.id, 'crm')).canAdd).toBe(false);
+      expect((await emailLimitFor(tx, user.id, 'desk')).canAdd).toBe(false);
     });
   });
 });
@@ -132,18 +127,18 @@ describe('§7 agent single-email restriction', () => {
  * one ever diverge, the divergence is the bug and the comment above `makeSoleDefault` says which
  * one is right.
  */
-describe('§6 one primary email per area', () => {
+describe('§6 one primary email across the Hub', () => {
   afterAll(async () => { await prisma.$disconnect(); });
 
-  const claimPrimary = async (tx: PrismaService, id: number, userId: number, scope: string | null) => {
+  const claimPrimary = async (tx: PrismaService, id: number, userId: number, _scope: string | null) => {
     await tx.mail_accounts.update({ where: { id }, data: { is_default: true, is_active: true } });
     await tx.mail_accounts.updateMany({
-      where: { id: { not: id }, is_default: true, user_id: userId, scope },
+      where: { id: { not: id }, is_default: true, user_id: userId },
       data: { is_default: false },
     });
   };
 
-  it('setting the Transaction Desk primary leaves the CRM primary alone', async () => {
+  it('setting a primary clears every other personal primary', async () => {
     await inRollback(async (tx) => {
       const { user, addAccount } = await seed(tx, 'admin');
       const crm = await addAccount('crm', { is_default: true, is_active: true });
@@ -156,8 +151,7 @@ describe('§6 one primary email per area', () => {
         where: { user_id: user.id }, select: { id: true, scope: true, is_default: true },
       });
       const primary = (s: string) => after.filter((a) => a.scope === s && a.is_default).map((a) => a.id);
-      // Exactly one per area, and the CRM's is untouched — the whole point of section 6.
-      expect(primary('crm')).toEqual([crm.id]);
+      expect(primary('crm')).toEqual([]);
       expect(primary('desk')).toEqual([desk2.id]);
       expect(after.find((a) => a.id === desk1.id)!.is_default).toBe(false);
     });

@@ -16,13 +16,8 @@ import ConfirmDialog, { useConfirm } from './ConfirmDialog';
  * through the shared MailAccountModal wizard. Everything is scoped to this login by the server.
  */
 /**
- * `scope` decides which area's accounts this card manages.
- *
- * CRM Settings and Transaction Desk Settings are completely separate mailboxes of
- * configuration: an address connected here is stamped with this scope and is listed only
- * here. Connecting an account under Transaction Desk never affects CRM, and vice versa —
- * there is no shared state and nothing to assign, so the card simply shows this area's
- * accounts and nothing else.
+ * Personal mail is connected once for the whole Hub. `scope` only records which page initiated
+ * OAuth so the browser can return there; both areas list and operate on the same account.
  */
 export default function EmailIntegrationCard({ scope = 'crm' }: { scope?: IntegrationScope }) {
   const toast = useToast();
@@ -38,7 +33,7 @@ export default function EmailIntegrationCard({ scope = 'crm' }: { scope?: Integr
   const [limit, setLimit] = useState<EmailAccountLimit | null>(null);
 
   const load = useCallback(() => {
-    listMyMailAccounts(scope).then(setAccounts).catch(() => setAccounts([]));
+    listMyMailAccounts().then(setAccounts).catch(() => setAccounts([]));
     mailAccountLimit(scope).then(setLimit).catch(() => setLimit(null));
   }, [scope]);
   useEffect(() => { load(); }, [load]);
@@ -101,7 +96,7 @@ export default function EmailIntegrationCard({ scope = 'crm' }: { scope?: Integr
       // "Primary" rather than "default": it is the account this area sends from, and section 6
       // asks for it to be named clearly. Saying nothing is set is worth doing loudly — that is
       // exactly the state where mail quietly leaves from the brokerage address instead.
-      ? `${active.length} account${active.length === 1 ? '' : 's'} connected${def ? ` · primary ${def.from_email}` : ' · no primary set'}`
+      ? `${active.length} Hub account${active.length === 1 ? '' : 's'} connected${def ? ` · primary ${def.from_email}` : ' · no primary set'}`
       : 'Connect your own email to send and receive from your address — Gmail or any SMTP. Until then, mail goes out through the brokerage account.';
 
   return (
@@ -163,9 +158,8 @@ export default function EmailIntegrationCard({ scope = 'crm' }: { scope?: Integr
           onClick={() => setEditing('new')}>+ Connect email account</button>
         {atLimit && (
           <span className="help" style={{ flex: '1 1 100%' }}>
-            Your role allows one {AREA_LABEL[scope]} email account. Disconnect the one above to
-            connect a different address. Your account in the other area is separate and is not
-            affected.
+            Your role allows one Hub email account shared by CRM and Transactions. Disconnect the
+            account above to connect a different address.
           </span>
         )}
       </div>

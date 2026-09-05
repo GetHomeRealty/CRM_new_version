@@ -7,6 +7,21 @@ import { toDateTimeString } from '../common/serialize';
 
 const PER_PAGE = 50;
 
+/*
+ * TD-012 - the page size is a request, not a constant.
+ *
+ * PER_PAGE was a module constant and `AuditLogQuery` declared no page-size field at all, so a
+ * per_page in the query string had nowhere to land: every spelling tried - per_page, perPage,
+ * limit, page_size, pageSize, size, take, rows, count - returned exactly 50 rows, at 3 and at 100
+ * alike. The parameter was not being ignored; there was nothing to ignore it with.
+ *
+ * Clamped for the same reason MAX_PAGE is: `Number(query.page)` reaching `skip` unchecked already
+ * turned ?page=1e20 into a bare 500, and a raw take is the same mistake one column over. 200 is
+ * four screens of trail, past anything a person reads at once and well short of a payload. The
+ * default stays 50 so every existing caller sees exactly what it saw before.
+ */
+const MAX_PER_PAGE = 200;
+
 /**
  * The furthest page anybody may ask for. `Number(query.page)` went straight into `skip`, so
  * `?page=Infinity` and `?page=1e20` both reached Prisma and came back as a bare 500 — measured
@@ -42,6 +57,8 @@ export interface AuditLogQuery {
   to?: string;
   q?: string;
   page?: string;
+  /** TD-012 - rows per page. Absent means the 50 this endpoint always returned. */
+  per_page?: string;
   /** Which area's trail this is. */
   area?: string;
   /** How wide to read within it — see `SCOPES`. */
@@ -171,14 +188,15 @@ export class AuditLogService {
     // unanswerable question, and the response already reports `last_page` for the client to correct
     // itself. `|| 1` handles NaN; `Math.min` handles Infinity, which `|| 1` does not.
     const page = Math.min(MAX_PAGE, Math.max(1, Math.floor(Number(query.page ?? 1)) || 1));
+    const perPage = Math.min(MAX_PER_PAGE, Math.max(1, Math.floor(Number(query.per_page ?? PER_PAGE)) || PER_PAGE));
 
     const [total, rows] = await Promise.all([
       this.prisma.audit_logs.count({ where }),
       this.prisma.audit_logs.findMany({
         where,
         orderBy: [{ created_at: 'desc' }, { id: 'desc' }],
-        skip: (page - 1) * PER_PAGE,
-        take: PER_PAGE,
+        skip: (page - 1) * perPage,
+        take: perPage,
         include: { transactions: { select: { id: true, trade_no: true, deleted_at: true } } },
       }),
     ]);
@@ -205,7 +223,8 @@ export class AuditLogService {
       }),
       meta: {
         current_page: page,
-        last_page: Math.max(Math.ceil(total / PER_PAGE), 1),
+        last_page: Math.max(Math.ceil(total / perPage), 1),
+        per_page: perPage,
         total,
       },
       // The category list is the area's own modules plus the shared ones — the CRM's trail does not
