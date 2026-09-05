@@ -699,7 +699,7 @@ export default function LeadsPage() {
                   </td>
                   <td className="lead-inline-cell">
                     <InlineLeadCell lead={l} field="lead_source" options={options?.lead_source ?? []}
-                      disabled={!canEdit || isBrokerageLead(l)} saving={savingCell === `${l.id}:lead_source`} onSave={(field, value) => saveInline(l, field, value)} />
+                      disabled={!canEdit || identityLocked(l, user)} saving={savingCell === `${l.id}:lead_source`} onSave={(field, value) => saveInline(l, field, value)} />
                     <SourceAttribution lead={l} />
                   </td>
                   <td className="lead-inline-cell">
