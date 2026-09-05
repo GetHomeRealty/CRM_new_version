@@ -2,7 +2,7 @@ import { BadRequestException, ForbiddenException, Injectable, NotFoundException 
 import * as ExcelJS from 'exceljs';
 import { PrismaService } from '../prisma/prisma.service';
 import { TransactionsWriteService } from '../transactions/transactions-write.service';
-import { TRANSACTION_TYPES, isListingType, statusOptionsFor, defaultStatusFor } from '../reference/transaction.constants';
+import { ACCEPTED_TYPE_NAMES, TRANSACTION_TYPES, canonicalTransactionType, isListingType, splitClassificationNote, statusOptionsFor, defaultStatusFor } from '../reference/transaction.constants';
 import {
   IMPORT_FIELDS, FINANCIAL_FIELDS, CHILD_SHEETS, REQUIRED_COLUMNS, REF_COLUMN,
   requiredColumnsFor, forbiddenColumnsFor, statusReference, flatColumn, flatColumns,
@@ -213,9 +213,13 @@ export class TransactionImportService {
 
     // --- the valid statuses per type ---
     const ref = wb.addWorksheet('Reference');
-    this.writeHeader(ref, ['Transaction Type', 'Valid Deal Statuses'], [undefined, undefined]);
-    for (const { type, statuses } of statusReference()) ref.addRow([type, statuses.join(' | ')]);
-    ref.getColumn(1).width = 34; ref.getColumn(2).width = 90;
+    this.writeHeader(ref, ['Transaction Type', 'Valid Deal Statuses', 'Note'], [undefined, undefined, undefined]);
+    // TD-051 — the note column exists for the type whose statuses do not follow its date rules.
+    for (const { type, statuses } of statusReference()) {
+      ref.addRow([type, statuses.join(' | '), splitClassificationNote(type) ?? '']);
+    }
+    ref.getColumn(1).width = 34; ref.getColumn(2).width = 90; ref.getColumn(3).width = 70;
+    ref.eachRow((r) => r.eachCell((c) => { c.alignment = { vertical: 'top', wrapText: true }; }));
 
     return Buffer.from(await wb.xlsx.writeBuffer());
   }
@@ -392,6 +396,16 @@ export class TransactionImportService {
     guide.addRow(['', 'Upload whichever you used — the importer detects the layout automatically. Do not mix the two in one file.']);
     guide.addRow(['', 'If both are filled the Transactions sheet wins and the "One-Sheet (CSV)" tab is ignored. To use the one-sheet layout, leave the Transactions sheet empty, or save that tab on its own as .csv.']);
     guide.addRow(['']);
+    /*
+     * TD-051 — the one rule a reader cannot deduce from the column list.
+     *
+     * A Business Sale is asked for the offer-side dates (it is not a listing type) and accepts only
+     * the listing statuses (it is sold like one). Both are correct; neither is written anywhere, and
+     * the validator reveals them one refusal at a time, so the type read as impossible to import.
+     * Stated here, in the sheet somebody has open while they fill the file.
+     */
+    guide.addRow(['', 'Business Sale takes BOTH: the offer-side dates (Offer Date, Closing Date, Price — no listing dates) AND the listing statuses (Active, Sold Conditional, Sold, Closed …). It is transacted on an offer and sold like a listing. Every other type is one or the other; the Reference sheet lists the statuses of each.']);
+    guide.addRow(['']);
 
     head('Columns');
     const colHead = guide.addRow(['Sheet', 'Column', 'Required', 'Format / accepted values', 'Example']);
@@ -513,11 +527,68 @@ export class TransactionImportService {
     throw new BadRequestException({ message: `Unsupported file type ".${ext}". Upload an .xlsx or .csv file.` });
   }
 
+  /*
+   * TD-099 — WHAT FAILED, NOT JUST THAT SOMETHING DID.
+   *
+   * Every unreadable upload answered with one sentence: "The file could not be read as an Excel
+   * workbook. Re-save it as .xlsx and try again." That is sound advice for the commonest causes — a
+   * renamed .csv, a legacy .xls, an .ods, a truncated download — and useless to the operator whose
+   * file already IS a valid .xlsx, because it gives them nothing to change. A brokerage migrating
+   * its book of business writes that file from a script, and "re-save it as .xlsx" describes what
+   * they just did.
+   *
+   * The reported cause (inline strings, which openpyxl and pandas emit) reads correctly now, so
+   * what is left is the message. These branches say which of the common causes this actually looks
+   * like, from the bytes rather than from a guess, and fall back to the reader's own error when it
+   * is none of them. The advice is kept — it is still the right next step — but it now follows a
+   * sentence that says why.
+   */
+  private xlsxProblem(buffer: Buffer, err: unknown): string {
+    const detail = String((err as Error)?.message ?? '').split(/\r?\n/)[0].trim().slice(0, 200);
+    const isZip = buffer.length > 4 && buffer[0] === 0x50 && buffer[1] === 0x4b;                       // "PK"
+    const isOle2 = buffer.length > 8 && buffer[0] === 0xd0 && buffer[1] === 0xcf && buffer[2] === 0x11 && buffer[3] === 0xe0;
+
+    if (isOle2) {
+      return 'This is a legacy .xls workbook that has been given an .xlsx name. Open it and use '
+        + 'Save As to write a real .xlsx, or export it as .csv.';
+    }
+    if (!isZip) {
+      const looksLikeText = buffer.subarray(0, 512).every((b) => b === 9 || b === 10 || b === 13 || (b >= 32 && b < 127));
+      return looksLikeText
+        ? 'This file is not a workbook — it is plain text with an .xlsx name. If it is a CSV, rename it to .csv and upload it again.'
+        : 'This file is not an .xlsx workbook: an .xlsx is a ZIP container and this does not begin like one. '
+          + 'It may be a different format, or the download may have been truncated.';
+    }
+    if (!buffer.includes('xl/workbook.xml')) {
+      return 'This is a ZIP file but not a workbook: it contains no xl/workbook.xml. '
+        + 'If it is an archive of spreadsheets, upload the .xlsx inside it rather than the archive.';
+    }
+    return `The workbook is an .xlsx but could not be read${detail ? `: ${detail}` : '.'}`;
+  }
+
   private async parseXlsx(buffer: Buffer): Promise<ParsedFile> {
     const wb = new ExcelJS.Workbook();
     try { await wb.xlsx.load(buffer as unknown as ArrayBuffer); }
-    catch { throw new BadRequestException({ message: 'The file could not be read as an Excel workbook. Re-save it as .xlsx and try again.' }); }
-    if (!wb.worksheets.length) throw new BadRequestException({ message: 'The workbook has no sheets.' });
+    catch (err) {
+      throw new BadRequestException({
+        message: `${this.xlsxProblem(buffer, err)} If the file opens in Excel, use Save As to rewrite it as .xlsx and try again.`,
+      });
+    }
+    /*
+     * TD-099 — an empty workbook and a file that is not a workbook are different problems.
+     *
+     * A ZIP carrying no `xl/workbook.xml` LOADS without error and simply has no sheets, so an
+     * operator who uploaded an archive of spreadsheets — or anything else zipped — was told "The
+     * workbook has no sheets", which describes a workbook they do not have.
+     */
+    if (!wb.worksheets.length) {
+      throw new BadRequestException({
+        message: buffer.includes('xl/workbook.xml')
+          ? 'The workbook has no sheets.'
+          : 'This is a ZIP file but not a workbook: it contains no xl/workbook.xml. '
+            + 'If it is an archive of spreadsheets, upload the .xlsx inside it rather than the archive.',
+      });
+    }
 
     // Layout detection, in precedence order. A FILLED Transactions sheet always wins: the
     // downloadable template and sample both ship a "One-Sheet (CSV)" sheet as the
@@ -746,7 +817,15 @@ export class TransactionImportService {
       const rowNo = rec.row;
       const issues: RowIssue[] = [];
       const get = (col: string) => String(rec.main[col] ?? '').trim();
-      const type = get('Transaction Type');
+      /*
+       * TD-050 — the name the screens show is accepted here and stored as the value behind it.
+       * `Lease Listing` is what the product calls `Residential Lease Listing` everywhere a person
+       * can read it, and a file built by copying that name off the screen was refused. The RAW
+       * text is kept for the error message, so a genuinely wrong type is still quoted back as the
+       * user wrote it rather than as something we guessed.
+       */
+      const rawType = get('Transaction Type');
+      const type = canonicalTransactionType(rawType) ?? rawType;
       const reference = get('Property Address') || `Row ${rowNo}`;
       const add = (field: string, value: string, message: string, fix: string, severity: RowIssue['severity'] = 'error', section = '') =>
         issues.push({ row: rowNo, reference, field, value, message, fix, severity, section });
@@ -754,18 +833,25 @@ export class TransactionImportService {
       // ---- transaction type drives every other rule ----
       if (!type) add('Transaction Type', '', 'Transaction Type is required.', 'Enter one of: ' + TRANSACTION_TYPES.join(', '));
       else if (!(TRANSACTION_TYPES as readonly string[]).includes(type)) {
-        const near = this.closest(type, TRANSACTION_TYPES);
-        add('Transaction Type', type, 'Not a valid transaction type.', near ? `Did you mean "${near}"?` : 'Use one of: ' + TRANSACTION_TYPES.join(', '));
+        const near = this.closest(rawType, ACCEPTED_TYPE_NAMES);
+        add('Transaction Type', rawType, 'Not a valid transaction type.', near ? `Did you mean "${near}"?` : 'Use one of: ' + TRANSACTION_TYPES.join(', '));
       }
       const known = (TRANSACTION_TYPES as readonly string[]).includes(type);
       const listing = known && isListingType(type);
 
       // ---- required / forbidden per type ----
       if (known) {
+        /*
+         * TD-051 — a type whose dates and statuses are classified differently explains itself on
+         * the FIRST message. Business Sale asks for offer dates and then accepts only listing
+         * statuses; both are right, and meeting them one refusal at a time is what made the type
+         * look impossible to import.
+         */
+        const split = splitClassificationNote(type);
         for (const col of requiredColumnsFor(type)) {
           if (!get(col)) {
             const f = IMPORT_FIELDS.find((x) => x.column === col)!;
-            add(col, '', `${col} is required for ${type}.`, `Enter a value — ${f.hint}`);
+            add(col, '', `${col} is required for ${type}.`, `Enter a value — ${f.hint}${split ? ' ' + split : ''}`);
           }
         }
         /*
@@ -784,7 +870,7 @@ export class TransactionImportService {
             : SOLD_LISTING_ALLOWS.includes(col)
               ? 'A listing carries a price and dates only once it has sold — clear this cell, or set Deal Status to Sold, Leased or Closed.'
               : 'A listing takes its commission from Listing Commission % and Co-Op Commission % — clear this cell.';
-          add(col, get(col), `${col} must be empty for ${type}.`, why);
+          add(col, get(col), `${col} must be empty for ${type}.`, split ? `${why} ${split}` : why);
         }
       }
 
@@ -814,6 +900,15 @@ export class TransactionImportService {
         severity?: RowIssue['severity'], section?: string,
       ): void => {
         if (issues.some((x) => x.field === field)) return;
+        /*
+         * TD-050 — Transaction Type is spoken for entirely by the dedicated rule above, so the
+         * generic enum check never speaks for it. It compares the raw cell against the catalogue
+         * and would refuse "Lease Listing" — the name the screens show — moments after the rule
+         * that owns the field accepted it, leaving the row rejected with no visible reason. This
+         * is the same precedence TD-052 established, applied to the case where the dedicated rule
+         * says YES rather than no.
+         */
+        if (field === 'Transaction Type') return;
         add(field, value, message, fix, severity, section);
       };
       this.checkFormats(IMPORT_FIELDS, rec.main, addMainFormat, '');
@@ -833,7 +928,12 @@ export class TransactionImportService {
         const allowed = statusOptionsFor(type);
         if (!allowed.includes(status)) {
           const near = this.closest(status, allowed);
-          add('Deal Status', status, `"${status}" is not a valid status for ${type}.`, near ? `Did you mean "${near}"?` : 'Use one of: ' + allowed.join(', '));
+          const note = splitClassificationNote(type);
+          // TD-051 — the correction, then WHY this type's statuses are not the ones its dates
+          // implied. Without the second half, "Secured Firm is not valid for Business Sale" reads
+          // as a contradiction of the offer dates the same file was just told to supply.
+          const base = near ? `Did you mean "${near}"?` : 'Use one of: ' + allowed.join(', ');
+          add('Deal Status', status, `"${status}" is not a valid status for ${type}.`, note ? `${base} ${note}` : base);
         }
       }
 
@@ -993,6 +1093,9 @@ export class TransactionImportService {
       if (!v) continue;
       body[key] = f.type === 'number' ? Number(v.replace(/[$,\s]/g, '')) : v;
     }
+    // TD-050 — the STORED value, not the label the row was written with: `type` arrives here
+    // already resolved, and the loop above would otherwise put "Lease Listing" in the column.
+    if (type) body.type = type;
     const status = get('Deal Status');
     body.status = status || defaultStatusFor(type) || 'Open';
     // The primary agent may come from the Transactions sheet or from the Team Split rows.

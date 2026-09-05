@@ -348,11 +348,29 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
                 </div>
                 {/* Status / Validation — agents may view but not change these. */}
                 {agentMode ? (
-                  <div style={{ ...sel, boxSizing: 'border-box', padding: '6px 8px', border: '1px solid var(--line)', borderRadius: 6, background: 'var(--surface-2)', fontSize: 12.5, ...(d.status === 'Received' ? { color: 'var(--ok-600)', fontWeight: 700 } : { color: 'var(--muted)' }) }}>
-                    {d.status === 'Received' ? 'Sent' : 'Pending'}
+                  /*
+                   * TD-078 — the read-only cell prints the status the record holds.
+                   *
+                   * It printed "Sent" for a document stored as "Received", and that is not a
+                   * shorter word for the same thing: "Received" says the brokerage HAS the
+                   * document, "Sent" says it went out. On a compliance checklist that is the
+                   * difference between an obligation discharged and one still outstanding — and
+                   * the agent shown the wrong word is the one who uploaded the file, while the
+                   * counter directly above the table ("1 / 10 received") and the administrator's
+                   * dropdown on the same row both said Received.
+                   *
+                   * There is no "Sent" in the document model. The status vocabulary is the two
+                   * values the dropdown below offers, so the read-only branch shows one of those,
+                   * falling back to Pending only when the record carries nothing at all.
+                   *
+                   * Both branches carry `doc-status`, so "what does this row say" is one question
+                   * with one answer whichever role is looking — and one thing a test can read.
+                   */
+                  <div className="doc-status" style={{ ...sel, boxSizing: 'border-box', padding: '6px 8px', border: '1px solid var(--line)', borderRadius: 6, background: 'var(--surface-2)', fontSize: 12.5, ...(d.status === 'Received' ? { color: 'var(--ok-600)', fontWeight: 700 } : { color: 'var(--muted)' }) }}>
+                    {d.status || 'Pending'}
                   </div>
                 ) : (
-                  <select style={{ ...sel, ...(d.status === 'Received' ? { color: 'var(--ok-600)', fontWeight: 700 } : null) }}
+                  <select className="doc-status" style={{ ...sel, ...(d.status === 'Received' ? { color: 'var(--ok-600)', fontWeight: 700 } : null) }}
                     value={d.status} onChange={(e) => upd(i, 'status', e.target.value)}>
                     <option>Pending</option><option>Received</option>
                   </select>

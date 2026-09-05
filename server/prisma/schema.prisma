@@ -2545,6 +2545,8 @@ model transactions {
   reco_audit_ready            String?                       @db.VarChar(255)
   reco_audit_remarks          String?                       @db.Text
   trade_sheet_sent_at         DateTime?                     @db.Timestamp(0)
+  /// TD-088 — when the Trade Record Sheet was last PRODUCED. Sending is a separate act with its own column above.
+  trade_sheet_generated_at    DateTime?                     @db.Timestamp(0)
   trade_sheet_data            String?                       @db.Text
   // Reports module (backward-compatible; NULL on all legacy records)
   payment_type                String?                       @db.VarChar(255)

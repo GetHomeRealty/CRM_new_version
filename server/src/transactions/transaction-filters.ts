@@ -27,9 +27,24 @@ const has = (v: string | undefined): v is string => typeof v === 'string' && v.t
 export function filterClauses(q: ListTransactionsDto): Prisma.transactionsWhereInput[] {
   const out: Prisma.transactionsWhereInput[] = [];
 
-  // Free text. The old predicate tested one concatenation of "property trade_no agent", which no
-  // relational filter can express; this matches any of the three instead. The only divergence is
-  // a query that straddles two fields ("Main St 1024"), which matched before and does not now.
+  /*
+   * Free text. The old predicate tested one concatenation of "property trade_no agent", which no
+   * relational filter can express; this matches any of the fields instead. The only divergence is
+   * a query that straddles two fields ("Main St 1024"), which matched before and does not now.
+   *
+   * TD-090 — A CLIENT'S NAME FINDS THEIR DEAL.
+   *
+   * The box searched three columns on `transactions` and nothing else, so a deal carrying two
+   * buyers named Nair returned nothing for "Nair" while "Oakridge" and the trade number each
+   * returned it. That is the everyday journey: an agent takes a call from a client and has to reach
+   * the file by the only thing they know for certain — who is on the phone. The alternative is
+   * asking the caller for their own address.
+   *
+   * The predicate already existed, as the dedicated `client` filter below, so this adds a fourth
+   * arm rather than a capability. It is the one arm that crosses a relation: `some` matches a deal
+   * with ANY client whose name contains the text, which is what "find me the Nair file" means when
+   * a deal has two of them.
+   */
   if (has(q.q)) {
     const contains = q.q.trim();
     out.push({
@@ -37,6 +52,7 @@ export function filterClauses(q: ListTransactionsDto): Prisma.transactionsWhereI
         { property: { contains, mode: 'insensitive' } },
         { trade_no: { contains, mode: 'insensitive' } },
         { agent: { contains, mode: 'insensitive' } },
+        { clients: { some: { name: { contains, mode: 'insensitive' } } } },
       ],
     });
   }

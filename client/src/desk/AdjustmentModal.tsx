@@ -10,6 +10,8 @@ import type { AdjustmentEntry, AgentLoanMap, ExtReferral, Transaction } from '..
 
 /** The three dynamic adjustment lists share the entry shape. */
 type RowKey = 'adjustment_rows' | 'advance_rows' | 'client_rows';
+/** The Yes/No toggle in front of each of the four sections. */
+type ToggleKey = 'agent_adjust' | 'advance_payment' | 'client_referral' | 'ext_referral';
 
 interface AdjustmentForm {
   agent_adjust: string;
@@ -29,6 +31,20 @@ const ADJ_LINKED: Record<RowKey, string[]> = {
   client_rows: ['“Commissions after client referral” in Financial Information', 'Client referral totals'],
 };
 const ADJ_TITLE: Record<RowKey, string> = { adjustment_rows: 'agent adjustment', advance_rows: 'advance payment', client_rows: 'client referral' };
+
+/** The external referral's fields, blank — the shape the form edits when the section is switched on. */
+const BLANK_EXT: ExtReferral = { agent_name: '', brokerage: '', amount: '', invoice_received: 'No', hst_no: '', paid_type: 'N/A', paid_date: '', batch_no: '', paid_status: '' };
+
+/**
+ * TD-111 — has this entry been filled in at all?
+ *
+ * A section switched off is emptied, and emptying it is announced to the user. The blank row this
+ * modal adds the moment a toggle goes to Yes must not trigger that announcement: nobody typed it,
+ * and warning about losing it teaches people to click through the warning that matters. 'No' and
+ * 'N/A' are the defaults on this panel's own selects, so they do not count as content either.
+ */
+const hasContent = (row: Record<string, unknown> | null | undefined): boolean =>
+  !!row && Object.values(row).some((v) => v !== null && v !== undefined && v !== '' && v !== false && v !== 'No' && v !== 'N/A');
 
 const lbl: CSSProperties = { fontSize: 11.5, color: 'var(--text-2)', fontWeight: 600, marginBottom: 5, display: 'block' };
 
@@ -84,7 +100,9 @@ export default function AdjustmentModal({ open, onClose, transactionId, txn, onS
       agent_adjust: a.agent_adjust || 'No', adjustment_rows: a.adjustment_rows || [],
       advance_payment: a.advance_payment || 'No', advance_rows: a.advance_rows || [],
       client_referral: a.client_referral || 'No', client_rows: a.client_rows || [],
-      ext_referral: a.ext_referral || 'No', ext: a.ext || { agent_name: '', brokerage: '', amount: '', invoice_received: 'No', hst_no: '', paid_type: 'N/A', paid_date: '', batch_no: '', paid_status: '' },
+      // Merged over the blank shape, not substituted for it: a switched-off section is stored empty
+      // (TD-111), and `{}` on its own would leave every input in here without a value.
+      ext_referral: a.ext_referral || 'No', ext: { ...BLANK_EXT, ...(a.ext || {}) },
     };
   });
   const [saving, setSaving] = useState(false);
@@ -101,7 +119,9 @@ export default function AdjustmentModal({ open, onClose, transactionId, txn, onS
     if (!name) return null;
     const info = agentLoans[name];
     if (!info) return null;
-    const savedHere = ((txn.adjustments?.adjustment_rows) || [])
+    // Gated the way the server's loan ledger is (TD-111): a repayment behind a switched-off section
+    // is not counted there, so adding it back here would understate what the agent still owes.
+    const savedHere = (txn.adjustments?.agent_adjust === 'Yes' ? (txn.adjustments?.adjustment_rows || []) : [])
       .filter((r) => r.agent === name && r.is_loan)
       .reduce((s, r) => s + Math.max(0, parseNumber(r.amount)), 0);
     const pendingHere = form.adjustment_rows
@@ -112,7 +132,7 @@ export default function AdjustmentModal({ open, onClose, transactionId, txn, onS
 
   if (!open) return null;
 
-  const set = (k: 'agent_adjust' | 'advance_payment' | 'client_referral' | 'ext_referral', v: string) => setForm((f) => ({ ...f, [k]: v }));
+  const set = (k: ToggleKey, v: string) => setForm((f) => ({ ...f, [k]: v }));
   const setRow = (key: RowKey, i: number, patch: Partial<AdjustmentEntry>) => setForm((f) => ({ ...f, [key]: f[key].map((r, idx) => idx === i ? { ...r, ...patch } : r) }));
   const addRow = (key: RowKey, row: AdjustmentEntry) => setForm((f) => ({ ...f, [key]: [...f[key], row] }));
   const rmRow = (key: RowKey, i: number) => askDelete({
@@ -122,6 +142,44 @@ export default function AdjustmentModal({ open, onClose, transactionId, txn, onS
     onConfirm: () => setForm((f) => ({ ...f, [key]: f[key].filter((_, idx) => idx !== i) })),
   });
   const setExt = (patch: Partial<ExtReferral>) => setForm((f) => ({ ...f, ext: { ...f.ext, ...patch } }));
+
+  /*
+   * TD-111 — SWITCHING A SECTION OFF EMPTIES IT, AND SAYS SO FIRST.
+   *
+   * Setting a toggle back to No used to hide the rows and leave them in the record. The deal stopped
+   * applying them, so nothing moved — but the entries sat there invisibly, and would be applied
+   * again the moment anybody set the toggle back to Yes, including somebody who had no idea they
+   * were there. The server clears them on save; this is the half that asks first, because a user
+   * who switches a section off has every reason to believe the entries are gone and should be told
+   * plainly that they are.
+   *
+   * The rows go to the Recycle Bin like any other deleted row — the server files them from the same
+   * capture — so the warning can promise they are recoverable, and restoring one switches the
+   * section back on by itself.
+   */
+  const switchSectionOff = (toggle: ToggleKey, key: RowKey, label: string) => {
+    const clear = () => setForm((f) => ({ ...f, [toggle]: 'No', [key]: [] }));
+    const filled = form[key].filter((r) => hasContent(r as unknown as Record<string, unknown>)).length;
+    if (filled === 0) { clear(); return; }
+    askDelete({
+      title: `Switch ${label} off?`,
+      message: `${filled} ${filled === 1 ? 'entry' : 'entries'} recorded here will be removed from this transaction when you Save. You can restore ${filled === 1 ? 'it' : 'them'} from the Recycle Bin.`,
+      linked: ADJ_LINKED[key] || [],
+      confirmLabel: 'Remove and switch off',
+      onConfirm: clear,
+    });
+  };
+  const switchExtOff = () => {
+    const clear = () => setForm((f) => ({ ...f, ext_referral: 'No', ext: { ...BLANK_EXT } }));
+    if (!hasContent(form.ext as unknown as Record<string, unknown>)) { clear(); return; }
+    askDelete({
+      title: 'Switch External Brokerage Agent Referral off?',
+      message: 'The referral recorded here will be removed from this transaction when you Save. You can restore it from the Recycle Bin.',
+      linked: ['Commission after external referral (Financial Information)', 'External referral totals in the financial reports'],
+      confirmLabel: 'Remove and switch off',
+      onConfirm: clear,
+    });
+  };
 
   const extAmt = parseNumber(form.ext.amount);
   const extHst = Math.round(extAmt * 0.13 * 100) / 100;
@@ -224,7 +282,7 @@ export default function AdjustmentModal({ open, onClose, transactionId, txn, onS
         {/* Adjustment Details */}
         <div className="modal-sub">Adjustment Details</div>
         <div className="field" style={{ maxWidth: 220 }}><label style={lbl}>Agent Adjust</label>
-          <select value={form.agent_adjust} onChange={(e) => { const v = e.target.value; set('agent_adjust', v); if (v === 'Yes' && form.adjustment_rows.length === 0) addRow('adjustment_rows', { agent: '', amount: '', status: '', remarks: '', is_loan: false }); }}><option>No</option><option>Yes</option></select></div>
+          <select value={form.agent_adjust} onChange={(e) => { const v = e.target.value; if (v !== 'Yes') { switchSectionOff('agent_adjust', 'adjustment_rows', 'Agent Adjust'); return; } set('agent_adjust', v); if (form.adjustment_rows.length === 0) addRow('adjustment_rows', { agent: '', amount: '', status: '', remarks: '', is_loan: false }); }}><option>No</option><option>Yes</option></select></div>
         {form.agent_adjust === 'Yes' && (<>
           {form.adjustment_rows.map((r, i) => (
             <div className="dyn-list-box" key={i}>
@@ -258,7 +316,7 @@ export default function AdjustmentModal({ open, onClose, transactionId, txn, onS
         {/* Advance Payment */}
         <div className="modal-sub">Advance Payment Details</div>
         <div className="field" style={{ maxWidth: 220 }}><label style={lbl}>Advance Payment</label>
-          <select value={form.advance_payment} onChange={(e) => { const v = e.target.value; set('advance_payment', v); if (v === 'Yes' && form.advance_rows.length === 0) addRow('advance_rows', { agent: '', amount: '', paid_type: 'N/A', paid_date: '', batch_no: '', remarks: '' }); }}><option>No</option><option>Yes</option></select></div>
+          <select value={form.advance_payment} onChange={(e) => { const v = e.target.value; if (v !== 'Yes') { switchSectionOff('advance_payment', 'advance_rows', 'Advance Payment'); return; } set('advance_payment', v); if (form.advance_rows.length === 0) addRow('advance_rows', { agent: '', amount: '', paid_type: 'N/A', paid_date: '', batch_no: '', remarks: '' }); }}><option>No</option><option>Yes</option></select></div>
         {form.advance_payment === 'Yes' && (<>
           {form.advance_rows.map((r, i) => (
             <div className="dyn-list-box" key={i}>
@@ -280,7 +338,7 @@ export default function AdjustmentModal({ open, onClose, transactionId, txn, onS
         {/* Client Referral */}
         <div className="modal-sub">Client Referral</div>
         <div className="field" style={{ maxWidth: 220 }}><label style={lbl}>Client Referral</label>
-          <select value={form.client_referral} onChange={(e) => { const v = e.target.value; set('client_referral', v); if (v === 'Yes' && form.client_rows.length === 0) addRow('client_rows', { client_name: '', amount: '', void_cheque: 'No', paid_type: 'N/A', paid_date: '', batch_no: '', paid_status: '' }); }}><option>No</option><option>Yes</option></select></div>
+          <select value={form.client_referral} onChange={(e) => { const v = e.target.value; if (v !== 'Yes') { switchSectionOff('client_referral', 'client_rows', 'Client Referral'); return; } set('client_referral', v); if (form.client_rows.length === 0) addRow('client_rows', { client_name: '', amount: '', void_cheque: 'No', paid_type: 'N/A', paid_date: '', batch_no: '', paid_status: '' }); }}><option>No</option><option>Yes</option></select></div>
         {form.client_referral === 'Yes' && (<>
           {form.client_rows.map((r, i) => (
             <div className="dyn-list-box" key={i}>
@@ -306,7 +364,7 @@ export default function AdjustmentModal({ open, onClose, transactionId, txn, onS
         {/* External Brokerage Referral */}
         <div className="modal-sub">External Brokerage Agent Referral</div>
         <div className="field" style={{ maxWidth: 260 }}><label style={lbl}>External Brokerage Agent Referral</label>
-          <select value={form.ext_referral} onChange={(e) => set('ext_referral', e.target.value)}><option>No</option><option>Yes</option></select></div>
+          <select value={form.ext_referral} onChange={(e) => { const v = e.target.value; if (v !== 'Yes') { switchExtOff(); return; } set('ext_referral', v); }}><option>No</option><option>Yes</option></select></div>
         {form.ext_referral === 'Yes' && (
           <div className="dyn-list-box">
             <div className="g2">

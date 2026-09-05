@@ -140,19 +140,27 @@ describe('Analytics filters narrow the aggregate in the database', () => {
     });
   });
 
-  it('a date range keeps only the deals inside it, on the SAME date the chart buckets by', async () => {
+  it('a date range keeps every deal that belongs to the period, however the chart buckets it', async () => {
+    /*
+     * TD-092 — THE RANGE AND THE CHART ANSWER DIFFERENT QUESTIONS.
+     *
+     * This case used to assert they applied one rule. They deliberately do not: membership of a
+     * period is COALESCE(closing, offer), because a deal that has not closed still belongs to the
+     * period it was written in and dropping it would hide live work — while the month a BAR is
+     * drawn in is the closing date alone, because that is what the chart is headed.
+     *
+     * So the deal below with only an offer date is inside the March range AND sits in the
+     * no-closing-date bucket. Both are true; the defect was inventing a closing month for it.
+     */
     await inRollback(async (tx) => {
       const a = await makeAgent(tx, 'Filt Date');
       const inside = await makeDeal(tx, { agent: a, closing: '2025-03-10' });
       await makeDeal(tx, { agent: a, closing: '2025-09-10' });
-      // No closing date: Analytics buckets this one by its OFFER date, so a range covering that
-      // month must keep it. Filtering on closing_date alone would have dropped it while the month
-      // chart still showed it.
       const byOffer = await makeDeal(tx, { agent: a, closing: null, offer: '2025-03-20' });
 
       const out = await svcFor(tx).summary(office, { from: '2025-03-01', to: '2025-03-31' });
       expect(out.totals.total).toBe(await expectedTotal(tx, inRange('2025-03-01', '2025-03-31')));
-      expect(out.by_month.map((m) => m.month)).toEqual(['2025-03']);
+      expect(out.by_month.map((m) => m.month)).toEqual(['2025-03', 'none']);
       // Both fixture deals landed inside — one by its closing date, one by its offer date.
       expect(await expectedCount(tx, { AND: [{ id: { in: [inside, byOffer] } }, inRange('2025-03-01', '2025-03-31')] })).toBe(2);
     });

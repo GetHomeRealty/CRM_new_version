@@ -17,6 +17,22 @@ interface LoanAgg {
 export interface AgentCommission {
   agent_pct: number;
   lease_pct: number | null;
+  /**
+   * TD-102 — IS THIS PLAN'S ACCOUNT SOMEBODY WHO CAN BE PUT ON A DEAL TODAY?
+   *
+   * The plan list answered for names the application will not offer: `listNames()` — the agent
+   * picker — is role `agent` AND status `Active`, while this map had no filter at all. So a
+   * departed agent, or a manager on a 95% plan, still resolved a rate whenever their name appeared
+   * on a deal, typed by hand or carried in by an import. With the agent name being free text
+   * (TD-045), a plan nobody can pick is a plan a typo can still reach.
+   *
+   * THE PLANS ARE NOT REMOVED, deliberately. The two screens that read this map look a member up BY
+   * NAME on a deal that already exists, and fall back to 90/95 when there is no entry — so dropping
+   * a departed agent's plan would quietly re-rate the historical deals they are on, which is the
+   * same harm as the defect. Every plan still resolves; the ones that are not a current agent are
+   * now labelled as such, and the screens say so where they apply one.
+   */
+  active_agent: boolean;
 }
 export interface AgentLoan {
   loan_amount: number;
@@ -106,7 +122,13 @@ export class AgentsService {
 
   /** Map of name => registered default commission split. Agents get their own row only. */
   async commissions(viewer: Viewer = null): Promise<Record<string, AgentCommission>> {
-    const rows = await this.prisma.users.findMany({ select: { name: true, profile: true }, orderBy: { id: 'asc' } });
+    const rows = await this.prisma.users.findMany({
+      // TD-102 — role and status come back so each plan can say whether its account is somebody
+      // the application would let you put on a deal. The POPULATION is unchanged: every plan that
+      // resolved before still resolves.
+      select: { name: true, profile: true, role: true, status: true },
+      orderBy: { id: 'asc' },
+    });
     const map: Record<string, AgentCommission> = {};
     for (const u of rows) {
       const p = parseJsonObject(u.profile);
@@ -116,6 +138,9 @@ export class AgentsService {
       map[u.name] = {
         agent_pct: phpFloat(agent),
         lease_pct: lease === null || lease === undefined || lease === '' ? null : phpFloat(lease),
+        // The same rule `listNames()` uses to decide who may be offered as an agent, asked here
+        // about the person the plan belongs to.
+        active_agent: u.role === 'agent' && u.status === 'Active',
       };
     }
     return this.mine(map, viewer);
@@ -141,6 +166,18 @@ export class AgentsService {
       });
       for (const t of txns) {
         const adj = parseJsonObject(t.adjustments);
+        /*
+         * TD-111 — a repayment counts only while the Agent Adjust section is ON.
+         *
+         * This was the one consumer of `adjustment_rows` that did not ask. Every other reader gates
+         * on the toggle — CommissionService.memberDeduction, the SQL transliteration, the reports'
+         * own `loanRepayments`, the two client screens — so a row left behind a No toggle was
+         * inert everywhere except here, where it went on repaying the loan. The entry says the
+         * risk is entirely in the future; for the loan ledger it was not. An agent whose repayment
+         * row was switched off had their outstanding balance reduced by it anyway, and the Agent
+         * Financial report and this endpoint disagreed about the same loan.
+         */
+        if ((adj['agent_adjust'] ?? 'No') !== 'Yes') continue;
         const rows = Array.isArray(adj['adjustment_rows']) ? (adj['adjustment_rows'] as Record<string, unknown>[]) : [];
         for (const r of rows) {
           if (phpEmpty(r['is_loan'])) continue;

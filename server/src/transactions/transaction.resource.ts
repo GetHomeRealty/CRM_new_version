@@ -5,6 +5,7 @@ import type { CommissionService } from './commission.service';
 
 import { can, isAgent } from '../core/authz';
 import { ownsTransaction, teamMemberIdentity } from '../common/transaction-scope';
+import { invoiceDisplayStatus } from '../reference/invoice.constants';
 const isPrecon = (type: string): boolean => type === 'Preconstruction';
 
 // Deterministic ordering (Laravel's own order for these is index-plan-dependent
@@ -55,10 +56,38 @@ export const txnShowInclude = {
  * own paged endpoint would be the real fix and is a change to how the screen works, not to how fast
  * it is, so it is left alone and recorded as an open item.
  */
-export function txnShowIncludeFor(user: { role?: string | null } | null | undefined): Prisma.transactionsInclude {
+export function txnShowIncludeFor(user: { role?: string | null; id?: number; name?: string | null } | null | undefined): Prisma.transactionsInclude {
   if (!isAgent(user)) return txnShowInclude;
-  const { audit_logs: _dropped, ...rest } = txnShowInclude;
-  return rest;
+  /*
+   * TD-110 — AN AGENT SEES THEIR OWN CHANGES, AND STILL NOT THE OFFICE'S.
+   *
+   * The whole `audit_logs` relation was dropped for agents, correctly: it carries every field the
+   * office has ever touched — commission percentages, splits, trust payable, approval decisions and
+   * the reasons given — and an agent has no audit screen. But it also carries the rows the AGENT
+   * wrote, so the person most likely to be asked to account for a change was the one person who
+   * could not see it. On a RECO-regulated file that is the wrong way round.
+   *
+   * So the relation comes back for them, narrowed to their OWN rows. Identity by `user_id` where
+   * the row carries one, falling back to the name for rows written before that column existed —
+   * the same rule `common/transaction-scope.ts` uses to decide whose deal is whose.
+   *
+   * It stays bounded: only this caller's rows, and only on the detail read. The office's rows are
+   * never loaded for them, so the reason the relation was dropped — reading an unbounded history
+   * off disk to throw it away — does not come back with it.
+   */
+  const id = typeof user?.id === 'number' ? user.id : null;
+  const name = (user?.name ?? '').trim();
+  const mine: Prisma.audit_logsWhereInput[] = [];
+  if (id !== null) mine.push({ user_id: id });
+  if (name !== '') mine.push({ user_id: null, who: name });
+
+  return {
+    ...txnShowInclude,
+    audit_logs: mine.length
+      ? { where: { OR: mine }, orderBy: AUDIT_ORDER, take: 200 }
+      // No identity to match on: send nothing rather than everything.
+      : { where: { id: -1 }, orderBy: AUDIT_ORDER },
+  };
 }
 
 type FullTxn = Prisma.transactionsGetPayload<{ include: typeof txnShowInclude }>;
@@ -104,7 +133,15 @@ export interface ResourceCtx {
 const num = (d: Prisma.Decimal | number | null): number => (d === null ? 0 : Number(d));
 const numN = (d: Prisma.Decimal | number | null): number | null => (d === null ? null : Number(d));
 
-/** Laravel InvoiceStatusService::sentStatus — derived, never stored. */
+/**
+ * Laravel InvoiceStatusService::sentStatus — derived, never stored.
+ *
+ * TD-048 — this answers "has the invoice gone out yet", NOT "what does the invoice say". Its
+ * `Draft` means raised but not sent; the panel that showed it was labelled "Invoice Status", so an
+ * issued, overdue invoice was described as a draft on one screen and as Overdue on another. The
+ * value is right and the label was wrong: it travels as `invoice_sent_status` beside
+ * `invoice_status`, which is the same word the invoice list and the API show.
+ */
 function sentStatus(inv: { status?: string; sent_at?: Date | null } | null): string {
   if (!inv) return 'Pending to Raise';
   if (inv.status === 'Paid') return 'Paid';
@@ -182,6 +219,9 @@ function invoiceAdmin(t: LoadedTxn): Record<string, unknown> {
   const invoices = t.invoices ?? [];
   const block = (inv: (typeof invoices)[number] | null): Record<string, unknown> => ({
     invoice_number: inv?.invoice_no ?? null,
+    // TD-048 — what the invoice says, derived exactly once (`reference/invoice.constants`), so this
+    // panel and the invoice list cannot describe the same invoice with two different words.
+    invoice_status: inv ? invoiceDisplayStatus(inv) : null,
     invoice_sent_status: sentStatus(inv),
     commission_received_date: toDateString(inv?.commission_received_date ?? null),
     commission_received_via: inv?.commission_received_via ?? null,
@@ -263,6 +303,9 @@ export async function transactionResource(t: LoadedTxn, ctx: ResourceCtx): Promi
     commercial_lease: jsonField(t.commercial_lease),
     notice_of_sale: jsonField(t.notice_of_sale),
     trade_sheet_sent_at: toIso8601String(t.trade_sheet_sent_at),
+    // TD-088 — when the sheet was last PRODUCED, which is a different question from whether it
+    // was emailed to anybody.
+    trade_sheet_generated_at: toIso8601String(t.trade_sheet_generated_at),
     trade_sheet_data: jsonField(t.trade_sheet_data),
 
     precon_listing_type: t.precon_listing_type,
@@ -415,6 +458,31 @@ export async function transactionResource(t: LoadedTxn, ctx: ResourceCtx): Promi
    * Absent rather than emptied: an empty array would read as "nothing has ever happened on this
    * deal", which is a different and worse untruth than the field not being there.
    */
+  /*
+   * TD-110 — the agent's own history, on their own deal.
+   *
+   * `agent_changes` above is the OFFICE's review queue: unhandled agent edits awaiting a decision,
+   * including other people's on a team deal, rendered by an `isAdminOrAbove` banner. Handing that
+   * array to agents would be the wrong fix — it is not their history and it carries their
+   * colleagues' pending edits.
+   *
+   * `my_changes` is what they were missing: the rows THEY wrote on THIS deal, handled ones
+   * included, so a change that was reverted (TD-038) is visible to the person who made it. The
+   * include has already narrowed the relation to their own rows, so nothing else is in reach.
+   */
+  if (t.audit_logs !== undefined && isAgent(ctx.user)) {
+    out.my_changes = t.audit_logs.map((a) => ({
+      id: a.id,
+      section: a.section,
+      field: a.field,
+      action: a.action,
+      old_value: a.old_value,
+      new_value: a.new_value,
+      handled: a.handled,
+      stamp: toDateTimeString(a.created_at),
+    }));
+  }
+
   if (t.audit_logs !== undefined && !isAgent(ctx.user)) {
     const logs = t.audit_logs;
     out.audit_logs = logs.map((a) => ({

@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { DeskAnalyticsService, type DeskAnalytics } from './desk-analytics.service';
+import { DeskAnalyticsService, NO_CLOSING_DATE, type DeskAnalytics } from './desk-analytics.service';
 import { ReportExportService } from '../reports/report-export.service';
 import { CompanySettingsService } from '../settings/company-settings.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -100,7 +100,17 @@ export class DeskAnalyticsExportService {
       { section: 'summary', group: 'Paid (before HST)', count: a.totals.paid_count, commission: a.totals.paid },
       { section: 'summary', group: 'Pending (before HST)', count: a.totals.pending_count, commission: a.totals.pending },
     ];
-    for (const m of a.by_month) out.push({ section: 'by_month', group: m.month, count: null, commission: m.total });
+    /*
+     * TD-092 — the no-closing-date bucket is spelled out in the file too.
+     *
+     * An export outlives the screen it came from: a row keyed `none` in a workbook headed "By
+     * Month" is a puzzle to whoever opens it, and the whole point of the bucket is that it says
+     * what it is.
+     */
+    for (const m of a.by_month) {
+      const group = m.month === NO_CLOSING_DATE ? 'No closing date' : m.month;
+      out.push({ section: 'by_month', group, count: null, commission: m.total });
+    }
     for (const r of a.by_agent) out.push({ section: 'by_agent', group: r.agent, count: r.count, commission: r.total });
     for (const r of a.by_type) out.push({ section: 'by_type', group: r.type, count: r.count, commission: r.total });
     return out;

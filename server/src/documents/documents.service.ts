@@ -190,7 +190,19 @@ export class DocumentsService {
     let pos = await this.maxPosition(txn.id);
 
     for (const c of conditions) {
-      const name = c.custom_name || c.type;
+      const name = String(c.custom_name || c.type || '').trim();
+      /*
+       * TD-065 — no name, no document.
+       *
+       * A blank row saved as a condition produced a checklist entry titled "Condition: " with
+       * nothing after the colon: an outstanding document that could never be satisfied, counted in
+       * the deal's Documents Outstanding and printed on a RECO compliance file. The write path now
+       * refuses to store such a row, and this is the second half of the same rule — it also
+       * disposes of the ones already stored, because a nameless condition simply never produces a
+       * document, and the row it used to produce falls to the orphan handling below (which
+       * soft-deletes anything carrying an upload rather than destroying it).
+       */
+      if (!name) continue;
       const title = `Condition: ${name}`;
       const doc = existing.get(c.id);
       if (doc) {

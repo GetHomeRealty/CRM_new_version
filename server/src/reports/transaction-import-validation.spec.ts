@@ -35,8 +35,14 @@ const validate = (main: Record<string, string>): Promise<RowLike[]> =>
 const BASE = { 'Property Address': '1 ZZ-TEST Rd' };
 
 describe('bulk import validation — one problem is reported once (TD-052)', () => {
+  /*
+   * The example used to be 'Lease Listing', which TD-050 has since made VALID — it is the label the
+   * screens show for `Residential Lease Listing`, and refusing what the product taught the user to
+   * say was that defect. The rule TD-052 pins is untouched; only a type that is genuinely not one
+   * can demonstrate it.
+   */
   it('reports a bad transaction type once, in the wording of the rule that owns the field', async () => {
-    const [r] = await validate({ ...BASE, 'Transaction Type': 'Lease Listing' });
+    const [r] = await validate({ ...BASE, 'Transaction Type': 'Spaceship Sale' });
     const typeIssues = r.issues.filter((i) => i.field === 'Transaction Type');
 
     // Was two: the dedicated rule's message and the generic enum check's, with the same fix.
@@ -47,7 +53,7 @@ describe('bulk import validation — one problem is reported once (TD-052)', () 
   it('still reports a bad value on a field nothing else speaks for', async () => {
     // The de-duplication is per field, so suppressing the Transaction Type duplicate must not
     // suppress an unrelated problem on the same row.
-    const [r] = await validate({ ...BASE, 'Transaction Type': 'Lease Listing', 'MLS Type': 'nonsense' });
+    const [r] = await validate({ ...BASE, 'Transaction Type': 'Spaceship Sale', 'MLS Type': 'nonsense' });
 
     expect(r.issues.map((i) => i.field)).toContain('MLS Type');
     expect(r.issues.find((i) => i.field === 'MLS Type')?.message).toBe('Not an accepted value for MLS Type.');

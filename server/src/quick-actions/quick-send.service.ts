@@ -42,7 +42,7 @@ export class QuickSendService {
    * `assertTransaction` is the same rule the transaction, document and chat endpoints already
    * apply — one definition of who may reach a deal, deliberately not restated here.
    */
-  private async reachableTxnOr404(user: Actor, id: number): Promise<{ id: number; trade_no: string; property: string | null; deposit: unknown; agent: string | null; agent_user_id: number | null; trade_sheet_sent_at: Date | null }> {
+  private async reachableTxnOr404(user: Actor, id: number): Promise<{ id: number; trade_no: string; property: string | null; deposit: unknown; agent: string | null; agent_user_id: number | null; trade_sheet_sent_at: Date | null; trade_sheet_generated_at: Date | null }> {
     await this.access.assertTransaction(user, id);
     const t = await this.prisma.transactions.findFirst({ where: { id, deleted_at: null } });
     if (!t) throw new NotFoundException({ message: `No query results for model [App\\Models\\Transaction] ${id}.` });
@@ -221,5 +221,38 @@ export class QuickSendService {
     await this.audit.record(txnId, this.actor(user), { section: 'Quick Actions — Trade Record Sheet', field: 'Trade Record Sheet', action: resend ? 'Resent' : 'Sent', source: 'Quick Action', new: email });
 
     return { ok: true, message: (resend ? 'Resent' : 'Sent') + ' to ' + email, sent_at: toIso8601String(now) };
+  }
+
+  /**
+   * TD-088 — the deal records that the Trade Record Sheet was PRODUCED.
+   *
+   * The sheet is a RECO trade record. It generated on demand and left nothing behind: no flag, no
+   * date, no entry — so a brokerage under audit could produce one today and had nothing to show it
+   * had produced one at the time. `trade_sheet_sent_at` answers a different question (was it
+   * emailed to somebody) and is null on every sheet handed over in person or filed.
+   *
+   * WHY THE CLIENT HAS TO SAY SO. The sheet is filled in the browser — a static OREA Form 640 with
+   * `pdf-lib` writing the deal's values into it — so the server never sees the production unless it
+   * is told. This is that call, and it is deliberately not the PDF: storing another copy of a
+   * document the system can regenerate from the deal buys nothing, while the evidence question is
+   * only ever "was it produced, when, and by whom".
+   *
+   * BOTH HALVES ARE WRITTEN. The column carries the LATEST production, for the header pill and
+   * anything that reports on it; the audit trail carries every one of them, with the actor, which
+   * is what "by whom" means here. It goes through `reachableTxnOr404` like every other quick
+   * action, so a deal somebody has no part in cannot be marked from outside (TD-012).
+   */
+  async tradeSheetGenerated(user: Actor, txnId: number): Promise<Record<string, unknown>> {
+    const t = await this.reachableTxnOr404(user, txnId);
+    const now = new Date();
+    await this.prisma.transactions.update({ where: { id: txnId }, data: { trade_sheet_generated_at: now, updated_at: now } });
+    await this.audit.record(txnId, this.actor(user), {
+      section: 'Quick Actions — Trade Record Sheet',
+      field: 'Trade Record Sheet',
+      action: t.trade_sheet_generated_at ? 'Regenerated' : 'Generated',
+      source: 'Quick Action',
+      new: `Trade Record Sheet ${t.trade_no}`,
+    });
+    return { ok: true, generated_at: toIso8601String(now) };
   }
 }

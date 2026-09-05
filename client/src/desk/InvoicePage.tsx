@@ -5,17 +5,16 @@ import { formatCurrency, typeLabel } from './format';
 import { useToast } from './toast';
 import { apiErrorMessage } from '../lib/apiError';
 import { useAuth } from '../context/AuthContext';
-import InvoiceEditorModal, { STATUSES } from './InvoiceEditorModal';
+import InvoiceEditorModal from './InvoiceEditorModal';
+// TD-048 — the filter and the badge read the one vocabulary; the filter used to be the editor's
+// five spread behind two hand-written extras, which is why it and the editor could disagree.
+import { INVOICE_STATUSES, STATUS_PILL } from './invoiceStatus';
 import InvoicePreviewModal from './InvoicePreviewModal';
 import CommissionAnalytics from './CommissionAnalytics';
 import type { CompanySettings, Invoice } from '../types';
 
 /** Rows per page. The server caps this at 200. */
 const PER_PAGE = 25;
-
-const STATUS_PILL: Record<string, string> = {
-  Paid: 'ok', 'Partially Paid': 'warn', Unpaid: 'info', Overdue: 'bad', Void: 'bad', Draft: 'info', Due: 'info',
-};
 
 // Due/overdue warning from the transaction closing date.
 function dueWarning(closing: string | null | undefined, status: string | undefined): { label: string; cls: string } | null {
@@ -130,7 +129,7 @@ export default function InvoicePage() {
         <select value={filter} onChange={(e) => { setPage(1); setFilter(e.target.value); }}>
           <option value="">All statuses</option>
           {/* TD-063 - the filter must offer every status an invoice can HOLD: everything the editor can SET, plus Draft and Partially Paid which the server derives. A second hard-coded list is what let 'Due' fall out of it. */}
-          {[...new Set(['Draft', 'Unpaid', 'Partially Paid', ...STATUSES])].map((s) => <option key={s}>{s}</option>)}
+          {INVOICE_STATUSES.map((s) => <option key={s}>{s}</option>)}
         </select>
         <div style={{ flex: 1 }} />
         {canEdit && <button className="btn primary sm" onClick={() => setEditorId(null)}>+ New Invoice</button>}

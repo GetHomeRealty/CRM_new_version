@@ -5,10 +5,19 @@ interface AuditTrailModalProps {
   open: boolean;
   onClose: () => void;
   txn: Transaction;
+  /**
+   * TD-110 — the rows to show, when they are not the office's audit trail.
+   *
+   * An agent is never sent `audit_logs`: it carries every field the office has ever changed. They
+   * are sent `my_changes` — their own rows on this deal — and this is the same table, reading the
+   * list it is handed. One screen, two populations, no second copy of the filtering and search.
+   */
+  entries?: AuditEntry[];
+  title?: string;
 }
 
-export default function AuditTrailModal({ open, onClose, txn }: AuditTrailModalProps) {
-  const logs: AuditEntry[] = txn.audit_logs || [];
+export default function AuditTrailModal({ open, onClose, txn, entries, title }: AuditTrailModalProps) {
+  const logs: AuditEntry[] = entries ?? txn.audit_logs ?? [];
   const [section, setSection] = useState('All');
   const [query, setQuery] = useState('');
 
@@ -47,7 +56,7 @@ export default function AuditTrailModal({ open, onClose, txn }: AuditTrailModalP
     <div className="overlay open" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="modal xl" style={{ maxHeight: '92vh', overflowY: 'auto' }}>
         <button className="close" onClick={onClose}>✕</button>
-        <div className="modal-h">Audit Trail</div>
+        <div className="modal-h">{title ?? 'Audit Trail'}</div>
         <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 10 }}>
           Complete chronological history of every change to this transaction (most recent first).
         </div>

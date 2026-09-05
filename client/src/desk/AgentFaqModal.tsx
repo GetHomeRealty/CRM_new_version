@@ -122,9 +122,23 @@ export default function AgentFaqModal({ open, onClose, transactionId, txn, onSav
       });
     }
     return {
-      // Default ON: a transaction is included in batch review emails unless the user deselects it.
-      // Only an explicitly stored `false` (a deliberate deselect) keeps it off.
-      batch_review_email: a.batch_review_email == null ? true : !!a.batch_review_email,
+      /*
+       * TD-094 — OFF UNTIL SOMEBODY TURNS IT ON.
+       *
+       * This read `a.batch_review_email == null ? true : …`, so a deal nobody had ever opened
+       * rendered with the box TICKED and the panel showed the form's assumption as though it were
+       * a decision. Save the panel without touching anything and that assumption was written into
+       * the record as a choice.
+       *
+       * The stored record is silent on a new deal — `activity_tracker` carries no
+       * `batch_review_email` key at all — and silence is not consent for something that emails a
+       * client. It reads as false here, so the state shown is only ever what somebody chose, and a
+       * no-touch save writes false rather than enrolling the deal.
+       *
+       * The same rule is applied on the server, where an agent's save normalises the flag with
+       * `!!` — absent means excluded there too, and the two ends cannot disagree.
+       */
+      batch_review_email: !!a.batch_review_email,
       // Auto-reflected from Admin Activities (the linked invoice's Commission Received Date).
       commission_received_date: txn.invoice_admin?.commission_received_date || (a.commission_received_date as string) || txn.admin_activities?.commission_received_date || '',
       docs_cleared: (a.docs_cleared as string) || '',
@@ -401,6 +415,8 @@ export default function AgentFaqModal({ open, onClose, transactionId, txn, onSav
           <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
             <input type="checkbox" checked={form.batch_review_email} disabled={dftNA || (readOnly && !allowBatchEmail)} onChange={(e) => set('batch_review_email', e.target.checked)} /> Include this transaction in batch review emails
           </label>
+          {/* TD-094 — said out loud, so nobody has to infer the default from an empty box. */}
+          <div className="help" style={{ marginTop: 6 }}>Off unless you tick it. Nothing is emailed to a client for this deal while it is unticked.</div>
         </div>
         )}
 
@@ -574,7 +590,11 @@ export default function AgentFaqModal({ open, onClose, transactionId, txn, onSav
 
         {!precon && !isFaqV2 && (<>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12, marginBottom: 12 }}>
-          <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Invoice Status</label><input value={invAdmin.invoice_sent_status || '—'} readOnly style={{ background: '#f9fafb' }} /><span className="help">Auto-reflected from Admin Activities.</span></div>
+          {/* TD-048 — this panel repeated Admin Activities' value under Admin Activities' label, so
+              it inherited the same ambiguity: it said "Draft" for an issued, overdue invoice. Both
+              questions are now asked by name, with the invoice's own word first. */}
+          <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Invoice Status</label><input value={invAdmin.invoice_status || '—'} readOnly style={{ background: '#f9fafb' }} /><span className="help">Auto-reflected from Admin Activities.</span></div>
+          <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Invoice Sent</label><input value={invAdmin.invoice_sent_status || '—'} readOnly style={{ background: '#f9fafb' }} /><span className="help">Auto-reflected from Admin Activities.</span></div>
           <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Commission Received Date</label><input type="date" value={invAdmin.commission_received_date || form.commission_received_date || ''} readOnly style={{ background: '#f9fafb' }} /><span className="help">Auto-reflected from Admin Activities.</span></div>
           <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Valid Docs Cleared from Agent</label>
             <select value={form.docs_cleared} onChange={(e) => set('docs_cleared', e.target.value)}><option value="">Select</option><option>Yes</option><option>No</option></select>

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { loadPdfLib } from './heavyLibs';
 import { formatCurrency, commissionSummary, isListingFinancialType } from './format';
-import { sendTradeSheet } from '../lib/api';
+import { recordTradeSheetGenerated, sendTradeSheet } from '../lib/api';
 import { bytesToBase64 } from './pdf';
 import { splitPropertyAddress } from './propertyAddress';
 import { useToast } from './toast';
@@ -175,10 +175,14 @@ export default function TradeSheetModal({ open, onClose, txn }: TradeSheetModalP
   const [src, setSrc] = useState<string | null>(null);
   const [status, setStatus] = useState<'loading' | 'ready' | 'missing' | 'error'>('loading');
   const [sentAt, setSentAt] = useState<string | null>(txn?.trade_sheet_sent_at || null);
+  // TD-088 — when this deal's sheet was last PRODUCED. Separate from `sentAt`: a sheet handed over
+  // in person or filed is never emailed, and the audit asks whether it was produced.
+  const [generatedAt, setGeneratedAt] = useState<string | null>(txn?.trade_sheet_generated_at || null);
   const [sending, setSending] = useState(false);
   const [pdfBytes, setPdfBytes] = useState<Uint8Array | null>(null); // filled Form 640 bytes, for attaching
 
   useEffect(() => { setSentAt(txn?.trade_sheet_sent_at || null); }, [txn?.trade_sheet_sent_at]);
+  useEffect(() => { setGeneratedAt(txn?.trade_sheet_generated_at || null); }, [txn?.trade_sheet_generated_at]);
 
   const emailSheet = async () => {
     const to = window.prompt(`${sentAt ? 'Resend' : 'Send'} the Trade Record Sheet to:`);
@@ -207,6 +211,22 @@ export default function TradeSheetModal({ open, onClose, txn }: TradeSheetModalP
         let bytes: Uint8Array;
         try { bytes = await fillPdf(buf, txn); } catch { bytes = new Uint8Array(buf); } // show original if fill fails
         if (!cancelled) setPdfBytes(bytes);
+        /*
+         * TD-088 — the deal learns that its trade record was produced.
+         *
+         * Recorded HERE, where the filled document exists: from this line the sheet can be opened,
+         * downloaded or emailed, and the brokerage has produced it whichever of those follows.
+         * Recording on Download instead would miss the copy taken by "Open in new tab" and every
+         * sheet read on screen, which is the same evidence gap in a smaller shape.
+         *
+         * Best-effort and deliberately silent: a failure here must not stop somebody looking at
+         * their own paperwork, and the audit entry is the record — not this response.
+         */
+        if (!cancelled && txn?.id) {
+          recordTradeSheetGenerated(txn.id)
+            .then((r) => { if (!cancelled) setGeneratedAt(r.generated_at ?? new Date().toISOString()); })
+            .catch(() => undefined);
+        }
         // Copy into a fresh Uint8Array (ArrayBuffer-backed) so it's a valid BlobPart.
         const blob = new Blob([new Uint8Array(bytes)], { type: 'application/pdf' });
         url = URL.createObjectURL(blob);
@@ -228,6 +248,8 @@ export default function TradeSheetModal({ open, onClose, txn }: TradeSheetModalP
           <div className="modal-h" style={{ margin: 0, border: 0, padding: 0 }}>Trade Record Sheet — OREA Form 640</div>
           {status === 'ready' && (
             <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              {/* TD-088 — produced and sent are two different facts, so they are two different pills. */}
+              {generatedAt && <span className="pill ok" style={{ fontSize: 10 }}>Produced {new Date(generatedAt).toLocaleDateString()}</span>}
               {sentAt && <span className="pill info" style={{ fontSize: 10 }}>Last sent {new Date(sentAt).toLocaleDateString()}</span>}
               <a className="btn ghost sm" href={src ?? undefined} target="_blank" rel="noreferrer">↗ Open in new tab</a>
               <a className="btn ghost sm" href={src ?? undefined} download={`Trade Record Sheet ${txn?.trade_no || ''}.pdf`}>📄 Download PDF</a>

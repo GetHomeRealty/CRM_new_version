@@ -6,6 +6,14 @@ type Tx = Prisma.TransactionClient;
 /** One numbering series. Each owns a band and never leaves it. */
 type Series = { label: string; start: number; end: number; suffix: string };
 
+/**
+ * TD-076 — the advisory-lock class for trade-number allocation.
+ *
+ * Advisory locks share one global space, so the class namespaces this rule; the second argument is
+ * the band's start, which is unique per series and reads sensibly in `pg_locks`.
+ */
+const TRADE_NUMBER_LOCK_CLASS = 7601;
+
 const SERIES: Record<string, Series> = {
   listing:  { label: 'Listing / Sale',            start: 100000, end: 199999, suffix: '' },
   buying:   { label: 'Buying',                    start: 200000, end: 299999, suffix: '' },
@@ -88,6 +96,25 @@ export class TradeNumberService {
     const s = SERIES[BY_TYPE[type] ?? 'buying'];
     const lo = String(s.start);
     const hi = String(s.end + 1);
+
+    /*
+     * TD-076 — TWO CREATES AT ONCE MUST NOT BE HANDED THE SAME NUMBER.
+     *
+     * Allocation is read-then-insert: this finds the highest number in the band, adds one, and the
+     * caller inserts it. Two creates racing each other both read the same highest value, both
+     * compute the same candidate, and the second insert dies on the `trade_no` unique index — a
+     * 500 on a save that was in no way the user's fault. It is the same shape as the duplicate
+     * guard's race, and it fires between UNRELATED deals: only the band has to match.
+     *
+     * The band is serialised for the rest of the transaction, so the read and the insert that
+     * follows it are one step as far as any other create is concerned. Per band, so a Listing and
+     * a Buying create never wait for each other, and the wait that does happen is the length of one
+     * insert.
+     *
+     * `pg_advisory_xact_lock(int, int)` with the casts spelled out: Prisma sends a JS number as a
+     * bigint parameter, and there is no two-argument bigint form of the function.
+     */
+    await db.$executeRawUnsafe('SELECT pg_advisory_xact_lock($1::int, $2::int)', TRADE_NUMBER_LOCK_CLASS, s.start);
     const rows = await db.$queryRaw<{ trade_no: string }[]>`
       SELECT trade_no
         FROM transactions

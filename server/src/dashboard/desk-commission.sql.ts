@@ -321,26 +321,41 @@ std_base AS MATERIALIZED (
 std_lc AS MATERIALIZED (
   SELECT b.*, php_round2f(b.commission - b.ext_ref) AS lc FROM std_base b
 ),
+/*
+ * TD-025, RESTORED TO THIS SIDE — each member's OWN entitlement, kept as well as summed.
+ *
+ * agentCommissionsAfterClient in commission.service.ts builds exactly this number per member
+ * and keeps it in an entitlements map, because the line each person is paid is their own
+ * entitlement's share of the pool — not their split's share. The transliteration summed it and
+ * threw the parts away, so the pool was right and the DIVISION was flat: on deal 001 (840,000 at
+ * 2.5%, split 60/20/20, rates 90/95/90) the TypeScript pays 11,340 / 3,990 / 3,780 while the SQL
+ * paid 11,466 / 3,822 / 3,822. Same total to the cent, three wrong cheques — which is why the
+ * headline reconciled and desk-sql-parity.spec.ts was the only thing that noticed.
+ */
+std_own AS MATERIALIZED (
+  SELECT
+    l.id, m.name, m.split,
+    GREATEST(0::float8, LEAST(
+      l.lc * (m.agent_pct / 100) * (m.split / 100),
+      l.lc - CASE WHEN l.lc = 0 THEN 0::float8
+                  ELSE GREATEST(l.lc * (m.brok_pct / 100) * (m.split / 100), 200::float8 * ${G})
+                       - (l.adj_before * ${G} - l.adj_after) END
+    )) AS own
+  FROM std_lc l LEFT JOIN members m ON m.tid = l.id
+),
 std_pool AS MATERIALIZED (
   SELECT
-    l.id,
-    php_round2f(
-      COALESCE(SUM(
-        GREATEST(0::float8, LEAST(
-          l.lc * (m.agent_pct / 100) * (m.split / 100),
-          l.lc - CASE WHEN l.lc = 0 THEN 0::float8
-                      ELSE GREATEST(l.lc * (m.brok_pct / 100) * (m.split / 100), 200::float8 * ${G})
-                           - (l.adj_before * ${G} - l.adj_after) END
-        ))
-      ), 0::float8) * ${G} - MIN(l.client_ref)
-    ) AS ac_total
-  FROM std_lc l LEFT JOIN members m ON m.tid = l.id
+    o.id,
+    php_round2f(COALESCE(SUM(o.own), 0::float8) * ${G} - MIN(l.client_ref)) AS ac_total,
+    -- The UNROUNDED pool, which is what the share is taken against on the TypeScript side.
+    COALESCE(SUM(o.own), 0::float8) AS pool
+  FROM std_own o JOIN std_lc l ON l.id = o.id
   -- GROUPED BY THE ID ALONE. This used to list lc, adj_before, adj_after and client_ref as group
   -- keys too, and lc is a nested php_round2 over the whole four-way commission fallback — so the
   -- planner made that expression a SORT KEY and re-evaluated it for every row it compared. Measured
   -- at 80,000 deals: 4.5 s in this node alone. The columns are constant within a deal, so MIN()
   -- reads them without their being keys.
-  GROUP BY l.id
+  GROUP BY o.id
 ),
 std_raw AS MATERIALIZED (
   /*
@@ -356,12 +371,15 @@ std_raw AS MATERIALIZED (
    * A materialised CTE is a real barrier — the value is computed, stored, and read as a column.
    * Measured at 80,000 deals this node went from 4.9 s to under a second.
    */
-  SELECT m.tid, m.name,
-         php_round2f(p.ac_total * (m.split / 100)) AS t4a_raw${full ? `,
-         php_round2f(p.ac_total * (m.split / 100) - desk_member_deduction(s.adj, m.name, NULL)) AS total,
-         php_round2f(php_round2f((l.lc * m.split) / 100) * m.brok_pct / 100) AS brok_wo` : ''}
+  -- TD-025: the share is this member's own entitlement over the pool, falling back to the split
+  -- when there is no pool to divide - which is what agentCommissionLine does, and never a zero.
+  SELECT o.id AS tid, o.name,
+         php_round2f(p.ac_total * CASE WHEN p.pool > 0 THEN o.own / p.pool ELSE o.split / 100 END) AS t4a_raw${full ? `,
+         php_round2f(p.ac_total * CASE WHEN p.pool > 0 THEN o.own / p.pool ELSE o.split / 100 END - desk_member_deduction(s.adj, o.name, NULL)) AS total,
+         php_round2f(php_round2f((l.lc * o.split) / 100) * m.brok_pct / 100) AS brok_wo` : ''}
   FROM std_pool p
-  JOIN members m ON m.tid = p.id${full ? `
+  JOIN std_own o ON o.id = p.id${full ? `
+  JOIN members m ON m.tid = p.id AND m.name IS NOT DISTINCT FROM o.name AND m.split IS NOT DISTINCT FROM o.split
   JOIN std_lc l  ON l.id  = p.id
   -- A PLAIN JOIN, not a correlated subquery on scoped.
   --
@@ -423,31 +441,48 @@ lst_split AS MATERIALIZED (
   SELECT
     b.id, b.client_ref,
     php_round2f((b.list_comm + b.list_comm * ${HST} + b.l_adj_after) - b.ext_ref * ${G}) AS split_total,
-    COALESCE(
-      md.first_agent_pct / 100,
-      CASE WHEN b.is_lease THEN 0.95::float8 ELSE 0.9::float8 END
-    ) AS agent_split,
     b.min_brok
   FROM lst_base b
-  LEFT JOIN mem_deal md ON md.tid = b.id
+),
+/*
+ * TD-025 ON THE LISTING SIDE — each member at their OWN rate, not the first member's.
+ *
+ * This variant sized one agent pool from members[0].agent_pct and sliced it by split, so two agents
+ * on a listing could never be on different plans and the per-member agent_pct was reported but
+ * never used. The TypeScript stopped doing that (breakdownListing, the memberEarn/floorScale
+ * block); the transliteration did not, and desk-sql-parity was the only thing that noticed.
+ *
+ * The rule, copied from there: each member earns splitTotal x share x their own rate, less their
+ * share of the client referral; if the sum of those would leave the brokerage under its minimum,
+ * every line is scaled down by the same factor rather than one member absorbing the shortfall.
+ * mem_deal.first_agent_pct is no longer read here, which is what made a mixed-rate team wrong.
+ */
+lst_own AS MATERIALIZED (
+  SELECT
+    x.id, m.name, m.split,
+    x.split_total * (m.split / 100) * (m.agent_pct / 100) - x.client_ref * (m.split / 100) AS raw
+  FROM lst_split x LEFT JOIN members m ON m.tid = x.id
 ),
 lst_pool AS MATERIALIZED (
   SELECT
     x.id, x.client_ref, x.split_total,
-    GREATEST(LEAST(
-      x.split_total * x.agent_split,
-      x.split_total - GREATEST(x.split_total * (1::float8 - x.agent_split), x.min_brok * ${G})
-    ), 0::float8) AS agent_pool
-  FROM lst_split x
+    CASE
+      WHEN COALESCE(SUM(o.raw), 0::float8) > GREATEST(x.split_total - php_round2f(x.min_brok * ${G}), 0::float8)
+       AND COALESCE(SUM(o.raw), 0::float8) > 0::float8
+      THEN GREATEST(x.split_total - php_round2f(x.min_brok * ${G}), 0::float8) / COALESCE(SUM(o.raw), 0::float8)
+      ELSE 1::float8
+    END AS floor_scale
+  FROM lst_split x LEFT JOIN lst_own o ON o.id = x.id
+  GROUP BY x.id, x.client_ref, x.split_total, x.min_brok
 ),
 lst_raw AS MATERIALIZED (
   -- The member's unrounded share, computed once. A single-row LATERAL would be flattened and its
   -- expression copied into each of the seven references below — see the note on std_raw.
-  SELECT m.tid, m.name,
-         ((p.agent_pool - p.client_ref) * (m.split / 100)) AS earned${full ? `,
-         ((p.split_total - p.agent_pool) * (m.split / 100)) / ${G} AS brok_wo` : ''}
+  SELECT o.id AS tid, o.name,
+         GREATEST(o.raw * p.floor_scale, 0::float8) AS earned${full ? `,
+         (p.split_total * (o.split / 100) - GREATEST(o.raw * p.floor_scale, 0::float8)) / ${G} AS brok_wo` : ''}
   FROM lst_pool p
-  JOIN members m ON m.tid = p.id
+  JOIN lst_own o ON o.id = p.id
 ),
 lst_lines AS MATERIALIZED (
   /*

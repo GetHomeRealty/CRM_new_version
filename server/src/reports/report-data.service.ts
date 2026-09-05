@@ -48,8 +48,20 @@ export interface EnrichedTxn {
   agent_names: string[];        // all split agents (scoped for agent users)
   is_team: boolean;
   split_ratios: string[];
-  /** Every split agent's own line (one entry per agent, incl. single-agent deals). */
-  splits: { name: string; ratio: string; split: number; agent: Triple; brokerage: Triple }[];
+  /**
+   * Every split agent's own line (one entry per agent, incl. single-agent deals) — SCOPED: an agent
+   * user gets only their own.
+   *
+   * TD-060 — `position` is where that line sits in the DEAL's full split set, and `split_total`
+   * below is how many there are. Both describe the deal, not the rows the caller may see, which is
+   * the distinction the Team Split report got wrong: it numbered rows "n of m" from the length of
+   * this array, so an agent looking at a two-agent deal read "Split 1 of 1" and reasonably
+   * concluded it was theirs alone. Only the count is widened — no other agent's name, ratio or
+   * money crosses the scope.
+   */
+  splits: { name: string; ratio: string; split: number; position: number; agent: Triple; brokerage: Triple }[];
+  /** TD-060 — how many split lines the DEAL has, whether or not the caller may see them all. */
+  split_total: number;
   /** 'Yes' once any CTA→BA transfer row is Yes; otherwise 'No' (Admin Activities → CTA to BA). */
   cta_to_ba: string;
   price: number;
@@ -427,10 +439,13 @@ export class ReportDataService {
     const admin = parseJsonObject(t.admin_activities);
     const tracker = parseJsonObject(t.activity_tracker);
 
-    const allNames = agentLines(bd).map((l) => String(l.name ?? '')).filter((n) => n !== '');
+    // TD-060 — the deal's lines, once. Both the scoped view and the deal-level count come from
+    // this one array, so "which line am I" and "how many are there" cannot disagree.
+    const allLines = agentLines(bd);
+    const allNames = allLines.map((l) => String(l.name ?? '')).filter((n) => n !== '');
     // Agent users only ever see their own split line(s); admins see the whole split.
     const scopedNames = lockedAgent ? allNames.filter((n) => n === lockedAgent) : allNames;
-    const scopedLines = lockedAgent ? agentLines(bd).filter((l) => String(l.name) === lockedAgent) : agentLines(bd);
+    const scopedLines = lockedAgent ? allLines.filter((l) => String(l.name) === lockedAgent) : allLines;
 
     const agentComm = scopedLines.reduce<Triple>((a, l) => addTriple(a, { commission: num((l.agent as Record<string, unknown>)?.commission), hst: num((l.agent as Record<string, unknown>)?.hst), total: num((l.agent as Record<string, unknown>)?.total) }), { ...ZERO_TRIPLE });
     const brokerageComm = lockedAgent ? scopedLines.reduce<Triple>((a, l) => addTriple(a, { commission: num((l.brokerage as Record<string, unknown>)?.commission), hst: num((l.brokerage as Record<string, unknown>)?.hst), total: num((l.brokerage as Record<string, unknown>)?.total) }), { ...ZERO_TRIPLE }) : brokerageCommission(bd);
@@ -494,7 +509,8 @@ export class ReportDataService {
       agent_names: scopedNames.length ? scopedNames : (t.agent ? [t.agent] : []),
       is_team: allNames.length > 1,
       split_ratios: splitRatios(bd),
-      splits: this.buildSplits(scopedLines),
+      splits: this.buildSplits(scopedLines, allLines),
+      split_total: allLines.length,
       cta_to_ba: this.ctaToBa(admin, scopedNames),
       price: num(t.price),
       listing_price: rec.listing_price != null ? num(rec.listing_price) : null,
@@ -546,14 +562,23 @@ export class ReportDataService {
     };
   }
 
-  /** One entry per split agent (single-agent deals produce exactly one). */
-  private buildSplits(lines: Record<string, unknown>[]): EnrichedTxn['splits'] {
+  /**
+   * One entry per split agent the caller may see (single-agent deals produce exactly one).
+   *
+   * TD-060 — `all` is the deal's complete line set and decides `position`. The lines handed in as
+   * `lines` are a filter OF that array, so identity gives each one its place among all of them: an
+   * agent's own line on a two-agent deal is position 1 or 2, never "1 of 1".
+   */
+  private buildSplits(lines: Record<string, unknown>[], all: Record<string, unknown>[]): EnrichedTxn['splits'] {
     const tri = (v: unknown): Triple => { const o = (v ?? {}) as Record<string, unknown>; return { commission: num(o.commission), hst: num(o.hst), total: num(o.total) }; };
     const trim = (n: number): string => (Number.isInteger(n) ? String(n) : String(money(n)));
-    return lines.map((l) => ({
+    return lines.map((l, i) => ({
       name: String(l.name ?? ''),
       ratio: `${trim(num(l.agent_pct))}/${trim(num(l.brok_pct))}`,
       split: num(l.split),
+      // `indexOf` on the same objects; the fallback keeps a hand-built line (a test, a future
+      // caller that maps before splitting) numbered in its own order rather than at zero.
+      position: (all.indexOf(l) >= 0 ? all.indexOf(l) : i) + 1,
       agent: tri(l.agent),
       brokerage: tri(l.brokerage),
     }));

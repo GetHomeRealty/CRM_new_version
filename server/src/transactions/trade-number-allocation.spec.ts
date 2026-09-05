@@ -25,12 +25,23 @@ import { TradeNumberService } from './trade-number.service';
  */
 
 interface Asked { sql: string; params: unknown[] }
+/** TD-076 — what the allocator locked before it looked, and in which order. */
+interface Locked { sql: string; params: unknown[]; beforeTheQuery: boolean }
 
 /** A service whose one query answers with `top`, recording what it was asked. */
 const service = (top: string | undefined): { svc: TradeNumberService; asked: Asked; usedFindMany: () => boolean } => {
   const asked: Asked = { sql: '', params: [] };
+  const locked: Locked = { sql: '', params: [], beforeTheQuery: false };
   let findManyCalled = false;
   const db = {
+    // TD-076 — the band lock the allocation takes first, so a concurrent create cannot read the
+    // same highest number and compute the same candidate.
+    $executeRawUnsafe: (sql: string, ...values: unknown[]) => {
+      locked.sql = sql;
+      locked.params = values;
+      locked.beforeTheQuery = asked.sql === '';
+      return Promise.resolve(1);
+    },
     $queryRaw: (strings: TemplateStringsArray, ...values: unknown[]) => {
       asked.sql = strings.join('?').replace(/\s+/g, ' ').trim();
       asked.params = values;
@@ -40,18 +51,43 @@ const service = (top: string | undefined): { svc: TradeNumberService; asked: Ask
       findMany: () => { findManyCalled = true; return Promise.resolve([]); },
     },
   } as never;
-  return { svc: new TradeNumberService(), asked, usedFindMany: () => findManyCalled, db } as never;
+  return { svc: new TradeNumberService(), asked, locked, usedFindMany: () => findManyCalled, db } as never;
 };
 
-const next = async (type: string, top: string | undefined): Promise<{ value: string | UnprocessableEntityException; asked: Asked; usedFindMany: boolean }> => {
-  const s = service(top) as unknown as { svc: TradeNumberService; asked: Asked; usedFindMany: () => boolean; db: never };
+const next = async (type: string, top: string | undefined): Promise<{ value: string | UnprocessableEntityException; asked: Asked; locked: Locked; usedFindMany: boolean }> => {
+  const s = service(top) as unknown as { svc: TradeNumberService; asked: Asked; locked: Locked; usedFindMany: () => boolean; db: never };
   try {
     const value = await s.svc.next(s.db, type);
-    return { value, asked: s.asked, usedFindMany: s.usedFindMany() };
+    return { value, asked: s.asked, locked: s.locked, usedFindMany: s.usedFindMany() };
   } catch (e) {
-    return { value: e as UnprocessableEntityException, asked: s.asked, usedFindMany: s.usedFindMany() };
+    return { value: e as UnprocessableEntityException, asked: s.asked, locked: s.locked, usedFindMany: s.usedFindMany() };
   }
 };
+
+describe('allocation is serialised per band (TD-076)', () => {
+  it('takes the band lock BEFORE reading the highest number', async () => {
+    /*
+     * The read and the insert that follows it are one step only if nothing else can read between
+     * them. Two creates racing each other used to compute the same candidate, and the second died
+     * on the `trade_no` unique index — a 500 on a save the user could do nothing about.
+     */
+    const r = await next('Residential Buying', '200837');
+    expect(r.locked.sql).toContain('pg_advisory_xact_lock');
+    expect(r.locked.beforeTheQuery).toBe(true);
+  });
+
+  it('locks the band, not the whole table — another series does not wait', async () => {
+    const buying = await next('Residential Buying', '200837');
+    const listing = await next('Residential Sale Listing', '100123');
+    expect(buying.locked.params).not.toEqual(listing.locked.params);
+  });
+
+  it('casts the arguments, because Prisma sends a JS number as a bigint', () => {
+    // Without the casts Postgres answers 42883: there is no pg_advisory_xact_lock(bigint, bigint).
+    expect.assertions(1);
+    return next('Residential Buying', '200837').then((r) => expect(r.locked.sql).toContain('::int'));
+  });
+});
 
 describe('trade numbers are allocated by an indexed lookup (TD-008)', () => {
   it('never reads the transactions table in full', async () => {

@@ -31,7 +31,19 @@ export interface TeamMemberData {
 }
 
 /** name → registered agent split from their User profile (GET /api/agent-commissions). */
-export type AgentCommissionMap = Record<string, { agent_pct?: number | null; lease_pct?: number | null }>;
+/**
+ * Commission plans by agent NAME, as `/api/agent-commissions` returns them.
+ *
+ * TD-102 — `active_agent` says whether the plan's account is somebody the application would let
+ * you put on a deal today (role agent, status Active). Plans for departed agents and for non-agent
+ * seats are still here on purpose — a deal that already carries such a name must keep resolving the
+ * rate it was paid at — so the flag is how a screen tells one from the other.
+ */
+export type AgentCommissionMap = Record<string, {
+  agent_pct?: number | null;
+  lease_pct?: number | null;
+  active_agent?: boolean;
+}>;
 
 /** name → outstanding agent loan balance (GET /api/agent-loans). */
 export type AgentLoanMap = Record<string, { loan_balance?: number; loan_repaid?: number; repayments?: import('./users').LoanRepayment[] }>;
@@ -182,6 +194,13 @@ export interface ActivityTracker {
 /** §12.4 auto invoice fields surfaced into Admin Activities (read-only). */
 export interface InvoiceAdminBlock {
   invoice_number?: string | null;
+  /**
+   * TD-048 — what the invoice SAYS (Draft / Unpaid / Partially Paid / Paid / Due / Overdue / Void),
+   * derived once on the server and identical to the invoice list's badge and the API's
+   * `display_status`.
+   */
+  invoice_status?: string | null;
+  /** Whether it has gone OUT: Pending to Raise / Draft / Sent / Paid / Void. A different question. */
   invoice_sent_status?: string;
   commission_received_date?: string | null;
   commission_received_via?: string | null;
@@ -219,6 +238,16 @@ export interface NoticeOfSaleData {
 export interface DeleteRequestLite { id: number; status: string; reason?: string; requested_by_name?: string; forwarded_by_name?: string; forward_reason?: string; stamp?: string; }
 export interface InvoiceLite { id: number; invoice_no?: string; status?: string; total?: number; sent_at?: string | null; }
 export interface AgentChange { id?: number; who?: string; section?: string; field?: string; action?: string; old_value?: string | null; new_value?: string | null; stamp?: string; }
+/**
+ * TD-110 — the caller's OWN changes on this deal, sent to agents.
+ *
+ * `agent_changes` above is the office's review queue and is not sent to agents at all — it holds
+ * colleagues' pending edits on a team deal. This is the agent's own history: what they changed,
+ * when, and whether the office has dealt with it.
+ */
+// A type alias rather than an interface on purpose: `AuditEntry` carries an index signature,
+// and only an alias is assignable to it — the same table renders both (see AuditTrailModal).
+export type MyChange = { id: number; section?: string; field?: string; action?: string; old_value?: string | null; new_value?: string | null; handled?: boolean; stamp?: string };
 export interface ConditionData { id?: number; type?: string; custom_name?: string | null; deadline?: string | null; status?: string; }
 export interface InterBoardListingData { id?: number; name?: string; board_id?: string; verified?: boolean; }
 export interface BuilderData { name?: string; vendor?: string; project?: string; address?: string; office_email?: string; invoice_email?: string; phone?: string; }
@@ -303,8 +332,12 @@ export interface Transaction {
   commercial_lease?: Record<string, unknown> | null;
   notice_of_sale?: { sent_at?: string | null; [key: string]: unknown } | null;
   trade_sheet_sent_at?: string | null;
+  /** TD-088 — when the Trade Record Sheet was last produced, whether or not it was ever emailed. */
+  trade_sheet_generated_at?: string | null;
   my_team_access?: string | null;
   agent_changes?: AgentChange[];
+  /** TD-110 — an agent's own changes on this deal. Absent for office seats, who get `audit_logs`. */
+  my_changes?: MyChange[];
   audit_logs?: AuditEntry[];
   invoices?: InvoiceLite[];
   // Lawyer details (single + buyer/seller sides).

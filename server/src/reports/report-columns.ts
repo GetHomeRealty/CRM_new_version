@@ -45,7 +45,20 @@ export const col = {
   dealNo: (): ReportColumn => ({ key: 'trade_no', label: 'Deal Number', type: 'text', default: true, sortable: true, mandatory: true, width: 12 }),
   clientName: (): ReportColumn => ({ key: 'client_names', label: 'Client Name', type: 'text', default: true, width: 20 }),
   docStatus: (): ReportColumn => ({ key: 'documentation_status', label: 'Documentation Status', type: 'status', default: true, sortable: true, width: 16 }),
-  pendingDocs: (): ReportColumn => ({ key: 'pending_docs', label: 'Pending Documents', type: 'number', default: true, sortable: true, total: true, width: 11 }),
+  /*
+   * TD-089 — THE LABEL NAMES WHICH "PENDING" THIS IS.
+   *
+   * A document row carries TWO independent fields: `status` (Pending / Received — has it arrived?)
+   * and `validation` (Pending / Valid / Invalid — has it been checked?). These three counts are all
+   * VALIDATION states, while the deal's own Legal & Documentation panel counts RECEIPT and reads
+   * "5 / 10 received". On a deal where one document had arrived but not been checked, the panel
+   * said five outstanding and this column said eleven, both correct, neither saying what it meant —
+   * on the report a compliance reviewer uses to judge whether a file is complete.
+   *
+   * Only the wording changes. Both figures are worth having and both are right; "Pending Documents"
+   * was simply the wrong name for either of them on its own.
+   */
+  pendingDocs: (): ReportColumn => ({ key: 'pending_docs', label: 'Pending Validation', type: 'number', default: true, sortable: true, total: true, width: 11 }),
   invalidDocs: (): ReportColumn => ({ key: 'invalid_docs', label: 'Invalid Documents', type: 'number', default: true, sortable: true, total: true, width: 11 }),
   validDocs: (): ReportColumn => ({ key: 'valid_docs', label: 'Valid Documents', type: 'number', default: false, sortable: true, total: true, width: 11 }),
   totalDocs: (): ReportColumn => ({ key: 'total_docs', label: 'Total Required Documents', type: 'number', default: true, sortable: true, total: true, width: 12 }),

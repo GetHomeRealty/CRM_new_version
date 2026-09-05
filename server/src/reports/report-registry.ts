@@ -170,6 +170,26 @@ export const REPORTS: ReportDef[] = [
     defaultSort: { key: 'closing_date', dir: 'desc' },
     // No predicate: every deal in scope is in the report, so the SQL count is the true count.
     sqlExact: () => true,
+    /**
+     * TD-109 — THE NAME ON THE ROW IS THE NAME THE MONEY BELONGS TO.
+     *
+     * `baseRow.agent` is the deal's PRIMARY agent — a raw column — while the Agent Commission
+     * beside it is `agentComm`, which is SCOPED: an agent is served their own share and an office
+     * seat the whole agent side. On a team deal read by a minority member the two halves therefore
+     * described different people: trade 007 showed "Aswini" against the 18,000 that is Sai Ramesh's
+     * share, while Aswini's own share is 27,000.
+     *
+     * The right name was already on the row — `agent_names` is scoped the same way the money is —
+     * so this binds the displayed column to it. An agent sees themselves against their own figure;
+     * an office seat sees the deal's agents against the summed agent side, which is what that
+     * figure is. The column keeps its key, its label and its sort, so saved column selections are
+     * unaffected.
+     *
+     * The Team Split Deals Report never had this: it overrides `agent` per split line with the
+     * member whose share the line carries. This is the same correction for a report that shows one
+     * row per deal.
+     */
+    map: (t) => ({ ...baseRow(t), agent: t.agent_names.join(', ') || t.agent }),
   },
   // 2 -----------------------------------------------------------------
   {
@@ -199,11 +219,22 @@ export const REPORTS: ReportDef[] = [
      * One row per split agent ("Split 1 of 3", "Split 2 of 3", …). Agent + brokerage figures
      * are that agent's own share; the TRANSACTION-level totals are carried on the first split
      * row only so footer totals aren't multiplied by the number of agents.
+     *
+     * TD-060 — THE LABEL DESCRIBES THE DEAL, NOT THE ROWS THE READER MAY SEE.
+     *
+     * It was built from the position and length of `t.splits`, which is SCOPED: an agent user is
+     * served only their own line. So a deal with two agents printed "Split 1 of 1" to each of them
+     * — the one direction that matters, because it hides the existence of a co-agent from somebody
+     * reconciling their commission. An administrator saw the right numbers throughout, which is
+     * why it reads as not reproducing unless it is re-tested as an agent.
+     *
+     * The row scoping stays exactly as it is. `position` and `split_total` are computed before the
+     * scoping, so the count widens and nothing else does: no other agent's name, ratio or money.
      */
     expand: (t) => t.splits.map((s, i) => ({
       ...baseRow(t),
       agent: s.name,
-      split_no: `Split ${i + 1} of ${t.splits.length}`,
+      split_no: `Split ${s.position} of ${t.split_total}`,
       split_ratio: s.ratio,
       agent_wo: s.agent.commission, agent_hst: s.agent.hst, agent_w: s.agent.total,
       brok_wo: s.brokerage.commission, brok_hst: s.brokerage.hst, brok_w: s.brokerage.total,

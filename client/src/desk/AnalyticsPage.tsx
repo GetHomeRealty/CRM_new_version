@@ -157,9 +157,19 @@ export default function AnalyticsPage() {
 
       <div className="card">
         <div className="modal-h" style={{ fontSize: 14 }}>Commission by Closing Month <span className="help" style={{ fontWeight: 400 }}>· before HST</span></div>
-        {months.length === 0 ? <div className="help">No dated transactions yet.</div> : months.map((m) => (
+        {months.length === 0 ? <div className="help">No transactions yet.</div> : months.map((m) => (
+          /*
+           * TD-092 — a deal with no closing date has its own bar, labelled as such.
+           *
+           * It used to be charted under its OFFER month — asserted to close in a month it has no
+           * closing date for, on a chart headed "by Closing Month" — or, with no offer date either,
+           * dropped from the chart entirely. The bucket carries the sentinel `none` from the API;
+           * the words belong here, where they are read.
+           */
           <div key={m.month} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '5px 0' }}>
-            <span style={{ width: 70, fontSize: 12, color: 'var(--muted)' }}>{m.month}</span>
+            <span style={{ width: 108, fontSize: 12, color: m.month === 'none' ? 'var(--warn-ink)' : 'var(--muted)' }}>
+              {m.month === 'none' ? 'No closing date' : m.month}
+            </span>
             <div style={{ flex: 1, background: 'var(--surface-3)', height: 16, borderRadius: 6, overflow: 'hidden' }}>
               <div style={{ height: '100%', width: `${(m.total / maxMonth) * 100}%`, background: 'linear-gradient(90deg,#c8102e,#9c0c24)' }} />
             </div>
@@ -170,11 +180,21 @@ export default function AnalyticsPage() {
 
       <div className="g2">
         <div className="card">
-          <div className="modal-h" style={{ fontSize: 14 }}>{agents.some((x) => typeof x.total === 'number') ? 'Top Agents by Commission' : 'Top Agents by Deals'}</div>
+          {/*
+            TD-109 — THIS BLOCK GROUPS BY THE DEAL'S PRIMARY AGENT, AND NOW SAYS SO.
+            The figure on each line is the DEAL's commission, grouped by whoever is named as the
+            deal's agent — not that person's own share. Headed as a ranking of agents by commission
+            it read as each agent's earnings, so an agent looking at their own screen saw money
+            under a colleague's name: on a team deal they are a member of, the deal is grouped under
+            its primary agent. Nothing here is another agent's data — the scoping was tested
+            separately and is right — and the counts and totals are unchanged. Only the heading and
+            the column say which question they answer.
+          */}
+          <div className="modal-h" style={{ fontSize: 14 }}>Deals by Primary Agent<span className="help" style={{ fontWeight: 400 }}> · the deal’s commission, grouped by the agent named on it</span></div>
           <table className="list-table">{/* TD-002. The column is drawn only when the API sends commission at all. Driven by the
               data, not by the role: the server decides who may see money, and repeating that rule
               here would be a second copy of it to drift out of step. */}
-            <thead><tr><th>Agent</th><th>Deals</th>{agents.some((x) => typeof x.total === 'number') && <th>Commission</th>}</tr></thead>
+            <thead><tr><th>Primary Agent</th><th>Deals</th>{agents.some((x) => typeof x.total === 'number') && <th>Deal Commission</th>}</tr></thead>
             <tbody>
               {agents.length === 0 && <tr><td colSpan={agents.some((x) => typeof x.total === 'number') ? 3 : 2} style={{ textAlign: 'center', color: 'var(--muted)', padding: 14 }}>No data.</td></tr>}
               {agents.map((a) => <tr key={a.agent}><td>{a.agent}</td><td>{a.count}</td>{agents.some((x) => typeof x.total === 'number') && <td>{formatCurrency(a.total ?? 0)}</td>}</tr>)}

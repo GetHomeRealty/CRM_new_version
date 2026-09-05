@@ -93,6 +93,15 @@ const AMOUNT = `php_round2(${GROSS})`;
 const PAID = `(COALESCE(t.comm_paid_status = 'Yes', false) OR t.comm_status = 'Received')`;
 
 /**
+ * TD-092 — the month key for a deal that has no closing date.
+ *
+ * A sentinel rather than an empty string or a null, so it survives a JSON round trip, sorts
+ * predictably and cannot be mistaken for a month: every other key is exactly `YYYY-MM`. The
+ * screen and the export both translate it into words; nothing renders the sentinel itself.
+ */
+export const NO_CLOSING_DATE = 'none';
+
+/**
  * The screen's filters, as extra SQL predicates.
  *
  * EVERY ONE IS APPLIED IN THE DATABASE. Filtering the response in the browser would mean shipping
@@ -114,8 +123,18 @@ function filterSql(f: AnalyticsFilters, params: unknown[]): string {
 
   if (f.from !== undefined) clauses.push(`${ANALYTICS_DATE_SQL} >= ${bind(f.from)}::date`);
   if (f.to !== undefined) clauses.push(`${ANALYTICS_DATE_SQL} <= ${bind(f.to)}::date`);
-  // A date range EXCLUDES deals with neither date, which is the same rule `by_month` applies when it
-  // drops them from the chart. Asking for a period cannot include deals that belong to no period.
+  /*
+   * A date range EXCLUDES deals with neither date: asking for a period cannot include deals that
+   * belong to no period.
+   *
+   * TD-092 — THE RANGE AND THE CHART ANSWER DIFFERENT QUESTIONS, AND NO LONGER PRETEND OTHERWISE.
+   * This used to say the range applied the same rule the month chart did. It deliberately does not
+   * any more. Membership of a period is COALESCE(closing, offer) — a deal that has not closed still
+   * belongs to the period it was written in, and dropping it from a filtered view would hide live
+   * work. The month a BAR is drawn in is the closing date alone, because that is what the chart is
+   * headed. So a deal with only an offer date inside the range is included by the filter and
+   * appears under "No closing date" in the chart: both facts stated, instead of one invented.
+   */
   if (f.from !== undefined || f.to !== undefined) clauses.push(`${ANALYTICS_DATE_SQL} IS NOT NULL`);
 
   if (f.type !== undefined) clauses.push(`t.type = ${bind(f.type)}`);
@@ -195,9 +214,26 @@ export class DeskAnalyticsService {
         WHERE t.deleted_at IS NULL AND ${scope}${narrowed}`, ...params),
 
       /*
-       * The month a deal counts in: its closing date, or its offer date when it has not closed. A
-       * deal with neither belongs to no month and drops out, exactly as the screen's '—' bucket was
-       * filtered before rendering.
+       * TD-092 — THE CHART IS "COMMISSION BY CLOSING MONTH", SO A DEAL WITHOUT ONE SAYS SO.
+       *
+       * The month was `COALESCE(closing_date, offer_date)`, and deals with neither date were
+       * dropped. One missing field therefore produced two different wrong answers, chosen by
+       * whichever other date the deal happened to carry:
+       *
+       *   · a deal with an offer date was charted as CLOSING in its offer month — measured on a
+       *     50,000 deal whose closing date was cleared: 2027-03 fell back by 50,000 and the offer
+       *     month rose by exactly that, with the headline unchanged. The arithmetic reconciles
+       *     perfectly, which is why a careful month-end review would never catch it;
+       *   · a deal with neither date vanished from the chart altogether (the residue of TD-044).
+       *
+       * Both are now one honest bucket. `closing_date` alone decides the month, and everything else
+       * lands in `none`, which the screen and the export both label "No closing date". Nothing is
+       * dropped — the month totals still sum to the headline — and nothing is asserted to close in a
+       * month it has no closing date for.
+       *
+       * The offer-date fallback is deliberately gone rather than moved: a deal that has not closed
+       * has no closing month, and inventing one is the defect. Its commission is still visible, in
+       * the bucket that says the date is missing.
        *
        * `to_char(date, 'YYYY-MM')` on a `date` column is the same value the TypeScript produced by
        * reading the driver's UTC midnight with `toISOString()`. It is also right, which the browser
@@ -205,13 +241,15 @@ export class DeskAnalyticsService {
        * day, and at a month boundary the previous MONTH.
        */
       this.prisma.$queryRawUnsafe<MonthRow[]>(`
-        SELECT to_char(COALESCE(t.closing_date, t.offer_date), 'YYYY-MM') AS month,
+        SELECT COALESCE(to_char(t.closing_date, 'YYYY-MM'), '${NO_CLOSING_DATE}') AS month,
                COALESCE(SUM(${AMOUNT}), 0) AS total
         FROM transactions t
         WHERE t.deleted_at IS NULL AND ${scope}${narrowed}
-          AND COALESCE(t.closing_date, t.offer_date) IS NOT NULL
         GROUP BY 1
-        ORDER BY 1 ASC`, ...params),
+        -- The no-date bucket sorts last, said explicitly rather than left to the collation's view
+        -- of how 'none' compares with '2027-03'. The expression is the grouped one repeated, which
+        -- is what makes it legal to order by: the bare column is not in the GROUP BY.
+        ORDER BY (COALESCE(to_char(t.closing_date, 'YYYY-MM'), '${NO_CLOSING_DATE}') = '${NO_CLOSING_DATE}') ASC, 1 ASC`, ...params),
 
       // Highest commission first — the order the two tables have always rendered in. The tie-break
       // on the key is not cosmetic: without it two agents on identical totals could swap places

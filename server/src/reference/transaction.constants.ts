@@ -40,6 +40,52 @@ export const INVOICEABLE_TYPES = [
   'Business Buying',
 ] as const;
 
+/*
+ * TD-050 — THE NAMES THE SCREENS SHOW, ACCEPTED WHEREVER A TYPE IS TYPED.
+ *
+ * Three of the twelve types are RELABELLED in the client (`TYPE_LABELS` in `client/src/desk/
+ * format.ts`): the stored `Residential Sale Listing` is shown as "Sale Listing", `Residential Lease
+ * Listing` as "Lease Listing", and `Preconstruction` as "Pre-construction". The dropdowns map the
+ * label back to the value correctly, so the screens themselves are fine.
+ *
+ * The bulk importer and the API compare against the STORED value. So somebody building an import
+ * file by copying the deal type off the screen — the only names the application ever showed them —
+ * had three of twelve rows refused with "Not a valid transaction type", naming a list they had
+ * never seen. The same is true of an API caller who sends what the UI displays.
+ *
+ * The labels are accepted as aliases and resolved to the stored value, rather than the screens
+ * being changed to show the long names: the labels are deliberate, and the refusal was the bug.
+ * This is NOT a loosening of the catalogue check (TD-068) — anything that is neither a type nor a
+ * label of one is still refused. Matching ignores case, surrounding space, and the hyphen in
+ * "Pre-construction", because those are the ways a person retypes a name they read on a screen.
+ */
+export const TYPE_LABELS: Record<string, string> = {
+  Preconstruction: 'Pre-construction',
+  'Residential Sale Listing': 'Sale Listing',
+  'Residential Lease Listing': 'Lease Listing',
+};
+
+/** 'sale listing' / 'Pre construction' → the key each name may be typed as. */
+const typeKey = (v: string): string => v.trim().toLowerCase().replace(/[-\s]+/g, ' ');
+
+const TYPE_BY_KEY: Map<string, string> = new Map([
+  ...TRANSACTION_TYPES.map((t) => [typeKey(t), t] as [string, string]),
+  ...Object.entries(TYPE_LABELS).map(([value, label]) => [typeKey(label), value] as [string, string]),
+]);
+
+/**
+ * The stored transaction type for whatever was typed — a type, or the label a screen shows for one.
+ * `null` when it is neither, which is still a refusal.
+ */
+export const canonicalTransactionType = (input: string | null | undefined): string | null =>
+  TYPE_BY_KEY.get(typeKey(String(input ?? ''))) ?? null;
+
+/** The names a person may enter for a type, for the message that lists them. */
+export const ACCEPTED_TYPE_NAMES: string[] = [
+  ...TRANSACTION_TYPES,
+  ...Object.values(TYPE_LABELS),
+];
+
 export const isListingType = (type: string | null | undefined): boolean =>
   (LISTING_TYPES as readonly string[]).includes(type ?? '');
 
@@ -116,6 +162,30 @@ export const isTerminalStatus = (status: string): boolean =>
  *      screen offers; enforcing it server-side is what stops `Expired` being set on a Residential
  *      Buying deal, or `Secured Firm` on a listing, by a direct API call.
  */
+/*
+ * TD-051 — THE ONE TYPE WHOSE DATES AND STATUSES ARE CLASSIFIED DIFFERENTLY, SAID OUT LOUD.
+ *
+ * `Business Sale` is not a listing TYPE — `requiredColumnsFor` and `forbiddenColumnsFor` therefore
+ * ask it for Offer Date, Closing Date and Price, and refuse the listing dates. But it IS in the
+ * listing STATUS family (`isListingStatusFamily`), so the only statuses it may hold are Active,
+ * Sold Conditional, Sold and the rest of the listing set — "Secured Firm" is refused.
+ *
+ * Both halves are deliberate and correct: a business sale is transacted on an offer and sold like a
+ * listing. What was wrong is that nothing said so, and the two refusals arrive one at a time — a
+ * person who fixes the dates is then surprised by the statuses, and concludes the type cannot be
+ * imported at all. QA found it was the only one of the twelve that failed a corrected second
+ * attempt, and a valid combination (offer dates + a listing status) does exist.
+ *
+ * So this is the sentence, attached to every message that could send somebody down that path. It is
+ * derived from the two classifiers rather than naming the type, so a second type that ever sits
+ * across them explains itself the same way instead of silently reopening this defect.
+ */
+export const splitClassificationNote = (type: string | null | undefined): string | null =>
+  (isListingStatusFamily(type) && !isListingType(type))
+    ? `A ${type} is transacted on an offer but sold like a listing: it takes the OFFER dates `
+      + '(Offer Date, Closing Date and Price) together with the LISTING statuses.'
+    : null;
+
 export function statusSetProblem(type: string, statuses: readonly string[]): string | null {
   const set = [...new Set(statuses.filter((s) => s !== ''))];
   if (set.length === 0) return null;
@@ -123,8 +193,11 @@ export function statusSetProblem(type: string, statuses: readonly string[]): str
   const allowed = statusOptionsFor(type);
   const foreign = set.filter((s) => !allowed.includes(s));
   if (foreign.length) {
+    // TD-051 — for a type whose dates and statuses are classified differently, the allowed list
+    // alone reads as a contradiction of the date rules the same caller just satisfied.
+    const note = splitClassificationNote(type);
     return `${foreign.map((s) => `"${s}"`).join(', ')} ${foreign.length === 1 ? 'is not a status' : 'are not statuses'} a ${type} transaction can have. `
-      + `Allowed: ${allowed.join(', ')}.`;
+      + `Allowed: ${allowed.join(', ')}.${note ? ' ' + note : ''}`;
   }
 
   const terminal = set.filter(isTerminalStatus);

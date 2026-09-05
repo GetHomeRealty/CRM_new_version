@@ -8,7 +8,7 @@ import { CommissionService } from './commission.service';
 import { PaymentCacheService } from './payment-cache.service';
 import { normalizeCommissionTxn } from './commission.loader';
 import { parseJsonObject, phpEmpty, phpFloat, phpJsonNormalize, round2, toFloat } from '../common/serialize';
-import { isInvoiceableType, isListingType, SECURED_DEAL_TYPES, statusSetProblem, TRANSACTION_TYPES } from '../reference/transaction.constants';
+import { canonicalTransactionType, isInvoiceableType, isListingType, SECURED_DEAL_TYPES, statusSetProblem, TRANSACTION_TYPES } from '../reference/transaction.constants';
 import { TradeNumberService } from './trade-number.service';
 import { TransactionLawyerReminderService } from './transaction-lawyer-reminder.service';
 import { TransactionReviewService } from './transaction-review.service';
@@ -26,6 +26,15 @@ import type { AuthUserRecord } from '../auth/auth.types';
 import { isAdminOrAbove, isAgent, isSuperAdmin } from '../core/authz';
 import { ownsTransaction, teamMemberIdentity } from '../common/transaction-scope';
 type Tx = Prisma.TransactionClient;
+
+/**
+ * TD-076 — the advisory-lock class for the create-time duplicate guard.
+ *
+ * Postgres advisory locks share one global space, so a bare hash could collide with a lock taken
+ * for something else entirely. The two-argument form namespaces this rule under a class of its own
+ * and makes it recognisable in `pg_locks` while somebody is diagnosing a wait.
+ */
+const DUPLICATE_LOCK_CLASS = 76;
 
 /**
  * TD-028 — the same shape the Calendar and the browser already use, so a client email is judged by
@@ -118,6 +127,54 @@ const AGENT_LOCKED = [
   'adjustments', 'admin_activities',
 ];
 
+/**
+ * TD-111 — the Adjustment panel's sections: the Yes/No toggle, and what it holds when it is on.
+ *
+ * The three lists and the single external-referral object, in the order the panel shows them. The
+ * external referral is an object rather than an array, which is why the clearing below asks what
+ * shape it is looking at instead of assuming a list.
+ */
+const ADJUSTMENT_SECTIONS: [toggle: string, holds: string][] = [
+  ['agent_adjust', 'adjustment_rows'],
+  ['advance_payment', 'advance_rows'],
+  ['client_referral', 'client_rows'],
+  ['ext_referral', 'ext'],
+];
+
+/**
+ * Does this section actually hold anything?
+ *
+ * A list holds something when it has a row. An OBJECT is judged by its values, because the form
+ * posts the external referral as a full set of blank strings whether or not anybody filled it in —
+ * treating that as content would file an empty Recycle Bin entry on every save of every deal that
+ * has ever opened the panel. 'No' and 'N/A' are that form's own select defaults, so they are blank
+ * in the same sense.
+ */
+function sectionHasContent(held: unknown): boolean {
+  if (Array.isArray(held)) return held.length > 0;
+  if (held === null || typeof held !== 'object') return false;
+  const blank = new Set(['', 'No', 'N/A']);
+  return Object.values(held as Record<string, unknown>)
+    .some((v) => v !== null && v !== undefined && v !== false && !(typeof v === 'string' && blank.has(v)));
+}
+
+/**
+ * TD-111 — empty the sections whose toggle is not 'Yes', so a section switched off holds nothing.
+ *
+ * Exported for the test that reads it directly: what it does is a rule about the record, and the
+ * rule is worth stating on its own rather than only through a save.
+ */
+export function clearSwitchedOffSections(value: unknown): unknown {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return value;
+  const adj = { ...(value as Record<string, unknown>) };
+  for (const [toggle, holds] of ADJUSTMENT_SECTIONS) {
+    if ((adj[toggle] ?? 'No') === 'Yes') continue;
+    if (!sectionHasContent(adj[holds])) continue;
+    adj[holds] = Array.isArray(adj[holds]) ? [] : {};
+  }
+  return adj;
+}
+
 const FINANCIAL_FIELDS = new Set([
   'price', 'deposit', 'comm_type', 'comm_value', 'comm_pct', 'comm_amt',
   'comm_adjust_enabled', 'comm_adjust_before', 'comm_adjust_after',
@@ -171,6 +228,20 @@ export class TransactionsWriteService {
 
   /** Create a transaction (port of TransactionController::store). */
   async store(user: AuthUserRecord | null, body: Record<string, unknown>): Promise<{ data: Record<string, unknown> }> {
+    /*
+     * TD-050 — a caller may send the name the screens show, and it is stored as the value behind it.
+     *
+     * Three types are relabelled in the client: `Residential Sale Listing` reads as "Sale Listing",
+     * `Residential Lease Listing` as "Lease Listing", `Preconstruction` as "Pre-construction". Those
+     * labels are the only names the application ever shows, and sending one was refused as "not a
+     * transaction type this system offers" — quoting a list the caller had never seen.
+     *
+     * Resolved on the WAY IN, once, so everything after this line — the required-field rules, the
+     * status vocabulary, the row that gets written — sees the stored value and nothing downstream
+     * needs to know an alias existed. An unknown string still resolves to nothing and is still
+     * refused by the catalogue check below (TD-068).
+     */
+    if (String(body.type ?? '').trim() !== '') body.type = canonicalTransactionType(String(body.type)) ?? String(body.type).trim();
     const type = String(body.type ?? '');
     const isListing = isListingType(type);
 
@@ -306,23 +377,47 @@ export class TransactionsWriteService {
     const actor: ActingUser | null = user ? { id: user.id, name: user.name } : null;
     const toDate = (v: unknown): Date | null => (v ? new Date(String(v).slice(0, 10) + 'T00:00:00.000Z') : null);
 
-    // Duplicate guard (buying/lease): same Type + Price + Offer Date with a FUZZY property
-    // match — an exact address isn't required (mirrors TransactionController::store). Soft-
-    // deleted rows are excluded (Eloquent SoftDeletes global scope → deleted_at null).
-    if (!isListing && !phpEmpty(body.offer_date)) {
-      const candidates = await this.prisma.transactions.findMany({
-        where: { type, price: toFloat(body.price ?? 0), offer_date: toDate(body.offer_date), deleted_at: null },
-      });
-      for (const cand of candidates) {
-        if (this.propertiesSimilar(String(body.property ?? ''), String(cand.property ?? ''))) {
-          const on = cand.agent ? ` on ${cand.agent}` : ' (unassigned)';
-          throw new UnprocessableEntityException({ message: `Transaction already exists${on} — Trade #${cand.trade_no}. Same Type, Price and Offer Date with a matching Property Address.` });
-        }
-      }
-    }
-
+    /*
+     * TD-076 — THE DUPLICATE GUARD HAS TO HOLD WHEN TWO SAVES ARRIVE TOGETHER.
+     *
+     * The guard is a SELECT followed by an INSERT, and it ran BEFORE the write transaction. Sent
+     * one after the other, the second create is correctly refused with "Transaction already exists
+     * — Trade #NNN". Fired simultaneously — a double-click, a retry, a flaky connection, two people
+     * saving the same deal — both requests selected, both found nothing, and both inserted. Two
+     * identical deals, each with its own trade number, and nothing to say which is real.
+     *
+     * A UNIQUE INDEX CANNOT EXPRESS THIS RULE. The match is fuzzy on the address: "9 Oak Rd" and
+     * "9 Oak Road Unit 2" are compared by `propertiesSimilar`, not by equality, so there is no
+     * column tuple a constraint could be placed on. What CAN be serialised is the candidate set —
+     * every deal sharing Type, Price and Offer Date — so the check and the insert now happen inside
+     * one transaction holding an advisory lock on exactly that key. Two racing saves of the same
+     * deal take the same lock; the loser then sees the winner's row and gets the same 422 the
+     * sequential path has always produced.
+     *
+     * The lock is per-key, so it costs nothing to unrelated saves: deals differing in type, price
+     * or offer date hash to different keys and never queue behind each other. It is a TRANSACTION
+     * lock, released on commit or rollback, so a failure cannot leave it held.
+     *
+     * Listings are outside this rule, as they always were: they carry no offer date to key on.
+     */
     const txnId = await this.prisma.$transaction(async (tx) => {
       const now = new Date();
+      if (!isListing && !phpEmpty(body.offer_date)) {
+        const offerDate = toDate(body.offer_date);
+        const price = toFloat(body.price ?? 0);
+        await this.lockDuplicateKey(tx, `${type}|${price}|${offerDate ? offerDate.toISOString().slice(0, 10) : ''}`);
+
+        // Soft-deleted rows are excluded (Eloquent SoftDeletes global scope → deleted_at null).
+        const candidates = await tx.transactions.findMany({
+          where: { type, price, offer_date: offerDate, deleted_at: null },
+        });
+        for (const cand of candidates) {
+          if (this.propertiesSimilar(String(body.property ?? ''), String(cand.property ?? ''))) {
+            const on = cand.agent ? ` on ${cand.agent}` : ' (unassigned)';
+            throw new UnprocessableEntityException({ message: `Transaction already exists${on} — Trade #${cand.trade_no}. Same Type, Price and Offer Date with a matching Property Address.` });
+          }
+        }
+      }
       const t = await tx.transactions.create({
         data: {
           trade_no: manualTrade || await this.tradeNumbers.next(tx, type),
@@ -404,6 +499,28 @@ export class TransactionsWriteService {
   }
 
   /** Fuzzy property-address match (port of TransactionController::propertiesSimilar). */
+  /**
+   * TD-076 — serialise everything that could be a duplicate of this deal, and nothing else.
+   *
+   * A Postgres advisory lock keyed by Type + Price + Offer Date. Two racing creates of the same
+   * deal queue; a create of any other deal is untouched. The key is hashed here rather than with
+   * `hashtext()` so the lock does not depend on an internal Postgres function, and the two-argument
+   * form carries a fixed class id, which makes the lock identifiable in `pg_locks` as this rule
+   * rather than an anonymous number.
+   */
+  private async lockDuplicateKey(tx: Tx, key: string): Promise<void> {
+    // FNV-1a, folded into the signed 32-bit range `pg_advisory_xact_lock(int, int)` takes.
+    let hash = 0x811c9dc5;
+    for (let i = 0; i < key.length; i++) {
+      hash ^= key.charCodeAt(i);
+      hash = Math.imul(hash, 0x01000193);
+    }
+    // Cast in SQL: Prisma sends a JS number as a bigint parameter, and there is no
+    // `pg_advisory_xact_lock(bigint, bigint)` — only the one-argument bigint form and this
+    // two-argument int one. Without the casts every create answers 42883.
+    await tx.$executeRawUnsafe('SELECT pg_advisory_xact_lock($1::int, $2::int)', DUPLICATE_LOCK_CLASS, hash | 0);
+  }
+
   private propertiesSimilar(a: string, b: string): boolean {
     const fa = this.addrFeatures(a), fb = this.addrFeatures(b);
     if (fa.dirs.join('\x00') !== fb.dirs.join('\x00') || fa.units.join('\x00') !== fb.units.join('\x00')) return false;
@@ -526,6 +643,33 @@ export class TransactionsWriteService {
       }
     }
 
+    /*
+     * TD-111 — A SECTION SWITCHED OFF DOES NOT KEEP WHAT IT HELD.
+     *
+     * Each of the Adjustment panel's sections is a Yes/No toggle over a list. Setting the toggle
+     * back to No hid the rows and stopped applying them — the money is released correctly — but the
+     * rows stayed in the stored blob, invisible from every screen. Dormant, until somebody set the
+     * toggle back to Yes: an entry nobody remembers making, applied by somebody who had no way to
+     * know it was waiting there.
+     *
+     * IT IS CLEARED, NOT KEPT-AND-SHOWN, because this panel already answers the question. The
+     * fourth section, the external referral, has always treated its toggle going off as a REMOVAL —
+     * `captureRemovedRows` files it in the Recycle Bin — and `RecycleBinService.restore` puts a
+     * restored row back by setting its toggle to 'Yes' again. That restore was written for a world
+     * where a switched-off section holds nothing. The three lists were the ones not keeping to it.
+     *
+     * NOTHING IS DESTROYED. This runs BEFORE `captureRemovedRows`, so what it clears is what that
+     * method sees disappear, and every row lands in the Recycle Bin exactly as if it had been
+     * deleted with the row's own bin button — restorable, by name, with the toggle coming back on.
+     *
+     * A save that leaves a section ON is untouched, and the arithmetic is untouched either way: a
+     * dormant row was already being skipped by every consumer that gates on the toggle. The one
+     * that did not is fixed with it — see `AgentsService.loans`.
+     */
+    if (Object.prototype.hasOwnProperty.call(data, 'adjustments')) {
+      data.adjustments = clearSwitchedOffSections(data.adjustments);
+    }
+
     const statuses = await this.statusList(this.prisma, txnId);
 
     /*
@@ -551,7 +695,10 @@ export class TransactionsWriteService {
      * created, then free to be blanked or replaced with anything at all on update.
      */
     if (Object.prototype.hasOwnProperty.call(data, 'type')) {
-      const submittedType = String(data.type ?? '').trim();
+      // TD-050 — the same resolution as `store`: what the screens display is accepted and stored
+      // as the value behind it, and anything else is still refused.
+      const submittedType = canonicalTransactionType(String(data.type ?? '')) ?? String(data.type ?? '').trim();
+      if (submittedType) data.type = submittedType;
       if (!submittedType) {
         const m = 'A transaction must have a type. It is required when the deal is created and cannot be cleared afterwards.';
         throw new UnprocessableEntityException({ message: m, errors: { type: [m] } });
@@ -731,6 +878,43 @@ export class TransactionsWriteService {
         const problem = statusSetProblem(String(data.type ?? t.type), submitted);
         if (problem) {
           throw new UnprocessableEntityException({ message: problem, errors: { statuses: [problem] } });
+        }
+      }
+    }
+
+    /*
+     * TD-071 — A TYPE CHANGE CARRIES THE STATUS WITH IT, SO IT HAS TO ANSWER FOR IT.
+     *
+     * The vocabulary was enforced only against statuses arriving in the SAME request: the block
+     * above runs when `statuses` is submitted and changed. A PUT carrying nothing but a new type
+     * never looked at what the deal was already holding — so a Residential Buying deal marked
+     * "Secured Firm" became a Residential Sale Listing still marked "Secured Firm", a combination
+     * the very same API refuses on a direct write with "Allowed: Open, Closed, Mutual Release, DFT,
+     * Void". The deal was not accepted into an impossible state; it was CARRIED into one.
+     *
+     * That is not cosmetic. Status decides the edit-lock, the commission layout and every status
+     * filter in the reports, so a deal holding a status its type does not define behaves
+     * unpredictably in all three and nothing on screen says why.
+     *
+     * REFUSED RATHER THAN CLEARED. TD-015 was the opposite defect — a type change that wiped the
+     * status silently — and clearing it here would be that bug again wearing a different hat. The
+     * caller is told what the new type would leave behind and can send a status the type allows in
+     * the same request, which is one round trip and no lost information.
+     *
+     * The EFFECTIVE set is judged: statuses submitted alongside the type when there are any,
+     * otherwise the stored ones. That also closes the narrower hole above, where re-sending the
+     * same statuses with a new type counted as "unchanged" and skipped the check entirely.
+     */
+    if (Object.prototype.hasOwnProperty.call(data, 'type')) {
+      const newType = String(data.type ?? t.type);
+      if (newType !== t.type) {
+        const effective = Object.prototype.hasOwnProperty.call(data, 'statuses')
+          ? [...new Set((data.statuses as unknown[]).filter(Boolean).map(String))]
+          : statuses;
+        const problem = statusSetProblem(newType, effective);
+        if (problem) {
+          const m = `Changing this deal to ${newType} would leave it holding a status that type cannot have. ${problem}`;
+          throw new UnprocessableEntityException({ message: m, errors: { type: [m], statuses: [problem] } });
         }
       }
     }
@@ -1081,12 +1265,39 @@ export class TransactionsWriteService {
     // TD-033: match existing rows by id and update in place. Deleting and recreating gave every
     // condition a new id, which orphaned its generated document row - and syncConditionDocs then
     // purged that row's uploaded file from disk. Identity has to survive an ordinary save.
+    /*
+     * TD-065 — A ROW WITH NO NAME IS NOT A CONDITION.
+     *
+     * The Conditional Offer editor keeps a spare row for the next entry, and the whole list went to
+     * the API on save. So one condition entered arrived as two: the real one, and
+     * `{type: '', deadline: null, status: 'Pending'}`. The blank one stored, and the document
+     * auto-creation then produced a checklist row titled literally "Condition: " — an outstanding
+     * document nobody could ever satisfy, counted on the dashboard and printed on a RECO file.
+     *
+     * A condition is identified by its type or its custom name; with neither, there is nothing to
+     * store, nothing to chase and nothing to title. Such rows are dropped here rather than in the
+     * browser, because the browser is not the only caller — an import or an integration sending the
+     * same shape would have reproduced this exactly.
+     *
+     * DROPPED, NOT REFUSED, and that includes a stored row whose name has been cleared: the row
+     * then falls out of `keep` and is deleted with everything else that is gone. Nothing is lost
+     * silently — `syncConditionDocs` soft-deletes a document that carries an upload (TD-120), so a
+     * condition with a file reaches the Recycle Bin rather than disappearing.
+     *
+     * `type` absent ENTIRELY still defaults to 'Financing' below, which is the long-standing
+     * behaviour for a caller that names a condition without classifying it. What is refused is a
+     * row that names nothing at all.
+     */
+    const named = (c: Record<string, unknown>): boolean =>
+      String(c.type ?? '').trim() !== '' || String(c.custom_name ?? '').trim() !== '';
+    const conditionRows = conditions.filter(named);
+
     const existing = await tx.conditions.findMany({ where: { transaction_id: txnId } });
     const known = new Set(existing.map((r) => r.id));
     const now = new Date();
     const keep = new Set<number>();
     let i = 0;
-    for (const c of conditions) {
+    for (const c of conditionRows) {
       const values = {
         type: String(c.type ?? 'Financing'),
         custom_name: (c.custom_name ?? null) as string | null,
@@ -1188,9 +1399,17 @@ export class TransactionsWriteService {
           await save('adjustments', kind, who2, null, label + (who2 ? ` — ${who2}` : ''), r);
         }
       }
-      const oldExt = (oldA.ext_referral ?? 'No') === 'Yes' && !this.isEmpty(oldA.ext);
-      const newExt = (newA.ext_referral ?? 'No') === 'Yes' && !this.isEmpty(newA.ext);
-      if (oldExt && !newExt) {
+      /*
+       * TD-111 — the external referral is filed when its CONTENT goes, not when its TOGGLE does.
+       *
+       * Both readings agree on the case this was written for (toggle Yes with a referral in it,
+       * switched off) because the referral is now cleared with the toggle. Asking about content
+       * covers the two the toggle reading missed: a referral left dormant behind a No toggle by a
+       * save that predates this fix is filed the first time it is cleared, and a referral somebody
+       * blanks field-by-field with the section still on is filed too, where before it was simply
+       * gone — `isEmpty` counts an object of empty strings as content, so nothing was captured.
+       */
+      if (sectionHasContent(oldA.ext) && !sectionHasContent(newA.ext)) {
         const ext = asObject(oldA.ext);
         const agentName = (ext.agent_name ?? null) as string | null;
         await save('adjustments', 'ext_referral', agentName, null, 'External Brokerage Referral' + (agentName ? ` — ${agentName}` : ''), oldA.ext);

@@ -90,4 +90,17 @@ export class QuickActionsController {
   sendTradeSheet(@CurrentUser() user: AuthUserRecord | undefined, @Param('transaction', ParseIntPipe) txnId: number, @Body() body: Res): Promise<Res> {
     return this.quick.tradeSheet(u(user), txnId, body ?? {});
   }
+
+  /**
+   * TD-088 — the browser reporting that it produced the Trade Record Sheet.
+   *
+   * The sheet is filled client-side, so this is the only moment the server can learn that a RECO
+   * trade record was produced for this deal. It takes no body: the event is the whole message.
+   */
+  @Post('transactions/:transaction/trade-sheet/generated')
+  @HttpCode(200)
+  @Screen('transactions', 'edit')
+  tradeSheetGenerated(@CurrentUser() user: AuthUserRecord | undefined, @Param('transaction', ParseIntPipe) txnId: number): Promise<Res> {
+    return this.quick.tradeSheetGenerated(u(user), txnId);
+  }
 }

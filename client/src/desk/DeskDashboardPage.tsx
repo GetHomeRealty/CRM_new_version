@@ -102,11 +102,17 @@ export default function DeskDashboardPage() {
             { n: data.closings.next_30_days, label: 'next 30 days' },
             { n: data.closings.overdue, label: 'past closing, unpaid', tone: 'bad' },
           ]} />} />
-        {/* Beside Closings Ahead: both answer "what is about to need attention on a deal". */}
+        {/* Beside Closings Ahead: both answer "what is about to need attention on a deal".
+            TD-089 — "pending" is named for WHICH pending it is. A document row carries two
+            independent fields: `status` (has it arrived?) and `validation` (has it been checked?).
+            This tile's headline counts documents that have not ARRIVED, while the Deal
+            Documentation Status Report's column counts documents not yet VALIDATED — so the same
+            word meant two things on two screens the same person reads, and the figures could not
+            be reconciled. The counts are each right and unchanged; only the words are. */}
         <Tile label="Documents Outstanding" value={data.documents.pending}
           color={data.documents.invalid > 0 ? 'var(--warn-700)' : undefined}
           sub={<Breakdown parts={[
-            { n: data.documents.pending, label: 'pending', tone: 'info' },
+            { n: data.documents.pending, label: 'awaiting receipt', tone: 'info' },
             { n: data.documents.invalid, label: 'invalid', tone: 'bad' },
             { n: data.documents.mandatory_missing, label: 'mandatory missing', tone: 'bad' },
           ]} />} />

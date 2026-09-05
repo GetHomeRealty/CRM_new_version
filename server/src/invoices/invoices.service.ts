@@ -7,7 +7,10 @@ import { AuditService, type ActingUser } from '../audit/audit.service';
 import { throwValidation } from '../common/laravel-exceptions';
 import { jsonField, phpJsonNormalize, round2, toDateString, toDateTimeString, toIso8601String } from '../common/serialize';
 import { INVOICEABLE_TYPES, isInvoiceableType } from '../reference/transaction.constants';
-import { INVOICE_STATUSES, INVOICE_TERMS, MAX_TAX_RATE, isInvoiceStatus, isInvoiceTerm } from '../reference/invoice.constants';
+import {
+  INVOICE_STATUSES, INVOICE_TERMS, MAX_TAX_RATE, SETTABLE_STATUSES,
+  invoiceDisplayStatus, isDerivedStatus, isInvoiceStatus, isInvoiceTerm,
+} from '../reference/invoice.constants';
 import { InvoiceCalculator } from './invoice.calculator';
 import { InvoiceNumberService } from './invoice.numbers';
 import { TransactionInvoiceService } from './transaction-invoice.service';
@@ -165,17 +168,15 @@ export class InvoicesService {
     return this.detail(inv);
   }
 
-  /** Overdue is derived: past due date with an outstanding balance. */
+  /*
+   * TD-048 — the derivation moved to `reference/invoice.constants`, unchanged.
+   *
+   * It lived here as a private method, so the transaction's Admin Activities panel — which reads
+   * the invoice through `transaction.resource.ts` — could not use it and answered the question its
+   * own way. Two derivations, two answers, one invoice. There is now one, and both call it.
+   */
   private displayStatus(i: { status: string; due_date: Date | null; balance_due: Prisma.Decimal | number }): string {
-    if (
-      (i.status === 'Unpaid' || i.status === 'Partially Paid') &&
-      i.due_date &&
-      i.due_date < new Date() &&
-      num(i.balance_due) > 0
-    ) {
-      return 'Overdue';
-    }
-    return i.status;
+    return invoiceDisplayStatus(i);
   }
 
   // Laravel's belongsTo auto-excludes soft-deleted models, so a trashed linked
@@ -320,7 +321,7 @@ export class InvoicesService {
     const subTotal = Object.prototype.hasOwnProperty.call(body, 'line_items')
       ? this.lineSubTotal(this.asArray(body.line_items))
       : num(invoice.sub_total);
-    this.validateInvoiceInput(body, subTotal);
+    this.validateInvoiceInput(body, subTotal, invoice);
     const settings = await this.settings.current();
     const oldStatus = invoice.status;
 
@@ -725,7 +726,11 @@ export class InvoicesService {
    * the rules across two mechanisms would leave two places to look. `subTotal` is passed in by the
    * caller, which is what knows whether the lines came from the request or from the record.
    */
-  private validateInvoiceInput(body: Record<string, unknown>, subTotal: number): void {
+  private validateInvoiceInput(
+    body: Record<string, unknown>,
+    subTotal: number,
+    current?: { status: string; amount_paid: Prisma.Decimal | number; sent_at: Date | null },
+  ): void {
     const errors: Record<string, string[]> = {};
     const blank = (v: unknown): boolean => v === undefined || v === null || v === '';
     const present = (f: string): boolean => !blank(body[f]);
@@ -754,6 +759,38 @@ export class InvoicesService {
 
     if (present('status') && !isInvoiceStatus(String(body.status))) {
       errors.status = [`"${String(body.status)}" is not an invoice status. Allowed: ${INVOICE_STATUSES.join(', ')}.`];
+    }
+
+    /*
+     * TD-048 — A STATUS THE PAYMENTS DECIDE IS NOT A STATUS ANYBODY MAY TYPE.
+     *
+     * `Draft` and `Partially Paid` are written by the system: a new invoice starts as a draft, and
+     * a part payment moves it to Partially Paid on its own. Both were nonetheless ACCEPTED from a
+     * request — which is where the Admin Activities panel's "Draft" on an issued invoice came from
+     * — and `Unpaid` was accepted over an invoice with money against it, only for `recalculate` to
+     * quietly put it back. A silent correction and a refusal look identical from the outside until
+     * one of them is wrong.
+     *
+     * Only a CHANGE is refused. The editor spreads the whole form on every save, so an invoice
+     * already sitting at `Partially Paid` re-sends that value on any edit; treating that as an
+     * attempt to set it would break every ordinary save on a part-paid invoice.
+     */
+    if (present('status') && current && !errors.status) {
+      const want = String(body.status);
+      const paid = num(current.amount_paid);
+      if (want !== current.status) {
+        if (isDerivedStatus(want)) {
+          errors.status = [
+            `"${want}" is set by the invoice itself, not chosen: it follows the payments recorded against it. `
+            + `Statuses that can be set: ${SETTABLE_STATUSES.join(', ')}.`,
+          ];
+        } else if (want === 'Unpaid' && paid > 0) {
+          errors.status = [
+            `This invoice has ${paid.toFixed(2)} recorded against it, so it cannot be set back to Unpaid — `
+            + 'it is Partially Paid until those payments are removed.',
+          ];
+        }
+      }
     }
 
     /*

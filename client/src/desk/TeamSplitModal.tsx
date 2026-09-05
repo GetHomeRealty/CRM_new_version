@@ -27,12 +27,20 @@ interface TeamSplitModalProps {
   termCount?: number;
   onSaved?: (updated: Transaction) => void;
   readOnly?: boolean;
+  /**
+   * TD-058 — WHY the form is locked, in the words of whoever locked it.
+   *
+   * The modal knows it is read-only; only the page knows whether that is because View Only is on,
+   * because the deal is closed and paid, or because this member may not touch the split. Without
+   * it the banner had to guess, and it guessed by role — so an AGENT, the person the defect was
+   * reported on, saw a dead form with no explanation at all.
+   */
+  readOnlyReason?: string;
   lockAgents?: boolean;
-  isAgent?: boolean;
   canManageAccess?: boolean;
 }
 
-export default function TeamSplitModal({ open, onClose, transactionId, primaryAgent, initialTeam, agents, isPrecon, isLease = false, termCount = 0, onSaved, readOnly = false, lockAgents = false, isAgent = false, canManageAccess = false }: TeamSplitModalProps) {
+export default function TeamSplitModal({ open, onClose, transactionId, primaryAgent, initialTeam, agents, isPrecon, isLease = false, termCount = 0, onSaved, readOnly = false, readOnlyReason, lockAgents = false, canManageAccess = false }: TeamSplitModalProps) {
   const toast = useToast();
   const seed = (): TeamMemberData[] => {
     if (initialTeam && initialTeam.length) return initialTeam.map((m) => ({ ...m }));
@@ -56,6 +64,19 @@ export default function TeamSplitModal({ open, onClose, transactionId, primaryAg
     const d = agentComm[name];
     const v = d ? (isLease ? d.lease_pct : d.agent_pct) : null;
     return (v === null || v === undefined) ? (isLease ? 95 : 90) : v;
+  };
+
+  /*
+   * TD-102 — a rate that comes from somebody who is not a current agent says so.
+   *
+   * The plan list answers for names the picker will not offer: a departed agent, or a non-agent
+   * seat carrying a plan. Their rate is still applied — a deal that already carries the name must
+   * keep the rate it was paid at — but a rate arriving from an account nobody could choose today
+   * should not look like a rate somebody chose.
+   */
+  const stalePlan = (name: string): boolean => {
+    const d = agentComm[name];
+    return !!name && !!d && d.active_agent === false;
   };
 
   // §Team Splits — enabling a split resets every agent (incl. primary) to 0%.
@@ -136,9 +157,17 @@ export default function TeamSplitModal({ open, onClose, transactionId, primaryAg
         <button className="close" onClick={onClose}>✕</button>
         <div className="modal-h">Team Split</div>
 
-        {readOnly && !isAgent && (
+        {/*
+          TD-058 — a locked form says so, to everyone.
+          The fields below are inside a disabled fieldset, which is what stopped this modal
+          accepting a split it would then throw away. A disabled form with no explanation is the
+          smaller version of the same complaint, and it was shown to agents only.
+        */}
+        {readOnly && (
           <div className="card" style={{ borderLeft: '4px solid #2563eb', background: 'var(--info-bg)', marginBottom: 12 }}>
-            <span style={{ fontSize: 12.5, color: 'var(--info-ink)' }}>🔒 View-only — click <strong>Edit</strong> on the transaction to make changes.</span>
+            <span style={{ fontSize: 12.5, color: 'var(--info-ink)' }}>🔒 {readOnlyReason
+              ? readOnlyReason
+              : <>View-only — click <strong>Edit</strong> on the transaction to make changes.</>}</span>
           </div>
         )}
         {!readOnly && lockAgents && (
@@ -177,6 +206,11 @@ export default function TeamSplitModal({ open, onClose, transactionId, primaryAg
                   <datalist id={`agentList-${i}`}>{(agents || []).filter((a) => a === m.name || !members.some((x, idx) => idx !== i && x.name === a)).map((a) => <option key={a} value={a} />)}</datalist>
                 </div>
                 <div className="g3">
+                  {stalePlan(m.name) && (
+                    <div className="help" style={{ gridColumn: '1 / -1', color: 'var(--warn-ink)' }}>
+                      ⚠ {m.name} is not a current agent — their commission plan is still on file and is what these rates come from.
+                    </div>
+                  )}
                   <div className="field" style={{ marginBottom: 0 }}><label>Split %</label>
                     <input type="number" min="0" max="100" value={m.split ?? ''} onChange={(e) => set(i, 'split', e.target.value)} /></div>
                   {/* Agent % / Brokerage % come from the agent's registered split and are

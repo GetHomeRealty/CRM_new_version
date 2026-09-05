@@ -254,9 +254,16 @@ describe('the gross commission in SQL matches CommissionService, deal for deal',
 describe('the Analytics aggregate matches summing the same rows in TypeScript', () => {
   it('agrees on every total, month, agent and type', async () => {
     await inRollback(async (tx) => {
-      // A corpus with real skew: three variants, both paid states, two agents, a deal with no
-      // closing date (which must fall back to the offer month) and one with neither (which must
-      // drop out of by_month entirely).
+      /*
+       * A corpus with real skew: three variants, both paid states, two agents, a deal with an offer
+       * date but NO closing date, and one with neither.
+       *
+       * TD-092 — those last two both belong to the no-closing-date bucket now. The chart is headed
+       * "Commission by Closing Month", and it used to answer a missing closing date two different
+       * ways depending on whether the deal happened to carry an offer date: charted in the OFFER
+       * month, or dropped from the chart altogether. Both are here so the reference below has to
+       * agree about both.
+       */
       await makeDeal(tx, { agent: 'Ana', comm_pct: 2.5, price: 812_345.67, comm_paid_status: 'Yes', closing_date: '2025-01-31' });
       await makeDeal(tx, { agent: 'Ana', comm_pct: 3.7, price: 1_234_567.89, closing_date: '2025-01-05' });
       await makeDeal(tx, { agent: 'Bo', comm_type: 'Fixed', comm_pct: null, comm_value: 7_500, comm_status: 'Received', closing_date: '2025-02-14' });
@@ -280,8 +287,9 @@ describe('the Analytics aggregate matches summing the same rows in TypeScript', 
       for (const r of rows) {
         const { amount, paid: isPaid } = svc.amountFor(r);
         if (isPaid) { paid += amount; paidCount++; } else { pending += amount; pendingCount++; }
-        const d = r.closing_date ?? r.offer_date;
-        if (d) { const k = d.toISOString().slice(0, 7); byMonth.set(k, (byMonth.get(k) ?? 0) + amount); }
+        // TD-092 — the closing date alone decides the month; everything else is one named bucket.
+        const k = r.closing_date ? r.closing_date.toISOString().slice(0, 7) : 'none';
+        byMonth.set(k, (byMonth.get(k) ?? 0) + amount);
         tally(byAgent, r.agent && r.agent.trim() !== '' ? r.agent : 'Unassigned', amount);
         tally(byType, r.type, amount);
       }
@@ -290,8 +298,11 @@ describe('the Analytics aggregate matches summing the same rows in TypeScript', 
         total: round2(paid + pending), paid: round2(paid), pending: round2(pending),
         paid_count: paidCount, pending_count: pendingCount,
       });
+      // Months ascending with the no-date bucket last, which is the order the SQL promises.
       expect(out.by_month).toEqual(
-        [...byMonth.entries()].map(([month, total]) => ({ month, total: round2(total) })).sort((a, b) => a.month.localeCompare(b.month)),
+        [...byMonth.entries()]
+          .map(([month, total]) => ({ month, total: round2(total) }))
+          .sort((a, b) => (a.month === 'none' ? 1 : b.month === 'none' ? -1 : a.month.localeCompare(b.month))),
       );
       // Compared as maps: the SQL's tie-break on the key is its own contract and is asserted below.
       expect(Object.fromEntries(out.by_agent.map((r) => [r.agent, [r.count, r.total]])))

@@ -56,3 +56,46 @@ export const MAX_TAX_RATE = 100;
 
 export const isInvoiceTerm = (v: string): boolean => (INVOICE_TERMS as readonly string[]).includes(v);
 export const isInvoiceStatus = (v: string): boolean => (INVOICE_STATUSES as readonly string[]).includes(v);
+
+/*
+ * TD-048 — WHICH OF THOSE A PERSON MAY CHOOSE, AND WHICH THE INVOICE DECIDES FOR ITSELF.
+ *
+ * The list above is what the column may hold. It is not what a human may set, and conflating the
+ * two is how one invoice came to be described by four different words at once: the list badge said
+ * Overdue, the editor said Unpaid, the Admin Activities panel said Draft, and the API returned
+ * both `status: Unpaid` and `display_status: Overdue`.
+ *
+ * `Draft` and `Partially Paid` are STATES THE SYSTEM WRITES. A new invoice starts as a draft; a
+ * part payment moves it to Partially Paid on its own and a second one keeps it there. Neither is
+ * offered as a choice, and neither should be settable by hand — sending `Unpaid` over an invoice
+ * that has money against it is not an edit, it is a claim the payments contradict.
+ */
+export const DERIVED_STATUSES = ['Draft', 'Partially Paid'] as const;
+
+/** The statuses a person may set, and the exact list the editor offers. */
+export const SETTABLE_STATUSES = INVOICE_STATUSES.filter(
+  (s) => !(DERIVED_STATUSES as readonly string[]).includes(s),
+);
+
+export const isDerivedStatus = (v: string): boolean => (DERIVED_STATUSES as readonly string[]).includes(v);
+
+/**
+ * The status to SHOW for an invoice — one derivation, used by every surface.
+ *
+ * `Overdue` is not stored: it is what an unpaid or part-paid invoice becomes once its due date has
+ * passed with money still outstanding. The invoice list derived it, the transaction's Admin
+ * Activities panel did not, and the two therefore described the same invoice differently. Stated
+ * here so there is one answer to "what does this invoice say", wherever it is asked.
+ *
+ * An invoice with no due date is never overdue — a `Due on Closing` invoice on a deal with no
+ * closing date yet is waiting, not late.
+ */
+export function invoiceDisplayStatus(
+  invoice: { status: string; due_date: Date | null; balance_due: { toString(): string } | number | null },
+  now: Date = new Date(),
+): string {
+  const balance = Number(invoice.balance_due ?? 0);
+  const overdueable = invoice.status === 'Unpaid' || invoice.status === 'Partially Paid';
+  if (overdueable && invoice.due_date && invoice.due_date.getTime() < now.getTime() && balance > 0) return 'Overdue';
+  return invoice.status;
+}

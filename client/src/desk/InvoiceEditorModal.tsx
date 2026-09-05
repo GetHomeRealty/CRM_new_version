@@ -13,12 +13,14 @@ import InvoicePreviewModal from './InvoicePreviewModal';
 import MiniCalendar from './MiniCalendar';
 import SavedBadge from './SavedBadge';
 import type { CompanySettings, Invoice } from '../types';
+import { SETTABLE_STATUSES, STATUS_COLOR } from './invoiceStatus';
 
 const BRAND = 'var(--brand-red)';
 const TERM_DAYS: Record<string, number> = { 'Due on Receipt': 0, 'Net 7': 7, 'Net 15': 15, 'Net 30': 30 };
-export const STATUSES = ['Unpaid', 'Paid', 'Overdue', 'Void', 'Due']; // §12.2
-// Status colours: Due=blue, Overdue=red, Paid=green, Void=black.
-const STATUS_COLOR: Record<string, string> = { Due: 'var(--info)', Overdue: 'var(--bad)', Paid: 'var(--ok-600)', Void: 'var(--text)', Unpaid: 'var(--info)', 'Partially Paid': 'var(--warn)', Draft: 'var(--muted)' };
+// TD-048 — the settable list and the colours come from `invoiceStatus.ts`, which is the client's
+// single copy of the server's vocabulary. This file used to declare both, and the list it exported
+// (five statuses) disagreed with the map beside it (seven) — so the editor could paint a state it
+// offered no way to reach. §12.2's five are exactly `SETTABLE_STATUSES` today.
 const COMM_VIA = ['Bank Transfer', 'Cash', 'EFT', 'Interac e-Transfer', 'Cheque'];
 const AUTO_REMINDERS = [
   { mode: '2', label: 'Every 2 days (until Paid, excl. weekends/holidays)' },
@@ -363,13 +365,25 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
             <button style={{ ...sideBtn, justifyContent: 'space-between' }} onClick={() => setMenu(menu === 'status' ? '' : 'status')}>
               <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}><Icon name="tag" size={13} /> Status</span>
               <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                {form.status && <span style={{ fontSize: 10, fontWeight: 700, color: '#fff', background: STATUS_COLOR[form.status] || 'var(--muted)', borderRadius: 999, padding: '2px 8px' }}>{form.status}</span>}
+                {/*
+                  TD-048 — the badge shows the word every other screen shows.
+                  `status` is what is stored; `display_status` is what the invoice list, the API and
+                  the transaction's Admin Activities panel all report — Overdue for an unpaid
+                  invoice past its due date. Showing the stored word here is how one invoice came to
+                  read "Unpaid" in the editor and "Overdue" in the list at the same moment. The
+                  server's word is used while the form still agrees with what was saved; the moment
+                  a status is picked, the picked one shows until the save answers.
+                */}
+                {form.status && (() => {
+                  const shown = saved && saved.status === form.status ? (saved.display_status || form.status) : form.status;
+                  return <span style={{ fontSize: 10, fontWeight: 700, color: '#fff', background: STATUS_COLOR[shown] || 'var(--muted)', borderRadius: 999, padding: '2px 8px' }}>{shown}</span>;
+                })()}
                 <span><Icon name="chevronDown" size={12} /></span>
               </span>
             </button>
             {menu === 'status' && (
               <div style={{ border: '1px solid var(--line)', borderRadius: 8, margin: '2px 0 6px', background: '#fff', boxShadow: '0 6px 18px rgba(0,0,0,.08)' }}>
-                {STATUSES.map((s) => (
+                {SETTABLE_STATUSES.map((s) => (
                   <button key={s} style={{ ...sideBtn, padding: '8px 12px' }} onClick={() => onStatus(s)}>{s}</button>
                 ))}
               </div>

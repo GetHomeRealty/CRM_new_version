@@ -129,8 +129,19 @@ function buildPayload(form: DetailForm): Record<string, unknown> {
     conditional_offer: form.conditional_offer, inter_board_enabled: form.inter_board_enabled,
     statuses: form.statuses,
     clients: form.clients.map((c) => ({ name: c.name, email: c.email || null, phone: c.phone || null })),
+    /*
+     * TD-065 — the spare row is not sent until it is filled in.
+     *
+     * "+ Add Condition" appends an empty row for the next entry, and the whole list went up on
+     * save, so one condition entered was stored as two — the second nameless, and given a document
+     * titled "Condition: " that nobody could ever satisfy. The API drops such rows now, which is
+     * where the rule has to live; this keeps the request honest about what was actually entered
+     * instead of sending something to be discarded.
+     */
     conditions: form.conditional_offer
-      ? form.conditions.map((c) => ({ id: c.id, type: c.type, custom_name: c.custom_name || null, deadline: dOrNull(c.deadline), status: c.status }))
+      ? form.conditions
+        .filter((c) => (c.type || '').trim() !== '' || (c.custom_name || '').trim() !== '')
+        .map((c) => ({ id: c.id, type: c.type, custom_name: c.custom_name || null, deadline: dOrNull(c.deadline), status: c.status }))
       : [],
     inter_board_listings: form.inter_board_enabled
       ? form.inter_board_listings.map((i) => ({ name: i.name || null, board_id: i.board_id || null, verified: !!i.verified }))
@@ -714,6 +725,20 @@ export default function TransactionDetailPage() {
   // after Notice of Sale is sent, agents can't be added/removed/renamed (Admin+ retain access).
   const teamSplitVisible = !closedAndPaid || isSuperAdmin;
   const teamReadOnly = view || (closedAndPaid && !isSuperAdmin) || !teamSplitEditableByRole;
+  /*
+   * TD-058 — which of the three locks is on, said in the modal.
+   *
+   * The defect was a Team Split form that accepted a split in View Only and discarded it silently;
+   * the fields are now inside a disabled fieldset. This is the other half of "nothing tells them":
+   * the banner explaining the lock was shown to everybody EXCEPT agents, which is the one role the
+   * defect was reported on. Telling an agent to "click Edit" is only true when editing would
+   * actually let them in, so the reason is chosen here, where the three conditions live.
+   */
+  const teamReadOnlyReason = !teamSplitEditableByRole
+    ? 'Read-only — only the primary agent or a full-access team member can change the split.'
+    : (closedAndPaid && !isSuperAdmin)
+      ? 'Read-only — this deal is closed and the commission has been paid, so the split is locked.'
+      : undefined;
   const teamLockAgents = nosSent && !isAdminOrAbove && !agentPaid;
   // Adjustment / advance / client referral / external brokerage referral: locked to
   // Super Admin once the deal is closed and the agent commission is paid.
@@ -1240,6 +1265,14 @@ export default function TransactionDetailPage() {
               */}
               {!docsOnly && !slNoSections && canEdit && <button className="btn ghost sm" style={{ textAlign: 'left' }} onClick={() => setFaqOpen(true)}><Icon name="analytics" size={13} /> Agent Payment Readiness</button>}
               {!isAgent && <button className="btn ghost sm" style={{ textAlign: 'left' }} onClick={() => setAuditOpen(true)}><Icon name="clipboard" size={13} /> Audit Trail</button>}
+              {/*
+                TD-110 — an agent can see what THEY changed on their own deal.
+                The Audit Trail itself stays an office screen: it carries every field the office has
+                ever touched, including commission figures. What an agent was missing is their own
+                history — the thing they are asked to account for when a change is queried or
+                reverted — so they get the same table over their own rows.
+              */}
+              {isAgent && <button className="btn ghost sm" style={{ textAlign: 'left' }} onClick={() => setAuditOpen(true)}><Icon name="clipboard" size={13} /> My Changes</button>}
               {!canEdit && <span className="help" style={{ margin: '4px 0 0' }}>Read-only access — editing actions are hidden.</span>}
             </div>
           </div>
@@ -1479,8 +1512,8 @@ export default function TransactionDetailPage() {
           termCount={parseInt(String(form.precon_term_count), 10) || 0}
           onSaved={applyUpdated}
           readOnly={teamReadOnly}
+          readOnlyReason={teamReadOnlyReason}
           lockAgents={teamLockAgents}
-          isAgent={isAgent}
           canManageAccess={!isAgent || isOwnerAgent}
         />
       )}
@@ -1514,7 +1547,14 @@ export default function TransactionDetailPage() {
         <LawyerModal open={lawyerOpen} onClose={() => setLawyerOpen(false)} transactionId={id} txn={txn} onSaved={applyUpdated} readOnly={view} isAgent={isAgent} />
       )}
       {auditOpen && txn && (
-        <AuditTrailModal open={auditOpen} onClose={() => setAuditOpen(false)} txn={txn} />
+        <AuditTrailModal
+          open={auditOpen}
+          onClose={() => setAuditOpen(false)}
+          txn={txn}
+          // TD-110 — an agent's own rows, under their own heading. Office seats keep the trail.
+          entries={isAgent ? (txn.my_changes ?? []) : undefined}
+          title={isAgent ? 'My Changes' : undefined}
+        />
       )}
       {adminOpen && txn && (
         <AdminActivitiesModal open onClose={() => setAdminOpen(false)} transactionId={id} txn={txn} onSaved={applyUpdated} depositOnly={slDepositOnly} dftNA={stDFT} readOnly={view} termCount={precon ? (parseInt(String(form.precon_term_count), 10) || 0) : undefined} />

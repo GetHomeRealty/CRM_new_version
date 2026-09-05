@@ -104,13 +104,32 @@ const SCREENS: ScreenRoutes[] = [
   // screen, so a Super Admin must still get in even if their `settings` permission was revoked.
   // Each tab re-checks for itself.
   { screen: 'settings', paths: [''], element: () => <SettingsPage />, orSuperAdmin: true },
+  /*
+   * TD-057 — BULK IMPORT IS A SUPER-ADMIN SCREEN, AND THE ROUTE HAS TO SAY SO.
+   *
+   * Every sub-path of `transactions` was gated on one thing: `transactions: view`, which an agent
+   * holds. The toolbar button was hidden from them and the API refuses them (the controller carries
+   * `AdminGuard`, so even the template and sample downloads are refused) — but the ROUTE was open,
+   * so an agent who typed or was sent `/desk/transactions/import` got the whole Bulk Import screen
+   * with both download buttons on it. Hiding a button is the weaker of the two protections and it
+   * was the only one the browser had.
+   *
+   * Import therefore gets its own entry with `superAdmin: true`, which is the same gate `users` and
+   * `recycle-bin` already use and the same answer the product gives every other denied screen: the
+   * 🔒 No access panel, rather than a screen that works until you choose a file.
+   *
+   * Two entries for one screen is fine — `screenRoutes` maps over paths, and `KNOWN_SCREENS` is a
+   * Set. The list and the detail keep the screen permission they always had: an agent must still
+   * reach their own deals.
+   */
   {
     screen: 'transactions',
     // 'import' and 'downloads' precede ':id' so they are not read as transaction ids. Ids are
     // numeric, so no real transaction can be shadowed by a named sub-route.
-    paths: ['', 'import', 'downloads', ':id'],
-    element: (p) => (p === '' ? <TransactionsPage /> : p === 'import' ? <BulkImportPage /> : p === 'downloads' ? <DownloadCentrePage /> : <TransactionDetailPage />),
+    paths: ['', 'downloads', ':id'],
+    element: (p) => (p === '' ? <TransactionsPage /> : p === 'downloads' ? <DownloadCentrePage /> : <TransactionDetailPage />),
   },
+  { screen: 'transactions', paths: ['import'], element: () => <BulkImportPage />, superAdmin: true },
   { screen: 'triggers', paths: [''], element: () => <TriggersPage /> },
   { screen: 'audit', paths: [''], element: () => <AuditLogPage /> },
   // Personal screens — every authenticated user has them, with no admin permission gate. The

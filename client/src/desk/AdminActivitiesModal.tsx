@@ -275,7 +275,10 @@ export default function AdminActivitiesModal({ open, onClose, transactionId, txn
                 <div className="modal-sub" style={{ marginTop: 0 }}>Term {k} — Invoice &amp; Commission Details</div>
                 <div className="help" style={{ marginTop: -4, marginBottom: 8 }}>Auto-filled from the linked term invoice — read-only.</div>
                 <div className="g4">
-                  <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Invoice Status</label><input value={ia.invoice_sent_status || '—'} readOnly style={{ background: 'var(--surface-2)' }} /></div>
+                  {/* TD-048 — "Invoice Status" is the invoice's own word, the same one the invoice
+                      list shows; whether it has gone out is a separate field with its own label. */}
+                  <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Invoice Status</label><input value={ia.invoice_status || '—'} readOnly style={{ background: 'var(--surface-2)' }} /></div>
+                  <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Invoice Sent</label><input value={ia.invoice_sent_status || '—'} readOnly style={{ background: 'var(--surface-2)' }} /></div>
                   <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Invoice Number</label><input value={ia.invoice_number || '—'} readOnly style={{ background: 'var(--surface-2)' }} /></div>
                   <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Commission Received Date</label><input value={ia.commission_received_date || '—'} readOnly style={{ background: 'var(--surface-2)' }} /></div>
                   <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Commission Received Via</label><input value={ia.commission_received_via || '—'} readOnly style={{ background: 'var(--surface-2)' }} /></div>
@@ -339,8 +342,12 @@ export default function AdminActivitiesModal({ open, onClose, transactionId, txn
           <div className="modal-sub">Invoice &amp; Commission Details</div>
           <div className="help" style={{ marginTop: -4, marginBottom: 8 }}>Auto-filled from the linked invoice — read-only.</div>
           <div className="g2">
-            <div className="field"><label style={lbl}>Invoice Status</label><input value={invAdmin.invoice_sent_status || '—'} readOnly style={{ background: 'var(--surface-2)' }} /></div>
+            {/* TD-048 — the invoice's own status, then the separate question of whether it was sent. */}
+            <div className="field"><label style={lbl}>Invoice Status</label><input value={invAdmin.invoice_status || '—'} readOnly style={{ background: 'var(--surface-2)' }} /></div>
             <div className="field"><label style={lbl}>Invoice Number</label><input value={invAdmin.invoice_number || '—'} readOnly style={{ background: 'var(--surface-2)' }} /></div>
+          </div>
+          <div className="g2">
+            <div className="field"><label style={lbl}>Invoice Sent</label><input value={invAdmin.invoice_sent_status || '—'} readOnly style={{ background: 'var(--surface-2)' }} /></div>
           </div>
           <div className="g2">
             <div className="field"><label style={lbl}>Commission Received Date</label><input value={invAdmin.commission_received_date || '—'} readOnly style={{ background: 'var(--surface-2)' }} /></div>

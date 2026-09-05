@@ -273,7 +273,10 @@ export default function TransactionsPage() {
 
       {/* Toolbar */}
       <div className="toolbar"><div className="toolbar-row">
-        <input className="inp with-search" placeholder="Search property, trade #, agent" value={filters.q} onChange={(e) => setF('q', e.target.value)} />
+        {/* TD-090 — the placeholder names what the box now searches. It was honest before, which is
+            how the missing capability stayed invisible: an agent read "property, trade #, agent"
+            and never tried a client's name. */}
+        <input className="inp with-search" placeholder="Search property, trade #, agent, client" value={filters.q} onChange={(e) => setF('q', e.target.value)} />
         <select value={filters.year} onChange={(e) => setF('year', e.target.value)} title="Year (by closing date)">
           <option value="">All years (by closing date)</option>
           {years.map((y) => <option key={y} value={y}>{y}</option>)}
@@ -312,9 +315,9 @@ export default function TransactionsPage() {
           only, and a button that every `transactions: edit` holder can see but only one tier can
           use is the affordance mismatch of TD-017 all over again.
 
-          This is NOT all of TD-057, which is still open: an agent who types /desk/transactions/import
-          still reaches the page, because the route is gated on the transactions SCREEN rather than
-          on the tier, and still discovers the refusal only after uploading a file.
+          TD-057 completed the pair: the ROUTE is gated on the tier too (see `SCREENS` in App.tsx),
+          so /desk/transactions/import typed by hand answers an agent with the No access panel
+          instead of a working screen that refuses only once a file has been chosen.
         */}
         {isSuperAdmin && <button className="btn ghost sm" onClick={() => navigate(deskPath('transactions/import'))} title="Create many transactions from a spreadsheet"><Icon name="upload" size={13} /> Bulk Import</button>}
         {canEdit && <button className="btn primary sm" onClick={() => setAddOpen(true)}>+ Add Transaction</button>}

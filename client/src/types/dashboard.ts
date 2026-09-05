@@ -1,6 +1,14 @@
 /** Shape of GET /api/dashboard/commissions (see DashboardController::commissions). */
 export interface DashboardCommissions {
-  role: 'agent' | 'admin';
+  /**
+   * TD-101 — the caller's OWN role, as the account holds it.
+   *
+   * It was typed and sent as `'agent' | 'admin'`, so an accounting user was described as an
+   * administrator. Nothing on the screen reads this field today; it is widened rather than removed
+   * because a payload that answers "who is asking" should answer truthfully — the shape of the
+   * figures below is decided by the server from the same user, not by anybody reading this.
+   */
+  role: string;
   /**
    * TD-047 — what the `_count` fields below count: one row per commission line (a team member's
    * share of a deal) for the office, one per deal for an agent. The server derives it from the

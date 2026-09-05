@@ -182,6 +182,14 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
     const v = leaseType ? (d.lease_pct ?? d.agent_pct) : d.agent_pct;
     return (v === null || v === undefined) ? null : parseNumber(v);
   };
+  /*
+   * TD-102 — the plan list answers for names the agent picker will not offer: a departed agent, or
+   * a seat that is not an agent at all but carries a plan. Their rate is still used, because a deal
+   * that already names them must keep the rate it was paid at — but the screen says where it came
+   * from, so a default nobody could choose today does not read as one somebody did.
+   */
+  const planIsStale = (name: string | undefined): boolean =>
+    !!name && agentDefaults[name]?.active_agent === false;
   // For transactions not yet customised via Team Split, seed Agent Comm (%) from
   // the agent's registered default once it loads.
   const hadSavedTeam = !!(txn.team && txn.team.length);
@@ -562,6 +570,11 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
                           : hadSavedTeam) && (
                           <div className="help" style={{ margin: '6px 0 0', color: 'var(--brand)' }}>
                             This commission split applies only to this transaction; the agent’s main/default commission split is {defaultPctFor(m.name) !== null ? `${defaultPctFor(m.name)}%` : 'not set on their profile'}.
+                          </div>
+                        )}
+                        {planIsStale(m.name) && (
+                          <div className="help" style={{ margin: '6px 0 0', color: 'var(--warn-ink)' }}>
+                            ⚠ {m.name} is not a current agent — the default above comes from a commission plan still on file for them.
                           </div>
                         )}
                         {termDeduct[i].total > 0 && <div className="help" style={{ margin: '6px 0 0' }}>Less {adjLabel(termDeduct[i])} = −{formatCurrency(termDeduct[i].total)} off total{termDeduct[i].loan > 0 ? ' for loan payment' : ''}</div>}

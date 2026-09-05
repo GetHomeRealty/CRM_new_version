@@ -453,6 +453,17 @@ export const getDepositReceiptCcSuggestions = (txnId: Id): Promise<string[]> => 
 export const sendDepositReceipt = (txnId: Id, email: string, cc?: unknown): Promise<SendResult> => api.post<SendResult>(`/api/transactions/${txnId}/deposit-receipt/send`, { email, cc }).then((r) => r.data);
 export const sendTradeSheet = (txnId: Id, email: string, extra: Record<string, unknown> = {}): Promise<SendResult> => api.post<SendResult>(`/api/transactions/${txnId}/trade-sheet/send`, { email, ...extra }).then((r) => r.data);
 
+/**
+ * TD-088 — tell the deal its Trade Record Sheet has been produced.
+ *
+ * The sheet is filled in the browser, so nothing reaches the server unless it is sent by email —
+ * and a sheet produced and handed over in person left the deal with no evidence it had ever been
+ * produced at all, which is what a RECO audit asks for. This records the production; the server
+ * stamps the deal and writes the audit entry that carries who and when.
+ */
+export const recordTradeSheetGenerated = (txnId: Id): Promise<{ generated_at?: string }> =>
+  api.post<{ generated_at?: string }>(`/api/transactions/${txnId}/trade-sheet/generated`).then((r) => r.data);
+
 // --- FINTRAC per-client identity (Form 630 auto-fill) ---
 export const getClientIdentification = (txnId: Id, clientName: string): Promise<ClientIdentification | null> =>
   api.get<ClientIdentification | null>(`/api/transactions/${txnId}/identifications`, { params: { client_name: clientName } }).then((r) => r.data);

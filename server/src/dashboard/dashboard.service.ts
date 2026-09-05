@@ -58,7 +58,20 @@ const COMMISSION_INCLUDE = {
 type TxnForCommissions = Prisma.transactionsGetPayload<{ include: typeof COMMISSION_INCLUDE }>;
 
 export interface DashboardCommissions {
-  role: 'agent' | 'admin';
+  /**
+   * TD-101 — THE CALLER'S OWN ROLE, NOT A GUESS AT THEIR TIER.
+   *
+   * This was `isAgent(user) ? 'agent' : 'admin'`, so every non-agent was described as an
+   * administrator: an ACCOUNTING user reading this endpoint from their own session, where
+   * `GET /api/user` says `accounting`, was told `admin`. The figures were right for the seat — the
+   * fault was the label — but a role field is exactly the kind of thing a later screen or
+   * integration starts trusting, and by then an accounting user is an administrator on the strength
+   * of a payload nobody re-checked against the roles matrix.
+   *
+   * It reports what the account carries. The SHAPE of the response still turns on `isAgent`, which
+   * is a different question from what to call the caller, and is unchanged.
+   */
+  role: string;
   /*
    * TD-047 — WHAT THE COUNTS ON THIS PAYLOAD ARE COUNTING.
    *
@@ -90,9 +103,18 @@ export interface DashboardCommissions {
   referrals: { external_total: number; client_total: number };
 }
 
+/**
+ * TD-101 — the role to report: the one the account holds.
+ *
+ * Empty only for a caller with no account at all, which the auth guard makes unreachable through
+ * the API; reporting 'agent' or 'admin' for that case would be inventing a seat rather than
+ * describing one.
+ */
+const callerRole = (user: ResourceUser | null): string => String(user?.role ?? '').trim();
+
 /** What a caller who can see nothing is shown — zeros, not an error and not everybody's figures. */
 const emptyCommissions = (user: ResourceUser | null): DashboardCommissions => ({
-  role: isAgent(user) ? 'agent' : 'admin',
+  role: callerRole(user),
   count_basis: isAgent(user) ? 'deals' : 'commission_lines',
   t4a: {
     closed_total: 0, closed_paid: 0, closed_pending: 0, closed_count: 0,
@@ -216,7 +238,7 @@ export class DashboardService {
     const closedTotal = paidTotal + pendingTotal;
 
     return {
-      role: agent ? 'agent' : 'admin',
+      role: callerRole(user),
       // TD-047 — `agent` is the same boolean that chose between the per-deal and the per-line
       // query a few lines above, so the basis reported here is the basis actually counted.
       count_basis: agent ? 'deals' : 'commission_lines',
@@ -354,7 +376,7 @@ export class DashboardService {
     const closedCount = paidCount + pendingCount;
 
     return {
-      role: isAgent(user) ? 'agent' : 'admin',
+      role: callerRole(user),
       // TD-047 — `isAgent` is what narrowed `members` to the caller's own line per deal above;
       // the enrichment path and the SQL path therefore report the same basis for the same user.
       count_basis: isAgent(user) ? 'deals' : 'commission_lines',
