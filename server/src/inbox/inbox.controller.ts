@@ -1,5 +1,5 @@
 import { AreaGuard } from '../core/area.guard';
-import { BadRequestException, Body, Controller, ForbiddenException, Get, NotFoundException, Param, ParseIntPipe, Post, Put, Query, Sse, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, NotFoundException, Param, ParseIntPipe, Post, Put, Query, Sse, UseGuards } from '@nestjs/common';
 import type { Observable } from 'rxjs';
 import { AuthGuard } from '../auth/guards/auth.guard';
 import { CurrentUser } from '../auth/decorators';
