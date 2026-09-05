@@ -141,7 +141,8 @@ describe('§6 one primary email across the Hub', () => {
   it('setting a primary clears every other personal primary', async () => {
     await inRollback(async (tx) => {
       const { user, addAccount } = await seed(tx, 'admin');
-      const crm = await addAccount('crm', { is_default: true, is_active: true });
+      // Bound to nothing: what matters is that this primary is cleared, asserted by scope below.
+      await addAccount('crm', { is_default: true, is_active: true });
       const desk1 = await addAccount('desk', { is_default: true, is_active: true });
       const desk2 = await addAccount('desk', { is_default: false, is_active: true });
 

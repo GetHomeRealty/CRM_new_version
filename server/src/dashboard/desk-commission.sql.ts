@@ -338,7 +338,9 @@ std_own AS MATERIALIZED (
     GREATEST(0::float8, LEAST(
       l.lc * (m.agent_pct / 100) * (m.split / 100),
       l.lc - CASE WHEN l.lc = 0 THEN 0::float8
-                  ELSE GREATEST(l.lc * (m.brok_pct / 100) * (m.split / 100), 200::float8 * ${G})
+                  -- TD-080: ex-HST against ex-HST. This was 200 * G, an HST-inclusive figure
+                  -- compared against a percentage of lc, which is ex-HST.
+                  ELSE GREATEST(l.lc * (m.brok_pct / 100) * (m.split / 100), 200::float8)
                        - (l.adj_before * ${G} - l.adj_after) END
     )) AS own
   FROM std_lc l LEFT JOIN members m ON m.tid = l.id
@@ -376,7 +378,13 @@ std_raw AS MATERIALIZED (
   SELECT o.id AS tid, o.name,
          php_round2f(p.ac_total * CASE WHEN p.pool > 0 THEN o.own / p.pool ELSE o.split / 100 END) AS t4a_raw${full ? `,
          php_round2f(p.ac_total * CASE WHEN p.pool > 0 THEN o.own / p.pool ELSE o.split / 100 END - desk_member_deduction(s.adj, o.name, NULL)) AS total,
-         php_round2f(php_round2f((l.lc * o.split) / 100) * m.brok_pct / 100) AS brok_wo` : ''}
+         -- TD-124: the remainder of the member's share, not a flat percentage that never
+         -- consulted the minimum. The subtrahend is the share BEFORE any deduction — t4a_raw's own
+         -- expression, repeated rather than named, because an output alias cannot be read inside
+         -- the SELECT list that defines it. The total column above repeats it for the same reason.
+         GREATEST(php_round2f((l.lc * o.split) / 100)
+                  - php_round2(php_round2f(p.ac_total * CASE WHEN p.pool > 0 THEN o.own / p.pool ELSE o.split / 100 END) / ${G}),
+                  0::float8) AS brok_wo` : ''}
   FROM std_pool p
   JOIN std_own o ON o.id = p.id${full ? `
   JOIN members m ON m.tid = p.id AND m.name IS NOT DISTINCT FROM o.name AND m.split IS NOT DISTINCT FROM o.split
@@ -467,9 +475,10 @@ lst_pool AS MATERIALIZED (
   SELECT
     x.id, x.client_ref, x.split_total,
     CASE
-      WHEN COALESCE(SUM(o.raw), 0::float8) > GREATEST(x.split_total - php_round2f(x.min_brok * ${G}), 0::float8)
+      -- TD-080: the minimum is ex-HST here too, matching agentCommissionsAfterClient.
+      WHEN COALESCE(SUM(o.raw), 0::float8) > GREATEST(x.split_total - x.min_brok, 0::float8)
        AND COALESCE(SUM(o.raw), 0::float8) > 0::float8
-      THEN GREATEST(x.split_total - php_round2f(x.min_brok * ${G}), 0::float8) / COALESCE(SUM(o.raw), 0::float8)
+      THEN GREATEST(x.split_total - x.min_brok, 0::float8) / COALESCE(SUM(o.raw), 0::float8)
       ELSE 1::float8
     END AS floor_scale
   FROM lst_split x LEFT JOIN lst_own o ON o.id = x.id
@@ -543,7 +552,9 @@ pre_raw AS MATERIALIZED (
    */
   SELECT m.tid, m.name,
          php_round2f(php_round2f((t.t_amt * m.split) / 100) * m.agent_pct / 100) AS agent_wo${full ? `,
-         php_round2f(php_round2f((t.t_amt * m.split) / 100) * m.brok_pct / 100)  AS brok_wo,
+         -- TD-124: the remainder of this term's member share, as agentLines now takes it.
+         GREATEST(php_round2f((t.t_amt * m.split) / 100)
+                  - php_round2f(php_round2f((t.t_amt * m.split) / 100) * m.agent_pct / 100), 0::float8) AS brok_wo,
          desk_member_deduction(s.adj, m.name, t.k)                               AS deduction` : ''}
   FROM pre_terms t
   JOIN members m ON m.tid = t.id${full ? `
