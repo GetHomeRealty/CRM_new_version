@@ -533,8 +533,58 @@ export default function TransactionDetailPage() {
     });
   };
 
-  // Changing type can switch status family — reset to that family's default status (empty for secured deal types).
-  const onTypeChange = (newType: string) => setForm((f) => (f ? { ...f, type: newType, statuses: defaultStatusFor(newType) ? [defaultStatusFor(newType)] : [] } : f));
+  /*
+   * TD-015 — A TYPE CHANGE CARRIES THE STATUS ACROSS, AND ASKS BEFORE DROPPING ONE.
+   *
+   * This reset the status to the new family's default on every type change, silently: a deal marked
+   * "Secured Firm" whose type was corrected came back "Open", and the only way to notice was to
+   * remember what it had been. The reported case was a type restored on deal 5 — the status had to
+   * be set again by hand, on a field that decides the edit-lock, the commission layout and every
+   * status filter in the reports.
+   *
+   * MOST STATUSES DO NOT NEED TO BE LOST. `normalizeStatus` already knows how a status reads in
+   * another family — "Open" is "Active" on a listing and "Secured Conditional" on a secured deal,
+   * "Sold" is "Leased" on a lease — so the carry-over is that mapping, kept where the new type's
+   * vocabulary actually has it.
+   *
+   * THE SAME RULE THE SERVER APPLIES, deliberately. `statusSetProblem` refuses a status the type
+   * does not define, and since TD-071 it refuses one the deal is merely still holding, so a client
+   * that carried anything else forward would produce a save the API rejects. Its other two rules —
+   * one terminal status, no terminal beside a running one — cannot be broken by this mapping: it
+   * never turns a running status into an ended one.
+   *
+   * WHAT CANNOT COME ACROSS IS NAMED BEFORE IT GOES, which is the half the entry asks for: "either
+   * preserve a still-valid status or warn the user that status will reset". Cancelling leaves the
+   * type alone, so nothing is saved either way.
+   */
+  const carryStatuses = (was: string[], newType: string): { keep: string[]; lost: string[] } => {
+    const options = statusOptionsFor(newType);
+    const keep: string[] = [];
+    const lost: string[] = [];
+    for (const s of was.filter(Boolean)) {
+      const mapped = normalizeStatus(newType, s);
+      if (!options.includes(mapped)) lost.push(s);
+      else if (!keep.includes(mapped)) keep.push(mapped);
+    }
+    return { keep, lost };
+  };
+
+  const onTypeChange = (newType: string) => {
+    if (!form || newType === form.type) return;
+    const { keep, lost } = carryStatuses(form.statuses || [], newType);
+    const fallback = keep.length ? keep : (defaultStatusFor(newType) ? [defaultStatusFor(newType)] : []);
+    const apply = () => setForm((f) => (f ? { ...f, type: newType, statuses: fallback } : f));
+    if (lost.length === 0) { apply(); return; }
+    const quoted = lost.map((s) => `“${s}”`).join(' and ');
+    askDelete({
+      title: 'Change the transaction type?',
+      message: `A ${typeLabel(newType)} deal cannot be ${quoted}, so ${lost.length === 1 ? 'that status' : 'those statuses'} will be removed. `
+        + (fallback.length ? `This deal will be ${fallback.join(' and ')}.` : 'Its status will be left blank for you to set.'),
+      linked: ['Which fields this deal shows and how its commission is worked out', 'Whether the deal is locked for editing', 'Every report and filter that selects by status'],
+      confirmLabel: 'Change type',
+      onConfirm: apply,
+    });
+  };
 
   // Delete confirmation: opens a popup describing the item and any linked
   // functionality before the row is removed (applied on Save).

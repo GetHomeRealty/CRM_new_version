@@ -296,7 +296,17 @@ export default function InboxPage() {
                     Mail for <strong>{list.mailbox.address}</strong> — the primary account for this area.
                     {list.mailbox.auto_sync ? ' Syncing automatically.' : ' Automatic sync is off for this account.'}
                   </span>
-                : <span className="muted">Mail from every account connected to this area — mark one primary in Integrations to read just that mailbox.</span>}
+                : <span className="muted">Mail from every account connected to this area — mark one primary in{' '}
+                    {/*
+                      TD-006 — one screen, named the same way twice, and one an agent can open.
+                      This said "in Integrations" while the empty state below said "under My
+                      Settings": two names for the work, and Integrations is a tab inside Settings,
+                      which an agent opening this very screen is refused. My Settings carries the
+                      same Make primary control, is reachable by every role, and is what the other
+                      sentence on this page already points at.
+                    */}
+                    <a onClick={() => navigate(link('account'))} style={{ cursor: 'pointer', textDecoration: 'underline' }}>My Settings</a>{' '}
+                    to read just that mailbox.</span>}
               {list && list.unread > 0 && <span className="pill info">{list.unread} unread</span>}
             </div>
           </div>
