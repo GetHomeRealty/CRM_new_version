@@ -118,8 +118,19 @@ export class AuditLogService {
     const scope: AuditScope = isScope(query.scope) ? query.scope : 'default';
 
     const and: Prisma.audit_logsWhereInput[] = [
-      // Agent-made transaction changes live in each transaction's own trail — exclude them.
-      { OR: [{ transaction_id: null }, { source: null }, { source: { not: 'Agent' } }] },
+      /*
+       * TD-067 - an agent's changes belong in the trail.
+       *
+       * This dropped every row with a transaction_id whose source was 'Agent', because those
+       * changes also live in each transaction's own trail. They do, and the review queue still
+       * owns approving them - but the Audit Trail is the screen a brokerage prints to show who
+       * changed what, and it silently omitted a whole class of change with nothing on the page
+       * to say so. buildWhere feeds the export too, so a workbook taken as evidence was missing
+       * the same rows.
+       *
+       * They are included and labelled instead: each row already carries `source`, and `handled`
+       * is now returned so the screen can say whether an agent's change is awaiting review.
+       */
       ...this.domainWhere(area, scope),
     ];
 
@@ -215,6 +226,7 @@ export class AuditLogService {
           field: a.field,
           action: a.action,
           source: a.source,
+          handled: a.handled,
           old_value: a.old_value,
           new_value: a.new_value,
           details: a.details,
