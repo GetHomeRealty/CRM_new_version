@@ -1388,11 +1388,16 @@ export class TransactionImportService {
   }
 
   /** Fuzzy property comparison — same rule the single-transaction duplicate guard uses. */
+  /**
+   * TD-139 - the review screen now applies the SAME address rule as the write.
+   *
+   * This was exact-or-prefix while TransactionsWriteService used a fuzzy match, so a file could
+   * pass review with 0 DUPLICATES and then have rows refused as duplicates on import - the
+   * counter positively asserting there were none. The two now share one function, so they cannot
+   * disagree about what a duplicate is.
+   */
   private similar(a: string, b: string): boolean {
-    const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
-    const x = norm(a), y = norm(b);
-    if (!x || !y) return false;
-    return x === y || x.startsWith(y) || y.startsWith(x);
+    return this.write.sameProperty(a, b);
   }
 
   // ---------------------------------------------------------------- confirm

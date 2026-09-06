@@ -521,7 +521,47 @@ export class TransactionsWriteService {
     await tx.$executeRawUnsafe('SELECT pg_advisory_xact_lock($1::int, $2::int)', DUPLICATE_LOCK_CLASS, hash | 0);
   }
 
+  /**
+   * TD-139 - THE ONE ADDRESS RULE, shared with the bulk importer.
+   *
+   * The importer had its own matcher - exact-or-prefix - while this one is fuzzy, so the review
+   * screen and the write applied DIFFERENT rules to the same pair of rows and disagreed by
+   * construction: review passed 300 Beta Rd beside 301 Beta Rd, the write then refused it as a
+   * duplicate. Two copies of a fuzzy rule drift; one rule cannot.
+   */
+  sameProperty(a: string, b: string): boolean {
+    return this.propertiesSimilar(a, b);
+  }
+
   private propertiesSimilar(a: string, b: string): boolean {
+    /*
+     * TD-138 - THE STREET NUMBER DECIDES, BEFORE ANY SIMILARITY IS CONSULTED.
+     *
+     * The fallback below is similar_text() >= 85%, and on a long address the street number is
+     * statistically invisible: 'ZZ-TEST DUP A, 300 Beta Rd, Toronto, ON M4B 2B2' and the same
+     * string with 301 differ by two characters in forty - about 95% similar - so two genuinely
+     * different properties were called one deal and the second was refused as a duplicate.
+     * Measured 2026-09-06; it also fired on 111 vs 112 Sample St.
+     *
+     * WHY THIS IS A SUBSET TEST AND NOT AN EQUALITY TEST. The fuzziness is deliberate and worth
+     * keeping - '9 Oak Rd' and '9 Oak Road Unit 2' ARE the same property, and that is the case
+     * the guard exists for. So every number in the shorter address must appear in the longer:
+     *   9 Oak Rd  vs  9 Oak Road Unit 2   -> {9} within {9,2}    -> still compared, still matches
+     *   300 Beta Rd  vs  301 Beta Rd      -> {300} not in {301}  -> different properties, stop
+     *   300 Beta Rd Unit 2 vs Unit 3      -> {300,2} vs {300,3}  -> different units, stop
+     * Word boundaries keep postal codes out of it: M4B and 2B2 yield no standalone digit run.
+     *
+     * THIS MAKES THE GUARD NARROWER, WHICH IS THE SAFE DIRECTION HERE. A missed duplicate is one
+     * extra deal somebody can delete; a false duplicate silently drops a real deal from an import
+     * of 495 and nobody finds out until they go looking for it.
+     */
+    const streetNums = (s: string): Set<string> => new Set(s.match(/\b\d+\b/g) ?? []);
+    const naNums = streetNums(a), nbNums = streetNums(b);
+    if (naNums.size && nbNums.size) {
+      const small = naNums.size <= nbNums.size ? naNums : nbNums;
+      const big = naNums.size <= nbNums.size ? nbNums : naNums;
+      for (const n of small) if (!big.has(n)) return false;
+    }
     const fa = this.addrFeatures(a), fb = this.addrFeatures(b);
     if (fa.dirs.join('\x00') !== fb.dirs.join('\x00') || fa.units.join('\x00') !== fb.units.join('\x00')) return false;
 
