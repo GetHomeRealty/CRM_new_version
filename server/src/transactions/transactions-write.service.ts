@@ -925,6 +925,54 @@ export class TransactionsWriteService {
     if (statuses.includes('Closed') && !isSuperAdmin(user)) {
       throw new ForbiddenException({ message: 'This transaction is Closed — only a Super Admin can edit it.' });
     }
+    /*
+     * TD-075 - AN AGENT MAY NOT MOVE THE MONEY ON A SAVED DEAL WITHOUT APPROVAL.
+     *
+     * AGENT_LOCKED holds every commission field - rate, amount, adjustments - and did not hold
+     * price. The commission is a rate applied to the price, so locking the rate and leaving the
+     * base open locks nothing: on ZZ-TEST deal 90 an agent moved 1,200,000 -> 1,250,000 and the
+     * commission followed, 30,000 -> 31,250, with no approval asked for. Measured 2026-09-06.
+     *
+     * PLACED HERE, BESIDE THE DFT RULE, rather than in the isAgent branch above: this is an
+     * approval gate and belongs with the other approval gates. A first attempt sat at the top of
+     * that branch and threw ReferenceError at runtime - readMoney is declared further down this
+     * same function, so it was in the temporal dead zone. It typechecked and still 500'd.
+     *
+     * REFUSED ONLY WHEN THE VALUE ACTUALLY CHANGES, not when the key is merely present. The client
+     * posts the whole form on every save, so refusing on presence breaks every ordinary save.
+     * The comparison parses its own numbers because the form sends "1,200,000" while the column
+     * holds a Decimal - String() on either gives digits this can read.
+     *
+     * ONLY ON UPDATE - creating a deal never reaches here, so an agent still types the price when
+     * they FILE the deal. Locked after it is saved, not before.
+     *
+     * ONLY FOR AGENTS. The withdrawn guard noted against TD-095 was about Accounting, whose right
+     * to change the money the brokerage affirmed on 2026-09-03. No other role is touched.
+     */
+    if (user && isAgent(user)) {
+      const money = (v: unknown): number => {
+        if (v === null || v === undefined || v === '') return 0;
+        const n = Number(String(v).replace(/[^0-9.-]/g, ''));
+        return Number.isFinite(n) ? n : 0;
+      };
+      const movedMoney = (['price', 'deposit'] as const).filter(
+        (k) =>
+          Object.prototype.hasOwnProperty.call(data, k) &&
+          Math.abs(money(data[k]) - money((t as unknown as Record<string, unknown>)[k])) > 0.005,
+      );
+      if (movedMoney.length) {
+        const approvedFin = await this.prisma.transaction_edit_requests.findFirst({
+          where: { transaction_id: txnId, scope: 'financial', status: 'approved' },
+          orderBy: [{ created_at: 'desc' }, { id: 'asc' }],
+        });
+        if (!approvedFin) {
+          const names = movedMoney.map((k) => (k === 'price' ? 'Total Purchase Price' : 'Deposit')).join(' and ');
+          const m = names + (movedMoney.length === 1 ? ' is' : ' are') + ' locked once the deal is saved, because the commission is worked out from ' + (movedMoney.length === 1 ? 'it' : 'them') + '. Ask a Super Admin to approve the change - use "Request Edit" - then save again.';
+          throw new ForbiddenException({ message: m, errors: Object.fromEntries(movedMoney.map((k) => [k, [m]])) });
+        }
+      }
+    }
+
     if (statuses.includes('DFT') && !isSuperAdmin(user)) {
       const approved = await this.prisma.transaction_edit_requests.findFirst({
         where: { transaction_id: txnId, status: 'approved' },
