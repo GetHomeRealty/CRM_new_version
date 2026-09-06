@@ -127,12 +127,44 @@ export class TradeNumberService {
     const top = rows[0]?.trade_no;
     const highest = top === undefined ? s.start - 1 : parseInt(top.slice(0, 6), 10);
     const candidate = highest + 1;
-    if (candidate > s.end) {
-      const msg = `The ${s.label} trade number series (${s.start}-${s.end}) is full. `
-        + 'No further deals of this type can be numbered until the range is extended.';
-      throw new UnprocessableEntityException({ message: msg, errors: { trade_no: [msg] } });
-    }
-    return String(candidate) + s.suffix;
+    if (candidate <= s.end) return String(candidate) + s.suffix;
+
+    /*
+     * TD-140 - ONE DEAL AT THE TOP OF A BAND MUST NOT KILL THE WHOLE SERIES.
+     *
+     * highest+1 is right almost always, and spent numbers staying spent is right too - an issued
+     * number should never be handed out twice, deleted deal or not. Together, though, a SINGLE
+     * row at the ceiling ended the series for good.
+     *
+     * Not hypothetical: on 2026-09-06 all five bands were dead, each holding one soft-deleted
+     * deal at its ceiling - 199999, 299999, 399999, 499999, 599999_NB - left by boundary testing.
+     * No deal of ANY type could be created through a screen that does not ask for a trade number,
+     * while thousands of numbers sat unused below.
+     *
+     * So when the top is taken, fall back to the LOWEST unused number in the band. Nothing is
+     * re-issued: the anti-join asks the table itself, so a number held by any row, deleted or
+     * live, is skipped. The series simply stops calling itself full while it demonstrably is not.
+     *
+     * ONLY ON THE FALLBACK, which is why the scan is affordable - ordinary allocation is still
+     * the single indexed row-read above. generate_series is already ordered, so LIMIT 1 stops at
+     * the first gap rather than walking the range.
+     */
+    const gap = await db.$queryRawUnsafe<{ n: number }[]>(
+      `SELECT g.n::int AS n
+         FROM generate_series($1::int, $2::int) AS g(n)
+        WHERE NOT EXISTS (
+              SELECT 1 FROM transactions t
+               WHERE t.trade_no = lpad(g.n::text, 6, '0') || $3
+            )
+        ORDER BY g.n
+        LIMIT 1`,
+      s.start, s.end, s.suffix);
+    if (gap.length && gap[0] && gap[0].n !== null && gap[0].n !== undefined) return String(gap[0].n) + s.suffix;
+
+    const msg = `The ${s.label} trade number series (${s.start}-${s.end}) is full. `
+      + 'Every number in the range has been issued. No further deals of this type can be numbered '
+      + 'until the range is extended.';
+    throw new UnprocessableEntityException({ message: msg, errors: { trade_no: [msg] } });
   }
 
   /** The band a type belongs to, for callers validating a manually-chosen number. */

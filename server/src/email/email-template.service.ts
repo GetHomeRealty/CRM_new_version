@@ -185,16 +185,34 @@ export class EmailTemplateService {
 
   // ---- validation (port of UpdateEmailTemplateRequest) ----
 
-  private async validate(body: Record<string, unknown>): Promise<{ subject: string; body_html: string; mail_account_id?: number | null; is_active?: boolean }> {
+  /*
+   * A STATUS-ONLY UPDATE DOES NOT HAVE TO RESEND THE MESSAGE.
+   *
+   * This validated every request as a full template rewrite, so the Triggers screen's Switch off
+   * button - which sends {is_active:false} and nothing else - was refused 422 with 'The subject
+   * field is required'. NO TRIGGER COULD BE SWITCHED OFF AT ALL, and the screen showed nothing,
+   * so the brokerage believed it had a working control over eleven customer-facing emails and did
+   * not. Found 2026-09-06 while trying to silence the triggers before a bulk import.
+   *
+   * The caller spreads this result straight into the update, so omitting the two keys leaves the
+   * stored subject and body untouched - a toggle cannot blank the message it is turning off.
+   * Every rule below is unchanged the moment either field IS sent, including the guard that stops
+   * a template being saved with a subject and nothing under it.
+   */
+  private async validate(body: Record<string, unknown>): Promise<{ subject?: string; body_html?: string; mail_account_id?: number | null; is_active?: boolean }> {
     const errors: FieldErrors = {};
     const push = (f: string, m: string): void => { (errors[f] ??= []).push(m); };
     const empty = (v: unknown): boolean => v === undefined || v === null || v === '';
+    const sent = (k: string): boolean => Object.prototype.hasOwnProperty.call(body, k);
+    const statusOnly = !sent('subject') && !sent('body_html');
 
-    if (empty(body.subject)) push('subject', 'The subject field is required.');
+    if (statusOnly) { /* the message is not being edited - leave it alone */ }
+    else if (empty(body.subject)) push('subject', 'The subject field is required.');
     else if (typeof body.subject !== 'string') push('subject', 'The subject field must be a string.');
     else if ([...(body.subject as string)].length > 998) push('subject', 'The subject field must not be greater than 998 characters.');
 
-    if (empty(body.body_html)) push('body_html', 'The body html field is required.');
+    if (statusOnly) { /* as above */ }
+    else if (empty(body.body_html)) push('body_html', 'The body html field is required.');
     else if (typeof body.body_html !== 'string') push('body_html', 'The body html field must be a string.');
     /*
      * "REQUIRED" HAS TO MEAN "HAS SOMETHING IN IT", not "is not the empty string".
@@ -222,7 +240,8 @@ export class EmailTemplateService {
 
     if (Object.keys(errors).length) throwValidation(errors);
 
-    const out: { subject: string; body_html: string; mail_account_id?: number | null; is_active?: boolean } = { subject: String(body.subject), body_html: String(body.body_html) };
+    const out: { subject?: string; body_html?: string; mail_account_id?: number | null; is_active?: boolean } =
+      statusOnly ? {} : { subject: String(body.subject), body_html: String(body.body_html) };
     if (Object.prototype.hasOwnProperty.call(body, 'mail_account_id')) out.mail_account_id = empty(body.mail_account_id) ? null : Number(body.mail_account_id);
     if (Object.prototype.hasOwnProperty.call(body, 'is_active')) out.is_active = body.is_active === true || body.is_active === 1 || ['1', 'true'].includes(String(body.is_active));
     return out;
