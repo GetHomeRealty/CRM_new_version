@@ -424,6 +424,36 @@ export class AreaDashboardService {
       this.prisma.todos.count({ where: { ...personal, ...this.areaOr('desk'), status: 'pending', due_date: { lt: today } } }),
     ]);
 
+    /*
+     * TD-005 - THE DESK CALENDAR TILE COUNTS WHAT THE DESK CALENDAR SHOWS.
+     *
+     * The tile counted stored calendar_events only, so once closings were projected onto the desk
+     * calendar the tile read 0 beside a calendar with entries on it - the same contradiction this
+     * entry was raised for, moved one tile along. The brokerage's ruling on 2026-09-06 was that
+     * the tile must match the calendar.
+     *
+     * SAME RULE, SAME SCOPE as CalendarService.list, so the two cannot drift: deals whose closing
+     * date falls in the window, restricted by transactionScopeWhere, minus any where a real
+     * 'closing' event is already booked against that deal on that day - which the calendar
+     * suppresses too, so counting both would be counting one thing twice.
+     *
+     * CRM IS UNTOUCHED: this is inside the desk summary, and the CRM tile above still counts only
+     * its own stored events.
+     */
+    const closeWindow = { gte: today, lt: this.daysFromToday(30) };
+    const [closingSoonDeals, closingTodayDeals, bookedClosings] = await Promise.all([
+      this.prisma.transactions.findMany({ where: { ...live, closing_date: closeWindow }, select: { id: true, closing_date: true } }),
+      this.prisma.transactions.findMany({ where: { ...live, closing_date: today }, select: { id: true } }),
+      this.prisma.calendar_events.findMany({
+        where: { ...personal, ...this.areaOr('desk'), ...this.liveEvent, type: 'closing', transaction_id: { not: null }, date: closeWindow },
+        select: { transaction_id: true, date: true },
+      }),
+    ]);
+    const bookedKey = new Set(bookedClosings.map((b) => String(b.transaction_id) + '|' + b.date.toISOString().slice(0, 10)));
+    const derivedSoon = closingSoonDeals.filter((d) => d.closing_date && !bookedKey.has(String(d.id) + '|' + d.closing_date.toISOString().slice(0, 10))).length;
+    const todayKey = today.toISOString().slice(0, 10);
+    const derivedToday = closingTodayDeals.filter((d) => !bookedKey.has(String(d.id) + '|' + todayKey)).length;
+
     const dec = (v: Prisma.Decimal | null): number => (v ? Number(v) : 0);
 
     return {
@@ -443,7 +473,7 @@ export class AreaDashboardService {
           outstanding: dec(invoiceMoney._sum.balance_due),
         }
         : null,
-      calendar: { upcoming: calUpcoming, today: calToday },
+      calendar: { upcoming: calUpcoming + derivedSoon, today: calToday + derivedToday },
       todos: { total: todoTotal, pending: todoPending, overdue: todoOverdue },
     };
   }

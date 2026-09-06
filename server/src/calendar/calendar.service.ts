@@ -130,7 +130,77 @@ export class CalendarService {
       // and the busiest calendar in this database was already 223 KB spanning five months.
       take: MAX_EVENTS,
     });
-    return rows.map((r) => this.present(r));
+    const events = rows.map((r) => this.present(r));
+
+    /*
+     * TD-005 - A DEAL'S CLOSING DATE APPEARS ON THE TRANSACTION DESK CALENDAR.
+     *
+     * Twelve deals carried closing dates spanning Aug 2026 to Mar 2027 and the calendar showed
+     * none of them. The application contradicted itself on one screen: the Dashboard's CLOSINGS
+     * AHEAD tile read '3 - 3 next 30 days' beside a DESK CALENDAR tile reading '0'.
+     *
+     * THE DESK CALENDAR ONLY - the brokerage's ruling of 2026-09-06. A closing belongs to the
+     * Transaction Desk; the CRM calendar is for the CRM's own work and is left exactly as it was.
+     * Hence the early return: area 'crm' never reaches this code.
+     *
+     * DERIVED AT READ TIME, NOT STORED. Writing a calendar_events row per deal would need
+     * creating, updating and deleting in step with the deal, and would drift the moment a
+     * closing date moved - which on this system it does, repeatedly. The deal is the single
+     * source of truth and this projects it.
+     *
+     * SCOPED LIKE EVERY OTHER READ. transactionScopeWhere means an agent sees closings only for
+     * deals they are on. Without it this endpoint would hand any agent every deal's trade number
+     * and street address - the exact hole that module's own comment was written about.
+     *
+     * A REAL EVENT WINS. If somebody has already booked a 'closing' event against that deal on
+     * that day, theirs is kept and nothing is added beside it - it is editable and this is not.
+     *
+     * NEGATIVE IDS mark these as derived: a stored row can never have one, so a client that
+     * tries to edit or delete one cannot hit a real record by accident. They also carry
+     * readonly: true for a client that wants to grey the pencil out.
+     */
+    if (area !== 'desk') return events;
+    if (q.lead_id) return events;
+    if (q.type && q.type !== 'closing') return events;
+    if (q.status && q.status !== 'scheduled') return events;
+    const closingWindow: Record<string, unknown> = { not: null };
+    if (q.from) closingWindow.gte = this.toDate(q.from);
+    if (q.to) closingWindow.lte = this.toDate(q.to);
+    const deals = await this.prisma.transactions.findMany({
+      where: {
+        deleted_at: null,
+        ...transactionScopeWhere(user),
+        ...(q.transaction_id ? { id: Number(q.transaction_id) } : {}),
+        closing_date: closingWindow,
+      },
+      select: { id: true, trade_no: true, property: true, closing_date: true, type: true },
+      take: MAX_EVENTS,
+    });
+    const booked = new Set(
+      events.filter((e) => e.type === 'closing' && e.transaction_id).map((e) => String(e.transaction_id) + '|' + String(e.date)),
+    );
+    for (const d of deals) {
+      if (!d.closing_date) continue;
+      const day = d.closing_date.toISOString().slice(0, 10);
+      if (booked.has(String(d.id) + '|' + day)) continue;
+      events.push({
+        id: -d.id,
+        readonly: true,
+        title: 'Closing - Trade #' + d.trade_no + (d.property ? ' - ' + d.property : ''),
+        date: day,
+        time: null, end_time: null, version: 1, recurrence_id: null, recur_freq: null,
+        type: 'closing', status: 'scheduled',
+        location: d.property ?? null,
+        description: d.type + ' closing on ' + day + '.',
+        attendees: null, contact_phone: null, contact_email: null, property_details: null,
+        notes: null, enable_reminder: false, reminder_sent: false,
+        transaction_id: d.id, lead_id: null,
+        trade_no: d.trade_no, transaction_property: d.property ?? null,
+        created_by: null, created_at: null, updated_at: null,
+      });
+    }
+    events.sort((a, b) => String(a.date).localeCompare(String(b.date)) || String(a.time ?? '').localeCompare(String(b.time ?? '')));
+    return events;
   }
 
   async get(id: number, user: AuthUserRecord, area: Area): Promise<Record<string, unknown>> {
