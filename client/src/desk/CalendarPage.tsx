@@ -424,6 +424,9 @@ export default function CalendarPage() {
           <div className="cal-legend">
             <span><i className="cal-lg-dot stat" /> Holiday</span>
             <span><i className="cal-lg-dot fest" /> Festival</span>
+            {/* TD-005 - the closing chips are drawn from the deals themselves, so the key has to
+                say both what the colour means and that it is not an appointment somebody booked. */}
+            <span><i className="cal-lg-dot" style={{ background: 'var(--ev-closing-bg, #0f172a)', borderColor: 'var(--ev-closing-bg, #0f172a)' }} /> Closing (from the deal)</span>
             <span className="muted">◐ date may vary (lunar)</span>
           </div>
         </div>

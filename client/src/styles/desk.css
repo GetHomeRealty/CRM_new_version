@@ -502,7 +502,13 @@ input[type="number"],.numeric,.stat-card .val{font-variant-numeric:tabular-nums;
 .ev-followup{background:var(--ev-followup-bg,#fae8ff);color:var(--ev-followup-fg,#86198f)}
 .ev-call{background:var(--ev-call-bg,#ffedd5);color:var(--ev-call-fg,#9a3412)}
 .ev-inspection{background:var(--ev-inspection-bg,#e0e7ff);color:var(--ev-inspection-fg,#4338ca)}
-.ev-closing{background:var(--ev-closing-bg,#fee2e2);color:var(--ev-closing-fg,#b91c1c)}
+/* TD-005 - a closing is INK, and deliberately the only solid chip among eight pastels.
+   Every hue was already spoken for (viewing blue, showing teal, meeting green, open-house
+   amber, call orange, inspection indigo, follow-up fuchsia) and red clashed with the Holiday
+   dot, so this is distinguished by WEIGHT rather than by hue - it cannot collide with anything.
+   It also reads as what it is: a deadline drawn from the deal, not an appointment somebody
+   booked, and the only chip on the calendar that cannot be edited. */
+.ev-closing{background:var(--ev-closing-bg,#0f172a);color:var(--ev-closing-fg,#f8fafc)}
 .ev-task{background:var(--ev-task-bg,#e5e7eb);color:var(--ev-task-fg,#374151)}
 
 /* Dark mode is chosen, not flipped: each pair is re-picked against the dark surface rather than
@@ -515,7 +521,11 @@ input[type="number"],.numeric,.stat-card .val{font-variant-numeric:tabular-nums;
   --ev-followup-bg:#4a1d4a;--ev-followup-fg:#f0abfc;
   --ev-call-bg:#4a2508;--ev-call-fg:#fdba74;
   --ev-inspection-bg:#2e2a5e;--ev-inspection-fg:#a5b4fc;
-  --ev-closing-bg:#5c1a1a;--ev-closing-fg:#fca5a5;
+  /* SAME INK AS THE LIGHT VALUE, ON PURPOSE, UNTIL TD-137 IS FIXED. These dark tokens apply to
+     anyone whose OS is in dark mode, but the page itself still renders light, so a pale chip
+     here would vanish into a pale calendar. When the page can actually be dark, give this its
+     own value again. */
+  --ev-closing-bg:#0f172a;--ev-closing-fg:#f8fafc;
   --ev-task-bg:#33383f;--ev-task-fg:#d1d5db;
 }}
 :root[data-theme="dark"]{
@@ -526,7 +536,11 @@ input[type="number"],.numeric,.stat-card .val{font-variant-numeric:tabular-nums;
   --ev-followup-bg:#4a1d4a;--ev-followup-fg:#f0abfc;
   --ev-call-bg:#4a2508;--ev-call-fg:#fdba74;
   --ev-inspection-bg:#2e2a5e;--ev-inspection-fg:#a5b4fc;
-  --ev-closing-bg:#5c1a1a;--ev-closing-fg:#fca5a5;
+  /* SAME INK AS THE LIGHT VALUE, ON PURPOSE, UNTIL TD-137 IS FIXED. These dark tokens apply to
+     anyone whose OS is in dark mode, but the page itself still renders light, so a pale chip
+     here would vanish into a pale calendar. When the page can actually be dark, give this its
+     own value again. */
+  --ev-closing-bg:#0f172a;--ev-closing-fg:#f8fafc;
   --ev-task-bg:#33383f;--ev-task-fg:#d1d5db;
 }
 
