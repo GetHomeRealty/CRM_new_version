@@ -960,6 +960,24 @@ export class TransactionImportService {
         }
       }
 
+      /*
+       * TD-097 - A BLANK CELL THE REVIEW SCREEN PASSED AND THE IMPORT THEN REFUSED.
+       *
+       * The check above runs only when a status was SUPPLIED, so a blank cell was never examined
+       * here. The write path then filled it with 'Open' and refused the row for holding it:
+       * 1 VALID on review, 0 IMPORTED / 1 REJECTED on import, reproduced 2026-09-06.
+       *
+       * NOTHING IS SUBSTITUTED, BECAUSE THERE IS NOTHING HONEST TO SUBSTITUTE. defaultStatusFor
+       * returns '' for the secured deal types on purpose - 'the user picks one'. Choosing the
+       * first allowed status instead would invent a business fact nobody stated: a deal is not
+       * Secured Firm because a cell was empty. So the row is refused, and refused HERE, where
+       * the user can still fix it, rather than after they have pressed Import.
+       */
+      if (known && !status && !defaultStatusFor(type)) {
+        add('Deal Status', '', 'Deal Status is needed for ' + type + ' - this type has no default.',
+          withSplitNote('Use one of: ' + statusOptionsFor(type).join(', '), splitClassificationNote(type)));
+      }
+
       // ---- team: from the Team Split rows when present, else the flat columns ----
       const teamRows = rec.children.team ?? [];
       const primaryFromSheet = teamRows.find((t) => /^yes$/i.test(String(t.Primary ?? '').trim()));
@@ -1120,7 +1138,9 @@ export class TransactionImportService {
     // already resolved, and the loop above would otherwise put "Lease Listing" in the column.
     if (type) body.type = type;
     const status = get('Deal Status');
-    body.status = status || defaultStatusFor(type) || 'Open';
+    // TD-097 - no || 'Open' fallback. defaultStatusFor returns '' for the secured deal types
+    // deliberately, and that literal overrode it with a status those types may not hold.
+    body.status = status || defaultStatusFor(type);
     // The primary agent may come from the Transactions sheet or from the Team Split rows.
     if (primary) body.primary_agent = primary;
     const splits = get('Split Agents').split(',').map((s) => s.trim()).filter(Boolean);
