@@ -827,7 +827,18 @@ export class TransactionImportService {
 
   /** Per-row validation: required fields, formats, enums, relationships and duplicates. */
   private async validateRows(records: RawRecord[]): Promise<ParsedRow[]> {
-    const agents = new Set((await this.prisma.users.findMany({ where: { status: 'Active' }, select: { name: true } })).map((u) => u.name));
+    const activeNames = (await this.prisma.users.findMany({ where: { status: 'Active' }, select: { name: true } })).map((u) => u.name);
+    const agents = new Set(activeNames);
+    // Agent names match without regard to case, and the stored spelling wins. The brokerage's
+    // master workbook writes ANAND PERICHERLA where Users holds Anand Pericherla, and all 495
+    // historic deals failed on that alone. Ruled 2026-09-06. Ambiguity is REFUSED, never guessed:
+    // this database holds two active accounts called Akhil, and filing a deal under the wrong one
+    // is a commission paid to the wrong person.
+    const agentByNorm = new Map<string, string[]>();
+    for (const n of activeNames) {
+      const k = n.trim().replace(/\s+/g, ' ').toLowerCase();
+      agentByNorm.set(k, [...(agentByNorm.get(k) ?? []), n]);
+    }
     const existing = await this.prisma.transactions.findMany({
       where: { deleted_at: null },
       select: { trade_no: true, type: true, price: true, offer_date: true, property: true },
@@ -979,6 +990,45 @@ export class TransactionImportService {
       }
 
       // ---- team: from the Team Split rows when present, else the flat columns ----
+      // Canonicalise BEFORE any check, so the review screen, the stored payload and the write all
+      // see one spelling. toBody() runs during validation and its result is what confirm() writes,
+      // so rewriting the record here is enough - relaxing only the check would pass a row at review
+      // that the write still could not resolve, which is TD-097.
+      const canon = (raw: string): { name: string; ambiguous?: string[] } => {
+        const v = String(raw ?? '').trim();
+        if (!v || agents.has(v)) return { name: v };
+        const hits = agentByNorm.get(v.replace(/\s+/g, ' ').toLowerCase()) ?? [];
+        if (hits.length === 1) return { name: hits[0] };
+        if (hits.length > 1) return { name: v, ambiguous: hits };
+        return { name: v };
+      };
+      const canonInto = (obj: Record<string, string>, col: string, section: string): void => {
+        const cur = String(obj[col] ?? '').trim();
+        if (!cur) return;
+        const r = canon(cur);
+        if (r.ambiguous) {
+          add(col, cur, 'More than one active user is named ' + cur + '.',
+            'These accounts match once capitals are set aside: ' + r.ambiguous.join(' and ') +
+            '. Type the one you mean exactly as it appears in the Users module.', 'error', section);
+          return;
+        }
+        obj[col] = r.name;
+      };
+      canonInto(rec.main, 'Primary Agent', '');
+      if (String(rec.main['Split Agents'] ?? '').trim()) {
+        const fixed: string[] = [];
+        for (const one of String(rec.main['Split Agents']).split(',').map((x) => x.trim()).filter(Boolean)) {
+          const r = canon(one);
+          if (r.ambiguous) {
+            add('Split Agents', one, 'More than one active user is named ' + one + '.',
+              'These accounts match once capitals are set aside: ' + r.ambiguous.join(' and ') + '.', 'error', '');
+          }
+          fixed.push(r.ambiguous ? one : r.name);
+        }
+        rec.main['Split Agents'] = fixed.join(', ');
+      }
+      for (const t of (rec.children.team ?? [])) canonInto(t as Record<string, string>, 'Agent', 'Team Split');
+
       const teamRows = rec.children.team ?? [];
       const primaryFromSheet = teamRows.find((t) => /^yes$/i.test(String(t.Primary ?? '').trim()));
       const primary = get('Primary Agent') || String(primaryFromSheet?.Agent ?? '').trim();
@@ -1193,7 +1243,16 @@ export class TransactionImportService {
         if (String(t['Deal Share %'] ?? '').trim()) m.split = num(String(t['Deal Share %']));
         if (String(t['Agent %'] ?? '').trim()) m.agent_pct = num(String(t['Agent %']));
         if (String(t['Brokerage %'] ?? '').trim()) m.brok_pct = num(String(t['Brokerage %']));
-        if (String(t.Access ?? '').trim()) m.access = String(t.Access).trim();
+        // An imported team member gets FULL access unless the file says otherwise - the brokerage's
+        // ruling, 2026-09-06. The write path falls back to 'docs' when no access is sent, and the
+        // Add Transaction screen always sends 'full', so an omitted column made the SAME agent on
+        // the SAME deal documents-only if the deal arrived by import and full if it was typed in.
+        // On the 495 historic deals - whose mapped file carries no Access column - every co-agent
+        // would have been silently locked out of deals they are working, and the import would have
+        // reported complete success. Fixed HERE rather than by changing the write-path default,
+        // which stays 'docs': least privilege is the right fallback for any caller that says
+        // nothing, and widening it would loosen permissions for every future integration too.
+        m.access = String(t.Access ?? '').trim() || 'full';
         return m;
       }).filter((m) => m.name);
       // The primary must sort first — syncTeam treats position 0 as primary when unflagged.
