@@ -148,6 +148,28 @@ export const isTerminalStatus = (status: string): boolean =>
   (TERMINAL_STATUSES as readonly string[]).includes(status);
 
 /**
+ * TD-009 — the status changes worth telling the deal's agent about.
+ *
+ * The entry asks for a trigger on "status changed", and the whole set is the wrong answer: a deal
+ * moves through Active and Secured Conditional as ordinary progress, and an administrator fixing a
+ * mis-set status would email the agent about a correction. What an agent needs to hear is that the
+ * deal has become FIRM or has ENDED — the two points where their money and their obligations
+ * change.
+ *
+ * Built from `TERMINAL_STATUSES` rather than beside it, so a new way for a deal to end is notified
+ * by having been added there once. The three added by hand are the firm/sold milestones, one per
+ * transaction family: `Secured Firm` on an offer-side deal, `Sold` on a listing, `Leased` on a
+ * lease. Omitting `Leased` would have left lease deals silent, which is the sort of gap a
+ * hand-written list acquires.
+ */
+export const NOTIFIABLE_STATUSES = [
+  'Secured Firm', 'Sold', 'Leased', ...TERMINAL_STATUSES,
+] as const;
+
+export const isNotifiableStatus = (status: string): boolean =>
+  (NOTIFIABLE_STATUSES as readonly string[]).includes(status);
+
+/**
  * What is wrong with this set of statuses for this transaction type, or null if nothing is.
  *
  * Returns a SENTENCE rather than a boolean because the caller shows it to somebody who has just

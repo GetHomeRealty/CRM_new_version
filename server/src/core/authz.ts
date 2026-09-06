@@ -83,13 +83,22 @@ export const CAPABILITIES = {
    * CRM › Settings audit: the `crm` role received all six, while its own permission map is
    * `transactions: 'none'`, `invoice: 'none'` — it cannot open a single screen that displays them.
    *
-   * WHY `accounting` IS THE LEVEL, and not something stricter. The six documents that print these
-   * numbers — Invoice, Trade Sheet, Notice of Sale, Deposit Receipt, Lawyer Statement — are opened
-   * from TransactionDetailPage behind `!isAgent`, which `documentation` reaches on
-   * `transactions: 'edit'` and `accounting` reaches for invoicing. Setting this any higher would
+   * WHY `accounting` IS THE LEVEL, and not something stricter. The documents that print these
+   * numbers are opened from TransactionDetailPage behind `!isAgent`, which `documentation` reaches
+   * on `transactions: 'edit'` and `accounting` reaches for invoicing. Setting this any higher would
    * take the numbers away from the two roles whose job is to produce those documents. `accounting`
    * and `documentation` share rank 60, so one threshold admits both, and `crm` (40) and `agent`
    * (20) fall below it — which is exactly the line the product already draws.
+   *
+   * TD-116 — THE `!isAgent` GATE ABOVE IS NO LONGER THE WHOLE STORY, and the threshold is
+   * deliberately unchanged by that. The Trade Sheet and the Notice of Sale are now offered to the
+   * deal's own agent, so two of the documents that sentence groups together are no longer behind
+   * `!isAgent`. Neither of them reads these fields — checked in both directions: no client modal
+   * and no server path composes them from company settings, and the only consumers of the bank
+   * block are `invoices.service.ts` and the Settings screens themselves. So an agent producing
+   * their own closing paperwork never reaches a number this capability withholds, and the Invoice,
+   * which does print them, is still `!isAgent`. If a document that DOES print them is ever opened
+   * up, this threshold is the line to revisit — not the page gate.
    */
   'company.read-banking': ROLE_RANK.accounting,
   /** Read data belonging to people other than yourself. */

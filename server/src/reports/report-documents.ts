@@ -43,6 +43,22 @@ export interface CondRow {
  * Invalid is decisive; a document is Valid only once validation says so; everything else
  * (not received, received but unchecked) is Pending.
  */
+/**
+ * TD-089 — HAS THE DOCUMENT ARRIVED? A different question from `docStatus` above.
+ *
+ * A document row carries two independent fields, and the reports only ever counted one of them.
+ * `validation` says whether a reviewer has checked the document; `status` says whether the
+ * brokerage HAS it. They part company exactly when a document has arrived but nobody has validated
+ * it yet — which is the normal state of a document the day it comes in — so on deal 4 the report
+ * called all ten outstanding while seven were already on file, and an administrator was sent to
+ * chase paperwork sitting in the folder.
+ *
+ * Normalised the way `docStatus` normalises validation, so the two axes are read with one
+ * discipline rather than one being trimmed and the other compared raw.
+ */
+export const isReceived = (d: { raw_status?: string; status?: string }): boolean =>
+  String(d.raw_status ?? '').trim().toLowerCase() === 'received';
+
 export function docStatus(d: { status: string; validation: string }): DocStatus {
   const v = String(d.validation ?? '').trim().toLowerCase();
   if (v === 'invalid') return 'Invalid';
@@ -93,6 +109,12 @@ export interface DocCounts {
   mandatory: number;
   /** Mandatory documents that are not yet Valid — the "missing mandatory" measure. */
   missing_mandatory: number;
+  /**
+   * TD-089 — documents the brokerage HAS, counted off `documents.status` rather than validation.
+   * This is the figure the deal's own Legal & Documentation panel shows as "5 / 10 received", and
+   * until now it could not be recovered from the reports at all.
+   */
+  received: number;
   uploaded: number;
   reminders_sent: number;
 }
@@ -104,6 +126,10 @@ export function docCounts(docs: DocRow[]): DocCounts {
     valid: docs.filter((d) => d.status === 'Valid').length,
     mandatory: docs.filter((d) => d.mandatory).length,
     missing_mandatory: docs.filter((d) => d.mandatory && d.status !== 'Valid').length,
+    // TD-089 — `raw_status`, not `uploaded`: the panel counts what the brokerage has been GIVEN,
+    // which is the same thing a reviewer marks Received, and not whether a file happens to be
+    // attached to the row.
+    received: docs.filter((d) => isReceived(d)).length,
     uploaded: docs.filter((d) => d.uploaded).length,
     reminders_sent: docs.filter((d) => d.reminder_sent).length,
   };

@@ -234,6 +234,8 @@ export default function TransactionDetailPage() {
   const [agents, setAgents] = useState<string[]>([]);
   // TD-045 - true when the agent on this deal is an external/co-op name rather than an account.
   const [externalAgent, setExternalAgent] = useState(false);
+  // TD-132 - the same, for the preconstruction Commission Agent.
+  const [externalCommissionAgent, setExternalCommissionAgent] = useState(false);
   const [saving, setSaving] = useState(false);
   const [teamOpen, setTeamOpen] = useState(false);
   const [finOpen, setFinOpen] = useState(false);
@@ -920,7 +922,8 @@ export default function TransactionDetailPage() {
           <span className={`pill ${view ? 'info' : 'warn'}`} style={{ fontSize: 10 }}>{view ? <><Icon name="lock" size={11} /> View Only</> : <><Icon name="edit" size={11} /> Edit Mode</>}</span>
         </div>
         <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-          {/* Invoice / Trade Sheet / Notice of Sale are hidden for agents. */}
+          {/* Invoice, the Deposit Receipt and the Lawyer Statement are hidden for agents. The Trade
+            * Sheet and Notice of Sale are not - see TD-116 on the two buttons further down. */}
           {/*
             * TD-035 — the Deposit Receipt is its own decision, taken on `hasDeposit`.
             *
@@ -938,8 +941,34 @@ export default function TransactionDetailPage() {
           ) : (
             !docsOnly && !isDocumentation && <button className="btn ghost sm" style={invoicePaid ? { color: 'var(--ok-ink)', borderColor: 'var(--ok-ring-2)', background: 'var(--ok-bg)', fontWeight: 700 } : undefined} onClick={openInvoice}><Icon name="receipt" size={13} /> Invoice{invoicePaid ? ' Paid' : (invoiceSent ? ' sent' : '')}</button>
           ))}
-          {!isAgent && !docsOnly && !hideTradeSheet && <button className="btn ghost sm" onClick={() => setTsOpen(true)}><Icon name="clipboard" size={13} /> Trade Sheet{tradeSheetSent ? ' sent' : ''}</button>}
-          {!isAgent && !docsOnly && !hideStmtNos && <button className="btn ghost sm" style={nosSent ? { color: 'var(--ok-ink)', borderColor: 'var(--ok-ring-2)', background: 'var(--ok-bg)', fontWeight: 700 } : undefined} onClick={() => setNosOpen(true)}><Icon name="doc" size={13} /> Notice of Sale{nosSent ? ' Sent' : ''}</button>}
+          {/*
+            * TD-116 - AN AGENT PRODUCES THE CLOSING PAPERWORK FOR THEIR OWN FILE.
+            *
+            * These two read `!isAgent`, so the role was offered neither action in either mode and
+            * neither phrase appeared anywhere on the page. The half that made it a defect rather
+            * than a policy is that the product ADVERTISED THE PAYOFF TO THE ROLE IT DENIED: the
+            * Lawyer Details modal an agent is asked to complete carries the footnote 'Used to
+            * auto-fill the Notice of Sale and Trade Sheet documents', so the screen explained the
+            * purpose of eight required fields and then withheld what they were for. The brokerage
+            * answered the question the entry parks - the agent gets the documents - so the footnote
+            * is now true rather than reworded.
+            *
+            * `isFullAgent` RATHER THAN DROPPING THE CHECK, because that is the rule the server
+            * already applies. `assertTransaction` admits the deal's own agent or a team member on
+            * it and refuses everyone else, and these routes are gated on the `transactions` SCREEN
+            * permission, which every agent holds - so the endpoints have always accepted an agent
+            * on their own deal and only a hidden button stopped them. Widening the UI to exactly
+            * `isOwnerAgent || myTeamAccess === 'full'` states one rule in two places instead of
+            * two rules; a view-only split viewer still gets nothing, and no server change is
+            * needed or made.
+            *
+            * The three conditions beside it are untouched and are NOT about role: `docsOnly` is a
+            * Void or Mutual Release deal, `hideTradeSheet` and `hideStmtNos` are statuses too
+            * early for the document to mean anything. They hide these actions from an
+            * administrator as readily as from an agent, which is why they stay.
+            */}
+          {(!isAgent || isFullAgent) && !docsOnly && !hideTradeSheet && <button className="btn ghost sm" onClick={() => setTsOpen(true)}><Icon name="clipboard" size={13} /> Trade Sheet{tradeSheetSent ? ' sent' : ''}</button>}
+          {(!isAgent || isFullAgent) && !docsOnly && !hideStmtNos && <button className="btn ghost sm" style={nosSent ? { color: 'var(--ok-ink)', borderColor: 'var(--ok-ring-2)', background: 'var(--ok-bg)', fontWeight: 700 } : undefined} onClick={() => setNosOpen(true)}><Icon name="doc" size={13} /> Notice of Sale{nosSent ? ' Sent' : ''}</button>}
           <button className="btn ghost sm" onClick={() => setChatOpen(true)}><Icon name="message" size={13} /> Chat</button>
           <span style={{ width: 1, height: 18, background: 'var(--line)', margin: '0 4px' }} />
           {!canEdit
@@ -1362,11 +1391,46 @@ export default function TransactionDetailPage() {
               </select>
             </Field>
             <Field label="Commission Agent">
-              <input list="agentList" value={form.commission_agent} disabled={ro} onChange={(e) => set('commission_agent', e.target.value)} placeholder="Search Agent..." />
-              {/* Kept beside the field that uses it: TD-045 turned Agent Name into a <select> and
-                * removed the shared <datalist> this input had been borrowing, silently breaking
-                * its suggestions - so it now owns the list it points at. */}
-              <datalist id="agentList">{agents.map((a) => <option key={a} value={a} />)}</datalist>
+              {/* TD-132 - the commission agent is PICKED, not typed, exactly as TD-045 made Agent
+                * Name a choice. This was an <input list="agentList">, and a datalist only SUGGESTS:
+                * a shortened name, a differing case or a trailing space was accepted and stored
+                * verbatim, with no link to an account. That is the same weakness on a different
+                * column, and it arrived here BY INHERITANCE - the two fields shared one datalist by
+                * id, so removing Agent Name's copy left this one pointing at nothing, and the list
+                * was restored beside it rather than the field being reconsidered.
+                *
+                * IT TRAILED TD-045 RATHER THAN SHIPPING WITH IT because nothing aggregates on
+                * commission_agent today: Analytics groups on transactions.agent, so a variant
+                * spelling here splits nobody in a report. But the field is presented as an agent
+                * identity, is read back as one in the audit trail (Commission Information ->
+                * Commission Agent) and in the bulk export, and would behave the same way the moment
+                * anything groups on it - so it is constrained here rather than left for whatever
+                * groups on it first to discover.
+                *
+                * WHAT THIS DELIBERATELY DOES NOT DO: TD-045 also keyed the deal's agent on
+                * agent_user_id, so grouping follows identity rather than the typed string. There is
+                * no such column behind this field, and adding one is a migration this defect does
+                * not carry. The control is constrained; the stored value is still a name.
+                *
+                * The external option is not a loophole. A preconstruction commission can genuinely
+                * be payable to someone with no account here, and a value already stored that
+                * matches no active user - a variant spelling, or an agent who has since left - must
+                * keep its text rather than be silently blanked, so it reopens as an external name. */}
+              <select
+                value={externalCommissionAgent || (!!form.commission_agent && !agents.includes(form.commission_agent)) ? '__external__' : (form.commission_agent || '')}
+                disabled={ro}
+                onChange={(e) => {
+                  if (e.target.value === '__external__') { setExternalCommissionAgent(true); set('commission_agent', ''); }
+                  else { setExternalCommissionAgent(false); set('commission_agent', e.target.value); }
+                }}
+              >
+                <option value="">Select agent</option>
+                {agents.map((a) => <option key={a} value={a}>{a}</option>)}
+                <option value="__external__">External / co-op agent…</option>
+              </select>
+              {(externalCommissionAgent || (!!form.commission_agent && !agents.includes(form.commission_agent))) && (
+                <input value={form.commission_agent} disabled={ro} onChange={(e) => set('commission_agent', e.target.value)} placeholder="External agent name" style={{ marginTop: 6 }} />
+              )}
             </Field>
             <Field label="Commission Receivable in Terms">
               <input type="number" min="0" max="200" value={form.precon_term_count} disabled={ro} onChange={(e) => set('precon_term_count', e.target.value)} placeholder="e.g. 3" />

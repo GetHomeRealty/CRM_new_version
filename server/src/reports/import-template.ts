@@ -36,6 +36,15 @@ export interface ImportField {
   listingOnly?: boolean;
   /** Required only for listing types. */
   requiredForListings?: boolean;
+  /**
+   * TD-098 — this column names a USER ACCOUNT, not a free name, so the validator refuses a value
+   * that matches nobody. No workbook shipped with the product can know a brokerage's roster, so
+   * the template leaves these cells blank on its example rows; the Instructions sheet still shows
+   * a name in its Example column, which is where a name belongs. Marked on every such column even
+   * where the validator does not check it yet, so the template cannot start shipping a placeholder
+   * again the day a check is added (see TD-132 for the same field on the deal screen).
+   */
+  roster?: boolean;
   options?: readonly string[];
   /** Shown in the template's "Accepted values / format" row. */
   hint: string;
@@ -61,8 +70,8 @@ export const IMPORT_FIELDS: ImportField[] = [
   { column: 'Trade Number', key: 'trade_no', type: 'text', hint: 'Optional. Six digits inside the range for this deal type - Listing 100000-199999, Buying 200000-299999, Preconstruction 300000-399999, Lease 400000-499999, Referral 500000-599999 with _NB. Leave blank to have the next number allocated automatically.', example: '' },
   { column: 'Property Address', key: 'property', type: 'text', required: true, hint: 'Free text, max 255 characters', example: '123 Main Street, Toronto, ON' },
   { column: 'Deal Status', key: 'status', type: 'text', hint: 'Must be valid for the transaction type (see the Reference sheet). Blank uses the type default.', example: 'Open' },
-  { column: 'Primary Agent', key: 'primary_agent', type: 'text', hint: 'Must match an active agent name exactly. Blank leaves the deal unassigned.', example: 'Ramesh Gollu' },
-  { column: 'Split Agents', key: 'team_members', type: 'list', hint: 'Other agents on the deal, separated by commas. Requires Primary Agent. For per-agent split %, use the Team Split sheet instead.', example: 'Veena Marpina, ashwini' },
+  { column: 'Primary Agent', key: 'primary_agent', type: 'text', roster: true, hint: 'Must match an active agent name exactly. Blank leaves the deal unassigned.', example: 'Ramesh Gollu' },
+  { column: 'Split Agents', key: 'team_members', type: 'list', roster: true, hint: 'Other agents on the deal, separated by commas. Requires Primary Agent. For per-agent split %, use the Team Split sheet instead.', example: 'Veena Marpina, ashwini' },
   { column: 'List Price', key: 'listing_price', type: 'number', listingOnly: true, hint: 'Listing types only. The asking price. Numbers only. Reports read this, or the sale price once the deal has sold.', example: '1150000' },
   { column: 'Price', key: 'price', type: 'number', requiredForDeals: true, hint: 'Numbers only — no $ or commas. Listing types must leave this blank.', example: '850000' },
   { column: 'Deposit', key: 'deposit', type: 'number', hint: 'Numbers only', example: '25000' },
@@ -76,7 +85,10 @@ export const IMPORT_FIELDS: ImportField[] = [
   { column: 'MLS Number', key: 'mls_num', type: 'text', hint: 'Free text', example: 'W1234567' },
   { column: 'MLS Verified', key: 'mls_verified', type: 'yesno', options: YES_NO, hint: 'Yes or No', example: 'No' },
   { column: 'Payment Type', key: 'payment_type', type: 'enum', options: PAYMENT_TYPES, hint: 'One of: ' + PAYMENT_TYPES.join(' | '), example: 'Cheque' },
-  { column: 'Conditional Offer', key: 'conditional_offer', type: 'yesno', options: YES_NO, hint: 'Yes or No. Yes means the Conditions sheet rows for this Ref are applied.', example: 'No' },
+  // TD-098 - 'Yes', because the template SHIPS a Conditions row. With 'No' the workbook demonstrated
+  // the condition sheet and the silent-condition-drop warning in the same breath, and row 2 came back
+  // 'Conditions were supplied but Conditional Offer is not Yes' on an untouched file.
+  { column: 'Conditional Offer', key: 'conditional_offer', type: 'yesno', options: YES_NO, hint: 'Yes or No. Yes means the Conditions sheet rows for this Ref are applied.', example: 'Yes' },
   { column: 'Inter-Board Listing', key: 'inter_board_enabled', type: 'yesno', options: YES_NO, hint: 'Yes or No', example: 'No' },
   { column: 'Lawyer Name', key: 'lawyer_name', type: 'text', hint: 'Free text', example: 'A. Solicitor' },
   { column: 'Lawyer Email', key: 'lawyer_email', type: 'text', hint: 'A valid email address', example: 'lawyer@example.com' },
@@ -119,12 +131,12 @@ export const FINANCIAL_FIELDS: ImportField[] = [
   { column: 'Precon Term Count', key: 'precon_term_count', type: 'number', hint: 'Preconstruction only — number of commission terms', example: '2' },
   { column: 'Precon Commission %', key: 'precon_comm_pct', type: 'number', hint: 'Preconstruction only', example: '3' },
   { column: 'Precon Net of HST', key: 'precon_net_of_hst', type: 'yesno', options: YES_NO, hint: 'Preconstruction only — Yes if the commission is net of HST', example: 'No' },
-  { column: 'Commission Agent', key: 'commission_agent', type: 'text', hint: 'Preconstruction only — the agent the commission is paid to', example: 'Ramesh Gollu' },
+  { column: 'Commission Agent', key: 'commission_agent', type: 'text', roster: true, hint: 'Preconstruction only — the agent the commission is paid to', example: 'Ramesh Gollu' },
 ];
 
 // ----------------------------------------------------------------- Team Split
 export const TEAM_FIELDS: ImportField[] = [
-  { column: 'Agent', key: 'name', type: 'text', required: true, hint: 'Must match an active agent name exactly.', example: 'Ramesh Gollu' },
+  { column: 'Agent', key: 'name', type: 'text', required: true, roster: true, hint: 'Must match an active agent name exactly.', example: 'Ramesh Gollu' },
   { column: 'Primary', key: 'is_primary', type: 'yesno', options: YES_NO, hint: 'Yes for the deal’s primary agent. Exactly one per transaction.', example: 'Yes' },
   { column: 'Deal Share %', key: 'split', type: 'number', hint: 'This member’s share of the deal, e.g. 50. Blank means an even share.', example: '50' },
   { column: 'Agent %', key: 'agent_pct', type: 'number', hint: 'The agent’s side of the commission split, e.g. 90. Blank uses the agent’s profile default.', example: '90' },
@@ -142,7 +154,7 @@ export const CLIENT_FIELDS: ImportField[] = [
 // ---------------------------------------------------------------- Adjustments
 export const ADJUSTMENT_FIELDS: ImportField[] = [
   { column: 'Section', key: 'section', type: 'enum', required: true, options: ADJUSTMENT_SECTIONS, hint: 'One of: ' + ADJUSTMENT_SECTIONS.join(' | '), example: 'Agent Adjustment' },
-  { column: 'Agent', key: 'agent', type: 'text', hint: 'Agent the row applies to (Agent Adjustment / Advance Payment / External Referral).', example: 'Ramesh Gollu' },
+  { column: 'Agent', key: 'agent', type: 'text', roster: true, hint: 'Agent the row applies to (Agent Adjustment / Advance Payment / External Referral).', example: 'Ramesh Gollu' },
   { column: 'Client Name', key: 'client_name', type: 'text', hint: 'Client the referral applies to (Client Referral rows).', example: 'Jane Ng' },
   { column: 'Brokerage', key: 'brokerage', type: 'text', hint: 'External Referral rows only — the other brokerage.', example: 'Sample Realty Inc.' },
   { column: 'Amount', key: 'amount', type: 'number', required: true, hint: 'Numbers only. Negative values reduce the payout.', example: '500' },
@@ -228,6 +240,17 @@ export function requiredColumnsFor(type: string): string[] {
 export function forbiddenColumnsFor(type: string): string[] {
   const listing = isListingType(type);
   return IMPORT_FIELDS.filter((f) => (listing ? f.requiredForDeals : (f.requiredForListings || f.listingOnly))).map((f) => f.column);
+}
+
+/**
+ * TD-098 — the template's example row for one sheet, obeying the rules the same workbook states.
+ *
+ * Roster columns are blanked: a shipped name matches no account at any brokerage, so a row
+ * carrying one is refused the moment it is uploaded. Everything else keeps its `example`, so the
+ * row still demonstrates the shape of the sheet.
+ */
+export function exampleRowFor(fields: ImportField[]): string[] {
+  return fields.map((f) => (f.roster ? '' : String(f.example ?? '')));
 }
 
 /** Valid deal statuses per transaction type, for the template's Reference sheet. */

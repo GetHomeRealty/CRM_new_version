@@ -212,10 +212,18 @@ export default function DeskTriggersPanel() {
       */}
       <div className="card">
         <div className="modal-h">Not built yet</div>
+        {/*
+          TD-009 — the card names what is MISSING, so every line of it has to keep being true.
+          Status changes came off this list when the trigger below them was built; "document
+          deadlines" came off because it was never the right description — a document has no
+          deadline field to watch, and the two document reminders fire on a document still being
+          pending, which is a different thing and does exist.
+        */}
         <p className="help" style={{ marginTop: 0 }}>
-          There are no triggers on transaction status changes, offer dates, document deadlines,
-          payments or commissions. The document figures on the Dashboard are read when you open it —
-          nothing watches them and acts.
+          There are no triggers on offer dates, payments or commissions. The document figures on the
+          Dashboard are read when you open it — nothing watches them and acts. Documents are chased
+          on whether they are still pending rather than against a deadline, because a document has
+          no due date recorded against it.
         </p>
         <p className="help" style={{ marginBottom: 0 }}>
           The money ones are not simply unwritten: a deposit has no due date recorded against it, and

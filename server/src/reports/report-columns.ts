@@ -59,6 +59,20 @@ export const col = {
    * was simply the wrong name for either of them on its own.
    */
   pendingDocs: (): ReportColumn => ({ key: 'pending_docs', label: 'Pending Validation', type: 'number', default: true, sortable: true, total: true, width: 11 }),
+  /*
+   * TD-089 — THE OTHER AXIS, so the two surfaces can be reconciled at all.
+   *
+   * Naming the column above was half the entry: it stopped the number lying, but it did not give
+   * the reader the number they came for. There was no column anywhere in either report for
+   * documents RECEIVED — only pending, valid, invalid and total, every one of them a validation
+   * state — so the "5 / 10 received" the deal panel shows could not be recovered from the report at
+   * any setting. An administrator chasing outstanding paperwork on deal 4 was told ten were
+   * outstanding while seven sat in the folder, and nothing in the report could tell them otherwise.
+   *
+   * `default: true` on the documentation reports, because chasing what has not ARRIVED is what
+   * those reports are opened to do; the validation counts stay beside it for the reviewer.
+   */
+  receivedDocs: (): ReportColumn => ({ key: 'received_docs', label: 'Documents Received', type: 'number', default: true, sortable: true, total: true, width: 11 }),
   invalidDocs: (): ReportColumn => ({ key: 'invalid_docs', label: 'Invalid Documents', type: 'number', default: true, sortable: true, total: true, width: 11 }),
   validDocs: (): ReportColumn => ({ key: 'valid_docs', label: 'Valid Documents', type: 'number', default: false, sortable: true, total: true, width: 11 }),
   totalDocs: (): ReportColumn => ({ key: 'total_docs', label: 'Total Required Documents', type: 'number', default: true, sortable: true, total: true, width: 12 }),
@@ -135,6 +149,7 @@ export function baseRow(t: EnrichedTxn): ReportRow {
     txn_id: t.id,
     client_names: t.client_names.join(', ') || null,
     documentation_status: t.documentation_status,
+    received_docs: t.doc_counts.received,
     pending_docs: t.doc_counts.pending,
     invalid_docs: t.doc_counts.invalid,
     valid_docs: t.doc_counts.valid,

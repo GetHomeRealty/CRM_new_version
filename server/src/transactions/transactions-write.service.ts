@@ -8,7 +8,7 @@ import { CommissionService } from './commission.service';
 import { PaymentCacheService } from './payment-cache.service';
 import { normalizeCommissionTxn } from './commission.loader';
 import { parseJsonObject, phpEmpty, phpFloat, phpJsonNormalize, round2, toFloat } from '../common/serialize';
-import { canonicalTransactionType, isInvoiceableType, isListingType, SECURED_DEAL_TYPES, statusSetProblem, TRANSACTION_TYPES } from '../reference/transaction.constants';
+import { canonicalTransactionType, isInvoiceableType, isListingType, isNotifiableStatus, SECURED_DEAL_TYPES, statusSetProblem, TRANSACTION_TYPES } from '../reference/transaction.constants';
 import { TradeNumberService } from './trade-number.service';
 import { TransactionLawyerReminderService } from './transaction-lawyer-reminder.service';
 import { TransactionReviewService } from './transaction-review.service';
@@ -671,6 +671,9 @@ export class TransactionsWriteService {
     }
 
     const statuses = await this.statusList(this.prisma, txnId);
+    // TD-009 — filled inside the transaction below, read after it commits.
+    let enteredStatuses: string[] = [];
+    let previousStatuses: string[] = [];
 
     /*
      * A STATUS SET THAT CANNOT BE TRUE IS REFUSED, and refused here — before the lock checks, so an
@@ -1048,6 +1051,17 @@ export class TransactionsWriteService {
         const finals = ['Sold', 'Leased'];
         const oldStatuses = statuses;
         const newStatuses = (data.statuses as unknown[]).filter(Boolean).map(String);
+        /*
+         * TD-009 — which statuses this save ENTERED, for the trigger fired after the commit.
+         *
+         * Captured here because `statuses` is the set read before the write and `syncStatuses`
+         * below replaces the rows, so once this block has run nothing remembers what the deal used
+         * to be. Only newly-entered ones count: a save that leaves a deal Closed and edits its
+         * address is not a status change, and re-announcing on every later save is how a trigger
+         * turns into noise people filter.
+         */
+        enteredStatuses = newStatuses.filter((x) => isNotifiableStatus(x) && !oldStatuses.includes(x));
+        previousStatuses = oldStatuses;
         const type = String(fill.type ?? t.type);
         const justSold = isListingStatusFamily(type) && newStatuses.some((s) => finals.includes(s)) && !oldStatuses.some((s) => finals.includes(s));
 
@@ -1088,6 +1102,18 @@ export class TransactionsWriteService {
 
     // Re-check lawyer details after the edit — only re-emails when the missing set actually changed.
     void this.lawyerReminder.maybeRemind(txnId);
+
+    /*
+     * TD-009 — the deal became firm, or ended, and its agent is told.
+     *
+     * AFTER THE COMMIT and not awaited, for the same reason the lawyer reminder above is not: the
+     * status is saved either way. A mail server that is down must not turn a good save into a 500,
+     * and the delivery record carries the failure for anybody who looks. Who receives it, and
+     * whether the person who made the change is skipped, is decided in `statusChanged`.
+     */
+    if (enteredStatuses.length) {
+      void this.reminders.statusChanged(txnId, enteredStatuses, actor?.name ?? null, previousStatuses);
+    }
 
     // A moved closing or expiry date means the reminder cadence is computed against a different
     // day from now on. Nothing is scheduled ahead — the sweep derives it nightly — so the schedule

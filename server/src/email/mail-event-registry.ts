@@ -779,6 +779,33 @@ export const MAIL_EVENTS: Record<string, MailEvent> = {
       + '{{ transaction_button }}'
       + '<p>{{ company_name }}</p>',
   },
+  /**
+   * TD-009 — the deal has become firm, or has ended.
+   *
+   * The only reactive trigger in this group: its neighbours are nightly sweeps and this one is sent
+   * by the save that changes the status. `NOTIFIABLE_STATUSES` decides which changes are worth a
+   * message — becoming firm, and every way of ending — so ordinary progress through Active and
+   * Secured Conditional stays quiet.
+   */
+  'transaction.status_changed': {
+    module: 'Transactions',
+    label: 'Transactions — Deal Status Changed',
+    variables: ['agent_name', 'deal_number', 'property_address', 'transaction_type', 'new_status', 'previous_status', 'changed_by', 'transaction_button', 'company_name', 'current_date'],
+    default_subject: '{{ property_address }} is now {{ new_status }} ({{ deal_number }})',
+    default_body_html:
+      '<p>Hello {{ agent_name }},</p>'
+      + '<p>Your deal on <strong>{{ property_address }}</strong> is now <strong>{{ new_status }}</strong>.</p>'
+      + '<table style="border-collapse:collapse;font-size:14px;margin:10px 0">'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Transaction</td><td style="padding:4px 0;font-weight:600">{{ deal_number }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Property</td><td style="padding:4px 0;font-weight:600">{{ property_address }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Type</td><td style="padding:4px 0">{{ transaction_type }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Was</td><td style="padding:4px 0">{{ previous_status }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Now</td><td style="padding:4px 0;font-weight:600">{{ new_status }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Changed by</td><td style="padding:4px 0">{{ changed_by }}</td></tr>'
+      + '</table>'
+      + '{{ transaction_button }}'
+      + '<p>{{ company_name }}</p>',
+  },
   /** Daily countdown to a listing's expiry date, from ten days out. */
   'transaction.listing_expiry_reminder': {
     module: 'Transactions',

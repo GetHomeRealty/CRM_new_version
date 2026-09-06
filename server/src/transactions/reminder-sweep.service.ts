@@ -51,12 +51,14 @@ const REMINDER_CATEGORY: Record<ReminderKind, string> = {
   lawyer: 'lawyer_details',
   closing: 'closing_reminders',
   condition: 'condition_deadline',
+  status: 'status_change',
 };
 const REMINDER_LABEL: Record<ReminderKind, string> = {
   listing_expiry: 'Listing expiry reminder',
   lawyer: 'Lawyer details reminder',
   closing: 'Closing date reminder',
   condition: 'Condition deadline reminder',
+  status: 'Deal status change',
 };
 
 /**
@@ -78,7 +80,7 @@ const redirectTo = (): string | null => {
 };
 
 /** The kinds of reminder this sweep sends. Stored in `transaction_reminders.kind`. */
-export type ReminderKind = 'listing_expiry' | 'lawyer' | 'closing' | 'condition';
+export type ReminderKind = 'listing_expiry' | 'lawyer' | 'closing' | 'condition' | 'status';
 
 /**
  * TD-009 - a condition nobody is waiting on any more.
@@ -109,6 +111,8 @@ export interface SweepResult {
   closingReminders: number;
   /** TD-009 — conditions approaching their deadline. */
   conditionReminders: number;
+  /** TD-009 — deals that became firm or ended. Raised reactively, never by the sweep. */
+  statusChanges: number;
   skipped: number;
   failed: number;
   /** Failed deliveries attempted again this pass. */
@@ -134,12 +138,17 @@ export class ReminderSweepService {
     private readonly dispatcher?: NotificationDispatcher,
   ) {}
 
+  /** A zeroed tally. The sweep fills one over a night; `statusChanged` uses one for a single send. */
+  private emptyResult(): SweepResult {
+    return {
+      expiryReminders: 0, expired: 0, lawyerReminders: 0, closingReminders: 0, conditionReminders: 0,
+      statusChanges: 0, skipped: 0, failed: 0, retried: 0, recovered: 0,
+    };
+  }
+
   /** One night's work. `today` is injectable so the schedule can be tested across a whole run-up. */
   async sweep(today: Date = new Date()): Promise<SweepResult> {
-    const result: SweepResult = {
-      expiryReminders: 0, expired: 0, lawyerReminders: 0, closingReminders: 0, conditionReminders: 0,
-      skipped: 0, failed: 0, retried: 0, recovered: 0,
-    };
+    const result: SweepResult = this.emptyResult();
     // Retries first: a reminder that failed last night is more urgent than tonight's new ones, and
     // clearing the backlog before adding to it keeps a bad evening from compounding.
     await this.retryFailed(today, result);
@@ -984,6 +993,86 @@ export class ReminderSweepService {
       data: { seen_at: new Date() },
     });
     return { ok: true };
+  }
+
+  /**
+   * TD-009 - the deal has become firm, or has ended, and its agent is told.
+   *
+   * THE ONE REACTIVE TRIGGER IN THIS SERVICE. Everything else here is a nightly sweep asking "what
+   * is due today"; this is called by the save that changed the status, so the agent hears about it
+   * when it happens rather than the next morning. It reuses `deliver` rather than sending directly,
+   * which buys the in-app row, the push, the email, the delivery record and the retry ladder that
+   * the sweeps already have - and, more to the point, the same notification preference, so an agent
+   * who turns these off turns off all three channels in the one place.
+   *
+   * ONE MESSAGE PER DEAL PER DAY, naming every status the save entered - the same rule
+   * `conditionDeadlines` follows, and for the same reason: `claim` is keyed on (deal, kind, day,
+   * channel), so that is what the table allows. A save that takes a listing to Sold AND Closed
+   * together says both in one message rather than sending two.
+   *
+   * THE COST OF THAT KEY, STATED RATHER THAN DISCOVERED: a deal moved to Sold in the morning and to
+   * Closed in the afternoon announces only the morning's change. The alternative was a migration to
+   * put `variant` in the unique key, which is a schema change this defect does not carry, and the
+   * agent has been told the deal moved either way. If same-day sequences turn out to matter, that
+   * migration is the fix - not a second `kind`.
+   *
+   * NEVER THROWS INTO THE SAVE. The caller fires this without awaiting it: a deal's status must not
+   * fail to save because a mail server is down, and the delivery record carries the failure for
+   * anybody looking.
+   */
+  async statusChanged(
+    txnId: number,
+    entered: string[],
+    changedBy: string | null,
+    previous: string[],
+    today: Date = new Date(),
+  ): Promise<void> {
+    if (!entered.length) return;
+
+    const t = await this.prisma.transactions.findFirst({
+      where: { id: txnId, deleted_at: null },
+      select: { id: true, trade_no: true, property: true, agent: true, type: true },
+    });
+    if (!t?.agent) return;
+
+    /*
+     * NOT WHEN THE AGENT DID IT THEMSELVES. An agent who has just marked their own deal Sold does
+     * not need to be emailed that it is Sold, and a trigger that answers your own click is the
+     * quickest way to teach somebody to ignore the ones that matter. The office doing it is exactly
+     * the case worth sending. Decided here rather than at the call site because this is the only
+     * place that knows who the deal's agent IS.
+     */
+    if (changedBy && changedBy.trim() === t.agent.trim()) return;
+
+    // The result the sweeps thread through their passes. Nothing reads it here - the counters
+    // belong to a sweep run - but `deliver` records failures on it, so it is given a real one
+    // rather than a cast.
+    const result = this.emptyResult();
+
+    const now = entered.join(', ');
+    await this.deliver({
+      txnId: t.id,
+      kind: 'status',
+      // Informational only - `variant` is not part of the unique key, so it does not separate two
+      // sends. It is what the reminder history shows an administrator afterwards.
+      variant: entered.join(',').slice(0, 16),
+      day: dbDay(startOfDay(today)),
+      daysRemaining: 0,
+      agentName: t.agent,
+      event: 'transaction.status_changed',
+      vars: {
+        agent_name: t.agent ?? 'there',
+        deal_number: t.trade_no ?? String(t.id),
+        property_address: t.property ?? '-',
+        transaction_type: t.type ?? '-',
+        new_status: now,
+        previous_status: previous.length ? previous.join(', ') : '-',
+        changed_by: changedBy ?? 'the office',
+      },
+      summary: `Deal is now ${now} - ${t.property ?? t.trade_no ?? ''}`.trim(),
+      result,
+      onSent: () => { result.statusChanges++; },
+    });
   }
 
   /** Reminder history for administrators, newest first. */

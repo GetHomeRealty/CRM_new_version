@@ -35,6 +35,17 @@ const DOC_STATUS_SQL = `CASE lower(btrim(d.validation))
   ELSE 'Pending' END`;
 
 /**
+ * TD-089 — `isReceived(d)` as SQL: has the brokerage GOT the document?
+ *
+ * The other axis, and the one every count in this file was missing. `documents.status` is the field
+ * the deal's own panel counts for "5 / 10 received"; `documents.validation` above is whether a
+ * reviewer has checked it. Same normalisation as `DOC_STATUS_SQL`, and the same as the TypeScript's
+ * `String(...).trim().toLowerCase()` — including the NULL case, where `btrim(NULL)` is NULL, the
+ * comparison is NULL, and `COUNT(*) FILTER` does not count the row.
+ */
+const RECEIVED_SQL = `lower(btrim(d.status)) = 'received'`;
+
+/**
  * One row per transaction that HAS documents, with the six counts `docCounts` produces.
  *
  * A deal with no documents has no row here at all and is LEFT JOINed to zeros below, which is the
@@ -48,6 +59,7 @@ doc_counts AS MATERIALIZED (
     COUNT(*) FILTER (WHERE ${DOC_STATUS_SQL} = 'Pending')           AS pending,
     COUNT(*) FILTER (WHERE ${DOC_STATUS_SQL} = 'Invalid')           AS invalid,
     COUNT(*) FILTER (WHERE ${DOC_STATUS_SQL} = 'Valid')             AS valid,
+    COUNT(*) FILTER (WHERE ${RECEIVED_SQL})                          AS received,
     COUNT(*) FILTER (WHERE d.mandatory)                             AS mandatory,
     COUNT(*) FILTER (WHERE d.mandatory AND ${DOC_STATUS_SQL} <> 'Valid') AS missing_mandatory,
     -- last_doc_update is max(reviewed_at) over the deal's documents, and reviewed_at is
@@ -75,6 +87,7 @@ cand AS MATERIALIZED (
     COALESCE(c.pending, 0)::int           AS pending_docs,
     COALESCE(c.invalid, 0)::int           AS invalid_docs,
     COALESCE(c.valid, 0)::int             AS valid_docs,
+    COALESCE(c.received, 0)::int          AS received_docs,
     COALESCE(c.mandatory, 0)::int         AS mandatory_docs,
     COALESCE(c.missing_mandatory, 0)::int AS missing_mandatory,
     c.last_doc_update
@@ -105,6 +118,7 @@ export const RECO_READY_SQL = `CASE
 
 /** The count columns a documentation report may total, and the expression that answers each. */
 export const DOC_TOTAL_COLUMNS: Record<string, string> = {
+  received_docs: 'received_docs',
   pending_docs: 'pending_docs',
   invalid_docs: 'invalid_docs',
   valid_docs: 'valid_docs',
@@ -131,6 +145,7 @@ export const DOC_SORT_COLUMNS: Record<string, string> = {
   offer_date: 'offer_date',
   created_at: 'created_at',
   updated_at: 'updated_at',
+  received_docs: 'received_docs',
   pending_docs: 'pending_docs',
   invalid_docs: 'invalid_docs',
   valid_docs: 'valid_docs',
@@ -185,6 +200,7 @@ WITH ${COUNTS_CTE},
 ${CANDIDATE_CTE}
 SELECT
   COUNT(*)::int                     AS count,
+  COALESCE(SUM(received_docs), 0)::int    AS received_docs,
   COALESCE(SUM(pending_docs), 0)::int     AS pending_docs,
   COALESCE(SUM(invalid_docs), 0)::int     AS invalid_docs,
   COALESCE(SUM(valid_docs), 0)::int       AS valid_docs,
@@ -220,6 +236,7 @@ OFFSET $2 LIMIT $3
 /** One row of `docTotalsSql`. Every column is cast to `int`, so these arrive as numbers. */
 export interface DocTotalsRow {
   count: number;
+  received_docs: number;
   pending_docs: number;
   invalid_docs: number;
   valid_docs: number;

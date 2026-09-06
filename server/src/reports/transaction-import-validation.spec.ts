@@ -1,6 +1,6 @@
 import * as ExcelJS from 'exceljs';
 import { TransactionImportService } from './transaction-import.service';
-import { IMPORT_FIELDS, forbiddenColumnsFor } from './import-template';
+import { IMPORT_FIELDS, FINANCIAL_FIELDS, CHILD_SHEETS, forbiddenColumnsFor } from './import-template';
 import { statusOptionsFor } from '../reference/transaction.constants';
 import type { PrismaService } from '../prisma/prisma.service';
 import type { TransactionsWriteService } from '../transactions/transactions-write.service';
@@ -14,7 +14,7 @@ import type { TransactionsWriteService } from '../transactions/transactions-writ
  * given those two lookups, and going through `validate()` would drag in file parsing and add
  * nothing to what is being asserted.
  */
-interface IssueLike { row: number; field: string; message: string; severity: string }
+interface IssueLike { row: number; field: string; message: string; severity: string; section?: string }
 interface RowLike { issues: IssueLike[]; valid: boolean }
 
 const prisma = {
@@ -114,5 +114,90 @@ describe('the downloadable template does not contradict itself (TD-098)', () => 
     // Uploaded unmodified this returned 1 DETECTED / 0 VALID / 1 INVALID / 1 WARNING.
     expect(r.issues).toHaveLength(0);
     expect(r.valid).toBe(true);
+  }, 30000);
+
+  /*
+   * THE WHOLE WORKBOOK, not the Transactions sheet on its own.
+   *
+   * The three assertions above read row 2 of one sheet and hand its cells to the validator as a
+   * transaction with no children. That is the shape TD-098 was first written about, and it passed
+   * while the file a user actually downloads still came back 0 VALID — the error was on the Team
+   * Split sheet ('No active user named "Ramesh Gollu"') and the warning was raised by the
+   * Conditions sheet against the Transactions sheet's own Conditional Offer cell. Neither sheet was
+   * in the test, so neither could fail it.
+   *
+   * TD-098 records that this entry was closed twice by checks that counted the right columns
+   * without reading what was inside them. So this one does the thing the entry describes: generate
+   * the shipped template, put the BUFFER through the same parse the upload route uses, and validate
+   * every row it yields, children and all.
+   */
+  const uploadUnmodified = async (buffer: Buffer): Promise<RowLike[]> => {
+    const priv = service as unknown as {
+      parseFile: (name: string, b: Buffer) => Promise<{ records: unknown[] }>;
+      validateRows: (r: unknown[]) => Promise<RowLike[]>;
+    };
+    const parsed = await priv.parseFile('template.xlsx', buffer);
+    return priv.validateRows(parsed.records);
+  };
+
+  it('validates clean when the file is downloaded and uploaded with nothing changed', async () => {
+    const rows = await uploadUnmodified((await service.template()) as Buffer);
+
+    // Was: 1 row detected, 0 valid, 1 invalid, 1 warning — on a file nobody had touched.
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.flatMap((r) => r.issues.map((i) => `${i.section || 'Transactions'} / ${i.field}: ${i.message}`))).toEqual([]);
+    expect(rows.every((r) => r.valid)).toBe(true);
+  }, 30000);
+
+  /**
+   * The columns that name a USER ACCOUNT, listed here as a literal rather than derived.
+   *
+   * Deriving them - `fields.filter((f) => f.roster)` - is how this check quietly stops checking:
+   * strip the flags and the filter yields nothing, every loop body runs zero times, and the test
+   * goes green while the template ships 'Ramesh Gollu' on five sheets again. Naming them makes the
+   * flags themselves the thing under test, so removing one FAILS here rather than disappearing.
+   *
+   * Adding a genuine sixth roster column is then a two-line change: flag it, and add it here. That
+   * is the intended cost - this list is the statement of which columns a shipped workbook may not
+   * fill in, and it should not be possible to change that set without saying so.
+   */
+  const ROSTER_COLUMNS: [string, string][] = [
+    ['Transactions', 'Primary Agent'],
+    ['Transactions', 'Split Agents'],
+    ['Financial', 'Commission Agent'],
+    ['Team Split', 'Agent'],
+    ['Adjustments', 'Agent'],
+  ];
+
+  it('still marks exactly the columns that name an account', () => {
+    const declared = [
+      ...IMPORT_FIELDS.filter((f) => f.roster).map((f) => ['Transactions', f.column]),
+      ...FINANCIAL_FIELDS.filter((f) => f.roster).map((f) => ['Financial', f.column]),
+      ...CHILD_SHEETS.flatMap((c) => c.fields.filter((f) => f.roster).map((f) => [c.sheet, f.column])),
+    ];
+    // The guard on the guard: without this, deleting the `roster` flags would make every
+    // assertion below iterate an empty list and pass.
+    expect(declared.sort()).toEqual([...ROSTER_COLUMNS].sort());
+  });
+
+  it('names no agent it cannot know on any example row', async () => {
+    // Blank by construction rather than by luck: the validator only refuses Team Split -> Agent
+    // today, so a placeholder left in Adjustments -> Agent or Financial -> Commission Agent would
+    // sit there passing until the day a check reaches it.
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load((await service.template()) as never);
+
+    for (const [sheet, column] of ROSTER_COLUMNS) {
+      const ws = wb.getWorksheet(sheet)!;
+      const header = (ws.getRow(1).values as unknown[]).slice(1).map(String);
+      const values = ws.getRow(2).values as unknown[];
+      expect(`${sheet} / ${column} = ${String(values[header.indexOf(column) + 1] ?? '')}`)
+        .toBe(`${sheet} / ${column} = `);
+    }
+  }, 30000);
+
+  it('leaves the Sample workbook clean too, which is what confined this to the Template', async () => {
+    const rows = await uploadUnmodified((await service.sample()) as Buffer);
+    expect(rows.every((r) => r.valid)).toBe(true);
   }, 30000);
 });

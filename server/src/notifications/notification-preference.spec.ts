@@ -160,6 +160,10 @@ describe('notification preferences', () => {
       // TD-009 - the closing run-up and condition deadlines, dispatched from the same nightly sweep
       // as the two either side of them, on the same claim-then-send path.
       'closing_reminders', 'condition_deadline',
+      // TD-009 - the third of the entry's five events, and the only reactive one: sent by the save
+      // that changes the status rather than by the sweep. It reaches the dispatcher through the
+      // same `deliver` the two above use, so all three channels are genuinely wired.
+      'status_change',
       'lawyer_details',
       'document_review', 'transaction_approvals', 'inbox_new_mail',
       // The six CRM lead and campaign events, all dispatched from their own event sites.

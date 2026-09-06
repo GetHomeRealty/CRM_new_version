@@ -572,11 +572,16 @@ export const REPORTS: ReportDef[] = [
   {
     type: 'deal-documentation-status',
     name: 'Deal Documentation Status Report',
-    description: 'Every deal with its documentation status and separate pending / invalid document counts.',
+    // TD-089 — the description says which axis each count reads, because the report carries both.
+    description: 'Every deal with its documentation status, how many documents have been received, '
+      + 'and separate pending-validation / invalid counts.',
     category: 'Documentation and Compliance Reports',
     columns: [
       col.txnId(), col.dealNo(), col.property(), col.typeOfDeal(), col.agent(), col.clientName(),
-      col.docStatus(), col.pendingDocs(), col.invalidDocs(), col.validDocs(), col.totalDocs(),
+      // TD-089 — Received sits BEFORE the validation counts: what has arrived is the first
+      // question a reviewer asks of a file, and reading it first is what stops the pending figure
+      // beside it being taken for the same thing.
+      col.docStatus(), col.receivedDocs(), col.pendingDocs(), col.invalidDocs(), col.validDocs(), col.totalDocs(),
       col.missingMandatory(), col.lastDocUpdate(), col.responsibleUser(),
     ],
     filters: [statusFilter('Documentation Status', DOCUMENTATION_STATUSES)],
@@ -604,7 +609,9 @@ export const REPORTS: ReportDef[] = [
     category: 'Documentation and Compliance Reports',
     columns: [
       col.txnId(), col.dealNo(), col.property(), col.agent(), col.typeOfDeal(),
-      col.recoReady(), col.pendingDocs(), col.invalidDocs(), col.missingMandatory(),
+      // TD-089 — the same pairing here: this report was the other one telling an administrator to
+      // chase documents already on file.
+      col.recoReady(), col.receivedDocs(), col.pendingDocs(), col.invalidDocs(), col.missingMandatory(),
       col.recoReadyDate(), col.reviewedBy(), col.lastReviewDate(),
     ],
     // "RECO Audit Ready" — All / Yes / No (§2)

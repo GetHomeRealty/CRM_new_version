@@ -5,7 +5,7 @@ import { TransactionsWriteService } from '../transactions/transactions-write.ser
 import { ACCEPTED_TYPE_NAMES, TRANSACTION_TYPES, canonicalTransactionType, isListingType, splitClassificationNote, statusOptionsFor, defaultStatusFor } from '../reference/transaction.constants';
 import {
   IMPORT_FIELDS, FINANCIAL_FIELDS, CHILD_SHEETS, REQUIRED_COLUMNS, REF_COLUMN,
-  requiredColumnsFor, forbiddenColumnsFor, statusReference, flatColumn, flatColumns,
+  requiredColumnsFor, forbiddenColumnsFor, statusReference, flatColumn, flatColumns, exampleRowFor,
   type ImportField, type ChildSheet,
 } from './import-template';
 
@@ -19,6 +19,28 @@ const TEAM_COLS = childFields('team');
 const CLIENT_COLS = childFields('clients');
 const ADJUSTMENT_COLS = childFields('adjustments');
 const CONDITION_COLS = childFields('conditions');
+
+/**
+ * TD-051 — append the split-classification note AS ITS OWN SENTENCE.
+ *
+ * The note is glued onto the end of three different correction texts, and one of them did not end
+ * in a full stop: the status correction finishes with the allowed list, so the reader was handed
+ * `Use one of: Active, … Terminated, Expired A Business Sale is transacted on an offer…`. 'Expired
+ * A Business Sale' is not a phrase, and worse, the note reads as an eleventh status — on the one
+ * message whose whole job is to say which statuses exist. That is TD-018's fault, two values joined
+ * with no separator, sitting inside TD-051's own fix.
+ *
+ * The other two call sites happen to end in a full stop today and are routed through here anyway.
+ * Their text comes from `ImportField.hint`, prose maintained per column: relying on every hint
+ * ending in punctuation is a rule nobody is told about, and the next column added breaks it. This
+ * asks the string what it ends with instead. '?' and '!' pass untouched, so the `Did you mean "X"?`
+ * branch keeps its question mark rather than collecting a full stop after it.
+ */
+const withSplitNote = (text: string, note: string | null): string => {
+  if (!note) return text;
+  const t = text.trimEnd();
+  return `${t}${/[.!?]$/.test(t) ? '' : '.'} ${note}`;
+};
 
 /** One problem found on one row. Mirrors the downloadable validation report columns. */
 export interface RowIssue {
@@ -173,7 +195,7 @@ export class TransactionImportService {
     const fin = wb.addWorksheet('Financial');
     this.writeHeader(fin, [REF_COLUMN, ...FINANCIAL_FIELDS.map((f) => f.column)],
       [undefined, ...FINANCIAL_FIELDS]);
-    fin.addRow(['1', ...FINANCIAL_FIELDS.map((f) => f.example)]).eachCell((c) => {
+    fin.addRow(['1', ...exampleRowFor(FINANCIAL_FIELDS)]).eachCell((c) => {
       c.font = { italic: true, color: { argb: 'FF64748B' } };
     });
     fin.getColumn(1).width = 8;
@@ -186,7 +208,7 @@ export class TransactionImportService {
     for (const child of CHILD_SHEETS) {
       const cs = wb.addWorksheet(child.sheet);
       this.writeHeader(cs, [REF_COLUMN, ...child.fields.map((f) => f.column)], [undefined, ...child.fields], CHILD_FILL);
-      cs.addRow(['1', ...child.fields.map((f) => f.example)]).eachCell((c) => {
+      cs.addRow(['1', ...exampleRowFor(child.fields)]).eachCell((c) => {
         c.font = { italic: true, color: { argb: 'FF64748B' } };
       });
       cs.getColumn(1).width = 8;
@@ -389,7 +411,8 @@ export class TransactionImportService {
     guide.addRow(['']);
     // TD-098 — said first, and on the sheet rather than in a hover note, because a reader who
     // misses it uploads the scaffold row and is told their own file is invalid.
-    guide.addRow(['', 'Row 2 of every sheet is a greyed-out EXAMPLE. Type over it or delete it before you import — it is read like any other row, not skipped, and it will be reported as invalid if left as it is.']);
+    guide.addRow(['', 'Row 2 of every sheet is a greyed-out EXAMPLE of a made-up deal. Type over it or delete it before you import — it is read like any other row, not skipped, so left as it is it imports 123 Main Street as a real transaction.']);
+    guide.addRow(['', 'The Agent columns on the example rows are deliberately blank — Primary Agent, Split Agents, Team Split → Agent, Adjustments → Agent and Financial → Commission Agent must name one of YOUR active users, which a file shipped with the product cannot know. The Columns table below shows the format each one takes.']);
     guide.addRow(['']);
     guide.addRow(['', 'Option A — multi-sheet (recommended): fill the Transactions sheet, then add rows to Financial, Team Split, Clients, Adjustments and Conditions. Tie every child row to its transaction with the Ref column. No limit on how many children a deal can have.']);
     guide.addRow(['', 'Option B — one sheet: fill the "One-Sheet (CSV)" sheet only, and save it as .csv or .xlsx. Repeating data goes in numbered columns. This is the only layout plain CSV can express.']);
@@ -463,9 +486,8 @@ export class TransactionImportService {
     const type = String(IMPORT_FIELDS.find((f) => f.column === 'Transaction Type')?.example ?? TRANSACTION_TYPES[0]);
     const forbidden = new Set(forbiddenColumnsFor(type));
     const statuses = statusOptionsFor(type);
-    const roster = new Set(['Primary Agent', 'Split Agents']);
     return IMPORT_FIELDS.map((f) => {
-      if (forbidden.has(f.column) || roster.has(f.column)) return '';
+      if (forbidden.has(f.column) || f.roster) return '';
       if (f.column === 'Deal Status') {
         const shown = String(f.example ?? '');
         return statuses.includes(shown) ? shown : (defaultStatusFor(type) || statuses[0] || '');
@@ -477,10 +499,11 @@ export class TransactionImportService {
   /** The example row for the one-sheet layout: main + financial + one filled child of each. */
   private flatExampleRow(): string[] {
     // TD-098 — the same corrected main-sheet row, so the two layouts cannot disagree.
-    const out: string[] = [...this.mainExampleRow(), ...FINANCIAL_FIELDS.map((f) => f.example)];
+    const out: string[] = [...this.mainExampleRow(), ...exampleRowFor(FINANCIAL_FIELDS)];
     for (const child of CHILD_SHEETS) {
+      const first = exampleRowFor(child.fields);
       for (let n = 1; n <= child.flatMax; n++) {
-        for (const f of child.fields) out.push(n === 1 ? f.example : '');
+        child.fields.forEach((_f, i) => out.push(n === 1 ? first[i] : ''));
       }
     }
     return out;
@@ -851,7 +874,7 @@ export class TransactionImportService {
         for (const col of requiredColumnsFor(type)) {
           if (!get(col)) {
             const f = IMPORT_FIELDS.find((x) => x.column === col)!;
-            add(col, '', `${col} is required for ${type}.`, `Enter a value — ${f.hint}${split ? ' ' + split : ''}`);
+            add(col, '', `${col} is required for ${type}.`, withSplitNote(`Enter a value — ${f.hint}`, split));
           }
         }
         /*
@@ -870,7 +893,7 @@ export class TransactionImportService {
             : SOLD_LISTING_ALLOWS.includes(col)
               ? 'A listing carries a price and dates only once it has sold — clear this cell, or set Deal Status to Sold, Leased or Closed.'
               : 'A listing takes its commission from Listing Commission % and Co-Op Commission % — clear this cell.';
-          add(col, get(col), `${col} must be empty for ${type}.`, split ? `${why} ${split}` : why);
+          add(col, get(col), `${col} must be empty for ${type}.`, withSplitNote(why, split));
         }
       }
 
@@ -933,7 +956,7 @@ export class TransactionImportService {
           // implied. Without the second half, "Secured Firm is not valid for Business Sale" reads
           // as a contradiction of the offer dates the same file was just told to supply.
           const base = near ? `Did you mean "${near}"?` : 'Use one of: ' + allowed.join(', ');
-          add('Deal Status', status, `"${status}" is not a valid status for ${type}.`, note ? `${base} ${note}` : base);
+          add('Deal Status', status, `"${status}" is not a valid status for ${type}.`, withSplitNote(base, note));
         }
       }
 

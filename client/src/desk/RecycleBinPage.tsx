@@ -239,19 +239,35 @@ export default function RecycleBinPage() {
               {/* TD-019 — "across the app" was the old, unscoped behaviour; say what this log covers now. */}
               <div className="help" style={{ margin: '0 0 10px 2px' }}>A read-only history of what admins or agents deleted in the Transaction Desk, plus shared records such as user accounts (marked <strong>Shared</strong>). CRM deletions are in the CRM&apos;s own trail. Recover items from their tab: <strong>Transactions</strong>, <strong>Documents</strong>, <strong>Invoices</strong>, and <strong>Payments</strong> (which also holds deleted commission &amp; adjustment rows).</div>
               <table className="list-table">
-                <thead><tr><th>When</th><th>Who</th><th>What</th><th>Item</th><th>Detail</th><th>Transaction</th></tr></thead>
+                {/*
+                  * TD-018 — the ACTION and the SECTION are two facts, so they are two columns.
+                  *
+                  * They shared one 'What' cell: the action in a pill, the section in a <div> under
+                  * it. On screen that reads as two lines, which is why this entry was closed twice
+                  * by checks that counted the columns of the table — but the cell's TEXT carried no
+                  * separator at all, so 'Removed' and 'Property Information' came back as
+                  * 'RemovedProperty Information' to anything that reads the text rather than the
+                  * layout: a copy-paste of the cell, a screen reader, the QA scrape that filed this.
+                  * 'RemovedProperty' is not a phrase.
+                  *
+                  * A separator character would have fixed the reading. A column fixes the shape:
+                  * `action` and `section` are separate fields on the audit row and are joined
+                  * nowhere but here, so there is no longer a place for them to run together.
+                  */}
+                <thead><tr><th>When</th><th>Who</th><th>Action</th><th>Section</th><th>Item</th><th>Detail</th><th>Transaction</th></tr></thead>
                 <tbody>
-                  {data.log.length === 0 ? <tr><td colSpan={6} className="empty-cell">No deletions logged.</td></tr>
+                  {data.log.length === 0 ? <tr><td colSpan={7} className="empty-cell">No deletions logged.</td></tr>
                     : data.log.map((e) => (
                       <tr key={e.id}>
                         <td style={{ whiteSpace: 'nowrap', fontSize: 12 }}>{e.stamp || '—'}</td>
                         <td>{e.who || '—'}</td>
                         <td>
                           <span className="pill bad" style={{ fontSize: 10 }}>{e.action}</span>
-                          {/* TD-019 — a shared record belongs to both areas; say so rather than let it read as a Desk deletion. */}
-                          {e.shared && <span className="pill info" style={{ fontSize: 10, marginLeft: 4 }} title="A shared record — this deletion also appears in the CRM's log">Shared</span>}
-                          {e.section ? <div style={{ fontSize: 11, color: 'var(--muted)' }}>{e.section}</div> : null}
+                          {/* TD-019 — a shared record belongs to both areas; say so rather than let it read as a Desk deletion.
+                            * It stays beside the ACTION: it qualifies the deletion, not the section the deletion happened in. */}
+                          {e.shared ? <>{' '}<span className="pill info" style={{ fontSize: 10, marginLeft: 4 }} title="A shared record — this deletion also appears in the CRM's log">Shared</span></> : null}
                         </td>
+                        <td style={{ fontSize: 12, color: 'var(--muted)' }}>{e.section || '—'}</td>
                         <td>{e.field || '—'}</td>
                         <td style={{ maxWidth: 220, fontSize: 12, color: 'var(--muted)' }}>{e.details || e.old_value || '—'}</td>
                         <td>{txnCell(e.transaction_id, e.trade_no, e.transaction_trashed)}</td>

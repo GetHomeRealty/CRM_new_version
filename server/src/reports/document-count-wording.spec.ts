@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { col } from './report-columns';
-import { docStatus } from './report-documents';
+import { docCounts, docStatus, isReceived, type DocRow } from './report-documents';
 import { REPORTS } from './report-registry';
 
 /**
@@ -63,5 +63,68 @@ describe('the documentation counts say which axis they count (TD-089)', () => {
     const tile = source.slice(source.indexOf('Documents Outstanding'), source.indexOf('mandatory missing'));
     expect(tile).toContain("label: 'awaiting receipt'");
     expect(tile).not.toContain("label: 'pending'");
+  });
+});
+
+/**
+ * THE LABEL WAS ONLY HALF OF IT.
+ *
+ * Naming the column 'Pending Validation' stopped the number lying, and left the reader without the
+ * number they came for: there was no column anywhere in either documentation report for documents
+ * RECEIVED — only pending, valid, invalid and total, every one a validation state. So the "5 / 10
+ * received" on the deal's own panel could not be recovered from the report at any setting, and on
+ * deal 4 an administrator was told to chase ten documents while seven sat in the folder.
+ *
+ * The entry asks for "a label OR a second column". The label alone leaves the reports unable to
+ * answer the question they are opened to answer, so this is the second column.
+ */
+describe('the reports can answer what has actually ARRIVED (TD-089)', () => {
+  const doc = (raw_status: string, validation: string): DocRow => ({
+    raw_status, validation, status: docStatus({ status: raw_status, validation }),
+  } as DocRow);
+
+  it('counts receipt off documents.status, not off validation', () => {
+    // The discriminating state, and the only one that separates the two axes: the document has
+    // ARRIVED but nobody has checked it. Every earlier look missed this defect because the deals
+    // examined had none in it.
+    const counts = docCounts([
+      doc('Received', 'Pending'),
+      doc('Received', 'Valid'),
+      doc('Pending', 'Pending'),
+    ]);
+
+    expect(counts.received).toBe(2);
+    // Unchanged, and deliberately asserted beside it: the received-but-unchecked document is still
+    // pending VALIDATION. Both numbers are right; they are answers to different questions.
+    expect(counts.pending).toBe(2);
+    expect(counts.total).toBe(3);
+  });
+
+  it('reads the receipt field the deal panel reads, however it is cased or spaced', () => {
+    expect(isReceived({ raw_status: 'Received' })).toBe(true);
+    expect(isReceived({ raw_status: ' received ' })).toBe(true);
+    expect(isReceived({ raw_status: 'Pending' })).toBe(false);
+    expect(isReceived({})).toBe(false);
+  });
+
+  it('names the column for the axis it counts', () => {
+    expect(col.receivedDocs().label).toBe('Documents Received');
+    expect(col.receivedDocs().key).toBe('received_docs');
+  });
+
+  it('offers it on both reports that were telling people to chase documents already on file', () => {
+    for (const type of ['deal-documentation-status', 'reco-audit-readiness']) {
+      const report = REPORTS.find((r) => r.type === type)!;
+      const keys = report.columns.map((c) => c.key);
+      // Present AND on by default: a column the reader has to go and enable does not correct a
+      // figure they are already reading.
+      expect([type, keys.includes('received_docs')]).toEqual([type, true]);
+      expect([type, report.columns.find((c) => c.key === 'received_docs')?.default]).toEqual([type, true]);
+    }
+  });
+
+  it('puts Received before the validation counts it is most confused with', () => {
+    const keys = REPORTS.find((r) => r.type === 'deal-documentation-status')!.columns.map((c) => c.key);
+    expect(keys.indexOf('received_docs')).toBeLessThan(keys.indexOf('pending_docs'));
   });
 });

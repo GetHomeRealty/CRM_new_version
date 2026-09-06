@@ -37,7 +37,21 @@ export const txnShowInclude = {
   team_members: { include: { team_member_terms: { orderBy: { term_no: 'asc' } } }, orderBy: { position: 'asc' } },
   precon_terms: { orderBy: { term_no: 'asc' } },
   audit_logs: { orderBy: AUDIT_ORDER },
-  invoices: { orderBy: { id: 'asc' } },
+  /*
+   * TD-048 — DELETED INVOICES ARE NOT THIS DEAL'S INVOICE.
+   *
+   * This loaded every invoice row the deal had ever had, deleted ones included, while the Invoice
+   * module filters `deleted_at: null` on every read it makes. So one invoice was described two ways
+   * again, by the same mechanism the entry is about: an invoice deleted into the Recycle Bin
+   * disappeared from the Invoice list and went on being reported by the deal's Admin Activities
+   * panel, number, status and all.
+   *
+   * `invoiceAdmin` then takes `invoices[0]` — the LOWEST id — so a deleted invoice also masked a
+   * live one raised after it, and the panel showed the dead invoice's status for a deal that had a
+   * perfectly good current invoice. Both consumers of this relation are fixed by filtering it here:
+   * the panel, and the `invoices` array served to the client beside it.
+   */
+  invoices: { where: { deleted_at: null }, orderBy: { id: 'asc' } },
   transaction_edit_requests: { orderBy: EDITREQ_ORDER },
   transaction_delete_requests: { orderBy: DELREQ_ORDER },
 } satisfies Prisma.transactionsInclude;

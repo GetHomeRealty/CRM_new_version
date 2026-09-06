@@ -20,6 +20,32 @@ import Icon from '../ui/Icon';
 
 const LEVEL_ORDER = ['none', 'view', 'edit'] as const;
 
+/**
+ * TD-119 - what a row here does NOT govern, said on the row itself.
+ *
+ * The matrix is a list of SCREENS, and its own subtitle says so. It is read as a list of DATA,
+ * which is the gap the defect records: Settings shows 'none' for the Agent role and
+ * `GET /api/company-settings` answers that same agent 200. Both are correct and they are answering
+ * different questions - the brokerage's branding is rendered by every screen in the product, so
+ * the route carries `AuthGuard` alone, while the bank block is withheld by a CAPABILITY
+ * (`company.read-banking`, thresholded at accounting rank in `core/authz.ts`) rather than by this
+ * row. A reader deciding 'can our agents get at that?' had no way to know any of it.
+ *
+ * THE ENDPOINT IS NOT THE THING TO CHANGE, and that was decided rather than assumed - closing the
+ * open read would blank the brokerage's name and logo on every screen for the roles that lose it.
+ * TD-061 settled the same argument the same way round in the other direction: where the screen and
+ * the matrix disagreed, the matrix was corrected, because it is the artefact people read to answer
+ * a question they cannot otherwise answer without testing.
+ *
+ * WHY IN PLAIN SIGHT RATHER THAN A HOVER TIP. This panel already uses `data-tip` for the reason a
+ * button is disabled, and that is the right place for it. A caveat that changes what the row MEANS
+ * is not a hint about a control - a reader who never hovers is exactly the reader who is misled,
+ * which is the mistake TD-098 records about the same guidance living in a cell note.
+ */
+const SCREEN_CAVEATS: Record<string, string> = {
+  settings: 'Opening the Settings screens only. The brokerage’s name, address, phone, logo, currency and tax rate stay readable at every level, including “none” — every screen renders them. Bank details are separate again: Accounting and above see them whatever this row says. Personal “My Settings” is always available to everyone.',
+};
+
 export default function RolesPanel() {
   const toast = useToast();
   const [roles, setRoles] = useState<ManagedRole[]>([]);
@@ -234,7 +260,10 @@ export default function RolesPanel() {
               <div className="roles-grid">
                 {screens.map((s) => (
                   <div className="roles-screen" key={s.key}>
-                    <span>{s.label}</span>
+                    <span>
+                      {s.label}
+                      {SCREEN_CAVEATS[s.key] && <em className="roles-screen-note">{SCREEN_CAVEATS[s.key]}</em>}
+                    </span>
                     <select
                       value={draft[s.key] ?? 'none'}
                       onChange={(e) => setDraft((d) => ({ ...d, [s.key]: e.target.value }))}

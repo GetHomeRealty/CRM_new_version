@@ -112,6 +112,49 @@ describe('the bulk importer explains Business Sale on the FIRST refusal (TD-051)
     }
   });
 
+  /*
+   * THE NOTE HAS TO BE READABLE, NOT MERELY PRESENT.
+   *
+   * The two assertions above ask whether the fix text CONTAINS 'sold like a listing', and both
+   * passed while the status correction actually read:
+   *
+   *   Use one of: Active, … Terminated, Expired A Business Sale is transacted on an offer…
+   *
+   * The allowed list ended without a full stop, so the note ran straight on from the last status.
+   * 'Expired A Business Sale' is not a phrase, and on a message whose entire job is to list the
+   * statuses that exist, the sentence after it reads as one more of them. A `toContain` check
+   * cannot see that — it is the same shape as the column-counting checks that closed TD-018 twice.
+   */
+  it('starts the note as its own sentence on every refusal that carries it', async () => {
+    const rows = [
+      await validate({ ...ADDRESS, 'Transaction Type': 'Business Sale', 'Deal Status': 'Secured Firm', ...OFFER_SIDE }),
+      await validate({
+        ...ADDRESS, 'Transaction Type': 'Business Sale', 'Deal Status': 'Active',
+        'Listing Contract Date': '2026-01-01', 'Listing Expiry Date': '2026-06-01',
+      }),
+    ];
+
+    const carrying = rows.flat().flatMap((r) => r.issues).filter((i) => i.fix.includes('A Business Sale is transacted'));
+    // Both refusal paths reach here — a fix that stopped emitting the note would empty this list
+    // and leave the loop below asserting nothing at all.
+    expect(carrying.length).toBeGreaterThanOrEqual(3);
+
+    for (const issue of carrying) {
+      const before = issue.fix.slice(0, issue.fix.indexOf('A Business Sale is transacted')).trimEnd();
+      expect([issue.field, before.slice(-1)]).toEqual([issue.field, expect.stringMatching(/[.!?]/)]);
+    }
+  });
+
+  it('keeps the question mark when the correction is a suggestion, rather than stopping it', async () => {
+    // 'Did you mean "Active"?' already ends in punctuation — the note must not follow it with a
+    // full stop bolted onto a question.
+    const [r] = await validate({ ...ADDRESS, ...OFFER_SIDE, 'Transaction Type': 'Business Sale', 'Deal Status': 'Activ' });
+    const fix = r.issues.find((i) => i.field === 'Deal Status')?.fix ?? '';
+
+    expect(fix).toContain('Did you mean "Active"?');
+    expect(fix).not.toContain('?.');
+  });
+
   it('still offers Business Sale exactly the listing statuses', () => {
     // The rule itself is unchanged — this is what the note describes, and what the Reference sheet
     // of the template prints beside it.

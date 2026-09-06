@@ -105,6 +105,19 @@ export const NOTIFICATION_CATEGORIES: readonly NotificationCategory[] = [
     areas: ['desk'],
   },
   {
+    key: 'status_change',
+    label: 'Deal status changes',
+    description: 'One of your deals has become firm, or has ended.',
+    /*
+     * TD-009 — the last of the entry's five events that could be built without a decision being
+     * made first. Unlike its neighbours here this one is NOT a sweep: it fires from the save that
+     * changes the status, so the agent hears about it when it happens rather than the next night.
+     * Same channels and same delivery record all the same, so it is turned off in the same place.
+     */
+    channels: { in_app: 'live', email: 'live', push: 'live' },
+    areas: ['desk'],
+  },
+  {
     key: 'lawyer_details',
     label: 'Lawyer detail reminders',
     description: 'A deal has reached a phase where the lawyer’s details are still missing.',
