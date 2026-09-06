@@ -70,17 +70,32 @@ export default function LawyerModal({ open, onClose, transactionId, txn, onSaved
   const sideComplete = (s: LawyerSide) => FIELDS.every((f) => form[`${s}_lawyer_${f}`].trim());
   const sideTouched = (s: LawyerSide) => FIELDS.some((f) => form[`${s}_lawyer_${f}`].trim());
 
+  /*
+   * TD-040 - VALIDATION IS REPORTED BY TOAST, NOT window.alert().
+   *
+   * alert() is a native modal: it blocks the browser's main thread until somebody clicks OK, so a
+   * tab showing one cannot be scripted or screenshotted. That is what the entry recorded as 'the
+   * tab hangs for 45 seconds or more' - the application was not frozen, the test tooling was.
+   *
+   * Two real problems remained, which is why this was fixed rather than withdrawn. Browsers offer
+   * 'prevent this page from creating additional dialogs' after a repeated alert, and a user who
+   * ticks it stops seeing validation entirely - Save then genuinely does nothing, with no
+   * explanation. And every other form in this product reports validation through toast(), which
+   * this file already imports and already uses in its own catch block a few lines below.
+   *
+   * The messages are unchanged - they were never the problem.
+   */
   const save = async () => {
     let payload: Record<string, unknown> = { ...form };
     if (dual) {
       // Only a section that's been started is mandatory — complete it, or leave it empty.
       const badSide = (['buyer', 'seller'] as const).find((s) => sideTouched(s) && !sideComplete(s));
       if (badSide) {
-        window.alert(`Please complete all ${badSide === 'buyer' ? 'Buyer' : 'Seller'} Lawyer fields, or clear that section.`);
+        toast(`Please complete all ${badSide === 'buyer' ? 'Buyer' : 'Seller'} Lawyer fields, or clear that section.`, 'bad');
         return;
       }
       if (!sideComplete('buyer') && !sideComplete('seller')) {
-        window.alert('Please fill at least one of Buyer Lawyer or Seller Lawyer details, and save.');
+        toast('Please fill at least one of Buyer Lawyer or Seller Lawyer details, and save.', 'bad');
         return;
       }
       // Mirror a completed side into the legacy lawyer_* fields (Notice of Sale / Trade Sheet):
@@ -95,7 +110,7 @@ export default function LawyerModal({ open, onClose, transactionId, txn, onSaved
         lawyer_address: form[`${mirrorSide}_lawyer_address`],
       };
     } else if (!form.lawyer_name.trim() || !form.lawyer_address.trim() || !form.lawyer_email.trim() || !form.lawyer_phone.trim()) {
-      window.alert('Please fill all the mandatory fields (Lawyer Name, Address, Email, Phone) and save.');
+      toast('Please fill all the mandatory fields (Lawyer Name, Address, Email, Phone) and save.', 'bad');
       return;
     }
     setSaving(true);

@@ -40,6 +40,21 @@ interface TeamSplitModalProps {
   canManageAccess?: boolean;
 }
 
+/*
+ * TD-040 - TEAM SPLIT VALIDATION IS REPORTED BY TOAST, NOT window.alert().
+ *
+ * Four validation messages used a native alert, which blocks the browser's main thread until
+ * somebody clicks OK - the behaviour the entry recorded as the tab hanging. It also cannot be
+ * styled, and a browser that has offered 'prevent this page from creating additional dialogs'
+ * will suppress it entirely, at which point Save silently does nothing.
+ *
+ * The wording is preserved but flattened to one line: these were written as 'Heading:\n\nBody'
+ * for a dialog box, and a toast is a single line.
+ *
+ * NOT THE WHOLE OF TD-040. Trade Sheet -> Send and Request Deletion use window.prompt, which
+ * COLLECTS a value rather than announcing one, so they need a real input dialog and are left for
+ * that work rather than half-converted here.
+ */
 export default function TeamSplitModal({ open, onClose, transactionId, primaryAgent, initialTeam, agents, isPrecon, isLease = false, termCount = 0, onSaved, readOnly = false, readOnlyReason, lockAgents = false, canManageAccess = false }: TeamSplitModalProps) {
   const toast = useToast();
   const seed = (): TeamMemberData[] => {
@@ -121,7 +136,7 @@ export default function TeamSplitModal({ open, onClose, transactionId, primaryAg
     if (!isSplit) {
       team = primaryAgent ? [{ ...blank(primaryAgent, true) }] : [];
       // §3.2 — a single-agent transaction still needs that agent present.
-      if (!team.length) { window.alert('Missing required block — Team Split:\n\nNo agent is assigned. Set the Agent in Basic Info, or enable a Team Split and add agents totalling 100%.'); return; }
+      if (!team.length) { toast('Missing required block — Team Split: No agent is assigned. Set the Agent in Basic Info, or enable a Team Split and add agents totalling 100%.', 'bad'); return; }
     } else {
       // Keep agent_pct/brok_pct null when unset so the backend applies the agent's
       // registered split; an explicit (Financial) value is preserved.
@@ -130,13 +145,13 @@ export default function TeamSplitModal({ open, onClose, transactionId, primaryAg
         .map((m, i): TeamMemberData => ({ ...m, name: i === 0 && primaryAgent ? primaryAgent : m.name, is_primary: i === 0, access: i === 0 ? 'full' : (m.access || 'docs'), split: parseFloat(String(m.split)) || 0, agent_pct: pct(m.agent_pct), brok_pct: pct(m.brok_pct) }))
         .filter((m) => m.name);
       // §Team Splits / §3.2 — block empty or incomplete splits with an explanatory pop-up.
-      if (!team.length) { window.alert('Missing required block — Team Split:\n\nA team split is enabled but no agents are added. Add at least one agent and make the splits total 100%.'); return; }
+      if (!team.length) { toast('Missing required block — Team Split: A team split is enabled but no agents are added. Add at least one agent and make the splits total 100%.', 'bad'); return; }
       // No agent may appear more than once in the split.
       const names = team.map((m) => m.name.trim().toLowerCase());
       const dup = names.find((n, i) => names.indexOf(n) !== i);
-      if (dup) { window.alert('Duplicate agent in Team Split:\n\nEach agent can be added only once. Please remove the repeated agent before saving.'); return; }
+      if (dup) { toast('Duplicate agent in Team Split: Each agent can be added only once. Please remove the repeated agent before saving.', 'bad'); return; }
       const t = team.reduce((s, m) => s + (Number(m.split) || 0), 0);
-      if (Math.round(t * 100) / 100 !== 100) { window.alert(`Incomplete Team Split:\n\nThe split percentages currently total ${Math.round(t * 100) / 100}%. They must total exactly 100% before saving.`); return; }
+      if (Math.round(t * 100) / 100 !== 100) { toast(`Incomplete Team Split: The split percentages currently total ${Math.round(t * 100) / 100}%. They must total exactly 100% before saving.`, 'bad'); return; }
     }
     setSaving(true);
     try {
