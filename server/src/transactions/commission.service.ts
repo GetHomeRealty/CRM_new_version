@@ -197,6 +197,7 @@ export class CommissionService {
         tTotal = this.r(tGross + tHst);
       }
       const visible = members.filter((m) => this.visibleAtTerm(m, k));
+      const onTerm = this.rebaseToTerm(visible);
       terms.push({
         term_no: k,
         pct: tpct,
@@ -204,7 +205,7 @@ export class CommissionService {
         commission: tAmt,
         hst: tHst,
         total: tTotal,
-        agents: this.agentLines(visible, tAmt, adj, k, null),
+        agents: this.agentLines(onTerm, tAmt, adj, k, null),
       });
     }
 
@@ -221,6 +222,35 @@ export class CommissionService {
       terms_pct_valid: termsPctValid,
       min_brokerage: { commission: 200, hst: 26, total: 226 },
     };
+  }
+
+  /*
+   * TD-123 - THE AGENTS ON A TERM SHARE THAT TERM, NOT THEIR SLICE OF THE DEAL.
+   *
+   * A preconstruction term records who actually worked it - that is what member scope is for.
+   * But each of them was still paid their DEAL-level split of that term, so a term worked by one
+   * member of a two-member team allocated only that member's standing share and THE REST WENT TO
+   * NOBODY. Not to the other agent, not to the brokerage: it was absent from the breakdown.
+   *
+   * On ZZ-TEST deal 82 that was 7,500.00 of 30,000.00 - exactly 25% - across three single-member
+   * terms of 5,000.00 each, at 50% apiece.
+   *
+   * The splits of whoever is on the term are therefore scaled to total 100 FOR THAT TERM,
+   * preserving their proportions: one member alone earns the whole term, two at 60/40 keep 60/40.
+   * The brokerage side needs no change - it keeps what the agent does not (see TD-080/TD-124
+   * below), so it follows from the same figure and the term still closes.
+   *
+   * The brokerage's ruling, 2026-09-06: 'an agent named alone on a term earns that whole term'.
+   *
+   * TWO CASES ARE LEFT EXACTLY AS THEY WERE, deliberately. A term with NO members allocates
+   * nothing - scaling cannot invent an agent, and inventing one would be worse than the gap it
+   * fills. And splits summing to zero are left alone rather than divided by.
+   */
+  private rebaseToTerm(visible: CommMember[]): CommMember[] {
+    if (visible.length === 0) return visible;
+    const sum = visible.reduce((acc, m) => acc + (m.split ?? 0), 0);
+    if (sum <= 0 || Math.abs(sum - 100) < 1e-9) return visible;
+    return visible.map((m) => ({ ...m, split: (m.split * 100) / sum }));
   }
 
   private visibleAtTerm(m: CommMember, k: number): boolean {
