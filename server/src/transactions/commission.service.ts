@@ -43,9 +43,25 @@ export class CommissionService {
 
   /** Gross commission summary for the list / analytics tiles. */
   summarize(t: CommissionTxn): CommissionSummary {
-    const amount = this.r(this.grossCommission(t));
-    const hst = this.r(amount * HST_RATE);
-    const total = this.r(amount + hst);
+    // TD-066. NET of HST means the preconstruction fee is TAX-INCLUSIVE. A 3% fee on a $1,000,000
+    // deal is $30,000 in total - 26,548.67 of commission with 3,451.33 of tax already inside it.
+    // grossCommission() returns that whole fee, so adding 13% on top invented tax nobody charged:
+    // the Financial panel read 30,000 while the API, the transactions list and the analytics tiles
+    // read 33,900. breakdownPrecon() has always been right; this is the same arithmetic, written
+    // the same way on purpose, so the two cannot drift apart. No other deal type is touched.
+    const gross = this.r(this.grossCommission(t));
+    let amount: number;
+    let hst: number;
+    let total: number;
+    if (isPrecon(t.type) && t.precon_net_of_hst) {
+      amount = this.r(gross / 1.13);
+      hst = this.r(gross - amount);
+      total = gross;
+    } else {
+      amount = gross;
+      hst = this.r(amount * HST_RATE);
+      total = this.r(amount + hst);
+    }
     const paid = t.comm_paid_status === 'Yes' || t.comm_status === 'Received';
     return { amount, hst, total, paid };
   }
