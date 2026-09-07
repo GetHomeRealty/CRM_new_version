@@ -1234,6 +1234,30 @@ export class TransactionsWriteService {
         where: { transaction_id: txnId, scope: 'financial', status: 'approved' },
         data: { status: 'applied', updated_at: new Date() },
       });
+
+      /*
+       * TD-083 — the commission invoice follows the deal while it is still unsent.
+       *
+       * The invoice's purchase price is derived from the deal on every read, so it already tracked
+       * a reprice; the commission lines are stored and did not. The document therefore stated one
+       * price and charged commission worked out on another — a bill that disproves itself, on a
+       * document that had never left the building.
+       *
+       * FIRED FROM THE SAME CONDITION that retires an approved financial edit request, because it
+       * is the same event: the money on this deal has changed. `refreshFromDeal` decides which
+       * invoices may follow — sent, paid or hand-built ones are left exactly as they are.
+       *
+       * AWAITED, unlike the reminders below it. This corrects a figure the brokerage bills on, and
+       * a save that reports success while leaving the invoice wrong is the defect again with a
+       * smaller window.
+       */
+      try {
+        await this.prisma.$transaction((tx) => this.txnInvoices.refreshFromDeal(tx, txnId, actor));
+      } catch {
+        // Never let it fail the save: the deal itself is correct either way, and the next financial
+        // save runs this again. The alternative — refusing the save because an invoice could not be
+        // updated — would be a worse failure than the one being fixed.
+      }
     }
 
     const source = isAgent(user) ? 'Agent' : 'Manual';

@@ -190,6 +190,8 @@ const TXN_SELECT = {
 /** The relation selections, likewise trimmed to the fields the enrichment reads. */
 const TEAM_SELECT = {
   select: {
+    // TD-054 — `access` decides whether this caller may see the deal's money at all.
+    access: true,
     name: true, user_id: true, split: true, agent_pct: true, brok_pct: true, scope: true,
     team_member_terms: { select: { term_no: true } },
   },
@@ -421,12 +423,59 @@ export class ReportDataService {
         const cinput = normalizeCommissionTxn(t);
         const bd = await this.commission.breakdown(cinput, cache);
         const summary = this.commission.summarize(cinput);
-        out.push(this.enrich(t, bd, summary, scope.lockedAgent ?? null));
+        out.push(this.redactDocsOnly(this.enrich(t, bd, summary, scope.lockedAgent ?? null), t, scope));
       }
 
       if (!more) break;
     }
     return out;
+  }
+
+  /**
+   * TD-054 — 'docs only' means documents, not money, on every report and every export.
+   *
+   * The access level was applied to the transaction detail response and nowhere else, so a member
+   * added to a colleague's deal for documents could still read that colleague's earnings and the
+   * brokerage's share from the Brokerage Split Ratio Commission Report, and download them from the
+   * transactions list. A restriction that holds on the screen it was tested on and fails everywhere
+   * else is worse than one that fails everywhere, because it looks fixed.
+   *
+   * APPLIED HERE BECAUSE THIS IS WHERE THE DATA IS ASSEMBLED. Every report and the bulk export read
+   * their rows from `load`, so one pass covers all of them — including a report added tomorrow,
+   * which is the property the entry actually asks for. Patching each report as it is noticed is how
+   * this came to be fixed on one surface out of three.
+   *
+   * THE DEAL STILL APPEARS, and that is deliberate: documents access means the deal is theirs to
+   * see. Only the figures go, which is exactly what the detail response does. `price` is left for
+   * the same reason it is left there — the entry asks that the identifying details of the deal stay
+   * visible, and one rule across the surfaces matters more than a second opinion on this one field.
+   */
+  private redactDocsOnly(e: EnrichedTxn, t: LoadedTxn, scope: DataScope): EnrichedTxn {
+    const lockedId = typeof scope.lockedUserId === 'number' ? scope.lockedUserId : null;
+    const lockedName = (scope.lockedAgent ?? '').trim();
+    // Only an agent-locked read is restricted; an administrator is not a team member being limited.
+    if (lockedId === null && lockedName === '') return e;
+
+    const members = (t.team_members ?? []) as unknown as { user_id: number | null; name: string; access?: string }[];
+    // Identity is the user id wherever the row carries one, and the name only for rows that never
+    // resolved to an account — the same rule `isMyMemberRow` states for the detail response.
+    const mine = members.find((m) => (m.user_id !== null && lockedId !== null
+      ? m.user_id === lockedId
+      : m.user_id === null && m.name === lockedName));
+    if (!mine || mine.access !== 'docs') return e;
+
+    const zero = { commission: 0, hst: 0, total: 0 };
+    return {
+      ...e,
+      splits: [], split_total: 0, split_ratios: [],
+      comm_type: null, comm_value: 0, comm_pct: null, comm_amt: null, comm_display: '',
+      total: { ...zero }, agentComm: { ...zero }, brokerageComm: { ...zero }, coopOut: { ...zero },
+      agent_payment_status: '', agent_paid: 0, agent_paid_date: null, any_agent_paid: false,
+      advance: 0, advance_date: null, agent_balance: 0, adjustments_total: 0,
+      cashback: { ...e.cashback, total: 0 },
+      referral: null,
+      commission_received: false,
+    };
   }
 
   private enrich(

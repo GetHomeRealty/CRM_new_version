@@ -63,6 +63,103 @@ export class TransactionInvoiceService {
     return created;
   }
 
+  /**
+   * TD-083 — an invoice that has never been sent follows the deal it bills for.
+   *
+   * THE INVOICE CONTRADICTED ITSELF, which is worse than being merely stale. `purchase_price` is
+   * derived at READ time from the joined deal, so it always shows the current price, while the
+   * commission lines are stored columns written once at generation. A deal repriced from 800,000 to
+   * 900,000 therefore produced a document stating a purchase price of 900,000 and charging
+   * commission worked out on 800,000 — a bill that disproves itself, and anyone can check the
+   * arithmetic. Every roll-up built on invoices inherited the error, so the Dashboard's billed and
+   * outstanding figures reconciled perfectly to the invoices and were wrong by the same amount.
+   *
+   * WHY UPDATE RATHER THAN LOCK-AND-CREDIT-NOTE. The entry offers both and says either is
+   * defensible; what is not is diverging silently. This is the one that matches what the document
+   * already does — the price half is travelling and only the commission half was left behind — and
+   * it costs the brokerage nothing, because these invoices have not left the building.
+   *
+   * WHAT IT WILL NOT TOUCH, and each guard is the difference between a correction and a forgery:
+   *   · an invoice that has been SENT keeps its figures. Once it is out, a change is a credit note
+   *     and a conversation, not a quiet edit.
+   *   · an invoice carrying ANY money — part-paid, Paid, or with reminders already chased — is left
+   *     alone for the same reason.
+   *   · a Void invoice is not revived.
+   *   · only invoices this system generated (`source: 'transaction'`), and within them only the
+   *     commission line it wrote. A line somebody added by hand is theirs, and rewriting the whole
+   *     invoice from the deal would delete it.
+   */
+  async refreshFromDeal(db: Tx, transactionId: number, actor: ActingUser | null): Promise<number> {
+    const t = await db.transactions.findUnique({
+      where: { id: transactionId },
+      include: commissionInclude,
+    });
+    if (!t || !isInvoiceableType(t.type)) return 0;
+
+    const open = await db.invoices.findMany({
+      where: {
+        transaction_id: transactionId,
+        source: 'transaction',
+        deleted_at: null,
+        sent_at: null,
+        status: { notIn: ['Paid', 'Void', 'Partially Paid'] },
+      },
+      select: { id: true, invoice_no: true, term_no: true, amount_paid: true, tax_rate: true, sub_total: true },
+    });
+    if (open.length === 0) return 0;
+
+    const settings = await db.company_settings.findUnique({ where: { id: 1 } });
+    const defaultTaxRate = Number(settings?.default_tax_rate ?? 13);
+    const breakdown = await this.commission.breakdown(normalizeCommissionTxn(t));
+    const terms = Array.isArray(breakdown.terms) ? (breakdown.terms as Record<string, unknown>[]) : [];
+
+    /** What this invoice should now be asking for. */
+    const commissionFor = (termNo: number | null): number | null => {
+      if (termNo === null) return Number((breakdown as { commission?: number }).commission ?? 0);
+      const term = terms.find((x) => Number(x.term_no) === termNo);
+      // A term that no longer exists is not a figure to guess at — the invoice is left as it is and
+      // the divergence stays visible rather than being papered over with a wrong number.
+      return term ? Number(term.commission ?? 0) : null;
+    };
+
+    let updated = 0;
+    for (const inv of open) {
+      // Belt and braces beside the `status` filter: a part-payment recorded without moving the
+      // status must still stop this.
+      if (Number(inv.amount_paid ?? 0) > 0) continue;
+
+      const want = commissionFor(inv.term_no);
+      if (want === null) continue;
+
+      const line = await db.invoice_line_items.findFirst({
+        where: { invoice_id: inv.id, description: { startsWith: 'Co-op Commission' } },
+        orderBy: { row_no: 'asc' },
+      });
+      if (!line) continue;                                   // hand-built invoice: not ours to rewrite
+      if (round2(Number(line.amount ?? 0)) === round2(want)) continue;
+
+      const was = round2(Number(line.amount ?? 0));
+      const now = new Date();
+      await db.invoice_line_items.update({
+        where: { id: line.id },
+        data: { rate: round2(want), amount: round2(want), updated_at: now },
+      });
+      await this.calc.recalculate(db, inv.id, Number(inv.tax_rate ?? defaultTaxRate));
+      updated += 1;
+
+      await this.audit.record(transactionId, actor, {
+        section: 'Quick Actions — Invoice',
+        field: inv.invoice_no,
+        action: 'Invoice commission updated',
+        source: 'System',
+        old: was.toFixed(2),
+        new: round2(want).toFixed(2),
+        details: 'The deal’s commission changed and this invoice had not been sent.',
+      });
+    }
+    return updated;
+  }
+
   private async make(
     db: Tx,
     t: { id: number; type: string; trade_no: string; property: string | null; agent: string | null; closing_date: Date | null },

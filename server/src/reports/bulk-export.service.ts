@@ -13,10 +13,57 @@ import { IMPORT_FIELDS, FINANCIAL_FIELDS, CHILD_SHEETS, flatColumn } from './imp
 import { buildDownloadAllWorkbook, type ExportRow, type RawTxnRow } from './download-all-export';
 import type { AuthUserRecord } from '../auth/auth.types';
 import { isMyMemberRow } from '../transactions/transaction.resource';
+
 import type { ReportFilters } from './report.types';
 import type { DocRow } from './report-documents';
 import { STORAGE_ROOT } from '../config/storage';
 import { contentDisposition } from '../common/content-disposition';
+
+/*
+ * TD-054 — the columns a 'docs only' team member may not have, named once for every export.
+ *
+ * The rule was written into `completeTable` and nowhere else, so the 111-column complete export
+ * obeyed it and the 62-column Export Data file — the one on the transactions list, and the one the
+ * re-test measured — did not. A restriction that holds on one export and fails on the other is
+ * worse than one that fails on both, because it looks fixed.
+ *
+ * BOTH HEADER VOCABULARIES ARE COVERED. The two builders spell the same figure differently —
+ * 'Total Commission (Excl HST)' against 'Total Commission Without HST' — so a set of literal names
+ * copied from one silently misses the other. That is exactly how this came to be half-fixed.
+ *
+ * PRICE AND DEPOSIT ARE DELIBERATELY NOT HERE. The entry's Expected clause withholds "the other
+ * agent's split, their commission, the brokerage share and the deal totals" and asks that the
+ * identifying details of the deal stay visible; the deal response — the surface already accepted as
+ * fixed — keeps the price on the same reading. One rule across the three surfaces matters more than
+ * my own preference, so if the brokerage wants the price withheld too it belongs in this one list.
+ */
+const MONEY_HEADERS = new Set([
+  'Split Ratios', 'Commission % / Amount', 'Commission Type', 'Commission Value',
+  'Listing Commission %', 'Co-Op Commission %', 'Listing Commission Flat', 'Co-Op Commission Flat',
+  'Trust Payable',
+  // completeTable's spelling
+  'Total Commission (Excl HST)', 'Total Commission HST', 'Total Commission (Incl HST)',
+  'Agent Commission (Excl HST)', 'Agent Commission HST', 'Agent Commission (Incl HST)',
+  'Brokerage Commission (Excl HST)', 'Brokerage Commission HST', 'Brokerage Commission (Incl HST)',
+  'Adjustments Total',
+  // dataWorkbook's spelling of the same figures
+  'Total Commission Without HST', 'Total Commission With HST',
+  'Agent Commission Without HST', 'Agent Commission With HST',
+  'Brokerage Commission Without HST', 'Brokerage Commission With HST',
+  'Adjustments',
+  // common to both
+  'Cashback', 'Referral Fee', 'Advance Paid', 'Agent Paid', 'Agent Balance', 'Agent Payment Status',
+  'Commission Adjust Before', 'Commission Adjust After',
+  'Listing Adjust Before', 'Listing Adjust After',
+  'Co-Op Adjust Before', 'Co-Op Adjust After',
+  'Precon Commission %', 'Precon Net of HST',
+]);
+
+/** A column an agent restricted to documents may not read. */
+const isMoneyHeader = (h: string): boolean =>
+  MONEY_HEADERS.has(h)
+  || /^Team \d+ (Deal Share %|Agent %|Brokerage %)$/.test(h)
+  || /^Adjustment \d+ Amount$/.test(h);
 
 /**
  * Ceiling on one bulk operation — protects the API from an accidental "select everything".
@@ -151,6 +198,32 @@ export class BulkExportService {
   }
 
   /** Documents selected for a ZIP, after status / category / date filtering. */
+  /**
+   * TD-054 — which of these deals the caller may see the documents of but not the money.
+   *
+   * One definition for both export builders. The access level is read straight from `team_members`
+   * because the enriched row does not carry it, and the member is matched with `isMyMemberRow` —
+   * the same rule the transaction resource uses, id first and name only for rows that never
+   * resolved to an account. A second spelling of that rule is how a namesake ends up reading
+   * somebody else's money.
+   *
+   * Only agents are restricted: an administrator on a deal is not a team member being limited.
+   */
+  private async docsOnlyDeals(ids: number[], user: AuthUserRecord): Promise<Set<number>> {
+    const out = new Set<number>();
+    if ((user.role ?? 'agent') !== 'agent' || ids.length === 0) return out;
+
+    const memberRows = await this.prisma.team_members.findMany({
+      where: { transaction_id: { in: ids } },
+      select: { transaction_id: true, user_id: true, name: true, access: true },
+    });
+    for (const id of ids) {
+      const mine = memberRows.filter((m) => m.transaction_id === id).find((m) => isMyMemberRow(m, user));
+      if (mine && mine.access === 'docs') out.add(id);
+    }
+    return out;
+  }
+
   private docsFor(t: EnrichedTxn, sel: BulkSelection): DocRow[] {
     let docs = t.docs;
     const want = sel.documents ?? 'all';
@@ -272,6 +345,18 @@ export class BulkExportService {
       });
     };
 
+    /*
+     * TD-054 — the same field scoping the complete export applies, on the export that is actually
+     * reached from the transactions list.
+     *
+     * Row scoping was already enforced by `resolve` (an agent gets only their own deals) and FIELD
+     * scoping lived in `completeTable` alone, so this 62-column file carried the other agent's
+     * earnings and the brokerage's share out of the building — generated by the person restricted
+     * to documents. Applied here by column NAME rather than by index, because a column inserted
+     * into the header list later must not silently shift the mask off the figures it covers.
+     */
+    const docsOnly = await this.docsOnlyDeals(txns.map((x) => x.id), user);
+
     // ---- Transactions ----
     const ws = sheet('Transactions', [
       'Transaction ID', 'Deal Number', 'Transaction Type', 'Property Address', 'Deal Status',
@@ -295,7 +380,8 @@ export class BulkExportService {
     for (const t of txns) {
       const r = rawById.get(t.id);
       const rec = (r ?? {}) as unknown as Record<string, unknown>;
-      ws.addRow([
+      // `unknown[]` because the row mixes typed figures with values read out of the raw record.
+      const cells: unknown[] = [
         t.id, t.trade_no, t.type, t.property, t.statuses.join(', '),
         t.agent, t.agent_names.join(', '), t.split_ratios.join(', '), t.client_names.join(', '),
         this.d(t.offer_date), this.d(t.closing_date), this.d(rec.listing_contract_date), this.d(rec.listing_expiry_date),
@@ -314,7 +400,12 @@ export class BulkExportService {
         r?.brokerages?.name ?? '', r?.brokerages?.address ?? '', r?.brokerages?.email ?? '',
         rec.lawyer_name ?? '', rec.lawyer_email ?? '', rec.lawyer_phone ?? '',
         t.lead_source ?? '', t.doc_counts.reminders_sent, this.d(t.created_at), this.d(t.updated_at),
-      ]);
+      ];
+      if (docsOnly.has(t.id)) {
+        const headers = (ws.getRow(1).values as unknown[]).slice(1).map(String);
+        for (let i = 0; i < cells.length; i++) if (isMoneyHeader(headers[i] ?? '')) cells[i] = '';
+      }
+      ws.addRow(cells);
     }
     this.moneyFormat(ws, [14, 15, 16, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35]);
     autoWidth(ws);
@@ -563,36 +654,12 @@ export class BulkExportService {
      * id first, name only for legacy rows. A second spelling of that rule is how a namesake ends
      * up reading somebody else's money.
      */
-    const MONEY = new Set([
-      'Commission % / Amount', 'Commission Type', 'Commission Value',
-      'Listing Commission %', 'Co-Op Commission %', 'Listing Commission Flat', 'Co-Op Commission Flat',
-      'Trust Payable', 'Total Commission (Excl HST)', 'Total Commission HST', 'Total Commission (Incl HST)',
-      'Agent Commission (Excl HST)', 'Agent Commission HST', 'Agent Commission (Incl HST)',
-      'Brokerage Commission (Excl HST)', 'Brokerage Commission HST', 'Brokerage Commission (Incl HST)',
-      'Adjustments Total', 'Cashback', 'Referral Fee', 'Advance Paid', 'Agent Paid', 'Agent Balance',
-      'Commission Adjust Before', 'Commission Adjust After',
-      'Listing Adjust Before', 'Listing Adjust After',
-      'Co-Op Adjust Before', 'Co-Op Adjust After',
-      'Precon Commission %', 'Precon Net of HST',
-    ]);
-    const hide = headers.map((h) => MONEY.has(h) || /^Team \d+ (Deal Share %|Agent %|Brokerage %)$/.test(h) || /^Adjustment \d+ Amount$/.test(h));
-    if ((user.role ?? 'agent') === 'agent' && hide.some(Boolean)) {
-      // The access level is read straight from team_members - the enriched row does not carry it.
-      // One query for the whole selection, matched with the same isMyMemberRow rule the screen uses.
-      const memberRows = await this.prisma.team_members.findMany({
-        where: { transaction_id: { in: txns.map((x) => x.id) } },
-        select: { transaction_id: true, user_id: true, name: true, access: true },
-      });
-      const docsOnly = new Set<number>();
-      for (const t of txns) {
-        const mine = memberRows.filter((m) => m.transaction_id === t.id).find((m) => isMyMemberRow(m, user));
-        if (mine && mine.access === 'docs') docsOnly.add(t.id);
-      }
-      if (docsOnly.size) {
-        for (const row of rows) {
-          if (!docsOnly.has(Number(row[0]))) continue;
-          for (let i = 0; i < row.length; i++) if (hide[i]) row[i] = '';
-        }
+    const hide = headers.map((h) => isMoneyHeader(h));
+    if (hide.some(Boolean)) {
+      const docsOnly = await this.docsOnlyDeals(txns.map((x) => x.id), user);
+      for (const row of rows) {
+        if (!docsOnly.has(Number(row[0]))) continue;
+        for (let i = 0; i < row.length; i++) if (hide[i]) row[i] = '';
       }
     }
 
