@@ -513,9 +513,18 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
             {pTerms.map((t, idx) => {
               const k = idx + 1;
               if (detailsOfTerms !== 'Entire' && detailsOfTerms !== `Term ${k}`) return null;
-              const tAmt = r2(parseNumber(price) * parseNumber(t.pct) / 100);
-              const tHst = r2(tAmt * HST);
-              const tTotal = netHst ? tAmt : r2(tAmt + tHst);
+              // TD-145 - a term uses the same HST treatment as the master 180 lines above. NET of
+              // HST means the fee ALREADY contains the tax, so it is divided out, never added on.
+              // This is the arithmetic the server has used since TD-024 shipped on 2026-09-02; this
+              // panel kept its own copy of the old version, so the screen read Commission 10,000.00
+              // + HST 1,300.00 against a Total of 10,000.00 - three numbers that cannot all be true -
+              // and handed the agents 10,170.00 out of a 10,000.00 term.
+              // Everything below consumes tAmt, so correcting it here corrects the agent, T4A and
+              // brokerage lines with it.
+              const tGross = r2(parseNumber(price) * parseNumber(t.pct) / 100);
+              let tAmt: number, tHst: number, tTotal: number;
+              if (netHst) { tAmt = r2(tGross / 1.13); tHst = r2(tGross - tAmt); tTotal = tGross; }
+              else { tAmt = tGross; tHst = r2(tGross * HST); tTotal = r2(tGross + tHst); }
               const visible = visibleAtTerm(k);
               const termDeduct = agentAdjustments(txn.adjustments, members, k); // term-scoped, aligned to members
               const locked = isLocked(k);
