@@ -57,13 +57,19 @@ const MONEY_HEADERS = new Set([
   'Listing Adjust Before', 'Listing Adjust After',
   'Co-Op Adjust Before', 'Co-Op Adjust After',
   'Precon Commission %', 'Precon Net of HST',
+  'Precon Commission Amount', 'Precon Commission Bonus',
 ]);
 
 /** A column an agent restricted to documents may not read. */
 const isMoneyHeader = (h: string): boolean =>
   MONEY_HEADERS.has(h)
   || /^Team \d+ (Deal Share %|Agent %|Brokerage %)$/.test(h)
-  || /^Adjustment \d+ Amount$/.test(h);
+  || /^Adjustment \d+ Amount$/.test(h)
+  // TD-130 - a preconstruction term is money too. Added with the term columns themselves rather
+  // than afterwards: a new money column that this function does not recognise silently reopens
+  // TD-054, and it would not fail anywhere - it would just appear in a docs-only agent's export.
+  // The term's Closing Date is deliberately NOT hidden; a date is not a figure.
+  || /^Term \d+ (Commission %|Commission Amount)$/.test(h);
 
 /**
  * Ceiling on one bulk operation — protects the API from an accidental "select everything".
@@ -499,6 +505,7 @@ export class BulkExportService {
       team_members: { orderBy: { position: 'asc' } },
       clients: { orderBy: { position: 'asc' } },
       conditions: { orderBy: { position: 'asc' } },
+      precon_terms: { orderBy: { term_no: 'asc' } },
     });
     const byId = new Map(raw.map((r) => [r.id, r]));
 
@@ -526,12 +533,16 @@ export class BulkExportService {
     };
 
     // Widest transaction in the selection decides how many repeat groups the sheet carries.
-    const widest = { team: 1, clients: 1, adjustments: 1, conditions: 1 };
+    const widest = { team: 1, clients: 1, adjustments: 1, conditions: 1, preconTerms: 1 };
     for (const t of txns) {
       const r = byId.get(t.id);
       widest.team = Math.max(widest.team, r?.team_members.length ?? 0);
       widest.clients = Math.max(widest.clients, r?.clients.length ?? 0);
       widest.conditions = Math.max(widest.conditions, r?.conditions.length ?? 0);
+      // TD-130 - preconstruction terms round-trip too. This file's contract is that it can be
+      // edited and fed back to the importer, so a column the importer can now read has to be a
+      // column the export can write.
+      widest.preconTerms = Math.max(widest.preconTerms, r?.precon_terms?.length ?? 0);
       widest.adjustments = Math.max(widest.adjustments, adjRowsFor((r ?? {}) as unknown as Record<string, unknown>).length);
     }
 
@@ -635,6 +646,17 @@ export class BulkExportService {
           (a.paid_status as string) ?? '', (a.remarks as string) ?? '',
         );
       }
+      // TD-130 - in CHILD_SHEETS order, which puts Precon Terms between Adjustments and
+      // Conditions. Writing these anywhere else would shift every later column by four.
+      const pterms = r?.precon_terms ?? [];
+      for (let i = 0; i < widest.preconTerms; i++) {
+        const pt = pterms[i];
+        row.push(
+          pt?.pct === null || pt?.pct === undefined ? '' : Number(pt.pct),
+          pt?.amt === null || pt?.amt === undefined ? '' : Number(pt.amt),
+          this.iso(pt?.closing_date),
+        );
+      }
       const conds = r?.conditions ?? [];
       for (let i = 0; i < widest.conditions; i++) {
         const c = conds[i];
@@ -678,9 +700,10 @@ export class BulkExportService {
       team_members: { orderBy: { position: 'asc' } },
       clients: { orderBy: { position: 'asc' } },
       conditions: { orderBy: { position: 'asc' } },
+      precon_terms: { orderBy: { term_no: 'asc' } },
     });
     const byId = new Map(raw.map((r) => [r.id, r]));
-    const empty: RawTxnRow = { id: 0, brokerages: null, team_members: [], clients: [], conditions: [] };
+    const empty: RawTxnRow = { id: 0, brokerages: null, team_members: [], clients: [], conditions: [], precon_terms: [] };
     const rows: ExportRow[] = txns.map((t) => ({ t, raw: byId.get(t.id) ?? { ...empty, id: t.id } }));
 
     const wb = buildDownloadAllWorkbook(rows, {

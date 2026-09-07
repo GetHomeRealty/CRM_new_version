@@ -47,6 +47,7 @@ export function normalizeCommissionTxn(t: TxnWithCommission): CommissionTxn {
     coop_adj_before: num(t.coop_adj_before),
     coop_adj_after: num(t.coop_adj_after),
     precon_net_of_hst: t.precon_net_of_hst,
+    precon_comm_bonus: numN(t.precon_comm_bonus),
     precon_comm_pct: numN(t.precon_comm_pct),
     precon_comm_amt_manual: numN(t.precon_comm_amt_manual),
     precon_term_count: t.precon_term_count,
@@ -66,7 +67,7 @@ export function normalizeCommissionTxn(t: TxnWithCommission): CommissionTxn {
       scope: m.scope,
       terms: m.team_member_terms.map((x) => x.term_no),
     })),
-    preconTerms: (t.precon_terms ?? []).map((p) => ({ term_no: p.term_no, pct: numN(p.pct), closing_date: p.closing_date })),
+    preconTerms: (t.precon_terms ?? []).map((p) => ({ term_no: p.term_no, pct: numN(p.pct), amt: numN(p.amt), bonus: numN(p.bonus), closing_date: p.closing_date })),
   };
 }
 

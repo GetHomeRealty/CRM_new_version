@@ -61,7 +61,8 @@ interface ReferralView {
   afterBroker: CommissionAmounts;
   afterClient: CommissionAmounts;
 }
-interface PreconTermRow { term_no: number; pct: number | string; closing_date: string; }
+interface PreconTermRow {
+  amt?: string; term_no: number; pct: number | string; closing_date: string; }
 
 interface FinancialModalProps {
   open: boolean;
@@ -222,14 +223,39 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
   const [netHst, setNetHst] = useState(!!txn.precon_net_of_hst);
   const [masterPct, setMasterPct] = useState<number | string>(txn.precon_comm_pct ?? '');
   const [pTerms, setPTerms] = useState<PreconTermRow[]>(() => {
-    const existing: Record<number, { pct?: number | null; closing_date?: string | null }> = {};
+    const existing: Record<number, { pct?: number | null; amt?: number | null; bonus?: number | null; closing_date?: string | null }> = {};
     (txn.precon_terms || []).forEach((t) => { existing[t.term_no] = t; });
     return Array.from({ length: termCount }, (_, k) => {
       const e = existing[k + 1] || {};
-      return { term_no: k + 1, pct: e.pct ?? '', closing_date: e.closing_date || '' };
+      // TD-130 - a stored amount or bonus must come back into its own box, or the panel would
+      // recompute from the percentage and contradict the server.
+      // TD-130 - a stored amount comes back with its percentage re-derived for display, because
+      // the percentage is never stored alongside an amount.
+      const amtStr = e.amt === null || e.amt === undefined ? '' : String(e.amt);
+      const basePrice = Number(txn.price) || 0;
+      const shownPct = amtStr !== '' && basePrice > 0
+        ? String(Math.round((Number(amtStr) / basePrice) * 100 * 1e6) / 1e6)
+        : (e.pct ?? '');
+      return { term_no: k + 1, pct: shownPct, amt: amtStr, closing_date: e.closing_date || '' };
     });
   });
-  const setTerm = (i: number, k: 'pct' | 'closing_date', v: string) => setPTerms((tt) => tt.map((t, idx) => idx === i ? { ...t, [k]: v } : t));
+  /*
+   * TD-130 - WHICHEVER BOX YOU TYPE IN IS THE ONE THAT IS KEPT.
+   *
+   * Typing a Commission Amount stores that amount and shows the percentage it works out to, for
+   * information. The percentage is NEVER multiplied back out: 7,500 of 859,900 is
+   * 0.8721944412...%, which the percentage column cannot hold, so a stored percentage reads back
+   * as 7,500.05 and two terms exceed their 15,000 master. Typing a percentage clears the amount,
+   * so a term never holds two contradictory answers.
+   */
+  const setTermAmt = (i: number, v: string) => setPTerms((tt) => tt.map((t, idx) => {
+    if (idx !== i) return t;
+    const p = parseNumber(price);
+    const shown = v === '' || p <= 0 ? '' : String(Math.round((parseNumber(v) / p) * 100 * 1e6) / 1e6);
+    return { ...t, amt: v, pct: shown };
+  }));
+  const setTermPct = (i: number, v: string) => setPTerms((tt) => tt.map((t, idx) => idx === i ? { ...t, pct: v, amt: '' } : t));
+
 
   // Auto-divide: resize the term list whenever the term count changes (preserving entered values).
   useEffect(() => {
@@ -237,6 +263,17 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
   }, [termCount]);
 
   const [masterAmtManual, setMasterAmtManual] = useState<number | string>(txn.precon_comm_amt_manual ?? '');
+  /*
+   * TD-130 - THE BUILDER BONUS BELONGS TO THE DEAL, at the brokerage's direction, not to the terms.
+   *
+   * 160 of its 430 preconstruction deals carry one - 480, 600, 240, 300 - agreed on top of the
+   * percentage. Reference deal 300001 is 650,000 at 2% with a 480 bonus and a fee of 13,480.
+   * Holding it here means the terms divide a fee that already includes it, so a bonus can never
+   * push the terms past their own deal. The switch keeps its own state so emptying the box to type
+   * a figure does not read as "no bonus" and close the field mid-keystroke.
+   */
+  const [masterBonus, setMasterBonus] = useState<number | string>(txn.precon_comm_bonus ?? '');
+  const [masterBonusOn, setMasterBonusOn] = useState<boolean>(txn.precon_comm_bonus !== null && txn.precon_comm_bonus !== undefined);
   const [detailsOfTerms, setDetailsOfTerms] = useState(txn.precon_details_of_terms || 'Entire');
   const [termLocks, setTermLocks] = useState<Record<number, boolean>>({});
   const isLocked = (k: number) => (termLocks[k] === undefined ? true : termLocks[k]);
@@ -327,7 +364,8 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
   const tvPass = Math.abs(tvCheck) < 0.005;
 
   // ---- live preconstruction master computation ----
-  const pMasterAmt = parseNumber(masterAmtManual) > 0 ? parseNumber(masterAmtManual) : (parseNumber(masterPct) > 0 ? parseNumber(price) * parseNumber(masterPct) / 100 : 0);
+  const pMasterBonus = masterBonusOn && String(masterBonus ?? '') !== '' ? parseNumber(masterBonus) : 0;
+  const pMasterAmt = (parseNumber(masterAmtManual) > 0 ? parseNumber(masterAmtManual) : (parseNumber(masterPct) > 0 ? parseNumber(price) * parseNumber(masterPct) / 100 : 0)) + pMasterBonus;
   let mComm: number, mHst: number, mTotal: number;
   if (netHst) { mComm = r2(pMasterAmt / 1.13); mHst = r2(pMasterAmt - mComm); mTotal = pMasterAmt; }
   else { mComm = pMasterAmt; mHst = r2(pMasterAmt * HST); mTotal = r2(pMasterAmt + mHst); }
@@ -335,8 +373,21 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
     if (adjB !== 0) { mComm = r2(mComm - adjB); mHst = r2(mComm * HST); mTotal = r2(mComm + mHst); }
     if (adjA !== 0) { mTotal = r2(mTotal - adjA); }
   }
-  const preconSumPct = pTerms.reduce((s, t) => s + parseNumber(t.pct), 0);
-  const preconTermsValid = parseNumber(masterPct) <= 0 ? true : preconSumPct <= parseNumber(masterPct) + 1e-9;
+  /*
+   * TD-130 - THE LIVE WARNING NEEDS THE SAME CONDITION IN MONEY.
+   *
+   * The percentage test is blind on a flat-fee deal: there is no master percentage to compare
+   * against, so 9,000 + 9,000 against a 15,000 fee looked perfectly fine until Save refused it.
+   * The server gate catches it either way; this is so the person typing finds out immediately
+   * rather than after pressing Save.
+   */
+  const preconSumGross = pTerms.reduce((s, t) => {
+    const base = (t.amt ?? '') === '' ? r2(parseNumber(price) * parseNumber(t.pct) / 100) : r2(parseNumber(t.amt));
+    return s + base;
+  }, 0);
+  const preconTermsValid =
+    (parseNumber(masterPct) <= 0 ? true : pTerms.reduce((s, t) => s + ((t.amt ?? '') !== '' ? 0 : parseNumber(t.pct)), 0) <= parseNumber(masterPct) + 1e-9)
+    && (pMasterAmt <= 0 ? true : r2(preconSumGross) <= pMasterAmt + 0.005);
   const visibleAtTerm = (k: number) => members.map((m, i) => ({ m, i })).filter(({ m }) => (m.scope || 'Entire') === 'Entire' || (m.terms || []).map(Number).includes(k));
 
   const save = async () => {
@@ -351,9 +402,17 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
           precon_term_count: termCount || null,
           precon_comm_pct: masterPct === '' ? null : parseNumber(masterPct),
           precon_comm_amt_manual: masterAmtManual === '' ? null : parseNumber(masterAmtManual),
+          precon_comm_bonus: masterBonusOn && String(masterBonus ?? '') !== '' ? parseNumber(masterBonus) : null,
           precon_details_of_terms: detailsOfTerms,
           comm_adjust_enabled: adjEnabled, comm_adjust_before: adjEnabled ? parseNumber(adjBefore) : 0, comm_adjust_after: adjEnabled ? parseNumber(adjAfter) : 0,
-          precon_terms: pTerms.map((t) => ({ term_no: t.term_no, pct: t.pct === '' ? null : parseNumber(t.pct), closing_date: t.closing_date || null })),
+          // TD-130 - the amount is stored, the percentage is only ever shown. A term carrying an
+          // amount sends no percentage, so nothing downstream can total a derived figure.
+          precon_terms: pTerms.map((t) => ({
+            term_no: t.term_no,
+            pct: (t.amt ?? '') !== '' ? null : (t.pct === '' ? null : parseNumber(t.pct)),
+            amt: (t.amt ?? '') === '' ? null : parseNumber(t.amt),
+            closing_date: t.closing_date || null,
+          })),
           team: members.map((m, i) => ({ name: m.name, split: parseNumber(m.split), agent_pct: parseNumber(m.agent_pct), brok_pct: parseNumber(m.brok_pct), is_primary: i === 0, scope: m.scope, terms: m.terms })),
         }
       : listing
@@ -493,9 +552,15 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
         {precon ? (
           <>
             <div className="modal-sub">Commission</div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5,1fr)', gap: 10, marginBottom: 14 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10, marginBottom: 10 }}>
               <div className="field" style={{ marginBottom: 0 }}><label>Commission % {finPencil()}</label><input type="number" value={masterPct} onChange={(e) => setMasterPct(e.target.value)} placeholder="e.g. 4" readOnly={finLock} style={finLock ? { ...finLockStyle, ...pctStyle } : pctStyle} /></div>
               <div className="field" style={{ marginBottom: 0 }}><label>Commission Amount {finPencil()}</label><MoneyInput value={masterAmtManual} onChange={(v) => setMasterAmtManual(v)} placeholder="0.00" readOnly={finLock} style={finLock ? finLockStyle : undefined} /></div>
+              <div className="field" style={{ marginBottom: 0 }}><label>Bonus {finPencil()}</label><select value={masterBonusOn ? 'Yes' : 'No'} disabled={finLock} onChange={(e) => { const on = e.target.value === 'Yes'; setMasterBonusOn(on); if (!on) setMasterBonus(''); }} style={finLock ? finLockStyle : undefined}><option>No</option><option>Yes</option></select></div>
+              {!masterBonusOn
+                ? <div className="field" style={{ marginBottom: 0 }} />
+                : <div className="field" style={{ marginBottom: 0 }}><label>Bonus Amount {finPencil()}</label><MoneyInput value={masterBonus} onChange={(v) => setMasterBonus(v)} placeholder="0.00" readOnly={finLock} style={finLock ? finLockStyle : undefined} /></div>}
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10, marginBottom: 14 }}>
               <div className="field" style={{ marginBottom: 0 }}><label>Commission</label><input readOnly style={cs(mComm)} value={formatCurrency(mComm)} />{adjEnabled && adjB !== 0 && <div className="help" style={{ margin: '4px 0 0' }}>{adjNote(adjB, 'before HST')}</div>}</div>
               <div className="field" style={{ marginBottom: 0 }}><label>HST</label><input readOnly style={cs(mHst)} value={formatCurrency(mHst)} /></div>
               <div className="field" style={{ marginBottom: 0 }}><label>Total</label><input readOnly style={ts(mTotal)} value={formatCurrency(mTotal)} />{adjEnabled && adjA !== 0 && <div className="help" style={{ margin: '4px 0 0' }}>{adjNote(adjA, 'after HST')}</div>}</div>
@@ -521,7 +586,10 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
               // and handed the agents 10,170.00 out of a 10,000.00 term.
               // Everything below consumes tAmt, so correcting it here corrects the agent, T4A and
               // brokerage lines with it.
-              const tGross = r2(parseNumber(price) * parseNumber(t.pct) / 100);
+              // TD-130 - the fee is the typed amount when there is one, otherwise the
+              // percentage of the price, and a builder bonus is added to either.
+              const tTyped = (t.amt ?? '') === '' ? null : r2(parseNumber(t.amt));
+              const tGross = tTyped === null ? r2(parseNumber(price) * parseNumber(t.pct) / 100) : tTyped;
               let tAmt: number, tHst: number, tTotal: number;
               if (netHst) { tAmt = r2(tGross / 1.13); tHst = r2(tGross - tAmt); tTotal = tGross; }
               else { tAmt = tGross; tHst = r2(tGross * HST); tTotal = r2(tGross + tHst); }
@@ -547,10 +615,16 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
                     <button type="button" className="btn ghost sm" style={{ padding: '4px 8px', lineHeight: 1 }} title={locked ? 'Unlock to edit Commission %' : 'Lock Commission %'} onClick={() => toggleLock(k)}>{locked ? <Icon name="edit" size={13} /> : <Icon name="lock" size={13} />}</button>
                   </div>
                   <div className="g4">
-                    <div className="field" style={{ marginBottom: 0 }}><label>Commission %</label><input type="number" value={t.pct} readOnly={locked} style={locked ? { background: 'var(--surface-3)', cursor: 'not-allowed', ...pctStyle } : pctStyle} onChange={(e) => setTerm(idx, 'pct', e.target.value)} /></div>
+                    <div className="field" style={{ marginBottom: 0 }}><label>Commission %</label><input type="number" value={t.pct} readOnly={locked} style={locked ? { background: 'var(--surface-3)', cursor: 'not-allowed', ...pctStyle } : pctStyle} onChange={(e) => setTermPct(idx, e.target.value)} /></div>
+                    <div className="field" style={{ marginBottom: 0 }}><label>Commission Amount</label><input type="number" value={t.amt ?? ''} readOnly={locked} placeholder="0.00" style={locked ? { background: 'var(--surface-3)', cursor: 'not-allowed', ...pctStyle } : pctStyle} onChange={(e) => setTermAmt(idx, e.target.value)} /></div>
+                    <div className="field" style={{ marginBottom: 0 }} />
+                    <div className="field" style={{ marginBottom: 0 }} />
+                  </div>
+                  <div className="g4" style={{ marginTop: 8 }}>
                     <div className="field" style={{ marginBottom: 0 }}><label>Commission</label><input readOnly style={cs(tAmt)} value={formatCurrency(tAmt)} /></div>
                     <div className="field" style={{ marginBottom: 0 }}><label>HST</label><input readOnly style={cs(tHst)} value={formatCurrency(tHst)} /></div>
                     <div className="field" style={{ marginBottom: 0 }}><label>Total</label><input readOnly style={ts(tTotal)} value={formatCurrency(tTotal)} /></div>
+                    <div className="field" style={{ marginBottom: 0 }} />
                   </div>
 
                   <div className="modal-sub" style={{ marginTop: 14 }}>Agent Commission — Term {k} <span style={{ color: totalColor(agentTermTotal) }}>({formatCurrency(agentTermTotal)})</span></div>

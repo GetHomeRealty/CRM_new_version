@@ -306,6 +306,7 @@ export interface Transaction {
   coop_adj_before?: number;
   coop_adj_after?: number;
   precon_net_of_hst?: boolean;
+  precon_comm_bonus?: number | null;
   precon_comm_pct?: number | null;
   precon_comm_amt_manual?: number | null;
   precon_details_of_terms?: string;

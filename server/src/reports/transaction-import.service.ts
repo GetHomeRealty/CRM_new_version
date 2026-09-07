@@ -309,6 +309,12 @@ export class TransactionImportService {
       { Ref: 'T4', 'Precon Listing Type': 'exclusive', 'Precon Term Count': '2', 'Precon Commission %': '3', 'Precon Net of HST': 'No', 'Commission Agent': a3 },
     ];
     const children: Record<ChildSheet['key'], Record<string, string>[]> = {
+      // TD-130 - two worked examples: a term given as a percentage, and a term given as a fixed
+      // amount carrying a builder bonus. Both are on the preconstruction sample deal.
+      preconTerms: [
+        { Ref: 'T4', 'Commission %': '1', 'Commission Amount': '', 'Closing Date': '' },
+        { Ref: 'T4', 'Commission %': '', 'Commission Amount': '7500', 'Closing Date': '' },
+      ],
       team: [
         { Ref: 'T1', Agent: a1, Primary: 'Yes', 'Deal Share %': '60', 'Agent %': '90', 'Brokerage %': '10', Access: 'full' },
         { Ref: 'T1', Agent: a2, Primary: 'No', 'Deal Share %': '40', 'Agent %': '80', 'Brokerage %': '20', Access: 'docs' },
@@ -1089,6 +1095,51 @@ export class TransactionImportService {
       const adjRows = rec.children.adjustments ?? [];
       this.checkFormats(ADJUSTMENT_COLS, adjRows, add, 'Adjustments');
 
+      /*
+       * TD-130 - THE TERMS CANNOT EXCEED THE DEAL, AND IT IS CHECKED HERE, NOT ONLY AT WRITE.
+       *
+       * Anything that can refuse a row at import must refuse it at review, by the same rule.
+       * TD-097 and TD-139 were both exactly this shape: a screen reporting every row valid and an
+       * import then taking fewer, with the difference findable only by counting. On a 495-row
+       * migration that is a failure nobody sees.
+       *
+       * The arithmetic is written out rather than borrowed so this cannot break if a shared helper
+       * moves - the TD-075 lesson, where a clean typecheck hid a runtime fault.
+       */
+      const r2 = (n: number): number => Math.round(n * 100) / 100;
+      const n2 = (v: unknown): number => {
+        const x = Number(String(v ?? '').replace(/[^0-9.-]/g, ''));
+        return Number.isFinite(x) ? x : 0;
+      };
+      const termRows = rec.children.preconTerms ?? [];
+      if (termRows.length) {
+        const ttype = get('Transaction Type');
+        if (!/precon/i.test(ttype)) {
+          add('Transaction Type', ttype,
+            'Commission term rows were supplied on a deal that is not Preconstruction.',
+            'Remove the Precon Terms rows, or set Transaction Type to Preconstruction - they are ignored on any other type.',
+            'warning', 'Precon Terms');
+        } else {
+          const fin = (col: string): string => String((rec.financial ?? {})[col] ?? '').trim();
+          const price = n2(get('Price'));
+          const mAmt = n2(fin('Precon Commission Amount'));
+          const mPct = n2(fin('Precon Commission %'));
+          const mBonus = n2(fin('Precon Commission Bonus'));
+          const masterGross = (mAmt > 0 ? mAmt : r2((price * mPct) / 100)) + mBonus;
+          const sum = termRows.reduce((acc, tr) => {
+            const a = n2(tr['Commission Amount']);
+            const base = a > 0 ? a : r2((price * n2(tr['Commission %'])) / 100);
+            return acc + base;
+          }, 0);
+          if (masterGross > 0 && r2(sum) > masterGross + 0.005) {
+            add('Precon Terms', String(r2(sum)),
+              'The commission terms add up to ' + r2(sum) + ', which is more than the deal\'s own commission of ' + masterGross + '.',
+              'Reduce the term figures, or raise the deal commission - together the terms cannot exceed it.',
+              'error', 'Precon Terms');
+          }
+        }
+      }
+
       // ---- date sanity (warning, not an error) ----
       const offer = get('Offer Date'), closing = get('Closing Date');
       if (offer && closing && /^\d{4}-\d{2}-\d{2}$/.test(offer) && /^\d{4}-\d{2}-\d{2}$/.test(closing) && closing < offer) {
@@ -1355,11 +1406,33 @@ export class TransactionImportService {
     if (brokAgents.length) brokerage.agents = brokAgents;
     if (Object.keys(brokerage).length) out['Co-Op Brokerage'] = { brokerage, __count: 1 };
 
-    // Preconstruction terms follow the term count set in Financial.
+    /*
+     * TD-130 - a supplied term carries its own commission; only an unsupplied one is blank.
+     *
+     * Term rows win over Precon Term Count when both are given, and the count is set from them,
+     * so a file cannot describe three terms and then list two. Position is the term number, the
+     * same convention Team Split and Clients already use.
+     */
     if (type === 'Preconstruction' && out.Financial) {
-      const tc = Number(out.Financial.precon_term_count ?? 0) || 0;
-      if (tc > 0) {
-        out.Financial.precon_terms = Array.from({ length: tc }, (_, i) => ({ term_no: i + 1, pct: null, closing_date: null }));
+      const termRows = rec.children.preconTerms ?? [];
+      if (termRows.length) {
+        out.Financial.precon_terms = termRows.map((r, i) => {
+          const pctS = String(r['Commission %'] ?? '').trim();
+          const amtS = String(r['Commission Amount'] ?? '').trim();
+          const cd = String(r['Closing Date'] ?? '').trim();
+          return {
+            term_no: i + 1,
+            pct: pctS ? num(pctS) : null,
+            amt: amtS ? num(amtS) : null,
+            closing_date: cd || null,
+          };
+        });
+        out.Financial.precon_term_count = termRows.length;
+      } else {
+        const tc = Number(out.Financial.precon_term_count ?? 0) || 0;
+        if (tc > 0) {
+          out.Financial.precon_terms = Array.from({ length: tc }, (_, i) => ({ term_no: i + 1, pct: null, amt: null, bonus: null, closing_date: null }));
+        }
       }
     }
     return out;

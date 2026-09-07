@@ -70,9 +70,14 @@ export class CommissionService {
     const price = t.price;
 
     if (isPrecon(t.type)) {
+      // TD-130 - the bonus belongs to the deal's fee, so it belongs here too. summarize() derives
+      // the fee separately from breakdownPrecon(), and leaving the bonus out of one of them would
+      // have the panel and the API disagree about the same deal by exactly the bonus - which is
+      // TD-066, in a new place, made by this very change.
+      const bonus = t.precon_comm_bonus ?? 0;
       const manual = t.precon_comm_amt_manual;
-      if (manual !== null && manual > 0) return manual;
-      return (price * (t.precon_comm_pct ?? 0)) / 100;
+      if (manual !== null && manual > 0) return manual + bonus;
+      return (price * (t.precon_comm_pct ?? 0)) / 100 + bonus;
     }
 
     if (isListingFinancial(t.type)) {
@@ -148,13 +153,26 @@ export class CommissionService {
     const price = t.price;
     const netHst = t.precon_net_of_hst;
 
+    /*
+      * TD-130 - THE DEAL'S FEE IS ITS AMOUNT (OR PERCENTAGE) PLUS A BUILDER BONUS.
+      *
+      * 160 of the brokerage's 430 preconstruction deals carry one - 480 on 42 deals, 600 on 27,
+      * 240 on 27, 300 on 26 - figures agreed with a builder on top of the percentage, not
+      * rounding noise. Reference deal 300001 is 650,000 at 2% = 13,000 with a 480 bonus, and the
+      * fee received was 13,480.
+      *
+      * The bonus lives HERE and not on the terms, at the brokerage's direction. It is also the
+      * safer place: the terms divide a fee that already includes the bonus, so a bonus can never
+      * push the terms past their own deal - which is exactly what happened when they carried it.
+      */
     const manual = t.precon_comm_amt_manual;
+    const bonus = t.precon_comm_bonus ?? 0;
     let amount: number;
     if (manual !== null) {
-      amount = this.r(manual);
+      amount = this.r(manual + bonus);
     } else {
       const pct = t.precon_comm_pct ?? 0;
-      amount = this.r((price * pct) / 100);
+      amount = this.r((price * pct) / 100 + bonus);
     }
 
     let commission: number;
@@ -185,21 +203,35 @@ export class CommissionService {
 
     let count = t.precon_term_count ?? 0;
     if (count < 1) count = 0;
-    const termRows = new Map<number, { pct: number | null; closing_date: Date | null }>();
-    for (const p of t.preconTerms) termRows.set(p.term_no, { pct: p.pct, closing_date: p.closing_date });
+    const termRows = new Map<number, { pct: number | null; amt: number | null; closing_date: Date | null }>();
+    for (const p of t.preconTerms) termRows.set(p.term_no, { pct: p.pct, amt: p.amt, closing_date: p.closing_date });
 
     const adj = t.adjustments ?? {};
     const terms: Record<string, unknown>[] = [];
     let sumPct = 0;
+    let sumGross = 0;
     for (let k = 1; k <= count; k++) {
       const row = termRows.get(k);
       const tpct = row ? row.pct ?? 0 : 0;
-      sumPct += tpct;
+      // TD-130 - an amount-driven term contributes NO percentage. The panel shows the percentage
+      // an amount works out to, for information, and that figure must never be totalled: on a deal
+      // whose fee carries a bonus the derived percentages necessarily exceed the master's, and the
+      // deal would be refused for exceeding itself. The money test is the one that governs.
+      if (!(row && row.amt !== null && row.amt !== undefined)) sumPct += tpct;
       // TD-024. A term must use the same HST treatment as the master above. netHst was read
       // for the total and nowhere else, so on a tax-inclusive fee the commission and HST were
       // computed the gross way: the total came out right and the two figures inside it did not.
       // Verified against 256 term rows in the brokerage's own books - every one reproduces.
-      const tGross = this.r((price * tpct) / 100);
+      // TD-130. A term can hold a FIXED AMOUNT and a BUILDER BONUS, not only a percentage.
+      // 382 of the brokerage's 430 preconstruction deals need one or the other: 222 are flat fees
+      // and 160 are a percentage plus a round bonus. amt is the source of truth when it is set -
+      // 7,500 of 859,900 is 0.8721944412...%, which Decimal(8,4) cannot hold, so a stored
+      // percentage reads back as 7,500.05 and two terms EXCEED their 15,000 master. Storing what
+      // was typed removes the question. Mirrors precon_comm_amt_manual on the master.
+      const tBase = row && row.amt !== null && row.amt !== undefined
+        ? this.r(row.amt)
+        : this.r((price * tpct) / 100);
+      const tGross = tBase;
       let tAmt: number;
       let tHst: number;
       let tTotal: number;
@@ -212,6 +244,7 @@ export class CommissionService {
         tHst = this.r(tGross * HST_RATE);
         tTotal = this.r(tGross + tHst);
       }
+      sumGross += tGross;
       const visible = members.filter((m) => this.visibleAtTerm(m, k));
       const onTerm = this.rebaseToTerm(visible);
       terms.push({
@@ -226,12 +259,19 @@ export class CommissionService {
     }
 
     const masterPct = t.precon_comm_pct ?? 0;
-    const termsPctValid = masterPct <= 0 ? true : sumPct <= masterPct + 1e-9;
+    // TD-130. The brokerage's condition is that the terms must not exceed the main in BOTH
+    // percentage and commission. The percentage test alone stopped meaning anything the moment a
+    // term could hold a flat amount: an amount-driven term contributes 0 to sumPct and would pass
+    // it trivially. Both are now checked. `amount` is the master's gross fee and `sumGross` is
+    // what the terms actually come to, bonuses included.
+    const pctOk = masterPct <= 0 ? true : sumPct <= masterPct + 1e-9;
+    const moneyOk = amount <= 0 ? true : sumGross <= amount + 0.005;
+    const termsPctValid = pctOk && moneyOk;
 
     return {
       variant: 'precon',
       net_of_hst: netHst,
-      master: { pct: masterPct, amount, commission, hst, total },
+      master: { pct: masterPct, bonus, amount, commission, hst, total },
       adjust: { enabled: t.comm_adjust_enabled, before: t.comm_adjust_before, after: t.comm_adjust_after },
       term_count: count,
       terms,

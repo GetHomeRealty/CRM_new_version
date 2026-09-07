@@ -130,6 +130,12 @@ export const FINANCIAL_FIELDS: ImportField[] = [
   { column: 'Precon Listing Type', key: 'precon_listing_type', type: 'enum', options: ['mls', 'exclusive'], hint: 'Preconstruction only — mls or exclusive', example: 'mls' },
   { column: 'Precon Term Count', key: 'precon_term_count', type: 'number', hint: 'Preconstruction only — number of commission terms', example: '2' },
   { column: 'Precon Commission %', key: 'precon_comm_pct', type: 'number', hint: 'Preconstruction only', example: '3' },
+  // TD-130 - the deal's own flat fee, which could not be imported at all. 222 of the brokerage's
+  // 430 preconstruction deals carry a fixed fee with no percentage anywhere on them, so without
+  // this column those deals cannot state what they are worth. Mirrors precon_comm_amt_manual,
+  // which the Add Transaction screen has always had.
+  { column: 'Precon Commission Amount', key: 'precon_comm_amt_manual', type: 'number', hint: 'Preconstruction only \u2014 a flat fee for the whole deal. Use this instead of Precon Commission % when the fee is a fixed figure. Wins over the percentage if both are filled.', example: '15000' },
+  { column: 'Precon Commission Bonus', key: 'precon_comm_bonus', type: 'number', hint: 'Preconstruction only - a builder bonus on top of the percentage or the amount. 160 of the brokerage\u2019s preconstruction deals carry one.', example: '480' },
   { column: 'Precon Net of HST', key: 'precon_net_of_hst', type: 'yesno', options: YES_NO, hint: 'Preconstruction only — Yes if the commission is net of HST', example: 'No' },
   { column: 'Commission Agent', key: 'commission_agent', type: 'text', roster: true, hint: 'Preconstruction only — the agent the commission is paid to', example: 'Ramesh Gollu' },
 ];
@@ -180,6 +186,20 @@ export const CONDITION_FIELDS: ImportField[] = [
  * the one-sheet layout. `flatMax` is the ceiling the flat layout imposes — the multi-sheet
  * layout has no ceiling, which is exactly why it exists.
  */
+/*
+ * TD-130 - PRECONSTRUCTION TERMS, WHICH COULD NOT BE IMPORTED AT ALL.
+ *
+ * The importer created BLANK terms - a term_no and a null percentage - so no term commission
+ * reached the system by any import route, as a percentage or otherwise. Preconstruction is
+ * invoiced one term at a time, and 382 of the brokerage's 430 preconstruction deals carry a flat
+ * fee or a percentage plus a round builder bonus, so these figures are what a builder is billed.
+ */
+export const PRECON_TERM_FIELDS: ImportField[] = [
+  { column: 'Commission %', key: 'pct', type: 'number', hint: 'Preconstruction only \u2014 this term as a percentage of the purchase price. Leave blank when you are giving an amount.', example: '1' },
+  { column: 'Commission Amount', key: 'amt', type: 'number', hint: 'Preconstruction only \u2014 this term as a fixed amount. Use it when the fee is a flat figure that no percentage lands on exactly. Wins over the percentage if both are filled.', example: '7500' },
+  { column: 'Closing Date', key: 'closing_date', type: 'date', hint: 'Preconstruction only \u2014 when this term closes.', example: '2026-11-03' },
+];
+
 export interface ChildSheet {
   sheet: string;
   /** Prefix for flat columns: `${flatPrefix} ${n} ${field.column}`. */
@@ -187,7 +207,7 @@ export interface ChildSheet {
   flatMax: number;
   fields: ImportField[];
   /** Key the normalised row carries this collection under. */
-  key: 'team' | 'clients' | 'adjustments' | 'conditions';
+  key: 'team' | 'clients' | 'adjustments' | 'conditions' | 'preconTerms';
   note: string;
 }
 
@@ -203,6 +223,10 @@ export const CHILD_SHEETS: ChildSheet[] = [
   {
     sheet: 'Adjustments', flatPrefix: 'Adjustment', flatMax: 8, fields: ADJUSTMENT_FIELDS, key: 'adjustments',
     note: 'Agent adjustments, advance payments, client referrals and the external referral all live here — pick the area with the Section column.',
+  },
+  {
+    sheet: 'Precon Terms', flatPrefix: 'Term', flatMax: 8, fields: PRECON_TERM_FIELDS, key: 'preconTerms',
+    note: 'Preconstruction only. One row per commission term, in order \u2014 the first row is Term 1. Give a Commission % or a Commission Amount, not both; a Bonus Amount is added to either. Together the terms cannot exceed the deal\u2019s own commission.',
   },
   {
     sheet: 'Conditions', flatPrefix: 'Condition', flatMax: 6, fields: CONDITION_FIELDS, key: 'conditions',

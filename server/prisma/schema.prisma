@@ -2074,6 +2074,8 @@ model precon_terms {
   transaction_id Int
   term_no        Int
   pct            Decimal?     @db.Decimal(8, 4)
+  amt            Decimal?     @db.Decimal(15, 2)
+  bonus          Decimal?     @db.Decimal(15, 2)
   closing_date   DateTime?    @db.Date
   created_at     DateTime?    @db.Timestamp(0)
   updated_at     DateTime?    @db.Timestamp(0)
@@ -2461,6 +2463,7 @@ model transactions {
   precon_net_of_hst           Boolean                       @default(false)
   precon_comm_pct             Decimal?                      @db.Decimal(8, 4)
   precon_comm_amt_manual      Decimal?                      @db.Decimal(15, 2)
+  precon_comm_bonus           Decimal?                      @db.Decimal(15, 2)
   precon_details_of_terms     String                        @default("Entire") @db.VarChar(255)
   builder_name                String?                       @db.VarChar(255)
   builder_vendor              String?                       @db.VarChar(255)

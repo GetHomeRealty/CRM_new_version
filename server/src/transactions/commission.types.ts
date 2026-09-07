@@ -15,6 +15,8 @@ export interface CommPreconTerm {
   term_no: number;
   pct: number | null;
   closing_date: Date | null;
+  amt: number | null;
+  bonus: number | null;
 }
 
 /** The transaction fields + relations the commission math reads. */
@@ -40,6 +42,7 @@ export interface CommissionTxn {
   coop_adj_before: number;
   coop_adj_after: number;
   precon_net_of_hst: boolean;
+  precon_comm_bonus: number | null;
   precon_comm_pct: number | null;
   precon_comm_amt_manual: number | null;
   precon_term_count: number | null;

@@ -195,7 +195,7 @@ const DOCS_ONLY_HIDDEN = [
   'listing_comm_pct', 'coop_comm_pct', 'listing_comm_flat', 'coop_comm_flat', 'trust_payable',
   'listing_adj_enabled', 'listing_adj_before', 'listing_adj_after',
   'coop_adj_enabled', 'coop_adj_before', 'coop_adj_after',
-  'precon_comm_pct', 'precon_comm_amt_manual', 'precon_net_of_hst',
+  'precon_comm_pct', 'precon_comm_amt_manual', 'precon_comm_bonus', 'precon_net_of_hst',
   'commission', 'financial',
 ];
 
@@ -326,6 +326,7 @@ export async function transactionResource(t: LoadedTxn, ctx: ResourceCtx): Promi
     precon_term_count: t.precon_term_count !== null ? Number(t.precon_term_count) : null,
     commission_agent: t.commission_agent,
     precon_net_of_hst: t.precon_net_of_hst,
+    precon_comm_bonus: t.precon_comm_bonus === null || t.precon_comm_bonus === undefined ? null : Number(t.precon_comm_bonus),
     precon_comm_pct: numN(t.precon_comm_pct),
     precon_comm_amt_manual: numN(t.precon_comm_amt_manual),
     precon_details_of_terms: t.precon_details_of_terms,
@@ -343,6 +344,10 @@ export async function transactionResource(t: LoadedTxn, ctx: ResourceCtx): Promi
   // precon_terms (whenLoaded)
   if (t.precon_terms !== undefined) {
     out.precon_terms = t.precon_terms.map((p) => ({
+      // TD-130 - the term's own fixed amount and builder bonus. Without these the panel cannot
+      // see what was typed and falls back to the percentage, so the screen would disagree with
+      // the server's own figures - the TD-145 fault, in a new place.
+      amt: p.amt === null || p.amt === undefined ? null : Number(p.amt),
       term_no: p.term_no,
       pct: numN(p.pct),
       closing_date: toDateString(p.closing_date),

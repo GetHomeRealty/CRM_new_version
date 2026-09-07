@@ -106,7 +106,7 @@ const FILL_KEYS = [
   'listing_adj_enabled', 'listing_adj_before', 'listing_adj_after',
   'coop_adj_enabled', 'coop_adj_before', 'coop_adj_after',
   'precon_listing_type', 'precon_term_count', 'commission_agent',
-  'precon_net_of_hst', 'precon_comm_pct', 'precon_comm_amt_manual', 'precon_details_of_terms',
+  'precon_net_of_hst', 'precon_comm_pct', 'precon_comm_amt_manual', 'precon_comm_bonus', 'precon_details_of_terms',
   'lawyer_name', 'lawyer_email', 'lawyer_phone', 'lawyer_address',
   'buyer_lawyer_name', 'buyer_lawyer_email', 'buyer_lawyer_phone', 'buyer_lawyer_address',
   'seller_lawyer_name', 'seller_lawyer_email', 'seller_lawyer_phone', 'seller_lawyer_address',
@@ -123,7 +123,7 @@ const AGENT_LOCKED = [
   'listing_adj_enabled', 'listing_adj_before', 'listing_adj_after',
   'coop_adj_enabled', 'coop_adj_before', 'coop_adj_after',
   'comm_status', 'comm_paid_status',
-  'precon_net_of_hst', 'precon_comm_pct', 'precon_comm_amt_manual', 'precon_listing_type',
+  'precon_net_of_hst', 'precon_comm_pct', 'precon_comm_amt_manual', 'precon_comm_bonus', 'precon_listing_type',
   'adjustments', 'admin_activities',
 ];
 
@@ -930,10 +930,51 @@ export class TransactionsWriteService {
         ? readMoney(data.precon_comm_pct)
         : readMoney(t.precon_comm_pct);
       if (masterPct > 0) {
-        const sumPct = asArray(data.precon_terms).reduce(
-          (acc, term) => acc + readMoney((term as Record<string, unknown>).pct), 0);
+        // TD-130 - a term that carries its own amount contributes no percentage to this test.
+        // Its percentage is a display of that amount, and totalling it would refuse deals whose
+        // fee includes a bonus, because the derived percentages must then exceed the master's.
+        const sumPct = asArray(data.precon_terms).reduce((acc, term) => {
+          const tr = term as Record<string, unknown>;
+          return acc + (readMoney(tr.amt) > 0 ? 0 : readMoney(tr.pct));
+        }, 0);
         if (sumPct > masterPct + 1e-9) {
           const m = `The commission terms add up to ${round2(sumPct)}% of the deal, which is more than the deal's own ${round2(masterPct)}%. The terms divide the commission between them; together they cannot exceed it.`;
+          throw new UnprocessableEntityException({ message: m, errors: { precon_terms: [m] } });
+        }
+      }
+
+      /*
+       * TD-130 - THE SAME CONDITION, IN MONEY.
+       *
+       * The percentage test above stops meaning anything the moment a term can hold a fixed
+       * amount: an amount-driven term contributes 0 to sumPct and passes it however large it is.
+       * A flat-fee deal has no master percentage at all, so that test never even runs.
+       *
+       * The master's gross fee is its manual amount when one is set, otherwise its percentage of
+       * the price - derived here exactly as breakdownPrecon derives it, so the gate and the
+       * calculation cannot disagree about what a deal is worth.
+       */
+      const priceForTerms = Object.prototype.hasOwnProperty.call(data, 'price')
+        ? readMoney(data.price)
+        : readMoney(t.price);
+      const masterManual = Object.prototype.hasOwnProperty.call(data, 'precon_comm_amt_manual')
+        ? readMoney(data.precon_comm_amt_manual)
+        : readMoney(t.precon_comm_amt_manual);
+      const masterBonus = Object.prototype.hasOwnProperty.call(data, 'precon_comm_bonus')
+        ? readMoney(data.precon_comm_bonus)
+        : readMoney(t.precon_comm_bonus);
+      const masterGross = (masterManual > 0 ? masterManual : round2((priceForTerms * masterPct) / 100)) + masterBonus;
+      if (masterGross > 0) {
+        const sumGross = asArray(data.precon_terms).reduce((acc, term) => {
+          const r = term as Record<string, unknown>;
+          const a = readMoney(r.amt);
+          const base = a > 0 ? a : round2((priceForTerms * readMoney(r.pct)) / 100);
+          return acc + base;
+        }, 0);
+        if (sumGross > masterGross + 0.005) {
+          const money = (n: number): string =>
+            '$' + round2(n).toLocaleString('en-CA', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+          const m = `The commission terms add up to ${money(sumGross)}, which is more than the deal's own commission of ${money(masterGross)}. The terms divide the commission between them; together they cannot exceed it.`;
           throw new UnprocessableEntityException({ message: m, errors: { precon_terms: [m] } });
         }
       }
@@ -1357,6 +1398,9 @@ export class TransactionsWriteService {
           transaction_id: txnId,
           term_no: Number(term.term_no),
           pct: term.pct === undefined || term.pct === null ? null : (term.pct as number),
+          // TD-130 - a term's own fixed amount and builder bonus. Blank stays NULL, which means
+          // "use the percentage", so every term saved before today behaves exactly as it did.
+          amt: term.amt === undefined || term.amt === null || term.amt === '' || !Number.isFinite(Number(term.amt)) ? null : Number(term.amt),
           closing_date: term.closing_date ? new Date(String(term.closing_date).slice(0, 10) + 'T00:00:00.000Z') : null,
           created_at: now,
           updated_at: now,

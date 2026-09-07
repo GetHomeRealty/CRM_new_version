@@ -37,6 +37,8 @@ export interface RawTxnRow {
   team_members: { name: string; is_primary: boolean; split: unknown; agent_pct: unknown; brok_pct: unknown; access: string }[];
   clients: { name: string; email: string | null; phone: string | null }[];
   conditions: { type: string; custom_name: string | null; deadline: Date | null; status: string }[];
+  // TD-130 - preconstruction terms, so the export can write what the importer can now read.
+  precon_terms: { term_no: number; pct: unknown; amt: unknown; closing_date: Date | null }[];
   [column: string]: unknown;
 }
 
