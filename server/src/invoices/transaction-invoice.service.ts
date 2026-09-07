@@ -7,6 +7,7 @@ import { isInvoiceableType } from '../reference/transaction.constants';
 import { round2 } from '../common/serialize';
 import { InvoiceCalculator } from './invoice.calculator';
 import { InvoiceNumberService } from './invoice.numbers';
+import { totalCommission } from '../reports/report-financials';
 
 type Tx = Prisma.TransactionClient;
 
@@ -113,13 +114,42 @@ export class TransactionInvoiceService {
     const breakdown = await this.commission.breakdown(normalizeCommissionTxn(t));
     const terms = Array.isArray(breakdown.terms) ? (breakdown.terms as Record<string, unknown>[]) : [];
 
-    /** What this invoice should now be asking for. */
+    /**
+     * What this invoice should now be asking for.
+     *
+     * TD-151 - THE WHOLE-DEAL FIGURE DOES NOT LIVE IN THE SAME PLACE ON EVERY VARIANT, and this was
+     * the one reader in the system that never asked which variant it had. breakdownStandard returns
+     * a top-level `commission`; breakdownPrecon puts it on `master`, breakdownListing on `totals`.
+     * So on a preconstruction or listing deal this evaluated Number(undefined ?? 0) - and zero is
+     * not an absent value, it is a number. The line was rewritten to 0.00 by an ordinary save and
+     * recalculate() then moved sub_total, tax_total and total down to match: a billing document
+     * destroyed by an edit that had nothing to do with it.
+     *
+     * IT NOW CALLS THE FUNCTION THAT ALREADY ANSWERS THIS, rather than becoming a fourth copy of the
+     * same three-line decision. totalCommission() is documented as authoritative per variant; the
+     * reports and the payment cache reach the figure through it, the dashboard branches on
+     * `variant` itself, and generate() - fifty lines above this - branches too.
+     *
+     * NOTHING IS GUESSED AND NOTHING IS SILENTLY ZEROED. A term that no longer exists, or one whose
+     * commission is not a number, returns null and the invoice is left exactly as it is - an
+     * unanswered question is not a figure. The write itself then refuses to take a live line down to
+     * zero, which is the guard that covers the whole CLASS rather than this one variant: a figure
+     * read from the wrong place, an absent field coerced by `?? 0`, or a variant a later build
+     * introduces that this function has never heard of.
+     */
+    /** Absent, null, empty or non-finite is NOT a commission of zero. */
+    const numeric = (v: unknown): number | null => {
+      if (v === null || v === undefined || v === '') return null;
+      const n = Number(v);
+      return Number.isFinite(n) ? n : null;
+    };
+
     const commissionFor = (termNo: number | null): number | null => {
-      if (termNo === null) return Number((breakdown as { commission?: number }).commission ?? 0);
-      const term = terms.find((x) => Number(x.term_no) === termNo);
-      // A term that no longer exists is not a figure to guess at — the invoice is left as it is and
-      // the divergence stays visible rather than being papered over with a wrong number.
-      return term ? Number(term.commission ?? 0) : null;
+      if (termNo !== null) {
+        const term = terms.find((x) => Number(x.term_no) === termNo);
+        return term ? numeric(term.commission) : null;
+      }
+      return totalCommission(breakdown).commission;
     };
 
     let updated = 0;
@@ -136,13 +166,41 @@ export class TransactionInvoiceService {
         orderBy: { row_no: 'asc' },
       });
       if (!line) continue;                                   // hand-built invoice: not ours to rewrite
-      if (round2(Number(line.amount ?? 0)) === round2(want)) continue;
-
       const was = round2(Number(line.amount ?? 0));
+      const next = round2(want);
+      if (next === was) continue;
+
+      /*
+       * TD-151 - AN ORDINARY SAVE DOES NOT WIPE A LIVE BILLING LINE.
+       *
+       * This is the guard that would have prevented the defect that created it, and it does not
+       * depend on anybody having thought of the particular way the figure went missing. On
+       * 2026-09-07 at 12:10:59 GHR-200837 went from 26,548.67 to 0.00 on a deal save, because the
+       * whole-deal figure was read from a field that does not exist on a preconstruction breakdown
+       * and `?? 0` turned that absence into a number. A commission that is honestly zero over a line
+       * that is already zero never reaches here - the equality above returns first - so this costs
+       * nothing in the honest case and refuses the entire class in the dishonest one.
+       *
+       * The invoice keeps what it had, and the refusal is recorded where somebody will find it
+       * rather than in a log nobody reads.
+       */
+      if (next === 0 && was !== 0) {
+        await this.audit.record(transactionId, actor, {
+          section: 'Quick Actions — Invoice',
+          field: inv.invoice_no,
+          action: 'Invoice commission left unchanged',
+          source: 'System',
+          old: was.toFixed(2),
+          new: was.toFixed(2),
+          details: 'The deal produced a commission of 0.00 for this invoice, so it was left at its existing figure rather than zeroed. Check the deal.',
+        });
+        continue;
+      }
+
       const now = new Date();
       await db.invoice_line_items.update({
         where: { id: line.id },
-        data: { rate: round2(want), amount: round2(want), updated_at: now },
+        data: { rate: next, amount: next, updated_at: now },
       });
       await this.calc.recalculate(db, inv.id, Number(inv.tax_rate ?? defaultTaxRate));
       updated += 1;
@@ -153,7 +211,7 @@ export class TransactionInvoiceService {
         action: 'Invoice commission updated',
         source: 'System',
         old: was.toFixed(2),
-        new: round2(want).toFixed(2),
+          new: next.toFixed(2),
         details: 'The deal’s commission changed and this invoice had not been sent.',
       });
     }
