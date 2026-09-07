@@ -3,8 +3,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   downloadImportTemplate, downloadImportSample, downloadImportErrors, fileToBase64,
-  validateImport, confirmImport, importHistory,
+  validateImport, confirmImport, importHistory, undoTransactionImport,
 } from '../lib/importApi';
+import ConfirmDialog from './ConfirmDialog';
 import { apiErrorMessage, isForbidden } from '../lib/apiError';
 import { useToast } from './toast';
 import type { ImportPreview, ImportResult, ImportBatch, ImportIssue } from '../types';
@@ -26,6 +27,7 @@ export default function BulkImportPage() {
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
   const [history, setHistory] = useState<ImportBatch[]>([]);
+  const [undoing, setUndoing] = useState(false);
   const [dragging, setDragging] = useState(false);
 
   /**
@@ -41,6 +43,30 @@ export default function BulkImportPage() {
    * administrator. Anything else may well be transient and is worth a Try again.
    */
   const [historyError, setHistoryError] = useState<'denied' | 'failed' | null>(null);
+  // TD-142 — the batch an Undo is being confirmed for. Held as the row itself so the dialog can say
+  // how many deals and which file, rather than asking again after the answer.
+  const [toUndo, setToUndo] = useState<ImportBatch | null>(null);
+  /*
+   * TD-142 — reverse one import.
+   *
+   * The history is reloaded rather than patched: the batch's status becomes Undone and its
+   * reversible count becomes zero, and reading both back from the server is what stops the button
+   * offering a second undo of something already undone.
+   */
+  const runUndo = async (batchId: string): Promise<void> => {
+    setToUndo(null);
+    setUndoing(true);
+    try {
+      const r = await undoTransactionImport(batchId);
+      toast(r.message, 'ok');
+      loadHistory();
+    } catch (e) {
+      toast(apiErrorMessage(e, 'Could not undo this import'), 'bad');
+    } finally {
+      setUndoing(false);
+    }
+  };
+
   const loadHistory = useCallback(() => {
     setHistoryError(null);
     importHistory()
@@ -272,6 +298,18 @@ export default function BulkImportPage() {
                       <button className="btn ghost sm" onClick={() => downloadImportErrors(b.batch_id).catch((e) => toast(apiErrorMessage(e, 'Download failed'), 'bad'))}>
                         Report
                       </button>
+                      {/*
+                        TD-142 — offered only where it can do something: a completed import that
+                        still has deals of its own. An import made before this feature existed
+                        carries no batch on its rows and reports zero, so the button is not shown
+                        rather than shown and refused.
+                      */}
+                      {b.status === 'Imported' && (b.reversible_rows ?? 0) > 0 && (
+                        <button className="btn ghost sm" style={{ marginLeft: 6, color: 'var(--bad)' }}
+                          disabled={undoing} onClick={() => setToUndo(b)}>
+                          {undoing ? 'Undoing…' : 'Undo import'}
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -280,6 +318,24 @@ export default function BulkImportPage() {
           </div>
         )}
       </div>
+
+      {/*
+        TD-142 — undoing an import removes deals, so it is confirmed like any other removal, and the
+        dialog says exactly how many and where they go.
+      */}
+      <ConfirmDialog
+        confirm={toUndo ? {
+          title: `Undo this import?`,
+          message: `${toUndo.reversible_rows} deal${toUndo.reversible_rows === 1 ? '' : 's'} created by ${toUndo.file_name || 'this import'} move to the Recycle Bin, where they can be restored. Deals entered by hand are not touched.`,
+          linked: [
+            'Invoices raised on those deals go with them, and come back with them',
+            'Their trade numbers are NOT returned to the pool — numbers are spent when issued',
+          ],
+          confirmLabel: `Undo import`,
+          onConfirm: () => { void runUndo(toUndo.batch_id); },
+        } : null}
+        onClose={() => setToUndo(null)}
+      />
     </>
   );
 }

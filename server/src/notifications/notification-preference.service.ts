@@ -118,6 +118,23 @@ export const NOTIFICATION_CATEGORIES: readonly NotificationCategory[] = [
     areas: ['desk'],
   },
   {
+    key: 'deposit_outstanding',
+    label: 'Deposit not recorded',
+    description: 'A deal you are on expects a deposit that has not been recorded as received.',
+    // TD-009. Chased once, five days after the offer date, not every day until somebody types it.
+    channels: { in_app: 'live', email: 'live', push: 'live' },
+    areas: ['desk'],
+  },
+  {
+    key: 'commission_received',
+    label: 'Commission received',
+    description: 'The brokerage has been paid for one of your deals.',
+    // TD-009. Fires on the invoice settling - the one meaning of "commission received" the system
+    // timestamps by itself rather than someone recording it by hand.
+    channels: { in_app: 'live', email: 'live', push: 'live' },
+    areas: ['desk'],
+  },
+  {
     key: 'lawyer_details',
     label: 'Lawyer detail reminders',
     description: 'A deal has reached a phase where the lawyer’s details are still missing.',

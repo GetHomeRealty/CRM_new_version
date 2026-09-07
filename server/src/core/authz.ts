@@ -101,6 +101,33 @@ export const CAPABILITIES = {
    * up, this threshold is the line to revisit — not the page gate.
    */
   'company.read-banking': ROLE_RANK.accounting,
+  /**
+   * TD-119 — the brokerage's OPERATIONAL settings, as opposed to its letterhead.
+   *
+   * `GET /api/company-settings` withheld the bank block and returned everything else to anybody with
+   * a session, on the stated grounds that branding is needed by every screen. Measured rather than
+   * assumed, that is not what the payload was doing: an agent received eighteen keys, eight of which
+   * are not letterhead - invoice_prefix, next_invoice_no, default_terms, thank_you_note,
+   * deposit_heading, deposit_signatory, feature_flags and lawyer_reminder_days. `next_invoice_no`
+   * tells the reader what the brokerage's next invoice number will be, to a role whose permission
+   * map says `settings: 'none'` and `invoice: 'none'`.
+   *
+   * NOTHING BELOW THIS LINE READS THEM. The consumers were traced before the fields were withheld:
+   * `CompanySettingsPage` (needs the Settings screen), `InvoiceDoc` and `InvoiceEditorModal` (the
+   * Invoice module) and `DepositReceiptModal` (opened behind `!isAgent`). `feature_flags` has no
+   * client consumer at all. So this takes nothing away from any screen a role below the threshold
+   * can open.
+   *
+   * `lawyer_reminder_days` IS DELIBERATELY NOT IN THE WITHHELD SET, though QA's list names it: an
+   * agent holds `triggers: 'view'` and the Desk Triggers panel shows them the reminder cadence, so
+   * it is a field their own screen reads.
+   *
+   * SAME RANK AS THE BANK BLOCK, and the same reasoning: `accounting` and `documentation` share rank
+   * 60 and are the two roles whose job is to produce the documents these fields print on. It is a
+   * separate capability rather than a reuse of `company.read-banking` because the two answer
+   * different questions and may not always move together.
+   */
+  'company.read-operations': ROLE_RANK.accounting,
   /** Read data belonging to people other than yourself. */
   'data.read-all': ROLE_RANK.manager,
   /**

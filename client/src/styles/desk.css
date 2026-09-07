@@ -513,6 +513,17 @@ input[type="number"],.numeric,.stat-card .val{font-variant-numeric:tabular-nums;
 
 /* Dark mode is chosen, not flipped: each pair is re-picked against the dark surface rather than
    inverted, which would wash the lighter hues out. Both scopes, so the theme toggle wins too. */
+/*
+ * TD-137 — the browser is told which theme this is, alongside the attribute on the document.
+ *
+ * `color-scheme` is what themes the parts the stylesheet does not own: form controls, scrollbars,
+ * and the canvas behind the page. Without it a viewer in OS dark mode gets dark scrollbars and
+ * dark-rendered inputs framing a light page — the same mismatch as the calendar chips, one layer
+ * out. The declaration follows the attribute rather than replacing it: the attribute closes the
+ * guard below, this makes the browser agree.
+ */
+:root{color-scheme:light}
+
 @media (prefers-color-scheme:dark){:root:where(:not([data-theme="light"])){
   --ev-viewing-bg:#1e3a5f;--ev-viewing-fg:#93c5fd;
   --ev-showing-bg:#134e4a;--ev-showing-fg:#5eead4;

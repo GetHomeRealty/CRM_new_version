@@ -87,6 +87,19 @@ export class TransactionImportController {
   }
 
   /** Downloadable validation report: row, field, invalid value, error, suggested correction. */
+  /**
+   * TD-142 — reverse one import, in one action.
+   *
+   * Behind the same `AdminGuard` and `assertCanImport` the import itself is behind: whoever may
+   * create hundreds of deals in one press is exactly who may put them back. The deals go to the
+   * Recycle Bin, so this is itself undoable.
+   */
+  @Post(':batchId/undo')
+  @HttpCode(200)
+  undo(@CurrentUser() user: AuthUserRecord, @Param('batchId') batchId: string): Promise<unknown> {
+    return this.imports.undo(batchId, user);
+  }
+
   @Get(':batchId/errors')
   async errors(@CurrentUser() user: AuthUserRecord, @Param('batchId') batchId: string, @Res() res: Response): Promise<void> {
     const { buffer, fileName } = await this.imports.errorReport(batchId, user);

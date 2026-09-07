@@ -35,8 +35,25 @@ import type { CompanySettings, EmailTemplate } from '../types';
  * calling them triggers would be describing a button as an automation.
  */
 const DESK_EVENT_PREFIXES = ['invoice.', 'document.', 'notice_of_sale.', 'deposit_receipt.', 'trade_sheet.', 'agent_faq.'];
+
+/*
+ * TD-009 — the `transaction.*` events that are MESSAGE triggers, named one at a time.
+ *
+ * `transaction.` cannot be admitted as a prefix the way the others are. Most keys under it are the
+ * nightly sweeps — closing dates, condition deadlines, listing expiry, the lawyer chase — and those
+ * are described in the Scheduled section above with no switch beside them, deliberately, because
+ * each is governed per person in Notification preferences. Admitting the prefix would list every one
+ * of them a second time, as a switch that contradicts the paragraph directly above it.
+ *
+ * The status-change trigger is the exception and belongs here: it fires on a save like every other
+ * message trigger, and it must be switchable from this screen. Left out of this list it would send
+ * for ever with no way to turn it off from the page whose whole purpose is turning things off —
+ * which is TD-141's defect, arrived at from the other side.
+ */
+const DESK_MESSAGE_EVENTS = new Set(['transaction.status_changed']);
+
 const isDeskEvent = (key: string | undefined): boolean =>
-  !!key && DESK_EVENT_PREFIXES.some((p) => key.startsWith(p));
+  !!key && (DESK_EVENT_PREFIXES.some((p) => key.startsWith(p)) || DESK_MESSAGE_EVENTS.has(key));
 
 /** Plain-language description of when each one fires. Falls back to the module name. */
 const WHEN: Record<string, string> = {
@@ -49,6 +66,8 @@ const WHEN: Record<string, string> = {
   'deposit_receipt.send': 'when a deposit receipt is issued',
   'trade_sheet.send': 'when a trade sheet is sent',
   'agent_faq.batch_review': 'when an agent’s batch of changes is reviewed',
+  // TD-009 — the wording matches NOTIFIABLE_STATUSES: becoming firm, and every way of ending.
+  'transaction.status_changed': 'when a deal becomes firm, or ends',
 };
 
 export default function DeskTriggersPanel() {
@@ -158,6 +177,25 @@ export default function DeskTriggersPanel() {
         </div>
 
         <div className="field" style={{ maxWidth: 520 }}>
+          <label>Deposit not recorded</label>
+          <p className="help" style={{ margin: 0 }}>
+            Five days after the offer date, a deal that expects a deposit and has none recorded as
+            received chases its agent once. Recording the deposit under Quick Actions &rarr; Admin
+            stops it. There is no deposit due date in the system, so this asks whether the money
+            arrived rather than whether it is late.
+          </p>
+        </div>
+
+        <div className="field" style={{ maxWidth: 520 }}>
+          <label>Commission received</label>
+          <p className="help" style={{ margin: 0 }}>
+            When an invoice is settled and the commission date is recorded, the deal&rsquo;s agent is
+            told that night. This is the brokerage being paid &mdash; the agent&rsquo;s own payment
+            is a separate thing and is not what this announces.
+          </p>
+        </div>
+
+        <div className="field" style={{ maxWidth: 520 }}>
           <label>Condition deadlines</label>
           <p className="help" style={{ margin: 0 }}>
             Every night, conditions reaching their deadline within a week are collected per deal and
@@ -220,15 +258,18 @@ export default function DeskTriggersPanel() {
           pending, which is a different thing and does exist.
         */}
         <p className="help" style={{ marginTop: 0 }}>
-          There are no triggers on offer dates, payments or commissions. The document figures on the
-          Dashboard are read when you open it — nothing watches them and acts. Documents are chased
-          on whether they are still pending rather than against a deadline, because a document has
-          no due date recorded against it.
+          There are no triggers on offer dates. The document figures on the Dashboard are read when
+          you open it — nothing watches them and acts. Documents are chased on whether they are still
+          pending rather than against a deadline, because a document has no due date recorded against
+          it, and the deposit is chased the same way and for the same reason.
         </p>
         <p className="help" style={{ marginBottom: 0 }}>
-          The money ones are not simply unwritten: a deposit has no due date recorded against it, and
-          “commission received” could mean the trust deposit, the invoice being paid or the agent
-          being paid. Those are decisions to be made before anything can watch for them.
+          The two money questions have now been answered rather than left open. A deposit still has
+          no due date, so it is chased on whether it has been received rather than against a
+          deadline. And of the three things “commission received” could mean — the trust deposit, the
+          invoice being paid, or the agent being paid — the trigger fires on the invoice, which is
+          the one the system records by itself; the other two are entered by hand, and announcing
+          them would be announcing the typing rather than the money.
         </p>
       </div>
     </>

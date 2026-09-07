@@ -3,6 +3,7 @@ import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Icon from '../ui/Icon';
 import { getInvoice, createInvoice, updateInvoice, recordInvoiceReminder, recordInvoicePayment, sendInvoice } from '../lib/api';
+import { withDeadline } from './withDeadline';
 import InvoiceDoc from './InvoiceDoc';
 import BrandMark from './BrandMark';
 import { reactToPdfBase64 } from './pdf';
@@ -81,6 +82,14 @@ interface InvoiceEditorModalProps {
   onSaved?: (updated?: Invoice | null) => void;
   onBack?: () => void;
 }
+
+/**
+ * TD-022 — how long the emailed PDF gets before the mail goes without it.
+ *
+ * Long enough that a slow but working render still attaches, short enough that nobody concludes the
+ * button is broken. The invoice is the message; the attachment is a convenience.
+ */
+const PDF_DEADLINE_MS = 12_000;
 
 export default function InvoiceEditorModal({ open, invoiceId, settings, onClose, onSaved, onBack }: InvoiceEditorModalProps) {
   const toast = useToast();
@@ -203,21 +212,44 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
     const tid = saved?.transaction_id || form.transaction_id;
     if (tid) navigate(deskPath(`transactions/${tid}`)); else onClose();
   };
-  // Render the invoice document to a PDF (base64) so it can be attached to the email.
-  const buildInvoicePdf = async (id: number, known: Invoice | null = null): Promise<{ pdf?: string; filename?: string }> => {
-    try {
+  /**
+   * Render the invoice document to a PDF (base64) so it can be attached to the email.
+   *
+   * TD-022 — BEST-EFFORT HAS TO INCLUDE "DOES NOT HANG".
+   *
+   * The `catch` below has always said the attachment must never block the send, and it did not keep
+   * that promise: `try/catch` catches a REJECTION, and this step's failure mode is a stall. The PDF
+   * is rendered by mounting the document offscreen and waiting on two chained
+   * `requestAnimationFrame` callbacks; rAF does not fire in a throttled tab, and the heavy PDF
+   * library is fetched on demand, so either can leave the promise pending for ever.
+   *
+   * That is what this entry measured: 'Sending...' still on screen at fifteen seconds, no request of
+   * any kind made, and no toast — because the send that would have produced one is still waiting
+   * here, several lines above where it is issued.
+   *
+   * A DEADLINE, and then the mail goes without the attachment. The invoice is the message; the PDF
+   * is a convenience. Sending it late and unattached beats sitting on a button that never resolves,
+   * and the caller now finds out either way.
+   */
+  const buildInvoicePdf = (id: number, known: Invoice | null = null): Promise<{ pdf?: string; filename?: string }> =>
+    withDeadline<{ pdf?: string; filename?: string }>((async () => {
       const full = known && known.id === id ? known : await getInvoice(id);
       const pdf = await reactToPdfBase64(<InvoiceDoc invoice={full} />);
       return { pdf, filename: `${full.invoice_no || 'invoice'}.pdf` };
-    } catch { return {}; } // attachment is best-effort — never block the send
-  };
+    })(), PDF_DEADLINE_MS, {});
   const sendMail = async () => {
     if (sending) return;
     setMenu('');
     setSending(true);
     try {
       const d = (edited || !saved) ? await save() : saved;
-      if (!d?.id) return;
+      /*
+       * TD-022 — the other half of the silence. `save()` reports its own failure, but a create that
+       * came back without an id fell out of here with nothing said at all, so the button returned to
+       * 'Send Email' as though the user had never pressed it. Every path out of this handler now
+       * ends in a sentence.
+       */
+      if (!d?.id) { toast('The invoice must be saved before it can be sent.', 'bad'); return; }
       const wasSent = !!(saved?.sent_at || form.sent_at);
       const payload = await buildInvoicePdf(d.id, d); // reuse detail — no extra round-trip
       const upd = await sendInvoice(d.id, payload);

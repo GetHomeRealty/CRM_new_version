@@ -179,3 +179,84 @@ describe('the client offers exactly the server vocabulary (TD-048)', () => {
     }
   });
 });
+
+/**
+ * TD-048 — the SECOND field on the Admin Activities panel, which the first closure never read.
+ *
+ * The panel carries two fields two lines apart. With the status wording settled, one invoice at one
+ * moment still read:
+ *
+ *     Invoice Status:  Overdue
+ *     Invoice Sent:    Draft
+ *
+ * 'Draft' is a member of INVOICE_STATUSES, so a reader was still shown two status-words for one
+ * invoice — the entry's original complaint ("the Admin Activities panel says Draft") surviving in a
+ * relabelled field rather than being resolved.
+ *
+ * FIXED AS A DISPLAY MAPPING, not a rename. `invoice_sent_status` is also a STORED field on
+ * `admin_activities` that the modal reads back, so historical rows hold the old word; renaming the
+ * enum would create a fresh mismatch of exactly the shape this entry is about.
+ */
+describe('the "Invoice Sent" field speaks its own vocabulary (TD-048)', () => {
+  const clientDir = join(__dirname, '..', '..', '..', 'client', 'src', 'desk');
+  const read = (f: string): string => readFileSync(join(clientDir, f), 'utf8');
+  const vocabulary = read('invoiceStatus.ts');
+
+  /** The mapping as it runs, with the note explaining the fault stripped out. */
+  const mapping = ((): Record<string, string> => {
+    const body = vocabulary.replace(/\/\*[\s\S]*?\*\//g, '');
+    const at = body.indexOf('SENT_STATUS_WORDS');
+    const slice = body.slice(body.indexOf('{', at) + 1, body.indexOf('}', at));
+    const out: Record<string, string> = {};
+    for (const pair of slice.split(',')) {
+      const m = /^\s*'?([^':]+)'?\s*:\s*'([^']+)'/.exec(pair);
+      if (m) out[m[1].trim()] = m[2];
+    }
+    return out;
+  })();
+
+  it('maps exactly the two words that need it', () => {
+    // Stated so the assertions below cannot pass over an empty map: if the parser above stopped
+    // finding entries, every "no collision" check would be vacuously true.
+    expect(Object.keys(mapping).sort()).toEqual(['Draft', 'Pending to Raise']);
+  });
+
+  it('maps Draft to a word that is not an invoice status', () => {
+    // The collision itself. 'Not sent' cannot be read as a payment state.
+    expect(mapping.Draft).toBe('Not sent');
+    expect(INVOICE_STATUSES).not.toContain(mapping.Draft as never);
+  });
+
+  it('leaves no mapped word colliding with the status vocabulary', () => {
+    for (const shown of Object.values(mapping)) {
+      expect([shown, (INVOICE_STATUSES as readonly string[]).includes(shown)]).toEqual([shown, false]);
+    }
+  });
+
+  it('does not rewrite Sent, Paid or Void', () => {
+    /*
+     * Each appears only when the status field says the same thing, so the two lines agree rather
+     * than contradict — and rewriting them would assert something the payload does not carry. An
+     * invoice marked Paid says nothing about whether it was ever emailed, and this field must not
+     * claim it was.
+     */
+    for (const kept of ['Sent', 'Paid', 'Void']) expect(mapping[kept]).toBeUndefined();
+  });
+
+  it('is used by every screen that shows the field', () => {
+    // Three render sites, and a mapping applied at two of them would be the same defect narrowed.
+    for (const f of ['AdminActivitiesModal.tsx', 'AgentFaqModal.tsx']) {
+      const src = read(f);
+      expect([f, src.includes('sentStatusLabel')]).toEqual([f, true]);
+      // No raw render left behind beside the mapped one.
+      expect([f, /invoice_sent_status \|\| '—'/.test(src)]).toEqual([f, false]);
+    }
+  });
+
+  it('leaves the stored value alone, which is why this is a mapping at all', () => {
+    // If the enum were renamed instead, `admin_activities.invoice_sent_status` rows written before
+    // the change would hold a word nothing maps — the mismatch this entry is about.
+    expect(read('AdminActivitiesModal.tsx')).toContain('invoice_sent_status: a.invoice_sent_status');
+  });
+});
+

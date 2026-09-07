@@ -41,9 +41,21 @@ const LEVEL_ORDER = ['none', 'view', 'edit'] as const;
  * button is disabled, and that is the right place for it. A caveat that changes what the row MEANS
  * is not a hint about a control - a reader who never hovers is exactly the reader who is misled,
  * which is the mistake TD-098 records about the same guidance living in a cell note.
+ *
+ * THE FIRST VERSION OF THIS SENTENCE WAS WRONG, AND THAT IS THE INTERESTING PART. It named six
+ * letterhead fields as what a role at 'none' still receives. The endpoint was returning EIGHTEEN
+ * keys, eight of them not letterhead at all - invoice_prefix and next_invoice_no among them - so
+ * the caveat described a system that did not exist, which is the very complaint the entry makes
+ * about the matrix. It was written by reading the wording rather than by measuring the response,
+ * and QA reopened the entry on exactly that.
+ *
+ * SO THE PAYLOAD WAS NARROWED TO MATCH, rather than this sentence widened to confess. What a role
+ * below `company.read-operations` receives is now the letterhead, the currency and tax rate, and
+ * the lawyer-reminder cadence their own Triggers screen reads - and `roles-matrix-caveat.spec.ts`
+ * holds this text against the server's withheld lists, so the two cannot drift apart again.
  */
 const SCREEN_CAVEATS: Record<string, string> = {
-  settings: 'Opening the Settings screens only. The brokerage’s name, address, phone, logo, currency and tax rate stay readable at every level, including “none” — every screen renders them. Bank details are separate again: Accounting and above see them whatever this row says. Personal “My Settings” is always available to everyone.',
+  settings: 'Opening the Settings screens only. At “none” the brokerage’s own details stay readable — name, address, phone, email, logo, currency, tax rate, and the lawyer-reminder cadence the Triggers screen shows. Everything else is withheld: bank account, HST number, invoice prefix and next number, and the document wording. Accounting and above see those whatever this row says. Personal “My Settings” is always available to everyone.',
 };
 
 export default function RolesPanel() {

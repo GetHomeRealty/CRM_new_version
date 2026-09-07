@@ -257,6 +257,15 @@ export default function TransactionDetailPage() {
   const bodyRef = useRef<HTMLDivElement>(null);
   const [brokSuggestions, setBrokSuggestions] = useState<BrokerageSuggestion[]>([]);
   const [confirm, setConfirm] = useState<ConfirmOptions | null>(null); // delete-confirmation popup
+  /*
+   * TD-040 — the reason an agent or an admin is typing, and which question is being asked.
+   *
+   * Held apart from `confirm` above because that one STORES the options object: a controlled
+   * textarea inside it is snapshotted and would not re-render as the user types. TD-016 hit the
+   * same trap on the transactions list and solved it the same way — build the dialog in the render.
+   */
+  const [reasonAsk, setReasonAsk] = useState<null | 'delete' | 'forward' | 'edit'>(null);
+  const [reasonText, setReasonText] = useState('');
   const [coreDocReminders, setCoreDocReminders] = useState<string[]>([]); // §5.2 Active: pending core listing docs
 
   // Close-guard and review-decision state. Declared up here with the rest of the state rather
@@ -825,9 +834,24 @@ export default function TransactionDetailPage() {
   const holdSections = sectionOpen && autoSaveOn && dirty && autoState !== 'blocked' && autoState !== 'error';
 
   const reloadTxn = () => getTransaction(id).then(applyUpdated).catch(() => {});
-  const onRequestEdit = async () => {
-    const reason = window.prompt('Reason for the edit request (optional):');
-    if (reason === null) return;
+  /*
+   * TD-040 — THE DELETION AND EDIT-REQUEST WORKFLOW ASKS IN THE APP.
+   *
+   * All three of these called `window.prompt` and the approval called `window.confirm`. Both are
+   * NATIVE MODALS that block the browser's main thread, which is what this entry measured as the
+   * page being "unresponsive for 45 seconds or more" — the tooling could not script a tab with a
+   * dialog open. The re-diagnosis of 2026-09-06 found the `alert` in LawyerModal and attributed the
+   * whole entry to it; Request Deletion is the second action the entry names and it is a `prompt`,
+   * so the alert alone was never the whole of it.
+   *
+   * The suppression risk is the same and worse here: a browser set to "prevent this page from
+   * creating additional dialogs" turns Request Deletion into a button that silently does nothing on
+   * a workflow that decides whether a deal is removed.
+   */
+  const askReason = (kind: 'delete' | 'forward' | 'edit') => { setReasonText(''); setReasonAsk(kind); };
+
+  const onRequestEdit = async (reason: string) => {
+    setReasonAsk(null);
     try { await requestTransactionEdit(id, reason); toast('Edit request sent for Super Admin approval', 'ok'); reloadTxn(); }
     catch (e) { toast(apiErrorMessage(e, 'Could not send request'), 'bad'); }
   };
@@ -836,25 +860,31 @@ export default function TransactionDetailPage() {
 
   // Transaction deletion approval workflow.
   const deleteReq = txn?.delete_request || null;
-  const onRequestDelete = async () => {
-    const reason = window.prompt('Reason for requesting this transaction be deleted:');
-    if (reason === null) return;
-    if (!reason.trim()) { toast('A reason is required', 'bad'); return; }
+  const onRequestDelete = async (reason: string) => {
+    setReasonAsk(null);
     try { await requestTransactionDeletion(id, reason.trim()); toast('Deletion request sent to Admin', 'ok'); reloadTxn(); }
     catch (e) { toast(apiErrorMessage(e, 'Could not send request'), 'bad'); }
   };
-  const onForwardDelete = async () => {
+  const onForwardDelete = async (reason: string) => {
+    setReasonAsk(null);
     if (!deleteReq) return;
-    const reason = window.prompt('Reason to forward this deletion to a Super Admin (optional):');
-    if (reason === null) return;
     try { await forwardDeleteRequest(deleteReq.id, reason); toast('Forwarded to Super Admin', 'ok'); reloadTxn(); }
     catch (e) { toast(apiErrorMessage(e, 'Could not forward'), 'bad'); }
   };
-  const onApproveDelete = async () => {
+  const onApproveDelete = () => {
     if (!deleteReq) return;
-    if (!window.confirm('Approve and permanently delete this transaction?')) return;
-    try { await approveDeleteRequest(deleteReq.id); toast('Transaction deleted', 'ok'); navigate(deskPath('transactions')); }
-    catch (e) { toast(apiErrorMessage(e, 'Could not delete'), 'bad'); }
+    // No text to collect, so the shared confirmation is safe here - it is the snapshot that the
+    // three reason dialogs above cannot use, not the dialog itself.
+    askDelete({
+      title: 'Approve and permanently delete this transaction?',
+      message: `${form?.property || 'This transaction'} is removed permanently. This cannot be undone.`,
+      linked: ['Its documents, invoices, adjustments and history', 'Every report and total that counts it'],
+      confirmLabel: 'Delete permanently',
+      onConfirm: async () => {
+        try { await approveDeleteRequest(deleteReq.id); toast('Transaction deleted', 'ok'); navigate(deskPath('transactions')); }
+        catch (e) { toast(apiErrorMessage(e, 'Could not delete'), 'bad'); }
+      },
+    });
   };
   const onRejectDelete = async () => {
     if (!deleteReq) return;
@@ -980,7 +1010,7 @@ export default function TransactionDetailPage() {
             : lockedForUser && !approvedReq
             ? (<>
                 <button className="btn primary sm" disabled style={{ opacity: 0.5, cursor: 'not-allowed' }} title="Locked (DFT) — edits need Super Admin approval"><Icon name="edit" size={13} /> Edit</button>
-                {isAdminOrAbove && !pendingReq && <button className="btn ghost sm" onClick={onRequestEdit}><Icon name="unlock" size={13} /> Request Edit</button>}
+                {isAdminOrAbove && !pendingReq && <button className="btn ghost sm" onClick={() => askReason('edit')}><Icon name="unlock" size={13} /> Request Edit</button>}
                 {pendingReq && <span className="pill warn" style={{ fontSize: 10 }}>Awaiting approval</span>}
               </>)
             : isDocumentation
@@ -996,7 +1026,7 @@ export default function TransactionDetailPage() {
                 <button className="btn primary sm" onClick={() => void save()} disabled={saving}>{saving ? 'Saving…' : <><Icon name="check" size={13} /> Done</>}</button>
               </>)}
           {/* Agents request deletion (their own deals); admins/super admins delete via the workflow banner. */}
-          {isFullAgent && !deleteReq && <button className="btn ghost sm" style={{ color: 'var(--bad)' }} onClick={onRequestDelete}><Icon name="trash" size={13} /> Request Deletion</button>}
+          {isFullAgent && !deleteReq && <button className="btn ghost sm" style={{ color: 'var(--bad)' }} onClick={() => askReason('delete')}><Icon name="trash" size={13} /> Request Deletion</button>}
         </div>
       </div>
 
@@ -1064,7 +1094,7 @@ export default function TransactionDetailPage() {
           <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
             {/* Admin (not super): forward a pending request; reject. */}
             {isAdminOrAbove && !isSuperAdmin && deleteReq.status === 'pending' && (<>
-              <button className="btn primary sm" onClick={onForwardDelete}>Send to Super Admin</button>
+              <button className="btn primary sm" onClick={() => askReason('forward')}>Send to Super Admin</button>
               <button className="btn ghost sm" onClick={onRejectDelete}>Reject</button>
             </>)}
             {isAdminOrAbove && !isSuperAdmin && deleteReq.status === 'forwarded' && (
@@ -1726,6 +1756,57 @@ export default function TransactionDetailPage() {
       )}
       </>)}
       <ConfirmDialog confirm={confirm} onClose={() => setConfirm(null)} />
+
+      {/*
+        TD-040 — the three questions that used to be `window.prompt`, asked in the app.
+
+        Built here in the render rather than handed to `setConfirm` above: that state holds a
+        SNAPSHOT of the options, so the textarea inside would freeze at its first value and the
+        agent's typing would go nowhere. TD-016 documents the same trap on the transactions list.
+      */}
+      <ConfirmDialog
+        confirm={reasonAsk ? {
+          ...{
+            delete: {
+              title: 'Request deletion of this transaction?',
+              message: `An Admin reviews the request before anything is removed. ${form?.property || 'This deal'} stays exactly as it is until they decide.`,
+              confirmLabel: 'Send request',
+              // An Admin has to act on this, and the reason is what they act on.
+              confirmDisabled: !reasonText.trim(),
+              onConfirm: () => { void onRequestDelete(reasonText); },
+            },
+            forward: {
+              title: 'Send this deletion to a Super Admin?',
+              message: 'The request moves up for a Super Admin to decide. Nothing is removed by forwarding it.',
+              confirmLabel: 'Forward',
+              onConfirm: () => { void onForwardDelete(reasonText); },
+            },
+            edit: {
+              title: 'Request permission to edit this deal?',
+              message: 'A Super Admin reviews the request. The deal stays locked until they approve it.',
+              confirmLabel: 'Send request',
+              onConfirm: () => { void onRequestEdit(reasonText); },
+            },
+          }[reasonAsk],
+          // Asking is not destroying, on any of the three - the red of a delete would misdescribe it.
+          variant: 'primary' as const,
+          body: (
+            <label style={{ display: 'block', marginTop: 10, fontSize: 13 }}>
+              {reasonAsk === 'delete' ? 'Reason for the request' : 'Reason (optional)'}
+              <textarea
+                className="inp"
+                rows={3}
+                autoFocus
+                value={reasonText}
+                onChange={(e) => setReasonText(e.target.value)}
+                placeholder={reasonAsk === 'delete' ? 'Why should this transaction be removed?' : 'Anything the reviewer should know'}
+                style={{ width: '100%', marginTop: 4, resize: 'vertical' }}
+              />
+            </label>
+          ),
+        } : null}
+        onClose={() => setReasonAsk(null)}
+      />
     </>
   );
 }

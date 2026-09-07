@@ -51,6 +51,8 @@ export default function LawyerModal({ open, onClose, transactionId, txn, onSaved
     seller_lawyer_address: txn.seller_lawyer_address || '',
   });
   const [saving, setSaving] = useState(false);
+  // TD-040 — the validation message, kept on screen rather than announced and lost.
+  const [error, setError] = useState<string | null>(null);
   const [savedOk, setSavedOk] = useState(false); // §3.2 — "Saved" then auto-close
   const [suggestions, setSuggestions] = useState<LawyerSuggestion[]>([]);
   useEffect(() => { if (open) getLawyerSuggestions().then(setSuggestions).catch(() => {}); }, [open]);
@@ -71,31 +73,43 @@ export default function LawyerModal({ open, onClose, transactionId, txn, onSaved
   const sideTouched = (s: LawyerSide) => FIELDS.some((f) => form[`${s}_lawyer_${f}`].trim());
 
   /*
-   * TD-040 - VALIDATION IS REPORTED BY TOAST, NOT window.alert().
+   * TD-040 — VALIDATION IS REPORTED THE WAY THE REST OF THE PRODUCT REPORTS IT.
    *
-   * alert() is a native modal: it blocks the browser's main thread until somebody clicks OK, so a
-   * tab showing one cannot be scripted or screenshotted. That is what the entry recorded as 'the
-   * tab hangs for 45 seconds or more' - the application was not frozen, the test tooling was.
+   * These three branches called `window.alert`, and that is a NATIVE MODAL: it blocks the browser's
+   * main thread until somebody clicks OK. It is why this entry was filed as a hang and measured at
+   * "unresponsive for 45 seconds or more" - a tab with an open alert cannot be scripted or
+   * screenshotted, so it was the test tooling that froze rather than the application. A person at
+   * the screen saw a dialog and clicked OK.
    *
-   * Two real problems remained, which is why this was fixed rather than withdrawn. Browsers offer
-   * 'prevent this page from creating additional dialogs' after a repeated alert, and a user who
-   * ticks it stops seeing validation entirely - Save then genuinely does nothing, with no
-   * explanation. And every other form in this product reports validation through toast(), which
-   * this file already imports and already uses in its own catch block a few lines below.
+   * WHAT WAS STILL REAL AFTER THAT RE-DIAGNOSIS, and why this is fixed rather than withdrawn: every
+   * major browser offers "prevent this page from creating additional dialogs" after a repeated
+   * alert, and a user who ticks it stops receiving these messages ENTIRELY. Save then does nothing
+   * and says nothing - the silent failure the entry describes, reachable in one click by the user
+   * themselves. A suppressed toast is not a thing browsers offer.
    *
-   * The messages are unchanged - they were never the problem.
+   * BOTH A TOAST AND AN INLINE LINE, deliberately. The toast matches every other form in the Desk;
+   * the inline copy stays put, because a message that vanishes after a few seconds is a poor way to
+   * tell somebody which of eight required fields they missed.
+   *
+   * THE TOAST HALF WAS REACHED INDEPENDENTLY in b964f03, which fixed these same three branches and
+   * the four in TeamSplitModal, and labelled itself "partial" — correctly, because the entry names
+   * three ACTIONS and the other two are `window.prompt`, which blocks identically. Those are fixed
+   * in TradeSheetModal and TransactionDetailPage alongside this.
    */
+  const fail = (message: string): void => { setError(message); toast(message, 'bad'); };
+
   const save = async () => {
+    setError(null);
     let payload: Record<string, unknown> = { ...form };
     if (dual) {
       // Only a section that's been started is mandatory — complete it, or leave it empty.
       const badSide = (['buyer', 'seller'] as const).find((s) => sideTouched(s) && !sideComplete(s));
       if (badSide) {
-        toast(`Please complete all ${badSide === 'buyer' ? 'Buyer' : 'Seller'} Lawyer fields, or clear that section.`, 'bad');
+        fail(`Please complete all ${badSide === 'buyer' ? 'Buyer' : 'Seller'} Lawyer fields, or clear that section.`);
         return;
       }
       if (!sideComplete('buyer') && !sideComplete('seller')) {
-        toast('Please fill at least one of Buyer Lawyer or Seller Lawyer details, and save.', 'bad');
+        fail('Please fill at least one of Buyer Lawyer or Seller Lawyer details, and save.');
         return;
       }
       // Mirror a completed side into the legacy lawyer_* fields (Notice of Sale / Trade Sheet):
@@ -110,7 +124,7 @@ export default function LawyerModal({ open, onClose, transactionId, txn, onSaved
         lawyer_address: form[`${mirrorSide}_lawyer_address`],
       };
     } else if (!form.lawyer_name.trim() || !form.lawyer_address.trim() || !form.lawyer_email.trim() || !form.lawyer_phone.trim()) {
-      toast('Please fill all the mandatory fields (Lawyer Name, Address, Email, Phone) and save.', 'bad');
+      fail('Please fill all the mandatory fields (Lawyer Name, Address, Email, Phone) and save.');
       return;
     }
     setSaving(true);
@@ -169,6 +183,11 @@ export default function LawyerModal({ open, onClose, transactionId, txn, onSaved
         )}
         <span className="help">Used to auto-fill the Notice of Sale and Trade Sheet documents{showPrimaryNote ? ` (the ${primaryLabel} Lawyer is used as the primary contact).` : '.'}</span>
         </fieldset>
+        {error && (
+          <div className="card" role="alert" style={{ borderLeft: '4px solid var(--bad)', background: 'var(--bad-soft)', marginTop: 10 }}>
+            <span style={{ fontSize: 12.5, color: 'var(--bad-ink, #991b1b)' }}>{error}</span>
+          </div>
+        )}
         <SavedBadge show={savedOk} />
         <div className="actions">
           <button className="btn ghost" onClick={onClose}>Close</button>

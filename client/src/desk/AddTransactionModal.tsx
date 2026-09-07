@@ -56,12 +56,36 @@ interface AddTransactionModalProps {
   onCreated?: (created: Transaction) => void;
 }
 
+/**
+ * TD-076 — a value unique to one filling-in of the form.
+ *
+ * `crypto.randomUUID` where the browser has it; the fallback is only for older ones, and does not
+ * need to be unguessable — this identifies a submission, it does not authorise anything.
+ */
+const newToken = (): string =>
+  (globalThis.crypto?.randomUUID?.()
+    ?? `t-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`);
+
 export default function AddTransactionModal({ open, onClose, onCreated }: AddTransactionModalProps) {
   const toast = useToast();
   const { user } = useAuth();
   const isAgent = user?.role === 'agent';
   const [form, setForm] = useState<TransactionForm>(EMPTY);
   const [saving, setSaving] = useState(false);
+  /*
+   * TD-076 — one token per filling-in of this form, so a double-click is one submission.
+   *
+   * Minted when the modal opens and carried by every attempt from that form. Two clicks send the
+   * same value, so the server recognises the second as a replay and answers with the deal the first
+   * one created — no error, no warning, the same outcome as a single click. A genuinely new deal
+   * entered later opens the form again, gets a different token, and still meets the duplicate guard
+   * and its 422.
+   *
+   * `disabled={saving}` on the Save button stops most double-clicks reaching the server at all, and
+   * is worth having on its own — but it is not enough by itself, which is why the token does the
+   * real work: a slow connection, a browser retry or two open tabs all defeat a disabled button.
+   */
+  const [clientToken, setClientToken] = useState('');
   const [error, setError] = useState('');
   /**
    * TD-056 — which field is wrong, said next to that field.
@@ -79,6 +103,11 @@ export default function AddTransactionModal({ open, onClose, onCreated }: AddTra
   const [agents, setAgents] = useState<string[]>([]);
   const [primaryAgent, setPrimaryAgent] = useState('');
   const [teamMembers, setTeamMembers] = useState<string[]>([]);
+
+  // TD-076 — a fresh token each time the form is opened, and only then.
+  useEffect(() => {
+    if (open) setClientToken(newToken());
+  }, [open]);
 
   // Load the agent list once the modal opens (for the team member picker).
   useEffect(() => {
@@ -224,7 +253,9 @@ export default function AddTransactionModal({ open, onClose, onCreated }: AddTra
 
     setSaving(true);
     try {
-      const created = await createTransaction(payload);
+      // TD-076 — sent on every attempt from this form, so the server can tell a second click from a
+      // second deal.
+      const created = await createTransaction({ ...payload, client_token: clientToken });
       toast('Transaction saved successfully', 'ok');
       close();
       onCreated?.(created);

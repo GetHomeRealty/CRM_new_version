@@ -58,3 +58,39 @@ export const STATUS_COLOR: Record<string, string> = {
   Overdue: 'var(--bad)',
   Void: 'var(--text)',
 };
+
+/**
+ * TD-048 — the OTHER field on the Admin Activities panel, and the last collision between the two.
+ *
+ * That panel carries two fields two lines apart, and on one invoice at one moment they read:
+ *
+ *     Invoice Status:  Overdue
+ *     Invoice Sent:    Draft
+ *
+ * 'Draft' is a member of INVOICE_STATUSES above, so a reader is shown two status-words for one
+ * invoice — which is this entry's original complaint ("the Admin Activities panel says Draft")
+ * surviving in a relabelled field rather than being resolved.
+ *
+ * WHY THE VALUE IS NOT RENAMED AT SOURCE. `invoice_sent_status` is DERIVED for the payload but is
+ * also a STORED field on `admin_activities` that the modal reads back, so historical rows hold the
+ * old word. Renaming the enum would create a fresh mismatch rather than remove one — a new defect
+ * of exactly the shape this entry is about. So the stored value is left alone and the words are
+ * mapped where they are rendered.
+ *
+ * ONLY THE TWO THAT NEED IT. 'Draft' is the collision, and 'Pending to Raise' is opaque rather than
+ * wrong. 'Sent', 'Paid' and 'Void' are left: each appears only when the status field says the same
+ * thing, so the two lines agree rather than contradict, and rewriting them would assert something
+ * the payload does not carry — an invoice marked Paid says nothing about whether it was ever
+ * emailed, and this field must not claim it was.
+ */
+const SENT_STATUS_WORDS: Record<string, string> = {
+  Draft: 'Not sent',
+  'Pending to Raise': 'Not raised',
+};
+
+/** How the "Invoice Sent" field reads. Anything unmapped shows exactly as stored. */
+export const sentStatusLabel = (value: string | null | undefined): string => {
+  const v = String(value ?? '').trim();
+  if (!v) return '—';
+  return SENT_STATUS_WORDS[v] ?? v;
+};

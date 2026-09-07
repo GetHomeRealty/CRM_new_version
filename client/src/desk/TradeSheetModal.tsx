@@ -5,6 +5,7 @@ import { recordTradeSheetGenerated, sendTradeSheet } from '../lib/api';
 import { bytesToBase64 } from './pdf';
 import { splitPropertyAddress } from './propertyAddress';
 import { useToast } from './toast';
+import ConfirmDialog from './ConfirmDialog';
 import { apiErrorMessage } from '../lib/apiError';
 import type { BrokerageLite, ClientLite, FinancialAgentLine, NumericInput, Transaction } from '../types';
 
@@ -180,13 +181,27 @@ export default function TradeSheetModal({ open, onClose, txn }: TradeSheetModalP
   const [generatedAt, setGeneratedAt] = useState<string | null>(txn?.trade_sheet_generated_at || null);
   const [sending, setSending] = useState(false);
   const [pdfBytes, setPdfBytes] = useState<Uint8Array | null>(null); // filled Form 640 bytes, for attaching
+  // TD-040 — the recipient, asked for in the app rather than by the browser.
+  const [sendOpen, setSendOpen] = useState(false);
+  const [sendTo, setSendTo] = useState('');
 
   useEffect(() => { setSentAt(txn?.trade_sheet_sent_at || null); }, [txn?.trade_sheet_sent_at]);
   useEffect(() => { setGeneratedAt(txn?.trade_sheet_generated_at || null); }, [txn?.trade_sheet_generated_at]);
 
-  const emailSheet = async () => {
-    const to = window.prompt(`${sentAt ? 'Resend' : 'Send'} the Trade Record Sheet to:`);
-    if (!to) return;
+  /*
+   * TD-040 — ASKING FOR THE ADDRESS NO LONGER BLOCKS THE BROWSER.
+   *
+   * This was `window.prompt`, which is a native modal and freezes the main thread exactly as the
+   * `alert` in LawyerModal did. The entry names three actions and this is the second of them; the
+   * re-diagnosis of 2026-09-06 identified the alert and stopped there, so fixing that alone would
+   * have left this one and the deletion request still reproducing.
+   *
+   * A PROMPT ALSO COLLECTED NOTHING IT COULD CHECK. It returned whatever was typed, so a typo went
+   * straight to the API and came back as a failed send. The dialog below refuses to enable its
+   * button until the address at least looks like one, which is the same rule the server applies.
+   */
+  const emailSheet = async (to: string) => {
+    setSendOpen(false);
     setSending(true);
     try {
       const extra = pdfBytes ? { pdf: bytesToBase64(pdfBytes), filename: `Trade Record Sheet ${txn?.trade_no || ''}.pdf` } : {};
@@ -253,7 +268,7 @@ export default function TradeSheetModal({ open, onClose, txn }: TradeSheetModalP
               {sentAt && <span className="pill info" style={{ fontSize: 10 }}>Last sent {new Date(sentAt).toLocaleDateString()}</span>}
               <a className="btn ghost sm" href={src ?? undefined} target="_blank" rel="noreferrer">↗ Open in new tab</a>
               <a className="btn ghost sm" href={src ?? undefined} download={`Trade Record Sheet ${txn?.trade_no || ''}.pdf`}>📄 Download PDF</a>
-              <button className="btn primary sm" onClick={emailSheet} disabled={sending}>✉ {sending ? 'Sending…' : (sentAt ? 'Resend' : 'Send')}</button>
+              <button className="btn primary sm" onClick={() => { setSendTo(''); setSendOpen(true); }} disabled={sending}>✉ {sending ? 'Sending…' : (sentAt ? 'Resend' : 'Send')}</button>
             </div>
           )}
         </div>
@@ -278,6 +293,38 @@ export default function TradeSheetModal({ open, onClose, txn }: TradeSheetModalP
 
         <div className="actions"><button className="btn ghost" onClick={onClose}>Close</button></div>
       </div>
+
+      {/*
+        TD-040 — built inline in the render, not stored in state. `useConfirm` snapshots the options
+        object, so a controlled input held inside it would not re-render as the address is typed —
+        the same trap TD-016 documents on the transactions list.
+      */}
+      <ConfirmDialog
+        confirm={sendOpen ? {
+          title: `${sentAt ? 'Resend' : 'Send'} the Trade Record Sheet`,
+          message: `The filled OREA Form 640 for ${txn?.property || `Trade #${txn?.trade_no || ''}`} is attached to the email.`,
+          body: (
+            <label style={{ display: 'block', marginTop: 10, fontSize: 13 }}>
+              Send to
+              <input
+                className="inp"
+                type="email"
+                autoFocus
+                value={sendTo}
+                onChange={(e) => setSendTo(e.target.value)}
+                placeholder="name@example.com"
+                style={{ width: '100%', marginTop: 4 }}
+              />
+            </label>
+          ),
+          confirmLabel: sentAt ? 'Resend' : 'Send',
+          variant: 'primary' as const,
+          // Nothing is destroyed by sending, and the address has to look like one first.
+          confirmDisabled: !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(sendTo.trim()),
+          onConfirm: () => { void emailSheet(sendTo); },
+        } : null}
+        onClose={() => setSendOpen(false)}
+      />
     </div>
   );
 }

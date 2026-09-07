@@ -2547,6 +2547,15 @@ model transactions {
   trade_sheet_sent_at         DateTime?                     @db.Timestamp(0)
   /// TD-088 — when the Trade Record Sheet was last PRODUCED. Sending is a separate act with its own column above.
   trade_sheet_generated_at    DateTime?                     @db.Timestamp(0)
+  /// TD-076 — the token the Add Transaction form mints when it opens. Both clicks of a
+  /// double-click carry the same one, so the second create is recognised as a replay and answered
+  /// with the deal the first one made. Null on every row created before this, and on any client
+  /// that sends none.
+  client_token                String?                       @unique @db.VarChar(64)
+  /// TD-142 — the bulk import that created this deal, so one import can be reversed in one action.
+  /// Null on every deal entered by hand, and on every row created before this column: nothing
+  /// recorded which import made those, so they are not reversible by batch.
+  import_batch_id             String?                       @db.VarChar(64)
   trade_sheet_data            String?                       @db.Text
   // Reports module (backward-compatible; NULL on all legacy records)
   payment_type                String?                       @db.VarChar(255)
@@ -2583,6 +2592,7 @@ model transactions {
 
   /// The brokerage this row belongs to. See src/core/tenancy.spec.ts for why this table carries one.
 
+  @@index([import_batch_id])
   @@index([agent])
   @@index([type])
   @@index([offer_date])

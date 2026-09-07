@@ -110,6 +110,37 @@ export function conditionReminderFor(today: Date, deadline: Date): { due: boolea
   return { due: daysRemaining >= 0 && daysRemaining <= CONDITION_WINDOW_DAYS, daysRemaining };
 }
 
+// ---------------------------------------------------------------- deposit outstanding
+
+/**
+ * TD-009 — how long a deal's deposit may go unrecorded before its agent is chased.
+ *
+ * THE RULE HAD TO BE CHOSEN, and this is the choice, stated where it can be changed. The entry says
+ * a deposit trigger cannot be written because "a deposit has no due date recorded against it" —
+ * which is true, and is a reason there is nothing to count DOWN to, not a reason nothing can be
+ * watched. What the deal does carry is a deposit AMOUNT and, in its admin activities, whether a
+ * deposit has been received. So the question this answers is not "is the deposit late against a
+ * date nobody entered" but "has the deposit the deal says it expects actually arrived yet".
+ *
+ * FIVE DAYS FROM THE OFFER DATE. Long enough that a deposit delivered in the ordinary course is
+ * never chased, short enough to matter while the trade is still fresh. If the brokerage's agreements
+ * specify a term — "upon acceptance", "within 24 hours" — this is the constant to change, and the
+ * one place to change it.
+ */
+export const DEPOSIT_GRACE_DAYS = 5;
+
+/**
+ * Whether an unrecorded deposit should be chased today, and how long it has been outstanding.
+ *
+ * Chased ONCE, on the day the grace period ends, rather than every day after it. A deposit is a
+ * single thing to go and ask about; repeating it daily until somebody types a date turns the
+ * reminder into noise, and the deal's own screen already shows it missing.
+ */
+export function depositReminderFor(today: Date, offer: Date): { due: boolean; daysOutstanding: number } {
+  const daysOutstanding = daysBetween(offer, today);
+  return { due: daysOutstanding === DEPOSIT_GRACE_DAYS, daysOutstanding };
+}
+
 /** "due today" / "due tomorrow" — the same reason closingPhrase exists. */
 export function deadlinePhrase(daysRemaining: number): string {
   if (daysRemaining <= 0) return 'due today';

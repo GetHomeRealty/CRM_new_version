@@ -806,6 +806,58 @@ export const MAIL_EVENTS: Record<string, MailEvent> = {
       + '{{ transaction_button }}'
       + '<p>{{ company_name }}</p>',
   },
+  /**
+   * TD-009 — the deposit the deal expects has not been recorded as received.
+   *
+   * Not a countdown: there is no deposit due date anywhere in the system, which is why this entry
+   * stood open. What the deal has is an expected AMOUNT and a record of receipt, so this asks
+   * whether the money arrived rather than whether it is late against a date nobody entered.
+   */
+  'transaction.deposit_outstanding': {
+    module: 'Transactions',
+    label: 'Transactions — Deposit Not Yet Recorded',
+    variables: ['agent_name', 'deal_number', 'property_address', 'deposit_amount', 'offer_date', 'days_outstanding', 'transaction_button', 'company_name', 'current_date'],
+    default_subject: 'Deposit not recorded — {{ property_address }} ({{ deal_number }})',
+    default_body_html:
+      '<p>Hello {{ agent_name }},</p>'
+      + '<p>The deposit on <strong>{{ property_address }}</strong> has not been recorded as received.</p>'
+      + '<table style="border-collapse:collapse;font-size:14px;margin:10px 0">'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Transaction</td><td style="padding:4px 0;font-weight:600">{{ deal_number }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Deposit expected</td><td style="padding:4px 0;font-weight:600">{{ deposit_amount }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Offer date</td><td style="padding:4px 0">{{ offer_date }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Days since</td><td style="padding:4px 0;font-weight:600">{{ days_outstanding }}</td></tr>'
+      + '</table>'
+      + '<p>If it has arrived, record it under Quick Actions → Admin so this stops being chased.</p>'
+      + '{{ transaction_button }}'
+      + '<p>{{ company_name }}</p>',
+  },
+  /**
+   * TD-009 — the brokerage has been paid for the deal.
+   *
+   * "Commission received" meant three things — the trust deposit, the invoice being paid, or the
+   * agent being paid — which is why the entry could not be closed. This fires on the INVOICE being
+   * settled, the one of the three the system already timestamps by itself
+   * (`invoices.commission_received_date`, written when an invoice reaches Paid). The other two are
+   * recorded by hand and would announce somebody's typing rather than an event.
+   */
+  'transaction.commission_received': {
+    module: 'Transactions',
+    label: 'Transactions — Commission Received',
+    variables: ['agent_name', 'deal_number', 'property_address', 'invoice_number', 'amount_received', 'received_on', 'received_via', 'transaction_button', 'company_name', 'current_date'],
+    default_subject: 'Commission received — {{ property_address }} ({{ deal_number }})',
+    default_body_html:
+      '<p>Hello {{ agent_name }},</p>'
+      + '<p>The commission on <strong>{{ property_address }}</strong> has been received.</p>'
+      + '<table style="border-collapse:collapse;font-size:14px;margin:10px 0">'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Transaction</td><td style="padding:4px 0;font-weight:600">{{ deal_number }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Invoice</td><td style="padding:4px 0;font-weight:600">{{ invoice_number }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Amount</td><td style="padding:4px 0;font-weight:600">{{ amount_received }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Received</td><td style="padding:4px 0">{{ received_on }} ({{ received_via }})</td></tr>'
+      + '</table>'
+      + '<p>This is the brokerage being paid, not your own commission payment.</p>'
+      + '{{ transaction_button }}'
+      + '<p>{{ company_name }}</p>',
+  },
   /** Daily countdown to a listing's expiry date, from ten days out. */
   'transaction.listing_expiry_reminder': {
     module: 'Transactions',

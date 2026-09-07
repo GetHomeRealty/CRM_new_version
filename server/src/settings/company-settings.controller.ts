@@ -11,6 +11,23 @@ import { can } from '../core/authz';
 import { CompanySettingsService } from './company-settings.service';
 import { UpdateCompanySettingsDto } from './dto/update-company-settings.dto';
 
+/** Withheld below `company.read-banking` — the brokerage's bank account and HST number. */
+export const BANKING_FIELDS = [
+  'bank_beneficiary', 'bank_name', 'transit_no', 'account_no', 'institution_no', 'hst_number',
+] as const;
+
+/**
+ * TD-119 — withheld below `company.read-operations`: invoice numbering and document boilerplate.
+ *
+ * Exported because the Roles & Permissions caveat describes what a role WITHOUT Settings access can
+ * still read, and a description maintained separately from the thing it describes is precisely how
+ * this entry came to be reopened. `roles-matrix-caveat.spec.ts` holds the two together.
+ */
+export const OPERATIONS_FIELDS = [
+  'invoice_prefix', 'next_invoice_no', 'default_terms', 'thank_you_note',
+  'deposit_heading', 'deposit_signatory', 'feature_flags',
+] as const;
+
 @Controller('company-settings')
 export class CompanySettingsController {
   constructor(private readonly settings: CompanySettingsService) {}
@@ -18,10 +35,16 @@ export class CompanySettingsController {
   /**
    * Readable by any authenticated staff — but the bank account is not part of "readable".
    *
-   * The branding half of this row (name, address, phone, logo, currency, tax rate) is needed by
-   * every screen, so the endpoint stays open. The banking half is printed only on the Invoice,
-   * Trade Sheet, Notice of Sale, Deposit Receipt and Lawyer Statement, and is withheld from anyone
-   * who cannot produce those.
+   * The brokerage's letterhead is what stays open — and TD-119 narrowed what that means. This said
+   * the branding "is needed by every screen, so the endpoint stays open", and the second half did
+   * not follow from the first: the route was returning invoice numbering and document boilerplate
+   * alongside the letterhead, to roles whose permission map says `settings: 'none'`. Traced rather
+   * than assumed, `getCompanySettings` has three client call sites, only one of which a role below
+   * `company.read-operations` can open, and it reads a single field. So the payload was narrowed to
+   * what those roles' own screens actually use.
+   *
+   * The banking half is printed only on the Invoice, Trade Sheet, Notice of Sale, Deposit Receipt
+   * and Lawyer Statement, and is withheld from anyone who cannot produce those.
    *
    * THIS ASKS A CAPABILITY, NOT A ROLE. It used to strip for `isAgent(user)`, which answered "is
    * this person an agent?" when the question is "may this person see the operating account?" —
@@ -38,11 +61,31 @@ export class CompanySettingsController {
   @UseGuards(AuthGuard)
   async show(@CurrentUser() user: AuthUserRecord | undefined): Promise<Record<string, unknown>> {
     const row = this.settings.serialize(await this.settings.current());
-    if (can(user, 'company.read-banking')) return row;
-
-    const withheld = ['bank_beneficiary', 'bank_name', 'transit_no', 'account_no', 'institution_no', 'hst_number'];
     const safe: Record<string, unknown> = { ...row };
-    for (const key of withheld) delete safe[key];
+
+    if (!can(user, 'company.read-banking')) {
+      for (const key of BANKING_FIELDS) delete safe[key];
+    }
+    /*
+     * TD-119 — the operational block goes the same way the bank block does.
+     *
+     * This route answers any session, and the Roles & Permissions matrix says the Agent role has
+     * `settings: 'none'`. Both were deliberate and they disagreed: an agent received eighteen keys
+     * including `invoice_prefix` and `next_invoice_no`, so the matrix described a system that did
+     * not exist.
+     *
+     * THE FIRST ATTEMPT AT THIS ENTRY CORRECTED THE MATRIX INSTEAD, and named six letterhead
+     * fields — which was itself wrong, because it was written from the wording rather than measured
+     * against the response. QA reopened the entry on exactly that, and were right. This is the
+     * other branch they offered: stop returning the rest.
+     *
+     * What is left below the threshold is the brokerage's letterhead, its currency and tax rate, and
+     * the lawyer-reminder cadence an agent's own Triggers panel reads. `company.read-operations`
+     * carries the consumer-by-consumer trace behind that list.
+     */
+    if (!can(user, 'company.read-operations')) {
+      for (const key of OPERATIONS_FIELDS) delete safe[key];
+    }
     return safe;
   }
 

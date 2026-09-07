@@ -1,5 +1,20 @@
 <!doctype html>
-<html lang="en">
+<!--
+  TD-137 — data-theme is stamped HERE, not from JavaScript.
+
+  The dark custom properties are declared under `@media (prefers-color-scheme: dark)` behind
+  `:root:where(:not([data-theme="light"]))` — dark UNLESS the page says it is light. Nothing ever
+  said: the root carried no `data-theme` at all. So on any machine set to dark mode the calendar
+  chips took their dark values while the page around them stayed light, and a viewer saw maroon,
+  navy and bottle-green blocks on a white calendar.
+
+  Light is the only theme this application ships — the Theme preference was removed precisely
+  because nothing read it — so the document declares that, and the guard closes. Set in the markup
+  rather than at boot because a script would repaint after first render: the dark chips would flash
+  and then correct themselves, which reads as a fault of its own. When a dark theme is built, this
+  attribute is what switches the WHOLE page rather than the chips alone.
+-->
+<html lang="en" data-theme="light">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />

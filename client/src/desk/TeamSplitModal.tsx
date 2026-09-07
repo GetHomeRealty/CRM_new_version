@@ -191,11 +191,26 @@ export default function TeamSplitModal({ open, onClose, transactionId, primaryAg
           </div>
         )}
 
+        {/*
+          TD-058 — the fieldset stays, and every control inside it now says so for itself.
+
+          `<fieldset disabled>` genuinely blocks a person: the controls match `:disabled`, take no
+          input and submit nothing. What it does NOT do is set `element.disabled`, which reflects a
+          control's OWN attribute and nothing about its ancestors — so a check that reads that
+          property sees an editable field, and a scripted `dispatchEvent` still reaches React's
+          onChange even though a click could not. That is exactly the split this entry measured:
+          the controls reported as still live are the two with no attribute of their own, and the
+          ones reported as correctly disabled are those already carrying `readOnly`.
+
+          Rather than argue about whether the fieldset is enough, each control below states the rule
+          itself. A reader looking at one line now sees when it is editable, and any measurement
+          agrees with the behaviour instead of contradicting it.
+        */}
         <fieldset disabled={readOnly} style={{ border: 0, margin: 0, padding: 0, minInlineSize: 0 }}>
 
         <div className="field" style={{ maxWidth: 200 }}>
           <label>Is this a Team Split?</label>
-          <select value={isSplit ? 'Yes' : 'No'} disabled={lockAgents} onChange={(e) => onToggleSplit(e.target.value === 'Yes')}>
+          <select value={isSplit ? 'Yes' : 'No'} disabled={readOnly || lockAgents} onChange={(e) => onToggleSplit(e.target.value === 'Yes')}>
             <option>No</option><option>Yes</option>
           </select>
         </div>
@@ -210,13 +225,13 @@ export default function TeamSplitModal({ open, onClose, transactionId, primaryAg
           <>
             {members.map((m, i) => (
               <div className="team-card" key={i}>
-                {i !== 0 && !lockAgents && <button className="row-rm" style={{ position: 'absolute', top: 8, right: 8 }} onClick={() => rm(i)}>🗑️</button>}
+                {i !== 0 && !readOnly && !lockAgents && <button className="row-rm" style={{ position: 'absolute', top: 8, right: 8 }} onClick={() => rm(i)}>🗑️</button>}
                 <strong style={{ fontSize: 13 }}>{i === 0 ? 'Primary Agent' : `Team Member ${i + 1}`}{i === 0 && <span className="pill" style={{ fontSize: 9, padding: '2px 6px', marginLeft: 6, background: 'var(--surface-3)', color: '#6b7280', border: '1px solid var(--line)' }}>🔒 Locked</span>}</strong>
                 <div className="field" style={{ marginTop: 10 }}>
                   <label>Select Agent</label>
                   {i === 0
                     ? <input value={primaryAgent || m.name} readOnly style={{ background: 'var(--surface-2)', cursor: 'not-allowed' }} title="Primary Agent is set in Basic Info" />
-                    : <input list={`agentList-${i}`} value={m.name} disabled={lockAgents} onChange={(e) => set(i, 'name', e.target.value)} placeholder="Search agent..." />}
+                    : <input list={`agentList-${i}`} value={m.name} disabled={readOnly || lockAgents} onChange={(e) => set(i, 'name', e.target.value)} placeholder="Search agent..." />}
                   {/* Exclude agents already chosen in other rows so a member can't be added twice. */}
                   <datalist id={`agentList-${i}`}>{(agents || []).filter((a) => a === m.name || !members.some((x, idx) => idx !== i && x.name === a)).map((a) => <option key={a} value={a} />)}</datalist>
                 </div>
@@ -227,7 +242,7 @@ export default function TeamSplitModal({ open, onClose, transactionId, primaryAg
                     </div>
                   )}
                   <div className="field" style={{ marginBottom: 0 }}><label>Split %</label>
-                    <input type="number" min="0" max="100" value={m.split ?? ''} onChange={(e) => set(i, 'split', e.target.value)} /></div>
+                    <input type="number" min="0" max="100" value={m.split ?? ''} disabled={readOnly || lockAgents} onChange={(e) => set(i, 'split', e.target.value)} /></div>
                   {/* Agent % / Brokerage % come from the agent's registered split and are
                       only changed under Financial Information → Agent Commission. Read-only here. */}
                   <div className="field" style={{ marginBottom: 0 }}><label>Agent %</label>
@@ -242,7 +257,7 @@ export default function TeamSplitModal({ open, onClose, transactionId, primaryAg
                 {i !== 0 && canManageAccess && (
                   <div className="field" style={{ marginTop: 10, marginBottom: 0, maxWidth: 260 }}>
                     <label>Portal Access</label>
-                    <select value={m.access || 'docs'} disabled={lockAgents} onChange={(e) => set(i, 'access', e.target.value)}>
+                    <select value={m.access || 'docs'} disabled={readOnly || lockAgents} onChange={(e) => set(i, 'access', e.target.value)}>
                       <option value="docs">Docs only (upload documents)</option>
                       <option value="full">Full access (edit like primary)</option>
                     </select>
@@ -274,7 +289,8 @@ export default function TeamSplitModal({ open, onClose, transactionId, primaryAg
               </div>
             ))}
             {/* §Team Splits — once the split totals 100% (or agents are locked), no more agents can be added. */}
-            {!lockAgents && total < 100 && <button className="btn primary sm" onClick={add} style={{ marginBottom: 12 }}>+ Add Team Member</button>}
+            {/* TD-058 — not offered at all in a mode that cannot save it. */}
+            {!readOnly && !lockAgents && total < 100 && <button className="btn primary sm" onClick={add} style={{ marginBottom: 12 }}>+ Add Team Member</button>}
             <div style={{ background: total === 100 ? 'var(--ok-bg)' : '#f0f9ff', border: `1px solid ${total > 100 ? 'var(--bad-ring)' : (total === 100 ? 'var(--ok-ring-2)' : '#bae6fd')}`, borderRadius: 10, padding: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <strong>Total Split:</strong>
               <span style={{ fontSize: 22, fontWeight: 700, color: total > 100 ? 'var(--bad)' : (total === 100 ? 'var(--ok)' : 'var(--info-700)') }}>{total.toFixed(2)}%</span>

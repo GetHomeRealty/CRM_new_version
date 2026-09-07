@@ -112,4 +112,10 @@ export interface ImportBatch {
   duplicate_rows: number;
   warning_rows: number;
   status: string;
+  /**
+   * TD-142 — how many of this batch's deals are still present, and therefore what an Undo would
+   * remove. Zero for an import made before the batch was recorded on the rows it created, which is
+   * why the button is hidden rather than shown and refused.
+   */
+  reversible_rows?: number;
 }

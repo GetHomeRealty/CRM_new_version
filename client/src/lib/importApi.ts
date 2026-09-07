@@ -42,5 +42,12 @@ export const validateImport = (fileName: string, content: string): Promise<Impor
 export const confirmImport = (batchId: string): Promise<ImportResult> =>
   api.post<ImportResult>(`/api/transaction-imports/${batchId}/confirm`).then((r) => r.data);
 
+/**
+ * TD-142 — put one import back. Its deals move to the Recycle Bin, where they can be restored, so
+ * the undo is itself undoable.
+ */
+export const undoTransactionImport = (batchId: string): Promise<{ removed: number; message: string }> =>
+  api.post<{ removed: number; message: string }>(`/api/transaction-imports/${batchId}/undo`).then((r) => r.data);
+
 export const importHistory = (): Promise<ImportBatch[]> =>
   api.get<ImportBatch[]>('/api/transaction-imports').then((r) => r.data);

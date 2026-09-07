@@ -12,6 +12,7 @@ import {
   CLOSING_WINDOW_DAYS, CONDITION_WINDOW_DAYS, EXPIRY_WINDOW_DAYS, LAWYER_TEMPLATE, LAWYER_WINDOW_DAYS,
   closingPhrase, closingReminderFor, conditionReminderFor, daysBetween, deadlinePhrase, expiryPhrase,
   expiryReminderFor, hasExpired, lawyerReminderFor, lawyerVariant, startOfDay, calendarDay, dbDay,
+  DEPOSIT_GRACE_DAYS, depositReminderFor,
 } from './reminder-schedule';
 
 /**
@@ -52,6 +53,8 @@ const REMINDER_CATEGORY: Record<ReminderKind, string> = {
   closing: 'closing_reminders',
   condition: 'condition_deadline',
   status: 'status_change',
+  deposit: 'deposit_outstanding',
+  commission: 'commission_received',
 };
 const REMINDER_LABEL: Record<ReminderKind, string> = {
   listing_expiry: 'Listing expiry reminder',
@@ -59,6 +62,8 @@ const REMINDER_LABEL: Record<ReminderKind, string> = {
   closing: 'Closing date reminder',
   condition: 'Condition deadline reminder',
   status: 'Deal status change',
+  deposit: 'Deposit not recorded',
+  commission: 'Commission received',
 };
 
 /**
@@ -80,7 +85,7 @@ const redirectTo = (): string | null => {
 };
 
 /** The kinds of reminder this sweep sends. Stored in `transaction_reminders.kind`. */
-export type ReminderKind = 'listing_expiry' | 'lawyer' | 'closing' | 'condition' | 'status';
+export type ReminderKind = 'listing_expiry' | 'lawyer' | 'closing' | 'condition' | 'status' | 'deposit' | 'commission';
 
 /**
  * TD-009 - a condition nobody is waiting on any more.
@@ -113,6 +118,10 @@ export interface SweepResult {
   conditionReminders: number;
   /** TD-009 — deals that became firm or ended. Raised reactively, never by the sweep. */
   statusChanges: number;
+  /** TD-009 — deals whose expected deposit has not been recorded. */
+  depositReminders: number;
+  /** TD-009 — commissions received. Raised reactively by the invoice, never by the sweep. */
+  commissionsReceived: number;
   skipped: number;
   failed: number;
   /** Failed deliveries attempted again this pass. */
@@ -142,7 +151,7 @@ export class ReminderSweepService {
   private emptyResult(): SweepResult {
     return {
       expiryReminders: 0, expired: 0, lawyerReminders: 0, closingReminders: 0, conditionReminders: 0,
-      statusChanges: 0, skipped: 0, failed: 0, retried: 0, recovered: 0,
+      statusChanges: 0, depositReminders: 0, commissionsReceived: 0, skipped: 0, failed: 0, retried: 0, recovered: 0,
     };
   }
 
@@ -157,6 +166,8 @@ export class ReminderSweepService {
     await this.lawyerDetails(today, result);
     await this.closingApproaching(today, result);
     await this.conditionDeadlines(today, result);
+    await this.depositsOutstanding(today, result);
+    await this.commissionsReceived(today, result);
 
     if (result.expiryReminders || result.expired || result.lawyerReminders || result.closingReminders
       || result.conditionReminders || result.failed) {
@@ -524,6 +535,150 @@ export class ReminderSweepService {
         summary: (what + ' ' + deadlinePhrase(soonest.daysRemaining) + ' - ' + (txn.property ?? txn.trade_no ?? '')).trim(),
         result,
         onSent: () => { result.conditionReminders++; },
+      });
+    }
+  }
+
+  // ---------------------------------------------------------------- deposits outstanding
+
+  /**
+   * TD-009 — the deal expects a deposit and none has been recorded.
+   *
+   * WHAT THIS COULD AND COULD NOT ASK. The entry says a deposit trigger cannot be written because
+   * "a deposit has no due date recorded against it". That is true, and it rules out a countdown —
+   * not a watch. A deal carries the deposit AMOUNT it expects, and its admin activities carry the
+   * receipt: a `deposits` row with a date on it. So the question asked here is whether the money has
+   * arrived, not whether it is late against a date nobody entered.
+   *
+   * ONCE, ON THE FIFTH DAY. `depositReminderFor` fires on the day the grace period ends and not
+   * afterwards. A deposit is a single thing to go and ask about; chasing it every night until
+   * somebody types a date is how a reminder becomes something people filter, and the deal's own
+   * screen already shows it missing.
+   *
+   * READ FROM THE JSON RATHER THAN A COLUMN, because that is where the receipt lives. `admin_
+   * activities` is a text column holding the panel's own shape; a row counts as recorded when it
+   * carries a date, which is exactly what the Admin panel writes when somebody enters one.
+   */
+  private async depositsOutstanding(today: Date, result: SweepResult): Promise<void> {
+    const from = startOfDay(today);
+    const offerDay = new Date(from.getFullYear(), from.getMonth(), from.getDate() - DEPOSIT_GRACE_DAYS);
+
+    const rows = await this.prisma.transactions.findMany({
+      // Exactly the day the grace period ends, so this reads one day's deals rather than the table.
+      where: { deleted_at: null, offer_date: dbDay(offerDay), deposit: { gt: 0 } },
+      select: {
+        id: true, trade_no: true, property: true, agent: true, deposit: true, offer_date: true,
+        admin_activities: true,
+        transaction_statuses: { select: { status: true } },
+      },
+    });
+
+    for (const t of rows) {
+      if (!t.offer_date) continue;
+      if (this.isSettled(t.transaction_statuses)) { result.skipped++; continue; }
+      if (this.depositRecorded(t.admin_activities)) { result.skipped++; continue; }
+
+      const { due, daysOutstanding } = depositReminderFor(today, calendarDay(t.offer_date));
+      if (!due) continue;
+
+      await this.deliver({
+        txnId: t.id,
+        kind: 'deposit',
+        variant: null,
+        day: dbDay(startOfDay(today)),
+        daysRemaining: daysOutstanding,
+        agentName: t.agent,
+        event: 'transaction.deposit_outstanding',
+        vars: {
+          agent_name: t.agent ?? 'there',
+          deal_number: t.trade_no ?? String(t.id),
+          property_address: t.property ?? '-',
+          deposit_amount: String(t.deposit ?? ''),
+          offer_date: toDateString(t.offer_date) ?? '',
+          days_outstanding: String(daysOutstanding),
+        },
+        summary: `Deposit not recorded - ${t.property ?? t.trade_no ?? ''}`.trim(),
+        result,
+        onSent: () => { result.depositReminders++; },
+      });
+    }
+  }
+
+  /**
+   * Has a deposit receipt been entered on this deal?
+   *
+   * A row counts once it carries a DATE. The panel adds an empty row the moment somebody opens the
+   * section, so counting rows would report every deal that has ever been looked at as settled — the
+   * same trap `sectionHasContent` documents for the Adjustment panel.
+   */
+  private depositRecorded(adminActivities: string | null): boolean {
+    if (!adminActivities) return false;
+    try {
+      const parsed = JSON.parse(adminActivities) as { deposits?: { date?: unknown }[] };
+      return (parsed.deposits ?? []).some((d) => String(d?.date ?? '').trim() !== '');
+    } catch {
+      // Unparseable admin activities are not evidence that a deposit arrived.
+      return false;
+    }
+  }
+
+  // ---------------------------------------------------------------- commission received
+
+  /**
+   * TD-009 — the brokerage has been paid for the deal, and its agent is told.
+   *
+   * WHICH OF THE THREE MEANINGS. The entry could not be closed because "commission received" meant
+   * the trust deposit, the invoice being paid, or the agent being paid. This is the INVOICE — the
+   * only one of the three the system timestamps itself, in `recordPayment`, when settling an invoice
+   * writes `commission_received_date`. The other two are typed into the Admin panel by hand, so a
+   * trigger on them would announce somebody's data entry rather than an event, and would fire again
+   * every time the value was corrected.
+   *
+   * A NIGHTLY PASS RATHER THAN A CALL FROM THE INVOICE, and that is a structural choice worth
+   * recording. `TransactionsModule` already imports `InvoicesModule`, so having the invoice call
+   * this service would close a dependency cycle and need `forwardRef` on both sides — fragility
+   * bought for an immediacy nobody needs. Being told the same night that the brokerage has been paid
+   * is timely; a status change is the one that wanted to be instant, and it is reactive for that
+   * reason.
+   *
+   * THE COST, STATED: this reads invoices whose commission date IS TODAY, so a date back-filled to
+   * last month is not announced. That is the right way round — back-filling is bookkeeping, and
+   * announcing it would tell an agent money arrived today when it did not.
+   */
+  private async commissionsReceived(today: Date, result: SweepResult): Promise<void> {
+    const rows = await this.prisma.invoices.findMany({
+      where: { deleted_at: null, status: 'Paid', commission_received_date: dbDay(startOfDay(today)) },
+      select: {
+        invoice_no: true, total: true, commission_received_date: true, commission_received_via: true,
+        transaction_id: true,
+        transactions: { select: { id: true, trade_no: true, property: true, agent: true, deleted_at: true } },
+      },
+    });
+
+    for (const inv of rows) {
+      const t = inv.transactions;
+      if (!t || t.deleted_at || !t.agent) { result.skipped++; continue; }
+
+      await this.deliver({
+        txnId: t.id,
+        kind: 'commission',
+        variant: null,
+        day: dbDay(startOfDay(today)),
+        daysRemaining: 0,
+        agentName: t.agent,
+        event: 'transaction.commission_received',
+        vars: {
+          agent_name: t.agent ?? 'there',
+          deal_number: t.trade_no ?? String(t.id),
+          property_address: t.property ?? '-',
+          invoice_number: inv.invoice_no ?? '-',
+          amount_received: String(inv.total ?? ''),
+          received_on: toDateString(inv.commission_received_date) ?? '',
+          received_via: inv.commission_received_via ?? '-',
+        },
+        summary: `Commission received - ${t.property ?? t.trade_no ?? ''}`.trim(),
+        result,
+        onSent: () => { result.commissionsReceived++; },
       });
     }
   }

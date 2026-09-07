@@ -2,6 +2,7 @@ import { BadRequestException, ForbiddenException, Injectable, NotFoundException 
 import * as ExcelJS from 'exceljs';
 import { PrismaService } from '../prisma/prisma.service';
 import { TransactionsWriteService } from '../transactions/transactions-write.service';
+import { AuditService } from '../audit/audit.service';
 import { ACCEPTED_TYPE_NAMES, TRANSACTION_TYPES, canonicalTransactionType, isListingType, splitClassificationNote, statusOptionsFor, defaultStatusFor } from '../reference/transaction.constants';
 import {
   IMPORT_FIELDS, FINANCIAL_FIELDS, CHILD_SHEETS, REQUIRED_COLUMNS, REF_COLUMN,
@@ -134,6 +135,14 @@ export class TransactionImportService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly write: TransactionsWriteService,
+    /*
+     * TD-142 — used by `undo`, which removes deals and must say so in the trail.
+     *
+     * Optional so every existing construction — the four spec files that build this service with
+     * two arguments — keeps working untouched, the same shape `ReminderSweepService` uses for its
+     * dispatcher. `AuditModule` is global, so the running application always injects it.
+     */
+    private readonly audit?: AuditService,
   ) {}
 
   /**
@@ -1436,7 +1445,9 @@ export class TransactionImportService {
       let tradeNo = '';
       let property: string | null = null;
       try {
-        const res = await this.write.store(user, r.data);
+        // TD-142 — stamped on every row this batch writes, which is what makes the import
+        // reversible as one action rather than a deal at a time.
+        const res = await this.write.store(user, { ...r.data, import_batch_id: batchId });
         const data = res.data as Record<string, unknown>;
         txnId = Number(data.id);
         tradeNo = String(data.trade_no ?? '');
@@ -1578,7 +1589,7 @@ export class TransactionImportService {
   async history(user: AuthUserRecord, limit = 50): Promise<Record<string, unknown>[]> {
     this.assertCanImport(user);
     const rows = await this.prisma.import_batches.findMany({ orderBy: { id: 'desc' }, take: Math.min(200, Math.max(1, limit)) });
-    return rows.map((b) => ({
+    return Promise.all(rows.map(async (b) => ({
       batch_id: b.batch_id,
       file_name: b.file_name,
       uploaded_by: b.uploaded_by,
@@ -1591,6 +1602,83 @@ export class TransactionImportService {
       duplicate_rows: b.duplicate_rows,
       warning_rows: b.warning_rows,
       status: b.status,
-    }));
+      // TD-142 — how many of this batch's deals are still present, which is what the Undo removes.
+      // Read per batch rather than joined, because the history is at most 200 rows and this keeps
+      // the shape of the method it belongs to.
+      reversible_rows: b.status === 'Imported'
+        ? await this.prisma.transactions.count({ where: { import_batch_id: b.batch_id, deleted_at: null } })
+        : 0,
+    })));
+  }
+
+  /**
+   * TD-142 — put one import back, in one action.
+   *
+   * AN IMPORT CAN CREATE HUNDREDS OF DEALS IN ONE PRESS and could only be reversed a deal at a
+   * time: the trash icon on each row, then Delete forever in the Recycle Bin — roughly a thousand
+   * deliberate clicks for the 495 historic deals the brokerage intends to migrate, or SQL against
+   * production. Reversing a mistake cost more effort than making it.
+   *
+   * THE BATCH, NOT A SELECTION. The entry offers both and prefers this, rightly: a batch cannot
+   * catch a deal somebody entered by hand in between, and it asks no judgement at the moment of
+   * use. A bulk delete over whatever happens to be selected is a more dangerous control for the
+   * same job. (The entry assumes the batch id is already on every row it created; it was not —
+   * `import_batch_id` and the migration that adds it are part of this fix.)
+   *
+   * TO THE RECYCLE BIN, NEVER PERMANENT, and by the same mechanism a single delete uses: one
+   * timestamp written to the deals and their invoices together, which is what lets a restore bring
+   * back exactly the invoices that went with them. Undoing an import is therefore itself undoable.
+   *
+   * WHAT IT WILL NOT DO. Deals already deleted are left alone rather than re-stamped, so an earlier
+   * deletion keeps its own moment and its own restore. And a batch whose deals have since been
+   * worked on is still reversed — they are recoverable, and a deal created by a bad import is a bad
+   * deal however much has been added to it — but the count returned says how many moved, so the
+   * caller can see it was more than they expected before they go looking.
+   *
+   * TRADE NUMBERS ARE NOT GIVEN BACK, and the entry says so: numbers are spent when issued. A
+   * mistaken import is not fully reversible even once the deals are gone. That is a property of the
+   * numbering, not something this can fix.
+   */
+  async undo(batchId: string, user: AuthUserRecord): Promise<Record<string, unknown>> {
+    this.assertCanImport(user);
+    const batch = await this.prisma.import_batches.findUnique({ where: { batch_id: batchId } });
+    if (!batch) throw new NotFoundException({ message: 'Import batch not found.' });
+    if (batch.status !== 'Imported') {
+      throw new BadRequestException({
+        message: `Only a completed import can be undone (this one is ${batch.status}).`,
+      });
+    }
+
+    const rows = await this.prisma.transactions.findMany({
+      where: { import_batch_id: batchId, deleted_at: null },
+      select: { id: true, trade_no: true, type: true },
+    });
+    if (rows.length === 0) {
+      throw new BadRequestException({
+        message: 'Nothing to undo — this import created no deals that are still present. '
+          + 'Imports made before this feature existed carry no batch, and cannot be reversed this way.',
+      });
+    }
+
+    const at = new Date();
+    const ids = rows.map((r) => r.id);
+    const actor = { id: user.id, name: user.name };
+    for (const r of rows) {
+      await this.audit?.record(r.id, actor, {
+        section: 'Basic Information', action: 'Record removed', source: 'Import undo',
+        details: `Trade #${r.trade_no} (${r.type}) — import ${batchId} undone`,
+      });
+    }
+    await this.prisma.$transaction([
+      this.prisma.invoices.updateMany({ where: { transaction_id: { in: ids }, deleted_at: null }, data: { deleted_at: at } }),
+      this.prisma.transactions.updateMany({ where: { id: { in: ids } }, data: { deleted_at: at } }),
+      this.prisma.import_batches.update({ where: { batch_id: batchId }, data: { status: 'Undone', updated_at: at } }),
+    ]);
+
+    return {
+      batch_id: batchId,
+      removed: rows.length,
+      message: `${rows.length} deal${rows.length === 1 ? '' : 's'} from this import moved to the Recycle Bin, where they can be restored.`,
+    };
   }
 }

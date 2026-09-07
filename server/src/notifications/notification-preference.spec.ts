@@ -164,6 +164,9 @@ describe('notification preferences', () => {
       // that changes the status rather than by the sweep. It reaches the dispatcher through the
       // same `deliver` the two above use, so all three channels are genuinely wired.
       'status_change',
+      // TD-009 - the entry's last two events. Both reach the dispatcher through the same `deliver`
+      // as the sweeps around them, so all three channels are genuinely wired.
+      'deposit_outstanding', 'commission_received',
       'lawyer_details',
       'document_review', 'transaction_approvals', 'inbox_new_mail',
       // The six CRM lead and campaign events, all dispatched from their own event sites.

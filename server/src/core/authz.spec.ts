@@ -117,6 +117,9 @@ describe('the capabilities restate the decisions they came from', () => {
      * `agent` stays OUT, unchanged — an agent works transactions but is not shown brokerage banking.
      */
     'company.read-banking': ['admin', 'manager', 'accounting', 'documentation'],
+    // TD-119 - the same four, and deliberately the same line: these fields print on the documents
+    // `accounting` and `documentation` produce. An agent and the crm seat fall below it.
+    'company.read-operations': ['admin', 'manager', 'accounting', 'documentation'],
     /*
      * The brokerage's whole marketing audience: which leads may be SELECTED for a campaign, and the
      * whole opt-out list.

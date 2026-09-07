@@ -400,8 +400,46 @@ export class TransactionsWriteService {
      *
      * Listings are outside this rule, as they always were: they carry no offer date to key on.
      */
+    /*
+     * TD-076 — A DOUBLE-CLICK IS ONE SUBMISSION THAT ARRIVED TWICE, AND SUCCEEDS SILENTLY.
+     *
+     * The advisory lock below closed the race that answered 500, and left the loser getting the
+     * same 422 the sequential path gives: "Transaction already exists — Trade #NNN". The brokerage
+     * rejected that on the user's behalf and was right — the user's deal DID save, so telling them
+     * it already exists implies somebody else created it, or that theirs failed, and they go
+     * looking for a record they believe is not theirs. Wrong, rather than merely unhelpful.
+     *
+     * A GENUINE DUPLICATE IS A DIFFERENT SITUATION and keeps the 422 unchanged: it is a separate
+     * attempt to enter a deal the system already holds, and the message is exactly right there.
+     *
+     * TOLD APART BY A TOKEN, NOT BY TIMING. The Add Transaction form mints one when it opens, so
+     * both clicks of a double-click carry the same value and a later attempt carries a different
+     * one. Guessing from how close together two requests arrived would be a rule nobody could state
+     * and every slow connection would break.
+     *
+     * THE LOOK-UP IS INSIDE THE LOCK, and that is the whole point: a plain read-then-write check
+     * would have both clicks find nothing and both insert, which is the defect this entry is about
+     * one level down. Racing clicks queue on the token, and the second sees the first's row. The
+     * unique index on the column is the backstop if anything ever reaches an insert unserialised.
+     *
+     * A REQUEST WITH NO TOKEN behaves exactly as it always has — the importer, the API and any
+     * older client are untouched.
+     */
+    const clientToken = typeof body.client_token === 'string' && body.client_token.trim()
+      ? body.client_token.trim().slice(0, 64)
+      : null;
+    let replayedId: number | null = null;
+
     const txnId = await this.prisma.$transaction(async (tx) => {
       const now = new Date();
+      if (clientToken) {
+        await this.lockDuplicateKey(tx, `client-token|${clientToken}`);
+        const prior = await tx.transactions.findFirst({
+          where: { client_token: clientToken },
+          select: { id: true },
+        });
+        if (prior) { replayedId = prior.id; return prior.id; }
+      }
       if (!isListing && !phpEmpty(body.offer_date)) {
         const offerDate = toDate(body.offer_date);
         const price = toFloat(body.price ?? 0);
@@ -420,6 +458,15 @@ export class TransactionsWriteService {
       }
       const t = await tx.transactions.create({
         data: {
+          client_token: clientToken,
+          /*
+           * TD-142 — which bulk import made this deal, so one import can be reversed in one action.
+           * Set only by `TransactionImportService.confirm`, which puts it on every row it writes;
+           * a deal entered by hand carries null and is untouched by any undo.
+           */
+          import_batch_id: typeof body.import_batch_id === 'string' && body.import_batch_id.trim()
+            ? body.import_batch_id.trim().slice(0, 64)
+            : null,
           trade_no: manualTrade || await this.tradeNumbers.next(tx, type),
           type,
           property: (body.property ?? null) as string | null,
@@ -452,6 +499,17 @@ export class TransactionsWriteService {
       if (team.length > 0) await this.syncTeam(tx, t.id, type, team);
       return t.id;
     });
+
+    /*
+     * TD-076 — a replay does the follow-on work no second time.
+     *
+     * Everything below creates something or tells somebody: the commission invoice, and the nudge
+     * for missing lawyer details. The first click already ran them. Returning here means the second
+     * click ends exactly where the first did — on the deal, with nothing to interpret.
+     */
+    if (replayedId !== null) {
+      return this.loadResource(replayedId, user, ['mls_type', 'precon_listing_type', 'precon_details_of_terms']);
+    }
 
     // Auto-generate the commission invoice (transaction_desk_v2 flag, invoiceable, not precon). Best-effort.
     if ((await this.featureFlag('transaction_desk_v2', true)) && isInvoiceableType(type) && type !== 'Preconstruction') {
