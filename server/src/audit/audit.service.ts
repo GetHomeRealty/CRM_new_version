@@ -10,7 +10,7 @@ import { decimalCast, parseJson, toDateString } from '../common/serialize';
 const DEC2 = new Set([
   'price', 'deposit', 'comm_value', 'comm_amt', 'comm_adjust_before', 'comm_adjust_after',
   'listing_comm_flat', 'coop_comm_flat', 'trust_payable', 'listing_adj_before', 'listing_adj_after',
-  'coop_adj_before', 'coop_adj_after', 'precon_comm_amt_manual',
+  'coop_adj_before', 'coop_adj_after', 'precon_comm_amt_manual', 'precon_comm_bonus',
 ]);
 const DEC4 = new Set(['comm_pct', 'listing_comm_pct', 'coop_comm_pct', 'precon_comm_pct']);
 const BOOLCOL = new Set([
@@ -111,6 +111,10 @@ export const SCALAR_MAP: Record<string, [string, string]> = {
   precon_net_of_hst: ['Commission Information', 'Preconstruction Net of HST'],
   precon_comm_pct: ['Commission Information', 'Preconstruction Commission %'],
   precon_comm_amt_manual: ['Commission Information', 'Preconstruction Commission Amount'],
+  // TD-150 - the builder bonus is money, and money is audited. Added with the field itself would
+  // have been better: this list is an allow-list, so a new column is silently UNAUDITED until
+  // somebody remembers it, and nothing fails to say so.
+  precon_comm_bonus: ['Commission Information', 'Preconstruction Commission Bonus'],
   precon_details_of_terms: ['Commission Information', 'Preconstruction Details of Terms'],
   lawyer_name: ['Legal & Documents', 'Lawyer Name'],
   lawyer_email: ['Legal & Documents', 'Lawyer Email'],
@@ -285,6 +289,10 @@ export class AuditService {
 
     t.precon_terms.forEach((term) => {
       add('Commission Information', `Term ${term.term_no} %`, term.pct === null ? '' : decimalCast(term.pct, 4) ?? '');
+      // TD-150 - a term's own amount, alongside its percentage. After TD-130 the amount is the
+      // figure that governs when it is set, so auditing only the percentage records the one that
+      // does not decide the money.
+      add('Commission Information', `Term ${term.term_no} Amount`, term.amt === null ? '' : decimalCast(term.amt, 2) ?? '');
       add('Commission Information', `Term ${term.term_no} Closing Date`, toDateString(term.closing_date) ?? '');
     });
 
