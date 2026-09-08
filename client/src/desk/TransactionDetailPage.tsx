@@ -1272,6 +1272,30 @@ export default function TransactionDetailPage() {
 
       <div ref={bodyRef}>
         <div className="detail-2col">
+          {/*
+            * TD-146 - an invoice raised on this deal that no longer agrees with it.
+            *
+            * Placed above Basic Info because it is a statement about the deal, not a detail of it,
+            * and because the person who repriced the deal is the person who needs to know. Costs
+            * nothing to compute: the server already had both figures in hand.
+            */}
+          {(() => {
+            const rows = ((txn as unknown as { invoice_divergence?: { invoice_no: string; billed: number; derived: number; difference: number; sent: boolean }[] } | null)?.invoice_divergence) || [];
+            if (!rows.length) return null;
+            const fmt = (n: number) => n.toLocaleString('en-CA', { style: 'currency', currency: 'CAD' });
+            return (
+              <div style={{ margin: '0 0 12px', padding: '10px 14px', borderLeft: '3px solid var(--warn)', background: 'rgba(245, 158, 11, 0.10)', borderRadius: 6 }}>
+                <strong style={{ fontSize: 13, color: 'var(--warn)' }}>An invoice on this deal no longer matches it</strong>
+                {rows.map((r) => (
+                  <p key={r.invoice_no} className="help" style={{ margin: '6px 0 0' }}>
+                    <strong>{r.invoice_no}</strong> bills {fmt(r.billed)} before HST and this deal now works out at {fmt(r.derived)} —{' '}
+                    <strong>{r.difference > 0 ? 'under-billed' : 'over-billed'} by {fmt(Math.abs(r.difference))}</strong>.
+                    {r.sent ? ' It has already been sent, so it is deliberately not changed automatically; amending or re-issuing it is a decision for the brokerage.' : ''}
+                  </p>
+                ))}
+              </div>
+            );
+          })()}
           {/* Basic Info */}
           <div className="card" style={{ marginBottom: 0 }}>
             <div className="modal-h" style={{ fontSize: 14 }}>Basic Info</div>

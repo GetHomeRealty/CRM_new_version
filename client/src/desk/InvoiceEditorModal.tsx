@@ -595,6 +595,28 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
           <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 14 }}>
             <table style={{ minWidth: 340 }}><tbody>
               <tr><td style={{ padding: '6px 14px', color: 'var(--text-3)' }}>Sub Total</td><td style={{ padding: '6px 14px', textAlign: 'right', fontWeight: 700 }}>{formatCurrency(displaySubTotal)}</td></tr>
+              {/*
+                * TD-146 - the deal has moved and this invoice has not. Shown beside the money it
+                * disagrees about, rather than as a badge somewhere else on the screen.
+                *
+                * Read from the response, never stored, so it cannot itself go stale. It is absent
+                * on the 26 invoices that agree with their deals - a warning that appears on
+                * everything is read by nobody.
+                */}
+              {(() => {
+                const d = saved as unknown as { diverged?: boolean; sub_total?: number; derived_sub_total?: number | null; divergence?: number | null } | null;
+                if (!d || !d.diverged || d.derived_sub_total === null || d.derived_sub_total === undefined) return null;
+                const diff = Number(d.divergence ?? 0);
+                const under = diff > 0;
+                return (
+                  <tr><td colSpan={2} style={{ padding: '10px 14px', background: 'rgba(245, 158, 11, 0.12)', color: 'var(--warn)', fontSize: 12, lineHeight: 1.55 }}>
+                    <strong>This invoice no longer matches its deal.</strong>{' '}
+                    It bills {formatCurrency(Number(d.sub_total ?? 0))} before HST, and the deal now works out at {formatCurrency(Number(d.derived_sub_total))} —{' '}
+                    <strong>{under ? 'under-billed' : 'over-billed'} by {formatCurrency(Math.abs(diff))}</strong>.{' '}
+                    A sent invoice is never altered automatically. Whether to amend it, re-issue it or leave it stands as a decision for the brokerage.
+                  </td></tr>
+                );
+              })()}
               <tr><td style={{ padding: '6px 14px', color: 'var(--text-3)' }}>Discount</td><td style={{ padding: '6px 14px', textAlign: 'right' }}><input value={form.discount} onChange={(e) => set('discount', e.target.value)} style={docInput({ width: 120, textAlign: 'right' })} /></td></tr>
               <tr><td style={{ padding: '8px 14px', fontWeight: 800, borderTop: '2px solid #0f172a', fontSize: 15 }}>GRAND TOTAL</td><td style={{ padding: '8px 14px', textAlign: 'right', fontWeight: 800, borderTop: '2px solid #0f172a', fontSize: 15 }}>{formatCurrency(grandTotal)}</td></tr>
               {amountPaid > 0 && <tr><td style={{ padding: '4px 14px', color: 'var(--ok-ink)' }}>Paid</td><td style={{ padding: '4px 14px', textAlign: 'right', color: 'var(--ok-ink)' }}>{formatCurrency(amountPaid)}</td></tr>}
