@@ -79,8 +79,8 @@ export const IMPORT_FIELDS: ImportField[] = [
   { column: 'Closing Date', key: 'closing_date', type: 'date', requiredForDeals: true, hint: 'YYYY-MM-DD. Listing types must leave this blank.', example: '2026-06-30' },
   { column: 'Listing Contract Date', key: 'listing_contract_date', type: 'date', requiredForListings: true, hint: 'YYYY-MM-DD. Listing types only.', example: '2026-03-01' },
   { column: 'Listing Expiry Date', key: 'listing_expiry_date', type: 'date', requiredForListings: true, hint: 'YYYY-MM-DD. Listing types only.', example: '2026-09-01' },
-  { column: 'Commission Type', key: 'comm_type', type: 'enum', requiredForDeals: true, options: ['%', 'Fixed'], hint: '% or Fixed. Listing types must leave this blank.', example: '%' },
-  { column: 'Commission Value', key: 'comm_value', type: 'number', requiredForDeals: true, hint: 'The percentage (2.5) or the fixed amount (5000). Listing types must leave this blank.', example: '2.5' },
+  { column: 'Commission Type', key: 'comm_type', type: 'enum', requiredForDeals: true, options: ['%', 'Fixed'], hint: '% or Fixed. Listing types must leave this blank; Preconstruction ignores it and takes its fee from the Precon columns.', example: '%' },
+  { column: 'Commission Value', key: 'comm_value', type: 'number', requiredForDeals: true, hint: 'The percentage (2.5) or the fixed amount (5000). Listing types must leave this blank; Preconstruction ignores it and takes its fee from the Precon columns.', example: '2.5' },
   { column: 'MLS Type', key: 'mls_type', type: 'enum', options: ['mls', 'exclusive'], hint: 'mls or exclusive. Blank defaults to mls.', example: 'mls' },
   { column: 'MLS Number', key: 'mls_num', type: 'text', hint: 'Free text', example: 'W1234567' },
   { column: 'MLS Verified', key: 'mls_verified', type: 'yesno', options: YES_NO, hint: 'Yes or No', example: 'No' },
@@ -253,11 +253,41 @@ export function flatColumns(): string[] {
 }
 
 /** Which columns must be filled for a given transaction type (drives per-row validation). */
+/**
+ * TD-147 - PRECONSTRUCTION DOES NOT USE THE GENERIC COMMISSION COLUMNS, so it is no longer asked
+ * for them.
+ *
+ * The importer refused a preconstruction row without Commission Type and Commission Value and then
+ * never read either. grossCommission() returns early inside isPrecon() on precon_comm_amt_manual,
+ * or price x precon_comm_pct / 100, and breakdownPrecon() works from those two plus
+ * precon_comm_bonus. On a 430-deal migration that is 860 invented values entered purely to get past
+ * a check.
+ *
+ * The listing types were already exempted for exactly this reason, and the note beside
+ * forbiddenColumnsFor says why: allowing them would invite somebody to fill a cell that does
+ * nothing. The same sentence applies to preconstruction and had simply not been extended to it.
+ *
+ * They are IGNORED here rather than FORBIDDEN as they are for listings, and that difference is
+ * deliberate: files already built to satisfy the old rule carry these columns, and refusing those
+ * files would punish people for having obeyed the system. A value is warned about on the review
+ * screen and is not written to the deal - which is the half that matters, because a commission
+ * stored on a type that never consults it is a number waiting to be believed by a later report.
+ *
+ * AND THE SECOND COPY OF THIS RULE LIVES IN transactions-write.service.ts, in the create-time
+ * validation that pushes comm_type and comm_value onto `required` for every non-listing type.
+ * Relaxing this list alone changed nothing a user could see - the importer accepted the row and the
+ * write refused it, with a differently worded message carrying no field name. Change one, change
+ * the other.
+ */
+export const PRECON_IGNORED_COLUMNS = ['Commission Type', 'Commission Value'];
+
 export function requiredColumnsFor(type: string): string[] {
   const listing = isListingType(type);
-  return IMPORT_FIELDS.filter((f) =>
+  const cols = IMPORT_FIELDS.filter((f) =>
     f.required || (listing ? f.requiredForListings : f.requiredForDeals),
   ).map((f) => f.column);
+  if (type === 'Preconstruction') return cols.filter((c) => !PRECON_IGNORED_COLUMNS.includes(c));
+  return cols;
 }
 
 /** Columns that must be EMPTY for a given type (listing deals carry no price/offer terms). */

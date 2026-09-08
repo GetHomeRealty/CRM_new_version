@@ -276,7 +276,23 @@ export class TransactionsWriteService {
     const knownType = (TRANSACTION_TYPES as readonly string[]).includes(type);
 
     const required = ['type', 'property', 'status'];
-    if (knownType && !isListing) required.push('comm_type', 'comm_value', 'price', 'offer_date', 'closing_date');
+    if (knownType && !isListing) {
+      required.push('price', 'offer_date', 'closing_date');
+      /*
+       * TD-147 - PRECONSTRUCTION STATES ITS FEE IN THE PRECON FIELDS, so it is not asked for the
+       * generic pair. grossCommission() returns early inside isPrecon() on precon_comm_amt_manual,
+       * or price x precon_comm_pct / 100, and breakdownPrecon() reads those two plus
+       * precon_comm_bonus. comm_type and comm_value are never consulted for this type, anywhere.
+       *
+       * THIS RULE IS WRITTEN DOWN TWICE AND BOTH COPIES MUST AGREE. The bulk importer keeps its own
+       * in import-template.ts requiredColumnsFor(), with PRECON_IGNORED_COLUMNS beside it naming
+       * the same two columns. Relaxing the importer alone was not enough: every preconstruction row
+       * still failed HERE, on the write, with a differently worded message and no field name, which
+       * is a hard thing to trace back to a validator you have already fixed. Change one, change the
+       * other.
+       */
+      if (type !== 'Preconstruction') required.push('comm_type', 'comm_value');
+    }
 
     const errors: Record<string, string[]> = {};
     const missing = required.filter((f) => blank(body[f]));

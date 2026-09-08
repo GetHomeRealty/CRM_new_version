@@ -7,8 +7,7 @@ import { ACCEPTED_TYPE_NAMES, TRANSACTION_TYPES, canonicalTransactionType, isLis
 import {
   IMPORT_FIELDS, FINANCIAL_FIELDS, CHILD_SHEETS, REQUIRED_COLUMNS, REF_COLUMN,
   requiredColumnsFor, forbiddenColumnsFor, statusReference, flatColumn, flatColumns, exampleRowFor,
-  type ImportField, type ChildSheet,
-} from './import-template';
+  type ImportField, type ChildSheet, PRECON_IGNORED_COLUMNS } from './import-template';
 
 import { isSuperAdmin } from '../core/authz';
 import type { AuthUserRecord } from '../auth/auth.types';
@@ -393,7 +392,7 @@ export class TransactionImportService {
       'Fill EITHER the multi-sheet layout (Transactions + Financial + Team Split + Clients + Adjustments + Conditions) OR the "One-Sheet (CSV)" sheet — not both.',
       'If both are filled, the Transactions sheet wins and the One-Sheet tab is ignored. To use the one-sheet layout, clear the Transactions sheet (or save just that tab as .csv).',
       'Dates are YYYY-MM-DD. Numbers are digits only — no $ and no commas.',
-      'Only Transaction Type and Property Address are required for every row. Deal types also need Price, Offer Date, Closing Date, Commission Type and Commission Value; listing types need the two listing dates instead.',
+      'Only Transaction Type and Property Address are required for every row. Deal types also need Price, Offer Date, Closing Date, Commission Type and Commission Value; listing types need the two listing dates instead; Preconstruction needs neither commission column and takes its fee from the Precon columns.',
       'Deal Status must be valid for the type — see the Reference sheet of the blank template (Download Template).',
       'Legal & Documentation cannot be imported; documents are uploaded per transaction.',
     ]) read.addRow(['', line]);
@@ -904,6 +903,20 @@ export class TransactionImportService {
           }
         }
         /*
+         * TD-147 - not an error, and not a figure either. A preconstruction deal states its fee in
+         * the Precon columns, so anything in these two is reported as ignored AND is withheld from
+         * the deal by toBody() below. Warning rather than refusing keeps files that were built to
+         * satisfy the old requirement importable.
+         */
+        if (type === 'Preconstruction') {
+          for (const col of PRECON_IGNORED_COLUMNS) {
+            if (!get(col)) continue;
+            add(col, get(col), `${col} is not used by Preconstruction.`,
+              'Leave it blank. The fee comes from Precon Commission %, Precon Commission Amount and Precon Commission Bonus. Anything entered here is ignored and is not saved to the deal.',
+              'warning');
+          }
+        }
+        /*
          * A SOLD LISTING CARRIES ITS MONEY, so the offer-side block is lifted for one.
          * Commission Type and Commission Value stay refused even then: a listing's commission
          * is worked out from Listing Commission % and Co-Op Commission %, and the calculation
@@ -1240,6 +1253,9 @@ export class TransactionImportService {
       'listing_contract_date', 'listing_expiry_date', 'comm_type', 'comm_value']) {
       const f = IMPORT_FIELDS.find((x) => x.key === key);
       if (!f) continue;
+      // TD-147 - the generic commission columns are never stored on a preconstruction deal, so a
+      // value entered to satisfy an older template cannot be mistaken later for the fee.
+      if (type === 'Preconstruction' && PRECON_IGNORED_COLUMNS.includes(f.column)) continue;
       const v = get(f.column);
       if (!v) continue;
       body[key] = f.type === 'number' ? Number(v.replace(/[$,\s]/g, '')) : v;
