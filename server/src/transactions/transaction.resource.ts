@@ -6,6 +6,7 @@ import type { CommissionService } from './commission.service';
 import { can, isAgent } from '../core/authz';
 import { ownsTransaction, teamMemberIdentity } from '../common/transaction-scope';
 import { invoiceDisplayStatus } from '../reference/invoice.constants';
+import { invoiceCommissionFrom } from '../invoices/invoice-commission';
 const isPrecon = (type: string): boolean => type === 'Preconstruction';
 
 // Deterministic ordering (Laravel's own order for these is index-plan-dependent
@@ -197,6 +198,10 @@ const DOCS_ONLY_HIDDEN = [
   'coop_adj_enabled', 'coop_adj_before', 'coop_adj_after',
   'precon_comm_pct', 'precon_comm_amt_manual', 'precon_comm_bonus', 'precon_net_of_hst',
   'commission', 'financial',
+  // TD-146 - a money figure, so a docs-only member never sees it. This list is hand-written and has
+  // silently omitted a new money field three times this week; anything added to `out` that carries
+  // an amount belongs here.
+  'invoice_divergence',
 ];
 
 async function myTeamAccess(t: LoadedTxn, ctx: ResourceCtx): Promise<string | null> {
@@ -378,6 +383,32 @@ export async function transactionResource(t: LoadedTxn, ctx: ResourceCtx): Promi
   if (t.team_members !== undefined) {
     // The profile cache, when supplied, spares breakdown() a users lookup per agent name.
     out.financial = await ctx.commission.breakdown(commissionInput, ctx.bulk?.profiles);
+  }
+
+  /*
+   * TD-146 - every invoice on this deal that no longer agrees with it, named on the deal itself.
+   *
+   * Free: the breakdown above is already computed and the invoices are already loaded, so this adds
+   * no query. It reads through the SAME function the refresh writes through, so the deal screen and
+   * the invoice screen cannot describe one invoice two different ways.
+   *
+   * An unsent invoice will normally be absent from this list, because the refresh keeps it in step.
+   * What surfaces here is the case that CANNOT be corrected automatically - a sent invoice whose
+   * deal was repriced afterwards. Changing an issued document is the brokerage decision, not the
+   * system decision; being told is not.
+   */
+  if (out.financial) {
+    const r2 = (n: number): number => Math.round(n * 100) / 100;
+    const rows = (t.invoices ?? []).map((inv) => {
+      const want = invoiceCommissionFrom(out.financial as Record<string, unknown>, inv.term_no ?? null);
+      if (want === null) return null;
+      const billed = r2(Number(inv.sub_total ?? 0));
+      const derived = r2(want);
+      if (billed === derived) return null;
+      return { invoice_no: inv.invoice_no, term_no: inv.term_no ?? null, billed, derived,
+               difference: r2(derived - billed), sent: inv.sent_at !== null, status: inv.status };
+    }).filter(Boolean);
+    if (rows.length) out.invoice_divergence = rows;
   }
 
   // TD-054. Applied after `financial` is built, so it strips the result rather than trying to

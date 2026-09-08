@@ -7,7 +7,7 @@ import { isInvoiceableType } from '../reference/transaction.constants';
 import { round2 } from '../common/serialize';
 import { InvoiceCalculator } from './invoice.calculator';
 import { InvoiceNumberService } from './invoice.numbers';
-import { totalCommission } from '../reports/report-financials';
+import { invoiceCommissionFrom } from './invoice-commission';
 
 type Tx = Prisma.TransactionClient;
 
@@ -112,7 +112,6 @@ export class TransactionInvoiceService {
     const settings = await db.company_settings.findUnique({ where: { id: 1 } });
     const defaultTaxRate = Number(settings?.default_tax_rate ?? 13);
     const breakdown = await this.commission.breakdown(normalizeCommissionTxn(t));
-    const terms = Array.isArray(breakdown.terms) ? (breakdown.terms as Record<string, unknown>[]) : [];
 
     /**
      * What this invoice should now be asking for.
@@ -137,20 +136,7 @@ export class TransactionInvoiceService {
      * read from the wrong place, an absent field coerced by `?? 0`, or a variant a later build
      * introduces that this function has never heard of.
      */
-    /** Absent, null, empty or non-finite is NOT a commission of zero. */
-    const numeric = (v: unknown): number | null => {
-      if (v === null || v === undefined || v === '') return null;
-      const n = Number(v);
-      return Number.isFinite(n) ? n : null;
-    };
-
-    const commissionFor = (termNo: number | null): number | null => {
-      if (termNo !== null) {
-        const term = terms.find((x) => Number(x.term_no) === termNo);
-        return term ? numeric(term.commission) : null;
-      }
-      return totalCommission(breakdown).commission;
-    };
+    const commissionFor = (termNo: number | null): number | null => invoiceCommissionFrom(breakdown, termNo);
 
     let updated = 0;
     for (const inv of open) {
@@ -216,6 +202,22 @@ export class TransactionInvoiceService {
       });
     }
     return updated;
+  }
+
+  /**
+   * TD-146 - what this invoice WOULD be asked to charge if it were rewritten from its deal now.
+   *
+   * Reads nothing but the deal and writes nothing at all, so it can be called from a presenter. It
+   * exists because refreshFromDeal correctly DECLINES to touch a sent, paid or hand-built invoice
+   * and, until now, declined silently: the figure it had just computed was thrown away at the
+   * moment it was most worth reporting. A sent invoice must not move - that is TD-083 - but the
+   * brokerage has to be told when its deal has moved away from it.
+   */
+  async expectedFor(db: Tx, transactionId: number, termNo: number | null): Promise<number | null> {
+    const t = await db.transactions.findUnique({ where: { id: transactionId }, include: commissionInclude });
+    if (!t || !isInvoiceableType(t.type)) return null;
+    const breakdown = await this.commission.breakdown(normalizeCommissionTxn(t));
+    return invoiceCommissionFrom(breakdown, termNo);
   }
 
   private async make(

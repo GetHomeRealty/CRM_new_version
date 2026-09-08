@@ -215,10 +215,27 @@ export class InvoicesService {
     const brok = txn?.brokerages ?? null;
     const brokAgents = brok ? brok.brokerage_agents.map((a) => a.name).filter(Boolean).join(', ') : null;
 
+    /*
+     * TD-146 - the deal's CURRENT answer, beside the stored one, computed rather than remembered.
+     *
+     * A stored flag would need a migration and could itself go stale, which is the disease this
+     * week has been spent treating. This costs one query and one breakdown on a single invoice, and
+     * cannot be wrong. `derived_sub_total` is null when the figure cannot be told - an invoice with
+     * no deal, or a preconstruction term that no longer exists - and null is not zero.
+     */
+    const derived = i.transaction_id !== null && txn !== null
+      ? await this.txnInvoices.expectedFor(this.prisma, i.transaction_id, i.term_no)
+      : null;
+    const billed = round2(num(i.sub_total));
+    const diverged = derived !== null && round2(derived) !== billed;
+
     return {
       ...this.summary(i),
       transaction_id: i.transaction_id,
       purchase_price: i.transaction_id ? num(txn?.price ?? 0) : null,
+      derived_sub_total: derived === null ? null : round2(derived),
+      diverged,
+      divergence: derived === null ? null : round2(round2(derived) - billed),
       customer_id: i.customer_id,
       customer_name: i.customer_name || (brok?.name ?? null),
       customer_phone: i.customer_phone || (brok?.phone ?? null),
