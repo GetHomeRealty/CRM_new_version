@@ -23,34 +23,51 @@ import { Injectable } from '@nestjs/common';
  *                        system required Deposit Slip and RECO Guide, which the brokerage does not,
  *                        and treated Trade Sheet as optional, which the brokerage requires.
  *
- * NOT YET CONFIRMED, AND STILL CARRYING THE EARLIER UNVERIFIED LIST: the two LISTING types. The
- * brokerage describes "Listing agreement" as covering the MLS Draft Preview, the Listing Agreement,
- * the MLS Data Sheet form and the RECO Guide, and has not yet said whether that is one checklist row
- * or four. Until it does, both listing types are left exactly as they were. Lease Listing is also
- * short of Rental Application, Schedule A and ORTA on the brokerage's list; Schedule A exists on no
- * type today. Do not "tidy" either list without that answer.
+ *   Sale Listing        13 documents; MLS data sheet and RECO Guide optional, the rest mandatory.
+ *   Lease Listing       16 documents; MLS data sheet, RECO Guide, Offer Summary Document and
+ *                       Rental Application optional. Rental Application, Schedule A and ORTA were
+ *                       missing and are added; one of them existed on no type at all.
  *
- * ONE MECHANICAL CONSTRAINT for whoever takes that on: DocumentsService.ensureRecoGuide() recreates
- * a RECO Guide row on every load of every deal, so RECO Guide cannot be removed from a type here
- * alone - it would come straight back.
+ * ALL SIX TYPES ARE NOW THE BROKERAGE'S OWN LIST. Nothing in this file is invented any more, which
+ * is what its original author asked for and could not get.
  */
 @Injectable()
 export class DocumentDefaultsService {
   defaultsFor(type: string): { title: string; mandatory: boolean }[] {
     const t = (type ?? '').toLowerCase();
-    const optional = new Set<string>(t === 'preconstruction' ? ['Deposit Slip', 'RECO Guide'] : t.includes('listing') ? (t.includes('lease') ? ['Offer Summary Document'] : []) : t.includes('lease') ? ['Offer Summary', 'Rental Application'] : []);
+    const optional = new Set<string>(
+      t === 'preconstruction' ? ['Deposit Slip', 'RECO Guide']
+      : t.includes('listing') ? (t.includes('lease')
+          ? ['MLS data sheet', 'RECO Guide', 'Offer Summary Document', 'Rental Application']
+          : ['MLS data sheet', 'RECO Guide'])
+      : t.includes('lease') ? ['Offer Summary', 'Rental Application']
+      : []);
     const rows = (pairs: string[]): { title: string; mandatory: boolean }[] => pairs.map((title) => ({ title, mandatory: !optional.has(title) }));
 
     if (t === 'referral') return rows(['Referral doc', 'Notice of Sale', 'Trade Sheet']);
     if (t === 'preconstruction') return rows(['Agreement of Purchase and Sale (APS)', 'Broker Referral', 'Deposit Slip', 'RECO Guide', 'Trade Sheet', 'Notice of Sale']);
 
     if (t.includes('listing')) {
-      const isLeaseListing = t.includes('lease');
-      return rows([
-        'Listing agreement', 'MLS data sheet', 'Client Photo IDs', 'FINTRACK', 'Offer Summary Document',
-        isLeaseListing ? 'Agreement to Lease' : 'Agreement of Purchase & Sale',
-        'Confirmation of CO-OP', 'Schedule B', 'Deposit Receipt', 'MLS', 'RECO Guide', 'Trade Sheet', 'Notice of Sale',
-      ]);
+      /*
+       * TD-149 - THE BROKERAGE'S RULING, 2026-09-08: 'Listing agreement' is the mandatory row and
+       * covers the MLS Draft Preview, the Listing Agreement, the MLS Data Sheet form and the RECO
+       * Guide. The separate 'MLS data sheet' and 'RECO Guide' rows are KEPT and marked optional
+       * rather than folded in and deleted, so nothing disappears off the three live listing deals
+       * and the checklist still shows them.
+       *
+       * That choice also settles a mechanical problem the alternative created: ensureRecoGuide()
+       * recreates a RECO Guide row on every load of every deal, always non-mandatory. Folding it
+       * away would have left the two fighting each other; leaving it optional makes them agree.
+       */
+      if (t.includes('lease')) {
+        return rows(['Listing agreement', 'MLS data sheet', 'Client Photo IDs', 'FINTRACK',
+          'Offer Summary Document', 'Rental Application', 'Agreement to Lease', 'Schedule A',
+          'Schedule B', 'Confirmation of CO-OP', 'ORTA', 'Deposit Receipt', 'MLS', 'RECO Guide',
+          'Trade Sheet', 'Notice of Sale']);
+      }
+      return rows(['Listing agreement', 'MLS data sheet', 'Client Photo IDs', 'FINTRACK',
+        'Offer Summary Document', 'Agreement of Purchase & Sale', 'Confirmation of CO-OP',
+        'Schedule B', 'Deposit Receipt', 'MLS', 'RECO Guide', 'Trade Sheet', 'Notice of Sale']);
     }
     if (t.includes('lease')) {
       return rows(['Offer Summary', 'Agreement to Lease', 'Schedule B', 'Confirmation of CO-OP', 'Tenant Representation', 'ORTA', 'Deposit Receipt', 'MLS', 'Client Photo IDs', 'FINTRACK', 'Rental Application', 'RECO Guide', 'Trade Sheet', 'Notice of Sale']);
