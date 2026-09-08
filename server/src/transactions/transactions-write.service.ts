@@ -112,6 +112,20 @@ const FILL_KEYS = [
   'seller_lawyer_name', 'seller_lawyer_email', 'seller_lawyer_phone', 'seller_lawyer_address',
   'admin_activities', 'activity_tracker', 'adjustments', 'commercial_lease', 'trade_sheet_data',
   'comm_status', 'comm_paid_status', 'valid_status',
+  /*
+   * TD-154 - payment_type was the one importable column missing from this list, and the
+   * omission was invisible from either end. The bulk importer packages it at
+   * transaction-import.service.ts:1302 alongside mls_type, mls_num and the lawyer fields -
+   * all of which arrive - and the review screen reports the row valid, so an import that
+   * silently dropped the value looked entirely successful.
+   *
+   * MEANWHILE THE REPORTS MODULE HAS OFFERED THE FIELD ALL ALONG: a sortable Payment Type
+   * column on by default, a column in the download-all export under Payments, and a
+   * multi-select filter with the five allowed values. Measured 2026-09-08: 46 deals in the
+   * system, ZERO with a payment_type. Nothing could ever set it, so that filter has always
+   * returned nothing and that column has always been blank.
+   */
+  'payment_type',
   'conditional_offer', 'inter_board_enabled',
 ] as const;
 
@@ -123,6 +137,9 @@ const AGENT_LOCKED = [
   'listing_adj_enabled', 'listing_adj_before', 'listing_adj_after',
   'coop_adj_enabled', 'coop_adj_before', 'coop_adj_after',
   'comm_status', 'comm_paid_status',
+  // TD-154 - how the brokerage was paid is an accounting fact, so it sits with comm_status
+  // and comm_paid_status rather than with the fields an agent maintains.
+  'payment_type',
   'precon_net_of_hst', 'precon_comm_pct', 'precon_comm_amt_manual', 'precon_comm_bonus', 'precon_listing_type',
   'adjustments', 'admin_activities',
 ];
