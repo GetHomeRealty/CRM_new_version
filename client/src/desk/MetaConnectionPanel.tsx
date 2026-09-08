@@ -179,6 +179,7 @@ export default function MetaConnectionPanel({ compact = false }: { compact?: boo
             <button className="btn ghost sm" type="button" disabled={busy !== ''}
               onClick={() => askDelete({
                 title: 'Disconnect Meta?',
+                confirmLabel: 'Disconnect',
                 message: 'New leads will stop arriving. Leads already synced stay in the Lead module.',
                 note: 'The stored Facebook access tokens are erased immediately, and your connected lead forms '
                   + 'are released — another agent can connect them while you are disconnected. '

@@ -544,23 +544,17 @@ export default function CrmSettingsPanel() {
         </p>
 
         {/*
-          MAIL HEALTH, SAID OUT LOUD.
-          This panel already fetched `integrations` and rendered none of it, so when three
-          brokerage-wide broadcasts failed on `535 Username and Password not accepted` there was
-          genuinely nothing here that could have said so - the accounts all reported `sync_error:
-          null`, which records a failed IMAP poll and nothing about sending. Roughly forty-four
-          welcome emails to real new leads were refused in a day and every surface said fine.
+          MAIL HEALTH IS NO LONGER A BANNER HERE, by request.
+          It was a red alarm across the top of Integrations, and it was firing on rows that were not
+          faults at all: every deliberate refusal - a switched-off trigger, an opted-out address -
+          is written to `crm_email_log` with `success: false`, and the count read all of them as
+          delivery failures. Somebody who had turned a trigger off was told to reconnect accounts
+          that were sending perfectly well.
+          The miscount is fixed at source (see `genuineSendFailure` in crm-settings.service.ts), so
+          `integrations.email.failing` now means only what it says. The banner is gone regardless:
+          each account below carries its own state, and the send log records what happened. Restore
+          it here if a silent outage ever needs to announce itself again.
         */}
-        {integrations?.email?.failing && (
-          <div className="import-error" style={{ marginBottom: 10 }}>
-            <strong>Email is configured, but messages are being refused.</strong>
-            <p>{integrations.email.detail}</p>
-            <p>
-              Reconnect the affected account below. Until then automated email — welcome messages,
-              reminders and campaigns — is not reaching clients.
-            </p>
-          </div>
-        )}
 
         {/* Mail Configuration — connect your own Gmail / SMTP sending + inbox account. */}
         <EmailIntegrationCard scope="crm" />

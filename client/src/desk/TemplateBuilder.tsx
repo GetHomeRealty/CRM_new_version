@@ -39,7 +39,26 @@ export const DEFAULT_STYLES: Styles = {
   header: false, footer: false, logo: '', brandName: 'Get Home Realty', brand: '#dc2626',
   accent: '#dc2626', bg: '#ffffff', footerText: '',
 };
-const STD_FOOTER = '"A Tradition of Trust" — Brokerage\n{{AGENT_NAME}} · {{AGENT_EMAIL}} · {{AGENT_PHONE}}';
+/*
+ * THE BROKERAGE SIGNS THE FOOTER, not whoever happened to press Send.
+ *
+ * This was `{{AGENT_NAME}} · {{AGENT_EMAIL}} · {{AGENT_PHONE}}`, so a campaign footer carried the
+ * sending agent's personal name and address underneath the Get Home Realty heading — and the
+ * heading and the contact line then named two different senders. The seeded templates
+ * ("Follow-up — Checking In", "Showing — Confirmation") already sign with the brokerage's own
+ * details; only templates built here disagreed with them.
+ *
+ * It matters beyond tidiness: the footer is the identification block a commercial email is
+ * required to carry, and under CASL that identifies the ORGANISATION whose consent the recipient
+ * gave — which is the brokerage, not an individual salesperson who may since have left.
+ *
+ * The agent still signs the BODY: `{{AGENT_NAME}}` in a sign-off and the "Reply to This Email"
+ * button on `mailto:{{AGENT_EMAIL}}` are untouched, so a reply still reaches the person who sent
+ * it. Taken from Settings → Company (GET HOME REALTY INC., info@GetHomeRealty.ca, 905-565-9933);
+ * written out rather than tokenised because the send engine has no brokerage token — see
+ * FILLABLE_TOKENS in server/src/campaigns/campaign.constants.ts.
+ */
+const STD_FOOTER = '"A Tradition of Trust" — Brokerage\nGet Home Realty · info@gethomerealty.ca · +1 (905) 565-9933';
 const MARKER = 'BUILDER:';
 
 export const newBlock = (type: Block['type']): Block => {
@@ -269,7 +288,7 @@ export function TemplateBuilder({ blocks, setBlocks, styles, setStyles }: {
                 Use company logo
               </button>
             </div>
-            <div className="field"><label>Footer text</label><textarea rows={3} value={styles.footerText} onChange={(e) => setStyles({ ...styles, footerText: e.target.value })} placeholder={'"A Tradition of Trust" — Brokerage\n{{AGENT_NAME}} · {{AGENT_EMAIL}} · {{AGENT_PHONE}}'} /></div>
+            <div className="field"><label>Footer text</label><textarea rows={3} value={styles.footerText} onChange={(e) => setStyles({ ...styles, footerText: e.target.value })} placeholder={STD_FOOTER} /></div>
             <div className="field"><label>Brand / footer colour</label>{swatch(styles.brand, (c) => setStyles({ ...styles, brand: c }))}</div>
             <div className="field"><label>Accent line colour</label>{swatch(styles.accent, (c) => setStyles({ ...styles, accent: c }))}</div>
             <div className="field"><label>Background</label>{swatch(styles.bg, (c) => setStyles({ ...styles, bg: c }))}</div>

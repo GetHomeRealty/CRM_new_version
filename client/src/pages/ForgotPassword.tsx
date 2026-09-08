@@ -39,7 +39,7 @@ export default function ForgotPassword() {
   };
 
   return (
-    <div className="auth-wrap"><div className="auth-card">
+    <div className="auth-shell"><div className="auth-card">
       <img className="auth-logo" src={companyLogoUrl()} alt="" />
       {sent ? (
         <>

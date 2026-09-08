@@ -1,3 +1,4 @@
+import type { Prisma } from '@prisma/client';
 import { auditDomain } from '../common/domain';
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
@@ -852,6 +853,37 @@ export class CrmSettingsService {
   /** How far back a send failure still counts as "this is broken now". */
   private static readonly SEND_HEALTH_DAYS = 14;
 
+  /*
+   * Rows in `crm_email_log` that are DELIBERATE, and must never be read as a fault.
+   *
+   * Every policy refusal in the CRM mailer is written with `success: false` and an error beginning
+   * "Not sent —": a switched-off trigger, an opted-out address, the brokerage kill switch, a
+   * recipient who is not a lead. They are recorded on purpose - under CASL the evidence that a
+   * message was withheld is most of the value - but they are the system OBEYING an instruction, not
+   * failing to carry one out.
+   *
+   * Counting them as delivery failures inverted this panel: an administrator who switched a trigger
+   * off was told "messages are being refused - reconnect the affected account", about accounts that
+   * were sending perfectly well. An alarm that fires when somebody uses a setting as intended is one
+   * people learn to scroll past, which costs exactly the outage this check was built to catch.
+   *
+   * A transport failure carries the transport's own words instead ("535 Username and Password not
+   * accepted", "invalid_grant"), so the prefix separates them cleanly. A `success: false` row with
+   * no error text at all stays counted - unexplained is not the same as intended.
+   */
+  private static readonly DELIBERATE_REFUSAL_PREFIX = 'Not sent';
+
+  /** `success: false` rows that represent an actual delivery failure. */
+  private static genuineSendFailure(): Prisma.crm_email_logWhereInput {
+    return {
+      success: false,
+      OR: [
+        { error: null },
+        { error: { not: { startsWith: CrmSettingsService.DELIBERATE_REFUSAL_PREFIX } } },
+      ],
+    };
+  }
+
   async integrations(user: AuthUserRecord): Promise<Record<string, unknown>> {
     /*
      * `sync_error` IS NOT A SEND ERROR, and that gap is the whole of CRM-016.
@@ -876,9 +908,13 @@ export class CrmSettingsService {
       this.prisma.mail_accounts.count(),
       this.prisma.mail_accounts.count({ where: { is_active: true } }),
       this.prisma.meta_connections.findFirst({ where: { user_id: user.id ?? -1, is_active: true }, select: { facebook_user_name: true, last_sync: true } }),
-      this.prisma.crm_email_log.count({ where: { success: false, created_at: { gte: since } } }),
+      this.prisma.crm_email_log.count({ where: { ...CrmSettingsService.genuineSendFailure(), created_at: { gte: since } } }),
       this.prisma.crm_email_log.findFirst({
-        where: { success: false, created_at: { gte: since }, error: { not: null } },
+        where: {
+          success: false,
+          created_at: { gte: since },
+          error: { not: { startsWith: CrmSettingsService.DELIBERATE_REFUSAL_PREFIX } },
+        },
         orderBy: { id: 'desc' },
         select: { error: true, created_at: true },
       }),

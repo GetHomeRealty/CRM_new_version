@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useToast } from './toast';
 import { useAuth } from '../context/AuthContext';
 import ConfirmDialog, { useConfirm } from './ConfirmDialog';
+import AutoComplete from './AutoComplete';
 import { apiErrorMessage } from '../lib/apiError';
 import {
   listInventory, inventoryOptions, createInventory, updateInventory, deleteInventory, restoreInventory,
@@ -417,7 +418,6 @@ export default function InventoryPage() {
                   <label style={{ fontWeight: 600, fontSize: 13 }}>Assigned To</label>
                   <span className="muted" style={{ fontSize: 12 }}>{previewAssigned} of {form.count || 0} assigned{previewOut !== previewAssigned && ` · ${previewOut} still out`}</span>
                 </div>
-                <datalist id="inv-names">{(options?.names ?? []).map((n) => <option key={n} value={n} />)}</datalist>
                 {form.assignments.length === 0 ? (
                   <div className="muted" style={{ border: '1px dashed var(--line)', borderRadius: 8, padding: '12px', textAlign: 'center', fontSize: 13 }}>
                     Nobody assigned yet — the full count stays in stock.
@@ -428,7 +428,31 @@ export default function InventoryPage() {
                   return (
                     <div key={idx} style={{ border: '1px solid var(--line)', borderRadius: 8, padding: 10, marginBottom: 8, background: 'var(--surface-2, var(--surface-2))' }}>
                       <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                        <input list="inv-names" placeholder="Select or type a person" style={{ flex: 1 }} value={a.assignedTo} onChange={(e) => updateAssignment(idx, { assignedTo: e.target.value })} />
+                        {/*
+                          * A CONTAINED dropdown, not the native <datalist> this used to be.
+                          *
+                          * A datalist popup is drawn by the BROWSER, outside the page: nothing in
+                          * this application can bound its height or keep it inside the modal. With
+                          * a few dozen names that is merely ugly; this list is every assignable
+                          * person in the brokerage, so it rendered as a full-height column of names
+                          * standing over the form and off the bottom of the screen, hiding the very
+                          * fields it was meant to fill in.
+                          *
+                          * AutoComplete is the same control the rest of the desk already uses -
+                          * filtered as you type, capped at eight rows, scrolled and positioned
+                          * inside the dialog. Free text still saves, which is what `list` gave and
+                          * what somebody entering a name that is not on staff needs.
+                          */}
+                        <div style={{ flex: 1 }}>
+                          <AutoComplete<string>
+                            value={a.assignedTo}
+                            options={options?.names ?? []}
+                            getLabel={(n) => n}
+                            placeholder="Select or type a person"
+                            onChange={(v) => updateAssignment(idx, { assignedTo: v })}
+                            onPick={(n) => updateAssignment(idx, { assignedTo: n })}
+                          />
+                        </div>
                         <input type="number" min={1} placeholder="Qty" style={{ width: 76 }} value={a.qty} onChange={(e) => updateAssignment(idx, { qty: e.target.value })} />
                         <button className="btn ghost sm" style={{ color: 'var(--bad)' }} title="Remove" onClick={() => removeAssignment(idx)}>✕</button>
                       </div>

@@ -179,6 +179,25 @@ export function productionConfigProblems(cfg: AppConfig): string[] {
         + 'unsubscribe link of every campaign email, so a development value means recipients cannot '
         + 'unsubscribe at all — and the emails already sent keep that link for ever.',
       );
+    } else if (EPHEMERAL_TUNNEL.test(campaignUrl)) {
+      /*
+       * THE SAME CHECK META ALREADY GETS, and this variable needs it MORE.
+       *
+       * EPHEMERAL_TUNNEL sat two hundred lines above being applied to META_PUBLIC_URL only, while
+       * the value here was a trycloudflare hostname - a quick tunnel, reissued on every restart.
+       * The consequences are not comparable. A dead Meta callback is repaired by setting the new
+       * URL and reconnecting: nothing is lost but the leads that arrived meanwhile. This URL is
+       * COPIED INTO EVERY MESSAGE as it is built, so a campaign sent through a tunnel that later
+       * dies carries a dead pixel and, far worse, a dead UNSUBSCRIBE link in every inbox it reached
+       * - and there is no edit that reaches back into mail already delivered. An opt-out somebody
+       * cannot act on is a CASL problem, not a missing statistic.
+       */
+      problems.push(
+        `CAMPAIGN_PUBLIC_URL "${campaignUrl}" is a temporary tunnel, which is handed a new hostname `
+        + 'every time it restarts. It is copied into the tracking pixel and the unsubscribe link of '
+        + 'every campaign email as that email is built, so once the tunnel dies those links are dead '
+        + 'in every inbox they reached and cannot be corrected. Use the public address of this deployment.',
+      );
     } else if (!campaignUrl.startsWith('https://')) {
       problems.push(`CAMPAIGN_PUBLIC_URL "${campaignUrl}" is not https. Mail clients block insecure images, so opens would never record.`);
     } else if (campaignUrl.endsWith('/')) {

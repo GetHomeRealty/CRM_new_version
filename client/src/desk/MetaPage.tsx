@@ -134,6 +134,7 @@ export default function MetaPage() {
 
   const disconnect = () => askDelete({
     title: 'Disconnect Meta?',
+    confirmLabel: 'Disconnect',
     message: 'New leads will stop arriving. Leads already synced stay in the Lead module.',
     // Worth stating plainly: releasing the forms is what lets a successor pick them up, so it is
     // the desired behaviour when somebody leaves — and a surprise to anyone disconnecting briefly.
@@ -178,21 +179,18 @@ export default function MetaPage() {
         </div>
       )}
       {/*
-        * Beside the connection banners, because this is the failure somebody actually has to act
-        * on: a connection that is healthy in every respect except the one that matters. The API
-        * writes the reason itself and names the likely cause, so it is shown verbatim rather than
-        * paraphrased into something vaguer.
+        * DELIBERATELY NOT A PAGE BANNER, and the distinction is who the message is for.
+        *
+        * The reason the API writes names META_PUBLIC_URL and the Meta subscription - it is addressed
+        * to whoever deploys this, not to the agent working leads, and there is nothing the latter
+        * can do about it. Standing permanently across the top of the module, it read as "Meta is
+        * broken" to every user on a deployment that simply runs on scheduled sync.
+        *
+        * So it moves one click away, into Diagnostics, where somebody has gone looking for exactly
+        * this. It is NOT deleted: a webhook stops silently, "no deliveries" looks identical to a
+        * quiet week, and this is still the only thing in the app that can tell them apart. The
+        * admin-facing copy in CRM Settings (MetaConnectionPanel) also stays - that audience can act.
         */}
-      {webhook?.stalled && webhook.stalled_reason && (
-        <div className="card meta-alert warn">
-          <strong>Connected, but new leads are not being pushed.</strong>
-          <p>{webhook.stalled_reason}</p>
-          <p>
-            Leads are still collected by the scheduled sync, so nothing is lost - but they arrive on
-            that cadence rather than within seconds of the form being submitted.
-          </p>
-        </div>
-      )}
 
       <div className="toolbar">
         <div className="toolbar-row" style={{ justifyContent: 'space-between' }}>
@@ -347,7 +345,7 @@ export default function MetaPage() {
         )}
       </div>
 
-      {diagnostics && <DiagnosticsModal d={diagnostics} onClose={() => setDiagnostics(null)} />}
+      {diagnostics && <DiagnosticsModal d={diagnostics} webhook={webhook} onClose={() => setDiagnostics(null)} />}
       <ConfirmDialog confirm={confirm} onClose={closeConfirm} />
     </>
   );
@@ -362,7 +360,9 @@ function Stat({ label, value }: { label: string; value: number }) {
   );
 }
 
-function DiagnosticsModal({ d, onClose }: { d: MetaDiagnostics; onClose: () => void }) {
+function DiagnosticsModal(
+  { d, webhook, onClose }: { d: MetaDiagnostics; webhook: MetaWebhookHealth | null; onClose: () => void },
+) {
   return (
     <div className="overlay open" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="modal lg">
@@ -388,6 +388,34 @@ function DiagnosticsModal({ d, onClose }: { d: MetaDiagnostics; onClose: () => v
           <dt>Live permissions</dt><dd>{d.live_permissions.length ? d.live_permissions.join(', ') : 'None reported'}</dd>
           <dt>Required</dt><dd>{d.required_permissions.join(', ')}</dd>
         </dl>
+
+        {/*
+          * Lead delivery, reported separately from the connection above it, because the two are
+          * genuinely independent: every line in "Server configuration" can be correct while not one
+          * lead has ever been pushed. This is where that shows up now.
+          */}
+        {webhook && (
+          <>
+            <div className="modal-sub">Lead delivery</div>
+            {webhook.stalled && webhook.stalled_reason
+              ? (
+                <>
+                  <ul className="meta-list bad"><li>{webhook.stalled_reason}</li></ul>
+                  <p className="help">
+                    Leads are still collected by the scheduled sync, so nothing is lost - but they
+                    arrive on that cadence rather than within seconds of the form being submitted.
+                  </p>
+                </>
+              )
+              : (
+                <p className="help">
+                  {webhook.total} webhook delivery(ies) received
+                  {webhook.failed > 0 ? `, ${webhook.failed} failed` : ''}
+                  {webhook.last_received_at ? ` · last ${stamp(webhook.last_received_at)}` : ''}
+                </p>
+              )}
+          </>
+        )}
 
         <div className="modal-sub">Setup checklist</div>
         <ol className="meta-list">{d.fix_steps.map((s) => <li key={s}>{s}</li>)}</ol>

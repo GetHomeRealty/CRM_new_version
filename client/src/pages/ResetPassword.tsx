@@ -52,7 +52,7 @@ export default function ResetPassword() {
 
   if (!token || !email) {
     return (
-      <div className="auth-wrap"><div className="auth-card">
+      <div className="auth-shell"><div className="auth-card">
         <img className="auth-logo" src={companyLogoUrl()} alt="" />
         <h1>That link is incomplete</h1>
         <p className="muted">
@@ -64,7 +64,7 @@ export default function ResetPassword() {
   }
 
   return (
-    <div className="auth-wrap"><div className="auth-card">
+    <div className="auth-shell"><div className="auth-card">
       <img className="auth-logo" src={companyLogoUrl()} alt="" />
       {done ? (
         <>

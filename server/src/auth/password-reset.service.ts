@@ -155,8 +155,35 @@ export class PasswordResetService {
       update: { token: PasswordResetService.hash(token), created_at: now },
     });
 
-    const link = `${String(frontendUrl).replace(/\/+$/, '')}/reset-password`
+    const origin = String(frontendUrl).replace(/\/+$/, '');
+    const link = `${origin}/reset-password`
       + `?token=${encodeURIComponent(token)}&email=${encodeURIComponent(user.email)}`;
+
+    /*
+     * SAID OUT LOUD, because this failure is otherwise completely silent and lands on the one user
+     * who cannot work around it.
+     *
+     * FRONTEND_URL falls back to http://localhost:5173. Every other consumer of it — the OAuth
+     * returns, the "view this lead" links — is followed by somebody already sitting at the machine
+     * that serves it, so a development value costs them nothing. This link is followed from an
+     * INBOX, on a phone or another person's computer, where localhost reaches nothing: the recipient
+     * sees "this site can't be reached" and is locked out, while the server reports a clean send.
+     *
+     * `assertProductionConfig` refuses to boot on exactly this value and would have caught it, but
+     * it returns early unless NODE_ENV is production — so a production deployment left at
+     * development gets no check at all, and this is the request where that shows.
+     *
+     * A WARNING RATHER THAN A REFUSAL. The address is genuinely correct on a developer's own
+     * machine, and withholding the mail there would break testing the flow to fix a deployment
+     * mistake. The mail still goes; the log says why it will not work if this is not a laptop.
+     */
+    if (!origin || /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|\/|$)/i.test(origin)) {
+      this.log.warn(
+        `Password reset link points at "${origin || '(unset)'}", which resolves to the RECIPIENT's own `
+        + 'machine and will show "this site cannot be reached" from their inbox. Set FRONTEND_URL to '
+        + 'the public address of this deployment. Expected on a development machine; a real problem anywhere else.',
+      );
+    }
 
     /*
      * THE SEND IS NOT AWAITED, and that is the enumeration defence rather than a speed tweak.
