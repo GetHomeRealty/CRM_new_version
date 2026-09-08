@@ -1389,18 +1389,42 @@ export class TransactionsWriteService {
   }
 
   private async syncPreconTerms(tx: Tx, txnId: number, terms: Record<string, unknown>[]): Promise<void> {
+    /*
+     * TD-152 - A SAVE THAT DOES NOT MENTION A FIELD IS NOT PERMISSION TO ERASE IT.
+     *
+     * This method deletes every term and recreates them from the array it is handed, so whatever
+     * the caller leaves out is destroyed. Two different screens write these rows - the detail form
+     * owns the closing dates, the Financial panel owns the percentage and the amount - and the
+     * detail form carried `pct` deliberately ("preserve pct set in Financial") and never learned
+     * about `amt`, which was added later. So pressing Done on a preconstruction deal silently
+     * deleted the fixed commission amount off every one of its terms.
+     *
+     * The client is fixed too, but this is the guard that matters, because it does not depend on
+     * anybody having remembered: a key ABSENT from the payload now keeps whatever is stored, while
+     * a key present and null still clears it. Intent is honoured, silence is not. The importer and
+     * any future caller inherit the same protection.
+     *
+     * This is the third time in three days that a new money field was left out of a hand-written
+     * list - the audit map (TD-150), the docs-only export mask, and now this. A test asserting
+     * that every column on precon_terms is either sent by both payload builders or explicitly
+     * preserved would close the class rather than the instance.
+     */
+    const prevTerms = await tx.precon_terms.findMany({ where: { transaction_id: txnId } });
+    const prev = new Map(prevTerms.map((r) => [r.term_no, r]));
+    const sent = (o: Record<string, unknown>, k: string): boolean => Object.prototype.hasOwnProperty.call(o, k);
     await tx.precon_terms.deleteMany({ where: { transaction_id: txnId } });
     const now = new Date();
     for (const term of terms) {
       if (term.term_no === undefined || term.term_no === null) continue;
+      const was = prev.get(Number(term.term_no));
       await tx.precon_terms.create({
         data: {
           transaction_id: txnId,
           term_no: Number(term.term_no),
-          pct: term.pct === undefined || term.pct === null ? null : (term.pct as number),
+          pct: !sent(term, 'pct') ? (was?.pct ?? null) : (term.pct === null || term.pct === undefined ? null : (term.pct as number)),
           // TD-130 - a term's own fixed amount and builder bonus. Blank stays NULL, which means
           // "use the percentage", so every term saved before today behaves exactly as it did.
-          amt: term.amt === undefined || term.amt === null || term.amt === '' || !Number.isFinite(Number(term.amt)) ? null : Number(term.amt),
+          amt: !sent(term, 'amt') ? (was?.amt ?? null) : (term.amt === null || term.amt === undefined || term.amt === '' || !Number.isFinite(Number(term.amt)) ? null : Number(term.amt)),
           closing_date: term.closing_date ? new Date(String(term.closing_date).slice(0, 10) + 'T00:00:00.000Z') : null,
           created_at: now,
           updated_at: now,

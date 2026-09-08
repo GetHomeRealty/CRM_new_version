@@ -44,7 +44,9 @@ interface ConditionRow { id?: number; type: string; custom_name?: string | null;
 interface InterBoardRow { id?: number; name?: string; board_id?: string; verified?: boolean; }
 interface BrokerageForm { name: string; address: string; email: string; invoice_email: string; agent_email: string; phone: string; agents: string[]; }
 interface BuilderForm { name: string; vendor: string; project: string; address: string; office_email: string; invoice_email: string; phone: string; }
-interface PreconTermForm { term_no: number; pct: number | null; closing_date: string; }
+interface PreconTermForm {
+  /** TD-152 - carried so pressing Done cannot delete an amount entered in Financial. */
+  amt?: number | null; term_no: number; pct: number | null; closing_date: string; }
 interface DetailForm {
   id: number;
   trade_no: number | string;
@@ -108,7 +110,7 @@ function toForm(t: Transaction): DetailForm {
     // Commercial lease calculator inputs (JSON column)
     commercial_lease: t.commercial_lease || null,
     // Preconstruction per-term rows (pct managed in Financial; closing dates editable here)
-    precon_terms: (t.precon_terms || []).map((p) => ({ term_no: p.term_no, pct: p.pct ?? null, closing_date: p.closing_date || '' })),
+    precon_terms: (t.precon_terms || []).map((p) => ({ term_no: p.term_no, pct: p.pct ?? null, amt: (p as { amt?: number | null }).amt ?? null, closing_date: p.closing_date || '' })),
   };
 }
 
@@ -166,8 +168,8 @@ function buildPayload(form: DetailForm): Record<string, unknown> {
     const tc = parseInt(String(form.precon_term_count), 10) || 0;
     payload.precon_terms = Array.from({ length: tc }, (_, i) => {
       const k = i + 1;
-      const existing = (form.precon_terms || []).find((x) => Number(x.term_no) === k) || { pct: null, closing_date: '' };
-      return { term_no: k, pct: existing.pct ?? null, closing_date: existing.closing_date || null };
+      const existing = (form.precon_terms || []).find((x) => Number(x.term_no) === k) || { pct: null, amt: null, closing_date: '' };
+      return { term_no: k, pct: existing.pct ?? null, amt: existing.amt ?? null, closing_date: existing.closing_date || null };
     });
   }
   if (isCommercialLeaseType(form.type)) {
