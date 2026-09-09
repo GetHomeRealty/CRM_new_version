@@ -43,13 +43,38 @@ export class TransactionInvoiceService {
     const created: invoices[] = [];
     if (t.type === 'Preconstruction') {
       const terms = Array.isArray(breakdown.terms) ? (breakdown.terms as Record<string, unknown>[]) : [];
-      if (terms.length === 0) {
-        const master = breakdown.master as { commission?: number } | undefined;
-        created.push(await this.make(db, t, brok, defaultTerms, defaultTaxRate, brokAgents, actor, null, Number(master?.commission ?? 0), invoicePrefix));
-      } else {
-        for (const term of terms) {
-          created.push(await this.make(db, t, brok, defaultTerms, defaultTaxRate, brokAgents, actor, Number(term.term_no), Number(term.commission), invoicePrefix));
-        }
+      /*
+       * TD-157 - A PRECONSTRUCTION DEAL WITH NO TERMS IS BILLED BY NOBODY, SO BILL NOTHING.
+       *
+       * What stood here raised ONE whole-deal invoice at master.commission, which is 0.00 when
+       * the deal has no commission yet - and that invoice then locked the deal out of the only
+       * billing route it has, because generateForTransaction refuses to generate while any
+       * invoice exists. So a single press of Create Term Invoices, made before the terms were
+       * entered, permanently prevented the per-term invoices that press was asking for.
+       * ZZ-TEST deal 82 and its GHR-200837 are exactly that, and it is the fixture TD-151 came
+       * from.
+       *
+       * Returning nothing REFUSES rather than guesses, and leaves open the question the
+       * fallback was quietly answering: whether a preconstruction deal may ever be invoiced as
+       * one whole-deal invoice rather than per term. TD-130 settled that the brokerage bills
+       * per term; nobody has been asked about a deal with no terms BY DESIGN. If that case is
+       * real, it is an additive change made deliberately rather than a fallback nobody chose.
+       */
+      /*
+       * SECOND PASS, the same day. The guard above caught a deal with NO terms and let through a
+       * deal whose terms carry NO MONEY - two rows with a closing date and neither a percentage
+       * nor an amount produced two invoices of 0.00 on ZZ-TEST 300009, which is the same
+       * worthless-invoice-that-locks-the-deal all over again, one level down.
+       *
+       * ALL OR NOTHING, and that is not fastidiousness. Billing only the terms that carry a
+       * figure would leave the empty ones permanently unbillable, because
+       * generateForTransaction refuses while ANY invoice exists. A partial run would trap the
+       * remainder exactly as the 0.00 invoice used to trap the whole deal.
+       */
+      if (terms.length === 0) return [];
+      if (!terms.every((t) => Number(t.commission) > 0)) return [];
+      for (const term of terms) {
+        created.push(await this.make(db, t, brok, defaultTerms, defaultTaxRate, brokAgents, actor, Number(term.term_no), Number(term.commission), invoicePrefix));
       }
     } else {
       created.push(await this.make(db, t, brok, defaultTerms, defaultTaxRate, brokAgents, actor, null, Number((breakdown as { commission?: number }).commission ?? 0), invoicePrefix));

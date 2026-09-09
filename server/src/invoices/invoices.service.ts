@@ -512,6 +512,17 @@ export class InvoicesService {
       return { count: 0, existing: true, invoices: existing.map((i) => this.summary(i)) };
     }
     const created = await this.prisma.$transaction((tx) => this.txnInvoices.generate(tx, txnId, actor, false));
+    // TD-157 - generate() declines a preconstruction deal that has no terms rather than
+    // raising a 0.00 invoice that would lock the deal. Say so, instead of reporting a
+    // successful run that created nothing.
+    if (created.length === 0 && t.type === 'Preconstruction') {
+      const termCount = await this.prisma.precon_terms.count({ where: { transaction_id: txnId } });
+      throw new UnprocessableEntityException({
+        message: termCount === 0
+          ? 'This preconstruction deal has no commission terms yet. Add its terms under Quick Actions - Financial, then generate the invoices.'
+          : 'Every commission term needs a percentage or an amount before its invoice can be raised. Fill them in under Quick Actions - Financial, then generate the invoices.',
+      });
+    }
     const withTxn = await this.prisma.invoices.findMany({ where: { id: { in: created.map((c) => c.id) } }, orderBy: { id: 'asc' }, include: { transactions: TXN_FOR_SUMMARY } });
     return { count: created.length, existing: false, invoices: withTxn.map((i) => this.summary(i)) };
   }
