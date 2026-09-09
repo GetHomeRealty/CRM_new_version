@@ -103,7 +103,7 @@ describe('coverage', () => {
     const uncovered = CHILD_SHEETS
       .filter((c) => TABLE[c.key] === null)
       .reduce((n, c) => n + c.fields.length * c.flatMax, 0);
-    console.warn(`import template: ${total} columns; ${childCovered} child columns checked against the schema here, ${uncovered} still unchecked (the Adjustments sheet writes to a JSON blob, not a table).`);
+    console.warn(`import template: ${total} columns; ${childCovered} child columns checked against the schema here, ${uncovered} Adjustments columns checked by import-template-adjustments.spec.ts instead, since a JSON blob has no schema to check against.`);
     expect(childCovered).toBeGreaterThan(0);
   });
 });
