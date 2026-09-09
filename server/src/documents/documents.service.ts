@@ -6,7 +6,7 @@ import * as crypto from 'crypto';
 import { Prisma, type documents as DocRow } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService, type ActingUser } from '../audit/audit.service';
-import { DocumentDefaultsService, documentKind } from './document-defaults.service';
+import { documentKind, seedDocumentDefaults } from './document-defaults.service';
 import { DocsValidationService } from './docs-validation.service';
 import { DocumentMailService } from './document-mail.service';
 import { MailerService } from '../email/mailer.service';
@@ -49,7 +49,6 @@ export class DocumentsService {
     private readonly access: ResourceAccessService,
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
-    private readonly defaults: DocumentDefaultsService,
     private readonly docsValidation: DocsValidationService,
     private readonly mailer: MailerService,
     private readonly settings: CompanySettingsService,
@@ -108,8 +107,7 @@ export class DocumentsService {
     await this.guardAgent(user, txn);
 
     if ((await this.prisma.documents.count({ where: { transaction_id: txnId, deleted_at: null, condition_id: null } })) === 0) {
-      const rows = this.defaults.defaultsFor(txn.type);
-      for (let i = 0; i < rows.length; i++) await this.createDoc(txnId, { title: rows[i].title, mandatory: rows[i].mandatory, position: i });
+      await seedDocumentDefaults(this.prisma, txnId, txn.type);
     }
 
     /*
@@ -132,7 +130,6 @@ export class DocumentsService {
     await this.ensureStatusDocs(txn);
     await this.normalizeLeaseAgreementDoc(txn);
     await this.normalizeFintracDoc(txnId);
-    await this.ensureRecoGuide(txnId);
     await this.syncConditionDocs(txn);
 
     return this.payload(txnId);
@@ -143,11 +140,6 @@ export class DocumentsService {
       const m = /^\d+\s*\((.+)\)\s*$/.exec(String(doc.title));
       if (m) await this.prisma.documents.update({ where: { id: doc.id }, data: { title: m[1].trim(), updated_at: new Date() } });
     }
-  }
-
-  private async ensureRecoGuide(txnId: number): Promise<void> {
-    const exists = await this.prisma.documents.findFirst({ where: { transaction_id: txnId, deleted_at: null, condition_id: null, title: { contains: 'RECO Guide', mode: 'insensitive' } } });
-    if (!exists) await this.createDoc(txnId, { title: 'RECO Guide', mandatory: false, position: (await this.maxPosition(txnId)) + 1 });
   }
 
   private async normalizeLeaseAgreementDoc(txn: { id: number; type: string }): Promise<void> {

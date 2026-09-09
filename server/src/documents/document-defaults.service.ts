@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client';
 import { Injectable } from '@nestjs/common';
 
 /**
@@ -55,9 +56,11 @@ export class DocumentDefaultsService {
        * rather than folded in and deleted, so nothing disappears off the three live listing deals
        * and the checklist still shows them.
        *
-       * That choice also settles a mechanical problem the alternative created: ensureRecoGuide()
-       * recreates a RECO Guide row on every load of every deal, always non-mandatory. Folding it
-       * away would have left the two fighting each other; leaving it optional makes them agree.
+       * That choice also settled a mechanical problem the alternative created:
+     * ensureRecoGuide() used to recreate a RECO Guide row on every load of every deal.
+     * IT WAS DELETED 2026-09-09: the brokerage ruled that a Referral carries three
+     * documents and no RECO Guide, and Referral was the only type whose list omits it,
+     * so the function only ever fired where it should not have.
        */
       if (t.includes('lease')) {
         return rows(['Listing agreement', 'MLS data sheet', 'Client Photo IDs', 'FINTRACK',
@@ -77,6 +80,51 @@ export class DocumentDefaultsService {
     }
     return [];
   }
+}
+
+/** Stateless - the class holds no state and takes no constructor arguments. */
+const DEFAULTS = new DocumentDefaultsService();
+
+/**
+ * TD-155 - the checklist is created WITH the deal, not when somebody first opens it.
+ *
+ * Both callers come through here: the create path in transactions-write.service.ts, inside the
+ * same database transaction that writes the deal, and DocumentsService.index(), which still seeds
+ * lazily for deals written before this existed. ONE RULE IN ONE PLACE - the answer to the shape
+ * that produced TD-066, TD-145, TD-147 and TD-151, a rule written down twice and updated once.
+ *
+ * `db` is whichever client the caller is already inside: the interactive transaction on the create
+ * path, the plain client on the read path. Taking it as an argument rather than injecting one
+ * keeps this file dependency-free and keeps the transactions module out of the documents module,
+ * so no import cycle can form.
+ *
+ * A TYPE WITH NO LIST IS LEFT ALONE, AND THAT IS DELIBERATE. `defaultsFor` returns [] for anything
+ * that is not referral, preconstruction, listing, lease or buy - Business Sale today, and any
+ * blank or misspelled type. Writing even one row would make documents.count() non-zero forever,
+ * so index()'s `count === 0` guard could never fire again and CORRECTING THE TYPE LATER WOULD NO
+ * LONGER REPAIR THE CHECKLIST. On a migration of 1,200 deals nobody opens, that is precisely the
+ * population where a type-mapping mistake is found after loading. Zero rows keeps today's
+ * behaviour: the deal is seeded from its then-current type whenever it is first opened.
+ * See TD-159 for the missing lists themselves.
+ *
+ * NO ROW IS ADDED THAT THE TYPE LIST DOES NOT NAME. The brokerage ruled 2026-09-09 that a
+ * Referral carries three documents and no RECO Guide. Every other list names RECO Guide
+ * itself, so ensureRecoGuide() - which used to add one to every deal of every type on every
+ * load - was deleted rather than mirrored here.
+ */
+export async function seedDocumentDefaults(
+  db: Pick<Prisma.TransactionClient, 'documents'>,
+  txnId: number,
+  type: string,
+): Promise<number> {
+  const now = new Date();
+  const rows: Prisma.documentsCreateManyInput[] = DEFAULTS.defaultsFor(type).map((r, i) => ({
+    transaction_id: txnId, title: r.title, mandatory: r.mandatory, position: i,
+    created_at: now, updated_at: now,
+  }));
+  if (rows.length === 0) return 0;
+  await db.documents.createMany({ data: rows });
+  return rows.length;
 }
 
 /** §13 checklist row kind (port of Document::kind()). */

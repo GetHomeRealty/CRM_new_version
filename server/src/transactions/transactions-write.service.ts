@@ -1,3 +1,4 @@
+import { seedDocumentDefaults } from '../documents/document-defaults.service';
 import { TransactionsService } from './transactions.service';
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
@@ -530,6 +531,10 @@ export class TransactionsWriteService {
       if (status) await tx.transaction_statuses.create({ data: { transaction_id: t.id, status, created_at: now, updated_at: now } });
       await this.audit.record(t.id, actor, { section: 'Basic Information', action: 'Record created', source: 'Manual', details: `Trade #${t.trade_no} (${t.type})` }, tx);
       if (team.length > 0) await this.syncTeam(tx, t.id, type, team);
+      // TD-155 - the checklist is created with the deal, inside the same transaction that
+      // writes it, so a deal cannot exist without one even momentarily. Conditions are not
+      // written on this path, so condition documents are still built by index().
+      await seedDocumentDefaults(tx, t.id, type);
       return t.id;
     });
 
