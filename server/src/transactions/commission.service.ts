@@ -686,16 +686,60 @@ export class CommissionService {
     // rather than by index or name, so a later filter, re-sort or duplicate name cannot hand one
     // person another's share.
     const entitlements = new Map<CommMember, number>();
-    let pool = 0;
+    let gross = 0;
+    let brokPct = 0;
     for (const m of members) {
       const a = m.agent_pct / 100;
       const b = m.brok_pct / 100;
       const split = m.split / 100;
-      const brokRaw = Math.max(lc * b * split, minBrokEx);
-      const floor = lc === 0 ? 0 : brokRaw - (adjBefore * g - adjAfter);
-      const own = Math.max(0, Math.min(lc * a * split, lc - floor));
+      const own = Math.max(0, lc * a * split);
       entitlements.set(m, own);
-      pool += own;
+      gross += own;
+      brokPct += lc * b * split;
+    }
+    
+    /*
+     * TD-158 - ONE MINIMUM PER DEAL, SHARED, WHICH IS THE BROKERAGE RULING OF 2026-09-09.
+     *
+     * What stood here applied the floor PER MEMBER and compared it against the WHOLE deal:
+     * `min(lc * a * split, lc - floor)`, a member-sized entitlement against a deal-sized cap.
+     * With one member on 100% those are the same size and the minimum was enforced. With two
+     * the left halved and the right did not, so the cap could not bind and the minimum was
+     * never applied at all: a 1,500.00 commission kept 200.00 with one agent and 150.00 with
+     * two or three, while the panel printed 200.00 in every case.
+     *
+     * The floor is now computed ONCE for the deal and the entitlements are trimmed in
+     * proportion when they exceed the room above it. Prorating each member's floor separately
+     * would also be headcount-invariant, but it COLLECTS MORE THAN ONE MINIMUM when members
+     * are on different plans - 237.30 rather than 226.00 on a 1,500.00 deal split 90/10 and
+     * 85/15 - and the ruling was one fee per deal, not one per share.
+     *
+     * THIS IS WHAT THE LISTING VARIANT ALREADY DOES. desk-commission.sql.ts lst_pool computes a
+     * floor_scale in exactly this shape. The standard path simply never got it, and the two
+     * halves of the same product have disagreed ever since.
+     *
+     * THE RELIEF IS EX-HST NOW, WHICH IS THE OTHER HALF OF TD-128. `adjBefore * g - adjAfter`
+     * is a tax-INCLUSIVE figure and it was being subtracted from a floor that is pre-HST -
+     * min_brokerage is {200.00, 26.00, 226.00}, so 200.00 is the ex-HST number. The correct
+     * relief is `adjBefore - adjAfter / g`. Applied once for the deal rather than once per
+     * member, an after-HST adjustment now costs the deal exactly what it says: a 1,000.00
+     * adjustment on a 5,000.00 two-agent deal left the brokerage at -435.00 and now leaves it
+     * at 565.00, the same as it keeps with no adjustment at all.
+     *
+     * MEASURED BEFORE THE CHANGE: of 44 live deals, ELEVEN carry more than one agent, NONE of
+     * those has a commission under 2,000.00, and the single deal carrying an after-HST
+     * adjustment (6686 / trade 200007, ZZ-TEST) produces 1,884.85 under the old arithmetic and
+     * 1,884.85 under the new. So this moves no figure on any deal held today; it corrects a
+     * region the data does not yet occupy.
+     */
+    const reliefEx = adjBefore - adjAfter / g;
+    const floor = lc === 0 ? 0 : Math.max(brokPct, minBrokEx) - reliefEx;
+    const room = Math.max(0, lc - floor);
+    let pool = gross;
+    if (gross > room) {
+      const scale = gross > 0 ? room / gross : 0;
+      for (const [m, own] of entitlements) entitlements.set(m, own * scale);
+      pool = room;
     }
     const total = this.r(pool * g - clientReferral);
     const commission = this.r(total / g);
