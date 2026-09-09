@@ -89,10 +89,11 @@ deal AS MATERIALIZED (
     s.price,
     t.listing_price::float8    AS listing_price,
     t.gift_coupon_value::float8 AS gift_coupon_value,
-    php_round2f(desk_gross_commission(
+    php_round2f(desk_gross_amount(
       s.type, s.price, s.comm_type, s.comm_value, s.comm_pct, s.comm_amt,
       s.listing_comm_pct, s.coop_comm_pct, s.listing_comm_flat, s.coop_comm_flat,
-      s.precon_comm_pct, s.precon_comm_amt_manual)) AS amount
+      s.precon_comm_pct, s.precon_comm_amt_manual,
+        s.precon_comm_bonus, s.precon_net_of_hst)) AS amount
   FROM scoped s JOIN transactions t ON t.id = s.id
 )`;
 

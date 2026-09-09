@@ -66,12 +66,13 @@ export interface DeskAnalytics {
  * Written once and shared by all four aggregates so they cannot drift from each other, and so the
  * only place the column list appears is here.
  */
-const GROSS = `desk_gross_commission(
+const GROSS = `desk_gross_amount(
   t.type, t.price::float8, t.comm_type, t.comm_value::float8,
   t.comm_pct::float8, t.comm_amt::float8,
   t.listing_comm_pct::float8, t.coop_comm_pct::float8,
   t.listing_comm_flat::float8, t.coop_comm_flat::float8,
-  t.precon_comm_pct::float8, t.precon_comm_amt_manual::float8
+  t.precon_comm_pct::float8, t.precon_comm_amt_manual::float8,
+  t.precon_comm_bonus::float8, t.precon_net_of_hst
 )`;
 
 /** `summarize().amount` — the gross, rounded the way the application rounds. */

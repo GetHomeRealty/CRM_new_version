@@ -101,6 +101,8 @@ scoped AS (
     t.listing_adj_after::float8         AS listing_adj_after,
     t.precon_comm_pct::float8           AS precon_comm_pct,
     t.precon_comm_amt_manual::float8    AS precon_comm_amt_manual,
+    t.precon_comm_bonus::float8         AS precon_comm_bonus,
+    t.precon_net_of_hst,
     t.precon_term_count,
     desk_safe_jsonb(t.adjustments)      AS adj,
     ${adminBlob === 'always'
@@ -536,11 +538,38 @@ lst_lines AS MATERIALIZED (
  */
 export const PRECON_CTE = (full = false): string => `
 pre_terms AS MATERIALIZED (
-  SELECT s.id, k,
-         php_round2f((s.price * COALESCE(pt.pct::float8, 0)) / 100) AS t_amt
-  FROM scoped s
-  CROSS JOIN LATERAL generate_series(1, GREATEST(COALESCE(s.precon_term_count, 0), 0)) k
-  LEFT JOIN precon_terms pt ON pt.transaction_id = s.id AND pt.term_no = k
+  /*
+   * TD-163 - THIS COMPUTED THE TERM FEE FROM THE PERCENTAGE ALONE, AND IGNORED BOTH THE FIXED
+   * AMOUNT AND NET OF HST. Two of the three divergences that had desk-sql-parity.spec.ts
+   * failing, and the larger one.
+   *
+   * precon_terms.amt is TD-130's column, added 2026-09-07 for the case no percentage can
+   * express: 7,500 of 859,900 is 0.8721944412...%, which Decimal(8,4) cannot hold. Such a term
+   * stores amt with pct NULL - so COALESCE(pt.pct, 0) made it ZERO and the Dashboard paid the
+   * agent nothing for the term. THIRTEEN of the eighteen term rows in this database are that
+   * shape, 86,990.00 of fees the agent figures could not see.
+   *
+   * NET OF HST is the second half, and it is TD-024 in this file: a term must use the same HST
+   * treatment as the master. breakdownPrecon divides the term gross by 1.13 when the deal is
+   * tax-inclusive, and t_amt feeds every agent and brokerage line below, so without it every
+   * one of them was 13% high on a net-of-HST deal.
+   *
+   * THE DIVISOR IS THE LITERAL 1.13, matching breakdownPrecon, NOT this file's (1 + 0.13)
+   * gross-up constant. They are different doubles - see the header - and the TypeScript uses
+   * the literal here.
+   */
+  SELECT id, k,
+         CASE WHEN net THEN php_round2f(t_gross / 1.13::float8) ELSE t_gross END AS t_amt
+  FROM (
+    SELECT s.id, k, COALESCE(s.precon_net_of_hst, false) AS net,
+           CASE WHEN pt.amt IS NOT NULL
+                THEN php_round2f(pt.amt::float8)
+                ELSE php_round2f((s.price * COALESCE(pt.pct::float8, 0)) / 100)
+           END AS t_gross
+    FROM scoped s
+    CROSS JOIN LATERAL generate_series(1, GREATEST(COALESCE(s.precon_term_count, 0), 0)) k
+    LEFT JOIN precon_terms pt ON pt.transaction_id = s.id AND pt.term_no = k
+  ) x
 ),
 pre_raw AS MATERIALIZED (
   /*
@@ -695,10 +724,11 @@ export const commissionsSqlHeadline = (scope: string): string => `
 WITH ${scopedCte(scope, 'TRUE')},
 ${REFS_CTE}
 SELECT
-  COALESCE((SELECT SUM(php_round2(desk_gross_commission(
+  COALESCE((SELECT SUM(php_round2(desk_gross_amount(
       s.type, s.price, s.comm_type, s.comm_value, s.comm_pct, s.comm_amt,
       s.listing_comm_pct, s.coop_comm_pct, s.listing_comm_flat, s.coop_comm_flat,
-      s.precon_comm_pct, s.precon_comm_amt_manual))) FROM scoped s), 0)       AS gross_total,
+      s.precon_comm_pct, s.precon_comm_amt_manual,
+        s.precon_comm_bonus, s.precon_net_of_hst))) FROM scoped s), 0)       AS gross_total,
   php_round2(COALESCE((SELECT SUM(ext_ref::numeric)    FROM refs), 0)::float8) AS ext_ref_total,
   php_round2(COALESCE((SELECT SUM(client_ref::numeric) FROM refs), 0)::float8) AS client_ref_total
 `;

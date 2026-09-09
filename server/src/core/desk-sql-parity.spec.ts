@@ -62,10 +62,11 @@ const analyticsFor = (tx: PrismaService) => new DeskAnalyticsService(tx, engineF
 const asUser = (name: string, role: string, id: number): ResourceUser => ({ id, name, role } as unknown as ResourceUser);
 
 /** The gross-commission expression exactly as the services build it. */
-const GROSS = `desk_gross_commission(
+const GROSS = `desk_gross_amount(
   t.type, t.price::float8, t.comm_type, t.comm_value::float8, t.comm_pct::float8, t.comm_amt::float8,
   t.listing_comm_pct::float8, t.coop_comm_pct::float8, t.listing_comm_flat::float8, t.coop_comm_flat::float8,
-  t.precon_comm_pct::float8, t.precon_comm_amt_manual::float8)`;
+  t.precon_comm_pct::float8, t.precon_comm_amt_manual::float8,
+  t.precon_comm_bonus::float8, t.precon_net_of_hst)`;
 
 interface DealSpec {
   type?: string;
