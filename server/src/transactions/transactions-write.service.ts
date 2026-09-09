@@ -97,7 +97,7 @@ const DATE_COLS = new Set(['offer_date', 'closing_date', 'listing_contract_date'
 const BOOL_COLS = new Set(['mls_verified', 'comm_adjust_enabled', 'listing_adj_enabled', 'coop_adj_enabled', 'precon_net_of_hst', 'conditional_offer', 'inter_board_enabled']);
 const INT_COLS = new Set(['precon_term_count']);
 
-const FILL_KEYS = [
+export const FILL_KEYS = [
   'type', 'property', 'agent', 'price', 'deposit',
   'offer_date', 'closing_date', 'listing_contract_date', 'listing_expiry_date',
   'mls_type', 'mls_num', 'mls_verified',
