@@ -349,6 +349,15 @@ export class InvoicesService {
      * Paid from the balance, so the label would silently revert - which is correct but tells the
      * user nothing. This refuses it plainly instead, and names the action that does work.
      */
+    // TD-162 - a payment recorded against an invoice stops it being voided as well as deleted.
+    // Beside TD-021 because both are status refusals that name the action which does work.
+    if (String(body.status ?? '') === 'Void') {
+      const paidRows = await this.prisma.invoice_payments.count({ where: { invoice_id: id } });
+      if (paidRows > 0 || num(invoice.amount_paid) > 0) {
+        const m = 'This invoice has a payment recorded against it, so it cannot be voided. Remove the payment first if it was entered in error.';
+        throw new UnprocessableEntityException({ message: m, errors: { status: [m] } });
+      }
+    }
     if (String(body.status ?? '') === 'Paid' && invoice.status !== 'Paid' && num(invoice.balance_due) > 0) {
       const m = 'This invoice still has ' + num(invoice.balance_due).toFixed(2)
         + ' outstanding, so it cannot be marked Paid. Record a payment for the balance and the status updates itself.';
@@ -377,6 +386,28 @@ export class InvoicesService {
   async destroy(actor: ActingUser | null, id: number, reason: string | null): Promise<{ message: string }> {
     const invoice = await this.prisma.invoices.findFirst({ where: { id, deleted_at: null } });
     if (!invoice) throw new NotFoundException({ message: `No query results for model [App\\Models\\Invoice] ${id}.` });
+    /*
+     * TD-162 - THE BROKERAGE'S RULES, WHICH NOTHING ENFORCED. A SENT invoice must not be
+     * deletable - it can be voided instead. An invoice with a PAYMENT recorded against it must
+     * not be deletable or voidable.
+     *
+     * Money first, because it is the stricter rule. A payment entered in error is undone by
+     * removing the payment, which recalculates amount_paid and unlocks the invoice - so this is
+     * a wall, not a trap. The PAYMENT ROWS are counted as well as the derived amount_paid: the
+     * rule is about money having been recorded, and a zero-value or refunded row still records
+     * that it was.
+     *
+     * It is also what makes TD-161 safe - a deleted invoice can now never have been sent or paid.
+     */
+    const paidRows = await this.prisma.invoice_payments.count({ where: { invoice_id: id } });
+    if (paidRows > 0 || Number(invoice.amount_paid) > 0) {
+      const m = 'This invoice has a payment recorded against it, so it cannot be deleted or voided. Remove the payment first if it was entered in error.';
+      throw new UnprocessableEntityException({ message: m, errors: { id: [m] } });
+    }
+    if (invoice.sent_at !== null) {
+      const m = 'This invoice has been sent and cannot be deleted. Set its status to Void instead.';
+      throw new UnprocessableEntityException({ message: m, errors: { id: [m] } });
+    }
     const r = (reason ?? '').trim() || null;
     await this.auditInvoice(id, invoice.transaction_id, actor, { field: invoice.invoice_no, action: 'Invoice deleted', old: invoice.invoice_no, details: r });
     await this.prisma.invoices.update({ where: { id }, data: { delete_reason: r, deleted_at: new Date() } });
@@ -510,6 +541,16 @@ export class InvoicesService {
     const existing = await this.prisma.invoices.findMany({ where: { transaction_id: txnId, deleted_at: null }, include: { transactions: TXN_FOR_SUMMARY } });
     if (existing.length > 0) {
       return { count: 0, existing: true, invoices: existing.map((i) => this.summary(i)) };
+    }
+    // TD-161 - fail fast with a clear message before any work is done. make() enforces the same
+    // rule for every caller; this only improves what the user is told on the common path.
+    const buried = await this.prisma.invoices.findFirst({
+      where: { transaction_id: txnId, deleted_at: { not: null }, OR: [{ sent_at: { not: null } }, { amount_paid: { gt: 0 } }] },
+    });
+    if (buried) {
+      const m = 'Invoice ' + buried.invoice_no
+        + ' was deleted after it had been sent or paid, so its number cannot be reissued. That invoice has to be dealt with before this deal can be invoiced again.';
+      throw new UnprocessableEntityException({ message: m, errors: { id: [m] } });
     }
     const created = await this.prisma.$transaction((tx) => this.txnInvoices.generate(tx, txnId, actor, false));
     // TD-157 - generate() declines a preconstruction deal that has no terms rather than
