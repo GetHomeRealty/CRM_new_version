@@ -46,7 +46,9 @@ const HANDLED_ELSEWHERE: Record<string, string> = {
 
 /** Known to be broken, each naming its open defect. Empty is the goal. */
 const KNOWN_GAPS: Record<string, string> = {
-  listing_price: 'TD-160 - set only in the create block, missing from FILL_KEYS, and the client has no field for it at all',
+  // Empty, and that is the point. listing_price sat here until TD-160 was fixed on 2026-09-09, and
+  // the assertion below is what forced this entry out: a gap that has been closed fails the suite
+  // until somebody deletes the note saying it is still open.
 };
 
 describe('every import template column reaches the write path', () => {

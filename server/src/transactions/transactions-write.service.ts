@@ -99,7 +99,10 @@ const INT_COLS = new Set(['precon_term_count']);
 
 export const FILL_KEYS = [
   'type', 'property', 'agent', 'price', 'deposit',
-  'offer_date', 'closing_date', 'listing_contract_date', 'listing_expiry_date',
+  // TD-160 - the brokerage ruled 2026-09-09 that List Price stays off every screen but must
+  // remain CORRECTABLE. Without this it could be written once at create, by the importer, and
+  // never again by any route - and 442 listings arrive carrying it.
+  'offer_date', 'closing_date', 'listing_price', 'listing_contract_date', 'listing_expiry_date',
   'mls_type', 'mls_num', 'mls_verified',
   'comm_type', 'comm_value', 'comm_pct', 'comm_amt',
   'comm_adjust_enabled', 'comm_adjust_before', 'comm_adjust_after',
