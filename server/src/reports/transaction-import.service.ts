@@ -216,9 +216,13 @@ export class TransactionImportService {
     for (const child of CHILD_SHEETS) {
       const cs = wb.addWorksheet(child.sheet);
       this.writeHeader(cs, [REF_COLUMN, ...child.fields.map((f) => f.column)], [undefined, ...child.fields], CHILD_FILL);
-      cs.addRow(['1', ...exampleRowFor(child.fields)]).eachCell((c) => {
-        c.font = { italic: true, color: { argb: 'FF64748B' } };
-      });
+      // TD-170 - only when the example deal's own type allows it. See childExampleRow.
+      const csExample = this.childExampleRow(child);
+      if (csExample) {
+        cs.addRow(['1', ...csExample]).eachCell((c) => {
+          c.font = { italic: true, color: { argb: 'FF64748B' } };
+        });
+      }
       cs.getColumn(1).width = 8;
       child.fields.forEach((f, i) => { cs.getColumn(i + 2).width = Math.max(16, Math.min(30, f.column.length + 6)); });
       cs.views = [{ state: 'frozen', ySplit: 1, xSplit: 1 }];
@@ -496,6 +500,30 @@ export class TransactionImportService {
    *     brokerage's agents and a name that matches nobody is refused. They are documented optional
    *     and still illustrated on the Instructions sheet, which is where a name belongs.
    */
+  /**
+   * TD-170 - A CHILD SHEET'S EXAMPLE ROW OBEYS THE SAME RULES AS THE MAIN ONE.
+   *
+   * TD-098 corrected the Transactions row so the workbook could not contradict the rules it states,
+   * and mainExampleRow() below derives that row from the validator's own forbiddenColumnsFor(). The
+   * CHILD sheets never got the same treatment. TD-130 then added worked examples to Precon Terms,
+   * and the template downloaded and re-uploaded with nothing changed came back carrying
+   * "Commission term rows were supplied on a deal that is not Preconstruction" - a complaint the
+   * workbook raised against itself, because its example deal is a Residential Buying.
+   *
+   * NULL MEANS HEADER-ONLY, NOT A ROW OF BLANKS. A blank row under a Ref is exactly the empty term
+   * TD-130 was raised to stop the importer creating, so shipping one would trade this fault for
+   * that one. The column examples are not lost: the Instructions sheet lists every child field with
+   * its example, which is where a reader looks for the format.
+   *
+   * The rule is stated once, here, against the validator it mirrors. If another child sheet ever
+   * gains a type rule, it belongs in this method rather than at the two call sites.
+   */
+  private childExampleRow(child: (typeof CHILD_SHEETS)[number]): string[] | null {
+    const type = String(IMPORT_FIELDS.find((f) => f.column === 'Transaction Type')?.example ?? TRANSACTION_TYPES[0]);
+    if (child.key === 'preconTerms' && !/precon/i.test(type)) return null;
+    return exampleRowFor(child.fields);
+  }
+
   private mainExampleRow(): string[] {
     const type = String(IMPORT_FIELDS.find((f) => f.column === 'Transaction Type')?.example ?? TRANSACTION_TYPES[0]);
     const forbidden = new Set(forbiddenColumnsFor(type));
@@ -515,7 +543,8 @@ export class TransactionImportService {
     // TD-098 — the same corrected main-sheet row, so the two layouts cannot disagree.
     const out: string[] = [...this.mainExampleRow(), ...exampleRowFor(FINANCIAL_FIELDS)];
     for (const child of CHILD_SHEETS) {
-      const first = exampleRowFor(child.fields);
+      // TD-170 - blanks rather than values when the child does not apply to the example type.
+      const first = this.childExampleRow(child) ?? child.fields.map(() => '');
       for (let n = 1; n <= child.flatMax; n++) {
         child.fields.forEach((_f, i) => out.push(n === 1 ? first[i] : ''));
       }
