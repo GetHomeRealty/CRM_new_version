@@ -177,6 +177,12 @@ const TXN_SELECT = {
   listing_adj_enabled: true, listing_adj_before: true, listing_adj_after: true,
   coop_adj_enabled: true, coop_adj_before: true, coop_adj_after: true,
   precon_net_of_hst: true, precon_comm_pct: true, precon_comm_amt_manual: true, precon_term_count: true,
+  // TD-166. precon_comm_bonus is TD-130's column, added 2026-09-07, and it never reached this
+  // select. AN UNSELECTED COLUMN ARRIVES AS `undefined`, WHICH COERCES TO NaN, AND `?? 0` DOES NOT
+  // CATCH NaN - so grossCommission() returned NaN for every preconstruction deal and the report
+  // printed a BLANK commission cell while its own footer, computed in SQL, counted the money.
+  // Seven deals, 131,544.24 between the column and its total. The blank is why nobody saw it.
+  precon_comm_bonus: true,
   comm_paid_status: true, comm_status: true, payment_type: true,
   // the three JSON blobs the enrichment parses
   adjustments: true, admin_activities: true, activity_tracker: true,
@@ -197,7 +203,12 @@ const TEAM_SELECT = {
   },
   orderBy: { position: 'asc' },
 } as const;
-const PRECON_SELECT = { select: { term_no: true, pct: true, closing_date: true }, orderBy: { term_no: 'asc' } } as const;
+// TD-166. `amt` is TD-130's other column and was missing here too. A term entered as a fixed
+// AMOUNT stores amt with pct NULL, so without it breakdownPrecon fell to the percentage branch and
+// valued the term at ZERO - the agent was paid nothing for it on every report. THIRTEEN of the
+// eighteen term rows in this database are that shape. It is the same omission TD-163 fixed in the
+// Dashboard's pre_terms four hours ago; this is the Node half of it.
+const PRECON_SELECT = { select: { term_no: true, pct: true, amt: true, closing_date: true }, orderBy: { term_no: 'asc' } } as const;
 const DOCUMENT_SELECT = {
   where: { deleted_at: null },
   select: {
