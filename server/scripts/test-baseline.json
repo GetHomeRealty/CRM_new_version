@@ -1,0 +1,20 @@
+[
+  "src/audit-log/audit-export.spec.ts :: domain isolation > excludes agent-made transaction changes, as the listing does",
+  "src/email/hub-mail-account.spec.ts :: Hub-wide personal email accounts > uses the user primary mailbox across both areas",
+  "src/email/local-mail-safety.spec.ts :: the local .env cannot send real mail > is not quietly overridden by a duplicate key later in the file",
+  "src/email/local-mail-safety.spec.ts :: the local .env cannot send real mail > redirects everything to a single designated mailbox",
+  "src/email/local-mail-safety.spec.ts :: the local .env cannot send real mail > sends only somewhere THIS BROKERAGE controls — unroutable, or a colleague",
+  "src/email/mail-account-default-scope.spec.ts :: adding a mailbox changes only this person’s sender > cannot displace another user’s default",
+  "src/email/mail-account-default-scope.spec.ts :: adding a mailbox changes only this person’s sender > keeps the two areas independent",
+  "src/email/mail-account-default-scope.spec.ts :: adding a mailbox changes only this person’s sender > leaves the existing default alone when the second is added without asking for it",
+  "src/email/mail-account-default-scope.spec.ts :: adding a mailbox changes only this person’s sender > moves the default when that IS what was asked for",
+  "src/email/mail-account-default-scope.spec.ts :: adding a mailbox changes only this person’s sender > promotes the first account in an area even when not asked to",
+  "src/email/mail-account-usage.spec.ts :: the mail-account usage figure > counts the accounts an unlimited role actually has",
+  "src/email/mail-account-usage.spec.ts :: the mail-account usage figure > does not count an unscoped account against either area",
+  "src/email/mail-account-usage.spec.ts :: the mail-account usage figure > keeps the two areas independent",
+  "src/google/external-google-account-connect.spec.ts :: the application accepts any Google account, whatever its domain > B — an external @gmail.com address connects, and is stored identically",
+  "src/google/external-google-account-connect.spec.ts :: the application accepts any Google account, whatever its domain > the connected mailbox belongs to the area it was connected in",
+  "src/inbox/inbox-isolation.spec.ts :: the two areas are separate inboxes, not one with a label > a CRM message is not in the Transaction Desk list",
+  "src/inbox/inbox-isolation.spec.ts :: the two areas are separate inboxes, not one with a label > asking the wrong area for your own message says where it is, rather than \"not found\"",
+  "src/invoices/invoice-status-vocabulary.spec.ts :: an invoice status the payments decide cannot be set by hand (TD-048) > still accepts Void, which is a choice"
+]
