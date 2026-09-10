@@ -323,6 +323,27 @@ export interface DocRowSource {
  */
 const AMENDMENT_ORDER = `NULLIF(a.uploaded_at::text, '') DESC, t.closing_date DESC, t.trade_no ASC, a.position ASC, a.id ASC`;
 
+/*
+ * TD-169 - A TEXT KEY IN AN ORDER BY MUST SORT THE WAY THE ENRICHMENT PATH SORTS.
+ *
+ * This database is C.UTF-8, so a plain SQL comparison is BYTE order: 'ORTA' sorts before
+ * 'Offer Summary' because R is 82 and f is 102. ReportsService.sort uses localeCompare, which folds
+ * case, and puts 'Offer Summary' first. Two documents in one category therefore swapped between the
+ * fast path and the enrichment path, and all four cases in report-docs-rows.spec.ts caught it -
+ * including the paged one, because a tie can move a row across a PAGE boundary. It cannot move a
+ * row across a SECTION boundary: array_position(section) is settled first.
+ *
+ * und-x-icu is PostgreSQL's Unicode default collation and localeCompare is ICU underneath, so the
+ * two agree. Verified on this server before the change: with the collation applied, 'Offer Summary'
+ * sorts first, matching Node.
+ *
+ * ONLY THE TEXT KEYS NEED IT. position and id are numeric and already deterministic, and the
+ * comment above AMENDMENT_ORDER explains why they are the final tiebreak at all.
+ *
+ * WIDER THAN THIS FILE, AND DELIBERATELY NOT FIXED HERE: any fast-path report sorted by a text
+ * column can diverge from its enrichment path the same way - property, client name, agent. Only the
+ * document reports have a test that noticed. Recorded under TD-169 rather than fixed blind.
+ */
 export const DOC_ROW_SOURCES: Record<string, DocRowSource> = {
   /*
    * Unchanged from the hard-coded version this replaces: every document that is not Valid, split
@@ -333,7 +354,7 @@ export const DOC_ROW_SOURCES: Record<string, DocRowSource> = {
     sectionSql: `CASE lower(btrim(d.validation)) WHEN 'invalid' THEN 'invalid' ELSE 'pending' END`,
     qualify: () => 'TRUE',
     joinTxn: false,
-    order: `a.tid, a.category, a.title, a.position, a.id`,
+    order: `a.tid, a.category COLLATE "und-x-icu", a.title COLLATE "und-x-icu", a.position, a.id`,
     sortKey: null,
   },
 

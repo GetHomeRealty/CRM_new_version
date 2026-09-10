@@ -687,8 +687,16 @@ pre_raw AS MATERIALIZED (
   SELECT m.tid, m.name,
          php_round2f(php_round2f((m.t_amt * m.split) / 100) * m.agent_pct / 100) AS agent_wo${full ? `,
          -- TD-124: the remainder of this term's member share, as agentLines now takes it.
-         GREATEST(php_round2f((m.t_amt * m.split) / 100)
-                  - php_round2f(php_round2f((m.t_amt * m.split) / 100) * m.agent_pct / 100), 0::float8) AS brok_wo,
+         -- TD-164 - THE OUTER ROUNDING agentLines() APPLIES AND THIS DID NOT.
+         -- brokEffective is this.r(Math.max(memberWoHst - t4a.commission, 0)) - the SUBTRACTION is
+         -- rounded. Two doubles that are each the nearest double to a two-decimal value do not
+         -- subtract to the nearest double of the two-decimal difference, so this sat about 1e-13
+         -- from the TypeScript. Below a cent almost always, but where the true remainder ends in
+         -- .50 the residue decides which way php_round2 goes and a Reports brokerage column comes
+         -- out a cent low - roughly one member-term row in 2,500. GREATEST stays INSIDE the round,
+         -- mirroring this.r(Math.max(...)).
+         php_round2f(GREATEST(php_round2f((m.t_amt * m.split) / 100)
+                  - php_round2f(php_round2f((m.t_amt * m.split) / 100) * m.agent_pct / 100), 0::float8)) AS brok_wo,
          desk_member_deduction(s.adj, m.name, m.k)                               AS deduction` : ''}
   FROM pre_mem m${full ? `
   LEFT JOIN deductible s ON s.id = m.tid` : ''}
