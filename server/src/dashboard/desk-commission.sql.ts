@@ -349,31 +349,80 @@ std_lc AS MATERIALIZED (
  * headline reconciled and desk-sql-parity.spec.ts was the only thing that noticed.
  */
 std_own AS MATERIALIZED (
+  /*
+   * TD-158 - THE ENTITLEMENT IS RAW HERE NOW; THE FLOOR IS A DEAL-LEVEL FIGURE AND MOVED BELOW.
+   *
+   * What stood here capped each member with LEAST(own, lc - floor) - a MEMBER-sized entitlement
+   * against a DEAL-sized cap. With one member on 100% those are the same size and the minimum was
+   * enforced; with two the left halved and the right did not, so the cap could not bind and the
+   * brokerage collected nothing extra: a 1,500.00 commission kept 200.00 with one agent and 150.00
+   * with two or three, while the panel printed 200.00 in every case. The brokerage ruled 2026-09-09
+   * that it is ONE fee per deal, shared.
+   *
+   * brok_share is carried out alongside it because the deal-level floor needs the SUM of the
+   * members brokerage percentages, which cannot be seen from inside a single member row.
+   *
+   * NO BACKTICKS IN ANY COMMENT IN THIS FILE. These CTEs sit inside a TypeScript template literal
+   * and a backtick terminates the string. It fails at build rather than at runtime, but it fails.
+   */
   SELECT
     l.id, m.name, m.split,
-    GREATEST(0::float8, LEAST(
-      l.lc * (m.agent_pct / 100) * (m.split / 100),
-      l.lc - CASE WHEN l.lc = 0 THEN 0::float8
-                  -- TD-080: ex-HST against ex-HST. This was 200 * G, an HST-inclusive figure
-                  -- compared against a percentage of lc, which is ex-HST.
-                  ELSE GREATEST(l.lc * (m.brok_pct / 100) * (m.split / 100), 200::float8)
-                       - (l.adj_before * ${G} - l.adj_after) END
-    )) AS own
+    GREATEST(0::float8, l.lc * (m.agent_pct / 100) * (m.split / 100)) AS own,
+    l.lc * (m.brok_pct / 100) * (m.split / 100)                       AS brok_share
   FROM std_lc l LEFT JOIN members m ON m.tid = l.id
 ),
-std_pool AS MATERIALIZED (
+std_deal AS MATERIALIZED (
+  /*
+   * ONE ROW PER DEAL: the raw pool, the brokerage's own percentage, and the adjustment relief.
+   *
+   * THE RELIEF IS EX-HST, which is the other half of TD-158 and the money half of TD-128.
+   * adj_before * G - adj_after is a tax-INCLUSIVE figure and it was being subtracted from a floor
+   * that is pre-HST - min_brokerage reads {200.00, 26.00, 226.00}, so 200.00 is the ex-HST number.
+   * agentCommissionsAfterClient now computes adjBefore - adjAfter / g, once for the deal rather
+   * than once per member, and this is that expression.
+   */
   SELECT
-    o.id,
-    php_round2f(COALESCE(SUM(o.own), 0::float8) * ${G} - MIN(l.client_ref)) AS ac_total,
+    l.id, l.lc, l.client_ref,
+    COALESCE(SUM(o.own), 0::float8)        AS gross,
+    COALESCE(SUM(o.brok_share), 0::float8) AS brok_pct_sum,
+    (l.adj_before - l.adj_after / ${G})    AS relief_ex
+  FROM std_lc l LEFT JOIN std_own o ON o.id = l.id
+  GROUP BY l.id, l.lc, l.client_ref, l.adj_before, l.adj_after
+),
+std_pool AS MATERIALIZED (
+  /*
+   * TD-158 - ONE FLOOR FOR THE DEAL, AND THE ENTITLEMENTS TRIMMED IN PROPORTION WHEN THEY EXCEED
+   * THE ROOM ABOVE IT. This is agentCommissionsAfterClient line for line:
+   *
+   *   floor = lc = 0 ? 0 : max(brok_pct_sum, 200) - relief_ex
+   *   room  = max(0, lc - floor)
+   *   scale = gross > room ? (gross > 0 ? room / gross : 0) : 1
+   *   pool  = gross > room ? room : gross
+   *
+   * THE OPERATION ORDER IS COPIED DELIBERATELY. (own * scale) / pool is algebraically own / gross,
+   * and in binary floating point it is NOT the same double - desk-sql-parity.spec.ts compares with
+   * no tolerance, so the multiply-then-divide is reproduced rather than simplified away.
+   *
+   * Prorating each member's floor separately would also be headcount-invariant and is the obvious
+   * alternative, but it COLLECTS MORE THAN ONE MINIMUM on mixed plans - 237.30 rather than 226.00
+   * on a 1,500.00 deal split 90/10 and 85/15 - and the ruling was one fee per deal, not one per
+   * share. THE LISTING VARIANT ALREADY WORKS THIS WAY; the standard path simply never got it.
+   */
+  SELECT
+    r.id,
+    php_round2f((CASE WHEN r.gross > r.room THEN r.room ELSE r.gross END) * ${G} - r.client_ref) AS ac_total,
     -- The UNROUNDED pool, which is what the share is taken against on the TypeScript side.
-    COALESCE(SUM(o.own), 0::float8) AS pool
-  FROM std_own o JOIN std_lc l ON l.id = o.id
-  -- GROUPED BY THE ID ALONE. This used to list lc, adj_before, adj_after and client_ref as group
-  -- keys too, and lc is a nested php_round2 over the whole four-way commission fallback — so the
-  -- planner made that expression a SORT KEY and re-evaluated it for every row it compared. Measured
-  -- at 80,000 deals: 4.5 s in this node alone. The columns are constant within a deal, so MIN()
-  -- reads them without their being keys.
-  GROUP BY o.id
+    CASE WHEN r.gross > r.room THEN r.room ELSE r.gross END AS pool,
+    CASE WHEN r.gross > r.room
+         THEN (CASE WHEN r.gross > 0::float8 THEN r.room / r.gross ELSE 0::float8 END)
+         ELSE 1::float8 END AS scale
+  FROM (
+    SELECT d.id, d.client_ref, d.gross,
+           GREATEST(0::float8,
+             d.lc - CASE WHEN d.lc = 0::float8 THEN 0::float8
+                         ELSE GREATEST(d.brok_pct_sum, 200::float8) - d.relief_ex END) AS room
+    FROM std_deal d
+  ) r
 ),
 std_raw AS MATERIALIZED (
   /*
@@ -392,14 +441,14 @@ std_raw AS MATERIALIZED (
   -- TD-025: the share is this member's own entitlement over the pool, falling back to the split
   -- when there is no pool to divide - which is what agentCommissionLine does, and never a zero.
   SELECT o.id AS tid, o.name,
-         php_round2f(p.ac_total * CASE WHEN p.pool > 0 THEN o.own / p.pool ELSE o.split / 100 END) AS t4a_raw${full ? `,
-         php_round2f(p.ac_total * CASE WHEN p.pool > 0 THEN o.own / p.pool ELSE o.split / 100 END - desk_member_deduction(s.adj, o.name, NULL)) AS total,
+         php_round2f(p.ac_total * CASE WHEN p.pool > 0 THEN (o.own * p.scale) / p.pool ELSE o.split / 100 END) AS t4a_raw${full ? `,
+         php_round2f(p.ac_total * CASE WHEN p.pool > 0 THEN (o.own * p.scale) / p.pool ELSE o.split / 100 END - desk_member_deduction(s.adj, o.name, NULL)) AS total,
          -- TD-124: the remainder of the member's share, not a flat percentage that never
          -- consulted the minimum. The subtrahend is the share BEFORE any deduction — t4a_raw's own
          -- expression, repeated rather than named, because an output alias cannot be read inside
          -- the SELECT list that defines it. The total column above repeats it for the same reason.
          GREATEST(php_round2f((l.lc * o.split) / 100)
-                  - php_round2(php_round2f(p.ac_total * CASE WHEN p.pool > 0 THEN o.own / p.pool ELSE o.split / 100 END) / ${G}),
+                  - php_round2(php_round2f(p.ac_total * CASE WHEN p.pool > 0 THEN (o.own * p.scale) / p.pool ELSE o.split / 100 END) / ${G}),
                   0::float8) AS brok_wo` : ''}
   FROM std_pool p
   JOIN std_own o ON o.id = p.id${full ? `
@@ -492,9 +541,9 @@ lst_pool AS MATERIALIZED (
     x.id, x.client_ref, x.split_total,
     CASE
       -- TD-080: the minimum is ex-HST here too, matching agentCommissionsAfterClient.
-      WHEN COALESCE(SUM(o.raw), 0::float8) > GREATEST(x.split_total - x.min_brok, 0::float8)
+      WHEN COALESCE(SUM(o.raw), 0::float8) > GREATEST(x.split_total - x.min_brok * ${G}, 0::float8)
        AND COALESCE(SUM(o.raw), 0::float8) > 0::float8
-      THEN GREATEST(x.split_total - x.min_brok, 0::float8) / COALESCE(SUM(o.raw), 0::float8)
+      THEN GREATEST(x.split_total - x.min_brok * ${G}, 0::float8) / COALESCE(SUM(o.raw), 0::float8)
       ELSE 1::float8
     END AS floor_scale
   FROM lst_split x LEFT JOIN lst_own o ON o.id = x.id
