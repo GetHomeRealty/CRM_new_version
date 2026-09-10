@@ -47,6 +47,14 @@ const service = (top: string | undefined): { svc: TradeNumberService; asked: Ask
       asked.params = values;
       return Promise.resolve(top === undefined ? [] : [{ trade_no: top }]);
     },
+    // TD-165 - THE FULL-BAND PATH ASKS FOR A REUSABLE GAP BEFORE IT REFUSES, and this stub was
+    // never added when it did. next() calls $queryRawUnsafe to look for a freed number in the
+    // range; with no stub the call landed on undefined and the band-full test saw a TypeError
+    // instead of the UnprocessableEntityException it exists to check. TD-127's refusal was intact
+    // throughout - the product had simply got better than the test.
+    //
+    // No rows means NO GAP, which is the case this file exercises: a genuinely full series.
+    $queryRawUnsafe: () => Promise.resolve([]),
     transactions: {
       findMany: () => { findManyCalled = true; return Promise.resolve([]); },
     },

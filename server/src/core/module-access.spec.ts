@@ -261,8 +261,24 @@ describe('the live data is untouched by any of this', () => {
   });
 
   it('still licenses both modules for the company', async () => {
-    const sub = await prisma.subscriptions.findFirst();
-    expect(sub).not.toBeNull();
-    expect({ crm: sub!.crm_enabled, desk: sub!.transaction_enabled, status: sub!.status }).toEqual({ crm: true, desk: true, status: 'active' });
+    /*
+     * TD-165 - THIS ASSERTS WHAT THE SERVICE PROMISES, NOT THAT A ROW EXISTS.
+     *
+     * It required a subscriptions row and there is none, which ModuleAccessService documents as
+     * correct in as many words: no subscription row means licensed, so that a deployment which has
+     * not been told about licensing behaves exactly as it did before licensing existed. The test
+     * contradicted the design it was written to guard, and failed for being right about nothing.
+     *
+     * What a person actually depends on is the ANSWER, so the answer is what is asserted. This
+     * still fails the day either module stops resolving as licensed - with a row or without one -
+     * which is the whole reason the case is here.
+     *
+     * Worth knowing separately, and recorded under TD-165 rather than hidden in a test: with the
+     * table empty, module licensing is UNENFORCED on this deployment. Harmless for one brokerage
+     * that owns both modules; it would matter the day the product is sold to another.
+     */
+    const licence = await svc(prisma as unknown as PrismaService).licence();
+    expect({ crm: licence.crm, desk: licence.desk, valid: licence.valid })
+      .toEqual({ crm: true, desk: true, valid: true });
   });
 });

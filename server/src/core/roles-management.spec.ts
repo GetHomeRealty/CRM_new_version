@@ -159,7 +159,13 @@ describe('the screen cannot be used to lock everyone out of it', () => {
       // Strip it from everyone except admin, which is the role the live users' administrator holds.
       for (const r of await svc.list()) {
         if (r.key === 'admin') continue;
-        const map = store.defaultsFor(r.key as string)!;
+        // TD-165 - A ROLE CREATED THROUGH THE ROLES SCREEN HAS NO COMPILED DEFAULT. is_system is
+        // false for it and defaultsFor() correctly returns null; the non-null assertion then read
+        // .users off nothing and the test crashed with a TypeError instead of checking the
+        // lock-out guard it was written for. Skipping such a role is right: this case is about the
+        // guard, and a role with no default has no default grant to take away.
+        const map = store.defaultsFor(r.key as string);
+        if (!map) continue;
         if (map.users === 'edit') await svc.setGrants(null, r.id as number, { ...map, users: 'view' });
       }
       const admin = (await svc.list()).find((r) => r.key === 'admin')!;

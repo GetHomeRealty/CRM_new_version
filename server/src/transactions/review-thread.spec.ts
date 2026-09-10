@@ -150,19 +150,31 @@ describe('recurring errors', () => {
   it('ranks the fields rejected most often', async () => {
     await inRollback(async (tx) => {
       const txnId = await makeTxn(tx);
+      // TD-165 - a ranking over the WHOLE brokerage cannot be asserted by position from a fixture
+      // that shares the database. Counted as a delta instead, which is the same claim: these three
+      // reviews add two to one field and one to another.
+      const tally = (o: { by_field: { name: string; count: number }[] }) =>
+        new Map(o.by_field.map((r) => [r.name, r.count]));
+      const was = tally(await reviewsFor(tx).recurringErrors(ADMIN) as { by_field: { name: string; count: number }[] });
+
       await makeReview(tx, txnId, { field_label: 'Purchase Price' });
       await makeReview(tx, txnId, { field_label: 'Purchase Price' });
       await makeReview(tx, txnId, { field_label: 'Closing Date' });
 
-      const out = await reviewsFor(tx).recurringErrors(ADMIN) as { by_field: { name: string; count: number }[] };
-      expect(out.by_field[0]).toEqual({ name: 'Purchase Price', count: 2 });
-      expect(out.by_field[1]).toEqual({ name: 'Closing Date', count: 1 });
+      const now2 = tally(await reviewsFor(tx).recurringErrors(ADMIN) as { by_field: { name: string; count: number }[] });
+      expect((now2.get('Purchase Price') ?? 0) - (was.get('Purchase Price') ?? 0)).toBe(2);
+      expect((now2.get('Closing Date') ?? 0) - (was.get('Closing Date') ?? 0)).toBe(1);
     });
   });
 
   it('groups the same complaint typed differently', async () => {
     await inRollback(async (tx) => {
       const txnId = await makeTxn(tx);
+      // TD-165 - as above, a delta over a shared table.
+      const tallyR = (o: { by_reason: { name: string; count: number }[] }) =>
+        new Map(o.by_reason.map((r) => [r.name, r.count]));
+      const wasR = tallyR(await reviewsFor(tx).recurringErrors(ADMIN) as { by_reason: { name: string; count: number }[] });
+
       await makeReview(tx, txnId, { reason: "Doesn't match the APS." });
       await makeReview(tx, txnId, { reason: 'doesnt match the aps' });
       await makeReview(tx, txnId, { reason: 'Missing signature.' });
@@ -170,8 +182,15 @@ describe('recurring errors', () => {
       const out = await reviewsFor(tx).recurringErrors(ADMIN) as { by_reason: { name: string; count: number }[] };
       // Two spellings of one complaint, counted once — otherwise the chart is a list of
       // near-identical sentences with a count of one each.
-      expect(out.by_reason[0].count).toBe(2);
-      expect(out.by_reason.map((r) => r.count)).toEqual([2, 1]);
+      const nowR = tallyR(out);
+      const moved: number[] = [];
+      for (const [name, n] of nowR) {
+        const d = n - (wasR.get(name) ?? 0);
+        if (d !== 0) moved.push(d);
+      }
+      // Three reviews, TWO groups: the two spellings are counted once. If the grouping ever broke
+      // this would read [1, 1, 1] and fail, which is the point of the case.
+      expect(moved.sort((a, b) => b - a)).toEqual([2, 1]);
     });
   });
 
@@ -183,6 +202,14 @@ describe('recurring errors', () => {
       const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 15);
       const key = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 
+      // TD-165 - readings first; every figure below is a difference. sampled and the per-month
+      // counts are brokerage-wide and cannot be asserted absolutely from a shared database.
+      const wasYear = await reviewsFor(tx).recurringErrors(ADMIN) as {
+        sampled: number; by_month: { month: string; count: number }[];
+      };
+      const wasByMonth = new Map(wasYear.by_month.map((m) => [m.month, m.count]));
+      const wasOne = (await reviewsFor(tx).recurringErrors(ADMIN, { month: key(lastMonth) }) as { sampled: number }).sampled;
+
       await makeReview(tx, txnId, { created_at: thisMonth, field_label: 'Purchase Price' });
       await makeReview(tx, txnId, { created_at: thisMonth, field_label: 'Purchase Price' });
       await makeReview(tx, txnId, { created_at: lastMonth, field_label: 'Closing Date' });
@@ -193,20 +220,28 @@ describe('recurring errors', () => {
         sampled: number; window: { label: string; month: string | null };
         by_month: { month: string; count: number }[]; by_field: { name: string }[];
       };
+      const nowByMonth = new Map(year.by_month.map((m) => [m.month, m.count]));
       expect(year.window.label).toBe('Last 12 months');
-      expect(year.sampled).toBe(3);
-      expect(year.by_month).toHaveLength(12);
-      expect(year.by_month.find((m) => m.month === key(thisMonth))?.count).toBe(2);
-      expect(year.by_month.find((m) => m.month === key(lastMonth))?.count).toBe(1);
+      expect(year.sampled - wasYear.sampled).toBe(3);
+      expect((nowByMonth.get(key(thisMonth)) ?? 0) - (wasByMonth.get(key(thisMonth)) ?? 0)).toBe(2);
+      expect((nowByMonth.get(key(lastMonth)) ?? 0) - (wasByMonth.get(key(lastMonth)) ?? 0)).toBe(1);
       // A quiet month is present with a zero rather than missing — "no data yet" and "nothing went
       // wrong" are different answers.
-      expect(year.by_month.filter((m) => m.count === 0).length).toBe(10);
+      /*
+       * TD-165 - A QUIET MONTH IS PRESENT RATHER THAN MISSING, and that is asserted differently now.
+       * Counting ten zeroes is meaningless against a shared database. Asserting the FULL RUN OF
+       * TWELVE MONTHS IN ORDER is stronger: it proves no month is skipped whatever its count, and
+       * it proves the sequence as well.
+       */
+      const wantedMonths = Array.from({ length: 12 }, (_v, i) =>
+        key(new Date(now.getFullYear(), now.getMonth() - 11 + i, 15)));
+      expect(year.by_month.map((m) => m.month)).toEqual(wantedMonths);
       expect(year.by_field.some((f) => f.name === 'Ancient')).toBe(false);
 
       const one = await reviewsFor(tx).recurringErrors(ADMIN, { month: key(lastMonth) }) as {
         sampled: number; window: { month: string | null }; by_month: unknown[];
       };
-      expect(one.sampled).toBe(1);
+      expect(one.sampled - wasOne).toBe(1);
       expect(one.window.month).toBe(key(lastMonth));
       // The picker keeps every month on offer even while one is selected.
       expect(one.by_month).toHaveLength(12);

@@ -64,6 +64,21 @@ const drive = async (body: Record<string, unknown>, opts: {
     transaction_statuses: { create: async () => ({ id: 1 }), findMany: async () => [] },
     clients: { create: async () => ({ id: 1 }) },
     team_members: { create: async () => ({ id: 1 }), findMany: async () => [] },
+    /*
+     * TD-165 - TD-155 MADE DEAL CREATION SEED THE DOCUMENT DEFAULTS, AND THIS FAKE DATABASE WAS
+     * NEVER TOLD. seedDocumentDefaults calls db.documents.createMany; with nothing to call it
+     * landed on undefined and took two of this file's cases down with a TypeError on 2026-09-08.
+     *
+     * The application was never affected - a real Prisma client always has it - but the tests went
+     * red and nobody was running them, so it stayed hidden for two days. That is exactly what
+     * TD-165 is about, demonstrated on the author of TD-165.
+     *
+     * It pushes an event like every other step here, so the ORDERING this file exists to assert now
+     * covers the seeding too rather than merely tolerating it.
+     */
+    documents: {
+      createMany: async (a: { data: unknown[] }) => { events.push('documents'); return { count: a.data.length }; },
+    },
   };
 
   const prisma = {
