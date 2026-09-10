@@ -344,6 +344,14 @@ export class DashboardService {
       const input = normalizeCommissionTxn(t);
       const summary = this.commission.summarize(input);
       const isClosed = t.transaction_statuses.some((s) => s.status === 'Closed');
+      // TD-163. The SQL copy learned TD-084's broader status list and this loop never did, which is
+      // how the parity spec found deal 6677. Fixing it by copying that list across would have made
+      // both sides agree on the WRONG answer - a released deal reported as payment pending. The
+      // rule is the brokerage's, given 2026-09-10, and matches Reports' paymentSection().
+      const isDead = t.transaction_statuses.some(
+        (s) => s.status === 'DFT' || s.status === 'Mutual Release'
+            || s.status === 'Terminated' || s.status === 'Void',
+      );
       const adminActivities = parseJsonObject(t.admin_activities);
 
       const t4aByName = await this.t4aByMember(input, profiles);
@@ -351,16 +359,21 @@ export class DashboardService {
         ? { [name as string]: t4aByName[name as string] ?? 0 }
         : t4aByName;
 
-      for (const [mName, amt] of Object.entries(members)) {
-        if (this.memberPaid(adminActivities, mName)) {
-          paidTotal += amt;
-          paidCount++;
-        } else if (isClosed) {
-          pendingTotal += amt;
-          pendingCount++;
-        } else {
-          upcomingTotal += amt;
-          upcomingCount++;
+      // A DEAD DEAL CONTRIBUTES NO LINE - not paid, not pending, not upcoming. gross and the
+      // referral totals below are deliberately NOT skipped: they answer a different question
+      // (what the brokerage wrote) and moving them is a separate decision, not this one.
+      if (!isDead) {
+        for (const [mName, amt] of Object.entries(members)) {
+          if (this.memberPaid(adminActivities, mName)) {
+            paidTotal += amt;
+            paidCount++;
+          } else if (isClosed) {
+            pendingTotal += amt;
+            pendingCount++;
+          } else {
+            upcomingTotal += amt;
+            upcomingCount++;
+          }
         }
       }
 

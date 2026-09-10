@@ -115,15 +115,29 @@ scoped AS (
     t.calc_paid_total::numeric          AS calc_paid_total,
     (t.type ~* 'lease')                 AS is_lease,
     EXISTS (
-      -- TD-084. 'is_closed' really means 'has ended' - it drives the upcoming figures, which must
-      -- shed a deal the moment it dies, not only when it closes. This tested status = 'Closed'
-      -- alone, so a deal moved to DFT / Mutual Release / Terminated / Void kept its commission in
-      -- the agent's upcoming total and stayed in the pipeline count. Broadened to every ending
-      -- status; the name is left as is to avoid churning its consumers.
+      -- TD-163. 'is_closed' MEANS CLOSED AGAIN, AND 'HAS ENDED' IS ITS OWN FLAG BELOW.
+      --
+      -- TD-084 broadened this single predicate to every ending status so a dead deal would shed
+      -- from the upcoming figures. It did - and landed in closed_pending instead, because one
+      -- boolean drove both. The Dashboard then reported commission RECEIVABLE on a deal that will
+      -- never pay: 6677, mutually released, sat in Pending for 15,750.00 of a 700,000 deal.
+      --
+      -- Ruled by the brokerage 2026-09-10: a DFT, mutually released, terminated or void deal earns
+      -- nothing and belongs in NONE of paid, pending or upcoming. That is already how Reports
+      -- behaves - paymentSection() tests is_mutual_release FIRST and gives it its own section - so
+      -- this returns the Dashboard to a rule the product already had rather than inventing one.
+      --
+      -- DEAD WINS OVER CLOSED, matching that same paymentSection ordering: a deal carrying both is
+      -- dead. Measured before choosing - 0 deals in this database carry both, so the alternative
+      -- reading moves no figure today and consistency decided it.
+      SELECT 1 FROM transaction_statuses st
+      WHERE st.transaction_id = t.id AND st.status = 'Closed'
+    )                                   AS is_closed,
+    EXISTS (
       SELECT 1 FROM transaction_statuses st
       WHERE st.transaction_id = t.id
-        AND st.status IN ('Closed', 'DFT', 'Mutual Release', 'Terminated', 'Void')
-    )                                   AS is_closed
+        AND st.status IN ('DFT', 'Mutual Release', 'Terminated', 'Void')
+    )                                   AS is_dead
   FROM transactions t
   WHERE t.deleted_at IS NULL AND ${scope} AND ${typeFilter}
 )`;
@@ -571,6 +585,48 @@ pre_terms AS MATERIALIZED (
     LEFT JOIN precon_terms pt ON pt.transaction_id = s.id AND pt.term_no = k
   ) x
 ),
+pre_mem AS (
+  /*
+   * TD-163 - THE MEMBER SPLITS ARE REBASED TO THE TERM, WHICH THEY NEVER WERE.
+   *
+   * breakdownPrecon filters the members to those visible at term k and then calls rebaseToTerm on
+   * what is left, scaling the survivors back up to 100. The filter was transliterated here and the
+   * REBASE WAS NOT, so a term the others are not on paid out only what the remaining splits
+   * happened to add up to, and the rest went NOWHERE - not to the agent, not to the brokerage. On
+   * deal 82 (five terms; Aswini on all five, Sai Ramesh on the first two) terms 3 to 5 each had a
+   * single member holding a 50 split, so the SQL paid half of each term and dropped the other
+   * half: 6,750.00 on that deal alone. Last of the five divergences the parity spec reported.
+   *
+   * BOTH OF rebaseToTerm's GUARDS ARE COPIED AND BOTH MATTER. It leaves the splits alone when they
+   * sum to zero - nothing to scale - and when they already sum to 100 within 1e-9. The second is
+   * not an optimisation: (split * 100) / 100 is not the identity in binary floating point for
+   * every split, so rescaling a set that already totals 100 can move the last bit, and
+   * desk-sql-parity.spec.ts compares with no tolerance. The association is (split * 100) / sum,
+   * as the TypeScript writes it, NOT split * (100 / sum).
+   *
+   * THE WINDOW IS ORDERED BY m.ord FOR THE SAME REASON. reduce() adds the splits in member order;
+   * an unordered SUM() may add them in any order and float addition is not associative. The
+   * ORDER BY is load-bearing - do not simplify it away.
+   *
+   * NOT MATERIALIZED, unlike its neighbours in this file, and deliberately: it is read exactly
+   * once, by pre_raw, which is itself materialised. Blocking inlining would buy nothing but a
+   * second tuplestore of the same cardinality and a wider tuple.
+   */
+  SELECT tid, k, t_amt, name, agent_pct,
+         CASE WHEN vsum <= 0::float8 OR abs(vsum - 100::float8) < 1e-9::float8
+              THEN split_raw
+              ELSE (split_raw * 100::float8) / vsum
+         END AS split
+  FROM (
+    SELECT t.id AS tid, t.k, t.t_amt, m.name, m.agent_pct, m.split AS split_raw,
+           SUM(m.split) OVER (PARTITION BY t.id, t.k ORDER BY m.ord
+                              ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS vsum
+    FROM pre_terms t
+    JOIN members m ON m.tid = t.id
+    WHERE COALESCE(m.scope, 'Entire') = 'Entire'
+       OR EXISTS (SELECT 1 FROM team_member_terms tt WHERE tt.team_member_id = m.mid AND tt.term_no = t.k)
+  ) v
+),
 pre_raw AS MATERIALIZED (
   /*
    * One row per member PER TERM, unrounded and unsummed.
@@ -580,16 +636,13 @@ pre_raw AS MATERIALIZED (
    * per term — and w.deduction likewise.
    */
   SELECT m.tid, m.name,
-         php_round2f(php_round2f((t.t_amt * m.split) / 100) * m.agent_pct / 100) AS agent_wo${full ? `,
+         php_round2f(php_round2f((m.t_amt * m.split) / 100) * m.agent_pct / 100) AS agent_wo${full ? `,
          -- TD-124: the remainder of this term's member share, as agentLines now takes it.
-         GREATEST(php_round2f((t.t_amt * m.split) / 100)
-                  - php_round2f(php_round2f((t.t_amt * m.split) / 100) * m.agent_pct / 100), 0::float8) AS brok_wo,
-         desk_member_deduction(s.adj, m.name, t.k)                               AS deduction` : ''}
-  FROM pre_terms t
-  JOIN members m ON m.tid = t.id${full ? `
-  LEFT JOIN deductible s ON s.id = t.id` : ''}
-  WHERE COALESCE(m.scope, 'Entire') = 'Entire'
-     OR EXISTS (SELECT 1 FROM team_member_terms tt WHERE tt.team_member_id = m.mid AND tt.term_no = t.k)
+         GREATEST(php_round2f((m.t_amt * m.split) / 100)
+                  - php_round2f(php_round2f((m.t_amt * m.split) / 100) * m.agent_pct / 100), 0::float8) AS brok_wo,
+         desk_member_deduction(s.adj, m.name, m.k)                               AS deduction` : ''}
+  FROM pre_mem m${full ? `
+  LEFT JOIN deductible s ON s.id = m.tid` : ''}
 ),
 pre_lines AS MATERIALIZED (
   /*
@@ -664,6 +717,8 @@ ${linesCte(variant)},
 classified AS MATERIALIZED (
   SELECT l.t4a, desk_member_paid(s.admin, l.name) AS paid, s.is_closed
   FROM all_lines l JOIN scoped s ON s.id = l.tid
+  -- TD-163: a dead deal contributes no line at all. See is_dead in scopedCte.
+  WHERE NOT s.is_dead
 )
 SELECT
   COALESCE(SUM(t4a) FILTER (WHERE paid), 0)                       AS paid_total,
@@ -696,6 +751,9 @@ mine AS MATERIALIZED (
   SELECT COALESCE(l.t4a, 0) AS t4a, desk_member_paid(s.admin, $1) AS paid, s.is_closed
   FROM scoped s
   LEFT JOIN all_lines l ON l.tid = s.id AND l.name = $1
+  -- TD-163: a dead deal contributes no line at all, and for an agent that means it leaves their
+  -- deal COUNT too - which is correct: it is not in their pipeline any more.
+  WHERE NOT s.is_dead
 )
 SELECT
   COALESCE(SUM(t4a) FILTER (WHERE paid), 0)                       AS paid_total,
