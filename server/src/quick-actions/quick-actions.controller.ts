@@ -91,6 +91,13 @@ export class QuickActionsController {
     return this.quick.tradeSheet(u(user), txnId, body ?? {});
   }
 
+  @Post('transactions/:transaction/lawyer-statement/send')
+  @HttpCode(200)
+  @Screen('transactions', 'edit')
+  sendLawyerStatement(@CurrentUser() user: AuthUserRecord | undefined, @Param('transaction', ParseIntPipe) txnId: number, @Body() body: Res): Promise<Res> {
+    return this.quick.lawyerStatement(u(user), txnId, body ?? {});
+  }
+
   /**
    * TD-088 — the browser reporting that it produced the Trade Record Sheet.
    *

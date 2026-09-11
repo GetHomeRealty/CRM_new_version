@@ -1043,6 +1043,15 @@ export const MAIL_EVENTS: Record<string, MailEvent> = {
     default_subject: 'Trade Record Sheet — {{ property_address }} ({{ transaction_number }})',
     default_body_html: '<p>Please find the Trade Record Sheet for <strong>{{ property_address }}</strong> ({{ transaction_number }}).</p><p>Agent: {{ agent_name }}.</p><p>Regards,<br>{{ company_name }}</p>',
   },
+  // The Commission / Lawyer Statement of a listing-side deal, sent to the lawyer from the statement
+  // dialog with the statement attached as a PDF.
+  'lawyer_statement.send': {
+    module: 'Lawyer Statement',
+    label: 'Commission / Lawyer Statement — Send',
+    variables: ['transaction_number', 'property_address', 'lawyer_name', 'company_name'],
+    default_subject: 'Commission Statement — {{ property_address }} ({{ transaction_number }})',
+    default_body_html: '<p>Dear {{ lawyer_name }},</p><p>Please find attached the Commission Statement for <strong>{{ property_address }}</strong> ({{ transaction_number }}).</p><p>Regards,<br>Admin Department<br>{{ company_name }}</p>',
+  },
   'agent_faq.batch_review': {
     module: 'Agent FAQ',
     label: 'Agent FAQ — Batch Review Request',

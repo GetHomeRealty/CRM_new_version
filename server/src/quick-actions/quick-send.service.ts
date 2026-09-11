@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
+import { ForbiddenException, Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { MailerService } from '../email/mailer.service';
@@ -6,6 +6,7 @@ import { CompanySettingsService } from '../settings/company-settings.service';
 import { throwValidation, type FieldErrors } from '../common/laravel-exceptions';
 import { toIso8601String } from '../common/serialize';
 import { isBuyingType, missingLawyerParties, lawyerPartyLabel } from '../transactions/lawyer-details';
+import { isListingStatusFamily } from '../reference/transaction.constants';
 import { ResourceAccessService } from '../core/resource-access.service';
 import type { AuthUserRecord } from '../auth/auth.types';
 
@@ -221,6 +222,44 @@ export class QuickSendService {
     await this.audit.record(txnId, this.actor(user), { section: 'Quick Actions — Trade Record Sheet', field: 'Trade Record Sheet', action: resend ? 'Resent' : 'Sent', source: 'Quick Action', new: email });
 
     return { ok: true, message: (resend ? 'Resent' : 'Sent') + ' to ' + email, sent_at: toIso8601String(now) };
+  }
+
+  // ---- Commission / Lawyer Statement ----
+  /*
+   * The statement is built in the browser — the same document Print produces, with the signature
+   * uploaded in the dialog — and arrives here as a PDF to attach. Only a listing-side deal has one,
+   * and only staff send it: the button is hidden from agents, and this refuses them too, since a
+   * hidden button is not a permission. No recipients are added beyond the address given.
+   */
+  async lawyerStatement(user: Actor, txnId: number, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+    if (user?.role === 'agent') throw new ForbiddenException({ message: 'Only brokerage staff can send the Lawyer Statement.' });
+    const t = await this.reachableTxnOr404(user, txnId);
+    const g = await this.prisma.transactions.findUnique({ where: { id: txnId }, select: { type: true, lawyer_name: true } });
+    if (!isListingStatusFamily(g?.type)) {
+      throw new UnprocessableEntityException({
+        message: `${t.property || 'This transaction'} is not a listing, so it has no Lawyer Statement to send.`,
+      });
+    }
+    this.validateEmail(body, (errors) => {
+      if (!body.pdf) (errors.pdf ??= []).push('The statement PDF is required.');
+      if (body.filename !== undefined && body.filename !== null && body.filename !== '' && [...String(body.filename)].length > 255) (errors.filename ??= []).push('The filename field must not be greater than 255 characters.');
+    });
+    const email = String(body.email);
+    const attachments = [{ data: String(body.pdf), name: (body.filename as string) || `Commission Statement ${t.trade_no}.pdf`, mime: 'application/pdf' }];
+
+    try {
+      await this.mailer.send('lawyer_statement.send', {
+        transaction_number: t.trade_no,
+        property_address: t.property,
+        lawyer_name: String(body.lawyer_name ?? '').trim() || g?.lawyer_name || 'Sir/Madam',
+        company_name: (await this.settings.current()).name,
+      }, email, [], attachments);
+    } catch (err) {
+      throw new UnprocessableEntityException({ ok: false, message: 'Send failed: ' + ((err as { message?: string })?.message ?? '') });
+    }
+
+    await this.audit.record(txnId, this.actor(user), { section: 'Quick Actions — Lawyer Statement', field: 'Lawyer Statement', action: 'Sent', source: 'Quick Action', new: email });
+    return { ok: true, message: 'Sent to ' + email };
   }
 
   /**

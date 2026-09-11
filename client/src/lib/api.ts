@@ -452,6 +452,7 @@ export const sendNoticeOfSale = (txnId: Id, agents: unknown, extra: Record<strin
 export const getDepositReceiptCcSuggestions = (txnId: Id): Promise<string[]> => api.get<string[]>(`/api/transactions/${txnId}/deposit-receipt/cc-suggestions`).then((r) => r.data);
 export const sendDepositReceipt = (txnId: Id, email: string, cc?: unknown): Promise<SendResult> => api.post<SendResult>(`/api/transactions/${txnId}/deposit-receipt/send`, { email, cc }).then((r) => r.data);
 export const sendTradeSheet = (txnId: Id, email: string, extra: Record<string, unknown> = {}): Promise<SendResult> => api.post<SendResult>(`/api/transactions/${txnId}/trade-sheet/send`, { email, ...extra }).then((r) => r.data);
+export const sendLawyerStatement = (txnId: Id, email: string, extra: Record<string, unknown> = {}): Promise<SendResult> => api.post<SendResult>(`/api/transactions/${txnId}/lawyer-statement/send`, { email, ...extra }).then((r) => r.data);
 
 /**
  * TD-088 — tell the deal its Trade Record Sheet has been produced.
