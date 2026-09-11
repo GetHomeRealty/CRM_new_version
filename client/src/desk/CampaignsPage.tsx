@@ -555,8 +555,12 @@ export default function CampaignsPage() {
       {tab === 'suppressions' && <SuppressionsPanel />}
 
       {/* Open tracking dies silently when the public URL is unreachable — surface it, and let
-          the result be re-checked on demand rather than only at page load. */}
-      {tab === 'campaigns' && tracking && (
+          the result be re-checked on demand rather than only at page load.
+
+          Shown in development only, by request: in a production build the banner is hidden. The
+          check itself still runs — the results below use it to warn when Opened figures are
+          incomplete — so only this block goes. */}
+      {!import.meta.env.PROD && tab === 'campaigns' && tracking && (
         <div
           className={tracking.ok && !tracking.ephemeral && !tracking.insecure ? 'reminder-ok'
             : tracking.ok ? 'reminder-warn' : 'import-error'}
