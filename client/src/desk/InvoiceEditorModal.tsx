@@ -195,14 +195,19 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
 
   const onStatus = async (v: string) => {
     setMenu('');
+    // The badge moves before the server answers. If the server REFUSES - a Void on an invoice with
+    // a payment, say - put back what was there, or a refused Void reads as a Void (TD-162).
+    const before = form;
     set('status', v);
+    let d: Invoice | undefined;
     // §12.3 — once settled (Paid or Void), auto-reminders are no longer needed → disable them.
     if (v === 'Paid' || v === 'Void') {
       setForm((f) => (f ? { ...f, auto_reminder: { mode: 'off' } } : f));
-      await save(v, { auto_reminder: { mode: 'off' } });
+      d = await save(v, { auto_reminder: { mode: 'off' } });
     } else {
-      await save(v);
+      d = await save(v);
     }
+    if (!d && before) setForm((f) => (f ? { ...f, status: before.status, auto_reminder: before.auto_reminder } : f));
   };
 
   // Persist pending edits (e.g. a just-uploaded signature) so the preview/PDF reflects them.

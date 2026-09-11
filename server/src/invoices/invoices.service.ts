@@ -457,11 +457,17 @@ export class InvoicesService {
   async deletePayment(actor: ActingUser | null, id: number, paymentId: number): Promise<Record<string, unknown>> {
     const invoice = await this.prisma.invoices.findFirst({ where: { id, deleted_at: null } });
     if (!invoice) throw new NotFoundException({ message: `No query results for model [App\\Models\\Invoice] ${id}.` });
+    // Read the row BEFORE it goes, so the history can say what was removed. 'Payment recorded'
+    // writes the figure and the method, and since TD-162 removing a payment is the only way past
+    // the delete and void guards - so this is the entry a reader most needs to be complete.
+    const gone = await this.prisma.invoice_payments.findFirst({ where: { id: paymentId, invoice_id: id }, select: { amount: true, method: true } });
     await this.prisma.invoice_payments.deleteMany({ where: { id: paymentId, invoice_id: id } });
     const settings = await this.settings.current();
     await this.calc.recalculate(this.prisma, id, this.rate(invoice.tax_rate, settings.default_tax_rate));
     const updated = await this.prisma.invoices.findUniqueOrThrow({ where: { id } });
-    await this.auditInvoice(id, updated.transaction_id, actor, { field: `Invoice ${updated.invoice_no} — Payment`, action: 'Payment removed' });
+    await this.auditInvoice(id, updated.transaction_id, actor, { field: `Invoice ${updated.invoice_no} — Payment`, action: 'Payment removed',
+      ...(gone ? { old: this.numberFormat(num(gone.amount)) + (gone.method ? ` (${gone.method})` : '') } : {}),
+    });
     return this.show(id);
   }
 

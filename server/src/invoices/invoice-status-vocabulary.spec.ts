@@ -38,7 +38,7 @@ import {
 interface Written { invoice: Record<string, unknown> | null }
 
 const put = async (
-  stored: { status: string; amount_paid?: number; sent_at?: Date | null },
+  stored: { status: string; amount_paid?: number; sent_at?: Date | null; payments?: number },
   body: Record<string, unknown>,
 ): Promise<{ status: number | 'accepted'; errors: Record<string, string[]>; written: Written }> => {
   const STORED = {
@@ -56,6 +56,9 @@ const put = async (
   const prisma = {
     $transaction: async (cb: (t: unknown) => Promise<unknown>) => cb(tx),
     invoices: { findFirst: async () => STORED, findUniqueOrThrow: async () => ({ ...STORED }) },
+    // TD-162 counts an invoice's payment rows before it may be voided. Unstubbed, that count
+    // threw, and every Void in this file read as a 500 (found by TD-165).
+    invoice_payments: { count: async () => stored.payments ?? 0 },
   } as never;
   const svc = new InvoicesService(
     prisma,
@@ -116,6 +119,24 @@ describe('an invoice status the payments decide cannot be set by hand (TD-048)',
   it.each(SETTABLE_STATUSES.filter((s) => s !== 'Unpaid'))('still accepts %s, which is a choice', async (want) => {
     const r = await put({ status: 'Unpaid' }, { ...BASE, status: want });
     expect(r.status).toBe('accepted');
+  });
+});
+
+describe('a payment stops an invoice being voided (TD-162)', () => {
+  // The refusal shipped with no test of its own, so when it broke the Void test above nothing
+  // pointed at it. These two are the rule itself: money recorded, by row or by amount, blocks Void.
+  it('refuses Void when a payment row is recorded, and writes nothing', async () => {
+    const r = await put({ status: 'Unpaid', payments: 1 }, { ...BASE, status: 'Void' });
+    expect(r.status).toBe(422);
+    expect(r.errors.status[0]).toContain('cannot be voided');
+    expect(r.written.invoice).toBeNull();
+  });
+
+  it('refuses Void when money is recorded even with no payment row', async () => {
+    const r = await put({ status: 'Unpaid', amount_paid: 500 }, { ...BASE, status: 'Void' });
+    expect(r.status).toBe(422);
+    expect(r.errors.status[0]).toContain('cannot be voided');
+    expect(r.written.invoice).toBeNull();
   });
 });
 
