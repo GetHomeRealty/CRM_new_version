@@ -43,6 +43,30 @@ function fitToField(value: string, maxLength: number | undefined): string {
   return value.slice(0, maxLength);
 }
 
+/*
+ * THE SIGNATURE BLANKS, PUT BACK ON THEIR LINES.
+ *
+ * Form 640 does give these blanks fields, but not where the blanks are: each one sits on the caption
+ * row below its dotted line and only over the right-hand part of it — page 1's two
+ * "(Salesperson/Broker/Broker of Record)" boxes start where the caption ends, and page 2's
+ * "(Signature of Broker of Record)" covers the last quarter of its line. Clicking the line itself hit
+ * nothing, so the blanks read as not editable. Each widget is moved to lie along its whole dotted line.
+ *
+ * Measured from the form (points, origin bottom-left). A widget is picked by nearness to its target
+ * rather than by index, so a field with two boxes — `txtBrokerSig` is both the Broker of Record line
+ * and the Commission Trust "Broker of Record/Manager" line, sharing one value — moves each box to its
+ * own line.
+ */
+const SIGNATURE_BLANKS: { field: string; rect: { x: number; y: number; width: number; height: number } }[] = [
+  // Page 1 — the two (Salesperson/Broker/Broker of Record) lines.
+  { field: 'txts_sig1', rect: { x: 40.5, y: 75, width: 259.5, height: 13 } },
+  { field: 'txts_sig2', rect: { x: 319.5, y: 75, width: 250, height: 13 } },
+  // Page 2 — (Signature of Broker of Record), then the Commission Trust Agreement's two lines.
+  { field: 'txtBrokerSig', rect: { x: 352.5, y: 166, width: 217, height: 13 } },
+  { field: 'txtBrokerSig', rect: { x: 49.5, y: 74, width: 324.5, height: 13 } },
+  { field: 'txtAgentSig', rect: { x: 380.5, y: 74, width: 180, height: 13 } },
+];
+
 // Fill OREA Form 640 by its exact AcroForm field names.
 async function fillPdf(buf: ArrayBuffer, txn: Transaction): Promise<Uint8Array> {
   // Fetched on first use — see heavyLibs.
@@ -160,6 +184,21 @@ async function fillPdf(buf: ArrayBuffer, txn: Transaction): Promise<Uint8Array> 
     const opt = form.getField('chkOpt_l_coop') as { select?: (o: string) => void };
     if (opt && typeof opt.select === 'function') opt.select(listing ? 'coop' : 'l');
   } catch { /* noop */ }
+
+  // The signature blanks — see SIGNATURE_BLANKS. Best-effort: a form without these fields is shown as is.
+  const moved = new Set<unknown>();
+  SIGNATURE_BLANKS.forEach(({ field: name, rect }) => {
+    try {
+      const field = form.getTextField(name);
+      const widget = field.acroField.getWidgets()
+        .filter((w) => !moved.has(w))
+        .sort((a, b) => Math.abs(a.getRectangle().y - rect.y) - Math.abs(b.getRectangle().y - rect.y))[0];
+      if (!widget) return;
+      widget.setRectangle(rect);
+      moved.add(widget);
+      form.markFieldAsDirty(field.ref); // redraw it at the new size
+    } catch { /* field absent — leave the form as it is */ }
+  });
 
   try { form.updateFieldAppearances(); } catch { /* noop */ }
   return pdf.save();
