@@ -121,7 +121,7 @@ function marksFromStyle(style: string, inherited: Marks): Marks {
 }
 
 type Token =
-  | { kind: 'open'; name: string; style: string; href: string; selfClosing: boolean }
+  | { kind: 'open'; name: string; style: string; href: string; src: string; signature: boolean; selfClosing: boolean }
   | { kind: 'close'; name: string }
   | { kind: 'text'; text: string };
 
@@ -135,8 +135,10 @@ function tokenize(html: string): Token[] {
     if (openName) {
       const style = /style\s*=\s*"([^"]*)"/i.exec(attrs ?? '')?.[1] ?? '';
       const href = /href\s*=\s*"([^"]*)"/i.exec(attrs ?? '')?.[1] ?? '';
+      const src = /src\s*=\s*"([^"]*)"/i.exec(attrs ?? '')?.[1] ?? '';
+      const signature = /\sdata-signature\s*=/i.test(attrs ?? '');
       const name = openName.toLowerCase();
-      tokens.push({ kind: 'open', name, style, href, selfClosing: slash === '/' || VOID_TAGS.has(name) });
+      tokens.push({ kind: 'open', name, style, href, src, signature, selfClosing: slash === '/' || VOID_TAGS.has(name) });
       continue;
     }
     if (text) tokens.push({ kind: 'text', text });
@@ -145,6 +147,13 @@ function tokenize(html: string): Token[] {
 }
 
 const VOID_TAGS = new Set(['br', 'img', 'hr', 'input', 'meta', 'link']);
+
+/**
+ * A signature uploaded onto the contract or media agreement in the review dialog. The one kind of
+ * image printed from the body: embedded, so nothing is fetched, and only in the two formats a PDF
+ * can carry.
+ */
+const SIGNATURE_SRC = /^data:image\/(?:png|jpeg);base64,[A-Za-z0-9+/=]+$/i;
 /** Tags that end a run of text, so a paragraph is not glued to the list that follows it. */
 const BLOCK_TAGS = new Set(['p', 'div', 'ul', 'ol', 'li', 'table', 'tr', 'td', 'th', 'h1', 'h2', 'h3', 'h4', 'br']);
 
@@ -203,6 +212,17 @@ function convert(html: string): Content[] {
     if (token.kind === 'open') {
       const { name } = token;
       if (name === 'br') { frame.runs.push({ text: '\n' }); continue; }
+      if (name === 'img' && token.signature && SIGNATURE_SRC.test(token.src)) {
+        // An image is a block in pdfmake, so the text before it ("Signature:") is closed off as its
+        // own line first. That text belongs to the nearest block — inline frames share its buffer —
+        // and those inline frames are pointed at the fresh buffer so nothing after is lost.
+        let owner = stack.length - 1;
+        while (owner > 0 && stack[owner].runs === stack[owner - 1].runs) owner--;
+        flush(stack[owner]);
+        for (let i = owner + 1; i < stack.length; i++) stack[i].runs = stack[owner].runs;
+        stack[owner].children.push({ image: token.src, fit: [150, 40], margin: [0, 0, 0, 3.5] });
+        continue;
+      }
       if (name === 'img' || name === 'hr') continue;
 
       const marks = marksFromStyle(token.style, frame.marks);

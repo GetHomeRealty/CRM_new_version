@@ -1357,6 +1357,21 @@ input[type="number"],.numeric,.stat-card .val{font-variant-numeric:tabular-nums;
 /* Signature and address lines. Deliberately inert: no pointer, no hover, no focus ring — nothing
    that suggests it can be filled in, because it is signed by hand on the printed copy. */
 .onb-locked{cursor:default}
+/* A signature line on the contract or media agreement: clicked to upload an image of the
+   signature, with a remove button beside it once one is on. */
+.onb-sign{cursor:pointer}
+.onb-sign:hover{background:var(--info-050,#eff6ff)}
+.onb-sign:focus{outline:2px solid var(--info,#2563eb);outline-offset:1px}
+.onb-sign-btn{margin-left:6px;padding:1px 8px;border:1px solid var(--info,#2563eb);border-radius:5px;background:#fff;
+  color:var(--info,#2563eb);font:inherit;font-size:11.5px;font-weight:600;line-height:18px;cursor:pointer;vertical-align:bottom;white-space:nowrap}
+.onb-sign-btn:hover{background:var(--info-050,#eff6ff)}
+.onb-sign-clear{border-color:var(--line);color:#6b7280;font-weight:400}
+.onb-sign-clear:hover{color:#b91c1c;border-color:#fca5a5;background:#fff}
+/* A name in a contract signature box, typed over in place. A dashed underline marks it editable on
+   screen only — the email and the PDF print the name plain. */
+.onb-name{cursor:text;border-bottom:1px dashed var(--info,#2563eb);border-radius:3px 3px 0 0;min-width:60px;display:inline-block}
+.onb-name:hover{background:var(--info-050,#eff6ff)}
+.onb-name:focus{outline:2px solid var(--info,#2563eb);outline-offset:1px;background:#fff;color:#111827}
 /* The date field that appears over a date line while one is being picked. */
 .onb-datefield{font:inherit;font-size:13px;padding:2px 6px;border:1px solid var(--info,#2563eb);
   border-radius:4px;background:#fff;color:#111827;box-shadow:0 4px 14px rgba(15,23,42,.18)}

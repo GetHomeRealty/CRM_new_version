@@ -87,22 +87,39 @@ const escapeHtml = (s: string): string =>
  * Read from the label rather than from the blank's position: the positions shift whenever the
  * template is edited, and the label is what a reader uses to know what the line is for too.
  */
-type BlankKind = 'text' | 'date' | 'locked';
+type BlankKind = 'text' | 'date' | 'locked' | 'signature';
 
-const blankKindFor = (preceding: string): BlankKind => {
+/*
+ * The signature lines on the contract and the media agreement take an uploaded image of the
+ * signature instead — an image placed on the line, not a name typed into it, so it still reads as a
+ * signature. Any other form keeps its signature lines locked for signing by hand.
+ */
+const SIGNATURE_UPLOAD_FORMS: readonly OnboardingKind[] = ['contract', 'media'];
+
+const blankKindFor = (preceding: string, form: OnboardingKind): BlankKind => {
   const label = preceding.slice(-70).replace(/<[^>]*>/g, ' ').toLowerCase();
-  if (/signature/.test(label)) return 'locked';
+  if (/signature/.test(label)) return SIGNATURE_UPLOAD_FORMS.includes(form) ? 'signature' : 'locked';
   if (/residing at/.test(label)) return 'locked';
   if (/date/.test(label)) return 'date';
   return 'text';
 };
 
-const tagBlanks = (html: string): string => {
+/**
+ * The names in the contract's signature boxes, made editable: the brokerage's signatory and the
+ * agent. Only the name itself — a title after it in brackets, "(Broker Manager)", stays as written.
+ */
+const NAME_LINE = /(<p\b[^>]*>\s*Name:\s*)([^<(]+?)(\s*)(?=\(|<\/p>)/g;
+
+const tagBlanks = (html: string, form: OnboardingKind): string => {
   let i = 0;
-  return html.replace(RULE_SPAN, (_m, rule: string, offset: number, whole: string) => {
-    const kind = blankKindFor(whole.slice(0, offset));
+  const tagged = html.replace(RULE_SPAN, (_m, rule: string, offset: number, whole: string) => {
+    const kind = blankKindFor(whole.slice(0, offset), form);
     return `<span data-blank="${i++}" data-kind="${kind}" data-rule="${rule.length}" style="${blankStyle(rule.length)}"></span>`;
   });
+  if (form !== 'contract') return tagged;
+  let n = 0;
+  return tagged.replace(NAME_LINE, (_m, label: string, name: string, gap: string) =>
+    `${label}<span data-name="${n++}">${name}</span>${gap}`);
 };
 
 /** The same body with its blanks made typeable and its tick boxes clickable. Display only. */
@@ -116,6 +133,21 @@ const asEditable = (html: string): string => html
   // Signature and address lines: shown, never filled in here.
   .replace(/<span data-blank="(\d+)" data-kind="locked"/g,
     '<span class="onb-locked" title="Signed by hand on the printed copy" data-blank="$1" data-kind="locked"')
+  /*
+   * A signature line takes an uploaded image. The line itself opens the picker, but that alone was
+   * invisible — it looks exactly like any other ruled line — so a labelled button sits beside it:
+   * "Upload signature" while empty, "Replace" and "Remove" once one is on. Display only: none of
+   * these buttons are in the message that is sent.
+   */
+  .replace(/<span data-blank="(\d+)" data-kind="signature"([^>]*>)([\s\S]*?)<\/span>/g,
+    (_m, id: string, rest: string, inner: string) => {
+      const signed = inner.includes('<img');
+      return `<span class="onb-blank onb-sign" role="button" tabindex="0" title="${signed ? 'Replace the signature' : 'Upload a signature'}" data-blank="${id}" data-kind="signature"${rest}${inner}</span>`
+        + `<button type="button" class="onb-sign-btn" data-sign-upload="${id}">${signed ? 'Replace' : '📤 Upload signature'}</button>`
+        + (signed ? `<button type="button" class="onb-sign-btn onb-sign-clear" data-sign-clear="${id}" title="Remove the signature">✕ Remove</button>` : '');
+    })
+  // The names in the signature boxes, typed over in place.
+  .replace(/<span data-name="(\d+)"/g, '<span class="onb-name" contenteditable="true" title="Click to edit the name" data-name="$1"')
   .replace(/<span data-check="(\d+)"/g, '<span class="onb-check" role="checkbox" tabindex="0" data-check="$1"');
 
 /*
@@ -144,6 +176,53 @@ const fillBlank = (html: string, id: string, text: string): string => {
       `<span data-blank="${id}" data-kind="${kind}" data-rule="${chars}" style="${blankStyle(Number(chars))}">${escapeHtml(value)}</span>`,
   );
 };
+
+/** Put an uploaded signature on blank `id`; an empty `src` takes it off and leaves the line bare. */
+const fillSignature = (html: string, id: string, src: string): string =>
+  html.replace(
+    new RegExp(`(<span data-blank="${id}" data-kind="signature" data-rule="\\d+"[^>]*>)[\\s\\S]*?(</span>)`),
+    (_m, open: string, close: string) => `${open}${src
+      ? `<img data-signature="${id}" src="${src}" alt="Signature" height="44" style="height:44px;width:auto;max-width:100%;display:inline-block;vertical-align:bottom;border:0">`
+      : ''}${close}`,
+  );
+
+/**
+ * Put `text` on name `id`. Emptied, it becomes a ruled line so the printed copy shows a name is
+ * wanted there rather than a gap.
+ */
+const fillName = (html: string, id: string, text: string): string => {
+  const value = text.replace(/\s+/g, ' ').trim();
+  return html.replace(
+    new RegExp(`<span data-name="${id}"[^>]*>[\\s\\S]*?</span>`),
+    `<span data-name="${id}"${value ? '' : ` style="${blankStyle(28)}"`}>${escapeHtml(value)}</span>`,
+  );
+};
+
+/**
+ * The picked image as a PNG data URI, scaled down to signature size.
+ *
+ * Redrawn through a canvas rather than attached as picked: a phone photo is megabytes, a PDF can only
+ * carry PNG or JPEG, and PNG keeps a transparent background transparent on the signature line.
+ */
+const SIGNATURE_MAX = { w: 600, h: 200 };
+const signatureDataUri = (file: File): Promise<string> => new Promise((resolve, reject) => {
+  if (!file.type.startsWith('image/')) { reject(new Error('Choose an image file of the signature (PNG or JPEG).')); return; }
+  const url = URL.createObjectURL(file);
+  const img = new Image();
+  img.onload = () => {
+    URL.revokeObjectURL(url);
+    const scale = Math.min(1, SIGNATURE_MAX.w / img.naturalWidth, SIGNATURE_MAX.h / img.naturalHeight);
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+    canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+    const ctx = canvas.getContext('2d');
+    if (!ctx) { reject(new Error('Could not read that image')); return; }
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    resolve(canvas.toDataURL('image/png'));
+  };
+  img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Could not read that image')); };
+  img.src = url;
+});
 
 /** Said under the heading, so which of the two onboarding guides this is can be read at a glance. */
 const EVENT_LABEL: Record<string, string> = {
@@ -212,6 +291,28 @@ export default function OnboardingEmailModal({ userId, kind, onClose }: {
    */
   const dateForRef = useRef<string | null>(null);
   const dateInput = useRef<HTMLInputElement>(null);
+  /** The contract signature line waiting on the file picker, and the picker itself. */
+  const signForRef = useRef<string | null>(null);
+  const signInput = useRef<HTMLInputElement>(null);
+
+  const openSignaturePicker = (id: string) => {
+    signForRef.current = id;
+    signInput.current?.click();
+  };
+
+  const chooseSignature = async (file: File | null) => {
+    const target = signForRef.current;
+    signForRef.current = null;
+    // Cleared so picking the same file again still fires change.
+    if (signInput.current) signInput.current.value = '';
+    if (!file || target === null) return;
+    try {
+      const src = await signatureDataUri(file);
+      setHtml((h) => fillSignature(h, target, src));
+    } catch (e) {
+      toast(e instanceof Error && e.message ? e.message : 'Could not read that image', 'bad');
+    }
+  };
 
   // The object URL outlives React's rendering, so it is released on the way out.
   useEffect(() => () => { if (urlRef.current) URL.revokeObjectURL(urlRef.current); }, []);
@@ -219,7 +320,7 @@ export default function OnboardingEmailModal({ userId, kind, onClose }: {
   useEffect(() => {
     getOnboardingPreview(userId, kind)
       // Tagged on arrival, so every later edit addresses a blank by id rather than by position.
-      .then((p) => { setPreview(p); setSubject(p.subject); setHtml(tagBlanks(p.html)); })
+      .then((p) => { setPreview(p); setSubject(p.subject); setHtml(tagBlanks(p.html, kind)); })
       .catch((e) => { toast(apiErrorMessage(e, 'Could not build the preview'), 'bad'); onClose(); })
       .finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -415,19 +516,35 @@ export default function OnboardingEmailModal({ userId, kind, onClose }: {
                     const el = e.target as HTMLElement;
                     const box = el.closest?.('[data-check]') as HTMLElement | null;
                     if (box?.dataset.check !== undefined) { setHtml((h) => toggleCheck(h, box.dataset.check!)); return; }
+                    const clear = el.closest?.('[data-sign-clear]') as HTMLElement | null;
+                    if (clear?.dataset.signClear !== undefined) { setHtml((h) => fillSignature(h, clear.dataset.signClear!, '')); return; }
+                    const upload = el.closest?.('[data-sign-upload]') as HTMLElement | null;
+                    if (upload?.dataset.signUpload !== undefined) { openSignaturePicker(upload.dataset.signUpload); return; }
+                    const sign = el.closest?.('[data-kind="signature"]') as HTMLElement | null;
+                    if (sign?.dataset.blank !== undefined) { openSignaturePicker(sign.dataset.blank); return; }
                     const date = el.closest?.('[data-kind="date"]') as HTMLElement | null;
                     if (date?.dataset.blank !== undefined) openPicker(date.dataset.blank, date);
                   }}
                   onBlur={(e) => {
                     const el = e.target as HTMLElement;
                     const id = el.dataset?.blank;
-                    if (id !== undefined) setHtml((h) => fillBlank(h, id, el.textContent ?? ''));
+                    // A signature line holds an image, not text — writing its (empty) text back
+                    // would wipe the signature every time focus left it.
+                    if (id !== undefined && el.dataset.kind !== 'signature') setHtml((h) => fillBlank(h, id, el.textContent ?? ''));
+                    const nameId = el.dataset?.name;
+                    if (nameId !== undefined) setHtml((h) => fillName(h, nameId, el.textContent ?? ''));
                   }}
                   onKeyDown={(e) => {
                     const el = e.target as HTMLElement;
+                    // A signature line is a button: Enter or Space opens the upload.
+                    if ((e.key === 'Enter' || e.key === ' ') && el.dataset?.kind === 'signature' && el.dataset.blank !== undefined) {
+                      e.preventDefault();
+                      openSignaturePicker(el.dataset.blank);
+                      return;
+                    }
                     // A blank is one line on a form. Enter finishes it rather than adding a line
-                    // break inside a contract.
-                    if (e.key === 'Enter' && el.dataset?.blank !== undefined) {
+                    // break inside a contract. A name in the signature box is one line too.
+                    if (e.key === 'Enter' && (el.dataset?.blank !== undefined || el.dataset?.name !== undefined)) {
                       e.preventDefault();
                       el.blur();
                     }
@@ -467,13 +584,34 @@ export default function OnboardingEmailModal({ userId, kind, onClose }: {
                   aria-label="Pick a date for this line"
                 />
               )}
+              {/* The signature lines take an uploaded image — the picker behind them. */}
+              {!editing && SIGNATURE_UPLOAD_FORMS.includes(kind) && (
+                <input ref={signInput} type="file" accept="image/png,image/jpeg" style={{ display: 'none' }}
+                  onChange={(e) => void chooseSignature(e.target.files?.[0] ?? null)} />
+              )}
               {!editing && (html.includes('data-blank=') || html.includes('data-check=')) && (
-                <p className="help" style={{ margin: '6px 0 0' }}>
-                  Click a ruled line to type into it, or a date line to pick a date
-                  {html.includes('data-check=') ? ', and any box to tick it' : ''}.
-                  Signature and address lines are not filled in here — they are signed by hand on the
-                  printed copy. What you fill in is sent and appears in the PDF.
-                </p>
+                kind === 'contract' ? (
+                  <p className="help" style={{ margin: '6px 0 0' }}>
+                    Click a ruled line to type into it, a date line to pick a date, or a name to edit it.
+                    Use <strong>Upload signature</strong> to put an image of a signature (PNG or JPEG) on
+                    a signature line. The address line is not filled in here. What you fill in is sent
+                    and appears in the PDF.
+                  </p>
+                ) : kind === 'media' ? (
+                  <p className="help" style={{ margin: '6px 0 0' }}>
+                    Click a ruled line to type into it, or a date line to pick a date
+                    {html.includes('data-check=') ? ', and any box to tick it' : ''}.
+                    Use <strong>Upload signature</strong> to put an image of a signature (PNG or JPEG) on
+                    a signature line. What you fill in is sent and appears in the PDF.
+                  </p>
+                ) : (
+                  <p className="help" style={{ margin: '6px 0 0' }}>
+                    Click a ruled line to type into it, or a date line to pick a date
+                    {html.includes('data-check=') ? ', and any box to tick it' : ''}.
+                    Signature and address lines are not filled in here — they are signed by hand on the
+                    printed copy. What you fill in is sent and appears in the PDF.
+                  </p>
+                )
               )}
             </div>
 

@@ -292,6 +292,24 @@ const CONTRACT_VARIANTS = new Set([
 /** The deal count the tiered agreements are written for. A different one is a different document. */
 const TIERED_THRESHOLD = 10;
 
+/**
+ * The brokerage's name as the contract prints it: "Get Home Realty INC", not "GetHomeRealty INC".
+ *
+ * Company Settings holds the name run together, and every other screen and letter keeps reading it
+ * that way — only the agreement spells it out, so the words are split here rather than in Settings.
+ */
+const contractCompanyName = (name: string): string => name.replace(/([a-z])([A-Z])/g, '$1 $2');
+
+/**
+ * A signature uploaded in the review dialog: an image placed on a signature line of the contract or
+ * the media agreement.
+ *
+ * It arrives as a `data:` URI because that is what the review screen and the PDF can render, but
+ * Gmail strips `data:` images — so on the way out each one is swapped for a `cid:` reference and the
+ * image travels inside the message, the same bargain as the logo and the training banner.
+ */
+const SIGNATURE_IMG = /(<img data-signature="\d+" src=")data:(image\/(?:png|jpeg));base64,([A-Za-z0-9+/=]+)(")/g;
+
 const safeName = (agentName: string): string =>
   agentName.replace(/[^\w\s.-]/g, '').trim().slice(0, 60) || 'Agent';
 
@@ -669,6 +687,7 @@ export class UserOnboardingService {
 
     // Rendered with the real attachment count, which is only known once the template is loaded.
     const { vars, to, name } = await this.vars(userId, attachments.length, baseUrl);
+    if (kind === 'contract') vars.company_name = contractCompanyName(String(vars.company_name ?? ''));
     const variant = kind === 'contract' ? this.contractVariant(profile) : null;
     const html = renderTemplate(template.body_html, vars);
 
@@ -775,7 +794,16 @@ export class UserOnboardingService {
     // The signature logo travels inside the message rather than as a link back to this API. The
     // review screen has to load it over HTTP — it is a browser — but an agent's mail client is
     // somewhere else entirely, and a URL that resolves here may resolve to nothing there.
-    const embedded = await this.embedLogo(html);
+    // Uploaded signatures, likewise — after the PDF, which renders them from the `data:` URIs. Both
+    // signable forms (the contract and the media agreement) take them.
+    let outgoing = html;
+    if (GENERATES_DOCUMENT.includes(kind)) {
+      const signed = this.embedSignatures(html);
+      outgoing = signed.html;
+      files.push(...signed.files);
+    }
+
+    const embedded = await this.embedLogo(outgoing);
     if (embedded.file) files.push(embedded.file);
 
     // The training banner travels the same way, and after the logo so both swaps see the body the
@@ -851,6 +879,17 @@ export class UserOnboardingService {
     } catch {
       return { html, file: null };
     }
+  }
+
+  /** Carry each uploaded signature inside the message under `cid:` — see `SIGNATURE_IMG`. */
+  private embedSignatures(html: string): { html: string; files: MailAttachment[] } {
+    const files: MailAttachment[] = [];
+    const out = html.replace(SIGNATURE_IMG, (_m, open: string, mime: string, data: string, close: string) => {
+      const cid = `signature-${files.length + 1}`;
+      files.push({ data, name: `${cid}.${mime === 'image/png' ? 'png' : 'jpg'}`, mime, cid });
+      return `${open}cid:${cid}${close}`;
+    });
+    return { html: out, files };
   }
 
   /**
