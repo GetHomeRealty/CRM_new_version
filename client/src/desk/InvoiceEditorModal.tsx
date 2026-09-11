@@ -172,6 +172,14 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
   const save = async (statusOverride?: string, extra: Record<string, unknown> = {}): Promise<Invoice | undefined> => {
     const payload = { ...buildPayload(), ...extra };
     if (statusOverride) payload.status = statusOverride;
+    // TD-173 - the Commission Received box is also the payment form, so on an invoice that is not
+    // Paid its date and method are a payment being typed, not money received. Saving them made an
+    // unpaid invoice read as collected, and the agent-payout rule (TD-107) trusts that date. Left out
+    // of the save, the server leaves both as they were; Record Payment still uses them.
+    if (payload.status !== 'Paid') {
+      Reflect.deleteProperty(payload, 'commission_received_date');
+      Reflect.deleteProperty(payload, 'commission_received_via');
+    }
     // §12.2 — Paid captures a Commission Received date if none given yet.
     if (payload.status === 'Paid' && !payload.commission_received_date) payload.commission_received_date = today();
     setSaving(true);

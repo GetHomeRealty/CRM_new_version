@@ -566,8 +566,12 @@ export class ReportDataService {
       created_at: dateStr(t.created_at),
       updated_at: dateStr(t.updated_at),
       agent: t.agent,
-      agent_names: scopedNames.length ? scopedNames : (t.agent ? [t.agent] : []),
-      is_team: allNames.length > 1,
+      // TD-174 - ONE NAME PER PERSON, for display and the team flag only. A pre-construction deal has
+      // a line per member PER TERM, so a five-term deal listed its agent five times and counted a
+      // single agent as a team. The per-agent money lookups above keep the per-line names on purpose:
+      // the SQL copy of this report counts the same way, and the two must not drift (TD-163).
+      agent_names: scopedNames.length ? Array.from(new Set(scopedNames)) : (t.agent ? [t.agent] : []),
+      is_team: new Set(allNames).size > 1,
       split_ratios: splitRatios(bd),
       splits: this.buildSplits(scopedLines, allLines),
       split_total: allLines.length,

@@ -2,6 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AREA_LABEL, type Area } from '../common/domain';
+import { permittedAccountIds } from './mailbox-scope';
 
 /**
  * Reads a user's synced inbound mail. Every method is scoped to `userId`, so an inbox query can
@@ -180,8 +181,15 @@ export class InboxService {
   }
 
   async markSeen(userId: number, area: Area, id: number, seen: boolean): Promise<{ seen: boolean }> {
+    /*
+     * TD-171 - checked against EVERY mailbox this user may act through in this area, the same set the
+     * Inbox screen opens and moves messages against (mailbox-scope.ts). It looked in the default
+     * mailbox only, so a message opened through the Mailbox switcher could not be marked read or
+     * unread: the screen could show it and this could not find it.
+     */
+    const permitted = await permittedAccountIds(this.prisma, userId, area);
     const row = await this.prisma.inbound_emails.findFirst({
-      where: { id, user_id: userId, ...this.scopeFor(await this.primaryAccount(userId, area), area) },
+      where: { id, user_id: userId, account_id: { in: permitted } },
       select: { id: true },
     });
     if (!row) throw await this.missingError(userId, area, id);
