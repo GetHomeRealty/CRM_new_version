@@ -26,6 +26,22 @@ const longDate = (ymd: string): string => {
   return m ? `${MONTHS[Number(m[2]) - 1]} ${Number(m[3])}, ${m[1]}` : ymd;
 };
 
+/*
+ * Order two events within a day.
+ *
+ * NOT `a.time.localeCompare(b.time)`, which is what this was and what took the whole Calendar down.
+ * `CalendarEvent.time` is typed `string`, but the Desk feed carries CLOSING events synthesised from
+ * each transaction's closing date — they have no clock time and arrive as `null`. TypeScript cannot
+ * see that (the type says otherwise), so the first render against real Desk data threw
+ * "Cannot read properties of null (reading 'localeCompare')" and the error boundary replaced the
+ * entire screen. Every Desk user, every visit, because every one of those events is timeless.
+ *
+ * Coalescing to '' also puts them where they belong: an all-day marker sorts before 09:00, which is
+ * how every calendar shows an all-day item.
+ */
+const byTime = (a: CalendarEvent, b: CalendarEvent): number =>
+  (a.time ?? '').localeCompare(b.time ?? '');
+
 /** 24-hour "14:30" → "2:30 PM" */
 const clock = (t: string): string => {
   const m = /^(\d{2}):(\d{2})$/.exec(t ?? '');
@@ -184,7 +200,7 @@ export default function CalendarPage() {
       list.push(e);
       map.set(e.date, list);
     }
-    for (const list of map.values()) list.sort((a, b) => a.time.localeCompare(b.time));
+    for (const list of map.values()) list.sort(byTime);
     return map;
   }, [events]);
 
@@ -240,7 +256,7 @@ export default function CalendarPage() {
   const upcoming = useMemo(
     () => events
       .filter((e) => e.date > today && e.date <= upcomingUntil)
-      .sort((a, b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time)),
+      .sort((a, b) => a.date.localeCompare(b.date) || byTime(a, b)),
     [events, today, upcomingUntil],
   );
   // Holidays + festivals in the month currently shown, listed under Upcoming Events.
