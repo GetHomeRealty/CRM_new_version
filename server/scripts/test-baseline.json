@@ -1,6 +1,8 @@
 [
   "src/audit-log/audit-export.spec.ts :: domain isolation > excludes agent-made transaction changes, as the listing does",
-  "src/email/hub-mail-account.spec.ts :: Hub-wide personal email accounts > uses the user primary mailbox across both areas",
+  "src/email/campaign-sender-area.spec.ts :: which mailbox a CRM campaign sends from > refuses rather than borrowing when the area has no mailbox",
+  "src/email/campaign-sender-area.spec.ts :: which mailbox a CRM campaign sends from > the Transaction Desk keeps its own answer, unchanged",
+  "src/email/campaign-sender-area.spec.ts :: which mailbox a CRM campaign sends from > uses the sender’s CRM mailbox, not their Transaction Desk one",
   "src/email/local-mail-safety.spec.ts :: the local .env cannot send real mail > is not quietly overridden by a duplicate key later in the file",
   "src/email/local-mail-safety.spec.ts :: the local .env cannot send real mail > redirects everything to a single designated mailbox",
   "src/email/local-mail-safety.spec.ts :: the local .env cannot send real mail > sends only somewhere THIS BROKERAGE controls — unroutable, or a colleague",
