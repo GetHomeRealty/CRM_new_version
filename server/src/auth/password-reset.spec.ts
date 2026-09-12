@@ -258,6 +258,31 @@ describe('spending the link', () => {
     await expect(h.svc.reset('aswini@example.test', 'anything', 'pw12345678', 'pw12345678', h.endSessions)).rejects.toThrow();
   });
 
+  /*
+   * TD-177. THE ONLY LENGTH RULE ON THIS ROUTE WAS A MAXIMUM. `fits` refuses anything past 72
+   * bytes because bcrypt reads no further; nothing refused anything SHORT, so this route accepted a
+   * one-character password while the two other routes that set one required eight.
+   * BOTH DIRECTIONS ARE ASSERTED ON PURPOSE: a rule that refused everything would satisfy a test
+   * that only checks the refusal, and that is the way a length check is usually got wrong.
+   */
+  it('refuses a password shorter than eight characters', async () => {
+    const token = PasswordResetService.newToken();
+    const h = harness({ row: fresh(token) });
+    await expect(h.svc.reset('aswini@example.test', token, 'short7c', 'short7c', h.endSessions)).rejects.toThrow();
+    expect(h.updates).toEqual([]);
+    // The token is NOT spent by a refusal, so the person can try again with a longer one rather
+    // than having to request a second link.
+    expect(h.deletes).toEqual([]);
+  });
+
+  it('accepts exactly eight characters, so the rule is a minimum and not a wall', async () => {
+    const token = PasswordResetService.newToken();
+    const h = harness({ row: fresh(token) });
+    const r = await h.svc.reset('aswini@example.test', token, 'eight8ch', 'eight8ch', h.endSessions);
+    expect(r.message).toMatch(/has been reset/i);
+    expect(h.updates).toHaveLength(1);
+  });
+
   it('refuses a mismatched confirmation', async () => {
     const token = PasswordResetService.newToken();
     const h = harness({ row: fresh(token) });

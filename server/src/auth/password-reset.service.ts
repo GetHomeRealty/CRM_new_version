@@ -251,6 +251,21 @@ export class PasswordResetService {
     if (password !== confirmation) {
       throwValidation({ password: ['The password field confirmation does not match.'] });
     }
+    /*
+     * A MINIMUM, WHICH THIS ROUTE DID NOT HAVE. `fits` below is a MAXIMUM - 72 bytes, all that
+     * bcrypt reads - and it was the only length rule here, so a ONE-CHARACTER password was
+     * accepted while both other routes that set one required eight: users.service.ts for an
+     * administrator creating or editing a user, and ChangePasswordDto for somebody changing their
+     * own. Raised 2026-09-12 as TD-177 by an outside review that claimed there were no password
+     * rules at all; there were two, and this was the route without them.
+     * Counted in CODE POINTS rather than UTF-16 units, and worded identically to the message the
+     * administrator's form already gives, so all three routes now agree in rule and in wording.
+     * Deliberately here rather than on ResetPasswordDto: form validation runs first, and its
+     * default wording would replace this message with the framework's own.
+     */
+    if ([...String(password ?? '')].length < 8) {
+      throwValidation({ password: ['The password field must be at least 8 characters.'] });
+    }
     if (!this.passwords.fits(password)) {
       throwValidation({
         password: [
