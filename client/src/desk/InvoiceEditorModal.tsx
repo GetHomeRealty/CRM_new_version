@@ -2,7 +2,9 @@ import { deskPath } from './area';
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Icon from '../ui/Icon';
-import { getInvoice, createInvoice, updateInvoice, recordInvoiceReminder, recordInvoicePayment, sendInvoice } from '../lib/api';
+import { getInvoice, createInvoice, updateInvoice, recordInvoiceReminder, recordInvoicePayment, sendInvoice, updateInvoicePayment, deleteInvoicePayment } from '../lib/api';
+import { useAuth } from '../context/AuthContext';
+import ConfirmDialog, { useConfirm } from './ConfirmDialog';
 import { withDeadline } from './withDeadline';
 import InvoiceDoc from './InvoiceDoc';
 import BrandMark from './BrandMark';
@@ -97,6 +99,11 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
   const sigInputRef = useRef<HTMLInputElement>(null);
   const [form, setForm] = useState<InvoiceForm | null>(null);
   const [saved, setSaved] = useState<Invoice | null>(null);
+  // TD-172 - Accounting and Super Admin may correct a recorded payment; the server refuses anyone else.
+  const auth = useAuth();
+  const canCorrectPayments = auth.isSuperAdmin || auth.user?.role === 'accounting';
+  const payConfirm = useConfirm();
+  const [editPay, setEditPay] = useState<{ id: number; paid_on: string; amount: string; method: string; reference: string } | null>(null);
   const [saving, setSaving] = useState(false);
   const [savedOk, setSavedOk] = useState(false); // centered "Saved" badge
   const [sending, setSending] = useState(false); // Send Email in progress
@@ -361,6 +368,66 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
     } finally { setSaving(false); }
   };
 
+  // TD-172 - correct a recorded payment. One at a time; its fields are kept apart from the invoice form.
+  const startEditPay = (p: NonNullable<Invoice['payments']>[number]) => setEditPay({
+    id: Number(p.id), paid_on: String(p.paid_on ?? ''), amount: String(p.amount ?? ''),
+    method: String(p.method ?? ''), reference: String(p.reference ?? ''),
+  });
+  // After a refused or failed correction, show the invoice as it now stands rather than a stale list.
+  const reloadSaved = async () => {
+    if (!saved?.id) return;
+    try { const d = await getInvoice(saved.id); setForm(toForm(d)); setSaved(d); onSaved?.(d); } catch { /* keep what is shown */ }
+  };
+  // Unsaved invoice edits are saved first, as Record Payment does, so the reload after the payment change keeps
+  // them - except a received date/method typed on an invoice that is not Paid, which save() leaves out. With
+  // nothing unsaved the invoice is not re-sent, so a clean Paid invoice skips save() and its today() fill-in.
+  const saveIfChanged = async (): Promise<Invoice | undefined> =>
+    (saved?.id && JSON.stringify(form) === JSON.stringify(toForm(saved)) ? saved : save());
+  const saveEditPay = async () => {
+    if (!editPay) return;
+    const amount = Math.round(parseNumber(editPay.amount) * 100) / 100;
+    if (!editPay.paid_on) { toast('Enter the date the payment was received.', 'bad'); return; }
+    if (!(amount > 0)) { toast('Enter an amount greater than zero.', 'bad'); return; }
+    // Nothing changed: close the row without sending it, so the history gets no empty 'Payment edited'.
+    const orig = (saved?.payments || []).find((x) => Number(x.id) === editPay.id);
+    if (orig && String(orig.paid_on ?? '') === editPay.paid_on && Number(orig.amount ?? 0) === amount
+      && String(orig.method ?? '') === editPay.method && String(orig.reference ?? '') === editPay.reference) { setEditPay(null); return; }
+    setSaving(true);
+    try {
+      const s = await saveIfChanged();
+      if (!s?.id) return;
+      setSaving(true); // save() unlocks the buttons in its own finally; keep them locked until this lands
+      const d = await updateInvoicePayment(s.id, editPay.id, {
+        paid_on: editPay.paid_on, amount, method: editPay.method || null, reference: editPay.reference || null,
+      });
+      setForm(toForm(d)); setSaved(d); onSaved?.(d); setEditPay(null);
+      toast('Payment updated.', 'ok');
+    } catch (e) {
+      toast(apiErrorMessage(e, 'Could not update the payment'), 'bad');
+      await reloadSaved(); // the buttons stay locked until the fresh invoice is shown
+    } finally { setSaving(false); }
+  };
+  const askRemovePay = (p: NonNullable<Invoice['payments']>[number]) => payConfirm.askDelete({
+    title: 'Remove this payment?',
+    message: formatCurrency(Number(p.amount ?? 0)) + ' received on ' + String(p.paid_on ?? '')
+      + (p.method ? ' by ' + p.method : '') + ' will be removed, and that amount will show as due again.',
+    confirmLabel: 'Remove payment',
+    onConfirm: async () => {
+      setSaving(true);
+      try {
+        const s = await saveIfChanged();
+        if (!s?.id) return;
+        setSaving(true);
+        const d = (await deleteInvoicePayment(s.id, Number(p.id))) as Invoice;
+        setForm(toForm(d)); setSaved(d); onSaved?.(d);
+        toast('Payment removed.', 'ok');
+      } catch (e) {
+        toast(apiErrorMessage(e, 'Could not remove the payment'), 'bad');
+        await reloadSaved(); // the buttons stay locked until the fresh invoice is shown
+      } finally { setSaving(false); }
+    },
+  });
+
   // Reminders apply only until the invoice is settled — disabled once Paid or Void.
   const noReminders = form.status === 'Paid' || form.status === 'Void';
 
@@ -447,6 +514,39 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
                   Recorded so far: {formatCurrency(amountPaid)} · Outstanding: {formatCurrency(balanceDue)}
                 </div>
               )}
+              {/* TD-172 - each recorded payment, with Edit and Remove, shown to Accounting and Super Admin only. */}
+              {canCorrectPayments && (saved?.payments || []).length > 0 && (
+                <div style={{ marginBottom: 8 }}>
+                  {(saved?.payments || []).map((p) => (
+                    <div key={String(p.id)} style={{ fontSize: 11, borderTop: '1px solid #bbf7d0', padding: '5px 0' }}>
+                      {editPay && editPay.id === Number(p.id) ? (
+                        <div style={{ display: 'grid', gap: 4 }}>
+                          <input type="date" aria-label="Payment date" value={editPay.paid_on} onChange={(e) => setEditPay({ ...editPay, paid_on: e.target.value })} style={{ width: '100%', border: '1px solid var(--line)', borderRadius: 6, padding: '4px 6px' }} />
+                          <input type="number" step="0.01" min="0" aria-label="Payment amount" value={editPay.amount} onChange={(e) => setEditPay({ ...editPay, amount: e.target.value })} style={{ width: '100%', border: '1px solid var(--line)', borderRadius: 6, padding: '4px 6px' }} />
+                          <select aria-label="Received via" value={editPay.method} onChange={(e) => setEditPay({ ...editPay, method: e.target.value })} style={{ width: '100%', border: '1px solid var(--line)', borderRadius: 6, padding: '4px 6px' }}>
+                            <option value="">Select</option>
+                            {editPay.method && !COMM_VIA.includes(editPay.method) && <option>{editPay.method}</option>}
+                            {COMM_VIA.map((v) => <option key={v}>{v}</option>)}
+                          </select>
+                          <input aria-label="Reference" placeholder="Reference" value={editPay.reference} onChange={(e) => setEditPay({ ...editPay, reference: e.target.value })} style={{ width: '100%', border: '1px solid var(--line)', borderRadius: 6, padding: '4px 6px' }} />
+                          <div style={{ display: 'flex', gap: 6 }}>
+                            <button className="btn primary sm" onClick={saveEditPay} disabled={saving}>Save</button>
+                            <button className="btn ghost sm" onClick={() => setEditPay(null)} disabled={saving}>Cancel</button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <span style={{ flex: 1 }}>
+                            {String(p.paid_on ?? '')} - {formatCurrency(Number(p.amount ?? 0))}{p.method ? ' - ' + p.method : ''}{p.reference ? ' - ' + p.reference : ''}
+                          </span>
+                          <button className="btn ghost sm" onClick={() => startEditPay(p)} disabled={saving}>Edit</button>
+                          <button className="btn ghost sm" style={{ color: 'var(--bad)' }} onClick={() => askRemovePay(p)} disabled={saving}>Remove</button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
               <label style={{ fontSize: 11, color: 'var(--text-3)', display: 'block', marginBottom: 2 }}>Date</label>
               <input type="date" value={form.commission_received_date} onChange={(e) => set('commission_received_date', e.target.value)} style={{ width: '100%', marginBottom: 8, border: '1px solid var(--line)', borderRadius: 6, padding: '6px 8px' }} />
               <label style={{ fontSize: 11, color: 'var(--text-3)', display: 'block', marginBottom: 2 }}>Received via</label>
@@ -463,6 +563,7 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
               )}
             </div>
           )}
+          <ConfirmDialog confirm={payConfirm.confirm} onClose={payConfirm.closeConfirm} />
 
           {/* 4. Reminders — only until settled; disabled once the invoice is Paid or Void */}
           <div style={{ position: 'relative' }}>

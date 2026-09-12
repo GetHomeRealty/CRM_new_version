@@ -1,5 +1,5 @@
 import {
-  Body, Controller, Delete, Get, HttpCode, Param, ParseIntPipe, Post, Put, Query, Res, UseGuards,
+  Body, Controller, Delete, ForbiddenException, Get, HttpCode, Param, ParseIntPipe, Post, Put, Query, Res, UseGuards,
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { AuthGuard } from '../auth/guards/auth.guard';
@@ -10,8 +10,20 @@ import type { ActingUser } from '../audit/audit.service';
 import { InvoicesService, type InvoiceListPage, type InvoiceListQuery } from './invoices.service';
 import { CustomersService } from './customers.service';
 import { InvoiceAccessGuard } from './invoice-access.guard';
+import { isSuperAdmin } from '../core/authz';
 
 const actor = (u: AuthUserRecord | undefined): ActingUser | null => (u ? { id: u.id, name: u.name } : null);
+
+/**
+ * TD-172 - correcting a recorded payment, by editing it or removing it, is for Accounting and Super
+ * Admin only: the brokerage's ruling of 2026-09-11. Refused here on the role, so hiding the buttons is
+ * not the only thing in the way. Recording a NEW payment is unchanged.
+ */
+const assertCanCorrectPayments = (u: AuthUserRecord | undefined): void => {
+  if (!u || !(isSuperAdmin(u) || u.role === 'accounting')) {
+    throw new ForbiddenException({ message: 'Only Accounting or a Super Admin can edit or remove a recorded payment.' });
+  }
+};
 
 /**
  * Every route here requires BOTH the `invoice` screen permission AND a brokerage financial role.
@@ -89,7 +101,15 @@ export class InvoicesController {
   @Delete('invoices/:invoice/payments/:payment')
   @Screen('invoice', 'edit')
   deletePayment(@CurrentUser() user: AuthUserRecord | undefined, @Param('invoice', ParseIntPipe) id: number, @Param('payment', ParseIntPipe) paymentId: number): Promise<Record<string, unknown>> {
+    assertCanCorrectPayments(user);
     return this.invoices.deletePayment(actor(user), id, paymentId);
+  }
+
+  @Put('invoices/:invoice/payments/:payment')
+  @Screen('invoice', 'edit')
+  updatePayment(@CurrentUser() user: AuthUserRecord | undefined, @Param('invoice', ParseIntPipe) id: number, @Param('payment', ParseIntPipe) paymentId: number, @Body() body: Record<string, unknown>): Promise<Record<string, unknown>> {
+    assertCanCorrectPayments(user);
+    return this.invoices.updatePayment(actor(user), id, paymentId, body ?? {});
   }
 
   /*

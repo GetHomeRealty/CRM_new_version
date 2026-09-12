@@ -646,6 +646,7 @@ export const updateInvoice = (id: Id, payload: unknown): Promise<Invoice> => api
 export const deleteInvoice = (id: Id, reason?: string): Promise<unknown> => api.delete(`/api/invoices/${id}`, { data: { reason } }).then((r) => r.data);
 export const recordInvoicePayment = (id: Id, payload: unknown): Promise<Invoice> => api.post<Invoice>(`/api/invoices/${id}/payments`, payload).then((r) => r.data);
 export const deleteInvoicePayment = (id: Id, paymentId: Id): Promise<unknown> => api.delete(`/api/invoices/${id}/payments/${paymentId}`).then((r) => r.data);
+export const updateInvoicePayment = (id: Id, paymentId: Id, payload: unknown): Promise<Invoice> => api.put<Invoice>(`/api/invoices/${id}/payments/${paymentId}`, payload).then((r) => r.data);
 export const recordInvoiceReminder = (id: Id, payload: unknown = {}): Promise<Invoice> => api.post<Invoice>(`/api/invoices/${id}/reminders`, payload).then((r) => r.data);
 export const sendInvoice = (id: Id, payload: unknown = {}): Promise<Invoice> => api.post<Invoice>(`/api/invoices/${id}/send`, payload).then((r) => r.data);
 

@@ -354,7 +354,7 @@ export class InvoicesService {
     if (String(body.status ?? '') === 'Void') {
       const paidRows = await this.prisma.invoice_payments.count({ where: { invoice_id: id } });
       if (paidRows > 0 || num(invoice.amount_paid) > 0) {
-        const m = 'This invoice has a payment recorded against it, so it cannot be voided. Remove the payment first if it was entered in error.';
+        const m = 'This invoice has a payment recorded against it, so it cannot be voided. If the payment was entered in error, Accounting or a Super Admin can remove it first.';
         throw new UnprocessableEntityException({ message: m, errors: { status: [m] } });
       }
     }
@@ -401,7 +401,7 @@ export class InvoicesService {
      */
     const paidRows = await this.prisma.invoice_payments.count({ where: { invoice_id: id } });
     if (paidRows > 0 || Number(invoice.amount_paid) > 0) {
-      const m = 'This invoice has a payment recorded against it, so it cannot be deleted or voided. Remove the payment first if it was entered in error.';
+      const m = 'This invoice has a payment recorded against it, so it cannot be deleted or voided. If the payment was entered in error, Accounting or a Super Admin can remove it first.';
       throw new UnprocessableEntityException({ message: m, errors: { id: [m] } });
     }
     if (invoice.sent_at !== null) {
@@ -460,15 +460,119 @@ export class InvoicesService {
     // Read the row BEFORE it goes, so the history can say what was removed. 'Payment recorded'
     // writes the figure and the method, and since TD-162 removing a payment is the only way past
     // the delete and void guards - so this is the entry a reader most needs to be complete.
-    const gone = await this.prisma.invoice_payments.findFirst({ where: { id: paymentId, invoice_id: id }, select: { amount: true, method: true } });
+    const gone = await this.prisma.invoice_payments.findFirst({ where: { id: paymentId, invoice_id: id }, select: { amount: true, method: true, paid_on: true, reference: true } });
+    // TD-172 - a payment that is not there is said so, rather than recorded in the history as removed.
+    if (!gone) throw new NotFoundException({ message: 'That payment is no longer on this invoice - it may already have been removed.' });
     await this.prisma.invoice_payments.deleteMany({ where: { id: paymentId, invoice_id: id } });
     const settings = await this.settings.current();
     await this.calc.recalculate(this.prisma, id, this.rate(invoice.tax_rate, settings.default_tax_rate));
-    const updated = await this.prisma.invoices.findUniqueOrThrow({ where: { id } });
+    const { row: updated, cleared } = await this.clearReceivedIfUnpaid(id);
     await this.auditInvoice(id, updated.transaction_id, actor, { field: `Invoice ${updated.invoice_no} — Payment`, action: 'Payment removed',
-      ...(gone ? { old: this.numberFormat(num(gone.amount)) + (gone.method ? ` (${gone.method})` : '') } : {}),
+      old: this.describePayment(num(gone.amount), gone.method, gone.paid_on, gone.reference),
+      ...(cleared ? { details: cleared } : {}),
     });
     return this.show(id);
+  }
+
+  /**
+   * TD-172 - correct a recorded payment: its date, amount, method and reference.
+   *
+   * Accounting and Super Admin only, enforced in the controller. Allowed on a Paid invoice as well:
+   * the brokerage's ruling of 2026-09-11 is that a payment typed wrong must be correctable after the
+   * fact. The totals are recalculated from the payment rows exactly as recording one does, and the
+   * history keeps both versions, plus anything that happened to the commission-received date.
+   */
+  async updatePayment(actor: ActingUser | null, id: number, paymentId: number, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const invoice = await this.prisma.invoices.findFirst({ where: { id, deleted_at: null } });
+    if (!invoice) throw new NotFoundException({ message: `No query results for model [App\\Models\\Invoice] ${id}.` });
+    const before = await this.prisma.invoice_payments.findFirst({ where: { id: paymentId, invoice_id: id } });
+    if (!before) throw new NotFoundException({ message: 'That payment is no longer on this invoice - it may have been removed.' });
+    this.requireField(body, 'paid_on');
+    const paidOn = this.toDate(body.paid_on);
+    const amount = Math.round(Number(body.amount) * 100) / 100;
+    if (!paidOn) {
+      const m = 'Enter the date the payment was received.';
+      throw new UnprocessableEntityException({ message: m, errors: { paid_on: [m] } });
+    }
+    if (!(amount > 0)) {
+      const m = 'Enter an amount greater than zero.';
+      throw new UnprocessableEntityException({ message: m, errors: { amount: [m] } });
+    }
+    // RAISING a payment may not take the payments past the invoice total - the limit the Record Payment
+    // screen applies. A correction that keeps or lowers the amount is always allowed.
+    const others = (await this.prisma.invoice_payments.findMany({ where: { invoice_id: id, NOT: { id: paymentId } }, select: { amount: true } }))
+      .reduce((sum, p) => sum + num(p.amount), 0);
+    if (amount > num(before.amount) + 0.005 && others + amount > num(invoice.total) + 0.005) {
+      const m = 'That would record ' + this.numberFormat(others + amount) + ' against an invoice total of '
+        + this.numberFormat(num(invoice.total)) + '.';
+      throw new UnprocessableEntityException({ message: m, errors: { amount: [m] } });
+    }
+    const method = body.method ? String(body.method) : null;
+    const reference = body.reference ? String(body.reference) : null;
+    // Nothing changed: no write, no recalculation, no history entry.
+    if (amount === num(before.amount) && toDateString(paidOn) === toDateString(before.paid_on)
+      && method === (before.method ?? null) && reference === (before.reference ?? null)) return this.show(id);
+    await this.prisma.invoice_payments.update({
+      where: { id: paymentId },
+      data: { paid_on: paidOn, amount, method, reference, updated_at: new Date() },
+    });
+    const settings = await this.settings.current();
+    await this.calc.recalculate(this.prisma, id, this.rate(invoice.tax_rate, settings.default_tax_rate));
+    const notes: string[] = [];
+    const cleared = await this.clearReceivedIfUnpaid(id);
+    let updated = cleared.row;
+    if (cleared.cleared) notes.push(cleared.cleared);
+    /*
+     * TD-106 ON AN EDIT. A Paid invoice takes its commission-received date and method from the payment
+     * that settled it: set here when this edit is what makes it Paid, and moved when this edit corrects
+     * the payment the date came from. A date that came from anywhere else is left alone, and so is an
+     * invoice that was already Paid with no date: this payment is not known to be the one that settled it.
+     */
+    if (updated.status === 'Paid') {
+      const rc = updated.commission_received_date;
+      const current = { date: rc ? toDateString(rc) : null, via: updated.commission_received_via ?? null };
+      const target = { date: toDateString(paidOn), via: method };
+      const madePaid = invoice.status !== 'Paid';
+      const fromThis = !!current.date && current.date === toDateString(before.paid_on) && current.via === (before.method ?? null);
+      if (((!current.date && madePaid) || fromThis) && (current.date !== target.date || current.via !== target.via)) {
+        updated = await this.prisma.invoices.update({
+          where: { id },
+          data: { commission_received_date: paidOn, commission_received_via: method, updated_at: new Date() },
+        });
+        notes.push('Commission received set to ' + String(target.date) + (method ? ', ' + method : '') + '.');
+      }
+    }
+    await this.auditInvoice(id, updated.transaction_id, actor, {
+      field: `Invoice ${updated.invoice_no} \u2014 Payment`, action: 'Payment edited',
+      old: this.describePayment(num(before.amount), before.method, before.paid_on, before.reference),
+      new: this.describePayment(amount, method, paidOn, reference),
+      ...(notes.length ? { details: notes.join(' ') } : {}),
+    });
+    return this.show(id);
+  }
+
+  /** TD-172 - one payment in words, for the history: "1,000.00 (Cash) on 2026-09-08, ref CHQ-9". */
+  private describePayment(amount: number, method: string | null, paidOn: Date | null, reference: string | null): string {
+    return this.numberFormat(amount) + (method ? ` (${method})` : '') + (paidOn ? ` on ${toDateString(paidOn)}` : '')
+      + (reference ? `, ref ${reference}` : '');
+  }
+
+  /**
+   * TD-172 - an invoice that is no longer fully Paid must not keep saying its commission was received.
+   * The agent-payout rule (TD-107) trusts that date, so removing or reducing the payment that settled an
+   * invoice clears it - and says so, because the history is where anyone would look for why it went.
+   */
+  private async clearReceivedIfUnpaid(id: number) {
+    const cur = await this.prisma.invoices.findUniqueOrThrow({ where: { id } });
+    if (cur.status !== 'Paid' && (cur.commission_received_date || cur.commission_received_via)) {
+      const was = [cur.commission_received_date ? toDateString(cur.commission_received_date) : null, cur.commission_received_via].filter(Boolean).join(', ');
+      const row = await this.prisma.invoices.update({
+        where: { id },
+        data: { commission_received_date: null, commission_received_via: null, updated_at: new Date() },
+      });
+      return { row, cleared: 'Commission received ' + (was ? '(' + was + ') ' : '') + 'cleared - the invoice is no longer fully Paid.' };
+    }
+    return { row: cur, cleared: null as string | null };
   }
 
   /**
