@@ -114,7 +114,7 @@ export class DashboardController {
   }
 
   @Get('commissions')
-  @Screen('dashboard', 'view')
+  @Screen('dashboard', 'view', 'desk')
   commissions(@CurrentUser() user: AuthUserRecord | undefined): Promise<DashboardCommissions> {
     return this.dashboard.commissions(user ? { id: user.id, role: user.role, name: user.name } : null);
   }
@@ -127,14 +127,14 @@ export class DashboardController {
    * visits that never scroll far enough to see them.
    */
   @Get('reviews')
-  @Screen('dashboard', 'view')
+  @Screen('dashboard', 'view', 'desk')
   reviews(@CurrentUser() user: AuthUserRecord | undefined): Promise<Record<string, unknown>> {
     return this.reviews_.stats(user ?? null);
   }
 
   /** What keeps going wrong, and how long it takes to put right — the charts and the metrics. */
   @Get('review-errors')
-  @Screen('dashboard', 'view')
+  @Screen('dashboard', 'view', 'desk')
   reviewErrors(
     @CurrentUser() user: AuthUserRecord | undefined,
     /** `YYYY-MM` narrows it to one month; absent means the twelve months ending today. */
