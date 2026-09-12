@@ -5,26 +5,31 @@ import { MailAccountService } from './mail-account.service';
 import { LaravelCryptService } from '../common/laravel-crypt.service';
 
 /**
- * A CRM send leaves from a CRM mailbox, or it does not leave at all.
+ * WHICH MAILBOX A SEND LEAVES FROM - the person's own, on either side.
  *
- * WHAT WAS REPORTED. CRM Account Settings said no CRM email account was connected - and stated that
- * each area keeps its own accounts - while a CRM campaign went out from the agent's
- * TRANSACTION DESK mailbox.
+ * RULED BY THE BROKERAGE 2026-09-12, AND THREE OF THESE TESTS WERE REWRITTEN TO IT. A mailbox is
+ * connected once and used from both the CRM and the Transaction Desk: the side a mailbox is marked
+ * for no longer decides who sends from it. The owner chose this over the older per-area rule because
+ * every mailbox connected since the 2026-09-04 change carries no side at all, so the per-area rule
+ * left those people sending from the system's default address rather than from their own.
  *
- * WHY IT HAPPENED, and it was already written down. `MailAccountService.senderFor` carries a comment
- * saying `MailerService.resolveSender` "never looks at `scope`, so a CRM email could leave from a
- * Transaction Desk mailbox, which is the exact cross-wiring the `scope` column was added to
- * prevent". `senderFor` was written to close that gap and the per-lead CRM paths use it. Campaigns
- * did not: they called `sendDirect`, which resolves through `resolveSender`.
+ * WHAT THIS REPLACED, AND WHY THAT RULE EXISTED. CRM Account Settings said no CRM email account was
+ * connected - and stated that each area keeps its own accounts - while a CRM campaign went out from
+ * the agent's TRANSACTION DESK mailbox. `MailAccountService.senderFor` was written to close that
+ * gap; campaigns reached the mailbox through `MailerService.resolveSender`, which never looked at
+ * `scope`. The 2026-09-04 change then made personal mailboxes Hub-wide. A per-area filter ran on
+ * this server uncommitted until 2026-09-12, when its author removed it, and the brokerage settled
+ * the question the same day in favour of one mailbox used on both sides.
  *
- * WORSE THAN CROSS-AREA. `resolveSender`'s last resort is ANY active mailbox belonging to anyone, so
- * a campaign could go out from a COLLEAGUE'S address - the code logs a warning when it does. The
- * fault was cross-person as well as cross-area.
- *
- * WHY REFUSING IS THE RIGHT ANSWER when the area has no mailbox. It is what the rest of the CRM
- * already does - `CrmAdvancedEmailService` declines rather than borrowing - and it is what CRM
- * Account Settings already tells the reader happens. A brokerage marketing message leaving from an
- * arbitrary mailbox is a worse outcome than a send that stops and says why.
+ * WHAT DID NOT CHANGE, AND WHAT THE FALLBACKS ACTUALLY DO. With no mailbox of their own a person
+ * falls back to the brokerage's shared account, and then - a gap recorded below and deliberately not
+ * closed - to a colleague's. The colleague fallback still reads the side a mailbox is marked for, so
+ * a CRM send will not borrow a colleague's Desk mailbox. The shared-account fallback does NOT:
+ * `defaultSender` looks for a shared row in the area first, but its next two lookups drop `scope`, so
+ * a shared row marked for the other side is used when the area has none. The person's own mailbox
+ * ignores the mark outright. A switched-off mailbox is never used, and where nothing usable is
+ * switched on the refusal still names the area, so the message says what to connect. Those two
+ * refusals are tests five and seven below.
  *
  * NOTHING IS SENT BY THESE TESTS. Only the resolution is exercised.
  */
@@ -77,34 +82,39 @@ async function account(tx: PrismaService, over: Record<string, unknown>) {
 }
 
 describe('which mailbox a CRM campaign sends from', () => {
-  it('uses the sender’s CRM mailbox, not their Transaction Desk one', async () => {
+  it('uses the main mailbox of the person sending, whichever side it is marked for', async () => {
     await inRollback(async (tx) => {
       await emptyAccounts(tx);
       const user = await makeUser(tx);
-      const desk = await account(tx, { user_id: user.id, scope: 'desk', is_default: true });
-      const crm = await account(tx, { user_id: user.id, scope: 'crm' });
+      // The other mailbox is created FIRST, so being the oldest cannot explain the answer: what is
+      // being proved is that the mailbox marked as this person's main one wins.
+      const other = await account(tx, { user_id: user.id, scope: 'crm' });
+      const main = await account(tx, { user_id: user.id, scope: 'desk', is_default: true });
 
       const chosen = await mailer(tx).resolveSenderInArea(user.id, 'crm');
 
-      // THE DEFECT: this returned the Desk account, because it was the user's default and nothing
-      // in the resolution looked at `scope`.
-      expect(chosen.id).toBe(crm.id);
-      expect(chosen.id).not.toBe(desk.id);
+      // The 2026-09-12 ruling: connected once, used on both sides. The mark on a mailbox no longer
+      // decides; the person's own main mailbox does, and this send leaves from it.
+      expect(chosen.id).toBe(main.id);
+      expect(chosen.id).not.toBe(other.id);
     });
   });
 
-  it('refuses rather than borrowing when the area has no mailbox', async () => {
+  it('uses the only mailbox a person has, even when it is marked for the other side', async () => {
     /*
-     * The behaviour change worth stating plainly: a campaign that previously went out from a Desk
-     * mailbox now stops. That is the existing CRM rule, applied to campaigns for the first time.
+     * The behaviour the brokerage chose on 2026-09-12, stated plainly: a CRM send by somebody whose
+     * only mailbox is marked Transaction Desk leaves from that mailbox rather than stopping. That
+     * mailbox carries no main-mailbox mark either, so this is also the fallback branch - the same
+     * no-main-mailbox shape that branch serves. The refusal still happens where nothing usable
+     * is switched on: the switched-off case and the nothing-connected case, tests five and seven.
      */
     await inRollback(async (tx) => {
       await emptyAccounts(tx);
       const user = await makeUser(tx);
-      await account(tx, { user_id: user.id, scope: 'desk', is_default: true });
+      const only = await account(tx, { user_id: user.id, scope: 'desk' });
 
-      await expect(mailer(tx).resolveSenderInArea(user.id, 'crm'))
-        .rejects.toThrow(/No active CRM email account is connected/i);
+      const chosen = await mailer(tx).resolveSenderInArea(user.id, 'crm');
+      expect(chosen.id).toBe(only.id);
     });
   });
 
@@ -155,17 +165,18 @@ describe('which mailbox a CRM campaign sends from', () => {
     });
   });
 
-  it('the Transaction Desk keeps its own answer, unchanged', async () => {
-    // The fix is symmetrical: a Desk send must not start using a CRM mailbox either.
+  it('the Transaction Desk gives the same answer: the main mailbox of the person sending', async () => {
+    // The rule is symmetrical: neither side reads the mark on a mailbox any more. The other mailbox
+    // is created first here too, so age cannot explain the answer.
     await inRollback(async (tx) => {
       await emptyAccounts(tx);
       const user = await makeUser(tx);
-      const crm = await account(tx, { user_id: user.id, scope: 'crm', is_default: true });
-      const desk = await account(tx, { user_id: user.id, scope: 'desk' });
+      const other = await account(tx, { user_id: user.id, scope: 'desk' });
+      const main = await account(tx, { user_id: user.id, scope: 'crm', is_default: true });
 
       const chosen = await mailer(tx).resolveSenderInArea(user.id, 'desk');
-      expect(chosen.id).toBe(desk.id);
-      expect(chosen.id).not.toBe(crm.id);
+      expect(chosen.id).toBe(main.id);
+      expect(chosen.id).not.toBe(other.id);
     });
   });
 
