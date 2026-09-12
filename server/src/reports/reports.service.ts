@@ -965,11 +965,11 @@ export class ReportsService {
     // section filtering happens on ROWS, so per-row sectioning filters correctly too
     if (visibleSections) mapped = mapped.filter((r) => wanted.includes(String(r.section ?? '')));
 
-    // Section reports render in fixed section order (sorting disabled); others sort normally.
+    // Section reports render in fixed section order, each section sorted by the report's own default (TD-181).
     let sections: { key: string; label: string; count: number; totals?: ReportTotals }[] | undefined;
     let ordered: ReportRow[];
     if (visibleSections) {
-      ordered = visibleSections.flatMap((s) => mapped.filter((r) => r.section === s.key));
+      ordered = visibleSections.flatMap((s) => this.sort(mapped.filter((r) => r.section === s.key), def, query));
       sections = visibleSections.map((s) => {
         const rows = mapped.filter((r) => r.section === s.key);
         return {
