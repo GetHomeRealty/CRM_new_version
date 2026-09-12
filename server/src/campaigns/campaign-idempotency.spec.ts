@@ -150,9 +150,11 @@ describe('a repeated commit does not become a second campaign', () => {
     const name = `Race ${uniq()}`;
     const key = `key-${uniq()}`;
     let made: number[] = [];
+    let scenery: { userId: number; templateId: number } | null = null;
 
     try {
       const { user, template } = await scene(tx);
+      scenery = { userId: user.id, templateId: template.id };
       const results = await Promise.allSettled([
         svc.createAndSend({ ...payload(name, template.id), idempotency_key: key } as never, user),
         svc.createAndSend({ ...payload(name, template.id), idempotency_key: key } as never, user),
@@ -171,6 +173,21 @@ describe('a repeated commit does not become a second campaign', () => {
       // `campaign-concurrency.spec.ts`. Remove it immediately rather than in `afterAll`.
       await prisma.campaign_recipients.deleteMany({ where: { campaign_id: { in: made } } });
       await prisma.campaigns.deleteMany({ where: { name } });
+      /*
+       * AND THE SCENERY, WHICH THIS TEST USED TO LEAVE BEHIND. scene() runs against the real
+       * client here too, so the agent, the template and the lead it creates are committed just
+       * as the campaign is. Removing only the campaign left ONE LOGIN AND ONE LEAD IN THE LIVE
+       * DATABASE PER FULL-SUITE RUN - 17 of each by 2026-09-12, every one of them showing up
+       * wherever the application lists agents or leads. Found by an outside review, not by us.
+       * ORDER MATTERS: the lead and the template both point at the agent, so the agent is last.
+       * The rehearsal on 2026-09-12 deleted all three sets in this order against the live
+       * database inside a rolled-back transaction, so nothing else refers to them.
+       */
+      if (scenery) {
+        await prisma.campaign_templates.deleteMany({ where: { id: scenery.templateId } });
+        await prisma.leads.deleteMany({ where: { owner_user_id: scenery.userId } });
+        await prisma.users.deleteMany({ where: { id: scenery.userId } });
+      }
     }
   });
 
