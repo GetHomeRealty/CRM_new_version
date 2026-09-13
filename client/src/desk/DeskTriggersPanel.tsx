@@ -138,7 +138,7 @@ export default function DeskTriggersPanel() {
         <div className="field" style={{ maxWidth: 520 }}>
           <label>Lawyer-detail reminders</label>
           <p className="help" style={{ margin: '0 0 8px' }}>
-            Every hour, each Buying or Lease deal that still has a lawyer name, email, phone or
+            Every hour, each Buying deal that still has a lawyer name, email, phone or
             address missing is re-checked. The agent on the deal is emailed again once this many days
             have passed since their last reminder, and keeps being reminded until the details are
             entered. <strong>Zero switches the recurring reminder off</strong> — the one-off nudge

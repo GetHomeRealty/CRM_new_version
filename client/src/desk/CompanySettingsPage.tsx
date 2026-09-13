@@ -195,7 +195,7 @@ export default function CompanySettingsPage() {
               <label htmlFor="cs-lawyer_reminder_days">Lawyer detail reminder — every (days)</label>
               <input id="cs-lawyer_reminder_days" type="number" min={0} max={365} value={String(form.lawyer_reminder_days ?? 3)} disabled={!canEdit}
                 onChange={(e) => set('lawyer_reminder_days', e.target.value)} />
-              <span className="help">Agents are re-emailed this often while buyer/seller lawyer details are missing on a Buying/Lease deal. Set to 0 to turn recurring reminders off.</span>
+              <span className="help">Agents are re-emailed this often while buyer/seller lawyer details are missing on a Buying deal. Set to 0 to turn recurring reminders off.</span>
             </div>
           </div>
         </div>

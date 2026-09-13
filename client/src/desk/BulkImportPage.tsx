@@ -299,12 +299,20 @@ export default function BulkImportPage() {
                         Report
                       </button>
                       {/*
-                        TD-142 — offered only where it can do something: a completed import that
-                        still has deals of its own. An import made before this feature existed
-                        carries no batch on its rows and reports zero, so the button is not shown
-                        rather than shown and refused.
+                        TD-142 — offered only where it can do something: an import that still has
+                        deals of its own. An import made before this feature existed carries no
+                        batch on its rows and reports zero, so the button is not shown rather than
+                        shown and refused.
+
+                        TD-182, 2026-09-13 — `reversible_rows` IS that test, and it was paired with
+                        `status === 'Imported'`, which excluded a PARTIALLY imported batch. A
+                        partial batch has deals of its own like any other, the server's undo
+                        endpoint has never had a status check, and a partial import is the ordinary
+                        case on a real file. Four of the five batches in the master-sheet migration
+                        were partial, and reversing one needed a hand-written SQL statement against
+                        the live database because this button was not drawn.
                       */}
-                      {b.status === 'Imported' && (b.reversible_rows ?? 0) > 0 && (
+                      {(b.reversible_rows ?? 0) > 0 && (
                         <button className="btn ghost sm" style={{ marginLeft: 6, color: 'var(--bad)' }}
                           disabled={undoing} onClick={() => setToUndo(b)}>
                           {undoing ? 'Undoing…' : 'Undo import'}
