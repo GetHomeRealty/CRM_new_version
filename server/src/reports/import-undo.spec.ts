@@ -183,7 +183,7 @@ describe('undoing one bulk import (TD-142)', () => {
       await svc.undo(batchId, superAdmin);
 
       expect((await tx.import_batches.findUnique({ where: { batch_id: batchId } }))?.status).toBe('Undone');
-      expect(await refusal(() => svc.undo(batchId, superAdmin))).toContain('Only a completed import');
+      expect(await refusal(() => svc.undo(batchId, superAdmin))).toContain('cannot be undone');
     });
   }, 60000);
 
@@ -204,12 +204,48 @@ describe('undoing one bulk import (TD-142)', () => {
   }, 60000);
 });
 
+describe('a partly completed import (TD-182)', () => {
+  /*
+   * Ruled by the brokerage on 2026-09-13, after four of the five master-sheet batches came back
+   * Partially Imported and reversing one needed hand-written SQL against the live database.
+   * BOTH HALVES ARE ASSERTED, because fixing one and announcing the fix is how this was got wrong
+   * the first time: undo() must accept the batch, AND history() must report it as reversible,
+   * which is the number the button is actually drawn from.
+   */
+  it('can be undone, because it created real deals like any other', async () => {
+    await inRollback(async (tx) => {
+      const batchId = `IMP-${Date.now()}-P`;
+      await makeBatch(tx, batchId, 'Partially Imported');
+      const dealId = await makeDeal(tx, { import_batch_id: batchId });
+
+      const r = await serviceFor(tx).undo(batchId, superAdmin) as { removed: number };
+
+      expect(r.removed).toBe(1);
+      expect((await tx.transactions.findUnique({ where: { id: dealId } }))?.deleted_at).not.toBeNull();
+      expect((await tx.import_batches.findUnique({ where: { batch_id: batchId } }))?.status).toBe('Undone');
+    });
+  }, 60000);
+
+  it('is reported as reversible by the history, which is what draws the button', async () => {
+    await inRollback(async (tx) => {
+      const batchId = `IMP-${Date.now()}-Q`;
+      await makeBatch(tx, batchId, 'Partially Imported');
+      await makeDeal(tx, { import_batch_id: batchId });
+
+      const rows = (await serviceFor(tx).history(superAdmin)) as unknown as
+        Array<{ batch_id: string; reversible_rows: number }>;
+
+      expect(rows.find((x) => x.batch_id === batchId)?.reversible_rows).toBe(1);
+    });
+  }, 60000);
+});
+
 describe('what the undo refuses (TD-142)', () => {
   it('refuses an import that was never completed', async () => {
     await inRollback(async (tx) => {
       const batchId = `IMP-${Date.now()}-H`;
       await makeBatch(tx, batchId, 'Validated');
-      expect(await refusal(() => serviceFor(tx).undo(batchId, superAdmin))).toContain('Only a completed import');
+      expect(await refusal(() => serviceFor(tx).undo(batchId, superAdmin))).toContain('cannot be undone');
     });
   }, 60000);
 

@@ -1702,6 +1702,19 @@ export class TransactionImportService {
     return { buffer: Buffer.from(await wb.xlsx.writeBuffer()), fileName: `import-errors-${batch.batch_id}.xlsx` };
   }
 
+  /**
+   * TD-182, 2026-09-13 - WHICH BATCHES UNDO IS OFFERED FOR AND ACCEPTED ON, IN ONE PLACE.
+   * This test used to be written out separately in three places - here in history(), again in
+   * undo(), and a third time on the Import History screen - and they drifted. The screen was
+   * corrected first, on its own, and nothing changed: history() still reported zero reversible
+   * rows for a partial batch, so the button stayed hidden with no way to see why from the screen.
+   * A PARTLY IMPORTED BATCH CREATED REAL DEALS like any other, and four of the five batches in the
+   * master-sheet migration were partial - reversing one took hand-written SQL against the live
+   * database. The brokerage ruled on 2026-09-13 that they may be reversed. Add a status here and
+   * every gate moves together.
+   */
+  private readonly UNDOABLE_BATCH_STATUSES = ['Imported', 'Partially Imported'];
+
   // ------------------------------------------------------------------ history
   /** Import history (most recent first) for the Bulk Import History screen. */
   async history(user: AuthUserRecord, limit = 50): Promise<Record<string, unknown>[]> {
@@ -1723,7 +1736,7 @@ export class TransactionImportService {
       // TD-142 — how many of this batch's deals are still present, which is what the Undo removes.
       // Read per batch rather than joined, because the history is at most 200 rows and this keeps
       // the shape of the method it belongs to.
-      reversible_rows: b.status === 'Imported'
+      reversible_rows: this.UNDOABLE_BATCH_STATUSES.includes(b.status ?? '')
         ? await this.prisma.transactions.count({ where: { import_batch_id: b.batch_id, deleted_at: null } })
         : 0,
     })));
@@ -1761,9 +1774,10 @@ export class TransactionImportService {
     this.assertCanImport(user);
     const batch = await this.prisma.import_batches.findUnique({ where: { batch_id: batchId } });
     if (!batch) throw new NotFoundException({ message: 'Import batch not found.' });
-    if (batch.status !== 'Imported') {
+    if (!this.UNDOABLE_BATCH_STATUSES.includes(batch.status ?? '')) {
       throw new BadRequestException({
-        message: `Only a completed import can be undone (this one is ${batch.status}).`,
+        message: `This import cannot be undone (it is ${batch.status}). `
+          + 'Only a completed or partly completed import can be reversed.',
       });
     }
 
