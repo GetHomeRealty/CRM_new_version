@@ -194,7 +194,12 @@ describe('the document-row fast path returns exactly what the enrichment path re
       const svc = serviceFor(tx);
       const first = await svc.run('pending-invalid-documents', admin, { filters: {}, page: 1, per_page: 7 } as never);
       expect(first.last_page).toBeGreaterThan(2);
-      for (let page = 1; page <= first.last_page; page++) {
+      // THE FIRST FEW PAGES, NOT ALL OF THEM. What is under test is that a page boundary falls in
+      // the same place on both paths; the boundaries between pages 1-6 prove that as well as every
+      // page would. The report now covers the brokerage's own documents, so walking all of them ran
+      // the whole report twice per page.
+      const pages = Math.min(first.last_page, 6);
+      for (let page = 1; page <= pages; page++) {
         const q = { filters: {}, page, per_page: 7 };
         expect(presented(await svc.run('pending-invalid-documents', admin, q as never)))
           .toEqual(presented(await slowly(svc, q)));

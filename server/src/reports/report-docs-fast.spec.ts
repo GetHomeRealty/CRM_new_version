@@ -150,6 +150,17 @@ async function slowly(svc: ReportsService, type: string, query: Record<string, u
 
 const REPORTS_UNDER_TEST = ['deal-documentation-status', 'reco-audit-readiness'] as const;
 
+/**
+ * THIS SPEC'S OWN AGENTS. `fixture()` creates Docs A..I plus six Docs Bulk deals, and nothing else
+ * here belongs to them. Sort comparisons have to be narrowed to these: PER_PAGE_MAX is 200, so once
+ * the brokerage has more deals than that, real rows share page one and the two paths break ties
+ * between THEM differently - which says nothing about the code under test.
+ */
+const DOCS_AGENTS = [
+  'Docs A', 'Docs B', 'Docs C', 'Docs D', 'Docs E', 'Docs F', 'Docs G', 'Docs H', 'Docs I',
+  ...Array.from({ length: 6 }, (_, i) => `Docs Bulk ${i}`),
+];
+
 describe('the documentation fast path returns exactly what the enrichment path returns', () => {
   jest.setTimeout(180_000);
 
@@ -211,7 +222,7 @@ describe('the documentation fast path returns exactly what the enrichment path r
         'last_doc_update', 'documentation_status', 'trade_no', 'agent', 'txn_id'];
       for (const sort of keys) {
         for (const dir of ['asc', 'desc'] as const) {
-          const q = { filters: {}, page: 1, per_page: 200, sort, dir };
+          const q = { filters: { agent: DOCS_AGENTS }, page: 1, per_page: 200, sort, dir };
           expect(presented(await svc.run('deal-documentation-status', admin, q as never)))
             .toEqual(presented(await slowly(svc, 'deal-documentation-status', q)));
         }

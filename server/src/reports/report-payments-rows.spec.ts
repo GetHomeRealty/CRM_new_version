@@ -183,7 +183,12 @@ describe('the payment-status fast path returns exactly what the enrichment path 
       await fixture(tx);
       await warmCache(tx);
       const svc = serviceFor(tx);
-      const q = { filters: {}, page: 1, per_page: 500 };
+      // THIS TEST'S OWN DEALS ONLY. It looks its fixtures up by name, so they have to be in the
+      // rows it gets back - and PER_PAGE_MAX is 200, so asking for a bigger page cannot help once
+      // the brokerage has more than 200 deals of its own. The fast path refuses payment_type,
+      // payout_status, split_ratio and search but NOT agent, so filtering by the fixture agents
+      // narrows the report while keeping both paths in play, which is the whole point of the test.
+      const q = { filters: { agent: ['Pay Agent A', 'Pay Agent B'] }, page: 1, per_page: 200 };
       const fast = await svc.run('transaction-payment-status', admin, q as never);
       const slow = await slowly(svc, q);
 

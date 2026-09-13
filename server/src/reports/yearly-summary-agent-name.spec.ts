@@ -89,7 +89,12 @@ async function teamDeal(tx: PrismaService) {
 }
 
 const rowsFor = async (tx: PrismaService, user: AuthUserRecord, tradeNo: string): Promise<Row[]> => {
-  const r = await serviceFor(tx).run('yearly-deal-summary', user, { filters: {}, page: 1, per_page: 200 } as never);
+  // ASK FOR THE DEAL, do not fetch 200 rows and hope it is among them. It was when the
+  // Desk held a handful; with 852 deals the fixture fell off page one and `[row]` came
+  // back undefined. `search` matches the trade number. It does send this report down the
+  // enrichment path - harmless here, because these tests are about which agent NAME a row
+  // carries, not about fast-vs-slow parity.
+  const r = await serviceFor(tx).run('yearly-deal-summary', user, { filters: { search: tradeNo }, page: 1, per_page: 200 } as never);
   return (r.rows as unknown as Row[]).filter((x) => x.trade_no === tradeNo);
 };
 
