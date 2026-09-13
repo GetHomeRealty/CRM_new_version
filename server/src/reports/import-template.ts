@@ -77,7 +77,10 @@ export const IMPORT_FIELDS: ImportField[] = [
   { column: 'Deposit', key: 'deposit', type: 'number', hint: 'Numbers only', example: '25000' },
   { column: 'Offer Date', key: 'offer_date', type: 'date', requiredForDeals: true, hint: 'YYYY-MM-DD. Listing types must leave this blank.', example: '2026-03-14' },
   { column: 'Closing Date', key: 'closing_date', type: 'date', requiredForDeals: true, hint: 'YYYY-MM-DD. Listing types must leave this blank.', example: '2026-06-30' },
-  { column: 'Listing Contract Date', key: 'listing_contract_date', type: 'date', requiredForListings: true, hint: 'YYYY-MM-DD. Listing types only.', example: '2026-03-01' },
+  // Migration decision 12, 2026-09-13 - NO LONGER REQUIRED. The brokerage's master workbook
+  // has never recorded the date a listing agreement was signed, and demanding it refused 444
+  // of the 941 deals being migrated. The column stays and is used when a date is given.
+  { column: 'Listing Contract Date', key: 'listing_contract_date', type: 'date', listingOnly: true, hint: 'YYYY-MM-DD. Listing types only. Optional.', example: '2026-03-01' },
   { column: 'Listing Expiry Date', key: 'listing_expiry_date', type: 'date', requiredForListings: true, hint: 'YYYY-MM-DD. Listing types only.', example: '2026-09-01' },
   { column: 'Commission Type', key: 'comm_type', type: 'enum', requiredForDeals: true, options: ['%', 'Fixed'], hint: '% or Fixed. Listing types must leave this blank; Preconstruction ignores it and takes its fee from the Precon columns.', example: '%' },
   { column: 'Commission Value', key: 'comm_value', type: 'number', requiredForDeals: true, hint: 'The percentage (2.5) or the fixed amount (5000). Listing types must leave this blank; Preconstruction ignores it and takes its fee from the Precon columns.', example: '2.5' },
