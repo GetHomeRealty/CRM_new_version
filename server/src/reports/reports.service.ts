@@ -969,7 +969,25 @@ export class ReportsService {
     let sections: { key: string; label: string; count: number; totals?: ReportTotals }[] | undefined;
     let ordered: ReportRow[];
     if (visibleSections) {
-      ordered = visibleSections.flatMap((s) => this.sort(mapped.filter((r) => r.section === s.key), def, query));
+      // TD-181, NARROWED 2026-09-13 - IT APPLIES TO ONE REPORT, NOT BOTH.
+      //
+      // Sorting inside the section was right for Transaction Payment Status, whose SQL declares
+      // `ORDER BY array_position(section), closing_date DESC, trade_no ASC` that the enrichment
+      // path reproduced nowhere - so the two paths agreed only by accident, and the accident ended
+      // when 852 deals arrived.
+      //
+      // It is WRONG for Pending and Invalid Documents. Those rows are documents, loaded ORDER BY
+      // position within a deal, and that report's SQL is written to reproduce the loader's order
+      // exactly. Sorting them by trade_no moved them away from it and broke three of its parity
+      // tests - a pure reordering, every figure present and correct.
+      //
+      // Measured both ways before narrowing: with the sort applied to everything,
+      // report-docs-rows fails 4; with it removed, 1 (and that one is the page-walk, unrelated).
+      const sortWithinSection = def.type === 'transaction-payment-status';
+      ordered = visibleSections.flatMap((s) => {
+        const inSection = mapped.filter((r) => r.section === s.key);
+        return sortWithinSection ? this.sort(inSection, def, query) : inSection;
+      });
       sections = visibleSections.map((s) => {
         const rows = mapped.filter((r) => r.section === s.key);
         return {
