@@ -32,7 +32,14 @@ const stubs = () => {
   const sent: { event: string; to: unknown }[] = [];
   return {
     sent,
-    mailer: { send: async (event: string, _v: unknown, to: unknown) => { sent.push({ event, to }); } },
+    // ONLY THIS SPEC'S OWN FIXTURES, 2026-09-13. The sweep runs against the real database
+    // inside a rollback, so it also reaches the brokerage's live deals. After the migration
+    // put 852 of them in, a genuine deposit reminder to a real agent turned an
+    // "expect 2 sends" into three. Recording only fixture recipients makes every count in
+    // this file about what the test itself caused, which is what it was always asserting.
+    mailer: { send: async (event: string, _v: unknown, to: unknown) => {
+      if (String(to).includes('@example.test')) sent.push({ event, to });
+    } },
     settings: { current: async () => ({ name: 'Test Brokerage' }) },
   };
 };
