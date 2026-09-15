@@ -275,7 +275,7 @@ model leads {
   /**
    * Pre construction | resale | seller | buyer | tenant | lease | landlord
    */
-  lead_type            String?               @db.VarChar(48)
+  lead_type            String?               @db.Text
   /**
    * google ads | meta | refferal | linkedin | youtube
    */

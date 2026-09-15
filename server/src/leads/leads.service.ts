@@ -14,6 +14,7 @@ import { throwValidation } from '../common/laravel-exceptions';
 import {
   EMAIL_SHAPE, FEED_PER_PAGE, LEADS_PER_PAGE, MAX_PER_PAGE, MAX_EXPORT_ROWS, NONE_FILTER_VALUE,
   RECENT_LEAD_DAYS, DASHBOARD_LEAD_SOURCES, canonicalLeadSource, leadSourceMatches,
+  encodeLeadTypes, parseLeadTypes,
   isClientType, isConversion, isGender, isLeadEstimation, isLeadQuality, isLeadResponse, isLeadSource,
   isLeadStatus, isLeadType, isTaskStatus,
 } from './lead.constants';
@@ -922,7 +923,7 @@ export class LeadsService {
       Location: r.location ?? '',
       Property: r.property ?? '',
       Status: r.lead_status ?? '',
-      Type: r.lead_type ?? '',
+      Type: parseLeadTypes(r.lead_type).join(' | '),
       Source: r.lead_source ?? '',
       Response: r.lead_response ?? '',
       'Client Type': r.client_type ?? '',
@@ -1080,7 +1081,13 @@ export class LeadsService {
     };
     if (str(q.leadStatus) === 'warm') and.push({ lead_status: { in: ['warm', 'mild'] } });
     else field('lead_status', q.leadStatus);
-    field('lead_type', q.leadType);
+    const leadType = str(q.leadType);
+    if (leadType === NONE_FILTER_VALUE) {
+      and.push({ OR: [{ lead_type: null }, { lead_type: '' }, { lead_type: '[]' }] });
+    } else if (leadType) {
+      // New rows are JSON arrays; the exact equality keeps historical single-value rows visible.
+      and.push({ OR: [{ lead_type: leadType }, { lead_type: { contains: `"${leadType}"` } }] });
+    }
     /*
      * SOURCE IS MATCHED ACROSS BOTH SPELLINGS rather than by the single-value helper above.
      *
@@ -1283,7 +1290,6 @@ export class LeadsService {
     // --- vocabularies: an empty value clears the field ---
     const vocab: [keyof LeadInput, string, (v: string) => boolean, string][] = [
       ['lead_status', 'lead_status', isLeadStatus, 'lead status'],
-      ['lead_type', 'lead_type', isLeadType, 'lead type'],
       ['lead_source', 'lead_source', isLeadSource, 'lead source'],
       ['lead_response', 'lead_response', isLeadResponse, 'lead response'],
       ['client_type', 'client_type', isClientType, 'client type'],
@@ -1303,6 +1309,13 @@ export class LeadsService {
       else if (field === 'lead_source') out[field] = canonicalLeadSource(v);
       else if (field === 'lead_status' && v === 'mild') out[field] = 'warm';
       else out[field] = v;
+    }
+
+    if (has('lead_type')) {
+      const types = parseLeadTypes(input.lead_type);
+      const invalid = types.find((value) => !isLeadType(value));
+      if (invalid) add('lead_type', `${invalid} is not a recognised lead type.`);
+      else out.lead_type = encodeLeadTypes(types);
     }
 
     // --- age ---
@@ -1452,7 +1465,7 @@ export class LeadsService {
       location: r.location,
       property: r.property,
       lead_status: r.lead_status,
-      lead_type: r.lead_type,
+      lead_type: parseLeadTypes(r.lead_type),
       lead_source: r.lead_source,
       lead_response: r.lead_response,
       client_type: r.client_type,

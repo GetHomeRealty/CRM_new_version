@@ -54,7 +54,8 @@ export interface Lead {
   location: string | null;
   property: string | null;
   lead_status: string | null;
-  lead_type: string | null;
+  /** One lead may belong to several segments, for example Preconstruction and Buyer. */
+  lead_type: string[];
   lead_source: string | null;
   lead_response: string | null;
   client_type: string | null;

@@ -88,7 +88,10 @@ describe('widening the pool does not loosen the controls', () => {
       as('crm'),
     ));
     expect(w.lead_status).toEqual({ equals: 'Active', mode: 'insensitive' });
-    expect(w.lead_type).toBe('Buyer');
+    expect(w.OR).toEqual([
+      { lead_type: 'Buyer' },
+      { lead_type: { contains: '"Buyer"' } },
+    ]);
     expect(w.lead_source).toBe('Meta');
     expect(w.client_type).toBe('Individual');
     expect(w.tags).toEqual({ contains: '"VIP"' });

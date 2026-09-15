@@ -65,6 +65,26 @@ export const LEAD_TYPE = [
   'Pre construction', 'resale', 'seller', 'buyer', 'tenant', 'lease', 'landlord', 'realtor',
 ] as const;
 
+/**
+ * Lead types are stored as a JSON array in the existing text column. Plain legacy values are
+ * accepted too, so this can be deployed before every historical row has been rewritten.
+ */
+export const parseLeadTypes = (value: unknown): string[] => {
+  if (Array.isArray(value)) return [...new Set(value.map(String).map((v) => v.trim()).filter(Boolean))];
+  const raw = typeof value === 'string' ? value.trim() : '';
+  if (!raw) return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (Array.isArray(parsed)) return [...new Set(parsed.map(String).map((v) => v.trim()).filter(Boolean))];
+  } catch { /* legacy single value */ }
+  return [raw];
+};
+
+export const encodeLeadTypes = (value: unknown): string | null => {
+  const types = parseLeadTypes(value);
+  return types.length ? JSON.stringify(types) : null;
+};
+
 export const CLIENT_TYPE = [
   'Investor', 'custom buyer', 'first home buyer', 'move-up buyer', 'seasonal investor', 'commercial buyer',
 ] as const;

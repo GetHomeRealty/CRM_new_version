@@ -17,6 +17,7 @@ import { identityLocked } from '../lib/leadIdentity';
 import Icon from '../ui/Icon';
 import ConfirmDialog, { useConfirm } from './ConfirmDialog';
 import LeadEditorModal, { label } from './LeadEditorModal';
+import { leadTypeValues } from './leadTypeValues';
 import type {
   DeletedLead, Lead, LeadFilters, LeadOptions, LeadStats, LeadTagCounts,
 } from '../types';
@@ -116,8 +117,12 @@ function InlineLeadCell({
   const [draftTags, setDraftTags] = useState<string[]>(lead.tags);
   const [menuStyle, setMenuStyle] = useState<React.CSSProperties>({});
   const isTags = field === 'tags';
-  const stored = field === 'lead_status' && lead.lead_status === 'mild' ? 'warm' : lead[field] as string | null;
-  const current = isTags ? lead.tags : [stored].filter(Boolean) as string[];
+  const isTypes = field === 'lead_type';
+  const isMulti = isTags || isTypes;
+  const stored = field === 'lead_status' && lead.lead_status === 'mild'
+    ? 'warm'
+    : (isTypes ? null : lead[field] as string | null);
+  const current = isTags ? lead.tags : isTypes ? leadTypeValues(lead.lead_type) : [stored].filter(Boolean) as string[];
   const allOptions = isTags ? (tagOptions ?? []) : options;
   const filtered = allOptions.filter((item) => label(item).toLowerCase().includes(query.trim().toLowerCase()));
   const canCreate = isTags && query.trim() !== ''
@@ -158,7 +163,7 @@ function InlineLeadCell({
   }, [close, open, placeMenu]);
 
   const choose = async (value: string) => {
-    if (isTags) {
+    if (isMulti) {
       setDraftTags((tags) => tags.some((tag) => tag.toLowerCase() === value.toLowerCase())
         ? tags.filter((tag) => tag.toLowerCase() !== value.toLowerCase())
         : [...tags, value]);
@@ -177,8 +182,11 @@ function InlineLeadCell({
   };
 
   const done = async () => {
-    const created = draftTags.filter((tag) => !(tagOptions ?? []).some((known) => known.toLowerCase() === tag.toLowerCase()));
-    const changed = draftTags.length !== lead.tags.length || draftTags.some((tag, index) => tag !== lead.tags[index]);
+    const original = isTypes ? leadTypeValues(lead.lead_type) : lead.tags;
+    const created = isTags
+      ? draftTags.filter((tag) => !(tagOptions ?? []).some((known) => known.toLowerCase() === tag.toLowerCase()))
+      : [];
+    const changed = draftTags.length !== original.length || draftTags.some((tag, index) => tag !== original[index]);
     if (!changed) { close(); return; }
     const next = [...draftTags];
     close();
@@ -200,6 +208,8 @@ function InlineLeadCell({
 
   const display = isTags ? (
     lead.tags.length ? <div className="lead-tags">{lead.tags.slice(0, 3).map((tag) => <span key={tag} className="lead-tag">{tag}</span>)}{lead.tags.length > 3 && <span className="lead-tag more">+{lead.tags.length - 3}</span>}</div> : null
+  ) : isTypes ? (
+    current.length ? <div className="lead-tags">{current.slice(0, 2).map((type) => <span key={type} className={`pill ${typePill(type)}`}>{label(type)}</span>)}{current.length > 2 && <span className="lead-tag more">+{current.length - 2}</span>}</div> : null
   ) : current[0] ? <span className={`pill ${valuePill(field, current[0])}`}>{label(current[0])}</span> : null;
 
   return (
@@ -207,7 +217,7 @@ function InlineLeadCell({
       <button ref={buttonRef} type="button" className={`lead-inline-trigger${current.length ? ' populated' : ' empty'}`}
         disabled={disabled || saving} aria-haspopup="listbox" aria-expanded={open}
         aria-label={`${current.length ? 'Change' : INLINE_COPY[field].empty} for ${lead.name}`}
-        onClick={(event) => { event.stopPropagation(); setDraftTags(lead.tags); setOpen((value) => !value); }}
+        onClick={(event) => { event.stopPropagation(); setDraftTags(isTypes ? leadTypeValues(lead.lead_type) : lead.tags); setOpen((value) => !value); }}
         onKeyDown={(event) => { if (event.key === 'Escape') close(); }}>
         {saving ? <span className="lead-inline-saving" aria-label="Saving" /> : <>
           <span className="lead-inline-value">{display ?? <><span className="lead-inline-dash">—</span><span className="lead-inline-prompt">{INLINE_COPY[field].empty}</span></>}</span>
@@ -215,7 +225,7 @@ function InlineLeadCell({
         </>}
       </button>
       {open && createPortal(
-        <div ref={menuRef} className="lead-inline-menu" style={menuStyle} role="listbox" tabIndex={-1} aria-multiselectable={isTags || undefined}
+        <div ref={menuRef} className="lead-inline-menu" style={menuStyle} role="listbox" tabIndex={-1} aria-multiselectable={isMulti || undefined}
           onClick={(event) => event.stopPropagation()} onKeyDown={onMenuKeyDown}>
           {field !== 'lead_status' && (
             <div className="lead-inline-search">
@@ -227,11 +237,11 @@ function InlineLeadCell({
           )}
           <div className="lead-inline-options">
             {filtered.map((option, index) => {
-              const selected = isTags ? draftTags.some((tag) => tag.toLowerCase() === option.toLowerCase()) : current[0] === option;
+              const selected = isMulti ? draftTags.some((tag) => tag.toLowerCase() === option.toLowerCase()) : current[0] === option;
               return <button key={option} type="button" role="option" aria-selected={selected}
                 className={`lead-inline-option${active === index ? ' active' : ''}`}
                 onMouseEnter={() => setActive(index)} onClick={() => void choose(option)}>
-                {isTags && <span className={`lead-inline-check${selected ? ' checked' : ''}`}>{selected && <Icon name="check" size={11} />}</span>}
+                {isMulti && <span className={`lead-inline-check${selected ? ' checked' : ''}`}>{selected && <Icon name="check" size={11} />}</span>}
                 {!isTags && <span className={`pill ${valuePill(field, option)}`}>{label(option)}</span>}
                 {isTags && <span>{option}</span>}
               </button>;
@@ -241,7 +251,7 @@ function InlineLeadCell({
               onMouseEnter={() => setActive(filtered.length)} onClick={createTag}><Icon name="plus" size={13} /> Create tag “{query.trim()}”</button>}
             {!filtered.length && !canCreate && <div className="lead-inline-no-results">No matches</div>}
           </div>
-          {isTags && <div className="lead-inline-footer"><button type="button" className="btn primary sm" onClick={() => void done()}>Done</button></div>}
+          {isMulti && <div className="lead-inline-footer"><button type="button" className="btn primary sm" onClick={() => void done()}>Done</button></div>}
         </div>, document.body,
       )}
     </div>

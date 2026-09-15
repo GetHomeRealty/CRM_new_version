@@ -14,6 +14,7 @@ import TwilioDialer from './TwilioDialer';
 import { useToast } from './toast';
 import { useAuth } from '../context/AuthContext';
 import LeadEditorModal, { label, prefHeading } from './LeadEditorModal';
+import { leadTypeValues } from './leadTypeValues';
 import { identityLocked } from '../lib/leadIdentity';
 import { createEvent } from '../lib/calendarApi';
 import type {
@@ -125,7 +126,7 @@ export default function LeadDetailPage() {
             <h2 className="lead-title">{lead.name}</h2>
             <div className="lead-subtitle">
               {lead.lead_status && <span className="pill info">{label(lead.lead_status === 'mild' ? 'warm' : lead.lead_status)}</span>}
-              {lead.lead_type && <span className="pill">{label(lead.lead_type)}</span>}
+              {leadTypeValues(lead.lead_type).map((type) => <span key={type} className="pill">{label(type)}</span>)}
               {/* Source indicator, added alongside the existing lead_source value rather than replacing it. */}
               {lead.source === 'facebook_meta' && <span className="pill type-res-buy" title="Imported from Facebook Lead Ads">Meta</span>}
               {lead.unsubscribed && <span className="pill bad">Unsubscribed</span>}

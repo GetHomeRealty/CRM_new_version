@@ -93,7 +93,10 @@ export class CampaignAudienceService {
     };
     // Status is matched case-insensitively, as the source did.
     if (a.leadStatus) where.lead_status = { equals: a.leadStatus, mode: 'insensitive' };
-    if (a.leadType) where.lead_type = a.leadType;
+    if (a.leadType) where.OR = [
+      { lead_type: a.leadType },
+      { lead_type: { contains: `"${a.leadType}"` } },
+    ];
     if (a.leadSource) where.lead_source = a.leadSource;
     if (a.clientType) where.client_type = a.clientType;
     // tags is a JSON array in a text column; `contains` on the quoted value avoids

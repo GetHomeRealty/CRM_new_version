@@ -4,6 +4,7 @@ import { apiErrorMessage, apiFieldErrors } from '../lib/apiError';
 import { useToast } from './toast';
 import type { Lead, LeadOptions, LeadPropertyPreferences } from '../types';
 import { ageFromDateOfBirth } from './age';
+import { leadTypeValues } from './leadTypeValues';
 
 /** Title-case a stored vocabulary value for display ("first home buyer" → "First Home Buyer"). */
 export const label = (v: string): string =>
@@ -20,7 +21,7 @@ const lockNote = 'The brokerage assigned this lead to you, so its contact detail
 interface Form {
   first_name: string; middle_name: string; last_name: string;
   email: string; phone: string; location: string; property: string;
-  lead_status: string; lead_type: string; lead_source: string; lead_response: string;
+  lead_status: string; lead_type: string[]; lead_source: string; lead_response: string;
   client_type: string; lead_conversion: string; lead_estimation: string; lead_quality: string;
   gender: string; language: string; religion: string; age: string;
   date_of_birth: string; marriage_day: string; notes: string; assigned_to: string;
@@ -50,7 +51,7 @@ export const EMPTY_PREF: PrefForm = {
 
 const EMPTY: Form = {
   first_name: '', middle_name: '', last_name: '', email: '', phone: '', location: '', property: '',
-  lead_status: '', lead_type: '', lead_source: '', lead_response: '',
+  lead_status: '', lead_type: [], lead_source: '', lead_response: '',
   client_type: '', lead_conversion: '', lead_estimation: '', lead_quality: '',
   gender: '', language: '', religion: '', age: '',
   date_of_birth: '', marriage_day: '', notes: '', assigned_to: '', tags: '',
@@ -78,7 +79,7 @@ function toForm(lead: Lead): Form {
     last_name: lead.last_name ?? (parts.length > 1 ? parts.at(-1) ?? '' : ''),
     email: lead.email ?? '', phone: s(lead.phone),
     location: s(lead.location), property: s(lead.property),
-    lead_status: lead.lead_status === 'mild' ? 'warm' : s(lead.lead_status), lead_type: s(lead.lead_type),
+    lead_status: lead.lead_status === 'mild' ? 'warm' : s(lead.lead_status), lead_type: leadTypeValues(lead.lead_type),
     lead_source: s(lead.lead_source), lead_response: s(lead.lead_response),
     client_type: s(lead.client_type), lead_conversion: s(lead.lead_conversion),
     lead_estimation: s(lead.lead_estimation), lead_quality: s(lead.lead_quality),
@@ -140,11 +141,14 @@ function toPreferences(f: PrefForm): LeadPropertyPreferences | null {
  * Everything chosen is echoed back underneath as removable chips, so the selection is legible
  * without scrolling the list.
  */
-function PropertyTypePicker({ vocabulary, types, custom, onChange }: {
+function MultiValuePicker({ vocabulary, types, custom, onChange, labelText = 'Property Type', allowCustom = true, error }: {
   vocabulary: string[];
   types: string[];
   custom: string[];
   onChange: (patch: { types?: string[]; custom?: string[] }) => void;
+  labelText?: string;
+  allowCustom?: boolean;
+  error?: React.ReactNode;
 }) {
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState('');
@@ -193,14 +197,14 @@ function PropertyTypePicker({ vocabulary, types, custom, onChange }: {
 
   return (
     <div className="field">
-      <label id="prop-type-label">Property Type</label>
+      <label>{labelText}</label>
       <div className="type-dd" ref={boxRef}>
         <button
           type="button"
           className="type-dd-trigger"
           aria-expanded={open}
           aria-haspopup="listbox"
-          aria-labelledby="prop-type-label"
+          aria-label={`Choose ${labelText.toLowerCase()}`}
           onClick={() => setOpen((v) => !v)}
         >
           <span className={chosen.length ? '' : 'muted'}>
@@ -220,12 +224,12 @@ function PropertyTypePicker({ vocabulary, types, custom, onChange }: {
                   {t}
                 </label>
               ))}
-              <button type="button" className={`type-opt custom${adding ? ' on' : ''}`} onClick={() => setAdding((a) => !a)}>
+              {allowCustom && <button type="button" className={`type-opt custom${adding ? ' on' : ''}`} onClick={() => setAdding((a) => !a)}>
                 + Custom
-              </button>
+              </button>}
             </div>
 
-            {adding && (
+            {allowCustom && adding && (
               <div className="type-custom-row">
                 <input value={draft} autoFocus placeholder="Type a property type…"
                   onChange={(e) => setDraft(e.target.value)}
@@ -253,6 +257,7 @@ function PropertyTypePicker({ vocabulary, types, custom, onChange }: {
           ))}
         </div>
       )}
+      {error}
     </div>
   );
 }
@@ -332,7 +337,7 @@ export default function LeadEditorModal({ lead, options, onClose, onSaved, lockI
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lead]);
 
-  const set = (k: keyof Form, v: string) => setForm((f) => ({ ...f, [k]: v }));
+  const set = <K extends keyof Form>(k: K, v: Form[K]) => setForm((f) => ({ ...f, [k]: v }));
 
   /**
    * Picking a date of birth fills the age in.
@@ -554,13 +559,15 @@ export default function LeadEditorModal({ lead, options, onClose, onSaved, lockI
               </select>
               {err('lead_status')}
             </div>
-            <div className="field">
-              <label>Lead Type</label>
-              <select value={form.lead_type} onChange={(e) => set('lead_type', e.target.value)}>
-                {pick(options?.lead_type, 'Not set')}
-              </select>
-              {err('lead_type')}
-            </div>
+            <MultiValuePicker
+              labelText="Lead Type"
+              allowCustom={false}
+              vocabulary={options?.lead_type ?? []}
+              types={form.lead_type}
+              custom={[]}
+              onChange={({ types }) => set('lead_type', types ?? [])}
+              error={err('lead_type')}
+            />
             <div className="field">
               <label>Lead Source</label>
               <select value={form.lead_source} onChange={(e) => set('lead_source', e.target.value)}
@@ -755,7 +762,7 @@ export default function LeadEditorModal({ lead, options, onClose, onSaved, lockI
                 </div>
               </div>
 
-              <PropertyTypePicker
+              <MultiValuePicker
                 vocabulary={vocabulary}
                 types={p.types}
                 custom={p.custom}

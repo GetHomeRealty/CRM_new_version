@@ -322,7 +322,11 @@ export class LeadImportEngine {
         email: c.email,
         phone: fit('phone', pick('phone', 'phonenumber', 'mobile', 'contact')),
         lead_status: vocab(pick('leadstatus', 'status'), LEAD_STATUS),
-        lead_type: vocab(pick('leadtype', 'type'), LEAD_TYPE),
+        lead_type: (() => {
+          const values = (pick('leadtype', 'type') ?? '').split(/[|,]/).map((v) => v.trim()).filter(Boolean);
+          const recognised = values.map((value) => vocab(value, LEAD_TYPE)).filter((v): v is string => v !== null);
+          return recognised.length ? JSON.stringify([...new Set(recognised)]) : null;
+        })(),
         lead_source: vocab(pick('leadsource', 'source'), LEAD_SOURCE),
         client_type: vocab(pick('clienttype'), CLIENT_TYPE),
         /*
