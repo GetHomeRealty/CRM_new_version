@@ -1,5 +1,5 @@
 import { AREAS, AREA_LABEL, type Area } from './area';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import Icon from '../ui/Icon';
 import { getUsers, getUsersCatalog, createUser, updateUser, deleteUser, getUserDealHistory, getAgentLoans, uploadUserPhoto, getOffboarding, type OffboardingChecklist, type OnboardingKind } from '../lib/api';
 import { fileToBase64 } from '../lib/importApi';
@@ -40,6 +40,35 @@ export default function UsersPage() {
   const toast = useToast();
   const { user: me, setUser } = useAuth();
   const [users, setUsers] = useState<ManagedUser[]>([]);
+
+  /*
+   * Finding one person in the list.
+   *
+   * FILTERED HERE RATHER THAN ON THE SERVER, deliberately. `/api/users` already answers with the
+   * whole list — the screen holds every row in memory and hands one straight to the editor — so a
+   * `?search=` round trip per keystroke would fetch data the browser is already sitting on, and the
+   * service's own note says that array shape is load-bearing and not to be reworked casually. At the
+   * 500 agents this brokerage is sizing for, filtering an in-memory array is not measurable.
+   *
+   * MATCHES WHAT SOMEBODY WOULD ACTUALLY TYPE, which is not only the two columns the old table could
+   * be scanned by: a name, part of an email, a username nobody displays, "accounting" for the role,
+   * or the department. Role is matched on BOTH the stored key and the label shown in the pill, since
+   * `admin` renders as "Super Admin" and a person searching for what they can see should find it.
+   */
+  const [query, setQuery] = useState('');
+  const shown = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return users;
+    // Every term must match something, so "dana agent" narrows rather than widens.
+    const terms = q.split(/\s+/);
+    return users.filter((u) => {
+      const hay = [
+        u.name, u.email, u.username, u.role, roleLabel(u.role), u.status,
+        u.department, u.designation,
+      ].filter(Boolean).join(' ').toLowerCase();
+      return terms.every((t) => hay.includes(t));
+    });
+  }, [users, query]);
   const [catalog, setCatalog] = useState<UsersCatalog | null>(null);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<Partial<ManagedUser> | null>(null); // user object or {} for new
@@ -117,7 +146,18 @@ export default function UsersPage() {
         onChange={(e) => void onPhotoChosen(e.target.files?.[0] ?? null)} />
 
       <div className="toolbar"><div className="toolbar-row">
-        <span className="pill info" style={{ fontSize: 11 }}>{users.length} users</span>
+        <span className="pill info" style={{ fontSize: 11 }}>
+          {/* Honest about the filter: "12 users" while 109 are hidden reads as the brokerage shrinking. */}
+          {query.trim() ? `${shown.length} of ${users.length} users` : `${users.length} users`}
+        </span>
+        <div className="field" style={{ margin: 0, minWidth: 260 }}>
+          <input value={query} onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search by name, email, username, role or department"
+            aria-label="Search users" />
+        </div>
+        {query.trim() && (
+          <button className="btn ghost sm" type="button" onClick={() => setQuery('')}>Clear</button>
+        )}
         <div style={{ flex: 1 }} />
         <button className="btn primary sm" onClick={() => setEditing({})}>+ Add User</button>
       </div></div>
@@ -133,7 +173,14 @@ export default function UsersPage() {
         */}
         <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Screen Access</th><th>Actions</th></tr></thead>
         <tbody>
-          {users.map((u) => (
+          {shown.length === 0 ? (
+            <tr>
+              {/* Says which search found nothing, so it reads as "no match" rather than "no users". */}
+              <td colSpan={6} className="help" style={{ padding: 16 }}>
+                No user matches “{query.trim()}”.
+              </td>
+            </tr>
+          ) : shown.map((u) => (
             <tr key={u.id}>
               <td>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
