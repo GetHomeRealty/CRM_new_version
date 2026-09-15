@@ -803,9 +803,9 @@ function SendEmailCard({ seasons, onSent }: { seasons: string[]; onSent: () => P
       listLeads({ search: q }, 1, 20)
         .then((r) => {
           if (cancelled) return;
-          setLeadMatches(r.data
-            .filter((l) => !!l.email)
-            .map((l) => ({ id: l.id, name: l.name, email: l.email })));
+          setLeadMatches(r.data.flatMap((l) => l.email
+            ? [{ id: l.id, name: l.name, email: l.email }]
+            : []));
         })
         .catch(() => { if (!cancelled) setLeadMatches([]); })
         .finally(() => { if (!cancelled) setSearchingLeads(false); });

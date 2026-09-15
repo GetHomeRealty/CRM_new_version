@@ -1054,7 +1054,9 @@ ${offer?.description ? `<p>${esc(offer.description)}</p>` : ''}
       }),
     ]);
 
-    const lower = (rows: { email: string }[]) => new Set(rows.map((r) => r.email.trim().toLowerCase()));
+    const lower = (rows: { email: string | null }[]) => new Set(
+      rows.flatMap((r) => r.email ? [r.email.trim().toLowerCase()] : []),
+    );
     const knownSet = lower(known);
     const mineSet = lower(mine);
     return new Set(wanted.filter((a) => mineSet.has(a) || !knownSet.has(a)));

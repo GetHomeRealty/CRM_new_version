@@ -270,11 +270,13 @@ export class LeadImportEngine {
     const now = new Date();
     const toCreate: Prisma.leadsCreateManyInput[] = [];
     const toTag: { id: number; tags: string }[] = [];
+    const duplicateIds = new Set<number>();
 
     for (const c of candidates) {
       const hit = byKey.get(c.key);
       if (hit) {
         tally.duplicate++;
+        if (mine(hit)) duplicateIds.add(hit.id);
         // Only tag it if it is actually this user's lead. Someone else's is left alone.
         if (ctx.tag && mine(hit)) {
           const tags = parseJsonArray(hit.tags);
@@ -371,6 +373,14 @@ export class LeadImportEngine {
         // Anything skipped was created by someone else in the gap; count it as a duplicate rather
         // than silently losing it from the totals.
         tally.duplicate += toCreate.length - created.count;
+      }
+      // A repeated import is fresh activity even when it adds no tag. Refreshing the timestamp
+      // keeps the existing lead at the top instead of creating a second record.
+      if (duplicateIds.size) {
+        await tx.leads.updateMany({
+          where: { id: { in: [...duplicateIds] } },
+          data: { updated_at: now },
+        });
       }
       // Tagging is grouped, not looped.
       //

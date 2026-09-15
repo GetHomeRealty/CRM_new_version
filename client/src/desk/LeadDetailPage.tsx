@@ -124,7 +124,7 @@ export default function LeadDetailPage() {
             <button className="btn ghost sm" type="button" onClick={() => navigate(crmPath('lead'))}>← Back to Leads</button>
             <h2 className="lead-title">{lead.name}</h2>
             <div className="lead-subtitle">
-              {lead.lead_status && <span className="pill info">{label(lead.lead_status)}</span>}
+              {lead.lead_status && <span className="pill info">{label(lead.lead_status === 'mild' ? 'warm' : lead.lead_status)}</span>}
               {lead.lead_type && <span className="pill">{label(lead.lead_type)}</span>}
               {/* Source indicator, added alongside the existing lead_source value rather than replacing it. */}
               {lead.source === 'facebook_meta' && <span className="pill type-res-buy" title="Imported from Facebook Lead Ads">Meta</span>}
@@ -156,6 +156,8 @@ export default function LeadDetailPage() {
             <Row k="Lead Response" v={lead.lead_response && label(lead.lead_response)} />
             <Row k="Client Type" v={lead.client_type && label(lead.client_type)} />
             <Row k="Conversion" v={lead.lead_conversion && label(lead.lead_conversion)} />
+            <Row k="Lead Estimation" v={lead.lead_estimation && label(lead.lead_estimation)} />
+            <Row k="Lead Quality" v={lead.lead_quality && label(lead.lead_quality)} />
             <Row k="Tags" v={lead.tags.length ? lead.tags.join(', ') : null} />
           </dl>
 
@@ -1255,7 +1257,7 @@ function FollowUpModal({ lead, onClose, onSaved }: { lead: LeadDetail; onClose: 
         time: form.time,
         type: form.type as CalendarEventInput['type'],
         status: 'scheduled',
-        contact_email: lead.email,
+        contact_email: lead.email ?? undefined,
         contact_phone: lead.phone ?? '',
         notes: form.notes.trim(),
         lead_id: lead.id,

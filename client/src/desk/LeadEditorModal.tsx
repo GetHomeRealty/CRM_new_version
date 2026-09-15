@@ -18,9 +18,10 @@ export const label = (v: string): string =>
 const lockNote = 'The brokerage assigned this lead to you, so its contact details, source and assignment are locked. Ask an administrator to change them.';
 
 interface Form {
-  name: string; email: string; phone: string; location: string; property: string;
+  first_name: string; middle_name: string; last_name: string;
+  email: string; phone: string; location: string; property: string;
   lead_status: string; lead_type: string; lead_source: string; lead_response: string;
-  client_type: string; lead_conversion: string;
+  client_type: string; lead_conversion: string; lead_estimation: string; lead_quality: string;
   gender: string; language: string; religion: string; age: string;
   date_of_birth: string; marriage_day: string; notes: string; assigned_to: string;
   tags: string;
@@ -48,9 +49,9 @@ export const EMPTY_PREF: PrefForm = {
 };
 
 const EMPTY: Form = {
-  name: '', email: '', phone: '', location: '', property: '',
+  first_name: '', middle_name: '', last_name: '', email: '', phone: '', location: '', property: '',
   lead_status: '', lead_type: '', lead_source: '', lead_response: '',
-  client_type: '', lead_conversion: '',
+  client_type: '', lead_conversion: '', lead_estimation: '', lead_quality: '',
   gender: '', language: '', religion: '', age: '',
   date_of_birth: '', marriage_day: '', notes: '', assigned_to: '', tags: '',
 };
@@ -70,12 +71,17 @@ export const prefHeading = (i: number): string => {
 
 function toForm(lead: Lead): Form {
   const s = (v: unknown) => (v === null || v === undefined ? '' : String(v));
+  const parts = lead.name.trim().split(/\s+/).filter(Boolean);
   return {
-    name: lead.name ?? '', email: lead.email ?? '', phone: s(lead.phone),
+    first_name: lead.first_name ?? parts[0] ?? '',
+    middle_name: lead.middle_name ?? (parts.length > 2 ? parts.slice(1, -1).join(' ') : ''),
+    last_name: lead.last_name ?? (parts.length > 1 ? parts.at(-1) ?? '' : ''),
+    email: lead.email ?? '', phone: s(lead.phone),
     location: s(lead.location), property: s(lead.property),
-    lead_status: s(lead.lead_status), lead_type: s(lead.lead_type),
+    lead_status: lead.lead_status === 'mild' ? 'warm' : s(lead.lead_status), lead_type: s(lead.lead_type),
     lead_source: s(lead.lead_source), lead_response: s(lead.lead_response),
     client_type: s(lead.client_type), lead_conversion: s(lead.lead_conversion),
+    lead_estimation: s(lead.lead_estimation), lead_quality: s(lead.lead_quality),
     gender: s(lead.gender), language: s(lead.language), religion: s(lead.religion),
     age: s(lead.age), date_of_birth: s(lead.date_of_birth), marriage_day: s(lead.marriage_day),
     notes: s(lead.notes), assigned_to: s(lead.assigned_to),
@@ -409,7 +415,9 @@ export default function LeadEditorModal({ lead, options, onClose, onSaved, lockI
     setErrors({});
     try {
       const body: Partial<Lead> = {
-        name: form.name.trim(),
+        name: [form.first_name, form.middle_name, form.last_name].map((v) => v.trim()).filter(Boolean).join(' '),
+        first_name: form.first_name.trim(), middle_name: form.middle_name.trim() || null,
+        last_name: form.last_name.trim(),
         email: form.email.trim(),
         phone: form.phone.trim(),
         location: form.location.trim(),
@@ -420,6 +428,8 @@ export default function LeadEditorModal({ lead, options, onClose, onSaved, lockI
         lead_response: form.lead_response,
         client_type: form.client_type,
         lead_conversion: form.lead_conversion,
+        lead_estimation: form.lead_estimation,
+        lead_quality: form.lead_quality,
         gender: form.gender,
         language: form.language.trim(),
         religion: form.religion.trim(),
@@ -436,10 +446,11 @@ export default function LeadEditorModal({ lead, options, onClose, onSaved, lockI
       // On a locked lead the four identity fields are simply not sent, so the save is a clean
       // update of everything the agent is allowed to touch rather than a rejected request.
       if (lockIdentity) {
+        delete body.name; delete body.first_name; delete body.middle_name; delete body.last_name;
         delete body.email; delete body.phone; delete body.lead_source; delete body.assigned_to;
       }
       const saved = lead ? await updateLead(lead.id, body) : await createLead(body);
-      toast(lead ? 'Lead updated.' : 'Lead created.', 'ok');
+      toast(lead ? 'Lead updated.' : saved.duplicate_updated ? 'Existing lead updated with the latest information.' : 'Lead created.', 'ok');
       onSaved(saved);
     } catch (ex) {
       const fields = apiFieldErrors(ex);
@@ -485,21 +496,31 @@ export default function LeadEditorModal({ lead, options, onClose, onSaved, lockI
 
         <form onSubmit={submit}>
           <div className="modal-sub">Contact</div>
-          <div className="g2">
+          <div className="g3">
             <div className="field">
-              <label>Name *</label>
-              <input value={form.name} onChange={(e) => set('name', e.target.value)} required />
-              {err('name')}
+              <label>First Name *</label>
+              <input value={form.first_name} onChange={(e) => set('first_name', e.target.value)} required disabled={lockIdentity} />
+              {err('first_name')}
             </div>
             <div className="field">
-              <label>Email *</label>
-              <input type="email" value={form.email} onChange={(e) => set('email', e.target.value)} required
+              <label>Middle Name</label>
+              <input value={form.middle_name} onChange={(e) => set('middle_name', e.target.value)} disabled={lockIdentity} />
+              {err('middle_name')}
+            </div>
+            <div className="field">
+              <label>Last Name *</label>
+              <input value={form.last_name} onChange={(e) => set('last_name', e.target.value)} required disabled={lockIdentity} />
+              {err('last_name')}
+            </div>
+            <div className="field">
+              <label>Email</label>
+              <input type="email" value={form.email} onChange={(e) => set('email', e.target.value)}
                 disabled={lockIdentity} title={lockIdentity ? lockNote : undefined} />
               {err('email')}
             </div>
             <div className="field">
-              <label>Phone</label>
-              <input value={form.phone} onChange={(e) => set('phone', e.target.value)}
+              <label>Phone *</label>
+              <input type="tel" value={form.phone} onChange={(e) => set('phone', e.target.value)} required
                 disabled={lockIdentity} title={lockIdentity ? lockNote : undefined} />
               {err('phone')}
             </div>
@@ -569,6 +590,20 @@ export default function LeadEditorModal({ lead, options, onClose, onSaved, lockI
               </select>
               {err('lead_conversion')}
             </div>
+            <div className="field">
+              <label>Lead Estimation</label>
+              <select value={form.lead_estimation} onChange={(e) => set('lead_estimation', e.target.value)}>
+                {pick(options?.lead_estimation, 'Not set')}
+              </select>
+              {err('lead_estimation')}
+            </div>
+            <div className="field">
+              <label>Lead Quality</label>
+              <select value={form.lead_quality} onChange={(e) => set('lead_quality', e.target.value)}>
+                {pick(options?.lead_quality, 'Not set')}
+              </select>
+              {err('lead_quality')}
+            </div>
           </div>
 
           <div className="field">
@@ -602,6 +637,11 @@ export default function LeadEditorModal({ lead, options, onClose, onSaved, lockI
 
           <div className="modal-sub">Demographics</div>
           <div className="g3">
+            <div className="field">
+              <label>Date of Birth</label>
+              <input type="date" value={form.date_of_birth} onChange={(e) => setDateOfBirth(e.target.value)} />
+              {err('date_of_birth')}
+            </div>
             <div className="field">
               <label>Age</label>
               {/* Editable, because plenty of leads give a rough age and no birthday. Entering a
@@ -661,11 +701,6 @@ export default function LeadEditorModal({ lead, options, onClose, onSaved, lockI
                 {pick(options?.religions, 'Not set', form.religion)}
               </select>
               {err('religion')}
-            </div>
-            <div className="field">
-              <label>Date of Birth</label>
-              <input type="date" value={form.date_of_birth} onChange={(e) => setDateOfBirth(e.target.value)} />
-              {err('date_of_birth')}
             </div>
             <div className="field">
               <label>Marriage Day</label>

@@ -45,10 +45,11 @@ export interface Lead {
   /** manual | import | facebook_meta */
   source: string | null;
   first_name: string | null;
+  middle_name: string | null;
   last_name: string | null;
   facebook_lead_id: string | null;
   meta: LeadMetaAttribution | null;
-  email: string;
+  email: string | null;
   phone: string | null;
   location: string | null;
   property: string | null;
@@ -58,6 +59,8 @@ export interface Lead {
   lead_response: string | null;
   client_type: string | null;
   lead_conversion: string | null;
+  lead_estimation: string | null;
+  lead_quality: string | null;
   tags: string[];
   gender: string | null;
   language: string | null;
@@ -101,6 +104,7 @@ export interface Lead {
   created_by: string | null;
   created_at: string | null;
   updated_at: string | null;
+  duplicate_updated?: boolean;
 }
 
 export interface LeadNote {
@@ -230,7 +234,7 @@ export interface LeadStats {
   total: number;
   noCalls: number;
   recent: number;
-  byStatus: { hot: number; warm: number; cold: number; mild: number; closed: number };
+  byStatus: { hot: number; warm: number; cold: number; 'offer submitted': number; 'offer accepted': number; closed: number };
   /** Lead counts by source for the Dashboard. `other` absorbs everything not broken out. */
   bySource: { google: number; meta: number; website: number; referral: number; other: number };
 }
@@ -274,6 +278,8 @@ export interface LeadOptions {
   lead_response: string[];
   client_type: string[];
   lead_conversion: string[];
+  lead_estimation: string[];
+  lead_quality: string[];
   genders: string[];
   languages: string[];
   religions: string[];

@@ -13,7 +13,7 @@ import { CrmAdvancedEmailService } from '../crm-settings/crm-advanced-email.serv
 import { LeadTransferService } from './lead-transfer.service';
 import { LeadImportJobService } from './lead-import-job.service';
 import {
-  CALL_OUTCOME, CLIENT_TYPE, GENDERS, LANGUAGES, LEAD_CONVERSION, LEAD_RESPONSE, LEAD_SOURCE,
+  CALL_OUTCOME, CLIENT_TYPE, GENDERS, LANGUAGES, LEAD_CONVERSION, LEAD_ESTIMATION, LEAD_QUALITY, LEAD_RESPONSE, LEAD_SOURCE,
   LEAD_STATUS, LEAD_TYPE, NONE_FILTER_VALUE, PROPERTY_TYPES, RELIGIONS, SHOWING_STATUS,
   TASK_PRIORITY, TASK_STATUS, RECENT_LEAD_DAYS,
 } from './lead.constants';
@@ -99,6 +99,8 @@ export class LeadsController {
       lead_response: LEAD_RESPONSE,
       client_type: CLIENT_TYPE,
       lead_conversion: LEAD_CONVERSION,
+      lead_estimation: LEAD_ESTIMATION,
+      lead_quality: LEAD_QUALITY,
       genders: GENDERS,
       languages: LANGUAGES,
       religions: RELIGIONS,

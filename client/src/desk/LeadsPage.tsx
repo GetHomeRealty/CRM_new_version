@@ -31,7 +31,7 @@ const EMPTY_FILTERS: LeadFilters = {
 
 const EMPTY_STATS: LeadStats = {
   total: 0, noCalls: 0, recent: 0,
-  byStatus: { hot: 0, warm: 0, cold: 0, mild: 0, closed: 0 },
+  byStatus: { hot: 0, warm: 0, cold: 0, 'offer submitted': 0, 'offer accepted': 0, closed: 0 },
   bySource: { google: 0, meta: 0, website: 0, referral: 0, other: 0 },
 };
 
@@ -41,7 +41,8 @@ const STATUS_TABS: { key: keyof LeadStats['byStatus'] | 'all'; label: string }[]
   { key: 'hot', label: 'Hot' },
   { key: 'warm', label: 'Warm' },
   { key: 'cold', label: 'Cold' },
-  { key: 'mild', label: 'Mild' },
+  { key: 'offer submitted', label: 'Offer Submitted' },
+  { key: 'offer accepted', label: 'Offer Accepted' },
   { key: 'closed', label: 'Closed' },
 ];
 
@@ -50,7 +51,7 @@ const statusPill = (s: string | null): string => {
     case 'hot': return 'bad';
     case 'warm': return 'warn';
     case 'cold': return 'info';
-    case 'mild': return 'ok';
+    case 'mild': return 'warn';
     case 'closed': return 'type-res-sell';
     default: return '';
   }
@@ -115,7 +116,8 @@ function InlineLeadCell({
   const [draftTags, setDraftTags] = useState<string[]>(lead.tags);
   const [menuStyle, setMenuStyle] = useState<React.CSSProperties>({});
   const isTags = field === 'tags';
-  const current = isTags ? lead.tags : [lead[field] as string | null].filter(Boolean) as string[];
+  const stored = field === 'lead_status' && lead.lead_status === 'mild' ? 'warm' : lead[field] as string | null;
+  const current = isTags ? lead.tags : [stored].filter(Boolean) as string[];
   const allOptions = isTags ? (tagOptions ?? []) : options;
   const filtered = allOptions.filter((item) => label(item).toLowerCase().includes(query.trim().toLowerCase()));
   const canCreate = isTags && query.trim() !== ''
@@ -690,7 +692,7 @@ export default function LeadsPage() {
                     <div className="muted">{l.location || 'No location'}</div>
                   </td>
                   <td className="lead-inline-cell">
-                    <InlineLeadCell lead={l} field="lead_status" options={options?.lead_status ?? ['hot', 'warm', 'cold', 'mild', 'closed']}
+                    <InlineLeadCell lead={l} field="lead_status" options={options?.lead_status ?? ['hot', 'warm', 'cold', 'offer submitted', 'offer accepted', 'closed']}
                       disabled={!canEdit} saving={savingCell === `${l.id}:lead_status`} onSave={(field, value) => saveInline(l, field, value)} />
                   </td>
                   <td className="lead-inline-cell">

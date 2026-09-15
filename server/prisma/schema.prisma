@@ -266,7 +266,7 @@ model documents {
 model leads {
   id                   Int                   @id @default(autoincrement())
   name                 String                @db.VarChar(255)
-  email                String                @db.VarChar(255)
+  email                String?               @db.VarChar(255)
   phone                String?               @db.VarChar(64)
   /**
    * cold | warm | hot | mild
@@ -292,6 +292,8 @@ model leads {
    * converted | not-converted
    */
   lead_conversion      String?               @db.VarChar(24)
+  lead_estimation      String?               @db.VarChar(32)
+  lead_quality         String?               @db.VarChar(16)
   /**
    * JSON array of free-form tags.
    */
@@ -339,6 +341,7 @@ model leads {
   custom_fields        String?               @db.Text
   // ---- Meta attribution (all nullable; blank for manually created leads) ----
   first_name           String?               @db.VarChar(128)
+  middle_name          String?               @db.VarChar(128)
   last_name            String?               @db.VarChar(128)
   /**
    * Digits-only phone, used for duplicate detection across formats.
