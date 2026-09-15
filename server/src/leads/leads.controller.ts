@@ -179,6 +179,19 @@ export class LeadsController {
     return this.leads.listDeleted(user, { page, limit, search });
   }
 
+  /**
+   * DECLARED BEFORE `deleted/:id/restore`, on the same rule the import preflight below records: a
+   * literal segment and a parameterised one are matched in declaration order. These two differ in
+   * length so they would not actually collide, but the next person to add `deleted/:id` in any verb
+   * should not have to notice that to stay safe.
+   */
+  @Post('deleted/bulk-restore')
+  @HttpCode(200)
+  @Screen('lead', 'edit')
+  bulkRestore(@CurrentUser() user: AuthUserRecord, @Body() body: Record<string, unknown>): Promise<unknown> {
+    return this.leads.bulkRestore(ids(body.lead_ids), user);
+  }
+
   @Post('deleted/:id/restore')
   @HttpCode(200)
   @Screen('lead', 'edit')

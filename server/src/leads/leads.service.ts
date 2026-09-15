@@ -800,6 +800,43 @@ export class LeadsService {
   }
 
   /**
+   * Put several leads back at once.
+   *
+   * The bin could already be filled in one action — `bulkDelete` moves a whole selection in a single
+   * click — and emptying it could not: restoring was one lead per click, so undoing a fifty-lead
+   * mistake meant fifty of them on the screen somebody opens precisely because something has already
+   * gone wrong. This is the other half of that pair.
+   *
+   * SCOPED LIKE `restore`, NOT LIKE `bulkDelete`. The bulk delete additionally refuses an agent's
+   * brokerage-assigned leads, because bulk-binning somebody else's book is not theirs to do. Putting
+   * a lead back is the opposite: it is recovery, it destroys nothing, and anything reachable by the
+   * single-restore button should be reachable by this one. A bulk action that could do less than N
+   * presses of the button it replaces would send people back to pressing the button.
+   *
+   * Ids outside the caller's scope are simply not found and not counted, so a selection spanning a
+   * boundary restores what it may and reports the number, rather than failing whole.
+   */
+  async bulkRestore(ids: number[], user: AuthUserRecord): Promise<{ restored: number }> {
+    const valid = [...new Set(ids.filter((n) => Number.isInteger(n) && n > 0))];
+    if (!valid.length) throw new BadRequestException({ message: 'Select at least one lead to restore.' });
+    const rows = await this.prisma.leads.findMany({
+      where: { id: { in: valid }, deleted_at: { not: null }, ...this.scopeWhere(user) },
+      select: { id: true, name: true },
+    });
+    if (!rows.length) return { restored: 0 };
+    const res = await this.prisma.leads.updateMany({
+      where: { id: { in: rows.map((r) => r.id) } },
+      data: { deleted_at: null, deleted_by: null, updated_at: new Date() },
+    });
+    // Named, not just counted — the same reason bulkDelete names them: a trail that says "12 leads"
+    // cannot answer "which ones?" six months later.
+    const names = rows.map((r) => r.name);
+    const shown = names.slice(0, 10).join(', ') + (names.length > 10 ? `, and ${names.length - 10} more` : '');
+    await this.audit.record(user, 'Leads bulk restored', `${res.count} lead(s)`, `Restored from Recently Deleted: ${shown}`);
+    return { restored: res.count };
+  }
+
+  /**
    * Permanent delete. Notes, tasks, showings and calls cascade; campaign recipient rows keep
    * their email address but lose the lead link, so past campaign results stay intact.
    */

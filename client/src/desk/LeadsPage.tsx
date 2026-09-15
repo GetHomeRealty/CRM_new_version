@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import {
-  bulkDeleteLeads, createLeadTag, deleteLead, deleteLeadTag, exportLeads,
+  bulkDeleteLeads, bulkRestoreLeads, createLeadTag, deleteLead, deleteLeadTag, exportLeads,
   leadOptions, leadStatusBeforeClose, listDeletedLeads, listLeadTags, listLeads, purgeLead, restoreLead, tagLeads,
   updateLead,
 } from '../lib/leadsApi';
@@ -1269,10 +1269,54 @@ function RecycleModal({ canEdit, onClose, onChanged }: { canEdit: boolean; onClo
       if (kind === 'restore') { await restoreLead(id); toast('Lead restored.', 'ok'); }
       else { await purgeLead(id); toast('Lead permanently deleted.', 'ok'); }
       setRows((r) => r.filter((x) => x.id !== id));
+      setPicked((s) => { const n = new Set(s); n.delete(id); return n; });
       onChanged();
     } catch (ex) {
       toast(apiErrorMessage(ex, 'That did not work'), 'bad');
     } finally { setBusy(null); }
+  };
+
+  /*
+   * Restoring a selection, because the bin could already be FILLED in one action and not emptied in
+   * one. `Delete Selected` on the list behind this modal moves a whole page of leads in a click;
+   * undoing that meant pressing Restore once per lead, on the screen somebody opens precisely
+   * because something has already gone wrong.
+   *
+   * Selection is deliberately per-page and cleared when the page or search changes: the checkboxes
+   * describe rows that are on screen, and carrying invisible ones forward would mean a button that
+   * restores leads the person cannot see and did not knowingly tick.
+   *
+   * No confirmation. Restoring destroys nothing and is itself reversible by deleting again — the
+   * dialog in this modal is spent on Delete Forever, which is neither.
+   */
+  const [picked, setPicked] = useState<Set<number>>(new Set());
+  useEffect(() => { setPicked(new Set()); }, [page, search]);
+
+  const allPicked = rows.length > 0 && rows.every((r) => picked.has(r.id));
+  const togglePickAll = () => setPicked(allPicked ? new Set() : new Set(rows.map((r) => r.id)));
+  const togglePick = (id: number) => setPicked((s) => {
+    const n = new Set(s);
+    if (n.has(id)) n.delete(id); else n.add(id);
+    return n;
+  });
+
+  const [restoringMany, setRestoringMany] = useState(false);
+  const restoreSelected = async () => {
+    const ids = [...picked];
+    if (!ids.length) return;
+    setRestoringMany(true);
+    try {
+      const res = await bulkRestoreLeads(ids);
+      // Report what came back, not what was sent — a lead outside scope is silently not restored,
+      // and saying "12 restored" when 9 were is how a missing lead goes unnoticed a second time.
+      toast(`${res.restored} lead${res.restored === 1 ? '' : 's'} restored.`, res.restored ? 'ok' : 'bad');
+      setRows((r) => r.filter((x) => !ids.includes(x.id)));
+      setPicked(new Set());
+      onChanged();
+      void load();
+    } catch (ex) {
+      toast(apiErrorMessage(ex, 'Could not restore the selected leads'), 'bad');
+    } finally { setRestoringMany(false); }
   };
 
   /**
@@ -1318,18 +1362,45 @@ function RecycleModal({ canEdit, onClose, onChanged }: { canEdit: boolean; onClo
           <p className="help">{search ? `No deleted lead matches "${search}".` : 'Nothing here.'}</p>
         ) : (
           <div className="lead-scroll">
+            {canEdit && picked.size > 0 && (
+              <div className="toolbar-row" style={{ marginBottom: 8, alignItems: 'center', gap: 10 }}>
+                <span><strong>{picked.size}</strong> selected</span>
+                <button className="btn ghost sm" type="button" disabled={restoringMany}
+                  onClick={() => void restoreSelected()}>
+                  {restoringMany ? 'Restoring…' : `Restore Selected (${picked.size})`}
+                </button>
+                <button className="btn ghost sm" type="button" disabled={restoringMany}
+                  onClick={() => setPicked(new Set())}>Clear</button>
+              </div>
+            )}
             <table className="list-table">
-              <thead><tr><th>Name</th><th>Contact</th><th>Deleted</th><th>By</th><th>Actions</th></tr></thead>
+              <thead>
+                <tr>
+                  {canEdit && (
+                    <th style={{ width: 32 }}>
+                      <input type="checkbox" checked={allPicked} onChange={togglePickAll}
+                        aria-label="Select all deleted leads on this page" />
+                    </th>
+                  )}
+                  <th>Name</th><th>Contact</th><th>Deleted</th><th>By</th><th>Actions</th>
+                </tr>
+              </thead>
               <tbody>
                 {rows.map((r) => (
                   <tr key={r.id}>
+                    {canEdit && (
+                      <td>
+                        <input type="checkbox" checked={picked.has(r.id)} onChange={() => togglePick(r.id)}
+                          aria-label={`Select ${r.name}`} />
+                      </td>
+                    )}
                     <td>{r.name}</td>
                     <td className="muted">{[r.email, r.phone].filter(Boolean).join(' · ')}</td>
                     <td>{shortDate(r.deleted_at)}</td>
                     <td className="muted">{r.deleted_by ?? '—'}</td>
                     <td className="lead-actions">
-                      {canEdit && <button className="btn ghost sm" type="button" disabled={busy === r.id} onClick={() => void act(r.id, 'restore')}>Restore</button>}
-                      {canEdit && <button className="btn ghost sm" type="button" disabled={busy === r.id} onClick={() => confirmPurge(r)}>Delete Forever</button>}
+                      {canEdit && <button className="btn ghost sm" type="button" disabled={busy === r.id || restoringMany} onClick={() => void act(r.id, 'restore')}>Restore</button>}
+                      {canEdit && <button className="btn ghost sm" type="button" disabled={busy === r.id || restoringMany} onClick={() => confirmPurge(r)}>Delete Forever</button>}
                     </td>
                   </tr>
                 ))}

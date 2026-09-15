@@ -91,6 +91,15 @@ export const listDeletedLeads = (opts: { page?: number; limit?: number; search?:
 export const restoreLead = (id: number): Promise<void> =>
   api.post(`/api/leads/deleted/${id}/restore`).then(() => undefined);
 
+/**
+ * Put a selection back in one request.
+ *
+ * `restored` can be lower than the number sent: ids outside the caller's scope are not found rather
+ * than refused, so the count is what actually came back and is what the screen should report.
+ */
+export const bulkRestoreLeads = (leadIds: number[]): Promise<{ restored: number }> =>
+  api.post<{ restored: number }>('/api/leads/deleted/bulk-restore', { lead_ids: leadIds }).then((r) => r.data);
+
 export const purgeLead = (id: number): Promise<void> =>
   api.delete(`/api/leads/deleted/${id}`).then(() => undefined);
 
