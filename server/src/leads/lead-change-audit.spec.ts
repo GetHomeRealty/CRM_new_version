@@ -52,6 +52,7 @@ async function makeLead(tx: PrismaService, over: Record<string, unknown> = {}) {
   return tx.leads.create({
     data: {
       name: `ZZ Audit ${t}`, email: `zz-audit-${t}@probe.test`, phone: '4165550000',
+      notes: 'Initial audit note',
       lead_status: 'warm', owner_user_id: USER.id, assigned_to: USER.id,
       created_at: now, updated_at: now, ...over,
     },
@@ -99,14 +100,14 @@ describe('a changed lead field records what it changed from', () => {
   });
 
   it('records an empty value as empty rather than losing the row', async () => {
-    // Clearing a phone number is exactly the change somebody would later deny making.
+    // Phone is required, so use an optional field to verify that clearing a value is audited.
     await inRollback(async (tx) => {
       const lead = await makeLead(tx);
-      await leadsFor(tx).update(lead.id, { phone: '' }, USER);
+      await leadsFor(tx).update(lead.id, { notes: '' }, USER);
 
-      const row = (await rowsFor(tx, lead.name)).find((r) => r.field === 'phone');
+      const row = (await rowsFor(tx, lead.name)).find((r) => r.field === 'notes');
       expect(row).toBeTruthy();
-      expect(row!.old_value).toBe('4165550000');
+      expect(row!.old_value).toBe('Initial audit note');
       expect(row!.details).toMatch(/to \(empty\)/);
     });
   });

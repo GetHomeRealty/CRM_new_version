@@ -46,12 +46,12 @@ function svc(tx: PrismaService) {
 }
 
 /** Log rows addressed to nobody's lead, so the readability filter keeps every one. */
-async function seedLog(tx: PrismaService, howMany: number, mark: string) {
+async function seedLog(tx: PrismaService, howMany: number, mark: string, kind = 'test') {
   const now = new Date();
   for (let i = 0; i < howMany; i += 1) {
     await tx.crm_email_log.create({
       data: {
-        kind: 'test', lead_name: null, recipient: `zz-${mark}-${i}@probe.test`,
+        kind, lead_name: null, recipient: `zz-${mark}-${i}@probe.test`,
         subject: `${mark} #${i}`, success: true, sent_by: BOSS.name,
         created_at: new Date(now.getTime() - i * 1000),
       },
@@ -63,12 +63,13 @@ describe('the send log reports how much of itself it is showing', () => {
   it('returns a page and the total that page came from', async () => {
     await inRollback(async (tx) => {
       const mark = `ZZLOG${tag()}`;
-      await seedLog(tx, 30, mark);
+      const kind = `test-${mark}`;
+      await seedLog(tx, 30, mark, kind);
 
-      const page = await svc(tx).listLogPage(BOSS, { limit: 10, offset: 0 });
+      const page = await svc(tx).listLogPage(BOSS, { limit: 10, offset: 0, kind });
       expect(page.data).toHaveLength(10);
       // THE DEFECT: there was no total, so 10 rows looked exactly like "there are only 10".
-      expect(page.meta.total).toBeGreaterThanOrEqual(30);
+      expect(page.meta.total).toBe(30);
       expect(page.meta.limit).toBe(10);
       expect(page.meta.complete).toBe(true);
     });

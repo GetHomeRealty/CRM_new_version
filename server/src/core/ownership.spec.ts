@@ -172,7 +172,9 @@ describe('what the person a lead was assigned to may change', () => {
     // Exactly the brokerage's list: name, email, phone, plus where it came from and whose desk it
     // is on. Notes, tasks, calls and status are deliberately absent — that is the work, and both
     // people are supposed to be doing it.
-    expect(fields).toEqual(['assigned_to', 'email', 'lead_source', 'name', 'phone']);
+    expect(fields).toEqual([
+      'assigned_to', 'email', 'first_name', 'last_name', 'lead_source', 'middle_name', 'name', 'phone',
+    ]);
   });
 });
 

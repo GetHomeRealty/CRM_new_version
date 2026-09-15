@@ -276,6 +276,22 @@ describe('the Analytics aggregate matches summing the same rows in TypeScript', 
 
       // The reference: the same rows, summed in TypeScript.
       const rows = (await tx.transactions.findMany({ where: { deleted_at: null }, select: ANALYTICS_SELECT, orderBy: { id: 'asc' } })) as AnalyticsRow[];
+      const users = await tx.users.findMany({ select: { id: true, name: true } });
+      const userById = new Map(users.map((u) => [u.id, u]));
+      const usersByExactName = new Map<string, typeof users>();
+      for (const user of users) {
+        const matches = usersByExactName.get(user.name) ?? [];
+        matches.push(user);
+        usersByExactName.set(user.name, matches);
+      }
+      const resolvedAgentName = (row: AnalyticsRow): string => {
+        const typed = row.agent?.trim() ?? '';
+        const byId = row.agent_user_id == null ? undefined : userById.get(row.agent_user_id);
+        const byUniqueName = typed && usersByExactName.get(typed)?.length === 1
+          ? usersByExactName.get(typed)?.[0]
+          : undefined;
+        return (byId ?? byUniqueName)?.name.trim() || typed || 'Unassigned';
+      };
       const svc = analyticsFor(tx);
       let paid = 0, pending = 0, paidCount = 0, pendingCount = 0;
       const byMonth = new Map<string, number>();
@@ -291,7 +307,9 @@ describe('the Analytics aggregate matches summing the same rows in TypeScript', 
         // TD-092 — the closing date alone decides the month; everything else is one named bucket.
         const k = r.closing_date ? r.closing_date.toISOString().slice(0, 7) : 'none';
         byMonth.set(k, (byMonth.get(k) ?? 0) + amount);
-        tally(byAgent, r.agent && r.agent.trim() !== '' ? r.agent : 'Unassigned', amount);
+        // Match the SQL identity resolver: an attached account's current name wins, and a typed
+        // name resolves only when it identifies exactly one user.
+        tally(byAgent, resolvedAgentName(r), amount);
         tally(byType, r.type, amount);
       }
 

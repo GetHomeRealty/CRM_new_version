@@ -44,6 +44,12 @@ const prisma = new PrismaClient();
 const ROLLBACK = '__rollback__';
 let seq = 0;
 
+/** Fixture leads always have email; keep that invariant explicit now production leads may not. */
+function emailOf(lead: { email: string | null }): string {
+  if (!lead.email) throw new Error('Test fixture unexpectedly has no email');
+  return lead.email;
+}
+
 afterAll(async () => { await prisma.$disconnect(); });
 
 async function inRollback(fn: (tx: PrismaService) => Promise<void>) {
@@ -268,9 +274,9 @@ describe('every other CRM module resolves the SAME scope', () => {
         where: { AND: [{ email }, { deleted_at: null }, leadScopeWhere(manager)] },
       })) === 1;
 
-      expect(await reachable(w.brokerage[0].email)).toBe(true);
-      expect(await reachable(w.privateA[0].email)).toBe(false);
-      expect(await reachable(w.privateB[0].email)).toBe(false);
+      expect(await reachable(emailOf(w.brokerage[0]))).toBe(true);
+      expect(await reachable(emailOf(w.privateA[0]))).toBe(false);
+      expect(await reachable(emailOf(w.privateB[0]))).toBe(false);
     });
   });
 
@@ -518,7 +524,7 @@ describe('the CRM email log cannot be used to discover a private lead', () => {
     await inRollback(async (tx) => {
       const w = await world(tx);
       const priv = w.privateA[0];
-      await logRow(tx, priv.email, priv.name, w.agentA.name);
+      await logRow(tx, emailOf(priv), priv.name, w.agentA.name);
 
       for (const u of [w.manager, w.crm, w.superAdmin, w.accounting]) {
         const rows = await svc(tx).listLog(as(u), 500);
@@ -536,7 +542,7 @@ describe('the CRM email log cannot be used to discover a private lead', () => {
     await inRollback(async (tx) => {
       const w = await world(tx);
       const priv = w.privateA[0];
-      await logRow(tx, priv.email, priv.name, w.agentA.name);
+      await logRow(tx, emailOf(priv), priv.name, w.agentA.name);
 
       const rows = await svc(tx).listLog(as(w.agentA), 500);
       expect(rows.some((r) => String(r.recipient) === priv.email)).toBe(true);
@@ -555,7 +561,7 @@ describe('the CRM email log cannot be used to discover a private lead', () => {
     await inRollback(async (tx) => {
       const w = await world(tx);
       const brok = w.brokerage[0];
-      await logRow(tx, brok.email, brok.name, w.manager.name);
+      await logRow(tx, emailOf(brok), brok.name, w.manager.name);
 
       // Hold `data.read-all`, so they read everybody's sends — and the lead is in scope.
       for (const u of [w.manager, w.superAdmin]) {
@@ -569,7 +575,7 @@ describe('the CRM email log cannot be used to discover a private lead', () => {
 
       // Its OWN send about the same brokerage lead does come through — proving the refusal above is
       // the sender rule and not the lead rule.
-      await logRow(tx, brok.email, brok.name, w.crm.name);
+      await logRow(tx, emailOf(brok), brok.name, w.crm.name);
       const crmOwn = await svc(tx).listLog(as(w.crm), 500);
       expect(crmOwn.some((r) => String(r.recipient) === brok.email)).toBe(true);
 
@@ -596,7 +602,7 @@ describe('the CRM email log cannot be used to discover a private lead', () => {
     await inRollback(async (tx) => {
       const w = await world(tx);
       const priv = w.privateA[1];
-      await logRow(tx, priv.email, priv.name, w.agentA.name);
+      await logRow(tx, emailOf(priv), priv.name, w.agentA.name);
       await tx.leads.update({ where: { id: priv.id }, data: { deleted_at: new Date() } });
 
       // Binning a lead must not be a way to publish its correspondence.
@@ -609,7 +615,7 @@ describe('the CRM email log cannot be used to discover a private lead', () => {
     await inRollback(async (tx) => {
       const w = await world(tx);
       const priv = w.privateB[0];
-      await logRow(tx, priv.email, priv.name, w.agentB.name);
+      await logRow(tx, emailOf(priv), priv.name, w.agentB.name);
 
       // Two independent reasons to refuse: not their send, and not their lead.
       const rows = await svc(tx).listLog(as(w.agentA), 500);

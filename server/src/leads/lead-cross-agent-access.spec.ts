@@ -214,7 +214,10 @@ describe('identity fields cannot be set from a request body', () => {
       const { leads } = services(tx);
 
       const created = await leads.create(
-        { name: 'Payload test', email: `payload-${tag()}@example.test`, ...HOSTILE, owner_user_id: other.id } as never,
+        {
+          name: 'Payload test', email: `payload-${tag()}@example.test`, phone: '4165550199',
+          ...HOSTILE, owner_user_id: other.id,
+        } as never,
         a,
       ) as { id: number };
 
