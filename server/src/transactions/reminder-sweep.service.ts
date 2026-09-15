@@ -8,6 +8,7 @@ import { NotificationDispatcher } from '../notifications/notification-dispatcher
 import { areaPath } from '../common/domain';
 import { toDateString } from '../common/serialize';
 import { missingLawyerParties, tracksBothLawyers } from './lawyer-details';
+import { isSettledDeal } from './deal-state';
 import {
   CLOSING_WINDOW_DAYS, CONDITION_WINDOW_DAYS, EXPIRY_WINDOW_DAYS, LAWYER_TEMPLATE, LAWYER_WINDOW_DAYS,
   closingPhrase, closingReminderFor, conditionReminderFor, daysBetween, deadlinePhrase, expiryPhrase,
@@ -1096,8 +1097,8 @@ export class ReminderSweepService {
 
   /** A deal nobody is waiting on any more. */
   private isSettled(statuses: { status: string }[]): boolean {
-    const done = ['Closed', 'Sold', 'Leased', 'Void', 'Terminated', 'Mutual Release', 'Expired', 'Cancelled', 'Archived', 'Completed', 'Suspended'];
-    return statuses.some((s) => done.includes(s.status));
+    // TD-188 - the list moved to deal-state.ts so the save-time lawyer reminder reads the same one.
+    return isSettledDeal(statuses);
   }
 
   /** The Triggers screen's cadence field, still the on/off switch for lawyer reminders. */

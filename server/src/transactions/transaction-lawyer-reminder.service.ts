@@ -4,6 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { MailerService } from '../email/mailer.service';
 import { parseJsonObject, phpJsonNormalize } from '../common/serialize';
 import { missingLawyerParties, lawyerReminderMessage, tracksBothLawyers, type LawyerParty } from './lawyer-details';
+import { isSettledDeal } from './deal-state';
 
 const esc = (v: unknown): string =>
   String(v ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string));
@@ -42,9 +43,18 @@ export class TransactionLawyerReminderService {
       select: {
         id: true, trade_no: true, property: true, type: true, agent: true,
         buyer_lawyer_name: true, seller_lawyer_name: true, activity_tracker: true,
+        transaction_statuses: { select: { status: true } },
       },
     });
-    if (!t || !tracksBothLawyers(t.type)) return; // only Buying/Lease deals track both lawyers
+    if (!t || !tracksBothLawyers(t.type)) return; // only Buying deals track both lawyers
+    /*
+     * TD-188, 2026-09-15 - A FINISHED DEAL IS NOT CHASED. The nightly sweep has always asked this
+     * and this path never did, so the two disagreed. The import of 2026-09-13 saved 852 deals and
+     * sent 267 emails from here, 235 about deals recorded Closed, Terminated or Mutual Release.
+     * One agent replied that his had closed in February; another asked why a mutual release needed
+     * a lawyer. Same list as the sweep, read from deal-state.ts so they cannot drift apart again.
+     */
+    if (isSettledDeal(t.transaction_statuses)) return;
 
     const missing = missingLawyerParties(t);
     const key = missing.join(','); // '', 'buyer', 'seller', 'buyer,seller'
