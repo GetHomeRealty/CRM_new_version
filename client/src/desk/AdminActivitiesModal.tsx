@@ -14,6 +14,17 @@ import type {
   PaidLawyer, RecvLawyer, TaCta, TeamMemberData, Transaction,
 } from '../types';
 
+/**
+ * The Paid Types a person may CHOOSE on a payment row.
+ *
+ * Migration decision #14, 2026-09-16: payment history imported from the master sheet can hold a
+ * value outside these - 'CTA-BA Tr Internal', the agent's commission moved to the brokerage account,
+ * which the brokerage ruled is HISTORICAL ONLY. A row already holding such a value shows it as an
+ * extra option of its own; no other row is offered it. Without this the dropdown displayed N/A over
+ * the stored value, and the first careless save would have overwritten the record.
+ */
+const PAID_TYPES = ['N/A', 'TDB-EFT', 'CTA-BA Transfer', 'Cheque'];
+
 const PAY_LINKED = ['Agent payment / T4A history in Admin Activities', 'Agent breakdown in Agent Payment Readiness'];
 
 const lbl: CSSProperties = { fontSize: 11.5, color: 'var(--text-2)', fontWeight: 600, marginBottom: 5, display: 'block' };
@@ -301,7 +312,7 @@ export default function AdminActivitiesModal({ open, onClose, transactionId, txn
                       </div>
                       {ag.payments.map((p, i) => (
                         <div className="g4" key={i} style={{ alignItems: 'end', marginBottom: 6 }}>
-                          <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Paid Type</label><select value={na(p.paid_type)} onChange={(e) => setTRow(k, n, 'payments', i, { paid_type: e.target.value })}><option>N/A</option><option>TDB-EFT</option><option>CTA-BA Transfer</option><option>Cheque</option></select></div>
+                          <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Paid Type</label><select value={na(p.paid_type)} onChange={(e) => setTRow(k, n, 'payments', i, { paid_type: e.target.value })}><option>N/A</option><option>TDB-EFT</option><option>CTA-BA Transfer</option><option>Cheque</option>{PAID_TYPES.includes(na(p.paid_type) || 'N/A') ? null : <option>{na(p.paid_type)}</option>}</select></div>
                           <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Paid Date</label><input type="date" value={p.paid_date} onChange={(e) => setTRow(k, n, 'payments', i, { paid_date: e.target.value, batch_no: batchNo(e.target.value), t4a_year: t4aYear(e.target.value) })} /></div>
                           <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Batch No.</label><input value={p.batch_no} readOnly style={{ background: 'var(--surface-2)' }} /></div>
                           <div style={{ display: 'flex', gap: 6, alignItems: 'end' }}><div className="field" style={{ marginBottom: 0, flex: 1 }}><label style={lbl}>T4A Year</label><input value={p.t4a_year} readOnly style={{ background: 'var(--surface-2)' }} /></div><button className="row-rm" onClick={() => rmTRow(k, n, 'payments', i)}><Icon name="trash" size={13} /></button></div>
@@ -467,7 +478,7 @@ export default function AdminActivitiesModal({ open, onClose, transactionId, txn
               {a.payments.map((p, i) => (
                 <div className="g4" key={i} style={{ alignItems: 'end', marginBottom: 6, gridTemplateColumns: 'repeat(5, 1fr)' }}>
                   <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Paid Type</label>
-                    <select value={na(p.paid_type)} onChange={(e) => setRow(n, 'payments', i, { paid_type: e.target.value })}><option>N/A</option><option>TDB-EFT</option><option>CTA-BA Transfer</option><option>Cheque</option></select></div>
+                    <select value={na(p.paid_type)} onChange={(e) => setRow(n, 'payments', i, { paid_type: e.target.value })}><option>N/A</option><option>TDB-EFT</option><option>CTA-BA Transfer</option><option>Cheque</option>{PAID_TYPES.includes(na(p.paid_type) || 'N/A') ? null : <option>{na(p.paid_type)}</option>}</select></div>
                   <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Paid Status</label>
                     <input value={paidStatusOf(n, p) || '—'} readOnly style={{ background: 'var(--surface-2)', fontWeight: 600 }} title="Auto — Paid when Paid Type + Paid Date are set; N/A when the agent's commission is fully covered by advance/adjustments." /></div>
                   <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Paid Date</label><input type="date" value={p.paid_date} onChange={(e) => onPayDate(n, i, e.target.value)} /></div>
