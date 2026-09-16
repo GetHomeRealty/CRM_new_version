@@ -200,7 +200,7 @@ export class ReminderSweepService {
       // never the table.
       where: { deleted_at: null, listing_expiry_date: { gte: dbDay(from), lte: dbDay(to) } },
       select: {
-        id: true, trade_no: true, property: true, agent: true, type: true,
+        id: true, trade_no: true, property: true, agent: true, agent_user_id: true, type: true,
         listing_expiry_date: true, transaction_statuses: { select: { status: true } },
       },
     });
@@ -219,6 +219,7 @@ export class ReminderSweepService {
         day: dbDay(startOfDay(today)),
         daysRemaining,
         agentName: t.agent,
+        agentUserId: t.agent_user_id,
         event: 'transaction.listing_expiry_reminder',
         vars: {
           deal_number: t.trade_no ?? String(t.id),
@@ -346,7 +347,7 @@ export class ReminderSweepService {
       // closing_date is already indexed; this reads the deals closing inside the window only.
       where: { deleted_at: null, closing_date: { gte: dbDay(from), lte: dbDay(to) } },
       select: {
-        id: true, trade_no: true, property: true, agent: true, type: true, closing_date: true,
+        id: true, trade_no: true, property: true, agent: true, agent_user_id: true, type: true, closing_date: true,
         buyer_lawyer_name: true, seller_lawyer_name: true,
         transaction_statuses: { select: { status: true } },
       },
@@ -373,6 +374,7 @@ export class ReminderSweepService {
         day: dbDay(startOfDay(today)),
         daysRemaining,
         agentName: t.agent,
+        agentUserId: t.agent_user_id,
         event: LAWYER_TEMPLATE[variant],
         vars: {
           deal_number: t.trade_no ?? String(t.id),
@@ -414,7 +416,7 @@ export class ReminderSweepService {
       // The same indexed range read the lawyer pass uses, over a shorter window.
       where: { deleted_at: null, closing_date: { gte: dbDay(from), lte: dbDay(to) } },
       select: {
-        id: true, trade_no: true, property: true, agent: true, type: true, closing_date: true,
+        id: true, trade_no: true, property: true, agent: true, agent_user_id: true, type: true, closing_date: true,
         transaction_statuses: { select: { status: true } },
       },
     });
@@ -433,6 +435,7 @@ export class ReminderSweepService {
         day: dbDay(startOfDay(today)),
         daysRemaining,
         agentName: t.agent,
+        agentUserId: t.agent_user_id,
         event: 'transaction.closing_reminder',
         vars: this.closingVars(t, daysRemaining),
         summary: ('Deal ' + closingPhrase(daysRemaining) + ' - ' + (t.property ?? t.trade_no ?? '')).trim(),
@@ -486,7 +489,7 @@ export class ReminderSweepService {
         deadline: true, status: true, type: true, custom_name: true,
         transactions: {
           select: {
-            id: true, trade_no: true, property: true, agent: true, deleted_at: true,
+            id: true, trade_no: true, property: true, agent: true, agent_user_id: true, deleted_at: true,
             transaction_statuses: { select: { status: true } },
           },
         },
@@ -522,6 +525,7 @@ export class ReminderSweepService {
         day: dbDay(startOfDay(today)),
         daysRemaining: soonest.daysRemaining,
         agentName: txn.agent,
+        agentUserId: txn.agent_user_id,
         event: 'transaction.condition_deadline_reminder',
         vars: {
           deal_number: txn.trade_no ?? String(txn.id),
@@ -568,7 +572,7 @@ export class ReminderSweepService {
       // Exactly the day the grace period ends, so this reads one day's deals rather than the table.
       where: { deleted_at: null, offer_date: dbDay(offerDay), deposit: { gt: 0 } },
       select: {
-        id: true, trade_no: true, property: true, agent: true, deposit: true, offer_date: true,
+        id: true, trade_no: true, property: true, agent: true, agent_user_id: true, deposit: true, offer_date: true,
         admin_activities: true,
         transaction_statuses: { select: { status: true } },
       },
@@ -589,6 +593,7 @@ export class ReminderSweepService {
         day: dbDay(startOfDay(today)),
         daysRemaining: daysOutstanding,
         agentName: t.agent,
+        agentUserId: t.agent_user_id,
         event: 'transaction.deposit_outstanding',
         vars: {
           agent_name: t.agent ?? 'there',
@@ -652,7 +657,7 @@ export class ReminderSweepService {
       select: {
         invoice_no: true, total: true, commission_received_date: true, commission_received_via: true,
         transaction_id: true,
-        transactions: { select: { id: true, trade_no: true, property: true, agent: true, deleted_at: true } },
+        transactions: { select: { id: true, trade_no: true, property: true, agent: true, agent_user_id: true, deleted_at: true } },
       },
     });
 
@@ -667,6 +672,7 @@ export class ReminderSweepService {
         day: dbDay(startOfDay(today)),
         daysRemaining: 0,
         agentName: t.agent,
+        agentUserId: t.agent_user_id,
         event: 'transaction.commission_received',
         vars: {
           agent_name: t.agent ?? 'there',
@@ -711,7 +717,7 @@ export class ReminderSweepService {
       include: {
         transactions: {
           select: {
-            id: true, trade_no: true, property: true, agent: true, type: true, deleted_at: true,
+            id: true, trade_no: true, property: true, agent: true, agent_user_id: true, type: true, deleted_at: true,
             closing_date: true, listing_expiry_date: true,
             buyer_lawyer_name: true, seller_lawyer_name: true,
             transaction_statuses: { select: { status: true } },
@@ -735,7 +741,7 @@ export class ReminderSweepService {
         continue;
       }
 
-      const address = await this.addressFor(t!.agent);
+      const address = await this.addressFor(t!.agent, t!.agent_user_id);
       if (!address) {
         await this.closeRetry(row.id, 'Skipped', 'No email address on file for the assigned agent.');
         result.skipped++;
@@ -927,6 +933,8 @@ export class ReminderSweepService {
     day: Date;
     daysRemaining: number;
     agentName: string | null;
+    /** TD-189 - the account the deal is linked to; the name is only the fallback. */
+    agentUserId?: number | null;
     event: string;
     vars: Record<string, string>;
     summary: string;
@@ -936,7 +944,7 @@ export class ReminderSweepService {
     const claimed = await this.claim(job.txnId, job.kind, job.day, 'in-app', {
       variant: job.variant,
       daysRemaining: job.daysRemaining,
-      recipient: job.agentName,
+      recipient: (await this.nameFor(job.agentName, job.agentUserId)) ?? job.agentName,
       status: 'Sent',
       subject: job.summary,
     });
@@ -959,7 +967,7 @@ export class ReminderSweepService {
      * unreachable, and the claim above has already made this occurrence idempotent.
      */
     if (this.dispatcher) {
-      const recipientId = await this.userIdFor(job.agentName);
+      const recipientId = await this.userIdFor(job.agentName, job.agentUserId);
       if (recipientId) {
         await this.dispatcher.dispatch({
           category: REMINDER_CATEGORY[job.kind],
@@ -976,7 +984,7 @@ export class ReminderSweepService {
     const base = (process.env.FRONTEND_URL ?? '').trim().replace(/\/+$/, '');
     const link = base ? `${base}${areaPath('desk', `transactions/${job.txnId}`)}` : '';
 
-    const address = await this.addressFor(job.agentName);
+    const address = await this.addressFor(job.agentName, job.agentUserId);
     if (!address) {
       await this.claim(job.txnId, job.kind, job.day, 'email', {
         variant: job.variant, daysRemaining: job.daysRemaining, recipient: job.agentName,
@@ -1066,13 +1074,15 @@ export class ReminderSweepService {
     });
   }
 
-  private async addressFor(agentName: string | null): Promise<string | null> {
+  private async addressFor(agentName: string | null, agentUserId?: number | null): Promise<string | null> {
     const name = (agentName ?? '').trim();
-    if (!name) return null;
+    if (!name && !agentUserId) return null;
     // Through PersonResolver so two people sharing a name resolve the same way everywhere, and
     // deterministically: Active wins, ties break on the lowest id. This was a findFirst with no
     // orderBy, so the planner decided which colleague got the mail.
-    const user = await this.people.resolve(null, name, { activeOnly: true });
+    // TD-189 - BY ACCOUNT FIRST. resolve() was built to take the id and was always handed null, so
+    // renaming a user - even a change of capital letter - left every linked deal resolving to nobody.
+    const user = await this.people.resolve(agentUserId ?? null, name, { activeOnly: true });
     return (user?.email ?? '').trim() || null;
   }
 
@@ -1083,11 +1093,23 @@ export class ReminderSweepService {
    * resolve identically and deterministically everywhere — Active wins, ties break on the lowest id.
    * Resolving them differently here would mean one person got the email and another the push.
    */
-  private async userIdFor(agentName: string | null): Promise<number | null> {
+  private async userIdFor(agentName: string | null, agentUserId?: number | null): Promise<number | null> {
     const name = (agentName ?? '').trim();
-    if (!name) return null;
-    const user = await this.people.resolve(null, name, { activeOnly: true });
+    if (!name && !agentUserId) return null;
+    const user = await this.people.resolve(agentUserId ?? null, name, { activeOnly: true });
     return user?.id ?? null;
+  }
+
+  /**
+   * TD-189 - the name the agent's ACCOUNT carries today. The deal keeps the spelling it was saved
+   * with; after a rename that spelling matches nobody, and the bell - which reads by the signed-in
+   * user's current name - went empty. Null when the deal names nobody with an active account.
+   */
+  private async nameFor(agentName: string | null, agentUserId?: number | null): Promise<string | null> {
+    const name = (agentName ?? '').trim();
+    if (!name && !agentUserId) return null;
+    const user = await this.people.resolve(agentUserId ?? null, name, { activeOnly: true });
+    return (user?.name ?? '').trim() || null;
   }
 
   /** Active is the only status a listing is chased or expired in. */
@@ -1187,7 +1209,7 @@ export class ReminderSweepService {
 
     const t = await this.prisma.transactions.findFirst({
       where: { id: txnId, deleted_at: null },
-      select: { id: true, trade_no: true, property: true, agent: true, type: true },
+      select: { id: true, trade_no: true, property: true, agent: true, agent_user_id: true, type: true },
     });
     if (!t?.agent) return;
 
@@ -1198,7 +1220,12 @@ export class ReminderSweepService {
      * the case worth sending. Decided here rather than at the call site because this is the only
      * place that knows who the deal's agent IS.
      */
-    if (changedBy && changedBy.trim() === t.agent.trim()) return;
+    // TD-189 - compare with the name the ACCOUNT carries today as well; after a rename the deal's
+    // own spelling no longer matches the person making the change.
+    if (changedBy) {
+      const own = (await this.nameFor(t.agent, t.agent_user_id)) ?? '';
+      if (changedBy.trim() === t.agent.trim() || (own !== '' && changedBy.trim() === own.trim())) return;
+    }
 
     // The result the sweeps thread through their passes. Nothing reads it here - the counters
     // belong to a sweep run - but `deliver` records failures on it, so it is given a real one
@@ -1215,6 +1242,7 @@ export class ReminderSweepService {
       day: dbDay(startOfDay(today)),
       daysRemaining: 0,
       agentName: t.agent,
+      agentUserId: t.agent_user_id,
       event: 'transaction.status_changed',
       vars: {
         agent_name: t.agent ?? 'there',

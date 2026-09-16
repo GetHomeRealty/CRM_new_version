@@ -107,10 +107,24 @@ export class TransactionLawyerReminderService {
 
   /** Emails of the primary agent plus any full team members. */
   private async agentEmails(txnId: number, agent: string | null): Promise<string[]> {
-    const members = await this.prisma.team_members.findMany({ where: { transaction_id: txnId }, select: { name: true } });
-    const names = [...new Set([agent, ...members.map((m) => m.name)].filter((n): n is string => !!n))];
-    if (names.length === 0) return [];
-    const users = await this.prisma.users.findMany({ where: { name: { in: names }, email: { not: '' } }, select: { email: true } });
-    return [...new Set(users.map((u) => u.email).filter((e) => e))];
+    /*
+     * TD-189 - BY ACCOUNT FIRST, the name only for a person with no linked account. This matched
+     * users by name alone, so a renamed agent stopped receiving it on every deal they already had.
+     * ACTIVE ACCOUNTS ONLY, which this never checked: an agent who has left is not chased.
+     */
+    const txn = await this.prisma.transactions.findUnique({ where: { id: txnId }, select: { agent_user_id: true } });
+    const members = await this.prisma.team_members.findMany({ where: { transaction_id: txnId }, select: { name: true, user_id: true } });
+    const ids = [...new Set([txn?.agent_user_id, ...members.map((m) => m.user_id)].filter((n): n is number => typeof n === 'number'))];
+    const names = [...new Set([txn?.agent_user_id ? null : agent, ...members.filter((m) => !m.user_id).map((m) => m.name)]
+      .filter((n): n is string => !!n))];
+    if (ids.length === 0 && names.length === 0) return [];
+    const users = await this.prisma.users.findMany({
+      where: {
+        email: { not: '' }, status: 'Active',
+        OR: [...(ids.length ? [{ id: { in: ids } }] : []), ...(names.length ? [{ name: { in: names } }] : [])],
+      },
+      select: { email: true },
+    });
+    return [...new Set(users.map((u) => u.email).filter((e): e is string => !!e))];
   }
 }
