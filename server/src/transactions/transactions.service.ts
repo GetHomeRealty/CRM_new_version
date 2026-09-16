@@ -76,7 +76,25 @@ export class TransactionsService {
       paged ? this.prisma.transactions.count({ where }) : Promise.resolve(0),
       this.prisma.transactions.findMany({
         where,
-        orderBy: { created_at: 'desc' },
+        /*
+         * `id` IS THE TIEBREAKER, AND THE LIST IS WRONG WITHOUT IT.
+         *
+         * `created_at` is not unique — a bulk import stamps every deal in the batch with the same
+         * timestamp — so ordering by it alone leaves the rows within a timestamp in whatever order
+         * the planner happens to produce. That is fine for a single unpaged query and quietly
+         * corrupting for a paged one: LIMIT/OFFSET takes its window from a fresh sort each request,
+         * so a row can land on page 2 one moment and page 3 the next.
+         *
+         * Measured against production on 2026-09-16: paging all 35 pages returned 852 rows but only
+         * 826 DISTINCT ids — 26 deals came back twice and 26 others could not be reached at any page
+         * number. The loss shrank as the page size grew (26 lost at 25/page, 7 at 100, 4 at 200),
+         * which is the signature of an unstable sort rather than missing data: the same sweep run
+         * through the report export returned all 852 and reconciled to the cent.
+         *
+         * Adding a unique second key makes the total order deterministic, so every row belongs to
+         * exactly one page. `desc` matches the `created_at` direction, keeping newest-first intact.
+         */
+        orderBy: [{ created_at: 'desc' }, { id: 'desc' }],
         include: txnIndexInclude,
         ...(paged ? { skip: (Math.max(1, query.page ?? 1) - 1) * perPage, take: perPage } : {}),
       }),

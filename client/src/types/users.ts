@@ -37,6 +37,13 @@ export interface UserProfile {
   has_loan?: string;
   loan_entries?: LoanEntry[];
   address?: string;
+  /**
+   * Where the user's avatar file lives, or absent when they have never uploaded one.
+   *
+   * Named explicitly rather than left to the index signature below because the Users list reads it
+   * to decide whether an avatar is worth requesting at all — see `UserAvatar`'s `hasPhoto`.
+   */
+  photo_path?: string | null;
   [key: string]: unknown;
 }
 
