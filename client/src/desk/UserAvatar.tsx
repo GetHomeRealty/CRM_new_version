@@ -47,21 +47,37 @@ export interface UserAvatarProps {
   size?: number;
   /** Cache-buster; pass the user's photo_version after a change. */
   version?: string | number | null;
+  /**
+   * Whether this user has a picture at all, when the caller already knows.
+   *
+   * THE 404-PER-USER TRADE ABOVE IS ONLY A GOOD ONE WHEN THE ANSWER COSTS A REQUEST. On the Users
+   * screen it does not: `GET /api/users` already returns each row's `profile`, and `photo_path`
+   * inside it is exactly what `has_photo` is derived from server-side. Measured against production
+   * on 2026-09-16: 127 users, ONE of whom had a picture, so the screen issued 126 requests that
+   * could only ever 404 — 126 red console errors on a single load, and a cold render of 9.9 s.
+   *
+   * Pass `false` and the initial renders immediately with no request at all. Leave it undefined and
+   * the original behaviour is unchanged, which is what every other caller relies on.
+   */
+  hasPhoto?: boolean;
   title?: string;
   style?: CSSProperties;
 }
 
-export default function UserAvatar({ userId, name, size = 36, version, title, style }: UserAvatarProps) {
+export default function UserAvatar({ userId, name, size = 36, version, title, style, hasPhoto }: UserAvatarProps) {
   const bust = version ?? (photoVersion || null);
+  // `hasPhoto === false` is the caller stating there is no picture, which settles it without a
+  // request. Anything else falls through to the cache, so callers that pass nothing are unaffected.
+  const known = hasPhoto === false;
   // Start from what is already known, so a user we have seen 404 renders their initial without
   // issuing the request again.
-  const [failed, setFailed] = useState(() => (userId ? noPhoto.has(missKey(userId, bust)) : false));
+  const [failed, setFailed] = useState(() => known || (userId ? noPhoto.has(missKey(userId, bust)) : false));
 
   // A different user, or a new upload, deserves a fresh attempt — unless this exact user at this
   // exact version has already been found to have no picture.
   useEffect(() => {
-    setFailed(userId ? noPhoto.has(missKey(userId, bust)) : false);
-  }, [userId, bust]);
+    setFailed(known || (userId ? noPhoto.has(missKey(userId, bust)) : false));
+  }, [userId, bust, known]);
 
   const remember = () => {
     if (userId) noPhoto.add(missKey(userId, bust));

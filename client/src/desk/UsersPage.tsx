@@ -10,6 +10,16 @@ import { useAuth } from '../context/AuthContext';
 import PasswordInput from './PasswordInput';
 import UserAvatar, { bumpPhotoVersion } from './UserAvatar';
 
+/**
+ * Whether a listed user has an avatar, read from the row the list already holds.
+ *
+ * `users.profile.photo_path` is the same field the server derives `has_photo` from, so this is the
+ * authoritative answer and it costs nothing — it arrived with `GET /api/users`. Without it every
+ * pictureless user cost a request that could only 404.
+ */
+const hasAvatar = (u: { profile?: { photo_path?: string | null } }): boolean =>
+  typeof u.profile?.photo_path === 'string' && u.profile.photo_path !== '';
+
 const PHOTO_ACCEPT = '.png,.jpg,.jpeg,.gif,.webp';
 const PHOTO_MAX_MB = 4;
 import type {
@@ -184,7 +194,7 @@ export default function UsersPage() {
             <tr key={u.id}>
               <td>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <UserAvatar userId={u.id} name={u.name} size={32} version={photoV[u.id]} />
+                  <UserAvatar userId={u.id} name={u.name} size={32} version={photoV[u.id]} hasPhoto={hasAvatar(u)} />
                   <span>{u.name}{u.id === me?.id && <span className="pill ok" style={{ fontSize: 9, marginLeft: 6 }}>You</span>}</span>
                 </div>
               </td>
@@ -299,7 +309,7 @@ function UserDetailsModal({ user, catalog, isMe, photoVersion, onClose, onEdit }
         <div className="modal-h" id="user-details-heading">User Details</div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 }}>
-          <UserAvatar userId={user.id} name={user.name} size={56} version={photoVersion} />
+          <UserAvatar userId={user.id} name={user.name} size={56} version={photoVersion} hasPhoto={hasAvatar(user)} />
           <div>
             <div style={{ fontWeight: 700, fontSize: 16 }}>
               {user.name}
