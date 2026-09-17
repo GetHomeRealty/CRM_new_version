@@ -195,6 +195,10 @@ describe('a deal whose deposit has not been recorded (TD-009)', () => {
 // ---------------------------------------------------------------------------
 
 describe('a commission the brokerage has received (TD-009)', () => {
+  // Only this test's own deals. The sweep reads the whole invoices table, so a REAL invoice received on
+  // the anchor day (200889, 2026-06-16, from the 2026-09-16 import correction) is announced beside ours.
+  const mine = (s: ReturnType<typeof stubs>) => s.sent.filter((x) => x.event === 'transaction.commission_received'
+    && String(x.vars.deal_number ?? '').startsWith('TD009M-'));
   const makeInvoice = async (tx: PrismaService, txnId: number, over: Record<string, unknown>) => {
     seq += 1;
     const now = new Date();
@@ -217,7 +221,7 @@ describe('a commission the brokerage has received (TD-009)', () => {
 
       await sweepFor(tx, s).sweep(anchor());
 
-      const sent = s.sent.filter((x) => x.event === 'transaction.commission_received');
+      const sent = mine(s);
       expect(sent).toHaveLength(1);
       expect(sent[0].vars.received_via).toBe('Wire');
       expect(sent[0].vars.amount_received).toContain('8500');
@@ -235,7 +239,7 @@ describe('a commission the brokerage has received (TD-009)', () => {
 
       await sweepFor(tx, s).sweep(anchor());
 
-      expect(s.sent.filter((x) => x.event === 'transaction.commission_received')).toHaveLength(0);
+      expect(mine(s)).toHaveLength(0);
     });
   }, 60000);
 
@@ -248,7 +252,7 @@ describe('a commission the brokerage has received (TD-009)', () => {
 
       await sweepFor(tx, s).sweep(anchor());
 
-      expect(s.sent.filter((x) => x.event === 'transaction.commission_received')).toHaveLength(0);
+      expect(mine(s)).toHaveLength(0);
     });
   }, 60000);
 
@@ -263,7 +267,7 @@ describe('a commission the brokerage has received (TD-009)', () => {
       await sweep.sweep(anchor());
       await sweep.sweep(anchor());
 
-      expect(s.sent.filter((x) => x.event === 'transaction.commission_received')).toHaveLength(1);
+      expect(mine(s)).toHaveLength(1);
     });
   }, 60000);
 });

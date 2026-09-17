@@ -17,11 +17,22 @@ STAMP=$(date +%Y%m%d-%H%M%S)
 echo "==> backing up dist to dist.bak.$STAMP"
 cp -r dist "dist.bak.$STAMP"
 
+# TD-192 - put the build that was running back. Used whenever this script stops after building.
+restore_build() {
+  echo "!! putting the previous build back (dist.bak.$STAMP)"
+  rm -rf dist && cp -r "dist.bak.$STAMP" dist
+}
+
 echo "==> building"
 npm run build
 
+# TD-192, 2026-09-16 - the gate passed and crm-api could not start: no test ever assembled the whole
+# application. boot-check does, from the build just made, before anything is restarted.
+echo "==> boot check (does the whole application assemble?)"
+node scripts/boot-check.cjs || { restore_build; exit 1; }
+
 echo "==> gate (about 90 seconds)"
-node scripts/test-gate.cjs
+node scripts/test-gate.cjs || { restore_build; exit 1; }
 
 echo "==> restarting crm-api"
 pm2 restart crm-api

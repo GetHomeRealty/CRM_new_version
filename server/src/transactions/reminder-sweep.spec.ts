@@ -349,7 +349,9 @@ describe('history and the bell', () => {
       const sweep = sweepFor(tx, s);
 
       const result = await sweep.sweep(today);
-      expect(result.failed).toBe(1);
+      // At least ours: the sweep also tries real deals due on the anchor day, and every send fails here.
+      // This deal's own row, checked below, is what proves the failure was recorded.
+      expect(result.failed).toBeGreaterThanOrEqual(1);
 
       const email = await tx.transaction_reminders.findFirst({ where: { transaction_id: txnId, delivery_method: 'email' } });
       expect(email?.delivery_status).toBe('Failed');
