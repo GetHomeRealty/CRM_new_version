@@ -3,6 +3,7 @@ import { BrowserRouter, Navigate, Route, Routes, useLocation, useParams, useSear
 import { AuthProvider } from './context/AuthContext';
 import { ToastProvider } from './desk/toast';
 import ProtectedRoute from './components/ProtectedRoute';
+import VersionWatcher from './components/VersionWatcher';
 import Login from './pages/Login';
 import Register from './pages/Register';
 import SsoAuthorize from './pages/SsoAuthorize';
@@ -298,6 +299,8 @@ function RootRedirect() {
 export default function App() {
   return (
     <BrowserRouter>
+      {/* TD-195 - moves an open tab onto a new release at its next page change. */}
+      <VersionWatcher />
       <AuthProvider>
         <ToastProvider>
           <Routes>

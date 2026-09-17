@@ -1,4 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react';
+import { isChunkLoadError, reloadForNewVersion } from '../lib/appVersion';
 
 /**
  * Stops one broken render from blanking the application.
@@ -37,6 +38,9 @@ export default class ErrorBoundary extends Component<Props, State> {
 
   componentDidCatch(error: Error, info: ErrorInfo): void {
     this.setState({ info });
+    // TD-195 - a page file that no longer exists means the app was released while this tab was
+    // open. Reload once onto the new version; reloadForNewVersion refuses to loop.
+    if (isChunkLoadError(error)) reloadForNewVersion();
     // Keep the original report intact — the boundary changes what the user sees, not what a
     // developer can find in the console.
     // eslint-disable-next-line no-console
@@ -49,16 +53,17 @@ export default class ErrorBoundary extends Component<Props, State> {
     const { error, info } = this.state;
     if (!error) return this.props.children;
     if (this.props.fallback) return this.props.fallback(error, this.reset);
+    const updated = isChunkLoadError(error);
 
     return (
       <div className="card" style={{ borderLeft: '4px solid var(--bad)', maxWidth: 720, margin: '24px auto' }}>
         <h3 style={{ margin: '0 0 8px', color: 'var(--bad-ink)', fontSize: 16 }}>
-          ⚠ {this.props.what ?? 'Something'} could not be displayed
+          ⚠ {updated ? 'A new version of the app is available' : `${this.props.what ?? 'Something'} could not be displayed`}
         </h3>
         <p style={{ margin: '0 0 14px', color: 'var(--text-2)', fontSize: 13.5, lineHeight: 1.5 }}>
-          An unexpected error stopped this from rendering. Nothing you had already saved is
-          affected — this is a display failure, not a data one. Try again, or move to another
-          screen and come back.
+          {updated
+            ? 'The app was updated while this page was open. Reload the page to continue - nothing you saved is affected.'
+            : 'An unexpected error stopped this from rendering. Nothing you had already saved is affected — this is a display failure, not a data one. Try again, or move to another screen and come back.'}
         </p>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <button className="btn primary sm" onClick={this.reset}>↻ Try again</button>
