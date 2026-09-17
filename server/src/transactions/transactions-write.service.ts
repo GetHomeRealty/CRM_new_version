@@ -579,7 +579,7 @@ export class TransactionsWriteService {
    * leading "5-123" prefix). Returned sorted so two feature sets compare by equality.
    * (Sort order only needs to be self-consistent — both sides use the same sort.)
    */
-  private addrFeatures(input: string): { dirs: string[]; units: string[] } {
+  private addrFeatures(input: string): { dirs: string[]; units: string[]; marks: string[] } {
     const s = input.toLowerCase().trim();
     const units: string[] = [];
     const unitRe = /(?:unit|apt|apartment|suite|ste|#)\s*\.?\s*([a-z0-9]+)/gu;
@@ -593,8 +593,17 @@ export class TransactionsWriteService {
       north: 'n', south: 's', east: 'e', west: 'w', northeast: 'ne', northwest: 'nw', southeast: 'se', southwest: 'sw',
     };
     const dirsSet: Record<string, string> = {};
-    for (const tok of s.split(/[^a-z0-9]+/u)) if (tok && dirMap[tok]) dirsSet[dirMap[tok]] = dirMap[tok];
-    return { dirs: Object.values(dirsSet).sort(), units: uniqUnits };
+    // TD-193 - lot and unit LETTERS: a lone letter ('Lot 85 R') or a number carrying one ('Lot 122A').
+    // Neither is caught by the unit words above nor by the street-number test, so 'Lot 85 R' and
+    // 'Lot 85 L' - two lots, two buyers - compared 87.5% similar and the 2026-09-13 import refused the
+    // second as a duplicate. Directions are excluded here; they have their own comparison.
+    const marks = new Set<string>();
+    for (const tok of s.split(/[^a-z0-9]+/u)) {
+      if (!tok) continue;
+      if (dirMap[tok]) dirsSet[dirMap[tok]] = dirMap[tok];
+      else if (/^[a-z]$/u.test(tok) || (/\d/u.test(tok) && /[a-z]/u.test(tok))) marks.add(tok);
+    }
+    return { dirs: Object.values(dirsSet).sort(), units: uniqUnits, marks: [...marks].sort() };
   }
 
   /** Fuzzy property-address match (port of TransactionController::propertiesSimilar). */
@@ -663,6 +672,12 @@ export class TransactionsWriteService {
     }
     const fa = this.addrFeatures(a), fb = this.addrFeatures(b);
     if (fa.dirs.join('\x00') !== fb.dirs.join('\x00') || fa.units.join('\x00') !== fb.units.join('\x00')) return false;
+    // TD-193 - the street-number subset rule, applied to lot and unit letters: when both addresses
+    // carry them, every one in the shorter list must appear in the longer.
+    if (fa.marks.length && fb.marks.length) {
+      const [small, big] = fa.marks.length <= fb.marks.length ? [fa.marks, fb.marks] : [fb.marks, fa.marks];
+      if (small.some((m) => !big.includes(m))) return false;
+    }
 
     const norm = (s: string): string => s.toLowerCase().trim().replace(/[^\p{L}\p{N}\s]+/gu, ' ').replace(/\s+/gu, ' ').trim();
     const na = norm(a), nb = norm(b);
