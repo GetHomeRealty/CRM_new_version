@@ -7,7 +7,13 @@ module.exports = {
    * variable at TEST_DATABASE_URL and refuses the run outright if the database does not name itself
    * a test database — see the file for what this is preventing.
    */
-  setupFiles: ['<rootDir>/test/jest-db-guard.cjs'],
+  setupFiles: [
+    '<rootDir>/test/jest-db-guard.cjs',
+    // Forces this process's mail settings to something that cannot reach a person, whatever the
+    // deployment's own are — see the file. Production legitimately sends real mail; a test worker
+    // never may, and that must not depend on how the host is configured.
+    '<rootDir>/test/jest-mail-guard.cjs',
+  ],
   roots: ['<rootDir>/src'],
   testMatch: ['**/*.spec.ts'],
   transform: { '^.+\\.ts$': ['ts-jest', { isolatedModules: true }] },
