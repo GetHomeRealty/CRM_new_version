@@ -118,18 +118,74 @@ describe('§12 the runtime rules agree with the backfill', () => {
   const prisma = new PrismaClient();
   afterAll(async () => { await prisma.$disconnect(); });
 
-  it('re-derives every stored domain from the row it was derived from', async () => {
-    const rows = await prisma.audit_logs.findMany({
-      select: { id: true, category: true, section: true, transaction_id: true, domain: true },
-    });
-    expect(rows.length).toBeGreaterThan(0);
+  /*
+   * ROWS THIS TEST WRITES, NOT WHATEVER THE TABLE HAPPENED TO HOLD.
+   *
+   * This scanned `audit_logs` whole and asserted that the stored `domain` of every row re-derives
+   * from the row it came from. That is a data-integrity check over live data wearing a unit test's
+   * clothes: on the deploy host it read the brokerage's real trail, and on an isolated database it
+   * read nothing and failed on `expect(0).toBeGreaterThan(0)` — reporting an empty fixture as a
+   * defect.
+   *
+   * The property is worth keeping, so it is asserted against rows covering each branch of
+   * `auditDomain`, seeded here with the domain the backfill WOULD have written. The expected value
+   * is written out by hand rather than computed from the function, so this compares the rule with a
+   * stated answer instead of with itself.
+   *
+   * Whether the LIVE trail still satisfies the property is a question about production data, not
+   * about this code, and belongs to a migration check rather than the deployment gate.
+   */
+  it('re-derives the stored domain for every shape the rule recognises', async () => {
+    const ROLLBACK = '__rollback__';
+    try {
+      await prisma.$transaction(async (tx) => {
+        const now = new Date();
+        const deal = await tx.transactions.create({
+          data: { trade_no: `AD-${Date.now()}`, type: 'Residential Buying', property: '1 Domain Way', created_at: now, updated_at: now },
+        });
 
-    const disagreements = rows
-      .map((r) => ({ row: r, derived: auditDomain({ category: r.category, section: r.section, transactionId: r.transaction_id }) }))
-      .filter(({ row, derived }) => derived !== null && derived !== row.domain)
-      .map(({ row, derived }) => `#${row.id} ${row.category}/${row.section}: stored ${row.domain}, derived ${derived}`);
+        /** category, section, transaction id, and the domain the backfill stores for that shape. */
+        const cases: [string | null, string | null, number | null, string][] = [
+          ['Transactions', 'Financial', deal.id, 'desk'],   // a transaction id decides it outright
+          ['Lead', 'Notes', null, 'crm'],
+          ['Leads', 'Import', null, 'crm'],
+          ['Campaigns', 'Audience', null, 'crm'],
+          ['Meta', 'Forms', null, 'crm'],
+          ['Transactions', 'Conditions', null, 'desk'],
+          ['Invoice', 'Line items', null, 'desk'],
+          ['Reports', 'Export', null, 'desk'],
+          ['MLS', 'Listing', null, 'desk'],
+          ['Inventory', 'Stock', null, 'desk'],
+          ['Settings', 'CRM Settings', null, 'crm'],
+          ['Settings', 'Transaction Desk Settings', null, 'desk'],
+          ['Settings', 'Company Settings', null, 'common'],
+        ];
+        const who = `Domain Fixture ${Date.now()}`;
 
-    expect(disagreements).toEqual([]);
+        await tx.audit_logs.createMany({
+          data: cases.map(([category, section, transaction_id, domain]) => ({
+            category, section, transaction_id, domain,
+            who, action: 'Updated', created_at: now, updated_at: now,
+          })),
+        });
+
+        const rows = await tx.audit_logs.findMany({
+          where: { who },
+          select: { id: true, category: true, section: true, transaction_id: true, domain: true },
+        });
+        expect(rows).toHaveLength(cases.length);
+
+        const disagreements = rows
+          .map((r) => ({ row: r, derived: auditDomain({ category: r.category, section: r.section, transactionId: r.transaction_id }) }))
+          .filter(({ row, derived }) => derived !== null && derived !== row.domain)
+          .map(({ row, derived }) => `#${row.id} ${row.category}/${row.section}: stored ${row.domain}, derived ${derived}`);
+
+        expect(disagreements).toEqual([]);
+        throw new Error(ROLLBACK);
+      }, { timeout: 60000 });
+    } catch (e) {
+      if (!String((e as Error).message).includes(ROLLBACK)) throw e;
+    }
   });
 
   it('leaves no audit record invisible to both trails', async () => {

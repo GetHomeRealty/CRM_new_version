@@ -348,10 +348,27 @@ describe('history and the bell', () => {
       const txnId = await makeTxn(tx, { agent, listing_expiry_date: day(today, 4) }, ['Active']);
       const sweep = sweepFor(tx, s);
 
+      /*
+       * COUNTED ON THIS DEAL, NOT ON THE SWEEP'S TOTAL.
+       *
+       * `result.failed` is the tally across every deal the sweep touched. That equals "what happened
+       * to the deal this test made" only when nothing else in the database qualifies — true on an
+       * empty scratch database, false the moment the deployment gate pointed the suite at a live
+       * one, where a second outstanding listing turned an expected 1 into a received 2.
+       *
+       * Both branches reached for this. version_3 relaxed the total to "at least ours", which stops
+       * the false failure; the isolation branch moved the real assertion onto the fixture's own rows,
+       * which is what makes the count immune rather than merely tolerant. Both are kept: the relaxed
+       * total still proves the sweep DID something, and the row check below is the one that decides
+       * the test.
+       */
       const result = await sweep.sweep(today);
-      // At least ours: the sweep also tries real deals due on the anchor day, and every send fails here.
-      // This deal's own row, checked below, is what proves the failure was recorded.
+      // At least ours: the sweep also tries other deals due on the anchor day, and every send fails here.
       expect(result.failed).toBeGreaterThanOrEqual(1);
+
+      // This deal's own rows — nothing another deal does can move this.
+      const mineAfterFirst = await tx.transaction_reminders.findMany({ where: { transaction_id: txnId } });
+      expect(mineAfterFirst.filter((r) => r.delivery_status === 'Failed')).toHaveLength(1);
 
       const email = await tx.transaction_reminders.findFirst({ where: { transaction_id: txnId, delivery_method: 'email' } });
       expect(email?.delivery_status).toBe('Failed');
@@ -361,8 +378,11 @@ describe('history and the bell', () => {
       expect(email?.detail).toContain('not retried');
       expect(email?.next_retry_at).toBeNull();
 
-      // The occurrence itself is claimed either way: today is done.
-      expect((await sweep.sweep(today)).failed).toBe(0);
+      // The occurrence itself is claimed either way: today is done. Again read on this deal —
+      // a second pass may legitimately fail OTHER deals, and that is not this test's business.
+      await sweep.sweep(today);
+      const mineAfterSecond = await tx.transaction_reminders.findMany({ where: { transaction_id: txnId } });
+      expect(mineAfterSecond).toHaveLength(mineAfterFirst.length);
     });
   });
 

@@ -31,11 +31,37 @@ describe('storage root', () => {
     expect(STORAGE_ROOT).toBe(path.resolve(historical));
   });
 
-  it('still points at the real directory holding this deployment\'s files', () => {
-    // Guards the migration itself: if this fails, the default has drifted off the live data.
-    const { STORAGE_ROOT } = load({ STORAGE_ROOT: undefined });
-    expect(fs.existsSync(STORAGE_ROOT)).toBe(true);
-    expect(fs.existsSync(path.join(STORAGE_ROOT, 'documents'))).toBe(true);
+  /*
+   * WAS: an assertion that the DEPLOYMENT'S OWN storage directory existed on disk, reached through
+   * the default root. It guarded the migration — if the default drifted off the live data, uploads
+   * would quietly land somewhere the existing documents are not.
+   *
+   * WHY IT CHANGED. That is a fact about a machine, not about this code, so the result depended on
+   * where the suite happened to run: green on the deploy host, red in a worktree, a fresh clone or
+   * CI, none of which hold the brokerage's files. A deployment gate cannot be a test of the
+   * checkout it runs from. It also pointed the suite AT the production storage tree, which is the
+   * same class of mistake as pointing it at the production database.
+   *
+   * WHAT IS KEPT. The property — that the resolved root is a real directory holding `documents`,
+   * and that the boot check passes on it — is now asserted against a root this test creates and
+   * removes. The default path computation is untouched and still pinned by the case above, which
+   * is the half genuinely about this code.
+   *
+   * The live directory is still checked, by `checkStorageRoot()` at boot, which refuses to start
+   * production when the root is missing. That is where an environment fact belongs.
+   */
+  it('resolves to a root that really holds documents, using one it creates itself', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'td-storage-root-'));
+    fs.mkdirSync(path.join(root, 'documents'), { recursive: true });
+    try {
+      const { STORAGE_ROOT, checkStorageRoot } = load({ STORAGE_ROOT: root });
+      expect(STORAGE_ROOT).toBe(path.resolve(root));
+      expect(fs.existsSync(STORAGE_ROOT)).toBe(true);
+      expect(fs.existsSync(path.join(STORAGE_ROOT, 'documents'))).toBe(true);
+      expect(checkStorageRoot('production')).toEqual({ ok: true });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('is overridden by STORAGE_ROOT, so it no longer depends on the working directory', () => {
