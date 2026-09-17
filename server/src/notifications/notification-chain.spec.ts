@@ -399,10 +399,35 @@ describe('CHAIN — Lead Welcome: new lead -> trigger -> master switch -> send -
       const t = transport();
       const svc = welcome(tx, t);
 
-      for (let i = 0; i < 6; i += 1) await svc.sweep(new Date());
+      /*
+       * SWEEP UNTIL THIS FIXTURE IS DRAINED, RATHER THAN A FIXED SIX TIMES.
+       *
+       * The eligible-lead query is `ORDER BY l.id LIMIT MAX_PER_PASS` over a 24-hour window and is
+       * NOT scoped to an owner. Six passes is 600 lead-slots, which comfortably drains 250 when the
+       * 250 are the only recent leads — and cannot when they are not. Older un-welcomed leads have
+       * LOWER ids, so they are served first and spend the budget before the fixture is reached.
+       *
+       * That is what timed this test out on the deployment gate: pointed at a live database it was
+       * welcoming the brokerage's real backlog, 100 at a time, and five seconds was not enough to
+       * work through it and then the fixture. The timeout was the symptom. Sweeping until the
+       * fixture's own 250 have gone removes the assumption instead of buying time for it, and the
+       * cap still fails the test — rather than hanging — if draining genuinely stops making
+       * progress.
+       */
+      const PASS_CAP = 40;
+      let passes = 0;
+      while (mine(t).length < 250 && passes < PASS_CAP) {
+        const before = mine(t).length;
+        await svc.sweep(new Date());
+        passes += 1;
+        if (mine(t).length === before) break;   // a pass that achieves nothing will not achieve it later
+      }
 
       expect(mine(t)).toHaveLength(250);
       expect(new Set(mine(t).map((e) => e.to)).size).toBe(250);
+      // Draining 250 at MAX_PER_PASS=100 is three passes when nothing else competes. More than that
+      // means foreign rows were in the way, which on an isolated database should not happen.
+      expect(passes).toBeLessThanOrEqual(5);
     });
   });
 });

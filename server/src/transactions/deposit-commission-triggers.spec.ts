@@ -54,6 +54,22 @@ const stubs = () => {
 const sweepFor = (tx: PrismaService, s: ReturnType<typeof stubs>) =>
   new ReminderSweepService(tx, new PersonResolver(tx), s.mailer as never, s.settings as never, new AuditService(tx));
 
+/*
+ * MAIL THIS TEST CAUSED, NOT EVERY MAIL THE SWEEP SENT.
+ *
+ * `ReminderSweepService.sweep()` walks the whole transactions table. Inside a rolled-back
+ * transaction it still sees every committed row, so on a database holding real deals the stub
+ * collects their reminders alongside the fixture's — which is how the deployment gate came to fail
+ * these with trade 200889 / transaction 79967 in the output, a live record this file never created.
+ *
+ * Every fixture deal here is made by `makeDeal`, whose trade number carries the `TD009M-` prefix,
+ * and the sweep passes that number through to the mailer as `deal_number`. Filtering on it makes
+ * each assertion a statement about this test's own deal and nothing else.
+ */
+const FIXTURE_TRADE = /^TD009M-/;
+const mine = (s: ReturnType<typeof stubs>, event: string) =>
+  s.sent.filter((x) => x.event === event && FIXTURE_TRADE.test(String(x.vars.deal_number ?? '')));
+
 /** A Tuesday in mid-June at midday — away from month end, DST and any date boundary. */
 const anchor = (): Date => new Date(2026, 5, 16, 12, 0, 0, 0);
 const dayBefore = (d: Date, n: number): Date => new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate() - n));
@@ -125,7 +141,7 @@ describe('a deal whose deposit has not been recorded (TD-009)', () => {
 
       await sweepFor(tx, s).sweep(anchor());
 
-      const sent = s.sent.filter((x) => x.event === 'transaction.deposit_outstanding');
+      const sent = mine(s, 'transaction.deposit_outstanding');
       expect(sent).toHaveLength(1);
       expect(sent[0].vars.days_outstanding).toBe(String(DEPOSIT_GRACE_DAYS));
       expect(sent[0].vars.deposit_amount).toContain('25000');
@@ -144,7 +160,7 @@ describe('a deal whose deposit has not been recorded (TD-009)', () => {
 
       await sweepFor(tx, s).sweep(anchor());
 
-      expect(s.sent.filter((x) => x.event === 'transaction.deposit_outstanding')).toHaveLength(0);
+      expect(mine(s, 'transaction.deposit_outstanding')).toHaveLength(0);
     });
   }, 60000);
 
@@ -161,7 +177,7 @@ describe('a deal whose deposit has not been recorded (TD-009)', () => {
 
       await sweepFor(tx, s).sweep(anchor());
 
-      expect(s.sent.filter((x) => x.event === 'transaction.deposit_outstanding')).toHaveLength(1);
+      expect(mine(s, 'transaction.deposit_outstanding')).toHaveLength(1);
     });
   }, 60000);
 
@@ -173,7 +189,7 @@ describe('a deal whose deposit has not been recorded (TD-009)', () => {
 
       await sweepFor(tx, s).sweep(anchor());
 
-      expect(s.sent.filter((x) => x.event === 'transaction.deposit_outstanding')).toHaveLength(0);
+      expect(mine(s, 'transaction.deposit_outstanding')).toHaveLength(0);
     });
   }, 60000);
 
@@ -185,7 +201,7 @@ describe('a deal whose deposit has not been recorded (TD-009)', () => {
 
       await sweepFor(tx, s).sweep(anchor());
 
-      expect(s.sent.filter((x) => x.event === 'transaction.deposit_outstanding')).toHaveLength(0);
+      expect(mine(s, 'transaction.deposit_outstanding')).toHaveLength(0);
     });
   }, 60000);
 });
@@ -217,7 +233,7 @@ describe('a commission the brokerage has received (TD-009)', () => {
 
       await sweepFor(tx, s).sweep(anchor());
 
-      const sent = s.sent.filter((x) => x.event === 'transaction.commission_received');
+      const sent = mine(s, 'transaction.commission_received');
       expect(sent).toHaveLength(1);
       expect(sent[0].vars.received_via).toBe('Wire');
       expect(sent[0].vars.amount_received).toContain('8500');
@@ -235,7 +251,7 @@ describe('a commission the brokerage has received (TD-009)', () => {
 
       await sweepFor(tx, s).sweep(anchor());
 
-      expect(s.sent.filter((x) => x.event === 'transaction.commission_received')).toHaveLength(0);
+      expect(mine(s, 'transaction.commission_received')).toHaveLength(0);
     });
   }, 60000);
 
@@ -248,7 +264,7 @@ describe('a commission the brokerage has received (TD-009)', () => {
 
       await sweepFor(tx, s).sweep(anchor());
 
-      expect(s.sent.filter((x) => x.event === 'transaction.commission_received')).toHaveLength(0);
+      expect(mine(s, 'transaction.commission_received')).toHaveLength(0);
     });
   }, 60000);
 
@@ -263,7 +279,7 @@ describe('a commission the brokerage has received (TD-009)', () => {
       await sweep.sweep(anchor());
       await sweep.sweep(anchor());
 
-      expect(s.sent.filter((x) => x.event === 'transaction.commission_received')).toHaveLength(1);
+      expect(mine(s, 'transaction.commission_received')).toHaveLength(1);
     });
   }, 60000);
 });
