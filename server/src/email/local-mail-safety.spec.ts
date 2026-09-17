@@ -70,6 +70,21 @@ describeLocal('the local .env cannot send real mail', () => {
      * own Gmail, which is a perfectly reasonable place to capture test mail. Ownership is the
      * question, not whether the address appears elsewhere in the database.
      */
+    /*
+     * A NOTE ON WHICH DATABASE THIS READS, since the suite now runs against an isolated one.
+     *
+     * The ownership check below asks the `users` table. An unroutable target short-circuits before
+     * it and needs no database at all; a REAL colleague's address does not, and the isolated test
+     * database does not contain the brokerage's people. So configuring a readable capture mailbox
+     * here will fail this case on the gate even though the configuration is perfectly safe —
+     * measured, not predicted: `colleague@gethomerealty.ca` fails, and passes the moment that
+     * address exists as a user in the database being used.
+     *
+     * The rule itself is deliberate and is left exactly as it is. If a readable capture mailbox is
+     * ever wanted, the address has to exist in the seeded test environment too — `seed-test-env.cjs`
+     * is where it would go — rather than this assertion being relaxed to "non-empty" again, which is
+     * the weakening its own comment above warns about.
+     */
     const target = (fromEnvFile('MAIL_REDIRECT_TO') ?? '').trim().toLowerCase();
     if (target.endsWith('.invalid')) return;              // unroutable: nothing to check further
 

@@ -31,6 +31,47 @@ const svc = new AuditLogService(prisma as unknown as PrismaService);
 const total = async (q: Record<string, string> = {}): Promise<number> =>
   ((await svc.index(q)) as { meta: { total: number } }).meta.total;
 
+/*
+ * A TRAIL THIS FILE PUT THERE ITSELF.
+ *
+ * The three cases below used to read whatever rows the database already held — "over a trail of 127
+ * rows", as the header says, which was true of the machine they were written on. On an isolated test
+ * database that trail is empty, so `total()` is 0, and `expect(0).toBeGreaterThan(0)` and
+ * `expect(0).toBeLessThan(0)` both fail: the tests were reporting the absence of fixtures, not a
+ * defect. On the deploy host they read the brokerage's real audit trail instead, which is worse.
+ *
+ * `seedTrail` writes its own rows inside the caller's rolled-back transaction and hands back a
+ * service bound to that same transaction, so the counts are of this test's data and nothing else.
+ *
+ * The text is deliberately free of `%` and `_`: two of these cases assert that searching for those
+ * characters does NOT match everything, which only means something if the fixtures do not contain
+ * them incidentally.
+ */
+async function seedTrail(tx: PrismaService, rows = 6): Promise<{ count: (q?: Record<string, string>) => Promise<number> }> {
+  const now = new Date();
+  const t = tag();
+  await tx.audit_logs.createMany({
+    data: Array.from({ length: rows }, (_, i) => ({
+      category: 'Transactions',
+      who: `Auditor ${t} ${i}`,
+      user_id: 1,
+      section: 'Query Fixture',
+      field: 'Field ' + i,
+      action: 'Updated',
+      old_value: 'before ' + i,
+      new_value: 'after ' + i,
+      details: 'seeded by audit-log-query.spec',
+      created_at: now,
+      updated_at: now,
+    })),
+  });
+  const scoped = new AuditLogService(tx);
+  return {
+    count: async (q: Record<string, string> = {}) =>
+      ((await scoped.index(q)) as { meta: { total: number } }).meta.total,
+  };
+}
+
 describe('a filter that cannot be honoured is refused, not silently answered', () => {
   /*
    * `Number('abc')` is NaN, and Prisma renders NaN as `user_id: null`. So `?user_id=abc` returned
@@ -39,7 +80,15 @@ describe('a filter that cannot be honoured is refused, not silently answered', (
    * something, so an answer that is confidently wrong is the worst outcome available.
    */
   it.each(['abc', '1e999', 'NaN', '', ' 12 x', '3.5'])('user_id=%s is refused', async (uid) => {
-    if (uid === '') { expect(await total({ user_id: uid })).toBeGreaterThan(0); return; }  // absent, not invalid
+    if (uid === '') {
+      // Absent, not invalid: an empty filter must answer with the trail rather than refuse. Counted
+      // against rows this test seeds, so an empty database does not read as a refusal.
+      await inRollback(async (tx) => {
+        const trail = await seedTrail(tx);
+        expect(await trail.count({ user_id: uid })).toBeGreaterThan(0);
+      });
+      return;
+    }
     await expect(svc.index({ user_id: uid })).rejects.toMatchObject({ response: { errors: { user_id: expect.anything() } } });
   });
 
@@ -114,13 +163,21 @@ describe('search means search, not LIKE', () => {
    * with this; it is wrong in the ordinary way, and "50%" is a string that turns up in a trail.
    */
   it('a lone percent sign no longer matches everything', async () => {
-    const all = await total();
-    expect(await total({ q: '%' })).toBeLessThan(all);
+    await inRollback(async (tx) => {
+      const trail = await seedTrail(tx);
+      const all = await trail.count();
+      expect(all).toBeGreaterThan(0);              // the comparison below is meaningless otherwise
+      expect(await trail.count({ q: '%' })).toBeLessThan(all);
+    });
   });
 
   it('an underscore no longer matches everything either', async () => {
-    const all = await total();
-    expect(await total({ q: '_' })).toBeLessThan(all);
+    await inRollback(async (tx) => {
+      const trail = await seedTrail(tx);
+      const all = await trail.count();
+      expect(all).toBeGreaterThan(0);
+      expect(await trail.count({ q: '_' })).toBeLessThan(all);
+    });
   });
 
   it('a literal percent IS found when it is really there', async () => {

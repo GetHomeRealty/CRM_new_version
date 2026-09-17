@@ -1,8 +1,5 @@
 [
   "src/audit-log/audit-export.spec.ts :: domain isolation > excludes agent-made transaction changes, as the listing does",
-  "src/email/local-mail-safety.spec.ts :: the local .env cannot send real mail > is not quietly overridden by a duplicate key later in the file",
-  "src/email/local-mail-safety.spec.ts :: the local .env cannot send real mail > redirects everything to a single designated mailbox",
-  "src/email/local-mail-safety.spec.ts :: the local .env cannot send real mail > sends only somewhere THIS BROKERAGE controls — unroutable, or a colleague",
   "src/email/mail-account-default-scope.spec.ts :: adding a mailbox changes only this person’s sender > cannot displace another user’s default",
   "src/email/mail-account-default-scope.spec.ts :: adding a mailbox changes only this person’s sender > keeps the two areas independent",
   "src/email/mail-account-default-scope.spec.ts :: adding a mailbox changes only this person’s sender > leaves the existing default alone when the second is added without asking for it",
