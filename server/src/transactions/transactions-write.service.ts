@@ -663,7 +663,10 @@ export class TransactionsWriteService {
      * extra deal somebody can delete; a false duplicate silently drops a real deal from an import
      * of 495 and nobody finds out until they go looking for it.
      */
-    const streetNums = (s: string): Set<string> => new Set(s.match(/\b\d+\b/g) ?? []);
+    // TD-194 - not \b: an underscore is a regex WORD character, so '134_Pending' had no boundary and the
+    // number was invisible. The brokerage's sheet suffixes addresses that way ('_Mutual Release', '_Term 1').
+    // Letters and digits still bind, so '122A' and a postal code's 'M4B 2B2' stay out, as before.
+    const streetNums = (s: string): Set<string> => new Set(s.match(/(?<![A-Za-z0-9])\d+(?![A-Za-z0-9])/g) ?? []);
     const naNums = streetNums(a), nbNums = streetNums(b);
     if (naNums.size && nbNums.size) {
       const small = naNums.size <= nbNums.size ? naNums : nbNums;
