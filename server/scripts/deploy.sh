@@ -36,12 +36,24 @@ node scripts/test-gate.cjs || { restore_build; exit 1; }
 
 echo "==> restarting crm-api"
 pm2 restart crm-api
-sleep 6
-
-CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/api/dashboard/commissions || echo "000")
+# TD-192, 2026-09-16 - the old check compared the answer with exactly "000", but `curl -w ... || echo "000"`
+# prints "000000" when nothing answers, so a crash-looping API was reported as deployed and the site
+# stayed down. It also asked a route that needs a login. Now: wait up to a minute for the public
+# liveness probe to say 200, and if it never does, put the previous build back and restart onto it.
+# (Applied 2026-09-17: the first attempt matched nothing because of a blank line, and said nothing.)
+CODE=000
+for _ in $(seq 1 20); do
+  sleep 3
+  CODE=$(curl -s -o /dev/null -m 5 -w "%{http_code}" http://localhost:8000/api/health 2>/dev/null || true)
+  [ "$CODE" = "200" ] && break
+done
 echo "==> API answered HTTP $CODE"
-if [ "$CODE" = "000" ]; then
-  echo "!! THE API DID NOT COME BACK. Restore with:  rm -rf dist && mv dist.bak.$STAMP dist && pm2 restart crm-api"
+if [ "$CODE" != "200" ]; then
+  echo "!! THE API DID NOT COME BACK on the new build."
+  restore_build
+  pm2 restart crm-api
+  echo "   restarted onto the previous build. crm-worker was not restarted and still runs it too."
+  echo "   Why it failed:  pm2 logs crm-api --lines 80 --nostream"
   exit 1
 fi
 # TD-187, 2026-09-15 - crm-worker runs the SAME dist/main.js and was never restarted here, so every
