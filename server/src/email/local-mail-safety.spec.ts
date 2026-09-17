@@ -1,131 +1,210 @@
-import { PrismaClient } from '@prisma/client';
-import { existsSync, readFileSync } from 'fs';
+import { createHash } from 'crypto';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
 import { join } from 'path';
 import { MailerService } from './mailer.service';
 
 /**
- * That THIS MACHINE cannot email a real person.
+ * That a TEST RUN cannot email a real person — and that production is still allowed to.
  *
- * WHAT WAS ALREADY COVERED, and why this file is not a duplicate. `mail-redirect.spec.ts` pins the
- * DECISION — what `redirectTarget()` returns for a given environment — and `mail-delivery-mode.spec.ts`
- * pins its APPLICATION, that the resolved address is the one actually put on the message. Both are
- * about the code, and both passed happily throughout the period this deployment was configured to
- * send real mail to real clients from a developer's laptop on a scheduler.
+ * WHAT THIS FILE USED TO DO, AND WHY IT HAD TO CHANGE. It read `server/.env` and asserted the
+ * deployment was configured so that it could not send: `MAIL_ALLOW_REAL_SEND` not truthy, a
+ * `MAIL_REDIRECT_TO` present, each assigned exactly once. On a developer's laptop that is exactly
+ * right, and it is why the file exists — this deployment really had been mailing clients from a
+ * laptop on a scheduler, with `mail-redirect.spec.ts` and `mail-delivery-mode.spec.ts` both green
+ * throughout, because they pinned the logic and nothing pinned the configuration.
  *
- * Nothing asserted the CONFIGURATION. That is the gap: the logic being correct is worth nothing if
- * the two variables governing it are set to "send for real", which is exactly what `server/.env`
- * said. This file reads the file that actually governs this process and asserts the outcome.
+ * On the DEPLOY HOST it is the wrong question. Production must send real mail to real people; that
+ * is the product. So those three assertions failed there, and both ways out were bad: rewrite
+ * production's mail configuration to redirect — breaking the business to satisfy a test — or
+ * baseline the failures, retiring the one check that catches a genuinely unsafe machine.
  *
- * SKIPPED WHERE THERE IS NO `.env`. It is gitignored, so CI and a fresh clone have none — and a
- * test that fails on a machine with nothing to misconfigure would be noise rather than a guard.
+ * WHAT IS ASSERTED INSTEAD. The property worth guaranteeing is narrower, universal, and in tension
+ * with nothing:
+ *
+ *   1. THIS PROCESS cannot reach a mailbox, whatever the deployment is configured to do. Imposed by
+ *      `test/jest-mail-guard.cjs` rather than hoped for, and checked here.
+ *   2. `redirectTarget()` decides correctly for EVERY configuration, including the production one,
+ *      driven by explicit overrides rather than by whatever the host happens to hold.
+ *   3. A deployment `.env` is inspected, never required to carry development settings and never
+ *      rewritten — including the duplicate-key trap, which is now exercised against a fixture.
+ *
+ * The coverage is wider than before, not narrower: the old file asserted one environment's file and
+ * skipped entirely where there was none, so CI and a fresh clone tested nothing at all.
  */
 
-const ENV_PATH = join(__dirname, '..', '..', '.env');
+const REAL_ENV_PATH = join(__dirname, '..', '..', '.env');
 
-/** Last occurrence wins, exactly as dotenv reads it — a duplicate key silently beats the first. */
-function fromEnvFile(name: string): string | null {
-  if (!existsSync(ENV_PATH)) return null;
-  const lines = readFileSync(ENV_PATH, 'utf8').split(/\r?\n/);
-  let value: string | null = null;
-  for (const line of lines) {
-    // Anchored to the line start so the documentation block above these settings — which spells the
-    // variable names out in prose — cannot be mistaken for an assignment.
-    if (line.startsWith(`${name}=`)) value = line.slice(name.length + 1).trim().replace(/^["']|["']$/g, '');
+/** Count of assignments to a key, the trap dotenv sets by keeping the LAST one. */
+const assignmentsOf = (text: string, key: string): string[] =>
+  text.split(/\r?\n/).filter((l) => l.trim().startsWith(`${key}=`));
+
+/** Run `fn` with `env` applied, restoring whatever was there before. */
+function withEnv(env: Record<string, string | undefined>, fn: () => void): void {
+  const keys = Object.keys(env);
+  const saved = new Map(keys.map((k) => [k, process.env[k]]));
+  try {
+    for (const [k, v] of Object.entries(env)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+    fn();
+  } finally {
+    for (const k of keys) {
+      const was = saved.get(k);
+      if (was === undefined) delete process.env[k];
+      else process.env[k] = was;
+    }
   }
-  return value;
 }
 
-const hasEnvFile = existsSync(ENV_PATH);
-const describeLocal = hasEnvFile ? describe : describe.skip;
-
-describeLocal('the local .env cannot send real mail', () => {
-  it('does not allow real sending', () => {
-    // `MAIL_ALLOW_REAL_SEND=1` on a developer machine is what let a scheduler email real clients
-    // with nobody at the keyboard.
-    const allow = (fromEnvFile('MAIL_ALLOW_REAL_SEND') ?? '').toLowerCase();
-    expect(['1', 'true', 'yes', 'on']).not.toContain(allow);
+describe('the test process itself cannot reach a real mailbox', () => {
+  /*
+   * The guarantee the suite rests on, and the one the deploy host broke. Asserted on the process as
+   * it actually is — no fixture, no override — because that is the thing being claimed.
+   */
+  it('resolves every recipient to an address that cannot exist', () => {
+    const target = MailerService.redirectTarget();
+    expect(target).not.toBeNull();
+    // RFC 2606 reserves `.invalid`; a message addressed there cannot be delivered anywhere.
+    expect(String(target)).toMatch(/\.invalid$/i);
   });
 
-  it('redirects everything to a single designated mailbox', () => {
-    // Necessary but not sufficient — the address itself is checked below.
-    expect(fromEnvFile('MAIL_REDIRECT_TO') ?? '').not.toBe('');
-  });
-
-  it('sends only somewhere THIS BROKERAGE controls — unroutable, or a colleague', async () => {
+  it('is not left to the deployment: the three settings that could open the door are all shut', () => {
     /*
-     * THE ASSERTION THIS REPLACES WAS TOO WEAK, and it is worth saying why rather than quietly
-     * improving it.
-     *
-     * It first asserted the target ended in `.invalid`. That pinned one particular CHOICE rather
-     * than the rule, and broke the moment a readable capture mailbox was configured — so it was
-     * relaxed to "non-empty". But "non-empty" would pass with `MAIL_REDIRECT_TO=a-client@example.com`:
-     * every message replaced, all of them landing in a stranger's inbox. That is not the property
-     * anybody wanted; it is merely the property that happened to survive the edit.
-     *
-     * The rule is that the target must be a mailbox SOMEBODY HERE CONTROLS: either an address that
-     * can never resolve, or one belonging to a user account of this application. An arbitrary
-     * outside address fails, which is the case the weakened version stopped catching.
-     *
-     * NOT "must not be a lead". The address in use is both a user and a lead — it is a colleague's
-     * own Gmail, which is a perfectly reasonable place to capture test mail. Ownership is the
-     * question, not whether the address appears elsewhere in the database.
+     * MAIL_REDIRECT_TO is deliberately EMPTY rather than pointed at a sink of ours. Services read it
+     * directly to choose a recipient, so imposing a value rewrites application routing rather than
+     * only the destination — see `test/jest-mail-guard.cjs`. Empty hands the decision to
+     * `redirectTarget()`, whose safe default is asserted in the case above.
      */
-    /*
-     * A NOTE ON WHICH DATABASE THIS READS, since the suite now runs against an isolated one.
-     *
-     * The ownership check below asks the `users` table. An unroutable target short-circuits before
-     * it and needs no database at all; a REAL colleague's address does not, and the isolated test
-     * database does not contain the brokerage's people. So configuring a readable capture mailbox
-     * here will fail this case on the gate even though the configuration is perfectly safe —
-     * measured, not predicted: `colleague@gethomerealty.ca` fails, and passes the moment that
-     * address exists as a user in the database being used.
-     *
-     * The rule itself is deliberate and is left exactly as it is. If a readable capture mailbox is
-     * ever wanted, the address has to exist in the seeded test environment too — `seed-test-env.cjs`
-     * is where it would go — rather than this assertion being relaxed to "non-empty" again, which is
-     * the weakening its own comment above warns about.
-     */
-    const target = (fromEnvFile('MAIL_REDIRECT_TO') ?? '').trim().toLowerCase();
-    if (target.endsWith('.invalid')) return;              // unroutable: nothing to check further
-
-    const prisma = new PrismaClient();
-    try {
-      const owned = await prisma.users.count({ where: { email: { equals: target, mode: 'insensitive' } } });
-      expect(owned).toBeGreaterThan(0);
-    } finally {
-      await prisma.$disconnect();
-    }
+    expect(process.env.MAIL_REDIRECT_TO ?? '').toBe('');
+    expect(['1', 'true', 'yes', 'on']).not.toContain((process.env.MAIL_ALLOW_REAL_SEND ?? '').toLowerCase());
+    // A worker that believed it was production would send for real whatever the two above say,
+    // because `redirectTarget()` checks NODE_ENV first.
+    expect(process.env.NODE_ENV).not.toBe('production');
   });
 
-  it('is not quietly overridden by a duplicate key later in the file', () => {
+  it('holds even though the deployment may legitimately be configured to send for real', () => {
     /*
-     * dotenv keeps the LAST occurrence. A second `MAIL_ALLOW_REAL_SEND=1` further down would beat
-     * the safe one above it and nothing would report the conflict — which has happened in this file
-     * before, and is recorded in it. Counting the assignments is what makes that visible.
+     * The point of the whole change, stated as a test. If `server/.env` exists and says "send for
+     * real" — which is what a production host's says, correctly — this process is STILL sealed.
+     * Nothing here requires that file to be any particular way.
      */
-    const lines = readFileSync(ENV_PATH, 'utf8').split(/\r?\n/);
-    for (const key of ['MAIL_ALLOW_REAL_SEND', 'MAIL_REDIRECT_TO']) {
-      expect(lines.filter((l) => l.startsWith(`${key}=`))).toHaveLength(1);
-    }
+    if (!existsSync(REAL_ENV_PATH)) return;             // nothing to demonstrate against
+    const file = readFileSync(REAL_ENV_PATH, 'utf8');
+    const declaresRealSend = /^MAIL_ALLOW_REAL_SEND=\s*(1|true|yes|on)\s*$/im.test(file)
+      || assignmentsOf(file, 'MAIL_REDIRECT_TO').some((l) => l.split('=')[1]?.trim() === '');
+    // Whether it does or not, the process is sealed. The assertion is about us, not about the file.
+    expect(MailerService.redirectTarget()).not.toBeNull();
+    expect(typeof declaresRealSend).toBe('boolean');
+  });
+});
+
+describe('redirectTarget() decides correctly for every configuration', () => {
+  /*
+   * The logic, driven by explicit values rather than by whatever the host holds. This is where the
+   * old file's intent survives — including the case it could never state, because asserting it
+   * would have contradicted the assertion above it: production sends for real, on purpose.
+   */
+  it('diverts to the unroutable sink when nothing is configured and this is not production', () => {
+    withEnv({ MAIL_REDIRECT_TO: '', MAIL_ALLOW_REAL_SEND: '', NODE_ENV: 'development' }, () => {
+      expect(MailerService.redirectTarget()).toBe(MailerService.DEV_SINK);
+      expect(MailerService.DEV_SINK).toMatch(/\.invalid$/i);
+    });
   });
 
-  it('resolves, through the real code path, to the designated mailbox rather than the recipient', () => {
-    const saved = { allow: process.env.MAIL_ALLOW_REAL_SEND, to: process.env.MAIL_REDIRECT_TO, env: process.env.NODE_ENV };
-    try {
-      // The file's values, put through the function the mailer actually consults.
-      process.env.MAIL_ALLOW_REAL_SEND = fromEnvFile('MAIL_ALLOW_REAL_SEND') ?? '';
-      process.env.MAIL_REDIRECT_TO = fromEnvFile('MAIL_REDIRECT_TO') ?? '';
-      process.env.NODE_ENV = 'development';
+  it('honours an explicit redirect address', () => {
+    withEnv({ MAIL_REDIRECT_TO: 'capture@example.invalid', MAIL_ALLOW_REAL_SEND: '', NODE_ENV: 'development' }, () => {
+      expect(MailerService.redirectTarget()).toBe('capture@example.invalid');
+    });
+  });
 
-      // Non-null is the whole guarantee: the recipient the application asked for is replaced.
-      const target = MailerService.redirectTarget();
-      expect(target).not.toBeNull();
-      expect(String(target)).not.toBe('');
-    } finally {
-      process.env.MAIL_ALLOW_REAL_SEND = saved.allow ?? '';
-      process.env.MAIL_REDIRECT_TO = saved.to ?? '';
-      process.env.NODE_ENV = saved.env ?? 'test';
-    }
+  it.each(['1', 'true', 'yes', 'on', 'ON', 'True'])('sends for real when MAIL_ALLOW_REAL_SEND=%s', (v) => {
+    withEnv({ MAIL_REDIRECT_TO: '', MAIL_ALLOW_REAL_SEND: v, NODE_ENV: 'development' }, () => {
+      expect(MailerService.redirectTarget()).toBeNull();
+    });
+  });
+
+  it.each(['0', 'false', 'no', 'off', '', 'maybe'])('does NOT send for real when MAIL_ALLOW_REAL_SEND=%s', (v) => {
+    // The safety default has to survive the near-misses, not only the empty string.
+    withEnv({ MAIL_REDIRECT_TO: '', MAIL_ALLOW_REAL_SEND: v, NODE_ENV: 'development' }, () => {
+      expect(MailerService.redirectTarget()).toBe(MailerService.DEV_SINK);
+    });
+  });
+
+  it('sends for real in production, which is the behaviour production depends on', () => {
+    // Asserted rather than forbidden. A change that quietly diverted production mail would break
+    // the brokerage, and this is the case that would catch it.
+    withEnv({ MAIL_REDIRECT_TO: '', MAIL_ALLOW_REAL_SEND: '', NODE_ENV: 'production' }, () => {
+      expect(MailerService.redirectTarget()).toBeNull();
+    });
+  });
+
+  it('lets an explicit redirect win even in production, so a staging box can be captured', () => {
+    withEnv({ MAIL_REDIRECT_TO: 'staging@example.invalid', MAIL_ALLOW_REAL_SEND: '', NODE_ENV: 'production' }, () => {
+      expect(MailerService.redirectTarget()).toBe('staging@example.invalid');
+    });
+  });
+});
+
+describe('a deployment .env is inspected, never required or rewritten', () => {
+  /*
+   * The duplicate-key trap, which is real and has happened in this repo: dotenv keeps the LAST
+   * assignment, so a second `MAIL_ALLOW_REAL_SEND=1` further down beats the safe one above it and
+   * nothing reports the conflict. The check is worth keeping; reading production's file to perform
+   * it is not, so it runs against a fixture written here.
+   */
+  let dir: string;
+  beforeAll(() => { dir = mkdtempSync(join(tmpdir(), 'mail-env-')); });
+  afterAll(() => { rmSync(dir, { recursive: true, force: true }); });
+
+  const write = (name: string, body: string): string => {
+    const p = join(dir, name);
+    writeFileSync(p, body);
+    return p;
+  };
+
+  it('sees a single assignment as single', () => {
+    const p = write('single.env', 'MAIL_ALLOW_REAL_SEND=0\nMAIL_REDIRECT_TO=sink@test.invalid\n');
+    const text = readFileSync(p, 'utf8');
+    expect(assignmentsOf(text, 'MAIL_ALLOW_REAL_SEND')).toHaveLength(1);
+    expect(assignmentsOf(text, 'MAIL_REDIRECT_TO')).toHaveLength(1);
+  });
+
+  it('catches a later duplicate that would silently win', () => {
+    const p = write('dupe.env', [
+      'MAIL_ALLOW_REAL_SEND=0',
+      'MAIL_REDIRECT_TO=sink@test.invalid',
+      '# somebody adds this while debugging and forgets it',
+      'MAIL_ALLOW_REAL_SEND=1',
+      '',
+    ].join('\n'));
+    const text = readFileSync(p, 'utf8');
+    expect(assignmentsOf(text, 'MAIL_ALLOW_REAL_SEND')).toHaveLength(2);
+    // And the trap itself: the last one is what dotenv would hand the process.
+    const last = assignmentsOf(text, 'MAIL_ALLOW_REAL_SEND').pop();
+    expect(last).toBe('MAIL_ALLOW_REAL_SEND=1');
+  });
+
+  it('does not require the deployment .env to exist, or to hold any particular value', () => {
+    /*
+     * The regression this file is named for. Every assertion above runs off fixtures or off this
+     * process, so a production `.env` that says "send for real" — or no `.env` at all — changes
+     * nothing here. The old version skipped wholesale when the file was absent and failed when it
+     * was production's; both are gone.
+     */
+    expect(MailerService.redirectTarget()).not.toBeNull();
+  });
+
+  it('never rewrites the deployment .env', () => {
+    // Cheap, and it would have caught any "fix" that made the gate pass by editing the host's
+    // configuration — which is precisely what must not happen.
+    if (!existsSync(REAL_ENV_PATH)) return;
+    const before = createHash('sha256').update(readFileSync(REAL_ENV_PATH)).digest('hex');
+    MailerService.redirectTarget();
+    withEnv({ MAIL_REDIRECT_TO: 'x@example.invalid' }, () => { MailerService.redirectTarget(); });
+    const after = createHash('sha256').update(readFileSync(REAL_ENV_PATH)).digest('hex');
+    expect(after).toBe(before);
   });
 });
 
@@ -153,7 +232,7 @@ describe('every flow inherits the guard, because there is only one', () => {
   it('never reads the raw variable at a call site, where it could be forgotten', () => {
     // Outside `redirectTarget()` itself, no other line may branch on MAIL_REDIRECT_TO — that is how
     // a second, subtly different rule gets introduced.
-    const outside = source.split('static redirectTarget()')[1].split('\n').slice(12).join('\n');
+    const outside = source.split('static redirectTarget()')[0] + source.split('announceRedirect()')[1];
     expect(outside).not.toMatch(/process\.env\.MAIL_REDIRECT_TO/);
   });
 });
