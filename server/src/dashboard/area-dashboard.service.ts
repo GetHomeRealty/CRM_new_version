@@ -409,9 +409,10 @@ export class AreaDashboardService {
        *     standalone invoice is brokerage billing, not one agent's.
        */
       mayReadInvoices ? this.prisma.invoices.count({ where: invoiceWhere }) : Promise.resolve(0),
-      mayReadInvoices ? this.prisma.invoices.count({ where: { ...invoiceWhere, status: { not: 'Paid' } } }) : Promise.resolve(0),
+      mayReadInvoices ? this.prisma.invoices.count({ where: { ...invoiceWhere, status: { notIn: ['Paid', 'Void'] } } }) : Promise.resolve(0),
       mayReadInvoices
-        ? this.prisma.invoices.aggregate({ _sum: { total: true, amount_paid: true, balance_due: true }, where: invoiceWhere })
+        // TD-191 - Void invoices are neither unpaid nor owed, and a voided total was never invoiced.
+        ? this.prisma.invoices.aggregate({ _sum: { total: true, amount_paid: true, balance_due: true }, where: { ...invoiceWhere, status: { not: 'Void' } } })
         : Promise.resolve({ _sum: { total: null, amount_paid: null, balance_due: null } }),
 
       this.prisma.calendar_events.count({

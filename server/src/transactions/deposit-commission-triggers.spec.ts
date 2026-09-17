@@ -69,6 +69,16 @@ const sweepFor = (tx: PrismaService, s: ReturnType<typeof stubs>) =>
 const FIXTURE_TRADE = /^TD009M-/;
 const mine = (s: ReturnType<typeof stubs>, event: string) =>
   s.sent.filter((x) => x.event === event && FIXTURE_TRADE.test(String(x.vars.deal_number ?? '')));
+/*
+ * A WORKED EXAMPLE OF WHAT THIS PREVENTS, recorded on version_3 against the commission sweep and
+ * kept here because it is the clearest evidence of the problem: the sweep reads the whole invoices
+ * table, so a REAL invoice received on the anchor day — 200889, 2026-06-16, from the 2026-09-16
+ * import correction — was announced beside the fixture's and turned an expected 1 into 2.
+ *
+ * version_3 answered that for the commission describe alone. This helper is the same answer applied
+ * to BOTH sweeps, since the deposit describe reads the whole transactions table and has the
+ * identical exposure.
+ */
 
 /** A Tuesday in mid-June at midday — away from month end, DST and any date boundary. */
 const anchor = (): Date => new Date(2026, 5, 16, 12, 0, 0, 0);

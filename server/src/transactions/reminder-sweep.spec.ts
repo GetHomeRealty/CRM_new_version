@@ -351,14 +351,22 @@ describe('history and the bell', () => {
       /*
        * COUNTED ON THIS DEAL, NOT ON THE SWEEP'S TOTAL.
        *
-       * `result.failed` is the tally across every deal the sweep touched. That is only equal to
-       * "what happened to the deal this test made" when nothing else in the database qualifies —
-       * which was true when the suite ran on an empty scratch database and false the moment the
-       * deployment gate pointed it at a live one, where a second outstanding listing turned an
-       * expected 1 into a received 2. The assertion below reads the rows written for THIS
-       * transaction, so nothing another deal does can move it.
+       * `result.failed` is the tally across every deal the sweep touched. That equals "what happened
+       * to the deal this test made" only when nothing else in the database qualifies — true on an
+       * empty scratch database, false the moment the deployment gate pointed the suite at a live
+       * one, where a second outstanding listing turned an expected 1 into a received 2.
+       *
+       * Both branches reached for this. version_3 relaxed the total to "at least ours", which stops
+       * the false failure; the isolation branch moved the real assertion onto the fixture's own rows,
+       * which is what makes the count immune rather than merely tolerant. Both are kept: the relaxed
+       * total still proves the sweep DID something, and the row check below is the one that decides
+       * the test.
        */
-      await sweep.sweep(today);
+      const result = await sweep.sweep(today);
+      // At least ours: the sweep also tries other deals due on the anchor day, and every send fails here.
+      expect(result.failed).toBeGreaterThanOrEqual(1);
+
+      // This deal's own rows — nothing another deal does can move this.
       const mineAfterFirst = await tx.transaction_reminders.findMany({ where: { transaction_id: txnId } });
       expect(mineAfterFirst.filter((r) => r.delivery_status === 'Failed')).toHaveLength(1);
 

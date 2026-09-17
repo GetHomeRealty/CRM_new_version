@@ -1,6 +1,6 @@
 import { AREAS, type Area } from '../common/domain';
 import { ModuleAccessService } from '../core/module-access.service';
-import { Injectable, Logger, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
+import { Inject, Injectable, Logger, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
 import { PasswordHashService } from '../auth/password-hash.service';
 import { Prisma, type users, type user_permissions, type user_modules } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -12,6 +12,7 @@ import type { AuthUserRecord } from '../auth/auth.types';
 
 import { isSuperAdmin, superAdminRoles } from '../core/authz';
 import { OffboardingService } from './offboarding.service';
+import { UserRenameService } from './user-rename.service';
 type UserWithPerms = users & { user_permissions: user_permissions[]; user_modules: user_modules[] };
 
 /** bcrypt ignores everything past 72 bytes, so accepting more would overstate the protection. */
@@ -34,6 +35,9 @@ export class UsersService {
     private readonly audit: AuditService,
     private readonly offboarding: OffboardingService,
     private readonly passwords: PasswordHashService,
+    // @Inject names the provider outright: a `| null` type is emitted as Object, which Nest cannot
+    // resolve - that is what kept crm-api from starting on 2026-09-16. The default keeps hand-built specs working.
+    @Inject(UserRenameService) private readonly rename: UserRenameService | null = null,
   ) {}
 
   /**
@@ -144,6 +148,24 @@ export class UsersService {
     const departure = goingInactive ? await this.offboarding.depart(user.id, user.name) : null;
 
     /*
+     * TD-190 - a new name reaches the deals linked to this account. The dashboard, the reports and
+     * the Admin Activities payouts read the agent by the name on the deal, so a rename left all of
+     * them at $0.00. Best-effort, like the departure above: the rename itself is already saved, and
+     * the same call run later (the backfill) finishes anything this could not.
+     */
+    let carried: string | null = null;
+    // Optional only so the specs that build this service by hand still compile; the app always has it.
+    if (this.rename && (existing.name ?? '') !== (user.name ?? '')) {
+      try {
+        const r = await this.rename.syncNameToDeals(user.id);
+        if (r.deals) carried = `new name carried onto ${r.deals} deal${r.deals === 1 ? '' : 's'}`;
+        if (r.skipped.length) carried = [carried, `${r.skipped.length} left for review`].filter(Boolean).join(', ');
+      } catch (e) {
+        carried = `new name NOT carried onto deals: ${(e as Error).message}`;
+      }
+    }
+
+    /*
      * A new password ends every session that account already had open.
      *
      * Without this, resetting a compromised account's password changed only what a NEW sign-in
@@ -167,7 +189,8 @@ export class UsersService {
       field: user.name,
       action: goingInactive ? 'User deactivated' : 'User updated',
       details: `${user.email} · ${this.permissions.label(user.role)} · ${user.status}`
-        + (departure ? ` · ${departure}` : ''),
+        + (departure ? ` · ${departure}` : '')
+        + (carried ? ` · ${carried}` : ''),
     });
     return this.payload(await this.load(id));
   }

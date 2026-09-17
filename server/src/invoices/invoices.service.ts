@@ -102,7 +102,7 @@ export class InvoicesService {
 
     const where: Prisma.invoicesWhereInput = { deleted_at: null, ...this.displayStatusWhere(query.status) };
 
-    const [total, rows, ledger, paidCount] = await Promise.all([
+    const [total, rows, ledger, paidCount, owed] = await Promise.all([
       this.prisma.invoices.count({ where }),
       this.prisma.invoices.findMany({
         where,
@@ -117,6 +117,9 @@ export class InvoicesService {
         _sum: { balance_due: true },
       }),
       this.prisma.invoices.count({ where: { deleted_at: null, status: 'Paid' } }),
+      // TD-191 - a Void invoice is not money owed. Its balance stays on the document (voiding does
+      // not rewrite the figures) so it is left out here, where the balances become a total.
+      this.prisma.invoices.aggregate({ where: { deleted_at: null, status: { not: 'Void' } }, _sum: { balance_due: true } }),
     ]);
 
     return {
@@ -124,7 +127,7 @@ export class InvoicesService {
       meta: { current_page: page, per_page: perPage, last_page: Math.max(1, Math.ceil(total / perPage)), total },
       totals: {
         count: ledger._count._all,
-        outstanding: round2(num(ledger._sum.balance_due)),
+        outstanding: round2(num(owed._sum.balance_due)),
         paid_count: paidCount,
       },
     };
