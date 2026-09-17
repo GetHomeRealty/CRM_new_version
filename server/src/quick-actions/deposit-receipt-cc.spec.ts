@@ -79,7 +79,7 @@ describe('the Deposit Receipt Cc resolves this deal\'s own team, not a namesake 
       const admin = await mkUser(tx, collisionName, 'admin', 'Active', `${collisionName.toLowerCase()}@gmail.test`);
 
       const deal = await tx.transactions.create({
-        data: { agent: collisionName, agent_user_id: null, trade_no: `TD037-${n}A`, type: 'Residential Buying', property: '1 Test St', deposit: 50000, created_at: new Date(), updated_at: new Date() },
+        data: { agent: collisionName, agent_user_id: null, trade_no: `TD037-${n}A`, type: 'Residential Sale Listing', property: '1 Test St', deposit: 50000, created_at: new Date(), updated_at: new Date() },
       });
 
       const svc = service(tx);
@@ -98,7 +98,7 @@ describe('the Deposit Receipt Cc resolves this deal\'s own team, not a namesake 
       const manager = await mkUser(tx, `Manager-${n}`, 'manager');
 
       const deal = await tx.transactions.create({
-        data: { agent: agent.name, agent_user_id: agent.id, trade_no: `TD037-${n}B`, type: 'Residential Buying', property: '1 Test St', deposit: 50000, created_at: new Date(), updated_at: new Date() },
+        data: { agent: agent.name, agent_user_id: agent.id, trade_no: `TD037-${n}B`, type: 'Residential Sale Listing', property: '1 Test St', deposit: 50000, created_at: new Date(), updated_at: new Date() },
       });
       await tx.team_members.create({
         data: { transaction_id: deal.id, user_id: manager.id, name: manager.name, access: 'full', position: 0, created_at: new Date(), updated_at: new Date() },
@@ -117,7 +117,7 @@ describe('the Deposit Receipt Cc resolves this deal\'s own team, not a namesake 
       const departed = await mkUser(tx, `Departed-${n}`, 'agent', 'Inactive');
 
       const deal = await tx.transactions.create({
-        data: { agent: agent.name, agent_user_id: agent.id, trade_no: `TD037-${n}C`, type: 'Residential Buying', property: '1 Test St', deposit: 50000, created_at: new Date(), updated_at: new Date() },
+        data: { agent: agent.name, agent_user_id: agent.id, trade_no: `TD037-${n}C`, type: 'Residential Sale Listing', property: '1 Test St', deposit: 50000, created_at: new Date(), updated_at: new Date() },
       });
       await tx.team_members.create({
         data: { transaction_id: deal.id, user_id: departed.id, name: departed.name, access: 'full', position: 0, created_at: new Date(), updated_at: new Date() },
@@ -143,7 +143,7 @@ describe('the Deposit Receipt Cc resolves this deal\'s own team, not a namesake 
       const nonAgentSameName = await mkUser(tx, `NoMatch-${n}`, 'accounting');
 
       const deal = await tx.transactions.create({
-        data: { agent: agent.name, agent_user_id: agent.id, trade_no: `TD037-${n}D`, type: 'Residential Buying', property: '1 Test St', deposit: 50000, created_at: new Date(), updated_at: new Date() },
+        data: { agent: agent.name, agent_user_id: agent.id, trade_no: `TD037-${n}D`, type: 'Residential Sale Listing', property: '1 Test St', deposit: 50000, created_at: new Date(), updated_at: new Date() },
       });
       await tx.team_members.create({
         data: { transaction_id: deal.id, user_id: null, name: collisionName, access: 'full', position: 0, created_at: new Date(), updated_at: new Date() },
@@ -164,7 +164,7 @@ describe('the Deposit Receipt Cc resolves this deal\'s own team, not a namesake 
       const agent = await mkUser(tx, `Agent-${n}`, 'agent');
       const manager = await mkUser(tx, `Manager-${n}`, 'manager');
       const deal = await tx.transactions.create({
-        data: { agent: agent.name, agent_user_id: agent.id, trade_no: `TD037-${n}E`, type: 'Residential Buying', property: '1 Test St', deposit: 50000, created_at: new Date(), updated_at: new Date() },
+        data: { agent: agent.name, agent_user_id: agent.id, trade_no: `TD037-${n}E`, type: 'Residential Sale Listing', property: '1 Test St', deposit: 50000, created_at: new Date(), updated_at: new Date() },
       });
       await tx.team_members.create({
         data: { transaction_id: deal.id, user_id: manager.id, name: manager.name, access: 'full', position: 0, created_at: new Date(), updated_at: new Date() },

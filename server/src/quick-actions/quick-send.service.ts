@@ -6,7 +6,7 @@ import { CompanySettingsService } from '../settings/company-settings.service';
 import { throwValidation, type FieldErrors } from '../common/laravel-exceptions';
 import { toIso8601String } from '../common/serialize';
 import { isBuyingType, missingLawyerParties, lawyerPartyLabel } from '../transactions/lawyer-details';
-import { isListingStatusFamily } from '../reference/transaction.constants';
+import { isListingStatusFamily, isListingType } from '../reference/transaction.constants';
 import { ResourceAccessService } from '../core/resource-access.service';
 import type { AuthUserRecord } from '../auth/auth.types';
 
@@ -43,7 +43,7 @@ export class QuickSendService {
    * `assertTransaction` is the same rule the transaction, document and chat endpoints already
    * apply — one definition of who may reach a deal, deliberately not restated here.
    */
-  private async reachableTxnOr404(user: Actor, id: number): Promise<{ id: number; trade_no: string; property: string | null; deposit: unknown; agent: string | null; agent_user_id: number | null; trade_sheet_sent_at: Date | null; trade_sheet_generated_at: Date | null }> {
+  private async reachableTxnOr404(user: Actor, id: number): Promise<{ id: number; type: string | null; trade_no: string; property: string | null; deposit: unknown; agent: string | null; agent_user_id: number | null; trade_sheet_sent_at: Date | null; trade_sheet_generated_at: Date | null }> {
     await this.access.assertTransaction(user, id);
     const t = await this.prisma.transactions.findFirst({ where: { id, deleted_at: null } });
     if (!t) throw new NotFoundException({ message: `No query results for model [App\\Models\\Transaction] ${id}.` });
@@ -137,11 +137,16 @@ export class QuickSendService {
 
   // ---- Deposit Receipt ----
   /*
-   * TD-035 — A DEPOSIT RECEIPT FOLLOWS THE DEPOSIT, NOT THE DEAL TYPE.
+   * A DEPOSIT RECEIPT IS A LISTING-SIDE DOCUMENT THAT ALSO NEEDS A DEPOSIT. TWO CHECKS, IN ORDER.
    *
-   * The button offering this document was decided by transaction TYPE alone, so a Buying deal
-   * holding a real deposit could not receipt it while a listing at $0 offered to. The button now
-   * asks whether there IS a deposit, and this is the same question asked where it is enforceable:
+   * TD-035 removed the type test and kept only the deposit test, on the reasoning that holding
+   * money and owning the listing are different questions. They are — but the receipt belongs to
+   * whoever holds the deposit IN TRUST, and that is the listing brokerage. On a Buying deal the
+   * money sits with the other office, so a receipt issued here would describe funds this brokerage
+   * never received. The type test is therefore back, by the brokerage's decision of 2026-09-17,
+   * and the deposit test stays beside it because it answers a different failure.
+   *
+   * The deposit half of TD-035's reasoning is unchanged and still applies below:
    * nothing but the hidden button stood between a direct POST and an emailed receipt reading
    * "Deposit: $0.00" — a document about money that was never taken, carrying the trade number and
    * the property address, with a Cc list of the caller's choosing.
@@ -157,6 +162,24 @@ export class QuickSendService {
    */
   async depositReceipt(user: Actor, txnId: number, body: Record<string, unknown>): Promise<Record<string, unknown>> {
     const t = await this.reachableTxnOr404(user, txnId);
+    /*
+     * LISTING TYPES ONLY, ENFORCED HERE AND NOT ONLY IN THE BROWSER.
+     *
+     * The receipt is written by the brokerage HOLDING the deposit in trust, which is the listing
+     * brokerage. On a Buying deal the money is in the other brokerage's account and a receipt
+     * issued from here would cover funds this office never received.
+     *
+     * The button is hidden for every other type, and that is the weaker half of the rule — the
+     * same lesson TD-057 recorded for Bulk Import. This endpoint composes and sends the mail
+     * itself, so without this check a POST would still put the trade number, the property address
+     * and the deposit amount in front of any address the caller supplied, on a deal type that
+     * should never produce the document at all.
+     */
+    if (!isListingType(t.type)) {
+      throw new UnprocessableEntityException({
+        message: `A Deposit Receipt is a listing-side document. ${t.property || 'This transaction'} is a ${t.type || 'non-listing'} deal, so the deposit is not held here and no receipt can be sent from it.`,
+      });
+    }
     if (!(Number(t.deposit) > 0)) {
       throw new UnprocessableEntityException({
         message: `There is no deposit recorded on ${t.property || 'this transaction'}, so a Deposit Receipt cannot be sent. Please enter the deposit first.`,

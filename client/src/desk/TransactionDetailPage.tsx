@@ -713,24 +713,22 @@ export default function TransactionDetailPage() {
   // A listing that's still Active has no price/deposit yet — hide those fields.
   const hidePriceDeposit = listing && form.statuses.includes('Active');
   /*
-   * TD-035 — A DEPOSIT RECEIPT FOLLOWS THE DEPOSIT, NOT THE DEAL TYPE.
+   * A DEPOSIT RECEIPT IS A LISTING-SIDE DOCUMENT, AND THE TYPE DECIDES IT.
    *
-   * The button was offered on `isListingFinancialType(form.type)` and nothing else, which is a
-   * question about which SIDE of a trade this is — it decides whether the header shows the
-   * listing-side documents or the Invoice. It says nothing about whether money was taken. So a
-   * Residential Buying deal holding a $28,000 deposit could not produce a receipt for it, while a
-   * Residential Sale Listing at $0 offered to write a receipt for nothing.
+   * This supersedes TD-035, which gated the button on `hasDeposit` alone — any deal holding money
+   * could produce a receipt, whichever side of the trade it was. The reasoning there was that "is
+   * there a deposit to receipt?" and "which side is this?" are different questions, which is true,
+   * but it answered the wrong one: the receipt is written by the brokerage that HOLDS the deposit
+   * in trust, and that is the listing brokerage. On a Buying deal the money sits in the other
+   * brokerage's trust account, so a receipt issued from here would be a document for funds this
+   * office never received.
    *
-   * Read from `form` rather than `txn` so the button follows what is on screen: entering a deposit
-   * offers the receipt immediately, and clearing it withdraws the offer, without a save in between.
-   * `parseNumber` is the same reader `buildPayload` uses, so the button and the saved value cannot
-   * disagree about what counts as a deposit.
-   *
-   * A NEGATIVE deposit is not a deposit either — the API refuses to store one (TD-055) but older
-   * rows can still hold one, and a receipt for minus eight hundred dollars is not a document
-   * anybody should be able to send.
+   * Requested by the brokerage on 2026-09-17 and decided deliberately: listing types only, whatever
+   * the deposit figure. That does re-admit the second case TD-035 named — a listing with no deposit
+   * recorded still offers the button — and that is accepted rather than overlooked. The API refuses
+   * the send with a plain message when no deposit exists, so the failure is explained rather than
+   * silent, and `listing` is the same flag the rest of this screen already branches on.
    */
-  const hasDeposit = parseNumber(form.deposit) > 0;
   const stSoldCond = saleListing && form.statuses.includes('Sold Conditional');
   const stTerminated = saleListing && form.statuses.includes('Terminated');
 
@@ -957,15 +955,13 @@ export default function TransactionDetailPage() {
           {/* Invoice, the Deposit Receipt and the Lawyer Statement are hidden for agents. The Trade
             * Sheet and Notice of Sale are not - see TD-116 on the two buttons further down. */}
           {/*
-            * TD-035 — the Deposit Receipt is its own decision, taken on `hasDeposit`.
-            *
-            * It used to be the first arm of the type ternary below, which made "is there a deposit
-            * to receipt?" and "which side of the trade is this?" the same question. They are not,
-            * and the ternary is still correct for the two that ARE side questions: the Lawyer
-            * Statement belongs to the listing side, the Invoice to the other. Only the receipt has
-            * been lifted out; neither of those changes behaviour.
+            * The Deposit Receipt is a LISTING-SIDE document — see the note beside `listing` above.
+            * It sits outside the ternary below rather than being its first arm, because that
+            * ternary asks which side owns the OTHER two documents (Lawyer Statement to the listing
+            * side, Invoice to the other) and `isListingFinancialType` admits Business Sale, which
+            * is not a listing and holds no deposit in this brokerage's trust.
           */}
-          {!isAgent && hasDeposit && (
+          {!isAgent && listing && (
             <button className="btn ghost sm" onClick={() => setDepositOpen(true)}><Icon name="receipt" size={13} /> Deposit Receipt</button>
           )}
           {!isAgent && (isListingFinancialType(form.type) ? (

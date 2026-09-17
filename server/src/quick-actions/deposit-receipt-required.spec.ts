@@ -5,19 +5,21 @@ import { ResourceAccessService } from '../core/resource-access.service';
 import { QuickSendService } from './quick-send.service';
 
 /**
- * TD-035 — the Deposit Receipt follows the DEPOSIT, not the deal type.
+ * A Deposit Receipt needs BOTH a listing-side deal and a deposit on it.
  *
- * THE DEFECT. The button was offered on `isListingFinancialType(type)` — a question about which
- * side of the trade this is — and on nothing else. So a Residential Buying deal holding a real
- * $28,000 deposit could not produce a receipt for it, while a Residential Sale Listing sitting at
- * $0 offered to write a receipt for nothing.
+ * THE RULE, AND WHY IT CHANGED BACK. TD-035 removed the type test and kept only the deposit test,
+ * reasoning that holding money and owning the listing are separate questions. They are — but the
+ * receipt is written by the brokerage HOLDING the deposit in trust, and that is the listing
+ * brokerage. On a Buying deal the money sits with the other office, so a receipt issued from here
+ * would describe funds this brokerage never received. The brokerage asked for listing-types-only
+ * on 2026-09-17 and that is what these pin, alongside the deposit test TD-035 added, which is
+ * unaffected and still correct.
  *
  * WHAT IS PINNED HERE. The visibility rule lives in the page, but hiding a button is not a rule —
- * the send endpoint composed and mailed the receipt itself, so a direct POST to a $0 deal would
- * still have emailed a document reading "Deposit: $0.00" with the trade number, the property
- * address and a Cc list of the caller's choosing. These assert the API's half: a deposit of zero,
- * absent, or negative is refused and mails NOTHING, and a real deposit still sends — on a BUYING
- * deal, which is exactly the type the old rule locked out.
+ * the send endpoint composes and mails the receipt itself, so a direct POST would otherwise still
+ * emit a document carrying the trade number, the property address and a Cc list of the caller's
+ * choosing. These assert the API's half: a non-listing type is refused however large its deposit,
+ * a listing with a deposit of zero, absent or negative is refused, and both refusals mail NOTHING.
  *
  * Real rows in a rolled-back transaction: what counts as a deposit is a question about the stored
  * column (null, 0, a negative legacy value), which a stub cannot stand in for.
@@ -70,7 +72,7 @@ const attempt = async (fn: () => Promise<unknown>): Promise<unknown> => {
   try { await fn(); return null; } catch (e) { return e; }
 };
 
-describe('a Deposit Receipt needs a deposit, whatever the transaction type (TD-035)', () => {
+describe('a Deposit Receipt needs a listing-side deal AND a deposit on it', () => {
   it('refuses a listing with no deposit — and mails nothing while refusing', async () => {
     await inRollback(async (tx) => {
       // The reported row: a Sale Listing at $0 that used to offer the receipt purely on its type.
@@ -98,14 +100,52 @@ describe('a Deposit Receipt needs a deposit, whatever the transaction type (TD-0
     });
   });
 
-  it('sends for a BUYING deal that holds a deposit — the case the type rule locked out', async () => {
+  it('sends for a LISTING that holds a deposit — the one case that produces the document', async () => {
     await inRollback(async (tx) => {
+      const listing = await deal(tx, 'Residential Sale Listing', 28000);
+      const { quick, sent } = services(tx);
+
+      const res = await quick.depositReceipt(ADMIN, listing.id, { email: 'client@example.test' });
+      expect(res).toMatchObject({ ok: true, email: 'client@example.test' });
+      expect(sent).toHaveLength(1);
+    });
+  });
+
+  it('refuses a BUYING deal even when it holds a real deposit — the money is not held here', async () => {
+    await inRollback(async (tx) => {
+      // The $28,000 Buying deal TD-035 opened this up for. The deposit is real; it is simply in
+      // the other brokerage's trust account, so this office is not the one that receipts it.
       const buying = await deal(tx, 'Residential Buying', 28000);
       const { quick, sent } = services(tx);
 
-      const res = await quick.depositReceipt(ADMIN, buying.id, { email: 'client@example.test' });
-      expect(res).toMatchObject({ ok: true, email: 'client@example.test' });
-      expect(sent).toHaveLength(1);
+      const err = await attempt(() => quick.depositReceipt(ADMIN, buying.id, { email: 'client@example.test' }));
+      expect(err).toBeInstanceOf(UnprocessableEntityException);
+      expect(String((err as { response?: { message?: string } }).response?.message)).toContain('listing-side');
+      expect(sent).toHaveLength(0);
+    });
+  });
+
+  it('refuses every other non-listing type the same way, deposit or not', async () => {
+    await inRollback(async (tx) => {
+      const { quick, sent } = services(tx);
+      for (const t of ['Preconstruction', 'Referral', 'Business Buying', 'Commercial Property Buying', 'Business Sale']) {
+        const d = await deal(tx, t, 5000);
+        expect(await attempt(() => quick.depositReceipt(ADMIN, d.id, { email: 'client@example.test' })))
+          .toBeInstanceOf(UnprocessableEntityException);
+      }
+      expect(sent).toHaveLength(0);
+    });
+  });
+
+  it('accepts all four listing types', async () => {
+    await inRollback(async (tx) => {
+      const { quick, sent } = services(tx);
+      for (const t of ['Residential Sale Listing', 'Residential Lease Listing',
+        'Commercial Property Sale Listing', 'Commercial Property Lease Listing']) {
+        const d = await deal(tx, t, 1000);
+        await expect(quick.depositReceipt(ADMIN, d.id, { email: 'client@example.test' })).resolves.toMatchObject({ ok: true });
+      }
+      expect(sent).toHaveLength(4);
     });
   });
 
@@ -113,7 +153,7 @@ describe('a Deposit Receipt needs a deposit, whatever the transaction type (TD-0
     // Ordering matters: if email validation ran first, the caller would be told to fix their
     // address on a deal that can never produce this document at all.
     await inRollback(async (tx) => {
-      const zero = await deal(tx, 'Residential Buying', 0);
+      const zero = await deal(tx, 'Residential Sale Listing', 0);
       const { quick } = services(tx);
 
       const err = await attempt(() => quick.depositReceipt(ADMIN, zero.id, {}));
