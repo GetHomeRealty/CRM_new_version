@@ -85,6 +85,17 @@ model audit_logs {
   @@index([new_value(ops: raw("gin_trgm_ops"))], map: "audit_logs_new_value_trgm_idx", type: Gin)
   @@index([action(ops: raw("gin_trgm_ops"))], map: "audit_logs_action_trgm_idx", type: Gin)
   @@index([details(ops: raw("gin_trgm_ops"))], map: "audit_logs_details_trgm_idx", type: Gin)
+  /// ADOPTED FROM THE LIVE DATABASE 2026-09-18, NOT ADDED BY IT.
+  ///
+  /// This index existed in production and in NO migration - created by hand at some point - so the
+  /// schema and the database disagreed. `prisma migrate diff` therefore proposed DROP INDEX on it,
+  /// and any routine migration would have taken it away: measured the same day, it had served
+  /// 244,596 index scans and occupies 432 kB. Dropping it would have been a real regression arriving
+  /// as a tidy-up.
+  ///
+  /// Declared here so the schema states what production actually has. If it is ever genuinely
+  /// unwanted, remove it deliberately in its own migration rather than as a side effect of another.
+  @@index([source, transaction_id, created_at(sort: Desc)], map: "audit_logs_source_transaction_created_idx")
 }
 
 model brokerage_agents {
@@ -439,6 +450,20 @@ model leads {
   @@index([source])
   @@index([phone_normalized])
   @@index([meta_campaign_id])
+  /// D-1 - THE LEAD LIST'S OWN ORDER, INDEXED.
+  ///
+  /// list() reads `where deleted_at is null (+ scope/filters) order by updated_at desc,
+  /// created_at desc, id desc limit 25`. Nothing covered that: measured 2026-09-18 on the live
+  /// database, the plan was a Seq Scan over every row followed by a top-N heapsort.
+  ///
+  /// THE ROW THAT RAISED THIS NAMED created_at AS THE SORT KEY, AND IT IS NOT - `updated_at` leads,
+  /// and an index built on created_at would have been unusable for this query while looking like a
+  /// fix. Checked against the service before writing it.
+  ///
+  /// AT 410 LEADS THE PLANNER WILL STILL SCAN, correctly - reading the whole table is cheaper than
+  /// walking an index at that size. This is built now because it is milliseconds now and a locked
+  /// table at fifty thousand, which is the size this defect was raised about.
+  @@index([deleted_at, updated_at(sort: Desc), created_at(sort: Desc), id(sort: Desc)], map: "leads_list_order_idx")
 }
 
 /**
