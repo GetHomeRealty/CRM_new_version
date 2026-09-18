@@ -157,4 +157,20 @@
 .login-page .login-logo{display:block;width:100%;max-width:380px;height:125px;max-height:none;object-fit:cover;object-position:center;margin:0 auto 40px;flex-shrink:0}
 @media(max-width:760px){.login-page .login-logo{height:120px;margin-bottom:30px}}
 
+/* Fit the desktop composition to the available height without hiding controls. */
+@media(min-width:761px){
+  .login-page .login-form-wrap{box-sizing:border-box;min-height:100svh;padding-top:clamp(12px,2.4svh,26px);padding-bottom:clamp(12px,2.4svh,26px)}
+  .login-page .login-logo{height:clamp(80px,12svh,125px);margin-bottom:clamp(10px,2svh,26px)}
+  .login-page .login-heading{margin-bottom:clamp(12px,2svh,24px)}
+  .login-page .login-heading h1{font-size:clamp(30px,4.8svh,54px)}
+  .login-page .login-heading>p:last-child{font-size:clamp(16px,2.4svh,24px);margin-top:8px}
+  .login-page .login-form{gap:8px}
+  .login-page .login-input-wrap input{height:clamp(44px,5.7svh,54px)}
+  .login-page .login-submit{height:clamp(44px,5.8svh,56px)}
+  .login-page .login-register{margin-top:12px}
+  .login-page .login-signature-art{width:auto;height:clamp(70px,13svh,140px);max-width:100%;object-fit:contain;margin:clamp(12px,2.4svh,28px) 0 12px}
+  .login-page .login-footer{padding-top:10px}
+  .login-page .login-hero{align-self:stretch}
+}
+
 /* ---- Stub pages ---- */
