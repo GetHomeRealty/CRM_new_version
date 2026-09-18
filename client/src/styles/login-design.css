@@ -173,4 +173,6 @@
   .login-page .login-hero{align-self:stretch}
 }
 
+.login-page .login-logo{object-fit:contain;object-position:center;height:auto;aspect-ratio:1020 / 345;width:100%;max-width:380px;max-height:none}
+
 /* ---- Stub pages ---- */

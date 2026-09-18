@@ -66,7 +66,7 @@ export default function Login() {
         <div className="login-form-wrap">
           {/* Official supplied brokerage artwork. */}
           <img
-            src="/get-home-realty-logo.png"
+            src="/get-home-realty-logo-fit.svg"
             alt="Get Home Realty — A Tradition of Trust"
             className="auth-logo login-logo"
           />
