@@ -277,12 +277,24 @@ describe('domain isolation', () => {
     });
   });
 
-  it('excludes agent-made transaction changes, as the listing does', async () => {
+  it('carries an agent-made change, as the listing does - the split is by domain, not by who', async () => {
+    /*
+     * WAS 'excludes agent-made transaction changes, as the listing does', expecting the export to
+     * drop them. TD-067 REVERSED THAT DELIBERATELY: agents' field-level edits were MISSING from the
+     * Audit Trail, and that absence was the defect - a brokerage cannot evidence a change it does not
+     * record. The listing shows them now, and this export does not re-implement any filter: it calls
+     * AuditLogService.buildWhere, whose only area split is the `domain` column. So a CRM-domain row
+     * belongs in a CRM export whoever made it.
+     *
+     * THE ISOLATION GUARANTEE IS UNTOUCHED and is asserted by the two cases above: a Desk row never
+     * appears in a CRM export, and the reverse. That is the rule this describe block exists for.
+     * TD-171.
+     */
     await inRollback(async (tx) => {
       await crmEntry(tx, { source: 'Agent', transaction_id: 1, who: 'ZZ Agent Change' });
       const file = await build(tx).exporter.export({ area: 'crm' } as never, 'csv');
       const rows = parseCsv(file.body);
-      expect(body(rows).some((r) => r[col(rows, 'User')] === 'ZZ Agent Change')).toBe(false);
+      expect(body(rows).some((r) => r[col(rows, 'User')] === 'ZZ Agent Change')).toBe(true);
     });
   });
 });

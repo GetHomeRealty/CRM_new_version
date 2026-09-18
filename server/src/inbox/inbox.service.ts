@@ -36,10 +36,23 @@ export class InboxService {
   /**
    * The user's Hub-wide primary mailbox. Both CRM and Transactions resolve the same account.
    */
-  private async primaryAccount(userId: number, _area: Area) {
+  private async primaryAccount(userId: number, area: Area) {
+    /*
+     * TD-171 - THIS TOOK THE AREA AND IGNORED IT. The parameter was written `_area`, the
+     * convention for one knowingly unused, while inbox.controller.ts promised 'the CRM Inbox and
+     * the Transaction Desk Inbox are two views over separate sets of accounts'. The code did not
+     * do what it said, and a person with mailboxes in both areas got whichever was default.
+     *
+     * The rule is NOT restated here. permittedAccountIds is where the product defines which
+     * mailboxes an area may reach - this area's, plus the unlabelled ones a person connects once
+     * and uses on both sides - and mailbox-scope.ts exists precisely so nothing writes a second
+     * version of it. Confirmed by the brokerage 2026-09-15.
+     */
+    const ids = await permittedAccountIds(this.prisma, userId, area);
+    if (ids.length === 0) return null;
     const pick = { id: true, from_email: true, inbound_enabled: true, imap_host: true };
-    return (await this.prisma.mail_accounts.findFirst({ where: { user_id: userId, is_default: true }, select: pick }))
-      ?? (await this.prisma.mail_accounts.findFirst({ where: { user_id: userId, is_active: true }, select: pick, orderBy: { id: 'asc' } }));
+    return (await this.prisma.mail_accounts.findFirst({ where: { id: { in: ids }, is_default: true }, select: pick }))
+      ?? (await this.prisma.mail_accounts.findFirst({ where: { id: { in: ids }, is_active: true }, select: pick, orderBy: { id: 'asc' } }));
   }
 
   /**
@@ -50,15 +63,19 @@ export class InboxService {
    * you are reading. Switching the primary switches the inbox immediately — the other accounts keep
    * syncing in the background, so their history is already there when you switch back.
    *
-   * With no primary the area falls back to everything it can see, so the inbox is never empty merely
-   * because nobody has chosen one. NOTE the relation is `mail_account`, singular — the field name, not
+   * WITH NO MAILBOX IN THIS AREA THE LIST IS EMPTY. It used to fall back to everything the user
+   * had, in either area - a fail-open that returned `{}` and dropped the account condition from
+   * the where clause entirely. It was masked only because every live user has a default, and
+   * making primaryAccount respect the area is exactly what would have exposed it. The brokerage
+   * ruled on 2026-09-15 that an area with no mailbox shows an empty inbox, which is what the
+   * Inbox screen already does. NOTE the relation is `mail_account`, singular — the field name, not
    * the model name; and `null` cannot go inside an `in` list in Prisma, so "this area, or not yet
    * assigned" has to be spelled as a union.
    *
    * Takes the already-resolved primary so a single request does not look it up twice.
    */
-  private scopeFor(primary: { id: number } | null, _area: Area): Prisma.inbound_emailsWhereInput {
-    return primary ? { account_id: primary.id } : {};
+  private scopeFor(primary: { id: number } | null): Prisma.inbound_emailsWhereInput {
+    return primary ? { account_id: primary.id } : { account_id: { in: [] } };
   }
 
   /** The message list, newest first, without the heavy bodies. */
@@ -84,7 +101,7 @@ export class InboxService {
     // a variable, a wrong key slips past excess-property checking and only fails at runtime,
     // which is exactly how this filter shipped broken once.
     const primary = await this.primaryAccount(userId, area);
-    const scoped: Prisma.inbound_emailsWhereInput = { user_id: userId, ...this.scopeFor(primary, area) };
+    const scoped: Prisma.inbound_emailsWhereInput = { user_id: userId, ...this.scopeFor(primary) };
     const where: Prisma.inbound_emailsWhereInput = {
       ...scoped,
       ...(opts.unread ? { seen: false } : {}),
@@ -165,7 +182,7 @@ export class InboxService {
     // Area-scoped as well as user-scoped: asking the Transaction Desk for a CRM message's id
     // must not return it.
     const row = await this.prisma.inbound_emails.findFirst({
-      where: { id, user_id: userId, ...this.scopeFor(await this.primaryAccount(userId, area), area) },
+      where: { id, user_id: userId, ...this.scopeFor(await this.primaryAccount(userId, area)) },
     });
     if (!row) throw await this.missingError(userId, area, id);
     if (!row.seen) await this.prisma.inbound_emails.update({ where: { id }, data: { seen: true } });

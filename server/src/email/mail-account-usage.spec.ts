@@ -64,16 +64,19 @@ async function makeAccount(tx: PrismaService, userId: number, scope: string | nu
 }
 
 describe('the mail-account usage figure', () => {
-  it('counts the accounts an unlimited role actually has', async () => {
+  it('counts every account the person has, Hub-wide, for an unlimited role', async () => {
     await inRollback(async (tx) => {
       const admin = await makeUser(tx, 'admin');
       await makeAccount(tx, admin.id, 'crm');
       await makeAccount(tx, admin.id, 'crm');
       await makeAccount(tx, admin.id, 'desk');
 
-      // THE DEFECT: this read 0 at every scope.
-      expect((await emailLimitFor(tx, admin.id, 'crm')).used).toBe(2);
-      expect((await emailLimitFor(tx, admin.id, 'desk')).used).toBe(1);
+      // THE DEFECT THIS CASE WAS WRITTEN FOR, UNCHANGED: the figure read 0 at every scope and had to
+      // become truthful. WHAT CHANGED (TD-171, brokerage confirmed 2026-09-15): the allowance is
+      // Hub-wide, so the same three accounts are three in BOTH areas - emailLimitFor takes the area
+      // and deliberately ignores it, and its own doc says one account is shared by CRM and Transactions.
+      expect((await emailLimitFor(tx, admin.id, 'crm')).used).toBe(3);
+      expect((await emailLimitFor(tx, admin.id, 'desk')).used).toBe(3);
     });
   });
 
@@ -102,25 +105,33 @@ describe('the mail-account usage figure', () => {
     });
   });
 
-  it('keeps the two areas independent', async () => {
-    // One CRM account must not spend the Transaction Desk's allowance.
+  it('spends the one allowance in both areas, because an agent gets one account across the Hub', async () => {
+    // WAS 'keeps the two areas independent', expecting a CRM account to leave the Desk allowance
+    // untouched. That describes the world before the product moved to ONE shared mailbox per person -
+    // which it now says on screen in those words: 'Only one email account can be connected across CRM
+    // and Transactions.' A per-area allowance would quietly hand every agent two addresses.
+    // TD-171; the rule confirmed by the brokerage 2026-09-15.
     await inRollback(async (tx) => {
       const agent = await makeUser(tx, 'agent');
       await makeAccount(tx, agent.id, 'crm');
 
       expect((await emailLimitFor(tx, agent.id, 'crm')).canAdd).toBe(false);
-      expect((await emailLimitFor(tx, agent.id, 'desk')).canAdd).toBe(true);
+      expect((await emailLimitFor(tx, agent.id, 'desk')).canAdd).toBe(false);
     });
   });
 
-  it('does not count an unscoped account against either area', async () => {
-    // It pre-dates the split and shows on both sides; counting it twice would strand the agent.
+  it('counts an unlabelled account once, on both sides, because it is the shared mailbox', async () => {
+    // WAS 'does not count an unscoped account against either area'. An account with no area is not
+    // orphaned: mailbox-scope.ts shows it in BOTH areas - OR: [{scope: area}, {scope: null}] - and both
+    // creation paths store scope null on purpose, commented 'the shared Hub scope used by both CRM and
+    // Transactions'. An address a person can actually send from has to spend their allowance, or the
+    // limit is not a limit. TD-171; confirmed 2026-09-15.
     await inRollback(async (tx) => {
       const agent = await makeUser(tx, 'agent');
       await makeAccount(tx, agent.id, null);
 
-      expect((await emailLimitFor(tx, agent.id, 'crm')).used).toBe(0);
-      expect((await emailLimitFor(tx, agent.id, 'desk')).used).toBe(0);
+      expect((await emailLimitFor(tx, agent.id, 'crm')).used).toBe(1);
+      expect((await emailLimitFor(tx, agent.id, 'desk')).used).toBe(1);
     });
   });
 });

@@ -63,8 +63,19 @@ async function addAccount(tx: PrismaService, userId: number, scope: 'crm' | 'des
   }, scope) as Promise<{ id: number }>;
 }
 
+/*
+ * WHICH ACCOUNTS THIS AREA SEES - asked the way the product asks it.
+ *
+ * TD-171: this looked for `scope: 'crm'` exactly, while both creation paths store `scope: null` on
+ * purpose - 'the shared Hub scope used by both CRM and Transactions'. So it matched nothing, every
+ * assertion below collapsed, and five tests failed on this one line while the service was right.
+ * The union is the rule mailbox-scope.ts states: this area's mailboxes, plus the unlabelled shared one.
+ */
 const defaultsOf = (tx: PrismaService, userId: number, scope: string) =>
-  tx.mail_accounts.findMany({ where: { user_id: userId, scope, is_default: true }, select: { id: true } });
+  tx.mail_accounts.findMany({
+    where: { user_id: userId, OR: [{ scope }, { scope: null }], is_default: true },
+    select: { id: true },
+  });
 
 describe('adding a mailbox changes only this person’s sender', () => {
   it('promotes the first account in an area even when not asked to', async () => {
@@ -127,12 +138,21 @@ describe('adding a mailbox changes only this person’s sender', () => {
     });
   });
 
-  it('keeps the two areas independent', async () => {
+  it('gives a person ONE default, which a later mailbox takes over on both sides', async () => {
+    /*
+     * WAS 'keeps the two areas independent', expecting the CRM default to survive a Desk mailbox
+     * being added as default. That is the world before the product moved to one shared mailbox per
+     * person: both accounts are stored unlabelled, both are visible in both areas, so there is one
+     * default and the newer request for it wins. Asserted exactly - ONE id, and the later one -
+     * because the fault worth catching here is two accounts marked default at once.
+     * TD-171; the rule confirmed by the brokerage 2026-09-15.
+     */
     await inRollback(async (tx) => {
       const user = await makeUser(tx);
-      const crm = await addAccount(tx, user.id, 'crm', true);
-      await addAccount(tx, user.id, 'desk', true);
-      expect((await defaultsOf(tx, user.id, 'crm')).map((a) => a.id)).toEqual([crm.id]);
+      await addAccount(tx, user.id, 'crm', true);
+      const second = await addAccount(tx, user.id, 'desk', true);
+      expect((await defaultsOf(tx, user.id, 'crm')).map((a) => a.id)).toEqual([second.id]);
+      expect((await defaultsOf(tx, user.id, 'desk')).map((a) => a.id)).toEqual([second.id]);
     });
   });
 });

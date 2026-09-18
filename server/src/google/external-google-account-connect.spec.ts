@@ -86,7 +86,12 @@ describe('the application accepts any Google account, whatever its domain', () =
       expect(acct.host).toBe('smtp.gmail.com');
       expect(acct.imap_host).toBe('imap.gmail.com');
       expect(acct.is_active).toBe(true);
-      expect(acct.scope).toBe('crm');
+      // TD-171: STORED UNLABELLED ON PURPOSE. Both creation paths set `scope: null` - 'the shared
+      // Hub scope used by both CRM and Transactions' - and mailbox-scope.ts shows such a row in
+      // BOTH areas. Asserting 'crm' here described the product before it moved to one mailbox per
+      // person. Still asserted exactly, because a stray area label would hide the mailbox from the
+      // other side. Confirmed by the brokerage 2026-09-15.
+      expect(acct.scope).toBeNull();
     });
   });
 
@@ -182,18 +187,26 @@ describe('the application accepts any Google account, whatever its domain', () =
     });
   });
 
-  it('the connected mailbox belongs to the area it was connected in', async () => {
-    // A row with no scope shows in neither CRM nor Transaction Desk, so the connect would appear
-    // to do nothing at all.
+  it('the same address connected from both areas stays ONE shared mailbox', async () => {
+    /*
+     * WAS 'the connected mailbox belongs to the area it was connected in', expecting two rows scoped
+     * crm and desk, on the premise that 'a row with no scope shows in neither CRM nor Transaction
+     * Desk'. THAT PREMISE IS UNTRUE OF THIS PRODUCT: mailbox-scope.ts matches
+     * `OR: [{scope: area}, {scope: null}]`, so an unlabelled row shows in BOTH. The product now gives
+     * a person one mailbox across the Hub and says so on screen, and test D above already asserts
+     * that reconnecting keeps the one row - these two cases contradicted each other.
+     * TD-171; the rule confirmed by the brokerage 2026-09-15.
+     */
     await inRollback(async (tx) => {
       const u = await makeUser(tx);
       await svc(tx).upsert(u.id, googleTokens('1//crm'), 'areas@gmail.com', 'crm');
       await svc(tx).upsert(u.id, googleTokens('1//desk'), 'areas@gmail.com', 'desk');
 
       const rows = await accountsOf(tx, u.id);
-      expect(rows.map((r) => r.scope).sort()).toEqual(['crm', 'desk']);
-      // Same address on both sides is two independent connections, not one shared row.
-      expect(new Set(rows.map((r) => r.id)).size).toBe(2);
+      // ONE row, unlabelled, so both areas reach it - asserted exactly, because a second row would
+      // mean an agent had quietly acquired two mailboxes against a limit of one.
+      expect(rows.length).toBe(1);
+      expect(rows[0].scope).toBeNull();
     });
   });
 
