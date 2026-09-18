@@ -367,6 +367,16 @@ export default function TransactionsPage() {
         </div>
       )}
 
+      {/*
+        B-7 - THE TABLE SCROLLS, NOT THE PAGE.
+        Measured 2026-09-12: this screen pushed the page 540px sideways at a 768px tablet width and
+        218px at 1280px, while every other Desk screen measured 0 at every width. The table is wider
+        than a laptop because its columns do not wrap, and with nothing around it that width became
+        the page's width - so the toolbar, the heading and the filters all slid away with it.
+        `table-scroll` is the container the reports and leads screens already use; at phone widths a
+        media query already made .list-table scroll on its own, which is why 390px measured clean.
+      */}
+      <div className="table-scroll">
       <table className="list-table">
         <thead><tr>
           <th className="report-sel-col">
@@ -443,6 +453,7 @@ export default function TransactionsPage() {
           })}
         </tbody>
       </table>
+      </div>
 
       {/* Pager. Hidden when everything fits on one page, so a short list looks exactly as before. */}
       {!loading && lastPage > 1 && (
