@@ -154,6 +154,7 @@ export default function Login() {
           <span aria-hidden="true" />
         </div>
         <img src="/ghr-mascot-login.png" alt="Get Home Realty mascot welcoming you" className="login-mascot" />
+        <p className="login-hero-promise">A Brighter<br />Tomorrow,<br />Together.</p>
 
         <div className="login-feature-row" aria-label="Platform benefits">
           <div><svg aria-hidden="true" viewBox="0 0 32 32"><circle cx="11" cy="10" r="4"/><circle cx="22" cy="11" r="3.5"/><path d="M3 26c.4-6 3.2-9 8-9s7.6 3 8 9M17 19c1.3-1.6 3-2.3 5-2.3 4.2 0 6.6 2.8 7 8.3"/></svg><span>Grow Your Network</span></div>

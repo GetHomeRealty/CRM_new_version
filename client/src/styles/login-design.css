@@ -198,4 +198,34 @@
 }
 @media(max-width:760px){.login-page .login-hero{display:none}.login-page .login-form-wrap{box-sizing:border-box}.login-page .login-logo{object-fit:contain}.login-page .login-heading h1{white-space:normal}}
 
+/* Responsive composition: independent content over an edge-to-edge photograph. */
+.login-page .login-hero{background:#17232b url('/login-home-hero.png') center / cover no-repeat;overflow:hidden}
+.login-page .login-hero::before{display:block;inset:0;width:auto;height:auto;aspect-ratio:auto;transform:none;background:linear-gradient(180deg,rgba(9,20,28,.18),transparent 35%,rgba(8,15,22,.68));z-index:0}
+.login-page .login-hero-copy{display:block;position:absolute;inset:5% 6% auto auto;max-width:240px;z-index:3}
+.login-page .login-hero-copy p{font-size:clamp(11px,1vw,16px)!important;text-shadow:0 2px 10px #000}
+.login-page .login-mascot{display:block;position:absolute;left:7%;right:auto;bottom:15%;height:65%;width:57%;object-fit:contain;object-position:center bottom;transform:none;animation:none;filter:drop-shadow(0 18px 14px rgba(0,0,0,.3));z-index:2}
+.login-page .login-hero-promise{position:absolute;right:5%;top:40%;width:30%;margin:0;color:#fff0dc;font-family:"Snell Roundhand","Segoe Script",Georgia,serif;font-size:clamp(24px,3.2vw,54px);font-style:italic;line-height:1.25;text-shadow:0 2px 10px #17232b;transform:rotate(-7deg);z-index:3}
+.login-page .login-hero-promise::after{content:"";display:block;width:75%;height:3px;background:#ef263a;margin:14px 0 0 10%;transform:rotate(-5deg)}
+.login-page .login-feature-row{display:grid;position:absolute;left:5%;right:5%;bottom:6%;width:90%;max-width:none;grid-template-columns:repeat(4,minmax(0,1fr));gap:0;z-index:4}
+.login-page .login-feature-row>div{display:flex;flex-direction:column;align-items:center;gap:8px;padding:0 8px;border-left:1px solid #ffffff40}
+.login-page .login-feature-row>div:first-child{border-left:0}
+.login-page .login-feature-row svg{width:clamp(26px,3vw,40px);height:clamp(26px,3vw,40px)}
+.login-page .login-feature-row span{font-size:clamp(10px,.85vw,13px);white-space:normal}
+.login-page .login-trust{display:block;left:0;right:0;bottom:1.7%;text-align:center}
+.login-page .login-trust i{display:none}
+.login-page .login-trust span{font-size:9px;letter-spacing:.25em}
+@media(min-width:761px){
+ .login-page .login-form-wrap{padding-top:clamp(16px,4svh,46px);padding-bottom:22px;justify-content:center}
+ .login-page .login-logo{margin-bottom:clamp(16px,4svh,44px)}
+ .login-page .login-signature-art{height:clamp(80px,13svh,132px);margin-top:clamp(18px,4svh,42px);margin-bottom:clamp(18px,4svh,42px)}
+ .login-page .login-footer{margin-top:0}
+}
+@media(min-width:761px) and (max-height:740px){
+ .login-page .login-form-wrap{padding-top:12px;padding-bottom:12px}
+ .login-page .login-logo{max-height:80px;margin-bottom:12px}
+ .login-page .login-heading{margin-bottom:12px}
+ .login-page .login-heading h1{font-size:32px}
+ .login-page .login-signature-art{height:70px;margin:12px 0}
+}
+
 /* ---- Stub pages ---- */
