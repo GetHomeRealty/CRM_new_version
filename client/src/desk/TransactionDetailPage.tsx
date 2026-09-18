@@ -1759,7 +1759,7 @@ export default function TransactionDetailPage() {
         <ChatModal open onClose={() => setChatOpen(false)} transactionId={id} />
       )}
       {depositOpen && txn && (
-        <DepositReceiptModal open onClose={() => setDepositOpen(false)} txn={txn} settings={invSettings} />
+        <DepositReceiptModal open onClose={() => setDepositOpen(false)} txn={txn} settings={invSettings} onSaved={applyUpdated} />
       )}
       {lawyerStmtOpen && txn && (
         <LawyerStatementModal open onClose={() => setLawyerStmtOpen(false)} txn={txn} settings={invSettings} />

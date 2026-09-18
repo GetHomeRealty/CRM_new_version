@@ -2,8 +2,9 @@ import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { formatCurrency } from './format';
 import { printDoc } from './printDoc';
 import BrandMark, { brandMarkHtml } from './BrandMark';
-import { sendDepositReceipt, getDepositReceiptCcSuggestions, getDocuments, uploadDocClientFile } from '../lib/api';
+import { sendDepositReceipt, getDepositReceiptCcSuggestions, getDocuments, uploadDocClientFile, updateTransaction } from '../lib/api';
 import { useToast } from './toast';
+import { useAuth } from '../context/AuthContext';
 import { apiErrorMessage } from '../lib/apiError';
 import type { CompanySettings, Transaction } from '../types';
 
@@ -60,13 +61,23 @@ interface DepositReceiptModalProps {
   txn: Transaction;
   /** Company settings — supplies the uploaded brand logo and the letterhead address. */
   settings?: CompanySettings | null;
+  /** Told the fresh transaction when the slips are saved back onto it. */
+  onSaved?: (updated: Transaction) => void;
 }
 
 // Deposit Receipt document (listing-side transactions). Auto-fills from the
 // transaction; blank fields are editable. Print/Save-PDF builds the markup from
 // state so typed values are included.
-export default function DepositReceiptModal({ open, onClose, txn, settings = null }: DepositReceiptModalProps) {
+export default function DepositReceiptModal({ open, onClose, txn, settings = null, onSaved }: DepositReceiptModalProps) {
   const toast = useToast();
+  /*
+   * An agent's save of `activity_tracker` is discarded by the server — it keeps the stored object
+   * and takes only `batch_review_email` from the body (transactions-write.service.ts). Offering
+   * "Save Slips" to an agent would report a save that never happened, so only the roles whose
+   * write is honoured are given the button.
+   */
+  const { user } = useAuth();
+  const canSaveSlips = (user?.role ?? '') !== 'agent';
   const [f, setF] = useState<DepositForm>(() => ({
     date: today(),
     address: txn.property || '',
@@ -129,6 +140,10 @@ export default function DepositReceiptModal({ open, onClose, txn, settings = nul
   const [sel, setSel] = useState<CropSel | null>(null); // crop selection {x,y,w,h} in displayed px
   const slipImgRef = useRef<HTMLImageElement>(null);
   const dragRef = useRef<{ x: number; y: number } | null>(null);
+  // Crops and rotations are edits to the slip itself, so they can be saved back onto the deal
+  // rather than living and dying with this modal.
+  const [slipsDirty, setSlipsDirty] = useState(false);
+  const [savingSlips, setSavingSlips] = useState(false);
   if (!open) return null;
   const set = (k: keyof DepositForm, v: string) => setF((p) => ({ ...p, [k]: v }));
   const tradeNo = txn.trade_no || '';
@@ -144,14 +159,48 @@ export default function DepositReceiptModal({ open, onClose, txn, settings = nul
   const addSlip = (file: File | undefined) => {
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = () => setSlips((s) => [...s, { name: file.name, data: reader.result as string, included: true }]);
+    reader.onload = () => { setSlips((s) => [...s, { name: file.name, data: reader.result as string, included: true }]); setSlipsDirty(true); };
     reader.readAsDataURL(file);
   };
-  const removeSlip = (i: number) => { setSlips((s) => s.filter((_, idx) => idx !== i)); if (cropIndex === i) { setCropIndex(null); setSel(null); } };
+  const removeSlip = (i: number) => { setSlips((s) => s.filter((_, idx) => idx !== i)); setSlipsDirty(true); if (cropIndex === i) { setCropIndex(null); setSel(null); } };
   const toggleSlip = (i: number) => setSlips((s) => s.map((x, idx) => idx === i ? { ...x, included: !x.included } : x));
-  const updateSlipData = (i: number, data: string) => setSlips((s) => s.map((x, idx) => idx === i ? { ...x, data } : x));
+  // Which slips are ticked is a choice about THIS receipt, so it is not a change to the slips.
+  const updateSlipData = (i: number, data: string) => { setSlips((s) => s.map((x, idx) => idx === i ? { ...x, data } : x)); setSlipsDirty(true); };
+
+  /*
+   * Save the slips — crops and rotations included — back onto the deal, where Agent Payment
+   * Readiness keeps them. Without this the cropped image only ever existed inside this modal:
+   * printing or sending used it, and reopening the receipt started again from the original photo.
+   *
+   * `activity_tracker` is stored whole, so it is merged rather than replaced — every other key on
+   * it (the paid dates, the term tracker, the review flag) is written back untouched.
+   */
+  const saveSlips = async () => {
+    setSavingSlips(true);
+    try {
+      const updated = await updateTransaction(txn.id, {
+        activity_tracker: { ...(txn.activity_tracker || {}), deposit_slips: slips.map((s) => ({ name: s.name, data: s.data })) },
+      });
+      // Trust the reply, not the request: report a save only if the deal came back holding it.
+      const stored = updated.activity_tracker?.deposit_slips || [];
+      if (stored.length !== slips.length) {
+        toast('The deal did not keep the slips — your crops are still only on this receipt.', 'bad');
+        return;
+      }
+      setSlipsDirty(false);
+      onSaved?.(updated);
+      toast(slips.length ? 'Deposit slips saved to this deal' : 'Deposit slips cleared on this deal', 'ok');
+    } catch (e) {
+      toast(apiErrorMessage(e, 'Could not save the deposit slips'), 'bad');
+    } finally {
+      setSavingSlips(false);
+    }
+  };
   const rotateSlip = (i: number, deg: number) => {
     const cur = slips[i]; if (!cur) return;
+    // The picture turns under any selection drawn on it, so the box no longer covers what it
+    // did — cropping after a rotate used to cut a different part of the slip.
+    if (cropIndex === i) setSel(null);
     const img = new Image();
     img.onload = () => {
       const swap = Math.abs(deg) % 180 !== 0;
@@ -169,28 +218,65 @@ export default function DepositReceiptModal({ open, onClose, txn, settings = nul
   };
   const startCrop = (i: number) => { setCropIndex(i); setSel(null); };
   const cancelCrop = () => { setCropIndex(null); setSel(null); };
-  const slipPos = (e: React.MouseEvent) => { const el = slipImgRef.current; if (!el) return { x: 0, y: 0 }; const r = el.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
-  const onSlipDown = (e: React.MouseEvent) => { const p = slipPos(e); dragRef.current = p; setSel({ x: p.x, y: p.y, w: 0, h: 0 }); };
-  const onSlipMove = (e: React.MouseEvent) => {
+  /*
+   * DRAGGING PAST THE EDGE OF THE SLIP SELECTS UP TO THE EDGE — IT DOES NOT END THE DRAG.
+   *
+   * This used to end the drag on mouseleave, with the corner wherever the pointer happened to
+   * cross out. Cropping a slip tight to its edge is exactly when the pointer leaves, so the
+   * selection froze short and Apply Crop cut a smaller piece than the one drawn.
+   *
+   * The pointer is captured on mousedown instead, so the drag keeps receiving moves anywhere on
+   * screen until release, and each position is clamped into the image — run past the right edge
+   * and the selection reaches the right edge, which is what the drag meant. Pointer events also
+   * mean touch and pen work; the mouse-only handlers did nothing on a tablet.
+   */
+  const slipPos = (e: React.PointerEvent) => {
+    const el = slipImgRef.current;
+    if (!el) return { x: 0, y: 0 };
+    const r = el.getBoundingClientRect();
+    return {
+      x: Math.min(Math.max(e.clientX - r.left, 0), r.width),
+      y: Math.min(Math.max(e.clientY - r.top, 0), r.height),
+    };
+  };
+  const onSlipDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault(); // no native image drag / text selection mid-crop
+    e.currentTarget.setPointerCapture(e.pointerId);
+    const p = slipPos(e); dragRef.current = p; setSel({ x: p.x, y: p.y, w: 0, h: 0 });
+  };
+  const onSlipMove = (e: React.PointerEvent) => {
     if (!dragRef.current) return;
     const p = slipPos(e); const s = dragRef.current;
     setSel({ x: Math.min(s.x, p.x), y: Math.min(s.y, p.y), w: Math.abs(p.x - s.x), h: Math.abs(p.y - s.y) });
   };
-  const onSlipUp = () => { dragRef.current = null; };
+  const onSlipUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    dragRef.current = null;
+    if (e.currentTarget.hasPointerCapture?.(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+  };
   const applyCrop = () => {
     const el = slipImgRef.current;
     const cur = cropIndex != null ? slips[cropIndex] : null;
     if (!cur || !el || !sel || sel.w < 5 || sel.h < 5 || cropIndex == null) return;
-    const sx = el.naturalWidth / el.clientWidth;
-    const sy = el.naturalHeight / el.clientHeight;
+    // Measure the same box the selection was drawn on — the rendered rect, not the rounded
+    // layout size — so the region cut out is the region drawn.
+    const r = el.getBoundingClientRect();
+    if (!r.width || !r.height) return;
+    const sx = el.naturalWidth / r.width;
+    const sy = el.naturalHeight / r.height;
     const img = new Image();
     img.onload = () => {
+      // Belt and braces: a source rectangle over the edge of the image would draw blank strips.
+      const left = Math.min(Math.max(sel.x * sx, 0), img.naturalWidth);
+      const top = Math.min(Math.max(sel.y * sy, 0), img.naturalHeight);
+      const width = Math.min(sel.w * sx, img.naturalWidth - left);
+      const height = Math.min(sel.h * sy, img.naturalHeight - top);
+      if (width < 1 || height < 1) return;
       const canvas = document.createElement('canvas');
-      canvas.width = Math.round(sel.w * sx);
-      canvas.height = Math.round(sel.h * sy);
+      canvas.width = Math.round(width);
+      canvas.height = Math.round(height);
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
-      ctx.drawImage(img, sel.x * sx, sel.y * sy, sel.w * sx, sel.h * sy, 0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, left, top, width, height, 0, 0, canvas.width, canvas.height);
       updateSlipData(cropIndex, canvas.toDataURL('image/png'));
       setSel(null); setCropIndex(null);
     };
@@ -295,10 +381,25 @@ export default function DepositReceiptModal({ open, onClose, txn, settings = nul
         <div style={{ border: '1px solid var(--line)', borderRadius: 8, padding: 12, marginBottom: 14, background: '#fcfcfd' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
             <strong style={{ fontSize: 13 }}>Deposit Slips <span style={{ fontWeight: 400, color: 'var(--muted)', fontSize: 12 }}>({selectedSlips.length} selected)</span></strong>
-            <label className="btn ghost sm" style={{ cursor: 'pointer' }}>+ Attach Slip
-              <input type="file" accept="image/*" style={{ display: 'none' }} onChange={(e) => { addSlip(e.target.files?.[0]); e.target.value = ''; }} />
-            </label>
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              {canSaveSlips && (
+                <button className="btn ghost sm" onClick={saveSlips} disabled={savingSlips || !slipsDirty}
+                  title="Save the slips — crops and rotations included — onto this deal">
+                  {savingSlips ? 'Saving…' : '💾 Save Slips'}
+                </button>
+              )}
+              <label className="btn ghost sm" style={{ cursor: 'pointer' }}>+ Attach Slip
+                <input type="file" accept="image/*" style={{ display: 'none' }} onChange={(e) => { addSlip(e.target.files?.[0]); e.target.value = ''; }} />
+              </label>
+            </div>
           </div>
+          {slipsDirty && (
+            <div className="help" style={{ marginBottom: 6, color: 'var(--warn, #b45309)' }}>
+              {canSaveSlips
+                ? 'Unsaved changes to the slips — “Save Slips” keeps them on the deal. Printing or sending uses them either way.'
+                : 'Your crops apply to the printed and sent receipt, but the slip held on the deal stays as it was.'}
+            </div>
+          )}
           <div className="help" style={{ marginBottom: 8 }}>Tick the slip(s) to include on the receipt. Click a slip name to view it.</div>
           {slips.length === 0 ? (
             <div className="help">No deposit slips. Upload them in Agent Payment Readiness, or attach one here.</div>
@@ -326,8 +427,9 @@ export default function DepositReceiptModal({ open, onClose, txn, settings = nul
                     <span className="help">Drag on the slip to select a crop area.</span>
                   </div>
                   <div style={{ display: 'inline-block', maxWidth: '100%' }}>
-                    <div style={{ position: 'relative', display: 'inline-block', maxWidth: '100%', cursor: 'crosshair' }}
-                      onMouseDown={onSlipDown} onMouseMove={onSlipMove} onMouseUp={onSlipUp} onMouseLeave={onSlipUp}>
+                    {/* touchAction none — a finger drag draws the crop box instead of scrolling. */}
+                    <div style={{ position: 'relative', display: 'inline-block', maxWidth: '100%', cursor: 'crosshair', touchAction: 'none', userSelect: 'none' }}
+                      onPointerDown={onSlipDown} onPointerMove={onSlipMove} onPointerUp={onSlipUp} onPointerCancel={onSlipUp}>
                       <img ref={slipImgRef} src={s.data} alt="crop" draggable={false} style={{ maxWidth: '100%', maxHeight: 360, display: 'block', userSelect: 'none' }} />
                       {sel && sel.w > 0 && (
                         <div style={{ position: 'absolute', left: sel.x, top: sel.y, width: sel.w, height: sel.h, border: '2px dashed #2563eb', background: 'rgba(37,99,235,0.12)', pointerEvents: 'none' }} />
