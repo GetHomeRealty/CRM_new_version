@@ -82,9 +82,14 @@ export default function RecycleBinPage() {
     },
   });
 
-  const actions = (type: TrashType, id: number | string, label: string, linked?: string[]) => (
+  /*
+   * `blockRestore` is the reason this row cannot come back on its own — its deal or its invoice is
+   * in the bin too. The server refuses either way; saying so on the button means the refusal is
+   * read before the click rather than after it. Delete forever stays available.
+   */
+  const actions = (type: TrashType, id: number | string, label: string, linked?: string[], blockRestore?: string) => (
     <span style={{ whiteSpace: 'nowrap' }}>
-      <button className="btn primary sm" onClick={() => doRestore(type, id, label)} disabled={busy}>↺ Restore</button>
+      <button className="btn primary sm" onClick={() => doRestore(type, id, label)} disabled={busy || !!blockRestore} title={blockRestore}>↺ Restore</button>
       <button className="btn sm" style={{ marginLeft: 6, background: 'var(--bad)', color: '#fff' }} onClick={() => doForce(type, id, label, linked)} disabled={busy}>🗑 Delete forever</button>
     </span>
   );
@@ -163,7 +168,8 @@ export default function RecycleBinPage() {
                       <td>{d.has_file ? '📎 1' : ((d.file_count ?? 0) > 0 ? `📎 ${d.file_count}` : '—')}</td>
                       <td style={{ whiteSpace: 'nowrap' }}>{d.deleted_at || '—'}</td>
                       <td>{txnCell(d.transaction_id, d.trade_no, d.transaction_trashed)}</td>
-                      <td>{actions('documents', d.id, d.title, ['The uploaded file(s) for this document'])}</td>
+                      <td>{actions('documents', d.id, d.title, ['The uploaded file(s) for this document'],
+                        d.transaction_trashed ? 'Its transaction is in the bin — restore the transaction and this comes back with it.' : undefined)}</td>
                     </tr>
                   ))}
               </tbody>
@@ -206,7 +212,8 @@ export default function RecycleBinPage() {
                         <td style={{ whiteSpace: 'nowrap' }}>{p.paid_on || '—'}</td>
                         <td style={{ whiteSpace: 'nowrap' }}>{p.deleted_at || '—'}</td>
                         <td>{p.invoice_id ? (p.invoice_trashed ? <span className="pill warn" style={{ fontSize: 10 }}>{p.invoice_no} (deleted)</span> : p.invoice_no) : '—'}</td>
-                        <td>{actions('payments', p.id, `Payment ${formatCurrency(p.amount)}`)}</td>
+                        <td>{actions('payments', p.id, `Payment ${formatCurrency(p.amount)}`, undefined,
+                          p.invoice_trashed ? 'Its invoice is in the bin — restore the invoice first, then the payment.' : undefined)}</td>
                       </tr>
                     ))}
                 </tbody>
