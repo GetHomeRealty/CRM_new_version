@@ -1,9 +1,9 @@
 import { DEFAULT_AREA, areaPath } from '../desk/area';
-import { useEffect, useState, type ChangeEvent, type FormEvent } from 'react';
+import '../styles/login-design.css';
+import { useState, type ChangeEvent, type FormEvent } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { apiErrorMessage } from '../lib/apiError';
-import { companyLogoUrl } from '../lib/api';
 import PasswordInput from '../desk/PasswordInput';
 import MfaChallenge from './MfaChallenge';
 import { isChallenge, type MfaChallenge as MfaChallengeView } from '../lib/mfaApi';
@@ -13,12 +13,9 @@ export default function Login() {
   const navigate = useNavigate();
   const location = useLocation();
   const [form, setForm] = useState({ username: '', password: '' });
+  const [remember, setRemember] = useState(true);
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  // Paint the bundled logo immediately. The configurable logo is fetched in the background and
-  // only swapped in after the browser has decoded it, so a slow/restarting API can never leave a
-  // broken-image icon on the sign-in screen.
-  const [logoSrc, setLogoSrc] = useState('/logo.svg');
   /**
    * Set when the server answered `mfa_required`. While this is set, the password step is replaced
    * rather than hidden — there is no session yet, and nothing else on this screen is usable.
@@ -33,22 +30,6 @@ export default function Login() {
     ? requested
     : areaPath(DEFAULT_AREA);
 
-  useEffect(() => {
-    const brandedLogo = companyLogoUrl();
-    const preload = new Image();
-    let active = true;
-
-    preload.onload = () => {
-      if (active) setLogoSrc(brandedLogo);
-    };
-    preload.src = brandedLogo;
-
-    return () => {
-      active = false;
-      preload.onload = null;
-    };
-  }, []);
-
   const update = (e: ChangeEvent<HTMLInputElement>) => setForm({ ...form, [e.target.name]: e.target.value });
 
   const onSubmit = async (e: FormEvent<HTMLFormElement>) => {
@@ -56,7 +37,7 @@ export default function Login() {
     setError('');
     setSubmitting(true);
     try {
-      const outcome = await login(form.username, form.password);
+      const outcome = await login(form.username, form.password, remember);
       if (isChallenge(outcome)) {
         // The password was right; the second factor is still outstanding. No navigation, because
         // there is nothing to navigate to yet.
@@ -80,47 +61,104 @@ export default function Login() {
   };
 
   return (
-    <div className="auth-shell"><div className="auth-card">
-      {/* The uploaded brand logo, served without a session so it shows before sign-in. */}
-      <img
-        src={logoSrc}
-        alt="Get Home Realty"
-        className="auth-logo"
-        onError={() => setLogoSrc('/logo.svg')}
-      />
-      {challenge ? (
-        <MfaChallenge
-          challenge={challenge}
-          onSignedIn={() => navigate(destination, { replace: true })}
-          onCancel={abandonChallenge}
-        />
-      ) : (
-        <>
-          <h1>Sign in</h1>
-          {error && <p className="error">{error}</p>}
-          <form onSubmit={onSubmit}>
-            <label>
-              Username
-              <input type="text" name="username" value={form.username} onChange={update} required autoFocus />
-            </label>
-            <label>
-              Password
-              <PasswordInput name="password" value={form.password} onChange={update} />
-            </label>
-            <button type="submit" disabled={submitting}>
-              {submitting ? 'Signing in…' : 'Sign in'}
-            </button>
-          </form>
-          <p className="muted">
-            {/* Beneath the form, not beside the password field: it is a way out of a dead end, not
-                a step in signing in. */}
-            <Link to="/forgot-password">Forgot your password?</Link>
-          </p>
-          <p className="muted">
-            No account? <Link to="/register">Create one</Link>
-          </p>
-        </>
-      )}
-    </div></div>
+    <main className="auth-shell login-page">
+      <section className="login-panel" aria-labelledby="login-heading">
+        <div className="login-form-wrap">
+          {/* Official supplied brokerage artwork. */}
+          <img
+            src="/get-home-realty-logo.png"
+            alt="Get Home Realty — A Tradition of Trust"
+            className="auth-logo login-logo"
+          />
+
+          {challenge ? (
+            <div className="login-challenge">
+              <MfaChallenge
+                challenge={challenge}
+                onSignedIn={() => navigate(destination, { replace: true })}
+                onCancel={abandonChallenge}
+              />
+            </div>
+          ) : (
+            <>
+              <div className="login-heading">
+                <h1 id="login-heading">Welcome <span>Back</span></h1>
+                <p>Let’s build more success<br />together.</p>
+              </div>
+
+              {error && <p className="error login-error" role="alert">{error}</p>}
+
+              <form onSubmit={onSubmit} className="login-form">
+                <label className="login-field">
+                  <span>Username or email</span>
+                  <span className="login-input-wrap">
+                    <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 5.75h16v12.5H4zM4.5 6.5 12 12l7.5-5.5" /></svg>
+                    <input
+                      type="text"
+                      name="username"
+                      value={form.username}
+                      onChange={update}
+                      placeholder="Email address or username"
+                      autoComplete="username"
+                      required
+                    />
+                  </span>
+                </label>
+
+                <label className="login-field">
+                  <span>Password</span>
+                  <span className="login-input-wrap login-password-wrap">
+                    <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M7 10V8a5 5 0 0 1 10 0v2M5.5 10.5h13v9h-13z" /></svg>
+                    <PasswordInput
+                      name="password"
+                      value={form.password}
+                      onChange={update}
+                      placeholder="Password"
+                      autoComplete="current-password"
+                    />
+                  </span>
+                </label>
+
+                <div className="login-options">
+                  <label className="login-remember">
+                    <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
+                    <span>Remember me</span>
+                  </label>
+                  <Link to="/forgot-password">Forgot password?</Link>
+                </div>
+
+                <button type="submit" className="login-submit" disabled={submitting}>
+                  <span>{submitting ? 'Signing in…' : 'Sign In'}</span>
+                  {!submitting && <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7M4 12h12" /></svg>}
+                </button>
+              </form>
+
+              <p className="login-register">New to Get Home Hub? <Link to="/register">Create an account</Link></p>
+              <img className="login-signature-art" src="/login-signature-transparent.png" alt="People, Properties, Possibilities" />
+            </>
+          )}
+
+          <footer className="login-footer">
+            <span>Need help? <a href="mailto:info@gethomerealty.ca">Contact Support</a></span>
+          </footer>
+        </div>
+      </section>
+
+      <section className="login-hero" aria-label="Your Get Home Realty workspace">
+        <div className="login-hero-copy">
+          <p>Real people<br />Real properties<br />Real possibilities</p>
+          <span aria-hidden="true" />
+        </div>
+        <img src="/ghr-mascot-login.png" alt="Get Home Realty mascot welcoming you" className="login-mascot" />
+
+        <div className="login-feature-row" aria-label="Platform benefits">
+          <div><svg aria-hidden="true" viewBox="0 0 32 32"><circle cx="11" cy="10" r="4"/><circle cx="22" cy="11" r="3.5"/><path d="M3 26c.4-6 3.2-9 8-9s7.6 3 8 9M17 19c1.3-1.6 3-2.3 5-2.3 4.2 0 6.6 2.8 7 8.3"/></svg><span>Grow Your Network</span></div>
+          <div><svg aria-hidden="true" viewBox="0 0 32 32"><path d="m3 15 13-11 13 11M6 13v15h20V13M13 28v-9h6v9"/></svg><span>Manage Properties</span></div>
+          <div><svg aria-hidden="true" viewBox="0 0 32 32"><path d="M8 3h13l5 5v21H8zM21 3v6h6M12 15h10M12 20h10M12 25h7"/></svg><span>Close Deals Faster</span></div>
+          <div><svg aria-hidden="true" viewBox="0 0 32 32"><path d="M4 28V17h5v11M13 28V10h6v18M23 28V4h5v24M2 28h28"/></svg><span>Achieve More</span></div>
+        </div>
+        <div className="login-trust"><i /><i /><i /><span>Tradition of Trust</span></div>
+      </section>
+    </main>
   );
 }
