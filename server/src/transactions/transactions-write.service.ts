@@ -1030,7 +1030,11 @@ export class TransactionsWriteService {
           const base = a > 0 ? a : round2((priceForTerms * readMoney(r.pct)) / 100);
           return acc + base;
         }, 0);
-        if (sumGross > masterGross + 0.005) {
+        // Same rounding allowance as the import review (one cent per term): the two must
+        // refuse the same rows or a file passes review and fails the save, which is the
+        // shape of TD-097, TD-139 and TD-194.
+        const rounding = 0.01 * Math.max(1, asArray(data.precon_terms).length);
+        if (sumGross > masterGross + rounding) {
           const money = (n: number): string =>
             '$' + round2(n).toLocaleString('en-CA', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
           const m = `The commission terms add up to ${money(sumGross)}, which is more than the deal's own commission of ${money(masterGross)}. The terms divide the commission between them; together they cannot exceed it.`;

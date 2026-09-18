@@ -296,6 +296,7 @@ export class TransactionImportService {
         Ref: 'T3', 'Transaction Type': 'Residential Sale Listing', 'Property Address': '9 Oak Road, Whitby, ON',
         'Deal Status': 'Active', 'Primary Agent': a1,
         'Listing Contract Date': '2026-03-01', 'Listing Expiry Date': '2026-09-01',
+        'List Price': '950000',
         'MLS Type': 'mls', 'MLS Number': 'E12488990', 'MLS Verified': 'Yes',
       },
       {
@@ -308,7 +309,11 @@ export class TransactionImportService {
     const financial: Record<string, string>[] = [
       { Ref: 'T1', 'Listing Commission %': '2.5', 'Co-Op Commission %': '2.5', 'Trust Payable': '12000', 'Commission Status': 'Pending', 'Agent Paid Status': 'No' },
       { Ref: 'T2', 'Commission Status': 'Pending', 'Agent Paid Status': 'No' },
-      { Ref: 'T3', 'Listing Commission %': '2.5', 'Co-Op Commission %': '2.5' },
+      // A LISTING'S COMMISSION IS GIVEN AS AN AMOUNT, NOT A PERCENTAGE. The calculation works
+      // a percentage out from Price, and a listing row leaves Price blank, so a percentage here
+      // produced a deal worth zero - and this sample taught exactly that until 2026-09-18.
+      // 23,750 is 2.5% of the 950,000 List Price above, on each side.
+      { Ref: 'T3', 'Listing Commission Flat': '23750', 'Co-Op Commission Flat': '23750' },
       { Ref: 'T4', 'Precon Listing Type': 'exclusive', 'Precon Term Count': '2', 'Precon Commission %': '3', 'Precon Net of HST': 'No', 'Commission Agent': a3 },
     ];
     const children: Record<ChildSheet['key'], Record<string, string>[]> = {
@@ -468,6 +473,7 @@ export class TransactionImportService {
     head('Notes');
     for (const note of [
       'Listing types (Sale Listing / Lease Listing) must leave Price, Deposit, Offer Date, Closing Date, Commission Type and Commission Value blank.',
+      'A listing states its commission as an AMOUNT - Listing Commission Flat and Co-Op Commission Flat. A percentage is worked out from Price, which a listing leaves blank, so a percentage on a listing row is refused rather than imported as zero. Give the List Price and the amount it comes to.',
       'Deal types must leave Listing Contract Date and Listing Expiry Date blank.',
       'Trade numbers are generated automatically — do not supply them.',
       'Rows that fail validation are reported and skipped; the valid rows are still imported.',
@@ -1173,12 +1179,73 @@ export class TransactionImportService {
             const base = a > 0 ? a : r2((price * n2(tr['Commission %'])) / 100);
             return acc + base;
           }, 0);
-          if (masterGross > 0 && r2(sum) > masterGross + 0.005) {
+          // A term is stored in cents, so a schedule built from percentages can round up by a
+        // cent per term and still be the same money. Half a cent of tolerance refused those
+        // rows outright - hit repeatedly on 2026-09-13 and worked around in the file.
+        const rounding = 0.01 * Math.max(1, termRows.length);
+        if (masterGross > 0 && r2(sum) > masterGross + rounding) {
             add('Precon Terms', String(r2(sum)),
               'The commission terms add up to ' + r2(sum) + ', which is more than the deal\'s own commission of ' + masterGross + '.',
               'Reduce the term figures, or raise the deal commission - together the terms cannot exceed it.',
               'error', 'Precon Terms');
           }
+        }
+      }
+
+      /*
+       * A LISTING'S PERCENTAGE IS WORKED OUT FROM PRICE, AND A LISTING ROW LEAVES PRICE BLANK.
+       *
+       * commission.service.ts breakdownListing() computes (price * listing_comm_pct) / 100, and
+       * this importer requires listing types to leave Price empty - so a percentage on a listing
+       * row can only ever produce zero, silently. Found on 2026-09-13 during the master-sheet
+       * migration and worked around by converting every percentage to a flat amount by hand; the
+       * behaviour itself was never fixed, so the next ordinary file walks into it.
+       *
+       * Refused rather than warned: the deal would carry a commission of zero while its own row
+       * states a rate, and nothing on any screen would say why.
+       */
+      const fin2 = (col: string): string => String((rec.financial ?? {})[col] ?? '').trim();
+      const num2 = (v: string): number => {
+        const x = Number(String(v).replace(/[^0-9.-]/g, ''));
+        return Number.isFinite(x) ? x : 0;
+      };
+      if (listing) {
+        const pctCol = num2(fin2('Listing Commission %')) > 0 ? 'Listing Commission %'
+          : num2(fin2('Co-Op Commission %')) > 0 ? 'Co-Op Commission %' : '';
+        const flats = num2(fin2('Listing Commission Flat')) + num2(fin2('Co-Op Commission Flat'));
+        if (pctCol && flats === 0) {
+          const listPrice = num2(get('List Price'));
+          const rate = num2(fin2(pctCol));
+          const worked = listPrice > 0
+            ? ` On a List Price of ${listPrice}, ${rate}% is ${Math.round(listPrice * rate) / 100}.`
+            : '';
+          add(pctCol, fin2(pctCol),
+            'A listing takes its percentage from Price, and listing rows leave Price blank - this row would import with a commission of zero.',
+            `Enter the amount instead, in Listing Commission Flat or Co-Op Commission Flat.${worked}`,
+            'error', 'Financial');
+        }
+      }
+
+      /*
+       * A PRECONSTRUCTION DEAL'S FEE IS READ FROM THE DEAL, NEVER FROM ITS TERMS.
+       *
+       * grossCommission() takes precon_comm_amt_manual, or price x precon_comm_pct, plus the bonus.
+       * The terms divide that fee; they never create it. So a row that states its money only on the
+       * term rows imports as a deal worth nothing, with the schedule sitting under it.
+       *
+       * A WARNING, NOT A REFUSAL: the row is incomplete rather than wrong, and 23 deals already in
+       * the system have exactly this shape because the brokerage's own sheet records no fee for
+       * them. Refusing would block a re-import of the rows still on hold.
+       */
+      if (termRows.length && /precon/i.test(get('Transaction Type'))) {
+        const master = num2(fin2('Precon Commission Amount')) > 0
+          ? num2(fin2('Precon Commission Amount'))
+          : (num2(get('Price')) * num2(fin2('Precon Commission %'))) / 100;
+        if (master + num2(fin2('Precon Commission Bonus')) <= 0) {
+          add('Precon Commission %', fin2('Precon Commission %'),
+            'This Preconstruction row carries commission terms but no commission of its own.',
+            'Enter Precon Commission %, Precon Commission Amount or Precon Commission Bonus - the terms divide the deal\'s fee, they do not create it. Without one the deal imports worth nothing.',
+            'warning', 'Precon Terms');
         }
       }
 
