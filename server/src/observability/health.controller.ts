@@ -10,6 +10,7 @@ import { STORAGE_ROOT } from '../config/storage';
 import { metrics } from './metrics';
 import { auditHealth } from './audit-health';
 import { workerSnapshot } from './worker-health';
+import { BUILD_INFO } from './build-info';
 
 /**
  * Health and metrics.
@@ -54,8 +55,15 @@ export class HealthController {
   /** Liveness. Deliberately checks nothing external. */
   @Get()
   @Header('Cache-Control', 'no-store')
-  live(): { status: string; uptime_s: number } {
-    return { status: 'ok', uptime_s: Math.round((Date.now() - metrics.startedAt) / 1000) };
+  live(): { status: string; uptime_s: number; build: string; built_at: string | null } {
+    // F-1 - the stamp deploy.sh writes into dist/. Read once at start-up, and unable to
+    // throw, because this endpoint is what the deploy waits on before calling a release good.
+    return {
+      status: 'ok',
+      uptime_s: Math.round((Date.now() - metrics.startedAt) / 1000),
+      build: BUILD_INFO.commit,
+      built_at: BUILD_INFO.built_at,
+    };
   }
 
   /**

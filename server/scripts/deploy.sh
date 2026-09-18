@@ -26,6 +26,13 @@ restore_build() {
 echo "==> building"
 npm run build
 
+# F-1 - stamp the build so /api/health can name the commit serving traffic. Written INSIDE dist/
+# so restore_build() brings back the stamp of the build it restores; a stamp kept beside the
+# folder would go on naming a version that is no longer running, which is worse than none.
+COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)
+printf '{"commit":"%s","built_at":"%s"}\n' "$COMMIT" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > dist/build-info.json
+echo "==> build stamped $COMMIT"
+
 # TD-192, 2026-09-16 - the gate passed and crm-api could not start: no test ever assembled the whole
 # application. boot-check does, from the build just made, before anything is restarted.
 echo "==> boot check (does the whole application assemble?)"
