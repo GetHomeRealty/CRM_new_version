@@ -82,8 +82,7 @@ export default function Login() {
           ) : (
             <>
               <div className="login-heading">
-                <h1 id="login-heading">Welcome <span>Back</span></h1>
-                <p>Let’s build more success<br />together.</p>
+                <h1 id="login-heading" className="login-welcome-title">Welcome to<br /><span>Get Home Hub</span></h1>
               </div>
 
               {error && <p className="error login-error" role="alert">{error}</p>}

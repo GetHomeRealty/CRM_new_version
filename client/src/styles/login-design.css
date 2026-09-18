@@ -228,4 +228,6 @@
  .login-page .login-signature-art{height:70px;margin:12px 0}
 }
 
+.login-page .login-heading .login-welcome-title{white-space:normal;font-size:clamp(20px,1.6vw,24px);line-height:1.2;letter-spacing:-.02em;font-weight:600}
+
 /* ---- Stub pages ---- */
