@@ -463,7 +463,16 @@ model leads {
   /// AT 410 LEADS THE PLANNER WILL STILL SCAN, correctly - reading the whole table is cheaper than
   /// walking an index at that size. This is built now because it is milliseconds now and a locked
   /// table at fifty thousand, which is the size this defect was raised about.
-  @@index([deleted_at, updated_at(sort: Desc), created_at(sort: Desc), id(sort: Desc)], map: "leads_list_order_idx")
+  ///
+  /// CORRECTED THE SAME DAY, AND THE FIRST ATTEMPT IS WORTH RECORDING. It led with `deleted_at`,
+  /// which reads naturally - filter, then order - and it does NOT work: `deleted_at IS NULL` is a
+  /// null test rather than a fixed value, so PostgreSQL cannot treat the following columns as
+  /// already ordered. Measured: the plan used the index to FIND the rows and then sorted all of
+  /// them anyway, which leaves the expensive half of the problem untouched at fifty thousand rows.
+  /// Ordering columns first, with the deleted check applied as a filter while walking: the Sort node
+  /// disappears and the first page costs 27.9 instead of 491. Deleted leads are ~2% of the table, so
+  /// filtering them during the walk is cheap.
+  @@index([updated_at(sort: Desc), created_at(sort: Desc), id(sort: Desc)], map: "leads_list_order_idx")
 }
 
 /**
