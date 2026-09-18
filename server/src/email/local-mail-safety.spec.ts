@@ -232,7 +232,13 @@ describe('every flow inherits the guard, because there is only one', () => {
   it('never reads the raw variable at a call site, where it could be forgotten', () => {
     // Outside `redirectTarget()` itself, no other line may branch on MAIL_REDIRECT_TO — that is how
     // a second, subtly different rule gets introduced.
-    const outside = source.split('static redirectTarget()')[0] + source.split('announceRedirect()')[1];
+    // THE MARKER IS THE SIGNATURE NAME, NOT THE WHOLE SIGNATURE. It read 'static redirectTarget()'
+    // exactly, so adding a parameter in 2026-09-18 made the split find nothing, `outside` became the
+    // WHOLE file, and this failed while the rule it guards was never broken. A test that breaks on an
+    // unrelated signature change teaches people to ignore it.
+    const outside = source.split('static redirectTarget(')[0] + source.split('announceRedirect()')[1];
     expect(outside).not.toMatch(/process\.env\.MAIL_REDIRECT_TO/);
+    // S-1 added a second mail-safety setting; it belongs under the same rule for the same reason.
+    expect(outside).not.toMatch(/process\.env\.MAIL_REAL_SEND_HOST/);
   });
 });

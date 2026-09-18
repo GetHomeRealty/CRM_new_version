@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { hostname } from 'node:os';
 import * as nodemailer from 'nodemailer';
 import { type mail_accounts } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -86,16 +87,47 @@ export class MailerService {
    */
   static readonly DEV_SINK = 'dev-sink@localhost.invalid';
 
-  static redirectTarget(): string | null {
+  static redirectTarget(host: string = hostname()): string | null {
     const explicit = (process.env.MAIL_REDIRECT_TO ?? '').trim();
     if (explicit !== '') return explicit;
 
-    if (process.env.NODE_ENV === 'production') return null;
+    if (process.env.NODE_ENV === 'production') {
+      /*
+       * S-1 - AND WHICH MACHINE IS THIS? NODE_ENV lives in a file, and a file can be copied.
+       *
+       * Everything above trusts one line of configuration to mean 'I am the live system'. Copy this
+       * server's .env to a laptop, restore a database dump to look at real data, and the same line
+       * says production there too - so test mail would go to the brokerage's actual clients, who
+       * cannot be un-emailed. Raised as S-1 on 2026-09-12; the rest of that entry did not reproduce,
+       * and this was the part that stood up.
+       *
+       * UNSET MEANS TODAY'S BEHAVIOUR, ON PURPOSE. A guard that stops production mail when somebody
+       * forgets to set it would be a worse defect than the one it prevents. It only ever refuses when
+       * a name IS given and does not match the machine underneath.
+       *
+       * The host is a parameter so the failure can be tested without renaming a machine.
+       */
+      if (MailerService.realSendHostProblem(host)) return MailerService.DEV_SINK;
+      return null;
+    }
     if (/^(1|true|yes|on)$/i.test((process.env.MAIL_ALLOW_REAL_SEND ?? '').trim())) return null;
 
     // `.invalid` is reserved by RFC 2606 and can never resolve, so a message that somehow escapes
     // this guard still cannot reach a person.
     return MailerService.DEV_SINK;
+  }
+
+  /**
+   * S-1 - is this the machine allowed to deliver? Null when it is, or when no machine is named.
+   *
+   * Deliberately placed between `redirectTarget` and `announceRedirect`: local-mail-safety.spec.ts
+   * requires that nothing OUTSIDE those two reads a mail-safety variable directly, so that a second,
+   * subtly different rule cannot grow somewhere else. Both callers ask this one question.
+   */
+  static realSendHostProblem(host: string = hostname()): { expected: string; actual: string } | null {
+    const expected = (process.env.MAIL_REAL_SEND_HOST ?? '').trim();
+    if (expected === '' || expected === host) return null;
+    return { expected, actual: host };
   }
 
   /**
@@ -114,6 +146,18 @@ export class MailerService {
       return;
     }
     if (target === MailerService.DEV_SINK) {
+      const mismatch = MailerService.realSendHostProblem();
+      if (process.env.NODE_ENV === 'production' && mismatch) {
+        // S-1: loud, and at error level, because this is the one case where a correctly configured
+        // production deployment would stop delivering - a renamed or migrated server. It must never
+        // be something somebody discovers from a client asking why they stopped hearing from us.
+        this.log.error(
+          `Outgoing mail is diverted to ${target}: this process claims NODE_ENV=production but runs on `
+          + `"${mismatch.actual}", and the machine named for real delivery is "${mismatch.expected}". If this machine IS the live `
+          + 'server, update MAIL_REAL_SEND_HOST; until then no mail reaches anybody.',
+        );
+        return;
+      }
       this.log.warn(
         `Outgoing mail is diverted to ${target} because this is not a production process. `
         + 'Set MAIL_REDIRECT_TO to send it somewhere you can read, or MAIL_ALLOW_REAL_SEND=1 to send for real.',
