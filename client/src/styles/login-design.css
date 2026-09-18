@@ -154,5 +154,7 @@
 
 .login-signature-art{display:block;flex-shrink:0;align-self:flex-start;width:210px;max-width:100%;height:auto;margin:44px 0 30px 0}
 
-/* ---- Stub pages ---- */
+.login-page .login-logo{display:block;width:100%;max-width:380px;height:125px;max-height:none;object-fit:cover;object-position:center;margin:0 auto 40px;flex-shrink:0}
+@media(max-width:760px){.login-page .login-logo{height:120px;margin-bottom:30px}}
 
+/* ---- Stub pages ---- */
