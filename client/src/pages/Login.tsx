@@ -1,5 +1,5 @@
 import { DEFAULT_AREA, areaPath } from '../desk/area';
-import { useState, type ChangeEvent, type FormEvent } from 'react';
+import { useEffect, useState, type ChangeEvent, type FormEvent } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { apiErrorMessage } from '../lib/apiError';
@@ -15,6 +15,10 @@ export default function Login() {
   const [form, setForm] = useState({ username: '', password: '' });
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  // Paint the bundled logo immediately. The configurable logo is fetched in the background and
+  // only swapped in after the browser has decoded it, so a slow/restarting API can never leave a
+  // broken-image icon on the sign-in screen.
+  const [logoSrc, setLogoSrc] = useState('/logo.svg');
   /**
    * Set when the server answered `mfa_required`. While this is set, the password step is replaced
    * rather than hidden — there is no session yet, and nothing else on this screen is usable.
@@ -28,6 +32,22 @@ export default function Login() {
   const destination = typeof requested === 'string' && requested.startsWith('/sso/authorize?')
     ? requested
     : areaPath(DEFAULT_AREA);
+
+  useEffect(() => {
+    const brandedLogo = companyLogoUrl();
+    const preload = new Image();
+    let active = true;
+
+    preload.onload = () => {
+      if (active) setLogoSrc(brandedLogo);
+    };
+    preload.src = brandedLogo;
+
+    return () => {
+      active = false;
+      preload.onload = null;
+    };
+  }, []);
 
   const update = (e: ChangeEvent<HTMLInputElement>) => setForm({ ...form, [e.target.name]: e.target.value });
 
@@ -63,10 +83,10 @@ export default function Login() {
     <div className="auth-shell"><div className="auth-card">
       {/* The uploaded brand logo, served without a session so it shows before sign-in. */}
       <img
-        src={companyLogoUrl()}
+        src={logoSrc}
         alt="Get Home Realty"
         className="auth-logo"
-        onError={(e) => { const i = e.currentTarget; if (i.src !== `${window.location.origin}/logo.svg`) i.src = '/logo.svg'; }}
+        onError={() => setLogoSrc('/logo.svg')}
       />
       {challenge ? (
         <MfaChallenge
