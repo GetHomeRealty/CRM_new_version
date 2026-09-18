@@ -134,6 +134,16 @@ export class UsersController {
     return this.users.index({ page, limit });
   }
 
+  /**
+   * A-1. Declared AFTER `users/catalog` on purpose: Nest matches in declaration order, and a
+   * `:user` parameter placed above it would swallow that route and every request for the catalog
+   * would arrive here as the id "catalog".
+   */
+  @Get('users/:user')
+  show(@Param('user', ParseIntPipe) id: number): Promise<Record<string, unknown>> {
+    return this.users.show(id);
+  }
+
   @Post('users')
   @HttpCode(201)
   store(@CurrentUser() user: AuthUserRecord | undefined, @Body() body: Record<string, unknown>): Promise<Record<string, unknown>> {

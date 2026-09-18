@@ -31,7 +31,7 @@ const SECTION = 'Legal & Documents';
  * set of things a brokerage files is small and known, and a block-list is only ever as good as
  * the last extension somebody thought of.
  */
-const ALLOWED_DOC_EXT = new Set([
+export const ALLOWED_DOC_EXT = new Set([
   '.pdf', '.jpg', '.jpeg', '.png', '.gif', '.webp', '.heic', '.heif',
   '.doc', '.docx', '.xls', '.xlsx', '.csv', '.txt', '.rtf', '.odt', '.ods',
   '.msg', '.eml',

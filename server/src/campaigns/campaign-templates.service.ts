@@ -1,4 +1,6 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { extname } from 'node:path';
+import { ALLOWED_DOC_EXT } from '../documents/documents.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { CampaignAudienceService } from './campaign-audience.service';
 import { CAMPAIGN_CATEGORIES } from './campaign.constants';
@@ -26,6 +28,37 @@ export interface TemplateInput {
  * Separate from Email Settings' `email_templates`: those are transactional, keyed by event and
  * fired by the system. These are marketing content an agent writes and reuses.
  */
+
+/**
+ * U-1 - WHAT MAY RIDE ALONG WITH A CAMPAIGN.
+ *
+ * addAttachment checked who owns the template, how many files it carries and how many bytes they
+ * come to - and never what the file IS. filename and content_type came straight from the request,
+ * with content_type defaulting to application/octet-stream, so an .html page or a script-bearing
+ * .svg could be stored and then attached to EVERY send of that template, over the agent's name, to
+ * the brokerage's clients.
+ *
+ * THE SAME ALLOW-LIST AS TRANSACTION DOCUMENTS, imported rather than repeated. TD-023 settled what
+ * a brokerage files and why an allow-list beats a block-list; a second copy here would drift from
+ * it the first time either list changed.
+ *
+ * The declared type is checked too, because it is what the recipient's mail client acts on: a file
+ * named .pdf may still announce itself as text/html.
+ *
+ * Exported so the rule can be tested directly, without a database.
+ */
+export function attachmentTypeProblem(filename: string, contentType: string): string | null {
+  const ext = extname(filename || '').toLowerCase();
+  if (!ext) return 'A file with no extension is not accepted as a campaign attachment.';
+  if (!ALLOWED_DOC_EXT.has(ext)) {
+    return `"${ext}" files are not accepted as a campaign attachment. Allowed: ${[...ALLOWED_DOC_EXT].join(', ')}.`;
+  }
+  if (/html|svg|javascript|ecmascript|xml/i.test(contentType)) {
+    return `A "${contentType}" attachment is not accepted, whatever the file is named.`;
+  }
+  return null;
+}
+
 @Injectable()
 export class CampaignTemplatesService {
   constructor(private readonly prisma: PrismaService, private readonly audience: CampaignAudienceService) {}
@@ -205,6 +238,10 @@ export class CampaignTemplatesService {
     // Accept either a bare base64 string or a full data: URI from a file input.
     const base64 = str(body.data).replace(/^data:[^;]+;base64,/, '');
     if (!base64) throw new BadRequestException({ message: 'The file is empty.' });
+
+    // U-1 - refuse before anything is stored, so nothing hostile ever reaches the table.
+    const typeProblem = attachmentTypeProblem(filename, contentType);
+    if (typeProblem) throw new BadRequestException({ message: typeProblem });
 
     let buffer: Buffer;
     try {

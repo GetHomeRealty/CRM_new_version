@@ -67,6 +67,26 @@ export class UsersService {
     return rows.slice((page - 1) * perPage, page * perPage).map((u) => this.payload(u));
   }
 
+  /**
+   * A-1 - ONE USER, BY ID.
+   *
+   * There was no way to fetch a single user: PUT, PATCH and DELETE all took `users/:user`, and GET
+   * did not exist, so /api/users/2903 answered 404 even for a Super Admin. The only way to render
+   * one person was to load the entire table and find them in it - the amplifier behind P-2 - and any
+   * integration written to the obvious REST shape broke on the first call.
+   *
+   * The SAME payload the list emits per row, deliberately: a second shape for the same record is how
+   * two screens come to disagree about one person.
+   */
+  async show(id: number): Promise<Record<string, unknown>> {
+    const u = await this.prisma.users.findUnique({
+      where: { id },
+      include: { user_permissions: { orderBy: { id: 'asc' } }, user_modules: true },
+    });
+    if (!u) throw new NotFoundException({ message: 'User not found.' });
+    return this.payload(u);
+  }
+
   async store(actor: AuthUserRecord | null, body: Record<string, unknown>): Promise<Record<string, unknown>> {
     const data = await this.validate(body, null);
     const now = new Date();
