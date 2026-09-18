@@ -175,4 +175,27 @@
 
 .login-page .login-logo{object-fit:contain;object-position:center;height:auto;aspect-ratio:1020 / 345;width:100%;max-width:380px;max-height:none}
 
+/* Keep all of the approved scene visible at every aspect ratio. */
+.login-page .login-hero{background:#62696c;min-height:100svh;height:100%;}
+.login-page .login-hero::before{content:"";display:block;position:absolute;inset:50% auto auto 50%;width:min(100%,94.62890625svh);height:auto;aspect-ratio:969 / 1024;transform:translate(-50%,-50%);background:url('/login-reference-artwork.png') right center / 158.5139319% 100% no-repeat;mask-image:none;z-index:0}
+.login-page .login-input-wrap input{border:1px solid #d7dbe0;background:#fff;color:#202124;width:100%;box-sizing:border-box}
+.login-page .login-input-wrap input:focus{outline:2px solid #e31b2d;outline-offset:2px}
+.login-page .login-eye{position:absolute;right:10px;top:50%;transform:translateY(-50%);width:36px;height:36px;border:0;background:transparent;color:#5d6269;cursor:pointer;display:grid;place-items:center;padding:8px}
+.login-page .login-eye svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round}
+.login-page .login-eye:focus-visible{outline:2px solid #e31b2d;border-radius:6px}
+@media(min-width:761px){
+ .auth-shell.login-page{height:100svh;min-height:620px;grid-template-columns:minmax(300px,36.9140625%) minmax(0,1fr);overflow:visible}
+ .login-page .login-panel{min-height:0}
+ .login-page .login-form-wrap{min-height:0;height:100%;padding-top:16px;padding-bottom:16px}
+ .login-page .login-logo{max-height:100px;min-height:0;object-fit:contain;margin-bottom:16px}
+ .login-page .login-heading h1{font-size:clamp(28px,3.2vw,48px)}
+ .login-page .login-heading>p:last-child{font-size:clamp(16px,2.2svh,22px)}
+ .login-page .login-heading{margin-bottom:16px}
+ .login-page .login-options{font-size:clamp(11px,1vw,14px);margin:6px 0}
+ .login-page .login-signature-art{height:clamp(70px,11svh,110px);margin:18px 0 10px}
+ .login-page .login-footer{margin-top:auto;padding-top:10px}
+ .login-page .login-hero{min-height:0}
+}
+@media(max-width:760px){.login-page .login-hero{display:none}.login-page .login-form-wrap{box-sizing:border-box}.login-page .login-logo{object-fit:contain}.login-page .login-heading h1{white-space:normal}}
+
 /* ---- Stub pages ---- */

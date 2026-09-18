@@ -4,7 +4,6 @@ import { useState, type ChangeEvent, type FormEvent } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { apiErrorMessage } from '../lib/apiError';
-import PasswordInput from '../desk/PasswordInput';
 import MfaChallenge from './MfaChallenge';
 import { isChallenge, type MfaChallenge as MfaChallengeView } from '../lib/mfaApi';
 
@@ -14,6 +13,7 @@ export default function Login() {
   const location = useLocation();
   const [form, setForm] = useState({ username: '', password: '' });
   const [remember, setRemember] = useState(true);
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
   /**
@@ -109,13 +109,17 @@ export default function Login() {
                   <span>Password</span>
                   <span className="login-input-wrap login-password-wrap">
                     <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M7 10V8a5 5 0 0 1 10 0v2M5.5 10.5h13v9h-13z" /></svg>
-                    <PasswordInput
+                    <input
+                      type={showPassword ? 'text' : 'password'}
                       name="password"
                       value={form.password}
                       onChange={update}
                       placeholder="Password"
                       autoComplete="current-password"
                     />
+                    <button className="login-eye" type="button" onClick={() => setShowPassword(!showPassword)} aria-label={showPassword ? 'Hide password' : 'Show password'} aria-pressed={showPassword}>
+                      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>{showPassword && <path d="m3 3 18 18"/>}</svg>
+                    </button>
                   </span>
                 </label>
 
