@@ -28,6 +28,32 @@ export const txnIndexInclude = {
   brokerages: { include: { brokerage_agents: { orderBy: { position: 'asc' } } } },
 } satisfies Prisma.transactionsInclude;
 
+/*
+ * COLUMNS THE LIST DOES NOT SEND.
+ *
+ * `findMany` with no `select` reads every column, and four of this table's are JSON text blobs that
+ * no list screen reads. `activity_tracker` is the expensive one: Agent Payment Readiness keeps the
+ * DEPOSIT SLIP IMAGES in it, base64 inside the transaction row. Measured on the development
+ * database: a page of 25 deals weighed 274 KB, of which 202 KB — 74% — was these columns, and a
+ * single deal carried 197 KB of slip on its own. Every one of those bytes was read from disk,
+ * JSON-parsed by the serialiser, re-serialised into the response and parsed again by the browser,
+ * to render a table that shows none of it. The unpaged list that Analytics and Commission Analytics
+ * load is the same query over every live deal — 1.87 MB here, and it grows with the brokerage.
+ *
+ * `adjustments` is NOT omitted: the commission engine reads it for every row (`commission.loader`),
+ * so the figures in the list depend on it. It is also small — 0.4 KB at its largest.
+ *
+ * An omitted column reaches `jsonField` as undefined and serialises to `null`, which is exactly
+ * what a deal with an empty column already sent, so the shape of the response is unchanged. The
+ * detail endpoint keeps all of them: its modals genuinely read them.
+ */
+export const txnIndexOmit = {
+  activity_tracker: true,
+  admin_activities: true,
+  trade_sheet_data: true,
+  commercial_lease: true,
+} satisfies Prisma.transactionsOmit;
+
 /** Relations eager-loaded by the detail (show) endpoint. */
 export const txnShowInclude = {
   transaction_statuses: { orderBy: STATUS_ORDER },

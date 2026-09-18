@@ -13,6 +13,7 @@ import { ownsTransaction, teamMemberIdentity, transactionScopeWhere } from '../c
 import {
   transactionResource,
   txnIndexInclude,
+  txnIndexOmit,
   txnShowIncludeFor,
   type LoadedTxn,
   type ResourceBulk,
@@ -96,6 +97,7 @@ export class TransactionsService {
          */
         orderBy: [{ created_at: 'desc' }, { id: 'desc' }],
         include: txnIndexInclude,
+        omit: txnIndexOmit,
         ...(paged ? { skip: (Math.max(1, query.page ?? 1) - 1) * perPage, take: perPage } : {}),
       }),
     ]);
