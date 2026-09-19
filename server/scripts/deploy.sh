@@ -23,6 +23,34 @@ restore_build() {
   rm -rf dist && cp -r "dist.bak.$STAMP" dist
 }
 
+# TD-200 - DOES THE DATABASE MATCH THE CODE WE ARE ABOUT TO SHIP?
+#
+# This script never asked. It does not apply migrations and never verified they had been applied,
+# so a schema change committed to the repository could be built, restarted and served while the
+# column it needs does not exist - and the first person to open that screen finds out.
+#
+# It cannot apply them itself: the app connects as crm_app and 102 of the 104 tables are owned by
+# postgres, so `prisma migrate deploy` fails with "must be owner of table ...". Worse, that failed
+# attempt is RECORDED and blocks every later migrate until somebody clears it by hand. So this
+# refuses to deploy and says exactly what to run instead.
+#
+# THE TEST IS PRISMA'S OWN SENTENCE. If a future Prisma changes that wording this will refuse to
+# deploy and print what it actually said - loud and obvious, which is the right way round: shipping
+# code without its schema is worse than a deploy that stops and tells you why.
+echo "==> database: does it match the migrations in this checkout?"
+MIGRATE_STATUS=$(npx prisma migrate status 2>&1 || true)
+if ! printf '%s' "$MIGRATE_STATUS" | grep -q "Database schema is up to date"; then
+  echo "!! THE DATABASE IS NOT UP TO DATE WITH prisma/migrations - refusing to deploy."
+  printf '%s\n' "$MIGRATE_STATUS" | tail -20
+  echo "!!"
+  echo "!! Apply them as the OWNER, not as the application user (TD-200):"
+  echo "!!   sudo -u postgres psql -d myapp -f prisma/migrations/<the-one>/migration.sql"
+  echo "!!   npx prisma migrate resolve --applied \"<the-one>\""
+  echo "!! Then run this deploy again."
+  exit 1
+fi
+echo "==> database is up to date"
+
 echo "==> building"
 npm run build
 
