@@ -1,5 +1,5 @@
 import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
-import { Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { companyLogoUrl, getAgentChangeNotifications, getDocNotifications, getReviewNotifications, markDocNotificationsSeen } from '../lib/api';
 import type { AgentChangeItem, AgentChangeNotif, DocNotif, DocNotifItem } from '../types';
@@ -420,9 +420,19 @@ export default function DeskLayout({ area = DEFAULT_AREA }: { area?: Area }) {
       {visibleNav.map((n) => {
         if (!n.children) {
           return (
-            <button key={n.key} className={seg === n.key ? 'active' : ''} onClick={() => { go(n.key); if (mobile) setMobileNavOpen(false); }}>
+            /* B-8 - A DESTINATION IS A LINK. These were buttons calling navigate(), so middle-click
+               and "open in a new tab" did nothing, and a screen reader announced "button" where a
+               person needed "link". A real anchor gets all of that from the browser for free, and
+               react-router still handles the click without a page reload. The expander below stays
+               a button on purpose: opening a section is an action, not a destination. */
+            <Link
+              key={n.key}
+              to={areaPath(area, n.key)}
+              className={seg === n.key ? 'active' : ''}
+              onClick={() => { if (mobile) setMobileNavOpen(false); }}
+            >
               <span className="ico"><Icon name={n.ico} size={17} /></span><span>{n.label}</span>
-            </button>
+            </Link>
           );
         }
         const onModule = seg === n.key;
@@ -437,9 +447,14 @@ export default function DeskLayout({ area = DEFAULT_AREA }: { area?: Area }) {
             {open && n.children.map((c) => {
               const active = onModule && (c.match ? c.match(location.pathname, location.search) : false);
               return (
-                <button key={c.key} className={`nav-child ${active ? 'active' : ''}`} onClick={() => { navigate(areaPath(area, c.path ?? c.key)); if (mobile) setMobileNavOpen(false); }}>
+                <Link
+                  key={c.key}
+                  to={areaPath(area, c.path ?? c.key)}
+                  className={`nav-child ${active ? 'active' : ''}`}
+                  onClick={() => { if (mobile) setMobileNavOpen(false); }}
+                >
                   <span className="ico"><Icon name={c.ico ?? ''} size={16} /></span><span>{c.label}</span>
-                </button>
+                </Link>
               );
             })}
           </div>
