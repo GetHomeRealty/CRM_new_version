@@ -18,6 +18,9 @@ import { MailerService } from './mailer.service';
 describe('where outgoing mail goes', () => {
   const saved = {
     NODE_ENV: process.env.NODE_ENV,
+    APP_ENV: process.env.APP_ENV,
+    DATABASE_URL: process.env.DATABASE_URL,
+    PRODUCTION_DATABASE_NAME: process.env.PRODUCTION_DATABASE_NAME,
     MAIL_REDIRECT_TO: process.env.MAIL_REDIRECT_TO,
     MAIL_ALLOW_REAL_SEND: process.env.MAIL_ALLOW_REAL_SEND,
   };
@@ -55,18 +58,23 @@ describe('where outgoing mail goes', () => {
       expect(MailerService.redirectTarget()).toBe('me@example.test');
     });
 
-    it('MAIL_ALLOW_REAL_SEND restores real delivery, deliberately and explicitly', () => {
-      set({ NODE_ENV: 'development', MAIL_ALLOW_REAL_SEND: '1' });
-      expect(MailerService.redirectTarget()).toBeNull();
+    /*
+     * REVERSED BY S-1. `MAIL_ALLOW_REAL_SEND` outside production was the escape hatch, and it is
+     * how a development machine came to email the brokerage's clients. It is now one of four
+     * conditions rather than an override, so outside production it opens nothing.
+     */
+    it('MAIL_ALLOW_REAL_SEND no longer restores real delivery outside production', () => {
+      set({ NODE_ENV: 'development', APP_ENV: 'development', MAIL_ALLOW_REAL_SEND: '1' });
+      expect(MailerService.redirectTarget()).toBe(MailerService.DEV_SINK);
     });
 
-    it.each(['true', 'yes', 'on', 'TRUE'])('accepts %s as the escape hatch', (v) => {
-      set({ NODE_ENV: 'development', MAIL_ALLOW_REAL_SEND: v });
-      expect(MailerService.redirectTarget()).toBeNull();
+    it.each(['true', 'yes', 'on', 'TRUE'])('does not accept %s as an escape hatch either', (v) => {
+      set({ NODE_ENV: 'development', APP_ENV: 'development', MAIL_ALLOW_REAL_SEND: v });
+      expect(MailerService.redirectTarget()).toBe(MailerService.DEV_SINK);
     });
 
     it.each(['0', 'false', 'no', '', 'maybe'])('does NOT treat %p as permission to send', (v) => {
-      set({ NODE_ENV: 'development', MAIL_ALLOW_REAL_SEND: v });
+      set({ NODE_ENV: 'development', APP_ENV: 'development', MAIL_ALLOW_REAL_SEND: v });
       expect(MailerService.redirectTarget()).toBe(MailerService.DEV_SINK);
     });
 
@@ -81,9 +89,18 @@ describe('where outgoing mail goes', () => {
     });
   });
 
-  describe('in production, behaviour is unchanged', () => {
-    it('sends normally when no redirect is configured', () => {
-      set({ NODE_ENV: 'production' });
+  /** The four conditions S-1 requires before a message may leave for a real person. */
+  const PRODUCTION = {
+    NODE_ENV: 'production',
+    APP_ENV: 'production',
+    DATABASE_URL: 'postgresql://u:p@db.internal:5432/myapp?schema=public',
+    PRODUCTION_DATABASE_NAME: 'myapp',
+    MAIL_ALLOW_REAL_SEND: '1',
+  };
+
+  describe('in production, delivery is unchanged once the identity is stated', () => {
+    it('sends normally when no redirect is configured and the identity is complete', () => {
+      set(PRODUCTION);
       expect(MailerService.redirectTarget()).toBeNull();
     });
 
@@ -92,13 +109,18 @@ describe('where outgoing mail goes', () => {
       expect(MailerService.redirectTarget()).toBe('sink@example.test');
     });
 
-    it('IGNORES MAIL_ALLOW_REAL_SEND — production never needed permission', () => {
-      set({ NODE_ENV: 'production', MAIL_ALLOW_REAL_SEND: '1' });
+    /*
+     * RENAMED AND REVERSED: production now DOES need the permission, explicitly. It was the one
+     * signal a copied .env carried for free, which is what made a laptop indistinguishable from
+     * the live server. A production host that has not said so refuses to boot.
+     */
+    it('REQUIRES MAIL_ALLOW_REAL_SEND — production must say so explicitly', () => {
+      set({ ...PRODUCTION, MAIL_ALLOW_REAL_SEND: '1' });
       expect(MailerService.redirectTarget()).toBeNull();
     });
 
     it('a blank MAIL_REDIRECT_TO means "not set", not "send to the empty address"', () => {
-      set({ NODE_ENV: 'production', MAIL_REDIRECT_TO: '   ' });
+      set({ ...PRODUCTION, MAIL_REDIRECT_TO: '   ' });
       expect(MailerService.redirectTarget()).toBeNull();
     });
   });

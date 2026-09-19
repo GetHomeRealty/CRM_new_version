@@ -52,10 +52,29 @@ const mailer = new MailerService(prisma, crypt, accounts);
 const last = () => sent[sent.length - 1];
 
 describe('which recipient the message actually leaves for', () => {
+  /*
+   * S-1 widened what decides delivery from one variable to four, so the harness has to be able to
+   * state all of them. `DELIVERING` below is the only configuration that now reaches a real
+   * recipient — which is why the cases that check the MECHANICS of real delivery (the recipient,
+   * the subject, cc and bcc) are driven from it rather than from a development process.
+   */
   const saved = {
     NODE_ENV: process.env.NODE_ENV,
+    APP_ENV: process.env.APP_ENV,
+    DATABASE_URL: process.env.DATABASE_URL,
+    PRODUCTION_DATABASE_NAME: process.env.PRODUCTION_DATABASE_NAME,
     MAIL_REDIRECT_TO: process.env.MAIL_REDIRECT_TO,
     MAIL_ALLOW_REAL_SEND: process.env.MAIL_ALLOW_REAL_SEND,
+  };
+
+  /** A correctly configured live server: the four conditions that permit external delivery. */
+  const DELIVERING = {
+    NODE_ENV: 'production',
+    APP_ENV: 'production',
+    DATABASE_URL: 'postgresql://u:p@db.internal:5432/myapp?schema=public',
+    PRODUCTION_DATABASE_NAME: 'myapp',
+    MAIL_ALLOW_REAL_SEND: '1',
+    MAIL_REDIRECT_TO: undefined,
   };
 
   const set = (env: Partial<typeof saved>) => {
@@ -77,9 +96,14 @@ describe('which recipient the message actually leaves for', () => {
     }
   });
 
-  describe('real delivery from a development process', () => {
-    // The configuration a developer runs locally when they mean to reach a real inbox.
-    beforeEach(() => set({ NODE_ENV: 'development', MAIL_ALLOW_REAL_SEND: '1', MAIL_REDIRECT_TO: undefined }));
+  describe('real delivery from a correctly configured production process', () => {
+    /*
+     * WAS "from a development process", with NODE_ENV=development and MAIL_ALLOW_REAL_SEND=1 — the
+     * configuration S-1 closed, because it was how a laptop came to email real clients. The cases
+     * below are about what real delivery DOES to a message once permitted, which is unchanged; only
+     * the configuration that earns it has moved.
+     */
+    beforeEach(() => set(DELIVERING));
 
     it('sends to the address the application asked for', async () => {
       await mailer.sendDirect('client1@gmail.com', 'Your property search', '<p>Hello.</p>');
@@ -113,11 +137,16 @@ describe('which recipient the message actually leaves for', () => {
     });
   });
 
-  describe('being in development is not, on its own, a reason to redirect', () => {
-    it('NODE_ENV=development with real send on reaches the real recipient', async () => {
-      set({ NODE_ENV: 'development', MAIL_ALLOW_REAL_SEND: '1', MAIL_REDIRECT_TO: undefined });
+  describe('being in development IS, on its own, a reason to redirect', () => {
+    /*
+     * REVERSED BY S-1. This read "being in development is not, on its own, a reason to redirect",
+     * and it was true: one variable let a development process reach a real inbox. That is the
+     * defect. A developer who needs to see the message uses MAIL_REDIRECT_TO, tested below.
+     */
+    it('NODE_ENV=development with real send on no longer reaches the real recipient', async () => {
+      set({ NODE_ENV: 'development', APP_ENV: 'development', MAIL_ALLOW_REAL_SEND: '1', MAIL_REDIRECT_TO: undefined });
       await mailer.sendDirect('client1@gmail.com', 'Subject', '<p>Hi.</p>');
-      expect(last().to).toBe('client1@gmail.com');
+      expect(last().to).toBe(MailerService.DEV_SINK);
     });
 
     it('but the safety default still applies when nothing has been chosen', async () => {
@@ -157,12 +186,23 @@ describe('which recipient the message actually leaves for', () => {
     });
   });
 
-  describe('production is unaffected by either switch', () => {
-    it('sends to the real recipient with nothing configured', async () => {
-      set({ NODE_ENV: 'production', MAIL_ALLOW_REAL_SEND: undefined, MAIL_REDIRECT_TO: undefined });
+  describe('production delivers, once it has said what it is', () => {
+    it('sends to the real recipient when the four conditions agree', async () => {
+      set(DELIVERING);
       await mailer.sendDirect('client1@gmail.com', 'Subject', '<p>Hi.</p>');
       expect(last().to).toBe('client1@gmail.com');
       expect(last().subject).toBe('Subject');
+    });
+
+    /*
+     * The case this file existed to protect, restated. Production used to deliver on NODE_ENV
+     * alone; it now needs the rest, and a live server that has not been told them is refused at
+     * BOOT by `validate-config.ts` rather than discovering it one undelivered message at a time.
+     */
+    it('diverts when NODE_ENV is the only thing claiming production', async () => {
+      set({ NODE_ENV: 'production', APP_ENV: 'development', MAIL_ALLOW_REAL_SEND: undefined, MAIL_REDIRECT_TO: undefined });
+      await mailer.sendDirect('client1@gmail.com', 'Subject', '<p>Hi.</p>');
+      expect(last().to).toBe(MailerService.DEV_SINK);
     });
   });
 });

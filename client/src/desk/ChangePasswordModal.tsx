@@ -52,7 +52,13 @@ export default function ChangePasswordModal({ open, onClose }: ChangePasswordMod
           <PasswordInput value={form.password} onChange={(e) => set('password', e.target.value)} /></div>
         <div className="field"><label>Confirm New Password <span className="req">*</span></label>
           <PasswordInput value={form.password_confirmation} onChange={(e) => set('password_confirmation', e.target.value)} /></div>
-        <span className="help">Use at least 8 characters.</span>
+        {/*
+          * Says what the server will actually enforce, and says it BEFORE the attempt. The number
+          * here and the rule in `server/src/auth/password-policy.ts` have to move together — this
+          * read "at least 8 characters" while the server had raised the rule to twelve, which
+          * turns a refusal into a surprise.
+          */}
+        <span className="help">Use at least 12 characters — a short phrase of a few unrelated words is easiest to remember. Avoid common passwords and the company name.</span>
         <SavedBadge show={savedOk} label="Password updated" />
         <div className="actions">
           <button className="btn ghost" onClick={onClose}>Close</button>

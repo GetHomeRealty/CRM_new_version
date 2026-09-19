@@ -60,6 +60,24 @@ describe('migration scripts', () => {
     for (const destructive of ['migrate dev', 'migrate reset', 'db push', '--force-reset', 'DROP DATABASE']) {
       expect(runnable).not.toContain(destructive);
     }
+
+    /*
+     * AND IT MUST ACTUALLY APPLY SOMETHING. Every assertion above is satisfied by a script that
+     * does NOTHING: an empty file contains no destructive command and is named correctly. That is
+     * the failure this last part exists for, and it is not far-fetched — a wrapper that silently
+     * applied no migrations would leave the schema behind while the deploy reported success.
+     *
+     * WHAT IS ASSERTED IS WHAT THE WRAPPER ACTUALLY PROMISES, which is not `prisma migrate deploy`.
+     * TD-200 replaced that command precisely because it cannot run here: the application's database
+     * user owns 2 of the 104 tables. The wrapper applies each pending migration.sql as the database
+     * OWNER and then records it in Prisma's own tracking table with `migrate resolve --applied`,
+     * which is how the two halves stay in step — the schema moves forward, and Prisma agrees that
+     * it did. Both lines are required, because either alone is a silent drift.
+     */
+    expect(runnable).toContain('prisma/migrations/');
+    expect(runnable).toMatch(/migrate resolve --applied/);
+    // Applied as the owner, which is the whole reason the raw command was replaced.
+    expect(runnable).toMatch(/sudo -u postgres psql/);
   });
 
   it('keeps migrate dev behind the guard', () => {

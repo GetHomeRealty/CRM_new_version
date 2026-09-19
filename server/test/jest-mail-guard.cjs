@@ -49,6 +49,14 @@
 process.env.MAIL_ALLOW_REAL_SEND = '0';
 process.env.MAIL_REDIRECT_TO = '';
 
+/*
+ * S-1. The identity, imposed rather than inherited. `redirectTarget()` now asks four questions
+ * instead of one, and a test worker must fail the FIRST of them however the host is configured —
+ * so APP_ENV is pinned here alongside the two above. A runner that picked up `APP_ENV=production`
+ * from the deploy host's environment would otherwise have three of the four already satisfied.
+ */
+process.env.APP_ENV = 'test';
+
 // A worker that believes it is production would send for real whatever the two above say, because
 // `redirectTarget()` checks NODE_ENV before either of them.
 if (process.env.NODE_ENV === 'production') process.env.NODE_ENV = 'test';

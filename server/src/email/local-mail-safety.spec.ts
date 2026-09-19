@@ -119,9 +119,16 @@ describe('redirectTarget() decides correctly for every configuration', () => {
     });
   });
 
-  it.each(['1', 'true', 'yes', 'on', 'ON', 'True'])('sends for real when MAIL_ALLOW_REAL_SEND=%s', (v) => {
-    withEnv({ MAIL_REDIRECT_TO: '', MAIL_ALLOW_REAL_SEND: v, NODE_ENV: 'development' }, () => {
-      expect(MailerService.redirectTarget()).toBeNull();
+  /*
+   * REVERSED BY S-1, DELIBERATELY, AND THIS IS THE POINT OF THE CHANGE. These six values used to
+   * return null — deliver for real — from a development process. That single variable was the
+   * whole distance between a laptop holding a restored database and the brokerage's clients.
+   * `MAIL_ALLOW_REAL_SEND` is now one of four conditions rather than an override that skips them,
+   * so on a development machine it no longer opens anything. See `config/environment.ts`.
+   */
+  it.each(['1', 'true', 'yes', 'on', 'ON', 'True'])('no longer sends for real outside production when MAIL_ALLOW_REAL_SEND=%s', (v) => {
+    withEnv({ MAIL_REDIRECT_TO: '', MAIL_ALLOW_REAL_SEND: v, NODE_ENV: 'development', APP_ENV: 'development' }, () => {
+      expect(MailerService.redirectTarget()).toBe(MailerService.DEV_SINK);
     });
   });
 
@@ -132,11 +139,33 @@ describe('redirectTarget() decides correctly for every configuration', () => {
     });
   });
 
-  it('sends for real in production, which is the behaviour production depends on', () => {
-    // Asserted rather than forbidden. A change that quietly diverted production mail would break
-    // the brokerage, and this is the case that would catch it.
-    withEnv({ MAIL_REDIRECT_TO: '', MAIL_ALLOW_REAL_SEND: '', NODE_ENV: 'production' }, () => {
+  /*
+   * STILL ASSERTED RATHER THAN FORBIDDEN — a change that quietly diverted production mail would
+   * break the brokerage, and this is the case that catches it. What changed is WHAT PRODUCTION HAS
+   * TO SAY: NODE_ENV alone no longer earns real delivery, because NODE_ENV alone is what a copied
+   * .env carries. All four conditions, and then it delivers exactly as before.
+   *
+   * The deployment consequence is recorded here because this is where somebody will look: the live
+   * server's environment must gain APP_ENV=production and MAIL_ALLOW_REAL_SEND=1 on BOTH crm-api
+   * and crm-worker. `validate-config.ts` refuses to boot without them rather than going quiet.
+   */
+  it('sends for real in production when all four conditions agree, which is what production depends on', () => {
+    withEnv({
+      MAIL_REDIRECT_TO: '',
+      MAIL_ALLOW_REAL_SEND: '1',
+      NODE_ENV: 'production',
+      APP_ENV: 'production',
+      DATABASE_URL: 'postgresql://u:p@db.internal:5432/myapp?schema=public',
+      PRODUCTION_DATABASE_NAME: 'myapp',
+      MAIL_REAL_SEND_HOST: '',
+    }, () => {
       expect(MailerService.redirectTarget()).toBeNull();
+    });
+  });
+
+  it('does NOT send for real in production when only NODE_ENV says so — the copied-.env case', () => {
+    withEnv({ MAIL_REDIRECT_TO: '', MAIL_ALLOW_REAL_SEND: '', NODE_ENV: 'production', APP_ENV: 'development' }, () => {
+      expect(MailerService.redirectTarget()).toBe(MailerService.DEV_SINK);
     });
   });
 

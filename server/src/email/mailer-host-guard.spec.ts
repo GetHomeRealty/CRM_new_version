@@ -8,31 +8,44 @@ import { MailerService } from './mailer.service';
  */
 describe('which machine may send real mail', () => {
   const env = { ...process.env };
+
+  /*
+   * S-1 widened the conditions for real delivery from NODE_ENV to four that must agree, so a case
+   * about the HOST guard has to satisfy the other three first — otherwise it would pass by
+   * diverting for the wrong reason and prove nothing about the host at all.
+   */
+  const asProduction = (): void => {
+    process.env.NODE_ENV = 'production';
+    process.env.APP_ENV = 'production';
+    process.env.DATABASE_URL = 'postgresql://u:p@db.internal:5432/myapp?schema=public';
+    process.env.PRODUCTION_DATABASE_NAME = 'myapp';
+    process.env.MAIL_ALLOW_REAL_SEND = '1';
+  };
   afterEach(() => { process.env = { ...env }; });
 
   it('sends for real when no machine is named - todays behaviour, unchanged', () => {
-    process.env.NODE_ENV = 'production';
+    asProduction();
     delete process.env.MAIL_REAL_SEND_HOST;
     delete process.env.MAIL_REDIRECT_TO;
     expect(MailerService.redirectTarget('any-machine')).toBeNull();
   });
 
   it('sends for real on the machine that is named', () => {
-    process.env.NODE_ENV = 'production';
+    asProduction();
     process.env.MAIL_REAL_SEND_HOST = 'srv781514';
     delete process.env.MAIL_REDIRECT_TO;
     expect(MailerService.redirectTarget('srv781514')).toBeNull();
   });
 
   it('refuses to deliver from any other machine, even calling itself production', () => {
-    process.env.NODE_ENV = 'production';
+    asProduction();
     process.env.MAIL_REAL_SEND_HOST = 'srv781514';
     delete process.env.MAIL_REDIRECT_TO;
     expect(MailerService.redirectTarget('someones-laptop')).toBe(MailerService.DEV_SINK);
   });
 
   it('still honours an explicit redirect above everything else', () => {
-    process.env.NODE_ENV = 'production';
+    asProduction();
     process.env.MAIL_REAL_SEND_HOST = 'srv781514';
     process.env.MAIL_REDIRECT_TO = 'someone@example.test';
     expect(MailerService.redirectTarget('someones-laptop')).toBe('someone@example.test');
@@ -40,6 +53,7 @@ describe('which machine may send real mail', () => {
 
   it('leaves a developer machine exactly as it was - diverted', () => {
     process.env.NODE_ENV = 'development';
+    process.env.APP_ENV = 'development';
     delete process.env.MAIL_REDIRECT_TO;
     delete process.env.MAIL_ALLOW_REAL_SEND;
     expect(MailerService.redirectTarget('someones-laptop')).toBe(MailerService.DEV_SINK);

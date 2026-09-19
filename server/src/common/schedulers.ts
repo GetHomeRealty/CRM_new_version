@@ -1,3 +1,5 @@
+import { schedulerEnvironmentProblem } from '../config/environment';
+
 /**
  * Whether this process should run background schedulers.
  *
@@ -29,6 +31,19 @@
 export function schedulersEnabled(): boolean {
   if (process.env.NODE_ENV === 'test') return false;
 
+  /*
+   * S-1. REFUSED OUTRIGHT when a non-production process holds the production database, whatever
+   * RUN_SCHEDULERS says — this one is not a default that an explicit answer can win, because the
+   * explicit answer is exactly what goes wrong: a developer copies the deploy host's environment,
+   * inherits `RUN_SCHEDULERS=true` along with `DATABASE_URL`, and the reminder and welcome sweeps
+   * begin working through the brokerage's real clients from a laptop.
+   *
+   * The mail gate would stop the message leaving. This stops the work happening at all, which also
+   * covers what a sweep does besides mailing — marking rows as contacted, spending reminders — none
+   * of which a sink can undo.
+   */
+  if (schedulerEnvironmentProblem()) return false;
+
   const v = process.env.RUN_SCHEDULERS;
   // An explicit answer always wins, in either direction, whatever else is going on.
   if (v !== undefined && v !== '') return v === 'true' || v === '1';
@@ -53,6 +68,8 @@ function underProcessManager(): boolean {
 /** One-line explanation of why a scheduler stayed idle, for the boot log. */
 export const schedulerSkipReason = (): string => {
   if (process.env.NODE_ENV === 'test') return 'test environment';
+  const environment = schedulerEnvironmentProblem();
+  if (environment) return environment;
   const v = process.env.RUN_SCHEDULERS;
   if (v !== undefined && v !== '') return 'RUN_SCHEDULERS is off for this process';
   return `running under a process manager (instance ${process.env.NODE_APP_INSTANCE ?? process.env.INSTANCE_ID}) `

@@ -5,6 +5,7 @@ import { type mail_accounts } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { LaravelCryptService } from '../common/laravel-crypt.service';
 import { MAIL_EVENTS, renderTemplate } from './mail-event-registry';
+import { externalMailProblem } from '../config/environment';
 import { MailAccountService, type IntegrationScope } from './mail-account.service';
 import { mailClientId, mailClientSecret } from '../google/google.constants';
 
@@ -91,7 +92,19 @@ export class MailerService {
     const explicit = (process.env.MAIL_REDIRECT_TO ?? '').trim();
     if (explicit !== '') return explicit;
 
-    if (process.env.NODE_ENV === 'production') {
+    /*
+     * S-1, WIDENED. This asked `NODE_ENV === 'production'` and, failing that, whether
+     * `MAIL_ALLOW_REAL_SEND` was set — so one copied file, or one exported variable, was the whole
+     * distance between a laptop and the brokerage's clients. The question is now asked of
+     * `externalMailProblem()`, which requires APP_ENV, NODE_ENV, the approved database and an
+     * explicit MAIL_ALLOW_REAL_SEND to agree. See `config/environment.ts`.
+     *
+     * DEVELOPMENT AND TEST CAN NO LONGER OPT OUT. `MAIL_ALLOW_REAL_SEND=1` on a developer machine
+     * used to return null from here; it now fails the APP_ENV condition and lands in the sink.
+     * `MAIL_REDIRECT_TO` above is the supported way to watch a message arrive.
+     */
+    const problem = externalMailProblem();
+    if (problem === null) {
       /*
        * S-1 - AND WHICH MACHINE IS THIS? NODE_ENV lives in a file, and a file can be copied.
        *
@@ -110,10 +123,16 @@ export class MailerService {
       if (MailerService.realSendHostProblem(host)) return MailerService.DEV_SINK;
       return null;
     }
-    if (/^(1|true|yes|on)$/i.test((process.env.MAIL_ALLOW_REAL_SEND ?? '').trim())) return null;
-
-    // `.invalid` is reserved by RFC 2606 and can never resolve, so a message that somehow escapes
-    // this guard still cannot reach a person.
+    /*
+     * NO ESCAPE HATCH HERE ANY MORE. This line read
+     *   `if (MAIL_ALLOW_REAL_SEND is truthy) return null;`
+     * and was the single thing that let a developer machine mail a client: one variable, set once,
+     * on a process holding real data. That variable is now one of the four conditions
+     * `externalMailProblem()` requires rather than an override that skips them.
+     *
+     * `.invalid` is reserved by RFC 2606 and can never resolve, so a message that somehow escapes
+     * this guard still cannot reach a person.
+     */
     return MailerService.DEV_SINK;
   }
 
@@ -140,9 +159,14 @@ export class MailerService {
   announceRedirect(): void {
     const target = MailerService.redirectTarget();
     if (!target) {
-      if (process.env.NODE_ENV !== 'production') {
-        this.log.warn('MAIL_ALLOW_REAL_SEND is set — outgoing mail will reach REAL recipients from a non-production process.');
-      }
+      /*
+       * Real delivery. Since S-1 this can only be reached with APP_ENV=production, NODE_ENV=
+       * production, the approved database and MAIL_ALLOW_REAL_SEND=1 all agreeing, so the old
+       * warning here — "a non-production process is about to mail real people" — describes a state
+       * that no longer exists. Said positively instead, once, so the boot log always records which
+       * way this deployment resolved rather than only the unhappy case.
+       */
+      this.log.log('Outgoing mail is delivered for real: APP_ENV, NODE_ENV, the database and MAIL_ALLOW_REAL_SEND all agree.');
       return;
     }
     if (target === MailerService.DEV_SINK) {
@@ -158,9 +182,23 @@ export class MailerService {
         );
         return;
       }
+      /*
+       * S-1: NAME THE CONDITION THAT FAILED. "not a production process" was true but useless on the
+       * day it mattered — four things must now agree, and somebody reading this line needs to know
+       * WHICH one does not. On a production host this is the difference between a five-second fix
+       * and an afternoon.
+       *
+       * At error level when the process believes it is production, because that combination is a
+       * live deployment that has gone quiet; at warn level on a developer machine, where a sink is
+       * the correct and expected outcome.
+       */
+      const why = externalMailProblem();
+      const line = `Outgoing mail is diverted to ${target}: ${why}. `
+        + 'Set MAIL_REDIRECT_TO to read it yourself, or make APP_ENV, NODE_ENV, the database and '
+        + 'MAIL_ALLOW_REAL_SEND agree to deliver for real.';
+      if (process.env.NODE_ENV === 'production') { this.log.error(line); return; }
       this.log.warn(
-        `Outgoing mail is diverted to ${target} because this is not a production process. `
-        + 'Set MAIL_REDIRECT_TO to send it somewhere you can read, or MAIL_ALLOW_REAL_SEND=1 to send for real.',
+        line,
       );
     } else {
       this.log.log(`Outgoing mail is diverted to ${target} (MAIL_REDIRECT_TO).`);

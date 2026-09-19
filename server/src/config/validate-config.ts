@@ -1,4 +1,5 @@
 import type { AppConfig } from './configuration';
+import { productionEnvironmentProblems } from './environment';
 
 /**
  * Refuse to start a production server that is configured to fail.
@@ -234,7 +235,20 @@ export function productionConfigProblems(cfg: AppConfig): string[] {
 /** Throws with every problem listed, or returns quietly. No-op outside production. */
 export function assertProductionConfig(cfg: AppConfig): void {
   if (cfg.env !== 'production') return;
-  const problems = productionConfigProblems(cfg);
+  /*
+   * S-1. The identity checks that decide whether this process may email a real person — APP_ENV,
+   * the approved database, an explicit MAIL_ALLOW_REAL_SEND — are asked HERE rather than inside
+   * `productionConfigProblems`, which answers about a CONFIG OBJECT and is tested by handing it
+   * one. These read the process environment, which no fixture can express, so folding them in
+   * there would have made that function's own tests depend on the environment they run in.
+   *
+   * Asked at all, rather than only at send time, because the alternative is a production process
+   * that starts perfectly and quietly delivers nothing — the failure this codebase has already
+   * been bitten by, and the kind a client discovers on our behalf. `deploy.sh` waits on
+   * /api/health and restores the previous build when it does not answer, so refusing here turns a
+   * silent mail outage into a rollback somebody is watching.
+   */
+  const problems = [...productionConfigProblems(cfg), ...productionEnvironmentProblems()];
   if (!problems.length) return;
   throw new Error(
     `Refusing to start: ${problems.length} configuration problem${problems.length === 1 ? '' : 's'} `

@@ -1,6 +1,7 @@
 import { ModuleAccessService } from '../core/module-access.service';
 import { ForbiddenException, Injectable, Logger } from '@nestjs/common';
 import { PasswordHashService } from './password-hash.service';
+import { passwordPolicyProblem } from './password-policy';
 import { PrismaService } from '../prisma/prisma.service';
 import { throwValidation } from '../common/laravel-exceptions';
 import { PermissionService } from './permission.service';
@@ -229,6 +230,7 @@ export class AuthService {
       throwValidation({ password: ['The password field confirmation does not match.'] });
     }
     this.assertPasswordFits(password);
+    this.assertPasswordPolicy(password);
 
     // Case-insensitive for the same reason sign-in is: the unique index is on `lower(email)`, so an
     // exact-match pre-check passes and the INSERT then fails with a raw P2002 instead of a 422.
@@ -268,6 +270,7 @@ export class AuthService {
       throwValidation({ password: ['The password field confirmation does not match.'] });
     }
     this.assertPasswordFits(newPassword);
+    this.assertPasswordPolicy(newPassword);
     // Refusing a no-op keeps the record honest: "I changed it" should not be able to mean
     // "I retyped the same one", least of all on the screen people use after a suspected leak.
     if (await this.passwords.verifyPassword(newPassword, user.password)) {
@@ -295,6 +298,18 @@ export class AuthService {
 
   usersExist(): Promise<boolean> {
     return this.prisma.users.count().then((n) => n > 0);
+  }
+
+  /**
+   * The shared strength rule, asked before a password is hashed.
+   *
+   * Separate from `assertPasswordFits` on purpose: that one is a fact about bcrypt's 72 bytes and
+   * this one is a judgement about guessability, they fail with different wording, and a password
+   * can be both too weak and too long. Both are asked at every point a password is set.
+   */
+  private assertPasswordPolicy(password: string): void {
+    const problem = passwordPolicyProblem(password);
+    if (problem) throwValidation({ password: [problem] });
   }
 
   /** bcrypt truncates past 72 bytes, so a longer password is not the password it appears to be. */

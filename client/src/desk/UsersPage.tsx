@@ -645,6 +645,16 @@ function UserModal({ catalog, existing, onClose, onSaved }: UserModalProps) {
             <PasswordInput value={form.password} onChange={(e) => set('password', e.target.value)} placeholder={existing ? 'leave blank to keep' : ''} autoComplete="new-password" /></div>
           <div className="field"><label>Confirm Password</label>
             <PasswordInput value={form.password_confirmation} onChange={(e) => set('password_confirmation', e.target.value)} autoComplete="new-password" /></div>
+          {/*
+            * The rule an administrator is setting on somebody else's behalf, stated here because
+            * they cannot see the person's own screen. Matches `server/src/auth/password-policy.ts`
+            * — the standard temporary password a busy administrator reaches for is exactly the
+            * shape that rule refuses.
+            */}
+          <div className="field full"><span className="help">
+            At least 12 characters, and not a common password or the company name. A short phrase of
+            a few unrelated words works well.
+          </span></div>
           <div className="field"><label>Status <span className="req">*</span></label>
             <select data-field="status" className={badField === 'status' ? 'field-bad' : undefined} value={form.status} onChange={(e) => set('status', e.target.value)}><option>Active</option><option>Inactive</option></select>
             <span className="help">Inactive users cannot login to the system.</span></div>

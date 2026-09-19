@@ -201,7 +201,7 @@ describe('an ADMIN-created account uses the configured cost — the path that ma
     const t = tag();
     return {
       name: `ZZ Made ${t}`, username: `zzmade${t.replace(/-/g, '')}`, email: `zz-made-${t}@probe.test`,
-      password: 'TestPass123!', password_confirmation: 'TestPass123!',
+      password: 'quarry lantern ninety', password_confirmation: 'quarry lantern ninety',
       role: 'agent', status: 'Active',
       profile: { mobile: '416-555-0100', gender: 'Other' },
     };
@@ -221,7 +221,7 @@ describe('an ADMIN-created account uses the configured cost — the path that ma
       const actor = { id: 1, name: 'Root', role: 'admin' } as never;
       const body = adminBody();
       await usersService(tx, 12).store(actor, body);
-      await expect(authService(tx, 12).login(body.email, 'TestPass123!')).resolves.toBeTruthy();
+      await expect(authService(tx, 12).login(body.email, 'quarry lantern ninety')).resolves.toBeTruthy();
     });
   });
 
@@ -236,7 +236,7 @@ describe('an ADMIN-created account uses the configured cost — the path that ma
       // come along — sending only the password fails with "The name field is required", which reads
       // like a broken reset rather than an incomplete fixture.
       await usersService(tx, 13).update(actor, created.id, {
-        ...body, password: 'NewPass456!', password_confirmation: 'NewPass456!',
+        ...body, password: 'harbour thimble rowan', password_confirmation: 'harbour thimble rowan',
       });
       expect(await storedCost(tx, created.id)).toBe(13);
     });

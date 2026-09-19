@@ -53,7 +53,7 @@ const body = (over: Record<string, unknown> = {}) => {
   const t = tag();
   return {
     name: `Probe ${t}`, username: `probe-${t}`, email: `probe-${t}@example.test`,
-    password: 'TestPass123!', password_confirmation: 'TestPass123!',
+    password: 'quarry lantern ninety', password_confirmation: 'quarry lantern ninety',
     role: 'agent', status: 'Active',
     profile: { mobile: '416-555-0100', gender: 'Other' },
     ...over,
