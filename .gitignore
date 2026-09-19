@@ -60,3 +60,11 @@ server_backup_*/
 *.backup
 *.backup-*
 *.before-*
+
+# Spare copies of a build, kept so a bad release can be put back by hand. They are not source,
+# they pile up at every release, and 180 of them once buried 8 commits of somebody's unpushed work
+# in `git status` - which is the list where real work is supposed to stand out. 2026-09-19.
+server/dist.bak.*
+client/dist.bak.*
+server/dist.failed.*
+client/dist.failed.*

@@ -7,7 +7,8 @@
 # dynamically imported module". So the page files of recent builds are copied back beside the new
 # ones: an open tab keeps working on its own version until the app moves it to the new one.
 #
-# Use this instead of a bare `npm run build`.
+# `npm run build` now runs this script, so nobody has to remember to. `npm run build:app`
+# is the raw build, and calling it directly skips the protection below.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -18,7 +19,9 @@ if [ -d dist ]; then
 fi
 
 echo "==> building the screens (type-check + vite)"
-npm run build
+# `build:app` is the RAW build. `npm run build` now points at THIS script, so calling it here
+# would recurse forever.
+npm run build:app
 
 # Page files from builds of the last 14 days. -n never overwrites a file the new build made.
 KEPT=0

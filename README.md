@@ -72,6 +72,9 @@ npm run backup:verify    # restore the newest set into a scratch database
 # client/
 npm run dev              # Vite dev server
 npm run build            # typecheck, then production build to dist/
+#   ^ this runs scripts/deploy-client.sh: it backs up dist/, builds, then copies recent
+#     screen files back so a tab opened before the release keeps working (TD-195). Use
+#     `npm run build:app` for the raw build - it skips that protection.
 ```
 
 ---

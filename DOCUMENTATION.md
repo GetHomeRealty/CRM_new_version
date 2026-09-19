@@ -142,6 +142,9 @@ npm run build                            # compile to dist/
 
 # client/
 npm run build                            # typecheck, then production build
+#   ^ this runs scripts/deploy-client.sh: it backs up dist/, builds, then copies recent
+#     screen files back so a tab opened before the release keeps working (TD-195). Use
+#     `npm run build:app` for the raw build - it skips that protection.
 ```
 
 > **Never run `prisma migrate dev` against a database you care about.** It resets on drift.
