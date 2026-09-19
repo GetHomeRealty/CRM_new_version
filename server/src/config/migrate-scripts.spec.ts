@@ -32,7 +32,34 @@ const runGuard = (env: Record<string, string>): number => {
 
 describe('migration scripts', () => {
   it('offers a forward-only command for production', () => {
-    expect(scripts['prisma:deploy']).toBe('prisma migrate deploy');
+    /*
+     * THIS ASSERTED ONE EXACT STRING - 'prisma migrate deploy' - and TD-200 changed what that
+     * script runs, on 2026-09-19. The application's database user owns 2 of the 104 tables, so
+     * `prisma migrate deploy` fails with "must be owner of table ..." AND records that failure,
+     * blocking every later migrate until somebody clears it by hand. prisma:deploy now runs
+     * scripts/apply-migrations.sh, which applies each migration as the owner; the raw command is
+     * kept as prisma:deploy:raw and is still asserted below.
+     *
+     * THE PROMISE THIS CASE EXISTS FOR IS FORWARD-ONLY, NOT A PARTICULAR SPELLING. So it is
+     * asserted as that, and asserted INSIDE the script rather than at its name - which is stricter
+     * than before, because the old form could not see what a script did.
+     *
+     * `migrate resolve --rolled-back` is deliberately allowed: it marks a FAILED attempt as not
+     * applied in Prisma's own tracking table. It reverts no schema - that failure is precisely why
+     * nothing was applied.
+     */
+    const cmd = scripts['prisma:deploy'];
+    expect(cmd).toBeTruthy();
+    expect(scripts['prisma:deploy:raw']).toBe('prisma migrate deploy');
+
+    const body = cmd.includes('apply-migrations.sh')
+      ? fs.readFileSync(path.join(serverDir, 'scripts', 'apply-migrations.sh'), 'utf8')
+      : cmd;
+    // Comments explain the commands that must not RUN, so only executable lines are judged.
+    const runnable = body.split('\n').filter((l) => !l.trim().startsWith('#')).join('\n');
+    for (const destructive of ['migrate dev', 'migrate reset', 'db push', '--force-reset', 'DROP DATABASE']) {
+      expect(runnable).not.toContain(destructive);
+    }
   });
 
   it('keeps migrate dev behind the guard', () => {
