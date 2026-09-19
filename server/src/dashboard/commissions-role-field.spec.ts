@@ -31,12 +31,30 @@ const ROLLBACK = '__rollback__';
 
 afterAll(async () => { await prisma.$disconnect(); });
 
+/**
+ * Q-1. READ COMMITTED — Postgres's default, and Prisma's — takes a FRESH snapshot for every
+ * statement, so two aggregates read one after the other inside the same transaction can disagree
+ * about the same table: anything another connection commits in between is visible to the second and
+ * not the first.
+ *
+ * That is not hypothetical here. Fifteen spec files in this repository write to the shared test
+ * database WITHOUT a rollback wrapper, and the suite runs them in parallel workers — so while this
+ * test reads the commission figures twice and compares them for equality, another worker may commit
+ * a deal between the two reads. The test then fails with two objects that differ by a few hundred
+ * dollars, names no cause, and passes when run alone.
+ *
+ * REPEATABLE READ pins one snapshot for the whole transaction, so every read inside it sees the
+ * same database. It does not hide a real defect: a genuine disagreement between the two code paths
+ * still fails, because both now read identical data. This is the narrow fix — the alternative,
+ * scoping the aggregate to this test's own fixtures, is not available while the endpoint under test
+ * deliberately sums the whole table.
+ */
 async function inRollback(fn: (tx: PrismaService) => Promise<void>) {
   try {
     await prisma.$transaction(async (tx) => {
       await fn(tx as unknown as PrismaService);
       throw new Error(ROLLBACK);
-    }, { timeout: 60000 });
+    }, { timeout: 60000, isolationLevel: 'RepeatableRead' });
   } catch (e) {
     if (!String((e as Error).message).includes(ROLLBACK)) throw e;
   }

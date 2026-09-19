@@ -390,6 +390,30 @@ describe('CHAIN — Lead Welcome: new lead -> trigger -> master switch -> send -
       await setMasterSwitch(tx, true);
       await setTrigger(tx, agent.id!, 'welcome', true);
       const now = new Date();
+
+      /*
+       * Q-1. THE FIXTURE IS MADE THE ONLY ELIGIBLE SET, BEFORE EVERY PASS.
+       *
+       * `sweep()` selects `FROM leads WHERE created_at >= $1 ... ORDER BY l.id LIMIT 100` and is
+       * NOT scoped to an owner — the comment below already says so. Every un-welcomed lead created
+       * in the last 24 hours competes for the same 100-slot budget, including rows this test did
+       * not create: seeded fixtures, and whatever the fifteen spec files that write to this
+       * database WITHOUT a rollback wrapper have committed. They win slots, the fixture needs more
+       * passes, and `passes <= 5` fails on somebody else's rows.
+       *
+       * DOING THIS ONCE BEFORE THE LOOP WAS NOT ENOUGH, which is worth recording: those fifteen
+       * files keep committing WHILE this test sweeps, so rows that did not exist at the start
+       * appear inside the window between passes. It is repeated before each pass instead, scoped
+       * by owner so it can only ever move rows this test did not create. Everything rolls back.
+       */
+      const clearTheField = () => tx.$executeRawUnsafe(
+        `UPDATE leads SET created_at = now() - interval '30 days'
+          WHERE created_at >= now() - interval '24 hours'
+            AND (owner_user_id IS NULL OR owner_user_id <> $1)`,
+        agent.id!,
+      );
+      await clearTheField();
+
       await tx.leads.createMany({
         data: Array.from({ length: 250 }, (_, i) => ({
           name: `Vol ${i}`, email: `vol-${tag()}-${i}@example.test`,
@@ -418,6 +442,8 @@ describe('CHAIN — Lead Welcome: new lead -> trigger -> master switch -> send -
       let passes = 0;
       while (mine(t).length < 250 && passes < PASS_CAP) {
         const before = mine(t).length;
+        // Anything committed by another worker since the last pass is moved out of the window too.
+        await clearTheField();
         await svc.sweep(new Date());
         passes += 1;
         if (mine(t).length === before) break;   // a pass that achieves nothing will not achieve it later

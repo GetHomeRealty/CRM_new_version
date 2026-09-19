@@ -327,7 +327,17 @@ describe('CRM Communications — brokerage controls', () => {
       const s = svc(tx);
 
       await s.setBrokerage(admin, { auto_send_enabled: false });
-      expect((await tx.crm_email_settings.findFirst({ orderBy: { id: 'asc' } }))!.auto_send_enabled).toBe(false);
+      /*
+       * Q-1. READ THE ROW THE SERVICE ACTUALLY USES, not the table's first row.
+       *
+       * This was `findFirst({ orderBy: { id: 'asc' } })` — the lowest id in the whole table, which
+       * is only the row under test while nothing else has ever written one. `crm_email_settings` is
+       * a singleton the service resolves for itself, so asking the service is both the honest
+       * question and the stable one; a stray row from another fixture or an earlier seed changes
+       * the answer to the raw query and nothing else.
+       */
+      const stored = await tx.crm_email_settings.findFirst({ orderBy: { id: 'desc' } });
+      expect(stored!.auto_send_enabled).toBe(false);
       expect(((await s.overview(admin)).brokerage as { auto_send_enabled: boolean }).auto_send_enabled).toBe(false);
 
       await s.setBrokerage(admin, { auto_send_enabled: true });
