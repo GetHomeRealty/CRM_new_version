@@ -105,6 +105,11 @@ npm ci
 cp .env.example .env            # set DATABASE_URL, APP_KEY, SESSION_SECRET, TZ
 npm run prisma:generate
 npm run prisma:deploy
+
+#   ^ applies pending migrations AS THE DATABASE OWNER. The application's own user may read
+#     and write rows but does not own the tables, so Prisma's `migrate deploy` fails with
+#     "must be owner of table ..." AND records that failure, which blocks every later
+#     migrate until it is cleared. This clears that, applies each one, and records it (TD-200).
 cd ../client
 npm ci
 ```

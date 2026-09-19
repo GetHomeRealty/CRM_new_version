@@ -43,7 +43,11 @@ if ! printf '%s' "$MIGRATE_STATUS" | grep -q "Database schema is up to date"; th
   echo "!! THE DATABASE IS NOT UP TO DATE WITH prisma/migrations - refusing to deploy."
   printf '%s\n' "$MIGRATE_STATUS" | tail -20
   echo "!!"
-  echo "!! Apply them as the OWNER, not as the application user (TD-200):"
+  echo "!! Apply them with (TD-200 - the app user does not own the tables):"
+  echo "!!   cd server && npm run db:migrate"
+  echo "!!"
+  echo "!! That script clears a blocked attempt, applies each one as the owner, and records it."
+  echo "!! The long way, if you prefer to see each step:"
   echo "!!   sudo -u postgres psql -d myapp -f prisma/migrations/<the-one>/migration.sql"
   echo "!!   npx prisma migrate resolve --applied \"<the-one>\""
   echo "!! Then run this deploy again."
