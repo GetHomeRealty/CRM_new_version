@@ -1,0 +1,13 @@
+[Unit]
+Description=Run the Transaction Desk health checks every five minutes (O-1)
+
+[Timer]
+OnCalendar=*:0/5
+# If the machine was off when a run was due, do it on the way back up rather than waiting.
+Persistent=true
+# Stagger slightly so a restart does not fire every timer at the same second.
+RandomizedDelaySec=20
+Unit=ghr-monitor.service
+
+[Install]
+WantedBy=timers.target

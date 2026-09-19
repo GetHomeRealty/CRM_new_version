@@ -1,0 +1,15 @@
+[Unit]
+Description=Transaction Desk health checks (O-1)
+After=network-online.target postgresql.service
+Documentation=file:///www/wwwroot/crm_node/server/scripts/monitor.mjs
+
+[Service]
+Type=oneshot
+# The working directory matters twice: dotenv reads .env from it, and `-r dotenv/config` resolves
+# the dotenv module out of this folder's node_modules.
+WorkingDirectory=/www/wwwroot/crm_node/server
+ExecStart=/usr/bin/node -r dotenv/config scripts/monitor.mjs --once --backup /var/backups/ghr
+# root because the worker check asks pm2, whose daemon here belongs to root.
+User=root
+# A check that hangs must not pile up behind the next one.
+TimeoutStartSec=90

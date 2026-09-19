@@ -37,6 +37,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { execFileSync } from 'node:child_process';
 
+const WORKER_NAME = 'crm-worker';
 const arg = (n, d) => { const i = process.argv.indexOf(`--${n}`); return i > -1 && process.argv[i + 1] ? process.argv[i + 1] : d; };
 const has = (n) => process.argv.includes(`--${n}`);
 
@@ -56,7 +57,13 @@ const TIMEOUT_MS = 10_000;
 
 async function get(path) {
   const ctl = AbortSignal.timeout(TIMEOUT_MS);
-  const res = await fetch(URL_BASE + path, { signal: ctl });
+  // The detailed endpoints - metrics and workers - are behind MetricsAccessGuard, which accepts a
+  // shared secret in this header so an unattended check never needs a session. Without it those
+  // endpoints answer politely and the four checks that read them report "not reported" forever,
+  // which reads like health and is not. Anonymous when no token is configured, exactly as before.
+  const token = (process.env.METRICS_TOKEN ?? '').trim();
+  const headers = token ? { 'x-metrics-token': token } : undefined;
+  const res = await fetch(URL_BASE + path, { signal: ctl, headers });
   const body = await res.text();
   return { status: res.status, body };
 }
@@ -100,22 +107,45 @@ async function checkLatency() {
 async function checkBackup() {
   const hb = join(BACKUP_DIR, 'last-success.json');
   if (!existsSync(hb)) return { ok: false, detail: `no backup has ever succeeded at ${BACKUP_DIR}` };
-  const { finished_at, set } = JSON.parse(readFileSync(hb, 'utf8'));
+  // TWO WRITERS, TWO SPELLINGS. This was written for a Windows backup that records `finished_at`
+  // and `set`; the Linux timer on this server records `last_success` and `file`. Read either rather
+  // than making the proven nightly job change shape for the checker that had never run.
+  const hb_json = JSON.parse(readFileSync(hb, 'utf8'));
+  const finished_at = hb_json.finished_at ?? hb_json.last_success;
+  const set = hb_json.set ?? hb_json.file ?? 'backup';
   const hours = (Date.now() - new Date(finished_at).getTime()) / 3.6e6;
+  if (!finished_at || Number.isNaN(hours)) {
+    return { ok: false, detail: `${hb} carries no completion time this understands` };
+  }
   // Staleness, not errors: a nightly job that stops running produces no error to detect. Whether it
   // failed, never fired, or the machine was off, the symptom is the same and so is the fix.
   return { ok: hours <= 25, detail: `last set ${set}, ${hours.toFixed(1)}h ago (limit 25h)` };
 }
 
 async function checkDisk() {
-  if (process.platform !== 'win32') return { ok: true, detail: 'skipped (not Windows)' };
-  const drive = BACKUP_DIR.slice(0, 2);
-  const out = execFileSync('powershell', ['-NoProfile', '-Command',
-    `(Get-PSDrive ${drive[0]} -ErrorAction Stop | Select-Object -First 1).Free`], { encoding: 'utf8', timeout: TIMEOUT_MS });
-  const freeGb = Number(out.trim()) / 1024 ** 3;
+  // BOTH PLATFORMS. This answered "skipped (not Windows)" on a Linux server and counted as OK -
+  // a check that cannot fail, printing a word that reads like health. That is the exact failure a
+  // monitor exists to prevent, and it sat in the monitor itself.
+  let freeGb;
+  let where;
+  if (process.platform === 'win32') {
+    const drive = BACKUP_DIR.slice(0, 2);
+    const out = execFileSync('powershell', ['-NoProfile', '-Command',
+      `(Get-PSDrive ${drive[0]} -ErrorAction Stop | Select-Object -First 1).Free`], { encoding: 'utf8', timeout: TIMEOUT_MS });
+    freeGb = Number(out.trim()) / 1024 ** 3;
+    where = drive;
+  } else {
+    // -P keeps one filesystem per line however long the device name is; -k is KiB blocks. Column 4
+    // is what is AVAILABLE, which is not the same as unused: root-reserved space is not yours.
+    const out = execFileSync('df', ['-Pk', BACKUP_DIR], { encoding: 'utf8', timeout: TIMEOUT_MS });
+    const cols = out.trim().split('\n').pop().split(/\s+/);
+    freeGb = Number(cols[3]) / 1024 ** 2;
+    where = cols[5] ?? BACKUP_DIR;
+  }
+  if (!Number.isFinite(freeGb)) return { ok: false, detail: `could not read free space for ${BACKUP_DIR}` };
   // Backups are the first thing to fail when a disk fills, and they fail by writing a truncated
   // dump rather than by refusing — which is worse than not running at all.
-  return { ok: freeGb >= 5, detail: `${freeGb.toFixed(1)} GB free on ${drive} (limit 5 GB)` };
+  return { ok: freeGb >= 5, detail: `${freeGb.toFixed(1)} GB free on ${where} (limit 5 GB)` };
 }
 
 // ── background work ──────────────────────────────────────────────────────────────────────────────
@@ -132,7 +162,10 @@ async function workers() {
 async function checkSchedulers() {
   const w = await workers();
   const list = w.schedulers ?? [];
-  if (!list.length) return { ok: true, detail: 'no schedulers armed on this process (RUN_SCHEDULERS off?)' };
+  // This asks whichever process answers HTTP, and on this deployment that is the API, which runs
+  // none by design - the sweeps live in the worker, which serves no HTTP and cannot be asked.
+  // checkWorker below covers that instead; saying so here stops the empty list reading as a fault.
+  if (!list.length) return { ok: true, detail: 'none on the API process, by design - the worker is checked separately' };
   const bad = list.filter((s) => !s.healthy);
   return {
     ok: bad.length === 0,
@@ -185,6 +218,32 @@ async function checkMailSync() {
   };
 }
 
+/**
+ * IS THE WORKER ALIVE? Nothing else asks.
+ *
+ * Every reminder this brokerage sends - closing dates, lawyer details, listing expiry - is swept by
+ * the crm-worker process. It serves no HTTP, so no endpoint can be asked about it, and if it dies
+ * the website stays perfect while every reminder silently stops. That is precisely the shape of
+ * failure this whole script exists for, and it was the one thing it could not see.
+ *
+ * Through pm2 rather than the database, keeping rule 1 at the top of this file: a monitor must not
+ * depend on what it monitors. Fails OPEN when pm2 is not present, because a machine without pm2 is
+ * a different deployment, not a broken one.
+ */
+async function checkWorker() {
+  let apps;
+  try {
+    apps = JSON.parse(execFileSync('pm2', ['jlist'], { encoding: 'utf8', timeout: TIMEOUT_MS }));
+  } catch (e) {
+    return { ok: true, detail: `pm2 not reachable here (${String(e.message).slice(0, 40)})` };
+  }
+  const w = apps.find((a) => a.name === WORKER_NAME);
+  if (!w) return { ok: false, detail: `${WORKER_NAME} is not registered with pm2 - reminders are not being swept` };
+  const status = w.pm2_env?.status ?? 'unknown';
+  const hours = Math.round((Date.now() - (w.pm2_env?.pm_uptime ?? Date.now())) / 3.6e6);
+  return { ok: status === 'online', detail: `${WORKER_NAME} ${status}, up ${hours}h, ${w.pm2_env?.restart_time ?? 0} restarts` };
+}
+
 async function checkResources() {
   const p = (await workers()).process;
   if (!p) return { ok: true, detail: 'not reported' };
@@ -192,7 +251,11 @@ async function checkResources() {
   // Thresholds are deliberately loose: this is for a trend that has become a problem, not for a
   // busy minute. Node's default heap ceiling is around 1.5-4 GB depending on build.
   if (p.rss_mb > RSS_MB) problems.push(`memory ${p.rss_mb} MB (limit ${RSS_MB})`);
-  if (p.cpu_percent_avg > CPU_PCT) problems.push(`sustained CPU ${p.cpu_percent_avg}% of one core (limit ${CPU_PCT})`);
+  // NOT IN THE FIRST FIVE MINUTES. Measured seconds after a restart this read 166% of a core and
+  // alerted, while the settled figure was 3%: start-up work dominates the average until there is
+  // some running to average against. Left alone, every deploy would raise an alarm and clear it,
+  // which is how people learn to ignore alarms. Same idea as the 20-request floor above.
+  if (p.uptime_s > 300 && p.cpu_percent_avg > CPU_PCT) problems.push(`sustained CPU ${p.cpu_percent_avg}% of one core (limit ${CPU_PCT})`);
   // Lag is measured on a single sample, so only a large value is meaningful — but a large value
   // means the event loop is blocked, which is every user seeing the whole app freeze at once.
   if (p.event_loop_lag_ms > 250) problems.push(`event loop blocked ${p.event_loop_lag_ms} ms`);
@@ -214,6 +277,7 @@ const CHECKS = {
   audit:      checkAudit,
   mail_sync:  checkMailSync,
   backup:     checkBackup,
+  worker:     checkWorker,
   disk:       checkDisk,
 };
 
