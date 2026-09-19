@@ -34,6 +34,11 @@ module.exports = {
 
       env: {
         NODE_ENV: 'production',
+        // S-1. Stated separately from NODE_ENV on purpose: two signals that must agree, so that a
+        // copied .env alone does not make another machine believe it is the live system. Both this
+        // app and crm-worker declare it, and `validate-config.ts` refuses to boot production
+        // without it rather than starting unable to send mail.
+        APP_ENV: 'production',
         TZ: 'America/Toronto',
         PORT: '8000',
         RUN_SCHEDULERS: 'false',
@@ -63,6 +68,9 @@ module.exports = {
 
       env: {
         NODE_ENV: 'production',
+        // As crm-api. The worker is the process that OWNS the sweeps, so it is the one where a
+        // wrong identity would email real clients on a timer — see `common/schedulers.ts`.
+        APP_ENV: 'production',
         TZ: 'America/Toronto',
         PORT: '8001',
         RUN_SCHEDULERS: 'true',
