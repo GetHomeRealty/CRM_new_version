@@ -2,6 +2,7 @@ import { AREAS, type Area } from '../common/domain';
 import { ModuleAccessService } from '../core/module-access.service';
 import { Inject, Injectable, Logger, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
 import { PasswordHashService } from '../auth/password-hash.service';
+import { passwordPolicyProblem } from '../auth/password-policy';
 import { Prisma, type users, type user_permissions, type user_modules } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { PermissionService, LEVELS, ROLES, SCREENS } from '../auth/permission.service';
@@ -459,11 +460,10 @@ export class UsersService {
       else if ([...String(val('email'))].length > 255) push('email', 'The email field must not be greater than 255 characters.');
     }
 
-    // password: (required on create / nullable on update)|confirmed|min:8
+    // password: (required on create / nullable on update)|confirmed|policy
     if (empty(val('password'))) { if (uReq) push('password', 'The password field is required.'); }
     else {
       if (body.password_confirmation !== val('password')) push('password', 'The password field confirmation does not match.');
-      if ([...String(val('password'))].length < 8) push('password', 'The password field must be at least 8 characters.');
       /*
        * A CEILING, because bcrypt silently ignores everything past 72 bytes.
        *
@@ -476,6 +476,14 @@ export class UsersService {
         push('password', `The password field must not be longer than ${PASSWORD_MAX_BYTES} bytes — `
           + 'anything beyond that is ignored by the password hash, so it would not protect the account.');
       }
+      /*
+       * The shared rule, not a local minimum. This said eight characters, which accepted
+       * `Admin@123` on a Super Admin account — see `password-policy.ts` for what replaced it and
+       * why. An administrator setting a colleague's password is held to exactly what that
+       * colleague would be held to when changing it themselves.
+       */
+      const problem = passwordPolicyProblem(val('password'));
+      if (problem) push('password', problem);
     }
 
     // role: required|in:ROLES

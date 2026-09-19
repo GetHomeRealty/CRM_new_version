@@ -4,6 +4,7 @@ import * as crypto from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { MailerService } from '../email/mailer.service';
 import { PasswordHashService } from './password-hash.service';
+import { passwordPolicyProblem } from './password-policy';
 import { throwValidation } from '../common/laravel-exceptions';
 
 /**
@@ -262,10 +263,12 @@ export class PasswordResetService {
      * administrator's form already gives, so all three routes now agree in rule and in wording.
      * Deliberately here rather than on ResetPasswordDto: form validation runs first, and its
      * default wording would replace this message with the framework's own.
+     *
+     * SINCE THEN the rule itself moved to `password-policy.ts` and the eight became twelve plus a
+     * denylist — `Admin@123` cleared all three of those eight-character rules. Agreeing in wording
+     * was never going to be enough while the sentence was written out four times; this route now
+     * asks the one rule, as the other three do.
      */
-    if ([...String(password ?? '')].length < 8) {
-      throwValidation({ password: ['The password field must be at least 8 characters.'] });
-    }
     if (!this.passwords.fits(password)) {
       throwValidation({
         password: [
@@ -273,6 +276,10 @@ export class PasswordResetService {
           + 'anything past that is ignored when it is stored, so it would not really be part of your password.',
         ],
       });
+    }
+    const problem = passwordPolicyProblem(password);
+    if (problem) {
+      throwValidation({ password: [problem] });
     }
 
     await this.prisma.users.update({

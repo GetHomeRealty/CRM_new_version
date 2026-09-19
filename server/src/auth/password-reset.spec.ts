@@ -264,21 +264,23 @@ describe('spending the link', () => {
    * one-character password while the two other routes that set one required eight.
    * BOTH DIRECTIONS ARE ASSERTED ON PURPOSE: a rule that refused everything would satisfy a test
    * that only checks the refusal, and that is the way a length check is usually got wrong.
+   * The eight became twelve when the rule moved to `password-policy.ts` — see that file for why
+   * eight was not enough. The shape of this test is unchanged.
    */
-  it('refuses a password shorter than eight characters', async () => {
+  it('refuses a password shorter than the minimum', async () => {
     const token = PasswordResetService.newToken();
     const h = harness({ row: fresh(token) });
-    await expect(h.svc.reset('aswini@example.test', token, 'short7c', 'short7c', h.endSessions)).rejects.toThrow();
+    await expect(h.svc.reset('aswini@example.test', token, 'short11chr', 'short11chr', h.endSessions)).rejects.toThrow();
     expect(h.updates).toEqual([]);
     // The token is NOT spent by a refusal, so the person can try again with a longer one rather
     // than having to request a second link.
     expect(h.deletes).toEqual([]);
   });
 
-  it('accepts exactly eight characters, so the rule is a minimum and not a wall', async () => {
+  it('accepts exactly the minimum, so the rule is a minimum and not a wall', async () => {
     const token = PasswordResetService.newToken();
     const h = harness({ row: fresh(token) });
-    const r = await h.svc.reset('aswini@example.test', token, 'eight8ch', 'eight8ch', h.endSessions);
+    const r = await h.svc.reset('aswini@example.test', token, 'kettlerowan9', 'kettlerowan9', h.endSessions);
     expect(r.message).toMatch(/has been reset/i);
     expect(h.updates).toHaveLength(1);
   });
@@ -286,7 +288,7 @@ describe('spending the link', () => {
   it('refuses a mismatched confirmation', async () => {
     const token = PasswordResetService.newToken();
     const h = harness({ row: fresh(token) });
-    await expect(h.svc.reset('aswini@example.test', token, 'one-password', 'another-password', h.endSessions)).rejects.toThrow();
+    await expect(h.svc.reset('aswini@example.test', token, 'kettle rowan nine', 'harbour thimble rowan', h.endSessions)).rejects.toThrow();
     expect(h.updates).toEqual([]);
   });
 

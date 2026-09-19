@@ -86,6 +86,17 @@ export default function ResetPassword() {
               Confirm new password
               <PasswordInput name="password_confirmation" value={confirmation} onChange={(e: ChangeEvent<HTMLInputElement>) => setConfirmation(e.target.value)} />
             </label>
+            {/*
+              * Stated before the attempt, not after it. Whoever is on this screen is already
+              * locked out, and the rule refuses most of what people reach for first — meeting it
+              * as a red error after typing a password twice is the worst moment to learn it.
+              * Matches `server/src/auth/password-policy.ts`; the two move together.
+              */}
+            <p className="muted">
+              At least 12 characters. A short phrase of a few unrelated words is both stronger and
+              easier to remember than a word with a number after it. Avoid common passwords and the
+              company name.
+            </p>
             <button type="submit" disabled={submitting}>
               {submitting ? 'Saving…' : 'Set new password'}
             </button>
