@@ -12,7 +12,9 @@ export class InvoiceCalculator {
   async recalculate(db: Tx, invoiceId: number, taxRate: number): Promise<void> {
     const inv = await db.invoices.findUnique({
       where: { id: invoiceId },
-      include: { invoice_line_items: true, invoice_payments: true },
+      // A payment in the Recycle Bin is not money received, so the totals leave it out. It comes
+      // back into them the moment it is restored, because this recomputes from the live rows.
+      include: { invoice_line_items: true, invoice_payments: { where: { deleted_at: null } } },
     });
     if (!inv) return;
 

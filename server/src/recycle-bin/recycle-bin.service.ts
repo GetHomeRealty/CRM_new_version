@@ -1,4 +1,4 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
 import { promises as fs } from 'fs';
 import * as path from 'path';
 import { PrismaService } from '../prisma/prisma.service';
@@ -176,11 +176,26 @@ export class RecycleBinService {
     return { count: items.length, items };
   }
 
+  /*
+   * A DOCUMENT CANNOT COME BACK BEFORE THE DEAL IT BELONGS TO.
+   *
+   * Restoring one whose transaction is also in the bin used to succeed and hide it in both places:
+   * no longer deleted, so it left this screen, and its deal still deleted, so there was nowhere to
+   * open it. Nothing said so — the restore even skipped its own audit entry, because that is
+   * written against a live transaction.
+   *
+   * Restoring the DEAL brings its documents back with it, so nothing is lost by refusing here; the
+   * message names that as the action that works.
+   */
   async restoreDocument(user: Actor, id: number): Promise<{ message: string }> {
     this.guard(user);
     const d = await this.onlyTrashed('documents', id, 'Document');
+    const txn = await this.prisma.transactions.findUnique({ where: { id: d.transaction_id } });
+    if (txn && txn.deleted_at !== null) {
+      const m = `Trade #${txn.trade_no} is in the Recycle Bin, so “${d.title}” cannot be restored on its own — it would be hidden on a deleted deal. Restore the transaction and its documents come back with it.`;
+      throw new UnprocessableEntityException({ message: m, errors: { id: [m] } });
+    }
     await this.prisma.documents.update({ where: { id }, data: { deleted_at: null } });
-    const txn = await this.prisma.transactions.findFirst({ where: { id: d.transaction_id, deleted_at: null } });
     if (txn) {
       await this.audit.record(txn.id, this.actingUser(user), {
         section: 'Legal & Documents', field: d.title, action: 'Document restored', source: 'Manual',
@@ -275,9 +290,15 @@ export class RecycleBinService {
     return { count: items.length, items };
   }
 
+  /** Same rule as a document: a payment cannot come back onto an invoice that is itself deleted. */
   async restorePayment(user: Actor, id: number): Promise<{ message: string }> {
     this.guard(user);
     const p = await this.onlyTrashed('invoice_payments', id, 'InvoicePayment');
+    const invoice = p.invoice_id ? await this.prisma.invoices.findUnique({ where: { id: p.invoice_id } }) : null;
+    if (invoice && invoice.deleted_at !== null) {
+      const m = `Invoice ${invoice.invoice_no} is in the Recycle Bin, so this payment cannot be restored on its own — its totals would not be recalculated. Restore the invoice first, then the payment.`;
+      throw new UnprocessableEntityException({ message: m, errors: { id: [m] } });
+    }
     await this.prisma.invoice_payments.update({ where: { id }, data: { deleted_at: null } });
     await this.recalcInvoice(p.invoice_id);
     await this.logAction(user, `Payment #${p.id}`, 'Payment restored');
@@ -396,6 +417,24 @@ export class RecycleBinService {
     const obj = (v: unknown): Record<string, unknown> => v as Record<string, unknown>;
     const arr = (v: unknown): unknown[] => v as unknown[];
 
+    /*
+     * A ROW ALREADY BACK ON THE DEAL IS NOT RESTORED TWICE.
+     *
+     * The restore appended blindly, so re-entering a deleted payment by hand and then restoring it
+     * here — or two people restoring the same entry — put the SAME commission or adjustment on the
+     * transaction twice, and each copy is money in a total. Identical content is the test, which is
+     * what a person comparing the two rows on screen would also call a duplicate.
+     */
+    const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
+    const refuseDuplicate = (): never => {
+      const m = `“${r.label ?? KIND_LABELS[r.kind] ?? 'That row'}” is already on this transaction, so restoring it would enter it twice. Delete this bin entry if it is no longer needed.`;
+      throw new UnprocessableEntityException({ message: m, errors: { id: [m] } });
+    };
+    const pushUnique = (list: unknown[], entry: unknown): void => {
+      if (list.some((x) => same(x, entry))) refuseDuplicate();
+      list.push(entry);
+    };
+
     switch (r.kind) {
       case 'agent_payment':
       case 'cta': {
@@ -405,27 +444,29 @@ export class RecycleBinService {
           const term = (obj(ta)[r.term] ??= {}) as Record<string, unknown>;
           const agents = (obj(term).agents ??= {}) as Record<string, unknown>;
           const agent = (obj(agents)[r.agent as string] ??= {}) as Record<string, unknown>;
-          (arr(obj(agent)[key] ??= []) as unknown[]).push(row);
+          pushUnique(arr(obj(agent)[key] ??= []) as unknown[], row);
         } else {
           const agents = (obj(data).agents ??= {}) as Record<string, unknown>;
           const agent = (obj(agents)[r.agent as string] ??= {}) as Record<string, unknown>;
-          (arr(obj(agent)[key] ??= []) as unknown[]).push(row);
+          pushUnique(arr(obj(agent)[key] ??= []) as unknown[], row);
         }
         break;
       }
       case 'adjustment_row':
+        pushUnique(arr(obj(data).adjustment_rows ??= []) as unknown[], row);
         obj(data).agent_adjust = 'Yes';
-        (arr(obj(data).adjustment_rows ??= []) as unknown[]).push(row);
         break;
       case 'advance_row':
+        pushUnique(arr(obj(data).advance_rows ??= []) as unknown[], row);
         obj(data).advance_payment = 'Yes';
-        (arr(obj(data).advance_rows ??= []) as unknown[]).push(row);
         break;
       case 'client_row':
+        pushUnique(arr(obj(data).client_rows ??= []) as unknown[], row);
         obj(data).client_referral = 'Yes';
-        (arr(obj(data).client_rows ??= []) as unknown[]).push(row);
         break;
       case 'ext_referral':
+        // One external referral per deal, so a stored one that already matches is the duplicate.
+        if (same(obj(data).ext, row)) refuseDuplicate();
         obj(data).ext_referral = 'Yes';
         obj(data).ext = row;
         break;

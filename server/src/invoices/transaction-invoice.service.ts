@@ -266,7 +266,7 @@ export class TransactionInvoiceService {
     const invoiceNo = this.numbers.forTransaction(t.trade_no, termNo, invoicePrefix) ?? (await this.numbers.next(db));
     const holder = await db.invoices.findFirst({ where: { invoice_no: invoiceNo } });
     if (holder) {
-      const held = await db.invoice_payments.count({ where: { invoice_id: holder.id } });
+      const held = await db.invoice_payments.count({ where: { invoice_id: holder.id, deleted_at: null } });
       if (holder.deleted_at === null || holder.transaction_id !== t.id
           || holder.sent_at !== null || Number(holder.amount_paid) > 0 || held > 0) {
         const m = 'Invoice ' + invoiceNo + ' is already in use and cannot be reissued for this deal.';

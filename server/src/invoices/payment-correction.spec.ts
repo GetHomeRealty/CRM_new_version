@@ -27,7 +27,9 @@ const make = (o: { payments: Pay[]; total?: number; statusBefore?: string; statu
       findFirst: async (a: { where: { id: number } }) => o.payments.find((p) => p.id === a.where.id) ?? null,
       findMany: async (a: { where: { NOT: { id: number } } }) => o.payments.filter((p) => p.id !== a.where.NOT.id),
       update: async (a: { data: Record<string, unknown> }) => { writes.push({ table: 'invoice_payments', data: a.data }); return {}; },
-      deleteMany: async () => { writes.push({ table: 'invoice_payments', data: { removed: true } }); return { count: 1 }; },
+      // Removal stamps `deleted_at` rather than erasing the row — the Recycle Bin's Payments tab
+      // is what the stamp is for, so the double records the data it was written with.
+      updateMany: async (a: { data: Record<string, unknown> }) => { writes.push({ table: 'invoice_payments', data: a.data }); return { count: 1 }; },
     },
   } as never;
   const svc = new InvoicesService(
@@ -140,6 +142,8 @@ describe('removing a recorded payment (TD-172)', () => {
     const { svc, writes, audits } = make({ payments: [CASH], statusAfter: 'Unpaid', received: { date: CASH.paid_on, via: 'Cash' } });
     await expect(svc.deletePayment(null, 1, 15)).resolves.toEqual({ ok: true });
     expect(writes.map((x) => x.table)).toEqual(['invoice_payments', 'invoices']);
+    // Recoverable: the row is stamped deleted, not erased, so it reaches the Recycle Bin.
+    expect(writes[0].data.deleted_at).toBeInstanceOf(Date);
     expect(audits[0]).toMatchObject({ action: 'Payment removed' });
     expect(String(audits[0]?.old)).toContain('1,000.00 (Cash) on');
     expect(String(audits[0]?.details)).toContain('cleared');

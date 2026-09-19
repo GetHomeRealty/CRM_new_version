@@ -163,7 +163,7 @@ export class InvoicesService {
       include: {
         customers: true,
         invoice_line_items: { orderBy: { row_no: 'asc' } },
-        invoice_payments: { orderBy: { paid_on: 'asc' } },
+        invoice_payments: { where: { deleted_at: null }, orderBy: { paid_on: 'asc' } },
         transactions: { include: { brokerages: { include: { brokerage_agents: { orderBy: { position: 'asc' } } } } } },
       },
     });
@@ -355,7 +355,7 @@ export class InvoicesService {
     // TD-162 - a payment recorded against an invoice stops it being voided as well as deleted.
     // Beside TD-021 because both are status refusals that name the action which does work.
     if (String(body.status ?? '') === 'Void') {
-      const paidRows = await this.prisma.invoice_payments.count({ where: { invoice_id: id } });
+      const paidRows = await this.prisma.invoice_payments.count({ where: { invoice_id: id, deleted_at: null } });
       if (paidRows > 0 || num(invoice.amount_paid) > 0) {
         const m = 'This invoice has a payment recorded against it, so it cannot be voided. If the payment was entered in error, Accounting or a Super Admin can remove it first.';
         throw new UnprocessableEntityException({ message: m, errors: { status: [m] } });
@@ -402,7 +402,7 @@ export class InvoicesService {
      *
      * It is also what makes TD-161 safe - a deleted invoice can now never have been sent or paid.
      */
-    const paidRows = await this.prisma.invoice_payments.count({ where: { invoice_id: id } });
+    const paidRows = await this.prisma.invoice_payments.count({ where: { invoice_id: id, deleted_at: null } });
     if (paidRows > 0 || Number(invoice.amount_paid) > 0) {
       const m = 'This invoice has a payment recorded against it, so it cannot be deleted or voided. If the payment was entered in error, Accounting or a Super Admin can remove it first.';
       throw new UnprocessableEntityException({ message: m, errors: { id: [m] } });
@@ -463,10 +463,24 @@ export class InvoicesService {
     // Read the row BEFORE it goes, so the history can say what was removed. 'Payment recorded'
     // writes the figure and the method, and since TD-162 removing a payment is the only way past
     // the delete and void guards - so this is the entry a reader most needs to be complete.
-    const gone = await this.prisma.invoice_payments.findFirst({ where: { id: paymentId, invoice_id: id }, select: { amount: true, method: true, paid_on: true, reference: true } });
+    const gone = await this.prisma.invoice_payments.findFirst({ where: { id: paymentId, invoice_id: id, deleted_at: null }, select: { amount: true, method: true, paid_on: true, reference: true } });
     // TD-172 - a payment that is not there is said so, rather than recorded in the history as removed.
     if (!gone) throw new NotFoundException({ message: 'That payment is no longer on this invoice - it may already have been removed.' });
-    await this.prisma.invoice_payments.deleteMany({ where: { id: paymentId, invoice_id: id } });
+    /*
+     * REMOVING A PAYMENT IS RECOVERABLE — it goes to the Recycle Bin, like every other deletion.
+     *
+     * This erased the row outright, so a payment entered against the wrong invoice, or removed by
+     * mistake, was gone with only an audit line describing it. The Recycle Bin has always carried a
+     * Payments tab, a restore and a permanent delete for exactly this row, and no record could ever
+     * reach it: nothing in the application soft-deleted a payment, so the list could only ever be
+     * empty. Stamping `deleted_at` is what that screen was already written to expect.
+     *
+     * Every read of these rows now excludes the stamped ones — the totals (invoice.calculator),
+     * the payments list, and both "this invoice has a payment recorded against it" guards — so a
+     * deleted payment stops counting as money received the moment it is removed, exactly as an
+     * erased row did. Restoring it puts the money back and recalculates.
+     */
+    await this.prisma.invoice_payments.updateMany({ where: { id: paymentId, invoice_id: id }, data: { deleted_at: new Date(), updated_at: new Date() } });
     const settings = await this.settings.current();
     await this.calc.recalculate(this.prisma, id, this.rate(invoice.tax_rate, settings.default_tax_rate));
     const { row: updated, cleared } = await this.clearReceivedIfUnpaid(id);
@@ -488,7 +502,7 @@ export class InvoicesService {
   async updatePayment(actor: ActingUser | null, id: number, paymentId: number, body: Record<string, unknown>): Promise<Record<string, unknown>> {
     const invoice = await this.prisma.invoices.findFirst({ where: { id, deleted_at: null } });
     if (!invoice) throw new NotFoundException({ message: `No query results for model [App\\Models\\Invoice] ${id}.` });
-    const before = await this.prisma.invoice_payments.findFirst({ where: { id: paymentId, invoice_id: id } });
+    const before = await this.prisma.invoice_payments.findFirst({ where: { id: paymentId, invoice_id: id, deleted_at: null } });
     if (!before) throw new NotFoundException({ message: 'That payment is no longer on this invoice - it may have been removed.' });
     this.requireField(body, 'paid_on');
     const paidOn = this.toDate(body.paid_on);
@@ -503,7 +517,7 @@ export class InvoicesService {
     }
     // RAISING a payment may not take the payments past the invoice total - the limit the Record Payment
     // screen applies. A correction that keeps or lowers the amount is always allowed.
-    const others = (await this.prisma.invoice_payments.findMany({ where: { invoice_id: id, NOT: { id: paymentId } }, select: { amount: true } }))
+    const others = (await this.prisma.invoice_payments.findMany({ where: { invoice_id: id, deleted_at: null, NOT: { id: paymentId } }, select: { amount: true } }))
       .reduce((sum, p) => sum + num(p.amount), 0);
     if (amount > num(before.amount) + 0.005 && others + amount > num(invoice.total) + 0.005) {
       const m = 'That would record ' + this.numberFormat(others + amount) + ' against an invoice total of '
