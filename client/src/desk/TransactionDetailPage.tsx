@@ -1295,8 +1295,8 @@ export default function TransactionDetailPage() {
           {/* Basic Info */}
           <div className="card" style={{ marginBottom: 0 }}>
             <div className="modal-h" style={{ fontSize: 14 }}>Basic Info</div>
-            <div style={{ display: 'grid', gridTemplateColumns: referral ? '1.2fr 1.6fr' : (OFFER_CLOSING_LISTING_TYPES.includes(form.type) ? '1.7fr 1.1fr 1fr 1fr' : '1.1fr 1.2fr 1.6fr'), gap: 12, marginBottom: 12 }}>
-              {!referral && (
+            <div style={{ display: 'grid', gridTemplateColumns: referral || precon ? '1.2fr 1.6fr' : (OFFER_CLOSING_LISTING_TYPES.includes(form.type) ? '1.7fr 1.1fr 1fr 1fr' : '1.1fr 1.2fr 1.6fr'), gap: 12, marginBottom: 12 }}>
+              {!referral && !precon && (
               <Field label={OFFER_CLOSING_LISTING_TYPES.includes(form.type) && form.mls_type !== 'exclusive' && !slMarkVerifiedHidden ? (
                 <span style={{ whiteSpace: 'nowrap' }}>Listing Type{' '}
                   <span role="button" onClick={(e) => { e.preventDefault(); e.stopPropagation(); if (!ro) set('mls_verified', !form.mls_verified); }}
