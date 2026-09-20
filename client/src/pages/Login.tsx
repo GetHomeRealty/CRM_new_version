@@ -4,6 +4,7 @@ import { useState, type ChangeEvent, type FormEvent } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { apiErrorMessage } from '../lib/apiError';
+import axios from 'axios';
 import MfaChallenge from './MfaChallenge';
 import { isChallenge, type MfaChallenge as MfaChallengeView } from '../lib/mfaApi';
 
@@ -15,6 +16,7 @@ export default function Login() {
   const [remember, setRemember] = useState(true);
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
+  const [credentialsInvalid, setCredentialsInvalid] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   /**
    * Set when the server answered `mfa_required`. While this is set, the password step is replaced
@@ -30,11 +32,16 @@ export default function Login() {
     ? requested
     : areaPath(DEFAULT_AREA);
 
-  const update = (e: ChangeEvent<HTMLInputElement>) => setForm({ ...form, [e.target.name]: e.target.value });
+  const update = (e: ChangeEvent<HTMLInputElement>) => {
+    setForm({ ...form, [e.target.name]: e.target.value });
+    setError('');
+    setCredentialsInvalid(false);
+  };
 
   const onSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setError('');
+    setCredentialsInvalid(false);
     setSubmitting(true);
     try {
       const outcome = await login(form.username, form.password, remember);
@@ -46,7 +53,13 @@ export default function Login() {
       }
       navigate(destination, { replace: true });
     } catch (err) {
-      setError(apiErrorMessage(err, 'Login failed. Check your credentials.'));
+      const message = apiErrorMessage(err, 'Unable to sign in. Please try again.');
+      const invalid = axios.isAxiosError(err) && (
+        err.response?.status === 401 ||
+        (err.response?.status === 422 && message === 'The provided credentials are incorrect.')
+      );
+      setCredentialsInvalid(invalid);
+      setError(invalid ? 'Incorrect email/username or password. Please try again.' : message);
     } finally {
       setSubmitting(false);
     }
@@ -85,8 +98,6 @@ export default function Login() {
                 <h1 id="login-heading" className="login-welcome-title">Welcome to<br /><span>Get Home Hub</span></h1>
               </div>
 
-              {error && <p className="error login-error" role="alert">{error}</p>}
-
               <form onSubmit={onSubmit} className="login-form">
                 <label className="login-field">
                   <span>Username or email</span>
@@ -99,6 +110,8 @@ export default function Login() {
                       onChange={update}
                       placeholder="Email address or username"
                       autoComplete="username"
+                      aria-invalid={credentialsInvalid || undefined}
+                      aria-describedby={credentialsInvalid ? 'login-error' : undefined}
                       required
                     />
                   </span>
@@ -115,12 +128,20 @@ export default function Login() {
                       onChange={update}
                       placeholder="Password"
                       autoComplete="current-password"
+                      required
+                      aria-invalid={credentialsInvalid || undefined}
+                      aria-describedby={error ? 'login-error' : undefined}
                     />
                     <button className="login-eye" type="button" onClick={() => setShowPassword(!showPassword)} aria-label={showPassword ? 'Hide password' : 'Show password'} aria-pressed={showPassword}>
                       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>{showPassword && <path d="m3 3 18 18"/>}</svg>
                     </button>
                   </span>
                 </label>
+
+                {error && <p id="login-error" className="login-inline-error" role="alert">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 6v7m0 4h.01"/></svg>
+                  <span>{error}</span>
+                </p>}
 
                 <div className="login-options">
                   <label className="login-remember">

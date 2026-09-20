@@ -231,6 +231,10 @@
 .login-page .login-heading .login-welcome-title{white-space:normal;font-size:clamp(20px,1.6vw,24px);line-height:1.2;letter-spacing:-.02em;font-weight:600}
 
 /* ---- Stub pages ---- */
+.login-page .login-input-wrap input[aria-invalid="true"]{border:2px solid #b3261e}
+.login-page .login-input-wrap input[aria-invalid="true"]:focus{outline-color:#b3261e}
+.login-page .login-inline-error{display:flex;align-items:flex-start;gap:8px;margin:2px 0 4px;color:#b3261e;font-size:13px;line-height:1.45;text-align:left}
+.login-page .login-inline-error svg{flex:0 0 18px;width:18px;height:18px;margin-top:1px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round}
 /* Use shipped fonts, not OS-specific script faces. Keep form width independent
    of viewport-relative padding (which previously collapsed it on wide screens). */
 @font-face{font-family:LoginInter;src:url('/fonts/login-inter-regular.ttf') format('truetype');font-style:normal;font-weight:400;font-display:swap}
