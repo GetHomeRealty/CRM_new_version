@@ -108,6 +108,9 @@ const listingStatuses = (type: string): string[] => {
 
 /** Statuses a transaction of this type may be given. */
 export function statusOptionsFor(type: string): string[] {
+  return [...new Set(['Conditional', 'Firm', 'Closed', 'DFT', 'Void', 'Mutual Release', ...legacyStatusOptionsFor(type)])];
+}
+function legacyStatusOptionsFor(type: string): string[] {
   if (type === 'Referral') return STATUS_REFERRAL;
   if (isListingStatusFamily(type)) return listingStatuses(type);
   if ((SECURED_DEAL_TYPES as readonly string[]).includes(type)) return STATUS_DEAL_SECURED;
@@ -140,7 +143,7 @@ export const defaultStatusFor = (type: string): string =>
  * as transacted rather than still running, and `Sold + Closed` is the ordinary end of a listing.
  * Confirmed with the brokerage 2026-08-30.
  */
-export const IN_PROGRESS_STATUSES = ['Active', 'Open', 'Sold Conditional', 'Lease Conditional', 'Secured Conditional', 'Suspended'] as const;
+export const IN_PROGRESS_STATUSES = ['Conditional', 'Active', 'Open', 'Sold Conditional', 'Lease Conditional', 'Secured Conditional', 'Suspended'] as const;
 
 export const TERMINAL_STATUSES = ['Closed', 'DFT', 'Void', 'Mutual Release', 'Terminated', 'Expired'] as const;
 
@@ -163,7 +166,7 @@ export const isTerminalStatus = (status: string): boolean =>
  * hand-written list acquires.
  */
 export const NOTIFIABLE_STATUSES = [
-  'Secured Firm', 'Sold', 'Leased', ...TERMINAL_STATUSES,
+  'Firm', 'Secured Firm', 'Sold', 'Leased', ...TERMINAL_STATUSES,
 ] as const;
 
 export const isNotifiableStatus = (status: string): boolean =>

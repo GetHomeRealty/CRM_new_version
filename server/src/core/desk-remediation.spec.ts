@@ -68,8 +68,8 @@ describe('a transaction cannot be in two contradictory end states', () => {
     expect(statusSetProblem('Residential Buying', ['Expired'])).toMatch(/is not a status/);
     // `Secured Firm` belongs to the secured deal types, not to a listing.
     expect(statusSetProblem('Residential Sale Listing', ['Secured Firm'])).toMatch(/is not a status/);
-    // Referral has the narrowest vocabulary of all.
-    expect(statusSetProblem('Referral', ['DFT'])).toMatch(/is not a status/);
+    // The unified deal lifecycle now permits DFT for referrals too.
+    expect(statusSetProblem('Referral', ['DFT'])).toBeNull();
   });
 
   it('names what is wrong, because somebody has just pressed Save', () => {

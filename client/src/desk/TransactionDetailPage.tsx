@@ -1,5 +1,6 @@
 import { deskPath } from './area';
 import Icon from '../ui/Icon';
+import { pickableStatusesFor, dealStatusLabel } from './format';
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { getTransaction, updateTransaction, listAgents, generateTransactionInvoices, getCompanySettings, getCustomers, getBrokerageSuggestions, requestTransactionEdit, approveEditRequest, rejectEditRequest, reviewAgentChanges, rejectAgentChange, requestTransactionDeletion, forwardDeleteRequest, approveDeleteRequest, rejectDeleteRequest, getDocuments, markTransactionReviewsSeen, bulkReviewAction, type OpenReviewItem } from '../lib/api';
@@ -87,7 +88,7 @@ function toForm(t: Transaction): DetailForm {
     mls_type: t.mls_type || 'mls', mls_num: t.mls_num || '', mls_verified: !!t.mls_verified,
     conditional_offer: !!t.conditional_offer, inter_board_enabled: !!t.inter_board_enabled,
     statuses: t.statuses && t.statuses.length
-      ? Array.from(new Set(t.statuses.map((s) => normalizeStatus(t.type, s))))
+      ? [...t.statuses]
       : (defaultStatusFor(t.type) ? [defaultStatusFor(t.type)] : []),
     clients: (t.clients || []).map((c) => ({ ...c, name: c.name || '' })),
     conditions: (t.conditions || []).map((c) => ({ ...c, type: c.type || '', status: c.status || 'Pending' })),
@@ -473,7 +474,7 @@ export default function TransactionDetailPage() {
   const priceLabel = isLease ? 'Total lease price' : isSaleListing ? 'Total Sale Price' : 'Total Purchase Price';
   // Lawyer Details is hidden for lease / preconstruction / referral types (legal side handled differently).
   const lawyerHidden = precon || /lease/i.test(form.type) || referral;
-  const statusOptions = statusOptionsFor(form.type);
+  const statusOptions = Array.from(new Set([...pickableStatusesFor(form.type), ...form.statuses]));
   const ro = view; // read-only flag
 
   function set<K extends keyof DetailForm>(k: K, v: DetailForm[K]) { setForm((f) => (f ? { ...f, [k]: v } : f)); }
@@ -541,7 +542,7 @@ export default function TransactionDetailPage() {
       const has = f.statuses.includes(s);
       // Any status may be selected freely (no grouping/transition restriction).
       let next = has ? f.statuses.filter((x) => x !== s) : [...f.statuses, s];
-      if (next.length === 0) { const d = defaultStatusFor(f.type); next = d ? [d] : []; }
+      if (next.length === 0) next = f.statuses;
       return { ...f, statuses: next };
     });
   };
@@ -729,7 +730,7 @@ export default function TransactionDetailPage() {
    * the send with a plain message when no deposit exists, so the failure is explained rather than
    * silent, and `listing` is the same flag the rest of this screen already branches on.
    */
-  const stSoldCond = saleListing && form.statuses.includes('Sold Conditional');
+  const stSoldCond = saleListing && (form.statuses.includes('Sold Conditional') || form.statuses.includes('Conditional'));
   const stTerminated = saleListing && form.statuses.includes('Terminated');
 
   // §5.1 — deal-side Mutual Release / Void restrict the page to Legal & Docs only
@@ -737,14 +738,14 @@ export default function TransactionDetailPage() {
   const dealSide = !isListingStatusFamily(form.type);
   const stVoid = dealSide && form.statuses.includes('Void');
   const stMutualRelease = dealSide && form.statuses.includes('Mutual Release');
-  const stSecuredFirm = form.statuses.includes('Secured Firm'); // hides Conditional Offer
+  const stSecuredFirm = form.statuses.includes('Secured Firm') || form.statuses.includes('Firm'); // hides Conditional Offer
   // Once Sold / Leased, hide the Conditional Offer section (its saved data stays
   // interlinked — e.g. Legal & Documentation condition docs remain).
   const stSoldOrLeased = form.statuses.includes('Sold') || form.statuses.includes('Leased');
   // Header doc buttons: Active hides Lawyer Statement + Notice of Sale + Trade Sheet;
   // Sold/Lease Conditional hides Lawyer Statement + Notice of Sale (Trade Sheet stays).
   const stHdrActive = form.statuses.includes('Active');
-  const stHdrConditional = form.statuses.includes('Sold Conditional') || form.statuses.includes('Lease Conditional');
+  const stHdrConditional = form.statuses.includes('Conditional') || form.statuses.includes('Sold Conditional') || form.statuses.includes('Lease Conditional');
   const hideStmtNos = stHdrActive || stHdrConditional; // Lawyer Statement + Notice of Sale
   const hideTradeSheet = stHdrActive;
   const docsOnly = stVoid || stMutualRelease;
@@ -1327,6 +1328,7 @@ export default function TransactionDetailPage() {
               </Field>
               <Field label="Status">
                 <StatusMultiSelect options={statusOptions} selected={form.statuses} disabled={ro} onToggle={toggleStatus} />
+                {form.statuses.includes('Firm') && <span className="help">Remains open until closing. Mark Closed when closing is confirmed.</span>}
               </Field>
               {OFFER_CLOSING_LISTING_TYPES.includes(form.type) && (
                 <Field label="Trade Number"><input value={form.trade_no} readOnly style={{ background: 'var(--surface-2)' }} /></Field>
@@ -1856,7 +1858,7 @@ function StatusMultiSelect({ options, selected, disabled, onToggle }: { options:
     return () => document.removeEventListener('mousedown', onDoc);
   }, [open]);
 
-  const label = selected.length ? selected.join(', ') : 'Select status';
+  const label = selected.length ? selected.map(dealStatusLabel).join(', ') : 'Select status';
 
   return (
     <div ref={ref} style={{ position: 'relative' }}>
@@ -1886,7 +1888,7 @@ function StatusMultiSelect({ options, selected, disabled, onToggle }: { options:
                   cursor: blocked ? 'not-allowed' : 'pointer', opacity: blocked ? 0.4 : 1,
                   background: on ? 'var(--brand-soft, #eef2ff)' : 'transparent' }}
               >
-                <input type="checkbox" checked={on} disabled={blocked} onChange={() => onToggle(s)} />{s}
+                <input type="checkbox" checked={on} disabled={blocked} onChange={() => onToggle(s)} />{dealStatusLabel(s)}
               </label>
             );
           })}
