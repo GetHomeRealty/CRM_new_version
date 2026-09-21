@@ -250,7 +250,7 @@ export interface AgentChange { id?: number; who?: string; section?: string; fiel
 export type MyChange = { id: number; section?: string; field?: string; action?: string; old_value?: string | null; new_value?: string | null; handled?: boolean; stamp?: string };
 export interface ConditionData { id?: number; type?: string; custom_name?: string | null; deadline?: string | null; status?: string; }
 export interface InterBoardListingData { id?: number; name?: string; board_id?: string; verified?: boolean; }
-export interface BuilderData { name?: string; vendor?: string; project?: string; address?: string; office_email?: string; invoice_email?: string; phone?: string; }
+export interface BuilderData { name?: string; vendor?: string; project?: string; lot_number?: string; city?: string; description?: string; address?: string; office_email?: string; invoice_email?: string; phone?: string; }
 /** A saved-brokerage type-ahead suggestion (GET /api/suggestions/brokerages). */
 export interface BrokerageSuggestion { name?: string; address?: string; email?: string; invoice_email?: string; phone?: string; }
 /** A saved-lawyer type-ahead suggestion (GET /api/suggestions/lawyers). */

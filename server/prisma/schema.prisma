@@ -2505,6 +2505,9 @@ model transactions {
   builder_name                String?                       @db.VarChar(255)
   builder_vendor              String?                       @db.VarChar(255)
   builder_project             String?                       @db.VarChar(255)
+  builder_lot_number          String?                       @db.VarChar(255)
+  builder_city                String?                       @db.VarChar(255)
+  builder_description         String?                       @db.Text
   builder_address             String?                       @db.VarChar(255)
   builder_office_email        String?                       @db.VarChar(255)
   builder_invoice_email       String?                       @db.VarChar(255)

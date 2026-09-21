@@ -44,7 +44,7 @@ interface ClientRow { id?: number; name: string; email?: string | null; phone?: 
 interface ConditionRow { id?: number; type: string; custom_name?: string | null; deadline?: string | null; status: string; }
 interface InterBoardRow { id?: number; name?: string; board_id?: string; verified?: boolean; }
 interface BrokerageForm { name: string; address: string; email: string; invoice_email: string; agent_email: string; phone: string; agents: string[]; }
-interface BuilderForm { name: string; vendor: string; project: string; address: string; office_email: string; invoice_email: string; phone: string; }
+interface BuilderForm { name: string; vendor: string; project: string; lot_number: string; city: string; description: string; address: string; office_email: string; invoice_email: string; phone: string; }
 interface PreconTermForm {
   /** TD-152 - carried so pressing Done cannot delete an amount entered in Financial. */
   amt?: number | null; term_no: number; pct: number | null; closing_date: string; }
@@ -105,6 +105,7 @@ function toForm(t: Transaction): DetailForm {
     commission_agent: t.commission_agent || '',
     builder: {
       name: t.builder?.name || '', vendor: t.builder?.vendor || '', project: t.builder?.project || '',
+      lot_number: t.builder?.lot_number || '', city: t.builder?.city || '', description: t.builder?.description || '',
       address: t.builder?.address || '', office_email: t.builder?.office_email || '',
       invoice_email: t.builder?.invoice_email || '', phone: t.builder?.phone || '',
     },
@@ -162,6 +163,7 @@ function buildPayload(form: DetailForm): Record<string, unknown> {
     payload.commission_agent = form.commission_agent || null;
     payload.builder = {
       name: form.builder.name || null, vendor: form.builder.vendor || null, project: form.builder.project || null,
+      lot_number: form.builder.lot_number || null, city: form.builder.city || null, description: form.builder.description || null,
       address: form.builder.address || null, office_email: form.builder.office_email || null,
       invoice_email: form.builder.invoice_email || null, phone: form.builder.phone || null,
     };
@@ -1520,8 +1522,13 @@ export default function TransactionDetailPage() {
           </div>
           <div className="g2">
             <Field label="Project Name"><input value={form.builder.project} disabled={ro} onChange={(e) => setBuilder('project', e.target.value)} /></Field>
+            <Field label="Lot Number"><input maxLength={255} value={form.builder.lot_number} disabled={ro} onChange={(e) => setBuilder('lot_number', e.target.value)} /></Field>
+          </div>
+          <div className="g2">
+            <Field label="City"><input maxLength={255} value={form.builder.city} disabled={ro} onChange={(e) => setBuilder('city', e.target.value)} /></Field>
             <Field label="Address"><input value={form.builder.address} disabled={ro} onChange={(e) => setBuilder('address', e.target.value)} /></Field>
           </div>
+          <Field label="Project Description"><textarea rows={3} maxLength={10000} value={form.builder.description} disabled={ro} onChange={(e) => setBuilder('description', e.target.value)} placeholder="Other details about the project" /></Field>
           <div className="g3">
             <Field label="Builder Office Email"><input type="email" value={form.builder.office_email} disabled={ro} onChange={(e) => setBuilder('office_email', e.target.value)} /></Field>
             <Field label="Invoice Email"><input type="email" value={form.builder.invoice_email} disabled={ro} onChange={(e) => setBuilder('invoice_email', e.target.value)} /></Field>

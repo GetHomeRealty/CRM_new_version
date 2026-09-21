@@ -1235,7 +1235,13 @@ export class TransactionsWriteService {
       }
       if (Object.prototype.hasOwnProperty.call(data, 'builder') && data.builder && typeof data.builder === 'object') {
         const b = asObject(data.builder);
-        for (const key of ['name', 'vendor', 'project', 'address', 'office_email', 'invoice_email', 'phone']) {
+        for (const key of ['name', 'vendor', 'project', 'address', 'office_email', 'invoice_email', 'phone', 'lot_number', 'city', 'description']) {
+          if (['lot_number', 'city', 'description'].includes(key)) {
+            if (!Object.prototype.hasOwnProperty.call(b, key)) continue;
+            if (b[key] !== null && (typeof b[key] !== 'string' || (b[key] as string).length > (key === 'description' ? 10000 : 255))) {
+              throw new UnprocessableEntityException(`Invalid builder ${key.replace('_', ' ')}.`);
+            }
+          }
           fill['builder_' + key] = (b[key] ?? null) as string | null;
         }
       }
