@@ -518,6 +518,18 @@ const fetchFileBlob = async (path: string, { inline = false }: { inline?: boolea
   }
   setTimeout(() => URL.revokeObjectURL(url), 60_000);
 };
+export const submitDocumentDrafts = (txnId: Id, draftIds: string[]): Promise<DocumentsResponse> =>
+  api.post<DocumentsResponse>(`/api/transactions/${txnId}/documents/submit`, { draft_ids: draftIds }).then((r) => r.data);
+export const deleteDocumentDraft = (txnId: Id, docId: Id, draftId: string): Promise<DocumentsResponse> =>
+  api.delete<DocumentsResponse>(`/api/transactions/${txnId}/documents/${docId}/drafts/${encodeURIComponent(draftId)}`).then((r) => r.data);
+export const replaceDocumentDraft = (txnId: Id, docId: Id, draftId: string, file: File): Promise<DocumentsResponse> => {
+  const form = new FormData(); form.append('file', file);
+  return api.post<DocumentsResponse>(`/api/transactions/${txnId}/documents/${docId}/drafts/${encodeURIComponent(draftId)}`, form).then((r) => r.data);
+};
+export const viewDocumentDraft = (txnId: Id, docId: Id, draftId: string): Promise<void> =>
+  fetchFileBlob(`/api/transactions/${txnId}/documents/${docId}/drafts/${encodeURIComponent(draftId)}?inline=1`, { inline: true });
+export const downloadDocumentDraft = (txnId: Id, docId: Id, draftId: string): Promise<void> =>
+  fetchFileBlob(`/api/transactions/${txnId}/documents/${docId}/drafts/${encodeURIComponent(draftId)}`);
 export const viewDocumentFile = (docId: Id): Promise<void> => fetchFileBlob(`/api/documents/${docId}/file?inline=1`, { inline: true });
 export const downloadDocumentFile = (docId: Id): Promise<void> => fetchFileBlob(`/api/documents/${docId}/file`);
 export const viewDocClientFile = (docId: Id, index: number): Promise<void> => fetchFileBlob(`/api/documents/${docId}/files/${index}?inline=1`, { inline: true });

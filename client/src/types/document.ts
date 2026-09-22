@@ -1,8 +1,10 @@
 /** A single uploaded file within a multi/per-client document. */
 export interface DeskDocFile { index: number; client_name?: string; file_name?: string; }
+export interface DeskDraftFile { id: string; client_name?: string | null; file_name: string; }
 
 /** A Legal & Documentation checklist row. */
 export interface DeskDocument {
+  draft_files?: DeskDraftFile[];
   id?: number;
   title?: string;
   status?: string;

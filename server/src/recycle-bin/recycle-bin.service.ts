@@ -214,7 +214,7 @@ export class RecycleBinService {
     return { message: 'Document permanently deleted' };
   }
 
-  private async purgeDocumentFiles(d: { file_path: string | null; validation_file_path: string | null; files: string | null }): Promise<void> {
+  private async purgeDocumentFiles(d: { file_path: string | null; validation_file_path: string | null; files: string | null; draft_files?: string | null }): Promise<void> {
     const unlink = async (p: string | null | undefined): Promise<void> => {
       if (!p) return;
       try { await fs.unlink(path.join(STORAGE_ROOT, p)); } catch { /* best-effort, matches Storage::delete swallowing */ }
@@ -222,6 +222,7 @@ export class RecycleBinService {
     await unlink(d.file_path);
     await unlink(d.validation_file_path);
     for (const f of (parseJson<{ file_path?: string }[]>(d.files) ?? [])) await unlink(f?.file_path);
+    for (const f of (parseJson<{ file_path?: string }[]>(d.draft_files) ?? [])) await unlink(f?.file_path);
   }
 
   // ---- Invoices --------------------------------------------------------

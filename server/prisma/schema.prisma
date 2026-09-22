@@ -239,6 +239,8 @@ model customers {
 }
 
 model documents {
+  /// Unsubmitted agent uploads. Kept separate so legacy/submitted files remain protected.
+  draft_files          String?      @db.Text
   id                   Int          @id @default(autoincrement())
   transaction_id       Int
   title                String       @db.VarChar(255)

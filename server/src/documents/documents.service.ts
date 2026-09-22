@@ -1,4 +1,4 @@
-import { ForbiddenException, Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
+import { ConflictException, ForbiddenException, Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
 import { NotificationDispatcher } from '../notifications/notification-dispatcher.service';
 import { promises as fs } from 'fs';
 import * as path from 'path';
@@ -39,6 +39,7 @@ export const ALLOWED_DOC_EXT = new Set([
 const MAX_DOC_BYTES = 25 * 1024 * 1024;
 type Actor = AuthUserRecord | null;
 type FileEntry = { client_name?: string | null; file_name?: string | null; file_path?: string | null };
+type DraftFile = FileEntry & { id: string; file_name: string; file_path: string };
 interface UploadedFile { originalname: string; buffer: Buffer }
 
 const isListingStatusFamily = (type: string | null): boolean => isListingType(type) || type === 'Business Sale';
@@ -132,7 +133,7 @@ export class DocumentsService {
     await this.normalizeFintracDoc(txnId);
     await this.syncConditionDocs(txn);
 
-    return this.payload(txnId);
+    return this.payload(txnId, user);
   }
 
   private async stripFormNumberPrefixes(txnId: number): Promise<void> {
@@ -220,7 +221,7 @@ export class DocumentsService {
        * with its files left in place, so it reaches the Recycle Bin like every other deletion.
        */
       const orphanFiles = (parseJson<FileEntry[]>(orphan.files) ?? []) as FileEntry[];
-      if (orphan.file_path || orphan.validation_file_path || orphanFiles.length > 0) {
+      if (orphan.file_path || orphan.validation_file_path || orphanFiles.length > 0 || this.drafts(orphan).length > 0) {
         await this.prisma.documents.update({ where: { id: orphan.id }, data: { deleted_at: new Date(), updated_at: new Date() } });
         continue;
       }
@@ -259,7 +260,7 @@ export class DocumentsService {
         await this.audit.record(txnId, this.actor(user), { section: SECTION, field: created.title, action: 'Document added' });
       }
       await this.docsValidation.sync(txnId, this.actor(user));
-      return this.payload(txnId);
+      return this.payload(txnId, user);
     }
 
     // Admin path.
@@ -365,7 +366,7 @@ export class DocumentsService {
     }
 
     await this.docsValidation.sync(txnId, this.actor(user));
-    return this.payload(txnId);
+    return this.payload(txnId, user);
   }
 
   // ---- file uploads ----
@@ -407,15 +408,7 @@ export class DocumentsService {
     this.guardValidLocked(user, document);
     this.requireFile(file);
 
-    if (isAgent(user) && document.file_path) {
-      const pos = (await this.maxPosition(txnId)) + 1;
-      const stored = await this.storeFile(txnId, file!);
-      await this.createDoc(txnId, { title: document.title, mandatory: false, status: 'Received', validation: 'Pending', position: pos, file_name: file!.originalname, file_path: stored });
-      await this.audit.record(txnId, this.actor(user), { section: SECTION, field: document.title, action: 'Document version added (previous kept)', new: file!.originalname, source: 'Agent' });
-      await this.docsValidation.sync(txnId, this.actor(user));
-      await this.notifyDealsDesk(user, txnId, document.title, file!.originalname, stored);
-      return this.payload(txnId);
-    }
+    if (isAgent(user)) return this.stageUpload(user, txnId, document, file!, null, true);
 
     if (document.file_path) await this.deleteFile(document.file_path);
     const replaced = !!document.file_path;
@@ -424,7 +417,143 @@ export class DocumentsService {
     await this.audit.record(txnId, this.actor(user), { section: SECTION, field: document.title, action: replaced ? 'Document replaced' : 'Document uploaded', new: file!.originalname, source: this.actorSource(user) });
     await this.docsValidation.sync(txnId, this.actor(user));
     await this.notifyDealsDesk(user, txnId, document.title, file!.originalname, p);
-    return this.payload(txnId);
+    return this.payload(txnId, user);
+  }
+
+  private drafts(document: DocRow): DraftFile[] {
+    return (parseJson<DraftFile[]>(document.draft_files) ?? []) as DraftFile[];
+  }
+
+  /** Compare-and-swap prevents a stale tab from deleting/replacing a newer draft or a reviewed file. */
+  private draftVersion(document: DocRow): Prisma.documentsWhereInput {
+    return { id: document.id, deleted_at: null, draft_files: document.draft_files,
+      title: document.title, is_condition: document.is_condition,
+      validation: document.validation, agent_accepted: document.agent_accepted,
+      file_path: document.file_path, files: document.files };
+  }
+
+  private async stageUpload(user: Actor, txnId: number, document: DocRow, file: UploadedFile, clientName: string | null, single: boolean, replaceId?: string): Promise<Record<string, unknown>> {
+    const kind = documentKind(document);
+    if (single !== (kind === 'single' || kind === 'condition')) throw new UnprocessableEntityException('Use the correct upload control for this document.');
+    if (kind === 'per_client') {
+      const client = clientName && await this.prisma.clients.findFirst({ where: { transaction_id: txnId, name: clientName } });
+      if (!client) throw new UnprocessableEntityException('Select a client on this transaction.');
+    }
+    const previous = this.drafts(document);
+    const replaced = previous.filter((f) => replaceId ? f.id === replaceId : single || (clientName !== null && f.client_name === clientName));
+    const stored = await this.storeFile(txnId, file);
+    const next = [...previous.filter((f) => !replaced.includes(f)), {
+      id: crypto.randomUUID(), client_name: clientName, file_name: file.originalname, file_path: stored,
+    }];
+    try {
+      const result = await this.prisma.documents.updateMany({ where: this.draftVersion(document),
+        data: { draft_files: JSON.stringify(next), updated_at: new Date() } });
+      if (result.count !== 1) throw new ConflictException('The document changed. Refresh and upload again.');
+    } catch (error) {
+      await this.deleteFile(stored);
+      throw error;
+    }
+    for (const old of replaced) await this.deleteFile(old.file_path);
+    // No received/validation change and no notification until explicit submission.
+    await this.audit.record(txnId, this.actor(user), { section: SECTION, field: document.title,
+      action: 'Draft uploaded', new: file.originalname, source: 'AgentDraft' });
+    return this.payload(txnId, user);
+  }
+
+  private async agentDraftDocument(user: Actor, txnId: number, docId: number): Promise<DocRow> {
+    if (!user || !isAgent(user)) throw new ForbiddenException('Draft uploads belong to the agent workflow.');
+    const txn = await this.txnOr404(txnId);
+    await this.guardAgent(user, txn);
+    return this.findDocForTxn(txnId, docId);
+  }
+
+  async draftFileFor(user: Actor, txnId: number, docId: number, draftId: string): Promise<{ absPath: string; name: string }> {
+    const document = await this.agentDraftDocument(user, txnId, docId);
+    const file = this.drafts(document).find((f) => f.id === draftId);
+    if (!file) throw new NotFoundException('Draft file not found.');
+    const absPath = path.join(STORAGE_ROOT, file.file_path);
+    await this.assertExists(absPath);
+    return { absPath, name: file.file_name };
+  }
+
+  async deleteDraftFile(user: Actor, txnId: number, docId: number, draftId: string): Promise<Record<string, unknown>> {
+    const document = await this.agentDraftDocument(user, txnId, docId);
+    const drafts = this.drafts(document);
+    const removed = drafts.find((f) => f.id === draftId);
+    if (!removed) throw new NotFoundException('Draft no longer exists. Refresh the document list.');
+    const next = drafts.filter((f) => f.id !== draftId);
+    const result = await this.prisma.documents.updateMany({ where: this.draftVersion(document),
+      data: { draft_files: next.length ? JSON.stringify(next) : null, updated_at: new Date() } });
+    if (result.count !== 1) throw new ConflictException('The document changed. Refresh before deleting.');
+    await this.deleteFile(removed.file_path);
+    await this.audit.record(txnId, this.actor(user), { section: SECTION, field: document.title,
+      action: 'Draft deleted', old: removed.file_name, source: 'AgentDraft' });
+    return this.payload(txnId, user);
+  }
+
+  async replaceDraftFile(user: Actor, txnId: number, docId: number, draftId: string, file: UploadedFile | undefined): Promise<Record<string, unknown>> {
+    const document = await this.agentDraftDocument(user, txnId, docId);
+    this.guardAccepted(document);
+    this.guardValidLocked(user, document);
+    this.requireFile(file);
+    const draft = this.drafts(document).find((f) => f.id === draftId);
+    if (!draft) throw new ConflictException('Draft changed or was submitted. Refresh before replacing.');
+    const kind = documentKind(document);
+    return this.stageUpload(user, txnId, document, file!, draft.client_name ?? null, kind === 'single' || kind === 'condition', draftId);
+  }
+
+  /** Only the exact draft IDs shown to the agent are submitted. A stale/repeated request cannot send twice. */
+  async submitDrafts(user: Actor, txnId: number, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+    if (!user || !isAgent(user)) throw new ForbiddenException('Only agents submit draft uploads.');
+    const txn = await this.txnOr404(txnId);
+    await this.guardAgent(user, txn);
+    if (!Array.isArray(body.draft_ids) || body.draft_ids.length > 500 || body.draft_ids.some((id) => typeof id !== 'string' || !/^[a-f0-9-]{36}$/.test(id))) {
+      throw new UnprocessableEntityException('Provide the draft files to submit.');
+    }
+    const ids = new Set(body.draft_ids as string[]);
+    if (!ids.size) return { ...await this.payload(txnId, user), submitted_count: 0 };
+    const submitted = await this.prisma.$transaction(async (tx) => {
+      const docs = await tx.documents.findMany({ where: { transaction_id: txnId, deleted_at: null, draft_files: { not: null } }, orderBy: { id: 'asc' } });
+      const found = docs.flatMap((d) => this.drafts(d).filter((f) => ids.has(f.id)));
+      if (found.length !== ids.size) throw new ConflictException('Some drafts changed or were already submitted. Refresh and review them again.');
+      const notices: { title: string; file: DraftFile }[] = [];
+      let position = (await tx.documents.aggregate({ where: { transaction_id: txnId }, _max: { position: true } }))._max.position ?? 0;
+      for (const document of docs) {
+        const drafts = this.drafts(document);
+        const selected = drafts.filter((f) => ids.has(f.id));
+        if (!selected.length) continue;
+        this.guardAccepted(document);
+        this.guardValidLocked(user, document);
+        const remaining = drafts.filter((f) => !ids.has(f.id));
+        const data: Prisma.documentsUpdateManyMutationInput = { draft_files: remaining.length ? JSON.stringify(remaining) : null, updated_at: new Date() };
+        const kind = documentKind(document);
+        if (kind === 'single' || kind === 'condition') {
+          const file = selected[0];
+          if (document.file_path) {
+            // Retain the previously submitted version, matching the existing agent replacement policy.
+            await tx.documents.create({ data: { transaction_id: txnId, title: document.title, mandatory: false,
+              status: 'Received', validation: 'Pending', position: ++position,
+              file_name: file.file_name, file_path: file.file_path, created_at: new Date(), updated_at: new Date() } });
+          } else {
+            Object.assign(data, { file_name: file.file_name, file_path: file.file_path, status: 'Received', validation: 'Pending' });
+          }
+        } else {
+          // Keep submitted versions; the client displays the most recent file for each client name.
+          const files = [...((parseJson<FileEntry[]>(document.files) ?? []) as FileEntry[]), ...selected.map(({ client_name, file_name, file_path }) => ({ client_name, file_name, file_path }))];
+          Object.assign(data, { files: JSON.stringify(files), status: await this.docStatusFromFiles(txnId, document, files), validation: 'Pending' });
+        }
+        const changed = await tx.documents.updateMany({ where: this.draftVersion(document), data });
+        if (changed.count !== 1) throw new ConflictException('A document changed during submission. Refresh and try again.');
+        for (const file of selected) notices.push({ title: document.title, file });
+      }
+      return notices;
+    });
+    await this.docsValidation.sync(txnId, this.actor(user));
+    for (const { title, file } of submitted) {
+      await this.audit.record(txnId, this.actor(user), { section: SECTION, field: title, action: 'Document submitted', new: file.file_name, source: 'Agent' });
+      await this.notifyDealsDesk(user, txnId, title, file.file_name, file.file_path);
+    }
+    return { ...await this.payload(txnId, user), submitted_count: submitted.length };
   }
 
   /**
@@ -444,6 +573,8 @@ export class DocumentsService {
     this.guardValidLocked(user, document);
     this.requireFile(file);
 
+    if (isAgent(user)) return this.stageUpload(user, txnId, document, file!, clientName, false);
+
     let files = (parseJson<FileEntry[]>(document.files) ?? []) as FileEntry[];
     if (clientName) {
       for (const f of files) if ((f.client_name ?? null) === clientName && f.file_path) await this.deleteFile(f.file_path);
@@ -456,7 +587,7 @@ export class DocumentsService {
     await this.audit.record(txnId, this.actor(user), { section: SECTION, field: document.title + (clientName ? ` (${clientName})` : ''), action: 'Document uploaded', new: file!.originalname, source: this.actorSource(user) });
     await this.docsValidation.sync(txnId, this.actor(user));
     await this.notifyDealsDesk(user, txnId, document.title + (clientName ? ` (${clientName})` : ''), file!.originalname, stored);
-    return this.payload(txnId);
+    return this.payload(txnId, user);
   }
 
   private async docStatusFromFiles(txnId: number, document: DocRow, files: FileEntry[]): Promise<string> {
@@ -478,6 +609,7 @@ export class DocumentsService {
     // nothing.
     const txn = await this.txnOr404(txnId);
     await this.guardAgent(user, txn);
+    if (isAgent(user)) throw new ForbiddenException('Submitted files cannot be deleted. Only draft uploads can be removed.');
     const document = await this.findDocForTxn(txnId, docId);
     this.guardValidLocked(user, document);
     const files = (parseJson<FileEntry[]>(document.files) ?? []) as FileEntry[];
@@ -490,7 +622,7 @@ export class DocumentsService {
       await this.audit.record(txnId, this.actor(user), { section: SECTION, field: document.title, action: 'Document file removed', old: removed });
     }
     await this.docsValidation.sync(txnId, this.actor(user));
-    return this.payload(txnId);
+    return this.payload(txnId, user);
   }
 
   async uploadValidationFile(user: Actor, txnId: number, docId: number, file: UploadedFile | undefined): Promise<Record<string, unknown>> {
@@ -506,7 +638,7 @@ export class DocumentsService {
     await this.prisma.documents.update({ where: { id: document.id }, data: { validation_file_name: file!.originalname, validation_file_path: await this.storeFile(txnId, file!), updated_at: new Date() } });
     await this.audit.record(txnId, this.actor(user), { section: SECTION, field: document.title, action: 'Validation attachment uploaded', new: file!.originalname });
     await this.docsValidation.sync(txnId, this.actor(user));
-    return this.payload(txnId);
+    return this.payload(txnId, user);
   }
 
   async deleteValidationFile(user: Actor, txnId: number, docId: number): Promise<Record<string, unknown>> {
@@ -522,7 +654,7 @@ export class DocumentsService {
     await this.prisma.documents.update({ where: { id: document.id }, data: { validation_file_name: null, validation_file_path: null, updated_at: new Date() } });
     await this.audit.record(txnId, this.actor(user), { section: SECTION, field: document.title, action: 'Validation attachment removed', old: removed });
     await this.docsValidation.sync(txnId, this.actor(user));
-    return this.payload(txnId);
+    return this.payload(txnId, user);
   }
 
   // ---- destroy / restore ----
@@ -659,7 +791,7 @@ export class DocumentsService {
 
   // ---- payload ----
 
-  async payload(txnId: number): Promise<Record<string, unknown>> {
+  async payload(txnId: number, user: Actor = null): Promise<Record<string, unknown>> {
     const txn = await this.prisma.transactions.findUnique({ where: { id: txnId }, select: { reco_audit_ready: true, reco_audit_remarks: true } });
     /*
      * `pending_delete` USED TO PARTITION THIS LIST. Nothing ever set it.
@@ -716,6 +848,7 @@ export class DocumentsService {
           has_validation_file: !!d.validation_file_path,
           files: files.map((f, idx) => ({ index: idx, client_name: f.client_name ?? null, file_name: f.file_name ?? null })),
           file_count: files.length,
+          ...(isAgent(user) ? { draft_files: this.drafts(d).map(({ id, client_name, file_name }) => ({ id, client_name, file_name })) } : {}),
         };
       }),
       stats: { total, mandatory, received, pending, pct: total > 0 ? Math.round((received / total) * 100) : 0 },

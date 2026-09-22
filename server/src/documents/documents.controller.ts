@@ -107,6 +107,33 @@ export class DocumentsController {
   }
 
   // ---- writes (screen:transactions,edit) ----
+  @Post('transactions/:transaction/documents/submit')
+  @HttpCode(200)
+  @Screen('transactions', 'edit')
+  submitDrafts(@CurrentUser() user: AuthUserRecord | undefined, @Param('transaction', ParseIntPipe) txnId: number, @Body() body: Res0): Promise<Res0> {
+    return this.docs.submitDrafts(u(user), txnId, body ?? {});
+  }
+
+  @Get('transactions/:transaction/documents/:document/drafts/:draft')
+  async viewDraft(@CurrentUser() user: AuthUserRecord | undefined, @Param('transaction', ParseIntPipe) txnId: number, @Param('document', ParseIntPipe) docId: number, @Param('draft') draftId: string, @Query('inline') inline: string, @Res() res: Response): Promise<void> {
+    const { absPath, name } = await this.docs.draftFileFor(u(user), txnId, docId, draftId);
+    this.stream(res, absPath, name, this.isInline(inline));
+  }
+
+  @Delete('transactions/:transaction/documents/:document/drafts/:draft')
+  @Screen('transactions', 'edit')
+  deleteDraft(@CurrentUser() user: AuthUserRecord | undefined, @Param('transaction', ParseIntPipe) txnId: number, @Param('document', ParseIntPipe) docId: number, @Param('draft') draftId: string): Promise<Res0> {
+    return this.docs.deleteDraftFile(u(user), txnId, docId, draftId);
+  }
+
+  @Post('transactions/:transaction/documents/:document/drafts/:draft')
+  @HttpCode(200)
+  @Screen('transactions', 'edit')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MB20 } }))
+  replaceDraft(@CurrentUser() user: AuthUserRecord | undefined, @Param('transaction', ParseIntPipe) txnId: number, @Param('document', ParseIntPipe) docId: number, @Param('draft') draftId: string, @UploadedFile() file: Express.Multer.File): Promise<Res0> {
+    return this.docs.replaceDraftFile(u(user), txnId, docId, draftId, file);
+  }
+
   @Put('transactions/:transaction/documents')
   @Screen('transactions', 'edit')
   bulkUpdate(@CurrentUser() user: AuthUserRecord | undefined, @Param('transaction', ParseIntPipe) txnId: number, @Body() body: Res0): Promise<Res0> {

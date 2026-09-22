@@ -6,6 +6,7 @@ import {
   uploadDocValidationFile, deleteDocValidationFile,
   viewDocumentFile, downloadDocumentFile, viewDocClientFile, downloadDocClientFile,
   viewDocValidationFile, downloadAllDocuments, sendDocumentReminders,
+  submitDocumentDrafts, deleteDocumentDraft, replaceDocumentDraft, viewDocumentDraft, downloadDocumentDraft,
 } from '../lib/api';
 import { useToast } from './toast';
 import { apiErrorMessage } from '../lib/apiError';
@@ -118,16 +119,47 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
     (d.validation === 'Valid' || (d.status === 'Received' && d.validation !== 'Invalid')) ? false : d.reminder;
   const docPayload = () => docs.map((d) => ({ id: d.id, title: d.title, mandatory: d.mandatory, status: d.status, validation: d.validation, drive_uploaded: d.drive_uploaded || 'No', reminder: persistReminder(d), agent_accepted: d.agent_accepted || null, remarks: d.remarks }));
 
-  const save = async () => {
+  const draftIds = shownDocs.flatMap((d) => (d.draft_files || []).map((f) => f.id));
+  const save = async (submit = false) => {
     setSaving(true);
     try {
-      const res = await saveDocuments(transactionId, docPayload(), { reco_audit_ready: recoReady || null, reco_audit_remarks: recoReady === 'No' ? recoRemarks : null });
+      let res = await saveDocuments(transactionId, docPayload(), { reco_audit_ready: recoReady || null, reco_audit_remarks: recoReady === 'No' ? recoRemarks : null });
+      if (agentMode && submit) res = await submitDocumentDrafts(transactionId, draftIds);
       setDocs(res.documents || []); setClients(res.clients || []);
       setRecoReady(res.reco_audit_ready || ''); setRecoRemarks(res.reco_audit_remarks || '');
       // Refresh the parent transaction so Agent Payment Readiness' "Valid Docs Cleared" flag is never stale.
       onSaved?.();
-      toast(agentMode ? 'Documents submitted — the admin team has been notified.' : 'Documents saved', 'ok');
-    } catch { toast('Could not save documents', 'bad'); } finally { setSaving(false); }
+      toast(agentMode ? (submit ? 'Documents submitted for Admin review.' : 'Draft saved — not sent to Admin.') : 'Documents saved', 'ok');
+    } catch (error) { toast(apiErrorMessage(error, 'Could not save documents'), 'bad'); } finally { setSaving(false); }
+  };
+
+  const onSubmit = () => askDelete({
+    title: 'Submit documents to Admin?', variant: 'primary', confirmLabel: 'Submit',
+    message: `Send ${draftIds.length} draft file(s) for review? After submission, these files cannot be deleted by an agent.`,
+    onConfirm: () => save(true),
+  });
+
+  const onDeleteDraft = (doc: DeskDocument, draftId: string) => askDelete({
+    title: 'Delete this draft file?', confirmLabel: 'Delete draft',
+    message: 'Only this unsubmitted file will be deleted. The required document row and any previously submitted files will remain.',
+    onConfirm: async () => {
+      if (!doc.id) return;
+      setSaving(true);
+      try {
+        const res = await deleteDocumentDraft(transactionId, doc.id, draftId);
+        setDocs(res.documents || []);
+        toast('Draft file deleted — nothing was sent to Admin.', 'ok');
+      } catch (error) { toast(apiErrorMessage(error, 'Could not delete draft'), 'bad'); }
+      finally { setSaving(false); }
+    },
+  });
+
+  const onReplaceDraft = async (doc: DeskDocument, draftId: string, file?: File) => {
+    if (!doc.id || !file) return;
+    setSaving(true);
+    try { const res = await replaceDocumentDraft(transactionId, doc.id, draftId, file); setDocs(res.documents || []); toast('Draft replaced — not sent to Admin.', 'ok'); }
+    catch (error) { toast(apiErrorMessage(error, 'Could not replace draft'), 'bad'); }
+    finally { setSaving(false); }
   };
 
   // Manually email the agent the list of still-outstanding, reminder-flagged docs.
@@ -144,13 +176,17 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
   const needSaved = (doc: DeskDocument) => { if (!doc.id) { toast('Save first, then upload', 'info'); return true; } return false; };
   const onSingle = async (doc: DeskDocument, file: File | undefined) => {
     if (!file || needSaved(doc) || !doc.id) return;
-    try { const r = await uploadDocumentFile(transactionId, doc.id, file); setDocs(r.documents || []); toast('File uploaded', 'ok'); }
-    catch { toast('Upload failed', 'bad'); }
+    setSaving(true);
+    try { const r = await uploadDocumentFile(transactionId, doc.id, file); setDocs(r.documents || []); toast(agentMode ? 'Draft uploaded — review it, then Submit to Admin.' : 'File uploaded', 'ok'); }
+    catch (error) { toast(apiErrorMessage(error, 'Upload failed'), 'bad'); }
+    finally { setSaving(false); }
   };
   const onMulti = async (doc: DeskDocument, file: File | undefined, clientName?: string) => {
     if (!file || needSaved(doc) || !doc.id) return;
-    try { const r = await uploadDocClientFile(transactionId, doc.id, file, clientName); setDocs(r.documents || []); toast('File uploaded', 'ok'); }
-    catch { toast('Upload failed', 'bad'); }
+    setSaving(true);
+    try { const r = await uploadDocClientFile(transactionId, doc.id, file, clientName); setDocs(r.documents || []); toast(agentMode ? 'Draft uploaded — review it, then Submit to Admin.' : 'File uploaded', 'ok'); }
+    catch (error) { toast(apiErrorMessage(error, 'Upload failed'), 'bad'); }
+    finally { setSaving(false); }
   };
   const onRemoveFile = async (doc: DeskDocument, index: number) => {
     if (!doc.id) return;
@@ -183,7 +219,7 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
   };
 
   const sel: CSSProperties = { width: '100%' };
-  const fileById = (doc: DeskDocument, name: string): DeskDocFile | undefined => (doc.files || []).find((f) => f.client_name === name);
+  const fileById = (doc: DeskDocument, name: string): DeskDocFile | undefined => [...(doc.files || [])].reverse().find((f) => f.client_name === name);
   // Title · Upload · Status · Validation · View/Download · [Uploaded to Drive · Replace · Delete].
   const COLS = agentMode ? '2.2fr 1.2fr 105px 105px 105px 85px' : '2.2fr 1.2fr 105px 105px 105px 110px 85px 55px';
   const hCell: CSSProperties = { fontSize: 11, fontWeight: 700, color: 'var(--text-2)', textTransform: 'uppercase', letterSpacing: '.03em' };
@@ -194,6 +230,9 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
         <button className="close" onClick={onClose}><Icon name="close" size={15} /></button>
         <div className="modal-h" style={{ marginBottom: 4 }}>Legal &amp; Documentation</div>
         <div style={{ fontSize: 12, color: 'var(--muted)', margin: '0 0 16px 12px' }}>Track receipt &amp; validation of every required document for this transaction.</div>
+        {agentMode && <div className="card" style={{ background: 'var(--info-bg)', marginBottom: 12 }}>
+          <strong>Uploads are drafts until you submit.</strong> View, replace, or delete your draft files below. Admin is notified only after you click <strong>Submit to Admin</strong>. Previously submitted files stay protected.
+        </div>}
 
         {readOnly && (
           <div className="card" style={{ borderLeft: '4px solid #2563eb', background: 'var(--info-bg)', marginBottom: 12 }}>
@@ -223,7 +262,7 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
           </div>
         </div>
 
-        <fieldset disabled={readOnly} style={{ border: 0, margin: 0, padding: 0, minInlineSize: 0 }}>
+        <fieldset disabled={readOnly || saving} style={{ border: 0, margin: 0, padding: 0, minInlineSize: 0 }}>
 
         {/* Ready for RECO Audit — Yes/No; a "No" requires a reason. Admins only. */}
         {!agentMode && (
@@ -339,7 +378,9 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
                   ) : (<>
                     {d.kind === 'multi' && <span><Icon name="doc" size={11} /> Multiple files</span>}
                     {d.kind === 'per_client' && <span><Icon name="users" size={11} /> Per-client uploads</span>}
-                    {single && (d.has_file
+                    {single && (agentMode && !!d.draft_files?.length
+                      ? <span className="pill warn">Draft — not submitted</span>
+                      : d.has_file
                       ? <span style={{ fontSize: 11.5, color: 'var(--ok-600)', fontWeight: 600 }}><Icon name="check" size={11} /> Uploaded</span>
                       : validLocked(d)
                         ? <span style={{ fontSize: 11, color: 'var(--muted-2)' }} title="Marked Valid — only a Super Admin can upload over it"><Icon name="lock" size={11} /> Locked (Valid)</span>
@@ -443,6 +484,24 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
               </div>
 
               {/* Expanded: per-client or multi-file uploads */}
+              {agentMode && !!d.draft_files?.length && (
+                <div style={{ padding: 12, borderTop: '1px solid var(--line)', background: 'var(--info-bg)' }}>
+                  <strong style={{ fontSize: 12 }}>Draft files — not sent to Admin</strong>
+                  {d.draft_files.map((file) => (
+                    <div key={file.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8, paddingTop: 8 }}>
+                      <span style={{ overflowWrap: 'anywhere', flex: '1 1 180px' }}>{file.client_name ? `${file.client_name}: ` : ''}{file.file_name}</span>
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                        <button type="button" className="btn ghost sm" onClick={() => openFile(viewDocumentDraft, transactionId, d.id!, file.id)}><Icon name="eye" size={13} /> View</button>
+                        <button type="button" className="btn ghost sm" onClick={() => openFile(downloadDocumentDraft, transactionId, d.id!, file.id)}><Icon name="download" size={13} /> Download</button>
+                        {!validLocked(d) && !uploadBlocked && <label className="btn ghost sm" style={{ cursor: 'pointer' }}>Replace
+                          <input type="file" aria-label={`Replace draft ${file.file_name}`} style={{ display: 'none' }} onChange={(e) => { onReplaceDraft(d, file.id, e.target.files?.[0]); e.target.value = ''; }} />
+                        </label>}
+                        <button type="button" className="btn ghost sm" style={{ color: 'var(--bad)' }} onClick={() => onDeleteDraft(d, file.id)}><Icon name="trash" size={13} /> Delete draft</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
               {open2 && d.kind === 'per_client' && (
                 <div style={{ background: 'var(--surface-2)', borderTop: '1px solid var(--line)', padding: 12 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
@@ -543,7 +602,8 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
 
         <div className="actions">
           <button className="btn ghost" onClick={onClose}>Close</button>
-          {!readOnly && <button className="btn primary" onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save'}</button>}
+          {!readOnly && <button className={agentMode ? 'btn ghost' : 'btn primary'} onClick={() => save()} disabled={saving}>{saving ? 'Saving…' : agentMode ? 'Save Draft' : 'Save'}</button>}
+          {!readOnly && agentMode && <button className="btn primary" onClick={onSubmit} disabled={saving || !draftIds.length}>Submit to Admin{draftIds.length ? ` (${draftIds.length})` : ''}</button>}
         </div>
       </div>
 
