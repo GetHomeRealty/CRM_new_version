@@ -1,4 +1,5 @@
 import { deskPath } from './area';
+import { createPortal } from 'react-dom';
 import Icon from '../ui/Icon';
 import { pickableStatusesFor, dealStatusLabel } from './format';
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
@@ -1857,12 +1858,53 @@ function Field({ label, req, children, style }: { label: ReactNode; req?: boolea
 function StatusMultiSelect({ options, selected, disabled, onToggle }: { options: string[]; selected: string[]; disabled?: boolean; onToggle: (s: string) => void }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [box, setBox] = useState({ up: false, maxHeight: 260, left: 0, width: 0, top: 0, bottom: 0 });
 
   useEffect(() => {
     if (!open) return undefined;
-    const onDoc = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
+    const onDoc = (e: MouseEvent) => {
+      const t = e.target as Node;
+      // the menu is drawn outside this component now, so it has to be asked separately
+      if (ref.current?.contains(t) || menuRef.current?.contains(t)) return;
+      setOpen(false);
+    };
     document.addEventListener('mousedown', onDoc);
     return () => document.removeEventListener('mousedown', onDoc);
+  }, [open]);
+
+  /*
+   * WHERE THE MENU OPENS. It used to open downwards always, capped at 260px. Near the foot of the
+   * window that put the last option below the fold, and because the cap cuts a row in half with no
+   * visible scrollbar there was nothing to say the list continued - so the option simply could not
+   * be reached. Measured when it opens, and again while it is open, because the page scrolls under
+   * it. Nothing else about the menu changes.
+   */
+  useEffect(() => {
+    if (!open) return undefined;
+    const measure = () => {
+      const r = ref.current?.getBoundingClientRect();
+      if (!r) return;
+      const gap = 8;
+      const below = window.innerHeight - r.bottom - gap;
+      const above = r.top - gap;
+      const up = below < Math.min(260, above) && above > below;
+      setBox({
+        up,
+        maxHeight: Math.max(120, Math.min(260, up ? above : below)),
+        left: r.left,
+        width: r.width,
+        top: r.bottom + 4,
+        bottom: window.innerHeight - r.top + 4,
+      });
+    };
+    measure();
+    window.addEventListener('scroll', measure, true);
+    window.addEventListener('resize', measure);
+    return () => {
+      window.removeEventListener('scroll', measure, true);
+      window.removeEventListener('resize', measure);
+    };
   }, [open]);
 
   const label = selected.length ? selected.map(dealStatusLabel).join(', ') : 'Select status';
@@ -1880,9 +1922,11 @@ function StatusMultiSelect({ options, selected, disabled, onToggle }: { options:
         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
         {!disabled && <span style={{ color: 'var(--muted)', flexShrink: 0 }}><Icon name="chevronDown" size={12} /></span>}
       </button>
-      {open && !disabled && (
-        <div style={{ position: 'absolute', zIndex: 30, top: 'calc(100% + 4px)', left: 0, right: 0, background: '#fff',
-          border: '1px solid var(--line)', borderRadius: 8, boxShadow: '0 8px 24px rgba(0,0,0,.12)', padding: 6, maxHeight: 260, overflowY: 'auto' }}>
+      {open && !disabled && createPortal(
+        <div ref={menuRef} style={{ position: 'fixed', zIndex: 1000,
+          left: box.left, width: box.width,
+          ...(box.up ? { bottom: box.bottom } : { top: box.top }), background: '#fff',
+          border: '1px solid var(--line)', borderRadius: 8, boxShadow: '0 8px 24px rgba(0,0,0,.12)', padding: 6, maxHeight: box.maxHeight, overflowY: 'auto' }}>
           {options.map((s) => {
             const on = selected.includes(s);
             const auto = s === 'Expired'; // set automatically from listing expiry
@@ -1899,7 +1943,8 @@ function StatusMultiSelect({ options, selected, disabled, onToggle }: { options:
               </label>
             );
           })}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );
