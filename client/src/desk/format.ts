@@ -116,12 +116,7 @@ export function listingStatuses(type: string): string[] {
     'Closed', 'Mutual Release', 'DFT', 'Void', 'Suspended', 'Terminated', 'Expired'];
 }
 
-export const DEAL_STATUS_OPTIONS = ['Conditional', 'Firm', 'Closed', 'DFT', 'Void', 'Mutual Release'];
-export const dealStatusLabel = (s: string): string => s === 'Void' ? 'Void (conditions failed)' : s;
 export function statusOptionsFor(type: string): string[] {
-  return [...new Set([...DEAL_STATUS_OPTIONS, ...legacyStatusOptionsFor(type)])];
-}
-function legacyStatusOptionsFor(type: string): string[] {
   if (type === 'Referral') return STATUS_REFERRAL;
   if (isListingStatusFamily(type)) return listingStatuses(type);
   if (SECURED_DEAL_TYPES.includes(type)) return STATUS_DEAL_SECURED;
@@ -136,8 +131,8 @@ function legacyStatusOptionsFor(type: string): string[] {
  * is genuinely unpickable, because a listing expiry sets it; excluding `Closed` was a rule nothing
  * else in the system shared.
  */
-export const pickableStatusesFor = (_type: string): string[] =>
-  [...DEAL_STATUS_OPTIONS];
+export const pickableStatusesFor = (type: string): string[] =>
+  statusOptionsFor(type).filter((s) => !AUTO_STATUSES.includes(s));
 
 /**
  * TD-029 — every status any transaction type can hold, for filtering a list that mixes them.

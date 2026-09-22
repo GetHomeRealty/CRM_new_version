@@ -1304,7 +1304,7 @@ export class TransactionsWriteService {
       if (Object.prototype.hasOwnProperty.call(data, 'precon_terms')) await this.syncPreconTerms(tx, txnId, asArray(data.precon_terms));
 
       if (Object.prototype.hasOwnProperty.call(data, 'statuses')) {
-        const finals = ['Sold', 'Leased', 'Firm'];
+        const finals = ['Sold', 'Leased'];
         const oldStatuses = statuses;
         const newStatuses = (data.statuses as unknown[]).filter(Boolean).map(String);
         /*

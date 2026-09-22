@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { createTransaction, listAgents } from '../lib/api';
-import { TRANSACTION_TYPES, typeLabel, isListingType, parseNumber, pickableStatusesFor, dealStatusLabel } from './format';
+import { TRANSACTION_TYPES, typeLabel, isListingType, parseNumber, pickableStatusesFor } from './format';
 import { useToast } from './toast';
 import { apiErrorMessage } from '../lib/apiError';
 import { useAuth } from '../context/AuthContext';
@@ -327,7 +327,7 @@ export default function AddTransactionModal({ open, onClose, onCreated }: AddTra
                 <div className="field"><label>Status <span className="req">*</span></label>
                   <select value={form.status} onChange={(e) => set('status', e.target.value)}>
                     <option value="">Select status</option>
-                    {statusOpts.map((s) => <option key={s} value={s}>{dealStatusLabel(s)}</option>)}
+                    {statusOpts.map((s) => <option key={s} value={s}>{s}</option>)}
                   </select></div>
               </div>
             ) : (
@@ -357,7 +357,7 @@ export default function AddTransactionModal({ open, onClose, onCreated }: AddTra
                   <div className="field"><label>Status <span className="req">*</span></label>
                     <select value={form.status} onChange={(e) => set('status', e.target.value)}>
                       <option value="">Select status</option>
-                      {statusOpts.map((s) => <option key={s} value={s}>{dealStatusLabel(s)}</option>)}
+                      {statusOpts.map((s) => <option key={s} value={s}>{s}</option>)}
                     </select></div>
                 </div>
                 <div className="g2">
