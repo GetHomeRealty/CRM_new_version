@@ -9,7 +9,7 @@ import { CommissionService } from './commission.service';
 import { PaymentCacheService } from './payment-cache.service';
 import { normalizeCommissionTxn } from './commission.loader';
 import { parseJsonObject, phpEmpty, phpFloat, phpJsonNormalize, round2, toFloat } from '../common/serialize';
-import { canonicalTransactionType, isInvoiceableType, isListingType, isNotifiableStatus, SECURED_DEAL_TYPES, statusSetProblem, TRANSACTION_TYPES } from '../reference/transaction.constants';
+import { isLeaseType, priceNoun, canonicalTransactionType, isInvoiceableType, isListingType, isNotifiableStatus, SECURED_DEAL_TYPES, statusSetProblem, TRANSACTION_TYPES } from '../reference/transaction.constants';
 import { TradeNumberService } from './trade-number.service';
 import { TransactionLawyerReminderService } from './transaction-lawyer-reminder.service';
 import { TransactionReviewService } from './transaction-review.service';
@@ -879,16 +879,25 @@ export class TransactionsWriteService {
     if (pricePresent || depositPresent) {
       const priceIn = pricePresent ? readMoney(data.price) : readMoney(t.price);
       const depositIn = depositPresent ? readMoney(data.deposit) : readMoney(t.deposit);
+      const moneyType = String((data as Record<string, unknown>).type ?? t.type ?? '');
       if (pricePresent && priceIn < 0) {
-        const m = 'The purchase price cannot be negative.';
+        const m = `The ${priceNoun(moneyType)} cannot be negative.`;
         throw new UnprocessableEntityException({ message: m, errors: { price: [m] } });
       }
       if (depositPresent && depositIn < 0) {
         const m = 'The deposit cannot be negative.';
         throw new UnprocessableEntityException({ message: m, errors: { deposit: [m] } });
       }
-      if (priceIn > 0 && depositIn > priceIn) {
-        const m = 'The deposit cannot be larger than the purchase price.';
+      /*
+       * NOT ON A LEASE, and this refused 152 of the brokerage's own deals. On a lease `price` is
+       * the RENT and the deposit is first-and-last month, so it is twice the price by design - all
+       * 150 residential and 2 commercial leases are stored at exactly 2x. The screen always knew,
+       * labelling the field 'Total lease price' while this refusal said 'purchase price'. Nothing
+       * downstream depends on deposit <= price; commission.service.ts already lets a lease deposit
+       * exceed the commission and go negative.
+       */
+      if (!isLeaseType(moneyType) && priceIn > 0 && depositIn > priceIn) {
+        const m = `The deposit cannot be larger than the ${priceNoun(moneyType)}.`;
         throw new UnprocessableEntityException({ message: m, errors: { deposit: [m] } });
       }
     }

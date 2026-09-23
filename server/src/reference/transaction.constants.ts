@@ -106,6 +106,17 @@ const listingStatuses = (type: string): string[] => {
     'Closed', 'Mutual Release', 'DFT', 'Void', 'Suspended', 'Terminated', 'Expired'];
 };
 
+/**
+ * THE SAME COLUMN MEANS DIFFERENT THINGS. `price` holds the purchase price on a buy, the sale price
+ * on a listing and the RENT on a lease - which is why a lease deposit of first-and-last month is
+ * twice it and perfectly correct. commission.service.ts already makes the same distinction.
+ */
+export const isLeaseType = (type: string | null | undefined): boolean => /lease/i.test(String(type ?? ''));
+
+/** What to call the price column when telling somebody their figure is wrong. */
+export const priceNoun = (type: string | null | undefined): string =>
+  (isLeaseType(type) ? 'lease price' : (isListingType(type) ? 'sale price' : 'purchase price'));
+
 /** Statuses a transaction of this type may be given. */
 export function statusOptionsFor(type: string): string[] {
   if (type === 'Referral') return STATUS_REFERRAL;
