@@ -92,8 +92,13 @@ describe('dashboard commission parity', () => {
       // every transaction the brokerage happens to hold.
       const dash = await serviceFor(tx).commissions(asUser(name, 'agent'));
 
-      // What the uncached lookup would have produced, resolved exactly as the service resolves it.
-      const chosen = await tx.users.findFirst({ where: { name }, select: { profile: true } });
+      // RESOLVED THE WAY THE SERVICE RESOLVES IT, which this line did not do while claiming it did.
+      // PersonResolver prefers an Active row and breaks ties by the lowest id. This was a bare
+      // findFirst with no orderBy, so it returned either namesake at the planner's whim - and when
+      // it returned the 90% row the test demanded money while the service had correctly used the
+      // 0% row it always picks. The gate then stopped deploys over a disagreement of its own making.
+      const namesakes = await tx.users.findMany({ where: { name }, select: { status: true, profile: true }, orderBy: { id: 'asc' } });
+      const chosen = namesakes.find((r) => (r.status ?? 'Active') === 'Active') ?? namesakes[0];
       const pct = Number(JSON.parse(chosen?.profile ?? '{}').agent_comm_pct ?? 90);
 
       // A 0% profile yields nothing; a 90% profile yields real money. Either is acceptable — what
@@ -101,6 +106,22 @@ describe('dashboard commission parity', () => {
       // failure that zeroed a real agent's commission.
       if (pct === 0) expect(dash.t4a.upcoming_total).toBe(0);
       else expect(dash.t4a.upcoming_total).toBeGreaterThan(0);
+    });
+  });
+
+  it('resolves the paying namesake when that one was created first', async () => {
+    // The case above always lands on the 0% row, because it is created first and the lowest id
+    // wins. Creating the PAYING account first exercises the other branch deterministically - which
+    // nothing did before, so half of this rule was only ever covered by accident.
+    await inRollback(async (tx) => {
+      const now = new Date();
+      const name = `Dup${++seq}`;
+      await tx.users.create({ data: { name, username: `${name}-a`, email: `${name}a@x.test`, password: 'x', role: 'agent', status: 'Active', profile: '{"agent_comm_pct":"90"}', created_at: now, updated_at: now } });
+      await tx.users.create({ data: { name, username: `${name}-b`, email: `${name}b@x.test`, password: 'x', role: 'admin', status: 'Active', profile: '{"agent_comm_pct":0}', created_at: now, updated_at: now } });
+
+      await deal(tx, { agent: name, price: 500000, closed: false });
+      const dash = await serviceFor(tx).commissions(asUser(name, 'agent'));
+      expect(dash.t4a.upcoming_total).toBeGreaterThan(0);
     });
   });
 
