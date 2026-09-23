@@ -82,7 +82,10 @@ describe('a transaction cannot be in two contradictory end states', () => {
     expect(statusSetProblem('Residential Sale Listing', ['Active'])).toBeNull();
     expect(statusSetProblem('Residential Sale Listing', ['Sold Conditional'])).toBeNull();
     expect(statusSetProblem('Residential Buying', ['Secured Firm'])).toBeNull();
-    expect(statusSetProblem('Preconstruction', ['Open'])).toBeNull();
+    // Preconstruction joined the secured lifecycle on 2026-09-23; 'Open' is no longer its word.
+    expect(statusSetProblem('Preconstruction', ['Secured Firm'])).toBeNull();
+    expect(statusSetProblem('Preconstruction', ['Secured Conditional'])).toBeNull();
+    expect(statusSetProblem('Preconstruction', ['Open'])).not.toBeNull();
     expect(statusSetProblem('Referral', ['Open'])).toBeNull();
     expect(statusSetProblem('Residential Buying', [])).toBeNull();
   });

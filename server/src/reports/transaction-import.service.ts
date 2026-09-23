@@ -301,7 +301,11 @@ export class TransactionImportService {
       },
       {
         Ref: 'T4', 'Transaction Type': 'Preconstruction', 'Property Address': '77 Tower Blvd, Suite 1802, Mississauga, ON',
-        'Deal Status': 'Open', 'Primary Agent': a3, Price: '695000', Deposit: '35000',
+        // 'Open' UNTIL 2026-09-23, when Preconstruction moved to the secured lifecycle and the
+        // importer began refusing it. The sample is what people copy, so it teaches the vocabulary
+        // the importer actually accepts - the same lesson TD-196 recorded about the listing row
+        // below. Secured Firm rather than Conditional because this row carries Conditional Offer: No.
+        'Deal Status': 'Secured Firm', 'Primary Agent': a3, Price: '695000', Deposit: '35000',
         'Offer Date': '2026-02-10', 'Closing Date': '2028-11-30', 'Commission Type': '%', 'Commission Value': '3',
         'MLS Type': 'exclusive', 'Conditional Offer': 'No',
       },

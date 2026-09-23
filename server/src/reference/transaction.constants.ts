@@ -22,7 +22,14 @@ export const LISTING_TYPES = [
   'Commercial Property Lease Listing',
 ] as const;
 
+  // PRECONSTRUCTION JOINED THIS LIST ON 2026-09-23, at the brokerage's instruction: its statuses are
+  // now Secured Firm / Secured Conditional rather than Open, because a preconstruction deal firms
+  // up the same way a purchase does. Three things follow from this one line and none of them is
+  // separate code: the picker offers the secured six, a new deal starts with NO status for somebody
+  // to choose, and a stored 'Open' displays as Secured Conditional. The 49 deals that held Open
+  // were moved to Secured Firm first, so that last rule catches nothing today.
 export const SECURED_DEAL_TYPES = [
+  'Preconstruction',
   'Residential Buying',
   'Residential Lease',
   'Commercial Property Buying',
