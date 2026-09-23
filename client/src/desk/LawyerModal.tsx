@@ -181,7 +181,7 @@ export default function LawyerModal({ open, onClose, transactionId, txn, onSaved
         ) : (
           lawyerGroup('')
         )}
-        <span className="help">Used to auto-fill the Notice of Sale and Trade Sheet documents{showPrimaryNote ? ` (the ${primaryLabel} Lawyer is used as the primary contact).` : '.'}</span>
+        <span className="help">Used by the brokerage to prepare the Notice of Sale and Trade Record Sheet{showPrimaryNote ? ` (the ${primaryLabel} Lawyer is used as the primary contact).` : '.'}</span>
         </fieldset>
         {error && (
           <div className="card" role="alert" style={{ borderLeft: '4px solid var(--bad)', background: 'var(--bad-soft)', marginTop: 10 }}>

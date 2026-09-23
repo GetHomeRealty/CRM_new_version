@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
+import { ForbiddenException, Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { MailerService } from '../email/mailer.service';
@@ -54,11 +54,13 @@ export class NoticeOfSaleService {
   }
 
   async show(user: Actor, txnId: number): Promise<Record<string, unknown>> {
+    if (user?.role === 'agent') throw new ForbiddenException({ message: 'Only brokerage staff can work on the Notice of Sale.' });
     const t = await this.reachableTxnOr404(user, txnId);
     return this.present(this.normalize(t.notice_of_sale));
   }
 
   async save(user: Actor, txnId: number, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+    if (user?.role === 'agent') throw new ForbiddenException({ message: 'Only brokerage staff can work on the Notice of Sale.' });
     const t = await this.reachableTxnOr404(user, txnId);
     this.validateSave(body);
     const previous = this.normalize(t.notice_of_sale);
@@ -161,6 +163,7 @@ export class NoticeOfSaleService {
   }
 
   async send(user: Actor, txnId: number, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+    if (user?.role === 'agent') throw new ForbiddenException({ message: 'Only brokerage staff can work on the Notice of Sale.' });
     const t = await this.reachableTxnOr404(user, txnId);
     this.validateSend(body);
     await this.requireBuyerLawyer(txnId);

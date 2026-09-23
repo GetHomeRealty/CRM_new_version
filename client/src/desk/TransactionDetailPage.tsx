@@ -973,33 +973,34 @@ export default function TransactionDetailPage() {
             !docsOnly && !isDocumentation && <button className="btn ghost sm" style={invoicePaid ? { color: 'var(--ok-ink)', borderColor: 'var(--ok-ring-2)', background: 'var(--ok-bg)', fontWeight: 700 } : undefined} onClick={openInvoice}><Icon name="receipt" size={13} /> Invoice{invoicePaid ? ' Paid' : (invoiceSent ? ' sent' : '')}</button>
           ))}
           {/*
-            * TD-116 - AN AGENT PRODUCES THE CLOSING PAPERWORK FOR THEIR OWN FILE.
+            * TD-116, REVERSED BY THE BROKERAGE ON 2026-09-23 - THE CLOSING PAPERWORK IS THE
+            * ADMIN TEAM'S, NOT THE AGENT'S.
             *
-            * These two read `!isAgent`, so the role was offered neither action in either mode and
-            * neither phrase appeared anywhere on the page. The half that made it a defect rather
-            * than a policy is that the product ADVERTISED THE PAYOFF TO THE ROLE IT DENIED: the
-            * Lawyer Details modal an agent is asked to complete carries the footnote 'Used to
-            * auto-fill the Notice of Sale and Trade Sheet documents', so the screen explained the
-            * purpose of eight required fields and then withheld what they were for. The brokerage
-            * answered the question the entry parks - the agent gets the documents - so the footnote
-            * is now true rather than reworded.
+            * The original entry was a real defect: these two read `!isAgent` while the Lawyer
+            * Details modal told the agent their eight fields fed the Notice of Sale and Trade
+            * Sheet, so the product asked for work and hid the result. Asked to settle it, the
+            * brokerage granted the actions to `isFullAgent` and the footnote was left alone.
             *
-            * `isFullAgent` RATHER THAN DROPPING THE CHECK, because that is the rule the server
-            * already applies. `assertTransaction` admits the deal's own agent or a team member on
-            * it and refuses everyone else, and these routes are gated on the `transactions` SCREEN
-            * permission, which every agent holds - so the endpoints have always accepted an agent
-            * on their own deal and only a hidden button stopped them. Widening the UI to exactly
-            * `isOwnerAgent || myTeamAccess === 'full'` states one rule in two places instead of
-            * two rules; a view-only split viewer still gets nothing, and no server change is
-            * needed or made.
+            * ASKED AGAIN, THE BROKERAGE ANSWERED THE OTHER WAY, and the reasoning is theirs:
+            * Lawyer Details is where an agent records the lawyer for a deal; that data reaches the
+            * admin portal, and the admin team prepares both documents from it and raises them to
+            * the agent for SIGNING. The agent needs the fields, not the documents. So the footnote
+            * was corrected instead - it now says the brokerage prepares them.
+            *
+            * AND THE SERVER REFUSES THE ROLE NOW, which the first arrangement never did. That one
+            * was a CURTAIN: the endpoints accepted an agent on their own deal and only this markup
+            * stopped them. Hiding the buttons again would have restored exactly that. Both services
+            * now throw for `role === 'agent'` in the same shape the Lawyer Statement always used,
+            * and agent-closing-documents.spec.ts calls them directly to prove it. DO NOT rely on
+            * the condition below as the restriction; it is the polite half of one.
             *
             * The three conditions beside it are untouched and are NOT about role: `docsOnly` is a
             * Void or Mutual Release deal, `hideTradeSheet` and `hideStmtNos` are statuses too
             * early for the document to mean anything. They hide these actions from an
             * administrator as readily as from an agent, which is why they stay.
             */}
-          {(!isAgent || isFullAgent) && !docsOnly && !hideTradeSheet && <button className="btn ghost sm" onClick={() => setTsOpen(true)}><Icon name="clipboard" size={13} /> Trade Sheet{tradeSheetSent ? ' sent' : ''}</button>}
-          {(!isAgent || isFullAgent) && !docsOnly && !hideStmtNos && <button className="btn ghost sm" style={nosSent ? { color: 'var(--ok-ink)', borderColor: 'var(--ok-ring-2)', background: 'var(--ok-bg)', fontWeight: 700 } : undefined} onClick={() => setNosOpen(true)}><Icon name="doc" size={13} /> Notice of Sale{nosSent ? ' Sent' : ''}</button>}
+          {!isAgent && !docsOnly && !hideTradeSheet && <button className="btn ghost sm" onClick={() => setTsOpen(true)}><Icon name="clipboard" size={13} /> Trade Sheet{tradeSheetSent ? ' sent' : ''}</button>}
+          {!isAgent && !docsOnly && !hideStmtNos && <button className="btn ghost sm" style={nosSent ? { color: 'var(--ok-ink)', borderColor: 'var(--ok-ring-2)', background: 'var(--ok-bg)', fontWeight: 700 } : undefined} onClick={() => setNosOpen(true)}><Icon name="doc" size={13} /> Notice of Sale{nosSent ? ' Sent' : ''}</button>}
           <button className="btn ghost sm" onClick={() => setChatOpen(true)}><Icon name="message" size={13} /> Chat</button>
           <span style={{ width: 1, height: 18, background: 'var(--line)', margin: '0 4px' }} />
           {!canEdit

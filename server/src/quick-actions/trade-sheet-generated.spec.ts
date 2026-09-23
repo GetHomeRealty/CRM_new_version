@@ -52,6 +52,12 @@ const service = (tx: PrismaService): QuickSendService => new QuickSendService(
 );
 
 const asUser = (u: { id: number; name: string }, role = 'agent') => ({ id: u.id, name: u.name, role } as never);
+/*
+ * THE PRODUCER IS BROKERAGE STAFF FROM 2026-09-23. The brokerage took the Trade Record Sheet away
+ * from agents, and the service refuses the role outright, so the cases below act as an
+ * administrator. The deal's own person is kept as the IDENTITY so the audit assertion still reads
+ * as "who produced it"; only the role changed.
+ */
 const ADMIN = { id: 990_000, name: 'An Admin', role: 'admin' } as never;
 
 async function scene(tx: PrismaService) {
@@ -85,7 +91,7 @@ describe('producing a Trade Record Sheet leaves a record on the deal (TD-088)', 
       const before = await tx.transactions.findUnique({ where: { id: deal.id }, select: { trade_sheet_generated_at: true } });
       expect(before?.trade_sheet_generated_at).toBeNull();
 
-      const res = await service(tx).tradeSheetGenerated(asUser(owner), deal.id);
+      const res = await service(tx).tradeSheetGenerated(asUser(owner, 'admin'), deal.id);
       expect(res).toMatchObject({ ok: true });
       expect(typeof res.generated_at).toBe('string');
 
@@ -105,8 +111,8 @@ describe('producing a Trade Record Sheet leaves a record on the deal (TD-088)', 
       const { owner, deal } = await scene(tx);
       const svc = service(tx);
 
-      await svc.tradeSheetGenerated(asUser(owner), deal.id);
-      await svc.tradeSheetGenerated(asUser(owner), deal.id);
+      await svc.tradeSheetGenerated(asUser(owner, 'admin'), deal.id);
+      await svc.tradeSheetGenerated(asUser(owner, 'admin'), deal.id);
 
       const actions = (await auditRows(tx, deal.id))
         .filter((r) => r.field === 'Trade Record Sheet')
@@ -120,7 +126,7 @@ describe('producing a Trade Record Sheet leaves a record on the deal (TD-088)', 
     // the send date a lie on exactly the deals this defect is about.
     await inRollback(async (tx) => {
       const { owner, deal } = await scene(tx);
-      await service(tx).tradeSheetGenerated(asUser(owner), deal.id);
+      await service(tx).tradeSheetGenerated(asUser(owner, 'admin'), deal.id);
 
       const after = await tx.transactions.findUnique({
         where: { id: deal.id }, select: { trade_sheet_sent_at: true, trade_sheet_generated_at: true },

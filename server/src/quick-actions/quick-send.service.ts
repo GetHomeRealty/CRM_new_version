@@ -211,6 +211,7 @@ export class QuickSendService {
 
   // ---- Trade Record Sheet ----
   async tradeSheet(user: Actor, txnId: number, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+    if (user?.role === 'agent') throw new ForbiddenException({ message: 'Only brokerage staff can send the Trade Record Sheet.' });
     const t = await this.reachableTxnOr404(user, txnId);
     // A Buying transaction's Trade Record Sheet needs both the buyer AND seller lawyer details
     // before it can be sent for signature. Non-buying types are unaffected.
@@ -305,6 +306,7 @@ export class QuickSendService {
    * action, so a deal somebody has no part in cannot be marked from outside (TD-012).
    */
   async tradeSheetGenerated(user: Actor, txnId: number): Promise<Record<string, unknown>> {
+    if (user?.role === 'agent') throw new ForbiddenException({ message: 'Only brokerage staff can send the Trade Record Sheet.' });
     const t = await this.reachableTxnOr404(user, txnId);
     const now = new Date();
     await this.prisma.transactions.update({ where: { id: txnId }, data: { trade_sheet_generated_at: now, updated_at: now } });

@@ -1,22 +1,31 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { ForbiddenException } from '@nestjs/common';
+import { NoticeOfSaleService } from './notice-of-sale.service';
+import { QuickSendService } from './quick-send.service';
 
 /**
- * TD-116 — an agent produces the Trade Sheet and Notice of Sale for their own file.
+ * TD-116, REVERSED BY THE BROKERAGE ON 2026-09-23 — the Trade Record Sheet and the Notice of Sale
+ * belong to the admin team, not to the agent.
  *
- * Both actions were gated `!isAgent` on the transaction header, so the role was offered neither in
- * either mode and neither phrase appeared anywhere on the page. What made it a defect rather than a
- * policy is the other half: the Lawyer Details modal an agent IS asked to complete carries the
- * footnote 'Used to auto-fill the Notice of Sale and Trade Sheet documents', so the product
- * explained the purpose of eight required fields to the one role it then refused the payoff to. The
- * brokerage answered the question the entry parks — grant the actions — which makes the footnote
- * true rather than needing a rewrite.
+ * WHAT THIS FILE USED TO ASSERT, and why it was right at the time. The two actions were hidden from
+ * agents while the Lawyer Details modal told them their eight fields "auto-fill the Notice of Sale
+ * and Trade Sheet documents" - the product asked for work and hid the result. Asked to settle it,
+ * the brokerage granted the actions, and this spec pinned that.
  *
- * WHY THIS SPEC READS BOTH SIDES. TD-116 was closed once already, against a change to
- * `document-defaults.service.ts` that added these two documents to the CHECKLIST. That change was
- * real and verified, and it is a different surface: adding a row to a document list does not give
- * an agent a control that produces the document. So the assertions below name the header buttons
- * specifically, and pin the footnote that has to stay true beside them.
+ * WHAT THE BROKERAGE SAYS NOW, and it answers the same question the other way: Lawyer Details is
+ * where an agent records the lawyer for a deal; that data reaches the admin portal and the admin
+ * team prepares both documents from it and raises them to the agent for signing. So the agent needs
+ * the FIELDS, not the DOCUMENTS - and the footnote is corrected rather than the actions granted.
+ * The old spec's last case said this in advance: "had the brokerage chosen the other branch, this
+ * is the line that would have had to change instead, and this assertion would have been its
+ * opposite." It is.
+ *
+ * THE HALF THAT NEVER EXISTED BEFORE, and the reason this is not just a hidden button again. The
+ * old arrangement was a CURTAIN: the endpoints accepted an agent on their own deal, and only the
+ * markup stopped them - the code said so itself. Hiding the buttons again would restore exactly
+ * that. The server now refuses the role outright, in the same shape the Lawyer Statement has always
+ * used, and the cases below call the services directly to prove it.
  */
 
 const CLIENT = join(__dirname, '..', '..', '..', 'client', 'src', 'desk');
@@ -33,39 +42,54 @@ const control = (label: string): string => {
   return line!;
 };
 
-describe('an agent can produce the closing paperwork for their own deal (TD-116)', () => {
+/* The guard is the first statement in each method and touches nothing on `this`, so a bare
+ * prototype is enough to reach it - and proves the refusal cannot depend on any dependency. */
+const nos = Object.create(NoticeOfSaleService.prototype) as NoticeOfSaleService;
+const quick = Object.create(QuickSendService.prototype) as QuickSendService;
+const agent = { id: 9, name: 'QA Agent', role: 'agent' } as never;
+const staff = { id: 1, name: 'QA Admin', role: 'admin' } as never;
+const raised = (p: Promise<unknown>): Promise<unknown> => p.then((v) => v, (e) => e);
+
+describe('the closing paperwork belongs to the admin team (TD-116, reversed 2026-09-23)', () => {
   for (const label of ['Trade Sheet', 'Notice of Sale']) {
     describe(label, () => {
-      it('is no longer hidden from the agent role outright', () => {
-        // Was: {!isAgent && !docsOnly && …} — absent on the agent's own deal, in both modes.
-        expect(control(label)).not.toMatch(/\{!isAgent &&/);
+      it('is hidden from the agent role outright, own deal or not', () => {
+        expect(control(label)).toMatch(/\{!isAgent &&/);
       });
 
-      it('is offered to the deal’s own agent and to a full team member', () => {
-        expect(control(label)).toContain('(!isAgent || isFullAgent)');
+      it('is not offered back to a full agent by the side door', () => {
+        expect(control(label)).not.toContain('isFullAgent');
       });
 
       it('still respects the status rules, which are not about role', () => {
-        // docsOnly is Void / Mutual Release; hideTradeSheet and hideStmtNos are statuses too early
-        // for the document to mean anything. They hide these from an administrator too.
+        // docsOnly is a Void / Mutual Release deal; hideTradeSheet and hideStmtNos are statuses too
+        // early for the document to mean anything. They hide these from an administrator too.
         expect(control(label)).toContain('!docsOnly');
         expect(control(label)).toContain(label === 'Trade Sheet' ? '!hideTradeSheet' : '!hideStmtNos');
       });
     });
   }
 
-  it('grants exactly what the server already allows, rather than a second rule', () => {
-    // `isFullAgent` is the deal's own agent or a full team member — the population
-    // `ResourceAccessService.assertTransaction` admits, minus the docs-only members. A view-only
-    // split viewer is still offered nothing.
-    expect(page).toContain("const isFullAgent = isAgent && (isOwnerAgent || myTeamAccess === 'full');");
-    expect(page).toContain('const isOwnerAgent = isAgent && form.agent === user?.name;');
+  it('no longer promises the agent documents they cannot produce', () => {
+    expect(lawyer).not.toContain('Used to auto-fill the Notice of Sale and Trade Sheet documents');
+    expect(lawyer).toContain('Used by the brokerage to prepare the Notice of Sale and Trade Record Sheet');
   });
 
-  it('leaves the Lawyer Details footnote true for the role that reads it', () => {
-    // The footnote is the half that turned a gate into a defect. It stays as it is BECAUSE the
-    // actions were granted; had the brokerage chosen the other branch, this is the line that would
-    // have had to change instead, and this assertion would have been its opposite.
-    expect(lawyer).toContain('Used to auto-fill the Notice of Sale and Trade Sheet documents');
+  it('REFUSES AN AGENT ON THE SERVER, on every Notice of Sale route', async () => {
+    expect(await raised(nos.show(agent, 1))).toBeInstanceOf(ForbiddenException);
+    expect(await raised(nos.save(agent, 1, {}))).toBeInstanceOf(ForbiddenException);
+    expect(await raised(nos.send(agent, 1, {}))).toBeInstanceOf(ForbiddenException);
+  });
+
+  it('REFUSES AN AGENT ON THE SERVER, on both Trade Record Sheet routes', async () => {
+    expect(await raised(quick.tradeSheet(agent, 1, {}))).toBeInstanceOf(ForbiddenException);
+    expect(await raised(quick.tradeSheetGenerated(agent, 1))).toBeInstanceOf(ForbiddenException);
+  });
+
+  it('refuses them for being an agent and for nothing else', async () => {
+    // Brokerage staff get past the role check and fail later on an unwired dependency, which is the
+    // point: a Forbidden here would mean the rule had caught the wrong people.
+    expect(await raised(quick.tradeSheet(staff, 1, {}))).not.toBeInstanceOf(ForbiddenException);
+    expect(await raised(nos.show(staff, 1))).not.toBeInstanceOf(ForbiddenException);
   });
 });

@@ -143,13 +143,16 @@ describe('Quick Actions refuse a deal the caller has no part in (TD-012)', () =>
   it('lets the agent on the deal through', async () => {
     await inRollback(async (tx) => {
       const { owner, deal } = await scene(tx);
-      const { notice, quick } = services(tx);
+      const { quick } = services(tx);
 
       // Not asserting the happy path end to end — only that the OWNERSHIP gate opened. A refusal
       // here would be a 403; anything else means the call got past it and failed on its own terms.
+      //
+      // THE NOTICE OF SALE CALLS WERE DROPPED FROM THIS LIST ON 2026-09-23, and not because
+      // ownership changed. The brokerage took that document away from agents outright, so the ROLE
+      // is refused before ownership is ever consulted and the call can no longer demonstrate this
+      // gate. The Deposit Receipt is the quick action an agent may still reach on their own deal.
       for (const call of [
-        () => notice.show(asUser(owner), deal.id),
-        () => notice.save(asUser(owner), deal.id, NOTICE_BODY),
         () => quick.depositReceipt(asUser(owner), deal.id, { email: 'client@example.test' }),
       ]) {
         expect(await attempt(call)).not.toBeInstanceOf(ForbiddenException);
@@ -217,12 +220,16 @@ describe('Quick Actions refuse a deal the caller has no part in (TD-012)', () =>
       });
     });
 
-    it('still tells the agent who owns the deal what is missing, and names it', async () => {
+    it('still tells brokerage staff what is missing, and names it', async () => {
       await inRollback(async (tx) => {
-        const { owner, deal } = await scene(tx);
+        const { admin, deal } = await scene(tx);
         const { quick } = services(tx);
 
-        const err = await attempt(() => quick.tradeSheet(asUser(owner), deal.id, { email: 'x@y.test' }));
+        // THE CALLER WAS THE DEAL'S OWN AGENT UNTIL 2026-09-23. The brokerage took the Trade Record
+        // Sheet away from agents, so the role is refused before this message can be produced - and
+        // this case exists precisely to prove the message IS produced, which is what keeps the
+        // stranger case above from passing vacuously. An administrator still reaches it.
+        const err = await attempt(() => quick.tradeSheet(asUser(admin), deal.id, { email: 'x@y.test' }));
 
         expect(err).not.toBeInstanceOf(ForbiddenException);
         const body = JSON.stringify((err as { getResponse(): unknown }).getResponse());
@@ -235,16 +242,24 @@ describe('Quick Actions refuse a deal the caller has no part in (TD-012)', () =>
   it('lets a team member on the deal through, as the transaction list already does', async () => {
     await inRollback(async (tx) => {
       const { stranger, deal } = await scene(tx);
-      const { notice } = services(tx);
+      const { quick } = services(tx);
 
-      // Before: refused. The rule is "named on it, or split into it" — same as everywhere else.
-      expect(await attempt(() => notice.show(asUser(stranger), deal.id))).toBeInstanceOf(ForbiddenException);
+      // THE EXAMPLE ACTION CHANGED ON 2026-09-23, NOT THE RULE. The Notice of Sale is refused to
+      // every agent by role now, so it can no longer show ownership opening for one. The Deposit
+      // Receipt is the quick action an agent may still reach, and the rule it answers to is the
+      // same one: "named on it, or split into it".
+      const call = () => quick.depositReceipt(asUser(stranger), deal.id, { email: 'client@example.test' });
+
+      // Before: refused, and refused as a STRANGER.
+      expect(await attempt(call)).toBeInstanceOf(ForbiddenException);
 
       await tx.team_members.create({
         data: { transaction_id: deal.id, user_id: stranger.id, name: stranger.name, access: 'full', position: 0, created_at: new Date(), updated_at: new Date() },
       });
 
-      expect(await attempt(() => notice.show(asUser(stranger), deal.id))).toBeNull();
+      // After: no longer a stranger. Not null, because this is a Buying deal and the Deposit
+      // Receipt then refuses on its OWN terms - which is the distinction being drawn.
+      expect(await attempt(call)).not.toBeInstanceOf(ForbiddenException);
     });
   });
 });
