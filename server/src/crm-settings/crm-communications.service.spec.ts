@@ -530,10 +530,18 @@ describe('CRM Communications — leaves everything else alone', () => {
   it('never touches campaign templates', async () => {
     await inRollback(async (tx) => {
       const admin = await makeUser(tx, 'admin');
-      const before = await tx.campaign_templates.count();
-      await svc(tx).createTemplate(admin, { name: `D ${tag()}`, subject: 'S', body_html: '<p>B</p>' });
+      const name = `D ${tag()}`;
+      await svc(tx).createTemplate(admin, { name, subject: 'S', body_html: '<p>B</p>' });
       await svc(tx).setPreference(admin, 'birthday', 'email', false);
-      expect(await tx.campaign_templates.count()).toBe(before);
+      /*
+       * SCOPED TO THIS TEST'S OWN ROW, not a global count. It used to read every campaign template
+       * in the database before and after and demand the same number - which is a statement about
+       * the whole database, not about this service. Measured 2026-09-23: it expected 7 and got 6,
+       * because another suite deleted one of ITS OWN templates in between. The claim being made is
+       * that a CRM communication template does not become a CAMPAIGN template, and asking whether
+       * this one did is both exact and immune to whatever else is running.
+       */
+      expect(await tx.campaign_templates.count({ where: { name } })).toBe(0);
     });
   });
 });
