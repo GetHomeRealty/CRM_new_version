@@ -198,9 +198,21 @@ describe('CRM notification templates — the separations that must hold', () => 
   it('does not touch campaign_templates — Campaigns → Templates is a different library', async () => {
     await inRollback(async (tx) => {
       const user = await makeUser(tx, 'Dana Okafor');
-      const before = await tx.campaign_templates.count();
       for (const { fire } of EVENTS) await fire(new CrmEventNotifier(recorder().dispatcher, tx), user.id);
-      expect(await tx.campaign_templates.count()).toBe(before);
+      /*
+       * SCOPED TO THIS TEST'S OWN USER, not a global count. It read every campaign template in the
+       * database before and after and demanded the same number - a statement about the whole
+       * database rather than about these events. Another suite creating or deleting one of its own
+       * templates in between broke it, and it stopped a deploy on 2026-09-23. The claim being made
+       * is that firing every CRM event creates no campaign template; asking whether THESE events
+       * created one is both exact and immune to whatever else is running. Cast to text so the
+       * question does not depend on how those two columns are typed.
+       */
+      const mine = await tx.$queryRawUnsafe<{ n: number }[]>(
+        'select count(*)::int as n from campaign_templates where created_by::text = $1 or user_id::text = $1',
+        String(user.id),
+      );
+      expect(Number(mine[0]?.n ?? 0)).toBe(0);
     });
   });
 
