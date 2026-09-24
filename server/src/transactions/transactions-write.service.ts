@@ -1,4 +1,5 @@
 import { seedDocumentDefaults } from '../documents/document-defaults.service';
+import { UNLOCKING_SCOPE_FILTER } from '../workflows/edit-request-scopes';
 import { TransactionsService } from './transactions.service';
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
@@ -1186,7 +1187,9 @@ export class TransactionsWriteService {
 
     if (statuses.includes('DFT') && !isSuperAdmin(user)) {
       const approved = await this.prisma.transaction_edit_requests.findFirst({
-        where: { transaction_id: txnId, status: 'approved' },
+        // TD-159 - WHICH approval, not just any. Unfiltered, an approval to untick one
+        // Mandatory box would also have unlocked the whole deal for editing.
+        where: { transaction_id: txnId, status: 'approved', ...UNLOCKING_SCOPE_FILTER },
         orderBy: [{ created_at: 'desc' }, { id: 'asc' }],
       });
       if (!approved) throw new ForbiddenException({ message: 'This transaction is DFT — edits require Super Admin approval. Use “Request Edit”.' });

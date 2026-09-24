@@ -812,8 +812,10 @@ export default function TransactionDetailPage() {
   const editRequests = txn?.edit_requests || [];
   // The DFT/Closed lock uses general (non-financial) requests; financial-scoped ones
   // are handled inside the Financial modal.
-  const pendingReq = editRequests.find((r) => r.status === 'pending' && r.scope !== 'financial');
-  const approvedReq = editRequests.find((r) => r.status === 'approved' && r.scope !== 'financial');
+  // TD-159 - only a request with NO scope is about this deal's lock. Naming one exception
+  // would silently admit every scope added later, starting with 'mandatory'.
+  const pendingReq = editRequests.find((r) => r.status === 'pending' && !r.scope);
+  const approvedReq = editRequests.find((r) => r.status === 'approved' && !r.scope);
 
   // Auto-save is allowed exactly when the Save button would have been offered — same
   // permission, role and lifecycle-lock gate, so it can never write where a manual

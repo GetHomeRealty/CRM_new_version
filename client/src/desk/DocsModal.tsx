@@ -352,6 +352,15 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
                         <input type="checkbox" checked={!!d.reminder && !notAccepted} disabled={readOnly || notAccepted} onChange={(e) => upd(i, 'reminder', e.target.checked)} /> <Icon name="bell" size={12} /> Reminder
                       </label>
                     )}
+                    {/* TD-159 - this screen had no Mandatory control at all: it sent the stored
+                        value straight back, so the flag every compliance figure counts could only be
+                        changed through the API. Shown to everyone, writable by a Super Admin; the
+                        server refuses regardless. See documents/document-mandatory-approval.ts. */}
+                    {!agentMode && (
+                      <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, color: d.mandatory ? 'var(--brand-red)' : 'var(--muted)', marginTop: 3, marginLeft: 10, cursor: (readOnly || !isSuperAdmin) ? 'default' : 'pointer' }} title={isSuperAdmin ? 'Whether this document must be held. Unticking it removes it from every outstanding count.' : 'Only a Super Admin can change this. Ask one to approve it - use Request Edit on the deal - then save again.'}>
+                        <input type="checkbox" checked={!!d.mandatory} disabled={readOnly || !isSuperAdmin} onChange={(e) => upd(i, 'mandatory', e.target.checked)} /> Mandatory
+                      </label>
+                    )}
                     {/* Agent acceptance — only for manually-added ("+ Add") documents. */}
                     {d.manual && !d.is_condition && agentMode && (
                       <div style={{ marginTop: 4 }}>

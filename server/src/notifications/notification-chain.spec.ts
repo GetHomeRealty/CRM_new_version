@@ -441,6 +441,8 @@ describe('CHAIN — Lead Welcome: new lead -> trigger -> master switch -> send -
       const PASS_CAP = 40;
       let passes = 0;
       let contended = 0;
+      let barren = 0;
+      let stalled = 0;
       while (mine(t).length < 250 && passes < PASS_CAP) {
         const before = mine(t).length;
         // Anything committed by another worker since the last pass is moved out of the window too,
@@ -449,7 +451,18 @@ describe('CHAIN — Lead Welcome: new lead -> trigger -> master switch -> send -
         if (moved > 0) contended += 1;
         await svc.sweep(new Date());
         passes += 1;
-        if (mine(t).length === before) break;   // a pass that achieves nothing will not achieve it later
+        /*
+         * ONE BARREN PASS IS TRAFFIC; THREE IN A ROW IS A STALL.
+         *
+         * This broke on the first pass that achieved nothing, reasoning that a later pass would
+         * not achieve it either. That holds on an isolated database. Here another suite can
+         * commit leads BETWEEN the clear and the sweep, take the whole budget with lower ids,
+         * and produce a barren pass that the next clear undoes - so the test gave up early and
+         * then failed its own length assertion. It stopped a deploy on 2026-09-24, minutes
+         * after the same suite passed. The sixth time a shared-database assumption has done it.
+         */
+        if (mine(t).length === before) { barren += 1; stalled += 1; } else { stalled = 0; }
+        if (stalled >= 3) break;
       }
 
       expect(mine(t)).toHaveLength(250);
@@ -470,7 +483,7 @@ describe('CHAIN — Lead Welcome: new lead -> trigger -> master switch -> send -
        * batches would need far more passes than the rows in its way could excuse. The extra +1
        * covers rows committed DURING a pass, which the next pass's clear is the first to see.
        */
-      expect(passes).toBeLessThanOrEqual(3 + contended + 1);
+      expect(passes).toBeLessThanOrEqual(3 + contended + barren + 1);
     });
   });
 });
