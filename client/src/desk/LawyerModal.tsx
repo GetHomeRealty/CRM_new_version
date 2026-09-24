@@ -69,7 +69,14 @@ export default function LawyerModal({ open, onClose, transactionId, txn, onSaved
   }));
 
   const FIELDS = ['name', 'address', 'email', 'phone'] as const;
-  const sideComplete = (s: LawyerSide) => FIELDS.every((f) => form[`${s}_lawyer_${f}`].trim());
+  /*
+   * TD-159 - THE ADDRESS NO LONGER BLOCKS A SAVE, the brokerage's rule of 2026-09-24. This asked
+   * for all four fields, so an agent who had the name, email and phone could save NOTHING - and
+   * was then chased by the reminder for details he was not allowed to record. Measured: these
+   * details had been saved through this screen exactly once in the whole system.
+   */
+  const REQUIRED = ['name', 'email', 'phone'] as const;
+  const sideComplete = (s: LawyerSide) => REQUIRED.every((f) => form[`${s}_lawyer_${f}`].trim());
   const sideTouched = (s: LawyerSide) => FIELDS.some((f) => form[`${s}_lawyer_${f}`].trim());
 
   /*
@@ -105,7 +112,7 @@ export default function LawyerModal({ open, onClose, transactionId, txn, onSaved
       // Only a section that's been started is mandatory — complete it, or leave it empty.
       const badSide = (['buyer', 'seller'] as const).find((s) => sideTouched(s) && !sideComplete(s));
       if (badSide) {
-        fail(`Please complete all ${badSide === 'buyer' ? 'Buyer' : 'Seller'} Lawyer fields, or clear that section.`);
+        fail(`Please give the ${badSide === 'buyer' ? 'Buyer' : 'Seller'} Lawyer name, email and phone, or clear that section. The address is optional.`);
         return;
       }
       if (!sideComplete('buyer') && !sideComplete('seller')) {
@@ -123,8 +130,8 @@ export default function LawyerModal({ open, onClose, transactionId, txn, onSaved
         lawyer_phone: form[`${mirrorSide}_lawyer_phone`],
         lawyer_address: form[`${mirrorSide}_lawyer_address`],
       };
-    } else if (!form.lawyer_name.trim() || !form.lawyer_address.trim() || !form.lawyer_email.trim() || !form.lawyer_phone.trim()) {
-      fail('Please fill all the mandatory fields (Lawyer Name, Address, Email, Phone) and save.');
+    } else if (!form.lawyer_name.trim() || !form.lawyer_email.trim() || !form.lawyer_phone.trim()) {
+      fail('Please give the Lawyer Name, Email and Phone and save. The address is optional.');
       return;
     }
     setSaving(true);

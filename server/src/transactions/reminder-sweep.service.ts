@@ -348,7 +348,7 @@ export class ReminderSweepService {
       where: { deleted_at: null, closing_date: { gte: dbDay(from), lte: dbDay(to) } },
       select: {
         id: true, trade_no: true, property: true, agent: true, agent_user_id: true, type: true, closing_date: true,
-        buyer_lawyer_name: true, seller_lawyer_name: true,
+        buyer_lawyer_name: true, buyer_lawyer_email: true, buyer_lawyer_phone: true, seller_lawyer_name: true, seller_lawyer_email: true, seller_lawyer_phone: true,
         transaction_statuses: { select: { status: true } },
       },
     });
@@ -719,7 +719,7 @@ export class ReminderSweepService {
           select: {
             id: true, trade_no: true, property: true, agent: true, agent_user_id: true, type: true, deleted_at: true,
             closing_date: true, listing_expiry_date: true,
-            buyer_lawyer_name: true, seller_lawyer_name: true,
+            buyer_lawyer_name: true, buyer_lawyer_email: true, buyer_lawyer_phone: true, seller_lawyer_name: true, seller_lawyer_email: true, seller_lawyer_phone: true,
             transaction_statuses: { select: { status: true } },
             // TD-009 - a condition reminder is rebuilt from the conditions as they stand TONIGHT,
             // so one satisfied since the failed attempt is not chased again.

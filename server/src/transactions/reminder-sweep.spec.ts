@@ -222,6 +222,21 @@ describe('lawyer-detail reminders', () => {
   const dealFor = async (tx: PrismaService, agent: string, closing: Date, lawyers: Record<string, unknown>) =>
     makeTxn(tx, { agent, type: 'Residential Buying', closing_date: closing, ...lawyers }, ['Open']);
 
+  /*
+   * A COMPLETE LAWYER SIDE - name, email and phone.
+   *
+   * TD-159, 2026-09-24: the brokerage ruled that a side counts as GIVEN when it carries those
+   * three, and that the address never blocks anything. These fixtures set the NAME alone, which
+   * was the old rule - and the old rule was the defect: the screen demanded all four fields, so
+   * an agent with a name and a phone could save nothing and was chased for what he could not
+   * record. The assertions below are unchanged; only what counts as 'filled in' has moved.
+   */
+  const lawyerSide = (party: 'buyer' | 'seller', name: string): Record<string, string> => ({
+    [`${party}_lawyer_name`]: name,
+    [`${party}_lawyer_email`]: `${name.split(' ')[0].toLowerCase()}@lawyers.test`,
+    [`${party}_lawyer_phone`]: '416-555-0100',
+  });
+
   /**
    * What was sent for ONE deal.
    *
@@ -254,7 +269,7 @@ describe('lawyer-detail reminders', () => {
       const s = stubs();
       const agent = await makeAgent(tx);
       const { today, closing } = mondayNear();
-      const txnId = await dealFor(tx, agent, closing, { buyer_lawyer_name: 'Ada Lawyer' });
+      const txnId = await dealFor(tx, agent, closing, lawyerSide('buyer', 'Ada Lawyer'));
 
       await sweepFor(tx, s).sweep(today);
       expect(await variantsFor(tx, txnId)).toEqual(['seller']);
@@ -266,7 +281,7 @@ describe('lawyer-detail reminders', () => {
       const s = stubs();
       const agent = await makeAgent(tx);
       const { today, closing } = mondayNear();
-      const txnId = await dealFor(tx, agent, closing, { seller_lawyer_name: 'Grace Lawyer' });
+      const txnId = await dealFor(tx, agent, closing, lawyerSide('seller', 'Grace Lawyer'));
 
       await sweepFor(tx, s).sweep(today);
       expect(await variantsFor(tx, txnId)).toEqual(['buyer']);
@@ -278,7 +293,7 @@ describe('lawyer-detail reminders', () => {
       const s = stubs();
       const agent = await makeAgent(tx);
       const { today, closing } = mondayNear();
-      const txnId = await dealFor(tx, agent, closing, { buyer_lawyer_name: 'Ada', seller_lawyer_name: 'Grace' });
+      const txnId = await dealFor(tx, agent, closing, { ...lawyerSide('buyer', 'Ada'), ...lawyerSide('seller', 'Grace') });
 
       await sweepFor(tx, s).sweep(today);
       expect(await variantsFor(tx, txnId)).toEqual([]);
@@ -294,9 +309,9 @@ describe('lawyer-detail reminders', () => {
       const sweep = sweepFor(tx, s);
 
       await sweep.sweep(today);                       // Monday: both missing
-      await tx.transactions.update({ where: { id: txnId }, data: { buyer_lawyer_name: 'Ada Lawyer' } });
+      await tx.transactions.update({ where: { id: txnId }, data: lawyerSide('buyer', 'Ada Lawyer') as never });
       await sweep.sweep(day(today, 2));               // Wednesday: only the seller now
-      await tx.transactions.update({ where: { id: txnId }, data: { seller_lawyer_name: 'Grace Lawyer' } });
+      await tx.transactions.update({ where: { id: txnId }, data: lawyerSide('seller', 'Grace Lawyer') as never });
       await sweep.sweep(day(today, 4));               // Friday: nothing left to ask for
 
       expect(await variantsFor(tx, txnId)).toEqual(['both', 'seller']);

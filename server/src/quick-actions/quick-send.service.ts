@@ -216,7 +216,7 @@ export class QuickSendService {
     // A Buying transaction's Trade Record Sheet needs both the buyer AND seller lawyer details
     // before it can be sent for signature. Non-buying types are unaffected.
     const g = await this.prisma.transactions.findUnique({
-      where: { id: txnId }, select: { type: true, buyer_lawyer_name: true, seller_lawyer_name: true, property: true },
+      where: { id: txnId }, select: { type: true, buyer_lawyer_name: true, buyer_lawyer_email: true, buyer_lawyer_phone: true, seller_lawyer_name: true, seller_lawyer_email: true, seller_lawyer_phone: true, property: true },
     });
     if (isBuyingType(g?.type)) {
       const missing = missingLawyerParties(g ?? {});

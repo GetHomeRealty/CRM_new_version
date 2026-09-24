@@ -42,7 +42,7 @@ export class TransactionLawyerReminderService {
       where: { id: txnId, deleted_at: null },
       select: {
         id: true, trade_no: true, property: true, type: true, agent: true,
-        buyer_lawyer_name: true, seller_lawyer_name: true, activity_tracker: true,
+        buyer_lawyer_name: true, buyer_lawyer_email: true, buyer_lawyer_phone: true, seller_lawyer_name: true, seller_lawyer_email: true, seller_lawyer_phone: true, activity_tracker: true,
         transaction_statuses: { select: { status: true } },
       },
     });

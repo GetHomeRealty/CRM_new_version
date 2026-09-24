@@ -1,21 +1,38 @@
 /**
  * Buyer/seller lawyer-detail helpers, shared by the reminder emails and the send-gates on the
- * Notice of Sale and Trade Record Sheet. The lawyer NAME is the presence signal — if it is blank,
- * the details have not been entered.
+ * Notice of Sale and Trade Record Sheet. A SIDE COUNTS AS GIVEN WHEN IT CARRIES A NAME, AN EMAIL AND A PHONE - the
+ * brokerage's rule of 2026-09-24. The address is wanted but never blocks anything.
  */
 
 export type LawyerParty = 'buyer' | 'seller';
 
 interface LawyerFields {
   buyer_lawyer_name?: string | null;
+  buyer_lawyer_email?: string | null;
+  buyer_lawyer_phone?: string | null;
   seller_lawyer_name?: string | null;
+  seller_lawyer_email?: string | null;
+  seller_lawyer_phone?: string | null;
+}
+
+/**
+ * Has this side been given? Name, email and phone - not the address.
+ *
+ * IT USED TO ASK FOR THE NAME ALONE, and the screen refused to save a side without all FOUR
+ * fields including the address. So an agent who knew the name and phone could save nothing, and
+ * was chased for details he was not allowed to record. Across the whole system these details had
+ * been saved through that screen EXACTLY ONCE. The two now ask the same question.
+ */
+export function lawyerSideGiven(t: LawyerFields, side: LawyerParty): boolean {
+  const v = (f: string): string => String((t as Record<string, unknown>)[side + '_lawyer_' + f] ?? '').trim();
+  return v('name') !== '' && v('email') !== '' && v('phone') !== '';
 }
 
 /** Which of buyer/seller lawyer details are still missing, in a stable order. */
 export function missingLawyerParties(t: LawyerFields): LawyerParty[] {
   const out: LawyerParty[] = [];
-  if (!String(t.buyer_lawyer_name ?? '').trim()) out.push('buyer');
-  if (!String(t.seller_lawyer_name ?? '').trim()) out.push('seller');
+  if (!lawyerSideGiven(t, 'buyer')) out.push('buyer');
+  if (!lawyerSideGiven(t, 'seller')) out.push('seller');
   return out;
 }
 
