@@ -71,16 +71,32 @@ export const DOC = {
   REFERRAL_AGREEMENT: 'Referral Agreement',
 } as const;
 
+/**
+ * Documents that satisfy each other - TD-159 slice 3.
+ *
+ * Upload any ONE member of a group and the rest stop being required, WHILE STAYING ON SCREEN. Both
+ * names come straight from the brokerage's remarks: 'Interlink with ... ; if one of these Documents
+ * uploaded, rest 2 remain Non-Mandatory' and 'Either this or the other sub-document. Both Mandatory
+ * until ONE is uploaded; the other then becomes Non-Mandatory.'
+ */
+export const PROOF_OF_CONDITION = 'condition-proof';
+export const ATL_FORM = 'atl-form';
+
 export interface ChecklistItem {
   title: string;
   mandatory: boolean;
   /** Set on the two commercial Agreement to Lease forms: either satisfies the parent. */
   parent?: string;
+  /** Members of the same group satisfy each other. See PROOF_OF_CONDITION / ATL_FORM. */
+  group?: string;
 }
 
 const M = (title: string): ChecklistItem => ({ title, mandatory: true });
 const N = (title: string): ChecklistItem => ({ title, mandatory: false });
-const SUB = (title: string, parent: string): ChecklistItem => ({ title, mandatory: true, parent });
+const MG = (title: string, group: string): ChecklistItem => ({ title, mandatory: true, group });
+const NG = (title: string, group: string): ChecklistItem => ({ title, mandatory: false, group });
+const SUB = (title: string, parent: string): ChecklistItem =>
+  ({ title, mandatory: true, parent, group: ATL_FORM });
 
 type StatusLists = Record<string, ChecklistItem[]>;
 
@@ -88,9 +104,10 @@ type StatusLists = Record<string, ChecklistItem[]>;
 const BUYING: StatusLists = {
   'Secured Firm': [M(DOC.OFFER_SUMMARY), M(DOC.APS), N(DOC.SCHEDULE_B), M(DOC.COOP), N(DOC.AMENDMENT),
     M(DOC.BUYER_REP), M(DOC.DEPOSIT_RECEIPT), M(DOC.CLIENT_IDS), M(DOC.FINTRAC), M(DOC.RECO), N(DOC.SCHEDULE_A)],
-  'Secured Conditional': [M(DOC.OFFER_SUMMARY), M(DOC.APS), N(DOC.SCHEDULE_B), N(DOC.AMENDMENT), M(DOC.NOF),
-    M(DOC.WAIVER), M(DOC.COOP), M(DOC.BUYER_REP), M(DOC.DEPOSIT_RECEIPT), M(DOC.CLIENT_IDS), M(DOC.FINTRAC),
-    M(DOC.RECO), N(DOC.SCHEDULE_A)],
+  'Secured Conditional': [M(DOC.OFFER_SUMMARY), M(DOC.APS), N(DOC.SCHEDULE_B),
+    NG(DOC.AMENDMENT, PROOF_OF_CONDITION), MG(DOC.NOF, PROOF_OF_CONDITION), MG(DOC.WAIVER, PROOF_OF_CONDITION),
+    M(DOC.COOP), M(DOC.BUYER_REP), M(DOC.DEPOSIT_RECEIPT), M(DOC.CLIENT_IDS), M(DOC.FINTRAC), M(DOC.RECO),
+    N(DOC.SCHEDULE_A)],
   'Closed': [M(DOC.OFFER_SUMMARY), M(DOC.APS), N(DOC.SCHEDULE_B), N(DOC.AMENDMENT), M(DOC.NOF), M(DOC.WAIVER),
     M(DOC.COOP), M(DOC.BUYER_REP), M(DOC.DEPOSIT_RECEIPT), M(DOC.CLIENT_IDS), M(DOC.FINTRAC), M(DOC.RECO),
     M(DOC.NOS), M(DOC.TRADE_SHEET), M(DOC.MLS_FINAL), N(DOC.SCHEDULE_A)],
@@ -105,8 +122,9 @@ const RESIDENTIAL_LEASE: StatusLists = {
     N(DOC.AMENDMENT), M(DOC.TENANT_REP), M(DOC.DEPOSIT_RECEIPT), M(DOC.CLIENT_IDS), M(DOC.FINTRAC), M(DOC.RECO),
     N(DOC.SCHEDULE_A)],
   'Secured Conditional': [N(DOC.OFFER_SUMMARY), N(DOC.RENTAL_APPLICATION), M(DOC.ATL), N(DOC.SCHEDULE_B),
-    N(DOC.AMENDMENT), M(DOC.NOF), M(DOC.WAIVER), M(DOC.COOP), M(DOC.TENANT_REP), M(DOC.DEPOSIT_RECEIPT),
-    M(DOC.CLIENT_IDS), M(DOC.FINTRAC), M(DOC.RECO), N(DOC.SCHEDULE_A)],
+    NG(DOC.AMENDMENT, PROOF_OF_CONDITION), MG(DOC.NOF, PROOF_OF_CONDITION), MG(DOC.WAIVER, PROOF_OF_CONDITION),
+    M(DOC.COOP), M(DOC.TENANT_REP), M(DOC.DEPOSIT_RECEIPT), M(DOC.CLIENT_IDS), M(DOC.FINTRAC), M(DOC.RECO),
+    N(DOC.SCHEDULE_A)],
   'Closed': [N(DOC.OFFER_SUMMARY), N(DOC.RENTAL_APPLICATION), M(DOC.ATL), N(DOC.SCHEDULE_B), N(DOC.AMENDMENT),
     M(DOC.NOF), M(DOC.WAIVER), M(DOC.COOP), M(DOC.TENANT_REP), M(DOC.DEPOSIT_RECEIPT), M(DOC.CLIENT_IDS),
     M(DOC.FINTRAC), M(DOC.RECO), M(DOC.ORTA), M(DOC.NOS), M(DOC.TRADE_SHEET), M(DOC.MLS_FINAL), N(DOC.SCHEDULE_A)],
@@ -121,8 +139,9 @@ const COMMERCIAL_LEASE: StatusLists = {
     SUB(DOC.ATL_SHORT, DOC.ATL_COMMERCIAL), M(DOC.COOP), M(DOC.TENANT_REP), M(DOC.RECO), N(DOC.AMENDMENT),
     N(DOC.SCHEDULE_A)],
   'Secured Conditional': [M(DOC.ATL_COMMERCIAL), SUB(DOC.ATL_LONG, DOC.ATL_COMMERCIAL),
-    SUB(DOC.ATL_SHORT, DOC.ATL_COMMERCIAL), M(DOC.COOP), M(DOC.TENANT_REP), M(DOC.RECO), N(DOC.WAIVER), N(DOC.NOF),
-    N(DOC.AMENDMENT), N(DOC.SCHEDULE_A)],
+    SUB(DOC.ATL_SHORT, DOC.ATL_COMMERCIAL), M(DOC.COOP), M(DOC.TENANT_REP), M(DOC.RECO),
+    NG(DOC.WAIVER, PROOF_OF_CONDITION), NG(DOC.NOF, PROOF_OF_CONDITION), NG(DOC.AMENDMENT, PROOF_OF_CONDITION),
+    N(DOC.SCHEDULE_A)],
   'Closed': [M(DOC.ATL_COMMERCIAL), SUB(DOC.ATL_LONG, DOC.ATL_COMMERCIAL), SUB(DOC.ATL_SHORT, DOC.ATL_COMMERCIAL),
     M(DOC.COOP), M(DOC.TENANT_REP), M(DOC.RECO), M(DOC.MLS_FINAL), N(DOC.WAIVER), N(DOC.NOF), N(DOC.AMENDMENT),
     M(DOC.FINTRAC), M(DOC.NOS), M(DOC.TRADE_SHEET), N(DOC.SCHEDULE_A)],
@@ -140,8 +159,9 @@ const SALE_LISTING: StatusLists = {
     N(DOC.SELLERS_DIRECTION), N(DOC.DISCLOSURE), M(DOC.RECO), N(DOC.LISTING_AMENDMENT)],
   'Sold Conditional': [M(DOC.LISTING_AGREEMENT), M(DOC.MLS_DRAFT), M(DOC.MLS_DATA_FORM), M(DOC.CLIENT_IDS),
     M(DOC.FINTRAC), N(DOC.SELLERS_DIRECTION), N(DOC.DISCLOSURE), M(DOC.RECO), N(DOC.LISTING_AMENDMENT),
-    M(DOC.OFFER_SUMMARY), M(DOC.APS), M(DOC.SCHEDULE_B), N(DOC.AMENDMENT), M(DOC.NOF), M(DOC.WAIVER), M(DOC.COOP),
-    M(DOC.DEPOSIT_RECEIPT), N(DOC.SCHEDULE_A)],
+    M(DOC.OFFER_SUMMARY), M(DOC.APS), M(DOC.SCHEDULE_B), NG(DOC.AMENDMENT, PROOF_OF_CONDITION),
+    MG(DOC.NOF, PROOF_OF_CONDITION), MG(DOC.WAIVER, PROOF_OF_CONDITION), M(DOC.COOP), M(DOC.DEPOSIT_RECEIPT),
+    N(DOC.SCHEDULE_A)],
   'Sold': [M(DOC.LISTING_AGREEMENT), M(DOC.MLS_DRAFT), M(DOC.MLS_DATA_FORM), M(DOC.MLS_FINAL), M(DOC.CLIENT_IDS),
     M(DOC.FINTRAC), N(DOC.SELLERS_DIRECTION), N(DOC.DISCLOSURE), M(DOC.RECO), N(DOC.LISTING_AMENDMENT),
     M(DOC.OFFER_SUMMARY), M(DOC.APS), M(DOC.SCHEDULE_B), N(DOC.AMENDMENT), M(DOC.NOF), M(DOC.WAIVER), M(DOC.COOP),
@@ -173,8 +193,9 @@ const LEASE_LISTING: StatusLists = {
     N(DOC.SELLERS_DIRECTION), N(DOC.DISCLOSURE), M(DOC.RECO), N(DOC.LISTING_AMENDMENT)],
   'Lease Conditional': [M(DOC.LISTING_AGREEMENT), M(DOC.MLS_DRAFT), M(DOC.MLS_DATA_FORM), M(DOC.CLIENT_IDS),
     M(DOC.FINTRAC), N(DOC.SELLERS_DIRECTION), N(DOC.DISCLOSURE), M(DOC.RECO), N(DOC.LISTING_AMENDMENT),
-    N(DOC.OFFER_SUMMARY), M(DOC.ATL), M(DOC.SCHEDULE_B), N(DOC.AMENDMENT), M(DOC.NOF), M(DOC.WAIVER), M(DOC.COOP),
-    M(DOC.DEPOSIT_RECEIPT), M(DOC.SCHEDULE_A)],
+    N(DOC.OFFER_SUMMARY), M(DOC.ATL), M(DOC.SCHEDULE_B), NG(DOC.AMENDMENT, PROOF_OF_CONDITION),
+    MG(DOC.NOF, PROOF_OF_CONDITION), MG(DOC.WAIVER, PROOF_OF_CONDITION), M(DOC.COOP), M(DOC.DEPOSIT_RECEIPT),
+    M(DOC.SCHEDULE_A)],
   'Leased': [M(DOC.LISTING_AGREEMENT), M(DOC.MLS_DRAFT), M(DOC.MLS_DATA_FORM), M(DOC.MLS_FINAL), M(DOC.CLIENT_IDS),
     M(DOC.FINTRAC), N(DOC.SELLERS_DIRECTION), N(DOC.DISCLOSURE), M(DOC.RECO), N(DOC.LISTING_AMENDMENT),
     N(DOC.OFFER_SUMMARY), M(DOC.ATL), M(DOC.SCHEDULE_B), N(DOC.AMENDMENT), M(DOC.NOF), M(DOC.WAIVER), M(DOC.COOP),
@@ -255,6 +276,22 @@ export function checklistFor(type: string | null | undefined, status: string | n
   // the brokerage's checklist for the whole process, and every deal made afterwards would inherit
   // the damage with nothing to show where it came from.
   return items ? items.map((item) => ({ ...item })) : [];
+}
+
+/**
+ * The interlink groups on this type/status, as { group: [titles] }. Empty when none apply.
+ *
+ * Read by the rule that relaxes a group once one of its members has a file. A group with fewer than
+ * two members is left out - one document cannot satisfy itself, and returning it would invite a
+ * caller to treat a lone row as optional.
+ */
+export function interlinkGroupsFor(type: string | null | undefined, status: string | null | undefined): Record<string, string[]> {
+  const groups: Record<string, string[]> = {};
+  for (const item of checklistFor(type, status)) {
+    if (item.group) (groups[item.group] ??= []).push(item.title);
+  }
+  for (const [name, titles] of Object.entries(groups)) if (titles.length < 2) delete groups[name];
+  return groups;
 }
 
 /**

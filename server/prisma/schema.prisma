@@ -245,6 +245,9 @@ model documents {
   transaction_id       Int
   title                String       @db.VarChar(255)
   mandatory            Boolean      @default(false)
+  /// TD-159 - set when a PERSON ticks or unticks Mandatory on this one deal.
+  /// Null means nobody has, and only then may the interlink rule move the flag.
+  mandatory_override   Boolean?
   is_condition         Boolean      @default(false)
   manual               Boolean      @default(false)
   condition_id         Int?

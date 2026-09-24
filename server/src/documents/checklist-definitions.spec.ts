@@ -1,4 +1,4 @@
-import { DOC, checklistFor, everyChecklist } from './checklist-definitions';
+import { DOC, checklistFor, everyChecklist, interlinkGroupsFor, PROOF_OF_CONDITION, ATL_FORM } from './checklist-definitions';
 import type { ChecklistItem } from './checklist-definitions';
 import { statusSetProblem } from '../reference/transaction.constants';
 
@@ -108,6 +108,54 @@ describe('document checklist definitions', () => {
     it('leaves no document defined but unused', () => {
       const used = new Set<string>(everyChecklist().flatMap((e) => titles(e.items)));
       expect(Object.values(DOC).filter((n) => !used.has(n))).toEqual([]);
+    });
+  });
+
+  describe('the documents that satisfy each other', () => {
+    // TD-159 slice 3. The groups are read off the brokerage's own interlink remarks, so these tests
+    // assert WHERE they apply as much as what they contain - a group appearing at a status they did
+    // not write one for would quietly relax a mandatory document.
+    it('groups Amendment, Notice of Fulfilment and Waiver at the conditional stages, and only there', () => {
+      const withTrio = everyChecklist()
+        .filter((e) => interlinkGroupsFor(e.type, e.status)[PROOF_OF_CONDITION])
+        .map((e) => e.status);
+      expect([...new Set(withTrio)].sort()).toEqual(['Lease Conditional', 'Secured Conditional', 'Sold Conditional']);
+      expect(withTrio).toHaveLength(9);
+    });
+
+    it('puts exactly those three documents in that group', () => {
+      const group = interlinkGroupsFor('Residential Buying', 'Secured Conditional')[PROOF_OF_CONDITION];
+      expect([...group].sort()).toEqual([DOC.AMENDMENT, DOC.NOF, DOC.WAIVER].sort());
+    });
+
+    it("groups the two commercial lease forms, at all six of that type's statuses and nowhere else", () => {
+      const withPair = everyChecklist().filter((e) => interlinkGroupsFor(e.type, e.status)[ATL_FORM]);
+      expect(withPair).toHaveLength(6);
+      expect([...new Set(withPair.map((e) => e.type))]).toEqual(['Commercial Property Lease']);
+      expect([...interlinkGroupsFor('Commercial Property Lease', 'Closed')[ATL_FORM]].sort())
+        .toEqual([DOC.ATL_LONG, DOC.ATL_SHORT].sort());
+    });
+
+    it('never returns a group with only one member, since a document cannot satisfy itself', () => {
+      const lonely: string[] = [];
+      for (const { type, status } of everyChecklist()) {
+        for (const [name, titles] of Object.entries(interlinkGroupsFor(type, status))) {
+          if (titles.length < 2) lonely.push(`${type} / ${status} / ${name}`);
+        }
+      }
+      expect(lonely).toEqual([]);
+    });
+
+    it('gives every grouped row a group the code actually knows', () => {
+      const strays: string[] = [];
+      for (const { type, status, items } of everyChecklist()) {
+        for (const item of items) {
+          if (item.group && item.group !== PROOF_OF_CONDITION && item.group !== ATL_FORM) {
+            strays.push(`${type} / ${status} / ${item.title} / ${item.group}`);
+          }
+        }
+      }
+      expect(strays).toEqual([]);
     });
   });
 

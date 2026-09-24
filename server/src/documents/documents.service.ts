@@ -7,6 +7,7 @@ import { Prisma, type documents as DocRow } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService, type ActingUser } from '../audit/audit.service';
 import { documentKind, governingStatus, seedDocumentDefaults } from './document-defaults.service';
+import { applyInterlinks } from './document-interlinks';
 import { DocsValidationService } from './docs-validation.service';
 import { DocumentMailService } from './document-mail.service';
 import { MailerService } from '../email/mailer.service';
@@ -260,6 +261,7 @@ export class DocumentsService {
         await this.audit.record(txnId, this.actor(user), { section: SECTION, field: created.title, action: 'Document added' });
       }
       await this.docsValidation.sync(txnId, this.actor(user));
+      await applyInterlinks(this.prisma, txnId);   // TD-159 - documents that satisfy each other
       return this.payload(txnId, user);
     }
 
@@ -282,15 +284,26 @@ export class DocumentsService {
       };
       const existing = row.id ? await this.prisma.documents.findFirst({ where: { id: Number(row.id), transaction_id: txnId, deleted_at: null } }) : null;
       if (existing) {
-        for (const [k, lbl] of [['title', 'Title'], ['status', 'Status'], ['validation', 'Validation']] as const) {
-          const old = String((existing as unknown as Record<string, unknown>)[k] ?? '');
-          const nw = String((attrs as Record<string, unknown>)[k] ?? '');
+        let mandatoryByHand = false;
+        // Booleans read as true/false in a history a person has to make sense of.
+        const shown = (k: string, v: unknown): string => (k === 'mandatory' ? (v ? 'Yes' : 'No') : String(v ?? ''));
+        for (const [k, lbl] of [['title', 'Title'], ['status', 'Status'], ['validation', 'Validation'], ['mandatory', 'Mandatory']] as const) {
+          const old = shown(k, (existing as unknown as Record<string, unknown>)[k]);
+          const nw = shown(k, (attrs as Record<string, unknown>)[k]);
           if (old !== nw) {
             if (k === 'validation') reviewed = true;
+            if (k === 'mandatory') mandatoryByHand = true;
             await this.audit.record(txnId, this.actor(user), { section: SECTION, field: `${existing.title} — ${lbl}`, action: 'Updated', old, new: nw });
           }
         }
-        await this.prisma.documents.update({ where: { id: existing.id }, data: { ...attrs, updated_at: new Date() } });
+        await this.prisma.documents.update({
+          where: { id: existing.id },
+          // Recorded only when the flag actually MOVED on this save. The screen sends every
+          // row every time, so writing it unconditionally would mark all of them as decided
+          // by hand the first time anybody pressed Save, and the interlink rule would then
+          // never touch anything again.
+          data: { ...attrs, ...(mandatoryByHand ? { mandatory_override: attrs.mandatory as boolean } : {}), updated_at: new Date() },
+        });
         keep.push(existing.id);
       } else {
         const created = await this.createDoc(txnId, { ...(attrs as Partial<DocRow>), manual: true });
@@ -366,6 +379,7 @@ export class DocumentsService {
     }
 
     await this.docsValidation.sync(txnId, this.actor(user));
+    await applyInterlinks(this.prisma, txnId);   // TD-159 - documents that satisfy each other
     return this.payload(txnId, user);
   }
 
@@ -416,6 +430,7 @@ export class DocumentsService {
     await this.prisma.documents.update({ where: { id: document.id }, data: { file_name: file!.originalname, file_path: p, status: 'Received', updated_at: new Date() } });
     await this.audit.record(txnId, this.actor(user), { section: SECTION, field: document.title, action: replaced ? 'Document replaced' : 'Document uploaded', new: file!.originalname, source: this.actorSource(user) });
     await this.docsValidation.sync(txnId, this.actor(user));
+    await applyInterlinks(this.prisma, txnId);   // TD-159 - documents that satisfy each other
     await this.notifyDealsDesk(user, txnId, document.title, file!.originalname, p);
     return this.payload(txnId, user);
   }
@@ -549,6 +564,7 @@ export class DocumentsService {
       return notices;
     });
     await this.docsValidation.sync(txnId, this.actor(user));
+    await applyInterlinks(this.prisma, txnId);   // TD-159 - documents that satisfy each other
     for (const { title, file } of submitted) {
       await this.audit.record(txnId, this.actor(user), { section: SECTION, field: title, action: 'Document submitted', new: file.file_name, source: 'Agent' });
       await this.notifyDealsDesk(user, txnId, title, file.file_name, file.file_path);
@@ -586,6 +602,7 @@ export class DocumentsService {
     await this.prisma.documents.update({ where: { id: document.id }, data: { files: JSON.stringify(files), status, updated_at: new Date() } });
     await this.audit.record(txnId, this.actor(user), { section: SECTION, field: document.title + (clientName ? ` (${clientName})` : ''), action: 'Document uploaded', new: file!.originalname, source: this.actorSource(user) });
     await this.docsValidation.sync(txnId, this.actor(user));
+    await applyInterlinks(this.prisma, txnId);   // TD-159 - documents that satisfy each other
     await this.notifyDealsDesk(user, txnId, document.title + (clientName ? ` (${clientName})` : ''), file!.originalname, stored);
     return this.payload(txnId, user);
   }
@@ -622,6 +639,7 @@ export class DocumentsService {
       await this.audit.record(txnId, this.actor(user), { section: SECTION, field: document.title, action: 'Document file removed', old: removed });
     }
     await this.docsValidation.sync(txnId, this.actor(user));
+    await applyInterlinks(this.prisma, txnId);   // TD-159 - documents that satisfy each other
     return this.payload(txnId, user);
   }
 
@@ -638,6 +656,7 @@ export class DocumentsService {
     await this.prisma.documents.update({ where: { id: document.id }, data: { validation_file_name: file!.originalname, validation_file_path: await this.storeFile(txnId, file!), updated_at: new Date() } });
     await this.audit.record(txnId, this.actor(user), { section: SECTION, field: document.title, action: 'Validation attachment uploaded', new: file!.originalname });
     await this.docsValidation.sync(txnId, this.actor(user));
+    await applyInterlinks(this.prisma, txnId);   // TD-159 - documents that satisfy each other
     return this.payload(txnId, user);
   }
 
@@ -654,6 +673,7 @@ export class DocumentsService {
     await this.prisma.documents.update({ where: { id: document.id }, data: { validation_file_name: null, validation_file_path: null, updated_at: new Date() } });
     await this.audit.record(txnId, this.actor(user), { section: SECTION, field: document.title, action: 'Validation attachment removed', old: removed });
     await this.docsValidation.sync(txnId, this.actor(user));
+    await applyInterlinks(this.prisma, txnId);   // TD-159 - documents that satisfy each other
     return this.payload(txnId, user);
   }
 
