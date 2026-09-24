@@ -6,7 +6,7 @@ import * as crypto from 'crypto';
 import { Prisma, type documents as DocRow } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService, type ActingUser } from '../audit/audit.service';
-import { documentKind, seedDocumentDefaults } from './document-defaults.service';
+import { documentKind, governingStatus, seedDocumentDefaults } from './document-defaults.service';
 import { DocsValidationService } from './docs-validation.service';
 import { DocumentMailService } from './document-mail.service';
 import { MailerService } from '../email/mailer.service';
@@ -108,7 +108,7 @@ export class DocumentsService {
     await this.guardAgent(user, txn);
 
     if ((await this.prisma.documents.count({ where: { transaction_id: txnId, deleted_at: null, condition_id: null } })) === 0) {
-      await seedDocumentDefaults(this.prisma, txnId, txn.type);
+      await seedDocumentDefaults(this.prisma, txnId, txn.type, governingStatus(txn.type, await this.statusList(txnId)));
     }
 
     /*

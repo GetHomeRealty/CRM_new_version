@@ -537,7 +537,7 @@ export class TransactionsWriteService {
       // TD-155 - the checklist is created with the deal, inside the same transaction that
       // writes it, so a deal cannot exist without one even momentarily. Conditions are not
       // written on this path, so condition documents are still built by index().
-      await seedDocumentDefaults(tx, t.id, type);
+      await seedDocumentDefaults(tx, t.id, type, status);
       return t.id;
     });
 
