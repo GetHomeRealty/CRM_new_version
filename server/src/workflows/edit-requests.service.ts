@@ -26,8 +26,17 @@ export class EditRequestsService {
     if (!t) throw new NotFoundException({ message: `No query results for model [App\\Models\\Transaction] ${txnId}.` });
 
     const statuses = await this.statusList(txnId);
-    if (scope === 'financial') {
-      if (isSuperAdmin(user)) throw new UnprocessableEntityException({ message: 'Super Admins can edit financial fields directly.' });
+    // TD-159 - 'mandatory' joins 'financial' as a scope anybody below Super Admin may ASK about,
+    // rather than one only an Admin may raise on a locked deal. The two behave identically: the
+    // top tier does not queue a request to itself.
+    if (scope === 'financial' || scope === 'mandatory') {
+      if (isSuperAdmin(user)) {
+        throw new UnprocessableEntityException({
+          message: scope === 'financial'
+            ? 'Super Admins can edit financial fields directly.'
+            : 'Super Admins can change whether a document is Mandatory directly.',
+        });
+      }
     } else {
       if (!isAdminOrAbove(user)) throw new ForbiddenException({ message: 'Only Admins can request edits.' });
       if (statuses.includes('Closed')) throw new ForbiddenException({ message: 'Closed transactions can only be edited by a Super Admin.' });

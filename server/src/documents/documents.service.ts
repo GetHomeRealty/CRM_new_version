@@ -8,6 +8,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AuditService, type ActingUser } from '../audit/audit.service';
 import { documentKind, governingStatus, seedDocumentDefaults } from './document-defaults.service';
 import { applyInterlinks } from './document-interlinks';
+import { mandatoryMoves, requireMandatoryApproval } from './document-mandatory-approval';
 import { DocsValidationService } from './docs-validation.service';
 import { DocumentMailService } from './document-mail.service';
 import { MailerService } from '../email/mailer.service';
@@ -268,6 +269,29 @@ export class DocumentsService {
     // Admin path.
     const keep: number[] = [];
     let reviewed = false;
+    /*
+     * TD-159 - MANDATORY IS A SUPER ADMIN ACTION, and this is checked BEFORE anything is written.
+     *
+     * Placed here rather than inside the loop on purpose. The loop writes row by row, so refusing
+     * part-way through would leave a save half-applied - some documents updated, the one that
+     * needed approval not, and the person told only that it failed. Asking once, first, means the
+     * save either happens or does not.
+     *
+     * It compares against what the deal CURRENTLY says. The screen sends every row on every save,
+     * so a guard that looked at the payload alone would refuse every save anybody made.
+     */
+    const beforeSave = await this.prisma.documents.findMany({
+      where: { transaction_id: txnId, deleted_at: null },
+      select: { id: true, title: true, mandatory: true },
+    });
+    await requireMandatoryApproval(this.prisma, user, txnId, mandatoryMoves(
+      rows.map((r) => ({
+        id: r.id == null ? null : Number(r.id as string | number),
+        title: String(r.title ?? ''),
+        mandatory: this.bool(r.mandatory),
+      })),
+      beforeSave,
+    ));
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
       const accepted = (row.agent_accepted as string) || null;

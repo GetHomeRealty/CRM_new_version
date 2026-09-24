@@ -58,6 +58,18 @@ export const rankOf = (u: Principal | null | undefined): number =>
 export const CAPABILITIES = {
   /** Replace or delete a document already marked Valid. */
   'documents.override-valid': ROLE_RANK.admin,
+  /**
+   * Tick or untick Mandatory on a document.
+   *
+   * THE BROKERAGE'S RULING, 2026-09-24, and it is about what this flag MEANS rather than about
+   * the document panel: Mandatory is the thing every compliance figure counts. The
+   * Documentation Status and RECO Audit Readiness reports, the Dashboard's outstanding tile
+   * and the deal's own panel all reduce to 'mandatory and not yet Valid', so unticking one
+   * box removes an outstanding document from all of them at once. Anybody below this may
+   * still ask, through the approval queue that already exists - see
+   * documents/document-mandatory-approval.ts.
+   */
+  'documents.set-mandatory': ROLE_RANK.admin,
   /** Administrative document operations — the "Administrator access required." path. */
   'documents.administer': ROLE_RANK.manager,
   /** Approve or reject a request to edit a locked transaction. */

@@ -69,6 +69,16 @@ describe('the capabilities restate the decisions they came from', () => {
   /** Read off the call sites this replaced, so a change to either side fails here. */
   const EXPECTED: Record<Capability, string[]> = {
     'documents.override-valid': ['admin'],
+    /*
+     * TD-159 - only Super Admin ticks or unticks Mandatory, the brokerage's ruling of 2026-09-24.
+     * Anybody below asks through the approval queue that already exists; see
+     * documents/document-mandatory-approval.ts.
+     *
+     * It sits beside 'documents.override-valid' rather than 'documents.administer' deliberately.
+     * Those two decide what somebody may do TO a document. This one decides whether a document's
+     * absence is reported as outstanding at all, which is why it is the top tier and not manager.
+     */
+    'documents.set-mandatory': ['admin'],
     'documents.administer': ['admin', 'manager'],
     'transactions.approve-edit': ['admin'],
     'transactions.decide-deletion': ['admin', 'manager'],
