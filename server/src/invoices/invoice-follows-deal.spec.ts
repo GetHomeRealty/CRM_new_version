@@ -228,3 +228,60 @@ describe('what an invoice update must never touch (TD-083)', () => {
     });
   }, 60000);
 });
+
+/** A Preconstruction deal at `price` and `pct`, with ONE term, and its term invoice generated. */
+async function preconDealWithInvoice(tx: PrismaService, price: number, pct: number) {
+  seq += 1;
+  const now = new Date();
+  const t = await tx.transactions.create({
+    data: {
+      trade_no: `TD151-${Date.now()}-${seq}`, type: 'Preconstruction', property: '7 Precon Place',
+      agent: 'ZZ Test', price, precon_comm_pct: pct, precon_term_count: 1,
+      offer_date: new Date('2026-04-01T00:00:00.000Z'), created_at: now, updated_at: now,
+    },
+  });
+  await tx.precon_terms.create({
+    data: { transaction_id: t.id, term_no: 1, pct, created_at: now, updated_at: now },
+  });
+  await tx.company_settings.upsert({
+    where: { id: 1 },
+    create: { id: 1, name: 'ZZ', default_tax_rate: 13, created_at: now, updated_at: now },
+    update: {},
+  });
+  const [inv] = await serviceFor(tx).generate(tx as never, t.id, null);
+  return { txnId: t.id, invoiceId: inv.id };
+}
+
+/*
+ * TD-151 - THE GAP THIS SPEC'S OWN CLOSURE NAMED. It had no preconstruction case at all, and
+ * TD-151 records that absence as the reason the defect reached production. A preconstruction deal
+ * bills PER TERM and works its fee out by a different route, so every case above could pass while
+ * this one was broken and nothing would say so. 430 of the brokerage's deals are this type.
+ *
+ * THE TERM IS NOT OPTIONAL IN THIS FIXTURE. A preconstruction deal with no terms generates no
+ * invoice at all, deliberately - see TD-157 in transaction-invoice.service.ts.
+ */
+describe('a preconstruction term invoice follows its deal too (TD-151)', () => {
+  it('moves a term invoice when the preconstruction deal is repriced', async () => {
+    await inRollback(async (tx) => {
+      const { txnId, invoiceId } = await preconDealWithInvoice(tx, 800_000, 2);
+      expect(Number((await invoice(tx, invoiceId)).sub_total)).toBe(16_000);
+
+      await reprice(tx, txnId, 900_000);
+      const changed = await serviceFor(tx).refreshFromDeal(tx as never, txnId, null);
+
+      expect(changed).toBe(1);
+      const after = await invoice(tx, invoiceId);
+      expect(Number(after.sub_total)).toBe(18_000);
+      expect(Number(after.tax_total)).toBe(2_340);
+      expect(Number(after.total)).toBe(20_340);
+    });
+  }, 60000);
+
+  it('stays quiet on a preconstruction deal that has not moved', async () => {
+    await inRollback(async (tx) => {
+      const { txnId } = await preconDealWithInvoice(tx, 800_000, 2);
+      expect(await serviceFor(tx).refreshFromDeal(tx as never, txnId, null)).toBe(0);
+    });
+  }, 60000);
+});
