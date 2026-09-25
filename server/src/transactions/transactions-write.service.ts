@@ -1,5 +1,6 @@
 import { seedDocumentDefaults } from '../documents/document-defaults.service';
 import { UNLOCKING_SCOPE_FILTER } from '../workflows/edit-request-scopes';
+import { hasNewlyPaidPayout } from './payout-collected';
 import { TransactionsService } from './transactions.service';
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
@@ -972,19 +973,16 @@ export class TransactionsWriteService {
      * never blocks editing a deal whose agents were already, legitimately, paid.
      */
     if (Object.prototype.hasOwnProperty.call(data, 'admin_activities')) {
-      const wasPaid = (blob: unknown): Set<string> => {
-        const out = new Set<string>();
-        const agents = asObject(asObject(blob).agents);
-        for (const [name, info] of Object.entries(agents)) {
-          for (const pay of asArray(asObject(info).payments)) {
-            if (String(asObject(pay).paid_status) === 'Paid') out.add(name + '|' + JSON.stringify(asObject(pay).paid_date ?? '') + '|' + String(asObject(pay).amount ?? ''));
-          }
-        }
-        return out;
-      };
-      const before = wasPaid(parseJsonObject(t.admin_activities));
-      const nowPaid = wasPaid(data.admin_activities);
-      const newlyPaid = [...nowPaid].some((k) => !before.has(k));
+      /*
+       * TD-107 (carry-forward) - THE WALK READS BOTH HALVES OF THE DEAL NOW. It was written inline
+       * here and read admin_activities.agents alone, so every PRECONSTRUCTION deal went unguarded:
+       * those payouts live in term_admin[termNo].agents, and a term could be marked Paid against a
+       * deal that had collected nothing - the one thing this rule exists to stop. paidAgentNames
+       * and the audit scan in this same file both already read both halves; this did not.
+       *
+       * Moved to payout-collected.ts so it can be tested. Inline here it had no test of any kind.
+       */
+      const newlyPaid = hasNewlyPaidPayout(parseJsonObject(t.admin_activities), data.admin_activities);
       if (newlyPaid) {
         const invs = await this.prisma.invoices.findMany({ where: { transaction_id: txnId, deleted_at: null }, select: { commission_received_date: true } });
         const collected = invs.some((i) => i.commission_received_date !== null);
