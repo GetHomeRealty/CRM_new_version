@@ -112,8 +112,14 @@ describe('the in-process queue driver', () => {
        * draft of this test used 60ms and measured gaps of 251ms and 252ms — the backoff was working
        * and the tick was hiding it. Production backoffs default to 1000ms, comfortably above the
        * tick, so this is a limit on resolution and not on behaviour.
+       *
+       * AND BY A MARGIN, which the first version of this test missed. At twice the tick the gaps
+       * were 500ms and 1000ms, and EACH rounds up independently on a few stray milliseconds. A
+       * first gap rounded to 751ms against a second that did not round at all left 249ms between
+       * them - one short - and the gate stopped a deploy for it on 25 Sep 2026. At four times the
+       * tick the worst case is 750ms, which rounding cannot reach.
        */
-      const base = InProcessQueueDriver.TICK_MS * 2;   // 500ms → gaps of ~500ms then ~1000ms
+      const base = InProcessQueueDriver.TICK_MS * 4;   // 1000ms, giving gaps of ~1000ms then ~2000ms
       const at: number[] = [];
       driver.register('sms', async () => { at.push(Date.now()); throw new Error('nope'); });
 
@@ -124,7 +130,7 @@ describe('the in-process queue driver', () => {
       const second = at[2] - at[1];
       // A clear margin, so tick rounding cannot make a real doubling look like noise.
       expect(second).toBeGreaterThan(first + InProcessQueueDriver.TICK_MS);
-    });
+    }, 20_000);
 
     it('tells the handler which attempt it is on', async () => {
       const attempts: number[] = [];

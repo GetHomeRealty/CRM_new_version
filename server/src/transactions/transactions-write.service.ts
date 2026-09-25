@@ -79,7 +79,9 @@ const asDay = (v: unknown): string => {
  * UTC day, matching `toDateString` and `startOfToday` elsewhere in the codebase, so a date compares
  * the same way wherever it is read.
  */
-function dateRuleProblems(offer: string, closing: string): Record<string, string> {
+// TD-194 - EXPORTED so the import REVIEW asks these same two questions. It reviewed a file as
+// '7 valid, 0 invalid' and the import then refused 6 of them on the first rule below.
+export function dateRuleProblems(offer: string, closing: string): Record<string, string> {
   const problems: Record<string, string> = {};
   const today = new Date().toISOString().slice(0, 10);
   if (offer && offer > today) problems.offer_date = 'The offer date cannot be in the future.';

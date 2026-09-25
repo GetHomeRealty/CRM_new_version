@@ -11,6 +11,7 @@ import {
 
 import { isSuperAdmin } from '../core/authz';
 import type { AuthUserRecord } from '../auth/auth.types';
+import { dateRuleProblems } from '../transactions/transactions-write.service';
 
 /** Child column lists, resolved once, for the per-area format checks. */
 const childFields = (key: ChildSheet['key']): ImportField[] =>
@@ -925,6 +926,28 @@ export class TransactionImportService {
       }
       const known = (TRANSACTION_TYPES as readonly string[]).includes(type);
       const listing = known && isListingType(type);
+
+      /*
+       * TD-194 - THE REVIEW ASKS THE SAME DATE QUESTIONS THE IMPORT DOES.
+       *
+       * On 2026-09-17 a file of 7 deals reviewed as "7 valid, 0 invalid" and the import then
+       * refused 6 with "The offer date cannot be in the future" - a rule the write path enforces
+       * and the review did not repeat. Nothing was half-written, but the review's promise was
+       * wrong and the person had to go looking for the rejections afterwards.
+       *
+       * It CALLS the write path's own function rather than restating the rules, so a rule added
+       * there is asked here too. Only a well-formed date is passed: checkFormats already reports a
+       * malformed one, and comparing "14/03/2026" as text would invent a second, wrong complaint
+       * about a row whose real problem is the format.
+       */
+      const isoDay = (v: string) => (/^\d{4}-\d{2}-\d{2}$/.test(v) ? v : '');
+      const offerRaw = get('Offer Date');
+      const closingRaw = get('Closing Date');
+      for (const [field, message] of Object.entries(dateRuleProblems(isoDay(offerRaw), isoDay(closingRaw)))) {
+        const onOffer = field === 'offer_date';
+        add(onOffer ? 'Offer Date' : 'Closing Date', onOffer ? offerRaw : closingRaw, message,
+          onOffer ? 'Use a date on or before today.' : 'Use a date on or after the Offer Date.');
+      }
 
       // ---- required / forbidden per type ----
       if (known) {
