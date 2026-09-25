@@ -177,3 +177,51 @@ describe('a condition with no name produces no document (TD-065)', () => {
     });
   });
 });
+
+/*
+ * TD-033 - AN ORDINARY DOCUMENT IS NOT CONDITION PAPERWORK, and nothing said so until now.
+ *
+ * syncConditionDocs reconciles the documents belonging to a deal's conditions and soft-deletes the
+ * rows that no longer match one. Ordinary documents - the Agreement of Purchase and Sale and the
+ * rest of the checklist - stay out of that sweep ONLY because their condition_id is null, which
+ * TD-033's closure of 2026-08-30 calls incidental protection rather than a rule. If a condition_id
+ * were ever set on an ordinary row it would simply be swept away, upload and all (TD-120), and
+ * nothing anywhere would have failed to say so.
+ *
+ * The second case is a control: it proves the sweep is real, so the first cannot pass merely
+ * because nothing happened at all.
+ */
+describe('condition reconciliation leaves ordinary documents alone (TD-033)', () => {
+  it('keeps a document that belongs to no condition', async () => {
+    await inRollback(async (tx) => {
+      const t = await deal(tx);
+      const now = new Date();
+      await tx.documents.create({
+        data: {
+          transaction_id: t.id, title: 'Agreement of Purchase and Sale', mandatory: true,
+          status: 'Pending', validation: 'Pending', position: 0, created_at: now, updated_at: now,
+        },
+      });
+
+      await syncConditionDocs(tx, t);
+
+      expect(await titles(tx, t.id)).toContain('Agreement of Purchase and Sale');
+    });
+  });
+
+  it('while the sweep itself is real - a document for a removed condition goes', async () => {
+    await inRollback(async (tx) => {
+      const t = await deal(tx);
+      await syncConditions(tx, t.id, [
+        { type: 'Home Inspection', custom_name: null, deadline: '2026-09-20', status: 'Pending' },
+      ]);
+      await syncConditionDocs(tx, t);
+      expect((await titles(tx, t.id)).some((x) => x.includes('Home Inspection'))).toBe(true);
+
+      await syncConditions(tx, t.id, []);
+      await syncConditionDocs(tx, t);
+
+      expect((await titles(tx, t.id)).some((x) => x.includes('Home Inspection'))).toBe(false);
+    });
+  });
+});
