@@ -78,11 +78,30 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
 
   // Counts reflect the documents actually shown (status-restricted list), not all docs.
   const shownDocs = docs.filter(docVisible);
-  const total = shownDocs.length;
-  const received = shownDocs.filter((d) => d.status === 'Received').length;
-  const valid = shownDocs.filter((d) => d.validation === 'Valid').length;
-  const pct = total > 0 ? Math.round((received / total) * 100) : 0;
-  const pctValid = total > 0 ? Math.round((valid / total) * 100) : 0;
+  /*
+   * TD-135 - THESE TILES COUNT REQUIRED DOCUMENTS ONLY, at the brokerage's instruction of
+   * 2026-09-26.
+   *
+   * They counted every row drawn, while the Documentation Status and RECO Audit Readiness reports
+   * count mandatory-and-not-yet-Valid. The two always disagreed. The checklist rebuild of
+   * 2026-09-26 made the gap impossible to ignore, because the brokerage's ruling is that a document
+   * the new list does not ask for STAYS on the deal and merely stops being required: 15,011 rows on
+   * live deals that day of which 8,141 were required, so 46 per cent of what these tiles counted
+   * was optional. Trade 101638 read 0 of 20 where only 6 were required, and that is how the
+   * brokerage found it.
+   *
+   * The optional rows are still LISTED below. They are simply not counted here, which is what every
+   * compliance figure in this application has always done.
+   *
+   * A deal with nothing required reads 100 per cent rather than 0. No live deal is in that state
+   * today - it was checked - but nothing outstanding is complete, not untouched.
+   */
+  const countedDocs = shownDocs.filter((d) => !!d.mandatory);
+  const total = countedDocs.length;
+  const received = countedDocs.filter((d) => d.status === 'Received').length;
+  const valid = countedDocs.filter((d) => d.validation === 'Valid').length;
+  const pct = total > 0 ? Math.round((received / total) * 100) : 100;
+  const pctValid = total > 0 ? Math.round((valid / total) * 100) : 100;
 
   const upd = (i: number, k: string, v: unknown) => setDocs((ds) => ds.map((d, idx) => idx === i ? { ...d, [k]: v } : d));
 
@@ -244,7 +263,7 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
           <div style={{ background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 'var(--r-md)', padding: 12 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-              <strong style={{ fontSize: 12, color: 'var(--text-2)', textTransform: 'uppercase', letterSpacing: '.04em' }}>Documents Received</strong>
+              <strong style={{ fontSize: 12, color: 'var(--text-2)', textTransform: 'uppercase', letterSpacing: '.04em' }}>Mandatory Documents Received</strong>
               <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--brand)' }}>{received} / {total} received ({pct}%)</span>
             </div>
             <div style={{ background: 'var(--surface-3)', height: 10, borderRadius: 6, overflow: 'hidden' }}>
@@ -253,7 +272,7 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
           </div>
           <div style={{ background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 'var(--r-md)', padding: 12 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-              <strong style={{ fontSize: 12, color: 'var(--text-2)', textTransform: 'uppercase', letterSpacing: '.04em' }}>Valid Documents</strong>
+              <strong style={{ fontSize: 12, color: 'var(--text-2)', textTransform: 'uppercase', letterSpacing: '.04em' }}>Mandatory Documents Valid</strong>
               <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--brand)' }}>{valid} / {total} valid ({pctValid}%)</span>
             </div>
             <div style={{ background: 'var(--surface-3)', height: 10, borderRadius: 6, overflow: 'hidden' }}>
