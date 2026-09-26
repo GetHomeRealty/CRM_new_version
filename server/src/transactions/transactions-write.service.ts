@@ -1,4 +1,5 @@
-import { seedDocumentDefaults } from '../documents/document-defaults.service';
+import { governingStatus, seedDocumentDefaults } from '../documents/document-defaults.service';
+import { syncChecklistToStatus } from '../documents/document-checklist-sync';
 import { UNLOCKING_SCOPE_FILTER } from '../workflows/edit-request-scopes';
 import { hasNewlyPaidPayout } from './payout-collected';
 import { TransactionsService } from './transactions.service';
@@ -1340,6 +1341,57 @@ export class TransactionsWriteService {
         if (newStatuses.includes('Closed') && !oldStatuses.includes('Closed')) await this.applySplitUpgrade(tx, cur?.agent ?? null);
         if (newStatuses.includes('DFT')) {
           await tx.transactions.update({ where: { id: txnId }, data: { comm_status: 'N/A', comm_paid_status: 'N/A', valid_status: 'N/A' } });
+        }
+
+        /*
+         * TD-159 slice 4 - THE CHECKLIST FOLLOWS THE DEAL'S STATUS.
+         *
+         * ONLY WHEN THE STATUS SET ACTUALLY MOVED. The screen sends every field on every save, so
+         * firing on each one would quietly rebuild the checklist of every deal anybody edits - that
+         * is slice 5's job, done deliberately over the 890 existing deals, not a side effect of
+         * somebody correcting an address.
+         *
+         * A deal may hold several statuses at once; governingStatus decides which one the checklist
+         * answers to, and it is the same rule slice 2 uses when a deal is created.
+         *
+         * THE BROKERAGE'S RULING OF 2026-09-25 LIVES IN THE FUNCTION, NOT HERE: documents are added
+         * and re-flagged, never removed. One the new status does not ask for stops being required
+         * and stays on the deal, with its file.
+         *
+         * NOT wrapped in a catch, deliberately. It runs inside this save's transaction, so a
+         * database error has already aborted that transaction and swallowing it could not rescue
+         * the save - it would only commit a half-built checklist. A failed save somebody repeats is
+         * the better outcome.
+         */
+        const sameStatuses = newStatuses.length === oldStatuses.length
+          && [...newStatuses].sort().join('|') === [...oldStatuses].sort().join('|');
+        if (!sameStatuses) {
+          const moved = await syncChecklistToStatus(tx, txnId, type, governingStatus(type, newStatuses));
+          /*
+           * AND THE DEAL'S OWN HISTORY SAYS SO, at the brokerage's instruction of 2026-09-26.
+           *
+           * Mandatory is what every compliance figure counts - the Documentation Status and RECO
+           * Audit Readiness reports, and the Dashboard's outstanding tile, all reduce to 'mandatory
+           * and not yet Valid'. So a status change that re-flags documents MOVES THOSE FIGURES, and
+           * without a line here a figure would move with nothing anywhere to say why.
+           *
+           * ONE LINE PER SAVE, NOT ONE PER DOCUMENT. A status change can touch dozens of rows on an
+           * older deal, and a row apiece would bury the entries people actually read.
+           *
+           * SILENT WHEN NOTHING MOVED - the same rule the status trigger above follows. An entry on
+           * every save is an entry nobody reads.
+           */
+          if (moved.added > 0 || moved.flagged > 0 || moved.relaxed > 0) {
+            await this.audit.record(txnId, actor, {
+              section: 'Legal & Documentation',
+              field: 'Document checklist',
+              action: 'Checklist brought up to the new status',
+              source: 'System',
+              old: oldStatuses.join(', ') || '(none)',
+              new: newStatuses.join(', '),
+              details: `${moved.added} added, ${moved.flagged} re-flagged, ${moved.relaxed} no longer required. Nothing was removed.`,
+            }, tx);
+          }
         }
       }
       if (Object.prototype.hasOwnProperty.call(data, 'clients')) await this.syncClients(tx, txnId, asArray(data.clients));
