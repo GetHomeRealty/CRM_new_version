@@ -8,6 +8,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AuditService, type ActingUser } from '../audit/audit.service';
 import { documentKind, governingStatus, seedDocumentDefaults } from './document-defaults.service';
 import { applyInterlinks } from './document-interlinks';
+import { DOC } from './checklist-definitions';
 import { mandatoryMoves, requireMandatoryApproval } from './document-mandatory-approval';
 import { DocsValidationService } from './docs-validation.service';
 import { DocumentMailService } from './document-mail.service';
@@ -148,13 +149,29 @@ export class DocumentsService {
   private async normalizeLeaseAgreementDoc(txn: { id: number; type: string }): Promise<void> {
     if (!txn.type.toLowerCase().includes('lease')) return;
     for (const doc of await this.docs(txn.id, { condition_id: null })) {
-      if (doc.title.toLowerCase().includes('agreement of purchase')) await this.prisma.documents.update({ where: { id: doc.id }, data: { title: 'Agreement to Lease', updated_at: new Date() } });
+      // TD-159 - to the APPROVED name, which carries the (ATL) suffix. Renaming to the short form
+      // put the row beyond the checklist's reach, the same fault as Fintrac above. The second test
+      // heals rows the short form already created.
+      const t = doc.title.toLowerCase();
+      if ((t.includes('agreement of purchase') || t.trim() === 'agreement to lease') && doc.title !== DOC.ATL) {
+        await this.prisma.documents.update({ where: { id: doc.id }, data: { title: DOC.ATL, updated_at: new Date() } });
+      }
     }
   }
 
   private async normalizeFintracDoc(txnId: number): Promise<void> {
     for (const doc of await this.docs(txnId, { condition_id: null })) {
-      if (String(doc.title).trim().toLowerCase() === 'fintrac') await this.prisma.documents.update({ where: { id: doc.id }, data: { title: 'FINTRACK', updated_at: new Date() } });
+      /*
+       * TD-159 - THE BROKERAGE'S SPELLING WINS, AND IT USED TO BE THE OTHER WAY ROUND. This renamed
+       * 'Fintrac' TO 'FINTRACK', which was harmless until the approved lists arrived spelling it
+       * 'Fintrac'. The checklist then could not match the row this had renamed, so a status change
+       * ADDED a second one - and opening the deal renamed that too. Deals would have collected a
+       * Fintrac row apiece. Reversed, so it heals the rows the old direction left behind.
+       */
+      const t = String(doc.title).trim().toLowerCase();
+      if ((t === 'fintrac' || t === 'fintrack') && doc.title !== DOC.FINTRAC) {
+        await this.prisma.documents.update({ where: { id: doc.id }, data: { title: DOC.FINTRAC, updated_at: new Date() } });
+      }
     }
   }
 
@@ -172,9 +189,12 @@ export class DocumentsService {
     const ensure = async (needle: string, title: string): Promise<void> => {
       if (!find(needle)) { pos += 1; const c = await this.createDoc(txn.id, { title, mandatory: false, position: pos }); docs.push(c); }
     };
-    if (isLease) await ensure('agreement to lease', 'Agreement to Lease');
-    else await ensure('agreement of purchase', 'Agreement of Purchase and Sale');
-    if (isMutualRelease) { await ensure('mutual release', 'Mutual Release'); await ensure('deposit receipt', 'Deposit Receipt'); }
+    // TD-159 - every title here comes from the brokerage's approved list, so this cannot create a
+    // document the checklist will not recognise. The needles stay loose on purpose: they must find
+    // a row under the old spelling too, or this would add a duplicate beside it.
+    if (isLease) await ensure('agreement to lease', DOC.ATL);
+    else await ensure('agreement of purchase', DOC.APS);
+    if (isMutualRelease) { await ensure('mutual release', DOC.MUTUAL_RELEASE); await ensure('deposit receipt', DOC.DEPOSIT_RECEIPT); }
   }
 
   private async syncConditionDocs(txn: { id: number; conditional_offer: boolean }): Promise<void> {
