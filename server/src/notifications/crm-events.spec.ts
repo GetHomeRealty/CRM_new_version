@@ -254,6 +254,63 @@ describe('Meta lead arrived', () => {
       expect(await stored(tx, owner.id)).toHaveLength(0);
     });
   });
+
+  it('sends NO email, because the agent was already emailed about this lead', async () => {
+    /*
+     * THE DUPLICATE. Every Facebook lead arrived as two emails. `MetaSyncService` calls
+     * `notifyNewLead` and then `metaArrived` on the same imported row, and each sent its own:
+     * "New lead received from Meta (Facebook / Instagram) — «name»" from the first, and this
+     * event's `crm.meta_lead_received` template from the second. Separate preference categories —
+     * `lead_new` and `lead_meta`, both defaulting to email on — so neither guard saw the other, and
+     * the `dedupeKey` only ever deduped this path against itself.
+     *
+     * `notifyNewLead` keeps the email because it carries the phone, property, location and enquiry
+     * message that this event's template has no variables for.
+     */
+    await inRollback(async (tx) => {
+      const owner = await makeUser(tx);
+      const { notifier, emails } = build(tx);
+
+      await notifier.metaLeadArrived(LEAD, owner.id, 'fb-lead-778', 'Spring Buyers');
+
+      expect(emails).toHaveLength(0);
+    });
+  });
+
+  it('still records the notification and still pushes', async () => {
+    /*
+     * The other half of the fix, and the one worth guarding: only the DUPLICATE was removed.
+     * Silencing the Notification Centre entry or the phone alert would take away notice nobody
+     * asked to lose, and would look identical to this change from the email's point of view.
+     */
+    await inRollback(async (tx) => {
+      const owner = await makeUser(tx);
+      const { notifier, pushes } = build(tx);
+
+      await notifier.metaLeadArrived(LEAD, owner.id, 'fb-lead-779', 'Spring Buyers');
+
+      const rows = await stored(tx, owner.id);
+      expect(rows).toHaveLength(1);
+      expect(rows[0].category).toBe('lead_meta');
+      expect(pushes).toEqual([owner.id]);
+    });
+  });
+
+  it('a lead from another source DOES still email — this is not a blanket mute', async () => {
+    /*
+     * THE CONTROL. Without this, dropping the email everywhere, or breaking the mailer double,
+     * would leave the two tests above green and look like the fix working.
+     */
+    await inRollback(async (tx) => {
+      const owner = await makeUser(tx);
+      const actor = await makeUser(tx);
+      const { notifier, emails } = build(tx);
+
+      await notifier.leadCreated({ ...LEAD, source: 'website' }, owner.id, actor.id);
+
+      expect(emails).toHaveLength(1);
+    });
+  });
 });
 
 // ============================================================================ 4. task due
@@ -407,7 +464,20 @@ describe('channel preferences are honoured for every new category', () => {
     }
   }
 
-  it.each(CATEGORIES)('%s delivers on every channel when nothing is muted', async (category) => {
+  /*
+   * ONE CATEGORY DELIBERATELY DOES NOT EMAIL, and saying so here is the point.
+   *
+   * `lead_meta` fires alongside `LeadNotificationService.notifyNewLead` on the same imported row, so
+   * emailing from both produced two messages per Facebook lead. The dispatch restricts itself to
+   * in-app and push; the email is `notifyNewLead`'s, which carries more of the lead.
+   *
+   * Listed as an exception rather than dropped from the matrix, so this still fails in BOTH
+   * directions: if email comes back to `lead_meta` and the duplicate returns, and if any other
+   * category quietly stops emailing.
+   */
+  const NO_EMAIL = new Set(['lead_meta']);
+
+  it.each(CATEGORIES)('%s delivers on every supported channel when nothing is muted', async (category) => {
     await inRollback(async (tx) => {
       const user = await makeUser(tx);
       const { notifier, emails, pushes } = build(tx);
@@ -415,7 +485,7 @@ describe('channel preferences are honoured for every new category', () => {
       await fire(notifier, category, user.id);
 
       expect(await stored(tx, user.id)).toHaveLength(1);   // in-app
-      expect(emails).toHaveLength(1);
+      expect(emails).toHaveLength(NO_EMAIL.has(category) ? 0 : 1);
       expect(pushes).toEqual([user.id]);
     });
   });

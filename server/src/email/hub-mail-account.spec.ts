@@ -16,7 +16,18 @@ describe('Hub-wide personal email accounts', () => {
 
   it('uses the user primary mailbox across both areas', async () => {
     const account = { id: 7, user_id: 42, is_active: true, is_default: true };
-    const findFirst = jest.fn().mockResolvedValue(account);
+    /*
+     * THIS BROKERAGE HAS CHOSEN NO PRIMARY, which is what the double has to say now that `senderFor`
+     * asks. It previously answered every query with `account`, so once the brokerage lookup was added
+     * ahead of the personal one the method returned at the first call and the assertion below — on a
+     * call that no longer happened — failed. Returning `account` for a query about the brokerage's
+     * own mailboxes would have been a false statement about the database either way.
+     *
+     * Answering null here also pins the property that matters to this file: with no primary set, a
+     * person's mailbox is still used on both sides, and the area is not part of the question.
+     */
+    const findFirst = jest.fn(({ where }: { where: { user_id: number | null } }) =>
+      Promise.resolve(where.user_id === null ? null : account));
     const prisma = { mail_accounts: { findFirst } };
     const service = new MailAccountService(prisma as never, {} as never);
 

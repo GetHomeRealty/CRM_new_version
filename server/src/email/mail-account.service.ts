@@ -99,7 +99,53 @@ export class MailAccountService {
    * finding L10.
    */
   async senderFor(userId: number | null, scope: IntegrationScope): Promise<mail_accounts | null> {
+    /*
+     * A BROKERAGE PRIMARY, ONCE CHOSEN, IS THE ANSWER — for everybody.
+     *
+     * WHAT WAS REPORTED. Clients received mail from a colleague's address — "sent through Veena".
+     * Nobody chose that. Every mail account here belongs to a PERSON, so the shared-account lookups
+     * in `defaultSender` all miss, and resolution falls through to "somebody's personal account",
+     * taken in id order. Which colleague that is, is an accident of which row sorts first.
+     *
+     * WHY PRESSING "SET AS PRIMARY" COULD NOT FIX IT. `is_default` is stored per owner, so a dozen
+     * accounts can each be "the default" — each for its own owner. `setDefault` calls
+     * `makeSoleDefault(id, account.user_id, scope)`, which clears only that same owner's defaults.
+     * Marking a personally-owned account primary was therefore never brokerage-wide, however many
+     * times it was pressed. An account with NO owner and `is_default` IS unambiguous, and this makes
+     * it mean what the admin screen makes it look like it means.
+     *
+     * WHY IT IS CONSULTED BEFORE THE SENDER'S OWN MAILBOX. `defaultSender` already finds a shared
+     * default, but only at the end — after the person's own mailbox has answered. So the brokerage's
+     * choice would lose to every agent who has connected anything, which is every agent. The point
+     * of choosing one is that it is the address mail leaves from.
+     *
+     * TWO LOOKUPS, NOT ONE, and the second is the one that matters in practice. Since the 2026-09-04
+     * Hub change, `storeForUser` stamps every new account `scope: null`, so a primary set through
+     * the screen carries no area at all. Matching only on `scope` would leave this reachable by
+     * hand-written SQL and by nothing else. The area's own row still wins where both exist, which
+     * mirrors `defaultSender`'s order: the area's shared account, then any shared account.
+     *
+     * UNTIL ONE IS SET THIS CHANGES NOTHING — both lookups miss and the old order runs exactly as
+     * before. That is deliberate: a brokerage that has connected no shared mailbox still has mail to
+     * send, and refusing every send would be a worse answer than an unexpected sender.
+     */
+    const chosen = (await this.prisma.mail_accounts.findFirst({
+      where: { user_id: null, scope, is_active: true, is_default: true },
+    }))
+      ?? (await this.prisma.mail_accounts.findFirst({
+        where: { user_id: null, scope: null, is_active: true, is_default: true },
+      }));
+    if (chosen) return chosen;
+
     if (userId) {
+      /*
+       * THE SIDE A MAILBOX IS MARKED FOR IS NOT CONSULTED HERE, and that is the brokerage's ruling
+       * of 2026-09-12, not an oversight — see the header of `campaign-sender-area.spec.ts`. A
+       * `scope` filter stood here uncommitted until then. It cannot be restored: every mailbox
+       * connected since 2026-09-04 is stamped `scope: null`, so filtering on the area would match
+       * none of them and put those people back on the brokerage's address instead of their own.
+       * The comment above this method still says "in this area"; it predates both changes.
+       */
       const own = (await this.prisma.mail_accounts.findFirst({
         where: { user_id: userId, is_active: true, is_default: true },
       }))

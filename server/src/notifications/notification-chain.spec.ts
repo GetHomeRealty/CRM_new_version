@@ -615,8 +615,18 @@ describe('CHAIN — the dispatcher events', () => {
       await n.metaLeadArrived(meta, agent.id!, 'form-1');
       await n.metaLeadArrived(meta, agent.id!, 'form-1');
 
-      expect(t.emails).toHaveLength(1);
+      /*
+       * NO EMAIL FROM THIS EVENT, so "twice sends once" is now proved on the channels it does use.
+       *
+       * It used to email, and that was the duplicate: `MetaSyncService` calls `notifyNewLead` and
+       * then `metaArrived` on the same imported row, so every Facebook lead produced two messages.
+       * The email is `notifyNewLead`'s — see `crm-events.service.ts` — and this dispatch keeps only
+       * in-app and push.
+       */
+      expect(t.emails).toHaveLength(0);
+      expect(t.pushes).toEqual([agent.id]);
       expect(await tx.notifications.count({ where: { user_id: agent.id!, category: 'lead_meta' } })).toBe(1);
+      expect((await ledgerFor(tx, agent.id!)).map((r) => r.channel)).toEqual(['in_app', 'push']);
     });
   });
 

@@ -348,7 +348,32 @@ export class MailerService {
       })
       : null;
 
+    /*
+     * THE BROKERAGE'S CHOSEN PRIMARY OUTRANKS THE SENDER'S OWN MAILBOX — but only where the caller
+     * named no account.
+     *
+     * Same gap as the one fixed in `MailAccountService.senderFor`, on the other path. The brokerage's
+     * shared default is already in the chain below, but it sits AFTER the sender's own mailbox, so
+     * the brokerage's choice lost to every agent who had connected anything — which is every agent.
+     * `LeadActivityService.sendEmail` reaches a client through here whenever the composer sends
+     * without picking an account, so this is the difference between a client seeing the address the
+     * brokerage chose and seeing whichever colleague's row sorted first.
+     *
+     * WHY A NAMED ACCOUNT STILL WINS. `accountId` is a deliberate per-message choice — the composer's
+     * account picker, or an onboarding template naming its own `mail_account_id`. Overriding it would
+     * discard an instruction rather than supply a missing one. A named account that is REJECTED as
+     * somebody else's is left to the chain below unchanged, so the fallback that rejection was
+     * written against still behaves as its tests describe.
+     *
+     * NO `scope` HERE, deliberately: this method is not told an area, and the shared-default step it
+     * is promoted above never filtered on one either. Precedence changes; reach does not.
+     */
+    const brokeragePrimary = accountId
+      ? null
+      : await this.prisma.mail_accounts.findFirst({ where: { user_id: null, is_active: true, is_default: true } });
+
     const account = chosen
+      ?? brokeragePrimary
       ?? (userId
         ? (await this.prisma.mail_accounts.findFirst({ where: { user_id: userId, is_active: true, is_default: true } })
           ?? await this.prisma.mail_accounts.findFirst({ where: { user_id: userId, is_active: true } }))

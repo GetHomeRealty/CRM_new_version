@@ -286,6 +286,40 @@ export class CrmEventNotifier {
       body: `${this.nameOf(lead)} submitted${formName ? ` "${formName}"` : ' a Facebook lead form'}.`,
       link: this.leadLink(lead.id),
       dedupeKey: `meta-lead:${metaLeadId}:${recipientUserId}`,
+      /*
+       * NO EMAIL FROM HERE: THE AGENT WAS ALREADY EMAILED ABOUT THIS LEAD.
+       *
+       * WHAT WAS REPORTED. Every Facebook lead produced TWO emails. `MetaSyncService` calls
+       * `notifyNewLead` and then `metaArrived` on the same imported row — see the two `imported`
+       * branches in meta-sync.service.ts — and each sends its own mail:
+       *
+       *   notifyNewLead  → "New lead received from Meta (Facebook / Instagram) — «name»"
+       *   this dispatch  → the `crm.meta_lead_received` template, "New Facebook lead: «name»"
+       *
+       * WHY NEITHER SUPPRESSED THE OTHER. They are separate preference categories — `lead_new` and
+       * `lead_meta` — and both default to `email: 'live'`, so the `shouldSend` guard inside
+       * `notifyNewLead` cannot see this one. The `dedupeKey` above only dedupes the dispatcher
+       * against itself, which is why it caught the webhook/scheduler race and not this. The two
+       * overlap completely: `lead_new` is catalogued as "a lead is added to your book, HOWEVER IT
+       * ARRIVED", which already includes every Meta lead.
+       *
+       * WHY THIS SIDE GIVES UP THE EMAIL. `notifyNewLead` sends the more useful of the two — phone,
+       * property, location and the enquiry message, none of which this event's template has
+       * variables for. It is also the shared path for Google Ads and Website leads, so silencing it
+       * for Meta alone would leave one source behaving unlike the others.
+       *
+       * IN-APP AND PUSH ARE KEPT. Only the duplicate is removed; the Notification Centre entry and
+       * the phone alert are the notice nobody asked to lose. Same fragment `templated()` returns for
+       * a switched-off template, for the same reason, a few lines up.
+       *
+       * ONE CONSEQUENCE, DELIBERATE AND WORTH KNOWING. `crm.meta_lead_received` stays editable under
+       * Settings → Templates but no longer sends anything, and the "Facebook leads" row on the
+       * notification-preferences screen becomes in-app and push only. The wording an agent actually
+       * receives is `notifyNewLead`'s, which is hardcoded. If the brokerage wants that wording under
+       * its own control, the fix is to give this event's template the missing variables and drop the
+       * other email instead — a larger change than the duplicate warranted.
+       */
+      channels: ['in_app', 'push'],
     });
   }
 
