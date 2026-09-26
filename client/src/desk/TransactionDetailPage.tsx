@@ -296,19 +296,23 @@ export default function TransactionDetailPage() {
     getBrokerageSuggestions().then(setBrokSuggestions).catch(() => {});
   }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // §5.2 — Active sale listings auto-remind about the core docs (Listing Agreement,
-  // MLS Data Information Form, Client Photo IDs) while they are still pending.
+  /*
+   * SS5.2 - Active sale listings show what is still outstanding, ON SCREEN ONLY. This list is
+   * rendered in a panel and sends no mail of any kind; the only document email in the application
+   * is the manual one somebody fires from Legal & Docs after ticking the bell.
+   *
+   * IT NOW ASKS THE SHEET INSTEAD OF CARRYING NAMES. It used to name three documents - and one of
+   * those names, 'mls data sheet', matched NOTHING once the approved names went in on 2026-09-24,
+   * so it chased two of its three. At the brokerage's instruction of 2026-09-26 it covers every
+   * REQUIRED document not yet received, which for an Active sale listing is six rather than three.
+   * No document name appears here at all now, so it cannot drift again.
+   */
   useEffect(() => {
     const isActiveSale = form && isListingStatusFamily(form.type) && !/lease/i.test(form.type) && (form.statuses || []).includes('Active');
     if (!isActiveSale) { setCoreDocReminders([]); return; }
-    // TD-159 - 'mls data sheet' matched NOTHING once the approved names went in on 2026-09-24:
-    // the sheet calls it 'MLS Data Information Form'. This reminder therefore never mentioned it
-    // on any Active sale listing. The three names here are the subset SS5.2 asks to chase, not the
-    // whole required list - widen it only on the brokerage's word.
-    const core = ['listing agreement', 'mls data information form', 'client photo'];
     getDocuments(id)
       .then((d) => setCoreDocReminders((d.documents || [])
-        .filter((doc) => { const t = (doc.title || '').toLowerCase(); return core.some((k) => t.includes(k)) && doc.status !== 'Received'; })
+        .filter((doc) => doc.mandatory && doc.status !== 'Received')
         .map((doc) => doc.title || '')))
       .catch(() => setCoreDocReminders([]));
   }, [id, form?.type, (form?.statuses || []).join(',')]); // eslint-disable-line react-hooks/exhaustive-deps
