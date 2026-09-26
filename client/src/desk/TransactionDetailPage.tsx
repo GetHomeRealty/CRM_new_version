@@ -297,11 +297,15 @@ export default function TransactionDetailPage() {
   }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // §5.2 — Active sale listings auto-remind about the core docs (Listing Agreement,
-  // MLS Data Sheet, Client Photo IDs) while they are still pending.
+  // MLS Data Information Form, Client Photo IDs) while they are still pending.
   useEffect(() => {
     const isActiveSale = form && isListingStatusFamily(form.type) && !/lease/i.test(form.type) && (form.statuses || []).includes('Active');
     if (!isActiveSale) { setCoreDocReminders([]); return; }
-    const core = ['listing agreement', 'mls data sheet', 'client photo'];
+    // TD-159 - 'mls data sheet' matched NOTHING once the approved names went in on 2026-09-24:
+    // the sheet calls it 'MLS Data Information Form'. This reminder therefore never mentioned it
+    // on any Active sale listing. The three names here are the subset SS5.2 asks to chase, not the
+    // whole required list - widen it only on the brokerage's word.
+    const core = ['listing agreement', 'mls data information form', 'client photo'];
     getDocuments(id)
       .then((d) => setCoreDocReminders((d.documents || [])
         .filter((doc) => { const t = (doc.title || '').toLowerCase(); return core.some((k) => t.includes(k)) && doc.status !== 'Received'; })
