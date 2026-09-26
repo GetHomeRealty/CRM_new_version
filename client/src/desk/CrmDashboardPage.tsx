@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { getCrmDashboard } from '../lib/api';
 import { listAllLeadTasks, listAllLeadShowings, type LeadFeedPage } from '../lib/leadsApi';
 import { useToast } from './toast';
@@ -6,6 +7,7 @@ import { useAuth } from '../context/AuthContext';
 import { apiErrorMessage } from '../lib/apiError';
 import TodoList from './TodoList';
 import { Breakdown, TallyBreakdown, Tile } from './DashboardTiles';
+import { areaPath } from './area';
 import { LeadShowingsPanel, LeadTasksPanel } from './LeadPanels';
 import type { CrmDashboard, LeadShowingRow, LeadTaskRow } from '../types';
 import type { TodoCounts } from '../types/todo';
@@ -36,8 +38,31 @@ const DASH_SECTIONS = [
 ] as const;
 const DASH_SECTIONS_KEY = 'crm.dashboard.hiddenSections';
 
+/**
+ * A dashboard card that opens the screen behind its number.
+ *
+ * Wraps the shared `Tile` here instead of giving `Tile` an `onClick`, because the Transaction Desk
+ * dashboard renders the same component and is meant to stay exactly as it is. With no `onOpen`
+ * (the person cannot see the destination), the card stays a plain figure, not a dead link.
+ *
+ * `display: grid` makes the card fill the wrapper, so a row of cards keeps one height.
+ */
+function CardLink({ title, onOpen, children }: { title: string; onOpen?: () => void; children: ReactNode }) {
+  if (!onOpen) return <>{children}</>;
+  const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(); }
+  };
+  return (
+    <div role="link" tabIndex={0} title={title} aria-label={title} onClick={onOpen} onKeyDown={onKey}
+      style={{ display: 'grid', cursor: 'pointer' }}>
+      {children}
+    </div>
+  );
+}
+
 export default function CrmDashboardPage() {
   const toast = useToast();
+  const navigate = useNavigate();
   const { can } = useAuth();
   const canSeeLeads = can('lead', 'view');
 
@@ -107,6 +132,23 @@ export default function CrmDashboardPage() {
     });
   }, []);
 
+  /*
+   * Where a card goes. Screens with their own page are navigated to; the lead tasks and the to-do
+   * list have no page of their own — they ARE the lists further down this dashboard — so those
+   * cards scroll to them, first switching the section back on if the person had hidden it.
+   */
+  const go = (screen: string) => () => navigate(areaPath('crm', screen));
+  const [scrollTo, setScrollTo] = useState<string | null>(null);
+  const reveal = (key: string) => () => {
+    if (hidden.has(key)) toggleSection(key);
+    setScrollTo(key);
+  };
+  useEffect(() => {
+    if (!scrollTo) return;
+    document.getElementById(`crm-dash-${scrollTo}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    setScrollTo(null);
+  }, [scrollTo, hidden, tasks]);
+
   if (loading) return <div className="centered">Loading dashboard…</div>;
   if (!data) {
     return (
@@ -128,39 +170,51 @@ export default function CrmDashboardPage() {
   return (
     <>
       <div className="tiles">
-        <Tile label="Total Leads" value={data.leads.total}
-          sub={<Breakdown parts={[{ n: data.leads.new_this_week, label: 'new this week', tone: 'info' }]} />} />
-        <Tile label="Leads by Stage" value={Object.keys(data.leads.by_status).length}
-          sub={<TallyBreakdown by={data.leads.by_status} />} />
-        <Tile label="Lead Sources" value={Object.keys(data.leads.by_source).length}
-          sub={<TallyBreakdown by={data.leads.by_source} />} />
+        <CardLink title="Open Leads" onOpen={canSeeLeads ? go('lead') : undefined}>
+          <Tile label="Total Leads" value={data.leads.total}
+            sub={<Breakdown parts={[{ n: data.leads.new_this_week, label: 'new this week', tone: 'info' }]} />} />
+        </CardLink>
+        <CardLink title="Open Leads" onOpen={canSeeLeads ? go('lead') : undefined}>
+          <Tile label="Leads by Stage" value={Object.keys(data.leads.by_status).length}
+            sub={<TallyBreakdown by={data.leads.by_status} />} />
+        </CardLink>
+        <CardLink title="Open Leads" onOpen={canSeeLeads ? go('lead') : undefined}>
+          <Tile label="Lead Sources" value={Object.keys(data.leads.by_source).length}
+            sub={<TallyBreakdown by={data.leads.by_source} />} />
+        </CardLink>
         {/* A card, like every other tile on this row — the sub-line describes the number rather
             than being a link out. It was the one tile carrying a button, which made it read as a
             control rather than a figure. */}
-        <Tile label="Unread Mail" value={data.inbox.unread}
-          color={data.inbox.unread > 0 ? 'var(--info-700)' : undefined}
-          sub={<span className="tile-breakdown"><span className="tile-part info">
-            {data.inbox.unread > 0 ? 'waiting in the CRM inbox' : 'nothing unread'}
-          </span></span>} />
+        <CardLink title="Open the Inbox" onOpen={go('inbox')}>
+          <Tile label="Unread Mail" value={data.inbox.unread}
+            color={data.inbox.unread > 0 ? 'var(--info-700)' : undefined}
+            sub={<span className="tile-breakdown"><span className="tile-part info">
+              {data.inbox.unread > 0 ? 'waiting in the CRM inbox' : 'nothing unread'}
+            </span></span>} />
+        </CardLink>
       </div>
 
       <div className="tiles">
-        <Tile label="Lead Tasks" value={data.tasks.total} sub={
-          <Breakdown parts={[
-            { n: data.tasks.pending, label: 'pending', tone: 'info' },
-            { n: data.tasks.completed, label: 'completed', tone: 'ok' },
-            { n: data.tasks.cancelled, label: 'cancelled', tone: 'bad' },
-          ]} />
-        } />
+        <CardLink title="Show the Lead Tasks list" onOpen={canSeeLeads ? reveal('tasks') : undefined}>
+          <Tile label="Lead Tasks" value={data.tasks.total} sub={
+            <Breakdown parts={[
+              { n: data.tasks.pending, label: 'pending', tone: 'info' },
+              { n: data.tasks.completed, label: 'completed', tone: 'ok' },
+              { n: data.tasks.cancelled, label: 'cancelled', tone: 'bad' },
+            ]} />
+          } />
+        </CardLink>
         {/* Overdue counts as due. The headline was `due_today` alone, so a user with one task due
             today and two a week late read "1" — the two that most needed chasing were the ones the
             number left out. */}
-        <Tile label="Follow-ups Due" value={followUpsDue}
-          color={followUpsDue > 0 ? 'var(--info-700)' : undefined}
-          sub={<Breakdown parts={[
-            { n: data.tasks.due_today, label: 'due today', tone: 'info' },
-            { n: data.tasks.overdue, label: 'overdue', tone: 'bad' },
-          ]} />} />
+        <CardLink title="Show the Lead Tasks list" onOpen={canSeeLeads ? reveal('tasks') : undefined}>
+          <Tile label="Follow-ups Due" value={followUpsDue}
+            color={followUpsDue > 0 ? 'var(--info-700)' : undefined}
+            sub={<Breakdown parts={[
+              { n: data.tasks.due_today, label: 'due today', tone: 'info' },
+              { n: data.tasks.overdue, label: 'overdue', tone: 'bad' },
+            ]} />} />
+        </CardLink>
         {/* Counts of campaigns, not delivery statistics. The sub-line used to carry
             sent/opened/failed, which made the card read as a performance summary; those figures are
             unchanged and still on the Campaigns screen.
@@ -168,29 +222,35 @@ export default function CrmDashboardPage() {
             `scheduled` belongs here for the opposite reason: it is a COUNT OF CAMPAIGNS, and it is
             the one that is about to do something without being asked. A campaign waiting to go out
             is the only state on this card that changes on its own. */}
-        <Tile label="Campaigns" value={data.campaigns.total} sub={
-          <Breakdown parts={[
-            { n: data.campaigns.total, label: 'created' },
-            { n: data.campaigns.scheduled, label: 'scheduled', tone: 'info' },
-          ]} />
-        } />
+        <CardLink title="Open Campaigns" onOpen={can('campaigns', 'view') ? go('campaigns') : undefined}>
+          <Tile label="Campaigns" value={data.campaigns.total} sub={
+            <Breakdown parts={[
+              { n: data.campaigns.total, label: 'created' },
+              { n: data.campaigns.scheduled, label: 'scheduled', tone: 'info' },
+            ]} />
+          } />
+        </CardLink>
         {/* Two counts that do not overlap: today, and the thirty days after it. The headline is
             today's, because that is the one that changes what somebody does this morning. */}
-        <Tile label="CRM Calendar" value={data.calendar.today} sub={
-          <Breakdown parts={[
-            { n: data.calendar.today, label: "today's events", tone: 'info' },
-            { n: data.calendar.upcoming, label: 'next 30 days' },
-          ]} />
-        } />
+        <CardLink title="Open the CRM Calendar" onOpen={can('calendar', 'view') ? go('calendar') : undefined}>
+          <Tile label="CRM Calendar" value={data.calendar.today} sub={
+            <Breakdown parts={[
+              { n: data.calendar.today, label: "today's events", tone: 'info' },
+              { n: data.calendar.upcoming, label: 'next 30 days' },
+            ]} />
+          } />
+        </CardLink>
         {/* Headline and breakdown from ONE object. They used to come from two: the headline from
             the live list, the parts from the page-load payload — so adding a to-do gave "1" beside
             "0 pending" until the page was reloaded. */}
-        <Tile label="Todo List" value={todos.total} sub={
-          <Breakdown parts={[
-            { n: todos.pending, label: 'pending', tone: 'info' },
-            { n: todos.overdue, label: 'overdue', tone: 'bad' },
-          ]} />
-        } />
+        <CardLink title="Show the Todo List" onOpen={can('calendar', 'view') ? reveal('todos') : undefined}>
+          <Tile label="Todo List" value={todos.total} sub={
+            <Breakdown parts={[
+              { n: todos.pending, label: 'pending', tone: 'info' },
+              { n: todos.overdue, label: 'overdue', tone: 'bad' },
+            ]} />
+          } />
+        </CardLink>
       </div>
 
       {/*
@@ -211,12 +271,12 @@ export default function CrmDashboardPage() {
         </div>
       </div>
 
-      {canSeeLeads && !hidden.has('tasks') && <LeadTasksPanel feed={tasks} onPage={setTaskPage} />}
+      {canSeeLeads && !hidden.has('tasks') && <div id="crm-dash-tasks"><LeadTasksPanel feed={tasks} onPage={setTaskPage} /></div>}
       {canSeeLeads && !hidden.has('showings') && <LeadShowingsPanel feed={showings} onPage={setShowingPage} />}
 
       {/* The CRM's own list. Tasks added here belong to the CRM and do not appear on the
           Transaction Desk's list — section 11. */}
-      {can('calendar', 'view') && !hidden.has('todos') && <TodoList onCounts={takeTodoCounts} />}
+      {can('calendar', 'view') && !hidden.has('todos') && <div id="crm-dash-todos"><TodoList onCounts={takeTodoCounts} /></div>}
     </>
   );
 }
