@@ -736,7 +736,7 @@ export default function TransactionDetailPage() {
   const stTerminated = saleListing && form.statuses.includes('Terminated');
 
   // §5.1 — deal-side Mutual Release / Void restrict the page to Legal & Docs only
-  // (listing-family types are exempt). docRestrict limits which documents show.
+  // (listing-family types are exempt).
   const dealSide = !isListingStatusFamily(form.type);
   const stVoid = dealSide && form.statuses.includes('Void');
   const stMutualRelease = dealSide && form.statuses.includes('Mutual Release');
@@ -751,12 +751,22 @@ export default function TransactionDetailPage() {
   const hideStmtNos = stHdrActive || stHdrConditional; // Lawyer Statement + Notice of Sale
   const hideTradeSheet = stHdrActive;
   const docsOnly = stVoid || stMutualRelease;
-  const docRestrict = stVoid
-    ? ['agreement of purchase', 'aps', 'agreement to lease']
-    : stMutualRelease ? ['agreement of purchase', 'aps', 'agreement to lease', 'mutual release', 'deposit receipt']
-      : stActive ? ['listing agreement', 'mls data sheet', 'client photo', 'fintrac']
-        : stTerminated ? ['listing agreement', 'mls data sheet', 'client photo', 'fintrac', 'cancellation']
-          : null;
+  /*
+   * TD-159 - docRestrict WAS DELETED HERE on 2026-09-26, at the brokerage's instruction, because
+   * the approved sheet decides what a deal shows and a second list beside it can only ever drift.
+   *
+   * It had. It asked for 'mls data sheet' where the approved name is 'MLS Data Information Form',
+   * so that document was INVISIBLE on 17 Active and 77 Terminated sale listings - and its lists
+   * were shorter than the sheet's anyway, hiding the MLS Draft Sheet and the RECO Information
+   * Guide with it. Three of six required documents on those 94 deals could not be seen or uploaded.
+   *
+   * The old value, should anybody ever want it back:
+   *   stVoid           -> ['agreement of purchase', 'aps', 'agreement to lease']
+   *   stMutualRelease  -> the same plus 'mutual release', 'deposit receipt'
+   *   stActive         -> ['listing agreement', 'mls data sheet', 'client photo', 'fintrac']
+   *   stTerminated     -> the same plus 'cancellation'
+   * and hideTitles, which hid 'mutual release' on any deal that was not one.
+   */
 
   const slDepositOnly = stActive || stSoldCond; // Admin: deposit only · FAQ: deposit slip only · Financial: hide client/commission
   const slHideBasic = stActive || stTerminated; // hide Offer/Closing dates, Co-op Brokerage, Conditional Offer
@@ -1733,7 +1743,7 @@ export default function TransactionDetailPage() {
         />
       )}
       {docsOpen && (
-        <DocsModal open={docsOpen} onClose={() => setDocsOpen(false)} transactionId={id} txn={txn} restrictTitles={docRestrict} hideTitles={stMutualRelease ? [] : ['mutual release']} readOnly={isAgent ? false : (isDocumentation ? false : view)} agentMode={isAgent} canDeleteConditionDocs={isSuperAdmin} onSaved={reloadTxn} />
+        <DocsModal open={docsOpen} onClose={() => setDocsOpen(false)} transactionId={id} txn={txn} readOnly={isAgent ? false : (isDocumentation ? false : view)} agentMode={isAgent} canDeleteConditionDocs={isSuperAdmin} onSaved={reloadTxn} />
       )}
       {invoiceOpen && txn && (
         <InvoiceModal open={invoiceOpen} onClose={() => setInvoiceOpen(false)} txn={txn} />

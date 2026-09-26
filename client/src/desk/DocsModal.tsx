@@ -22,15 +22,13 @@ interface DocsModalProps {
   onClose: () => void;
   transactionId: number | string;
   txn?: Transaction | null;
-  restrictTitles?: string[] | null;
-  hideTitles?: string[];
   readOnly?: boolean;
   agentMode?: boolean;
   canDeleteConditionDocs?: boolean;
   onSaved?: (() => void) | null;
 }
 
-export default function DocsModal({ open, onClose, transactionId, txn = null, restrictTitles = null, hideTitles = [], readOnly = false, agentMode = false, canDeleteConditionDocs = false, onSaved = null }: DocsModalProps) {
+export default function DocsModal({ open, onClose, transactionId, txn = null, readOnly = false, agentMode = false, canDeleteConditionDocs = false, onSaved = null }: DocsModalProps) {
   const toast = useToast();
   const { isSuperAdmin } = useAuth();
   const { confirm, askDelete, closeConfirm } = useConfirm();
@@ -41,12 +39,17 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
   const validLocked = (d: DeskDocument) => d.validation === 'Valid' && !isSuperAdmin;
   const [docs, setDocs] = useState<DeskDocument[]>([]);
   const [f630Client, setF630Client] = useState<string | null>(null); // FINTRACK → open Form 630 for this client
-  // §5.1 — Mutual Release / Void limit the visible checklist to specific documents.
-  const docVisible = (d: DeskDocument) => {
-    const t = (d.title || '').toLowerCase();
-    if (hideTitles.some((k) => t.includes(k))) return false;
-    return !restrictTitles || restrictTitles.some((k) => t.includes(k));
-  };
+  /*
+   * TD-159 - THE SHEET DECIDES WHICH DOCUMENTS A DEAL SHOWS, AND NOTHING ELSE DOES.
+   *
+   * A docVisible() used to live here, filtering the list through restrictTitles and hideTitles
+   * handed down from TransactionDetailPage - a SECOND opinion about the brokerage's paperwork,
+   * written before the approved lists existed and never updated with them. It hid three of the six
+   * required documents on 17 Active and 77 Terminated sale listings, because it asked for 'mls data
+   * sheet' and the approved name is 'MLS Data Information Form', and because its list was simply
+   * shorter than the sheet's. Deleted at the brokerage's instruction of 2026-09-26; the commit
+   * message carries the old list verbatim if it is ever wanted back.
+   */
   const [clients, setClients] = useState<string[]>([]);
   // "Ready for RECO Audit" (Yes/No) + reason when No.
   const [recoReady, setRecoReady] = useState('');
@@ -55,6 +58,13 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [newTitle, setNewTitle] = useState('');
+  /*
+   * TD-135 - REQUIRED DOCUMENTS FIRST, THE REST BEHIND A LINK, at the brokerage's instruction of
+   * 2026-09-26. Their ruling of the day before is that nothing is removed from a deal, so an older
+   * deal can carry twenty rows of which six are required. The others are still there and still one
+   * click away - only what you see FIRST has changed.
+   */
+  const [showOptional, setShowOptional] = useState(false);
 
   const load = (showSpin = true) => {
     if (showSpin) setLoading(true);
@@ -77,7 +87,7 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
   if (!open) return null;
 
   // Counts reflect the documents actually shown (status-restricted list), not all docs.
-  const shownDocs = docs.filter(docVisible);
+  const shownDocs = docs;
   /*
    * TD-135 - THESE TILES COUNT REQUIRED DOCUMENTS ONLY, at the brokerage's instruction of
    * 2026-09-26.
@@ -97,6 +107,7 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
    * today - it was checked - but nothing outstanding is complete, not untouched.
    */
   const countedDocs = shownDocs.filter((d) => !!d.mandatory);
+  const optionalCount = shownDocs.length - countedDocs.length;
   const total = countedDocs.length;
   const received = countedDocs.filter((d) => d.status === 'Received').length;
   const valid = countedDocs.filter((d) => d.validation === 'Valid').length;
@@ -331,7 +342,7 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
           </div>
         </div>
 
-        {!loading && docs.some(docVisible) && (
+        {!loading && docs.length > 0 && (
           <div style={{ display: 'grid', gridTemplateColumns: COLS, gap: 8, alignItems: 'center', padding: '6px 12px', borderBottom: '2px solid var(--line)' }}>
             <div style={hCell}>Title</div>
             <div style={hCell}>Upload</div>
@@ -344,7 +355,7 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
           </div>
         )}
         {loading ? <div className="centered">Loading…</div> : docs.map((d, i) => {
-          if (!docVisible(d)) return null;
+          if (!d.mandatory && !showOptional) return null;
           const key = d.id ?? `new-${i}`;
           const open2 = !!expanded[key];
           const expandable = d.kind === 'multi' || d.kind === 'per_client';
@@ -616,6 +627,17 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
             </div>
           );
         })}
+        {!loading && optionalCount > 0 && (
+          <div style={{ textAlign: 'center', padding: '8px 0 2px' }}>
+            <button type="button" onClick={() => setShowOptional((v) => !v)}
+              style={{ background: 'none', border: 'none', color: 'var(--brand)', fontSize: 12.5,
+                fontWeight: 600, cursor: 'pointer', textDecoration: 'underline' }}>
+              {showOptional
+                ? `Hide the ${optionalCount} document${optionalCount === 1 ? '' : 's'} that are not required`
+                : `Show ${optionalCount} more document${optionalCount === 1 ? '' : 's'} that are not required`}
+            </button>
+          </div>
+        )}
 
         </fieldset>
 
