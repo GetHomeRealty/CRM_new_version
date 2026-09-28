@@ -1,6 +1,7 @@
 import { readFileSync, readdirSync, statSync } from 'fs';
 import { join } from 'path';
 import { DOC } from './checklist-definitions';
+import { sameDocumentsSection } from '../transactions/transactions-write.service';
 
 /*
  * TD-159 - NO RULE MAY WRITE A DOCUMENT NAME THE BROKERAGE DID NOT APPROVE.
@@ -152,5 +153,42 @@ describe('the website matches document titles only against approved names (TD-15
     // person would weaken it to get a deploy through. This case makes that impossible to mistake.
     const sample = "// if (doc.title.includes('mls data sheet')) {}\nconst x = 1;";
     expect(withoutComments(sample)).not.toContain('mls data sheet');
+  });
+});
+
+/*
+ * THE DOCUMENTS SECTION HAS ONE NAME - the brokerage renamed it on 2026-09-28.
+ *
+ * It had three. The constant said 'Legal & Documents', the panel heading said 'Legal &
+ * Documentation', and the checklist rebuild of 2026-09-26 wrote 890 history rows under the heading
+ * rather than the constant. Nothing anywhere asserted the name, which is how they drifted apart.
+ */
+describe('the documents section has one name', () => {
+  it('the service writes Documents', () => {
+    const src = readFileSync(join(__dirname, 'documents.service.ts'), 'utf8');
+    expect(src).toMatch(/const SECTION = 'Documents';/);
+  });
+
+  it('still recognises the names it used to have, so old history keeps its guard', () => {
+    // 19 agent changes were awaiting review under the old name on the day of the rename. Rejecting
+    // one looks for its entry by section; finding nothing reads as "the value has not moved", so
+    // the guard would silently stop guarding.
+    for (const older of ['Legal & Documents', 'Legal & Documentation']) {
+      expect(sameDocumentsSection(older, 'Documents')).toBe(true);
+      expect(sameDocumentsSection('Documents', older)).toBe(true);
+    }
+    expect(sameDocumentsSection('Documents', 'Client Information')).toBe(false);
+    expect(sameDocumentsSection(null, 'Documents')).toBe(false);
+    expect(sameDocumentsSection(undefined, undefined)).toBe(true);
+  });
+
+  it('leaves no website label still saying Legal &', () => {
+    const strays: string[] = [];
+    for (const file of sourceFiles(CLIENT_SRC)) {
+      if (withoutComments(readFileSync(file, 'utf8')).includes('Legal &')) {
+        strays.push(file.replace(CLIENT_SRC, ''));
+      }
+    }
+    expect(strays).toEqual([]);
   });
 });

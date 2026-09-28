@@ -198,7 +198,7 @@ export class RecycleBinService {
     await this.prisma.documents.update({ where: { id }, data: { deleted_at: null } });
     if (txn) {
       await this.audit.record(txn.id, this.actingUser(user), {
-        section: 'Legal & Documents', field: d.title, action: 'Document restored', source: 'Manual',
+        section: 'Documents', field: d.title, action: 'Document restored', source: 'Manual',
       });
     }
     return { message: 'Document restored' };

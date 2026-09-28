@@ -499,7 +499,7 @@ export default function AgentFaqModal({ open, onClose, transactionId, txn, onSav
           <div className="g2">
             <div className="field"><label style={lbl}>Valid Docs Cleared from Agent</label>
               <select value={form.docs_cleared} onChange={(e) => set('docs_cleared', e.target.value)}><option value="">Select</option><option>Yes</option><option>No</option></select>
-              <span className="help">Auto-set to Yes when every Legal &amp; Documentation item is Received &amp; Valid.</span></div>
+              <span className="help">Auto-set to Yes when every document is Received &amp; Valid.</span></div>
             <div className="field"><label style={lbl}>Final Validation</label>
               <select value={form.final_validation} onChange={(e) => set('final_validation', e.target.value)}><option value="">Select</option><option>Done</option><option>Pending</option><option>Invalid</option></select>
               <span className="help">Auto-set to Pending when Valid Docs Cleared = Yes.</span></div>
@@ -599,7 +599,7 @@ export default function AgentFaqModal({ open, onClose, transactionId, txn, onSav
           <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Commission Received Date</label><input type="date" value={invAdmin.commission_received_date || form.commission_received_date || ''} readOnly style={{ background: '#f9fafb' }} /><span className="help">Auto-reflected from Admin Activities.</span></div>
           <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Valid Docs Cleared from Agent</label>
             <select value={form.docs_cleared} onChange={(e) => set('docs_cleared', e.target.value)}><option value="">Select</option><option>Yes</option><option>No</option></select>
-            <span className="help">Auto-set to Yes when every Legal &amp; Documentation item is Received &amp; Valid.</span></div>
+            <span className="help">Auto-set to Yes when every document is Received &amp; Valid.</span></div>
           <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Final Validation</label>
             <select value={form.final_validation} onChange={(e) => set('final_validation', e.target.value)}><option value="">Select</option><option>Done</option><option>Pending</option><option>Invalid</option></select>
             <span className="help">Auto-set to Pending when docs cleared = Yes.</span></div>

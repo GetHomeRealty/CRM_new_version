@@ -408,7 +408,7 @@ export class TransactionImportService {
       'Dates are YYYY-MM-DD. Numbers are digits only — no $ and no commas.',
       'Only Transaction Type and Property Address are required for every row. Deal types also need Price, Offer Date, Closing Date, Commission Type and Commission Value; listing types need the two listing dates instead; Preconstruction needs neither commission column and takes its fee from the Precon columns.',
       'Deal Status must be valid for the type — see the Reference sheet of the blank template (Download Template).',
-      'Legal & Documentation cannot be imported; documents are uploaded per transaction.',
+      'Documents cannot be imported; they are uploaded per transaction.',
     ]) read.addRow(['', line]);
     read.getColumn(1).width = 4;
     read.getColumn(2).width = 120;
@@ -484,7 +484,7 @@ export class TransactionImportService {
       'Rows that fail validation are reported and skipped; the valid rows are still imported.',
       'A row matching an existing deal (same Type, Price, Offer Date and a similar Property Address) is reported as a duplicate and skipped.',
       'If one area of a transaction fails to write (say a malformed adjustment), the transaction and every other area are still saved — the skipped area is listed in the result and in the error report.',
-      'Legal & Documentation is deliberately NOT importable — documents are uploaded per deal.',
+      'Documents are deliberately NOT importable — documents are uploaded per deal.',
       ...CHILD_SHEETS.map((c) => `${c.sheet}: ${c.note}`),
     ]) guide.addRow(['', note]);
   }

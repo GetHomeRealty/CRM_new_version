@@ -304,7 +304,7 @@ export default function DepositReceiptModal({ open, onClose, txn, settings = nul
           }
         } catch { /* non-fatal */ }
       }
-      toast(`Deposit Receipt sent to ${f.recipient_email}${attached ? ` • ${attached} slip(s) added to Legal & Documentation` : ''}`, 'ok');
+      toast(`Deposit Receipt sent to ${f.recipient_email}${attached ? ` • ${attached} slip(s) added to Documents` : ''}`, 'ok');
     } catch (e) { toast(apiErrorMessage(e, 'Could not send'), 'bad'); }
     finally { setSending(false); }
   };

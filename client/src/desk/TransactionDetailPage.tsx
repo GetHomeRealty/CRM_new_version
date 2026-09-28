@@ -631,7 +631,7 @@ export default function TransactionDetailPage() {
   const rmCond = (i: number) => askDelete({
     title: 'Delete condition?',
     message: `Remove condition "${form.conditions[i]?.custom_name || form.conditions[i]?.type || `#${i + 1}`}"?`,
-    linked: ['Its matching row in Legal & Documentation (and any files uploaded to it)', 'Document clearance / Final Validation in Agent Payment Readiness'],
+    linked: ['Its matching row in Documents (and any files uploaded to it)', 'Document clearance / Final Validation in Agent Payment Readiness'],
     note: 'The change is saved automatically a moment after you confirm.',
     onConfirm: () => setForm((f) => (f ? { ...f, conditions: f.conditions.filter((_, idx) => idx !== i) } : f)),
   });
@@ -1036,7 +1036,7 @@ export default function TransactionDetailPage() {
                 {pendingReq && <span className="pill warn" style={{ fontSize: 10 }}>Awaiting approval</span>}
               </>)
             : isDocumentation
-            ? <span className="pill info" style={{ fontSize: 10 }} title="Documentation role: edit Legal & Documentation from its section. All other sections are view-only."><Icon name="doc" size={11} /> Legal &amp; Docs editable</span>
+            ? <span className="pill info" style={{ fontSize: 10 }} title="Documentation role: edit Documents from its section. All other sections are view-only."><Icon name="doc" size={11} /> Documents editable</span>
             : view
             ? <button className="btn primary sm" onClick={() => setMode('edit')}><Icon name="edit" size={13} /> Edit{lockedForUser && approvedReq ? ' (approved)' : ''}</button>
             : (<>
@@ -1260,7 +1260,7 @@ export default function TransactionDetailPage() {
             {coreDocReminders.map((t) => <li key={t}>{t}</li>)}
           </ul>
           <div style={{ marginTop: 8 }}>
-            <button className="btn ghost sm" onClick={() => setDocsOpen(true)}><Icon name="folder" size={13} /> Open Legal &amp; Documentation</button>
+            <button className="btn ghost sm" onClick={() => setDocsOpen(true)}><Icon name="folder" size={13} /> Open Documents</button>
           </div>
         </div>
       )}
@@ -1421,7 +1421,7 @@ export default function TransactionDetailPage() {
               )}
               {!docsOnly && !slNoSections && canEdit && form.agent && teamSplitVisible && <button className="btn ghost sm" style={{ textAlign: 'left' }} onClick={() => setTeamOpen(true)}><Icon name="users" size={13} /> Team Split</button>}
               {!docsOnly && !slHideLawyer && canEdit && !lawyerHidden && <button className="btn ghost sm" style={{ textAlign: 'left' }} onClick={() => setLawyerOpen(true)}><Icon name="scale" size={13} /> Lawyer Details</button>}
-              {canEdit && <button className="btn ghost sm" style={{ textAlign: 'left' }} onClick={() => setDocsOpen(true)}><Icon name="report" size={13} /> Legal &amp; Docs</button>}
+              {canEdit && <button className="btn ghost sm" style={{ textAlign: 'left' }} onClick={() => setDocsOpen(true)}><Icon name="report" size={13} /> Documents</button>}
               {/* Admin Activities, Adjustment and Audit Trail are admin-only (hidden from agents). */}
               {!isAgent && !docsOnly && !slNoSections && canEdit && <button className="btn ghost sm" style={{ textAlign: 'left' }} onClick={() => setAdminOpen(true)}><Icon name="wrench" size={13} /> Admin</button>}
               {!docsOnly && !slNoSections && canEdit && <button className="btn ghost sm" style={{ textAlign: 'left' }} onClick={() => setFinOpen(true)}><Icon name="dollar" size={13} /> Financial</button>}

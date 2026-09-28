@@ -23,7 +23,12 @@ import { STORAGE_ROOT } from '../config/storage';
 import { can, isAgent } from '../core/authz';
 import { ownsTransaction, teamMemberIdentity } from '../common/transaction-scope';
 import { ResourceAccessService } from '../core/resource-access.service';
-const SECTION = 'Legal & Documents';
+/*
+ * THE SECTION NAME THE BROKERAGE CHOSE, 2026-09-28. It was 'Legal & Documents'; the panel
+ * heading said 'Legal & Documentation'; and a checklist rebuild on 2026-09-26 wrote 890 history
+ * rows under the heading rather than this constant. One name now, from one place.
+ */
+const SECTION = 'Documents';
 
 /*
  * TD-023 - what may be filed as a transaction document.

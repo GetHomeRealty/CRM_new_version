@@ -264,7 +264,7 @@ export default function NoticeOfSaleModal({ open, onClose, txn, onSaved = null }
           {/* Documents & Signatures card */}
           <div style={card}>
             <div style={sectionTitle}>Mandatory Documents</div>
-            {nosDocs.length === 0 && <div style={{ fontSize: 12, color: '#64748b', marginBottom: 14 }}>No documents in the Legal &amp; Documentation section yet.</div>}
+            {nosDocs.length === 0 && <div style={{ fontSize: 12, color: '#64748b', marginBottom: 14 }}>No documents on this deal yet.</div>}
             {/* Column-major: up to 6 per column, then the 7th sits beside the 1st, 8th beside the 2nd, … */}
             <div style={{ display: 'grid', gridAutoFlow: 'column', gridTemplateRows: `repeat(${Math.min(6, nosDocs.length || 1)}, auto)`, gridAutoColumns: '1fr', gap: '8px 28px', marginBottom: 14 }}>
               {nosDocs.map((d) => {

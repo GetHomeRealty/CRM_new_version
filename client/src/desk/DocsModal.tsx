@@ -258,7 +258,7 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
     <div className="overlay open" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="modal xl" style={{ maxHeight: '92vh', overflowY: 'auto' }}>
         <button className="close" onClick={onClose}><Icon name="close" size={15} /></button>
-        <div className="modal-h" style={{ marginBottom: 4 }}>Legal &amp; Documentation</div>
+        <div className="modal-h" style={{ marginBottom: 4 }}>Documents</div>
         <div style={{ fontSize: 12, color: 'var(--muted)', margin: '0 0 16px 12px' }}>Track receipt &amp; validation of every required document for this transaction.</div>
         {agentMode && <div className="card" style={{ background: 'var(--info-bg)', marginBottom: 12 }}>
           <strong>Uploads are drafts until you submit.</strong> View, replace, or delete your draft files below. Admin is notified only after you click <strong>Submit to Admin</strong>. Previously submitted files stay protected.
