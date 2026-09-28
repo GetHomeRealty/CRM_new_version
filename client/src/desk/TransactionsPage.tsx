@@ -45,8 +45,24 @@ const toQuery = (f: Filters): TransactionQuery => ({
   offer_from: f.offerFrom, offer_to: f.offerTo, closing_from: f.closingFrom, closing_to: f.closingTo,
 });
 
+/*
+ * THE DESK OPENS ON THE DEALS BEING WORKED, at the brokerage's instruction of 2026-09-28.
+ *
+ * 890 live deals, of which 128 carry one of these three. The rest - 335 Closed, 169 Terminated,
+ * 127 Leased, 59 Mutual Release, 31 Expired, 29 Sold and a handful of Void, Suspended and DFT -
+ * are finished business that was filling the screen every morning.
+ *
+ * NOTHING IS HIDDEN, only deferred: this is the ordinary status filter with a starting value, and
+ * 'All statuses' sits directly beneath it in the same dropdown. It RESETS to this on every visit,
+ * which the brokerage chose over remembering a changed filter.
+ *
+ * The server takes several statuses comma separated; a value without a comma still takes the path
+ * it always did, so every other filter on this screen is unaffected.
+ */
+const OPEN_AND_FIRM = 'Secured Firm,Active,Sold Conditional';
+
 const EMPTY_FILTERS: Filters = {
-  q: '', year: '', type: '', validation: '', agent: '', commission: '', status: '',
+  q: '', year: '', type: '', validation: '', agent: '', commission: '', status: OPEN_AND_FIRM,
   // Advanced ribbon filters
   offerFrom: '', offerTo: '', closingFrom: '', closingTo: '', payout: '', client: '', brokerage: '',
 };
@@ -299,6 +315,7 @@ export default function TransactionsPage() {
             Lease Conditional, Secured Firm and Secured Conditional entirely — so conditional and
             secured deals could not be filtered for at all.
           */}
+          <option value={OPEN_AND_FIRM}>Open &amp; firm</option>
           <option value="">All statuses</option>
           {ALL_STATUSES.map((s) => <option key={s}>{s}</option>)}
         </select>

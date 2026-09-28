@@ -144,3 +144,85 @@ describe('the transactions search finds a deal by its client (TD-090)', () => {
     expect((clause as { OR: unknown[] }).OR).toHaveLength(4);
   });
 });
+
+/*
+ * THE DESK OPENS ON THE DEALS BEING WORKED - the brokerage's instruction of 2026-09-28. The list
+ * accepts several statuses at once, comma separated, so the default view can be Secured Firm,
+ * Active and Sold Conditional: 128 of the 890 live deals rather than all of them.
+ *
+ * WHAT MUST NOT CHANGE IS THE POINT OF THESE CASES. A value with no comma cannot reach the new
+ * branch at all, so every filter that worked before behaves identically; the first and third cases
+ * below assert exactly that, and would fail if the single-status path had been disturbed.
+ */
+async function statusFixture(tx: PrismaService) {
+  const now = new Date();
+  const stamp = `ZZSTAT${Date.now()}${++seq}`;
+  const mk = async (label: string, statuses: string[]) => {
+    const t = await tx.transactions.create({
+      data: {
+        trade_no: `${stamp}-${label}`, type: 'Residential Buying',
+        property: `${stamp} Status Road`, agent: 'ZZ Test',
+        adjustments: '{}', admin_activities: '{}', activity_tracker: '{}',
+        created_at: now, updated_at: now,
+      },
+    });
+    for (const status of statuses) {
+      await tx.transaction_statuses.create({
+        data: { transaction_id: t.id, status, created_at: now, updated_at: now },
+      });
+    }
+    return t.id;
+  };
+  return {
+    stamp,
+    firm: await mk('firm', ['Secured Firm']),
+    active: await mk('active', ['Active']),
+    closed: await mk('closed', ['Closed']),
+    noStatus: await mk('none', []),
+  };
+}
+
+const idsByStatus = async (tx: PrismaService, stamp: string, status: string): Promise<number[]> => {
+  const res = await listFor(tx).index(OFFICE, { q: stamp, status } as never);
+  return (res.data as { id: number }[]).map((t) => t.id).sort((a, b) => a - b);
+};
+
+describe('the desk can be filtered by several statuses at once', () => {
+  jest.setTimeout(120_000);
+
+  it('still returns exactly one status when asked for one - the behaviour that must not change', async () => {
+    await inRollback(async (tx) => {
+      const f = await statusFixture(tx);
+      expect(await idsByStatus(tx, f.stamp, 'Secured Firm')).toEqual([f.firm]);
+      expect(await idsByStatus(tx, f.stamp, 'Closed')).toEqual([f.closed]);
+    });
+  });
+
+  it('returns the union when asked for several', async () => {
+    await inRollback(async (tx) => {
+      const f = await statusFixture(tx);
+      expect(await idsByStatus(tx, f.stamp, 'Secured Firm,Active,Sold Conditional'))
+        .toEqual([f.firm, f.active].sort((a, b) => a - b));
+    });
+  });
+
+  it('keeps Open meaning "no status rows either", alone and in a list', async () => {
+    // A deal with no status rows displays as Open. The single-status path has always included it;
+    // the new path must too, or the default view would quietly lose those deals.
+    await inRollback(async (tx) => {
+      const f = await statusFixture(tx);
+      expect(await idsByStatus(tx, f.stamp, 'Open')).toEqual([f.noStatus]);
+      expect(await idsByStatus(tx, f.stamp, 'Open,Closed'))
+        .toEqual([f.closed, f.noStatus].sort((a, b) => a - b));
+    });
+  });
+
+  it('leaves the closed deal out of the brokerage default', async () => {
+    await inRollback(async (tx) => {
+      const f = await statusFixture(tx);
+      const shown = await idsByStatus(tx, f.stamp, 'Secured Firm,Active,Sold Conditional');
+      expect(shown).not.toContain(f.closed);
+      expect(shown).not.toContain(f.noStatus);
+    });
+  });
+});

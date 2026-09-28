@@ -75,12 +75,34 @@ export function filterClauses(q: ListTransactionsDto): Prisma.transactionsWhereI
   // A transaction with no status rows was displayed as "Open" (statusList falls back to it), so
   // filtering by Open has to include those rows as well as rows explicitly marked Open.
   if (has(q.status)) {
-    const status = q.status.trim();
-    out.push(
-      status === 'Open'
-        ? { OR: [{ transaction_statuses: { none: {} } }, { transaction_statuses: { some: { status } } }] }
-        : { transaction_statuses: { some: { status } } },
-    );
+    const raw = q.status.trim();
+    if (!raw.includes(',')) {
+      // Unchanged, deliberately: a single status takes exactly the path it always has.
+      const status = raw;
+      out.push(
+        status === 'Open'
+          ? { OR: [{ transaction_statuses: { none: {} } }, { transaction_statuses: { some: { status } } }] }
+          : { transaction_statuses: { some: { status } } },
+      );
+    } else {
+      /*
+       * SEVERAL STATUSES AT ONCE, comma separated - the brokerage's default desk view of
+       * 2026-09-28: Secured Firm, Active and Sold Conditional, the deals actually being worked.
+       *
+       * ADDITIVE ON PURPOSE. A value with no comma cannot reach here at all, so every filter that
+       * worked before this change behaves identically after it. Only a comma opens the new path.
+       *
+       * The Open special case is kept: a deal with NO status rows displays as Open, so asking for
+       * Open has to include those rows as well as the ones explicitly marked Open.
+       */
+      const wanted = raw.split(',').map((x) => x.trim()).filter(Boolean);
+      if (wanted.length > 0) {
+        const some = { transaction_statuses: { some: { status: { in: wanted } } } };
+        out.push(wanted.includes('Open')
+          ? { OR: [{ transaction_statuses: { none: {} } }, some] }
+          : some);
+      }
+    }
   }
 
   const offerFrom = dateAt(q.offer_from);
