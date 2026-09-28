@@ -1,4 +1,4 @@
-import { readFileSync } from 'fs';
+import { readFileSync, readdirSync, statSync } from 'fs';
 import { join } from 'path';
 import { DOC } from './checklist-definitions';
 
@@ -58,5 +58,99 @@ describe('every document name this service writes is one the brokerage approved 
     // carry one, to prove an empty result means 'none present' and not 'the regex is broken'.
     const sample = "data: { title: 'FINTRACK', updated_at: new Date() }";
     expect([...sample.matchAll(/title:\s*'([^']+)'/g)].map((m) => m[1])).toEqual(['FINTRACK']);
+  });
+});
+
+/*
+ * TD-159 - THE SAME RULE FOR THE WEBSITE, which is where the costly copy was hiding.
+ *
+ * On 2026-09-26 the client held three stale copies of the brokerage's names. The expensive one was
+ * docRestrict: it asked for 'mls data sheet' after the approved name became 'MLS Data Information
+ * Form', so THREE of the six required documents were invisible and unuploadable on 17 Active and 77
+ * Terminated sale listings. Nothing failed. Nothing was logged. Every figure reconciled.
+ *
+ * WHAT THIS GUARDS AND WHAT IT DOES NOT, stated plainly because a guard nobody understands is a
+ * guard nobody trusts. It reads every website source file, STRIPS COMMENTS so the notes recording
+ * those faults do not trip it, and looks for lines comparing a DOCUMENT's title - d.title,
+ * doc.title or document.title - against a quoted phrase. Each phrase must match one of the
+ * brokerage's approved names. It cannot see a phrase held in a variable several lines away, and it
+ * ignores headings and labels, which are matched against nothing. A net with a known mesh, not a
+ * proof - but the mesh is exactly the size of the three faults it was built from.
+ */
+
+const CLIENT_SRC = join(__dirname, '..', '..', '..', 'client', 'src');
+
+const sourceFiles = (dir: string): string[] => {
+  const out: string[] = [];
+  for (const entry of readdirSync(dir)) {
+    const full = join(dir, entry);
+    if (statSync(full).isDirectory()) out.push(...sourceFiles(full));
+    else if (/\.tsx?$/.test(entry)) out.push(full);
+  }
+  return out;
+};
+
+/** Comments carry the history of these faults; they must not be mistaken for the faults. */
+const withoutComments = (src: string): string =>
+  src.replace(/\/\*[\s\S]*?\*\//g, '').split('\n').map((l) => l.replace(/\/\/.*$/, '')).join('\n');
+
+/** Phrases compared against a DOCUMENT's title, file by file. */
+const titleComparisons = (): { file: string; phrase: string }[] => {
+  const found: { file: string; phrase: string }[] = [];
+  for (const file of sourceFiles(CLIENT_SRC)) {
+    for (const line of withoutComments(readFileSync(file, 'utf8')).split('\n')) {
+      if (!/\b(d|doc|document)\.title\b/.test(line)) continue;
+      if (!/includes\(|===|startsWith\(|\.match\(/.test(line)) continue;
+      /*
+       * EMPTY STRINGS MUST BE MATCHED, NOT SKIPPED, or the pairing walks off by one. The first
+       * draft required 2-60 characters between the quotes, which cannot match '' - so on
+       * `(d.title || '').toLowerCase().includes('fintrac')` it paired the SECOND quote of the
+       * empty string with the opening quote of 'fintrac', captured the code between them, and
+       * missed the only phrase on the line. The guard reported a fault that was not there and
+       * missed the one thing it was built to see.
+       */
+      for (const m of line.matchAll(/'([^']*)'/g)) {
+        if (m[1].trim().length >= 3) found.push({ file, phrase: m[1] });
+      }
+    }
+  }
+  return found;
+};
+
+describe('the website matches document titles only against approved names (TD-159)', () => {
+  const matchesAnApproved = (phrase: string): boolean => {
+    const p = phrase.trim().toLowerCase();
+    if (!p) return false;
+    return Object.values(DOC).some((n) => {
+      const name = n.toLowerCase();
+      return name.includes(p) || p.includes(name);
+    });
+  };
+
+  it('finds the website source at all, so this cannot pass by looking at nothing', () => {
+    // If the repository is ever rearranged, this fails LOUDLY rather than quietly guarding air.
+    const files = sourceFiles(CLIENT_SRC);
+    expect(files.length).toBeGreaterThan(50);
+    expect(files.some((f) => f.endsWith('DocsModal.tsx'))).toBe(true);
+  });
+
+  it('compares a document title against no phrase the sheet lacks', () => {
+    const strays = titleComparisons().filter((c) => !matchesAnApproved(c.phrase));
+    expect(strays.map((c) => c.phrase + '   in ' + c.file.replace(CLIENT_SRC, ''))).toEqual([]);
+  });
+
+  it('does find the one legitimate comparison, so the case above is not vacuous', () => {
+    // FINTRACK Form 630 is opened per client off this check, and 'fintrac' is inside 'Fintrac'.
+    const found = titleComparisons();
+    expect(found.length).toBeGreaterThan(0);
+    expect(found.some((c) => c.phrase === 'fintrac')).toBe(true);
+  });
+
+  it('ignores a stale name that appears only in a comment', () => {
+    // The comments left on 2026-09-26 quote 'mls data sheet' deliberately, to record what was wrong.
+    // If comment stripping ever broke, this suite would fail for the wrong reason and the next
+    // person would weaken it to get a deploy through. This case makes that impossible to mistake.
+    const sample = "// if (doc.title.includes('mls data sheet')) {}\nconst x = 1;";
+    expect(withoutComments(sample)).not.toContain('mls data sheet');
   });
 });
