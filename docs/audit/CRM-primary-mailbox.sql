@@ -1,10 +1,22 @@
 -- Give the CRM a BROKERAGE primary mailbox, so the sender is CHOSEN rather than inherited.
 --
--- WHY THIS IS NEEDED. Clients received mail from a colleague's address — the "sent through Veena"
--- report. Nobody chose that; the sender lookup did. Every mail account in this system belongs to a
--- PERSON, so every shared-account lookup in `MailAccountService.defaultSender` misses and resolution
--- falls through to "somebody's personal CRM account", taken in id order. Which colleague that is, is
--- an accident of which row sorts first.
+-- WHY THIS IS NEEDED. Mail leaves from a colleague's address — the "sent through Veena" report, and
+-- since then from `info@`, `precon@` and an agent's personal Gmail, for the SAME kind of message on
+-- different days. Nobody chose any of them; the sender lookup did. Every mail account in this system
+-- belongs to a PERSON, so every shared-account lookup misses and resolution falls through to
+-- somebody's personal mailbox.
+--
+-- AND IT DRIFTS, which is the part that makes it look intermittent. Two different last resorts are
+-- in play. `MailAccountService.defaultSender` ends with `orderBy: { id: 'asc' }`, so that path at
+-- least picks the same row every time. `MailerService.resolveSender` — which every notification,
+-- OTP, password reset and reminder reaches, because the dispatcher names no account — ends with:
+--
+--     findFirst({ where: { is_active: true, sync_error: null } })
+--
+-- with NO `orderBy` at all. Postgres may return any matching row, and which one can change as rows
+-- are updated. That is why the same notification arrives from a different colleague week to week.
+-- The code logs a warning on every such send: grep the application log for "ANOTHER USER'S mailbox"
+-- to count them, and watch it stop once this script has run.
 --
 -- `is_default` DOES NOT MEAN "the brokerage's primary". It is stored per owner, which is why several
 -- accounts each carry is_default = true — they are several people's own defaults. `setDefault` calls
@@ -15,9 +27,25 @@
 -- WHAT THE CODE CHANGE DID, AND WHAT IS LEFT FOR THIS SCRIPT. `senderFor` and `resolveSender` now
 -- consult a brokerage primary — an account with `user_id IS NULL`, `is_default`, `is_active` — BEFORE
 -- the sender's own mailbox, which is the precedence that was missing. Both are inert until such a row
--- exists. Creating one is the only step SQL is needed for, and only because the mailbox you want is
--- currently owned by a person; a brokerage account added through admin Email Settings is already
--- `user_id IS NULL` and needs nothing here.
+-- exists, so the code is safe to deploy before this runs. Creating the row is the remaining step.
+--
+-- AND IT HAS TO BE DONE HERE, NOT ON THE ADMIN SCREEN. Super Admin -> Email Settings does create
+-- brokerage-owned rows (`store()` sets no `user_id`), so it looks like the obvious route — but its
+-- form collects host, port, username and PASSWORD, and every mail account in this deployment is
+-- `encryption = 'oauth'`, where `password` holds an encrypted Google REFRESH TOKEN rather than a
+-- password. There is no OAuth flow on that screen, and Google Workspace refuses basic SMTP auth, so
+-- an account added there would be accepted and then fail on every send.
+--
+-- Moving an existing row keeps the credential that already works: `dispatch()` reads only
+-- `username`/`from_email` and the decrypted refresh token, plus the app's own client id and secret.
+-- It never looks at `user_id`, so ownership can change without touching the Google connection.
+-- Inbound is the same: `ImapSyncService.pollAll` filters on `inbound_enabled`, `is_active` and
+-- `imap_host`, never on the owner.
+--
+-- ONE LATER SURPRISE TO KNOW ABOUT. `GmailConnectService` finds a row to reconnect with
+-- `where: { user_id: userId, ... }`. After this runs, the previous owner reconnecting Google for the
+-- same address will not match the now-ownerless row and will create a SECOND personal row for it.
+-- Harmless — the brokerage row still wins, because it is checked first — but you will see two.
 --
 -- MATCHED BY ADDRESS, NOT ID. Ids differ between databases; the development id means nothing here.
 -- Check the SELECT at the top against your own data before committing.

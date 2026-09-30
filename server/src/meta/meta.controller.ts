@@ -310,23 +310,37 @@ export class MetaController {
 
   @Get('leads')
   @Screen('meta', 'view')
-  async leads(@CurrentUser() user: AuthUserRecord, @Query('limit') limit?: string): Promise<Record<string, unknown>> {
+  async leads(
+    @CurrentUser() user: AuthUserRecord,
+    @Query('limit') limit?: string,
+    @Query('form_id') formId?: string,
+  ): Promise<Record<string, unknown>> {
     const take = Math.min(200, Math.max(1, Number(limit) || 50));
     // Same scope as the card above, for the same reason: the list and the tiles counting it must
     // answer one question. `liveLeadWhere` already excludes deleted rows.
     const where = { AND: [{ source: 'facebook_meta' }, liveLeadWhere(user)] };
+    /*
+     * `form_id` narrows the LIST to one lead form, for the Meta screen's "click a form to see its
+     * leads". The stats deliberately keep the unfiltered scope: they are the module's tiles, and a
+     * tile that changed when a form was clicked would stop meaning "Meta leads". `form_total` is
+     * the filtered count, so the list can say how many it holds.
+     */
+    const form = formId?.trim().slice(0, 64) || null;
+    const listWhere = form ? { AND: [where, { facebook_form_id: form }] } : where;
     const startOfDay = new Date(); startOfDay.setHours(0, 0, 0, 0);
     const startOfWeek = new Date(startOfDay); startOfWeek.setDate(startOfWeek.getDate() - startOfWeek.getDay());
 
-    const [rows, total, today, week] = await Promise.all([
-      this.prisma.leads.findMany({ where, orderBy: [{ created_at: 'desc' }, { id: 'desc' }], take }),
+    const [rows, total, today, week, formTotal] = await Promise.all([
+      this.prisma.leads.findMany({ where: listWhere, orderBy: [{ created_at: 'desc' }, { id: 'desc' }], take }),
       this.prisma.leads.count({ where }),
       this.prisma.leads.count({ where: { ...where, created_at: { gte: startOfDay } } }),
       this.prisma.leads.count({ where: { ...where, created_at: { gte: startOfWeek } } }),
+      form ? this.prisma.leads.count({ where: listWhere }) : Promise.resolve(null),
     ]);
 
     return {
       stats: { total, today, week },
+      ...(form ? { form_total: formTotal } : {}),
       data: rows.map((r) => ({
         id: r.id, name: r.name, email: r.email, phone: r.phone,
         message: r.message, property: r.property, lead_status: r.lead_status,

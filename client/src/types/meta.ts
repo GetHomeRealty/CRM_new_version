@@ -104,6 +104,8 @@ export interface MetaLeadRow {
 export interface MetaLeadsResponse {
   stats: { total: number; today: number; week: number };
   data: MetaLeadRow[];
+  /** Present only when the list was filtered to one form: how many of its leads are in the CRM. */
+  form_total?: number;
 }
 
 export interface MetaSyncResult {

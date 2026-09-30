@@ -32,8 +32,9 @@ export const syncMetaLeads = (): Promise<MetaSyncResult> =>
 export const disconnectMeta = (): Promise<void> =>
   api.delete('/api/meta/disconnect').then(() => undefined);
 
-export const metaLeads = (limit = 50): Promise<MetaLeadsResponse> =>
-  api.get<MetaLeadsResponse>('/api/meta/leads', { params: { limit } }).then((r) => r.data);
+/** `formId` narrows the list (not the stats) to one lead form's leads. */
+export const metaLeads = (limit = 50, formId?: string): Promise<MetaLeadsResponse> =>
+  api.get<MetaLeadsResponse>('/api/meta/leads', { params: { limit, form_id: formId || undefined } }).then((r) => r.data);
 
 export const metaDiagnostics = (): Promise<MetaDiagnostics> =>
   api.get<MetaDiagnostics>('/api/meta/diagnostics').then((r) => r.data);

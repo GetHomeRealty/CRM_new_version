@@ -1,5 +1,5 @@
 import { crmPath } from './area';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   disconnectMeta, metaAuthUrl, metaDiagnostics, metaForms, metaLeads, metaPages, metaStatus,
@@ -50,6 +50,31 @@ export default function MetaPage() {
    * fired. `/api/meta/webhook-health` is the only endpoint that knows, and nothing consulted it.
    */
   const [webhook, setWebhook] = useState<MetaWebhookHealth | null>(null);
+  /*
+   * The lead form whose leads the list below is showing, or null for every Meta lead. Picked by
+   * clicking a form. The tiles stay the whole module's counts either way — the API filters the list
+   * only — so clicking a form never changes what "Meta leads" means.
+   */
+  const [formFilter, setFormFilter] = useState<{ id: string; name: string } | null>(null);
+  const [formTotal, setFormTotal] = useState<number | null>(null);
+  /*
+   * WHY THE LIST NOW REMEMBERS THAT IT FAILED.
+   *
+   * `loadLeads` swallowed every error, so a request that never returned rows rendered exactly like
+   * one that returned none: "No leads from this form are in the CRM yet. Only connected forms are
+   * synced - connect it and press Sync Now to bring them in."
+   *
+   * Observed on a database missing a migration: `/api/meta/leads` answered 500 with
+   * `The column leads.lead_estimation does not exist`, and the screen said there were no leads for a
+   * form that had 32. Every clause of that sentence was false - the form WAS connected, the leads
+   * WERE in the CRM, and Sync Now could not have helped - and it sent the reader to fix the one
+   * thing that was not broken.
+   *
+   * Swallowing stays right for the connection panel, which is what the screen is for; what was wrong
+   * was reporting the failure as an answer.
+   */
+  const [leadsError, setLeadsError] = useState('');
+  const leadsRef = useRef<HTMLDivElement>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState('');
 
@@ -62,18 +87,38 @@ export default function MetaPage() {
 
   const loadLeads = useCallback(async () => {
     try {
-      const res = await metaLeads(50);
+      // 200 for one form, the API's ceiling: that view is about the form's whole set, where the
+      // unfiltered list is only the most recent arrivals.
+      const res = await metaLeads(formFilter ? 200 : 50, formFilter?.id);
       setLeads(res.data);
       setLeadStats(res.stats);
-    } catch { /* the lead list is secondary to the connection panel */ }
-  }, []);
+      setFormTotal(res.form_total ?? null);
+      setLeadsError('');
+    } catch (ex) {
+      // Still no toast: the connection panel is what this screen is for, and a toast on every
+      // reload would be noise. The list says so itself, where the missing rows would have been.
+      setLeads([]);
+      setFormTotal(null);
+      setLeadsError(apiErrorMessage(ex, 'Could not load Meta leads'));
+    }
+  }, [formFilter]);
 
   useEffect(() => {
     void (async () => {
       await Promise.all([loadStatus(), loadLeads()]);
       setLoading(false);
     })();
-  }, [loadStatus, loadLeads]);
+    // Once on arrival. The lead list reloads on its own below whenever the form filter changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadStatus]);
+
+  useEffect(() => { if (!loading) void loadLeads(); }, [loadLeads]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** Clicking a form shows its leads; clicking the same form again goes back to all of them. */
+  const showForm = (f: MetaForm) => {
+    setFormFilter((cur) => (cur?.id === f.id ? null : { id: f.id, name: f.name }));
+    leadsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
 
   // The OAuth callback redirects back here with the outcome in the query string.
   useEffect(() => {
@@ -103,6 +148,8 @@ export default function MetaPage() {
   }, [status?.is_connected]);
 
   useEffect(() => {
+    // A different Page has different forms, so a filter picked on the last one no longer applies.
+    setFormFilter(null);
     if (!selectedPage) { setForms([]); return; }
     metaForms(selectedPage)
       .then((r) => setForms(r.forms))
@@ -288,14 +335,19 @@ export default function MetaPage() {
           ) : (
             <ul className="meta-forms">
               {forms.map((f) => (
-                <li key={f.id}>
-                  <div>
+                <li key={f.id}
+                  style={formFilter?.id === f.id ? { borderColor: 'var(--accent)', boxShadow: 'inset 3px 0 0 var(--accent)' } : undefined}>
+                  {/* The name and counts are the button, not the whole row: Connect/Disconnect
+                      beside it keeps its own job, so pressing it never also filters the list. */}
+                  <button type="button" onClick={() => showForm(f)} aria-pressed={formFilter?.id === f.id}
+                    title={formFilter?.id === f.id ? 'Show all Meta leads' : `Show leads from ${f.name}`}
+                    style={{ all: 'unset', cursor: 'pointer', flex: 1, minWidth: 0 }}>
                     <strong>{f.name}</strong>
                     <div className="muted">
                       {f.leads_count} lead{f.leads_count === 1 ? '' : 's'} on Meta
                       {f.status ? ` · ${f.status.toLowerCase()}` : ''}
                     </div>
-                  </div>
+                  </button>
                   <div className="toolbar-row">
                     <span className={`pill ${f.is_connected ? 'ok' : ''}`}>{f.is_connected ? 'Connected' : 'Off'}</span>
                     {canEdit && (
@@ -309,16 +361,32 @@ export default function MetaPage() {
             </ul>
           )}
           <p className="help">
-            Only connected forms are read. Leads also arrive instantly by webhook once the
+            Click a form to see its leads below. Only connected forms are read. Leads also arrive instantly by webhook once the
             subscription is configured in Meta.
           </p>
         </div>
       </div>
 
-      <div className="card">
-        <div className="modal-sub">Recent Meta Leads</div>
-        {leads.length === 0 ? (
-          <p className="help">No Meta leads yet.</p>
+      <div className="card" ref={leadsRef}>
+        <div className="modal-sub" style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          {formFilter
+            ? `Leads from ${formFilter.name}${formTotal !== null ? ` (${formTotal})` : ''}`
+            : 'Recent Meta Leads'}
+          {formFilter && (
+            <button className="btn ghost sm" type="button" onClick={() => setFormFilter(null)}>Show all</button>
+          )}
+        </div>
+        {leadsError ? (
+          <p className="help bad">
+            {leadsError} — this is a failure to READ the leads, not a statement that there are none.
+            Any leads already synced are unaffected.
+          </p>
+        ) : leads.length === 0 ? (
+          <p className="help">
+            {formFilter
+              ? 'No leads from this form are in the CRM yet. Only connected forms are synced — connect it and press Sync Now to bring them in.'
+              : 'No Meta leads yet.'}
+          </p>
         ) : (
           <div className="lead-scroll">
             <table className="list-table">
