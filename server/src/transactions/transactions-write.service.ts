@@ -31,6 +31,25 @@ import { isAdminOrAbove, isAgent, isSuperAdmin } from '../core/authz';
 import { ownsTransaction, teamMemberIdentity } from '../common/transaction-scope';
 type Tx = Prisma.TransactionClient;
 
+/*
+ * THE HISTORY SECTION FOR DOCUMENTS, AND THE NAMES IT HAS HAD.
+ *
+ * The brokerage renamed it to 'Documents' on 2026-09-28. Before that the constant said
+ * 'Legal & Documents', the panel heading said 'Legal & Documentation', and the checklist rebuild of
+ * 2026-09-26 wrote 890 rows under the HEADING rather than the constant - my own slip, and the
+ * reason this list has three entries rather than two.
+ *
+ * WHY A COMPARISON NEEDS THEM ALL. Rejecting an agent's change looks for the matching entry in a
+ * fresh snapshot to check the value has not moved since. That lookup matches on section, so after
+ * a rename a change RECORDED under an old name would find nothing - and the check is written
+ * `entry !== undefined && ...`, so finding nothing reads as "it has not moved" and the guard
+ * silently stops guarding. 19 agent changes were sitting in that section on the day of the rename.
+ */
+const DOCUMENTS_SECTION = 'Documents';
+const DOCUMENT_SECTION_ALIASES: string[] = [DOCUMENTS_SECTION, 'Legal & Documents', 'Legal & Documentation'];
+export const sameDocumentsSection = (a: string | null | undefined, b: string | null | undefined): boolean =>
+  a === b || (!!a && !!b && DOCUMENT_SECTION_ALIASES.includes(a) && DOCUMENT_SECTION_ALIASES.includes(b));
+
 /**
  * TD-076 — the advisory-lock class for the create-time duplicate guard.
  *
@@ -1383,7 +1402,7 @@ export class TransactionsWriteService {
            */
           if (moved.added > 0 || moved.flagged > 0 || moved.relaxed > 0) {
             await this.audit.record(txnId, actor, {
-              section: 'Legal & Documentation',
+              section: DOCUMENTS_SECTION,
               field: 'Document checklist',
               action: 'Checklist brought up to the new status',
               source: 'System',
@@ -2006,7 +2025,7 @@ export class TransactionsWriteService {
     // field the agent CLEARED (null against '') is not mistaken for a change.
     const norm = (v: unknown): string => (v === null || v === undefined ? '' : String(v));
     const snapNow = await this.audit.snapshot(txnId);
-    const entry = Object.values(snapNow).find((e) => e.section === log.section && e.field === log.field);
+    const entry = Object.values(snapNow).find((e) => sameDocumentsSection(e.section, log.section) && e.field === log.field);
     const valueMoved = entry !== undefined && norm(entry.value) !== norm(log.new_value);
 
     const blockedBy = !log.field ? 'this entry does not name a field'

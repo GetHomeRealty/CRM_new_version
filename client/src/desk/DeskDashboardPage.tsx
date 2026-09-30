@@ -74,10 +74,19 @@ export default function DeskDashboardPage() {
 
   const money = (n: number) => formatCurrency(n);
 
+  // Every figure opens the screen it was counted from - the dashboard is a way in, not a dead end.
+  // Sai asked for this 2026-09-29. Nothing lands pre-filtered: the invoice and calendar screens read
+  // only an invoice id and a month from the link, and the transactions screen reads nothing at all,
+  // so a click opens the screen on its own defaults - for transactions, the open-and-firm default.
+  // A tile links only where this person is allowed to go - the same test the sidebar uses to decide
+  // which pages to show. An agent who cannot open Reports keeps the figure and loses only the link,
+  // rather than being sent to a page that would refuse them.
+  const go = (page: string) => (can(page.split('/')[0], 'view') ? () => navigate(deskPath(page)) : undefined);
+
   return (
     <>
       <div className="tiles">
-        <Tile label="Total Deals" value={data.transactions.total}
+        <Tile onOpen={go('transactions')} label="Total Deals" value={data.transactions.total}
           sub={<button className="prop-link" type="button" onClick={() => navigate(deskPath('transactions'))}>open transactions</button>} />
         {/*
           * Both headlines are the number of DEALS in the breakdown, not the number of statuses in
@@ -91,11 +100,11 @@ export default function DeskDashboardPage() {
           * mistake — those labels name the categories, so "5 sources" is what the number means.
           * These two label a property of deals and sit beside deal counts.
         */}
-        <Tile label="Validation" value={tallyTotal(data.transactions.by_validation)}
+        <Tile onOpen={go('transactions')} label="Validation" value={tallyTotal(data.transactions.by_validation)}
           sub={<TallyBreakdown by={data.transactions.by_validation} />} />
-        <Tile label="Commission Status" value={tallyTotal(data.transactions.by_commission)}
+        <Tile onOpen={go('transactions')} label="Commission Status" value={tallyTotal(data.transactions.by_commission)}
           sub={<TallyBreakdown by={data.transactions.by_commission} />} />
-        <Tile label="Closings Ahead" value={data.closings.next_30_days}
+        <Tile onOpen={go('calendar')} label="Closings Ahead" value={data.closings.next_30_days}
           color={data.closings.overdue > 0 ? 'var(--bad-700)' : undefined}
           sub={<Breakdown parts={[
             { n: data.closings.this_month, label: 'this month', tone: 'info' },
@@ -109,7 +118,7 @@ export default function DeskDashboardPage() {
             Documentation Status Report's column counts documents not yet VALIDATED — so the same
             word meant two things on two screens the same person reads, and the figures could not
             be reconciled. The counts are each right and unchanged; only the words are. */}
-        <Tile label="Documents Outstanding" value={data.documents.pending}
+        <Tile onOpen={go('reports/pending-invalid-documents')} label="Documents Outstanding" value={data.documents.pending}
           color={data.documents.invalid > 0 ? 'var(--warn-700)' : undefined}
           sub={<Breakdown parts={[
             { n: data.documents.pending, label: 'awaiting receipt', tone: 'info' },
@@ -132,16 +141,16 @@ export default function DeskDashboardPage() {
           * a row of dashes would only raise a question with nowhere to go and answer it.
           */}
         {data.invoices && <>
-          <Tile label="Invoices" value={data.invoices.total} sub={
+          <Tile onOpen={go('invoice')} label="Invoices" value={data.invoices.total} sub={
             <Breakdown parts={[{ n: data.invoices.unpaid, label: 'unpaid', tone: 'bad' }]} />
           } />
-          <Tile label="Billed" value={money(data.invoices.billed)} sub="invoiced in total" />
-          <Tile label="Collected" value={money(data.invoices.collected)} sub="received against invoices" color="var(--ok-ink)" />
-          <Tile label="Outstanding" value={money(data.invoices.outstanding)} sub="still to be collected" color="var(--warn-ink)" />
+          <Tile onOpen={go('invoice')} label="Billed" value={money(data.invoices.billed)} sub="invoiced in total" />
+          <Tile onOpen={go('invoice')} label="Collected" value={money(data.invoices.collected)} sub="received against invoices" color="var(--ok-ink)" />
+          <Tile onOpen={go('invoice')} label="Outstanding" value={money(data.invoices.outstanding)} sub="still to be collected" color="var(--warn-ink)" />
         </>}
         {/* Calendar and to-dos sit beside Outstanding rather than on a row of their own — two tiles
             alone left a near-empty band under the commission figures. */}
-        <Tile label="Desk Calendar" value={data.calendar.upcoming} sub={
+        <Tile onOpen={go('calendar')} label="Desk Calendar" value={data.calendar.upcoming} sub={
           <Breakdown parts={[
             { n: data.calendar.today, label: 'today', tone: 'info' },
             { n: data.calendar.upcoming, label: 'next 30 days' },
@@ -157,24 +166,24 @@ export default function DeskDashboardPage() {
 
       {comm && (
         <div className="tiles">
-          <Tile label="Pipeline" value={money(comm.t4a.closed_total)}
+          <Tile onOpen={go('analytics')} label="Pipeline" value={money(comm.t4a.closed_total)}
             sub={commissionCount(comm, comm.t4a.closed_count, 'closed')} />
-          <Tile label="Paid" value={money(comm.t4a.closed_paid)}
+          <Tile onOpen={go('analytics')} label="Paid" value={money(comm.t4a.closed_paid)}
             sub={commissionCount(comm, comm.t4a.paid_count)} color="var(--ok-ink)" />
-          <Tile label="Pending" value={money(comm.t4a.closed_pending)}
+          <Tile onOpen={go('analytics')} label="Pending" value={money(comm.t4a.closed_pending)}
             sub={commissionCount(comm, comm.t4a.pending_count)} color="var(--warn-ink)" />
-          <Tile label="Upcoming Commissions" value={money(comm.t4a.upcoming_total)}
+          <Tile onOpen={go('analytics')} label="Upcoming Commissions" value={money(comm.t4a.upcoming_total)}
             sub={commissionCount(comm, comm.t4a.upcoming_count, 'open')} color="var(--info-700)" />
           {/* Before HST on both sides: HST is collected and remitted, not earned. */}
-          <Tile label="Overall Commission"
+          <Tile onOpen={go('analytics')} label="Overall Commission"
             value={money(isAgent ? comm.t4a.overall_total : comm.gross.overall_total)}
             sub={isAgent ? 'your commission, before HST' : 'brokerage gross, before HST'} />
           {!isAgent && (
-            <Tile label="External Referral" value={money(comm.referrals.external_total)}
+            <Tile onOpen={go('reports/referral-payment')} label="External Referral" value={money(comm.referrals.external_total)}
               sub="paid to outside brokerages" />
           )}
           {!isAgent && (
-            <Tile label="Client Referral" value={money(comm.referrals.client_total)}
+            <Tile onOpen={go('reports/client-cashback')} label="Client Referral" value={money(comm.referrals.client_total)}
               sub="client referral payouts" />
           )}
         </div>

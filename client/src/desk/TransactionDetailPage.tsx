@@ -296,15 +296,23 @@ export default function TransactionDetailPage() {
     getBrokerageSuggestions().then(setBrokSuggestions).catch(() => {});
   }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // §5.2 — Active sale listings auto-remind about the core docs (Listing Agreement,
-  // MLS Data Sheet, Client Photo IDs) while they are still pending.
+  /*
+   * SS5.2 - Active sale listings show what is still outstanding, ON SCREEN ONLY. This list is
+   * rendered in a panel and sends no mail of any kind; the only document email in the application
+   * is the manual one somebody fires from Legal & Docs after ticking the bell.
+   *
+   * IT NOW ASKS THE SHEET INSTEAD OF CARRYING NAMES. It used to name three documents - and one of
+   * those names, 'mls data sheet', matched NOTHING once the approved names went in on 2026-09-24,
+   * so it chased two of its three. At the brokerage's instruction of 2026-09-26 it covers every
+   * REQUIRED document not yet received, which for an Active sale listing is six rather than three.
+   * No document name appears here at all now, so it cannot drift again.
+   */
   useEffect(() => {
     const isActiveSale = form && isListingStatusFamily(form.type) && !/lease/i.test(form.type) && (form.statuses || []).includes('Active');
     if (!isActiveSale) { setCoreDocReminders([]); return; }
-    const core = ['listing agreement', 'mls data sheet', 'client photo'];
     getDocuments(id)
       .then((d) => setCoreDocReminders((d.documents || [])
-        .filter((doc) => { const t = (doc.title || '').toLowerCase(); return core.some((k) => t.includes(k)) && doc.status !== 'Received'; })
+        .filter((doc) => doc.mandatory && doc.status !== 'Received')
         .map((doc) => doc.title || '')))
       .catch(() => setCoreDocReminders([]));
   }, [id, form?.type, (form?.statuses || []).join(',')]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -623,7 +631,7 @@ export default function TransactionDetailPage() {
   const rmCond = (i: number) => askDelete({
     title: 'Delete condition?',
     message: `Remove condition "${form.conditions[i]?.custom_name || form.conditions[i]?.type || `#${i + 1}`}"?`,
-    linked: ['Its matching row in Legal & Documentation (and any files uploaded to it)', 'Document clearance / Final Validation in Agent Payment Readiness'],
+    linked: ['Its matching row in Documents (and any files uploaded to it)', 'Document clearance / Final Validation in Agent Payment Readiness'],
     note: 'The change is saved automatically a moment after you confirm.',
     onConfirm: () => setForm((f) => (f ? { ...f, conditions: f.conditions.filter((_, idx) => idx !== i) } : f)),
   });
@@ -736,7 +744,7 @@ export default function TransactionDetailPage() {
   const stTerminated = saleListing && form.statuses.includes('Terminated');
 
   // §5.1 — deal-side Mutual Release / Void restrict the page to Legal & Docs only
-  // (listing-family types are exempt). docRestrict limits which documents show.
+  // (listing-family types are exempt).
   const dealSide = !isListingStatusFamily(form.type);
   const stVoid = dealSide && form.statuses.includes('Void');
   const stMutualRelease = dealSide && form.statuses.includes('Mutual Release');
@@ -751,12 +759,22 @@ export default function TransactionDetailPage() {
   const hideStmtNos = stHdrActive || stHdrConditional; // Lawyer Statement + Notice of Sale
   const hideTradeSheet = stHdrActive;
   const docsOnly = stVoid || stMutualRelease;
-  const docRestrict = stVoid
-    ? ['agreement of purchase', 'aps', 'agreement to lease']
-    : stMutualRelease ? ['agreement of purchase', 'aps', 'agreement to lease', 'mutual release', 'deposit receipt']
-      : stActive ? ['listing agreement', 'mls data sheet', 'client photo', 'fintrac']
-        : stTerminated ? ['listing agreement', 'mls data sheet', 'client photo', 'fintrac', 'cancellation']
-          : null;
+  /*
+   * TD-159 - docRestrict WAS DELETED HERE on 2026-09-26, at the brokerage's instruction, because
+   * the approved sheet decides what a deal shows and a second list beside it can only ever drift.
+   *
+   * It had. It asked for 'mls data sheet' where the approved name is 'MLS Data Information Form',
+   * so that document was INVISIBLE on 17 Active and 77 Terminated sale listings - and its lists
+   * were shorter than the sheet's anyway, hiding the MLS Draft Sheet and the RECO Information
+   * Guide with it. Three of six required documents on those 94 deals could not be seen or uploaded.
+   *
+   * The old value, should anybody ever want it back:
+   *   stVoid           -> ['agreement of purchase', 'aps', 'agreement to lease']
+   *   stMutualRelease  -> the same plus 'mutual release', 'deposit receipt'
+   *   stActive         -> ['listing agreement', 'mls data sheet', 'client photo', 'fintrac']
+   *   stTerminated     -> the same plus 'cancellation'
+   * and hideTitles, which hid 'mutual release' on any deal that was not one.
+   */
 
   const slDepositOnly = stActive || stSoldCond; // Admin: deposit only · FAQ: deposit slip only · Financial: hide client/commission
   const slHideBasic = stActive || stTerminated; // hide Offer/Closing dates, Co-op Brokerage, Conditional Offer
@@ -1018,7 +1036,7 @@ export default function TransactionDetailPage() {
                 {pendingReq && <span className="pill warn" style={{ fontSize: 10 }}>Awaiting approval</span>}
               </>)
             : isDocumentation
-            ? <span className="pill info" style={{ fontSize: 10 }} title="Documentation role: edit Legal & Documentation from its section. All other sections are view-only."><Icon name="doc" size={11} /> Legal &amp; Docs editable</span>
+            ? <span className="pill info" style={{ fontSize: 10 }} title="Documentation role: edit Documents from its section. All other sections are view-only."><Icon name="doc" size={11} /> Documents editable</span>
             : view
             ? <button className="btn primary sm" onClick={() => setMode('edit')}><Icon name="edit" size={13} /> Edit{lockedForUser && approvedReq ? ' (approved)' : ''}</button>
             : (<>
@@ -1242,7 +1260,7 @@ export default function TransactionDetailPage() {
             {coreDocReminders.map((t) => <li key={t}>{t}</li>)}
           </ul>
           <div style={{ marginTop: 8 }}>
-            <button className="btn ghost sm" onClick={() => setDocsOpen(true)}><Icon name="folder" size={13} /> Open Legal &amp; Documentation</button>
+            <button className="btn ghost sm" onClick={() => setDocsOpen(true)}><Icon name="folder" size={13} /> Open Documents</button>
           </div>
         </div>
       )}
@@ -1403,7 +1421,7 @@ export default function TransactionDetailPage() {
               )}
               {!docsOnly && !slNoSections && canEdit && form.agent && teamSplitVisible && <button className="btn ghost sm" style={{ textAlign: 'left' }} onClick={() => setTeamOpen(true)}><Icon name="users" size={13} /> Team Split</button>}
               {!docsOnly && !slHideLawyer && canEdit && !lawyerHidden && <button className="btn ghost sm" style={{ textAlign: 'left' }} onClick={() => setLawyerOpen(true)}><Icon name="scale" size={13} /> Lawyer Details</button>}
-              {canEdit && <button className="btn ghost sm" style={{ textAlign: 'left' }} onClick={() => setDocsOpen(true)}><Icon name="report" size={13} /> Legal &amp; Docs</button>}
+              {canEdit && <button className="btn ghost sm" style={{ textAlign: 'left' }} onClick={() => setDocsOpen(true)}><Icon name="report" size={13} /> Documents</button>}
               {/* Admin Activities, Adjustment and Audit Trail are admin-only (hidden from agents). */}
               {!isAgent && !docsOnly && !slNoSections && canEdit && <button className="btn ghost sm" style={{ textAlign: 'left' }} onClick={() => setAdminOpen(true)}><Icon name="wrench" size={13} /> Admin</button>}
               {!docsOnly && !slNoSections && canEdit && <button className="btn ghost sm" style={{ textAlign: 'left' }} onClick={() => setFinOpen(true)}><Icon name="dollar" size={13} /> Financial</button>}
@@ -1733,7 +1751,7 @@ export default function TransactionDetailPage() {
         />
       )}
       {docsOpen && (
-        <DocsModal open={docsOpen} onClose={() => setDocsOpen(false)} transactionId={id} txn={txn} restrictTitles={docRestrict} hideTitles={stMutualRelease ? [] : ['mutual release']} readOnly={isAgent ? false : (isDocumentation ? false : view)} agentMode={isAgent} canDeleteConditionDocs={isSuperAdmin} onSaved={reloadTxn} />
+        <DocsModal open={docsOpen} onClose={() => setDocsOpen(false)} transactionId={id} txn={txn} readOnly={isAgent ? false : (isDocumentation ? false : view)} agentMode={isAgent} canDeleteConditionDocs={isSuperAdmin} onSaved={reloadTxn} />
       )}
       {invoiceOpen && txn && (
         <InvoiceModal open={invoiceOpen} onClose={() => setInvoiceOpen(false)} txn={txn} />

@@ -25,7 +25,7 @@ const good = (): AppConfig => ({
     sameSite: 'lax',
     domain: undefined,
   },
-  sso: { clientId: 'precon', clientSecret: '', redirectUris: [], codeLifetimeSeconds: 60 },
+  sso: { clientId: 'precon', clientSecret: '', redirectUris: [], codeLifetimeSeconds: 60, mobileClientId: 'get-home-hub-mobile', mobileRedirectUris: ['gethomehub://auth/callback'], mobileSessionLifetimeDays: 30 },
   idExtraction: { provider: 'anthropic', apiKey: '', model: 'claude-sonnet-5' },
 });
 

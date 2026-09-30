@@ -9,7 +9,7 @@ describe('SsoController', () => {
       issue: jest.fn(async () => ({ code: 'c'.repeat(43), expiresIn: 60 })),
       exchange: jest.fn(),
     };
-    const controller = new SsoController(sso as never);
+    const controller = new SsoController(sso as never, {} as never);
     const result = await controller.authorize({ id: 7 } as never, {
       client_id: 'precon',
       redirect_uri: 'https://precon.gethomerealty.ca/api/auth/crm/callback',
@@ -28,7 +28,7 @@ describe('SsoController', () => {
   it('maps the private exchange request without returning the client secret', async () => {
     const identity = { sub: '7', name: 'Prudhvi', email: 'p@example.com', username: 'prudhvi', role: 'agent' };
     const sso = { issue: jest.fn(), exchange: jest.fn(async () => identity) };
-    const controller = new SsoController(sso as never);
+    const controller = new SsoController(sso as never, {} as never);
     const result = await controller.token({
       client_id: 'precon',
       client_secret: 's'.repeat(48),

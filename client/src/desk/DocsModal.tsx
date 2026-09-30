@@ -22,15 +22,13 @@ interface DocsModalProps {
   onClose: () => void;
   transactionId: number | string;
   txn?: Transaction | null;
-  restrictTitles?: string[] | null;
-  hideTitles?: string[];
   readOnly?: boolean;
   agentMode?: boolean;
   canDeleteConditionDocs?: boolean;
   onSaved?: (() => void) | null;
 }
 
-export default function DocsModal({ open, onClose, transactionId, txn = null, restrictTitles = null, hideTitles = [], readOnly = false, agentMode = false, canDeleteConditionDocs = false, onSaved = null }: DocsModalProps) {
+export default function DocsModal({ open, onClose, transactionId, txn = null, readOnly = false, agentMode = false, canDeleteConditionDocs = false, onSaved = null }: DocsModalProps) {
   const toast = useToast();
   const { isSuperAdmin } = useAuth();
   const { confirm, askDelete, closeConfirm } = useConfirm();
@@ -41,12 +39,17 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
   const validLocked = (d: DeskDocument) => d.validation === 'Valid' && !isSuperAdmin;
   const [docs, setDocs] = useState<DeskDocument[]>([]);
   const [f630Client, setF630Client] = useState<string | null>(null); // FINTRACK → open Form 630 for this client
-  // §5.1 — Mutual Release / Void limit the visible checklist to specific documents.
-  const docVisible = (d: DeskDocument) => {
-    const t = (d.title || '').toLowerCase();
-    if (hideTitles.some((k) => t.includes(k))) return false;
-    return !restrictTitles || restrictTitles.some((k) => t.includes(k));
-  };
+  /*
+   * TD-159 - THE SHEET DECIDES WHICH DOCUMENTS A DEAL SHOWS, AND NOTHING ELSE DOES.
+   *
+   * A docVisible() used to live here, filtering the list through restrictTitles and hideTitles
+   * handed down from TransactionDetailPage - a SECOND opinion about the brokerage's paperwork,
+   * written before the approved lists existed and never updated with them. It hid three of the six
+   * required documents on 17 Active and 77 Terminated sale listings, because it asked for 'mls data
+   * sheet' and the approved name is 'MLS Data Information Form', and because its list was simply
+   * shorter than the sheet's. Deleted at the brokerage's instruction of 2026-09-26; the commit
+   * message carries the old list verbatim if it is ever wanted back.
+   */
   const [clients, setClients] = useState<string[]>([]);
   // "Ready for RECO Audit" (Yes/No) + reason when No.
   const [recoReady, setRecoReady] = useState('');
@@ -55,6 +58,13 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [newTitle, setNewTitle] = useState('');
+  /*
+   * TD-135 - REQUIRED DOCUMENTS FIRST, THE REST BEHIND A LINK, at the brokerage's instruction of
+   * 2026-09-26. Their ruling of the day before is that nothing is removed from a deal, so an older
+   * deal can carry twenty rows of which six are required. The others are still there and still one
+   * click away - only what you see FIRST has changed.
+   */
+  const [showOptional, setShowOptional] = useState(false);
 
   const load = (showSpin = true) => {
     if (showSpin) setLoading(true);
@@ -77,12 +87,32 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
   if (!open) return null;
 
   // Counts reflect the documents actually shown (status-restricted list), not all docs.
-  const shownDocs = docs.filter(docVisible);
-  const total = shownDocs.length;
-  const received = shownDocs.filter((d) => d.status === 'Received').length;
-  const valid = shownDocs.filter((d) => d.validation === 'Valid').length;
-  const pct = total > 0 ? Math.round((received / total) * 100) : 0;
-  const pctValid = total > 0 ? Math.round((valid / total) * 100) : 0;
+  const shownDocs = docs;
+  /*
+   * TD-135 - THESE TILES COUNT REQUIRED DOCUMENTS ONLY, at the brokerage's instruction of
+   * 2026-09-26.
+   *
+   * They counted every row drawn, while the Documentation Status and RECO Audit Readiness reports
+   * count mandatory-and-not-yet-Valid. The two always disagreed. The checklist rebuild of
+   * 2026-09-26 made the gap impossible to ignore, because the brokerage's ruling is that a document
+   * the new list does not ask for STAYS on the deal and merely stops being required: 15,011 rows on
+   * live deals that day of which 8,141 were required, so 46 per cent of what these tiles counted
+   * was optional. Trade 101638 read 0 of 20 where only 6 were required, and that is how the
+   * brokerage found it.
+   *
+   * The optional rows are still LISTED below. They are simply not counted here, which is what every
+   * compliance figure in this application has always done.
+   *
+   * A deal with nothing required reads 100 per cent rather than 0. No live deal is in that state
+   * today - it was checked - but nothing outstanding is complete, not untouched.
+   */
+  const countedDocs = shownDocs.filter((d) => !!d.mandatory);
+  const optionalCount = shownDocs.length - countedDocs.length;
+  const total = countedDocs.length;
+  const received = countedDocs.filter((d) => d.status === 'Received').length;
+  const valid = countedDocs.filter((d) => d.validation === 'Valid').length;
+  const pct = total > 0 ? Math.round((received / total) * 100) : 100;
+  const pctValid = total > 0 ? Math.round((valid / total) * 100) : 100;
 
   const upd = (i: number, k: string, v: unknown) => setDocs((ds) => ds.map((d, idx) => idx === i ? { ...d, [k]: v } : d));
 
@@ -228,7 +258,7 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
     <div className="overlay open" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="modal xl" style={{ maxHeight: '92vh', overflowY: 'auto' }}>
         <button className="close" onClick={onClose}><Icon name="close" size={15} /></button>
-        <div className="modal-h" style={{ marginBottom: 4 }}>Legal &amp; Documentation</div>
+        <div className="modal-h" style={{ marginBottom: 4 }}>Documents</div>
         <div style={{ fontSize: 12, color: 'var(--muted)', margin: '0 0 16px 12px' }}>Track receipt &amp; validation of every required document for this transaction.</div>
         {agentMode && <div className="card" style={{ background: 'var(--info-bg)', marginBottom: 12 }}>
           <strong>Uploads are drafts until you submit.</strong> View, replace, or delete your draft files below. Admin is notified only after you click <strong>Submit to Admin</strong>. Previously submitted files stay protected.
@@ -244,7 +274,7 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
           <div style={{ background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 'var(--r-md)', padding: 12 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-              <strong style={{ fontSize: 12, color: 'var(--text-2)', textTransform: 'uppercase', letterSpacing: '.04em' }}>Documents Received</strong>
+              <strong style={{ fontSize: 12, color: 'var(--text-2)', textTransform: 'uppercase', letterSpacing: '.04em' }}>Mandatory Documents Received</strong>
               <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--brand)' }}>{received} / {total} received ({pct}%)</span>
             </div>
             <div style={{ background: 'var(--surface-3)', height: 10, borderRadius: 6, overflow: 'hidden' }}>
@@ -253,7 +283,7 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
           </div>
           <div style={{ background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 'var(--r-md)', padding: 12 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-              <strong style={{ fontSize: 12, color: 'var(--text-2)', textTransform: 'uppercase', letterSpacing: '.04em' }}>Valid Documents</strong>
+              <strong style={{ fontSize: 12, color: 'var(--text-2)', textTransform: 'uppercase', letterSpacing: '.04em' }}>Mandatory Documents Valid</strong>
               <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--brand)' }}>{valid} / {total} valid ({pctValid}%)</span>
             </div>
             <div style={{ background: 'var(--surface-3)', height: 10, borderRadius: 6, overflow: 'hidden' }}>
@@ -312,7 +342,7 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
           </div>
         </div>
 
-        {!loading && docs.some(docVisible) && (
+        {!loading && docs.length > 0 && (
           <div style={{ display: 'grid', gridTemplateColumns: COLS, gap: 8, alignItems: 'center', padding: '6px 12px', borderBottom: '2px solid var(--line)' }}>
             <div style={hCell}>Title</div>
             <div style={hCell}>Upload</div>
@@ -325,7 +355,7 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
           </div>
         )}
         {loading ? <div className="centered">Loading…</div> : docs.map((d, i) => {
-          if (!docVisible(d)) return null;
+          if (!d.mandatory && !showOptional) return null;
           const key = d.id ?? `new-${i}`;
           const open2 = !!expanded[key];
           const expandable = d.kind === 'multi' || d.kind === 'per_client';
@@ -597,6 +627,17 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
             </div>
           );
         })}
+        {!loading && optionalCount > 0 && (
+          <div style={{ textAlign: 'center', padding: '8px 0 2px' }}>
+            <button type="button" onClick={() => setShowOptional((v) => !v)}
+              style={{ background: 'none', border: 'none', color: 'var(--brand)', fontSize: 12.5,
+                fontWeight: 600, cursor: 'pointer', textDecoration: 'underline' }}>
+              {showOptional
+                ? `Hide the ${optionalCount} document${optionalCount === 1 ? '' : 's'} that are not required`
+                : `Show ${optionalCount} more document${optionalCount === 1 ? '' : 's'} that are not required`}
+            </button>
+          </div>
+        )}
 
         </fieldset>
 

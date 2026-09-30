@@ -115,7 +115,7 @@ export default function BulkImportPage() {
             <h2 style={{ margin: 0 }}>Bulk Transaction Import</h2>
             <div className="muted" style={{ fontSize: 13 }}>
               Create many transactions at once from a spreadsheet — with their team split, clients,
-              financial info, adjustments and conditions. (Legal &amp; Documentation is uploaded per deal.)
+              financial info, adjustments and conditions. (Documents are uploaded per deal.)
             </div>
           </div>
           <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
