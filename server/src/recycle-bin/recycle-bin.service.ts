@@ -143,6 +143,21 @@ export class RecycleBinService {
     this.guard(user);
     const t = await this.onlyTrashed('transactions', id, 'Transaction');
     const trade = t.trade_no;
+    /*
+     * THE INVOICE'S OWN GUARD IS NEVER REACHED ON THIS PATH. transactions -> invoices ->
+     * invoice_payments are CASCADE in the database, so erasing the deal takes its paid invoices and
+     * every payment row with them, and nothing asks first. Measured 2026-09-30 before this was
+     * written: no trashed deal held a paid invoice and no trashed invoice held a live payment, so
+     * this closes a door rather than fixes a leak. The wording is the invoice's own, because it is
+     * the same rule.
+     */
+    const invoiceIds = (await this.prisma.invoices.findMany({ where: { transaction_id: id }, select: { id: true } })).map((i) => i.id);
+    const paid = invoiceIds.length === 0 ? 0
+      : await this.prisma.invoice_payments.count({ where: { invoice_id: { in: invoiceIds }, deleted_at: null } });
+    if (paid > 0) {
+      const m = 'This deal has an invoice with a payment recorded against it, so it cannot be permanently deleted. If the payment was entered in error, Accounting or a Super Admin can remove it first.';
+      throw new UnprocessableEntityException({ message: m, errors: { id: [m] } });
+    }
     await this.prisma.transactions.delete({ where: { id } });
     await this.logAction(user, `Trade #${trade}`, 'Transaction permanently deleted');
     return { message: 'Transaction permanently deleted' };
