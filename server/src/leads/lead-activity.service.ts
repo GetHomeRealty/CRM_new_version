@@ -27,13 +27,52 @@ const str = (v: unknown): string => String(v ?? '').trim();
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const TIME_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
 
-/** Best-effort E.164 for a dialable number; '' when it can't be trusted (so we refuse rather than misdial). */
-function toE164(raw: string | null | undefined): string {
+/**
+ * THE DIALLING CODE ASSUMED FOR A NUMBER THAT ARRIVED WITHOUT ONE.
+ *
+ * `1` keeps the behaviour this had before it was configurable, so a brokerage that changes nothing
+ * sees no change. Set `LEAD_DEFAULT_COUNTRY_CODE` to the code the brokerage's own leads use — `91`
+ * for India — or to an EMPTY string to refuse ambiguous numbers outright rather than guess at them.
+ */
+function assumedCountryCode(): string {
+  return (process.env.LEAD_DEFAULT_COUNTRY_CODE ?? '1').replace(/\D/g, '');
+}
+
+/**
+ * Best-effort E.164 for a dialable number; '' when it can't be trusted (so we refuse rather than
+ * misdial). Exported for its tests: the rule below is the whole defect, and it is worth asserting
+ * directly rather than through a Twilio call.
+ *
+ * A TEN-DIGIT NUMBER IS NOT EVIDENCE OF NORTH AMERICA. This read
+ *
+ *     if (s.length === 10) return `+1${s}`;   // NANP without country code
+ *
+ * and an INDIAN MOBILE IS EXACTLY TEN DIGITS. So a lead who typed `9032763629` on a Meta form was
+ * dialled as `+19032763629` — a well-formed, reachable US number belonging to somebody else. It
+ * fails silently in the worst way: the call connects, to the wrong person, in the wrong country, and
+ * nobody reports it as a bug because there is nothing on screen to report.
+ *
+ * Reported from the Lead list, where several `+1` numbers were thought to be mangled Indian ones.
+ * They were not — `mapMetaLead` stores the Meta answer verbatim, so those had arrived as `+1`. This
+ * is the place the same suspicion IS justified, and it is only reachable through Call or Text.
+ *
+ * WHAT IS UNCHANGED, AND WHY. A number that arrives WITH a country code keeps it: the `+` branch
+ * above decides, and no guess is made. Eleven digits beginning `1` still means NANP, because a bare
+ * `1` prefix has no other reading at that length. Only the genuinely ambiguous case — ten digits and
+ * no code at all — consults the setting, which is the one case where the old code was inventing an
+ * answer and presenting it as a fact.
+ */
+export function toE164(raw: string | null | undefined): string {
   const s = String(raw ?? '').replace(/[^\d+]/g, '');
   if (!s) return '';
   if (s.startsWith('+')) return /^\+[1-9]\d{7,14}$/.test(s) ? s : '';
-  if (s.length === 10) return `+1${s}`;                       // NANP without country code
   if (s.length === 11 && s.startsWith('1')) return `+${s}`;   // NANP with a leading 1
+  if (s.length === 10) {
+    // Ambiguous: ten digits fit India, the NANP and several others. Answered by configuration
+    // rather than by a constant, and refused outright where the brokerage would rather it failed.
+    const cc = assumedCountryCode();
+    return cc ? `+${cc}${s}` : '';
+  }
   return /^\d{8,15}$/.test(s) ? `+${s}` : '';
 }
 
