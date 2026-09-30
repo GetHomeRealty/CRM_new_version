@@ -18,6 +18,7 @@ import { EmailOtpProvider, OtpDeliveryService, SmsOtpProvider } from './mfa/otp-
 import { AuditModule } from '../audit/audit.module';
 import { SsoAuthorizationService } from './sso-authorization.service';
 import { SsoController } from './sso.controller';
+import { MobileSessionService } from './mobile-session.service';
 
 /**
  * Authentication + authorization. Provides the Sanctum-contract session auth,
@@ -48,12 +49,14 @@ import { SsoController } from './sso.controller';
     MfaService, MfaPolicyService, RecoveryCodeService, TrustedDeviceService,
     OtpDeliveryService, EmailOtpProvider, SmsOtpProvider,
     SsoAuthorizationService,
+    MobileSessionService,
   ],
   exports: [
     AuthService, AccountLockoutService, PasswordHashService, PermissionService,
     AuthGuard, AdminGuard, ScreenGuard,
     MfaService, MfaPolicyService,
     SsoAuthorizationService,
+    MobileSessionService,
   ],
 })
 export class AuthModule implements OnModuleInit {

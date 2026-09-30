@@ -42,6 +42,9 @@ export interface AppConfig {
     clientSecret: string;
     redirectUris: string[];
     codeLifetimeSeconds: number;
+    mobileClientId: string;
+    mobileRedirectUris: string[];
+    mobileSessionLifetimeDays: number;
   };
   idExtraction: {
     provider: string;
@@ -86,6 +89,11 @@ export default (): AppConfig => {
       clientSecret: process.env.SSO_PRECON_CLIENT_SECRET ?? '',
       redirectUris: list(process.env.SSO_PRECON_REDIRECT_URIS),
       codeLifetimeSeconds: int(process.env.SSO_CODE_LIFETIME_SECONDS, 60),
+      mobileClientId: process.env.SSO_MOBILE_CLIENT_ID ?? 'get-home-hub-mobile',
+      mobileRedirectUris: list(process.env.SSO_MOBILE_REDIRECT_URIS).length
+        ? list(process.env.SSO_MOBILE_REDIRECT_URIS)
+        : ['gethomehub://auth/callback'],
+      mobileSessionLifetimeDays: int(process.env.MOBILE_SESSION_LIFETIME_DAYS, 30),
     },
     idExtraction: {
       provider: process.env.ID_EXTRACTION_PROVIDER ?? 'anthropic',

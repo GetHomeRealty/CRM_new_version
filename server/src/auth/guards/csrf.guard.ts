@@ -1,5 +1,6 @@
 import { CanActivate, ExecutionContext, HttpException, Injectable } from '@nestjs/common';
 import type { Request } from 'express';
+import { MobileSessionService } from '../mobile-session.service';
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
@@ -37,6 +38,8 @@ const CSRF_EXEMPT_PATHS = new Set([
   // Precon's SERVER exchanges a one-time code here, so there is no browser session or CSRF cookie.
   // The request is authenticated by its client secret and PKCE verifier, and the code is single-use.
   '/api/sso/token',
+  // The public native client proves possession of its PKCE verifier and one-time code.
+  '/api/sso/mobile/token',
 ]);
 
 /**
@@ -48,11 +51,24 @@ const CSRF_EXEMPT_PATHS = new Set([
  */
 @Injectable()
 export class CsrfGuard implements CanActivate {
-  canActivate(context: ExecutionContext): boolean {
+  constructor(private readonly mobileSessions: MobileSessionService) {}
+
+  async canActivate(context: ExecutionContext): Promise<boolean> {
     const req = context.switchToHttp().getRequest<Request>();
     if (SAFE_METHODS.has(req.method.toUpperCase())) return true;
     // Compare the path only — a query string must not be able to smuggle a match.
     if (CSRF_EXEMPT_PATHS.has(req.path)) return true;
+
+    // Native calls have no browser cookie to protect. Validate the opaque bearer credential here
+    // before bypassing CSRF, then let AuthGuard reuse the attached identity.
+    // AuthGuard gives browser sessions precedence. A bearer belonging to any user must not
+    // bypass CSRF while the request is authenticated as the browser-session user.
+    const mobile = req.session?.userId ? null : await this.mobileSessions.authenticate(req.headers.authorization);
+    if (mobile) {
+      req.mobileUserId = mobile.userId;
+      req.mobileSessionSid = mobile.sid;
+      return true;
+    }
 
     const headerRaw = req.headers['x-xsrf-token'];
     const header = Array.isArray(headerRaw) ? headerRaw[0] : headerRaw;
