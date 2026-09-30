@@ -54,15 +54,29 @@ export function TallyBreakdown({ by, tone = 'info' }: { by: Record<string, numbe
   return <Breakdown parts={parts} />;
 }
 
-export interface TileProps { label: ReactNode; value: ReactNode; sub: ReactNode; color?: string; }
+export interface TileProps { label: ReactNode; value: ReactNode; sub: ReactNode; color?: string; onOpen?: () => void; }
 
-export function Tile({ label, value, sub, color }: TileProps) {
+/**
+ * A tile given `onOpen` becomes clickable and takes the reader to the screen behind the figure.
+ * A tile without one is the plain card it has always been - every other dashboard is unaffected.
+ * Clicks that land on a link or button inside the tile are left to that control, so the existing
+ * "open transactions" button is not followed by a second navigation of our own.
+ */
+export function Tile({ label, value, sub, color, onOpen }: TileProps) {
   const valStyle: CSSProperties | undefined = color ? { color } : undefined;
-  return (
-    <div className="stat-card">
+  const body = (
+    <>
       <div className="lbl">{label}</div>
       <div className="val" style={valStyle}>{value}</div>
       <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>{sub}</div>
+    </>
+  );
+  if (onOpen === undefined) return <div className="stat-card">{body}</div>;
+  return (
+    <div className="stat-card" role="button" tabIndex={0} style={{ cursor: 'pointer' }}
+      onClick={(e) => { if ((e.target as HTMLElement).closest('button, a') === null) onOpen(); }}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(); } }}>
+      {body}
     </div>
   );
 }
