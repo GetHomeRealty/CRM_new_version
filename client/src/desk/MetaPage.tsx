@@ -206,23 +206,46 @@ export default function MetaPage() {
     try { setWebhook(await metaWebhookHealth(5)); } catch { /* warning is supplementary */ }
   }, [toast]);
 
+  /**
+   * WHICH LEADS REQUEST IS ALLOWED TO WRITE THE LIST — the newest, and only the newest.
+   *
+   * More than one can be in flight at once. Coming back to `/crm/meta?form=<id>` starts an
+   * unfiltered request while the form is still being restored, and a filtered one the moment it is,
+   * and nothing decided which answer counted: both called `setLeads`, so the LAST TO ARRIVE won.
+   * The filtered one asks for 200 rows and a count where the unfiltered asks for 50, so it is the
+   * slower of the two and usually landed last by luck rather than by rule. When it did not, the
+   * table filled with every Meta lead underneath a heading naming one form — the screen stating two
+   * different things at once, with the wrong one being the part somebody would act on.
+   *
+   * A counter is enough: take a ticket before asking, and on return put the answer away unless the
+   * ticket is still the current one. Aborting the request itself would be tidier but would also
+   * have to be threaded through `metaLeads`; this costs one ref and cannot be got wrong by a caller.
+   */
+  const leadsSeq = useRef(0);
+
   const loadLeads = useCallback(async () => {
+    const seq = leadsSeq.current + 1;
+    leadsSeq.current = seq;
     try {
       // 200 for one form, the API's ceiling: that view is about the form's whole set, where the
       // unfiltered list is only the most recent arrivals.
       const res = await metaLeads(formFilter ? 200 : 50, formFilter?.id, selectedPage || undefined);
+      if (seq !== leadsSeq.current) return;   // superseded while this was in flight
       setLeads(res.data);
       setLeadStats(res.stats);
       setFormTotal(res.form_total ?? null);
       setLeadsError('');
     } catch (ex) {
+      if (seq !== leadsSeq.current) return;   // a stale failure must not clear a fresher list
       // Still no toast: the connection panel is what this screen is for, and a toast on every
       // reload would be noise. The list says so itself, where the missing rows would have been.
       setLeads([]);
       setFormTotal(null);
       setLeadsError(apiErrorMessage(ex, 'Could not load Meta leads'));
     } finally {
-      setLeadsLoaded(true);
+      // Only the newest may declare the list loaded, or a stale arrival ends the "Loading leads…"
+      // state while the request that matters is still out.
+      if (seq === leadsSeq.current) setLeadsLoaded(true);
     }
   }, [formFilter, selectedPage]);
 
@@ -253,7 +276,19 @@ export default function MetaPage() {
   const pageKnown = !!status && (!status.is_connected
     || (pagesReady && (orderedPages.length === 0 || selectedPage !== '')));
   const formKnown = !status?.is_connected || !rememberedForm || formsLoaded;
-  const scopeReady = pageKnown && formKnown;
+
+  /**
+   * A form named in the URL has not been resolved yet, so asking now would ask the wrong question.
+   *
+   * Bounded by `formsLoaded`: if the forms have come back and this id is not among them, the wait
+   * ends and the screen loads unfiltered. Without that bound a stale `?form=` — one whose form was
+   * disconnected or deleted — would leave the list on "Loading leads…" for ever, since nothing
+   * clears the parameter any more.
+   */
+  const wantedForm = params.get('form');
+  const filterPending = !!wantedForm && formFilter?.id !== wantedForm && !formsLoaded;
+
+  const scopeReady = pageKnown && formKnown && !filterPending;
 
   useEffect(() => { if (scopeReady) void loadLeads(); }, [loadLeads, scopeReady]);
 
