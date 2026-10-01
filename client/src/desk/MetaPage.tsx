@@ -1,6 +1,6 @@
 import { crmPath } from './area';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   disconnectMeta, metaAuthUrl, metaDiagnostics, metaForms, metaLeads, metaPages, metaStatus,
   metaWebhookHealth, refreshMetaPages, setMetaDefaultPage, syncMetaLeads, toggleMetaForm,
@@ -79,6 +79,7 @@ const pageRank = (name: string): number => {
 export default function MetaPage() {
   const toast = useToast();
   const navigate = useNavigate();
+  const location = useLocation();
   const { can } = useAuth();
   const canEdit = can('meta', 'edit');
   const { confirm, askDelete, closeConfirm } = useConfirm();
@@ -284,6 +285,24 @@ export default function MetaPage() {
       if (id) sessionStorage.setItem(FORM_KEY, id); else sessionStorage.removeItem(FORM_KEY);
     } catch { /* unavailable in private mode; the URL still carries it */ }
   }, [setParams]);
+
+  /**
+   * OPENING A LEAD SAYS WHERE IT WAS OPENED FROM, so Back can come back here rather than to the
+   * Leads module. Without it the lead detail has no way to tell a lead reached from Meta from one
+   * reached from the Leads list, and its Back button was written for the second.
+   *
+   * CARRIED IN THE URL, not in router state, for one reason: router state does not survive a
+   * refresh. Somebody reading a lead, reloading, and pressing Back would be returned to the Leads
+   * module — the exact failure this is meant to fix, appearing only sometimes, which is worse than
+   * it never working.
+   *
+   * `location.search` goes along with the path, so the FORM FILTER comes back too. The Page needs
+   * no carrying: it is stored against the person and restores itself.
+   */
+  const openLead = (leadId: number) => {
+    const back = `${location.pathname}${location.search}`;
+    navigate(`${crmPath(`lead/${leadId}`)}?returnTo=${encodeURIComponent(back)}`);
+  };
 
   /** Clicking a form shows its leads; clicking the same form again goes back to all of them. */
   const showForm = (f: MetaForm) => {
@@ -667,7 +686,7 @@ export default function MetaPage() {
                     <td className="muted">{l.message || l.property || '—'}</td>
                     <td>{l.lead_status ? <span className="pill info">{l.lead_status}</span> : '—'}</td>
                     <td>{stamp(l.created_at)}</td>
-                    <td><button className="btn ghost sm" type="button" onClick={() => navigate(crmPath(`lead/${l.id}`))}>Open</button></td>
+                    <td><button className="btn ghost sm" type="button" onClick={() => openLead(l.id)}>Open</button></td>
                   </tr>
                 ))}
               </tbody>

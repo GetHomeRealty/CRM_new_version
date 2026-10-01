@@ -1,7 +1,8 @@
 import { crmPath } from './area';
+import { returnLabel, safeReturnTo } from './returnTo';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
   addCallRecording, addLeadCall, addLeadMessage, addLeadNote, addLeadShowing, addLeadTask,
   callRecordingUrl, deleteCallRecording, generateLeadEmail, getLead, leadOptions, placeLeadCall, sendLeadEmail, smsGatewayStatus, updateLeadMessage, voiceCallStatus,
@@ -48,6 +49,20 @@ export default function LeadDetailPage() {
   const leadId = Number(id);
   const toast = useToast();
   const navigate = useNavigate();
+  /**
+   * WHERE BACK GOES, which is not always the Leads module.
+   *
+   * Both buttons below read `navigate(crmPath('lead'))` — written when the Leads list was the only
+   * way in. The Meta screen opens leads too, and sent people to a list they had not come from,
+   * losing the Page and form they were working through.
+   *
+   * `safeReturnTo` is what keeps that from being an open redirect: `returnTo` arrives in the URL,
+   * so it is supplied by whoever wrote the link, and only an internal path is honoured. Anything
+   * else falls back to the Leads module silently — a rejected destination still lands somewhere
+   * sensible, so there is nothing to report to the person reading the lead.
+   */
+  const [params] = useSearchParams();
+  const backTo = safeReturnTo(params.get('returnTo'), crmPath('lead'));
   const { can, user } = useAuth();
   const canEdit = can('lead', 'edit');
 
@@ -110,7 +125,7 @@ export default function LeadDetailPage() {
       <div className="card stub">
         <h2>Lead not found</h2>
         <p>It may have been deleted, or it belongs to another agent.</p>
-        <button className="btn ghost" type="button" onClick={() => navigate(crmPath('lead'))}>Back to Leads</button>
+        <button className="btn ghost" type="button" onClick={() => navigate(backTo)}>Back to {returnLabel(backTo)}</button>
       </div>
     );
   }
@@ -122,7 +137,7 @@ export default function LeadDetailPage() {
       <div className="toolbar">
         <div className="toolbar-row" style={{ justifyContent: 'space-between' }}>
           <div>
-            <button className="btn ghost sm" type="button" onClick={() => navigate(crmPath('lead'))}>← Back to Leads</button>
+            <button className="btn ghost sm" type="button" onClick={() => navigate(backTo)}>← Back to {returnLabel(backTo)}</button>
             <h2 className="lead-title">{lead.name}</h2>
             <div className="lead-subtitle">
               {lead.lead_status && <span className="pill info">{label(lead.lead_status === 'mild' ? 'warm' : lead.lead_status)}</span>}
