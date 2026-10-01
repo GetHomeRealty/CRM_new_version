@@ -187,6 +187,15 @@ export default function MetaPage() {
     try { return sessionStorage.getItem(FORM_KEY) || ''; } catch { return ''; }
   });
   const leadsRef = useRef<HTMLDivElement>(null);
+  /**
+   * Did this visit ARRIVE already filtered, rather than being filtered by a click here?
+   *
+   * Read once, at mount, because it is the difference between coming back to a lead list somebody
+   * was already reading and opening the screen fresh. Only the first should move the viewport: a
+   * screen that scrolls itself on every visit takes the choice away from the person who opened it.
+   */
+  const [arrivedFiltered] = useState(() => !!params.get('form'));
+  const scrolledOnArrival = useRef(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState('');
 
@@ -416,8 +425,42 @@ export default function MetaPage() {
     if (forms.length === 0) { setFormFilter(null); return; }
     const match = wanted ? forms.find((f) => f.id === wanted) : undefined;
     setFormFilter(match ? { id: match.id, name: match.name } : null);
-    if (wanted && !match) setFormParam(null);
-  }, [forms, params, setFormParam]);
+    /*
+     * THE REQUESTED FORM IS NOT ERASED WHEN IT IS MERELY NOT FOUND.
+     *
+     * This read `if (wanted && !match) setFormParam(null);`, which deleted the id from the URL AND
+     * from the session. The lookup runs against `forms`, which arrives from Graph a second or so
+     * after the screen mounts and is replaced whenever the Page changes — so "not in the list" means
+     * "not there YET" as often as it means "gone". Erasing on the first miss destroyed the only two
+     * copies of the id, and by the time the real forms arrived there was nothing left to restore:
+     * the screen sat on "Recent Meta Leads" permanently, having thrown away what it was showing.
+     *
+     * Leaving the parameter alone makes the restore self-healing instead. A form that is simply
+     * late appears the moment its list lands; a form that is genuinely gone never matches, so the
+     * view stays unfiltered — the same outcome, reached without destroying anything. The cost is a
+     * dead `?form=` lingering in the URL, which "Show all" clears and choosing another form
+     * overwrites.
+     */
+  }, [forms, params]);
+
+  /**
+   * COMING BACK LANDS ON THE LIST, not at the top of the screen.
+   *
+   * Returning from a lead put the person back at the Connection panel, with the leads they were
+   * reading somewhere below the fold — so a journey that restored the filter correctly still ended
+   * in scrolling to find the row they had just come from.
+   *
+   * Waits for `leadsLoaded`, or it would scroll to "Loading leads…" and sit there while the rows
+   * arrived underneath and pushed the view off again. Runs once per visit: `showForm` already
+   * scrolls when a form is clicked here, and re-scrolling on every later change would fight anyone
+   * who had scrolled away deliberately.
+   */
+  useEffect(() => {
+    if (!arrivedFiltered || scrolledOnArrival.current) return;
+    if (!formFilter || !leadsLoaded) return;
+    scrolledOnArrival.current = true;
+    leadsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, [arrivedFiltered, formFilter, leadsLoaded]);
 
   useEffect(() => {
     /*
