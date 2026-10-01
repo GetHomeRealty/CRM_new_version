@@ -1,7 +1,7 @@
 import api from './axios';
 import type {
-  MetaAdAccount, MetaDiagnostics, MetaForm, MetaLeadsResponse, MetaPage, MetaStatus,
-  MetaSyncResult, MetaSyncRun, MetaWebhookHealth,
+  MetaAdAccount, MetaDefaultPageResponse, MetaDiagnostics, MetaForm, MetaLeadsResponse, MetaPage,
+  MetaStatus, MetaSyncResult, MetaSyncRun, MetaWebhookHealth,
 } from '../types';
 
 /** Meta API. No endpoint here ever returns an access token — those stay on the server. */
@@ -32,9 +32,18 @@ export const syncMetaLeads = (): Promise<MetaSyncResult> =>
 export const disconnectMeta = (): Promise<void> =>
   api.delete('/api/meta/disconnect').then(() => undefined);
 
-/** `formId` narrows the list (not the stats) to one lead form's leads. */
-export const metaLeads = (limit = 50, formId?: string): Promise<MetaLeadsResponse> =>
-  api.get<MetaLeadsResponse>('/api/meta/leads', { params: { limit, form_id: formId || undefined } }).then((r) => r.data);
+/** Remember which Page this person's Meta screen opens on. An empty id clears the preference. */
+export const setMetaDefaultPage = (pageId: string): Promise<MetaDefaultPageResponse> =>
+  api.post<MetaDefaultPageResponse>('/api/meta/pages/default', { page_id: pageId }).then((r) => r.data);
+
+/**
+ * `pageId` scopes the whole answer — list and tiles — to one Facebook Page, which is what the rest
+ * of the Meta screen is already showing. `formId` narrows the LIST further, and never the tiles.
+ */
+export const metaLeads = (limit = 50, formId?: string, pageId?: string): Promise<MetaLeadsResponse> =>
+  api.get<MetaLeadsResponse>('/api/meta/leads', {
+    params: { limit, form_id: formId || undefined, page_id: pageId || undefined },
+  }).then((r) => r.data);
 
 export const metaDiagnostics = (): Promise<MetaDiagnostics> =>
   api.get<MetaDiagnostics>('/api/meta/diagnostics').then((r) => r.data);

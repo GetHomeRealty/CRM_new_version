@@ -801,6 +801,20 @@ model meta_connections {
   ad_account_id         String?      @db.VarChar(64)
   ad_account_name       String?      @db.VarChar(255)
   /**
+   * The Meta Page this person's screen opens on, chosen by them.
+   *
+   * Lives here rather than in a table of its own BECAUSE THE PAGES BELONG TO THE CONNECTION
+   * (`meta_pages.connection_id`), so a default Page has no meaning without one — and disconnecting
+   * drops this row, which is exactly the cleanup a separate table would have to remember to do.
+   * `ad_account_id` above is the same shape of thing and the precedent followed here.
+   *
+   * Holds Meta's own Page id, NOT a foreign key to `meta_pages`: that table is rebuilt from Graph
+   * whenever Pages are refreshed, so a reference into it would break on a refresh that changed
+   * nothing the person cares about. Null means no choice has been made, and the screen falls back.
+   * A stale id is harmless and expected — every reader checks it against the Pages Graph returns.
+   */
+  default_meta_page_id  String?      @db.VarChar(64)
+  /**
    * Last Graph failure seen for this connection, surfaced in the UI.
    */
   last_error            String?      @db.Text

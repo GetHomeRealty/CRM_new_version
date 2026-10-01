@@ -15,6 +15,8 @@ export interface MetaStatus {
   connected_at: string | null;
   last_sync: string | null;
   leads_count: number;
+  /** The Page this person's screen opens on; null until they choose one. */
+  default_meta_page_id: string | null;
   /** Lead forms currently opted in. */
   connected_forms: number;
   token_expires_at: string | null;
@@ -99,6 +101,11 @@ export interface MetaLeadRow {
   lead_status: string | null;
   facebook_lead_id: string | null;
   created_at: string | null;
+}
+
+export interface MetaDefaultPageResponse {
+  default_meta_page_id: string | null;
+  message: string;
 }
 
 export interface MetaLeadsResponse {

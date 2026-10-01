@@ -93,6 +93,9 @@ export class MetaController {
       missing_permissions: missingPermissions,
       ad_account_id: meta?.ad_account_id ?? null,
       ad_account_name: meta?.ad_account_name ?? null,
+      // The Page this person's screen opens on. Null until they choose one; the screen checks it
+      // against the Pages Graph returns before using it, so a stale id costs nothing.
+      default_meta_page_id: meta?.default_meta_page_id ?? null,
       last_error: meta?.last_error ?? null,
       last_error_at: meta?.last_error_at?.toISOString() ?? null,
       last_webhook_at: meta?.last_webhook_at?.toISOString() ?? null,
@@ -276,6 +279,36 @@ export class MetaController {
     };
   }
 
+  /**
+   * Remember which Page this person's screen should open on.
+   *
+   * VALIDATED AGAINST THE PAGES THIS CONNECTION ACTUALLY HAS, so one agent cannot store another's
+   * Page id by posting it: `conn.pages` comes from their own connection. An empty body clears the
+   * preference rather than erroring, which is how the screen stops remembering.
+   *
+   * `@Screen('meta', 'view')` and not `'edit'`: this changes nothing about what the brokerage
+   * collects or who owns it — it is one person's view preference, and someone who may look at this
+   * screen may decide which Page it opens on.
+   */
+  @Post('pages/default')
+  @HttpCode(200)
+  @Screen('meta', 'view')
+  async setDefaultPage(@CurrentUser() user: AuthUserRecord, @Body() body: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const userId = user.id ?? 0;
+    const id = str(body.page_id).trim().slice(0, 64);
+    if (!id) {
+      await this.connections.setDefaultPage(userId, null);
+      return { default_meta_page_id: null, message: 'Default Page cleared.' };
+    }
+    const conn = await this.connections.find(userId);
+    if (!conn) throw new BadRequestException({ message: 'Meta is not connected.' });
+    if (!conn.pages.some((p) => p.page_id === id)) {
+      throw new BadRequestException({ message: 'That Page is not available on this connection.' });
+    }
+    await this.connections.setDefaultPage(userId, id);
+    return { default_meta_page_id: id, message: 'This screen will open on that Page.' };
+  }
+
   @Post('ad-accounts/select')
   @HttpCode(200)
   @Screen('meta', 'edit')
@@ -314,17 +347,32 @@ export class MetaController {
     @CurrentUser() user: AuthUserRecord,
     @Query('limit') limit?: string,
     @Query('form_id') formId?: string,
+    @Query('page_id') pageId?: string,
   ): Promise<Record<string, unknown>> {
     const take = Math.min(200, Math.max(1, Number(limit) || 50));
     // Same scope as the card above, for the same reason: the list and the tiles counting it must
     // answer one question. `liveLeadWhere` already excludes deleted rows.
-    const where = { AND: [{ source: 'facebook_meta' }, liveLeadWhere(user)] };
+    const base = { AND: [{ source: 'facebook_meta' }, liveLeadWhere(user)] };
+
     /*
-     * `form_id` narrows the LIST to one lead form, for the Meta screen's "click a form to see its
-     * leads". The stats deliberately keep the unfiltered scope: they are the module's tiles, and a
-     * tile that changed when a form was clicked would stop meaning "Meta leads". `form_total` is
-     * the filtered count, so the list can say how many it holds.
+     * `page_id` IS THE SCREEN'S CONTEXT, AND EVERYTHING ON IT ANSWERS FOR THE SAME PAGE.
+     *
+     * Without it the leads list ignored the Page entirely, so choosing one changed the Connection
+     * panel and the Lead Forms beside it while the table below went on showing another Page's
+     * leads — one screen describing two Pages at once. Every Meta lead records the Page it arrived
+     * from, so this is a filter the data already supports.
+     *
+     * THE TILES FOLLOW THE PAGE TOO, and deliberately do not follow the FORM. The two are not the
+     * same kind of thing: a Page is what the screen is about, and the Connection panel and the form
+     * list already say so, whereas a form is a narrowing WITHIN that Page. A tile that moved when a
+     * form was clicked would stop meaning "Meta leads"; a tile that ignored the Page would be
+     * counting something the rest of the screen is not showing.
+     *
+     * `form_total` remains the count the LIST holds, so a narrowed list can still say how many.
      */
+    const page = pageId?.trim().slice(0, 64) || null;
+    const where = page ? { AND: [base, { facebook_page_id: page }] } : base;
+
     const form = formId?.trim().slice(0, 64) || null;
     const listWhere = form ? { AND: [where, { facebook_form_id: form }] } : where;
     const startOfDay = new Date(); startOfDay.setHours(0, 0, 0, 0);

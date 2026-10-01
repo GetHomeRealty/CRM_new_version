@@ -1,9 +1,9 @@
 import { crmPath } from './area';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   disconnectMeta, metaAuthUrl, metaDiagnostics, metaForms, metaLeads, metaPages, metaStatus,
-  metaWebhookHealth, refreshMetaPages, syncMetaLeads, toggleMetaForm,
+  metaWebhookHealth, refreshMetaPages, setMetaDefaultPage, syncMetaLeads, toggleMetaForm,
 } from '../lib/metaApi';
 import { apiErrorMessage } from '../lib/apiError';
 import { useToast } from './toast';
@@ -25,6 +25,57 @@ const OAUTH_ERRORS: Record<string, string> = {
 
 const stamp = (iso: string | null): string => (iso ? iso.replace('T', ' ').slice(0, 16) : '—');
 
+/**
+ * The Page this brokerage wants first when nothing else has been chosen.
+ *
+ * MATCHED BY NAME, which is the weak part and is worth knowing: rename the Page on Facebook and
+ * this stops matching, silently, and the first Page in the list is used instead. That is a
+ * degradation rather than a failure — the screen still works and still lists every Page — but the
+ * only signal is that the dropdown opens somewhere unexpected. Meta's own Page id would be stable,
+ * and is the better key if this ever needs to be dependable.
+ *
+ * It is a FALLBACK, never an override: a Page the person actually chose wins, or remembering the
+ * choice at all would be pointless.
+ */
+const DEFAULT_PAGE_NAME = 'BUY EASY Realty';
+
+/**
+ * The brokerage's own Pages, in the order they belong at the top of the dropdown. Everything else
+ * follows in whatever order Meta returned it.
+ *
+ * MATCHED WHOLE, NOT BY PREFIX, and that is load-bearing here: this connection also carries
+ * "Get Home Realty Telugu", which a `startsWith` would pull up alongside "Get Home Realty" and put
+ * above Pages that were meant to rank higher. Names are compared trimmed and case-insensitively, so
+ * a stray space or a capitalisation change on Facebook does not quietly drop a Page to the bottom.
+ */
+const PAGE_ORDER = ['BUY EASY Realty', 'Get Home Realty'];
+
+/**
+ * The form last looked at, for the length of this browser session.
+ *
+ * `sessionStorage`, NOT `localStorage` and not the database, and the difference is the point:
+ *
+ *   - The URL alone was not enough. It carries the filter through Back and a reload, but coming
+ *     back through the sidebar lands on a bare /crm/meta with nothing to restore from — which is
+ *     exactly the journey that was reported.
+ *   - `localStorage` would outlive the session and follow the next person to sign in on a shared
+ *     machine, which is what the Page preference had to be moved off.
+ *   - The database would make a filter permanent, and the tiles above the list stay unfiltered
+ *     totals; opening the screen next week still narrowed to one form invites reading the two as
+ *     the same number.
+ *
+ * A working session is the span over which "the form I was looking at" is still true, so the value
+ * dies with the tab. It is never trusted on its own: it seeds the URL only when the form is one
+ * this Page actually returned.
+ */
+const FORM_KEY = 'meta_last_form';
+
+const pageRank = (name: string): number => {
+  const n = name.trim().toLowerCase();
+  const i = PAGE_ORDER.findIndex((x) => x.trim().toLowerCase() === n);
+  return i === -1 ? PAGE_ORDER.length : i;
+};
+
 export default function MetaPage() {
   const toast = useToast();
   const navigate = useNavigate();
@@ -35,6 +86,36 @@ export default function MetaPage() {
 
   const [status, setStatus] = useState<MetaStatus | null>(null);
   const [pages, setPages] = useState<MetaPageInfo[]>([]);
+  /**
+   * The list as the dropdown shows it. `Array.prototype.sort` is stable, so Pages outside
+   * `PAGE_ORDER` keep the order Meta gave them rather than being shuffled among themselves.
+   *
+   * `pages` itself is left alone: it stays the answer to "what does this connection have", which is
+   * what the validity checks ask, and only the presentation is ordered.
+   */
+  const orderedPages = useMemo(
+    () => [...pages].sort((a, b) => pageRank(a.name) - pageRank(b.name)),
+    [pages],
+  );
+
+  /** False only until the first `metaPages()` answers; a later Refresh does not reset it. */
+  const [pagesReady, setPagesReady] = useState(false);
+  /**
+   * WHICH PAGE THIS SCREEN REOPENS ON.
+   *
+   * Empty until `status.default_meta_page_id` arrives — the person's own choice, stored on their
+   * `meta_connections` row, so it follows them to another machine.
+   *
+   * THIS LIVED IN `localStorage` FIRST AND COULD NOT TELL ONE USER FROM ANOTHER. That is per
+   * browser, and three people hold separate Meta connections here, so signing out and in on a
+   * shared machine inherited somebody else's Page. Reading it at first render also meant the id
+   * arrived before the Page list did, with nothing to check it against.
+   *
+   * NOTHING IS FETCHED WITH IT UNTIL THE CONNECTION CONFIRMS IT. A stored Page can be removed or
+   * lose its permissions, and `metaForms(staleId)` against a Page this person cannot read is an
+   * error toast on arrival, before they have touched anything. The effects below wait for the list
+   * and check the id against it, so a stale preference costs nothing.
+   */
   const [selectedPage, setSelectedPage] = useState('');
   const [forms, setForms] = useState<MetaForm[]>([]);
   const [leads, setLeads] = useState<MetaLeadRow[]>([]);
@@ -55,6 +136,18 @@ export default function MetaPage() {
    * clicking a form. The tiles stay the whole module's counts either way — the API filters the list
    * only — so clicking a form never changes what "Meta leads" means.
    */
+  /**
+   * The form whose leads the list is showing, or null for all of them.
+   *
+   * DERIVED FROM THE URL, not set directly. `?form=<id>` is the source of truth, because this state
+   * used to die with the component: open a lead, come back, and the screen was unfiltered again —
+   * the selection existed only in memory and nothing outlived the unmount. In the URL it survives
+   * leaving and returning, a reload, and Back, and the link can be handed to somebody else.
+   *
+   * The NAME is kept alongside the id because the heading reads "Leads from <name> (n)" and the row
+   * needs it for its label and highlight; it is resolved from the loaded forms rather than stored,
+   * so it can never disagree with what Meta currently calls that form.
+   */
   const [formFilter, setFormFilter] = useState<{ id: string; name: string } | null>(null);
   const [formTotal, setFormTotal] = useState<number | null>(null);
   /*
@@ -74,6 +167,24 @@ export default function MetaPage() {
    * was reporting the failure as an answer.
    */
   const [leadsError, setLeadsError] = useState('');
+  /*
+   * "NOT FETCHED YET" IS NOT "NONE", and the list must never say the second while it means the
+   * first. Without this an empty `leads` renders "No Meta leads yet." on the way to the real
+   * answer — a worse statement than the flicker it replaces, because it reads as a fact.
+   */
+  const [leadsLoaded, setLeadsLoaded] = useState(false);
+  /*
+   * Distinguishes "the form list has not come back yet" from "this Page has no forms". Both are an
+   * empty `forms`, and only the second means a remembered form can never be restored.
+   */
+  const [formsLoaded, setFormsLoaded] = useState(false);
+  /*
+   * A form this visit is expected to restore — from the URL, or from what the session remembers.
+   * Read once, at mount, because it decides whether the leads request must WAIT for the form list.
+   */
+  const [rememberedForm] = useState(() => {
+    try { return sessionStorage.getItem(FORM_KEY) || ''; } catch { return ''; }
+  });
   const leadsRef = useRef<HTMLDivElement>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState('');
@@ -89,7 +200,7 @@ export default function MetaPage() {
     try {
       // 200 for one form, the API's ceiling: that view is about the form's whole set, where the
       // unfiltered list is only the most recent arrivals.
-      const res = await metaLeads(formFilter ? 200 : 50, formFilter?.id);
+      const res = await metaLeads(formFilter ? 200 : 50, formFilter?.id, selectedPage || undefined);
       setLeads(res.data);
       setLeadStats(res.stats);
       setFormTotal(res.form_total ?? null);
@@ -100,23 +211,83 @@ export default function MetaPage() {
       setLeads([]);
       setFormTotal(null);
       setLeadsError(apiErrorMessage(ex, 'Could not load Meta leads'));
+    } finally {
+      setLeadsLoaded(true);
     }
-  }, [formFilter]);
+  }, [formFilter, selectedPage]);
 
   useEffect(() => {
     void (async () => {
-      await Promise.all([loadStatus(), loadLeads()]);
+      await loadStatus();
       setLoading(false);
     })();
-    // Once on arrival. The lead list reloads on its own below whenever the form filter changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Once on arrival. The leads follow below, once it is settled what they are meant to be OF.
   }, [loadStatus]);
 
-  useEffect(() => { if (!loading) void loadLeads(); }, [loadLeads]); // eslint-disable-line react-hooks/exhaustive-deps
+  /**
+   * RESTORE FIRST, THEN FETCH ONCE — the list is never shown for a scope that is about to change.
+   *
+   * Asking too early answered the wrong question and corrected itself in public: a request with no
+   * Page returned every Meta lead, so 66 rows appeared and were replaced a moment later by that
+   * Page's 32. Two requests, and a number somebody could read and act on before it moved.
+   *
+   * `pageKnown` — the Page is settled. A DISCONNECTED ACCOUNT IS SETTLED IMMEDIATELY, and that case
+   * is why this is not simply `pagesReady`: `metaPages()` never runs without a connection, so
+   * `pagesReady` would stay false for ever and the list would never load at all — for the people
+   * whose historical Meta leads are the only reason they opened the screen.
+   *
+   * `formKnown` — nothing is waiting to be restored, or the form list has come back so the waiting
+   * is over. Only a visit that HAS a form to restore pays for this; an ordinary one does not wait on
+   * Graph. Bounded either way, because `formsLoaded` is set on failure as well as success.
+   */
+  const pageKnown = !!status && (!status.is_connected
+    || (pagesReady && (orderedPages.length === 0 || selectedPage !== '')));
+  const formKnown = !status?.is_connected || !rememberedForm || formsLoaded;
+  const scopeReady = pageKnown && formKnown;
+
+  useEffect(() => { if (scopeReady) void loadLeads(); }, [loadLeads, scopeReady]);
+
+  /**
+   * Remembering is deliberately tied to an EXPLICIT choice, not to `selectedPage` changing.
+   *
+   * Saving from an effect would also record the automatic fallback, so a load that could not honour
+   * the stored Page would overwrite it — and the Page somebody actually wanted would be lost by the
+   * very load that failed to restore it.
+   *
+   * THE SCREEN MOVES FIRST AND THE SAVE FOLLOWS. This is a view preference: waiting on a round trip
+   * to change a dropdown would make the screen feel broken, and a save that fails costs nothing the
+   * person needs right now. It is reported rather than swallowed, so "it keeps forgetting my Page"
+   * has an answer.
+   */
+  const choosePage = (id: string) => {
+    setSelectedPage(id);
+    void setMetaDefaultPage(id)
+      .catch((ex) => toast(apiErrorMessage(ex, 'Could not remember that Page'), 'bad'));
+  };
+
+  /**
+   * Writes the chosen form to the URL. `replace` rather than push, so narrowing the list does not
+   * fill the Back button with filter states somebody then has to press their way out of.
+   *
+   * Other params are preserved: the OAuth callback puts its own on this route, and clobbering them
+   * would swallow the message it came back to show.
+   */
+  const setFormParam = useCallback((id: string | null) => {
+    setParams((prev) => {
+      const next = new URLSearchParams(prev);
+      if (id) next.set('form', id); else next.delete('form');
+      return next;
+    }, { replace: true });
+    // Written on the way past, so leaving by any route remembers it. Clearing the filter clears
+    // this too — "Show all" must not be undone by the next visit.
+    try {
+      if (id) sessionStorage.setItem(FORM_KEY, id); else sessionStorage.removeItem(FORM_KEY);
+    } catch { /* unavailable in private mode; the URL still carries it */ }
+  }, [setParams]);
 
   /** Clicking a form shows its leads; clicking the same form again goes back to all of them. */
   const showForm = (f: MetaForm) => {
-    setFormFilter((cur) => (cur?.id === f.id ? null : { id: f.id, name: f.name }));
+    setFormParam(formFilter?.id === f.id ? null : f.id);
     leadsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
@@ -142,19 +313,109 @@ export default function MetaPage() {
   useEffect(() => {
     if (!status?.is_connected) return;
     metaPages().then((p) => {
+      // Reporting the list is all this does; the effect below decides what is selected.
       setPages(p);
-      setSelectedPage((cur) => cur || p[0]?.id || '');
-    }).catch(() => setPages([]));
+    }).catch(() => setPages([])).finally(() => setPagesReady(true));
   }, [status?.is_connected]);
 
+  /**
+   * WHICH PAGE IS SELECTED — decided in one place, reacting to the LIST rather than to one fetch.
+   *
+   * `pages` is set from three places: the first load, Refresh, and disconnect. Only the first used
+   * to revisit the selection, so a REFRESH THAT DROPPED THE SELECTED PAGE left `selectedPage`
+   * naming a Page no longer in the list: `<select>` matched no `<option>` and rendered blank, while
+   * the forms effect below went on asking for a Page that was gone.
+   *
+   * Reacting here covers all three, and covers the Page stored on this person's connection by the
+   * same rule — nothing has to know where the current value came from. A Page that was removed or
+   * lost its permissions falls to the first, exactly as if nothing had been remembered.
+   *
+   * The stored value is deliberately NOT cleared when that happens: it costs nothing while it is
+   * invalid, and it comes back by itself if the Page returns to the connection. Clearing it would
+   * turn a Page temporarily missing from Graph into a preference silently thrown away.
+   *
+   * THE ORDER, and each step is the reason the next one exists:
+   *
+   *   1. What is already selected, if this connection still offers it — a choice made in this
+   *      session, which must not be overridden by anything below it.
+   *   1b. The Page stored against this person's connection, when it is still on offer.
+   *   2. `DEFAULT_PAGE_NAME`, when it is on this connection. Not every connection has it; three
+   *      people hold separate Meta connections here and they do not administer the same Pages.
+   *   3. The first Page AS THE DROPDOWN ORDERS IT — `orderedPages`, not `pages`. Falling back to a
+   *      Page the reader would have to scroll to find is a worse answer than the one at the top.
+   *
+   * Putting the brokerage default at 2 rather than 1 is the whole point: ahead of the chosen Page it
+   * would reset the dropdown on every load and make remembering anything pointless.
+   */
   useEffect(() => {
-    // A different Page has different forms, so a filter picked on the last one no longer applies.
-    setFormFilter(null);
-    if (!selectedPage) { setForms([]); return; }
+    if (!pagesReady || orderedPages.length === 0) return;
+    const named = (n: string) => orderedPages.find((p) => p.name.trim().toLowerCase() === n.trim().toLowerCase());
+    const stored = status?.default_meta_page_id ?? null;
+    setSelectedPage((cur) => (
+      cur && orderedPages.some((p) => p.id === cur)
+        ? cur
+        : (
+          (stored ? orderedPages.find((p) => p.id === stored) : undefined)
+          ?? named(DEFAULT_PAGE_NAME)
+          ?? orderedPages[0]
+        ).id
+    ));
+  }, [orderedPages, pagesReady, status?.default_meta_page_id]);
+
+  /**
+   * THE ONE PLACE THE FILTER IS DECIDED: the URL, checked against the forms this Page returned.
+   *
+   * It used to be cleared outright whenever the Page changed, which was right for the Page and
+   * wrong for everything else — it also fired on the first load, before anything had been chosen.
+   * Deriving it instead means a different Page drops a filter that does not belong to it, while a
+   * filter that does belong survives the forms reloading underneath it.
+   *
+   * A `?form=` naming a form this Page does not have — an old link, a form disconnected since, a
+   * Page switched under it — clears the parameter too, rather than leaving the URL claiming a
+   * filter the screen is not applying.
+   */
+  /**
+   * ONCE PER VISIT, and only when the URL says nothing: put back the form this session was last
+   * looking at. `seeded` makes it once — without it, pressing "Show all" would clear the parameter
+   * and this would immediately restore it, and the button would look broken.
+   *
+   * It seeds the URL rather than the state, so there is still one source of truth and the restored
+   * filter is as linkable as a chosen one.
+   */
+  const seeded = useRef(false);
+  useEffect(() => {
+    if (seeded.current || forms.length === 0) return;
+    seeded.current = true;
+    if (params.get('form')) return;
+    let last: string | null = null;
+    try { last = sessionStorage.getItem(FORM_KEY); } catch { /* unavailable */ }
+    if (last && forms.some((f) => f.id === last)) setFormParam(last);
+  }, [forms, params, setFormParam]);
+
+  useEffect(() => {
+    const wanted = params.get('form');
+    if (forms.length === 0) { setFormFilter(null); return; }
+    const match = wanted ? forms.find((f) => f.id === wanted) : undefined;
+    setFormFilter(match ? { id: match.id, name: match.name } : null);
+    if (wanted && !match) setFormParam(null);
+  }, [forms, params, setFormParam]);
+
+  useEffect(() => {
+    /*
+     * WAIT FOR THE CONNECTION'S OWN LIST. `selectedPage` can now hold a remembered id at first
+     * render, and asking for the forms of a Page this person cannot read answers with an error
+     * toast before they have touched anything. `pagesReady` is false only until the first
+     * `metaPages()` returns — pressing Refresh leaves it true, so a form filter already chosen is
+     * not cleared out from under the person who chose it.
+     */
+    if (!selectedPage || !pagesReady) { setForms([]); return; }
     metaForms(selectedPage)
       .then((r) => setForms(r.forms))
-      .catch((ex) => { setForms([]); toast(apiErrorMessage(ex, 'Could not load lead forms'), 'bad'); });
-  }, [selectedPage, toast]);
+      .catch((ex) => { setForms([]); toast(apiErrorMessage(ex, 'Could not load lead forms'), 'bad'); })
+      // Success or failure, the waiting is over — a Graph error must not leave the leads list
+      // hanging on a restore that is never coming.
+      .finally(() => setFormsLoaded(true));
+  }, [selectedPage, pagesReady, toast]);
 
   const run = async (key: string, fn: () => Promise<unknown>, ok?: string) => {
     setBusy(key);
@@ -301,9 +562,9 @@ export default function MetaPage() {
             <>
               <div className="modal-sub">Pages</div>
               <div className="toolbar-row">
-                <select value={selectedPage} onChange={(e) => setSelectedPage(e.target.value)}>
+                <select value={selectedPage} onChange={(e) => choosePage(e.target.value)}>
                   {pages.length === 0 && <option value="">No pages available</option>}
-                  {pages.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  {orderedPages.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                 </select>
                 {canEdit && (
                   <button className="btn ghost sm" type="button" disabled={busy !== ''}
@@ -373,7 +634,7 @@ export default function MetaPage() {
             ? `Leads from ${formFilter.name}${formTotal !== null ? ` (${formTotal})` : ''}`
             : 'Recent Meta Leads'}
           {formFilter && (
-            <button className="btn ghost sm" type="button" onClick={() => setFormFilter(null)}>Show all</button>
+            <button className="btn ghost sm" type="button" onClick={() => setFormParam(null)}>Show all</button>
           )}
         </div>
         {leadsError ? (
@@ -381,6 +642,8 @@ export default function MetaPage() {
             {leadsError} — this is a failure to READ the leads, not a statement that there are none.
             Any leads already synced are unaffected.
           </p>
+        ) : !leadsLoaded ? (
+          <p className="help">Loading leads…</p>
         ) : leads.length === 0 ? (
           <p className="help">
             {formFilter

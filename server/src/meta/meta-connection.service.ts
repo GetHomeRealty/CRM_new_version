@@ -223,16 +223,34 @@ export class MetaConnectionService {
     });
   }
 
+  /**
+   * The Page this person's Meta screen opens on.
+   *
+   * `updateMany` rather than `update`, like `setAdAccount` above: `user_id` is unique, so this
+   * touches one row, and a person with no connection is a no-op rather than a thrown
+   * RecordNotFound. The id is NOT validated against `meta_pages` here — that table is rebuilt from
+   * Graph on every refresh, so the only list worth checking against is the one the screen has in
+   * hand, and it does check.
+   */
+  async setDefaultPage(userId: number, pageId: string | null): Promise<void> {
+    await this.prisma.meta_connections.updateMany({
+      where: { user_id: userId },
+      data: { default_meta_page_id: pageId, updated_at: new Date() },
+    });
+  }
+
   /** Raw row, for the fields `find()` deliberately omits (token state, errors). */
   async meta(userId: number): Promise<{
     token_expires_at: Date | null; granted_scopes: string | null;
     ad_account_id: string | null; ad_account_name: string | null;
+    default_meta_page_id: string | null;
     last_error: string | null; last_error_at: Date | null; last_webhook_at: Date | null;
   } | null> {
     return this.prisma.meta_connections.findFirst({
       where: { user_id: userId, is_active: true },
       select: {
         token_expires_at: true, granted_scopes: true, ad_account_id: true, ad_account_name: true,
+        default_meta_page_id: true,
         last_error: true, last_error_at: true, last_webhook_at: true,
       },
     });

@@ -1,0 +1,15 @@
+-- The Meta Page a person's screen opens on, remembered per user.
+--
+-- ON meta_connections RATHER THAN IN A TABLE OF ITS OWN. The Pages belong to the connection
+-- (meta_pages.connection_id), so a default Page has no meaning without one, and disconnecting
+-- drops this row — which is exactly the cleanup a separate preferences table would have to
+-- remember to do, and would get wrong by leaving a row pointing at a Page nobody can reach.
+-- ad_account_id on the same table is the same shape of thing and the precedent followed here.
+--
+-- META'S OWN PAGE ID, NOT A FOREIGN KEY. meta_pages is rebuilt from Graph on every refresh, so a
+-- reference into it would break on a refresh that changed nothing the person cares about.
+--
+-- NULLABLE AND NULL EVERYWHERE ON DAY ONE. Null means no choice has been made and the screen
+-- falls back as it does today, so nobody's dropdown moves the moment this ships. A stale id is
+-- harmless and expected: every reader checks it against the Pages Graph actually returns.
+ALTER TABLE "meta_connections" ADD COLUMN "default_meta_page_id" VARCHAR(64);
