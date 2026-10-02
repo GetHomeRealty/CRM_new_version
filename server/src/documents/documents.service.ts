@@ -731,7 +731,31 @@ export class DocumentsService {
   async destroy(user: Actor, docId: number): Promise<{ message: string }> {
     const document = await this.prisma.documents.findFirst({ where: { id: docId, deleted_at: null } });
     if (!document) throw new NotFoundException({ message: `No query results for model [App\\Models\\Document] ${docId}.` });
-    if (user && isAgent(user)) throw new ForbiddenException({ message: 'Only an administrator can delete documents.' });
+    /*
+     * AN AGENT MAY REMOVE A DOCUMENT THEY ADDED THEMSELVES, AND NOTHING ELSE.
+     *
+     * Sai ruled this on 2026-10-02, once the Add dialogue made adding easy: an agent who mistyped
+     * a name had no way to undo it and had to ask the office. Before that, every delete was
+     * refused for an agent outright.
+     *
+     * THE CONDITIONS ARE DELIBERATELY NARROW. The row must have been added by hand (`manual`), it
+     * must hold NO file of any kind - submitted, listed or still a draft - and it must not be a
+     * condition document. So an agent can tidy up their own mistake and can never remove the
+     * brokerage's own paperwork, nor anything that already carries evidence. The mandatory check
+     * below still applies to them as it does to everyone.
+     *
+     * Enforced HERE rather than on the screen, because the screen is only a reflection of this.
+     */
+    if (user && isAgent(user)) {
+      const holdsAFile = !!document.file_path
+        || ((parseJson<FileEntry[]>(document.files) ?? []) as FileEntry[]).length > 0
+        || ((parseJson<DraftFile[]>(document.draft_files) ?? []) as DraftFile[]).length > 0;
+      if (!document.manual || document.is_condition || holdsAFile) {
+        throw new ForbiddenException({ message: 'You can only remove a document you added yourself, and only while it has no file on it. Ask an administrator to remove anything else.' });
+      }
+      const ownTxn = await this.prisma.transactions.findUnique({ where: { id: document.transaction_id } });
+      if (ownTxn) await this.guardAgent(user, ownTxn);
+    }
     // TD-070. The same rule as the bulk path above - deleting one row directly must not be a
     // way around it.
     if (document.mandatory) {

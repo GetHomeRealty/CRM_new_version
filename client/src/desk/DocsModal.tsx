@@ -290,7 +290,16 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
       message: 'This document will be removed. A Super Admin can restore it from the Recycle Bin.',
       linked: doc.has_file ? ['The uploaded file for this document'] : [],
       onConfirm: async () => {
-        if (doc.id) { try { await deleteDocument(doc.id); } catch { /* ignore */ } }
+        /*
+         * A REFUSAL USED TO BE SWALLOWED - the row vanished from the screen and the toast said
+         * "Document deleted" while the document was still there, reappearing on the next load.
+         * It mattered little while only admins could delete; an agent is refused by design on
+         * anything but their own empty row, so they would be told something untrue routinely.
+         */
+        if (doc.id) {
+          try { await deleteDocument(doc.id); }
+          catch (error) { toast(apiErrorMessage(error, 'Could not delete the document'), 'bad'); return; }
+        }
         setDocs((ds) => ds.filter((_, idx) => idx !== i));
         toast('Document deleted', 'ok');
       },
@@ -300,7 +309,7 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
   const sel: CSSProperties = { width: '100%' };
   const fileById = (doc: DeskDocument, name: string): DeskDocFile | undefined => [...(doc.files || [])].reverse().find((f) => f.client_name === name);
   // Title · Upload · Status · Validation · View/Download · [Uploaded to Drive · Replace · Delete].
-  const COLS = agentMode ? '2.2fr 1.2fr 105px 105px 105px 85px' : '2.2fr 1.2fr 105px 105px 105px 110px 85px 55px';
+  const COLS = agentMode ? '2.2fr 1.2fr 105px 105px 105px 85px 55px' : '2.2fr 1.2fr 105px 105px 105px 110px 85px 55px';
   const hCell: CSSProperties = { fontSize: 11, fontWeight: 700, color: 'var(--text-2)', textTransform: 'uppercase', letterSpacing: '.03em' };
 
   return (
@@ -399,7 +408,7 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
             <div style={{ ...hCell, textAlign: 'center' }}>View / Download</div>
             {!agentMode && <div style={{ ...hCell, textAlign: 'center' }}>Uploaded to Drive</div>}
             <div style={{ ...hCell, textAlign: 'center' }}>Replace</div>
-            {!agentMode && <div style={{ ...hCell, textAlign: 'center' }}>Delete</div>}
+            <div style={{ ...hCell, textAlign: 'center' }}>Delete</div>
           </div>
         )}
         {loading ? <div className="centered">Loading…</div> : docs.map((d, i) => {
@@ -563,14 +572,23 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
                         <input type="file" style={{ display: 'none' }} onChange={(e) => { onSingle(d, e.target.files?.[0]); e.target.value = ''; }} /></label>
                     : <span style={{ color: 'var(--muted-2)' }} title={validLocked(d) ? 'Marked Valid — only a Super Admin can replace it' : undefined}>{validLocked(d) && d.has_file ? <Icon name="lock" size={12} /> : '—'}</span>}
                 </div>
-                {/* Delete — admins only (hidden for agents); locked to Super Admin once Valid. */}
-                {!agentMode && (
-                  <div style={{ textAlign: 'center' }}>
-                    {((d.is_condition && !canDeleteConditionDocs) || validLocked(d))
+                {/*
+                  * Delete. Admins as before, locked to a Super Admin once Valid.
+                  *
+                  * AN AGENT SEES IT ONLY ON A DOCUMENT THEY ADDED THAT HOLDS NO FILE. Sai ruled
+                  * this 2026-10-02: once adding became easy, an agent who mistyped a name had no
+                  * way to undo it. The server enforces the same rule, so this control only mirrors
+                  * what is already allowed.
+                  */}
+                <div style={{ textAlign: 'center' }}>
+                  {agentMode
+                    ? (d.manual && !d.has_file && !(d.draft_files || []).length && !d.is_condition
+                        ? <button className="row-rm" disabled={readOnly} title="Remove this document you added" onClick={() => onDeleteRow(d, i)}><Icon name="trash" size={13} /></button>
+                        : <span style={{ color: 'var(--muted-2)', fontSize: 11 }} title="Only a document you added yourself, with no file on it, can be removed here">—</span>)
+                    : ((d.is_condition && !canDeleteConditionDocs) || validLocked(d))
                       ? <span style={{ color: 'var(--muted-2)', fontSize: 11 }} title={validLocked(d) ? 'Valid — only a Super Admin can delete' : undefined}>{validLocked(d) ? '🔒' : '—'}</span>
                       : <button className="row-rm" disabled={readOnly} onClick={() => onDeleteRow(d, i)}><Icon name="trash" size={13} /></button>}
-                  </div>
-                )}
+                </div>
               </div>
 
               {/* Expanded: per-client or multi-file uploads */}
