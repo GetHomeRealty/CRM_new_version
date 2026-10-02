@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getCrmDashboard } from '../lib/api';
+import { getCrmDashboard, getCrmTeamStructure, type CrmTeamStructure } from '../lib/api';
 import { listAllLeadTasks, listAllLeadShowings, type LeadFeedPage } from '../lib/leadsApi';
 import { useToast } from './toast';
 import { useAuth } from '../context/AuthContext';
@@ -9,6 +9,9 @@ import TodoList from './TodoList';
 import { Breakdown, TallyBreakdown, Tile } from './DashboardTiles';
 import { areaPath } from './area';
 import { LeadShowingsPanel, LeadTasksPanel } from './LeadPanels';
+import { crmTeamDashboard, type CrmTeamDashboard } from '../lib/crmTeamsApi';
+import { TeamActivityCard, TeamReportCard } from './CrmTeamsPanel';
+import TeamLeadLeadsCard from './TeamLeadLeadsCard';
 import type { CrmDashboard, LeadShowingRow, LeadTaskRow } from '../types';
 import type { TodoCounts } from '../types/todo';
 
@@ -92,6 +95,29 @@ export default function CrmDashboardPage() {
     if (!canSeeLeads) return;
     listAllLeadTasks(taskPage).then(setTasks).catch(() => setTasks(null));
   }, [canSeeLeads, taskPage]);
+
+  /*
+   * TEAM CARDS — only for somebody in a team. Each counts leads with the same predicate the Leads
+   * screen filters by, and opens that filtered list, so the number on the card is the number of rows
+   * the click shows. Optional: a failure simply leaves the team row off.
+   */
+  const [teamDash, setTeamDash] = useState<CrmTeamDashboard | null>(null);
+  useEffect(() => {
+    if (!canSeeLeads) return;
+    crmTeamDashboard().then(setTeamDash).catch(() => setTeamDash(null));
+  }, [canSeeLeads]);
+  /*
+   * TEAM LEAD CARDS — who manages whom, from Users. A Super Admin sees every Team Lead and Agent;
+   * a Team Lead sees their own Agents; anyone else gets `none` and this renders nothing, so the
+   * Agent dashboard is unchanged. Optional like the cards above: a failure leaves the row off.
+   */
+  const [structure, setStructure] = useState<CrmTeamStructure | null>(null);
+  useEffect(() => {
+    getCrmTeamStructure().then(setStructure).catch(() => setStructure(null));
+  }, []);
+
+  const openLeads = (q: Record<string, string | number>) => () =>
+    navigate(`${areaPath('crm', 'lead')}?${new URLSearchParams(Object.entries(q).map(([k, v]) => [k, String(v)])).toString()}`);
 
   useEffect(() => {
     if (!canSeeLeads) return;
@@ -252,6 +278,140 @@ export default function CrmDashboardPage() {
           } />
         </CardLink>
       </div>
+
+      {teamDash?.in_team && (
+        <div className="tiles">
+          <CardLink title="Open My Leads" onOpen={openLeads({ view: 'mine' })}>
+            <Tile label="My Leads" value={teamDash.cards.my_leads}
+              sub={<span className="tile-breakdown"><span className="tile-part">private and handled by you</span></span>} />
+          </CardLink>
+          <CardLink title="Open My Team Leads" onOpen={openLeads({ view: 'my_team' })}>
+            <Tile label="My Team Leads" value={teamDash.cards.my_team_leads}
+              sub={<span className="tile-breakdown"><span className="tile-part">{teamDash.teams.map((t) => t.name).join(', ')}</span></span>} />
+          </CardLink>
+          <CardLink title="Open Unassigned Team Leads" onOpen={openLeads({ view: 'team_unassigned' })}>
+            <Tile label="Unassigned Team Leads" value={teamDash.cards.unassigned_team_leads}
+              color={teamDash.cards.unassigned_team_leads > 0 ? 'var(--info-700)' : undefined}
+              sub={<span className="tile-breakdown"><span className="tile-part info">waiting for a handler</span></span>} />
+          </CardLink>
+          <CardLink title="Open leads with a follow-up due" onOpen={openLeads({ followUps: 'due' })}>
+            <Tile label="Follow-ups Due" value={teamDash.cards.follow_ups_due}
+              sub={<span className="tile-breakdown"><span className="tile-part">leads due today or overdue</span></span>} />
+          </CardLink>
+          <CardLink title="Open leads created today" onOpen={openLeads({ newToday: 'true' })}>
+            <Tile label="New Today" value={teamDash.cards.new_today}
+              sub={<span className="tile-breakdown"><span className="tile-part">created since midnight</span></span>} />
+          </CardLink>
+        </div>
+      )}
+
+      {/* One row per team this person LEADS: the team's whole book, and what needs routing. */}
+      {teamDash?.team_lead.map((t) => (
+        <div className="tiles" key={t.team_id}>
+          <CardLink title={`Open ${t.team_name}'s leads`} onOpen={openLeads({ teamId: t.team_id })}>
+            <Tile label="Total Team Leads" value={t.total} sub={<span className="tile-breakdown"><span className="tile-part">{t.team_name}</span></span>} />
+          </CardLink>
+          <CardLink title="Open the assigned ones" onOpen={openLeads({ teamId: t.team_id, assignedTo: 'assigned' })}>
+            <Tile label="Assigned" value={t.assigned} sub={<span className="tile-breakdown"><span className="tile-part">have a handler</span></span>} />
+          </CardLink>
+          <CardLink title="Open the unassigned ones" onOpen={openLeads({ teamId: t.team_id, view: 'team_unassigned' })}>
+            <Tile label="Unassigned" value={t.unassigned} color={t.unassigned > 0 ? 'var(--info-700)' : undefined} sub={<span className="tile-breakdown"><span className="tile-part">waiting for you to route</span></span>} />
+          </CardLink>
+          <CardLink title="Open leads with an overdue follow-up" onOpen={openLeads({ teamId: t.team_id, followUps: 'overdue' })}>
+            <Tile label="Overdue Follow-ups" value={t.overdue_follow_ups} color={t.overdue_follow_ups > 0 ? 'var(--bad)' : undefined} sub={<span className="tile-breakdown"><span className="tile-part">leads with a late task</span></span>} />
+          </CardLink>
+          <CardLink title="Open converted leads" onOpen={openLeads({ teamId: t.team_id, leadConversion: 'converted' })}>
+            <Tile label="Converted" value={t.converted} sub={<span className="tile-breakdown"><span className="tile-part">team leads converted</span></span>} />
+          </CardLink>
+        </div>
+      ))}
+      {teamDash && teamDash.team_lead.length > 0 && (
+        <>
+          <TeamReportCard />
+          <TeamActivityCard teams={teamDash.team_lead.map((t) => ({ id: t.team_id, name: t.team_name }))} />
+        </>
+      )}
+
+      {structure?.scope === 'admin' && (
+        <>
+          <div className="tiles">
+            <CardLink title="Open Users" onOpen={go('users')}>
+              {/* Not "Total Team Leads": that card above counts LEADS a team owns. This counts people. */}
+              <Tile label="Team Lead Users" value={structure.team_leads.total}
+                sub={<Breakdown parts={[
+                  { n: structure.team_leads.active, label: 'active', tone: 'ok' },
+                  { n: structure.team_leads.inactive, label: 'inactive', tone: 'bad' },
+                ]} />} />
+            </CardLink>
+            <CardLink title="Open Users" onOpen={go('users')}>
+              <Tile label="Agents" value={structure.agents.total}
+                sub={<Breakdown parts={[
+                  { n: structure.agents.active, label: 'active', tone: 'ok' },
+                  { n: structure.agents.inactive, label: 'inactive', tone: 'bad' },
+                ]} />} />
+            </CardLink>
+          </div>
+          {structure.teams.length > 0 && (
+            <div className="card">
+              <div className="card-h"><h3 style={{ margin: 0 }}>Agents by Team Lead</h3></div>
+              <table className="list-table">
+                <thead><tr><th>Team Lead</th><th>Status</th><th>Agents</th><th>Active</th><th>Inactive</th></tr></thead>
+                <tbody>
+                  {structure.teams.map((t) => (
+                    <tr key={t.team_lead_id ?? 'none'}>
+                      <td>{t.team_lead_name ?? <span className="muted">No Team Lead</span>}</td>
+                      <td>{t.team_lead_status
+                        ? <span className={`pill ${t.team_lead_status === 'Active' ? 'ok' : 'bad'}`}>{t.team_lead_status}</span>
+                        : <span className="muted">—</span>}</td>
+                      <td>{t.agents.total}</td>
+                      <td>{t.agents.active}</td>
+                      <td>{t.agents.inactive}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
+      )}
+
+      {structure?.scope === 'team_lead' && (
+        <>
+          <div className="tiles">
+            <CardLink title="Open my team in Users" onOpen={go('users')}>
+              <Tile label="Total Agents in My Team" value={structure.agents.total}
+                sub={<span className="tile-breakdown"><span className="tile-part">agents reporting to you</span></span>} />
+            </CardLink>
+            <CardLink title="Open my team in Users" onOpen={go('users')}>
+              <Tile label="Active Agents" value={structure.agents.active} color="var(--ok-600)"
+                sub={<span className="tile-breakdown"><span className="tile-part">can sign in</span></span>} />
+            </CardLink>
+            <CardLink title="Open my team in Users" onOpen={go('users')}>
+              <Tile label="Inactive Agents" value={structure.agents.inactive}
+                color={structure.agents.inactive > 0 ? 'var(--bad)' : undefined}
+                sub={<span className="tile-breakdown"><span className="tile-part">kept, cannot sign in</span></span>} />
+            </CardLink>
+          </div>
+          {structure.members.length > 0 && (
+            <div className="card">
+              <div className="card-h"><h3 style={{ margin: 0 }}>My Team</h3></div>
+              <table className="list-table">
+                <thead><tr><th>Agent</th><th>Status</th></tr></thead>
+                <tbody>
+                  {structure.members.map((m) => (
+                    <tr key={m.id}>
+                      <td>{m.name}</td>
+                      <td><span className={`pill ${m.status === 'Active' ? 'ok' : 'bad'}`}>{m.status}</span></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {/* The Team Lead's own leads, handed to their own Active Agents. Ownership stays with them. */}
+          <TeamLeadLeadsCard />
+        </>
+      )}
 
       {/*
         Show/hide, for the three long lists only. The tiles above stay put: they are a fixed-height

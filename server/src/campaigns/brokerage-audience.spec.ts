@@ -1,6 +1,7 @@
 import { CampaignAudienceService } from './campaign-audience.service';
 import type { PrismaService } from '../prisma/prisma.service';
 import type { AuthUserRecord } from '../auth/auth.types';
+import { myTeamLeadsWhere } from '../common/lead-scope';
 
 /**
  * CRM-CAMP-H01 — the marketing roles select across the brokerage; everyone else stays capped.
@@ -49,7 +50,8 @@ describe('who may select the brokerage’s leads', () => {
 
   it('an agent is capped to their own leads — the one role with a private book', () => {
     const clause = ownerClause(svc.buildAudienceWhere({}, as('agent', 7))) as { OR?: unknown[] };
-    expect(clause?.OR).toEqual([{ assigned_to: 7 }, { owner_user_id: 7 }]);
+    // Plus the leads of the teams they belong to (CRM Teams) — never another agent's private lead.
+    expect(clause?.OR).toEqual([{ assigned_to: 7 }, { owner_user_id: 7 }, myTeamLeadsWhere(7)]);
   });
 
   it('no role gets an empty owner clause — that would be every agent’s book', () => {
@@ -69,7 +71,8 @@ describe('who may select the brokerage’s leads', () => {
   it('fails closed with no user at all', () => {
     // Not reachable from a request, and it must not open the book if it ever is.
     const clause = ownerClause(svc.buildAudienceWhere({}, null)) as { OR?: unknown[] };
-    expect(clause?.OR).toEqual([{ assigned_to: -1 }, { owner_user_id: -1 }]);
+    // The team clause for id -1 matches no team, so this still reaches nothing.
+    expect(clause?.OR).toEqual([{ assigned_to: -1 }, { owner_user_id: -1 }, myTeamLeadsWhere(-1)]);
   });
 });
 

@@ -30,13 +30,14 @@ export const SCREENS: Record<string, string> = {
   transactions: 'Transactions',
   invoice: 'Invoice',
   reports: 'Reports',
+  recruitment: 'Recruitment',
   audit: 'Audit Trail',
   users: 'Users',
   settings: 'Settings',
   triggers: 'Triggers',
 };
 
-export const ROLES = ['admin', 'manager', 'agent', 'accounting', 'documentation', 'crm'] as const;
+export const ROLES = ['admin', 'manager', 'agent', 'accounting', 'documentation', 'crm', 'recruiter'] as const;
 
 /** Display labels (relabel-in-place): stored role => UI tier name. */
 export const ROLE_LABELS: Record<string, string> = {
@@ -46,6 +47,7 @@ export const ROLE_LABELS: Record<string, string> = {
   accounting: 'Accounting',
   documentation: 'Documentation',
   crm: 'CRM',
+  recruiter: 'Recruiter',
 };
 
 /** A per-user override row (from the user_permissions table). */
@@ -108,6 +110,20 @@ export class PermissionService {
       case 'manager':
         return { ...this.fill('edit'), users: 'none', settings: 'view', audit: 'view' };
       /*
+       * RECRUITMENT ONLY, AND NOTHING ELSE — the one role in this matrix defined by what it cannot
+       * reach rather than what it can.
+       *
+       * `fill('none')` rather than `fill('view')`, which every other narrow role starts from. A
+       * recruiter works with people applying to join the brokerage, not with its customers: Leads,
+       * Transactions, Invoice, Reports and the audit trail are nothing to do with that job, and
+       * `view` on them would hand a recruiter the brokerage's entire client list.
+       *
+       * Dashboard and Calendar are left at 'view' deliberately — a person who can sign in needs
+       * somewhere to land and a diary to book interviews into, and neither carries customer data.
+       */
+      case 'recruiter':
+        return { ...this.fill('none'), recruitment: 'edit', dashboard: 'view', calendar: 'view' };
+      /*
        * Accounting: works in Transactions (Legal & Docs) + Invoice; no admin screens.
        *
        * `audit: 'none'` is explicit rather than inherited. It came from `fill('view')` and was
@@ -120,7 +136,9 @@ export class PermissionService {
        * out of read as one decision instead of two decisions and an oversight.
        */
       case 'accounting':
-        return { ...this.fill('view'), transactions: 'edit', invoice: 'edit', users: 'none', settings: 'none', audit: 'none' };
+        // `recruitment: 'none'` is listed, not inherited: `fill('view')` would otherwise hand this
+        // role a screen full of applicants' personal details that has nothing to do with accounts.
+        return { ...this.fill('view'), transactions: 'edit', invoice: 'edit', users: 'none', settings: 'none', audit: 'none', recruitment: 'none' };
       // Documentation: full Legal & Documentation access (other sections view-only,
       // enforced in the UI). Invoice module hidden.
       case 'documentation':
@@ -131,6 +149,8 @@ export class PermissionService {
           users: 'none',
           settings: 'none',
           audit: 'none',
+          // Not inherited from `fill('view')`: recruitment is a different job from documentation.
+          recruitment: 'none',
         };
       // CRM: leads / reviews / clients. Transactions AND Invoice hidden entirely.
       case 'crm':

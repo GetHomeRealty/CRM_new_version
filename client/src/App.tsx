@@ -47,6 +47,8 @@ const LeadDetailPage = lazy(() => import('./desk/LeadDetailPage'));
 const ForgotPassword = lazy(() => import('./pages/ForgotPassword'));
 const ResetPassword = lazy(() => import('./pages/ResetPassword'));
 const MetaPage = lazy(() => import('./desk/MetaPage'));
+const RecruitmentPage = lazy(() => import('./desk/RecruitmentPage'));
+const RecruitmentCandidatePage = lazy(() => import('./desk/RecruitmentCandidatePage'));
 const AccountSettingsPage = lazy(() => import('./desk/AccountSettingsPage'));
 const NotificationPreferencesPage = lazy(() => import('./desk/NotificationPreferencesPage'));
 const CrmCommunicationsPanel = lazy(() => import('./desk/CrmCommunicationsPanel'));
@@ -75,6 +77,8 @@ interface ScreenRoutes {
   superAdmin?: boolean;
   /** Lets a Super Admin in even if the screen permission was revoked. */
   orSuperAdmin?: boolean;
+  /** With `superAdmin`: lets a Team Lead in too. The API scopes what they get. */
+  orTeamLead?: boolean;
   /** No permission gate at all — personal screens every authenticated user has. */
   open?: boolean;
 }
@@ -87,6 +91,8 @@ const SCREENS: ScreenRoutes[] = [
   { screen: 'inventory', paths: [''], element: () => <InventoryPage /> },
   { screen: 'lead', paths: ['', ':id'], element: (p) => (p === '' ? <LeadsPage /> : <LeadDetailPage />) },
   { screen: 'meta', paths: [''], element: () => <MetaPage /> },
+  // `''` is the dashboard with its tabs; `:id` is one candidate. Same shape as `lead`.
+  { screen: 'recruitment', paths: ['', ':id'], element: (p) => (p === '' ? <RecruitmentPage /> : <RecruitmentCandidatePage />) },
   { screen: 'invoice', paths: [''], element: () => <InvoicePage /> },
   // MLS hosts Favorites as a section — see MlsModulePage.
   { screen: 'mls', paths: ['', ':id'], element: (p) => (p === '' ? <MlsModulePage /> : <MlsDetailPage />) },
@@ -100,7 +106,8 @@ const SCREENS: ScreenRoutes[] = [
   // with "Users: view" open a page that answered 403 to every request — an enabled "+ Add User"
   // button over an empty table and two "Could not load users" toasts. The permission still governs
   // Settings → Roles & Permissions, which does honour it.
-  { screen: 'users', paths: [''], element: () => <UsersPage />, superAdmin: true },
+  // `orTeamLead`: a Team Lead manages their own Agents here, and the API answers them with those only.
+  { screen: 'users', paths: [''], element: () => <UsersPage />, superAdmin: true, orTeamLead: true },
   // `orSuperAdmin`: Settings also hosts what used to be the Super-Admin-only Email Settings
   // screen, so a Super Admin must still get in even if their `settings` permission was revoked.
   // Each tab re-checks for itself.
@@ -189,6 +196,7 @@ function screenRoutes(area: Area): ReactElement[] {
               screen={s.superAdmin ? undefined : s.screen}
               superAdmin={s.superAdmin}
               orSuperAdmin={s.orSuperAdmin}
+              orTeamLead={s.orTeamLead}
             >
               {body}
             </RequireScreen>

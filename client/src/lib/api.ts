@@ -152,6 +152,70 @@ export const getDashboardCommissions = (): Promise<DashboardCommissions> =>
 export const getCrmDashboard = (): Promise<CrmDashboard> =>
   api.get<CrmDashboard>('/api/dashboard/crm').then((r) => r.data);
 
+/** Active / inactive counts of a group of users. */
+export interface StatusCounts { total: number; active: number; inactive: number }
+
+/**
+ * The CRM dashboard's Team Lead cards: every team for a Super Admin, their own team for a Team
+ * Lead, `none` for everyone else. Counted from Users only.
+ */
+export type CrmTeamStructure =
+  | {
+    scope: 'admin';
+    team_leads: StatusCounts;
+    agents: StatusCounts;
+    /** One row per Team Lead, plus a `team_lead_id: null` row for Agents with none. */
+    teams: { team_lead_id: number | null; team_lead_name: string | null; team_lead_status: string | null; agents: StatusCounts }[];
+  }
+  | { scope: 'team_lead'; agents: StatusCounts; members: { id: number; name: string; status: string }[] }
+  | { scope: 'none' };
+
+export const getCrmTeamStructure = (): Promise<CrmTeamStructure> =>
+  api.get<CrmTeamStructure>('/api/dashboard/crm/team-structure').then((r) => r.data);
+
+/** One of a Team Lead's own leads, with who is working it. */
+export interface TeamLeadLead {
+  id: number;
+  name: string;
+  email: string | null;
+  phone: string | null;
+  lead_status: string | null;
+  lead_source: string | null;
+  created_at: string | null;
+  assigned_to: number | null;
+  assigned_name: string | null;
+  assigned_status: string | null;
+  assigned_in_team: boolean;
+  /** With the Team Lead and not yet given to an Agent (an Admin assigned it to them). */
+  with_team_lead: boolean;
+  /**
+   * own = the Team Lead's own lead; admin = a brokerage lead an Admin assigned to them;
+   * shared = a brokerage lead an Admin put in a CRM team they lead.
+   */
+  source: 'own' | 'admin' | 'shared';
+  team_name: string | null;
+}
+
+export interface TeamLeadLeadsPage {
+  leads: TeamLeadLead[];
+  total: number;
+  page: number;
+  per_page: number;
+  /** The Team Lead's own Active Agents — the only people a lead may be assigned to here. */
+  agents: { id: number; name: string }[];
+}
+
+export const getTeamLeadLeads = (q: { page?: number; search?: string; filter?: string; source?: string } = {}): Promise<TeamLeadLeadsPage> =>
+  api.get<TeamLeadLeadsPage>('/api/dashboard/crm/team-lead-leads', { params: q }).then((r) => r.data);
+
+/** One lead the Team Lead may assign, with their Active Agents; rejects (404) when they may not. */
+export const getTeamLeadLead = (leadId: number): Promise<{ lead: TeamLeadLead; agents: { id: number; name: string }[] }> =>
+  api.get(`/api/dashboard/crm/team-lead-leads/${leadId}`).then((r) => r.data);
+
+/** Assign or reassign a Team Lead's own or Admin-shared lead. Owner and team never change. */
+export const assignTeamLeadLead = (leadId: number, agentId: number): Promise<{ lead_id: number; assigned_to: number; assigned_name: string }> =>
+  api.post(`/api/dashboard/crm/team-lead-leads/${leadId}/assign`, { agent_id: agentId }).then((r) => r.data);
+
 export const getDeskDashboard = (): Promise<DeskDashboard> =>
   api.get<DeskDashboard>('/api/dashboard/desk').then((r) => r.data);
 

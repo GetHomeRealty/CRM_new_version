@@ -48,6 +48,8 @@ export const SCREEN_DOMAIN: Record<string, Domain> = {
   lead: 'crm',
   campaigns: 'crm',
   meta: 'crm',
+  // Recruitment is run from the CRM side, so it is gated on the CRM module like Lead and Meta.
+  recruitment: 'crm',
   // Kept in step with the client's SCREEN_AREA: Client Reviews is a CRM module, so the Transaction
   // Desk's audit filter should not offer a category that can never match anything on its side.
   reviews: 'crm',

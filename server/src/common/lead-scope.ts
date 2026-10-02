@@ -52,9 +52,46 @@ import type { AuthUserRecord } from '../auth/auth.types';
 export function leadScopeWhere(user: AuthUserRecord | null): Prisma.leadsWhereInput {
   const id = user?.id ?? -1;
   const mine: Prisma.leadsWhereInput[] = [{ assigned_to: id }, { owner_user_id: id }];
+  // A Team Lead keeps sight of a lead an Admin gave them after passing it to one of their Agents
+  // (Admin -> Team Lead -> Agent, `assigned_team_lead_id`). Added for Team Leads only, so the scope
+  // every other user gets is exactly what it was.
+  if (user?.is_team_lead) mine.push({ assigned_team_lead_id: id });
   if (hasBrokerageLeadScope(user)) mine.push({ owner_user_id: null });
+  // A TEAM's leads, for the people in that team. Inert until a team exists: every lead written
+  // before teams did has `team_id IS NULL`, which this clause can never match.
+  else mine.push(myTeamLeadsWhere(id));
   return { OR: mine };
 }
+
+/**
+ * THE TEAMS A PERSON READS THROUGH: the ones they lead, and the ones they are an active member of —
+ * active teams only. The single definition, so the list, the row check in `ResourceAccessService`
+ * and the team filters cannot disagree about who is "in" a team.
+ */
+export function teamReaderWhere(userId: number): Prisma.crm_teamsWhereInput {
+  return {
+    is_active: true,
+    OR: [
+      { team_lead_user_id: userId },
+      { crm_team_members: { some: { user_id: userId, is_active: true } } },
+    ],
+  };
+}
+
+/**
+ * Leads owned by a team this person reads through.
+ *
+ * `owner_user_id: null` is restated on purpose, although the database's
+ * `leads_private_or_team_chk` already guarantees it: an agent's private lead must never become
+ * visible through a team, and this clause should not depend on a constraint to be right.
+ */
+export function myTeamLeadsWhere(userId: number): Prisma.leadsWhereInput {
+  return { owner_user_id: null, team_id: { not: null }, crm_teams: { is: teamReaderWhere(userId) } };
+}
+
+/** Is this row owned by a team (rather than by an agent privately or by the brokerage)? */
+export const isTeamLead = (lead: { owner_user_id: number | null; team_id?: number | null }): boolean =>
+  lead.owner_user_id === null && lead.team_id != null;
 
 /**
  * Does this person's data scope include the leads the brokerage owns?

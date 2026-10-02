@@ -25,6 +25,8 @@ export interface AuthPayload {
   is_admin: boolean;
   is_super_admin: boolean;
   is_admin_or_above: boolean;
+  /** An Agent who manages their own Agents in Users. Read only by Users and Dashboard. */
+  is_team_lead: boolean;
   permissions: Record<string, string>;
   /**
    * The modules this person may open — licensed to the company AND assigned to them. The frontend

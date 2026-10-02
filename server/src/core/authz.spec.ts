@@ -112,6 +112,18 @@ describe('the capabilities restate the decisions they came from', () => {
      */
     'leads.brokerage-scope': ['admin', 'manager', 'accounting', 'documentation', 'crm'],
     /*
+     * Recruitment: advice and decision are different rights, and `recruiter` holds neither.
+     *
+     * A recruiter has `recruitment: 'edit'` — the whole day-to-day job — and still cannot approve a
+     * candidate or create the account that follows, because those live here rather than on the
+     * screen permission. That separation is the point of the module: the screen grants the work,
+     * this grants the decision.
+     *
+     * `admin` and `manager` are Super Admin and Admin in the interface.
+     */
+    'recruitment.decide': ['admin', 'manager'],
+    'recruitment.view-all': ['admin', 'manager'],
+    /*
      * The brokerage's own banking details.
      *
      * `accounting` and `documentation` are IN, and that is deliberate rather than a loose

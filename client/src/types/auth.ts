@@ -27,6 +27,8 @@ export interface AuthUser {
   is_admin: boolean;
   is_super_admin: boolean;
   is_admin_or_above: boolean;
+  /** An Agent who manages their own Agents in Users. Optional so an older server still parses. */
+  is_team_lead?: boolean;
   permissions: Permissions;
   /**
    * The modules this person may open — bought by the company AND assigned to them. Navigation is

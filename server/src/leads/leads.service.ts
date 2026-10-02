@@ -7,7 +7,9 @@ import { CrmEventNotifier } from '../notifications/crm-events.service';
 import { normalizePhone } from '../meta/meta-lead-mapper';
 import type { AuthUserRecord } from '../auth/auth.types';
 import { can } from '../core/authz';
-import { hasBrokerageLeadScope, isBrokerageLead, leadScopeWhere, ownerAtIntake } from '../common/lead-scope';
+import { hasBrokerageLeadScope, isBrokerageLead, leadScopeWhere, myTeamLeadsWhere, ownerAtIntake } from '../common/lead-scope';
+import { LeadAssignmentHistoryService } from './lead-assignment-history.service';
+import { LeadTeamAssignmentService, type AssignmentPlan } from './lead-team-assignment.service';
 // Age is derived from the date of birth, never stored as an independent fact — see age.ts.
 import { ageFromDateOfBirth, dateOfBirthWindow } from './age';
 import { throwValidation } from '../common/laravel-exceptions';
@@ -34,6 +36,10 @@ export interface LeadInput {
   gender?: unknown; language?: unknown; religion?: unknown; age?: unknown;
   date_of_birth?: unknown; marriage_day?: unknown;
   notes?: unknown; tags?: unknown; assigned_to?: unknown;
+  /** The owning team. Only an administrator may set or change it — see LeadTeamAssignmentService. */
+  team_id?: unknown;
+  /** Alias of `assigned_to`, the handling agent, accepted for the team screens. */
+  assigned_to_user_id?: unknown;
   property_preferences?: unknown;
   property_address?: unknown; property_price?: unknown; bedrooms?: unknown;
   bathrooms?: unknown; square_footage?: unknown; key_features?: unknown;
@@ -59,6 +65,17 @@ export interface LeadQuery {
   minAge?: string; maxAge?: string; assignedTo?: string; recent?: string;
   /** 'true' narrows to leads nobody has logged a call against. */
   noCalls?: string;
+  /**
+   * Ownership views: mine | my_team | team_unassigned | brokerage | all. Each is applied INSIDE the
+   * caller's scope, so a view can only ever narrow what they may already see.
+   */
+  view?: string;
+  /** A single team's leads. */
+  teamId?: string;
+  /** 'true' = created since the start of today. */
+  newToday?: string;
+  /** 'due' = a pending task due today or earlier; 'overdue' = one due before today. */
+  followUps?: string;
 }
 
 @Injectable()
@@ -89,7 +106,22 @@ export class LeadsService {
      * untouched. Always injected in the running application.
      */
     private readonly crmEvents?: CrmEventNotifier,
-  ) {}
+    /*
+     * Optional for the same reason: the existing specs construct this service with three or four
+     * arguments. Built on the spot when absent, so team rules apply in every construction.
+     */
+    teamAssignment?: LeadTeamAssignmentService,
+    history?: LeadAssignmentHistoryService,
+  ) {
+    this.history = history ?? new LeadAssignmentHistoryService(prisma);
+    this.teams = teamAssignment ?? new LeadTeamAssignmentService(prisma, audit, this.history, crmEvents);
+  }
+
+  private readonly history: LeadAssignmentHistoryService;
+  private readonly teams: LeadTeamAssignmentService;
+
+  /** Loaded beside every lead that is presented, so the list can say which team owns it. */
+  private static readonly TEAM_INCLUDE = { crm_teams: { select: { id: true, name: true } } } as const;
 
   // --------------------------------------------------------------- scoping
   /**
@@ -133,9 +165,9 @@ export class LeadsService {
    * of a row already in hand rather than expressed as a query. Used to decide how much a validation
    * message may say about a lead the caller may not read.
    */
-  private canSee(lead: { owner_user_id: number | null; assigned_to: number | null }, user: AuthUserRecord): boolean {
+  private canSee(lead: { owner_user_id: number | null; assigned_to: number | null; assigned_team_lead_id?: number | null }, user: AuthUserRecord): boolean {
     const id = user.id ?? -1;
-    if (lead.owner_user_id === id || lead.assigned_to === id) return true;
+    if (lead.owner_user_id === id || lead.assigned_to === id || lead.assigned_team_lead_id === id) return true;
     // The brokerage's own lead, asked of a row rather than as a query. Same capability
     // `leadScopeWhere` uses, so this cannot answer differently from the list it accompanies.
     return isBrokerageLead(lead) && hasBrokerageLeadScope(user);
@@ -172,6 +204,7 @@ export class LeadsService {
         include: {
           _count: { select: { lead_calls: true, lead_tasks: true } },
           lead_tasks: { where: { status: 'pending' }, select: { id: true } },
+          ...LeadsService.TEAM_INCLUDE,
         },
       }),
       this.prisma.leads.count({ where }),
@@ -394,6 +427,7 @@ export class LeadsService {
       where: { id, deleted_at: null, ...this.scopeWhere(user) },
       include: {
         _count: { select: { lead_calls: true, lead_tasks: true } },
+        ...LeadsService.TEAM_INCLUDE,
         lead_tasks: { orderBy: [{ due_date: 'asc' }, { id: 'asc' }] },
         lead_notes: { orderBy: [{ pinned: 'desc' }, { id: 'desc' }] },
         lead_showings: { orderBy: [{ showing_date: 'asc' }, { time: 'asc' }] },
@@ -410,10 +444,26 @@ export class LeadsService {
     if (!row) throw new NotFoundException({ message: 'Lead not found.' });
 
     const ids = [row.assigned_to, ...row.lead_tasks.map((t) => t.assigned_to)];
-    const assignees = await this.assigneeNames(ids);
+    const [assignees, history, ledTeam] = await Promise.all([
+      this.assigneeNames(ids),
+      this.history.list(row.id),
+      this.teams.leadsTeam(row.team_id, user.id),
+    ]);
+    const mayMove = this.teams.mayMoveTeams(user);
 
     return {
       ...this.present(row, assignees, user),
+      /*
+       * WHAT THIS VIEWER MAY CHANGE about ownership, decided by the rules that will judge the
+       * request (`LeadTeamAssignmentService.plan`), so the screen never offers a control that is
+       * then refused. A private lead can never join a team.
+       */
+      assignment_permissions: {
+        change_team: mayMove && row.owner_user_id === null,
+        change_agent: mayMove || ledTeam,
+      },
+      // Newest first: team moves, handler assignments, reassignments and removals, each with who did it.
+      assignment_history: history,
       notes_history: row.lead_notes.map((n) => ({
         id: n.id, content: n.content, pinned: n.pinned,
         created_by: n.created_by, created_at: n.created_at?.toISOString() ?? null,
@@ -498,14 +548,31 @@ export class LeadsService {
       const refreshed = Object.fromEntries(Object.entries(data).filter(([key, value]) => {
         if (value === null || value === '') return false;
         if (key === 'tags' && value === '[]') return false;
+        // A team lead's handler changes only through the team rules, never as a side effect of
+        // somebody re-entering the same person.
+        if (key === 'assigned_to' && repeat.team_id !== null) return false;
         return true;
       }));
       const row = await this.prisma.leads.update({
         where: { id: repeat.id }, data: { ...refreshed, updated_at: now },
-        include: { _count: { select: { lead_calls: true, lead_tasks: true } } },
+        include: { _count: { select: { lead_calls: true, lead_tasks: true } }, ...LeadsService.TEAM_INCLUDE },
       });
       await this.audit.record(user, 'Repeat lead updated', row.name, 'Matched by email or phone and refreshed');
       return { ...this.present(row, await this.assigneeNames([row.assigned_to]), user), duplicate_updated: true };
+    }
+    /*
+     * CREATED STRAIGHT INTO A TEAM, when an administrator chooses one. The same rules as moving an
+     * existing lead: only an administrator may, only into an active team, never an agent's private
+     * lead, and the handler — if one is chosen — must be an active member of that team.
+     */
+    if (input.team_id !== undefined && input.team_id !== null && input.team_id !== '') {
+      const plan = await this.teams.plan(
+        { id: 0, name: String(data.name ?? ''), owner_user_id: owner, team_id: null, assigned_to: null },
+        { team_id: input.team_id, assigned_to: data.assigned_to ?? null },
+        user,
+      );
+      data.team_id = plan.after.team_id;
+      data.assigned_to = plan.after.assigned_to;
     }
     const row = await this.prisma.leads.create({
       data: {
@@ -517,16 +584,29 @@ export class LeadsService {
         // not have to be assigned to anyone to be visible to the person who made it.
         assigned_to: (data.assigned_to as number | null | undefined) ?? null,
         owner_user_id: owner,
+        team_id: (data.team_id as number | null | undefined) ?? null,
         created_by: user.name,
         created_at: now,
         updated_at: now,
       },
-      include: { _count: { select: { lead_calls: true, lead_tasks: true } } },
+      include: { _count: { select: { lead_calls: true, lead_tasks: true } }, ...LeadsService.TEAM_INCLUDE },
     }).catch((err: unknown) => {
       if (typeof data.email === 'string') return this.rethrowEmailClash(err, data.email, owner);
       throw err;
     });
     await this.audit.record(user, 'Lead created', row.name, [row.email, row.phone].filter(Boolean).join(' · '));
+    if (row.team_id !== null || row.assigned_to !== null) {
+      // The lead's first owner and handler, as the first entries in its ownership history.
+      await this.history.record(
+        row.id,
+        { team_id: null, assigned_to: null },
+        {
+          team_id: row.team_id, team_name: row.crm_teams?.name ?? null,
+          assigned_to: row.assigned_to, assigned_name: (await this.assigneeNames([row.assigned_to])).get(row.assigned_to ?? -1) ?? null,
+        },
+        { id: user.id ?? null, name: user.name ?? null },
+      );
+    }
     // Best-effort inbound-lead email (Meta / Google Ads / Website only); never blocks creation.
     void this.notifications.notifyNewLead(row);
 
@@ -581,6 +661,7 @@ export class LeadsService {
     phone: 'phone number',
     lead_source: 'lead source',
     assigned_to: 'assignment',
+    team_id: 'team',
   };
 
   async update(id: number, input: LeadInput, user: AuthUserRecord): Promise<Record<string, unknown>> {
@@ -590,6 +671,29 @@ export class LeadsService {
     const data = await this.validate(input, false, id, user, existing.owner_user_id);
 
     /*
+     * TEAM OWNERSHIP AND ITS HANDLER are decided by `LeadTeamAssignmentService.plan`, not by the
+     * identity lock below — for a lead a team owns, and for any save that moves a lead into or out
+     * of a team. The plan lets an administrator move teams, lets the team's own lead reassign within
+     * it, requires the handler to be an active member, and refuses everybody else. Every other lead
+     * keeps exactly the assignment rules it had before teams existed.
+     */
+    const requestedTeam = input.team_id === undefined ? existing.team_id
+      : input.team_id === null || input.team_id === '' ? null : Number(input.team_id);
+    const teamPath = existing.team_id !== null || requestedTeam !== existing.team_id;
+    let plan: AssignmentPlan | null = null;
+    if (teamPath) {
+      const body: Record<string, unknown> = {};
+      if (requestedTeam !== existing.team_id) body.team_id = input.team_id;
+      if ('assigned_to' in data) body.assigned_to = data.assigned_to;
+      plan = await this.teams.plan(existing, body, user);
+      delete data.assigned_to;
+      if (plan.changed) {
+        data.team_id = plan.after.team_id;
+        data.assigned_to = plan.after.assigned_to;
+      }
+    }
+
+    /*
      * On a brokerage-assigned lead an agent may change everything except the four identity
      * fields. This is checked against what would ACTUALLY change, not merely what was sent: the
      * lead editor posts the whole form every save, so the untouched email arrives every time.
@@ -597,7 +701,8 @@ export class LeadsService {
      */
     if (this.isBrokerageAssigned(existing, user)) {
       const attempted = Object.keys(LeadsService.LOCKED_FIELDS).filter(
-        (k) => k in data && String((existing as Record<string, unknown>)[k] ?? '') !== String((data as Record<string, unknown>)[k] ?? ''),
+        // Already authorised by the team plan above, which is stricter about these two than the lock.
+        (k) => !(plan && (k === 'assigned_to' || k === 'team_id')) && k in data && String((existing as Record<string, unknown>)[k] ?? '') !== String((data as Record<string, unknown>)[k] ?? ''),
       );
       if (attempted.length) {
         const names = attempted.map((k) => LeadsService.LOCKED_FIELDS[k]);
@@ -610,7 +715,7 @@ export class LeadsService {
     const row = await this.prisma.leads.update({
       where: { id },
       data: { ...data, updated_at: new Date() },
-      include: { _count: { select: { lead_calls: true, lead_tasks: true } } },
+      include: { _count: { select: { lead_calls: true, lead_tasks: true } }, ...LeadsService.TEAM_INCLUDE },
     }).catch((err: unknown) => this.rethrowEmailClash(err, str(data.email) || str(existing.email), existing.owner_user_id));
 
     /*
@@ -663,11 +768,32 @@ export class LeadsService {
      * The PREVIOUS assignee is deliberately not told anything. "This is no longer yours" is a
      * different message that nobody asked for.
      */
-    if (row.assigned_to && row.assigned_to !== existing.assigned_to) {
-      void this.crmEvents?.leadAssigned(
-        { id: row.id, first_name: row.name, last_name: null, email: row.email },
-        row.assigned_to, user.id ?? null, user.name,
+    if (plan) {
+      // Ownership history, audit line and the new handler's notification, for a team-path change.
+      await this.teams.afterWrite(existing, plan, user);
+    } else if (row.assigned_to !== existing.assigned_to) {
+      /*
+       * A lead an Admin gave a Team Lead (`assigned_team_lead_id`) stays theirs only while it is with
+       * them or one of their own Agents. Reassigned here to anybody else, the Team Lead level is
+       * cleared, so it stops being theirs to see or redistribute.
+       */
+      if (existing.assigned_team_lead_id !== null && row.assigned_to !== null && row.assigned_to !== existing.assigned_team_lead_id) {
+        const onTeam = await this.prisma.users.count({ where: { id: row.assigned_to, team_lead_id: existing.assigned_team_lead_id } });
+        if (!onTeam) await this.prisma.leads.update({ where: { id: row.id }, data: { assigned_team_lead_id: null } });
+      }
+      const names = await this.assigneeNames([existing.assigned_to, row.assigned_to]);
+      await this.history.record(
+        row.id,
+        { team_id: null, assigned_to: existing.assigned_to, assigned_name: names.get(existing.assigned_to ?? -1) ?? null },
+        { team_id: null, assigned_to: row.assigned_to, assigned_name: names.get(row.assigned_to ?? -1) ?? null },
+        { id: user.id ?? null, name: user.name ?? null },
       );
+      if (row.assigned_to) {
+        void this.crmEvents?.leadAssigned(
+          { id: row.id, first_name: row.name, last_name: null, email: row.email },
+          row.assigned_to, user.id ?? null, user.name,
+        );
+      }
     }
 
     return this.present(row, await this.assigneeNames([row.assigned_to]), user);
@@ -1153,6 +1279,8 @@ export class LeadsService {
 
     const assigned = str(q.assignedTo);
     if (assigned === 'unassigned') and.push({ assigned_to: null });
+    // Handled by somebody — the team dashboard's Assigned card.
+    else if (assigned === 'assigned') and.push({ assigned_to: { not: null } });
     else if (assigned && Number(assigned) > 0) and.push({ assigned_to: Number(assigned) });
 
     if (str(q.recent) === 'true') {
@@ -1161,6 +1289,34 @@ export class LeadsService {
 
     // The same predicate the tile counts with, so pressing it shows exactly the number it showed.
     if (str(q.noCalls) === 'true') and.push(LeadsService.NO_CALLS);
+
+    /*
+     * OWNERSHIP VIEWS — My Leads, My Team Leads, Unassigned Team Leads, Brokerage Leads, All.
+     *
+     * Every one is ANDed with the scope already at the head of this list, so a view can only narrow
+     * what the caller may already see; none of them is a way round it. That is also why "Unassigned
+     * Team Leads" needs no team clause of its own for an agent — the scope already limits them to
+     * their own teams — while an administrator sees every team's unassigned leads, which is theirs
+     * to route.
+     */
+    const me = user.id ?? -1;
+    switch (str(q.view)) {
+      case 'mine': and.push({ OR: [{ owner_user_id: me }, { assigned_to: me }] }); break;
+      case 'my_team': and.push(myTeamLeadsWhere(me)); break;
+      case 'team_unassigned': and.push({ owner_user_id: null, team_id: { not: null }, assigned_to: null }); break;
+      case 'brokerage': and.push({ owner_user_id: null, team_id: null }); break;
+      default: break; // 'all', or nothing chosen
+    }
+    const teamId = Number(str(q.teamId));
+    if (Number.isInteger(teamId) && teamId > 0) and.push({ team_id: teamId });
+
+    // The dashboard's day boundary, so the "New Today" and follow-up cards match this list exactly.
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    if (str(q.newToday) === 'true') and.push({ created_at: { gte: today } });
+    const followUps = str(q.followUps);
+    if (followUps === 'due') and.push({ lead_tasks: { some: { status: 'pending', due_date: { lte: today } } } });
+    else if (followUps === 'overdue') and.push({ lead_tasks: { some: { status: 'pending', due_date: { lt: today } } } });
 
     return { AND: and };
   }
@@ -1191,6 +1347,10 @@ export class LeadsService {
     const errors: Record<string, string[]> = {};
     const add = (f: string, m: string) => { (errors[f] ??= []).push(m); };
     const out: Record<string, unknown> = {};
+    // `assigned_to_user_id` is the team screens' name for the same field.
+    if (input.assigned_to === undefined && input.assigned_to_user_id !== undefined) {
+      input = { ...input, assigned_to: input.assigned_to_user_id };
+    }
     const has = (k: keyof LeadInput) => input[k] !== undefined;
 
     if (requireCore || has('name')) {
@@ -1556,6 +1716,21 @@ export class LeadsService {
        * never say "agent" about a lead the reader may not see.
        */
       ownership: ((r.owner_user_id as number | null) ?? null) === null ? 'brokerage' : 'agent',
+      /*
+       * TEAM OWNERSHIP, beside the handler rather than instead of it.
+       *
+       *   ownership_type   PRIVATE | TEAM | BROKERAGE — derived by the database from the two
+       *                    columns below, so it cannot disagree with them
+       *   team_id/_name    the team that owns it (TEAM only)
+       *   assigned_to_*    who is handling it — unchanged when the team is, and vice versa
+       *
+       * `ownership` above is left exactly as it was for the screens that already read it.
+       */
+      ownership_type: (r.ownership_type as string | null)
+        ?? ((r.owner_user_id ?? null) !== null ? 'PRIVATE' : (r.team_id ?? null) !== null ? 'TEAM' : 'BROKERAGE'),
+      team_id: (r.team_id as number | null) ?? null,
+      team_name: (r.crm_teams as { name: string } | null | undefined)?.name ?? null,
+      assigned_to_user_id: assignedTo,
       call_count: counts?.lead_calls ?? 0,
       task_count: counts?.lead_tasks ?? 0,
       pending_task_count: pending ?? 0,

@@ -40,7 +40,8 @@ import { ReportsModule } from './reports/reports.module';
 import { CalendarModule } from './calendar/calendar.module';
 import { CampaignsModule } from './campaigns/campaigns.module';
 import { LeadsModule } from './leads/leads.module';
-import { MetaModule } from './meta/meta.module';
+import { MetaModule } from './meta/meta.module';
+import { RecruitmentModule } from './recruitment/recruitment.module';
 import { CrmSettingsModule } from './crm-settings/crm-settings.module';
 import { SmsModule } from './sms/sms.module';
 import { AccountModule } from './account/account.module';
@@ -96,7 +97,8 @@ import { TwilioVoiceModule } from './twilio-voice/twilio-voice.module';
     CalendarModule,
     CampaignsModule,
     LeadsModule,
-    MetaModule,
+    MetaModule,
+    RecruitmentModule,
     CrmSettingsModule,
     SmsModule,
     AccountModule,

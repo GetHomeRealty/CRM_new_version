@@ -3,10 +3,14 @@ import { NotificationDispatcherModule } from '../notifications/notification-disp
 import { AuthModule } from '../auth/auth.module';
 import { CrmSettingsModule } from '../crm-settings/crm-settings.module';
 import { LeadsController } from './leads.controller';
+import { CrmTeamsController } from './crm-teams.controller';
+import { CrmTeamsService } from './crm-teams.service';
 import { LeadsService } from './leads.service';
 import { LeadActivityService } from './lead-activity.service';
 import { LeadAuditService } from './lead-audit.service';
 import { LeadTransferService } from './lead-transfer.service';
+import { LeadAssignmentHistoryService } from './lead-assignment-history.service';
+import { LeadTeamAssignmentService } from './lead-team-assignment.service';
 import { LeadRetentionService } from './lead-retention.service';
 import { LeadTaskReminderService } from './lead-task-reminder.service';
 import { LeadNotificationService } from './lead-notification.service';
@@ -26,8 +30,8 @@ import { EmailModule } from '../email/email.module';
   // processing the file will email everybody in it, and that answer belongs to the CRM email
   // service rather than to a second copy of the rule here.
   imports: [NotificationDispatcherModule, AuthModule, SmsModule, EmailModule, CrmSettingsModule],
-  controllers: [LeadsController],
-  providers: [LeadRetentionService, LeadTaskReminderService, LeadsService, LeadActivityService, LeadAuditService, LeadNotificationService, LeadTransferService, LeadImportEngine, LeadImportJobService, RecordingStorageService, AiDisclosureService],
+  controllers: [LeadsController, CrmTeamsController],
+  providers: [LeadRetentionService, LeadTaskReminderService, LeadsService, LeadActivityService, LeadAuditService, LeadNotificationService, LeadTransferService, LeadImportEngine, LeadImportJobService, RecordingStorageService, AiDisclosureService, LeadAssignmentHistoryService, LeadTeamAssignmentService, CrmTeamsService],
   // Campaigns imports leads through the same engine and the same queue. Exporting them is what
   // stops the two screens drifting apart again — they previously had separate implementations,
   // and only one of them de-duplicated within the uploaded file.

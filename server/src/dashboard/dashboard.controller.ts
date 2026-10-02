@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, Query, Res, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, ParseIntPipe, Post, Query, Res, UseGuards } from '@nestjs/common';
 import type { Response } from 'express';
 import { AuthGuard } from '../auth/guards/auth.guard';
 import { CurrentUser, Screen } from '../auth/decorators';
@@ -6,6 +6,8 @@ import { ScreenGuard } from '../auth/guards/screen.guard';
 import type { AuthUserRecord } from '../auth/auth.types';
 import { DashboardService, type DashboardCommissions } from './dashboard.service';
 import { AreaDashboardService, type CrmDashboard, type DeskDashboard } from './area-dashboard.service';
+import { TeamStructureService } from './team-structure.service';
+import { TeamLeadLeadsService } from './team-lead-leads.service';
 import { DeskAnalyticsService, type DeskAnalytics } from './desk-analytics.service';
 import { parseAnalyticsFilters, ALL_STATUSES } from './desk-analytics.filters';
 import { DeskAnalyticsExportService } from './desk-analytics-export.service';
@@ -31,6 +33,8 @@ export class DashboardController {
     private readonly analytics: DeskAnalyticsService,
     private readonly analyticsExport: DeskAnalyticsExportService,
     private readonly reviews_: TransactionReviewService,
+    private readonly teamStructure: TeamStructureService,
+    private readonly teamLeadLeads: TeamLeadLeadsService,
   ) {}
 
   /**
@@ -44,6 +48,51 @@ export class DashboardController {
   @Screen('dashboard', 'view', 'crm')
   crm(@CurrentUser() user: AuthUserRecord | undefined): Promise<CrmDashboard> {
     return this.areas.crm(user ?? null);
+  }
+
+  /**
+   * Team Lead cards: every team for a Super Admin, their own team for a Team Lead, nothing for
+   * anyone else. Separate from `crm` so the existing CRM payload, and every card built on it, is
+   * untouched.
+   */
+  @Get('crm/team-structure')
+  @Screen('dashboard', 'view', 'crm')
+  crmTeamStructure(@CurrentUser() user: AuthUserRecord | undefined): ReturnType<TeamStructureService['forUser']> {
+    return this.teamStructure.forUser(user ?? null);
+  }
+
+  /**
+   * A Team Lead's own leads, and the Active Agents on their team they may hand them to. Anyone who
+   * is not an active Team Lead is refused by the service.
+   */
+  @Get('crm/team-lead-leads')
+  @Screen('dashboard', 'view', 'crm')
+  crmTeamLeadLeads(
+    @CurrentUser() user: AuthUserRecord | undefined,
+    @Query() query: Record<string, unknown>,
+  ): ReturnType<TeamLeadLeadsService['list']> {
+    return this.teamLeadLeads.list(user ?? null, query ?? {});
+  }
+
+  /** One lead for the Assign Agent control on the lead page; 404 when the Team Lead may not assign it. */
+  @Get('crm/team-lead-leads/:lead')
+  @Screen('dashboard', 'view', 'crm')
+  crmTeamLeadLead(
+    @CurrentUser() user: AuthUserRecord | undefined,
+    @Param('lead', ParseIntPipe) leadId: number,
+  ): ReturnType<TeamLeadLeadsService['forLead']> {
+    return this.teamLeadLeads.forLead(user ?? null, leadId);
+  }
+
+  /** Assign or reassign one of the Team Lead's own leads to an Active Agent on their team. */
+  @Post('crm/team-lead-leads/:lead/assign')
+  @Screen('dashboard', 'view', 'crm')
+  crmTeamLeadAssign(
+    @CurrentUser() user: AuthUserRecord | undefined,
+    @Param('lead', ParseIntPipe) leadId: number,
+    @Body() body: Record<string, unknown>,
+  ): ReturnType<TeamLeadLeadsService['assign']> {
+    return this.teamLeadLeads.assign(user ?? null, leadId, body?.agent_id);
   }
 
   @Get('desk')

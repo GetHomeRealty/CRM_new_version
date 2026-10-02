@@ -13,6 +13,7 @@ import CompanySettingsPage from './CompanySettingsPage';
 import RolesPanel from './RolesPanel';
 import LicencePanel from './LicencePanel';
 import LeadBooksPanel from './LeadBooksPanel';
+import CrmTeamsPanel from './CrmTeamsPanel';
 import Icon from '../ui/Icon';
 
 /**
@@ -44,6 +45,8 @@ interface TabDef {
    * that easy to get wrong. Company Settings has no area and appears in both.
    */
   area?: Area;
+  /** Admin / Super Admin only — matches the server's own check for the tab's endpoints. */
+  adminOrAbove?: boolean;
 }
 
 /**
@@ -71,6 +74,11 @@ const TABS: TabDef[] = [
    * a password — `crm_email_settings` has no such column.
    */
   { key: 'crm', label: 'CRM Settings', ico: 'settings', screen: 'settings', area: 'crm' },
+  /*
+   * CRM Teams — who owns team leads and who may route them. Admin / Super Admin only, matching the
+   * server (`CrmTeamsService.mayManage`): choosing who is in a team decides whose leads they read.
+   */
+  { key: 'teams', label: 'Teams', ico: 'users', area: 'crm', adminOrAbove: true },
   { key: 'company', label: 'Company Settings', ico: 'building', screen: 'settings' },
   // Behind the Users screen rather than a Super Admin flag: changing what a role grants is the
   // same authority as changing who holds it, and the endpoint enforces exactly that.
@@ -133,7 +141,7 @@ const ALIASES: Record<string, [string, string?]> = {
 };
 
 export default function SettingsPage() {
-  const { isSuperAdmin, can } = useAuth();
+  const { isSuperAdmin, isAdminOrAbove, can } = useAuth();
   const toast = useToast();
   const [params, setParams] = useSearchParams();
   const { area } = useArea();
@@ -142,7 +150,7 @@ export default function SettingsPage() {
   // Email Settings stay Super Admin only, Company Settings keeps its `settings` screen check.
   const visible = TABS
     .filter((t) => !t.area || t.area === area)
-    .filter((t) => (!t.superAdmin || isSuperAdmin) && (!t.screen || can(t.screen, 'view')));
+    .filter((t) => (!t.superAdmin || isSuperAdmin) && (!t.adminOrAbove || isAdminOrAbove) && (!t.screen || can(t.screen, 'view')));
   const requested = params.get('tab') ?? '';
   const [aliasTab, aliasSub] = ALIASES[requested] ?? [requested, undefined];
   /*
@@ -310,6 +318,7 @@ export default function SettingsPage() {
                 : <CrmSettingsPanel />}
         </>
       )}
+      {tab === 'teams' && isAdminOrAbove && <CrmTeamsPanel />}
       {tab === 'company' && <CompanySettingsPage />}
       {tab === 'roles' && <><LicencePanel /><RolesPanel /><LeadBooksPanel /></>}
     </>

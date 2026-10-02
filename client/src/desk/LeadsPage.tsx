@@ -1,13 +1,14 @@
 import { crmPath } from './area';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   bulkDeleteLeads, bulkRestoreLeads, createLeadTag, deleteLead, deleteLeadTag, exportLeads,
   leadOptions, leadStatusBeforeClose, listDeletedLeads, listLeadTags, listLeads, purgeLead, restoreLead, tagLeads,
   updateLead,
 } from '../lib/leadsApi';
 import { apiErrorMessage } from '../lib/apiError';
+import { crmTeamLookup, type CrmTeamLookup } from '../lib/crmTeamsApi';
 import { downloadCsv, objectsToCsv } from '../lib/csv';
 import { leadImportPreflight, runLeadImport, type ImportJob } from '../lib/leadImportApi';
 import ImportProgress from '../components/ImportProgress';
@@ -28,7 +29,24 @@ const EMPTY_FILTERS: LeadFilters = {
   search: '', leadStatus: '', leadType: '', leadSource: '', leadResponse: '',
   clientType: '', leadConversion: '', tag: '', gender: '', language: '', religion: '',
   minAge: '', maxAge: '', assignedTo: '', recent: '', noCalls: '',
+  view: '', teamId: '', newToday: '', followUps: '',
 };
+
+/**
+ * Filters a link may open the list with — the dashboard's team cards and the team report use these,
+ * so "Unassigned Team Leads: 4" opens a list of exactly those four. Anything else in the URL is
+ * ignored, and every value is still applied by the server inside the viewer's own scope.
+ */
+const URL_FILTERS: (keyof LeadFilters)[] = ['view', 'teamId', 'assignedTo', 'newToday', 'followUps', 'leadConversion'];
+
+/** Ownership views, in the order they read left to right. Which ones show depends on the viewer. */
+const OWNERSHIP_VIEWS: { key: string; label: string; title: string }[] = [
+  { key: '', label: 'All Leads', title: 'Every lead you can see' },
+  { key: 'mine', label: 'My Leads', title: 'Your private leads and the leads you are handling' },
+  { key: 'my_team', label: 'My Team Leads', title: 'Leads owned by your teams' },
+  { key: 'team_unassigned', label: 'Unassigned Team Leads', title: 'Team leads nobody is handling yet' },
+  { key: 'brokerage', label: 'Brokerage Leads', title: 'The brokerage’s own leads, not owned by a team or an agent' },
+];
 
 const EMPTY_STATS: LeadStats = {
   total: 0, noCalls: 0, recent: 0,
@@ -319,8 +337,15 @@ export default function LeadsPage() {
   const [total, setTotal] = useState(0);
 
   const [search, setSearch] = useState('');
-  const [filters, setFilters] = useState<LeadFilters>(EMPTY_FILTERS);
-  const [showFilters, setShowFilters] = useState(false);
+  const [searchParams] = useSearchParams();
+  const [filters, setFilters] = useState<LeadFilters>(() => {
+    const out = { ...EMPTY_FILTERS };
+    for (const k of URL_FILTERS) { const v = searchParams.get(k); if (v) out[k] = v; }
+    return out;
+  });
+  // Opened when a link arrived carrying a filter that lives in the panel, so it is visible, not hidden.
+  const [showFilters, setShowFilters] = useState(() => ['teamId', 'assignedTo', 'leadConversion'].some((k) => searchParams.get(k)));
+  const [teamLookup, setTeamLookup] = useState<CrmTeamLookup | null>(null);
   const [selected, setSelected] = useState<Set<number>>(new Set());
 
   const [editing, setEditing] = useState<Lead | null>(null);
@@ -374,8 +399,24 @@ export default function LeadsPage() {
 
   useEffect(() => {
     leadOptions().then(setOptions).catch(() => setOptions(null));
+    // Optional: without it the screen simply shows no team controls.
+    crmTeamLookup().then(setTeamLookup).catch(() => setTeamLookup(null));
     void loadTags();
   }, [loadTags]);
+
+  /*
+   * Which ownership views this person gets. Each is filtered by the server inside their own scope,
+   * so hiding one here is about not offering an empty list, not about security.
+   */
+  const inTeam = (teamLookup?.member_team_ids.length ?? 0) > 0;
+  const hasTeams = (teamLookup?.teams.length ?? 0) > 0;
+  const views = OWNERSHIP_VIEWS.filter((v) => {
+    if (v.key === 'my_team') return inTeam;
+    if (v.key === 'team_unassigned') return inTeam || (hasTeams && !!teamLookup?.can_move_teams);
+    if (v.key === 'brokerage') return !!teamLookup?.sees_brokerage;
+    return true;
+  });
+  const selectedTeam = teamLookup?.teams.find((t) => String(t.id) === filters.teamId) ?? null;
 
   // ------------------------------------------------------------- filtering
   const setFilter = (k: keyof LeadFilters, v: string) => {
@@ -385,7 +426,7 @@ export default function LeadsPage() {
 
   const activeFilterCount = useMemo(
     () => (Object.entries(filters) as [keyof LeadFilters, string][])
-      .filter(([k, v]) => k !== 'search' && v !== '').length,
+      .filter(([k, v]) => k !== 'search' && k !== 'view' && v !== '').length,
     [filters],
   );
 
@@ -583,6 +624,23 @@ export default function LeadsPage() {
           </div>
         </div>
 
+        {views.length > 2 && (
+          <div className="lead-tabs" role="group" aria-label="Whose leads" style={{ marginBottom: 6 }}>
+            {views.map((v) => (
+              <button key={v.key || 'all'} type="button" title={v.title}
+                className={`lead-tab${filters.view === v.key ? ' on' : ''}`}
+                onClick={() => setFilter('view', v.key)}>
+                {v.label}
+              </button>
+            ))}
+          </div>
+        )}
+        {(filters.newToday === 'true' || filters.followUps) && (
+          <div className="help" style={{ margin: '0 0 6px' }}>
+            Showing {filters.newToday === 'true' ? 'leads created today' : filters.followUps === 'overdue' ? 'leads with an overdue follow-up' : 'leads with a follow-up due'}.{' '}
+            <button type="button" className="btn ghost sm" onClick={() => { setFilter('newToday', ''); setFilter('followUps', ''); }}>Show all</button>
+          </div>
+        )}
         <div className="lead-tabs">
           {STATUS_TABS.map((t) => {
             const value = t.key === 'all' ? '' : t.key;
@@ -628,12 +686,24 @@ export default function LeadsPage() {
               onChange={(v) => setFilter('language', v)} />
             <FilterSelect label="Religion" value={filters.religion} options={options.religions} none={options.none_filter_value}
               onChange={(v) => setFilter('religion', v)} />
+            {hasTeams && (
+              <div className="field">
+                <label>Team</label>
+                <select value={filters.teamId} onChange={(e) => setFilter('teamId', e.target.value)}>
+                  <option value="">All teams</option>
+                  {teamLookup!.teams.map((t) => <option key={t.id} value={t.id}>{t.name}{t.is_active ? '' : ' (inactive)'}</option>)}
+                </select>
+              </div>
+            )}
             <div className="field">
-              <label>Assigned To</label>
+              <label>{selectedTeam ? 'Assigned Agent' : 'Assigned To'}</label>
               <select value={filters.assignedTo} onChange={(e) => setFilter('assignedTo', e.target.value)}>
                 <option value="">All users</option>
                 <option value="unassigned">Unassigned</option>
-                {options.users.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+                <option value="assigned">Assigned to anyone</option>
+                {/* Within a team, only its members can be handling its leads. */}
+                {(selectedTeam ? selectedTeam.members.map((m) => ({ id: m.user_id, name: m.name })) : options.users)
+                  .map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
               </select>
             </div>
             <div className="field">
@@ -675,7 +745,7 @@ export default function LeadsPage() {
                 <th>Source</th>
                 <th>Lead Response</th>
                 <th>Tags</th>
-                <th>Assigned To</th>
+                <th title="Who owns the lead, and who is handling it">Owner / Assigned To</th>
                 <th>Created</th>
                 <th>Actions</th>
               </tr>
@@ -722,7 +792,13 @@ export default function LeadsPage() {
                     <InlineLeadCell lead={l} field="tags" options={[]} tagOptions={tagData.tags}
                       disabled={!canEdit} saving={savingCell === `${l.id}:tags`} onSave={(field, value, createdTags) => saveInline(l, field, value, createdTags)} />
                   </td>
-                  <td>{l.assigned_to_name ?? <span className="muted">Unassigned</span>}</td>
+                  <td>
+                    {/* Owner and handler, as the separate things they are. */}
+                    <div className="muted" style={{ fontSize: 11 }}>
+                      {l.ownership_type === 'TEAM' ? `Team: ${l.team_name ?? '—'}` : l.ownership_type === 'PRIVATE' ? 'Private' : 'Brokerage'}
+                    </div>
+                    {l.assigned_to_name ?? <span className="muted">Unassigned</span>}
+                  </td>
                   <td>{shortDate(l.created_at)}</td>
                   {/* Icon-only actions: four labelled buttons per row cost more width than the
                       rest of the table put together. `title` + `aria-label` keep the action

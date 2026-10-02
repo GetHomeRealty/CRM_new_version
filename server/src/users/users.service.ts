@@ -1,6 +1,6 @@
 import { AREAS, type Area } from '../common/domain';
 import { ModuleAccessService } from '../core/module-access.service';
-import { Inject, Injectable, Logger, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
+import { ForbiddenException, Inject, Injectable, Logger, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
 import { PasswordHashService } from '../auth/password-hash.service';
 import { passwordPolicyProblem } from '../auth/password-policy';
 import { Prisma, type users, type user_permissions, type user_modules } from '@prisma/client';
@@ -14,6 +14,7 @@ import type { AuthUserRecord } from '../auth/auth.types';
 import { isSuperAdmin, superAdminRoles } from '../core/authz';
 import { OffboardingService } from './offboarding.service';
 import { UserRenameService } from './user-rename.service';
+import { TEAM_LEAD_EDITABLE_FIELDS, TEAM_LEAD_PROFILE_KEYS, teamLeadIdOf } from './team-lead';
 type UserWithPerms = users & { user_permissions: user_permissions[]; user_modules: user_modules[] };
 
 /** bcrypt ignores everything past 72 bytes, so accepting more would overstate the protection. */
@@ -56,16 +57,22 @@ export class UsersService {
    * inflating the list for everybody, which was the real amplifier: one 500 kB profile took the
    * list from 4.3 kB to 493 kB.
    */
-  async index(q: { page?: unknown; limit?: unknown } = {}): Promise<Record<string, unknown>[]> {
-    const rows = await this.prisma.users.findMany({ include: { user_permissions: { orderBy: { id: 'asc' } }, user_modules: true } });
+  async index(q: { page?: unknown; limit?: unknown } = {}, actor: AuthUserRecord | null = null): Promise<Record<string, unknown>[]> {
+    // A Team Lead's Users screen is their own team and nobody else.
+    const lead = this.teamLeadScope(actor);
+    const rows = await this.prisma.users.findMany({
+      ...(lead !== null ? { where: this.ownAgentsWhere(lead) } : {}),
+      include: { user_permissions: { orderBy: { id: 'asc' } }, user_modules: true },
+    });
     rows.sort((a, b) => a.name.localeCompare(b.name, 'en', { sensitivity: 'base' }) || a.id - b.id);
+    const asPayload = (u: UserWithPerms) => this.payload(u, lead !== null);
 
     const limit = Number(q.limit);
-    if (!Number.isFinite(limit) || limit <= 0) return rows.map((u) => this.payload(u));
+    if (!Number.isFinite(limit) || limit <= 0) return rows.map(asPayload);
 
     const perPage = Math.min(MAX_USERS_PER_PAGE, Math.floor(limit));
     const page = Math.max(1, Math.floor(Number(q.page) || 1));
-    return rows.slice((page - 1) * perPage, page * perPage).map((u) => this.payload(u));
+    return rows.slice((page - 1) * perPage, page * perPage).map(asPayload);
   }
 
   /**
@@ -79,17 +86,26 @@ export class UsersService {
    * The SAME payload the list emits per row, deliberately: a second shape for the same record is how
    * two screens come to disagree about one person.
    */
-  async show(id: number): Promise<Record<string, unknown>> {
+  async show(id: number, actor: AuthUserRecord | null = null): Promise<Record<string, unknown>> {
+    const lead = this.teamLeadScope(actor);
     const u = await this.prisma.users.findUnique({
       where: { id },
       include: { user_permissions: { orderBy: { id: 'asc' } }, user_modules: true },
     });
-    if (!u) throw new NotFoundException({ message: 'User not found.' });
-    return this.payload(u);
+    // Another team's Agent answers exactly like a user who does not exist.
+    if (!u || (lead !== null && !this.isOwnAgent(u, lead))) throw new NotFoundException({ message: 'User not found.' });
+    return this.payload(u, lead !== null);
   }
 
   async store(actor: AuthUserRecord | null, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const lead = this.teamLeadScope(actor);
+    // A Team Lead creates Agents for their own team, and nothing else: whatever role, permissions,
+    // modules or reporting line the request carried is replaced, not merely hidden by the screen.
+    if (lead !== null) body = this.teamLeadBody(body, null);
     const data = await this.validate(body, null);
+    const hierarchy = lead !== null
+      ? { is_team_lead: false, team_lead_id: lead }
+      : await this.validateHierarchy(body, null, data.role as string);
     const now = new Date();
     const user = await this.prisma.users.create({
       data: {
@@ -109,6 +125,9 @@ export class UsersService {
         department: (data.department ?? null) as string | null,
         designation: (data.designation ?? null) as string | null,
         profile: data.profile !== undefined ? JSON.stringify(data.profile) : null,
+        is_team_lead: hierarchy.is_team_lead ?? false,
+        team_lead_id: hierarchy.team_lead_id ?? null,
+        created_by_id: actor?.id ?? null,
         created_at: now,
         updated_at: now,
       },
@@ -117,18 +136,30 @@ export class UsersService {
     // Which modules this person may open. Omitted means both — the same access a user created before
     // module assignment existed would have had, so an older client or an API caller that does not
     // know about modules cannot accidentally create someone who can open nothing.
-    await this.moduleAccess.setAssigned(user.id, this.wantedModules(body));
+    //
+    // A Team Lead's new Agent gets the Team Lead's own modules: an Agent is not handed more of the
+    // application than the person who created them can open.
+    await this.moduleAccess.setAssigned(user.id, lead !== null ? await this.assignedModules(lead) : this.wantedModules(body));
     await this.audit.logModule(actor ? { id: actor.id, name: actor.name } : null, 'Users', {
       section: 'User Management', field: user.name, action: 'User created',
-      details: `${user.email} · ${this.permissions.label(user.role)}`,
+      details: `${user.email} · ${this.roleLabelOf(user)}`
+        + (lead !== null ? ' · created by their Team Lead' : ''),
     });
     return this.payload(await this.load(user.id));
   }
 
   async update(actor: AuthUserRecord | null, id: number, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const lead = this.teamLeadScope(actor);
     const existing = await this.prisma.users.findUnique({ where: { id } });
-    if (!existing) throw new NotFoundException({ message: `No query results for model [App\\Models\\User] ${id}.` });
+    if (!existing || (lead !== null && !this.isOwnAgent(existing, lead))) {
+      throw new NotFoundException({ message: `No query results for model [App\\Models\\User] ${id}.` });
+    }
+    // A Team Lead edits basic profile and status only. Role, password, permissions, modules and the
+    // reporting line never reach validation from this caller, so they cannot be changed.
+    if (lead !== null) body = this.teamLeadBody(body, existing);
     const data = await this.validate(body, existing);
+    const hierarchy: { is_team_lead?: boolean; team_lead_id?: number | null; reassign_to?: number | null } =
+      lead !== null ? {} : await this.validateHierarchy(body, existing, data.role as string);
 
     const update: Prisma.usersUpdateInput = {
       department: (data.department ?? existing.department) as string | null,
@@ -141,6 +172,10 @@ export class UsersService {
       profile: Object.prototype.hasOwnProperty.call(data, 'profile')
         ? (data.profile !== undefined ? JSON.stringify(data.profile) : null)
         : existing.profile,
+      ...(hierarchy.is_team_lead !== undefined ? { is_team_lead: hierarchy.is_team_lead } : {}),
+      ...(hierarchy.team_lead_id !== undefined
+        ? { team_lead: hierarchy.team_lead_id === null ? { disconnect: true } : { connect: { id: hierarchy.team_lead_id } } }
+        : {}),
       updated_at: new Date(),
     };
     if (data.password) update.password = await this.passwords.hashPassword(data.password as string);
@@ -167,6 +202,26 @@ export class UsersService {
      * stay with them. See `OffboardingService` for why each of those is the right answer.
      */
     const departure = goingInactive ? await this.offboarding.depart(user.id, user.name) : null;
+
+    /*
+     * A Team Lead's Agents, when a Super Admin changes that Team Lead.
+     *
+     * `reassign_agents_to` moves the whole team to a replacement Team Lead, or, as null, leaves them
+     * with none while one is chosen. Somebody who stops being a Team Lead hands their team to nobody
+     * unless a replacement was named: an Agent reporting to a person who leads nobody is a reporting
+     * line nobody can manage. Only the reporting line moves — the Agent accounts, their leads, deals
+     * and history are untouched.
+     */
+    let moved: string | null = null;
+    if (existing.is_team_lead && hierarchy.reassign_to !== undefined) {
+      // The leads an Admin gave this Team Lead go with their Agents, so the replacement can manage them.
+      await this.prisma.leads.updateMany({ where: { assigned_team_lead_id: user.id }, data: { assigned_team_lead_id: hierarchy.reassign_to } });
+      const r = await this.prisma.users.updateMany({ where: { team_lead_id: user.id }, data: { team_lead_id: hierarchy.reassign_to } });
+      if (r.count) moved = `${r.count} agent${r.count === 1 ? '' : 's'} ${hierarchy.reassign_to === null ? 'left without a Team Lead' : 'moved to the replacement Team Lead'}`;
+    } else if (existing.is_team_lead && !user.is_team_lead) {
+      const r = await this.prisma.users.updateMany({ where: { team_lead_id: user.id }, data: { team_lead_id: null } });
+      if (r.count) moved = `${r.count} agent${r.count === 1 ? '' : 's'} left without a Team Lead`;
+    }
 
     /*
      * TD-190 - a new name reaches the deals linked to this account. The dashboard, the reports and
@@ -200,7 +255,9 @@ export class UsersService {
      */
     if (passwordChanged) await this.endSessionsFor(user.id);
 
-    await this.syncPermissions(user.id, user.role, (data.permissions ?? {}) as Record<string, unknown>);
+    // Not on a Team Lead's save: they cannot change permissions, and the absent map would otherwise
+    // clear whatever overrides a Super Admin had set on this Agent.
+    if (lead === null) await this.syncPermissions(user.id, user.role, (data.permissions ?? {}) as Record<string, unknown>);
     // Only when the caller said something about modules. An absent key means "leave it alone" here,
     // unlike on create — a PATCH-shaped save from a screen that does not edit modules must not wipe
     // the assignment.
@@ -209,17 +266,41 @@ export class UsersService {
       section: 'User Management',
       field: user.name,
       action: goingInactive ? 'User deactivated' : 'User updated',
-      details: `${user.email} · ${this.permissions.label(user.role)} · ${user.status}`
+      details: `${user.email} · ${this.roleLabelOf(user)} · ${user.status}`
+        + (lead !== null ? ' · by their Team Lead' : '')
         + (departure ? ` · ${departure}` : '')
-        + (carried ? ` · ${carried}` : ''),
+        + (carried ? ` · ${carried}` : '')
+        + (moved ? ` · ${moved}` : ''),
     });
-    return this.payload(await this.load(id));
+    return this.payload(await this.load(id), lead !== null);
   }
 
   async destroy(actor: AuthUserRecord | null, id: number): Promise<{ message: string }> {
+    const lead = this.teamLeadScope(actor);
     const user = await this.prisma.users.findUnique({ where: { id } });
-    if (!user) throw new NotFoundException({ message: `No query results for model [App\\Models\\User] ${id}.` });
+    if (!user || (lead !== null && !this.isOwnAgent(user, lead))) {
+      throw new NotFoundException({ message: `No query results for model [App\\Models\\User] ${id}.` });
+    }
     if (actor && user.id === actor.id) throw new UnprocessableEntityException({ message: 'You cannot delete your own account.' });
+
+    /*
+     * A TEAM LEAD REMOVES ONLY AN AGENT WHO HOLDS NOTHING.
+     *
+     * For an Agent who did not work out. Anything the Agent has to their name - a lead, a deal or
+     * its documents, a note, a call, an email, a showing, a Meta connection, a calendar entry -
+     * refuses the removal and points at Inactive instead, which keeps the account and every record.
+     * Stricter than the Super Admin's own checks below, which refuse only what deleting would strand.
+     */
+    if (lead !== null) {
+      const held = await this.workRecords(user);
+      if (held.length) {
+        const summary = held.map((r) => `${r.count} ${r.label}${r.count === 1 ? '' : 's'}`).join(', ');
+        throw new UnprocessableEntityException({
+          message: `${user.name} cannot be removed: they have ${summary}. Set them to Inactive instead - that ends `
+            + 'their access and keeps their records.',
+        });
+      }
+    }
     /*
      * "The last administrator" means the last of the top tier, whatever that tier is called — and
      * this now asks the authorization engine instead of counting `role: 'admin'` itself.
@@ -315,7 +396,7 @@ export class UsersService {
     await this.prisma.users.delete({ where: { id } });
     await this.audit.logModule(actor ? { id: actor.id, name: actor.name } : null, 'Users', {
       section: 'User Management', field: name, action: 'User deleted',
-      details: email + (departure ? ` · ${departure}` : ''),
+      details: email + (lead !== null ? ' · removed by their Team Lead' : '') + (departure ? ` · ${departure}` : ''),
     });
     return { message: 'User deleted' };
   }
@@ -390,8 +471,9 @@ export class UsersService {
     return AREAS.filter((a) => raw.includes(a));
   }
 
-  private payload(u: UserWithPerms): Record<string, unknown> {
+  private payload(u: UserWithPerms, forTeamLead = false): Record<string, unknown> {
     const overrides = u.user_permissions;
+    const profile = phpJsonNormalize(parseJson(u.profile) ?? []);
     return {
       id: u.id,
       name: u.name,
@@ -405,11 +487,224 @@ export class UsersService {
       // filtered by the licence would make an unlicensed module look un-assigned and lose the setting
       // the moment someone saved.
       modules: u.user_modules.filter((m) => m.status === 'active').map((m) => m.module_name),
-      profile: phpJsonNormalize(parseJson(u.profile) ?? []),
+      // A Team Lead is sent the basic profile only — never the commission split, loans or deal count.
+      profile: forTeamLead ? this.pick(profile, TEAM_LEAD_PROFILE_KEYS) : profile,
       is_admin: isSuperAdmin(u),
+      is_team_lead: u.is_team_lead,
+      team_lead_id: u.team_lead_id,
+      created_by_id: u.created_by_id,
       permissions: this.permissions.effectiveFor(u.role, overrides.map((p) => ({ screen: p.screen, level: p.level }))),
       overrides: overrides.length ? Object.fromEntries(overrides.map((p) => [p.screen, p.level])) : [],
     };
+  }
+
+  // ---- Team Lead (see team-lead.ts) ----
+
+  /**
+   * Null for a Super Admin (the whole table, as before); the Team Lead's own id for a Team Lead.
+   * Anyone else is refused here as well as at the guard, so a caller that skips the guard is not
+   * handed the table. No actor at all is a caller inside the application, which is unscoped.
+   */
+  private teamLeadScope(actor: AuthUserRecord | null): number | null {
+    if (!actor || isSuperAdmin(actor)) return null;
+    const lead = teamLeadIdOf(actor);
+    if (lead === null) throw new ForbiddenException({ message: 'Administrator access required.' });
+    return lead;
+  }
+
+  /** A Team Lead's own Agents: Agents reporting to them, never another Team Lead. */
+  private ownAgentsWhere(lead: number): Prisma.usersWhereInput {
+    return { team_lead_id: lead, role: 'agent', is_team_lead: false };
+  }
+
+  private isOwnAgent(u: users, lead: number): boolean {
+    return u.team_lead_id === lead && u.role === 'agent' && !u.is_team_lead;
+  }
+
+  /** "Team Lead" for a Team Lead, otherwise the role's usual label. */
+  private roleLabelOf(u: Pick<users, 'role' | 'is_team_lead'>): string {
+    return u.role === 'agent' && u.is_team_lead ? 'Team Lead' : this.permissions.label(u.role);
+  }
+
+  private pick(src: unknown, keys: readonly string[]): Record<string, unknown> {
+    const o = (src && typeof src === 'object' && !Array.isArray(src) ? src : {}) as Record<string, unknown>;
+    return Object.fromEntries(keys.filter((k) => Object.prototype.hasOwnProperty.call(o, k)).map((k) => [k, o[k]]));
+  }
+
+  /**
+   * What a Team Lead's request is allowed to say, and nothing more.
+   *
+   * Built from an allowlist rather than by deleting the forbidden keys, so a field added to the
+   * Users form later is refused to a Team Lead until somebody decides otherwise. The role is always
+   * Agent. On create the password is the new Agent's first one; on update it is not carried at all.
+   * The profile is MERGED onto what is stored, so the commission split, loans and deal count a Team
+   * Lead is never sent are kept rather than wiped. Fields left out of an update keep their values,
+   * so "set Inactive" on its own is a complete request.
+   */
+  private teamLeadBody(body: Record<string, unknown>, existing: users | null): Record<string, unknown> {
+    const out: Record<string, unknown> = { role: 'agent' };
+    for (const k of TEAM_LEAD_EDITABLE_FIELDS) {
+      if (Object.prototype.hasOwnProperty.call(body, k)) out[k] = body[k];
+      else if (existing) out[k] = existing[k];
+    }
+    if (!existing) {
+      for (const k of ['password', 'password_confirmation']) {
+        if (Object.prototype.hasOwnProperty.call(body, k)) out[k] = body[k];
+      }
+    }
+    const stored = existing ? (parseJson<Record<string, unknown>>(existing.profile) ?? {}) : {};
+    const asked = this.pick(body.profile, TEAM_LEAD_PROFILE_KEYS);
+    delete asked.photo_path; // the picture is set through its own endpoint, not typed in
+    out.profile = { ...(Array.isArray(stored) ? {} : stored), ...asked };
+    return out;
+  }
+
+  /**
+   * Everything an Agent has to their name, for the Team Lead's remove: the records deleting would
+   * strand, plus their deals (by id, or by the name deals still carry) and so those deals'
+   * documents, deal team seats, reviews, lead activity, mail and Meta. Account plumbing - settings,
+   * sessions, notifications - is not information and does not count.
+   */
+  private async workRecords(user: users): Promise<{ label: string; count: number }[]> {
+    const id = user.id;
+    const [stranded, deals, seats, reviews, dealMessages, notes, calls, emails, texts, showings, sent, received, meta, forms, todos, recruits] = await Promise.all([
+      this.offboarding.orphanRisk(id),
+      this.prisma.transactions.count({ where: { OR: [{ agent_user_id: id }, { agent: user.name }] } }),
+      this.prisma.team_members.count({ where: { OR: [{ user_id: id }, { name: user.name }] } }),
+      this.prisma.transaction_reviews.count({ where: { agent_user_id: id } }),
+      this.prisma.transaction_messages.count({ where: { user_id: id } }),
+      this.prisma.lead_notes.count({ where: { user_id: id } }),
+      this.prisma.lead_calls.count({ where: { user_id: id } }),
+      this.prisma.lead_emails.count({ where: { user_id: id } }),
+      this.prisma.lead_messages.count({ where: { user_id: id } }),
+      this.prisma.lead_showings.count({ where: { user_id: id } }),
+      this.prisma.outbound_emails.count({ where: { user_id: id } }),
+      this.prisma.inbound_emails.count({ where: { user_id: id } }),
+      this.prisma.meta_connections.count({ where: { user_id: id } }),
+      this.prisma.meta_lead_forms.count({ where: { user_id: id } }),
+      this.prisma.todos.count({ where: { user_id: id } }),
+      this.prisma.recruitment_candidates.count({ where: { agent_user_id: id } }),
+    ]);
+    return [
+      ...stranded,
+      { label: 'deal (with its documents)', count: deals },
+      { label: 'deal team seat', count: seats },
+      { label: 'deal review', count: reviews },
+      { label: 'deal message', count: dealMessages },
+      { label: 'lead note', count: notes },
+      { label: 'call', count: calls },
+      { label: 'lead email', count: emails },
+      { label: 'text message', count: texts },
+      { label: 'showing', count: showings },
+      { label: 'sent email', count: sent },
+      { label: 'received email', count: received },
+      { label: 'Meta connection', count: meta },
+      { label: 'Meta lead form', count: forms },
+      { label: 'to-do', count: todos },
+      { label: 'recruitment record', count: recruits },
+    ].filter((r) => r.count > 0);
+  }
+
+  /** The modules assigned to a user, used to give a Team Lead's new Agent the same ones. */
+  private async assignedModules(userId: number): Promise<Area[]> {
+    const rows = await this.prisma.user_modules.findMany({ where: { user_id: userId, status: 'active' }, select: { module_name: true } });
+    const names = rows.map((r) => r.module_name);
+    return AREAS.filter((a) => names.includes(a));
+  }
+
+  /**
+   * A Super Admin's reporting-line fields: `is_team_lead`, `team_lead_id` and, when saving a Team
+   * Lead, `reassign_agents_to`. Each is optional and an absent key means unchanged.
+   *
+   * Only an Agent can be a Team Lead or report to one; any other role clears both. A Team Lead does
+   * not report to a Team Lead — the hierarchy is Super Admin, Team Lead, Agent — and the Team Lead
+   * an Agent is given must be an active one.
+   */
+  private async validateHierarchy(
+    body: Record<string, unknown>,
+    existing: users | null,
+    role: string,
+  ): Promise<{ is_team_lead?: boolean; team_lead_id?: number | null; reassign_to?: number | null }> {
+    const has = (k: string): boolean => Object.prototype.hasOwnProperty.call(body, k);
+    const errors: FieldErrors = {};
+    const push = (f: string, m: string): void => { (errors[f] ??= []).push(m); };
+    const idOrNull = (v: unknown): number | null | 'bad' => {
+      if (v === null || v === '' || v === undefined) return null;
+      const n = Number(v);
+      return Number.isInteger(n) && n > 0 ? n : 'bad';
+    };
+
+    const out: { is_team_lead?: boolean; team_lead_id?: number | null; reassign_to?: number | null } = {};
+
+    if (role !== 'agent') {
+      // Not an Agent: neither a Team Lead nor on a team. Written only if there is something to clear.
+      if (!existing || existing.is_team_lead) out.is_team_lead = false;
+      if (!existing || existing.team_lead_id !== null) out.team_lead_id = null;
+    } else {
+      if (has('is_team_lead')) out.is_team_lead = body.is_team_lead === true || body.is_team_lead === 'true' || body.is_team_lead === 1;
+      const teamLead = out.is_team_lead ?? existing?.is_team_lead ?? false;
+
+      if (teamLead) {
+        // A Team Lead reports to the Super Admin, not to another Team Lead.
+        if (!existing || existing.team_lead_id !== null) out.team_lead_id = null;
+      } else if (has('team_lead_id')) {
+        const id = idOrNull(body.team_lead_id);
+        if (id === 'bad') push('team_lead_id', 'Choose a Team Lead from the list.');
+        else if (id !== null) {
+          const tl = await this.mustBeActiveTeamLead(id, existing?.id ?? null);
+          if (tl) push('team_lead_id', tl);
+          else out.team_lead_id = id;
+        } else out.team_lead_id = null;
+      }
+    }
+
+    if (existing?.is_team_lead && has('reassign_agents_to')) {
+      const id = idOrNull(body.reassign_agents_to);
+      if (id === 'bad') push('reassign_agents_to', 'Choose a replacement Team Lead from the list.');
+      else if (id !== null) {
+        const tl = await this.mustBeActiveTeamLead(id, existing.id);
+        if (tl) push('reassign_agents_to', tl);
+        else out.reassign_to = id;
+      } else out.reassign_to = null;
+    }
+
+    /*
+     * A LEAVING TEAM LEAD'S AGENTS MUST BE HANDED TO SOMEBODY.
+     *
+     * Leaving means this save deactivates them or stops them being a Team Lead. Without a decision
+     * their Agents would report to a person who can no longer manage them, so the save is refused
+     * until a replacement is named. "No Team Lead for now" (null) is accepted only when there is no
+     * other active Team Lead to choose — the one case where a replacement genuinely cannot be given.
+     */
+    if (existing?.is_team_lead && errors.reassign_agents_to === undefined) {
+      const stillTeamLead = role === 'agent' && (out.is_team_lead ?? existing.is_team_lead);
+      const goingInactive = (existing.status ?? 'Active') === 'Active' && body.status === 'Inactive';
+      if (!stillTeamLead || goingInactive) {
+        const agents = await this.prisma.users.count({ where: { team_lead_id: existing.id, role: 'agent', is_team_lead: false } });
+        if (agents > 0 && (out.reassign_to === undefined || out.reassign_to === null)) {
+          const others = await this.prisma.users.count({
+            where: { id: { not: existing.id }, role: 'agent', is_team_lead: true, status: 'Active' },
+          });
+          if (out.reassign_to === undefined || others > 0) {
+            push('reassign_agents_to', others > 0
+              ? `Choose a replacement Team Lead for ${existing.name}'s ${agents} agent${agents === 1 ? '' : 's'}.`
+              : `Say what happens to ${existing.name}'s ${agents} agent${agents === 1 ? '' : 's'}: there is no other active Team Lead, so choose "No Team Lead for now".`);
+          }
+        }
+      }
+    }
+
+    if (Object.keys(errors).length) throwValidation(errors);
+    return out;
+  }
+
+  /** Null when `id` is an active Team Lead other than `self`, otherwise why not. */
+  private async mustBeActiveTeamLead(id: number, self: number | null): Promise<string | null> {
+    if (id === self) return 'A person cannot be their own Team Lead.';
+    const tl = await this.prisma.users.findUnique({ where: { id }, select: { name: true, role: true, status: true, is_team_lead: true } });
+    if (!tl || tl.role !== 'agent' || !tl.is_team_lead) return 'Choose a Team Lead from the list.';
+    if ((tl.status ?? 'Active') !== 'Active') return `${tl.name}'s account is inactive.`;
+    return null;
   }
 
   // ---- validation (faithful port of UserController::rules) ----

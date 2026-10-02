@@ -11,6 +11,7 @@ import { LeadActivityService } from './lead-activity.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { CrmAdvancedEmailService } from '../crm-settings/crm-advanced-email.service';
 import { LeadTransferService } from './lead-transfer.service';
+import { LeadTeamAssignmentService } from './lead-team-assignment.service';
 import { LeadImportJobService } from './lead-import-job.service';
 import {
   CALL_OUTCOME, CLIENT_TYPE, GENDERS, LANGUAGES, LEAD_CONVERSION, LEAD_ESTIMATION, LEAD_QUALITY, LEAD_RESPONSE, LEAD_SOURCE,
@@ -41,6 +42,7 @@ export class LeadsController {
     private readonly prisma: PrismaService,
     // For the import preflight only: whether an import will email the people in the file.
     private readonly email: CrmAdvancedEmailService,
+    private readonly teamAssignment: LeadTeamAssignmentService,
   ) {}
 
   /**
@@ -316,6 +318,19 @@ export class LeadsController {
   @Screen('lead', 'edit')
   update(@CurrentUser() user: AuthUserRecord, @Param('id', ParseIntPipe) id: number, @Body() body: LeadInput): Promise<unknown> {
     return this.leads.update(id, body ?? {}, user);
+  }
+
+  /**
+   * Team & Assignment: the owning team and the handling agent, as one change.
+   *
+   * `lead` edit gets a person to the service; the service then decides by role and team — an
+   * administrator may move teams, the team's own lead may reassign within it, nobody else may do
+   * either. See LeadTeamAssignmentService.
+   */
+  @Put(':id/team-assignment')
+  @Screen('lead', 'edit')
+  assignTeam(@CurrentUser() user: AuthUserRecord, @Param('id', ParseIntPipe) id: number, @Body() body: Record<string, unknown>): Promise<unknown> {
+    return this.teamAssignment.assign(id, body ?? {}, user);
   }
 
   @Delete(':id')

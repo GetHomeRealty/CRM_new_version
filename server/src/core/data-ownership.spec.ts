@@ -34,6 +34,13 @@ const ROOT = [
   'company_settings',
   'users',
   'leads',
+  /*
+   * A person applying to join. ROOT rather than DERIVED, and not hung off `users`: a candidate is
+   * precisely somebody who is NOT a user, and most never become one. The optional `agent_user_id`
+   * points the other way — from the application to the account it eventually produced — so reading
+   * it as ownership would invert the relationship and leave every un-hired candidate unowned.
+   */
+  'recruitment_candidates',
   'transactions',
   'customers',
   'campaigns',
@@ -67,6 +74,9 @@ const ROOT = [
   // reached as "the brokerage's policy", never through any one person — so it is owned directly
   // rather than deriving an owner.
   'mfa_policies',
+  // A CRM team is the brokerage's own structure: its lead is a pointer that may be cleared, not
+  // an owner the team hangs off.
+  'crm_teams',
 ] as const;
 
 /**
@@ -115,7 +125,17 @@ const DERIVED: Record<string, string> = {
   mfa_challenges: 'users',
 
   // via leads
+  crm_lead_assignment_events: 'leads',
+  // via crm_teams
+  crm_team_members: 'crm_teams',
   lead_notes: 'leads', lead_tasks: 'leads', lead_showings: 'leads', lead_calls: 'leads',
+  // Everything about a candidate reaches the brokerage through the candidate, and cascades with it.
+  recruitment_interviews: 'recruitment_candidates',
+  recruitment_notes: 'recruitment_candidates',
+  recruitment_followups: 'recruitment_candidates',
+  recruitment_documents: 'recruitment_candidates',
+  recruitment_onboarding_items: 'recruitment_candidates',
+  recruitment_events: 'recruitment_candidates',
   lead_emails: 'leads', lead_messages: 'leads',
   lead_call_recordings: 'lead_calls',
   // via transactions

@@ -99,6 +99,16 @@ export interface Lead {
    * surface that does not send it, keeps the button rather than silently losing it.
    */
   can_delete?: boolean;
+  /**
+   * TEAM OWNERSHIP, separate from the handler. `ownership_type` is derived by the database:
+   * PRIVATE (an agent's own lead), TEAM (owned by `team_id`), or BROKERAGE.
+   * `assigned_to_user_id` is the handling agent — the same value as `assigned_to`.
+   * Optional so a response from before teams existed still type-checks.
+   */
+  ownership_type?: 'PRIVATE' | 'TEAM' | 'BROKERAGE';
+  team_id?: number | null;
+  team_name?: string | null;
+  assigned_to_user_id?: number | null;
   call_count: number;
   task_count: number;
   pending_task_count: number;
@@ -222,7 +232,23 @@ export interface LeadEmail {
 }
 
 /** A single lead with its full activity history. */
+/** One change to who owns or handles a lead, with the person who made it (null = the system). */
+export interface LeadAssignmentEvent {
+  id: number;
+  action: 'team_assigned' | 'team_removed' | 'agent_assigned' | 'agent_reassigned' | 'agent_unassigned' | string;
+  description: string;
+  from_team_name: string | null;
+  to_team_name: string | null;
+  from_user_name: string | null;
+  to_user_name: string | null;
+  actor_name: string | null;
+  created_at: string;
+}
+
 export interface LeadDetail extends Lead {
+  /** What the signed-in user may change about this lead's team and handler, decided by the server. */
+  assignment_permissions?: { change_team: boolean; change_agent: boolean };
+  assignment_history?: LeadAssignmentEvent[];
   emails: LeadEmail[];
   notes_history: LeadNote[];
   tasks: LeadTask[];
@@ -270,6 +296,13 @@ export interface LeadFilters {
    * raised a toast, so the list showed everybody while the message named a smaller number.
    */
   noCalls: string;
+  /** mine | my_team | team_unassigned | brokerage | all — always inside what the user may see. */
+  view: string;
+  teamId: string;
+  /** 'true' = created today. */
+  newToday: string;
+  /** 'due' | 'overdue' — leads with a pending follow-up task due by today / before today. */
+  followUps: string;
 }
 
 export interface LeadOptions {

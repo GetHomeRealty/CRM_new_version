@@ -1,6 +1,7 @@
 import { crmPath } from './area';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
+import { createLatest, shouldFetchLeads } from './metaLeadsRequest';
 import {
   disconnectMeta, metaAuthUrl, metaDiagnostics, metaForms, metaLeads, metaPages, metaStatus,
   metaWebhookHealth, refreshMetaPages, setMetaDefaultPage, syncMetaLeads, toggleMetaForm,
@@ -221,22 +222,21 @@ export default function MetaPage() {
    * ticket is still the current one. Aborting the request itself would be tidier but would also
    * have to be threaded through `metaLeads`; this costs one ref and cannot be got wrong by a caller.
    */
-  const leadsSeq = useRef(0);
+  const leadsLatest = useRef(createLatest()).current;
 
   const loadLeads = useCallback(async () => {
-    const seq = leadsSeq.current + 1;
-    leadsSeq.current = seq;
+    const ticket = leadsLatest.begin();
     try {
       // 200 for one form, the API's ceiling: that view is about the form's whole set, where the
       // unfiltered list is only the most recent arrivals.
       const res = await metaLeads(formFilter ? 200 : 50, formFilter?.id, selectedPage || undefined);
-      if (seq !== leadsSeq.current) return;   // superseded while this was in flight
+      if (!leadsLatest.isCurrent(ticket)) return;   // superseded while this was in flight
       setLeads(res.data);
       setLeadStats(res.stats);
       setFormTotal(res.form_total ?? null);
       setLeadsError('');
     } catch (ex) {
-      if (seq !== leadsSeq.current) return;   // a stale failure must not clear a fresher list
+      if (!leadsLatest.isCurrent(ticket)) return;   // a stale failure must not clear a fresher list
       // Still no toast: the connection panel is what this screen is for, and a toast on every
       // reload would be noise. The list says so itself, where the missing rows would have been.
       setLeads([]);
@@ -245,7 +245,7 @@ export default function MetaPage() {
     } finally {
       // Only the newest may declare the list loaded, or a stale arrival ends the "Loading leads…"
       // state while the request that matters is still out.
-      if (seq === leadsSeq.current) setLeadsLoaded(true);
+      if (leadsLatest.isCurrent(ticket)) setLeadsLoaded(true);
     }
   }, [formFilter, selectedPage]);
 
@@ -286,9 +286,9 @@ export default function MetaPage() {
    * clears the parameter any more.
    */
   const wantedForm = params.get('form');
-  const filterPending = !!wantedForm && formFilter?.id !== wantedForm && !formsLoaded;
-
-  const scopeReady = pageKnown && formKnown && !filterPending;
+  const scopeReady = shouldFetchLeads({
+    pageKnown, formKnown, wantedForm, currentFilterId: formFilter?.id ?? null, formsLoaded,
+  });
 
   useEffect(() => { if (scopeReady) void loadLeads(); }, [loadLeads, scopeReady]);
 

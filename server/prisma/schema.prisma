@@ -390,6 +390,18 @@ model leads {
   unsubscribed         Boolean               @default(false)
   unsubscribed_at      DateTime?             @db.Timestamp(0)
   owner_user_id        Int?
+  /// The TEAM that owns this lead, or null. A team lead has `owner_user_id IS NULL` — the check
+  /// constraint `leads_private_or_team_chk` refuses a row that is both private and team-owned —
+  /// and `assigned_to` stays the optional handling agent inside that team.
+  team_id              Int?
+  /// The Team Lead this lead was handed to by an Admin and then passed on to one of their Agents
+  /// (Admin -> Team Lead -> Agent). Null otherwise. Never ownership. Migration
+  /// 20261002150000_leads_assigned_team_lead; written by dashboard/team-lead-leads.service.ts.
+  assigned_team_lead_id Int?
+  /// 'PRIVATE' | 'TEAM' | 'BROKERAGE'. A Postgres GENERATED column derived from `owner_user_id`
+  /// and `team_id` (migration 20260929120000_crm_teams), so it can never disagree with them.
+  /// READ-ONLY: never write it — the database refuses an explicit value.
+  ownership_type       String?               @default(dbgenerated("\nCASE\n    WHEN (owner_user_id IS NOT NULL) THEN 'PRIVATE'::text\n    WHEN (team_id IS NOT NULL) THEN 'TEAM'::text\n    ELSE 'BROKERAGE'::text\nEND")) @db.VarChar(16)
   created_by           String?               @db.VarChar(255)
   /**
    * Who moved the lead to the Recently Deleted bin.
@@ -406,9 +418,12 @@ model leads {
   lead_messages        lead_messages[]
   lead_emails          lead_emails[]
   inbound_emails       inbound_emails[]
+  crm_teams            crm_teams?            @relation(fields: [team_id], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  crm_lead_assignment_events crm_lead_assignment_events[]
 
   /// The brokerage this row belongs to. See src/core/tenancy.spec.ts for why this table carries one.
 
+  @@index([team_id])
   @@index([email])
   /// UNIQUE PER BOOK — enforced by the database, and NOT expressible here.
   ///
@@ -448,6 +463,7 @@ model leads {
   @@index([lead_source])
   @@index([unsubscribed])
   @@index([assigned_to])
+  @@index([assigned_team_lead_id])
   /// Half of the lead scope filter (assigned_to = me OR owner_user_id = me). Unindexed, the OR
   /// could not use the assigned_to index either and every list read scanned the table.
   @@index([owner_user_id])
@@ -2723,6 +2739,13 @@ model users {
   designation               String?                     @db.VarChar(120)
   profile                   String?                     @db.Text
   email_verified_at         DateTime?                   @db.Timestamp(0)
+  /// Team Lead (migration 20261002120000_users_team_lead). A Team Lead keeps `role = 'agent'` so
+  /// every other module goes on treating them as an Agent; only Users and Dashboard read this.
+  is_team_lead              Boolean                     @default(false)
+  /// The Team Lead this Agent reports to. Null = no Team Lead (yet).
+  team_lead_id              Int?
+  /// Who created this account. Provenance only.
+  created_by_id             Int?
   password                  String                      @db.VarChar(255)
   remember_token            String?                     @db.VarChar(100)
   created_at                DateTime?                   @db.Timestamp(0)
@@ -2744,6 +2767,15 @@ model users {
   mfa_recovery_codes  mfa_recovery_codes[]
   mfa_trusted_devices mfa_trusted_devices[]
   mfa_challenges      mfa_challenges[]
+  crm_teams_led       crm_teams[]         @relation("crm_team_lead")
+  crm_team_members    crm_team_members[]
+  /// The recruitment record this account was created from, if it came from one. See migration
+  /// 20261001093000_recruitment_agent_fk for why this side is RESTRICT rather than cascading.
+  recruitment_candidate recruitment_candidates? @relation("recruitment_agent")
+  team_lead             users?                  @relation("user_team_lead", fields: [team_lead_id], references: [id], onDelete: SetNull, onUpdate: Restrict)
+  team_agents           users[]                 @relation("user_team_lead")
+  created_by            users?                  @relation("user_created_by", fields: [created_by_id], references: [id], onDelete: SetNull, onUpdate: Restrict)
+  created_users         users[]                 @relation("user_created_by")
 
   /// CASE-INSENSITIVE UNIQUENESS on `email` and `username` is enforced by two functional indexes
   /// Prisma cannot express here — `users_email_lower_key` and `users_username_lower_key`, added by
@@ -2751,6 +2783,7 @@ model users {
   /// which let `PRIYA@X.CA` and `priya@x.ca` both exist as separate accounts. Do not drop either
   /// index believing `@unique` covers it — `users-validation.spec.ts` fails if they go missing.
 
+  @@index([team_lead_id])
 }
 
 /// Short-lived, single-use authorization codes issued by the shared CRM sign-in service.
@@ -2927,6 +2960,71 @@ model lead_import_jobs {
 
   @@index([status])
   @@index([requested_by_id])
+}
+
+/// A CRM team — CRM → Settings → Teams. A team can OWN leads (`leads.team_id`), with an individual
+/// agent optionally handling each one (`leads.assigned_to`). Ownership and handling stay separate:
+/// reassigning the agent never changes the team.
+///
+/// Not to be confused with `team_members`, which is the Transaction Desk's per-deal co-op split.
+/// Teams are deactivated rather than deleted while they still own leads.
+model crm_teams {
+  id                Int                @id @default(autoincrement())
+  name              String             @db.VarChar(120)
+  description       String?            @db.Text
+  /// The Team Lead: may view every lead the team owns and assign or reassign them within the team.
+  team_lead_user_id Int?
+  is_active         Boolean            @default(true)
+  created_at        DateTime?          @db.Timestamp(0)
+  updated_at        DateTime?          @db.Timestamp(0)
+  team_lead         users?             @relation("crm_team_lead", fields: [team_lead_user_id], references: [id], onDelete: SetNull, onUpdate: Restrict)
+  crm_team_members  crm_team_members[]
+  leads             leads[]
+
+  /// Case-insensitive uniqueness on `name` is enforced by `crm_teams_name_lower_key`, a functional
+  /// index Prisma cannot express — see migration 20260929120000_crm_teams.
+  @@index([team_lead_user_id])
+}
+
+/// Who belongs to a CRM team. `is_active = false` keeps the row (and so the history of who was in
+/// the team) while taking away the access membership grants.
+model crm_team_members {
+  id         Int       @id @default(autoincrement())
+  team_id    Int
+  user_id    Int
+  is_active  Boolean   @default(true)
+  created_at DateTime? @db.Timestamp(0)
+  crm_teams  crm_teams @relation(fields: [team_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  users      users     @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@unique([team_id, user_id])
+  @@index([user_id])
+}
+
+/// Every change to WHO OWNS or WHO HANDLES a lead: team moves, agent assignment, reassignment and
+/// removal. Names are snapshotted beside the ids so the history still reads after a team is renamed
+/// or a person leaves. `actor_*` is the person who made the change; a null actor means the system
+/// did it (an agent being deactivated).
+model crm_lead_assignment_events {
+  id             Int      @id @default(autoincrement())
+  lead_id        Int
+  /// team_assigned | team_removed | agent_assigned | agent_reassigned | agent_unassigned
+  action         String   @db.VarChar(32)
+  from_team_id   Int?
+  from_team_name String?  @db.VarChar(120)
+  to_team_id     Int?
+  to_team_name   String?  @db.VarChar(120)
+  from_user_id   Int?
+  from_user_name String?  @db.VarChar(255)
+  to_user_id     Int?
+  to_user_name   String?  @db.VarChar(255)
+  actor_user_id  Int?
+  actor_name     String?  @db.VarChar(255)
+  description    String   @db.Text
+  created_at     DateTime @default(now()) @db.Timestamp(0)
+  leads          leads    @relation(fields: [lead_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@index([lead_id, created_at])
 }
 
 /**
@@ -3220,4 +3318,229 @@ model notification_deliveries {
   /// `map` because the migration named it `_created_idx` and Prisma's convention is `_created_at_idx`.
   /// Naming it here rather than renaming the index keeps an applied migration's checksum intact.
   @@index([created_at], map: "notification_deliveries_created_idx")
+}
+
+/**
+ * A person being considered for a place at the brokerage.
+ *
+ * SEPARATE FROM `users`, AND STAYS SEPARATE. A candidate is not an account and must never become one
+ * by accident: `agent_user_id` is null until an administrator approves them and creates the account
+ * deliberately, and the candidate row survives afterwards as the record of how that account came to
+ * exist. Nothing here grants access to anything.
+ *
+ * USERS ARE REFERENCED BY ID WITHOUT A RELATION, which is how `lead_tasks.assigned_to` already does
+ * it. A recruiter or interviewer who later leaves should not cascade a candidate's history away, and
+ * the history is the point of keeping the record.
+ */
+model recruitment_candidates {
+  id                   Int       @id @default(autoincrement())
+  name                 String    @db.VarChar(255)
+  email                String    @db.VarChar(255)
+  phone                String?   @db.VarChar(64)
+  location             String?   @db.VarChar(255)
+  /**
+   * Where this candidate came from: referral | website | walk-in | agency | other.
+   */
+  source               String?   @db.VarChar(32)
+  /**
+   * The agent who referred them, when the source is a referral. An agent may see the status of
+   * their own referrals and nothing else about recruitment.
+   */
+  referred_by_user_id  Int?
+  /**
+   * The recruiter working this candidate. Null means unassigned; an administrator assigns it.
+   */
+  assigned_recruiter_id Int?
+  /**
+   * new | contacted | interview | approved | onboarding | active | hold | not_selected
+   *
+   * DELIBERATELY NOT THE INTERVIEW'S STATUS. One candidate may sit through several interviews, each
+   * with its own outcome, and a recommendation from one of them is not the brokerage's decision.
+   */
+  status               String    @default("new") @db.VarChar(24)
+  /**
+   * What the recruiter RECOMMENDS — approved | hold | not_selected — which is advice, not a
+   * decision. Only an administrator moves `status` to `approved`.
+   */
+  recommendation       String?   @db.VarChar(16)
+  recommended_by_user_id Int?
+  recommended_at       DateTime? @db.Timestamp(0)
+  /**
+   * Who approved, and when. Set only by someone holding `recruitment.decide`.
+   */
+  approved_by_user_id  Int?
+  approved_at          DateTime? @db.Timestamp(0)
+  /**
+   * The account created FROM this candidate, once an administrator created one. Unique, so a second
+   * account can never be created from the same candidate — the duplicate guard is the database's,
+   * not a check somebody could forget to write.
+   */
+  agent_user_id        Int?      @unique
+  activated_at         DateTime? @db.Timestamp(0)
+  /**
+   * What the candidate brings. Every one nullable, and NULL means NOT ASKED rather than "no" —
+   * during early screening nobody has asked, and recording that as a negative would be a statement
+   * the brokerage never made. See migration 20261001120000_recruitment_experience_fields.
+   */
+  has_real_estate_experience Boolean?
+  years_experience           Int?      @db.SmallInt
+  is_licensed                Boolean?
+  licence_number             String?   @db.VarChar(64)
+  /**
+   * Current OR previous, deliberately one column: which it is follows from `is_licensed`.
+   */
+  brokerage_name             String?   @db.VarChar(255)
+  /**
+   * full_time | part_time | flexible. A CHECK constraint enforces it as well as the service, so a
+   * value arriving by import cannot sit here failing to match any filter.
+   */
+  availability               String?   @db.VarChar(16)
+  training_needs             String?   @db.Text
+  created_by           String?   @db.VarChar(255)
+  created_at           DateTime? @db.Timestamp(0)
+  updated_at           DateTime? @db.Timestamp(0)
+  deleted_at           DateTime? @db.Timestamp(0)
+
+  /**
+   * RESTRICT, not cascade and not SET NULL. Deleting the account must not delete the record of how
+   * it came to exist, and must not leave that record claiming nobody was hired from it — it should
+   * refuse, so the recruitment record is dealt with deliberately first.
+   */
+  agent_user  users? @relation("recruitment_agent", fields: [agent_user_id], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  interviews  recruitment_interviews[]
+  notes       recruitment_notes[]
+  followups   recruitment_followups[]
+  documents   recruitment_documents[]
+  onboarding  recruitment_onboarding_items[]
+  events      recruitment_events[]
+
+  @@index([status])
+  @@index([assigned_recruiter_id])
+  @@index([referred_by_user_id])
+  @@index([email])
+  @@index([deleted_at])
+}
+
+/**
+ * One interview, with its own outcome.
+ *
+ * `status` here is the INTERVIEW's, never the candidate's: scheduled | completed | approved | hold |
+ * not_selected. A candidate interviewed twice has two rows and two outcomes, and neither of them
+ * moves the candidate on by itself.
+ */
+model recruitment_interviews {
+  id             Int       @id @default(autoincrement())
+  candidate_id   Int
+  interviewer_id Int?
+  scheduled_at   DateTime? @db.Timestamp(0)
+  /**
+   * scheduled | completed | approved | hold | not_selected
+   */
+  status         String    @default("scheduled") @db.VarChar(16)
+  mode           String?   @db.VarChar(16)
+  location       String?   @db.VarChar(255)
+  feedback       String?   @db.Text
+  created_by     String?   @db.VarChar(255)
+  created_at     DateTime? @db.Timestamp(0)
+  updated_at     DateTime? @db.Timestamp(0)
+
+  candidate recruitment_candidates @relation(fields: [candidate_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@index([candidate_id])
+  @@index([status])
+  @@index([interviewer_id])
+  @@index([scheduled_at])
+}
+
+model recruitment_notes {
+  id           Int       @id @default(autoincrement())
+  candidate_id Int
+  body         String    @db.Text
+  author       String?   @db.VarChar(255)
+  user_id      Int?
+  created_at   DateTime? @db.Timestamp(0)
+
+  candidate recruitment_candidates @relation(fields: [candidate_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@index([candidate_id])
+}
+
+model recruitment_followups {
+  id           Int       @id @default(autoincrement())
+  candidate_id Int
+  due_at       DateTime  @db.Timestamp(0)
+  title        String    @db.VarChar(255)
+  done_at      DateTime? @db.Timestamp(0)
+  assigned_to  Int?
+  created_by   String?   @db.VarChar(255)
+  created_at   DateTime? @db.Timestamp(0)
+  updated_at   DateTime? @db.Timestamp(0)
+
+  candidate recruitment_candidates @relation(fields: [candidate_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@index([candidate_id])
+  @@index([due_at])
+}
+
+/**
+ * A document asked for or supplied. A row with no `file_path` is a REQUEST — the recruiter asking
+ * for something — which is why the file is nullable rather than the row only existing once uploaded.
+ */
+model recruitment_documents {
+  id           Int       @id @default(autoincrement())
+  candidate_id Int
+  name         String    @db.VarChar(255)
+  file_path    String?   @db.VarChar(512)
+  file_name    String?   @db.VarChar(255)
+  requested_at DateTime? @db.Timestamp(0)
+  uploaded_at  DateTime? @db.Timestamp(0)
+  uploaded_by  String?   @db.VarChar(255)
+  created_at   DateTime? @db.Timestamp(0)
+  updated_at   DateTime? @db.Timestamp(0)
+
+  candidate recruitment_candidates @relation(fields: [candidate_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@index([candidate_id])
+}
+
+model recruitment_onboarding_items {
+  id           Int       @id @default(autoincrement())
+  candidate_id Int
+  title        String    @db.VarChar(255)
+  position     Int       @default(0)
+  done_at      DateTime? @db.Timestamp(0)
+  done_by      String?   @db.VarChar(255)
+  created_at   DateTime? @db.Timestamp(0)
+  updated_at   DateTime? @db.Timestamp(0)
+
+  candidate recruitment_candidates @relation(fields: [candidate_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@index([candidate_id])
+}
+
+/**
+ * Everything that happened to a candidate, in order.
+ *
+ * ITS OWN TABLE RATHER THAN `audit_logs`, which is keyed on `transaction_id` and belongs to the
+ * Transaction Desk. A candidate is neither a transaction nor a lead, and borrowing that table would
+ * mean either a null key or a fake one.
+ */
+model recruitment_events {
+  id           Int       @id @default(autoincrement())
+  candidate_id Int
+  /**
+   * created | assigned | contacted | interview_scheduled | interview_completed | recommended |
+   * approved | held | not_selected | onboarding_started | agent_created | note | document | status
+   */
+  action       String    @db.VarChar(32)
+  detail       String?   @db.Text
+  actor_name   String?   @db.VarChar(255)
+  actor_id     Int?
+  created_at   DateTime? @db.Timestamp(0)
+
+  candidate recruitment_candidates @relation(fields: [candidate_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@index([candidate_id])
+  @@index([created_at])
 }

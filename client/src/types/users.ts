@@ -60,6 +60,11 @@ export interface ManagedUser {
   /** Modules assigned to this person — what the Users screen edits, before the licence is applied. */
   modules?: ('crm' | 'desk')[];
   is_admin?: boolean;
+  /** An Agent who manages their own Agents in Users. The role stays 'agent'. */
+  is_team_lead?: boolean;
+  /** The Team Lead this Agent reports to; null when they have none. */
+  team_lead_id?: number | null;
+  created_by_id?: number | null;
   permissions?: Permissions;
   profile?: UserProfile;
   [key: string]: unknown;

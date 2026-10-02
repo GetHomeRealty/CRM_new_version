@@ -6,6 +6,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { throwValidation } from '../common/laravel-exceptions';
 import { PermissionService } from './permission.service';
 import type { AuthPayload, AuthUserRecord } from './auth.types';
+import { teamLeadIdOf } from '../users/team-lead';
 import { AccountLockoutService } from './account-lockout.service';
 
 import { isAdminOrAbove, isSuperAdmin } from '../core/authz';
@@ -53,6 +54,8 @@ export class AuthService {
       is_admin: isSuperAdmin(user),
       is_super_admin: isSuperAdmin(user),
       is_admin_or_above: isAdminOrAbove(user),
+      // Team Lead stays `role: 'agent'` (see users/team-lead.ts); this is what opens Users for them.
+      is_team_lead: teamLeadIdOf(user) !== null,
       permissions: this.permissions.effectiveFor(role, user.user_permissions),
       // Filled in by `payloadFor`. Both modules is the same answer the application gave before
       // licensing existed, so a caller that cannot await still behaves as it always did.

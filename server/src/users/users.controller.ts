@@ -1,7 +1,7 @@
 import { BadRequestException, Body, Controller, Delete, Get, HttpCode, Param, ParseIntPipe, Patch, Post, Put, Query, Req, Res, UseGuards } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { AuthGuard } from '../auth/guards/auth.guard';
-import { AdminGuard } from '../auth/guards/admin.guard';
+import { TeamLeadAllowed, UsersAccessGuard } from './team-lead';
 import { CurrentUser } from '../auth/decorators';
 import type { AuthUserRecord } from '../auth/auth.types';
 import { UsersService } from './users.service';
@@ -24,9 +24,11 @@ function publicBaseUrl(req: Request): string {
   return host ? `${proto}://${host}` : '';
 }
 
-// User management — administrators only (Route::middleware('admin')).
+// User management — Super Admins, as before (Route::middleware('admin')), plus an active Team Lead on
+// the routes marked `@TeamLeadAllowed()`, where the service limits them to their own Agents. Every
+// unmarked route still answers a Team Lead exactly what `AdminGuard` did. See `team-lead.ts`.
 @Controller()
-@UseGuards(AuthGuard, AdminGuard)
+@UseGuards(AuthGuard, UsersAccessGuard)
 export class UsersController {
   constructor(
     private readonly users: UsersService,
@@ -106,6 +108,7 @@ export class UsersController {
   }
 
   @Get('users/catalog')
+  @TeamLeadAllowed()
   catalog(): ReturnType<UsersService['catalog']> {
     return this.users.catalog();
   }
@@ -130,8 +133,9 @@ export class UsersController {
   }
 
   @Get('users')
-  index(@Query('page') page?: string, @Query('limit') limit?: string): Promise<Record<string, unknown>[]> {
-    return this.users.index({ page, limit });
+  @TeamLeadAllowed()
+  index(@CurrentUser() user: AuthUserRecord | undefined, @Query('page') page?: string, @Query('limit') limit?: string): Promise<Record<string, unknown>[]> {
+    return this.users.index({ page, limit }, user ?? null);
   }
 
   /**
@@ -140,27 +144,36 @@ export class UsersController {
    * would arrive here as the id "catalog".
    */
   @Get('users/:user')
-  show(@Param('user', ParseIntPipe) id: number): Promise<Record<string, unknown>> {
-    return this.users.show(id);
+  @TeamLeadAllowed()
+  show(@CurrentUser() user: AuthUserRecord | undefined, @Param('user', ParseIntPipe) id: number): Promise<Record<string, unknown>> {
+    return this.users.show(id, user ?? null);
   }
 
   @Post('users')
+  @TeamLeadAllowed()
   @HttpCode(201)
   store(@CurrentUser() user: AuthUserRecord | undefined, @Body() body: Record<string, unknown>): Promise<Record<string, unknown>> {
     return this.users.store(user ?? null, body ?? {});
   }
 
   @Put('users/:user')
+  @TeamLeadAllowed()
   update(@CurrentUser() user: AuthUserRecord | undefined, @Param('user', ParseIntPipe) id: number, @Body() body: Record<string, unknown>): Promise<Record<string, unknown>> {
     return this.users.update(user ?? null, id, body ?? {});
   }
 
   @Patch('users/:user')
+  @TeamLeadAllowed()
   updatePatch(@CurrentUser() user: AuthUserRecord | undefined, @Param('user', ParseIntPipe) id: number, @Body() body: Record<string, unknown>): Promise<Record<string, unknown>> {
     return this.users.update(user ?? null, id, body ?? {});
   }
 
+  /**
+   * A Team Lead may remove one of their own Agents who holds nothing at all — see
+   * `UsersService.destroy`. Everyone else they would set Inactive.
+   */
   @Delete('users/:user')
+  @TeamLeadAllowed()
   destroy(@CurrentUser() user: AuthUserRecord | undefined, @Param('user', ParseIntPipe) id: number): Promise<{ message: string }> {
     return this.users.destroy(user ?? null, id);
   }

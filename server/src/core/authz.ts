@@ -29,6 +29,20 @@ export const ROLE_RANK: Record<string, number> = {
   documentation: 60,
   crm: 40,
   agent: 20,
+  /*
+   * AT THE FLOOR, DELIBERATELY, and not because a recruiter matters less.
+   *
+   * This ladder ranks SENIORITY for capabilities that follow one — approving a transaction edit,
+   * administering users, reading the brokerage's banking. A recruiter has no place on that ladder
+   * at all: the job is orthogonal to it, so the honest rank is the one that inherits nothing. No
+   * rank-threshold capability sits below `accounting` (60), so 20 grants none of them.
+   *
+   * What a recruiter CAN do is granted explicitly instead — `recruitment: 'edit'` for the screens,
+   * and nothing in `recruitment.decide`, which is how they can run the whole process and still not
+   * create an account. Listed here rather than left out because a role missing from this map ranks
+   * 0 and is refused everything SILENTLY, which `authz.spec.ts` pins against on purpose.
+   */
+  recruiter: 20,
 };
 
 /** The minimum anyone unknown gets. An unrecognised role is the least privileged, never the most. */
@@ -179,6 +193,30 @@ export const CAPABILITIES = {
    * the owner clause.
    */
   'leads.brokerage-scope': ['admin', 'manager', 'accounting', 'documentation', 'crm'],
+
+  /**
+   * THE BROKERAGE'S DECISION, AS OPPOSED TO A RECRUITER'S ADVICE.
+   *
+   * Final approval of a candidate, and creating or activating the agent account that follows. A
+   * recruiter interviews, forms a view and RECOMMENDS; nobody else turns that into an account.
+   *
+   * Separate from `recruitment: 'edit'` on purpose. Edit is the day-to-day work — notes, interviews,
+   * documents — and a recruiter needs all of it. This is the one step that creates a user who can
+   * sign in, and the screen permission must not be able to carry it by accident.
+   *
+   * `admin` and `manager`, which are Super Admin and Admin in the interface. The spec asked for
+   * "Admin", and Admin is `manager` here.
+   */
+  'recruitment.decide': ['admin', 'manager'],
+
+  /**
+   * See every candidate, rather than only the ones assigned to you.
+   *
+   * The same shape as `leads.brokerage-scope` above and for the same reason: which recruitment
+   * SCREENS you may open is `recruitment: view/edit`; which candidate ROWS you may see is this.
+   * Without it a recruiter sees their own assignments, which is the whole of their job.
+   */
+  'recruitment.view-all': ['admin', 'manager'],
   /**
    * Work with the brokerage's whole marketing audience: select leads across the brokerage rather
    * than only your own, and see the whole opt-out list.

@@ -104,6 +104,30 @@ const GUESSABLE =
   + 'and patterns like "Admin@123" — a short phrase of a few unrelated words is both stronger and easier to remember.';
 
 /**
+ * bcrypt reads 72 bytes and silently ignores the rest, so accepting more would overstate the
+ * protection. It lives here, beside the rule it accompanies, because a THIRD route now sets a
+ * password — an administrator creating an agent account from a recruitment candidate — and three
+ * local copies of one number is how the header above describes a policy coming undone.
+ *
+ * It is still not part of `passwordPolicyProblem`: that function judges strength, and this is a fact
+ * about what the hash reads, with its own wording saying so. `users.service.ts` keeps its own
+ * identical copy for now rather than being edited for this.
+ */
+export const PASSWORD_MAX_BYTES = 72;
+
+/**
+ * Both password rules at once: the byte ceiling, then the strength rule. Returns the message, or
+ * null. Callers that already report these separately need not use it.
+ */
+export function passwordProblem(password: unknown): string | null {
+  if (Buffer.byteLength(String(password ?? ''), 'utf8') > PASSWORD_MAX_BYTES) {
+    return `The password must not be longer than ${PASSWORD_MAX_BYTES} bytes — anything beyond that `
+      + 'is ignored by the password hash, so it would not protect the account.';
+  }
+  return passwordPolicyProblem(password);
+}
+
+/**
  * The problem with this password, or null when there is none.
  *
  * Returns a MESSAGE rather than throwing, because the four callers report failures in three

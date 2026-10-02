@@ -16,6 +16,8 @@ interface NavItem {
   label: string;
   ico: string;
   superAdmin?: boolean;
+  /** With superAdmin: shown to a Team Lead too (Users, their own Agents). */
+  orTeamLead?: boolean;
   /** Shown only to agents — their own personal settings, self-scoped. */
   agentOnly?: boolean;
   /**
@@ -88,6 +90,9 @@ const NAV: NavItem[] = [
     ],
   },
   { key: 'meta', label: 'Meta', ico: 'globe' },
+  // Shown only to somebody holding `recruitment: view` — `visibleNav` applies that, as it does for
+  // every entry here. An agent holds `recruitment: none`, so the item does not render for them.
+  { key: 'recruitment', label: 'Recruitment', ico: 'users' },
   {
     key: 'mls', label: 'MLS', ico: 'tag',
     children: [
@@ -105,7 +110,7 @@ const NAV: NavItem[] = [
   // `superAdmin` rather than the `users` screen permission, because that is what the API enforces:
   // `/api/users` is guarded by AdminGuard and never consults the grid. Driving the nav from the
   // permission produced a visible Users item that opened a page answering 403 to every request.
-  { key: 'users', label: 'Users', ico: 'users', superAdmin: true },
+  { key: 'users', label: 'Users', ico: 'users', superAdmin: true, orTeamLead: true },
   {
     key: 'settings', label: 'Settings', ico: 'settings',
     // Mirrors SettingsPage's own tabs, with the permissions those tabs already carried: the two
@@ -272,14 +277,19 @@ export default function DeskLayout({ area = DEFAULT_AREA }: { area?: Area }) {
     markDocNotificationsSeen(item.id).then(loadDocNotif).catch(() => {});
   };
 
+  // For a Team Lead the Users screen holds their own Agents only, so it is named for what it is.
+  const teamLeadView = !isSuperAdmin && !!user?.is_team_lead;
+  const titleOf = (key: string): string | undefined => (key === 'users' && teamLeadView ? 'My Team' : TITLES[key]);
+
   const visibleNav = NAV
     // Only this area's modules. Permission is unchanged by the split — a screen the user could
     // open before is still openable, it is simply listed under the area it belongs to.
     .filter((n) => screenInArea(n.key, area))
-    .filter((n) => (n.agentOnly ? isAgent : n.superAdmin ? isSuperAdmin : can(n.key, 'view')))
+    .filter((n) => (n.agentOnly ? isAgent : n.superAdmin ? (isSuperAdmin || (!!n.orTeamLead && !!user?.is_team_lead)) : can(n.key, 'view')))
     // Drop sections the user has no permission for or that belong to the other area, and flatten
     // an entry back to a plain link when only one is left — an expander that reveals a single
     // item is just a slower click.
+    .map((n) => (n.key === 'users' && teamLeadView ? { ...n, label: 'My Team' } : n))
     .map((n) => {
       if (!n.children) return n;
       const kids = n.children
@@ -349,7 +359,7 @@ export default function DeskLayout({ area = DEFAULT_AREA }: { area?: Area }) {
   const TXN_SUB_TITLES: Record<string, string> = { import: 'Bulk Transaction Import', downloads: 'Export & Download Centre' };
   const title = location.pathname.includes('/transactions/')
     ? (TXN_SUB_TITLES[sub] ?? 'Transaction Detail')
-    : (TITLES[seg] || AREA_SHORT[area]);
+    : (titleOf(seg) || AREA_SHORT[area]);
 
   const go = (key: string) => navigate(areaPath(area, key));
 
@@ -363,7 +373,7 @@ export default function DeskLayout({ area = DEFAULT_AREA }: { area?: Area }) {
   const rest = location.pathname.split('/').filter(Boolean).slice(2);
   const crumbs: { label: string; to?: string }[] = [];
   if (seg) {
-    crumbs.push({ label: TITLES[seg] ?? seg.replace(/-/g, ' ').replace(/\w/g, (c) => c.toUpperCase()), to: areaPath(area, seg) });
+    crumbs.push({ label: titleOf(seg) ?? seg.replace(/-/g, ' ').replace(/\w/g, (c) => c.toUpperCase()), to: areaPath(area, seg) });
     if (rest.length) {
       // A numeric segment is a record id; anything else is a named sub-screen (import, downloads).
       const last = rest[rest.length - 1];

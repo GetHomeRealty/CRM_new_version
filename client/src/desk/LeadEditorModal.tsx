@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { createLead, listLeadTags, updateLead } from '../lib/leadsApi';
+import { crmTeamLookup, type CrmTeamLookup } from '../lib/crmTeamsApi';
+import { assignTeamLeadLead, getTeamLeadLead, type TeamLeadLead } from '../lib/api';
+import { useAuth } from '../context/AuthContext';
 import { apiErrorMessage, apiFieldErrors } from '../lib/apiError';
 import { useToast } from './toast';
 import type { Lead, LeadOptions, LeadPropertyPreferences } from '../types';
@@ -26,6 +29,8 @@ interface Form {
   gender: string; language: string; religion: string; age: string;
   date_of_birth: string; marriage_day: string; notes: string; assigned_to: string;
   tags: string;
+  /** The owning team, for an administrator. '' = no team. */
+  team_id: string;
 }
 
 /**
@@ -54,7 +59,7 @@ const EMPTY: Form = {
   lead_status: '', lead_type: [], lead_source: '', lead_response: '',
   client_type: '', lead_conversion: '', lead_estimation: '', lead_quality: '',
   gender: '', language: '', religion: '', age: '',
-  date_of_birth: '', marriage_day: '', notes: '', assigned_to: '', tags: '',
+  date_of_birth: '', marriage_day: '', notes: '', assigned_to: '', tags: '', team_id: '',
 };
 
 const numOrNull = (v: string): number | null => {
@@ -87,6 +92,7 @@ function toForm(lead: Lead): Form {
     age: s(lead.age), date_of_birth: s(lead.date_of_birth), marriage_day: s(lead.marriage_day),
     notes: s(lead.notes), assigned_to: s(lead.assigned_to),
     tags: (lead.tags ?? []).join(', '),
+    team_id: s(lead.team_id ?? ''),
   };
 }
 
@@ -292,6 +298,36 @@ export default function LeadEditorModal({ lead, options, onClose, onSaved, lockI
   const vocabulary = options?.property_types ?? [];
 
   /*
+   * TEAMS, for the people who may route leads between them. The Team field shows only for an
+   * administrator and never on an agent's private lead (a private lead stays its agent's); when a
+   * team is chosen, Assigned To offers only that team's active members. The server applies the
+   * same rules whatever this form sends.
+   */
+  const [teamLookup, setTeamLookup] = useState<CrmTeamLookup | null>(null);
+  useEffect(() => { crmTeamLookup().then(setTeamLookup).catch(() => setTeamLookup(null)); }, []);
+  const showTeam = !!teamLookup?.can_move_teams && (teamLookup.teams.length > 0) && lead?.ownership_type !== 'PRIVATE';
+  const formTeam = teamLookup?.teams.find((t) => String(t.id) === form.team_id) ?? null;
+  const assignees = form.team_id
+    ? (formTeam?.members ?? []).map((m) => ({ id: m.user_id, name: m.name }))
+    : (options?.users ?? []);
+
+  /*
+   * TEAM LEAD ASSIGNMENT. When a Team Lead edits a lead they may hand out — their own, one an Admin
+   * assigned to them, or one shared with their team — Assigned To becomes theirs to set, offering
+   * only their own Active Agents. The change is saved through the Team Lead assignment endpoint,
+   * which checks every rule on the server; the editor's own save never carries it. Contact details
+   * and source stay locked exactly as before. Anyone else, and any other lead, sees no change.
+   */
+  const { user: me } = useAuth();
+  const [tl, setTl] = useState<{ lead: TeamLeadLead; agents: { id: number; name: string }[] } | null>(null);
+  useEffect(() => {
+    if (!lead?.id || !me?.is_team_lead || me.is_super_admin) return;
+    getTeamLeadLead(lead.id).then(setTl).catch(() => setTl(null));
+  }, [lead?.id, me?.is_team_lead, me?.is_super_admin]);
+  const tlHasAgent = !!tl && !!tl.lead.assigned_to && !tl.lead.with_team_lead;
+  const tlCurrent = tlHasAgent ? String(tl!.lead.assigned_to) : '';
+
+  /*
    * THE TAGS THAT ALREADY EXIST, so this field stops being a memory test.
    *
    * Tags were editable here only as free text, with no list of what the brokerage already uses.
@@ -443,6 +479,8 @@ export default function LeadEditorModal({ lead, options, onClose, onSaved, lockI
         marriage_day: form.marriage_day,
         notes: form.notes.trim(),
         assigned_to: form.assigned_to === '' ? null : Number(form.assigned_to),
+        // Sent only when the field is shown, so nobody else's save ever touches the team.
+        ...(showTeam ? { team_id: form.team_id === '' ? null : Number(form.team_id) } : {}),
         tags: form.tags.split(',').map((t) => t.trim()).filter(Boolean),
         // Empty sets are dropped, so adding a preference block and leaving it blank stores
         // nothing rather than an empty shell.
@@ -453,6 +491,14 @@ export default function LeadEditorModal({ lead, options, onClose, onSaved, lockI
       if (lockIdentity) {
         delete body.name; delete body.first_name; delete body.middle_name; delete body.last_name;
         delete body.email; delete body.phone; delete body.lead_source; delete body.assigned_to;
+      }
+      // A Team Lead's choice of Agent goes through the checked Team Lead endpoint, first, and never
+      // through the editor's save — so a refused choice stops here with nothing else written.
+      if (tl && lead) {
+        delete body.assigned_to;
+        if (form.assigned_to !== tlCurrent && tl.agents.some((a) => String(a.id) === form.assigned_to)) {
+          await assignTeamLeadLead(lead.id, Number(form.assigned_to));
+        }
       }
       const saved = lead ? await updateLead(lead.id, body) : await createLead(body);
       toast(lead ? 'Lead updated.' : saved.duplicate_updated ? 'Existing lead updated with the latest information.' : 'Lead created.', 'ok');
@@ -494,8 +540,10 @@ export default function LeadEditorModal({ lead, options, onClose, onSaved, lockI
         <div className="modal-h">{lead ? `Edit Lead — ${lead.name}` : 'Add New Lead'}</div>
         {lockIdentity && (
           <div className="lead-lock-note">
-            🔒 The brokerage assigned this lead to you. You can update everything except its
-            contact details, source and assignment — those are locked.
+            {tl
+              ? <>🔒 The brokerage assigned this lead to you. Its contact details and source are locked — you can choose which of your agents works it.</>
+              : <>🔒 The brokerage assigned this lead to you. You can update everything except its
+                contact details, source and assignment — those are locked.</>}
           </div>
         )}
 
@@ -539,15 +587,57 @@ export default function LeadEditorModal({ lead, options, onClose, onSaved, lockI
               <input value={form.property} onChange={(e) => set('property', e.target.value)} />
               {err('property')}
             </div>
+            {showTeam && (
+              <div className="field">
+                <label>Team</label>
+                <select value={form.team_id} disabled={lockIdentity}
+                  onChange={(e) => {
+                    const next = e.target.value;
+                    const members = teamLookup?.teams.find((t) => String(t.id) === next)?.members ?? [];
+                    // A handler who is not in the new team cannot keep the lead.
+                    setForm((f) => ({ ...f, team_id: next, assigned_to: next && !members.some((m) => String(m.user_id) === f.assigned_to) ? '' : f.assigned_to }));
+                  }}>
+                  <option value="">No team — brokerage lead</option>
+                  {teamLookup!.teams.filter((t) => t.is_active || String(t.id) === form.team_id)
+                    .map((t) => <option key={t.id} value={t.id}>{t.name}{t.is_active ? '' : ' (inactive)'}</option>)}
+                </select>
+                {err('team_id')}
+              </div>
+            )}
+            {tl ? (
+              <div className="field">
+                <label>Assigned Agent</label>
+                <select value={form.assigned_to === tlCurrent || tl.agents.some((a) => String(a.id) === form.assigned_to) ? form.assigned_to : tlCurrent}
+                  onChange={(e) => set('assigned_to', e.target.value)}>
+                  {tlHasAgent
+                    ? (
+                      <option value={tlCurrent}>
+                        {tl.lead.assigned_name ?? `User #${tlCurrent}`}{tl.lead.assigned_status !== 'Active' ? ' (Inactive)' : ''}
+                      </option>
+                    )
+                    : <option value="">{tl.lead.with_team_lead ? 'With you — choose an agent' : 'Unassigned — choose an agent'}</option>}
+                  {tl.agents.filter((a) => String(a.id) !== tlCurrent).map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                </select>
+                <span className="help">
+                  {tl.agents.length ? 'Only your active agents are listed. The owner does not change.' : 'You have no active agents yet — create one under My Team.'}
+                </span>
+                {err('assigned_to')}
+              </div>
+            ) : (
             <div className="field">
-              <label>Assigned To</label>
+              <label>{form.team_id ? 'Assigned Agent' : 'Assigned To'}</label>
               <select value={form.assigned_to} onChange={(e) => set('assigned_to', e.target.value)}
                 disabled={lockIdentity} title={lockIdentity ? lockNote : undefined}>
                 <option value="">Unassigned</option>
-                {(options?.users ?? []).map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+                {assignees.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+                {/* Keep a stored handler visible even if they are no longer on the list. */}
+                {form.assigned_to && !assignees.some((u) => String(u.id) === form.assigned_to) && lead?.assigned_to_name && (
+                  <option value={form.assigned_to}>{lead.assigned_to_name}</option>
+                )}
               </select>
               {err('assigned_to')}
             </div>
+            )}
           </div>
 
           <div className="modal-sub">Classification</div>

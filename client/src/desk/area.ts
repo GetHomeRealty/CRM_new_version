@@ -56,6 +56,8 @@ export const SCREEN_AREA: Record<string, ScreenArea> = {
   lead: 'crm',
   campaigns: 'crm',
   meta: 'crm',
+  // Recruitment is run from the CRM side, matching SCREEN_DOMAIN on the server.
+  recruitment: 'crm',
   // Client Reviews, by request. It has no screen behind it yet — no route, no controller, no page —
   // so this decides which sidebar offers it when one is built.
   reviews: 'crm',

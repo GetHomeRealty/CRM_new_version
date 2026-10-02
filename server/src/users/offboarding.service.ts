@@ -191,7 +191,10 @@ export class OffboardingService {
     }
 
     try {
-      const { unassigned, keptPrivate } = await this.transfers.returnToBrokerage(userId);
+      // A Team Lead's own leads handed to this Agent stay assigned to them (shown Inactive) for the
+      // Team Lead to reassign by hand — see `returnToBrokerage`.
+      const me = await this.prisma.users.findUnique({ where: { id: userId }, select: { team_lead_id: true } });
+      const { unassigned, keptPrivate } = await this.transfers.returnToBrokerage(userId, { keepOwnedBy: me?.team_lead_id ?? null });
       if (unassigned) parts.push(`${unassigned} assigned lead${unassigned === 1 ? '' : 's'} released back to the brokerage pool`);
       // Said explicitly, because the important half of this operation is what it did NOT do.
       if (keptPrivate) parts.push(`${keptPrivate} private lead${keptPrivate === 1 ? '' : 's'} left with them, still theirs`);

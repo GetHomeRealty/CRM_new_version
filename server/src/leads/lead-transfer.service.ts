@@ -2,6 +2,7 @@ import { ForbiddenException, Injectable, NotFoundException, UnprocessableEntityE
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { LeadAuditService } from './lead-audit.service';
+import { LeadAssignmentHistoryService } from './lead-assignment-history.service';
 import { isSuperAdmin } from '../core/authz';
 import type { AuthUserRecord } from '../auth/auth.types';
 
@@ -79,7 +80,13 @@ export class LeadTransferService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: LeadAuditService,
-  ) {}
+    // Optional so the existing two-argument constructions (specs) keep working.
+    history?: LeadAssignmentHistoryService,
+  ) {
+    this.history = history ?? new LeadAssignmentHistoryService(prisma);
+  }
+
+  private readonly history: LeadAssignmentHistoryService;
 
   /**
    * Leads nobody holds — the brokerage's own pool — and the people they may be handed to.
@@ -142,6 +149,12 @@ export class LeadTransferService {
       deleted_at: null,
       owner_user_id: null,
       assigned_to: null,
+      /*
+       * NOT A TEAM'S LEAD. An unassigned team lead is waiting for its own team lead to route it
+       * among the team's members; handing it from here to somebody outside the team would take it
+       * from the team that owns it. Only the brokerage's own pool is Lead Books' to hand out.
+       */
+      team_id: null,
     };
   }
 
@@ -311,6 +324,15 @@ export class LeadTransferService {
 
     const remaining = await this.prisma.leads.count({ where: this.eligibleWhere() });
 
+    // One ownership-history row per lead, with the Super Admin who handed it over.
+    await this.history.write(picked.flatMap((p) => this.history.build(
+      p.id,
+      { team_id: null, assigned_to: null },
+      { team_id: null, assigned_to: toUserId, assigned_name: to.name },
+      { id: actor?.id ?? null, name: actor?.name ?? null },
+      'handed out from Lead Books',
+    )));
+
     await this.audit.record(
       actor as AuthUserRecord,
       'Brokerage leads assigned',
@@ -358,8 +380,42 @@ export class LeadTransferService {
    * Not permission-checked: this is a consequence of deactivating somebody, which is already an
    * administrator-only action, rather than an operation anyone invokes directly.
    */
-  async returnToBrokerage(userId: number): Promise<{ unassigned: number; keptPrivate: number }> {
+  async returnToBrokerage(userId: number, opts: { keepOwnedBy?: number | null } = {}): Promise<{ unassigned: number; keptPrivate: number }> {
     const now = new Date();
+
+    /*
+     * TEAM LEAD LEADS STAY ASSIGNED. `keepOwnedBy` is the departing Agent's Team Lead (see
+     * users/team-lead.ts). Leads that Team Lead handed to this Agent — the Team Lead's own, brokerage
+     * leads an Admin assigned to them (`assigned_team_lead_id`), and brokerage leads an Admin shared
+     * with them through a CRM team they lead — are left exactly as
+     * they are: same owner, same team, still showing this Agent (now Inactive) as the assignee, for
+     * the Team Lead to reassign by hand. Nothing is transferred automatically. Absent (every other
+     * caller, and every Agent without a Team Lead) this method behaves exactly as before.
+     */
+    const keep: Prisma.leadsWhereInput = opts.keepOwnedBy
+      ? {
+        AND: [
+          { OR: [{ owner_user_id: null }, { owner_user_id: { not: opts.keepOwnedBy } }] },
+          { NOT: { owner_user_id: null, crm_teams: { is: { team_lead_user_id: opts.keepOwnedBy } } } },
+          { OR: [{ assigned_team_lead_id: null }, { assigned_team_lead_id: { not: opts.keepOwnedBy } }] },
+        ],
+      }
+      : {};
+
+    /*
+     * A TEAM'S LEAD KEEPS ITS TEAM. Only the handler is cleared, so the lead stays owned by the team
+     * and lands in that team's Unassigned list for its team lead to route — it is never moved to
+     * the brokerage. Brokerage and private leads behave exactly as below, as they always did.
+     *
+     * Read first so the ownership history can say which leads lost their handler, and why.
+     */
+    const [departing, affected] = await Promise.all([
+      this.prisma.users.findUnique({ where: { id: userId }, select: { name: true } }),
+      this.prisma.leads.findMany({
+        where: { assigned_to: userId, deleted_at: null, ...keep },
+        select: { id: true, team_id: true, crm_teams: { select: { name: true } } },
+      }),
+    ]);
 
     /*
      * NO `brokerageLeadWhere()` FILTER ANY MORE, and its absence is deliberate.
@@ -369,9 +425,18 @@ export class LeadTransferService {
      * lead including a Meta one: it changes who is working the record, never whose it is.
      */
     const unassigned = await this.prisma.leads.updateMany({
-      where: { assigned_to: userId, deleted_at: null },
+      where: { assigned_to: userId, deleted_at: null, ...keep },
       data: { assigned_to: null, updated_at: now },
     });
+
+    const who = departing?.name ?? `user #${userId}`;
+    await this.history.write(affected.flatMap((l) => this.history.build(
+      l.id,
+      { team_id: l.team_id, team_name: l.crm_teams?.name ?? null, assigned_to: userId, assigned_name: who },
+      { team_id: l.team_id, team_name: l.crm_teams?.name ?? null, assigned_to: null },
+      null,
+      `${who} was deactivated`,
+    )));
 
     // Reported so the departure summary can say plainly what stayed with them.
     const keptPrivate = await this.prisma.leads.count({

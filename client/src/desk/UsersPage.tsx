@@ -46,9 +46,24 @@ function StatusPill({ status, style }: { status?: string | null; style?: React.C
   return <span className={`pill ${active ? 'ok' : 'bad'}`} style={style}>{status}</span>;
 }
 
+/**
+ * The Role column's word for a user. A Team Lead is stored as an Agent with `is_team_lead`, so the
+ * role alone would call them "Agent".
+ */
+const userRoleLabel = (u: Pick<ManagedUser, 'role' | 'is_team_lead'>): string =>
+  (u.role === 'agent' && u.is_team_lead ? 'Team Lead' : roleLabel(u.role));
+
 export default function UsersPage() {
   const toast = useToast();
   const { user: me, setUser } = useAuth();
+  /*
+   * A TEAM LEAD'S USERS SCREEN — their own Agents, and only what they may do to them.
+   *
+   * The server already answers a Team Lead with their own Agents only and refuses the rest, so this
+   * is about not offering what would be refused: no delete, no picture upload, no role, permissions
+   * or modules, no transfer.
+   */
+  const teamLeadMode = !me?.is_super_admin && !!me?.is_team_lead;
   const [users, setUsers] = useState<ManagedUser[]>([]);
 
   /*
@@ -73,7 +88,7 @@ export default function UsersPage() {
     const terms = q.split(/\s+/);
     return users.filter((u) => {
       const hay = [
-        u.name, u.email, u.username, u.role, roleLabel(u.role), u.status,
+        u.name, u.email, u.username, u.role, userRoleLabel(u), u.status,
         u.department, u.designation,
       ].filter(Boolean).join(' ').toLowerCase();
       return terms.every((t) => hay.includes(t));
@@ -81,6 +96,13 @@ export default function UsersPage() {
   }, [users, query]);
   const [catalog, setCatalog] = useState<UsersCatalog | null>(null);
   const [loading, setLoading] = useState(true);
+  // Team Leads, for the Team Lead column and pickers. A Team Lead's own list holds none, and needs none.
+  const teamLeads = useMemo(() => users.filter((u) => u.role === 'agent' && u.is_team_lead), [users]);
+  const teamLeadName = (id: number | null | undefined): string | null =>
+    (id ? (teamLeads.find((t) => t.id === id)?.name ?? null) : null);
+  // A Team Lead's own Agents, by name, for the Super Admin's view of that Team Lead.
+  const agentsOf = (leadId: number): ManagedUser[] =>
+    users.filter((u) => u.team_lead_id === leadId && u.role === 'agent' && !u.is_team_lead);
   const [editing, setEditing] = useState<Partial<ManagedUser> | null>(null); // user object or {} for new
   // Profile pictures: administrators may set one for any user, not just themselves.
   const [photoBusy, setPhotoBusy] = useState<number | null>(null);
@@ -129,16 +151,28 @@ export default function UsersPage() {
       .catch(() => {
         if (reportedFailure.current) return;
         reportedFailure.current = true;
-        toast('Could not load users', 'bad');
+        toast(teamLeadMode ? 'Could not load your team' : 'Could not load users', 'bad');
       })
       .finally(() => setLoading(false));
   };
   useEffect(load, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  /*
+   * A Team Lead may remove an Agent who did not work out — but only one who holds nothing. The
+   * server checks for leads, deals, documents and every other record, and refuses with the list,
+   * which is shown as it comes back. Everyone else is set Inactive instead.
+   */
   const onDelete = async (u: ManagedUser) => {
-    if (!window.confirm(`Delete ${u.name}?`)) return;
-    try { await deleteUser(u.id); setUsers((us) => us.filter((x) => x.id !== u.id)); toast('User deleted', 'ok'); }
-    catch (e) { toast(apiErrorMessage(e, 'Could not delete'), 'bad'); }
+    const question = teamLeadMode
+      ? `Remove ${u.name} from the CRM?\n\nThis only works if they have no leads, deals, documents or other records. `
+        + 'If they do, set them to Inactive instead.'
+      : `Delete ${u.name}?`;
+    if (!window.confirm(question)) return;
+    try {
+      await deleteUser(u.id);
+      setUsers((us) => us.filter((x) => x.id !== u.id));
+      toast(teamLeadMode ? 'Agent removed' : 'User deleted', 'ok');
+    } catch (e) { toast(apiErrorMessage(e, teamLeadMode ? 'Could not remove this agent' : 'Could not delete'), 'bad'); }
   };
 
   const roleP = (r: string) => r === 'admin' ? 'bad' : (r === 'manager' ? 'warn' : 'info');
@@ -147,7 +181,7 @@ export default function UsersPage() {
     return `${v.filter((l) => l === 'edit').length} edit · ${v.filter((l) => l === 'view').length} view`;
   };
 
-  if (loading) return <div className="centered">Loading users…</div>;
+  if (loading) return <div className="centered">{teamLeadMode ? 'Loading your team…' : 'Loading users…'}</div>;
 
   return (
     <>
@@ -158,18 +192,20 @@ export default function UsersPage() {
       <div className="toolbar"><div className="toolbar-row">
         <span className="pill info" style={{ fontSize: 11 }}>
           {/* Honest about the filter: "12 users" while 109 are hidden reads as the brokerage shrinking. */}
-          {query.trim() ? `${shown.length} of ${users.length} users` : `${users.length} users`}
+          {query.trim()
+            ? `${shown.length} of ${users.length} ${teamLeadMode ? 'agents in my team' : 'users'}`
+            : `${users.length} ${teamLeadMode ? 'agents in my team' : 'users'}`}
         </span>
         <div className="field" style={{ margin: 0, minWidth: 260 }}>
           <input value={query} onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search by name, email, username, role or department"
-            aria-label="Search users" />
+            placeholder={teamLeadMode ? 'Search my team by name, email, username or department' : 'Search by name, email, username, role or department'}
+            aria-label={teamLeadMode ? 'Search my team' : 'Search users'} />
         </div>
         {query.trim() && (
           <button className="btn ghost sm" type="button" onClick={() => setQuery('')}>Clear</button>
         )}
         <div style={{ flex: 1 }} />
-        <button className="btn primary sm" onClick={() => setEditing({})}>+ Add User</button>
+        <button className="btn primary sm" onClick={() => setEditing({})}>{teamLeadMode ? '+ Create Agent' : '+ Add User'}</button>
       </div></div>
 
       <table className="list-table">
@@ -181,13 +217,23 @@ export default function UsersPage() {
           editor initialised from it. It was a column missing from a table, not a feature missing
           from the application.
         */}
-        <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Screen Access</th><th>Actions</th></tr></thead>
+        <thead><tr>
+          <th>Name</th><th>Email</th><th>Role</th>
+          {/* Who each Agent reports to — the Super Admin's view of the hierarchy. A Team Lead's list
+              is their own team, so the column would say their own name on every row. */}
+          {!teamLeadMode && <th title="An Agent's Team Lead, or a Team Lead's Agents">Team Lead / Agents</th>}
+          <th>Status</th>
+          {!teamLeadMode && <th>Screen Access</th>}
+          <th>Actions</th>
+        </tr></thead>
         <tbody>
           {shown.length === 0 ? (
             <tr>
               {/* Says which search found nothing, so it reads as "no match" rather than "no users". */}
-              <td colSpan={6} className="help" style={{ padding: 16 }}>
-                No user matches “{query.trim()}”.
+              <td colSpan={teamLeadMode ? 5 : 7} className="help" style={{ padding: 16 }}>
+                {query.trim()
+                  ? <>No user matches “{query.trim()}”.</>
+                  : (teamLeadMode ? 'No agents in your team yet. Use + Create Agent to add one.' : 'No users yet.')}
               </td>
             </tr>
           ) : shown.map((u) => (
@@ -199,9 +245,18 @@ export default function UsersPage() {
                 </div>
               </td>
               <td>{u.email}</td>
-              <td><span className={`pill ${roleP(u.role)}`}>{roleLabel(u.role)}</span></td>
+              <td><span className={`pill ${u.is_team_lead ? 'ok' : roleP(u.role)}`}>{userRoleLabel(u)}</span></td>
+              {!teamLeadMode && (
+                <td>{u.role === 'agent' && u.is_team_lead
+                  ? (agentsOf(u.id).length
+                    ? <span style={{ fontSize: 12.5 }}>{agentsOf(u.id).map((a) => a.name).join(', ')}</span>
+                    : <span className="muted">No agents yet</span>)
+                  : u.role === 'agent'
+                    ? (teamLeadName(u.team_lead_id) ?? <span className="muted">—</span>)
+                    : <span className="muted">—</span>}</td>
+              )}
               <td><StatusPill status={u.status} /></td>
-              <td><span className="help" style={{ margin: 0 }}>{u.is_admin ? 'Full access (all screens)' : accessSummary(u.permissions)}</span></td>
+              {!teamLeadMode && <td><span className="help" style={{ margin: 0 }}>{u.is_admin ? 'Full access (all screens)' : accessSummary(u.permissions)}</span></td>}
               <td>
                 <button className="btn ghost sm" onClick={() => setEditing(u)}>Edit</button>
                 {/* The eye now does what an eye means.
@@ -213,11 +268,19 @@ export default function UsersPage() {
                   title={`View ${u.name}'s details`} onClick={() => setViewing(u)}>
                   <Icon name="eye" size={14} />
                 </button>
-                <button className="btn ghost sm" style={{ marginLeft: 4 }} disabled={photoBusy === u.id}
-                  title={`Set ${u.name}'s profile picture`} onClick={() => pickFor(u.id)}>
-                  {photoBusy === u.id ? '…' : <Icon name="upload" size={14} />}
-                </button>
-                {u.id !== me?.id && <button className="btn ghost sm" style={{ marginLeft: 4 }} onClick={() => onDelete(u)}><Icon name="trash" size={14} /></button>}
+                {/* Not for a Team Lead: the picture is a Super Admin action. */}
+                {!teamLeadMode && (
+                  <button className="btn ghost sm" style={{ marginLeft: 4 }} disabled={photoBusy === u.id}
+                    title={`Set ${u.name}'s profile picture`} onClick={() => pickFor(u.id)}>
+                    {photoBusy === u.id ? '…' : <Icon name="upload" size={14} />}
+                  </button>
+                )}
+                {u.id !== me?.id && (
+                  <button className="btn ghost sm" style={{ marginLeft: 4 }} onClick={() => onDelete(u)}
+                    title={teamLeadMode ? `Remove ${u.name} (only if they have no records)` : `Delete ${u.name}`}>
+                    <Icon name="trash" size={14} />
+                  </button>
+                )}
               </td>
             </tr>
           ))}
@@ -229,6 +292,8 @@ export default function UsersPage() {
           user={viewing}
           catalog={catalog}
           isMe={viewing.id === me?.id}
+          teamLeadName={teamLeadMode ? null : teamLeadName(viewing.team_lead_id)}
+          teamAgents={teamLeadMode || !viewing.is_team_lead ? null : agentsOf(viewing.id)}
           photoVersion={photoV[viewing.id]}
           onClose={() => setViewing(null)}
           onEdit={() => { const u = viewing; setViewing(null); setEditing(u); }}
@@ -239,6 +304,9 @@ export default function UsersPage() {
         <UserModal
           catalog={catalog}
           existing={editing.id ? (editing as ManagedUser) : null}
+          teamLeadMode={teamLeadMode}
+          teamLeads={teamLeads}
+          teamSize={editing.id ? users.filter((u) => u.team_lead_id === editing.id && !u.is_team_lead).length : 0}
           onClose={() => setEditing(null)}
           onSaved={(saved) => {
             setEditing(null);
@@ -262,10 +330,14 @@ export default function UsersPage() {
  * Deliberately omits the commission percentages, loans and deal history the editor carries. Those
  * are somebody's pay, and a glance at "who is this person" should not put them on screen.
  */
-function UserDetailsModal({ user, catalog, isMe, photoVersion, onClose, onEdit }: {
+function UserDetailsModal({ user, catalog, isMe, teamLeadName, teamAgents, photoVersion, onClose, onEdit }: {
   user: ManagedUser;
   catalog: UsersCatalog | null;
   isMe: boolean;
+  /** Who this Agent reports to, for a Super Admin; null hides the row. */
+  teamLeadName?: string | null;
+  /** A Team Lead's Agents, for a Super Admin; null hides the section. */
+  teamAgents?: ManagedUser[] | null;
   photoVersion?: number;
   onClose: () => void;
   onEdit: () => void;
@@ -317,7 +389,7 @@ function UserDetailsModal({ user, catalog, isMe, photoVersion, onClose, onEdit }
             </div>
             <div className="muted" style={{ fontSize: 12.5 }}>{user.email}</div>
             <div style={{ marginTop: 4 }}>
-              <span className="pill info">{roleLabel(user.role)}</span>
+              <span className="pill info">{userRoleLabel(user)}</span>
               <StatusPill status={user.status} style={{ marginLeft: 6 }} />
             </div>
           </div>
@@ -331,7 +403,24 @@ function UserDetailsModal({ user, catalog, isMe, photoVersion, onClose, onEdit }
           <Row label="Designation" value={dash(user.designation)} />
           <Row label="Personal email" value={dash(p.personal_email)} />
           <Row label="Onboarded" value={dash(p.onboard_date)} />
+          {user.role === 'agent' && !user.is_team_lead && teamLeadName !== null && (
+            <Row label="Team Lead" value={dash(teamLeadName)} />
+          )}
         </div>
+
+        {teamAgents && (<>
+          <div className="modal-sub">Agents ({teamAgents.length})</div>
+          <div style={{ marginBottom: 10 }}>
+            {teamAgents.length === 0
+              ? <span className="muted">No agents report to {user.name} yet.</span>
+              : teamAgents.map((a) => (
+                <div key={a.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, padding: '3px 0' }}>
+                  <span style={{ fontSize: 12.5 }}>{a.name}</span>
+                  <StatusPill status={a.status} style={{ fontSize: 10 }} />
+                </div>
+              ))}
+          </div>
+        </>)}
 
         <div className="modal-sub">Modules</div>
         <div style={{ marginBottom: 10 }}>
@@ -406,11 +495,23 @@ interface UserForm {
 interface UserModalProps {
   catalog: UsersCatalog;
   existing: ManagedUser | null;
+  /** A Team Lead creating or editing one of their own Agents. */
+  teamLeadMode: boolean;
+  /** Every Team Lead, for a Super Admin's reporting-line pickers. */
+  teamLeads: ManagedUser[];
+  /** How many Agents report to `existing`, when it is a Team Lead. */
+  teamSize: number;
   onClose: () => void;
   onSaved: (saved: ManagedUser) => void;
 }
 
-function UserModal({ catalog, existing, onClose, onSaved }: UserModalProps) {
+/**
+ * "Team Lead" in the Role menu. Not a stored role: it saves as `role: 'agent'` with `is_team_lead`,
+ * so every other module goes on treating a Team Lead as the Agent they are.
+ */
+const TEAM_LEAD_CHOICE = 'team_lead';
+
+function UserModal({ catalog, existing, teamLeadMode, teamLeads, teamSize, onClose, onSaved }: UserModalProps) {
   const toast = useToast();
   /**
    * Agent Details, Loan and Previous Commission History are Transaction Desk concerns — commission
@@ -428,7 +529,8 @@ function UserModal({ catalog, existing, onClose, onSaved }: UserModalProps) {
   const p: UserProfile = existing?.profile || {};
   const [form, setForm] = useState<UserForm>(() => ({
     name: existing?.name || '', username: existing?.username || '', email: existing?.email || '',
-    password: '', password_confirmation: '', role: existing?.role || 'agent',
+    password: '', password_confirmation: '',
+    role: teamLeadMode ? 'agent' : (existing?.role === 'agent' && existing.is_team_lead ? TEAM_LEAD_CHOICE : (existing?.role || 'agent')),
     status: existing?.status || 'Active',
     // profile fields
     mobile: p.mobile || '', gender: p.gender || '',
@@ -448,32 +550,56 @@ function UserModal({ catalog, existing, onClose, onSaved }: UserModalProps) {
   }));
   const [perms, setPerms] = useState<Permissions>(() => existing?.permissions || role_defaults[existing?.role || 'agent']);
   const [saving, setSaving] = useState(false);
+  // Reporting line, set by a Super Admin. '' = no Team Lead.
+  const [teamLeadId, setTeamLeadId] = useState<string>(existing?.team_lead_id ? String(existing.team_lead_id) : '');
+  // For a Team Lead being edited: where their Agents go. 'keep' sends nothing, so nothing moves.
+  const [reassignTo, setReassignTo] = useState<string>('keep');
   // Previous Commission History is derived: the agent's paid deals (under the previous split).
   const [dealHistory, setDealHistory] = useState<DealHistoryEntry[]>([]);
   useEffect(() => {
-    if (existing?.id) getUserDealHistory(existing.id).then(setDealHistory).catch(() => setDealHistory([]));
-  }, [existing?.id]);
+    // Pay history is not a Team Lead's to read, and the API would refuse it.
+    if (existing?.id && !teamLeadMode) getUserDealHistory(existing.id).then(setDealHistory).catch(() => setDealHistory([]));
+  }, [existing?.id, teamLeadMode]);
 
   // Amount of this agent's loan already repaid via loan-repayment adjustments on
   // their deals (from the backend), so "Balance Loan Amount" = actual − repaid.
   const [loanRepaid, setLoanRepaid] = useState(0);
   const [loanRepayments, setLoanRepayments] = useState<LoanRepayment[]>([]);
   useEffect(() => {
-    if (!existing?.name) { setLoanRepaid(0); setLoanRepayments([]); return; }
+    if (!existing?.name || teamLeadMode) { setLoanRepaid(0); setLoanRepayments([]); return; }
     getAgentLoans().then((m) => {
       setLoanRepaid(m[existing.name]?.loan_repaid || 0);
       setLoanRepayments(m[existing.name]?.repayments || []);
     }).catch(() => { setLoanRepaid(0); setLoanRepayments([]); });
-  }, [existing?.name]);
+  }, [existing?.name, teamLeadMode]);
 
   const set = <K extends keyof UserForm>(k: K, v: UserForm[K]) => setForm((f) => ({ ...f, [k]: v }));
-  const onRole = (r: string) => { set('role', r); setPerms({ ...role_defaults[r] }); };
+  // The stored role behind the menu choice: a Team Lead is an Agent.
+  const storedRole = (r: string) => (r === TEAM_LEAD_CHOICE ? 'agent' : r);
+  const onRole = (r: string) => { set('role', r); setPerms({ ...role_defaults[storedRole(r)] }); };
   const setScreen = (key: string, level: ScreenLevel) => setPerms((p2) => ({ ...p2, [key]: level }));
-  const resetToRole = () => setPerms({ ...role_defaults[form.role] });
+  const resetToRole = () => setPerms({ ...role_defaults[storedRole(form.role)] });
   const isAdminRole = form.role === 'admin';
-  const isAgent = form.role === 'agent';
-  // Only for an agent, and only on the Transaction Desk side.
-  const showAgentFinance = isAgent && area === 'desk';
+  const isTeamLeadChoice = form.role === TEAM_LEAD_CHOICE;
+  // A Team Lead is an Agent for pay and paperwork, so they keep the Agent sections.
+  const isAgent = storedRole(form.role) === 'agent';
+  // Only for an agent, and only on the Transaction Desk side — and never to a Team Lead, whose
+  // Agents' pay is not theirs to see.
+  const showAgentFinance = isAgent && area === 'desk' && !teamLeadMode;
+  // A Super Admin chooses the Team Lead of a plain Agent.
+  const showReportingLine = !teamLeadMode && isAgent && !isTeamLeadChoice;
+  // A Super Admin editing somebody who leads Agents: where those Agents go.
+  const showReassign = !teamLeadMode && !!existing?.is_team_lead && teamSize > 0;
+  const otherTeamLeads = teamLeads.filter((t) => t.id !== existing?.id && (t.status ?? 'Active') === 'Active');
+  /*
+   * The Team Lead is leaving: this save deactivates them, or makes them something other than a Team
+   * Lead. Their Agents must then be handed to a replacement — keeping them is not offered, and the
+   * API refuses the save without a choice. "No Team Lead for now" appears only when there is no
+   * other active Team Lead to choose.
+   */
+  const teamLeadLeaving = showReassign && (
+    !isTeamLeadChoice || ((existing?.status ?? 'Active') === 'Active' && form.status === 'Inactive'));
+  const reassignValue = teamLeadLeaving && reassignTo === 'keep' ? '' : reassignTo;
 
   // Selecting a preset split (e.g. "90-10%") auto-fills Agent % / Brokerage %.
   // "Add custom split…" leaves both empty for manual entry.
@@ -589,7 +715,7 @@ function UserModal({ catalog, existing, onClose, onSaved }: UserModalProps) {
       if (form.lease_comm_pct === '' || form.lease_comm_pct === null) { toast('Lease % is required', 'bad'); return; }
     }
     const payload: Record<string, unknown> = {
-      name: form.name.trim(), username: form.username.trim() || null, email: form.email.trim(), role: form.role,
+      name: form.name.trim(), username: form.username.trim() || null, email: form.email.trim(), role: storedRole(form.role),
       department: form.department.trim() || null, designation: form.designation.trim() || null,
       modules: form.modules,
       status: form.status, permissions: isAdminRole ? {} : perms,
@@ -608,6 +734,17 @@ function UserModal({ catalog, existing, onClose, onSaved }: UserModalProps) {
       },
     };
     if (form.password) { payload.password = form.password; payload.password_confirmation = form.password_confirmation; }
+    if (teamLeadLeaving && reassignValue === '') {
+      fail('reassign', otherTeamLeads.length
+        ? `Choose a replacement Team Lead for ${existing?.name}'s ${teamSize} agent${teamSize === 1 ? '' : 's'}`
+        : `Choose what happens to ${existing?.name}'s agents`);
+      return;
+    }
+    if (!teamLeadMode) {
+      payload.is_team_lead = isTeamLeadChoice;
+      if (showReportingLine) payload.team_lead_id = teamLeadId ? Number(teamLeadId) : null;
+      if (showReassign && reassignValue !== 'keep' && reassignValue !== '') payload.reassign_agents_to = reassignValue === 'none' ? null : Number(reassignValue);
+    }
     setSaving(true);
     try {
       const saved = existing ? await updateUser(existing.id, payload) : await createUser(payload);
@@ -624,7 +761,7 @@ function UserModal({ catalog, existing, onClose, onSaved }: UserModalProps) {
     <div className="overlay open" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="modal lg" style={{ maxHeight: '92vh', overflowY: 'auto' }}>
         <button className="close" onClick={onClose}><Icon name="close" size={15} /></button>
-        <div className="modal-h">{existing ? 'Edit User' : 'Add User'}</div>
+        <div className="modal-h">{teamLeadMode ? (existing ? 'Edit Agent' : 'Create Agent') : (existing ? 'Edit User' : 'Add User')}</div>
 
         {/* Basic Information */}
         <div className="modal-sub" style={{ marginTop: 0 }}>Basic Information</div>
@@ -638,26 +775,92 @@ function UserModal({ catalog, existing, onClose, onSaved }: UserModalProps) {
           <div className="field"><label>Gender <span className="req">*</span></label>
             <select data-field="gender" className={badField === 'gender' ? 'field-bad' : undefined} value={form.gender} onChange={(e) => set('gender', e.target.value)}><option value="">Select gender</option><option>Male</option><option>Female</option><option>Other</option></select></div>
           <div className="field"><label>Role <span className="req">*</span></label>
-            <select value={form.role} onChange={(e) => onRole(e.target.value)}>{roles.map((r) => <option key={r} value={r}>{roleLabel(r)}</option>)}</select></div>
+            {teamLeadMode ? (
+              // Fixed: a Team Lead creates Agents and nothing else, and cannot change an Agent's role.
+              <input value="Agent" readOnly style={{ background: 'var(--surface-2)' }} title="Team Leads create Agents only" />
+            ) : (
+              <select value={form.role} onChange={(e) => onRole(e.target.value)}>
+                {roles.flatMap((r) => (r === 'agent'
+                  ? [<option key={r} value={r}>{roleLabel(r)}</option>, <option key={TEAM_LEAD_CHOICE} value={TEAM_LEAD_CHOICE}>Team Lead</option>]
+                  : [<option key={r} value={r}>{roleLabel(r)}</option>]))}
+              </select>
+            )}</div>
         </div>
+        {(showReportingLine || showReassign || isTeamLeadChoice) && (
+          <div className="g3">
+            {showReportingLine && (
+              <div className="field"><label>Team Lead</label>
+                <select value={teamLeadId} onChange={(e) => setTeamLeadId(e.target.value)}>
+                  <option value="">No Team Lead</option>
+                  {/* An inactive Team Lead stays listed while they are this Agent's current one, so
+                      opening the record does not quietly change the answer. */}
+                  {teamLeads.filter((t) => t.id !== existing?.id && ((t.status ?? 'Active') === 'Active' || String(t.id) === teamLeadId))
+                    .map((t) => <option key={t.id} value={t.id}>{t.name}{(t.status ?? 'Active') === 'Active' ? '' : ' (inactive)'}</option>)}
+                </select>
+                <span className="help">Who this Agent reports to. Only the reporting line changes — their leads and deals stay as they are.</span></div>
+            )}
+            {isTeamLeadChoice && !showReassign && (
+              <div className="field" style={{ gridColumn: '1 / -1' }}><span className="help">
+                A Team Lead is an Agent everywhere else in the application, and can also create Agents for
+                their own team and switch them between Active and Inactive under Users.
+              </span></div>
+            )}
+            {showReassign && (
+              <div className="field" style={{ gridColumn: 'span 2' }}>
+                <label>
+                  {teamLeadLeaving ? 'Replacement Team Lead for' : 'Their'} {teamSize} agent{teamSize === 1 ? '' : 's'}
+                  {teamLeadLeaving && <span className="req"> *</span>}
+                </label>
+                <select data-field="reassign" className={badField === 'reassign' ? 'field-bad' : undefined}
+                  value={reassignValue} onChange={(e) => setReassignTo(e.target.value)}>
+                  {teamLeadLeaving
+                    ? <option value="" disabled>Choose a replacement Team Lead…</option>
+                    : <option value="keep">Keep with {existing?.name}</option>}
+                  {otherTeamLeads.map((t) => <option key={t.id} value={t.id}>Move to {t.name}</option>)}
+                  {(!teamLeadLeaving || otherTeamLeads.length === 0) && <option value="none">No Team Lead for now</option>}
+                </select>
+                <span className="help">
+                  {teamLeadLeaving
+                    ? (otherTeamLeads.length
+                      ? `${existing?.name} is leaving, so their agents must be assigned to another Team Lead. Only the reporting line moves — the agent accounts and their history are kept.`
+                      : 'There is no other active Team Lead yet. Choose “No Team Lead for now” and assign them once a Team Lead is created.')
+                    : 'Only the reporting line moves — the agent accounts and their history are kept.'}
+                </span></div>
+            )}
+          </div>
+        )}
         <div className="g3">
-          <div className="field"><label>{existing ? 'New Password' : 'Password'} {!existing && <span className="req">*</span>}</label>
-            <PasswordInput value={form.password} onChange={(e) => set('password', e.target.value)} placeholder={existing ? 'leave blank to keep' : ''} autoComplete="new-password" /></div>
-          <div className="field"><label>Confirm Password</label>
-            <PasswordInput value={form.password_confirmation} onChange={(e) => set('password_confirmation', e.target.value)} autoComplete="new-password" /></div>
+          {/* A Team Lead sets a new Agent's first password; resetting an existing one is a Super Admin's job. */}
+          {!(teamLeadMode && existing) && (<>
+            <div className="field"><label>{existing ? 'New Password' : 'Password'} {!existing && <span className="req">*</span>}</label>
+              <PasswordInput value={form.password} onChange={(e) => set('password', e.target.value)} placeholder={existing ? 'leave blank to keep' : ''} autoComplete="new-password" /></div>
+            <div className="field"><label>Confirm Password</label>
+              <PasswordInput value={form.password_confirmation} onChange={(e) => set('password_confirmation', e.target.value)} autoComplete="new-password" /></div>
+          </>)}
           {/*
             * The rule an administrator is setting on somebody else's behalf, stated here because
             * they cannot see the person's own screen. Matches `server/src/auth/password-policy.ts`
             * — the standard temporary password a busy administrator reaches for is exactly the
             * shape that rule refuses.
             */}
-          <div className="field full"><span className="help">
+          {!(teamLeadMode && existing) && <div className="field full"><span className="help">
             At least 12 characters, and not a common password or the company name. A short phrase of
             a few unrelated words works well.
-          </span></div>
+          </span></div>}
           <div className="field"><label>Status <span className="req">*</span></label>
             <select data-field="status" className={badField === 'status' ? 'field-bad' : undefined} value={form.status} onChange={(e) => set('status', e.target.value)}><option>Active</option><option>Inactive</option></select>
             <span className="help">Inactive users cannot login to the system.</span></div>
+          {/* The Super Admin's checklist below is theirs to read; a Team Lead is told the same rule in words. */}
+          {teamLeadMode && deactivating && (
+            <div className="field offboarding warn" style={{ gridColumn: '1 / -1' }}>
+              <label>Saving will deactivate {existing?.name}</label>
+              <span className="help">
+                They will no longer be able to sign in. Their account stays in the CRM and nothing is deleted.
+                As with any deactivation, their Meta connection is disconnected and brokerage leads assigned to
+                them return to the brokerage pool; their own leads stay with them.
+              </span>
+            </div>
+          )}
           {offboarding && (
             <div className="field offboarding warn" style={{ gridColumn: '1 / -1' }}>
               <label>Saving will deactivate {offboarding.user.name} and do the following</label>
@@ -697,6 +900,8 @@ function UserModal({ catalog, existing, onClose, onSaved }: UserModalProps) {
           A module the company has not bought is shown but marked, because the assignment is worth
           keeping — resubscribing should restore the arrangement rather than a blank slate.
         */}
+        {/* Not for a Team Lead: a new Agent gets the Team Lead's own modules, and they cannot change access. */}
+        {!teamLeadMode && (<>
         <div className="modal-sub">Module Access</div>
         <div className="g3">
           {AREAS.map((a) => {
@@ -723,13 +928,14 @@ function UserModal({ catalog, existing, onClose, onSaved }: UserModalProps) {
               ? 'With no module selected this person can sign in but has nothing to open.'
               : 'Screen permissions below still decide what they can do inside each module.'}
           </span></div>
+        </>)}
 
         {/*
           Said only where it matters: a NEW agent created from the CRM is saved with no commission
           structure, because the section that sets it is not on this side. Editing an existing agent
           keeps whatever is already on file, so there is nothing to warn about there.
         */}
-        {isAgent && area === 'crm' && !existing && (
+        {isAgent && area === 'crm' && !existing && !teamLeadMode && (
           <p className="help" style={{ margin: '10px 0 0' }}>
             Commission split, loan and deal history are set in <strong>Transaction Management</strong> →
             Users. This agent can be created here and will have no commission structure until that is
@@ -889,6 +1095,8 @@ function UserModal({ catalog, existing, onClose, onSaved }: UserModalProps) {
           </div>
         </>)}
 
+        {/* Permissions are a Super Admin's: a Team Lead's Agents keep the Agent defaults. */}
+        {!teamLeadMode && (<>
         <div className="modal-sub" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <span>Screen Permissions</span>
           {!isAdminRole && <button className="btn ghost sm" onClick={resetToRole}><Icon name="refresh" size={13} /> Reset to {roleLabel(form.role)} defaults</button>}
@@ -934,6 +1142,7 @@ function UserModal({ catalog, existing, onClose, onSaved }: UserModalProps) {
             })}
           </div>
         )}
+        </>)}
 
         <div className="actions" style={{ flexWrap: 'wrap', gap: 8 }}>
           {/*
@@ -955,19 +1164,19 @@ function UserModal({ catalog, existing, onClose, onSaved }: UserModalProps) {
             The onboarding guide is one button, not two: which letter goes is read from the agent's
             own Fresher / Experienced field, so the wrong one cannot be picked by hand.
           */}
-          {isAgent && area === 'desk' && (
+          {isAgent && area === 'desk' && !teamLeadMode && (
             <button className="btn ghost" disabled={!existing}
               title={existing
                 ? `Preview and send the ${form.experience === 'Fresher' ? 'fresher' : 'experienced agent'} onboarding guide`
                 : 'Save the agent first'}
               onClick={() => setOnboarding('onboard')}><Icon name="mail" size={13} /> Send Onboard Email</button>
           )}
-          {isAgent && area === 'desk' && (
+          {isAgent && area === 'desk' && !teamLeadMode && (
             <button className="btn ghost" disabled={!existing}
               title={existing ? 'Preview and send Accounts’ request for PREC / Sole Proprietor banking details' : 'Save the agent first'}
               onClick={() => setOnboarding('accounting')}><Icon name="mail" size={13} /> Send Accounting Onboard Email</button>
           )}
-          {isAgent && area === 'desk' && (
+          {isAgent && area === 'desk' && !teamLeadMode && (
             <button className="btn ghost" disabled={!existing}
               title={existing ? 'Preview and send the Training Department welcome' : 'Save the agent first'}
               onClick={() => setOnboarding('training')}><Icon name="mail" size={13} /> Send Training Onboard Email</button>
@@ -975,7 +1184,7 @@ function UserModal({ catalog, existing, onClose, onSaved }: UserModalProps) {
           {/* Last of the four, and the only one that is not a letter: it sends the agreement itself,
               filled in from this agent's commission split, with a signable PDF built from the same
               message. */}
-          {isAgent && area === 'desk' && (
+          {isAgent && area === 'desk' && !teamLeadMode && (
             <button className="btn ghost" disabled={!existing}
               title={existing ? 'Preview and send the contract agreement' : 'Save the agent first'}
               onClick={() => setOnboarding('contract')}><Icon name="doc" size={13} /> Send Contract Agreement</button>
@@ -983,14 +1192,14 @@ function UserModal({ catalog, existing, onClose, onSaved }: UserModalProps) {
           {/* Per LISTING, not per agent — unlike everything to its left, this one is expected to be
               sent to the same person again and again. The property, the MLS number and the tick
               boxes are filled in on the review screen, because none of them live on the profile. */}
-          {isAgent && area === 'desk' && (
+          {isAgent && area === 'desk' && !teamLeadMode && (
             <button className="btn ghost" disabled={!existing}
               title={existing ? 'Preview and send the Listing Media & Marketing Fee Agreement' : 'Save the agent first'}
               onClick={() => setOnboarding('media')}><Icon name="doc" size={13} /> Send Listing Shoots Media Agreement</button>
           )}
           <div style={{ flex: 1 }} />
           <button className="btn ghost" onClick={onClose}>Close</button>
-          <button className="btn primary" onClick={save} disabled={saving}>{saving ? 'Saving…' : (existing ? 'Save' : 'Create User')}</button>
+          <button className="btn primary" onClick={save} disabled={saving}>{saving ? 'Saving…' : (existing ? 'Save' : (teamLeadMode ? 'Create Agent' : 'Create User'))}</button>
         </div>
       </div>
 

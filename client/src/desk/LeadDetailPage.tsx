@@ -15,6 +15,8 @@ import TwilioDialer from './TwilioDialer';
 import { useToast } from './toast';
 import { useAuth } from '../context/AuthContext';
 import LeadEditorModal, { label, prefHeading } from './LeadEditorModal';
+import LeadTeamAssignmentPanel from './LeadTeamAssignmentPanel';
+import TeamLeadAssignPanel from './TeamLeadAssignPanel';
 import { leadTypeValues } from './leadTypeValues';
 import { identityLocked } from '../lib/leadIdentity';
 import { createEvent } from '../lib/calendarApi';
@@ -159,6 +161,9 @@ export default function LeadDetailPage() {
         </div>
       </div>
 
+      {/* Team Lead only, and only on a lead they may hand out; renders nothing for anyone else. */}
+      <TeamLeadAssignPanel leadId={lead.id} onAssigned={() => void load(true)} />
+
       <div className="g2">
         <div className="card">
           <div className="modal-sub">Contact &amp; Classification</div>
@@ -167,6 +172,7 @@ export default function LeadDetailPage() {
             <Row k="Phone" v={lead.phone} />
             <Row k="Location" v={lead.location} />
             <Row k="Property" v={lead.property} />
+            {lead.ownership_type === 'TEAM' && <Row k="Team" v={lead.team_name ?? null} />}
             <Row k="Assigned To" v={lead.assigned_to_name ?? 'Unassigned'} />
             <Row k="Lead Source" v={lead.lead_source && label(lead.lead_source)} />
             <Row k="Lead Response" v={lead.lead_response && label(lead.lead_response)} />
@@ -251,6 +257,7 @@ export default function LeadDetailPage() {
         </div>
 
         <div>
+          <LeadTeamAssignmentPanel lead={lead} options={options} canEdit={canEdit} onChanged={() => void load(true)} />
           <CommunicationPanel lead={lead} canEdit={canEdit} run={run} ask={ask} onSent={() => void load(true)} />
           <NotesPanel lead={lead} canEdit={canEdit} run={run} ask={ask} />
           <TasksPanel lead={lead} options={options} canEdit={canEdit} run={run} ask={ask} />
