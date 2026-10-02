@@ -245,7 +245,23 @@ export interface LeadAssignmentEvent {
   created_at: string;
 }
 
+/** One Meta lead-form submission from this lead, keeping what THAT submission asked about. */
+export interface LeadMetaInquiry {
+  id: number;
+  facebook_lead_id: string;
+  property_address: string | null;
+  project_name: string | null;
+  page_name: string | null;
+  form_name: string | null;
+  submitted_at: string | null;
+  created_at: string | null;
+}
+
 export interface LeadDetail extends Lead {
+  /** How many Meta submissions this lead has made; 0 for a lead that never came from Meta. */
+  meta_inquiry_count?: number;
+  /** Newest first. */
+  meta_inquiries?: LeadMetaInquiry[];
   /** What the signed-in user may change about this lead's team and handler, decided by the server. */
   assignment_permissions?: { change_team: boolean; change_agent: boolean };
   assignment_history?: LeadAssignmentEvent[];

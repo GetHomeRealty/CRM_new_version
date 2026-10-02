@@ -439,6 +439,9 @@ export class LeadsService {
         // Oldest first: the SMS panel reads as a conversation, not a feed.
         lead_messages: { orderBy: [{ sent_at: 'asc' }, { id: 'asc' }] },
         lead_emails: { orderBy: { sent_at: 'desc' } },
+        // Newest first. Loaded through THIS scoped lookup, so the history is exactly as visible as
+        // the lead: whoever may not open the lead gets the 404 below, never its inquiries.
+        meta_lead_inquiries: { orderBy: [{ submitted_at: 'desc' }, { id: 'desc' }] },
       },
     });
     if (!row) throw new NotFoundException({ message: 'Lead not found.' });
@@ -464,6 +467,21 @@ export class LeadsService {
       },
       // Newest first: team moves, handler assignments, reassignments and removals, each with who did it.
       assignment_history: history,
+      /*
+       * Every Meta submission from this person, one row each: a returning customer who answered
+       * three ads is one lead with three inquiries, each keeping its own address.
+       */
+      meta_inquiry_count: row.meta_lead_inquiries.length,
+      meta_inquiries: row.meta_lead_inquiries.map((q) => ({
+        id: q.id,
+        facebook_lead_id: q.facebook_lead_id,
+        property_address: q.property_address,
+        project_name: q.project_name,
+        page_name: q.meta_page_name,
+        form_name: q.meta_form_name,
+        submitted_at: q.submitted_at?.toISOString() ?? null,
+        created_at: q.created_at?.toISOString() ?? null,
+      })),
       notes_history: row.lead_notes.map((n) => ({
         id: n.id, content: n.content, pinned: n.pinned,
         created_by: n.created_by, created_at: n.created_at?.toISOString() ?? null,

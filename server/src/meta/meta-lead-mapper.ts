@@ -169,6 +169,55 @@ export function mapMetaLead(fieldData: { name?: string; values?: string[] }[] | 
   return out;
 }
 
+/** What one submission was about, for its row in `meta_lead_inquiries`. */
+export interface MetaInquiryDetails {
+  property_address: string | null;
+  project_name: string | null;
+  /** The form's answers, question → answer, as JSON; null when it sent none. */
+  answers: string | null;
+}
+
+/**
+ * The parts of one submission that make it a different enquiry from the person's last one.
+ *
+ * Built on `mapMetaLead`'s result, so the field mapping stays in one place:
+ *
+ *   - `property_address` is the mapped `property` — EXCEPT when that is the mapper's fallback to the
+ *     property type ("Condo" is not an address). Blank stays blank; it is never guessed.
+ *   - `project_name` comes from a question naming a project or development, matched on wording
+ *     because every advertiser phrases it differently — and never from an address question.
+ *   - `answers` keeps every answer, so forms asking different questions lose nothing.
+ */
+export function mapMetaInquiry(
+  fieldData: { name?: string; values?: string[] }[] | undefined,
+  mapped: MappedMetaLead,
+): MetaInquiryDetails {
+  const answers: Record<string, string> = {};
+  let project: string | null = null;
+  let used = 2;
+  for (const field of fieldData ?? []) {
+    const key = str(field.name);
+    const value = (field.values ?? []).map(str).filter(Boolean).join(', ');
+    if (!key || !value) continue;
+
+    const k = key.toLowerCase().replace(/[^a-z]/g, '');
+    const namesProject = k.includes('project') || k.includes('development') || k.includes('precon');
+    if (!project && namesProject && !k.includes('address')) project = value;
+
+    const capped = value.length > 2_000 ? value.slice(0, 2_000) : value;
+    const entry = JSON.stringify({ [key]: capped }).length;
+    if (used + entry > META_FIELD_LIMITS.custom_fields) continue;
+    answers[key] = capped;
+    used += entry;
+  }
+
+  return {
+    property_address: mapped.property && mapped.property !== mapped.property_type ? mapped.property : null,
+    project_name: fit(project, 'property'),
+    answers: Object.keys(answers).length ? JSON.stringify(answers) : null,
+  };
+}
+
 /** Common question phrasings Meta advertisers use, matched loosely when the exact key misses. */
 function looseMatch(key: string): string | null {
   const k = key.replace(/[^a-z]/g, '');

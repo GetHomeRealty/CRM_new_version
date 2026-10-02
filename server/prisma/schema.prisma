@@ -420,6 +420,7 @@ model leads {
   inbound_emails       inbound_emails[]
   crm_teams            crm_teams?            @relation(fields: [team_id], references: [id], onDelete: Restrict, onUpdate: Restrict)
   crm_lead_assignment_events crm_lead_assignment_events[]
+  meta_lead_inquiries  meta_lead_inquiries[]
 
   /// The brokerage this row belongs to. See src/core/tenancy.spec.ts for why this table carries one.
 
@@ -918,6 +919,37 @@ model meta_pages {
 /**
  * A lead form the user opted into. Only forms listed here produce leads.
  */
+/// One Meta lead-form SUBMISSION, under the CRM lead for the person who made it.
+///
+/// ONE PERSON = ONE LEAD, ONE SUBMISSION = ONE INQUIRY. The lead row can hold only one Meta
+/// submission, so before this table a returning person's second submission overwrote the first.
+///
+/// `facebook_lead_id` (Meta's leadgen id) is UNIQUE and is the idempotency key: every insert is
+/// `ON CONFLICT DO NOTHING`, so however often a sync sees a submission it is one row. Each row keeps
+/// its own address and answers and is never rewritten afterwards.
+/// Created in migrations/20261002200000_meta_lead_inquiries.
+model meta_lead_inquiries {
+  id               Int       @id @default(autoincrement())
+  lead_id          Int
+  facebook_lead_id String    @unique @db.VarChar(64)
+  facebook_page_id String?   @db.VarChar(64)
+  facebook_form_id String?   @db.VarChar(64)
+  meta_page_name   String?   @db.VarChar(255)
+  meta_form_name   String?   @db.VarChar(255)
+  /// The address or listing asked about. Null when the form did not ask — shown as "Not provided".
+  property_address String?   @db.VarChar(255)
+  /// A named project or development, when the form asks for one.
+  project_name     String?   @db.VarChar(255)
+  /// JSON { question: answer } of the submission's answers, so the inquiry is preserved whole.
+  answers          String?   @db.Text
+  /// When the person submitted the form, per Meta.
+  submitted_at     DateTime? @db.Timestamp(0)
+  created_at       DateTime? @db.Timestamp(0)
+  leads            leads     @relation(fields: [lead_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@index([lead_id])
+}
+
 model meta_lead_forms {
   id         Int       @id @default(autoincrement())
   user_id    Int

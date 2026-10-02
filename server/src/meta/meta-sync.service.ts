@@ -8,7 +8,7 @@ import { MetaConnectionService } from './meta-connection.service';
 import { MetaGraphService, GraphError, isAuthFailure, type GraphLead } from './meta-graph.service';
 import { MetaApiBudgetService } from './meta-api-budget.service';
 import { MetaAlertService } from './meta-alert.service';
-import { mapMetaLead, normalizePhone, type MappedMetaLead } from './meta-lead-mapper';
+import { mapMetaInquiry, mapMetaLead, normalizePhone, type MappedMetaLead } from './meta-lead-mapper';
 import { ownerAtIntake } from '../common/lead-scope';
 import { MAX_LEADS_PER_FORM, META_RAW_MAX_CHARS, META_RAW_RETENTION_DAYS, WEBHOOK_QUIET_ALERT_MS } from './meta.constants';
 import { isSuperAdmin } from '../core/authz';
@@ -179,6 +179,22 @@ export class MetaSyncService {
   }
 
   /**
+   * The leads a submission may match: the importer's own book, plus — when this intake is the
+   * brokerage's — every brokerage-owned lead.
+   *
+   * WHY BROKERAGE INTAKE NEEDS IT. A brokerage lead is handed down Admin → Team Lead → Agent and
+   * `assigned_to` moves with it, so it leaves `ownBook` for the administrator whose connection
+   * imports it. The customer's next submission then matched nothing, tried to create a second
+   * brokerage lead, hit `leads_owner_email_key` (one brokerage lead per address) and was lost as
+   * skipped. This is exactly the set that index already treats as one book, so nothing new becomes
+   * writable; agent intake keeps `ownBook` unchanged.
+   */
+  private matchBook(ctx: LeadContext): Prisma.leadsWhereInput {
+    const own = this.ownBook(ctx.userId);
+    return this.ownerFor(ctx) === null ? { OR: [own, { owner_user_id: null }] } : own;
+  }
+
+  /**
    * Find an existing lead for this submission, in the order the brief requires:
    * Meta lead id → email → normalized phone. Returns the row and which rule matched.
    *
@@ -186,18 +202,18 @@ export class MetaSyncService {
    * submission arriving twice rather than a different person, and the row it finds is by definition
    * the one this delivery already created. Scoping it would let a retry create a second copy.
    */
-  private async findExisting(facebookLeadId: string, mapped: MappedMetaLead, userId: number): Promise<{ id: number; rule: string } | null> {
+  private async findExisting(facebookLeadId: string, mapped: MappedMetaLead, ctx: LeadContext): Promise<{ id: number; rule: string } | null> {
     const byMetaId = await this.prisma.leads.findFirst({
       where: { facebook_lead_id: facebookLeadId },
       select: { id: true },
     });
     if (byMetaId) return { id: byMetaId.id, rule: 'meta lead id' };
 
-    const mine = this.ownBook(userId);
+    const mine = this.matchBook(ctx);
 
     if (mapped.email && EMAIL_SHAPE.test(mapped.email)) {
       const byEmail = await this.prisma.leads.findFirst({
-        where: { email: { equals: mapped.email, mode: 'insensitive' }, deleted_at: null, ...mine },
+        where: { AND: [{ email: { equals: mapped.email, mode: 'insensitive' }, deleted_at: null }, mine] },
         select: { id: true },
       });
       if (byEmail) return { id: byEmail.id, rule: 'email address' };
@@ -205,7 +221,7 @@ export class MetaSyncService {
 
     if (mapped.phone_normalized) {
       const byPhone = await this.prisma.leads.findFirst({
-        where: { phone_normalized: mapped.phone_normalized, deleted_at: null, ...mine },
+        where: { AND: [{ phone_normalized: mapped.phone_normalized, deleted_at: null }, mine] },
         select: { id: true },
       });
       if (byPhone) return { id: byPhone.id, rule: 'phone number' };
@@ -221,30 +237,70 @@ export class MetaSyncService {
    * and the submission was lost outright. A person who enquires again after their lead was tidied
    * away is exactly the enquiry a brokerage most wants, and it was the one guaranteed to fail.
    */
-  private async deletedHolder(email: string, userId: number): Promise<{ id: number } | null> {
+  private async deletedHolder(email: string, ctx: LeadContext): Promise<{ id: number } | null> {
     if (!email) return null;
     return this.prisma.leads.findFirst({
-      where: { email: { equals: email, mode: 'insensitive' }, deleted_at: { not: null }, ...this.ownBook(userId) },
+      where: { AND: [{ email: { equals: email, mode: 'insensitive' }, deleted_at: { not: null } }, this.matchBook(ctx)] },
       select: { id: true },
     });
   }
 
   /**
-   * Turn one Graph lead into a row in `leads`, or enrich the record it duplicates.
+   * Turn one Graph lead into a CRM lead plus a Meta inquiry.
    *
-   * Idempotent by construction: the same `facebook_lead_id` always resolves to the same row, so
-   * a webhook retry and a manual sync racing on one submission cannot both insert.
+   * ONE PERSON = ONE LEAD, ONE SUBMISSION = ONE INQUIRY:
+   *   imported   a new person — a new lead, with this submission as inquiry #1.
+   *   duplicate  a person already here, by a NEW submission — the lead is kept exactly as it is
+   *              (owner, assignee, Team Lead, team, status) and one inquiry is added under it.
+   *   updated    a submission already recorded — nothing is created and the count does not move.
+   *
+   * Idempotent at the database: `meta_lead_inquiries.facebook_lead_id` is unique and every inquiry
+   * insert is `ON CONFLICT DO NOTHING`. Two syncs racing on a NEW person both try to create the
+   * lead; the loser gets a unique violation on `leads`, which is not a failure — it resolves the
+   * submission once more and finds the lead the winner created.
    */
   async upsertLead(lead: GraphLead, ctx: LeadContext): Promise<{ outcome: UpsertOutcome; leadId: number | null; rule?: string }> {
+    try {
+      return await this.upsertOnce(lead, ctx);
+    } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') return this.upsertOnce(lead, ctx);
+      throw err;
+    }
+  }
+
+  private async upsertOnce(lead: GraphLead, ctx: LeadContext): Promise<{ outcome: UpsertOutcome; leadId: number | null; rule?: string }> {
     const facebookLeadId = str(lead.id);
     if (!facebookLeadId) return { outcome: 'skipped', leadId: null };
+
+    /*
+     * THIS SUBMISSION, ALREADY RECORDED: skip, and write nothing. Re-writing the lead here is what
+     * let whichever submission the scheduler read last become "the" enquiry for a returning person.
+     */
+    const seen = await this.prisma.meta_lead_inquiries.findUnique({
+      where: { facebook_lead_id: facebookLeadId },
+      select: { lead_id: true },
+    });
+    if (seen) return { outcome: 'updated', leadId: seen.lead_id, rule: 'meta lead id' };
 
     const mapped = this.mapLead(lead.field_data);
     const attribution = this.attribution(lead);
     const createdAt = lead.created_time ? new Date(lead.created_time) : new Date();
     const now = new Date();
+    const details = mapMetaInquiry(lead.field_data, mapped);
+    const inquiry = {
+      facebook_lead_id: facebookLeadId,
+      facebook_page_id: ctx.pageId || null,
+      facebook_form_id: ctx.formId || null,
+      meta_page_name: ctx.pageName ?? null,
+      meta_form_name: ctx.formName ?? null,
+      property_address: details.property_address,
+      project_name: details.project_name,
+      answers: details.answers,
+      submitted_at: createdAt,
+      created_at: now,
+    };
 
-    const existing = await this.findExisting(facebookLeadId, mapped, ctx.userId);
+    const existing = await this.findExisting(facebookLeadId, mapped, ctx);
 
     const metaFields = {
       facebook_lead_id: facebookLeadId,
@@ -265,21 +321,38 @@ export class MetaSyncService {
     };
 
     if (existing) {
-      // Enrich rather than duplicate: the Meta identifiers and answers are attached to the
-      // record that already represents this person, and their existing details are left alone.
-      await this.prisma.leads.update({
-        where: { id: existing.id },
-        data: {
-          ...metaFields,
-          source: 'facebook_meta',
-          lead_source: 'meta',
-          // Only fill blanks — never overwrite something a person typed.
-          first_name: mapped.first_name ?? undefined,
-          last_name: mapped.last_name ?? undefined,
-          phone_normalized: mapped.phone_normalized ?? undefined,
-        },
+      /*
+       * A PERSON ALREADY HERE: attach the submission as one more inquiry. `count` is 1 only for the
+       * writer that actually added the row, so a concurrent sync that lost the race counts nothing.
+       */
+      const { count } = await this.prisma.meta_lead_inquiries.createMany({
+        data: [{ ...inquiry, lead_id: existing.id }],
+        skipDuplicates: true,
       });
-      return { outcome: existing.rule === 'meta lead id' ? 'updated' : 'duplicate', leadId: existing.id, rule: existing.rule };
+      // The lead's own Meta id was this submission (imported before inquiries existed): now recorded.
+      if (existing.rule === 'meta lead id' || count === 0) return { outcome: 'updated', leadId: existing.id, rule: 'meta lead id' };
+
+      /*
+       * The lead's Meta columns describe its LATEST submission, so only a newer one moves them on;
+       * an older submission recovered later must not drag them back. Either way the inquiry row is
+       * the record. Owner, assignee, Team Lead, team and status are never written here.
+       */
+      const current = await this.prisma.leads.findUnique({ where: { id: existing.id }, select: { meta_created_at: true } });
+      if (!current?.meta_created_at || current.meta_created_at.getTime() <= createdAt.getTime()) {
+        await this.prisma.leads.update({
+          where: { id: existing.id },
+          data: {
+            ...metaFields,
+            source: 'facebook_meta',
+            lead_source: 'meta',
+            // Only fill blanks — never overwrite something a person typed.
+            first_name: mapped.first_name ?? undefined,
+            last_name: mapped.last_name ?? undefined,
+            phone_normalized: mapped.phone_normalized ?? undefined,
+          },
+        });
+      }
+      return { outcome: 'duplicate', leadId: existing.id, rule: existing.rule };
     }
 
     // A Meta form can omit email entirely. `leads.email` is required, so a placeholder keyed to
@@ -297,7 +370,7 @@ export class MetaSyncService {
      * filing decision that a fresh enquiry supersedes. The outcome is reported as `imported`,
      * because from the brokerage's point of view a lead has arrived.
      */
-    const buried = await this.deletedHolder(email, ctx.userId);
+    const buried = await this.deletedHolder(email, ctx);
     if (buried) {
       const restored = await this.prisma.leads.update({
         where: { id: buried.id },
@@ -316,6 +389,7 @@ export class MetaSyncService {
           property: mapped.property ?? undefined,
         },
       });
+      await this.prisma.meta_lead_inquiries.createMany({ data: [{ ...inquiry, lead_id: restored.id }], skipDuplicates: true });
       this.log.log(`Meta lead ${facebookLeadId} restored lead #${buried.id}, which had been deleted.`);
       void this.notifications.notifyNewLead(restored);
       void this.metaArrived(restored, ctx, facebookLeadId);
@@ -343,6 +417,8 @@ export class MetaSyncService {
         created_by: `Meta${ctx.pageName ? ` · ${ctx.pageName}` : ''}`,
         created_at: createdAt,
         updated_at: createdAt,
+        // The lead and its inquiry #1 in one statement, so neither exists without the other.
+        meta_lead_inquiries: { create: inquiry },
       },
     });
     // Best-effort "new lead from Meta" email to the assigned agent; never blocks the sync.

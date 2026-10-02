@@ -17,6 +17,7 @@ import { useAuth } from '../context/AuthContext';
 import LeadEditorModal, { label, prefHeading } from './LeadEditorModal';
 import LeadTeamAssignmentPanel from './LeadTeamAssignmentPanel';
 import TeamLeadAssignPanel from './TeamLeadAssignPanel';
+import MetaInquiryHistory from './MetaInquiryHistory';
 import { leadTypeValues } from './leadTypeValues';
 import { identityLocked } from '../lib/leadIdentity';
 import { createEvent } from '../lib/calendarApi';
@@ -247,6 +248,8 @@ export default function LeadDetailPage() {
               )}
             </>
           )}
+
+          <MetaInquiryHistory count={lead.meta_inquiry_count ?? 0} inquiries={lead.meta_inquiries ?? []} />
 
           {lead.notes && (
             <>
