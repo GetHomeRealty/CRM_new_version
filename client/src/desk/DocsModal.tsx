@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import Icon from '../ui/Icon';
 import {
   getDocuments, saveDocuments, uploadDocumentFile, deleteDocument,
@@ -57,7 +57,6 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [newTitle, setNewTitle] = useState('');
   /*
    * TD-135 - REQUIRED DOCUMENTS FIRST, THE REST BEHIND A LINK, at the brokerage's instruction of
    * 2026-09-26. Their ruling of the day before is that nothing is removed from a deal, so an older
@@ -107,7 +106,19 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
    * today - it was checked - but nothing outstanding is complete, not untouched.
    */
   const countedDocs = shownDocs.filter((d) => !!d.mandatory);
-  const optionalCount = shownDocs.length - countedDocs.length;
+  /*
+   * A DOCUMENT SOMEBODY ADDED BY HAND IS NOT "NOT REQUIRED" - IT IS THE ONE THEY CAME FOR.
+   *
+   * Hand-added rows carry mandatory = false, so they were filed behind "Show N more documents that
+   * are not required": the person typed a name, pressed Add, and what they created landed somewhere
+   * invisible. They now sit in the main list beside the required ones.
+   *
+   * THE COUNTS ABOVE ARE UNTOUCHED - countedDocs still counts only mandatory documents, so
+   * "MANDATORY DOCUMENTS RECEIVED" and every compliance figure read exactly as before. Only which
+   * rows are hidden has changed.
+   */
+  const hiddenDocs = shownDocs.filter((d) => !d.mandatory && !d.manual);
+  const optionalCount = hiddenDocs.length;
   const total = countedDocs.length;
   const received = countedDocs.filter((d) => d.status === 'Received').length;
   const valid = countedDocs.filter((d) => d.validation === 'Valid').length;
@@ -137,29 +148,67 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
     setDocs((ds) => ds.map((d) => (remindable(d) ? { ...d, reminder: next } : d)));
   };
   const toggle = (key: string | number) => setExpanded((e) => ({ ...e, [key]: !e[key] }));
-  const addDoc = () => {
-    const title = newTitle.trim(); if (!title) return;
-    setDocs((ds) => [...ds, { title, mandatory: false, manual: true, status: 'Pending', validation: 'Pending', drive_uploaded: null, reminder: false, remarks: '', has_file: false, kind: 'single', files: [], file_count: 0 }]);
-    setNewTitle('');
+  /*
+   * ADD A DOCUMENT BY NAME, THROUGH A DIALOGUE. Sai asked for this 2026-10-02 - the name box sat on
+   * the toolbar where people did not see it.
+   *
+   * A REF, NOT STATE, FOR THE TYPED NAME. useConfirm stores the options object when the dialogue
+   * opens, so anything inside `body` is captured once: a controlled input would show stale text and
+   * `onConfirm` would read the name as it was before a key was pressed. A ref is the same object on
+   * every render, so the field and the handler both see what was actually typed.
+   */
+  const newTitleRef = useRef('');
+  const addDoc = async (raw: string) => {
+    const title = raw.trim();
+    if (!title) { toast('Give the document a name', 'info'); return; }
+    if (docs.some((d) => (d.title || '').trim().toLowerCase() === title.toLowerCase())) {
+      toast('This deal already has a document called "' + title + '"', 'info'); return;
+    }
+    const next: DeskDocument[] = [...docs, { title, mandatory: false, manual: true, status: 'Pending', validation: 'Pending', drive_uploaded: null, reminder: false, remarks: '', has_file: false, kind: 'single', files: [], file_count: 0 }];
+    setDocs(next);
+    /*
+     * AND SAVE IT AT ONCE, or the person cannot use what they just created: uploading is refused
+     * until the row exists on the server (needSaved). The journey used to be add it, see nothing
+     * happen, press Save, and only then upload.
+     *
+     * The list is handed to save() explicitly because setDocs has not reached state yet when this
+     * line runs - reading it from state here works on a fast machine and loses the row on a slow one.
+     */
+    await save(false, next, '"' + title + '" added - you can upload it now');
+  };
+  const askForDocumentName = () => {
+    newTitleRef.current = '';
+    askDelete({
+      title: 'Add a document',
+      message: 'Type the name of the document you want on this deal. It joins the list straight away, ready for a file.',
+      variant: 'primary',
+      confirmLabel: 'Add',
+      body: (
+        <input autoFocus placeholder="Name of your document" defaultValue=""
+          onChange={(ev) => { newTitleRef.current = ev.target.value; }}
+          style={{ width: '100%', marginTop: 10 }} />
+      ),
+      onConfirm: () => addDoc(newTitleRef.current),
+    });
   };
 
   // Never persist a reminder flag on a document that isn't remindable (Valid, or submitted and not
   // yet marked Invalid) — so a stale 🔔 can't linger on a doc that has moved out of the agent's court.
   const persistReminder = (d: DeskDocument) =>
     (d.validation === 'Valid' || (d.status === 'Received' && d.validation !== 'Invalid')) ? false : d.reminder;
-  const docPayload = () => docs.map((d) => ({ id: d.id, title: d.title, mandatory: d.mandatory, status: d.status, validation: d.validation, drive_uploaded: d.drive_uploaded || 'No', reminder: persistReminder(d), agent_accepted: d.agent_accepted || null, remarks: d.remarks }));
+  const docPayload = (list: DeskDocument[] = docs) => list.map((d) => ({ id: d.id, title: d.title, mandatory: d.mandatory, status: d.status, validation: d.validation, drive_uploaded: d.drive_uploaded || 'No', reminder: persistReminder(d), agent_accepted: d.agent_accepted || null, remarks: d.remarks }));
 
   const draftIds = shownDocs.flatMap((d) => (d.draft_files || []).map((f) => f.id));
-  const save = async (submit = false) => {
+  const save = async (submit = false, list?: DeskDocument[], successMessage?: string) => {
     setSaving(true);
     try {
-      let res = await saveDocuments(transactionId, docPayload(), { reco_audit_ready: recoReady || null, reco_audit_remarks: recoReady === 'No' ? recoRemarks : null });
+      let res = await saveDocuments(transactionId, docPayload(list), { reco_audit_ready: recoReady || null, reco_audit_remarks: recoReady === 'No' ? recoRemarks : null });
       if (agentMode && submit) res = await submitDocumentDrafts(transactionId, draftIds);
       setDocs(res.documents || []); setClients(res.clients || []);
       setRecoReady(res.reco_audit_ready || ''); setRecoRemarks(res.reco_audit_remarks || '');
       // Refresh the parent transaction so Agent Payment Readiness' "Valid Docs Cleared" flag is never stale.
       onSaved?.();
-      toast(agentMode ? (submit ? 'Documents submitted for Admin review.' : 'Draft saved — not sent to Admin.') : 'Documents saved', 'ok');
+      toast(successMessage ?? (agentMode ? (submit ? 'Documents submitted for Admin review.' : 'Draft saved — not sent to Admin.') : 'Documents saved'), 'ok');
     } catch (error) { toast(apiErrorMessage(error, 'Could not save documents'), 'bad'); } finally { setSaving(false); }
   };
 
@@ -337,8 +386,7 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
                 <Icon name="mail" size={13} /> Send reminders now ({flaggedReminderDocs.length})
               </button>
             )}
-            <input placeholder="Document name" value={newTitle} onChange={(e) => setNewTitle(e.target.value)} style={{ width: 200 }} />
-            <button className="btn primary sm" onClick={addDoc}>+ Add</button>
+            <button className="btn primary sm" onClick={askForDocumentName}>+ Add document</button>
           </div>
         </div>
 
@@ -355,7 +403,7 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
           </div>
         )}
         {loading ? <div className="centered">Loading…</div> : docs.map((d, i) => {
-          if (!d.mandatory && !showOptional) return null;
+          if (!d.mandatory && !d.manual && !showOptional) return null;
           const key = d.id ?? `new-${i}`;
           const open2 = !!expanded[key];
           const expandable = d.kind === 'multi' || d.kind === 'per_client';
@@ -420,7 +468,10 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
                     {single && (agentMode && !!d.draft_files?.length
                       ? <span className="pill warn">Draft — not submitted</span>
                       : d.has_file
-                      ? <span style={{ fontSize: 11.5, color: 'var(--ok-600)', fontWeight: 600 }}><Icon name="check" size={11} /> Uploaded</span>
+                      ? <span style={{ fontSize: 11.5, color: 'var(--ok-600)', fontWeight: 600 }} title={d.file_name || undefined}>
+                          <Icon name="check" size={11} /> Uploaded
+                          {d.file_name && <span style={{ fontWeight: 500, color: 'var(--muted)', marginLeft: 4, display: 'inline-block', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', verticalAlign: 'bottom' }}>{d.file_name}</span>}
+                        </span>
                       : validLocked(d)
                         ? <span style={{ fontSize: 11, color: 'var(--muted-2)' }} title="Marked Valid — only a Super Admin can upload over it"><Icon name="lock" size={11} /> Locked (Valid)</span>
                         : <input type="file" onChange={(e) => { onSingle(d, e.target.files?.[0]); e.target.value = ''; }} style={{ fontSize: 12 }} />)}

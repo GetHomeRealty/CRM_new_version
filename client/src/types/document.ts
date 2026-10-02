@@ -16,6 +16,8 @@ export interface DeskDocument {
   mandatory?: boolean;
   manual?: boolean;
   has_file?: boolean;
+  /** The stored name of the single uploaded file. The server always sent it; nothing read it. */
+  file_name?: string | null;
   kind?: string;
   files?: DeskDocFile[];
   file_count?: number;
