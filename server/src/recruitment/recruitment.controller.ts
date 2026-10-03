@@ -69,6 +69,13 @@ export class RecruitmentController {
     return this.recruitment.list(user, query);
   }
 
+  /** Interviews across the candidates you may see, optionally one status (`?status=scheduled`). */
+  @Get('interviews')
+  @Screen('recruitment', 'view')
+  interviews(@CurrentUser() user: AuthUserRecord, @Query() query: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return this.recruitment.interviews(user, query);
+  }
+
   /** Pending and overdue follow-ups. Declared before `candidates/:id` so it is not read as an id. */
   @Get('followups')
   @Screen('recruitment', 'view')

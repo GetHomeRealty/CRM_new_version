@@ -2,14 +2,14 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { crmPath } from './area';
 import {
-  createCandidate, listCandidates, pendingFollowups, recruitmentStats,
+  createCandidate, listCandidates, listInterviews, pendingFollowups, recruitmentStats,
 } from '../lib/recruitmentApi';
 import { apiErrorMessage } from '../lib/apiError';
 import { useToast } from './toast';
 import { useAuth } from '../context/AuthContext';
 import {
-  CANDIDATE_STATUSES, type Candidate, type CandidateStatus, type PendingFollowups,
-  type RecruitmentStats,
+  CANDIDATE_STATUSES, INTERVIEW_STATUSES, type Candidate, type CandidateStatus, type InterviewList,
+  type PendingFollowups, type RecruitmentStats,
 } from '../types/recruitment';
 
 /** Not Selected is two words everywhere a person reads it; the underscore is a column name. */
@@ -78,17 +78,46 @@ export default function RecruitmentPage() {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
-  // Filters. `status` lives in the URL so a filtered list can be linked and survives a reload.
+  /*
+   * Filters, ALL in the URL — status, recruiter, source and search — so a drill-down from a card or a
+   * Reports row can be linked, survives a reload and tab switches, and is applied by the SERVER under
+   * the same visibility scope the counts use. That is what makes a count equal the list it opens.
+   *   recruiter: a user id, or `none` (unassigned).  source: a stored value, or `__none__` (not recorded).
+   */
   const status = params.get('status') ?? '';
+  const recruiter = params.get('recruiter') ?? '';
+  const source = params.get('source') ?? '';
   const [search, setSearch] = useState(params.get('q') ?? '');
-  const [recruiter, setRecruiter] = useState('');
-  const [source, setSource] = useState('');
+  // The page is in the URL too, so a refresh or Back keeps your place; any filter change resets it.
+  const page = Math.max(1, Number(params.get('page')) || 1);
+  // Optional `per_page` in the URL; absent means the server's default of 50.
+  const perPage = Number(params.get('per_page')) || undefined;
+  const [listMeta, setListMeta] = useState({ total: 0, page: 1, per_page: 50, last_page: 1 });
+  const listTotal = listMeta.total;
+  const goToPage = (n: number) => setParams((prev) => {
+    const p = new URLSearchParams(prev);
+    if (n > 1) p.set('page', String(n)); else p.delete('page');
+    return p;
+  }, { replace: false });
+
+  const setFilter = (key: 'status' | 'recruiter' | 'source', value: string) => setParams((prev) => {
+    const p = new URLSearchParams(prev);
+    p.set('tab', 'candidates');
+    p.delete('page');
+    if (value) p.set(key, value); else p.delete(key);
+    return p;
+  }, { replace: true });
 
   const load = useCallback(async () => {
     try {
-      const [s, list, f] = await Promise.all([recruitmentStats(), listCandidates({ status, q: params.get('q') ?? '' }), pendingFollowups()]);
+      const [s, list, f] = await Promise.all([
+        recruitmentStats(),
+        listCandidates({ status, q: params.get('q') ?? '', recruiter, source, page, perPage }),
+        pendingFollowups(),
+      ]);
       setStats(s);
       setRows(list.data);
+      setListMeta({ total: list.total, page: list.page, per_page: list.per_page, last_page: list.last_page });
       setDue(f);
       setError('');
     } catch (ex) {
@@ -100,36 +129,69 @@ export default function RecruitmentPage() {
     } finally {
       setLoaded(true);
     }
-  }, [status, params]);
+  }, [status, recruiter, source, page, perPage, params]);
 
   useEffect(() => { void load(); }, [load]);
 
+  // Every filter is applied by the server now, so what arrived is what is shown.
+  const visible = rows;
+
   /*
-   * Recruiter and source are filtered HERE because the list arrives already scoped and capped at
-   * 200 rows — narrowing it further is a question about what is on screen, not a new question for
-   * the server. Status and search go to the API, because those decide which rows exist at all.
+   * The filter choices come from the REPORT figures, not from the rows on screen: a filtered list
+   * contains only one recruiter, and options derived from it would vanish the moment one was picked.
+   * A selected value the report does not list (a stale link) is still shown, so it stays visible.
    */
-  const visible = useMemo(() => rows.filter((r) => {
-    if (recruiter && String(r.assigned_recruiter_id ?? '') !== recruiter) return false;
-    if (source && (r.source ?? '') !== source) return false;
-    return true;
-  }), [rows, recruiter, source]);
-
   const recruiters = useMemo(() => {
-    const seen = new Map<string, string>();
-    for (const r of rows) {
-      if (r.assigned_recruiter_id == null) { seen.set('', 'Unassigned'); continue; }
-      seen.set(String(r.assigned_recruiter_id), r.assigned_recruiter_name ?? `User #${r.assigned_recruiter_id}`);
-    }
-    return [...seen.entries()];
-  }, [rows]);
+    const list: [string, string][] = (stats?.by_recruiter ?? []).map((r) => [r.key, r.name]);
+    if (recruiter && !list.some(([k]) => k === recruiter)) list.push([recruiter, recruiter === 'none' ? 'Unassigned' : `Recruiter #${recruiter}`]);
+    return list;
+  }, [stats, recruiter]);
 
-  const sources = useMemo(() => [...new Set(rows.map((r) => r.source).filter((v): v is string => !!v))], [rows]);
+  const sources = useMemo(() => {
+    const list: [string, string][] = (stats?.by_source ?? []).map((r) => [r.key, sourceLabel(r.source)]);
+    if (source && !list.some(([k]) => k === source)) list.push([source, source === '__none__' ? 'Not recorded' : sourceLabel(source)]);
+    return list;
+  }, [stats, source]);
+
+  /** A Reports row → Candidates showing exactly the candidates that row counted. */
+  const openFiltered = (key: 'recruiter' | 'source', value: string) => {
+    setSearch('');
+    setParams(() => new URLSearchParams({ tab: 'candidates', [key]: value }), { replace: true });
+  };
+
+  /*
+   * WHERE EACH CARD GOES. A candidate card opens Candidates filtered to that status (Total: every
+   * status); an interview card opens Interviews filtered to that interview status. Every other filter
+   * is cleared on the way, so the list shown is exactly what the card counted.
+   */
+  const openCandidates = (s: string) => {
+    setSearch('');
+    setParams(() => {
+      const p = new URLSearchParams({ tab: 'candidates' });
+      if (s) p.set('status', s);
+      return p;
+    }, { replace: true });
+  };
+  const openInterviews = (s: string) => {
+    setParams(() => new URLSearchParams({ tab: 'interviews', istatus: s }), { replace: true });
+  };
+
+  // The Interviews list: across every candidate you may see, by the INTERVIEW's own status.
+  const istatus = params.get('istatus') ?? '';
+  const [interviewList, setInterviewList] = useState<InterviewList | null>(null);
+  useEffect(() => {
+    if (tab !== 'interviews') return;
+    listInterviews(istatus).then(setInterviewList).catch((ex) => {
+      setInterviewList(null);
+      toast(apiErrorMessage(ex, 'Could not load interviews'), 'bad');
+    });
+  }, [tab, istatus, toast]);
 
   const applySearch = (value: string) => {
     setSearch(value);
     setParams((prev) => {
       const p = new URLSearchParams(prev);
+      p.delete('page');
       if (value) p.set('q', value); else p.delete('q');
       return p;
     }, { replace: true });
@@ -157,10 +219,8 @@ export default function RecruitmentPage() {
     }
   };
 
-  const interviewsSoon = useMemo(
-    () => rows.filter((r) => r.status === 'interview').length,
-    [rows],
-  );
+  // From the scoped counts, not from the rows on screen — those may carry a drill-down filter.
+  const interviewsSoon = stats?.candidates.interview ?? 0;
 
   return (
     <>
@@ -180,14 +240,18 @@ export default function RecruitmentPage() {
 
       {/* The pipeline at a glance. Figures come from the API already scoped to what you may see. */}
       <div className="stat-grid">
-        <Stat label="Total Candidates" value={stats?.total ?? 0} />
-        <Stat label="New" value={stats?.candidates.new ?? 0} />
-        <Stat label="Interviews Scheduled" value={stats?.interviews.scheduled ?? 0} />
-        <Stat label="Approved" value={stats?.candidates.approved ?? 0} />
-        <Stat label="Onboarding" value={stats?.candidates.onboarding ?? 0} />
-        <Stat label="Active / Joined" value={stats?.candidates.active ?? 0} />
-        <Stat label="Hold" value={stats?.candidates.hold ?? 0} />
-        <Stat label="Not Selected" value={stats?.candidates.not_selected ?? 0} />
+        {/* Each card opens the list it counts. */}
+        <Stat label="Total Candidates" value={stats?.total ?? 0} onOpen={() => openCandidates('')} />
+        <Stat label="New" value={stats?.candidates.new ?? 0} onOpen={() => openCandidates('new')} />
+        <Stat label="Contacted" value={stats?.candidates.contacted ?? 0} onOpen={() => openCandidates('contacted')} />
+        <Stat label="Interview" value={stats?.candidates.interview ?? 0} onOpen={() => openCandidates('interview')} />
+        <Stat label="Approved" value={stats?.candidates.approved ?? 0} onOpen={() => openCandidates('approved')} />
+        <Stat label="Onboarding" value={stats?.candidates.onboarding ?? 0} onOpen={() => openCandidates('onboarding')} />
+        <Stat label="Active / Joined" value={stats?.candidates.active ?? 0} onOpen={() => openCandidates('active')} />
+        <Stat label="Hold" value={stats?.candidates.hold ?? 0} onOpen={() => openCandidates('hold')} />
+        <Stat label="Not Selected" value={stats?.candidates.not_selected ?? 0} onOpen={() => openCandidates('not_selected')} />
+        <Stat label="Interviews Scheduled" value={stats?.interviews.scheduled ?? 0} onOpen={() => openInterviews('scheduled')} />
+        <Stat label="Completed Interviews" value={stats?.interviews.completed ?? 0} onOpen={() => openInterviews('completed')} />
       </div>
 
       {!!due?.overdue && (
@@ -224,35 +288,37 @@ export default function RecruitmentPage() {
               onChange={(e) => applySearch(e.target.value)}
               style={{ minWidth: 220 }}
             />
-            <select
-              value={status}
-              onChange={(e) => setParams((prev) => {
-                const p = new URLSearchParams(prev);
-                if (e.target.value) p.set('status', e.target.value); else p.delete('status');
-                return p;
-              }, { replace: true })}
-            >
+            <select aria-label="Status" value={status} onChange={(e) => setFilter('status', e.target.value)}>
               <option value="">Every status</option>
               {CANDIDATE_STATUSES.map((s) => <option key={s} value={s}>{statusLabel(s)}</option>)}
             </select>
-            <select value={recruiter} onChange={(e) => setRecruiter(e.target.value)}>
+            <select aria-label="Recruiter" value={recruiter} onChange={(e) => setFilter('recruiter', e.target.value)}>
               <option value="">Every recruiter</option>
-              {recruiters.map(([id, name]) => <option key={id || 'none'} value={id}>{name}</option>)}
+              {recruiters.map(([key, name]) => <option key={key} value={key}>{name}</option>)}
             </select>
-            <select value={source} onChange={(e) => setSource(e.target.value)}>
+            <select aria-label="Source" value={source} onChange={(e) => setFilter('source', e.target.value)}>
               <option value="">Every source</option>
-              {sources.map((s) => <option key={s} value={s}>{s}</option>)}
+              {sources.map(([key, label]) => <option key={key} value={key}>{label}</option>)}
             </select>
             {(status || search || recruiter || source) && (
               <button
                 className="btn ghost sm"
                 type="button"
-                onClick={() => { setRecruiter(''); setSource(''); setSearch(''); setParams({}, { replace: true }); }}
+                onClick={() => { setSearch(''); setParams({ tab: 'candidates' }, { replace: true }); }}
               >
                 Clear filters
               </button>
             )}
           </div>
+          {/* How many the filters matched — the figure a report row or card should equal. */}
+          <p className="help" style={{ margin: '0 0 8px' }}>
+            <span data-testid="candidate-total">{listTotal} candidate{listTotal === 1 ? '' : 's'}</span>
+            {listTotal > 0 && (
+              <span data-testid="candidate-range">
+                {' · '}Showing {(listMeta.page - 1) * listMeta.per_page + 1}–{(listMeta.page - 1) * listMeta.per_page + rows.length} of {listTotal}
+              </span>
+            )}
+          </p>
 
           {visible.length === 0 ? (
             <p className="help">
@@ -289,7 +355,7 @@ export default function RecruitmentPage() {
                           <div className="muted">Recommended: {statusLabel(c.recommendation)}</div>
                         )}
                       </td>
-                      <td>{c.source || '—'}</td>
+                      <td>{c.source ? sourceLabel(c.source) : <span className="muted">Not recorded</span>}</td>
                       <td>{date(c.created_at)}</td>
                       <td>
                         <button className="btn ghost sm" type="button" onClick={() => navigate(crmPath(`recruitment/${c.id}`))}>Open</button>
@@ -300,6 +366,7 @@ export default function RecruitmentPage() {
               </table>
             </div>
           )}
+          <Pager page={listMeta.page} lastPage={listMeta.last_page} onPage={goToPage} />
         </div>
       ) : tab === 'interviews' ? (
         <div className="card">
@@ -310,6 +377,52 @@ export default function RecruitmentPage() {
             <Stat label="At interview stage" value={interviewsSoon} />
             <Stat label="Follow-ups overdue" value={due?.overdue ?? 0} />
           </div>
+
+          <div className="toolbar-row" style={{ gap: 8, flexWrap: 'wrap', margin: '4px 0 10px' }}>
+            <strong style={{ fontSize: 13 }}>Interviews{interviewList ? ` (${interviewList.total})` : ''}</strong>
+            <select
+              aria-label="Interview status"
+              value={istatus}
+              onChange={(e) => setParams((prev) => {
+                const p = new URLSearchParams(prev);
+                if (e.target.value) p.set('istatus', e.target.value); else p.delete('istatus');
+                return p;
+              }, { replace: true })}
+            >
+              <option value="">Every status</option>
+              {INTERVIEW_STATUSES.map((s) => <option key={s} value={s}>{statusLabel(s)}</option>)}
+            </select>
+          </div>
+          {!interviewList ? (
+            <p className="help">Loading interviews…</p>
+          ) : interviewList.data.length === 0 ? (
+            <p className="help">No interviews{istatus ? ` with the status ${statusLabel(istatus)}` : ''}.</p>
+          ) : (
+            <div className="lead-scroll" style={{ marginBottom: 16 }}>
+              <table className="list-table">
+                <thead><tr><th>When</th><th>Candidate</th><th>Interviewer</th><th>Mode</th><th>Status</th><th></th></tr></thead>
+                <tbody>
+                  {interviewList.data.map((iv) => (
+                    <tr key={iv.id}>
+                      <td>{iv.scheduled_at ? dateTime(iv.scheduled_at) : '—'}</td>
+                      <td>
+                        <strong>{iv.candidate.name}</strong>
+                        <div className="muted">{statusLabel(iv.candidate.status)}</div>
+                      </td>
+                      <td>{iv.interviewer_name ?? '—'}</td>
+                      <td>{iv.mode || '—'}{iv.location ? <div className="muted">{iv.location}</div> : null}</td>
+                      <td><span className={statusPill(iv.status)}>{statusLabel(iv.status)}</span></td>
+                      <td>
+                        <button className="btn ghost sm" type="button" onClick={() => navigate(crmPath(`recruitment/${iv.candidate.id}`))}>Open</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          <div className="modal-sub" style={{ marginTop: 8 }}>Follow-ups due</div>
 
           {!due || due.data.length === 0 ? (
             <p className="help">Nothing outstanding. Follow-ups you add on a candidate appear here.</p>
@@ -375,8 +488,9 @@ export default function RecruitmentPage() {
             ) : (
               <table className="list-table">
                 <tbody>
+                  {/* Each row opens Candidates filtered to exactly the candidates it counts. */}
                   {stats.by_recruiter.map((r) => (
-                    <tr key={r.recruiter_id ?? 'none'}>
+                    <tr key={r.key} {...drillRow(`Show candidates of ${r.name}`, () => openFiltered('recruiter', r.key))}>
                       <td>{r.name}</td>
                       <td style={{ textAlign: 'right' }}>{r.count}</td>
                     </tr>
@@ -392,8 +506,8 @@ export default function RecruitmentPage() {
               <table className="list-table">
                 <tbody>
                   {stats.by_source.map((r) => (
-                    <tr key={r.source}>
-                      <td>{r.source}</td>
+                    <tr key={r.key} {...drillRow(`Show candidates from ${sourceLabel(r.source)}`, () => openFiltered('source', r.key))}>
+                      <td>{sourceLabel(r.source)}</td>
                       <td style={{ textAlign: 'right' }}>{r.count}</td>
                     </tr>
                   ))}
@@ -531,9 +645,64 @@ export default function RecruitmentPage() {
   );
 }
 
-function Stat({ label, value }: { label: string; value: number }) {
+/**
+ * Previous · 1 2 3 … Next. Every page when there are seven or fewer; otherwise the first, the last
+ * and two either side of the current one, with "…" for the gaps, so the control stays one line.
+ */
+function Pager({ page, lastPage, onPage }: { page: number; lastPage: number; onPage: (n: number) => void }) {
+  if (lastPage <= 1) return null;
+  const wanted = new Set([1, lastPage, page - 2, page - 1, page, page + 1, page + 2].filter((n) => n >= 1 && n <= lastPage));
+  const shown = lastPage <= 7 ? Array.from({ length: lastPage }, (_, i) => i + 1) : [...wanted].sort((a, b) => a - b);
+  const items: (number | 'gap')[] = [];
+  shown.forEach((n, i) => { if (i > 0 && n - shown[i - 1] > 1) items.push('gap'); items.push(n); });
   return (
-    <div className="card meta-stat">
+    <nav className="lead-pager" aria-label="Candidate pages">
+      <span className="muted">Page {page} of {lastPage}</span>
+      <div className="toolbar-row" style={{ gap: 4, flexWrap: 'wrap' }}>
+        <button className="btn ghost sm" type="button" disabled={page <= 1} onClick={() => onPage(page - 1)}>Previous</button>
+        {items.map((it, i) => (it === 'gap'
+          ? <span key={`gap-${i}`} className="muted" aria-hidden="true">…</span>
+          : (
+            <button key={it} type="button" className={it === page ? 'btn primary sm' : 'btn ghost sm'}
+              aria-current={it === page ? 'page' : undefined} aria-label={`Page ${it}`} onClick={() => onPage(it)}>
+              {it}
+            </button>
+          )))}
+        <button className="btn ghost sm" type="button" disabled={page >= lastPage} onClick={() => onPage(page + 1)}>Next</button>
+      </div>
+    </nav>
+  );
+}
+
+/** A source as people read it: "referral" → "Referral". The stored value is still what filters. */
+function sourceLabel(s: string): string {
+  return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+}
+
+/** A Reports row that opens its drill-down — by mouse, or by keyboard (Tab, then Enter or Space). */
+function drillRow(title: string, open: () => void) {
+  return {
+    role: 'link' as const,
+    tabIndex: 0,
+    title,
+    onClick: open,
+    onKeyDown: (e: React.KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } },
+    style: { cursor: 'pointer' },
+  };
+}
+
+/** A count; with `onOpen`, a card that opens the list it counts (mouse or keyboard). */
+function Stat({ label, value, onOpen }: { label: string; value: number; onOpen?: () => void }) {
+  const open = onOpen ? {
+    role: 'link' as const,
+    tabIndex: 0,
+    title: `Show ${label}`,
+    onClick: onOpen,
+    onKeyDown: (e: React.KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(); } },
+    style: { cursor: 'pointer' },
+  } : {};
+  return (
+    <div className="card meta-stat" {...open}>
       <div className="meta-stat-n">{value}</div>
       <div className="muted">{label}</div>
     </div>

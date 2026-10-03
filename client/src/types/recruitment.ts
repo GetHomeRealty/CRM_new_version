@@ -95,6 +95,22 @@ export interface Candidate {
   agent_user_name?: string | null;
 }
 
+/** One row of the Interviews list: an interview with the candidate it belongs to. */
+export interface InterviewRow {
+  id: number;
+  status: InterviewStatus;
+  scheduled_at: string | null;
+  mode: string | null;
+  location: string | null;
+  interviewer_name: string | null;
+  candidate: { id: number; name: string; status: CandidateStatus };
+}
+
+export interface InterviewList {
+  total: number;
+  data: InterviewRow[];
+}
+
 export interface Interview {
   id: number;
   candidate_id: number;
@@ -170,15 +186,21 @@ export interface CandidateDetail {
 
 export interface CandidateList {
   data: Candidate[];
+  /** Every candidate the filters match — the figure a card or Reports row shows. */
   total: number;
+  page: number;
+  per_page: number;
+  last_page: number;
 }
 
 export interface RecruitmentStats {
   total: number;
   candidates: Record<CandidateStatus, number>;
   interviews: Record<InterviewStatus, number>;
-  by_recruiter: { recruiter_id: number | null; name: string; count: number }[];
-  by_source: { source: string; count: number }[];
+  /** `key` is the Candidates `recruiter` filter that shows exactly this row: a user id, or `none`. */
+  by_recruiter: { recruiter_id: number | null; key: string; name: string; count: number }[];
+  /** `key` is the Candidates `source` filter for this row; `__none__` is Not recorded (null or empty). */
+  by_source: { source: string; key: string; count: number }[];
   followups_overdue: number;
 }
 
