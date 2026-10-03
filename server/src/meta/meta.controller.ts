@@ -173,11 +173,27 @@ export class MetaController {
     });
     const on = new Set(connected.map((f) => f.form_id));
 
+    /*
+     * TWO COUNTS, BECAUSE THEY ARE TWO DIFFERENT THINGS.
+     *
+     * `leads_count` is Facebook's: every submission the form ever received, including test leads,
+     * submissions older than Meta lets an app download, and people who answered twice. `crm_count`
+     * is the CRM's, counted by exactly the rule `leads()` lists with — same scope, same Page, deleted
+     * leads left out — so the card's CRM figure always equals the list heading for that form.
+     */
+    const crm = forms.length ? await this.prisma.leads.groupBy({
+      by: ['facebook_form_id'],
+      where: { AND: [{ source: 'facebook_meta' }, liveLeadWhere(user), { facebook_page_id: id }, { facebook_form_id: { in: forms.map((f) => f.id) } }] },
+      _count: { _all: true },
+    }) : [];
+    const inCrm = new Map(crm.map((r) => [r.facebook_form_id, r._count._all]));
+
     return {
       page_name: page.name,
       forms: forms.map((f) => ({
         id: f.id, name: f.name, status: f.status ?? null,
         leads_count: f.leads_count ?? 0, created_at: f.created_time ?? null,
+        crm_count: inCrm.get(f.id) ?? 0,
         is_connected: on.has(f.id),
       })),
     };

@@ -71,6 +71,10 @@ const PAGE_ORDER = ['BUY EASY Realty', 'Get Home Realty'];
  */
 const FORM_KEY = 'meta_last_form';
 
+/** Why a form card's two counts can differ — shown on hover. */
+const FORM_COUNTS_HINT = 'Facebook counts every submission. The CRM shows each person once, without deleted leads, '
+  + 'test leads, leads older than about 90 days, or leads you cannot see.';
+
 const pageRank = (name: string): number => {
   const n = name.trim().toLowerCase();
   const i = PAGE_ORDER.findIndex((x) => x.trim().toLowerCase() === n);
@@ -701,8 +705,9 @@ export default function MetaPage() {
                     title={formFilter?.id === f.id ? 'Show all Meta leads' : `Show leads from ${f.name}`}
                     style={{ all: 'unset', cursor: 'pointer', flex: 1, minWidth: 0 }}>
                     <strong>{f.name}</strong>
-                    <div className="muted">
-                      {f.leads_count} lead{f.leads_count === 1 ? '' : 's'} on Meta
+                    {/* Two counts from two places, labelled so they are never read as one. */}
+                    <div className="muted" title={FORM_COUNTS_HINT}>
+                      {f.leads_count} on Facebook · {f.crm_count ?? 0} in CRM
                       {f.status ? ` · ${f.status.toLowerCase()}` : ''}
                     </div>
                   </button>
@@ -728,7 +733,7 @@ export default function MetaPage() {
       <div className="card" ref={leadsRef}>
         <div className="modal-sub" style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           {formFilter
-            ? `Leads from ${formFilter.name}${formTotal !== null ? ` (${formTotal})` : ''}`
+            ? `Leads from ${formFilter.name}${formTotal !== null ? ` (${formTotal} in CRM)` : ''}`
             : 'Recent Meta Leads'}
           {formFilter && (
             <button className="btn ghost sm" type="button" onClick={() => setFormParam(null)}>Show all</button>
