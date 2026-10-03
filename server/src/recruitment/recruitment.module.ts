@@ -3,6 +3,8 @@ import { AuthModule } from '../auth/auth.module';
 import { RecruitmentController } from './recruitment.controller';
 import { RecruitmentService } from './recruitment.service';
 import { RecruitmentAgentService } from './recruitment-agent.service';
+import { RecruitmentReferralController } from './recruitment-referral.controller';
+import { RecruitmentReferralService } from './recruitment-referral.service';
 
 /**
  * Recruitment & Interview: candidates, their interviews, and the one step that turns an approved
@@ -17,7 +19,8 @@ import { RecruitmentAgentService } from './recruitment-agent.service';
  */
 @Module({
   imports: [AuthModule],
-  controllers: [RecruitmentController],
-  providers: [RecruitmentService, RecruitmentAgentService],
+  // The referral controller is the agents' submission-only door; see its own comment.
+  controllers: [RecruitmentController, RecruitmentReferralController],
+  providers: [RecruitmentService, RecruitmentAgentService, RecruitmentReferralService],
 })
 export class RecruitmentModule {}

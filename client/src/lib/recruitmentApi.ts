@@ -1,7 +1,7 @@
 import api from './axios';
 import type {
   AgentCreated, CandidateDetail, CandidateDocument, CandidateList, CandidateNote, CandidateStatus,
-  Followup, Interview, InterviewStatus, OnboardingItem, PendingFollowups, Recommendation,
+  Followup, Interview, InterviewList, InterviewStatus, OnboardingItem, PendingFollowups, Recommendation,
   RecruitmentPerson, RecruitmentStats,
 } from '../types/recruitment';
 
@@ -25,13 +25,33 @@ export const recruitmentPeople = (): Promise<{ data: RecruitmentPerson[] }> =>
 export const recruitmentStats = (): Promise<RecruitmentStats> =>
   api.get<RecruitmentStats>('/api/recruitment/stats').then((r) => r.data);
 
-export const listCandidates = (params: { status?: string; q?: string } = {}): Promise<CandidateList> =>
+/** `recruiter` is a user id or `none`; `source` a stored value or `__none__` — the keys Reports gives. */
+export const listCandidates = (
+  params: { status?: string; q?: string; recruiter?: string; source?: string; page?: number; perPage?: number } = {},
+): Promise<CandidateList> =>
   api.get<CandidateList>('/api/recruitment/candidates', {
-    params: { status: params.status || undefined, q: params.q || undefined },
+    params: {
+      status: params.status || undefined, q: params.q || undefined,
+      recruiter: params.recruiter || undefined, source: params.source || undefined,
+      page: params.page && params.page > 1 ? params.page : undefined,
+      // Server default is 50 and it caps at 200; only sent when a page size was asked for.
+      per_page: params.perPage || undefined,
+    },
   }).then((r) => r.data);
+
+/** Interviews across the candidates you may see, optionally one status — the list the interview cards open. */
+export const listInterviews = (status?: string): Promise<InterviewList> =>
+  api.get<InterviewList>('/api/recruitment/interviews', { params: { status: status || undefined } }).then((r) => r.data);
 
 export const getCandidate = (id: number): Promise<CandidateDetail> =>
   api.get<CandidateDetail>(`/api/recruitment/candidates/${id}`).then((r) => r.data);
+
+/**
+ * An agent's "Refer a Candidate". Submission only: the answer is a confirmation sentence, never the
+ * record — agents cannot read recruitment, and the server takes the referring agent from the session.
+ */
+export const referCandidate = (body: { name: string; phone: string; email?: string; note?: string }): Promise<{ message: string }> =>
+  api.post<{ message: string }>('/api/recruitment/referrals', body).then((r) => r.data);
 
 export const createCandidate = (body: Record<string, unknown>): Promise<{ data: CandidateDetail['candidate'] }> =>
   api.post('/api/recruitment/candidates', body).then((r) => r.data);

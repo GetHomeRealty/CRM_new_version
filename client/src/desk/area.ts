@@ -58,6 +58,8 @@ export const SCREEN_AREA: Record<string, ScreenArea> = {
   meta: 'crm',
   // Recruitment is run from the CRM side, matching SCREEN_DOMAIN on the server.
   recruitment: 'crm',
+  // Agent Recruitment → Refer an Agent: the agents' submission-only referral page.
+  'agent-recruitment': 'crm',
   // Client Reviews, by request. It has no screen behind it yet — no route, no controller, no page —
   // so this decides which sidebar offers it when one is built.
   reviews: 'crm',

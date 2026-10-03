@@ -9,6 +9,13 @@ import {
 } from './recruitment.status';
 
 const str = (v: unknown): string => String(v ?? '').trim();
+
+/**
+ * The filter keys for the two "nobody" rows in Reports. Sentinels rather than empty strings, so
+ * "no filter" (absent) and "filter to the missing ones" can never be confused.
+ */
+export const UNASSIGNED = 'none';
+export const SOURCE_NOT_RECORDED = '__none__';
 const EMAIL_SHAPE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /** The three the brokerage uses. Mirrored by a CHECK constraint on the column. */
@@ -202,15 +209,100 @@ export class RecruitmentService {
       by_recruiter: recruiters
         .map((r) => ({
           recruiter_id: r.assigned_recruiter_id,
+          key: r.assigned_recruiter_id === null ? UNASSIGNED : String(r.assigned_recruiter_id),
           name: r.assigned_recruiter_id ? (nameOf.get(r.assigned_recruiter_id) ?? `User #${r.assigned_recruiter_id}`) : 'Unassigned',
           count: r._count._all,
         }))
         .sort((a, b) => b.count - a.count),
-      by_source: bySource
-        .map((r) => ({ source: r.source ?? 'Not recorded', count: r._count._all }))
-        .sort((a, b) => b.count - a.count),
+      by_source: this.sourceRows(bySource),
       followups_overdue: overdue,
     };
+  }
+
+  // ------------------------------------------------------------------ drill-down filters
+
+  /**
+   * The recruiter / source part of a candidate query, as Reports counts it.
+   *
+   *   recruiter: a user id, or `none` for candidates nobody is assigned to.
+   *   source:    a source value exactly as stored, or `__none__` for NOT RECORDED — a null or empty
+   *              source, which `stats()` reports together as one "Not recorded" row.
+   *
+   * Absent means "any". Anything else is refused rather than silently ignored, because an ignored
+   * filter shows MORE than the report row that was clicked.
+   */
+  private drillDown(query: Record<string, unknown>): Prisma.recruitment_candidatesWhereInput[] {
+    const out: Prisma.recruitment_candidatesWhereInput[] = [];
+    const recruiter = str(query.recruiter);
+    if (recruiter) {
+      if (recruiter === UNASSIGNED) out.push({ assigned_recruiter_id: null });
+      else if (/^\d+$/.test(recruiter)) out.push({ assigned_recruiter_id: Number(recruiter) });
+      else throw new BadRequestException({ message: 'Unknown recruiter filter.' });
+    }
+    if (query.source !== undefined && query.source !== null && String(query.source) !== '') {
+      const source = String(query.source);
+      out.push(source === SOURCE_NOT_RECORDED ? { OR: [{ source: null }, { source: '' }] } : { source });
+    }
+    return out;
+  }
+
+  // ------------------------------------------------------------------ interviews
+
+  /**
+   * Every interview across the candidates this person may see, optionally one status.
+   *
+   * SCOPED EXACTLY AS `stats()` COUNTS THEM — `candidate: visibleWhere(user)` — so the "Interviews
+   * Scheduled" and "Completed Interviews" cards always equal the list they open. Capped at 200 like
+   * the candidate list; the total says how many there are.
+   */
+  async interviews(user: AuthUserRecord, query: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const status = str(query.status);
+    if (status && !isInterviewStatus(status)) {
+      throw new BadRequestException({ message: 'Unknown interview status.' });
+    }
+    const where: Prisma.recruitment_interviewsWhereInput = {
+      candidate: this.visibleWhere(user),
+      ...(status ? { status } : {}),
+    };
+    const [rows, total] = await Promise.all([
+      this.prisma.recruitment_interviews.findMany({
+        where,
+        // Soonest first while they are still ahead; a finished one has no "soonest".
+        orderBy: status === 'scheduled' ? [{ scheduled_at: 'asc' }, { id: 'asc' }] : [{ scheduled_at: 'desc' }, { id: 'desc' }],
+        take: 200,
+        include: { candidate: { select: { id: true, name: true, status: true } } },
+      }),
+      this.prisma.recruitment_interviews.count({ where }),
+    ]);
+    const names = await this.namesFor(rows.map((r) => r.interviewer_id));
+    return {
+      total,
+      data: rows.map((r) => ({
+        id: r.id,
+        status: r.status,
+        scheduled_at: r.scheduled_at?.toISOString() ?? null,
+        mode: r.mode,
+        location: r.location,
+        interviewer_name: r.interviewer_id ? names.get(r.interviewer_id) ?? null : null,
+        candidate: r.candidate,
+      })),
+    };
+  }
+
+  /**
+   * Candidate counts by source, keyed for drill-down. Null and empty are both NOT RECORDED — one row,
+   * matching the `__none__` filter. Any other value is its own row and filters by that exact value.
+   */
+  private sourceRows(rows: { source: string | null; _count: { _all: number } }[]): { source: string; key: string; count: number }[] {
+    const merged = new Map<string, { source: string; key: string; count: number }>();
+    for (const r of rows) {
+      const missing = r.source === null || r.source === '';
+      const key = missing ? SOURCE_NOT_RECORDED : (r.source as string);
+      const row = merged.get(key) ?? { source: missing ? 'Not recorded' : (r.source as string), key, count: 0 };
+      row.count += r._count._all;
+      merged.set(key, row);
+    }
+    return [...merged.values()].sort((a, b) => b.count - a.count);
   }
 
   // ------------------------------------------------------------------ candidates
@@ -222,6 +314,9 @@ export class RecruitmentService {
       AND: [
         this.visibleWhere(user),
         ...(isCandidateStatus(status) ? [{ status }] : []),
+        // Recruiter and source on the SERVER, by the same rule Reports counts with, so the list a
+        // report row opens holds exactly that row's number — not a slice of the first 200 rows.
+        ...this.drillDown(query),
         ...(search
           ? [{
             OR: [
@@ -234,10 +329,22 @@ export class RecruitmentService {
       ],
     };
 
+    /*
+     * PAGED, so every candidate a filter matches can be reached — "Referral 347" shows all 347, 50 at a
+     * time, rather than the first 200. `id` ends the ordering, so two candidates added in the same
+     * second still have a fixed place and no row appears on two pages or on none. A page past the end
+     * answers the last page rather than an empty list.
+     */
+    const perPage = Math.min(200, Math.max(1, Number(query.per_page) || 50));
+    const total = await this.prisma.recruitment_candidates.count({ where });
+    const lastPage = Math.max(1, Math.ceil(total / perPage));
+    const page = Math.min(lastPage, Math.max(1, Math.floor(Number(query.page)) || 1));
+
     const rows = await this.prisma.recruitment_candidates.findMany({
       where,
       orderBy: [{ created_at: 'desc' }, { id: 'desc' }],
-      take: 200,
+      skip: (page - 1) * perPage,
+      take: perPage,
     });
     const names = await this.namesFor(rows.map((r) => r.assigned_recruiter_id));
     return {
@@ -246,7 +353,10 @@ export class RecruitmentService {
         // Null when unassigned, so the screen can say "Unassigned" rather than inventing a name.
         assigned_recruiter_name: r.assigned_recruiter_id ? (names.get(r.assigned_recruiter_id) ?? null) : null,
       })),
-      total: await this.prisma.recruitment_candidates.count({ where }),
+      total,
+      page,
+      per_page: perPage,
+      last_page: lastPage,
     };
   }
 

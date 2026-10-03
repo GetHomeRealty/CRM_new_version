@@ -48,6 +48,7 @@ const ForgotPassword = lazy(() => import('./pages/ForgotPassword'));
 const ResetPassword = lazy(() => import('./pages/ResetPassword'));
 const MetaPage = lazy(() => import('./desk/MetaPage'));
 const RecruitmentPage = lazy(() => import('./desk/RecruitmentPage'));
+const ReferAgentPage = lazy(() => import('./desk/ReferAgentPage'));
 const RecruitmentCandidatePage = lazy(() => import('./desk/RecruitmentCandidatePage'));
 const AccountSettingsPage = lazy(() => import('./desk/AccountSettingsPage'));
 const NotificationPreferencesPage = lazy(() => import('./desk/NotificationPreferencesPage'));
@@ -93,6 +94,10 @@ const SCREENS: ScreenRoutes[] = [
   { screen: 'meta', paths: [''], element: () => <MetaPage /> },
   // `''` is the dashboard with its tabs; `:id` is one candidate. Same shape as `lead`.
   { screen: 'recruitment', paths: ['', ':id'], element: (p) => (p === '' ? <RecruitmentPage /> : <RecruitmentCandidatePage />) },
+  // Agent Recruitment → Refer an Agent. `open` because agents hold no screen permission for it; the
+  // page sends anyone but an agent away, and the endpoint behind it refuses non-agents itself.
+  { screen: 'agent-recruitment', paths: ['', 'refer-agent'], open: true,
+    element: (p, area) => (p === '' ? <Navigate to={areaPath(area, 'agent-recruitment/refer-agent')} replace /> : <ReferAgentPage />) },
   { screen: 'invoice', paths: [''], element: () => <InvoicePage /> },
   // MLS hosts Favorites as a section — see MlsModulePage.
   { screen: 'mls', paths: ['', ':id'], element: (p) => (p === '' ? <MlsModulePage /> : <MlsDetailPage />) },

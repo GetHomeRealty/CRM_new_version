@@ -21,6 +21,11 @@ interface NavItem {
   /** Shown only to agents — their own personal settings, self-scoped. */
   agentOnly?: boolean;
   /**
+   * Keep this an expandable group even with a single section. Without it an entry left with one
+   * child collapses to a plain link; set only where the menu itself is wanted.
+   */
+  keepGroup?: boolean;
+  /**
    * Sections of this module, shown as an indented list under the entry.
    *
    * Each child carries its own `key`, which is both its screen permission and, by default,
@@ -87,6 +92,17 @@ const NAV: NavItem[] = [
       // the same `campaigns` view permission as the rest of the module.
       { key: 'campaign-suppressions', label: 'Suppression List', ico: 'lock', screen: 'campaigns', path: 'campaigns?tab=suppressions',
         match: (_p, q) => new URLSearchParams(q).get('tab') === 'suppressions' },
+    ],
+  },
+  /*
+   * Agents only: their one way into recruitment, a submission-only referral form. Not the
+   * Recruitment module below, which agents cannot open.
+   */
+  {
+    key: 'agent-recruitment', label: 'Agent Recruitment', ico: 'users', agentOnly: true, keepGroup: true,
+    children: [
+      { key: 'refer-agent', label: 'Refer an Agent', ico: 'plus', personal: true, path: 'agent-recruitment/refer-agent',
+        match: (p) => p.endsWith('/agent-recruitment/refer-agent') },
     ],
   },
   { key: 'meta', label: 'Meta', ico: 'globe' },
@@ -185,6 +201,7 @@ TITLES.favorites = 'Favorites';
 // top-level entry of its own to take a heading from.
 TITLES.notifications = 'Notification Preferences';
 TITLES['notification-center'] = 'Notifications';
+TITLES['refer-agent'] = 'Refer an Agent';
 
 export default function DeskLayout({ area = DEFAULT_AREA }: { area?: Area }) {
   const { logout, user, can, isAdminOrAbove, isSuperAdmin, modules } = useAuth();
@@ -295,7 +312,7 @@ export default function DeskLayout({ area = DEFAULT_AREA }: { area?: Area }) {
       const kids = n.children
         .filter((c) => !c.area || c.area === area)
         .filter((c) => (c.personal ? true : c.superAdmin ? isSuperAdmin : can(c.screen ?? c.key, 'view')));
-      return kids.length > 1 ? { ...n, children: kids } : { ...n, children: undefined };
+      return kids.length > 1 || (n.keepGroup && kids.length > 0) ? { ...n, children: kids } : { ...n, children: undefined };
     });
 
   /**
@@ -377,7 +394,7 @@ export default function DeskLayout({ area = DEFAULT_AREA }: { area?: Area }) {
     if (rest.length) {
       // A numeric segment is a record id; anything else is a named sub-screen (import, downloads).
       const last = rest[rest.length - 1];
-      crumbs.push({ label: /^\d+$/.test(last) ? `#${last}` : last.replace(/-/g, ' ').replace(/\w/g, (c) => c.toUpperCase()) });
+      crumbs.push({ label: /^\d+$/.test(last) ? `#${last}` : TITLES[last] ?? last.replace(/-/g, ' ').replace(/\w/g, (c) => c.toUpperCase()) });
     }
   }
 
