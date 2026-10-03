@@ -86,7 +86,10 @@ export interface MetaForm {
   id: string;
   name: string;
   status: string | null;
+  /** Facebook's own count: every submission the form ever received. */
   leads_count: number;
+  /** The CRM's count for this form — the same number the list below shows for it. */
+  crm_count?: number;
   created_at: string | null;
   is_connected: boolean;
 }
