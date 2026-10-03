@@ -7,6 +7,7 @@ import { CurrentUser, Screen } from '../auth/decorators';
 import type { AuthUserRecord } from '../auth/auth.types';
 import { RecruitmentService } from './recruitment.service';
 import { RecruitmentAgentService } from './recruitment-agent.service';
+import { RecruitmentNoAgentsGuard } from './recruitment-no-agents.guard';
 import { CANDIDATE_STATUSES, INTERVIEW_STATUSES, allowedNext, isCandidateStatus } from './recruitment.status';
 
 /**
@@ -23,7 +24,9 @@ import { CANDIDATE_STATUSES, INTERVIEW_STATUSES, allowedNext, isCandidateStatus 
  * narrower of the two and refusing earlier would only change which message you get.
  */
 @Controller('recruitment')
-@UseGuards(AuthGuard, ScreenGuard)
+// RecruitmentNoAgentsGuard: agents are refused here even if permissions fall back to defaults —
+// their one recruitment action is the separate "Refer a Candidate" route.
+@UseGuards(AuthGuard, ScreenGuard, RecruitmentNoAgentsGuard)
 export class RecruitmentController {
   constructor(
     private readonly recruitment: RecruitmentService,

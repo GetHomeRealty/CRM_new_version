@@ -33,6 +33,13 @@ export const listCandidates = (params: { status?: string; q?: string } = {}): Pr
 export const getCandidate = (id: number): Promise<CandidateDetail> =>
   api.get<CandidateDetail>(`/api/recruitment/candidates/${id}`).then((r) => r.data);
 
+/**
+ * An agent's "Refer a Candidate". Submission only: the answer is a confirmation sentence, never the
+ * record — agents cannot read recruitment, and the server takes the referring agent from the session.
+ */
+export const referCandidate = (body: { name: string; phone: string; email?: string; note?: string }): Promise<{ message: string }> =>
+  api.post<{ message: string }>('/api/recruitment/referrals', body).then((r) => r.data);
+
 export const createCandidate = (body: Record<string, unknown>): Promise<{ data: CandidateDetail['candidate'] }> =>
   api.post('/api/recruitment/candidates', body).then((r) => r.data);
 
