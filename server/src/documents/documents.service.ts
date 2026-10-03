@@ -8,7 +8,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AuditService, type ActingUser } from '../audit/audit.service';
 import { documentKind, governingStatus, seedDocumentDefaults } from './document-defaults.service';
 import { applyInterlinks } from './document-interlinks';
-import { DOC } from './checklist-definitions';
+import { BROKERAGE_ONLY, DOC } from './checklist-definitions';
 import { mandatoryMoves, requireMandatoryApproval } from './document-mandatory-approval';
 import { DocsValidationService } from './docs-validation.service';
 import { DocumentMailService } from './document-mail.service';
@@ -901,7 +901,33 @@ export class DocumentsService {
      * review queue beside it would be new workflow, not a repair. The column is left in the
      * database; dropping it is a migration with nothing to gain.
      */
-    const docs = await this.docs(txnId);
+    const everything = await this.docs(txnId);
+    /*
+     * THE AGENT IS NOT ASKED FOR THE BROKERAGE'S OWN PAPERWORK, AND SEES IT WHEN IT IS READY.
+     *
+     * The Deposit Receipt, Notice of Sale and Trade Record Sheet are produced by the admin team
+     * from the lawyer details the agent fills in, and raised to the agent for signing. While there
+     * is nothing to show, the agent's screen does not carry an empty upload box for work that is
+     * not theirs, and the row does not count against their figures. The moment the brokerage
+     * produces it - NoticeOfSaleService marks the row Received, or a file is attached - it appears
+     * on the agent's deal by itself.
+     *
+     * THE ROW IS NEVER REMOVED. Admin sees all three on every deal exactly as before, and the
+     * compliance figures do not move. This decides one audience's view, nothing else.
+     *
+     * MEASURED BEFORE THE CHANGE, on the live database: 890 deals carry a Notice of Sale and a
+     * Trade Record Sheet, 708 a Deposit Receipt. Seven of those rows hold a file, and every upload
+     * was made by an ADMIN - not one agent has ever uploaded one, so no agent loses any work.
+     *
+     * Anything added by hand is left alone, whatever it is called (brokerage, 2026-09-25).
+     */
+    const brokerageOwned = (d: { title: string | null; manual: boolean | null }): boolean =>
+      Boolean(d.manual) === false && BROKERAGE_ONLY.includes(String(d.title));
+    const readyForTheAgent = (d: { status: string | null; file_path: string | null }): boolean =>
+      d.status === 'Received' || Boolean(d.file_path);
+    const docs = user && isAgent(user)
+      ? everything.filter((d) => brokerageOwned(d) === false || readyForTheAgent(d))
+      : everything;
     const total = docs.length;
     const mandatory = docs.filter((d) => d.mandatory).length;
     const received = docs.filter((d) => d.status === 'Received').length;

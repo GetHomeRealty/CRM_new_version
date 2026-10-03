@@ -311,3 +311,16 @@ export function everyChecklist(): { type: string; status: string; items: Checkli
   }
   return out;
 }
+
+/*
+ * THE BROKERAGE'S OWN PAPERWORK, 2026-10-03.
+ *
+ * The admin team prepares these three from the lawyer details and raises them to the agent for
+ * SIGNING - TD-116, settled by the brokerage on 2026-09-23. The row always stays on the deal and is
+ * always counted in the brokerage's own figures. What changes is the agent's side: they are never
+ * asked to SUPPLY one, and it reaches their screen once the brokerage has produced it.
+ *
+ * A document ADDED BY HAND is never covered by this, whatever it is called. The brokerage answered
+ * that on 2026-09-25: "Never touched."
+ */
+export const BROKERAGE_ONLY: readonly string[] = [DOC.DEPOSIT_RECEIPT, DOC.NOS, DOC.TRADE_SHEET];
