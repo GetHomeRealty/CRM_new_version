@@ -27,6 +27,18 @@ import type {
 
 const stamp = (iso: string | null): string => (iso ? iso.replace('T', ' ').slice(0, 16) : '—');
 
+/**
+ * "Oct 2, 2026, 9:55 PM EDT" — the same conversion and format as Meta Inquiry History, plus the
+ * zone label. Used for the Meta Submitted / Imported rows, which `stamp` showed as unlabelled UTC
+ * and so disagreed with the inquiry history by a day in the evening.
+ */
+const localStamp = (iso: string): string => {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime())
+    ? iso
+    : d.toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' });
+};
+
 /** 24-hour "14:30" → "2:30 PM". */
 const clock = (t: string): string => {
   const m = /^(\d{2}):(\d{2})$/.exec(t ?? '');
@@ -230,8 +242,8 @@ export default function LeadDetailPage() {
                 <Row k="Budget" v={lead.meta.budget} />
                 <Row k="Timeline" v={lead.meta.timeline} />
                 <Row k="Property type" v={lead.meta.property_type} />
-                <Row k="Submitted" v={lead.meta.submitted_at ? stamp(lead.meta.submitted_at) : null} />
-                <Row k="Imported" v={lead.meta.imported_at ? stamp(lead.meta.imported_at) : null} />
+                <Row k="Submitted" v={lead.meta.submitted_at ? localStamp(lead.meta.submitted_at) : null} />
+                <Row k="Imported" v={lead.meta.imported_at ? localStamp(lead.meta.imported_at) : null} />
                 <Row k="Meta lead ID" v={lead.meta.lead_id} />
               </dl>
               {lead.meta.message && (
