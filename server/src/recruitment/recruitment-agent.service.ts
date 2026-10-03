@@ -20,11 +20,17 @@ const UNIQUE_VIOLATION = 'P2002';
  * inside one transaction: a half-finished conversion would leave either an account nobody can trace
  * to an application, or an application claiming an account that was never made.
  *
- * WHY THE DATABASE IS THE ARBITER AND NOT THESE CHECKS. Two administrators pressing the button at
- * the same moment both read a candidate with `agent_user_id` NULL and both proceed — the read tells
- * them nothing about what the other is doing. The UNIQUE index on `agent_user_id` is what actually
- * decides, and it decides once. The checks below exist to produce a good MESSAGE in the ordinary
- * case; the constraint exists to be right in the rare one.
+ * WHAT DECIDES A RACE. Two administrators pressing the button at the same moment would both read a
+ * candidate with `agent_user_id` NULL and both proceed — a plain read tells neither what the other is
+ * doing. So the candidate row is locked before it is read (step 1): the second conversion of the same
+ * candidate waits, then sees the first one's committed link and is refused with step 2's message.
+ *
+ * Underneath that, the database still guarantees one account. The user row is inserted BEFORE the
+ * link, with the candidate's own address, so it is the UNIQUE index on `users.email` that refuses a
+ * second account — not the one on `agent_user_id`, which a same-address second insert never reaches.
+ * That index is also what settles two DIFFERENT candidates sharing an address, which the row lock
+ * does not serialise. The checks below exist to produce a good MESSAGE; the constraints exist to be
+ * right whatever happens.
  */
 @Injectable()
 export class RecruitmentAgentService {
@@ -82,9 +88,17 @@ export class RecruitmentAgentService {
     try {
       const result = await this.prisma.$transaction(async (tx) => {
         /*
-         * 1. READ THE CANDIDATE INSIDE THE TRANSACTION, not before it. A copy fetched earlier could
+         * 1. LOCK THE CANDIDATE, THEN READ IT, inside the transaction. A copy fetched earlier could
          *    already be stale by the time the write happens, which is the whole of the race.
+         *
+         *    The lock is what makes the second of two conversions of ONE candidate wait here until
+         *    the first commits. At READ COMMITTED (this transaction's level) its read then returns the
+         *    row as committed — linked — and step 2 gives the true answer. Without it, both read an
+         *    unlinked candidate and the loser was told the address "was created a moment ago", or to
+         *    "link or rename" the account just made for this very person. Two DIFFERENT candidates
+         *    are two rows and are not serialised by this; their clash is the address, below.
          */
+        await tx.$queryRaw`SELECT id FROM recruitment_candidates WHERE id = ${candidateId} FOR UPDATE`;
         const candidate = await tx.recruitment_candidates.findFirst({
           where: { id: candidateId, deleted_at: null },
         });

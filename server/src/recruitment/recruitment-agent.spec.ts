@@ -71,6 +71,124 @@ afterEach(async () => {
 
 afterAll(async () => { await prisma.$disconnect(); });
 
+// ---------------------------------------------------------------- forcing an overlap
+
+type Gate = { promise: Promise<void>; open: () => void };
+const gate = (): Gate => {
+  let open!: () => void;
+  const promise = new Promise<void>((resolve) => { open = resolve; });
+  return { promise, open };
+};
+
+/** Run inside one conversion's transaction, just before the named write. */
+type Pause = (tx: { $queryRawUnsafe: (sql: string, ...args: unknown[]) => Promise<unknown> }) => Promise<void>;
+type Hooks = { beforeUserCreate?: Pause; beforeLink?: Pause };
+
+/**
+ * The real service over the real database, except that the transaction client it is handed pauses at
+ * the named step. Hooks are given out in the order the conversions open their transactions. Nothing
+ * else about the transaction changes — not its isolation, not its statements.
+ */
+function instrumentedAgents(hooksByCall: Hooks[]): RecruitmentAgentService {
+  let calls = 0;
+  const db = new Proxy(prisma, {
+    get(target, prop, receiver) {
+      if (prop !== '$transaction') return Reflect.get(target, prop, receiver);
+      return (fn: (tx: unknown) => Promise<unknown>, opts?: unknown) => {
+        const hooks = hooksByCall[calls++] ?? {};
+        return target.$transaction(async (tx) => fn(new Proxy(tx, {
+          get(t, p) {
+            const v = Reflect.get(t, p);
+            if (p === 'users' || p === 'recruitment_candidates') {
+              return new Proxy(v as object, {
+                get(m, k) {
+                  const f = Reflect.get(m, k) as unknown;
+                  const call = (...a: unknown[]) => (f as (...x: unknown[]) => unknown).apply(m, a);
+                  if (p === 'users' && k === 'create') return async (...a: unknown[]) => { await hooks.beforeUserCreate?.(tx); return call(...a); };
+                  if (p === 'recruitment_candidates' && k === 'update') return async (...a: unknown[]) => { await hooks.beforeLink?.(tx); return call(...a); };
+                  return typeof f === 'function' ? (f as (...x: unknown[]) => unknown).bind(m) : f;
+                },
+              });
+            }
+            return typeof v === 'function' ? (v as (...x: unknown[]) => unknown).bind(t) : v;
+          },
+        })), opts as never);
+      };
+    },
+  });
+  const svc = db as unknown as PrismaService;
+  return new RecruitmentAgentService(svc, passwords, new RecruitmentService(svc));
+}
+
+/**
+ * True once some connection is waiting for the candidate row lock — seen from OUTSIDE, so the test
+ * knows the second conversion really is blocked rather than merely started. Bounded, so a service
+ * that takes no such lock fails the test instead of hanging it.
+ */
+async function seenWaitingForCandidateLock(): Promise<boolean> {
+  const deadline = Date.now() + 2000;
+  while (Date.now() < deadline) {
+    const rows = await prisma.$queryRawUnsafe<{ n: number }[]>(
+      `SELECT count(*)::int AS n FROM pg_stat_activity
+        WHERE datname = current_database() AND wait_event_type = 'Lock'
+          AND query ILIKE '%recruitment_candidates%' AND query ILIKE '%FOR UPDATE%'`,
+    );
+    if (rows[0].n > 0) return true;
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  return false;
+}
+
+/** One account for the address, the candidate linked to it and Active, one history event. */
+async function expectOneAccountLinked(c: { id: number; email: string }) {
+  const users = await prisma.users.findMany({ where: { email: { equals: c.email, mode: 'insensitive' } }, select: { id: true } });
+  made.users.push(...users.map((u) => u.id));
+  expect(users).toHaveLength(1);
+  const after = await prisma.recruitment_candidates.findUniqueOrThrow({ where: { id: c.id } });
+  expect(after.agent_user_id).toBe(users[0].id);
+  expect(after.status).toBe('active');
+  expect(after.activated_at).not.toBeNull();
+  expect(await prisma.recruitment_events.count({ where: { candidate_id: c.id, action: 'agent_created' } })).toBe(1);
+}
+
+/** The losing candidate, exactly as it was: no link, still approved, no history of a conversion. */
+async function expectUntouched(c: { id: number }) {
+  const after = await prisma.recruitment_candidates.findUniqueOrThrow({ where: { id: c.id } });
+  expect(after.agent_user_id).toBeNull();
+  expect(after.status).toBe('approved');
+  expect(after.activated_at).toBeNull();
+  expect(await prisma.recruitment_events.count({ where: { candidate_id: c.id, action: 'agent_created' } })).toBe(0);
+}
+
+/**
+ * Request 1 converts and stops at `step`, inside its transaction. Request 2 converts the same
+ * candidate. Request 1 is released only once request 2 is seen waiting for the candidate lock — or
+ * after two seconds if it never is, which then fails the test rather than hanging it.
+ */
+async function expectLoserWaitsAndIsToldTheTruth(step: keyof Hooks) {
+  const c = await candidate();
+  const paused = gate();
+  const release = gate();
+  const svc = instrumentedAgents([{ [step]: async () => { paused.open(); await release.promise; } }, {}]);
+
+  const first = svc.createAgent(ADMIN, c.id, WITH_PW);
+  await paused.promise;
+  const second = svc.createAgent({ ...ADMIN, id: 3, name: 'ZZ Admin Two' } as AuthUserRecord, c.id, WITH_PW);
+  let waited = false;
+  try {
+    waited = await seenWaitingForCandidateLock();
+  } finally {
+    release.open();
+  }
+  const [r1, r2] = await Promise.allSettled([first, second]);
+
+  expect(waited).toBe(true);
+  expect(r1.status).toBe('fulfilled');
+  expect(r2.status).toBe('rejected');
+  expect((r2 as PromiseRejectedResult).reason.response?.message).toBe('An Agent account already exists for this candidate.');
+  await expectOneAccountLinked(c);
+}
+
 describe('creating the agent account', () => {
   it('creates one account, links it, and marks the candidate Active', async () => {
     const c = await candidate();
@@ -198,6 +316,91 @@ describe('creating the agent account', () => {
 
     // And exactly one account exists for that address.
     expect(await prisma.users.count({ where: { email: c.email } })).toBe(1);
+  });
+
+  /*
+   * ================================================================================================
+   * THE SAME RACE, WITH THE OVERLAP FORCED RATHER THAN HOPED FOR.
+   *
+   * The test above starts both calls together, but alone it almost always runs them one after the
+   * other, so it saw the overlap only under full-gate load — and then failed, because the loser was
+   * told "a user with that email address was created a moment ago", or even to "link or rename" the
+   * account just made for this very candidate. These hold request 1 open at a chosen step, start
+   * request 2, and release request 1 only once request 2 is SEEN waiting on the candidate lock, so
+   * every run exercises the overlap.
+   * ================================================================================================
+   */
+  describe('two conversions of one candidate, overlapping on purpose', () => {
+    it('the second, arriving before the first has created the user, waits and is told the account exists', async () => {
+      await expectLoserWaitsAndIsToldTheTruth('beforeUserCreate');
+    });
+
+    it('the second, arriving after the user is created but before the link, waits and is told the account exists', async () => {
+      await expectLoserWaitsAndIsToldTheTruth('beforeLink');
+    });
+
+    it('runs at READ COMMITTED, which is what lets the waiting conversion see the committed link', async () => {
+      /*
+       * The lock serialises the two; it is READ COMMITTED that makes the second one's read, once the
+       * lock is granted, return the row as the first committed it. Under REPEATABLE READ the same wait
+       * would end in a serialization failure instead of the sentence above. This pins the assumption.
+       */
+      const c = await candidate();
+      let level = '';
+      const svc = instrumentedAgents([{
+        beforeUserCreate: async (tx) => {
+          const rows = await tx.$queryRawUnsafe(`SELECT current_setting('transaction_isolation') AS level`) as { level: string }[];
+          level = rows[0].level;
+        },
+      }]);
+      const res = await svc.createAgent(ADMIN, c.id, WITH_PW) as { user: { id: number } };
+      made.users.push(res.user.id);
+      expect(level).toBe('read committed');
+    });
+  });
+
+  describe('two DIFFERENT candidates who share an address', () => {
+    /*
+     * The candidate lock must not reach this case: these are two rows, so nothing serialises them,
+     * and the address is what clashes. The loser keeps the email-conflict answer, because here it is
+     * true — somebody else took the address — and the losing candidate is left exactly as it was.
+     */
+    it('converted at the same moment: one account, and the other is told the address was just taken', async () => {
+      const first = await candidate();
+      const second = await candidate('approved', { email: first.email });
+
+      // Both pass every check before either inserts, so the users.email index is what decides.
+      const bothChecked = gate();
+      let arrived = 0;
+      const atInsert = async () => { arrived += 1; if (arrived === 2) bothChecked.open(); await bothChecked.promise; };
+      const svc = instrumentedAgents([{ beforeUserCreate: atInsert }, { beforeUserCreate: atInsert }]);
+
+      const results = await Promise.allSettled([
+        svc.createAgent(ADMIN, first.id, WITH_PW),
+        svc.createAgent({ ...ADMIN, id: 3, name: 'ZZ Admin Two' } as AuthUserRecord, second.id, WITH_PW),
+      ]);
+      const wonIndex = results.findIndex((r) => r.status === 'fulfilled');
+      expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+      const lost = results.find((r) => r.status === 'rejected') as PromiseRejectedResult;
+      expect(lost.reason.response?.message)
+        .toBe('A user with that email address was created a moment ago. Refresh and check before trying again.');
+
+      const [winner, loser] = wonIndex === 0 ? [first, second] : [second, first];
+      await expectOneAccountLinked(winner);
+      await expectUntouched(loser);
+    });
+
+    it('converted one after the other: the second is told whose address it is', async () => {
+      const first = await candidate();
+      const second = await candidate('approved', { email: first.email });
+      const res = await agents.createAgent(ADMIN, first.id, WITH_PW) as { user: { id: number } };
+      made.users.push(res.user.id);
+
+      await expect(agents.createAgent(ADMIN, second.id, WITH_PW))
+        .rejects.toMatchObject({ response: { message: expect.stringContaining(`A user already exists with the address ${first.email}`) } });
+      await expectOneAccountLinked(first);
+      await expectUntouched(second);
+    });
   });
 
   it('refuses a second attempt afterwards, in the same words', async () => {
