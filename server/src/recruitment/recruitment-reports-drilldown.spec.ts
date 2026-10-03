@@ -1,5 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
-import { PrismaClient } from '@prisma/client';
+import { Prisma, PrismaClient } from '@prisma/client';
 import type { PrismaService } from '../prisma/prisma.service';
 import type { AuthUserRecord } from '../auth/auth.types';
 import { RecruitmentService, SOURCE_NOT_RECORDED, UNASSIGNED } from './recruitment.service';
@@ -15,9 +15,18 @@ const ROLLBACK = '__rollback__';
 let seq = 0;
 const tag = (): string => { seq += 1; return `${Date.now()}-${seq}`; };
 
+/*
+ * REPEATABLE READ, so the report and the lists it is compared with read ONE snapshot.
+ *
+ * An admin's rows count every candidate in the database, not only this file's. Under the default
+ * READ COMMITTED each statement sees whatever has been committed by then, and other recruitment
+ * specs commit candidates and delete them again in `afterEach` while this runs — so "Unassigned"
+ * came out 2 in the report and 3 in its list (and the reverse) in the full parallel gate, never
+ * alone. One snapshot makes the comparison exact without narrowing what is compared.
+ */
 async function inRollback(fn: (tx: PrismaService) => Promise<void>) {
   try {
-    await prisma.$transaction(async (tx) => { await fn(tx as unknown as PrismaService); throw new Error(ROLLBACK); }, { timeout: 60000 });
+    await prisma.$transaction(async (tx) => { await fn(tx as unknown as PrismaService); throw new Error(ROLLBACK); }, { timeout: 60000, isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
   } catch (e) {
     if (!String((e as Error).message).includes(ROLLBACK)) throw e;
   }

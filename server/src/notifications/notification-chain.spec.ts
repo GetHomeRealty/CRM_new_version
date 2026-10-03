@@ -392,30 +392,27 @@ describe('CHAIN — Lead Welcome: new lead -> trigger -> master switch -> send -
       const now = new Date();
 
       /*
-       * Q-1. THE FIXTURE IS MADE THE ONLY ELIGIBLE SET, BEFORE EVERY PASS.
+       * Q-1. THE FIXTURE IS SERVED FIRST, WITHOUT TOUCHING ANYBODY ELSE'S ROWS.
        *
        * `sweep()` selects `FROM leads WHERE created_at >= $1 ... ORDER BY l.id LIMIT 100` and is
-       * NOT scoped to an owner — the comment below already says so. Every un-welcomed lead created
-       * in the last 24 hours competes for the same 100-slot budget, including rows this test did
-       * not create: seeded fixtures, and whatever the fifteen spec files that write to this
-       * database WITHOUT a rollback wrapper have committed. They win slots, the fixture needs more
-       * passes, and `passes <= 5` fails on somebody else's rows.
+       * NOT scoped to an owner. Every un-welcomed lead created in the last 24 hours competes for the
+       * same 100-slot budget, including rows this test did not create — and a lead whose sender is
+       * not set up is skipped WITHOUT a log row, so it stays eligible and comes back every pass.
        *
-       * DOING THIS ONCE BEFORE THE LOOP WAS NOT ENOUGH, which is worth recording: those fifteen
-       * files keep committing WHILE this test sweeps, so rows that did not exist at the start
-       * appear inside the window between passes. It is repeated before each pass instead, scoped
-       * by owner so it can only ever move rows this test did not create. Everything rolls back.
+       * This used to push every other recent lead out of the window with an UPDATE before each
+       * pass. That UPDATE was the timeout: measured on 2026-10-03 under the full parallel gate, it
+       * waited up to 2.4s per call on row locks held by other suites' open transactions, and with
+       * one call per pass the 5s budget was gone. Passed alone in 1.8s every time.
+       *
+       * The fixture's ids are set BELOW every real id instead (ids from the sequence start at 1),
+       * so the oldest-first sweep reaches these 250 before anything else, whatever other suites
+       * commit meanwhile. No row this test did not create is read for update or written, so there
+       * is nothing to wait on. Everything rolls back, so the ids are never kept.
        */
-      const clearTheField = () => tx.$executeRawUnsafe(
-        `UPDATE leads SET created_at = now() - interval '30 days'
-          WHERE created_at >= now() - interval '24 hours'
-            AND (owner_user_id IS NULL OR owner_user_id <> $1)`,
-        agent.id!,
-      );
-      await clearTheField();
-
+      const FIRST_ID = -1_000_000_000;
       await tx.leads.createMany({
         data: Array.from({ length: 250 }, (_, i) => ({
+          id: FIRST_ID + i,
           name: `Vol ${i}`, email: `vol-${tag()}-${i}@example.test`,
           owner_user_id: agent.id!, created_at: now, updated_at: now,
         })) as never,
@@ -424,66 +421,34 @@ describe('CHAIN — Lead Welcome: new lead -> trigger -> master switch -> send -
       const svc = welcome(tx, t);
 
       /*
-       * SWEEP UNTIL THIS FIXTURE IS DRAINED, RATHER THAN A FIXED SIX TIMES.
+       * SWEEP UNTIL THIS FIXTURE IS DRAINED, WITH A CAP SO A STALL FAILS RATHER THAN HANGS.
        *
-       * The eligible-lead query is `ORDER BY l.id LIMIT MAX_PER_PASS` over a 24-hour window and is
-       * NOT scoped to an owner. Six passes is 600 lead-slots, which comfortably drains 250 when the
-       * 250 are the only recent leads — and cannot when they are not. Older un-welcomed leads have
-       * LOWER ids, so they are served first and spend the budget before the fixture is reached.
-       *
-       * That is what timed this test out on the deployment gate: pointed at a live database it was
-       * welcoming the brokerage's real backlog, 100 at a time, and five seconds was not enough to
-       * work through it and then the fixture. The timeout was the symptom. Sweeping until the
-       * fixture's own 250 have gone removes the assumption instead of buying time for it, and the
-       * cap still fails the test — rather than hanging — if draining genuinely stops making
-       * progress.
+       * Because the fixture holds the lowest ids, every pass is spent on it until it is gone; other
+       * suites' rows cannot take a slot ahead of it. A pass that welcomes none of it is therefore a
+       * stall in the sweep itself, and three in a row end the loop so the assertions below report it.
        */
       const PASS_CAP = 40;
       let passes = 0;
-      let contended = 0;
-      let barren = 0;
       let stalled = 0;
       while (mine(t).length < 250 && passes < PASS_CAP) {
         const before = mine(t).length;
-        // Anything committed by another worker since the last pass is moved out of the window too,
-        // and HOW MANY is remembered: it is the only honest measure of who else was in the way.
-        const moved = Number(await clearTheField());
-        if (moved > 0) contended += 1;
         await svc.sweep(new Date());
         passes += 1;
-        /*
-         * ONE BARREN PASS IS TRAFFIC; THREE IN A ROW IS A STALL.
-         *
-         * This broke on the first pass that achieved nothing, reasoning that a later pass would
-         * not achieve it either. That holds on an isolated database. Here another suite can
-         * commit leads BETWEEN the clear and the sweep, take the whole budget with lower ids,
-         * and produce a barren pass that the next clear undoes - so the test gave up early and
-         * then failed its own length assertion. It stopped a deploy on 2026-09-24, minutes
-         * after the same suite passed. The sixth time a shared-database assumption has done it.
-         */
-        if (mine(t).length === before) { barren += 1; stalled += 1; } else { stalled = 0; }
+        if (mine(t).length === before) stalled += 1; else stalled = 0;
         if (stalled >= 3) break;
       }
 
       expect(mine(t)).toHaveLength(250);
       expect(new Set(mine(t).map((e) => e.to)).size).toBe(250);
       /*
-       * THREE PASSES, PLUS ONE FOR EVERY PASS ANOTHER SUITE COMPETED IN.
+       * EXACTLY THREE PASSES: 250 at MAX_PER_PASS=100, with nothing ahead of the fixture.
        *
-       * Draining 250 at MAX_PER_PASS=100 is three passes when nothing else competes. The assertion
-       * here was a flat `<= 5`, with a comment saying more than that "should not happen on an
-       * isolated database". THIS DATABASE IS NOT ISOLATED: other spec files commit leads while this
-       * one sweeps - four of them must, because they exist to test concurrency - and their rows
-       * carry lower ids, so the sweep serves them first and spends the budget. Measured 2026-09-23:
-       * one failure in three full runs, on an application doing exactly the right thing, and it had
-       * already stopped a deploy.
-       *
-       * CONTENTION IS NOW MEASURED, NOT ASSUMED - `clearTheField` reports how many foreign rows it
-       * moved out of the window. The efficiency guarantee is kept: a sweep that regressed to small
-       * batches would need far more passes than the rows in its way could excuse. The extra +1
-       * covers rows committed DURING a pass, which the next pass's clear is the first to see.
+       * The earlier bound allowed one extra pass for every pass another suite competed in, because
+       * other suites' rows could be served first. They no longer can, so the efficiency guarantee is
+       * exact: a sweep that regressed to smaller batches, or re-served rows it had already welcomed,
+       * needs more passes and fails here.
        */
-      expect(passes).toBeLessThanOrEqual(3 + contended + barren + 1);
+      expect(passes).toBe(Math.ceil(250 / 100));
     });
   });
 });

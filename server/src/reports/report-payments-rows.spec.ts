@@ -1,4 +1,4 @@
-import { PrismaClient } from '@prisma/client';
+import { Prisma, PrismaClient } from '@prisma/client';
 import type { PrismaService } from '../prisma/prisma.service';
 import { CommissionService } from '../transactions/commission.service';
 import { PaymentCacheService } from '../transactions/payment-cache.service';
@@ -31,12 +31,22 @@ const prisma = new PrismaClient();
 const ROLLBACK = '__rollback__';
 let seq = 0;
 
+/*
+ * REPEATABLE READ, so the fast path and the enrichment path read ONE snapshot.
+ *
+ * Most comparisons here are over the whole brokerage report, not only this file's fixtures, and the
+ * two paths run one after the other. Under READ COMMITTED a deal committed in between by another
+ * suite appears in one answer and not the other: on 2026-10-03 the full parallel gate failed with the
+ * enrichment path returning 8 rows and the fast path 7, the extra one being "ZZ-TEST TD076 Concurrent
+ * … Road" — committed by duplicate-guard-concurrency.spec.ts, which must commit to test concurrency.
+ * One snapshot keeps the comparison brokerage-wide and makes it exact.
+ */
 async function inRollback(fn: (tx: PrismaService) => Promise<void>) {
   try {
     await prisma.$transaction(async (tx) => {
       await fn(tx as unknown as PrismaService);
       throw new Error(ROLLBACK);
-    }, { timeout: 240000 });
+    }, { timeout: 240000, isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
   } catch (e) {
     if (!String((e as Error).message).includes(ROLLBACK)) throw e;
   }
