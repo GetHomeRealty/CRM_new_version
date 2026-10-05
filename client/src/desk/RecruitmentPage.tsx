@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { crmPath } from './area';
 import {
@@ -176,6 +176,35 @@ export default function RecruitmentPage() {
     setParams(() => new URLSearchParams({ tab: 'interviews', istatus: s }), { replace: true });
   };
 
+  /*
+   * THE FOUR CARDS UNDER "Interviews and what is due", which differ from the cards above in one
+   * way: they are PUSHED rather than replaced, so Back undoes the drill-down and returns to the
+   * overview the card was read from. Replacing the entry — which the cards on the main grid do —
+   * leaves Back to exit Recruitment entirely, and somebody who clicked a card to check a figure has
+   * no way back to the figures.
+   *
+   * Every parameter is rebuilt from nothing, so no filter left over from an earlier drill-down can
+   * narrow the destination below what the card counted. That is what keeps a count equal to the
+   * list it opens.
+   */
+  const drillTo = (next: Record<string, string>) => {
+    setSearch('');
+    setParams(() => new URLSearchParams(next), { replace: false });
+  };
+
+  /*
+   * Which follow-ups the section below shows: every pending one, or only the overdue. In the URL so
+   * a refresh and Back both land on what was being looked at.
+   */
+  const dueFilter = params.get('due') ?? '';
+  const setDueFilter = (v: string) => setParams((prev) => {
+    const p = new URLSearchParams(prev);
+    if (v) p.set('due', v); else p.delete('due');
+    // The scroll has already happened; keeping it would re-scroll on every later change.
+    p.delete('focus');
+    return p;
+  }, { replace: true });
+
   // The Interviews list: across every candidate you may see, by the INTERVIEW's own status.
   const istatus = params.get('istatus') ?? '';
   const [interviewList, setInterviewList] = useState<InterviewList | null>(null);
@@ -221,6 +250,47 @@ export default function RecruitmentPage() {
 
   // From the scoped counts, not from the rows on screen — those may carry a drill-down filter.
   const interviewsSoon = stats?.candidates.interview ?? 0;
+
+  /**
+   * The follow-ups the section shows.
+   *
+   * THE OVERDUE ONES ARE THE FIRST `due.overdue` ROWS, and taking them by position rather than
+   * re-testing each date against the clock is deliberate. The server sorts by `due_at` ascending
+   * and counts overdue as `due_at < now` using ITS clock, so the overdue ones are exactly the
+   * leading rows. Re-testing here would use the BROWSER's clock, a little later and possibly skewed,
+   * and a follow-up falling due between the two readings would make the list disagree with the card
+   * that opened it. Slicing cannot disagree.
+   */
+  const followupRows = useMemo(() => {
+    if (!due) return [];
+    return dueFilter === 'overdue' ? due.data.slice(0, due.overdue) : due.data;
+  }, [due, dueFilter]);
+
+  /*
+   * Arriving at a section, rather than at the top of a page that happens to contain it. A card sits
+   * above both lists, so without this the filter applied correctly and left the person looking at
+   * the same cards, with the answer somewhere below the fold.
+   */
+  const focus = params.get('focus') ?? '';
+  const interviewsRef = useRef<HTMLDivElement | null>(null);
+  const followupsRef = useRef<HTMLDivElement | null>(null);
+  const scrolledFor = useRef('');
+
+  useEffect(() => {
+    if (!focus) { scrolledFor.current = ''; return; }
+    // Once per destination. Re-scrolling on every later render would fight anybody who had
+    // deliberately scrolled away while reading.
+    const key = `${focus}:${istatus}:${dueFilter}`;
+    if (scrolledFor.current === key) return;
+    /*
+     * WAITS FOR THE DATA. Scrolling to "Loading interviews…" puts the view where one line is, and
+     * the rows then arrive underneath and push the section back off the screen.
+     */
+    if (focus === 'interviews' ? !interviewList : !due) return;
+    scrolledFor.current = key;
+    const el = focus === 'interviews' ? interviewsRef.current : followupsRef.current;
+    el?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, [focus, istatus, dueFilter, interviewList, due]);
 
   return (
     <>
@@ -371,14 +441,36 @@ export default function RecruitmentPage() {
       ) : tab === 'interviews' ? (
         <div className="card">
           <div className="modal-sub">Interviews and what is due</div>
+          {/*
+            * Each card opens exactly what it counted. The first two filter the interview list by the
+            * INTERVIEW's own status; the third leaves for Candidates, because "at interview stage" is
+            * a CANDIDATE status and not an interview at all — one candidate at that stage may have
+            * several interviews, or none yet booked.
+            */}
           <div className="stat-grid" style={{ marginBottom: 12 }}>
-            <Stat label="Scheduled" value={stats?.interviews.scheduled ?? 0} />
-            <Stat label="Completed" value={stats?.interviews.completed ?? 0} />
-            <Stat label="At interview stage" value={interviewsSoon} />
-            <Stat label="Follow-ups overdue" value={due?.overdue ?? 0} />
+            <Stat
+              label="Scheduled"
+              value={stats?.interviews.scheduled ?? 0}
+              onOpen={() => drillTo({ tab: 'interviews', istatus: 'scheduled', focus: 'interviews' })}
+            />
+            <Stat
+              label="Completed"
+              value={stats?.interviews.completed ?? 0}
+              onOpen={() => drillTo({ tab: 'interviews', istatus: 'completed', focus: 'interviews' })}
+            />
+            <Stat
+              label="At interview stage"
+              value={interviewsSoon}
+              onOpen={() => drillTo({ tab: 'candidates', status: 'interview' })}
+            />
+            <Stat
+              label="Follow-ups overdue"
+              value={due?.overdue ?? 0}
+              onOpen={() => drillTo({ tab: 'interviews', due: 'overdue', focus: 'followups' })}
+            />
           </div>
 
-          <div className="toolbar-row" style={{ gap: 8, flexWrap: 'wrap', margin: '4px 0 10px' }}>
+          <div ref={interviewsRef} className="toolbar-row" style={{ gap: 8, flexWrap: 'wrap', margin: '4px 0 10px' }}>
             <strong style={{ fontSize: 13 }}>Interviews{interviewList ? ` (${interviewList.total})` : ''}</strong>
             <select
               aria-label="Interview status"
@@ -422,16 +514,33 @@ export default function RecruitmentPage() {
             </div>
           )}
 
-          <div className="modal-sub" style={{ marginTop: 8 }}>Follow-ups due</div>
+          <div ref={followupsRef} className="toolbar-row" style={{ justifyContent: 'space-between', marginTop: 8 }}>
+            <div className="modal-sub">
+              {dueFilter === 'overdue' ? `Follow-ups overdue (${due?.overdue ?? 0})` : 'Follow-ups due'}
+            </div>
+            {/*
+              * SAYS THE LIST IS NARROWED, AND UNDOES IT. A section quietly showing fewer rows than
+              * it did a moment ago reads as rows having gone missing.
+              */}
+            {dueFilter === 'overdue' && (
+              <button className="btn ghost sm" type="button" onClick={() => setDueFilter('')}>
+                Show all pending
+              </button>
+            )}
+          </div>
 
-          {!due || due.data.length === 0 ? (
-            <p className="help">Nothing outstanding. Follow-ups you add on a candidate appear here.</p>
+          {!due || followupRows.length === 0 ? (
+            <p className="help">
+              {dueFilter === 'overdue'
+                ? 'Nothing is overdue. Follow-ups still ahead of their date are under all pending.'
+                : 'Nothing outstanding. Follow-ups you add on a candidate appear here.'}
+            </p>
           ) : (
             <div className="lead-scroll">
               <table className="list-table">
                 <thead><tr><th>Due</th><th>Follow-up</th><th>Candidate</th><th>Status</th><th></th></tr></thead>
                 <tbody>
-                  {due.data.map((f) => {
+                  {followupRows.map((f) => {
                     const overdue = new Date(f.due_at) < new Date();
                     return (
                       <tr key={f.id}>
