@@ -146,11 +146,25 @@ describe('the ledger, not a stand-in for it', () => {
     const who = await recruiter();
     await booked(24 * 60, who);
 
-    const results = await Promise.all([sweep.run(), sweep.run(), sweep.run()]);
+    await Promise.all([sweep.run(), sweep.run(), sweep.run()]);
 
-    // Exactly one pass delivered it; the others found it already claimed.
-    expect(results.filter((n) => n > 0)).toHaveLength(1);
+    /*
+     * JUDGED ON THIS PERSON'S LEDGER, NOT ON WHAT `run()` RETURNED.
+     *
+     * That return value is a GLOBAL count of everything the pass delivered. Under the real gate
+     * these suites run in parallel against one database, so another file's fixture is due in the
+     * same window and a second pass legitimately returns a non-zero count — for a DIFFERENT
+     * interview, for a DIFFERENT person. Counting passes therefore proved nothing about this
+     * occurrence, and failed as soon as the suites ran together.
+     *
+     * The guarantee under test is narrower and stronger: this identity was delivered exactly once.
+     * The rows below are scoped to a user created by this test, so nothing else can reach them.
+     */
     expect(await prisma.notifications.count({ where: { user_id: who } })).toBe(1);
+
+    const perChannel = new Map<string, number>();
+    for (const r of await ledgerFor(who)) perChannel.set(r.channel, (perChannel.get(r.channel) ?? 0) + 1);
+    for (const [channel, n] of perChannel) expect({ channel, n }).toEqual({ channel, n: 1 });
 
     const rows = await ledgerFor(who);
     expect([...new Set(rows.map((r) => r.dedupe_key))]).toHaveLength(1);

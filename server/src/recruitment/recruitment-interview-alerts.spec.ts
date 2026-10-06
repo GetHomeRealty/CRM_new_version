@@ -25,6 +25,27 @@ type Dispatched = {
   category: string; userId: number; title: string; body?: string; link?: string; dedupeKey?: string;
 };
 
+/**
+ * ================================================================================================
+ * THE SWEEP IS GLOBAL. THE ASSERTIONS MUST NOT BE.
+ *
+ * `run()` selects every interview due in the window — that is what a sweep is for. Under the real
+ * gate these suites run in PARALLEL against one database, so a pass started by this file also
+ * delivers reminders for fixtures another file created seconds earlier, and `stub.sent.length` was
+ * counting both. Eleven tests here failed that way, and `--runInBand` had been hiding it.
+ *
+ * That was proved to be a TEST defect and not a service one before anything was changed: a pass
+ * over two fixtures dispatches two notifications with DIFFERENT interview ids to DIFFERENT people,
+ * and against the real ledger each lands exactly one row per channel and exactly one in-app
+ * notification. Two different occurrences, each delivered once — the sweep doing its job.
+ *
+ * So the fix is to judge only what this test created. `forInterviews` keeps the strictness — these
+ * are still exact counts, not "at least" — while scoping them to the interviews the test owns.
+ * ================================================================================================
+ */
+const forInterviews = (sent: Dispatched[], ids: number[]): Dispatched[] =>
+  sent.filter((d) => ids.some((id) => (d.dedupeKey ?? '').includes(`reminder:${id}:`)));
+
 /** Records what it was asked to deliver, and claims every channel was delivered. */
 function stubDispatcher() {
   const sent: Dispatched[] = [];
@@ -273,19 +294,35 @@ describe('a change that lands WHILE the sweep is running', () => {
    * ================================================================================================
    */
 
-  /** A dispatcher that runs `during` the first time it is asked to deliver anything. */
-  function mutatingDispatcher(during: () => Promise<void>) {
+  /**
+   * A dispatcher that runs `during` when it first reaches ONE OF THIS TEST'S interviews.
+   *
+   * THE BARRIER HAS TO FIRE ON THE INTENDED INTERVIEW. Firing on the first dispatch of any kind
+   * meant that under parallel runs it fired on another suite's fixture, before this test's batch
+   * had been reached at all — so the mutation landed too early to prove anything, and the test
+   * failed for a reason that had nothing to do with what it was testing.
+   *
+   * `during` is told WHICH of the pair was reached first, so the test can mutate the OTHER one.
+   * That makes it independent of the order the sweep happens to select them in: whichever arrives
+   * first triggers, and the one still to come is the one changed underneath it.
+   */
+  function mutatingDispatcher(ids: number[], during: (reached: number) => Promise<void>) {
     const sent: Dispatched[] = [];
     let fired = false;
     return {
       sent,
       dispatch: async (r: Dispatched) => {
-        if (!fired) { fired = true; await during(); }
+        const reached = ids.find((id) => (r.dedupeKey ?? '').includes(`reminder:${id}:`));
+        if (reached !== undefined && !fired) { fired = true; await during(reached); }
         sent.push(r);
         return { category: r.category, userId: r.userId, delivered: ['in_app'], skipped: [], failed: [] };
       },
     };
   }
+
+  /** The pair this test owns, and the one that was NOT reached first. */
+  const other = (pair: { a: { id: number }; b: { id: number } }, reached: number) =>
+    (reached === pair.a.id ? pair.b.id : pair.a.id);
 
   /** Two interviews due in the same window, on two candidates, for one recruiter. */
   async function twoDue(recruiterId: number) {
@@ -298,7 +335,7 @@ describe('a change that lands WHILE the sweep is running', () => {
     const b = await prisma.recruitment_interviews.create({
       data: { candidate_id: second.id, status: 'scheduled', scheduled_at: at(), created_at: new Date(), updated_at: new Date() },
     });
-    return { first, second, a, b };
+    return { first, second, a, b, ids: [a.id, b.id], candidateOf: { [a.id]: first, [b.id]: second } };
   }
 
   const sweepWith = (stub: { dispatch: unknown }) => {
@@ -310,47 +347,63 @@ describe('a change that lands WHILE the sweep is running', () => {
 
   it('AN INTERVIEW CANCELLED MID-PASS IS NOT REMINDED ABOUT BY THAT PASS', async () => {
     const who = await user('recruiter', 'ZZ Mid');
-    const { second, b } = await twoDue(who);
+    const pair = await twoDue(who);
+    let cancelled = 0;
 
-    const stub = mutatingDispatcher(async () => {
-      await prisma.recruitment_interviews.update({ where: { id: b.id }, data: { status: 'cancelled' } });
+    /*
+     * Whichever of the two the sweep reaches first triggers the barrier, and the OTHER is cancelled
+     * while the pass is still running. Written this way so the test does not depend on the order
+     * `findMany` happens to return them in.
+     */
+    const stub = mutatingDispatcher(pair.ids, async (reached) => {
+      cancelled = other(pair, reached);
+      await prisma.recruitment_interviews.update({ where: { id: cancelled }, data: { status: 'cancelled' } });
     });
     await sweepWith(stub).run();
 
-    // The first went out; the second was called off before its turn came.
-    expect(stub.sent).toHaveLength(1);
-    expect(stub.sent[0].body).not.toContain(second.name);
+    const mine = forInterviews(stub.sent, pair.ids);
+    expect(mine).toHaveLength(1);
+    expect(mine[0].dedupeKey).not.toContain(`reminder:${cancelled}:`);
+    expect(mine[0].body).not.toContain(pair.candidateOf[cancelled].name);
   });
 
   it('an interview MOVED mid-pass is reminded with the new time, or not at all', async () => {
     const who = await user('recruiter', 'ZZ Mid');
-    const { second, b } = await twoDue(who);
+    const pair = await twoDue(who);
+    let moved = 0;
 
     // Moved a week out — no longer due in this window at all.
-    const stub = mutatingDispatcher(async () => {
+    const stub = mutatingDispatcher(pair.ids, async (reached) => {
+      moved = other(pair, reached);
       await prisma.recruitment_interviews.update({
-        where: { id: b.id }, data: { scheduled_at: new Date(Date.now() + 8 * 24 * 60 * 60_000) },
+        where: { id: moved }, data: { scheduled_at: new Date(Date.now() + 8 * 24 * 60 * 60_000) },
       });
     });
     await sweepWith(stub).run();
 
-    expect(stub.sent).toHaveLength(1);
-    expect(stub.sent[0].body).not.toContain(second.name);
+    const mine = forInterviews(stub.sent, pair.ids);
+    expect(mine).toHaveLength(1);
+    expect(mine[0].dedupeKey).not.toContain(`reminder:${moved}:`);
+    expect(mine[0].body).not.toContain(pair.candidateOf[moved].name);
   });
 
   it('a candidate REMOVED mid-pass is not reminded about either', async () => {
     const who = await user('recruiter', 'ZZ Mid');
-    const { second } = await twoDue(who);
+    const pair = await twoDue(who);
+    let removed = 0;
 
-    const stub = mutatingDispatcher(async () => {
+    const stub = mutatingDispatcher(pair.ids, async (reached) => {
+      removed = other(pair, reached);
       await prisma.recruitment_candidates.update({
-        where: { id: second.id }, data: { deleted_at: new Date() },
+        where: { id: pair.candidateOf[removed].id }, data: { deleted_at: new Date() },
       });
     });
     await sweepWith(stub).run();
 
-    expect(stub.sent).toHaveLength(1);
-    expect(stub.sent[0].body).not.toContain(second.name);
+    const mine = forInterviews(stub.sent, pair.ids);
+    expect(mine).toHaveLength(1);
+    expect(mine[0].dedupeKey).not.toContain(`reminder:${removed}:`);
+    expect(mine[0].body).not.toContain(pair.candidateOf[removed].name);
   });
 
   it('ACCESS REMOVED MID-PASS stops the rest of that pass reaching them', async () => {
@@ -360,16 +413,18 @@ describe('a change that lands WHILE the sweep is running', () => {
      * chosen would keep posting to them for the rest of the run.
      */
     const who = await user('recruiter', 'ZZ Mid');
-    await twoDue(who);
+    const pair = await twoDue(who);
 
-    const stub = mutatingDispatcher(async () => {
+    const stub = mutatingDispatcher(pair.ids, async () => {
       // Moved to an agent role: `RecruitmentNoAgentsGuard` would now refuse them the screen.
       await prisma.users.update({ where: { id: who }, data: { role: 'agent' } });
     });
     await sweepWith(stub).run();
 
-    expect(stub.sent).toHaveLength(1);
-    expect(stub.sent[0].userId).toBe(who);
+    // One of the pair reached them; the rest of the pass could not, because they are now an agent.
+    const mine = forInterviews(stub.sent, pair.ids);
+    expect(mine).toHaveLength(1);
+    expect(mine[0].userId).toBe(who);
   });
 
   it('a reassignment mid-pass sends the rest to the person now carrying the candidate', async () => {
@@ -377,25 +432,67 @@ describe('a change that lands WHILE the sweep is running', () => {
     const second = await user('recruiter', 'ZZ Mid Two');
     const pair = await twoDue(first);
 
-    const stub = mutatingDispatcher(async () => {
+    let moved = 0;
+    const stub = mutatingDispatcher(pair.ids, async (reached) => {
+      moved = other(pair, reached);
       await prisma.recruitment_candidates.update({
-        where: { id: pair.second.id }, data: { assigned_recruiter_id: second },
+        where: { id: pair.candidateOf[moved].id }, data: { assigned_recruiter_id: second },
       });
     });
     await sweepWith(stub).run();
 
-    expect(stub.sent).toHaveLength(2);
-    expect(stub.sent[0].userId).toBe(first);
-    expect(stub.sent[1].userId).toBe(second);
+    /*
+     * Both of the pair go out, but to different people: the one reached first to the recruiter who
+     * had them, the one reassigned mid-pass to the recruiter who has them now. Asserted as a SET
+     * rather than in order, because which of the two the sweep reaches first is not ours to decide.
+     */
+    const mine = forInterviews(stub.sent, pair.ids);
+    expect(mine).toHaveLength(2);
+    expect(new Set(mine.map((d) => d.userId))).toEqual(new Set([first, second]));
+    expect(mine.find((d) => d.dedupeKey?.includes(`reminder:${moved}:`))?.userId).toBe(second);
+  });
+
+  it('A CANDIDATE DELETED MID-PASS SKIPS ONE REMINDER, IT DOES NOT ABORT THE SWEEP', async () => {
+    /*
+     * Deleting a candidate cascades to their interviews, so one can vanish underneath a pass that
+     * is already running. This covers the RE-READ path: the interview is gone by the time its turn
+     * comes, and that must cost one reminder rather than the batch.
+     *
+     * IT DOES NOT REPRODUCE THE CRASH THAT PROMPTED THE FIX, and saying so matters. That one came
+     * from the opening `findMany`, when a candidate was removed by another suite while the batch
+     * itself was being read — Prisma raised "Field candidate is required to return data, got null
+     * instead" and the whole pass died. Hitting that moment on demand is not something a test can
+     * do honestly; it was found by running these suites in parallel (three crashes in ten runs) and
+     * the fix is verified the same way. See the service for why the candidate is no longer selected
+     * as a nested relation.
+     *
+     * The deletion here is a real one, not a soft delete, because that is what produces the race.
+     */
+    const who = await user('recruiter', 'ZZ Mid');
+    const pair = await twoDue(who);
+    let removed = 0;
+
+    const stub = mutatingDispatcher(pair.ids, async (reached) => {
+      removed = other(pair, reached);
+      await prisma.recruitment_candidates.delete({ where: { id: pair.candidateOf[removed].id } });
+    });
+
+    // The pass completes rather than throwing.
+    await expect(sweepWith(stub).run()).resolves.toBeGreaterThanOrEqual(0);
+
+    // And the survivor was still reminded about — the deletion cost one reminder, not the batch.
+    const mine = forInterviews(stub.sent, pair.ids);
+    expect(mine).toHaveLength(1);
+    expect(mine[0].dedupeKey).not.toContain(`reminder:${removed}:`);
   });
 
   it('an untouched interview in the same batch is still reminded about', async () => {
     // The control. A guard that skipped everything would pass every test above.
     const who = await user('recruiter', 'ZZ Mid');
-    await twoDue(who);
-    const stub = mutatingDispatcher(async () => { /* nothing changes */ });
+    const pair = await twoDue(who);
+    const stub = mutatingDispatcher(pair.ids, async () => { /* nothing changes */ });
     await sweepWith(stub).run();
-    expect(stub.sent).toHaveLength(2);
+    expect(forInterviews(stub.sent, pair.ids)).toHaveLength(2);
   });
 });
 
@@ -417,7 +514,7 @@ describe('reminders before an interview', () => {
         created_at: new Date(), updated_at: new Date(),
       },
     });
-    return { recruiter, candidate: c, interview: iv };
+    return { recruiter, candidate: c, interview: iv, ids: [iv.id] };
   }
 
   it('sends one a day ahead and one an hour ahead', async () => {
@@ -426,9 +523,10 @@ describe('reminders before an interview', () => {
     const { interview } = await booked(24 * 60);
 
     await sweep.run();
-    expect(stub.sent).toHaveLength(1);
-    expect(stub.sent[0].category).toBe('recruitment_interview_reminder');
-    expect(stub.sent[0].title).toContain('Interview in 24 hours');
+    let mine = forInterviews(stub.sent, [interview.id]);
+    expect(mine).toHaveLength(1);
+    expect(mine[0].category).toBe('recruitment_interview_reminder');
+    expect(mine[0].title).toContain('Interview in 24 hours');
 
     // Move it to an hour away and the other reminder is the one that comes due.
     await prisma.recruitment_interviews.update({
@@ -436,8 +534,9 @@ describe('reminders before an interview', () => {
     });
     stub.sent.length = 0;
     await sweep.run();
-    expect(stub.sent).toHaveLength(1);
-    expect(stub.sent[0].title).toContain('Interview in 1 hour');
+    mine = forInterviews(stub.sent, [interview.id]);
+    expect(mine).toHaveLength(1);
+    expect(mine[0].title).toContain('Interview in 1 hour');
   });
 
   it('names the occurrence in the dedupe key, so a repeated sweep sends nothing extra', async () => {
@@ -454,7 +553,7 @@ describe('reminders before an interview', () => {
     await sweep.run();
     await sweep.run();
 
-    const keys = stub.sent.map((s) => s.dedupeKey);
+    const keys = forInterviews(stub.sent, [interview.id]).map((s) => s.dedupeKey);
     expect(keys).toHaveLength(3);
     expect(new Set(keys).size).toBe(1);               // the same occurrence every time
     expect(keys[0]).toContain(`:${interview.id}:`);   // this interview
@@ -468,7 +567,7 @@ describe('reminders before an interview', () => {
     const { interview } = await booked(24 * 60);
 
     await sweep.run();
-    const before = stub.sent[0].dedupeKey;
+    const before = forInterviews(stub.sent, [interview.id])[0].dedupeKey;
 
     /*
      * Moved EARLIER, not later. A reschedule to 24h05 would leave the window entirely and send
@@ -481,8 +580,9 @@ describe('reminders before an interview', () => {
     stub.sent.length = 0;
     await sweep.run();
 
-    expect(stub.sent).toHaveLength(1);
-    expect(stub.sent[0].dedupeKey).not.toBe(before);
+    const after = forInterviews(stub.sent, [interview.id]);
+    expect(after).toHaveLength(1);
+    expect(after[0].dedupeKey).not.toBe(before);
   });
 
   it('reminds nobody about an interview that was moved out of the window', async () => {
@@ -495,7 +595,7 @@ describe('reminders before an interview', () => {
       where: { id: interview.id }, data: { scheduled_at: new Date(Date.now() + 9 * DAY) },
     });
     await sweep.run();
-    expect(stub.sent).toHaveLength(0);
+    expect(forInterviews(stub.sent, [interview.id])).toHaveLength(0);
   });
 
   it('reminds nobody about a cancelled interview', async () => {
@@ -505,7 +605,7 @@ describe('reminders before an interview', () => {
 
     await prisma.recruitment_interviews.update({ where: { id: interview.id }, data: { status: 'cancelled' } });
     await sweep.run();
-    expect(stub.sent).toHaveLength(0);
+    expect(forInterviews(stub.sent, [interview.id])).toHaveLength(0);
   });
 
   it('reminds nobody about a completed interview, or one on a removed candidate', async () => {
@@ -521,7 +621,7 @@ describe('reminders before an interview', () => {
     });
 
     await sweep.run();
-    expect(stub.sent).toHaveLength(0);
+    expect(forInterviews(stub.sent, [done.interview.id, gone.interview.id])).toHaveLength(0);
   });
 
   it('two overlapping sweeps notify once, not twice', async () => {
@@ -535,12 +635,12 @@ describe('reminders before an interview', () => {
       prisma as unknown as PrismaService, stub as never, permissions,
     );
     const sweep = new RecruitmentInterviewReminderService(prisma as unknown as PrismaService, notify);
-    await booked(24 * 60);
+    const { interview } = await booked(24 * 60);
 
     await Promise.all([sweep.run(), sweep.run(), sweep.run()]);
 
-    expect(stub.sent).toHaveLength(1);
-    expect(stub.claimed.size).toBe(1);
+    // Exactly one dispatch for THIS interview, however many other fixtures the passes also carried.
+    expect(forInterviews(stub.sent, [interview.id])).toHaveLength(1);
   });
 
   it('A RESCHEDULED INTERVIEW REMINDS WITH THE NEW TIME, never the old one', async () => {
@@ -560,13 +660,14 @@ describe('reminders before an interview', () => {
     await prisma.recruitment_interviews.update({ where: { id: interview.id }, data: { scheduled_at: moved } });
 
     await sweep.run();
-    expect(stub.sent).toHaveLength(1);
+    const mine = forInterviews(stub.sent, [interview.id]);
+    expect(mine).toHaveLength(1);
 
     // The minute in the body is the NEW one. Rendered in the brokerage's zone, as the notice is.
     const minute = new Intl.DateTimeFormat('en-CA', {
       hour: 'numeric', minute: '2-digit', timeZone: process.env.TZ || 'America/Toronto',
     }).format(moved);
-    expect(stub.sent[0].body).toContain(minute);
+    expect(mine[0].body).toContain(minute);
   });
 
   it('a cancelled interview cannot be reminded about even if it is cancelled mid-window', async () => {
@@ -578,14 +679,14 @@ describe('reminders before an interview', () => {
     const { interview } = await booked(60);
 
     await sweep.run();
-    expect(stub.sent).toHaveLength(1);        // the 1-hour reminder went
+    expect(forInterviews(stub.sent, [interview.id])).toHaveLength(1);   // the 1-hour reminder went
 
     // Called off afterwards. Later passes must raise nothing more, for this or any lead time.
     await prisma.recruitment_interviews.update({ where: { id: interview.id }, data: { status: 'cancelled' } });
     stub.sent.length = 0;
     await sweep.run();
     await sweep.run();
-    expect(stub.sent).toHaveLength(0);
+    expect(forInterviews(stub.sent, [interview.id])).toHaveLength(0);
   });
 
   it('REASSIGNING THE RECRUITER MOVES THE REMINDER with it', async () => {
@@ -616,9 +717,9 @@ describe('reminders before an interview', () => {
     });
 
     await sweep.run();
-    expect(stub.sent.map((x) => x.userId)).toEqual([second]);
-    expect(stub.sent.map((x) => x.userId)).not.toContain(first);
-    expect(iv.id).toBeGreaterThan(0);
+    const mine = forInterviews(stub.sent, [iv.id]);
+    expect(mine.map((x) => x.userId)).toEqual([second]);
+    expect(mine.map((x) => x.userId)).not.toContain(first);
   });
 
   it('somebody whose access was removed stops being reminded', async () => {
@@ -635,7 +736,7 @@ describe('reminders before an interview', () => {
 
     const recruiter = await user('recruiter', 'ZZ Leaving');
     const c = await candidate(recruiter);
-    await prisma.recruitment_interviews.create({
+    const iv = await prisma.recruitment_interviews.create({
       data: {
         candidate_id: c.id, status: 'scheduled',
         scheduled_at: new Date(Date.now() + 24 * 60 * 60_000),
@@ -646,20 +747,20 @@ describe('reminders before an interview', () => {
     // Moved to an agent role: `RecruitmentNoAgentsGuard` would now refuse them the screen.
     await prisma.users.update({ where: { id: recruiter }, data: { role: 'agent' } });
     await sweep.run();
-    expect(stub.sent).toHaveLength(0);
+    expect(forInterviews(stub.sent, [iv.id])).toHaveLength(0);
 
     // And the same for an account that has been deactivated.
     await prisma.users.update({ where: { id: recruiter }, data: { role: 'recruiter', status: 'Inactive' } });
     await sweep.run();
-    expect(stub.sent).toHaveLength(0);
+    expect(forInterviews(stub.sent, [iv.id])).toHaveLength(0);
   });
 
   it('does not send both reminders for one interview in a single pass', async () => {
     // The windows are far enough apart that no interview can be due for both at once.
     const stub = stubDispatcher();
     const sweep = sweepFor(stub);
-    await booked(24 * 60);
+    const { interview } = await booked(24 * 60);
     await sweep.run();
-    expect(stub.sent).toHaveLength(1);
+    expect(forInterviews(stub.sent, [interview.id])).toHaveLength(1);
   });
 });

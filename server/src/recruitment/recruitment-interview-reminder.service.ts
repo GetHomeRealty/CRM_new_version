@@ -99,11 +99,32 @@ export class RecruitmentInterviewReminderService {
         // A candidate removed from recruitment has no interview worth reminding anybody about.
         candidate: { deleted_at: null },
       };
+      /*
+       * ================================================================================================
+       * THE CANDIDATE IS FETCHED SEPARATELY, AND THAT IS NOT A STYLE CHOICE.
+       *
+       * Selecting `candidate` as a nested relation makes Prisma treat it as REQUIRED: it reads the
+       * interview rows, then resolves their candidates, and if one has gone in between it raises
+       * `Inconsistent query result: Field candidate is required to return data, got null instead`
+       * and the whole pass dies — so every other interview due in that window silently loses its
+       * reminder because somebody deleted an unrelated candidate at the wrong moment.
+       *
+       * That window is not theoretical. `recruitment_interviews.candidate` cascades, so deleting a
+       * candidate removes their interviews too; the sweep can read an interview row and find its
+       * candidate already gone a moment later. It was measured, not reasoned about: running these
+       * suites in parallel reproduced the crash three times in ten runs.
+       *
+       * So the interview carries only `candidate_id`, and the candidate is read in the loop below
+       * where a missing one is an ordinary skip. The `where` clause still joins on the candidate to
+       * filter deleted ones out — a filter is a join, not a materialised relation, and does not
+       * raise.
+       * ================================================================================================
+       */
       const shape = {
         id: true,
         interviewer_id: true,
         scheduled_at: true,
-        candidate: { select: { id: true, name: true, assigned_recruiter_id: true } },
+        candidate_id: true,
       };
 
       const due = await this.prisma.recruitment_interviews.findMany({ where: stillDue, select: shape });
@@ -138,8 +159,19 @@ export class RecruitmentInterviewReminderService {
           });
           if (!current) continue;
 
-          // Dispatched from `current`, never from the snapshot — the details must be today's.
-          delivered += await this.notify.remind(current.candidate, current, lead);
+          /*
+           * Read now rather than joined above, so a candidate removed during this pass is a skipped
+           * reminder instead of a failed sweep. `deleted_at` is re-checked here for the same reason
+           * the interview is re-read at all: the row may have changed since the batch was chosen.
+           */
+          const candidate = await this.prisma.recruitment_candidates.findFirst({
+            where: { id: current.candidate_id, deleted_at: null },
+            select: { id: true, name: true, assigned_recruiter_id: true },
+          });
+          if (!candidate) continue;
+
+          // Dispatched from what was just read, never from the snapshot — details must be today's.
+          delivered += await this.notify.remind(candidate, current, lead);
         } catch (ex) {
           /*
            * One bad interview must not end the pass. The others in this window are due now and
