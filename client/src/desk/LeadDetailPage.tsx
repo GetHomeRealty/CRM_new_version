@@ -1,4 +1,6 @@
 import { crmPath } from './area';
+import '../styles/lead-workspace.css';
+import LeadActivityTimeline from './LeadActivityTimeline';
 import { returnLabel, safeReturnTo } from './returnTo';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -87,6 +89,7 @@ export default function LeadDetailPage() {
   const [notFound, setNotFound] = useState(false);
   const [editorOpen, setEditorOpen] = useState(false);
   const [followUpOpen, setFollowUpOpen] = useState(false);
+  const [workspaceTab, setWorkspaceTab] = useState<'notes' | 'communication'>('notes');
 
   /**
    * `quiet` refetches without showing the loader, so adding a note or task refreshes the panels
@@ -148,8 +151,8 @@ export default function LeadDetailPage() {
   const prefs = lead.property_preferences;
 
   return (
-    <>
-      <div className="toolbar">
+    <div className="lead-workspace">
+      <div className="toolbar lw-header">
         <div className="toolbar-row" style={{ justifyContent: 'space-between' }}>
           <div>
             <button className="btn ghost sm" type="button" onClick={() => navigate(backTo)}>← Back to {returnLabel(backTo)}</button>
@@ -177,9 +180,13 @@ export default function LeadDetailPage() {
       {/* Team Lead only, and only on a lead they may hand out; renders nothing for anyone else. */}
       <TeamLeadAssignPanel leadId={lead.id} onAssigned={() => void load(true)} />
 
-      <div className="g2">
-        <div className="card">
-          <div className="modal-sub">Contact &amp; Classification</div>
+      <div className="lw-columns">
+        <aside className="card lw-profile">
+          <div className="lw-identity">
+            <span className="lw-avatar" aria-hidden="true">{lead.name.split(/\s+/).filter(Boolean).slice(0, 2).map(n => n[0]).join('')}</span>
+            <div><h3>{lead.name}</h3><p>{lead.email || 'No email recorded'}</p><p>{lead.phone || 'No phone recorded'}</p></div>
+          </div>
+          <div className="modal-sub">Lead details</div>
           <dl className="lead-dl">
             <Row k="Email" v={lead.email} />
             <Row k="Phone" v={lead.phone} />
@@ -196,7 +203,7 @@ export default function LeadDetailPage() {
             <Row k="Tags" v={lead.tags.length ? lead.tags.join(', ') : null} />
           </dl>
 
-          <div className="modal-sub">Demographics</div>
+          <details className="lw-extra"><summary>Personal details</summary>
           <dl className="lead-dl">
             <Row k="Age" v={lead.age != null ? String(lead.age) : null} />
             <Row k="Gender" v={lead.gender && label(lead.gender)} />
@@ -205,6 +212,7 @@ export default function LeadDetailPage() {
             <Row k="Date of Birth" v={lead.date_of_birth} />
             <Row k="Marriage Day" v={lead.marriage_day} />
           </dl>
+          </details>
 
           {/* A lead may keep several sets — "Property Preferences", then "2nd Preference", … */}
           {!prefs?.length ? (
@@ -269,16 +277,29 @@ export default function LeadDetailPage() {
               <p className="lead-summary">{lead.notes}</p>
             </>
           )}
-        </div>
+        </aside>
 
-        <div>
-          <LeadTeamAssignmentPanel lead={lead} options={options} canEdit={canEdit} onChanged={() => void load(true)} />
+        <section className="lw-centre" aria-label="Communication and activity">
+          <div className="lw-composer">
+          <div className="lw-tabs" aria-label="Lead workspace views">
+            <button type="button" aria-pressed={workspaceTab === 'notes'} onClick={() => setWorkspaceTab('notes')}>Add note</button>
+            <button type="button" aria-pressed={workspaceTab === 'communication'} onClick={() => setWorkspaceTab('communication')}>Email, text &amp; calls</button>
+          </div>
+          <div hidden={workspaceTab !== 'communication'}>
           <CommunicationPanel lead={lead} canEdit={canEdit} run={run} ask={ask} onSent={() => void load(true)} />
+          <CallsPanel lead={lead} options={options} canEdit={canEdit} run={run} ask={ask} />
+          </div>
+          <div hidden={workspaceTab !== 'notes'}>
           <NotesPanel lead={lead} canEdit={canEdit} run={run} ask={ask} />
+          </div>
+          </div>
+          <LeadActivityTimeline lead={lead} />
+        </section>
+        <aside className="lw-right" aria-label="Follow-ups and showings">
           <TasksPanel lead={lead} options={options} canEdit={canEdit} run={run} ask={ask} />
           <ShowingsPanel lead={lead} canEdit={canEdit} run={run} ask={ask} />
-          <CallsPanel lead={lead} options={options} canEdit={canEdit} run={run} ask={ask} />
-        </div>
+          <LeadTeamAssignmentPanel lead={lead} options={options} canEdit={canEdit} onChanged={() => void load(true)} />
+        </aside>
       </div>
 
       {editorOpen && (
@@ -303,7 +324,7 @@ export default function LeadDetailPage() {
 
       {/* One dialog for every destructive control on the page, driven by `ask`. */}
       <ConfirmDialog confirm={confirm} onClose={closeConfirm} />
-    </>
+    </div>
   );
 }
 
@@ -340,18 +361,27 @@ type Ask = (title: string, message: string, onConfirm: () => void) => void;
 // ------------------------------------------------------------------- notes
 function NotesPanel({ lead, canEdit, run, ask }: { lead: LeadDetail; canEdit: boolean; run: Run; ask: Ask }) {
   const [text, setText] = useState('');
+  const [saving, setSaving] = useState(false);
+  const toast = useToast();
+  const save = async () => {
+    if (saving || !text.trim()) return;
+    setSaving(true);
+    try {
+      await addLeadNote(lead.id, text.trim());
+      setText('');
+      await run(async () => {}, 'Note added.');
+    } catch (error) { toast(apiErrorMessage(error, 'Could not save your note. Your text has been kept.'), 'bad'); }
+    finally { setSaving(false); }
+  };
   return (
     <div className="card">
-      <div className="modal-sub">Notes ({lead.notes_history.length})</div>
       {canEdit && (
-        <div className="lead-add-row">
-          <textarea rows={2} value={text} onChange={(e) => setText(e.target.value)} placeholder="Add a dated note…" />
-          <button className="btn primary sm" type="button" disabled={!text.trim()}
-            onClick={() => void run(() => addLeadNote(lead.id, text.trim()), 'Note added.').then(() => setText(''))}>
-            Add
-          </button>
+        <div className="lw-note-composer">
+          <textarea aria-label="New lead note" rows={4} value={text} disabled={saving} onChange={(e) => setText(e.target.value)} placeholder="Add a note about this lead…" />
+          <div className="lw-note-actions"><span className="help">Visible to your team</span><button className="btn ghost sm" type="button" disabled={saving || !text} onClick={() => setText('')}>Clear</button><button className="btn primary sm" type="button" disabled={saving || !text.trim()} onClick={() => void save()}>{saving ? 'Saving…' : 'Save note'}</button></div>
         </div>
       )}
+      <details className="lw-note-history"><summary>Manage notes ({lead.notes_history.length})</summary>
       {lead.notes_history.length === 0 ? <p className="help">No notes yet.</p> : (
         <ul className="lead-feed">
           {lead.notes_history.map((n) => (
@@ -383,6 +413,7 @@ function NotesPanel({ lead, canEdit, run, ask }: { lead: LeadDetail; canEdit: bo
           ))}
         </ul>
       )}
+      </details>
     </div>
   );
 }
@@ -398,15 +429,16 @@ function TasksPanel({ lead, options, canEdit, run, ask }: { lead: LeadDetail; op
 
   return (
     <div className="card">
-      <div className="modal-sub">Tasks ({pending} pending of {lead.tasks.length})</div>
+      <div className="modal-sub">Next follow-up · {pending} pending</div>
       {canEdit && (
+        <details className="lw-add-details"><summary>Add task</summary>
         <div className="lead-add-grid">
-          <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Task title" />
-          <input type="date" value={due} onChange={(e) => setDue(e.target.value)} />
-          <select value={priority} onChange={(e) => setPriority(e.target.value)}>
+          <input aria-label="Task title" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Task title" />
+          <input aria-label="Task due date" type="date" value={due} onChange={(e) => setDue(e.target.value)} />
+          <select aria-label="Task priority" value={priority} onChange={(e) => setPriority(e.target.value)}>
             {(options?.task_priority ?? ['low', 'medium', 'high']).map((p) => <option key={p} value={p}>{label(p)}</option>)}
           </select>
-          <select value={assignee} onChange={(e) => setAssignee(e.target.value)}>
+          <select aria-label="Task assignee" value={assignee} onChange={(e) => setAssignee(e.target.value)}>
             <option value="">Assign to me</option>
             {(options?.users ?? []).map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
           </select>
@@ -421,6 +453,7 @@ function TasksPanel({ lead, options, canEdit, run, ask }: { lead: LeadDetail; op
             Add
           </button>
         </div>
+        </details>
       )}
       {lead.tasks.length === 0 ? <p className="help">No tasks yet.</p> : (
         <ul className="lead-feed">
@@ -569,10 +602,11 @@ function ShowingsPanel({ lead, canEdit, run, ask }: { lead: LeadDetail; canEdit:
     <div className="card">
       <div className="modal-sub">Showings ({lead.showings.length})</div>
       {canEdit && (
+        <details className="lw-add-details"><summary>Add showing</summary>
         <div className="lead-add-grid">
-          <input value={property} onChange={(e) => setProperty(e.target.value)} placeholder="Property address" />
-          <input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
-          <input type="time" value={time} onChange={(e) => setTime(e.target.value)} />
+          <input aria-label="Showing property address" value={property} onChange={(e) => setProperty(e.target.value)} placeholder="Property address" />
+          <input aria-label="Showing date" type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+          <input aria-label="Showing time" type="time" value={time} onChange={(e) => setTime(e.target.value)} />
           <button className="btn primary sm" type="button" disabled={!property.trim()}
             onClick={() => void run(
               () => addLeadShowing(lead.id, { showing_date: date, time, property: property.trim() }),
@@ -581,6 +615,7 @@ function ShowingsPanel({ lead, canEdit, run, ask }: { lead: LeadDetail; canEdit:
             Add
           </button>
         </div>
+        </details>
       )}
       {lead.showings.length === 0 ? <p className="help">No showings scheduled.</p> : (
         <ul className="lead-feed">

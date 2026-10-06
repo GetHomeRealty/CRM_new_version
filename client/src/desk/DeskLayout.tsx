@@ -208,6 +208,14 @@ export default function DeskLayout({ area = DEFAULT_AREA }: { area?: Area }) {
   const navigate = useNavigate();
   const location = useLocation();
   const [pwOpen, setPwOpen] = useState(false);
+  const [sidebarClosed, setSidebarClosed] = useState(() => {
+    try { return localStorage.getItem('ghh.sidebar.closed') === 'true'; } catch { return false; }
+  });
+  const toggleSidebar = () => setSidebarClosed(previous => {
+    const next = !previous;
+    try { localStorage.setItem('ghh.sidebar.closed', String(next)); } catch { /* Storage is optional. */ }
+    return next;
+  });
   const [notif, setNotif] = useState<AgentChangeNotif>({ count: 0, items: [] });
   const [bellOpen, setBellOpen] = useState(false);
   const bellRef = useRef<HTMLDivElement>(null);
@@ -497,8 +505,8 @@ export default function DeskLayout({ area = DEFAULT_AREA }: { area?: Area }) {
   return (
     <>
       <div className="titlebar"><span className="dot">G</span> Get Home Realty — {AREA_SHORT[area]}</div>
-      <div className="app">
-        <aside className="sidebar">
+      <div className={`app${sidebarClosed ? ' sidebar-closed' : ''}`}>
+        <aside className="sidebar" id="desktop-sidebar">
           <div className="logo">
             {/* The uploaded brand logo (Settings → Company), falling back to the bundled mark. */}
             <img
@@ -540,6 +548,15 @@ export default function DeskLayout({ area = DEFAULT_AREA }: { area?: Area }) {
         </aside>
         <main className="main">
           <div className="topbar">
+            <button type="button" className="icon-btn desktop-sidebar-toggle"
+              aria-label={sidebarClosed ? 'Open sidebar' : 'Close sidebar'}
+              title={sidebarClosed ? 'Open sidebar' : 'Close sidebar'}
+              aria-expanded={!sidebarClosed} aria-controls="desktop-sidebar" onClick={toggleSidebar}>
+              <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+                <rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/>
+                <path d={sidebarClosed ? 'm13 9 3 3-3 3' : 'm17 9-3 3 3 3'}/>
+              </svg>
+            </button>
             <button
               ref={mobileToggleRef}
               type="button"
