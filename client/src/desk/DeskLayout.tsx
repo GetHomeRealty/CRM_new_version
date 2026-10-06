@@ -506,7 +506,7 @@ export default function DeskLayout({ area = DEFAULT_AREA }: { area?: Area }) {
     <>
       <div className="titlebar"><span className="dot">G</span> Get Home Realty — {AREA_SHORT[area]}</div>
       <div className={`app${sidebarClosed ? ' sidebar-closed' : ''}`}>
-        <aside className="sidebar" id="desktop-sidebar">
+        <aside className="sidebar">
           <div className="logo">
             {/* The uploaded brand logo (Settings → Company), falling back to the bundled mark. */}
             <img
@@ -524,8 +524,10 @@ export default function DeskLayout({ area = DEFAULT_AREA }: { area?: Area }) {
             switcher placed away from the list it governs invites the reading that the list is all
             there is.
           */}
-          {areaSwitch('in-sidebar')}
-          {navigation()}
+          <div className="sidebar-navigation" id="desktop-sidebar">
+            {areaSwitch('in-sidebar')}
+            {navigation()}
+          </div>
         </aside>
         <button type="button" className={`mobile-nav-backdrop ${mobileNavOpen ? 'open' : ''}`} aria-label="Close navigation menu" tabIndex={mobileNavOpen ? 0 : -1} onClick={() => setMobileNavOpen(false)} />
         <aside

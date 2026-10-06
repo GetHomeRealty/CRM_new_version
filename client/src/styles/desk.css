@@ -50,9 +50,9 @@ input:focus-visible,select:focus-visible,textarea:focus-visible{outline:none;bor
 *::-webkit-scrollbar-thumb:hover{background:#aeb4c4;border:2px solid transparent;background-clip:padding-box}
 
 .desktop-sidebar-toggle{flex:0 0 36px;margin-right:12px}
-.app.sidebar-closed{grid-template-columns:minmax(0,1fr)}
-.app.sidebar-closed>.sidebar{display:none}
-.app.sidebar-closed .overlay.beside-nav{left:0}
+/* Keep the brand rail's geometry stable when navigation is closed. */
+.app.sidebar-closed>.sidebar>.sidebar-navigation{display:none}
+.sidebar-navigation{display:flex;flex-direction:column;gap:6px}
 @media(max-width:720px){.desktop-sidebar-toggle{display:none}}
 .titlebar{background:linear-gradient(135deg,var(--brand) 0%,var(--brand-darker) 100%);color:#fff;padding:7px 16px;font-size:11.5px;display:flex;gap:8px;align-items:center;letter-spacing:0.01em;font-weight:500;box-shadow:inset 0 -1px 0 rgba(255,255,255,.10)}
 .titlebar .dot{width:16px;height:16px;background:#fff;border-radius:5px;display:inline-grid;place-items:center;color:var(--brand);font-weight:800;font-size:10px;line-height:1}
