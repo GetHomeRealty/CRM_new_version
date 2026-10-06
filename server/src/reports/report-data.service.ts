@@ -125,6 +125,7 @@ type LoadedTxn = Prisma.transactionsGetPayload<{ include: typeof commissionInclu
     id: number; title: string; status: string; validation: string; mandatory: boolean;
     is_condition: boolean; reminder: boolean; file_path: string | null; file_name: string | null;
     remarks: string | null; created_at: Date | null; updated_at: Date | null;
+    uploaded_at: Date | null; reviewed_at: Date | null;
   }[];
   conditions: { id: number; type: string; custom_name: string | null; deadline: Date | null; status: string }[];
   clients: { name: string }[];
@@ -214,6 +215,7 @@ const DOCUMENT_SELECT = {
   select: {
     id: true, title: true, status: true, validation: true, mandatory: true, is_condition: true,
     reminder: true, file_path: true, file_name: true, remarks: true, created_at: true, updated_at: true,
+    uploaded_at: true, reviewed_at: true,
   },
   orderBy: { position: 'asc' },
 } as const;
@@ -538,8 +540,10 @@ export class ReportDataService {
       uploaded: !!d.file_path,
       reminder_sent: d.reminder,
       file_name: d.file_name,
-      uploaded_at: dateStr(d.created_at),
-      reviewed_at: dateStr(d.updated_at),
+      // TD-204 - the document's own dates. These used to be created_at and updated_at, which are
+      // when the checklist row was made and when anything on it last changed.
+      uploaded_at: dateStr(d.uploaded_at),
+      reviewed_at: dateStr(d.reviewed_at),
       remarks: d.remarks,
     }));
     const counts = docCounts(docs);

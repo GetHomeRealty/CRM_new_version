@@ -334,13 +334,18 @@ export class DocumentsService {
       const existing = row.id ? await this.prisma.documents.findFirst({ where: { id: Number(row.id), transaction_id: txnId, deleted_at: null } }) : null;
       if (existing) {
         let mandatoryByHand = false;
+        let reviewedAt: { reviewed_at: Date | null } | Record<string, never> = {};
         // Booleans read as true/false in a history a person has to make sense of.
         const shown = (k: string, v: unknown): string => (k === 'mandatory' ? (v ? 'Yes' : 'No') : String(v ?? ''));
         for (const [k, lbl] of [['title', 'Title'], ['status', 'Status'], ['validation', 'Validation'], ['mandatory', 'Mandatory']] as const) {
           const old = shown(k, (existing as unknown as Record<string, unknown>)[k]);
           const nw = shown(k, (attrs as Record<string, unknown>)[k]);
           if (old !== nw) {
-            if (k === 'validation') reviewed = true;
+            if (k === 'validation') {
+              reviewed = true;
+              // TD-204 - the day Valid or Invalid was decided; back to Pending means not reviewed.
+              reviewedAt = { reviewed_at: nw === 'Valid' || nw === 'Invalid' ? new Date() : null };
+            }
             if (k === 'mandatory') mandatoryByHand = true;
             await this.audit.record(txnId, this.actor(user), { section: SECTION, field: `${existing.title} — ${lbl}`, action: 'Updated', old, new: nw });
           }
@@ -351,11 +356,12 @@ export class DocumentsService {
           // row every time, so writing it unconditionally would mark all of them as decided
           // by hand the first time anybody pressed Save, and the interlink rule would then
           // never touch anything again.
-          data: { ...attrs, ...(mandatoryByHand ? { mandatory_override: attrs.mandatory as boolean } : {}), updated_at: new Date() },
+          data: { ...attrs, ...reviewedAt, ...(mandatoryByHand ? { mandatory_override: attrs.mandatory as boolean } : {}), updated_at: new Date() },
         });
         keep.push(existing.id);
       } else {
-        const created = await this.createDoc(txnId, { ...(attrs as Partial<DocRow>), manual: true });
+        const decided = attrs.validation === 'Valid' || attrs.validation === 'Invalid';
+        const created = await this.createDoc(txnId, { ...(attrs as Partial<DocRow>), ...(decided ? { reviewed_at: new Date() } : {}), manual: true } as Partial<DocRow>);
         keep.push(created.id);
         await this.audit.record(txnId, this.actor(user), { section: SECTION, field: created.title, action: 'Document added' });
       }
@@ -476,7 +482,7 @@ export class DocumentsService {
     if (document.file_path) await this.deleteFile(document.file_path);
     const replaced = !!document.file_path;
     const p = await this.storeFile(txnId, file!);
-    await this.prisma.documents.update({ where: { id: document.id }, data: { file_name: file!.originalname, file_path: p, status: 'Received', updated_at: new Date() } });
+    await this.prisma.documents.update({ where: { id: document.id }, data: { file_name: file!.originalname, file_path: p, status: 'Received', uploaded_at: new Date(), updated_at: new Date() } });
     await this.audit.record(txnId, this.actor(user), { section: SECTION, field: document.title, action: replaced ? 'Document replaced' : 'Document uploaded', new: file!.originalname, source: this.actorSource(user) });
     await this.docsValidation.sync(txnId, this.actor(user));
     await applyInterlinks(this.prisma, txnId);   // TD-159 - documents that satisfy each other
@@ -597,14 +603,14 @@ export class DocumentsService {
             // Retain the previously submitted version, matching the existing agent replacement policy.
             await tx.documents.create({ data: { transaction_id: txnId, title: document.title, mandatory: false,
               status: 'Received', validation: 'Pending', position: ++position,
-              file_name: file.file_name, file_path: file.file_path, created_at: new Date(), updated_at: new Date() } });
+              file_name: file.file_name, file_path: file.file_path, uploaded_at: new Date(), created_at: new Date(), updated_at: new Date() } });
           } else {
-            Object.assign(data, { file_name: file.file_name, file_path: file.file_path, status: 'Received', validation: 'Pending' });
+            Object.assign(data, { file_name: file.file_name, file_path: file.file_path, status: 'Received', validation: 'Pending', uploaded_at: new Date(), reviewed_at: null });
           }
         } else {
           // Keep submitted versions; the client displays the most recent file for each client name.
           const files = [...((parseJson<FileEntry[]>(document.files) ?? []) as FileEntry[]), ...selected.map(({ client_name, file_name, file_path }) => ({ client_name, file_name, file_path }))];
-          Object.assign(data, { files: JSON.stringify(files), status: await this.docStatusFromFiles(txnId, document, files), validation: 'Pending' });
+          Object.assign(data, { files: JSON.stringify(files), status: await this.docStatusFromFiles(txnId, document, files), validation: 'Pending', uploaded_at: new Date(), reviewed_at: null });
         }
         const changed = await tx.documents.updateMany({ where: this.draftVersion(document), data });
         if (changed.count !== 1) throw new ConflictException('A document changed during submission. Refresh and try again.');
@@ -648,7 +654,7 @@ export class DocumentsService {
     const stored = await this.storeFile(txnId, file!);
     files.push({ client_name: clientName, file_name: file!.originalname, file_path: stored });
     const status = await this.docStatusFromFiles(txnId, document, files);
-    await this.prisma.documents.update({ where: { id: document.id }, data: { files: JSON.stringify(files), status, updated_at: new Date() } });
+    await this.prisma.documents.update({ where: { id: document.id }, data: { files: JSON.stringify(files), status, uploaded_at: new Date(), updated_at: new Date() } });
     await this.audit.record(txnId, this.actor(user), { section: SECTION, field: document.title + (clientName ? ` (${clientName})` : ''), action: 'Document uploaded', new: file!.originalname, source: this.actorSource(user) });
     await this.docsValidation.sync(txnId, this.actor(user));
     await applyInterlinks(this.prisma, txnId);   // TD-159 - documents that satisfy each other
@@ -684,7 +690,7 @@ export class DocumentsService {
       if (files[index].file_path) await this.deleteFile(files[index].file_path);
       files.splice(index, 1);
       const status = await this.docStatusFromFiles(txnId, document, files);
-      await this.prisma.documents.update({ where: { id: document.id }, data: { files: JSON.stringify(files), status, updated_at: new Date() } });
+      await this.prisma.documents.update({ where: { id: document.id }, data: { files: JSON.stringify(files), status, ...(files.length ? {} : { uploaded_at: null }), updated_at: new Date() } });
       await this.audit.record(txnId, this.actor(user), { section: SECTION, field: document.title, action: 'Document file removed', old: removed });
     }
     await this.docsValidation.sync(txnId, this.actor(user));

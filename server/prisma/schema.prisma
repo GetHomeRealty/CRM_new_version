@@ -268,6 +268,9 @@ model documents {
   created_at           DateTime?    @db.Timestamp(0)
   updated_at           DateTime?    @db.Timestamp(0)
   deleted_at           DateTime?    @db.Timestamp(0)
+  /// TD-204 - when the current file arrived, and when Valid / Invalid was last decided. NULL = not known.
+  uploaded_at          DateTime?    @db.Timestamp(0)
+  reviewed_at          DateTime?    @db.Timestamp(0)
   transactions         transactions @relation(fields: [transaction_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
 
   @@index([transaction_id])

@@ -150,7 +150,7 @@ export class NoticeOfSaleService {
     if (!existing) {
       if (!complete) return;
       const max = await this.prisma.documents.aggregate({ where: { transaction_id: txnId, deleted_at: null }, _max: { position: true } });
-      await this.prisma.documents.create({ data: { transaction_id: txnId, title: TITLE, status: 'Received', validation: 'Pending', position: (max._max.position ?? 0) + 1, created_at: now, updated_at: now } });
+      await this.prisma.documents.create({ data: { transaction_id: txnId, title: TITLE, status: 'Received', validation: 'Pending', position: (max._max.position ?? 0) + 1, uploaded_at: now, created_at: now, updated_at: now } });
       await this.audit.record(txnId, null, { section: SECTION, field: TITLE, action: 'Document uploaded', source: 'Quick Action', new: 'All ' + roster.length + ' salesperson(s) signed' });
       return;
     }
@@ -158,7 +158,7 @@ export class NoticeOfSaleService {
     if (existing.file_name) return;
     const want = complete ? 'Received' : 'Pending';
     if (existing.status === want) return;
-    await this.prisma.documents.update({ where: { id: existing.id }, data: { status: want, updated_at: now } });
+    await this.prisma.documents.update({ where: { id: existing.id }, data: { status: want, uploaded_at: complete ? now : null, updated_at: now } });
     await this.audit.record(txnId, null, { section: SECTION, field: TITLE, action: 'Updated', source: 'Quick Action', old: existing.status, new: want });
   }
 

@@ -63,9 +63,10 @@ doc_counts AS MATERIALIZED (
     COUNT(*) FILTER (WHERE d.mandatory)                             AS mandatory,
     COUNT(*) FILTER (WHERE d.mandatory AND ${DOC_STATUS_SQL} <> 'Valid') AS missing_mandatory,
     -- last_doc_update is max(reviewed_at) over the deal's documents, and reviewed_at is
-    -- dateStr(updated_at) — the DAY, compared as a string. Taking max() of the date is the same
+    -- dateStr(reviewed_at) — the DAY, compared as a string. Taking max() of the date is the same
     -- answer as max() of the timestamps reduced to dates, because the reduction is monotonic.
-    MAX(d.updated_at::date)                                         AS last_doc_update
+    -- TD-204: the document's own review date, no longer updated_at (any change at all).
+    MAX(d.reviewed_at::date)                                        AS last_doc_update
   FROM documents d
   WHERE d.deleted_at IS NULL AND d.transaction_id = ANY($1::int[])
   GROUP BY d.transaction_id
@@ -430,7 +431,7 @@ const docRowsCte = (src: DocRowSource, qualifySql: string): string => `
 amend AS MATERIALIZED (
   SELECT
     d.id, d.transaction_id AS tid, d.title, d.position,
-    d.created_at::date AS uploaded_at,
+    d.uploaded_at::date AS uploaded_at,   -- TD-204: when the file arrived, not when the row was made
     ${DOC_CATEGORY_SQL} AS category,
     ${DOC_STATUS_SQL}   AS doc_status,
     ${src.sectionSql}   AS section
