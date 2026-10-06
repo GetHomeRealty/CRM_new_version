@@ -56,6 +56,9 @@ input:focus-visible,select:focus-visible,textarea:focus-visible{outline:none;bor
 @media(min-width:721px){
   .app.sidebar-closed{grid-template-rows:auto 1fr}
   .app.sidebar-closed>.sidebar{grid-column:1;grid-row:1;height:auto;overflow:visible;z-index:41}
+  .app.sidebar-closed>.sidebar{padding:13px 14px}
+  .app.sidebar-closed>.sidebar>.logo{padding:0 8px;margin:0;border:0;height:34px}
+  .app.sidebar-closed .logo-img{height:34px;max-height:34px;object-fit:contain}
   .app.sidebar-closed>.main{display:contents}
   .app.sidebar-closed>.main>.topbar{grid-column:2;grid-row:1;align-self:stretch}
   .app.sidebar-closed>.main>.content{grid-column:1 / -1;grid-row:2;min-width:0}
