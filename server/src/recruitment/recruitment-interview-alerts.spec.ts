@@ -274,6 +274,97 @@ describe('who is told about an interview', () => {
   });
 });
 
+describe('an interview whose candidate has gone', () => {
+  /*
+   * ================================================================================================
+   * THE CRASH, PINNED DETERMINISTICALLY.
+   *
+   * Selecting `candidate` as a nested relation makes Prisma treat it as REQUIRED. The sweep read its
+   * interview rows, then resolved their candidates, and if one had been deleted in between Prisma
+   * raised `Inconsistent query result: Field candidate is required to return data, got null
+   * instead` — from `findMany`, OUTSIDE the per-interview try/catch, so the WHOLE PASS died and
+   * every other interview due in that window silently lost its reminder.
+   *
+   * WHY A STAND-IN FOR PRISMA RATHER THAN A REAL DELETION. The gap that produces the error is
+   * INSIDE one Prisma call — parent rows read, relation resolved a moment later — and interviews
+   * cascade from the candidate, so an interview can never be left behind for a test to find. Timing
+   * a real deletion into that gap is not something a test can do honestly; it was found by running
+   * these suites in parallel (three crashes in ten runs, none in fifteen afterwards).
+   *
+   * So the stand-in encodes PRISMA'S RULE rather than imitating a race: asking for a required
+   * relation that is missing raises, and asking only for the foreign key does not. The test then
+   * says the sweep must not ask for it that way. It fails against the old query and passes against
+   * the fix, every time, with no timing in it at all.
+   * ================================================================================================
+   */
+  const VANISHED = 'Inconsistent query result: Field candidate is required to return data, got `null` instead.';
+
+  /** Prisma, for one interview whose candidate was removed between the two halves of the read. */
+  function prismaWithVanishedCandidate() {
+    const interview = {
+      id: 90_001,
+      interviewer_id: null,
+      scheduled_at: new Date(Date.now() + 24 * 60 * 60_000 - 60_000),
+      candidate_id: 90_002,
+    };
+    const raiseIfRelationAsked = (select: Record<string, unknown> | undefined) => {
+      if (select && 'candidate' in select) throw new Error(VANISHED);
+    };
+    return {
+      recruitment_interviews: {
+        findMany: async ({ select }: { select?: Record<string, unknown> }) => {
+          raiseIfRelationAsked(select);
+          return [interview];
+        },
+        findFirst: async ({ select }: { select?: Record<string, unknown> }) => {
+          raiseIfRelationAsked(select);
+          return interview;
+        },
+      },
+      // The candidate really is gone, which is why the relation could not be resolved.
+      recruitment_candidates: { findFirst: async () => null },
+    };
+  }
+
+  it('THE SWEEP SURVIVES IT, and reminds nobody about that interview', async () => {
+    const stub = stubDispatcher();
+    const notify = new RecruitmentInterviewNotifyService(
+      prismaWithVanishedCandidate() as never, stub as never, permissions,
+    );
+    const sweep = new RecruitmentInterviewReminderService(
+      prismaWithVanishedCandidate() as never, notify,
+    );
+
+    // Completes rather than rejecting. Nothing was delivered, because there was nobody to tell.
+    await expect(sweep.run()).resolves.toBe(0);
+    expect(stub.sent).toHaveLength(0);
+  });
+
+  it('asks for the foreign key, never the relation — which is what makes the above true', async () => {
+    /*
+     * The assertion behind the assertion. The test above would also pass if the sweep stopped
+     * selecting interviews altogether; this one says WHY it passes, by recording the shape of the
+     * query the service actually issues.
+     */
+    const asked: Array<Record<string, unknown> | undefined> = [];
+    const recordingPrisma = {
+      recruitment_interviews: {
+        findMany: async ({ select }: { select?: Record<string, unknown> }) => { asked.push(select); return []; },
+        findFirst: async ({ select }: { select?: Record<string, unknown> }) => { asked.push(select); return null; },
+      },
+      recruitment_candidates: { findFirst: async () => null },
+    };
+    const notify = new RecruitmentInterviewNotifyService(recordingPrisma as never, stubDispatcher() as never, permissions);
+    await new RecruitmentInterviewReminderService(recordingPrisma as never, notify).run();
+
+    expect(asked.length).toBeGreaterThan(0);
+    for (const select of asked) {
+      expect(Object.keys(select ?? {})).toContain('candidate_id');
+      expect(Object.keys(select ?? {})).not.toContain('candidate');
+    }
+  });
+});
+
 describe('a change that lands WHILE the sweep is running', () => {
   /*
    * ================================================================================================

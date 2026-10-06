@@ -473,9 +473,21 @@ describe('creating the agent account', () => {
     made.users.push(existing.id);
     const c = await candidate('approved', { email: existing.email });
 
-    const before = await prisma.users.count();
     await expect(agents.createAgent(ADMIN, c.id, WITH_PW)).rejects.toBeDefined();
-    expect(await prisma.users.count()).toBe(before);
+
+    /*
+     * ASKED OF THIS CANDIDATE, NOT OF THE WHOLE TABLE.
+     *
+     * This counted every user in the database before and after, which is not a fact about this
+     * conversion: under the parallel gate another suite creating or deleting a user in between
+     * moved the number, and the test failed having proved nothing. It is also weaker than it looks
+     * — a run that both added one user and removed another would have passed.
+     *
+     * The guarantee is narrower and stronger: the refusal created no account for this address, and
+     * left the candidate unlinked. The blocker created above is the one user that address may have.
+     */
+    expect(await prisma.users.count({ where: { email: existing.email } })).toBe(1);
+    expect((await prisma.recruitment_candidates.findUniqueOrThrow({ where: { id: c.id } })).agent_user_id).toBeNull();
     expect(await prisma.recruitment_events.count({ where: { candidate_id: c.id, action: 'agent_created' } })).toBe(0);
   });
 });
