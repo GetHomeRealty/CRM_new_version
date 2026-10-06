@@ -2,7 +2,7 @@ import api from './axios';
 import type {
   AgentCreated, CandidateDetail, CandidateDocument, CandidateList, CandidateNote, CandidateStatus,
   Followup, Interview, InterviewList, InterviewStatus, OnboardingItem, PendingFollowups, Recommendation,
-  RecruitmentPerson, RecruitmentStats,
+  RecruitmentMessage, RecruitmentPerson, RecruitmentStats, SmsComposer,
 } from '../types/recruitment';
 
 /**
@@ -117,6 +117,23 @@ export const completeOnboardingItem = (id: number, itemId: number): Promise<{ da
  * The server re-checks both against the shared policy; the checks in the form are only there to
  * answer sooner.
  */
+/**
+ * The composer's opening state. The number comes from the SERVER, read off the candidate — the
+ * screen never tells the server where to send, it is only shown where the server would send.
+ */
+export const smsComposer = (id: number): Promise<SmsComposer> =>
+  api.get<SmsComposer>(`/api/recruitment/candidates/${id}/sms`).then((r) => r.data);
+
+export const sendCandidateSms = (id: number, body: string): Promise<{ data: RecruitmentMessage }> =>
+  api.post<{ data: RecruitmentMessage }>(`/api/recruitment/candidates/${id}/sms`, { body }).then((r) => r.data);
+
+/** Record whether the candidate agreed to be texted. `true` or `false` — never cleared back to null. */
+export const setSmsConsent = (id: number, consent: boolean, note?: string): Promise<{ data: unknown }> =>
+  api.post<{ data: unknown }>(`/api/recruitment/candidates/${id}/sms-consent`, { consent, note }).then((r) => r.data);
+
+export const candidateMessages = (id: number): Promise<{ data: RecruitmentMessage[] }> =>
+  api.get<{ data: RecruitmentMessage[] }>(`/api/recruitment/candidates/${id}/messages`).then((r) => r.data);
+
 export const createAgentAccount = (
   id: number,
   body: { password: string; password_confirmation: string; role?: string; username?: string },

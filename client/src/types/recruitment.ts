@@ -13,8 +13,13 @@ export const CANDIDATE_STATUSES = [
 ] as const;
 export type CandidateStatus = (typeof CANDIDATE_STATUSES)[number];
 
+/**
+ * `cancelled` is not an outcome — the other four all describe an interview that HAPPENED. It exists
+ * so an interview can be called off, which also stops its reminders: the sweep selects only
+ * `scheduled`. Mirrors `server/src/recruitment/recruitment.status.ts`.
+ */
 export const INTERVIEW_STATUSES = [
-  'scheduled', 'completed', 'approved', 'hold', 'not_selected',
+  'scheduled', 'completed', 'approved', 'hold', 'not_selected', 'cancelled',
 ] as const;
 export type InterviewStatus = (typeof INTERVIEW_STATUSES)[number];
 
@@ -73,6 +78,11 @@ export interface Candidate {
    * Experience and licence. Every one nullable, and null means NOT ASKED rather than "no" — see
    * `yesNoUnknown`, which is how the screen says the difference.
    */
+  /** Recorded, never assumed. Null means nobody has asked — see `SmsConsent`. */
+  sms_consent: boolean | null;
+  sms_consent_at: string | null;
+  sms_consent_by: string | null;
+  sms_consent_note: string | null;
   has_real_estate_experience: boolean | null;
   years_experience: number | null;
   is_licensed: boolean | null;
@@ -202,6 +212,49 @@ export interface RecruitmentStats {
   /** `key` is the Candidates `source` filter for this row; `__none__` is Not recorded (null or empty). */
   by_source: { source: string; key: string; count: number }[];
   followups_overdue: number;
+}
+
+/** The delivery record for one text sent to a candidate. */
+export interface RecruitmentMessage {
+  id: number;
+  candidate_id: number;
+  /** queued | sent | delivered | failed. Never `read` — plain SMS has no read receipt. */
+  status: 'queued' | 'sent' | 'delivered' | 'failed';
+  provider_sid: string | null;
+  error_code: string | null;
+  error_message: string | null;
+  body: string;
+  /** Where it actually went, in E.164, as it stood when it was sent. */
+  phone: string;
+  sent_at: string;
+  created_by: string | null;
+  user_id: number | null;
+}
+
+/**
+ * The recorded answer to "may we text you?".
+ *
+ * `answer` has THREE states and the screen must keep them apart: null is nobody asked, false is
+ * they said no, true is they agreed. Rendering null as "No" would claim an answer nobody gave.
+ */
+export interface SmsConsent {
+  answer: boolean | null;
+  at: string | null;
+  by: string | null;
+  note: string | null;
+}
+
+/** What the Send Text composer opens with. */
+export interface SmsComposer {
+  candidate: { id: number; name: string; phone: string | null };
+  /** E.164, exactly what would be dialled. Null when there is nothing dialable. */
+  to: string | null;
+  can_send: boolean;
+  /** Why Send is disabled, in words. Null when it is not. */
+  blocked_reason: string | null;
+  consent: SmsConsent;
+  template: string;
+  gateway_configured: boolean;
 }
 
 export interface PendingFollowups {

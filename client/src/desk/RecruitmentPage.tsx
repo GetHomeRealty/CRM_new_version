@@ -5,6 +5,7 @@ import {
   createCandidate, listCandidates, listInterviews, pendingFollowups, recruitmentStats,
 } from '../lib/recruitmentApi';
 import { apiErrorMessage } from '../lib/apiError';
+import RecruitmentSendText from './RecruitmentSendText';
 import { useToast } from './toast';
 import { useAuth } from '../context/AuthContext';
 import {
@@ -226,6 +227,12 @@ export default function RecruitmentPage() {
     }, { replace: true });
   };
 
+  /*
+   * Which candidate the composer is open for, by id. Held here rather than per row so that closing
+   * it and reopening on another candidate cannot leave two composers mounted at once.
+   */
+  const [texting, setTexting] = useState<number | null>(null);
+
   const [adding, setAdding] = useState(false);
   const [form, setForm] = useState(BLANK_CANDIDATE);
 
@@ -415,6 +422,16 @@ export default function RecruitmentPage() {
                       <td>
                         <div>{c.email}</div>
                         <div className="muted">{c.phone || 'No phone'}</div>
+                        {/*
+                          * Beside the number, and only when there IS one and the person may send.
+                          * A button that opens a composer purely to say "no phone number on file"
+                          * is a wasted press; the candidate's own page explains the absence there.
+                          */}
+                        {canEdit && c.phone && (
+                          <button className="btn ghost sm" type="button" onClick={() => setTexting(c.id)}>
+                            Send Text
+                          </button>
+                        )}
                       </td>
                       {/* Resolved by the server on each row, so no directory is needed here. */}
                       <td>{c.assigned_recruiter_name ?? 'Unassigned'}</td>
@@ -749,6 +766,11 @@ export default function RecruitmentPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {texting !== null && (
+        // The list shows no message state, so nothing here needs refreshing after a send.
+        <RecruitmentSendText candidateId={texting} onClose={() => setTexting(null)} />
       )}
     </>
   );

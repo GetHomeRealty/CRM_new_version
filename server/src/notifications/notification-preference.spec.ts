@@ -170,7 +170,14 @@ describe('notification preferences', () => {
       'lawyer_details',
       'document_review', 'transaction_approvals', 'inbox_new_mail',
       // The six CRM lead and campaign events, all dispatched from their own event sites.
-      'lead_new', 'lead_assigned', 'lead_meta', 'lead_task_due',
+      'lead_new', 'lead_assigned', 'lead_meta',
+      /*
+       * Recruitment interviews. Both are dispatched from their own event sites — the booking paths
+       * in `recruitment.service.ts` and the ten-minute reminder sweep — through the same `dispatch`
+       * every category above uses, so all three channels are genuinely wired rather than declared.
+       */
+      'recruitment_interview', 'recruitment_interview_reminder',
+      'lead_task_due',
       // Raised from addTask/addShowing — a task handed over, and a showing booked.
       'task_assigned', 'showing_created',
       'campaign_completed', 'campaign_failed',

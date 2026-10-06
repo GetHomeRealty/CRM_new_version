@@ -698,11 +698,46 @@ which takes a Redis lock when Redis is available and **runs anyway when it is no
 | `meta-sync` | Poll Meta lead forms | every `META_SYNC_SECONDS` (900) | worker | If Meta configured | Duplicate leads |
 | `google-calendar-retry` | Retry failed Google pushes | every 5 min | worker | If Google configured | Duplicate calendar events |
 | `event-reminders` | Appointment reminders | every 10 min | worker | Yes | Duplicate reminder emails |
+| `recruitment-interview-reminders` | Interview reminders, 24 h and 1 h ahead | every 10 min, first pass 50 s | worker | Yes | Duplicate notices to recruiter + interviewer |
 | `reminder-sweep` | Listing/lawyer reminders (Desk) | hourly | worker | Yes | Duplicate reminders |
 | `review-sla` | Document review SLA reminders (Desk) | hourly | worker | Yes | Duplicate reminders |
 | `export-sweeper` | Delete expired generated exports | every 15 min | worker | Yes | Harmless |
 | `campaign-resume` | Resume interrupted campaigns | on tick | worker | Yes | **Duplicate campaign sends** |
 | `queue:*` | BullMQ workers (with Redis) / in-process | continuous | worker | Yes | Duplicate job execution |
+
+### Recruitment interview reminders — what to set, and where
+
+Nothing new to configure. The sweep obeys the same two controls as every job above, so on a
+correctly built deployment it already runs on `crm-worker` alone:
+
+| Where | Setting | Effect |
+|---|---|---|
+| `crm-web` (4 instances) | `RUN_SCHEDULERS=false` (from `ecosystem.config.cjs`) | `schedulersEnabled()` is false, the timer is never armed, and the boot log says `Recruitment interview reminders not scheduled (…)` |
+| `crm-worker` (1 instance) | `RUN_SCHEDULERS=true` | the only process that arms it |
+| either, optionally | `RECRUITMENT_REMINDER_DISABLED=1` | turns this one sweep off without touching the others |
+
+`RECRUITMENT_REMINDER_DISABLED` exists for the same reason `META_SYNC_DISABLED` does: to silence one
+job during an incident without stopping the worker and with it every other sweep. **Leave it unset.**
+It is an off switch, not part of the normal configuration.
+
+**Why a second copy would be worse here than for most jobs:** the reminder is deduped by a key
+naming the interview and its scheduled time, enforced by the unique index on the delivery ledger —
+so two processes would not usually produce two notifications. "Usually" is doing real work in that
+sentence: two sweeps racing on the same key can both claim it if the writes interleave before
+either commits. `clusterTick` takes the Redis lock when `REDIS_URL` is set, and `RUN_SCHEDULERS` is
+the defence when it is not.
+
+**Verify on the day:**
+
+```bash
+curl -s localhost:8001/api/health/workers | jq '.[] | select(.name=="recruitment-interview-reminders")'
+curl -s localhost:8000/api/health/workers | jq '.[] | select(.name=="recruitment-interview-reminders")'   # must be empty
+pm2 logs crm-web --lines 200 | grep -c "Recruitment interview reminders not scheduled"   # 4, one per web instance
+pm2 logs crm-worker --lines 200 | grep -i "Recruitment interview reminders"              # delivery counts only
+```
+
+A reminder that fires is logged on the worker as `Recruitment interview reminders delivered: N.`
+Nothing is logged on a pass that finds nothing due, which is most passes.
 
 ### How to avoid running a scheduler twice
 

@@ -14,8 +14,23 @@ export const CANDIDATE_STATUSES = [
 ] as const;
 export type CandidateStatus = (typeof CANDIDATE_STATUSES)[number];
 
+/**
+ * `cancelled` IS NOT AN OUTCOME, AND THAT IS WHY IT HAD TO BE ADDED.
+ *
+ * The other four all describe an interview that HAPPENED: it was completed, and the interviewer
+ * concluded approved, hold or not selected. None of them can say "this is not going ahead", so
+ * until now there was no way to call an interview off — the only options were to leave it sitting
+ * as `scheduled` for ever, or to mark it with an outcome nobody reached.
+ *
+ * That gap mattered once interviews started sending reminders: an interview nobody could cancel is
+ * an interview that keeps reminding two people to attend it. The reminder sweep selects only
+ * `scheduled`, so cancelling stops the reminders with nothing to clean up.
+ *
+ * Added at the end, after the outcomes, so nothing that reads this list positionally changes. No
+ * existing status changed meaning and no existing transition was touched.
+ */
 export const INTERVIEW_STATUSES = [
-  'scheduled', 'completed', 'approved', 'hold', 'not_selected',
+  'scheduled', 'completed', 'approved', 'hold', 'not_selected', 'cancelled',
 ] as const;
 export type InterviewStatus = (typeof INTERVIEW_STATUSES)[number];
 

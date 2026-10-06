@@ -70,6 +70,36 @@ export class SmsPublicController {
 
     const msg = await this.prisma.lead_messages.findUnique({ where: { provider_sid: sid }, select: { id: true, status: true } });
     if (!msg) {
+      /*
+       * NOT A LEAD'S — SO TRY RECRUITMENT BEFORE GIVING UP.
+       *
+       * Texts to a recruitment candidate go through this same gateway and get status callbacks on
+       * this same URL, because there is one Twilio account and one callback per account. Without
+       * this branch every one of them fell through to "unknown message" and the recruiter's screen
+       * sat at `queued` for ever while Twilio had long since reported delivery.
+       *
+       * Looked up SECOND, and only when the lead table has no row: leads are by far the larger
+       * table and the commoner case, and nothing about their handling below changes.
+       */
+      const recruit = await this.prisma.recruitment_messages.findUnique({
+        where: { provider_sid: sid }, select: { id: true },
+      });
+      if (recruit) {
+        const code = str(b.ErrorCode);
+        await this.prisma.recruitment_messages.update({
+          where: { id: recruit.id },
+          data: {
+            // `read` is not a status that table holds — nothing Twilio sends maps to it, but a
+            // CHECK constraint guards the column, so it is folded to `sent` rather than risked.
+            status: mapped === 'read' ? 'sent' : mapped,
+            error_code: code || null,
+            error_message: code ? explainError(code, str(b.ErrorMessage)).slice(0, 255) : null,
+            updated_at: new Date(),
+          },
+        });
+        return { received: true };
+      }
+
       // Not ours — a message sent from another app on the same Twilio account, most likely.
       this.log.debug(`Status callback for unknown message ${sid} — ignoring.`);
       return { received: true };

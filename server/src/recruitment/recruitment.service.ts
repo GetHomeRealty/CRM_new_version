@@ -1,6 +1,7 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { RecruitmentInterviewNotifyService } from './recruitment-interview-notify.service';
 import type { AuthUserRecord } from '../auth/auth.types';
 import { can } from '../core/authz';
 import {
@@ -54,7 +55,27 @@ function optionalText(v: unknown): string | null | undefined {
  */
 @Injectable()
 export class RecruitmentService {
-  constructor(private readonly prisma: PrismaService) {}
+  /*
+   * `notify` IS OPTIONAL, and deliberately so. Several specs construct this service directly with
+   * nothing but a Prisma client — they are testing scope and status rules, not notifications — and
+   * a required dependency would have broken every one of them to add a feature none of them
+   * exercise. Absent, the service behaves exactly as it did before interviews raised alerts.
+   */
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly notify?: RecruitmentInterviewNotifyService,
+  ) {}
+
+  /**
+   * The candidate, under this person's scope — the same check every endpoint here makes.
+   *
+   * Public because the SMS service needs it and must not be allowed to invent its own: a texting
+   * endpoint that looked a candidate up by id without the scope would hand a recruiter the phone
+   * number of somebody they are not allowed to see, which is the one thing `mine` exists to stop.
+   */
+  async candidateFor(user: AuthUserRecord, id: number) {
+    return this.mine(user, id);
+  }
 
   // ------------------------------------------------------------------ scope
 
@@ -639,6 +660,8 @@ export class RecruitmentService {
       await this.prisma.recruitment_candidates.update({ where: { id }, data: { status: 'interview', updated_at: now } });
     }
     await this.event(this.prisma, id, 'interview_scheduled', `Interview booked for ${at.toISOString().slice(0, 16).replace('T', ' ')}.`, user);
+    // After the write, so nobody is told about an interview that failed to save.
+    await this.notify?.changed(candidate, row, 'booked', user);
     return { data: row };
   }
 
@@ -676,6 +699,34 @@ export class RecruitmentService {
 
     const row = await this.prisma.recruitment_interviews.update({ where: { id: interviewId }, data });
     await this.event(this.prisma, id, 'interview_completed', what, user);
+
+    /*
+     * WHICH CHANGE WORTH TELLING PEOPLE ABOUT, decided from what actually changed rather than from
+     * what the request mentioned. A request may set feedback and a time at once, and recording
+     * feedback is not news to the person who wrote it.
+     *
+     * `cancelled` wins over a time change: an interview that is both moved and called off has been
+     * called off. Marking an outcome — completed, approved, hold, not selected — raises nothing,
+     * because the people who would hear about it are the ones who were there.
+     */
+    const cancelled = data.status === 'cancelled' && interview.status !== 'cancelled';
+    const moved = data.scheduled_at !== undefined
+      && interview.scheduled_at?.getTime() !== (data.scheduled_at as Date | undefined)?.getTime();
+    if (cancelled || moved) {
+      const candidate = await this.prisma.recruitment_candidates.findUnique({
+        where: { id },
+        select: { id: true, name: true, assigned_recruiter_id: true },
+      });
+      if (candidate) {
+        /*
+         * A cancellation names the time it WAS at, not the new one — "the interview that was set
+         * for Tuesday is off" is what the reader needs; the row's current time is of no use to
+         * somebody deciding whether to clear their afternoon.
+         */
+        const subject = cancelled ? { ...row, scheduled_at: interview.scheduled_at } : row;
+        await this.notify?.changed(candidate, subject, cancelled ? 'cancelled' : 'moved', user);
+      }
+    }
     return { data: row };
   }
 

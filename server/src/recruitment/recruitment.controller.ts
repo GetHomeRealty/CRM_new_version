@@ -7,6 +7,7 @@ import { CurrentUser, Screen } from '../auth/decorators';
 import type { AuthUserRecord } from '../auth/auth.types';
 import { RecruitmentService } from './recruitment.service';
 import { RecruitmentAgentService } from './recruitment-agent.service';
+import { RecruitmentSmsService } from './recruitment-sms.service';
 import { RecruitmentNoAgentsGuard } from './recruitment-no-agents.guard';
 import { CANDIDATE_STATUSES, INTERVIEW_STATUSES, allowedNext, isCandidateStatus } from './recruitment.status';
 
@@ -31,6 +32,7 @@ export class RecruitmentController {
   constructor(
     private readonly recruitment: RecruitmentService,
     private readonly agents: RecruitmentAgentService,
+    private readonly sms: RecruitmentSmsService,
   ) {}
 
   /** The vocabulary, so the client never hardcodes a status or guesses what follows one. */
@@ -156,6 +158,64 @@ export class RecruitmentController {
     @Body() body: Record<string, unknown>,
   ): Promise<Record<string, unknown>> {
     return this.recruitment.updateInterview(user, id, interviewId, body);
+  }
+
+  // ------------------------------------------------------------------ texting a candidate
+  //
+  // `view` opens the composer and reads what was sent; `edit` is required to actually send one.
+  // They are different levels because reading the history of what a candidate was told is part of
+  // carrying them, while sending is an action with a cost and a recipient.
+
+  /** What the composer opens with: the number, whether it can be dialled, and a draft. */
+  @Get('candidates/:id/sms')
+  @Screen('recruitment', 'view')
+  smsComposer(
+    @CurrentUser() user: AuthUserRecord,
+    @Param('id', ParseIntPipe) id: number,
+  ): Promise<Record<string, unknown>> {
+    return this.sms.composer(user, id);
+  }
+
+  /**
+   * Record whether the candidate agreed to be texted.
+   *
+   * `edit`, because it is a statement about the candidate that the brokerage will rely on — not
+   * something somebody with read access should be able to assert on their behalf.
+   */
+  @Post('candidates/:id/sms-consent')
+  @HttpCode(200)
+  @Screen('recruitment', 'edit')
+  setSmsConsent(
+    @CurrentUser() user: AuthUserRecord,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    return this.sms.setConsent(user, id, body);
+  }
+
+  /** Every text sent to this candidate, with what became of each. */
+  @Get('candidates/:id/messages')
+  @Screen('recruitment', 'view')
+  smsHistory(
+    @CurrentUser() user: AuthUserRecord,
+    @Param('id', ParseIntPipe) id: number,
+  ): Promise<Record<string, unknown>> {
+    return this.sms.list(user, id);
+  }
+
+  /**
+   * Send it. The body is the message; the NUMBER is read from the candidate and anything the
+   * request says about it is ignored — see `RecruitmentSmsService`.
+   */
+  @Post('candidates/:id/sms')
+  @HttpCode(200)
+  @Screen('recruitment', 'edit')
+  sendSms(
+    @CurrentUser() user: AuthUserRecord,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    return this.sms.send(user, id, body);
   }
 
   /** The recruiter's recommendation. Advice — it moves nothing. */

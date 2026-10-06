@@ -1,20 +1,22 @@
-import { useCallback, useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { crmPath } from './area';
 import {
   addCandidateNote, addFollowup, addOnboardingItem, completeFollowup, completeOnboardingItem,
   assignRecruiter, createAgentAccount, getCandidate, recommendCandidate, receiveDocument,
-  recruitmentPeople, requestDocument, scheduleInterview, setCandidateStatus, updateCandidate,
-  updateInterview,
+  candidateMessages, recruitmentPeople, requestDocument, scheduleInterview, setCandidateStatus,
+  updateCandidate, updateInterview,
 } from '../lib/recruitmentApi';
 import { apiErrorMessage } from '../lib/apiError';
+import RecruitmentSendText, { messageStatusHint, messageStatusPill } from './RecruitmentSendText';
+import { setSmsConsent } from '../lib/recruitmentApi';
 import { useToast } from './toast';
 import { useAuth } from '../context/AuthContext';
 import ConfirmDialog, { useConfirm } from './ConfirmDialog';
 import { statusLabel, statusPill } from './RecruitmentPage';
 import { availabilityLabel, yesNoUnknown } from '../types/recruitment';
 import type {
-  CandidateDetail, CandidateStatus, Recommendation, RecruitmentPerson,
+  CandidateDetail, CandidateStatus, Recommendation, RecruitmentMessage, RecruitmentPerson,
 } from '../types/recruitment';
 
 /**
@@ -67,6 +69,18 @@ export default function RecruitmentCandidatePage() {
    * somebody else edits the record.
    */
   const [exp, setExp] = useState<Record<string, string> | null>(null);
+  const [texting, setTexting] = useState(false);
+  const [messages, setMessages] = useState<RecruitmentMessage[]>([]);
+
+  /*
+   * ARRIVING FROM A NOTIFICATION. An interview alert links here with `?focus=interviews`, because
+   * the thing the alert was about is a card some way down a long page. Without this the link opened
+   * the right candidate and left the reader to hunt for what changed.
+   */
+  const [params] = useSearchParams();
+  const focus = params.get('focus') ?? '';
+  const interviewsRef = useRef<HTMLDivElement | null>(null);
+  const scrolled = useRef(false);
 
   const [note, setNote] = useState('');
   const [followup, setFollowup] = useState({ title: '', due_at: '' });
@@ -92,6 +106,26 @@ export default function RecruitmentCandidatePage() {
   }, [candidateId]);
 
   useEffect(() => { void load(); }, [load]);
+
+  const loadMessages = useCallback(async () => {
+    try {
+      setMessages((await candidateMessages(candidateId)).data);
+    } catch {
+      // The history is a supporting panel; failing to load it must not blank the candidate.
+      setMessages([]);
+    }
+  }, [candidateId]);
+
+  useEffect(() => { void loadMessages(); }, [loadMessages]);
+
+  useEffect(() => {
+    if (focus !== 'interviews' || scrolled.current) return;
+    // Waits for the candidate: scrolling to a card that has not rendered does nothing, and the
+    // rows arriving afterwards would push it off the screen again.
+    if (!data) return;
+    scrolled.current = true;
+    interviewsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, [focus, data]);
 
   useEffect(() => {
     if (!canDecide) return;
@@ -155,7 +189,56 @@ export default function RecruitmentCandidatePage() {
             <div className="modal-sub">Overview</div>
             <dl className="lead-dl">
               <dt>Email</dt><dd>{c.email}</dd>
-              <dt>Phone</dt><dd>{c.phone || '—'}</dd>
+              <dt>Phone</dt>
+              <dd>
+                {c.phone || '—'}
+                {canEdit && (
+                  <>
+                    {' '}
+                    <button className="btn ghost sm" type="button" onClick={() => setTexting(true)}>
+                      Send Text
+                    </button>
+                  </>
+                )}
+              </dd>
+              {/*
+                * THREE ANSWERS, SHOWN AS THREE. "Not recorded" is not "No" — one means nobody has
+                * asked and the other means they declined, and a recruiter deciding whether to pick
+                * up the phone needs to know which.
+                */}
+              <dt>Texting</dt>
+              <dd>
+                {c.sms_consent === true
+                  ? `Agreed${c.sms_consent_by ? ` — recorded by ${c.sms_consent_by}` : ''}`
+                  : c.sms_consent === false
+                    ? 'Asked not to be texted'
+                    : 'Not recorded — ask before texting'}
+                {c.sms_consent_note && <div className="muted">{c.sms_consent_note}</div>}
+                {canEdit && (
+                  <div className="toolbar-row" style={{ gap: 6, marginTop: 4 }}>
+                    {c.sms_consent !== true && (
+                      <button
+                        className="btn ghost sm"
+                        type="button"
+                        disabled={busy !== ''}
+                        onClick={() => void run('consent', () => setSmsConsent(c.id, true), 'Agreement recorded.')}
+                      >
+                        They agreed
+                      </button>
+                    )}
+                    {c.sms_consent !== false && (
+                      <button
+                        className="btn ghost sm"
+                        type="button"
+                        disabled={busy !== ''}
+                        onClick={() => void run('consent', () => setSmsConsent(c.id, false), 'Recorded — they will not be texted.')}
+                      >
+                        They declined
+                      </button>
+                    )}
+                  </div>
+                )}
+              </dd>
               <dt>Location</dt><dd>{c.location || '—'}</dd>
               <dt>Source</dt><dd>{c.source || 'Not recorded'}</dd>
               <dt>Recruiter</dt>
@@ -321,7 +404,7 @@ export default function RecruitmentCandidatePage() {
           </div>
 
           {/* ---------------------------------------------------------------- interviews */}
-          <div className="card">
+          <div className="card" ref={interviewsRef}>
             <div className="modal-sub">Interviews</div>
             {data.interviews.length === 0 ? (
               <p className="help">No interviews yet.</p>
@@ -339,14 +422,40 @@ export default function RecruitmentCandidatePage() {
                 </div>
                 {iv.feedback && <p className="help" style={{ whiteSpace: 'pre-wrap' }}>{iv.feedback}</p>}
                 {canEdit && iv.status === 'scheduled' && (
-                  <button
-                    className="btn ghost sm"
-                    type="button"
-                    disabled={busy !== ''}
-                    onClick={() => void run(`iv-${iv.id}`, () => updateInterview(c.id, iv.id, { status: 'completed' }), 'Interview marked completed.')}
-                  >
-                    Mark completed
-                  </button>
+                  <div className="toolbar-row" style={{ gap: 8 }}>
+                    <button
+                      className="btn ghost sm"
+                      type="button"
+                      disabled={busy !== ''}
+                      onClick={() => void run(`iv-${iv.id}`, () => updateInterview(c.id, iv.id, { status: 'completed' }), 'Interview marked completed.')}
+                    >
+                      Mark completed
+                    </button>
+                    {/*
+                      * CANCELLING IS CONFIRMED, because it tells two other people the interview is
+                      * off and stops the reminders — and because, unlike marking an outcome, it is
+                      * about an interview that has not happened and somebody may still be planning
+                      * their day around.
+                      */}
+                    <button
+                      className="btn ghost sm"
+                      type="button"
+                      disabled={busy !== ''}
+                      onClick={() => askDelete({
+                        title: 'Cancel this interview?',
+                        message: `The interview on ${dateTime(iv.scheduled_at)} will be marked cancelled. `
+                          + 'Everyone who was told about it is told it is off, and its reminders stop. '
+                          + 'Book a new one to rearrange.',
+                        confirmLabel: 'Cancel interview',
+                        onConfirm: () => {
+                          closeConfirm();
+                          void run(`iv-${iv.id}`, () => updateInterview(c.id, iv.id, { status: 'cancelled' }), 'Interview cancelled.');
+                        },
+                      })}
+                    >
+                      Cancel interview
+                    </button>
+                  </div>
                 )}
                 {canEdit && iv.status === 'completed' && (
                   <div>
@@ -405,6 +514,40 @@ export default function RecruitmentCandidatePage() {
               </div>
             )}
           </div>
+
+          {/* ---------------------------------------------------------------- texts sent */}
+          {messages.length > 0 && (
+            <div className="card">
+              <div className="modal-sub">Texts sent</div>
+              {/*
+                * QUEUED, SENT, DELIVERED AND FAILED ARE FOUR DIFFERENT PROMISES and the screen says
+                * which. "Sent" means the carrier took it, not that it arrived — the distinction
+                * matters to a recruiter deciding whether to ring instead, so the pill carries the
+                * meaning as a title rather than leaving the word to be guessed at.
+                */}
+              <div className="lead-scroll">
+                <table className="list-table">
+                  <thead><tr><th>When</th><th>To</th><th>Status</th><th>Message</th><th>By</th></tr></thead>
+                  <tbody>
+                    {messages.map((m) => (
+                      <tr key={m.id}>
+                        <td>{dateTime(m.sent_at)}</td>
+                        <td>{m.phone}</td>
+                        <td>
+                          <span className={messageStatusPill(m.status)} title={messageStatusHint(m.status)}>
+                            {m.status}
+                          </span>
+                          {m.error_message && <div className="muted">{m.error_message}</div>}
+                        </td>
+                        <td style={{ whiteSpace: 'pre-wrap' }}>{m.body}</td>
+                        <td>{m.created_by || '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
 
           {/* ---------------------------------------------------------------- notes */}
           <div className="card">
@@ -769,6 +912,14 @@ export default function RecruitmentCandidatePage() {
           </div>
         </div>
       </div>
+
+      {texting && (
+        <RecruitmentSendText
+          candidateId={c.id}
+          onClose={() => setTexting(false)}
+          onSent={() => { void loadMessages(); void load(); }}
+        />
+      )}
 
       <ConfirmDialog confirm={confirm} onClose={closeConfirm} />
     </>

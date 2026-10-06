@@ -197,6 +197,32 @@ export const NOTIFICATION_CATEGORIES: readonly NotificationCategory[] = [
     description: 'A new lead arrives from a Meta lead form.',
     channels: { in_app: 'live', email: 'live', push: 'live' },
   },
+  /*
+   * Recruitment interviews, in TWO categories rather than one.
+   *
+   * A change to the booking and a reminder before it are different things to be told about, and a
+   * person wants them separately: the recruiter who arranged the interview needs to know the moment
+   * it moves, and may not want a nudge the day before; somebody sitting on the panel wants the
+   * nudge and did not arrange anything. Folding them together would mean silencing one to silence
+   * the other.
+   *
+   * `areas: ['crm']` only governs where the switch is drawn — Recruitment is a CRM screen. It
+   * changes nothing about who is notified.
+   */
+  {
+    key: 'recruitment_interview',
+    label: 'Interview bookings',
+    description: 'An interview you are recruiting for or sitting on is booked, moved or cancelled.',
+    channels: { in_app: 'live', email: 'live', push: 'live' },
+    areas: ['crm'],
+  },
+  {
+    key: 'recruitment_interview_reminder',
+    label: 'Interview reminders',
+    description: 'Before an interview you are recruiting for or sitting on — a day ahead, and an hour ahead.',
+    channels: { in_app: 'live', email: 'live', push: 'live' },
+    areas: ['crm'],
+  },
   {
     key: 'lead_task_due',
     label: 'Follow-ups falling due',

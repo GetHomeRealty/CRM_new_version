@@ -3428,6 +3428,22 @@ model recruitment_candidates {
    */
   availability               String?   @db.VarChar(16)
   training_needs             String?   @db.Text
+  /**
+   * Whether this candidate agreed to be texted — RECORDED, never assumed.
+   *
+   * THREE STATES, AND THEY STAY THREE. NULL means nobody has asked; `false` means they said no or
+   * withdrew; `true` means they agreed and somebody put their name to it. Only `true` may be
+   * texted, so every candidate who existed before this column cannot be, until somebody records an
+   * answer. See migration 20261006140000_recruitment_sms_consent for why there is no default.
+   *
+   * This is the BROKERAGE's end of the agreement. The carrier's STOP list is separate, still
+   * enforced by Twilio, and nothing here can override it.
+   */
+  sms_consent                Boolean?
+  sms_consent_at             DateTime? @db.Timestamp(0)
+  sms_consent_by             String?   @db.VarChar(255)
+  /** How it was obtained, in the recorder's words. A CHECK constraint requires the who and when. */
+  sms_consent_note           String?   @db.VarChar(255)
   created_by           String?   @db.VarChar(255)
   created_at           DateTime? @db.Timestamp(0)
   updated_at           DateTime? @db.Timestamp(0)
@@ -3446,6 +3462,7 @@ model recruitment_candidates {
   documents   recruitment_documents[]
   onboarding  recruitment_onboarding_items[]
   events      recruitment_events[]
+  messages    recruitment_messages[]
 
   @@index([status])
   @@index([assigned_recruiter_id])
@@ -3461,6 +3478,52 @@ model recruitment_candidates {
  * not_selected. A candidate interviewed twice has two rows and two outcomes, and neither of them
  * moves the candidate on by itself.
  */
+/**
+ * A text sent to a candidate from Recruitment, and what became of it.
+ *
+ * SEPARATE FROM `recruitment_events` because a sent text is not finished when it leaves. It moves
+ * queued -> sent -> delivered, or -> failed, reported by Twilio long after the request returned —
+ * a record with a changing status, where an event is a thing that happened and is never revised.
+ * Both are written: this carries the status, and an event records the send for the history.
+ *
+ * SHAPED LIKE `lead_messages` ON PURPOSE. One Twilio status callback has to find a row in either
+ * table, and a callback that had to remember two different shapes is how one of them ends up never
+ * being updated. See migration 20261006090000_recruitment_messages.
+ */
+model recruitment_messages {
+  id            Int       @id @default(autoincrement())
+  candidate_id  Int
+  /**
+   * queued | sent | delivered | failed — enforced by a CHECK constraint as well as here.
+   *
+   * NO `read`, unlike `lead_messages`. Plain SMS has no read receipt; that table allows one only
+   * because an agent can mark it by hand from what the lead told them. Recruitment has no such
+   * control, so this only ever holds what Twilio reported.
+   */
+  status        String    @default("queued") @db.VarChar(16)
+  /** Twilio's Message SID, so the status callback can find this row. Null if the send never got there. */
+  provider_sid  String?   @unique @db.VarChar(64)
+  error_code    String?   @db.VarChar(16)
+  error_message String?   @db.VarChar(255)
+  body          String    @db.Text
+  /**
+   * The number as it was dialled, in E.164. Kept here because the candidate's number may be
+   * corrected later and this must still say where the text actually went.
+   */
+  phone         String    @db.VarChar(64)
+  sent_at       DateTime  @db.Timestamp(0)
+  created_by    String?   @db.VarChar(255)
+  user_id       Int?
+  created_at    DateTime? @db.Timestamp(0)
+  updated_at    DateTime? @db.Timestamp(0)
+
+  candidate recruitment_candidates @relation(fields: [candidate_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@index([candidate_id])
+  @@index([status])
+  @@index([sent_at])
+}
+
 model recruitment_interviews {
   id             Int       @id @default(autoincrement())
   candidate_id   Int
