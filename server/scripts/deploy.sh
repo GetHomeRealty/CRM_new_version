@@ -55,8 +55,24 @@ if ! printf '%s' "$MIGRATE_STATUS" | grep -q "Database schema is up to date"; th
 fi
 echo "==> database is up to date"
 
+# TD-206, 2026-10-06 - REFRESH THE DATABASE CLIENT, THEN BUILD, AND PUT THE OLD BUILD BACK IF IT FAILS.
+#
+# The TD-204 deploy changed schema.prisma and the build failed: the generated Prisma client on this
+# server still described the old documents table. Nothing regenerates it unless somebody remembers.
+# Generating it every time costs a few seconds and makes the schema in the repository the one the
+# compiler checks against.
+#
+# And the failure was worse than it looked. `npm run build` runs `prebuild` (build-guard --clean),
+# which DELETES dist/, and the compiler then WRITES dist/ anyway, type errors and all - proved on the
+# local copy, where a deliberately broken file came out as dist/zz-td206-proof.js. set -e stopped the
+# script there, restore_build() was only wired to the boot check and the gate, so the server was left
+# holding an unstamped, unchecked build of the new code. The running processes kept the old code in
+# memory; any restart would have loaded the unchecked one.
+echo "==> refreshing the database client (prisma generate)"
+npx prisma generate || { restore_build; exit 1; }
+
 echo "==> building"
-npm run build
+npm run build || { restore_build; exit 1; }
 
 # F-1 - stamp the build so /api/health can name the commit serving traffic. Written INSIDE dist/
 # so restore_build() brings back the stamp of the build it restores; a stamp kept beside the
