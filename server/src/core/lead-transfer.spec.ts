@@ -346,6 +346,9 @@ describe('no agent-level statistics leave this screen', () => {
    */
   it('answers identically however many leads an agent is holding', async () => {
     await inRollback(async (tx) => {
+      // Parallel suites may commit users between the two reads. Compare our own
+      // lead changes against one snapshot, not an unrelated change to the user roster.
+      await tx.$executeRaw`SET TRANSACTION ISOLATION LEVEL REPEATABLE READ`;
       await emptyPool(tx);
       const { agent, admin } = await scene(tx, 2);
       const svc = new LeadTransferService(tx, auditStub);
