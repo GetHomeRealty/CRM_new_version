@@ -116,13 +116,19 @@ export function agentPaymentsPaid(adminActivities: Obj, names: string[]): AgentP
   const agents = obj(adminActivities.agents);
   let total = new Decimal(0), last: string | null = null, anyPaid = false;
   const paidNames: string[] = [];
+  // TD-174 - a preconstruction deal repeats a member once per term in `names`, on purpose: the
+  // payment status compares paidNames with names, so the repeats stay in paidNames. The MONEY must
+  // not repeat - an agent's payments are theirs once, however many terms they appear on.
+  const counted = new Set<string>();
   for (const name of names) {
     const rec = obj(agents[name]);
+    const firstTime = !counted.has(name);
+    counted.add(name);
     let namePaid = false;
     for (const p of arr(rec.payments).map(obj)) {
       if (String(p.paid_status) === 'Paid') {
         anyPaid = namePaid = true;
-        total = total.plus(num(p.amount));
+        if (firstTime) total = total.plus(num(p.amount));
         const d = p.paid_date ? String(p.paid_date) : null;
         if (d && (!last || d > last)) last = d;
       }

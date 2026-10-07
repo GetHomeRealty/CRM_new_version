@@ -153,8 +153,9 @@ const PAY_CTE = (names: string, lines: string): string => `
  * (No backticks in this comment: it lives inside a template literal.)
  */
 fallback_paid AS MATERIALIZED (
+  -- TD-174: each agent's payments once per deal - the names list repeats a member per precon term.
   SELECT n.tid, round(SUM(desk_agent_paid(s.admin, n.name)), 2) AS paid
-  FROM ${names} n JOIN scoped s ON s.id = n.tid
+  FROM (SELECT DISTINCT tid, name FROM ${names}) n JOIN scoped s ON s.id = n.tid
   WHERE s.calc_at IS NULL
   GROUP BY n.tid
 ),
