@@ -63,6 +63,33 @@ type InvoiceDetailRow = Prisma.invoicesGetPayload<{
   };
 }>;
 
+/** TD-150 - the invoice fields whose change is written to the history, with the label it shows. */
+const AUDITED_INVOICE_FIELDS: [key: string, label: string][] = [
+  ['customer_name', 'Customer'], ['customer_email', 'Customer Email'], ['customer_phone', 'Customer Phone'],
+  ['customer_address', 'Customer Address'], ['invoice_date', 'Invoice Date'], ['due_date', 'Due Date'],
+  ['terms', 'Terms'], ['subject', 'Subject'], ['sub_total', 'Sub Total'], ['discount', 'Discount'],
+  ['tax_rate', 'Tax Rate'], ['tax_total', 'Tax'], ['total', 'Total'], ['amount_paid', 'Amount Paid'],
+  ['balance_due', 'Balance Due'], ['commission_received_date', 'Commission Received Date'],
+  ['commission_received_via', 'Commission Received Via'], ['customer_notes', 'Customer Notes'],
+];
+
+/** Which audited fields moved between two reads of the same invoice, as display strings. */
+export function invoiceFieldChanges(before: Record<string, unknown>, after: Record<string, unknown>): { label: string; old: string; new: string }[] {
+  const show = (v: unknown): string => {
+    if (v === null || v === undefined) return '';
+    if (v instanceof Date) return v.toISOString().slice(0, 10);
+    if (typeof v === 'object' && typeof (v as { toFixed?: unknown }).toFixed === 'function') return Number(v).toFixed(2);
+    return String(v);
+  };
+  const out: { label: string; old: string; new: string }[] = [];
+  for (const [key, label] of AUDITED_INVOICE_FIELDS) {
+    const a = show(before[key]);
+    const b = show(after[key]);
+    if (a !== b) out.push({ label, old: a, new: b });
+  }
+  return out;
+}
+
 @Injectable()
 export class InvoicesService {
   constructor(
@@ -380,7 +407,18 @@ export class InvoicesService {
     const no = updated.invoice_no;
     if (oldStatus !== updated.status) {
       await this.auditInvoice(id, updated.transaction_id, actor, { field: `Invoice ${no} — Status`, action: 'Status changed', old: oldStatus, new: updated.status });
-    } else {
+    }
+    /*
+     * TD-150 - SAY WHAT CHANGED. The edit was recorded as a bare "Invoice updated", so the trail
+     * said an invoice was edited and not what was on it before - the one thing it exists to answer
+     * when a figure is later questioned. Each field below that moved is now its own row with the
+     * old and the new value, in the same shape the deal's own history uses.
+     */
+    const changed = invoiceFieldChanges(invoice as unknown as Record<string, unknown>, updated as unknown as Record<string, unknown>);
+    for (const c of changed) {
+      await this.auditInvoice(id, updated.transaction_id, actor, { field: `Invoice ${no} — ${c.label}`, action: 'Updated', old: c.old, new: c.new });
+    }
+    if (oldStatus === updated.status && changed.length === 0) {
       await this.auditInvoice(id, updated.transaction_id, actor, { field: `Invoice ${no}`, action: 'Invoice updated' });
     }
     return this.show(id);
