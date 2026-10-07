@@ -1672,8 +1672,11 @@ export class TransactionImportService {
       } catch (err) {
         failed++;
         // surface the real reason (duplicate guard, validation) against the offending row
+        // TD-097 - name the column when the write says which field refused, and show what the
+        // row held there. The save answers 422 with errors: { <body key>: [message] }.
+        const where = this.failedField(err, r.data);
         issues.push({
-          row: r.row, reference: r.reference, field: '—', value: '',
+          row: r.row, reference: r.reference, field: where.column, value: where.value,
           message: this.errorText(err), fix: 'Fix the row in your file and re-upload it.', severity: 'error', section: '',
         });
         continue;
@@ -1863,6 +1866,22 @@ export class TransactionImportService {
     const { __count, ...rest } = body;
     void __count;
     return rest;
+  }
+
+  /**
+   * TD-097 - which import column a refused save points at. The write answers with
+   * errors: { <body key>: [...] }; the body key is mapped back to the column heading the user typed
+   * in, through the same IMPORT_FIELDS the import reads with. Unknown keys keep their own name; no
+   * errors at all keeps the old dash, because then there is genuinely no field to point at.
+   */
+  private failedField(err: unknown, data: Record<string, unknown>): { column: string; value: string } {
+    const errors = (err as { response?: { errors?: Record<string, unknown> } })?.response?.errors;
+    const key = errors && typeof errors === 'object' ? Object.keys(errors)[0] : undefined;
+    if (!key) return { column: '—', value: '' };
+    const base = key.split('.')[0];
+    const f = IMPORT_FIELDS.find((x) => x.key === base);
+    const raw = data[base];
+    return { column: f ? f.column : key, value: raw === undefined || raw === null || typeof raw === 'object' ? '' : String(raw) };
   }
 
   private errorText(err: unknown): string {
