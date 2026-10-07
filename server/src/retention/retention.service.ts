@@ -72,6 +72,24 @@ export interface RetentionResult extends RetentionPlan {
   capped: boolean;
 }
 
+/*
+ * TD-162 - NOTHING THE CLEAN-UP REMOVES MAY TAKE A RECORDED PAYMENT WITH IT.
+ *
+ * The brokerage's rule (2026-09-09): an invoice with a recorded payment can be neither voided nor
+ * deleted. The database CASCADEs deal -> invoices -> invoice_payments, so a bulk delete of trashed
+ * deals or trashed invoices erased live payments without asking - the one path the hand-operated
+ * Recycle Bin already refused. A deal or invoice that still holds a live payment is therefore left
+ * in the bin, and the plan does not count it as due. A payment that was itself removed is not live.
+ */
+const trashedDealWithoutPayments = (cut: Date) => ({
+  deleted_at: { lt: cut },
+  invoices: { none: { invoice_payments: { some: { deleted_at: null } } } },
+});
+const trashedInvoiceWithoutPayments = (cut: Date) => ({
+  deleted_at: { lt: cut },
+  invoice_payments: { none: { deleted_at: null } },
+});
+
 @Injectable()
 export class RetentionService {
   private readonly log = new Logger(RetentionService.name);
@@ -124,9 +142,9 @@ export class RetentionService {
       auditCrm, auditCommon, auditNull,
     ] = await Promise.all([
       this.prisma.audit_logs.count({ where: { domain: 'desk', created_at: { lt: cut } } }),
-      this.prisma.transactions.count({ where: { deleted_at: { lt: cut } } }),
+      this.prisma.transactions.count({ where: trashedDealWithoutPayments(cut) }),
       this.prisma.documents.count({ where: { deleted_at: { lt: cut } } }),
-      this.prisma.invoices.count({ where: { deleted_at: { lt: cut } } }),
+      this.prisma.invoices.count({ where: trashedInvoiceWithoutPayments(cut) }),
       this.prisma.invoice_payments.count({ where: { deleted_at: { lt: cut } } }),
       this.prisma.trashed_row_items.count({ where: { created_at: { lt: cut } } }),
       this.prisma.transaction_reminders.count({ where: { created_at: { lt: cut } } }),
@@ -189,7 +207,7 @@ export class RetentionService {
     // 2. Whatever is left standing alone: documents, invoices and payments trashed on their own.
     result.deleted.trashed_documents = await this.purgeDocuments(cut, result);
     result.deleted.trashed_invoices = await this.batchDelete('invoices', () =>
-      this.prisma.invoices.findMany({ where: { deleted_at: { lt: cut } }, select: { id: true }, take: BATCH }),
+      this.prisma.invoices.findMany({ where: trashedInvoiceWithoutPayments(cut), select: { id: true }, take: BATCH }),
       (ids) => this.prisma.invoices.deleteMany({ where: { id: { in: ids } } }), result);
     result.deleted.trashed_payments = await this.batchDelete('invoice_payments', () =>
       this.prisma.invoice_payments.findMany({ where: { deleted_at: { lt: cut } }, select: { id: true }, take: BATCH }),
@@ -229,7 +247,7 @@ export class RetentionService {
     for (;;) {
       if (removed >= MAX_PER_SWEEP) { result.capped = true; break; }
       const batch = await this.prisma.transactions.findMany({
-        where: { deleted_at: { lt: cut } }, select: { id: true }, take: BATCH, orderBy: { id: 'asc' },
+        where: trashedDealWithoutPayments(cut), select: { id: true }, take: BATCH, orderBy: { id: 'asc' },
       });
       if (!batch.length) break;
       const ids = batch.map((t) => t.id);

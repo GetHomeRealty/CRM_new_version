@@ -276,6 +276,13 @@ export class RecycleBinService {
     this.guard(user);
     const i = await this.onlyTrashed('invoices', id, 'Invoice');
     const no = i.invoice_no;
+    // TD-162 - the deal's own purge refuses a paid invoice; deleting the invoice directly did not,
+    // and erased its payments first. Same rule, same words. A removed payment is not live.
+    const paid = await this.prisma.invoice_payments.count({ where: { invoice_id: id, deleted_at: null } });
+    if (paid > 0) {
+      const m = 'This invoice has a payment recorded against it, so it cannot be permanently deleted. If the payment was entered in error, Accounting or a Super Admin can remove it first.';
+      throw new UnprocessableEntityException({ message: m, errors: { id: [m] } });
+    }
     await this.prisma.invoice_line_items.deleteMany({ where: { invoice_id: id } });
     await this.prisma.invoice_payments.deleteMany({ where: { invoice_id: id } });
     await this.prisma.invoices.delete({ where: { id } });
