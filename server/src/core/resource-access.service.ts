@@ -100,7 +100,7 @@ export class ResourceAccessService {
   async assertLead(user: { id?: number; name?: string | null; role?: string | null } | null, leadId: number): Promise<void> {
     const lead = await this.prisma.leads.findFirst({
       where: { id: leadId, deleted_at: null },
-      select: { id: true, owner_user_id: true, assigned_to: true, team_id: true, assigned_team_lead_id: true },
+      select: { id: true, owner_user_id: true, assigned_to: true, team_id: true, assigned_team_lead_id: true, collaborator_user_ids: true },
     });
     /*
      * ONE ANSWER FOR BOTH QUESTIONS. A lead that does not exist and a lead that is somebody else's
@@ -134,7 +134,7 @@ export class ResourceAccessService {
      */
     const id = user.id ?? -1;
     // The assigned Team Lead too, matching `leadScopeWhere` (Admin -> Team Lead -> Agent).
-    const mine = lead.owner_user_id === id || lead.assigned_to === id || lead.assigned_team_lead_id === id;
+    const mine = lead.owner_user_id === id || lead.assigned_to === id || lead.assigned_team_lead_id === id || lead.collaborator_user_ids?.includes(id);
     const brokerages = isBrokerageLead(lead) && hasBrokerageLeadScope(user);
     if (mine || brokerages) return;
     // A team-owned lead, for the people in that team — the same clause `leadScopeWhere` adds.

@@ -1,0 +1,31 @@
+import { PrismaClient } from '@prisma/client';
+import { LeadsService } from './leads.service';
+import { leadScopeWhere } from '../common/lead-scope';
+import { ResourceAccessService } from '../core/resource-access.service';
+import type { AuthUserRecord } from '../auth/auth.types';
+const db = new PrismaClient();
+afterAll(() => db.$disconnect());
+it('persists shared access, permits follow-up access, then revokes it without moving brokerage ownership', async () => {
+  const rollback = new Error('fixture rollback');
+  await expect(db.$transaction(async tx => {
+    const suffix = `${Date.now()}-${Math.random()}`;
+    const one = await tx.users.create({ data: { name: 'Collaborator fixture', email: `collab-${suffix}@example.invalid`, password: 'not-a-login-hash', role: 'agent' } });
+    const two = await tx.users.create({ data: { name: 'Assigned fixture', email: `assigned-${suffix}@example.invalid`, password: 'not-a-login-hash', role: 'agent' } });
+    const lead = await tx.leads.create({ data: { name: 'Collaboration fixture', assigned_to: two.id } });
+    const service = new LeadsService(tx as never, { record: async () => undefined } as never, {} as never, {} as never, {} as never, {} as never);
+    const admin = { id: -100, name: 'Fixture admin', role: 'admin' } as AuthUserRecord;
+    const collaborator = { id: one.id, role: 'agent' } as AuthUserRecord;
+    await service.changeCollaborator(lead.id, one.id, 'add', admin);
+    const shared = await tx.leads.findFirst({ where: { id: lead.id, ...leadScopeWhere(collaborator) } });
+    expect(shared?.owner_user_id).toBeNull();
+    expect(shared?.assigned_to).toBe(two.id);
+    const access = new ResourceAccessService(tx as never);
+    await expect(access.assertLead(collaborator, lead.id)).resolves.toBeUndefined();
+    await service.changeCollaborator(lead.id, one.id, 'remove', admin);
+    expect(await tx.leads.findFirst({ where: { id: lead.id, ...leadScopeWhere(collaborator) } })).toBeNull();
+    await expect(access.assertLead(collaborator, lead.id)).rejects.toThrow();
+    await expect(access.assertLead({ id: two.id, role: 'agent' }, lead.id)).resolves.toBeUndefined();
+    await expect(access.assertLead(admin, lead.id)).resolves.toBeUndefined();
+    throw rollback;
+  }, { timeout: 15000 })).rejects.toBe(rollback);
+});

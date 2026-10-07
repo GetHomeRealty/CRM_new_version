@@ -118,6 +118,12 @@ export class LeadsController {
   }
 
   // ------------------------------------------------------------------ tags
+  @Put(':id/collaborators')
+  @Screen('lead', 'edit')
+  changeCollaborator(@Param('id', ParseIntPipe) id: number, @Body() body: { user_id?: unknown; action?: unknown }, @CurrentUser() user: AuthUserRecord): Promise<unknown> {
+    return this.leads.changeCollaborator(id, body?.user_id, body?.action, user);
+  }
+
   @Get('tags')
   @Screen('lead', 'view')
   tags(@CurrentUser() user: AuthUserRecord): Promise<unknown> {

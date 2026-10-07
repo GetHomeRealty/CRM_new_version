@@ -90,6 +90,11 @@ export interface Lead {
    * be deleted. Compare to the signed-in user id to decide. The server enforces this regardless.
    */
   owner_user_id: number | null;
+  can_choose_assignment_mode?: boolean;
+  collaborators?: { id: number; name: string }[];
+  can_manage_collaborators?: boolean;
+  assignment_mode?: 'keep' | 'transfer';
+  removed_from_my_leads?: boolean;
   /**
    * Whether THIS user may delete THIS lead, decided by the server rule that will refuse it.
    *

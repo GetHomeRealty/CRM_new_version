@@ -18,6 +18,7 @@ import { useToast } from './toast';
 import { useAuth } from '../context/AuthContext';
 import LeadEditorModal, { label, prefHeading } from './LeadEditorModal';
 import LeadTeamAssignmentPanel from './LeadTeamAssignmentPanel';
+import LeadCollaboratorsPanel from './LeadCollaboratorsPanel';
 import TeamLeadAssignPanel from './TeamLeadAssignPanel';
 import MetaInquiryHistory from './MetaInquiryHistory';
 import { leadTypeValues } from './leadTypeValues';
@@ -296,6 +297,7 @@ export default function LeadDetailPage() {
           <LeadActivityTimeline lead={lead} />
         </section>
         <aside className="lw-right" aria-label="Follow-ups and showings">
+          <LeadCollaboratorsPanel lead={lead} options={options} canEdit={canEdit} userId={user?.id} onChanged={() => void load(true)} onTransferred={() => navigate(backTo)} />
           <TasksPanel lead={lead} options={options} canEdit={canEdit} run={run} ask={ask} />
           <ShowingsPanel lead={lead} canEdit={canEdit} run={run} ask={ask} />
           <LeadTeamAssignmentPanel lead={lead} options={options} canEdit={canEdit} onChanged={() => void load(true)} />
@@ -309,7 +311,7 @@ export default function LeadDetailPage() {
           // One definition, shared with the Leads list and matching the server. See `leadIdentity`.
           lockIdentity={identityLocked(lead, user)}
           onClose={() => setEditorOpen(false)}
-          onSaved={() => { setEditorOpen(false); void load(true); }}
+          onSaved={(saved) => { setEditorOpen(false); if (saved.removed_from_my_leads) navigate(backTo); else void load(true); }}
         />
       )}
 

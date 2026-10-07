@@ -288,6 +288,7 @@ export default function LeadEditorModal({ lead, options, onClose, onSaved, lockI
   const [prefs, setPrefs] = useState<PrefForm[]>([{ ...EMPTY_PREF }]);
   const [errors, setErrors] = useState<Record<string, string[]>>({});
   const [saving, setSaving] = useState(false);
+  const [assignmentMode, setAssignmentMode] = useState<'keep' | 'transfer'>('keep');
   const [languagePopoverOpen, setLanguagePopoverOpen] = useState(false);
   const [customLanguage, setCustomLanguage] = useState('');
   const [customLanguageError, setCustomLanguageError] = useState('');
@@ -326,6 +327,8 @@ export default function LeadEditorModal({ lead, options, onClose, onSaved, lockI
   }, [lead?.id, me?.is_team_lead, me?.is_super_admin]);
   const tlHasAgent = !!tl && !!tl.lead.assigned_to && !tl.lead.with_team_lead;
   const tlCurrent = tlHasAgent ? String(tl!.lead.assigned_to) : '';
+  const showAssignmentMode = !!lead?.can_choose_assignment_mode && !tl && !lockIdentity
+    && !form.team_id && !!form.assigned_to && Number(form.assigned_to) !== me?.id;
 
   /*
    * THE TAGS THAT ALREADY EXIST, so this field stops being a memory test.
@@ -361,6 +364,7 @@ export default function LeadEditorModal({ lead, options, onClose, onSaved, lockI
   useEffect(() => {
     const nextForm = lead ? toForm(lead) : EMPTY;
     setForm(nextForm);
+    setAssignmentMode('keep');
     setPrefs(lead ? toPrefForms(lead, vocabulary) : [{ ...EMPTY_PREF }]);
     setErrors({});
     const needsCustomLanguage = nextForm.language.toLowerCase() === 'other';
@@ -452,6 +456,9 @@ export default function LeadEditorModal({ lead, options, onClose, onSaved, lockI
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (saving) return;
+    if (showAssignmentMode && assignmentMode === 'transfer'
+      && !window.confirm('Transfer this lead? It will leave your My Leads list. Existing brokerage/admin access is unchanged.')) return;
     setSaving(true);
     setErrors({});
     try {
@@ -479,6 +486,7 @@ export default function LeadEditorModal({ lead, options, onClose, onSaved, lockI
         marriage_day: form.marriage_day,
         notes: form.notes.trim(),
         assigned_to: form.assigned_to === '' ? null : Number(form.assigned_to),
+        ...(showAssignmentMode ? { assignment_mode: assignmentMode } : {}),
         // Sent only when the field is shown, so nobody else's save ever touches the team.
         ...(showTeam ? { team_id: form.team_id === '' ? null : Number(form.team_id) } : {}),
         tags: form.tags.split(',').map((t) => t.trim()).filter(Boolean),
@@ -501,7 +509,7 @@ export default function LeadEditorModal({ lead, options, onClose, onSaved, lockI
         }
       }
       const saved = lead ? await updateLead(lead.id, body) : await createLead(body);
-      toast(lead ? 'Lead updated.' : saved.duplicate_updated ? 'Existing lead updated with the latest information.' : 'Lead created.', 'ok');
+      toast(saved.removed_from_my_leads ? 'Lead transferred and removed from My Leads.' : lead ? 'Lead updated.' : saved.duplicate_updated ? 'Existing lead updated with the latest information.' : 'Lead created.', 'ok');
       onSaved(saved);
     } catch (ex) {
       const fields = apiFieldErrors(ex);
@@ -625,8 +633,8 @@ export default function LeadEditorModal({ lead, options, onClose, onSaved, lockI
               </div>
             ) : (
             <div className="field">
-              <label>{form.team_id ? 'Assigned Agent' : 'Assigned To'}</label>
-              <select value={form.assigned_to} onChange={(e) => set('assigned_to', e.target.value)}
+              <label htmlFor="lead-assigned-to">{form.team_id ? 'Assigned Agent' : 'Assigned To'}</label>
+              <select id="lead-assigned-to" value={form.assigned_to} onChange={(e) => set('assigned_to', e.target.value)}
                 disabled={lockIdentity} title={lockIdentity ? lockNote : undefined}>
                 <option value="">Unassigned</option>
                 {assignees.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
@@ -640,6 +648,16 @@ export default function LeadEditorModal({ lead, options, onClose, onSaved, lockI
             )}
           </div>
 
+          {showAssignmentMode && (
+            <fieldset style={{ border: '1px solid var(--line)', borderRadius: 10, padding: 14, margin: '12px 0' }}>
+              <legend>Collaborator access</legend>
+              <label style={{ display: 'flex', gap: 10, padding: '10px 0', alignItems: 'flex-start' }}>
+                <input style={{ width: 16, height: 16, flex: '0 0 16px', marginTop: 3 }} type="checkbox" checked={assignmentMode === 'keep'} onChange={e => setAssignmentMode(e.target.checked ? 'keep' : 'transfer')} />
+                <span><strong>Keep me as a collaborator</strong><br /><span className="muted">Continue editing and following up on this lead. Brokerage/admin access stays unchanged.</span></span>
+              </label>
+              {err('assignment_mode')}
+            </fieldset>
+          )}
           <div className="modal-sub">Classification</div>
           <div className="g3">
             <div className="field">

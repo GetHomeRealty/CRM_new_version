@@ -51,7 +51,7 @@ import type { AuthUserRecord } from '../auth/auth.types';
  */
 export function leadScopeWhere(user: AuthUserRecord | null): Prisma.leadsWhereInput {
   const id = user?.id ?? -1;
-  const mine: Prisma.leadsWhereInput[] = [{ assigned_to: id }, { owner_user_id: id }];
+  const mine: Prisma.leadsWhereInput[] = [{ assigned_to: id }, { owner_user_id: id }, { collaborator_user_ids: { has: id } }];
   // A Team Lead keeps sight of a lead an Admin gave them after passing it to one of their Agents
   // (Admin -> Team Lead -> Agent, `assigned_team_lead_id`). Added for Team Leads only, so the scope
   // every other user gets is exactly what it was.

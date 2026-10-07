@@ -1,4 +1,5 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { personalAssignment } from './personal-assignment';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { LeadAuditService } from './lead-audit.service';
@@ -29,6 +30,7 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 /** Everything the client may send when creating or updating a lead. */
 export interface LeadInput {
+  assignment_mode?: unknown;
   name?: unknown; first_name?: unknown; middle_name?: unknown; last_name?: unknown;
   email?: unknown; phone?: unknown; location?: unknown; property?: unknown;
   lead_status?: unknown; lead_type?: unknown; lead_source?: unknown; lead_response?: unknown;
@@ -165,9 +167,9 @@ export class LeadsService {
    * of a row already in hand rather than expressed as a query. Used to decide how much a validation
    * message may say about a lead the caller may not read.
    */
-  private canSee(lead: { owner_user_id: number | null; assigned_to: number | null; assigned_team_lead_id?: number | null }, user: AuthUserRecord): boolean {
+  private canSee(lead: { owner_user_id: number | null; assigned_to: number | null; assigned_team_lead_id?: number | null; collaborator_user_ids?: number[] }, user: AuthUserRecord): boolean {
     const id = user.id ?? -1;
-    if (lead.owner_user_id === id || lead.assigned_to === id || lead.assigned_team_lead_id === id) return true;
+    if (lead.owner_user_id === id || lead.assigned_to === id || lead.assigned_team_lead_id === id || lead.collaborator_user_ids?.includes(id)) return true;
     // The brokerage's own lead, asked of a row rather than as a query. Same capability
     // `leadScopeWhere` uses, so this cannot answer differently from the list it accompanies.
     return isBrokerageLead(lead) && hasBrokerageLeadScope(user);
@@ -446,7 +448,7 @@ export class LeadsService {
     });
     if (!row) throw new NotFoundException({ message: 'Lead not found.' });
 
-    const ids = [row.assigned_to, ...row.lead_tasks.map((t) => t.assigned_to)];
+    const ids = [row.assigned_to, ...(row.collaborator_user_ids ?? []), ...row.lead_tasks.map((t) => t.assigned_to)];
     const [assignees, history, ledTeam] = await Promise.all([
       this.assigneeNames(ids),
       this.history.list(row.id),
@@ -682,6 +684,37 @@ export class LeadsService {
     team_id: 'team',
   };
 
+  async changeCollaborator(id: number, targetId: unknown, action: unknown, user: AuthUserRecord): Promise<{ saved: true }> {
+    const existing = await this.prisma.leads.findFirst({ where: { id, deleted_at: null, ...this.scopeWhere(user) } });
+    if (!existing) throw new NotFoundException('Lead not found.');
+    if (existing.owner_user_id !== user.id && !this.mayRewriteIdentity(user)) {
+      throw new ForbiddenException('Only the lead owner or an authorized administrator can manage collaborators.');
+    }
+    if (!Number.isInteger(targetId) || Number(targetId) < 1 || !['add', 'remove'].includes(String(action))) {
+      throwValidation({ collaborator: ['Choose a valid collaborator and action.'] });
+    }
+    const target = Number(targetId);
+    if (action === 'add') {
+      if (target === existing.assigned_to) throwValidation({ collaborator: ['The assigned agent already has access.'] });
+      const active = await this.prisma.users.findFirst({ where: { id: target, status: 'Active' }, select: { id: true } });
+      if (!active) throwValidation({ collaborator: ['Choose an active user.'] });
+    }
+    const before = existing.collaborator_user_ids ?? [];
+    const after = action === 'add' ? [...new Set([...before, target])] : before.filter(n => n !== target);
+    if (before.join(',') === after.join(',')) return { saved: true };
+    const result = await this.prisma.leads.updateMany({
+      where: { id, deleted_at: null, owner_user_id: existing.owner_user_id, assigned_to: existing.assigned_to,
+        team_id: existing.team_id, assigned_team_lead_id: existing.assigned_team_lead_id,
+        collaborator_user_ids: { equals: before } },
+      data: { collaborator_user_ids: after, updated_at: new Date() },
+    });
+    if (result.count !== 1) throw new ConflictException('The lead access changed. Reload and try again.');
+    await this.audit.record(user, 'Lead collaborators updated', existing.name,
+      `${action === 'add' ? 'Added' : 'Removed'} collaborator ${target}`,
+      { field: 'collaborator_user_ids', old: before.join(','), new: after.join(',') });
+    return { saved: true };
+  }
+
   async update(id: number, input: LeadInput, user: AuthUserRecord): Promise<Record<string, unknown>> {
     const existing = await this.prisma.leads.findFirst({ where: { id, deleted_at: null, ...this.scopeWhere(user) } });
     if (!existing) throw new NotFoundException({ message: 'Lead not found.' });
@@ -730,11 +763,24 @@ export class LeadsService {
       }
     }
 
+    const retention = personalAssignment(existing, user.id ?? -1,
+      data.assigned_to as number | null | undefined, input.assignment_mode, this.mayRewriteIdentity(user));
+    if (retention) {
+      const recipient = await this.prisma.users.findFirst({ where: { id: Number(data.assigned_to), status: 'Active' }, select: { id: true } });
+      if (!recipient) throwValidation({ assigned_to: ['Select an active agent.'] });
+      Object.assign(data, retention);
+    }
     const row = await this.prisma.leads.update({
-      where: { id },
+      where: { id, ...(retention ? { owner_user_id: existing.owner_user_id, assigned_to: existing.assigned_to,
+        team_id: existing.team_id, assigned_team_lead_id: existing.assigned_team_lead_id,
+        collaborator_user_ids: { equals: existing.collaborator_user_ids } } : {}) },
       data: { ...data, updated_at: new Date() },
       include: { _count: { select: { lead_calls: true, lead_tasks: true } }, ...LeadsService.TEAM_INCLUDE },
-    }).catch((err: unknown) => this.rethrowEmailClash(err, str(data.email) || str(existing.email), existing.owner_user_id));
+    }).catch((err: unknown) => {
+      if (retention && (err as { code?: string }).code === 'P2025') throw new ConflictException('This assignment changed. Reload the lead and try again.');
+      if (retention?.owner_user_id && (err as { code?: string }).code === 'P2002') throwValidation({ assignment_mode: ['The recipient already has a lead with this email. No changes were saved.'] });
+      return this.rethrowEmailClash(err, str(data.email) || str(existing.email), existing.owner_user_id);
+    });
 
     /*
      * ONE ROW PER FIELD THAT ACTUALLY MOVED, each carrying what it moved from and to.
@@ -814,7 +860,8 @@ export class LeadsService {
       }
     }
 
-    return this.present(row, await this.assigneeNames([row.assigned_to]), user);
+    return { ...this.present(row, await this.assigneeNames([row.assigned_to]), user),
+      removed_from_my_leads: !!retention && input.assignment_mode === 'transfer' };
   }
 
   /** Soft delete — the lead moves to Recently Deleted and drops out of every list query. */
@@ -1319,7 +1366,7 @@ export class LeadsService {
      */
     const me = user.id ?? -1;
     switch (str(q.view)) {
-      case 'mine': and.push({ OR: [{ owner_user_id: me }, { assigned_to: me }] }); break;
+      case 'mine': and.push({ OR: [{ owner_user_id: me }, { assigned_to: me }, { collaborator_user_ids: { has: me } }] }); break;
       case 'my_team': and.push(myTeamLeadsWhere(me)); break;
       case 'team_unassigned': and.push({ owner_user_id: null, team_id: { not: null }, assigned_to: null }); break;
       case 'brokerage': and.push({ owner_user_id: null, team_id: null }); break;
@@ -1714,11 +1761,15 @@ export class LeadsService {
       } : null,
       assigned_to: assignedTo,
       assigned_to_name: assignedTo ? assignees.get(assignedTo) ?? null : null,
+      collaborators: ((r.collaborator_user_ids as number[] | undefined) ?? []).map(id => ({ id, name: assignees.get(id) ?? `User #${id}` })),
+      can_manage_collaborators: !!user?.id && (r.owner_user_id === user.id || this.mayRewriteIdentity(user)),
       // Who created the lead. The client compares this to the signed-in user to decide whether
       // the identity fields (email, phone, source, assignment) and the Delete action are locked:
       // an agent working a lead the brokerage created cannot change those. Not sensitive — it is
       // just a user id, and the server enforces the rule regardless of what the client shows.
       owner_user_id: (r.owner_user_id as number | null) ?? null,
+      can_choose_assignment_mode: !!user?.id && r.team_id == null && r.assigned_team_lead_id == null
+        && (r.owner_user_id === user.id || (r.owner_user_id == null && this.mayRewriteIdentity(user))),
       /*
        * WHOSE LEAD THIS IS, in one word, so a screen does not have to re-derive it.
        *

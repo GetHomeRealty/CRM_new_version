@@ -393,6 +393,8 @@ model leads {
   unsubscribed         Boolean               @default(false)
   unsubscribed_at      DateTime?             @db.Timestamp(0)
   owner_user_id        Int?
+  /// People who explicitly retained this lead while assigning it. Not brokerage ownership.
+  collaborator_user_ids Int[] @default([])
   /// The TEAM that owns this lead, or null. A team lead has `owner_user_id IS NULL` — the check
   /// constraint `leads_private_or_team_chk` refuses a row that is both private and team-owned —
   /// and `assigned_to` stays the optional handling agent inside that team.
@@ -471,6 +473,7 @@ model leads {
   /// Half of the lead scope filter (assigned_to = me OR owner_user_id = me). Unindexed, the OR
   /// could not use the assigned_to index either and every list read scanned the table.
   @@index([owner_user_id])
+  @@index([collaborator_user_ids], type: Gin, map: "leads_collaborator_user_ids_idx")
   @@index([deleted_at])
   @@index([source])
   @@index([phone_normalized])
