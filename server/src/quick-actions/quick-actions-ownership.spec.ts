@@ -151,9 +151,12 @@ describe('Quick Actions refuse a deal the caller has no part in (TD-012)', () =>
       // THE NOTICE OF SALE CALLS WERE DROPPED FROM THIS LIST ON 2026-09-23, and not because
       // ownership changed. The brokerage took that document away from agents outright, so the ROLE
       // is refused before ownership is ever consulted and the call can no longer demonstrate this
-      // gate. The Deposit Receipt is the quick action an agent may still reach on their own deal.
+      // gate. The Deposit Receipt was the example after that, until 2026-10-07, when the same rule
+      // reached it: it is the admin team's document and the role is refused first. The Cc look-up
+      // behind the Deposit Receipt editor is the quick action an agent can still reach, and it
+      // answers to the same ownership gate.
       for (const call of [
-        () => quick.depositReceipt(asUser(owner), deal.id, { email: 'client@example.test' }),
+        () => quick.ccSuggestions(asUser(owner), deal.id),
       ]) {
         expect(await attempt(call)).not.toBeInstanceOf(ForbiddenException);
       }
@@ -177,8 +180,10 @@ describe('Quick Actions refuse a deal the caller has no part in (TD-012)', () =>
     await inRollback(async (tx) => {
       const { owner, stranger, admin } = await scene(tx);
       const { quick } = services(tx);
+      // The Cc look-up rather than the send since 2026-10-07: an agent is refused the send by ROLE
+      // before the deal is looked up, so the send can no longer show the not-found answer.
       for (const person of [owner, stranger, admin]) {
-        const err = await attempt(() => quick.depositReceipt(asUser(person), 2_000_000_000, EVIL));
+        const err = await attempt(() => quick.ccSuggestions(asUser(person), 2_000_000_000));
         expect(err).toBeInstanceOf(NotFoundException);
       }
     });
@@ -245,10 +250,11 @@ describe('Quick Actions refuse a deal the caller has no part in (TD-012)', () =>
       const { quick } = services(tx);
 
       // THE EXAMPLE ACTION CHANGED ON 2026-09-23, NOT THE RULE. The Notice of Sale is refused to
-      // every agent by role now, so it can no longer show ownership opening for one. The Deposit
-      // Receipt is the quick action an agent may still reach, and the rule it answers to is the
-      // same one: "named on it, or split into it".
-      const call = () => quick.depositReceipt(asUser(stranger), deal.id, { email: 'client@example.test' });
+      // every agent by role now, so it can no longer show ownership opening for one. Since
+      // 2026-10-07 the same is true of the Deposit Receipt, so the example is the Cc look-up behind
+      // its editor - an agent may still reach it, and the rule it answers to is the same one:
+      // "named on it, or split into it".
+      const call = () => quick.ccSuggestions(asUser(stranger), deal.id);
 
       // Before: refused, and refused as a STRANGER.
       expect(await attempt(call)).toBeInstanceOf(ForbiddenException);
@@ -257,8 +263,7 @@ describe('Quick Actions refuse a deal the caller has no part in (TD-012)', () =>
         data: { transaction_id: deal.id, user_id: stranger.id, name: stranger.name, access: 'full', position: 0, created_at: new Date(), updated_at: new Date() },
       });
 
-      // After: no longer a stranger. Not null, because this is a Buying deal and the Deposit
-      // Receipt then refuses on its OWN terms - which is the distinction being drawn.
+      // After: no longer a stranger, so the gate opens.
       expect(await attempt(call)).not.toBeInstanceOf(ForbiddenException);
     });
   });

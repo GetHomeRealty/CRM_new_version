@@ -161,6 +161,19 @@ export class QuickSendService {
    * the shape the Trade Record Sheet's own precondition already uses.
    */
   async depositReceipt(user: Actor, txnId: number, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+    /*
+     * THE DEPOSIT RECEIPT IS THE ADMIN TEAM'S, LIKE THE NOTICE OF SALE AND THE TRADE RECORD SHEET.
+     *
+     * The brokerage's rule of 2026-09-23, confirmed 2026-10-03: the agent fills in the lawyer
+     * details; the admin team prepares these three documents and raises them to the agent for
+     * signing. The button has always been hidden from agents, but the server accepted the role -
+     * a curtain, not a lock - so an agent calling this address could mail a receipt carrying the
+     * trade number, the property and the deposit to any address they chose. Refused here first,
+     * before anything about the deal is read, in the same words the Trade Record Sheet uses.
+     * Proved before the fix on 2026-10-05 and again 2026-10-07: Trade Record Sheet refused,
+     * Deposit Receipt allowed.
+     */
+    if (user?.role === 'agent') throw new ForbiddenException({ message: 'Only brokerage staff can send the Deposit Receipt.' });
     const t = await this.reachableTxnOr404(user, txnId);
     /*
      * LISTING TYPES ONLY, ENFORCED HERE AND NOT ONLY IN THE BROWSER.

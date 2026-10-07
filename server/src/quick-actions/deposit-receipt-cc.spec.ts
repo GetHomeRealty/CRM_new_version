@@ -179,8 +179,12 @@ describe('the Deposit Receipt Cc resolves this deal\'s own team, not a namesake 
         new ResourceAccessService(tx),
       );
 
-      const preFill = await svc.ccSuggestions(asUser(agent), deal.id);
-      await svc.depositReceipt(asUser(agent), deal.id, { email: 'client@example.test' });
+      // Sent by an administrator since 2026-10-07 - the Deposit Receipt is the admin team's document
+      // and an agent is refused it. The Cc set is the deal's team whoever asks, so the comparison
+      // this test exists for is unchanged.
+      const admin = { id: 999, name: 'An Admin', role: 'admin' } as never;
+      const preFill = await svc.ccSuggestions(admin, deal.id);
+      await svc.depositReceipt(admin, deal.id, { email: 'client@example.test' });
 
       const actuallySent = (sent[0].cc as string[]).sort();
       expect(actuallySent).toEqual(preFill.sort());
