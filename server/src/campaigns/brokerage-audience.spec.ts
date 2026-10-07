@@ -45,13 +45,13 @@ describe('who may select the brokerage’s leads', () => {
   it.each(['admin', 'manager', 'crm', 'accounting', 'documentation'])(
     '%s selects the brokerage’s own leads as well as their own', (role) => {
       const clause = ownerClause(svc.buildAudienceWhere({}, as(role, 7))) as { OR?: unknown[] };
-      expect(clause?.OR).toEqual([{ assigned_to: 7 }, { owner_user_id: 7 }, { owner_user_id: null }]);
+      expect(clause?.OR).toEqual([{ assigned_to: 7 }, { owner_user_id: 7 }, { collaborator_user_ids: { has: 7 } }, { owner_user_id: null }]);
     });
 
   it('an agent is capped to their own leads — the one role with a private book', () => {
     const clause = ownerClause(svc.buildAudienceWhere({}, as('agent', 7))) as { OR?: unknown[] };
-    // Plus the leads of the teams they belong to (CRM Teams) — never another agent's private lead.
-    expect(clause?.OR).toEqual([{ assigned_to: 7 }, { owner_user_id: 7 }, myTeamLeadsWhere(7)]);
+    // Explicit collaboration and team membership grant access; unrelated private leads stay excluded.
+    expect(clause?.OR).toEqual([{ assigned_to: 7 }, { owner_user_id: 7 }, { collaborator_user_ids: { has: 7 } }, myTeamLeadsWhere(7)]);
   });
 
   it('no role gets an empty owner clause — that would be every agent’s book', () => {
@@ -72,7 +72,7 @@ describe('who may select the brokerage’s leads', () => {
     // Not reachable from a request, and it must not open the book if it ever is.
     const clause = ownerClause(svc.buildAudienceWhere({}, null)) as { OR?: unknown[] };
     // The team clause for id -1 matches no team, so this still reaches nothing.
-    expect(clause?.OR).toEqual([{ assigned_to: -1 }, { owner_user_id: -1 }, myTeamLeadsWhere(-1)]);
+    expect(clause?.OR).toEqual([{ assigned_to: -1 }, { owner_user_id: -1 }, { collaborator_user_ids: { has: -1 } }, myTeamLeadsWhere(-1)]);
   });
 });
 
