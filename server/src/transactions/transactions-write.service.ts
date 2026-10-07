@@ -231,6 +231,40 @@ const FINANCIAL_FIELDS = new Set([
 const asArray = (v: unknown): Record<string, unknown>[] => (Array.isArray(v) ? (v as Record<string, unknown>[]) : []);
 const asObject = (v: unknown): Record<string, unknown> => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {});
 
+/**
+ * TD-058 - ONCE THE NOTICE OF SALE IS OUT, THE TEAM IS FIXED FOR EVERYONE BELOW MANAGER.
+ *
+ * The screen has always locked it (TransactionDetailPage teamLockAgents: Notice of Sale sent, not
+ * admin-or-above, agent not yet paid) - the members, their names and their Split % - but the server
+ * accepted any team an agent sent, so the lock was a curtain. The Notice of Sale states who is paid
+ * what; changing the split after it went for signing changes a document the agents have signed.
+ *
+ * Same three conditions as the screen, so the two cannot disagree. A save that sends the team
+ * UNCHANGED still passes - the detail screen sends the whole deal on every save.
+ *
+ * Returns the refusal message, or null when the change is allowed.
+ */
+export function teamChangeAfterNoticeProblem(
+  isAdminOrAboveUser: boolean,
+  deal: { notice_of_sale: string | null; comm_paid_status: string | null; activity_tracker: string | null },
+  current: { name: string; split: unknown }[],
+  incoming: Record<string, unknown>[],
+): string | null {
+  if (isAdminOrAboveUser) return null;
+  let sentAt: unknown = null;
+  try { sentAt = (JSON.parse(deal.notice_of_sale || '{}') as Record<string, unknown>).sent_at ?? null; } catch { sentAt = null; }
+  if (!sentAt) return null;
+  let tracker: Record<string, unknown> = {};
+  try { tracker = JSON.parse(deal.activity_tracker || '{}') as Record<string, unknown>; } catch { tracker = {}; }
+  if (deal.comm_paid_status === 'Yes' || tracker.agent_commission_paid_status === 'Yes') return null;
+  const shape = (rows: { name?: unknown; split?: unknown }[]) => rows
+    .map((r) => `${String(r.name ?? '').trim().toLowerCase()}|${Number(r.split ?? 0).toFixed(4)}`)
+    .sort().join(';');
+  if (shape(current) === shape(incoming as { name?: unknown; split?: unknown }[])) return null;
+  return 'The Notice of Sale has been sent for signing, so the team and its Split % are locked. '
+    + 'Ask an administrator if the team has to change.';
+}
+
 @Injectable()
 export class TransactionsWriteService {
   constructor(
@@ -822,6 +856,13 @@ export class TransactionsWriteService {
         existing.batch_review_email = !!asObject(data.activity_tracker).batch_review_email;
         data.activity_tracker = existing;
       }
+    }
+
+    // TD-058 - the server half of the Team Split lock (see teamChangeAfterNoticeProblem).
+    if (Object.prototype.hasOwnProperty.call(data, 'team')) {
+      const current = await this.prisma.team_members.findMany({ where: { transaction_id: txnId }, select: { name: true, split: true } });
+      const problem = teamChangeAfterNoticeProblem(isAdminOrAbove(user), t, current, asArray(data.team));
+      if (problem) throw new UnprocessableEntityException({ message: problem, errors: { team: [problem] } });
     }
 
     /*
