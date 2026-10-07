@@ -40,9 +40,10 @@ export const setMetaDefaultPage = (pageId: string): Promise<MetaDefaultPageRespo
  * `pageId` scopes the whole answer — list and tiles — to one Facebook Page, which is what the rest
  * of the Meta screen is already showing. `formId` narrows the LIST further, and never the tiles.
  */
-export const metaLeads = (limit = 50, formId?: string, pageId?: string): Promise<MetaLeadsResponse> =>
+/** `listPage` is which page of the list (1 = the first, the default) — not a Facebook Page. */
+export const metaLeads = (limit = 50, formId?: string, pageId?: string, listPage?: number): Promise<MetaLeadsResponse> =>
   api.get<MetaLeadsResponse>('/api/meta/leads', {
-    params: { limit, form_id: formId || undefined, page_id: pageId || undefined },
+    params: { limit, form_id: formId || undefined, page_id: pageId || undefined, list_page: listPage && listPage > 1 ? listPage : undefined },
   }).then((r) => r.data);
 
 export const metaDiagnostics = (): Promise<MetaDiagnostics> =>

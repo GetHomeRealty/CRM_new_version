@@ -70,6 +70,27 @@ const PAGE_ORDER = ['BUY EASY Realty', 'Get Home Realty'];
  * this Page actually returned.
  */
 const FORM_KEY = 'meta_last_form';
+/**
+ * The selected form's VIEW — every lead from it, and which page — remembered with the form it belongs
+ * to, so coming back to the screen by any route returns to the same place. Only ever applied to that
+ * same form.
+ */
+const VIEW_KEY = 'meta_last_form_view';
+/** Rows per page of a form's leads, both its latest and the full paged set. */
+const FORM_PAGE_SIZE = 50;
+
+type SavedView = { form: string; all: boolean; page: number };
+function saveView(v: SavedView | null): void {
+  try {
+    if (v) sessionStorage.setItem(VIEW_KEY, JSON.stringify(v)); else sessionStorage.removeItem(VIEW_KEY);
+  } catch { /* unavailable in private mode; the URL still carries it */ }
+}
+function readView(): SavedView | null {
+  try {
+    const v = JSON.parse(sessionStorage.getItem(VIEW_KEY) ?? 'null') as SavedView | null;
+    return v && typeof v.form === 'string' ? v : null;
+  } catch { return null; }
+}
 
 /** Why a form card's two counts can differ — shown on hover. */
 const FORM_COUNTS_HINT = 'Facebook counts every submission. The CRM shows each person once, without deleted leads, '
@@ -155,6 +176,9 @@ export default function MetaPage() {
    * so it can never disagree with what Meta currently calls that form.
    */
   const [formFilter, setFormFilter] = useState<{ id: string; name: string } | null>(null);
+  // Read here, ahead of the leads request that depends on them — see "Show all leads from this form".
+  const showAllOfForm = !!params.get('form') && params.get('leads') === 'all';
+  const listPage = showAllOfForm ? Math.max(1, Math.floor(Number(params.get('lpage'))) || 1) : 1;
   const [formTotal, setFormTotal] = useState<number | null>(null);
   /*
    * WHY THE LIST NOW REMEMBERS THAT IT FAILED.
@@ -231,9 +255,17 @@ export default function MetaPage() {
   const loadLeads = useCallback(async () => {
     const ticket = leadsLatest.begin();
     try {
-      // 200 for one form, the API's ceiling: that view is about the form's whole set, where the
-      // unfiltered list is only the most recent arrivals.
-      const res = await metaLeads(formFilter ? 200 : 50, formFilter?.id, selectedPage || undefined);
+      /*
+       * One form: its latest page, or — after "Show all leads from this form" — the page of its whole
+       * set the URL names. The form filter goes with every request, so a page of this list can only
+       * ever hold that form's leads. Unfiltered: the most recent arrivals, as before.
+       */
+      const res = await metaLeads(
+        formFilter ? FORM_PAGE_SIZE : 50,
+        formFilter?.id,
+        selectedPage || undefined,
+        formFilter && showAllOfForm ? listPage : undefined,
+      );
       if (!leadsLatest.isCurrent(ticket)) return;   // superseded while this was in flight
       setLeads(res.data);
       setLeadStats(res.stats);
@@ -251,7 +283,7 @@ export default function MetaPage() {
       // state while the request that matters is still out.
       if (leadsLatest.isCurrent(ticket)) setLeadsLoaded(true);
     }
-  }, [formFilter, selectedPage]);
+  }, [formFilter, selectedPage, showAllOfForm, listPage]);
 
   useEffect(() => {
     void (async () => {
@@ -324,9 +356,14 @@ export default function MetaPage() {
   const setFormParam = useCallback((id: string | null) => {
     setParams((prev) => {
       const next = new URLSearchParams(prev);
+      // A different form (or none) starts at its latest leads: the "all" view and its page belonged
+      // to the form that was selected before.
+      if (next.get('form') !== id) { next.delete('leads'); next.delete('lpage'); }
       if (id) next.set('form', id); else next.delete('form');
       return next;
     }, { replace: true });
+    const saved = readView();
+    if (!id || saved?.form !== id) saveView(null);
     // Written on the way past, so leaving by any route remembers it. Clearing the filter clears
     // this too — "Show all" must not be undone by the next visit.
     try {
@@ -357,6 +394,24 @@ export default function MetaPage() {
     setFormParam(formFilter?.id === f.id ? null : f.id);
     leadsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
+
+  /*
+   * "SHOW ALL LEADS FROM THIS FORM" KEEPS THE FORM. It used to clear the form filter, so the list
+   * filled with every Meta lead under a screen that still looked like one form's — the opposite of
+   * what the words promised. It now widens the view to the form's whole set, a page at a time, with
+   * the Page and the form left exactly as they were. All of it is in the URL (a refresh lands on
+   * the same page of the same form) and in the session (so does coming back by another route).
+   */
+  const setListView = useCallback((all: boolean, page: number) => {
+    setParams((prev) => {
+      const next = new URLSearchParams(prev);
+      if (all) next.set('leads', 'all'); else next.delete('leads');
+      if (all && page > 1) next.set('lpage', String(page)); else next.delete('lpage');
+      return next;
+    }, { replace: true });
+    const form = params.get('form');
+    if (form) saveView(all ? { form, all: true, page } : null);
+  }, [params, setParams]);
 
   // The OAuth callback redirects back here with the outcome in the query string.
   useEffect(() => {
@@ -456,8 +511,27 @@ export default function MetaPage() {
     if (params.get('form')) return;
     let last: string | null = null;
     try { last = sessionStorage.getItem(FORM_KEY); } catch { /* unavailable */ }
-    if (last && forms.some((f) => f.id === last)) setFormParam(last);
-  }, [forms, params, setFormParam]);
+    if (last && forms.some((f) => f.id === last)) {
+      const form = last;
+      const view = readView();
+      /*
+       * ONE URL WRITE for the form, its view and its page. Two writes in a row do not chain: the
+       * second starts from the URL as it was before the first, and silently drops the form.
+       * The "all" view and its page come back with the form they were saved for, and only then.
+       */
+      setParams((prev) => {
+        const next = new URLSearchParams(prev);
+        next.set('form', form);
+        next.delete('leads');
+        next.delete('lpage');
+        if (view?.form === form && view.all) {
+          next.set('leads', 'all');
+          if (view.page > 1) next.set('lpage', String(view.page));
+        }
+        return next;
+      }, { replace: true });
+    }
+  }, [forms, params, setParams]);
 
   useEffect(() => {
     const wanted = params.get('form');
@@ -702,7 +776,7 @@ export default function MetaPage() {
                   {/* The name and counts are the button, not the whole row: Connect/Disconnect
                       beside it keeps its own job, so pressing it never also filters the list. */}
                   <button type="button" onClick={() => showForm(f)} aria-pressed={formFilter?.id === f.id}
-                    title={formFilter?.id === f.id ? 'Show all Meta leads' : `Show leads from ${f.name}`}
+                    title={formFilter?.id === f.id ? 'Stop filtering by this form (show recent Meta leads)' : `Show leads from ${f.name}`}
                     style={{ all: 'unset', cursor: 'pointer', flex: 1, minWidth: 0 }}>
                     <strong>{f.name}</strong>
                     {/* Two counts from two places, labelled so they are never read as one. */}
@@ -735,10 +809,21 @@ export default function MetaPage() {
           {formFilter
             ? `Leads from ${formFilter.name}${formTotal !== null ? ` (${formTotal} in CRM)` : ''}`
             : 'Recent Meta Leads'}
-          {formFilter && (
-            <button className="btn ghost sm" type="button" onClick={() => setFormParam(null)}>Show all</button>
+          {formFilter && !showAllOfForm && (
+            <button className="btn ghost sm" type="button" onClick={() => setListView(true, 1)}>
+              Show all leads from this form
+            </button>
           )}
         </div>
+        {formFilter && !leadsError && leadsLoaded && formTotal !== null && formTotal > 0 && (
+          <FormLeadsPager
+            all={showAllOfForm}
+            page={listPage}
+            total={formTotal}
+            shown={leads.length}
+            onPage={(n) => setListView(true, n)}
+          />
+        )}
         {leadsError ? (
           <p className="help bad">
             {leadsError} — this is a failure to READ the leads, not a statement that there are none.
@@ -781,6 +866,35 @@ export default function MetaPage() {
       {diagnostics && <DiagnosticsModal d={diagnostics} webhook={webhook} onClose={() => setDiagnostics(null)} />}
       <ConfirmDialog confirm={confirm} onClose={closeConfirm} />
     </>
+  );
+}
+
+/**
+ * Where in the selected form's leads the list is. Before "Show all" it says how many of the form's
+ * leads the latest page holds; after, it pages through every one of them. The total is the server's
+ * count for this form, never a figure written into the screen.
+ */
+function FormLeadsPager({ all, page, total, shown, onPage }: {
+  all: boolean; page: number; total: number; shown: number; onPage: (n: number) => void;
+}) {
+  const pages = Math.max(1, Math.ceil(total / FORM_PAGE_SIZE));
+  const from = shown === 0 ? 0 : (page - 1) * FORM_PAGE_SIZE + 1;
+  const to = (page - 1) * FORM_PAGE_SIZE + shown;
+  if (!all) {
+    return (
+      <p className="help" data-testid="form-leads-range" style={{ margin: '0 0 8px' }}>
+        {total > shown ? `Showing the latest ${shown} of ${total}.` : `Showing all ${total}.`}
+      </p>
+    );
+  }
+  return (
+    <div className="toolbar-row" style={{ gap: 8, margin: '0 0 8px', alignItems: 'center' }}>
+      <span className="help" data-testid="form-leads-range" style={{ margin: 0 }}>
+        All {total} leads from this form · showing {from}–{to} · page {page} of {pages}
+      </span>
+      <button className="btn ghost sm" type="button" disabled={page <= 1} onClick={() => onPage(page - 1)}>Previous</button>
+      <button className="btn ghost sm" type="button" disabled={page >= pages} onClick={() => onPage(page + 1)}>Next</button>
+    </div>
   );
 }
 

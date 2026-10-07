@@ -116,6 +116,9 @@ export interface MetaLeadsResponse {
   data: MetaLeadRow[];
   /** Present only when the list was filtered to one form: how many of its leads are in the CRM. */
   form_total?: number;
+  /** Which page of the list this is, and how many rows a page holds. */
+  page?: number;
+  per_page?: number;
 }
 
 export interface MetaSyncResult {

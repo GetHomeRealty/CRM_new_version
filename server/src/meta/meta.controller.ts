@@ -364,8 +364,12 @@ export class MetaController {
     @Query('limit') limit?: string,
     @Query('form_id') formId?: string,
     @Query('page_id') pageId?: string,
+    // Which page of the LIST — not a Facebook Page (that is `page_id`). Absent means the first, so
+    // every existing caller gets exactly what it got before.
+    @Query('list_page') listPage?: string,
   ): Promise<Record<string, unknown>> {
     const take = Math.min(200, Math.max(1, Number(limit) || 50));
+    const pageNo = Math.max(1, Math.floor(Number(listPage)) || 1);
     // Same scope as the card above, for the same reason: the list and the tiles counting it must
     // answer one question. `liveLeadWhere` already excludes deleted rows.
     const base = { AND: [{ source: 'facebook_meta' }, liveLeadWhere(user)] };
@@ -395,7 +399,7 @@ export class MetaController {
     const startOfWeek = new Date(startOfDay); startOfWeek.setDate(startOfWeek.getDate() - startOfWeek.getDay());
 
     const [rows, total, today, week, formTotal] = await Promise.all([
-      this.prisma.leads.findMany({ where: listWhere, orderBy: [{ created_at: 'desc' }, { id: 'desc' }], take }),
+      this.prisma.leads.findMany({ where: listWhere, orderBy: [{ created_at: 'desc' }, { id: 'desc' }], take, skip: (pageNo - 1) * take }),
       this.prisma.leads.count({ where }),
       this.prisma.leads.count({ where: { ...where, created_at: { gte: startOfDay } } }),
       this.prisma.leads.count({ where: { ...where, created_at: { gte: startOfWeek } } }),
@@ -405,6 +409,8 @@ export class MetaController {
     return {
       stats: { total, today, week },
       ...(form ? { form_total: formTotal } : {}),
+      page: pageNo,
+      per_page: take,
       data: rows.map((r) => ({
         id: r.id, name: r.name, email: r.email, phone: r.phone,
         message: r.message, property: r.property, lead_status: r.lead_status,
