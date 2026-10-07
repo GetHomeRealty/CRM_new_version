@@ -72,99 +72,114 @@ const next = async (type: string, top: string | undefined): Promise<{ value: str
   }
 };
 
-describe('allocation is serialised per band (TD-076)', () => {
-  it('takes the band lock BEFORE reading the highest number', async () => {
+describe('allocation is serialised on the one counter (TD-076)', () => {
+  it('takes the counter lock BEFORE reading the highest number', async () => {
     /*
      * The read and the insert that follows it are one step only if nothing else can read between
      * them. Two creates racing each other used to compute the same candidate, and the second died
      * on the `trade_no` unique index — a 500 on a save the user could do nothing about.
      */
-    const r = await next('Residential Buying', '200837');
+    const r = await next('Residential Buying', '000837');
     expect(r.locked.sql).toContain('pg_advisory_xact_lock');
     expect(r.locked.beforeTheQuery).toBe(true);
   });
 
-  it('locks the band, not the whole table — another series does not wait', async () => {
-    const buying = await next('Residential Buying', '200837');
-    const listing = await next('Residential Sale Listing', '100123');
-    expect(buying.locked.params).not.toEqual(listing.locked.params);
+  it('every deal type takes the SAME lock, because they share one counter', async () => {
+    // Since 2026-10-07 there are no bands: a Listing and a Buying create draw from the same counter,
+    // so they must wait for each other or they could be handed the same number.
+    const buying = await next('Residential Buying', '000837');
+    const listing = await next('Residential Sale Listing', '000837');
+    const referral = await next('Referral', '000837');
+    expect(buying.locked.params).toEqual(listing.locked.params);
+    expect(buying.locked.params).toEqual(referral.locked.params);
   });
 
   it('casts the arguments, because Prisma sends a JS number as a bigint', () => {
     // Without the casts Postgres answers 42883: there is no pg_advisory_xact_lock(bigint, bigint).
     expect.assertions(1);
-    return next('Residential Buying', '200837').then((r) => expect(r.locked.sql).toContain('::int'));
+    return next('Residential Buying', '000837').then((r) => expect(r.locked.sql).toContain('::int'));
   });
 });
 
 describe('trade numbers are allocated by an indexed lookup (TD-008)', () => {
   it('never reads the transactions table in full', async () => {
-    const r = await next('Residential Buying', '200837');
+    const r = await next('Residential Buying', '000837');
     expect(r.usedFindMany).toBe(false);
   });
 
   it('asks for exactly one row, ordered by the indexed column', async () => {
     // The shape IS the fix. `LIMIT 1` over a backward index scan is what makes this constant-time;
-    // an aggregate over an expression would use the index and still read the whole band.
-    const { asked } = await next('Residential Buying', '200837');
+    // an aggregate over an expression would use the index and still read the whole range.
+    const { asked } = await next('Residential Buying', '000837');
     expect(asked.sql).toMatch(/ORDER BY trade_no DESC/i);
     expect(asked.sql).toMatch(/LIMIT 1/i);
     expect(asked.sql).not.toMatch(/MAX\s*\(/i);
   });
 
-  it('bounds the query to the series band, so the index can range-scan it', async () => {
-    const { asked } = await next('Residential Buying', '200837');
-    expect(asked.params).toEqual(['200000', '300000']);
+  it('bounds the query to 000001-099999, so it can never see a number from the old bands', async () => {
+    const { asked } = await next('Residential Buying', '000837');
+    expect(asked.params).toEqual(['000001', '100000']);
     expect(asked.sql).toMatch(/trade_no >= \? AND trade_no < \?/i);
   });
 
   it('filters to well-formed numbers, so a stray value cannot win the sort', async () => {
-    // '2999999' sorts ABOVE '299999' lexicographically — it is the shorter string's own prefix
-    // extended — so without the shape filter a seven-digit stray would be picked as the highest.
-    const { asked } = await next('Residential Buying', '200837');
+    // '001' from before any series existed sorts inside '000001'..'100000' as text; the shape filter
+    // is what stops it being taken for the highest number.
+    const { asked } = await next('Residential Buying', '000837');
     expect(asked.sql).toContain("trade_no ~ '^[0-9]{6}(_NB)?$'");
   });
 
   it('does not filter out soft-deleted deals, whose numbers are still spent', async () => {
-    const { asked } = await next('Residential Buying', '200837');
+    const { asked } = await next('Residential Buying', '000837');
     expect(asked.sql).not.toMatch(/deleted_at/i);
   });
 
-  const BANDS: [string, string, string, string][] = [
-    ['Residential Sale Listing', '100000', '199998', '199999'],
-    ['Residential Buying', '200000', '200837', '200838'],
-    ['Preconstruction', '300000', '300010', '300011'],
-    ['Residential Lease', '400000', '400000', '400001'],
-    ['Referral', '500000', '500012_NB', '500013_NB'],
-  ];
+  const TYPES = ['Residential Sale Listing', 'Residential Buying', 'Preconstruction', 'Residential Lease',
+    'Residential Lease Listing', 'Commercial Property Buying', 'Business Sale', 'Referral'];
 
-  it.each(BANDS)('allocates one above the highest issued for %s', async (type, _start, top, expected) => {
-    const r = await next(type, top);
-    expect(r.value).toBe(expected);
-  });
-
-  it.each(BANDS)('starts at the band floor for %s when nothing has been issued', async (type, start) => {
+  it.each(TYPES)('starts at 000001 for %s when nothing has been issued', async (type) => {
     const r = await next(type, undefined);
-    const suffix = type === 'Referral' ? '_NB' : '';
-    expect(r.value).toBe(start + suffix);
+    expect(r.value).toBe('000001' + (type === 'Referral' ? '_NB' : ''));
   });
 
-  it('parses the six digits and ignores the suffix', async () => {
-    const r = await next('Referral', '599998_NB');
-    expect(r.value).toBe('599999_NB');
+  it.each(TYPES)('allocates one above the highest issued on the shared counter for %s', async (type) => {
+    const r = await next(type, '000041');
+    expect(r.value).toBe('000042' + (type === 'Referral' ? '_NB' : ''));
   });
 
-  it('refuses rather than spilling into the next series when a band is full', async () => {
-    // TD-127's rule, still enforced: a full series stops, it does not borrow the next one's range.
-    const r = await next('Residential Buying', '299999');
+  it('a Referral after a Buying deal takes the NEXT number, never the same one with _NB', async () => {
+    const r = await next('Referral', '000044');
+    expect(r.value).toBe('000045_NB');
+  });
+
+  it('a Buying deal after a Referral parses the six digits and ignores the suffix', async () => {
+    const r = await next('Residential Buying', '000045_NB');
+    expect(r.value).toBe('000046');
+  });
+
+  it('refuses rather than walking into the old numbers when the counter is full', async () => {
+    const r = await next('Residential Buying', '099999');
     expect(r.value).toBeInstanceOf(UnprocessableEntityException);
     const body = (r.value as UnprocessableEntityException).getResponse() as { message: string };
-    expect(body.message).toContain('is full');
+    expect(body.message).toContain('has been issued');
   });
 
-  it('treats an unknown transaction type as Buying, as it always did', async () => {
-    const r = await next('Something Nobody Defined', '200837');
-    expect(r.value).toBe('200838');
-    expect(r.asked.params).toEqual(['200000', '300000']);
+  it('treats an unknown transaction type like any other: next number, no suffix', async () => {
+    const r = await next('Something Nobody Defined', '000837');
+    expect(r.value).toBe('000838');
+    expect(r.asked.params).toEqual(['000001', '100000']);
+  });
+});
+
+describe('nobody chooses a trade number any more (2026-10-07)', () => {
+  const svc = new TradeNumberService();
+  it('a blank number is fine - the app gives one', async () => {
+    expect(await svc.manualProblem({} as never, 'Residential Buying', '')).toBeNull();
+    expect(await svc.manualProblem({} as never, 'Residential Buying', '   ')).toBeNull();
+    expect(await svc.manualProblem({} as never, 'Residential Buying', null)).toBeNull();
+  });
+  it.each(['000123', '200954', '500001_NB', 'abc'])('a typed number (%s) is refused, and says why', async (raw) => {
+    const problem = await svc.manualProblem({} as never, 'Residential Buying', raw);
+    expect(problem).toContain('given by the app');
   });
 });

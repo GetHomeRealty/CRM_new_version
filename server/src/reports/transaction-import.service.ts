@@ -1,5 +1,8 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import * as ExcelJS from 'exceljs';
+import { promises as fs } from 'fs';
+import * as path from 'path';
+import { STORAGE_ROOT } from '../config/storage';
 import { PrismaService } from '../prisma/prisma.service';
 import { TransactionsWriteService } from '../transactions/transactions-write.service';
 import { AuditService } from '../audit/audit.service';
@@ -129,6 +132,14 @@ interface ParsedFile {
 const HEADER_FILL = 'FF4F46E5';
 const REQUIRED_FILL = 'FFB91C1C';
 const CHILD_FILL = 'FF0F766E';
+
+/**
+ * 2026-10-07 - WHERE AN UPLOADED IMPORT FILE IS KEPT, so it can be handed back with the trade
+ * number the app gave each row. Beside the other stored files, readable by the app's own user only.
+ * It holds what the database already holds about the same deals, nothing more.
+ */
+const IMPORT_FILE_ROOT = path.join(STORAGE_ROOT, 'imports');
+const APP_TRADE_NUMBER_COLUMN = 'App Trade Number';
 
 @Injectable()
 export class TransactionImportService {
@@ -869,6 +880,8 @@ export class TransactionImportService {
       },
     });
 
+    await this.keepUpload(batchId, fileName, buffer);
+
     return {
       batch_id: batchId, file_name: fileName, layout: parsed.layout, ...counts,
       section_counts: sectionCounts, issues,
@@ -1306,20 +1319,10 @@ export class TransactionImportService {
         seen.push({ type, price: priceNum, offer, property: get('Property Address'), row: rowNo });
       }
 
-      // A hand-picked trade number is checked HERE, at review time, so a bad one turns its own row
-      // red in the preview instead of dying half way through the import - which is the failure
-      // TD-097 describes. store() checks it again when the row is actually written, so a number
-      // taken between review and import is still refused.
-      const tradeRaw = get('Trade Number');
-      if (tradeRaw) {
-        // Two rows in one file claiming the same number BOTH pass the database check - neither is
-        // assigned yet - and the second then dies at import. Catch it against the rows already
-        // reviewed, so the clash shows in the preview like every other row error.
-        const clash = out.find((o) => o.valid && String((o.data as Record<string, unknown>).trade_no ?? '') === tradeRaw);
-        if (clash) add('Trade Number', tradeRaw, `Trade number ${tradeRaw} is already claimed by row ${clash.row} of this file.`, 'Give one of the two rows a different number, or clear it to have one allocated automatically.');
-        const tradeProblem = await this.write.tradeNumberProblem(type, tradeRaw);
-        if (tradeProblem) add('Trade Number', tradeRaw, tradeProblem, 'Clear the cell to have a number allocated automatically, or choose a free number from this range.');
-      }
+      // 2026-10-07 - THE SHEET'S TRADE NUMBER IS IGNORED. The app gives every deal its number, so a
+      // value in the Trade Number column is neither checked nor stored - which is also why it can no
+      // longer turn a row red. The number each row receives goes back into the user's own file
+      // afterwards, as an App Trade Number column (see numberedFile()).
 
       const hasError = issues.some((x) => x.severity === 'error');
       out.push({
@@ -1372,7 +1375,9 @@ export class TransactionImportService {
     const body: Record<string, unknown> = {};
     const get = (col: string) => String(rec[col] ?? '').trim();
     // store() only understands the create-time subset; everything else is applied by update().
-    for (const key of ['type', 'trade_no', 'property', 'price', 'deposit', 'offer_date', 'closing_date', 'listing_price',
+    // 2026-10-07 - 'trade_no' is NOT taken from the sheet any more: the app gives every deal its
+    // number, and the file comes back afterwards with an App Trade Number column (numberedFile()).
+    for (const key of ['type', 'property', 'price', 'deposit', 'offer_date', 'closing_date', 'listing_price',
       'listing_contract_date', 'listing_expiry_date', 'comm_type', 'comm_value']) {
       const f = IMPORT_FIELDS.find((x) => x.key === key);
       if (!f) continue;
@@ -1696,7 +1701,8 @@ export class TransactionImportService {
         status, completed_at: now, updated_at: now,
         imported_rows: created.length,
         failed_rows: batch.failed_rows + failed,
-        errors: JSON.stringify({ issues, rows: stored.rows ?? [] }),
+        // `created` is what numberedFile() writes back into the user's own file: row -> trade number.
+        errors: JSON.stringify({ issues, rows: stored.rows ?? [], created: created.map((c) => ({ row: c.row, trade_no: c.trade_no })) }),
       },
     });
 
@@ -1709,6 +1715,108 @@ export class TransactionImportService {
       skipped_sections: skippedSections,
       issues, created,
     };
+  }
+
+  /** The kept copy of an upload. The batch id is the app's own, but it is still reduced to safe characters. */
+  private importFilePath(batchId: string, fileName: string): string {
+    const ext = (fileName.split('.').pop() ?? '').toLowerCase() === 'csv' ? 'csv' : 'xlsx';
+    return path.join(IMPORT_FILE_ROOT, `${batchId.replace(/[^A-Za-z0-9-]/g, '')}.${ext}`);
+  }
+
+  /**
+   * Keep the uploaded file, so the user can have it back with the App Trade Number column.
+   * Best-effort on purpose: failing to keep a copy must never stop an import, it only means that
+   * one file cannot be handed back - which numberedFile() then says plainly.
+   */
+  private async keepUpload(batchId: string, fileName: string, buffer: Buffer): Promise<void> {
+    try {
+      await fs.mkdir(IMPORT_FILE_ROOT, { recursive: true, mode: 0o700 });
+      await fs.writeFile(this.importFilePath(batchId, fileName), buffer, { mode: 0o600 });
+    } catch { /* the import goes ahead; the numbered copy will report that the file was not kept */ }
+  }
+
+  /**
+   * 2026-10-07 - THE USER'S OWN FILE, BACK, WITH THE TRADE NUMBER THE APP GAVE EACH ROW.
+   *
+   * Sai: "i also want our excel should get the trade numbers of the app to their corresponding
+   * deals". So this is not a separate list to match up by hand: it is the uploaded workbook itself,
+   * every sheet and every cell as it was, plus one column - App Trade Number - on the sheet the
+   * deals were read from. A row that was not imported says so instead of carrying a number.
+   *
+   * ROWS ARE MATCHED THE WAY THEY WERE READ. The import numbers its records by position among the
+   * NON-BLANK data rows of the main sheet (row 2 is the first record, whatever blank rows sit in
+   * between), so this walks the same sheet with the same blank-row rule and counts the same way.
+   * A CSV comes back as a workbook, because a CSV opened in Excel loses the leading zeros.
+   */
+  async numberedFile(batchId: string, user: AuthUserRecord): Promise<{ buffer: Buffer; fileName: string }> {
+    this.assertCanImport(user);
+    const batch = await this.prisma.import_batches.findUnique({ where: { batch_id: batchId } });
+    if (!batch) throw new NotFoundException({ message: 'Import batch not found.' });
+    if (batch.status === 'Validated') {
+      throw new BadRequestException({ message: 'This file has not been imported yet, so no trade numbers have been given to it.' });
+    }
+    const stored = JSON.parse(batch.errors ?? '{}') as { created?: { row: number; trade_no: string }[] };
+    let original: Buffer;
+    try {
+      original = await fs.readFile(this.importFilePath(batchId, batch.file_name ?? ''));
+    } catch {
+      original = Buffer.alloc(0);
+    }
+    if (!original.length || !stored.created) {
+      throw new NotFoundException({
+        message: 'The uploaded file was not kept for this import, so it cannot be handed back with its trade numbers. '
+          + 'Files are kept for imports made from 7 October 2026 onwards.',
+      });
+    }
+    const numberFor = new Map(stored.created.map((c) => [c.row, String(c.trade_no)]));
+
+    const wb = new ExcelJS.Workbook();
+    let ws: ExcelJS.Worksheet;
+    const isCsv = (batch.file_name ?? '').toLowerCase().endsWith('.csv');
+    if (isCsv) {
+      const rows = this.parseCsv(original.toString('utf8'));
+      const headers = Object.keys(rows[0] ?? {});
+      ws = wb.addWorksheet('Transactions');
+      ws.addRow(headers);
+      for (const r of rows) ws.addRow(headers.map((h) => r[h] ?? ''));
+      ws.eachRow((row) => row.eachCell((cell) => { cell.numFmt = '@'; }));
+    } else {
+      await wb.xlsx.load(original as unknown as ArrayBuffer);
+      // The same choice parseXlsx() makes: the Transactions sheet if it holds rows, else the
+      // one-sheet layout, else the first sheet.
+      const main = wb.getWorksheet('Transactions');
+      const flat = wb.getWorksheet('One-Sheet (CSV)');
+      ws = main && this.sheetRows(main).length ? main
+        : flat && this.sheetRows(flat).length ? flat
+          : wb.worksheets[0];
+    }
+
+    // The header row as the import read it, and the column the numbers go in: an existing
+    // App Trade Number column (a file that came back once and was uploaded again) is reused.
+    const headers: string[] = [];
+    ws.getRow(1).eachCell((cell, i) => { headers[i - 1] = String(this.cellText(cell)).trim(); });
+    let col = headers.findIndex((h) => h === APP_TRADE_NUMBER_COLUMN) + 1;
+    if (!col) {
+      col = headers.length + 1;
+      const head = ws.getRow(1).getCell(col);
+      head.value = APP_TRADE_NUMBER_COLUMN;
+      head.font = { bold: true };
+    }
+
+    let record = 0;
+    ws.eachRow((row, n) => {
+      if (n === 1) return;
+      const blank = headers.every((h, i) => !h || this.cellText(row.getCell(i + 1)) === '');
+      if (blank) return;
+      const cell = row.getCell(col);
+      cell.numFmt = '@';   // text, so 000001 stays 000001
+      cell.value = numberFor.get(record + 2) ?? 'Not imported - see the validation report';
+      record++;
+    });
+    ws.getColumn(col).width = Math.max(ws.getColumn(col).width ?? 0, 18);
+
+    const base = (batch.file_name ?? 'import').replace(/\.(xlsx|csv)$/i, '');
+    return { buffer: Buffer.from(await wb.xlsx.writeBuffer()), fileName: `${base} - with App Trade Numbers.xlsx` };
   }
 
   /**

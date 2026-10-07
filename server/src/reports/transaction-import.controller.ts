@@ -109,6 +109,19 @@ export class TransactionImportController {
     res.end(buffer);
   }
 
+  /**
+   * 2026-10-07 - the uploaded file back, with an App Trade Number column: the number the app gave
+   * each row. Behind the same guards as the import itself.
+   */
+  @Get(':batchId/numbered-file')
+  async numberedFile(@CurrentUser() user: AuthUserRecord, @Param('batchId') batchId: string, @Res() res: Response): Promise<void> {
+    const { buffer, fileName } = await this.imports.numberedFile(batchId, user);
+    res.setHeader('Content-Type', XLSX_MIME);
+    res.setHeader('Content-Disposition', contentDisposition(fileName));
+    res.setHeader('Content-Length', String(buffer.length));
+    res.end(buffer);
+  }
+
   /** Bulk import history. */
   @Get()
   history(@CurrentUser() user: AuthUserRecord, @Query('limit') limit?: string): Promise<unknown> {
