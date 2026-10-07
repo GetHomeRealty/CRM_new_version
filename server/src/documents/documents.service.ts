@@ -685,6 +685,20 @@ export class DocumentsService {
     const document = await this.findDocForTxn(txnId, docId);
     this.guardValidLocked(user, document);
     const files = (parseJson<FileEntry[]>(document.files) ?? []) as FileEntry[];
+    /*
+     * TD-042 - SAY SO WHEN THERE IS NOTHING AT THAT POSITION, INSTEAD OF ANSWERING "DONE".
+     *
+     * This route removes one entry from the per-client files[] list. A document that holds its file
+     * the single-file way (file_name / file_path) has no such list, so the call removed nothing and
+     * still returned the document as if it had worked. It is refused now with the reason; the
+     * single file is changed with Replace, which is what the screen offers.
+     */
+    if (!files[index]) {
+      const m = document.file_path
+        ? 'This document holds a single file, not a list of client files. Use Replace to change it.'
+        : 'There is no file at that position on this document.';
+      throw new NotFoundException({ message: m });
+    }
     if (files[index]) {
       const removed = files[index].file_name ?? null;
       if (files[index].file_path) await this.deleteFile(files[index].file_path);
