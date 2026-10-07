@@ -104,6 +104,9 @@ export interface MetaLeadRow {
   lead_status: string | null;
   facebook_lead_id: string | null;
   created_at: string | null;
+  /** The agent the lead is assigned to; null when nobody is. */
+  assigned_to?: number | null;
+  assigned_to_name?: string | null;
 }
 
 export interface MetaDefaultPageResponse {

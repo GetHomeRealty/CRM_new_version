@@ -406,6 +406,17 @@ export class MetaController {
       form ? this.prisma.leads.count({ where: listWhere }) : Promise.resolve(null),
     ]);
 
+    /*
+     * WHO EACH LEAD IS ASSIGNED TO, by the same rule as the Leads list: `assigned_to` names the
+     * agent, looked up once for the whole page. Only the name goes out, and only for rows the scope
+     * above already let this person see. An id with no user behind it reads as unassigned.
+     */
+    const assignedIds = [...new Set(rows.map((r) => r.assigned_to).filter((n): n is number => typeof n === 'number' && n > 0))];
+    const assignees = new Map(assignedIds.length
+      ? (await this.prisma.users.findMany({ where: { id: { in: assignedIds } }, select: { id: true, name: true } }))
+        .map((u) => [u.id, u.name] as const)
+      : []);
+
     return {
       stats: { total, today, week },
       ...(form ? { form_total: formTotal } : {}),
@@ -416,6 +427,8 @@ export class MetaController {
         message: r.message, property: r.property, lead_status: r.lead_status,
         facebook_lead_id: r.facebook_lead_id,
         created_at: r.created_at?.toISOString() ?? null,
+        assigned_to: r.assigned_to ?? null,
+        assigned_to_name: r.assigned_to ? assignees.get(r.assigned_to) ?? null : null,
       })),
     };
   }
