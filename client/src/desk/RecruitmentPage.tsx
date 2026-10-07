@@ -94,6 +94,8 @@ export default function RecruitmentPage() {
   // Optional `per_page` in the URL; absent means the server's default of 50.
   const perPage = Number(params.get('per_page')) || undefined;
   const [listMeta, setListMeta] = useState({ total: 0, page: 1, per_page: 50, last_page: 1 });
+  /** Which filter the rows on screen were loaded for — so a card can wait for ITS list before scrolling. */
+  const [listFor, setListFor] = useState<string | null>(null);
   const listTotal = listMeta.total;
   const goToPage = (n: number) => setParams((prev) => {
     const p = new URLSearchParams(prev);
@@ -119,6 +121,7 @@ export default function RecruitmentPage() {
       setStats(s);
       setRows(list.data);
       setListMeta({ total: list.total, page: list.page, per_page: list.per_page, last_page: list.last_page });
+      setListFor(listKey(status, recruiter, source, params.get('q') ?? '', page));
       setDue(f);
       setError('');
     } catch (ex) {
@@ -172,9 +175,26 @@ export default function RecruitmentPage() {
       if (s) p.set('status', s);
       return p;
     }, { replace: true });
+    requestScroll('candidates', s);
   };
   const openInterviews = (s: string) => {
+    // A different list is coming: wait for it rather than scrolling to the one still on screen.
+    if (tab !== 'interviews' || istatus !== s) setInterviewFor(null);
     setParams(() => new URLSearchParams({ tab: 'interviews', istatus: s }), { replace: true });
+    requestScroll('interviews', s);
+  };
+
+  /*
+   * THE CARD TAKES YOU TO ITS LIST. Each click records a request with a fresh number, so clicking
+   * the same card again scrolls again even though no filter changed. The effect further down waits
+   * until the destination list has rendered FOR THAT FILTER — an empty one included — and only then
+   * scrolls, so the view never lands on a loading line that the rows then push off the screen.
+   */
+  const scrollSeq = useRef(0);
+  const [scrollReq, setScrollReq] = useState<{ target: 'candidates' | 'interviews'; value: string; n: number } | null>(null);
+  const requestScroll = (target: 'candidates' | 'interviews', value: string) => {
+    scrollSeq.current += 1;
+    setScrollReq({ target, value, n: scrollSeq.current });
   };
 
   /*
@@ -209,10 +229,16 @@ export default function RecruitmentPage() {
   // The Interviews list: across every candidate you may see, by the INTERVIEW's own status.
   const istatus = params.get('istatus') ?? '';
   const [interviewList, setInterviewList] = useState<InterviewList | null>(null);
+  /** Which interview status the list on screen was loaded for (null while a new one is coming). */
+  const [interviewFor, setInterviewFor] = useState<string | null>(null);
   useEffect(() => {
     if (tab !== 'interviews') return;
-    listInterviews(istatus).then(setInterviewList).catch((ex) => {
+    listInterviews(istatus).then((list) => {
+      setInterviewList(list);
+      setInterviewFor(istatus);
+    }).catch((ex) => {
       setInterviewList(null);
+      setInterviewFor(istatus);
       toast(apiErrorMessage(ex, 'Could not load interviews'), 'bad');
     });
   }, [tab, istatus, toast]);
@@ -282,6 +308,21 @@ export default function RecruitmentPage() {
   const interviewsRef = useRef<HTMLDivElement | null>(null);
   const followupsRef = useRef<HTMLDivElement | null>(null);
   const scrolledFor = useRef('');
+
+  const candidatesRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!scrollReq) return;
+    if (error) { setScrollReq(null); return; }
+    const ready = scrollReq.target === 'candidates'
+      ? tab === 'candidates' && loaded && listFor === listKey(scrollReq.value, '', '', '', 1)
+      : tab === 'interviews' && interviewFor === scrollReq.value;
+    if (!ready) return;
+    const el = scrollReq.target === 'candidates' ? candidatesRef.current : interviewsRef.current;
+    if (!el) return;
+    setScrollReq(null);
+    // After the browser has laid the list out, so its position is the final one.
+    requestAnimationFrame(() => scrollToSection(el));
+  }, [scrollReq, error, tab, loaded, listFor, interviewFor]);
 
   useEffect(() => {
     if (!focus) { scrolledFor.current = ''; return; }
@@ -357,7 +398,7 @@ export default function RecruitmentPage() {
       ) : !loaded ? (
         <div className="card"><p className="help">Loading recruitment…</p></div>
       ) : tab === 'candidates' ? (
-        <div className="card">
+        <div className="card" ref={candidatesRef}>
           <div className="toolbar-row" style={{ gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
             <input
               placeholder="Search name, email or phone"
@@ -822,6 +863,40 @@ function drillRow(title: string, open: () => void) {
 }
 
 /** A count; with `onOpen`, a card that opens the list it counts (mouse or keyboard). */
+/** The candidate-list request a filter combination makes, as one comparable string. */
+function listKey(status: string, recruiter: string, source: string, q: string, page: number): string {
+  return [status, recruiter, source, q, page].join('|');
+}
+
+/**
+ * Scrolls whatever actually scrolls — the nearest scrollable ancestor, or the page — so that `el`
+ * sits just below the sticky top bar instead of underneath it. Smooth unless the person has asked
+ * the system for reduced motion.
+ */
+function scrollToSection(el: HTMLElement): void {
+  const GAP = 12;
+  const smooth = !(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  const behavior: ScrollBehavior = smooth ? 'smooth' : 'auto';
+  const header = document.querySelector('.topbar') as HTMLElement | null;
+  const headerH = header ? header.getBoundingClientRect().height : 0;
+
+  let box: HTMLElement | null = el.parentElement;
+  while (box && box !== document.body) {
+    const oy = getComputedStyle(box).overflowY;
+    if ((oy === 'auto' || oy === 'scroll') && box.scrollHeight > box.clientHeight) break;
+    box = box.parentElement;
+  }
+  if (box && box !== document.body) {
+    // A scrolling panel: measure inside it, and allow for the bar only if the bar lives inside it too.
+    const inside = header && box.contains(header) ? headerH : 0;
+    const top = el.getBoundingClientRect().top - box.getBoundingClientRect().top + box.scrollTop - inside - GAP;
+    box.scrollTo({ top: Math.max(0, top), behavior });
+    return;
+  }
+  const top = el.getBoundingClientRect().top + window.scrollY - headerH - GAP;
+  window.scrollTo({ top: Math.max(0, top), behavior });
+}
+
 function Stat({ label, value, onOpen }: { label: string; value: number; onOpen?: () => void }) {
   const open = onOpen ? {
     role: 'link' as const,

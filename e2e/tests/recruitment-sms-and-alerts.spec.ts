@@ -2,23 +2,27 @@ import { test, expect, type Page } from '@playwright/test';
 import { signIn, apiGet, apiSend } from './helpers';
 
 /**
- * Recruitment texting and interview alerts, through a real browser.
+ * Recruitment texting consent, Send Mail and interview alerts, through a real browser.
+ *
+ * Send Mail replaced Send Text on the candidate page (2c210cc). The texting-consent controls are
+ * unchanged and still covered here; the composer tests now cover Send Mail.
  *
  * ================================================================================================
- * NO LIVE TEXT CAN BE SENT FROM THIS FILE, and that needed arranging rather than assuming.
+ * NO REAL EMAIL CAN BE SENT FROM THIS FILE, and that is arranged rather than assumed.
  *
- * `server/.env` carries REAL Twilio credentials, and the e2e API inherits the environment — so a
- * browser pressing Send would reach Twilio and a real handset would ring. Every test that presses
- * Send therefore installs `page.route` on the send endpoint first: the request is answered inside
- * the browser and never reaches the server, so the server never calls the gateway.
+ * Every test that presses Send installs `interceptMail` first: the POST to the send endpoint is
+ * answered inside the browser and never reaches the server, so the mailer and SMTP are never
+ * involved. The composer's own GET and the server-built preview still go through for real, so what
+ * the screen shows is what the server said.
  *
- * That is asserted rather than trusted. `expectNothingSent` checks afterwards that the candidate
- * has no `recruitment_messages` row at all — which is only true if the server was genuinely never
- * asked to send. If the interception ever broke, that assertion fails and the test says so.
+ * That is asserted rather than trusted. `expectNoEmail` checks afterwards that the candidate has no
+ * `recruitment_emails` row at all — a real attempt, sent or failed, always leaves one. If the
+ * interception ever broke, that assertion fails and the test says so.
  *
- * The SUCCESSFUL send path — what is dialled, what is recorded, what the failures look like — is
- * covered at the service level in `recruitment-sms.spec.ts`, against a stubbed gateway. What is
- * tested here is the part only a browser can answer: what a person sees and can press.
+ * The REAL send path — what is sent, what is recorded, failures, a reply lost after the server took
+ * the message — is covered at the service level in `recruitment-email.spec.ts` and, through the
+ * actual mailer and a local SMTP server, in `recruitment-email-transport.spec.ts`. What is tested
+ * here is the part only a browser can answer: what a person sees and can press.
  * ================================================================================================
  */
 
@@ -43,21 +47,29 @@ async function cleanUp(page: Page, made: Made) {
   made.candidates = [];
 }
 
-/** Answers the send endpoint in the browser, so the server — and Twilio — never see it. */
-async function interceptSend(page: Page, candidateId: number) {
-  await page.route(`**/api/recruitment/candidates/${candidateId}/sms`, async (route) => {
+/**
+ * Answers the Send Mail endpoint in the browser and keeps what was posted, so the test can check
+ * exactly what the composer sent while no message reaches the server, the mailer or SMTP. Only the
+ * POST to `/email` itself: the composer's GET and the server-built preview go through for real.
+ */
+async function interceptMail(page: Page, candidateId: number): Promise<Record<string, unknown>[]> {
+  const posted: Record<string, unknown>[] = [];
+  await page.route(`**/api/recruitment/candidates/${candidateId}/email`, async (route) => {
     if (route.request().method() !== 'POST') return route.fallback();
+    posted.push(route.request().postDataJSON() as Record<string, unknown>);
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ data: { id: 1, status: 'queued', body: 'intercepted', phone: '+14165550188' } }),
+      body: JSON.stringify({ data: { id: 1, status: 'sent', kind: 'manual', subject: 'intercepted' } }),
     });
   });
+  return posted;
 }
 
-/** Proves the interception held: a real send would have left a row behind. */
-async function expectNothingSent(page: Page, candidateId: number) {
-  const r = await apiGet(page, `/api/recruitment/candidates/${candidateId}/messages`);
+/** Proves no email was attempted: any real send, failed or not, leaves a row in the history. */
+async function expectNoEmail(page: Page, candidateId: number) {
+  const r = await apiGet(page, `/api/recruitment/candidates/${candidateId}/emails`);
+  expect(r.status).toBe(200);
   expect((r.body as { data: unknown[] }).data).toHaveLength(0);
 }
 
@@ -116,81 +128,131 @@ test.describe('recording permission to text a candidate', () => {
   });
 });
 
-test.describe('the Send Text composer', () => {
-  test('refuses to send to somebody nobody has asked, and says why', async ({ page }) => {
+test.describe('the Send Mail composer', () => {
+  test('will not preview or send an incomplete email, and says why', async ({ page }) => {
     await signIn(page, 'superAdmin');
     const made: Made = { candidates: [] };
     try {
       const id = await newCandidate(page, made, unique('ZZSMSC'));
       await page.goto(`/crm/recruitment/${id}`);
-      await page.getByRole('button', { name: 'Send Text' }).click();
+      await page.getByRole('button', { name: 'Send Mail' }).click();
+      const modal = page.locator('.modal');
+      await expect(modal.locator('.modal-h')).toHaveText('Send mail');
 
-      await expect(page.getByText(/no record of .* agreeing to be texted/i)).toBeVisible();
-      // Preview is unreachable: there is nothing to preview if it cannot go.
-      await expect(page.getByRole('button', { name: 'Preview' })).toBeDisabled();
-      await expectNothingSent(page, id);
+      const subject = modal.locator('.field').filter({ hasText: 'Subject' }).locator('input');
+      const message = modal.locator('textarea');
+
+      // No subject: nothing to preview, and the reason is on screen.
+      await subject.fill('');
+      await expect(modal.getByRole('button', { name: 'Preview' })).toBeDisabled();
+      await expect(modal.getByText('The email needs a subject.')).toBeVisible();
+
+      // A subject but a blank message: still refused, with that reason instead.
+      await subject.fill('Your application');
+      await message.fill('   ');
+      await expect(modal.getByRole('button', { name: 'Preview' })).toBeDisabled();
+      await expect(modal.getByText('The email needs a message.')).toBeVisible();
+
+      // Send does not exist before a preview.
+      await expect(modal.getByRole('button', { name: 'Send', exact: true })).toHaveCount(0);
+
+      // The server holds the same line if asked directly, and records nothing for a refusal.
+      const direct = await apiSend(page, 'POST', `/api/recruitment/candidates/${id}/email`, { subject: '', message: 'x' });
+      expect(direct.status).toBe(400);
+      await expectNoEmail(page, id);
     } finally {
       await cleanUp(page, made);
     }
   });
 
-  test('shows the number it will dial, previews exactly what goes, and sends on the second press', async ({ page }) => {
+  test('shows the address it will send to, previews exactly what goes, and sends on the second press', async ({ page }) => {
     await signIn(page, 'superAdmin');
     const made: Made = { candidates: [] };
     try {
-      const id = await newCandidate(page, made, unique('ZZSMSD'));
-      await apiSend(page, 'POST', `/api/recruitment/candidates/${id}/sms-consent`, { consent: true });
-      await interceptSend(page, id);
+      const name = unique('ZZSMSD');
+      const id = await newCandidate(page, made, name);
+      const email = `${name.toLowerCase()}@probe.test`;
+      const posted = await interceptMail(page, id);
 
       await page.goto(`/crm/recruitment/${id}`);
-      await page.getByRole('button', { name: 'Send Text' }).click();
+      await page.getByRole('button', { name: 'Send Mail' }).click();
+      const modal = page.locator('.modal');
 
       /*
-       * THE NUMBER IS THE SERVER'S, IN THE FORM IT WILL BE DIALLED. The composer shows it so the
-       * sender can see where it is going; it never tells the server where to send.
+       * THE ADDRESS IS THE SERVER'S — the candidate's saved email, shown so the sender can see where
+       * it is going; the request never tells the server where to send. The From line is the CRM
+       * mail account the server resolved.
        */
-      await expect(page.getByText('+14165550188')).toBeVisible();
+      const composer = await apiGet(page, `/api/recruitment/candidates/${id}/email`);
+      const from = (composer.body as { from: { email: string } | null }).from;
+      await expect(modal.locator('dd').first()).toContainText(name);
+      await expect(modal.locator('dd').first()).toContainText(email);
+      if (from) await expect(modal.locator('dd').nth(1)).toContainText(from.email);
 
-      const box = page.locator('.modal textarea');
-      await box.fill('Confirming your interview on Tuesday.');
+      const subject = modal.locator('.field').filter({ hasText: 'Subject' }).locator('input');
+      const message = modal.locator('textarea');
+      // Opens with a starting point already in both boxes.
+      await expect(subject).not.toHaveValue('');
+      await expect(message).toHaveValue(/^Hi /);
 
-      /*
-       * Writing and sending are separated by a deliberate press — an SMS cannot be recalled. Matched
-       * EXACTLY: "Send Text" on the page behind also contains the word Send.
-       */
-      await expect(page.locator('.modal').getByRole('button', { name: 'Send', exact: true })).toHaveCount(0);
-      await page.getByRole('button', { name: 'Preview' }).click();
-      await expect(page.getByText('Confirming your interview on Tuesday.')).toBeVisible();
-      await expect(page.getByText(/cannot be recalled/i)).toBeVisible();
+      await subject.fill('Interview on Tuesday <confirmed>');
+      await message.fill('Hi there,\n\nConfirming your interview on Tuesday at <b>10</b>.');
+      await expect(modal.getByRole('button', { name: 'Send', exact: true })).toHaveCount(0);
+
+      // The preview is what the server built: escaped, so markup typed into the message stays text.
+      await modal.getByRole('button', { name: 'Preview' }).click();
+      await expect(modal.getByText(`This is exactly what will be sent to ${email}.`)).toBeVisible();
+      const preview = modal.locator('.card');
+      await expect(preview).toContainText('Interview on Tuesday <confirmed>');
+      await expect(preview).toContainText('Confirming your interview on Tuesday at <b>10</b>.');
+      await expect(preview.locator('b')).toHaveCount(0);
 
       // Back to editing keeps what was written, rather than starting again.
-      await page.getByRole('button', { name: 'Back to editing' }).click();
-      await expect(box).toHaveValue('Confirming your interview on Tuesday.');
+      await modal.getByRole('button', { name: 'Back to editing' }).click();
+      await expect(subject).toHaveValue('Interview on Tuesday <confirmed>');
+      await expect(message).toHaveValue('Hi there,\n\nConfirming your interview on Tuesday at <b>10</b>.');
 
-      await page.getByRole('button', { name: 'Preview' }).click();
-      await page.locator('.modal').getByRole('button', { name: 'Send', exact: true }).click();
+      await modal.getByRole('button', { name: 'Preview' }).click();
+      await modal.getByRole('button', { name: 'Send', exact: true }).click();
       await expect(page.locator('.modal')).toHaveCount(0);
+      await expect(page.getByText('Email sent.')).toBeVisible();
 
-      // The interception held — the server was never asked, so nothing was recorded or dialled.
-      await expectNothingSent(page, id);
+      // Exactly one request, carrying exactly what was written — and no recipient of its own.
+      expect(posted).toEqual([{ subject: 'Interview on Tuesday <confirmed>', message: 'Hi there,\n\nConfirming your interview on Tuesday at <b>10</b>.' }]);
+      // The interception held: the server never sent or recorded anything.
+      await expectNoEmail(page, id);
     } finally {
       await cleanUp(page, made);
     }
   });
 
-  test('offers to record the agreement where the refusal appears', async ({ page }) => {
-    // Somebody finds out consent is missing at the moment they try to text. Asking them to go
-    // elsewhere to record it is how it ends up never being recorded.
+  test('texting consent plays no part: a candidate who declined texts can still be emailed', async ({ page }) => {
     await signIn(page, 'superAdmin');
     const made: Made = { candidates: [] };
     try {
       const id = await newCandidate(page, made, unique('ZZSMSE'));
-      await page.goto(`/crm/recruitment/${id}`);
-      await page.getByRole('button', { name: 'Send Text' }).click();
+      const consent = await apiSend(page, 'POST', `/api/recruitment/candidates/${id}/sms-consent`, { consent: false });
+      expect(consent.status).toBe(200);
+      const posted = await interceptMail(page, id);
 
-      await page.getByRole('button', { name: 'They agreed to be texted' }).click();
-      await expect(page.getByText(/Agreed to be texted — recorded by/i)).toBeVisible();
-      await expect(page.getByRole('button', { name: 'Preview' })).toBeEnabled();
+      await page.goto(`/crm/recruitment/${id}`);
+      await expect(page.locator('dd').filter({ hasText: 'Asked not to be texted' })).toBeVisible();
+
+      await page.getByRole('button', { name: 'Send Mail' }).click();
+      const modal = page.locator('.modal');
+      // No texting refusal in the email composer, and nothing standing in the way of sending.
+      await expect(modal.getByText(/texted/i)).toHaveCount(0);
+      await modal.locator('textarea').fill('Hi, a quick note about your application.');
+      await expect(modal.getByRole('button', { name: 'Preview' })).toBeEnabled();
+      await modal.getByRole('button', { name: 'Preview' }).click();
+      await modal.getByRole('button', { name: 'Send', exact: true }).click();
+      await expect(page.locator('.modal')).toHaveCount(0);
+      expect(posted).toHaveLength(1);
+
+      // And the refusal to be texted is still on record, untouched by emailing.
+      const after = await apiGet(page, `/api/recruitment/candidates/${id}`);
+      expect((after.body as { candidate: { sms_consent: unknown } }).candidate.sms_consent).toBe(false);
+      await expectNoEmail(page, id);
     } finally {
       await cleanUp(page, made);
     }
