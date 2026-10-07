@@ -178,6 +178,7 @@ export default function AuditLogPage() {
                 <th style={th}>Action</th>
                 <th style={th}>Old Value</th>
                 <th style={th}>New Value</th>
+                <th style={th}>Review</th>
               </tr>
             </thead>
             <tbody>
@@ -192,6 +193,13 @@ export default function AuditLogPage() {
                   <td style={{ ...cell, color: actionColor(e.action), fontWeight: 600 }}>{e.action}{e.details ? ` — ${e.details}` : ''}</td>
                   <td style={{ ...cell, color: 'var(--bad-ink)', background: e.old_value ? '#fff5f5' : 'transparent' }}>{e.old_value || ''}</td>
                   <td style={{ ...cell, color: 'var(--ok-ink)', background: e.new_value ? 'var(--ok-bg)' : 'transparent' }}>{e.new_value || ''}</td>
+                  {/* TD-067 - an agent's change goes to the office for review; say where it stands.
+                      Only agent-made rows are reviewed, so every other row shows a dash. */}
+                  <td style={{ ...cell, whiteSpace: 'nowrap' }}>
+                    {e.source === 'Agent'
+                      ? <span className={`pill ${e.handled ? 'ok' : 'warn'}`} style={{ fontSize: 10 }}>{e.handled ? 'Reviewed' : 'Awaiting review'}</span>
+                      : <span style={{ color: 'var(--muted)' }}>—</span>}
+                  </td>
                 </tr>
               ))}
             </tbody>

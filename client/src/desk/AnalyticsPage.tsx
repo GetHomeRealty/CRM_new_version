@@ -150,7 +150,10 @@ export default function AnalyticsPage() {
       </div>
 
       <div className="stat-grid">
-        <div className="stat-card"><div className="lbl">Total Commission</div><div className="val">{formatCurrency(totals.total)}</div><div className="help">before HST</div></div>
+        {/* TD-002 - for an agent these figures are the WHOLE deal's commission on their own deals,
+            not their personal share (Dashboard and Reports show the share). Said on the card, so the
+            two numbers are not read as one disagreeing with the other. */}
+        <div className="stat-card"><div className="lbl">Total Commission{agentLocked ? ' (whole deal)' : ''}</div><div className="val">{formatCurrency(totals.total)}</div><div className="help">{agentLocked ? 'before HST · the full commission on your deals, not your share' : 'before HST'}</div></div>
         <div className="stat-card"><div className="lbl">Paid</div><div className="val" style={{ color: 'var(--ok-ink)' }}>{formatCurrency(totals.paid)}</div><div className="help">before HST</div></div>
         <div className="stat-card"><div className="lbl">Pending</div><div className="val" style={{ color: 'var(--warn-ink)' }}>{formatCurrency(totals.pending)}</div><div className="help">before HST</div></div>
       </div>

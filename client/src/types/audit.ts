@@ -10,6 +10,8 @@ export interface AuditEntry {
   new_value?: string | null;
   details?: string;
   source?: string;
+  /** TD-067 - true once the office has reviewed an agent-made change. */
+  handled?: boolean;
   category?: string;
   record?: string;
   [key: string]: unknown;
