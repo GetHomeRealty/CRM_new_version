@@ -7,12 +7,14 @@ import { decimalCast, parseJson, toDateString } from '../common/serialize';
 
 // Column → cast classification (mirrors the Transaction model casts) so snapshot
 // values stringify exactly like Laravel's cast values.
-const DEC2 = new Set([
+export const DEC2 = new Set([
   'price', 'deposit', 'comm_value', 'comm_amt', 'comm_adjust_before', 'comm_adjust_after',
   'listing_comm_flat', 'coop_comm_flat', 'trust_payable', 'listing_adj_before', 'listing_adj_after',
   'coop_adj_before', 'coop_adj_after', 'precon_comm_amt_manual', 'precon_comm_bonus',
+  // TD-150 - added 2026-10-07: money columns that existed on the deal and changed unrecorded.
+  'listing_price', 'gift_coupon_value',
 ]);
-const DEC4 = new Set(['comm_pct', 'listing_comm_pct', 'coop_comm_pct', 'precon_comm_pct']);
+export const DEC4 = new Set(['comm_pct', 'listing_comm_pct', 'coop_comm_pct', 'precon_comm_pct']);
 const BOOLCOL = new Set([
   'comm_adjust_enabled', 'listing_adj_enabled', 'coop_adj_enabled', 'precon_net_of_hst',
   'mls_verified', 'conditional_offer', 'inter_board_enabled',
@@ -84,6 +86,9 @@ export const SCALAR_MAP: Record<string, [string, string]> = {
   listing_contract_date: ['Dates', 'Listing Contract Date'],
   listing_expiry_date: ['Dates', 'Listing Expiry Date'],
   price: ['Financial Information', 'Price'],
+  // TD-150 - added 2026-10-07, see DEC2.
+  listing_price: ['Financial Information', 'Listing Price'],
+  gift_coupon_value: ['Review & Coupon', 'Gift Coupon Value'],
   deposit: ['Deposit Information', 'Deposit'],
   comm_type: ['Commission Information', 'Commission Type'],
   comm_value: ['Commission Information', 'Commission Value'],
