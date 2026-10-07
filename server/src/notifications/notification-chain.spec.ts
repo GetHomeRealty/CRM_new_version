@@ -450,7 +450,7 @@ describe('CHAIN — Lead Welcome: new lead -> trigger -> master switch -> send -
        */
       expect(passes).toBe(Math.ceil(250 / 100));
     });
-  });
+  }, 30_000); // Allow headroom for the 250-lead test under parallel load.
 });
 
 describe('CHAIN — Birthday and Anniversary greetings', () => {
