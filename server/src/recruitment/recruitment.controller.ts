@@ -8,6 +8,7 @@ import type { AuthUserRecord } from '../auth/auth.types';
 import { RecruitmentService } from './recruitment.service';
 import { RecruitmentAgentService } from './recruitment-agent.service';
 import { RecruitmentSmsService } from './recruitment-sms.service';
+import { RecruitmentEmailService } from './recruitment-email.service';
 import { RecruitmentNoAgentsGuard } from './recruitment-no-agents.guard';
 import { CANDIDATE_STATUSES, INTERVIEW_STATUSES, allowedNext, isCandidateStatus } from './recruitment.status';
 
@@ -33,6 +34,7 @@ export class RecruitmentController {
     private readonly recruitment: RecruitmentService,
     private readonly agents: RecruitmentAgentService,
     private readonly sms: RecruitmentSmsService,
+    private readonly email: RecruitmentEmailService,
   ) {}
 
   /** The vocabulary, so the client never hardcodes a status or guesses what follows one. */
@@ -207,6 +209,45 @@ export class RecruitmentController {
    * Send it. The body is the message; the NUMBER is read from the candidate and anything the
    * request says about it is ignored — see `RecruitmentSmsService`.
    */
+  /**
+   * EMAIL TO A CANDIDATE, from the brokerage's CRM mail account. Composing, previewing and sending
+   * need Recruitment: edit; reading what was sent needs view. Every one goes through the candidate
+   * scope, so a recruiter reaches only the candidates assigned to them.
+   */
+  @Get('candidates/:id/email')
+  @Screen('recruitment', 'edit')
+  emailComposer(@CurrentUser() user: AuthUserRecord, @Param('id', ParseIntPipe) id: number): Promise<Record<string, unknown>> {
+    return this.email.composer(user, id);
+  }
+
+  @Post('candidates/:id/email/preview')
+  @HttpCode(200)
+  @Screen('recruitment', 'edit')
+  emailPreview(
+    @CurrentUser() user: AuthUserRecord,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    return this.email.preview(user, id, body ?? {});
+  }
+
+  @Post('candidates/:id/email')
+  @HttpCode(200)
+  @Screen('recruitment', 'edit')
+  sendEmail(
+    @CurrentUser() user: AuthUserRecord,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    return this.email.send(user, id, body ?? {});
+  }
+
+  @Get('candidates/:id/emails')
+  @Screen('recruitment', 'view')
+  emailHistory(@CurrentUser() user: AuthUserRecord, @Param('id', ParseIntPipe) id: number): Promise<Record<string, unknown>> {
+    return this.email.history(user, id);
+  }
+
   @Post('candidates/:id/sms')
   @HttpCode(200)
   @Screen('recruitment', 'edit')

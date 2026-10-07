@@ -8,15 +8,16 @@ import {
   updateCandidate, updateInterview,
 } from '../lib/recruitmentApi';
 import { apiErrorMessage } from '../lib/apiError';
-import RecruitmentSendText, { messageStatusHint, messageStatusPill } from './RecruitmentSendText';
-import { setSmsConsent } from '../lib/recruitmentApi';
+import { messageStatusHint, messageStatusPill } from './RecruitmentSendText';
+import RecruitmentSendMail, { emailStatusPill } from './RecruitmentSendMail';
+import { candidateEmails, setSmsConsent } from '../lib/recruitmentApi';
 import { useToast } from './toast';
 import { useAuth } from '../context/AuthContext';
 import ConfirmDialog, { useConfirm } from './ConfirmDialog';
 import { statusLabel, statusPill } from './RecruitmentPage';
 import { availabilityLabel, yesNoUnknown } from '../types/recruitment';
 import type {
-  CandidateDetail, CandidateStatus, Recommendation, RecruitmentMessage, RecruitmentPerson,
+  CandidateDetail, CandidateStatus, Recommendation, RecruitmentEmail, RecruitmentMessage, RecruitmentPerson,
 } from '../types/recruitment';
 
 /**
@@ -102,7 +103,8 @@ export default function RecruitmentCandidatePage() {
    */
   const [ov, setOv] = useState<OverviewForm | null>(null);
   const [ovErrors, setOvErrors] = useState<Partial<Record<keyof OverviewForm, string>>>({});
-  const [texting, setTexting] = useState(false);
+  const [mailing, setMailing] = useState(false);
+  const [emails, setEmails] = useState<RecruitmentEmail[]>([]);
   const [messages, setMessages] = useState<RecruitmentMessage[]>([]);
 
   /*
@@ -150,6 +152,17 @@ export default function RecruitmentCandidatePage() {
   }, [candidateId]);
 
   useEffect(() => { void loadMessages(); }, [loadMessages]);
+
+  const loadEmails = useCallback(async () => {
+    try {
+      setEmails((await candidateEmails(candidateId)).data);
+    } catch {
+      // A supporting panel, like the texts: failing to load it must not blank the candidate.
+      setEmails([]);
+    }
+  }, [candidateId]);
+
+  useEffect(() => { void loadEmails(); }, [loadEmails]);
 
   useEffect(() => {
     if (focus !== 'interviews' || scrolled.current) return;
@@ -309,19 +322,20 @@ export default function RecruitmentCandidatePage() {
               </>
             )}
             <dl className="lead-dl">
-              <dt>Email</dt><dd>{c.email}</dd>
-              <dt>Phone</dt>
+              <dt>Email</dt>
               <dd>
-                {c.phone || '—'}
-                {canEdit && (
+                {c.email || '—'}
+                {canEdit && c.email && (
                   <>
                     {' '}
-                    <button className="btn ghost sm" type="button" onClick={() => setTexting(true)}>
-                      Send Text
+                    <button className="btn ghost sm" type="button" onClick={() => setMailing(true)}>
+                      Send Mail
                     </button>
                   </>
                 )}
               </dd>
+              <dt>Phone</dt>
+              <dd>{c.phone || '—'}</dd>
               {/*
                 * THREE ANSWERS, SHOWN AS THREE. "Not recorded" is not "No" — one means nobody has
                 * asked and the other means they declined, and a recruiter deciding whether to pick
@@ -635,6 +649,40 @@ export default function RecruitmentCandidatePage() {
               </div>
             )}
           </div>
+
+          {/* ---------------------------------------------------------------- emails */}
+          {emails.length > 0 && (
+            <div className="card">
+              <div className="modal-sub">Emails</div>
+              {/*
+                * Hand-sent mail and the automatic 24-hour interview reminder, with what became of
+                * each. A skipped reminder is listed too, with the reason — that is how somebody finds
+                * out the candidate never got one.
+                */}
+              <div className="lead-scroll">
+                <table className="list-table">
+                  <thead><tr><th>When</th><th>To</th><th>Status</th><th>Subject</th><th>By</th></tr></thead>
+                  <tbody>
+                    {emails.map((m) => (
+                      <tr key={m.id}>
+                        <td>{dateTime(m.sent_at ?? m.created_at)}</td>
+                        <td>{m.to_email || '—'}</td>
+                        <td>
+                          <span className={emailStatusPill(m.status)}>{m.status}</span>
+                          {m.error_message && <div className="muted">{m.error_message}</div>}
+                        </td>
+                        <td>
+                          {m.subject}
+                          {m.kind === 'interview_reminder' && <div className="muted">24-hour interview reminder</div>}
+                        </td>
+                        <td>{m.created_by || '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
 
           {/* ---------------------------------------------------------------- texts sent */}
           {messages.length > 0 && (
@@ -1034,11 +1082,11 @@ export default function RecruitmentCandidatePage() {
         </div>
       </div>
 
-      {texting && (
-        <RecruitmentSendText
+      {mailing && (
+        <RecruitmentSendMail
           candidateId={c.id}
-          onClose={() => setTexting(false)}
-          onSent={() => { void loadMessages(); void load(); }}
+          onClose={() => setMailing(false)}
+          onSent={() => { void loadEmails(); void load(); }}
         />
       )}
 

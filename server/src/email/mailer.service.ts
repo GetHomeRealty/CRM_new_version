@@ -307,9 +307,20 @@ export class MailerService {
     opts: {
       to: string[]; cc?: string[]; bcc?: string[]; subject: string; html: string;
       attachments?: MailAttachment[]; headers?: Record<string, string>;
+      /**
+       * How many transport attempts this one send may make. OMITTED = today's behaviour, unchanged
+       * (`SEND_ATTEMPTS`, retrying what `isTransient` calls transient). A caller that keeps its own
+       * record of what was sent passes 1 and decides retries itself: a connection lost after the
+       * server took the whole message looks "transient" here, so retrying it inside this call can
+       * deliver a second copy.
+       */
+      maxAttempts?: number;
     },
   ): Promise<{ messageId: string | null }> {
-    return this.dispatch(account, opts.to, opts.subject, opts.html, opts.cc ?? [], opts.attachments ?? [], opts.headers, opts.bcc ?? []);
+    return this.dispatch(
+      account, opts.to, opts.subject, opts.html, opts.cc ?? [], opts.attachments ?? [], opts.headers, opts.bcc ?? [],
+      null, opts.maxAttempts,
+    );
   }
 
   /**
@@ -459,7 +470,7 @@ export class MailerService {
    * BCC IS DROPPED WHEN MAIL IS REDIRECTED, exactly as CC already is. A staging environment
    * diverting everything to one address must not also quietly copy the real blind recipients.
    */
-  private async dispatch(account: mail_accounts, to: string | string[], subject: string, body: string, cc: string[] = [], attachments: MailAttachment[] = [], headers?: Record<string, string>, bcc: string[] = [], text?: string | null): Promise<{ messageId: string | null }> {
+  private async dispatch(account: mail_accounts, to: string | string[], subject: string, body: string, cc: string[] = [], attachments: MailAttachment[] = [], headers?: Record<string, string>, bcc: string[] = [], text?: string | null, maxAttempts?: number): Promise<{ messageId: string | null }> {
     const transport = account.encryption === 'oauth'
       // Google OAuth account: `password` holds the encrypted refresh token. Nodemailer mints a
       // fresh access token from it (via the app's client id/secret) for each send with XOAUTH2.
@@ -540,15 +551,19 @@ export class MailerService {
      * screen — and a person is waiting, so this adds at most ~8 seconds before giving up rather
      * than the minutes a background queue could afford.
      */
+    // Unset or nonsense means the default; a caller may only lower it, never raise it.
+    const attempts = Number.isInteger(maxAttempts) && (maxAttempts as number) >= 1
+      ? Math.min(maxAttempts as number, SEND_ATTEMPTS)
+      : SEND_ATTEMPTS;
     let lastError: unknown;
-    for (let attempt = 1; attempt <= SEND_ATTEMPTS; attempt++) {
+    for (let attempt = 1; attempt <= attempts; attempt++) {
       try {
         const info = (await transport.sendMail(message)) as { messageId?: string } | undefined;
         if (attempt > 1) this.log.log(`Delivery to ${realTo} succeeded on attempt ${attempt}.`);
         return { messageId: info?.messageId ?? null };
       } catch (err) {
         lastError = err;
-        if (attempt === SEND_ATTEMPTS || !isTransient(err)) break;
+        if (attempt === attempts || !isTransient(err)) break;
         const wait = RETRY_BACKOFF_MS[attempt - 1];
         this.log.warn(`Delivery to ${realTo} failed (${(err as Error)?.message ?? err}); retrying in ${wait / 1000}s.`);
         await new Promise((r) => setTimeout(r, wait));

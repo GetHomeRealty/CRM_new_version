@@ -5,7 +5,7 @@ import {
   createCandidate, listCandidates, listInterviews, pendingFollowups, recruitmentStats,
 } from '../lib/recruitmentApi';
 import { apiErrorMessage } from '../lib/apiError';
-import RecruitmentSendText from './RecruitmentSendText';
+import RecruitmentSendMail from './RecruitmentSendMail';
 import { useToast } from './toast';
 import { useAuth } from '../context/AuthContext';
 import {
@@ -231,7 +231,7 @@ export default function RecruitmentPage() {
    * Which candidate the composer is open for, by id. Held here rather than per row so that closing
    * it and reopening on another candidate cannot leave two composers mounted at once.
    */
-  const [texting, setTexting] = useState<number | null>(null);
+  const [mailing, setMailing] = useState<number | null>(null);
 
   const [adding, setAdding] = useState(false);
   const [form, setForm] = useState(BLANK_CANDIDATE);
@@ -423,13 +423,12 @@ export default function RecruitmentPage() {
                         <div>{c.email}</div>
                         <div className="muted">{c.phone || 'No phone'}</div>
                         {/*
-                          * Beside the number, and only when there IS one and the person may send.
-                          * A button that opens a composer purely to say "no phone number on file"
-                          * is a wasted press; the candidate's own page explains the absence there.
+                          * Only when there IS an address and the person may send. A button that opens
+                          * a composer purely to say "no email on file" is a wasted press.
                           */}
-                        {canEdit && c.phone && (
-                          <button className="btn ghost sm" type="button" onClick={() => setTexting(c.id)}>
-                            Send Text
+                        {canEdit && c.email && (
+                          <button className="btn ghost sm" type="button" onClick={() => setMailing(c.id)}>
+                            Send Mail
                           </button>
                         )}
                       </td>
@@ -768,9 +767,9 @@ export default function RecruitmentPage() {
         </div>
       )}
 
-      {texting !== null && (
-        // The list shows no message state, so nothing here needs refreshing after a send.
-        <RecruitmentSendText candidateId={texting} onClose={() => setTexting(null)} />
+      {mailing !== null && (
+        // The list shows no email state, so nothing here needs refreshing after a send.
+        <RecruitmentSendMail candidateId={mailing} onClose={() => setMailing(null)} />
       )}
     </>
   );

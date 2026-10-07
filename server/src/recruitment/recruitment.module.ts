@@ -2,12 +2,14 @@ import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
 import { SmsModule } from '../sms/sms.module';
 import { NotificationDispatcherModule } from '../notifications/notification-dispatcher.module';
+import { EmailModule } from '../email/email.module';
 import { RecruitmentController } from './recruitment.controller';
 import { RecruitmentService } from './recruitment.service';
 import { RecruitmentAgentService } from './recruitment-agent.service';
 import { RecruitmentReferralController } from './recruitment-referral.controller';
 import { RecruitmentReferralService } from './recruitment-referral.service';
 import { RecruitmentSmsService } from './recruitment-sms.service';
+import { RecruitmentEmailService } from './recruitment-email.service';
 import { RecruitmentInterviewNotifyService } from './recruitment-interview-notify.service';
 import { RecruitmentInterviewReminderService } from './recruitment-interview-reminder.service';
 import { RecruitmentInterviewReminderScheduler } from './recruitment-interview-reminder.scheduler';
@@ -33,7 +35,8 @@ import { RecruitmentInterviewReminderScheduler } from './recruitment-interview-r
  * happens inside this module and writes `users` directly within its own transaction.
  */
 @Module({
-  imports: [AuthModule, SmsModule, NotificationDispatcherModule],
+  // EmailModule for the brokerage's CRM mail account and the mailer every CRM email goes through.
+  imports: [AuthModule, SmsModule, NotificationDispatcherModule, EmailModule],
   // The referral controller is the agents' submission-only door; see its own comment.
   controllers: [RecruitmentController, RecruitmentReferralController],
   providers: [
@@ -41,6 +44,7 @@ import { RecruitmentInterviewReminderScheduler } from './recruitment-interview-r
     RecruitmentAgentService,
     RecruitmentReferralService,
     RecruitmentSmsService,
+    RecruitmentEmailService,
     RecruitmentInterviewNotifyService,
     RecruitmentInterviewReminderService,
     RecruitmentInterviewReminderScheduler,
