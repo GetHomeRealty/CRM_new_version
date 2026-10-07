@@ -217,6 +217,25 @@ export function clearSwitchedOffSections(value: unknown): unknown {
     if (!sectionHasContent(adj[holds])) continue;
     adj[holds] = Array.isArray(adj[holds]) ? [] : {};
   }
+  /*
+   * TD-108 - A ROW NAMES ITS AGENT IN `agent`, AND `agent_name` MEANS THE SAME THING.
+   *
+   * The commission engine matches an adjustment or advance row to a team member by `agent` only.
+   * A row sent with the agent in `agent_name` - the name every other part of the API uses - was
+   * stored, matched nobody and moved no money, with no error. It is read as `agent` here, once,
+   * so what is stored is what the engine reads.
+   */
+  for (const key of ['adjustment_rows', 'advance_rows']) {
+    if (!Array.isArray(adj[key])) continue;
+    adj[key] = (adj[key] as unknown[]).map((r) => {
+      if (r === null || typeof r !== 'object' || Array.isArray(r)) return r;
+      const row = { ...(r as Record<string, unknown>) };
+      const alias = typeof row.agent_name === 'string' ? row.agent_name.trim() : '';
+      if (alias && !(typeof row.agent === 'string' && row.agent.trim())) row.agent = alias;
+      delete row.agent_name;
+      return row;
+    });
+  }
   return adj;
 }
 
