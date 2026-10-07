@@ -642,6 +642,8 @@ export class RecruitmentService {
         candidate_id: id,
         interviewer_id: Number(body.interviewer_id) || null,
         scheduled_at: at,
+        // When this time was set — the 24-hour candidate reminder needs it (RecruitmentEmailService).
+        scheduled_set_at: now,
         status: 'scheduled',
         mode: str(body.mode) || null,
         location: str(body.location) || null,
@@ -677,6 +679,9 @@ export class RecruitmentService {
       const at = new Date(str(body.scheduled_at));
       if (Number.isNaN(at.getTime())) throw new BadRequestException({ message: 'That is not a valid date and time.' });
       data.scheduled_at = at;
+      // Only a real move restarts the clock for the 24-hour candidate reminder; re-saving the same
+      // time must not make an interview booked days ahead look booked late.
+      if (interview.scheduled_at?.getTime() !== at.getTime()) data.scheduled_set_at = new Date();
       what = `Interview moved to ${at.toISOString().slice(0, 16).replace('T', ' ')}.`;
     }
     if (body.interviewer_id !== undefined) data.interviewer_id = Number(body.interviewer_id) || null;

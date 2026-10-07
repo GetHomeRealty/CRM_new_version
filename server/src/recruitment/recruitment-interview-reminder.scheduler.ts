@@ -5,6 +5,7 @@ import { RedisService } from '../redis/redis.service';
 import { CacheService } from '../redis/cache.service';
 import { registerWorker, trackedTick } from '../observability/worker-health';
 import { RecruitmentInterviewReminderService } from './recruitment-interview-reminder.service';
+import { RecruitmentEmailService } from './recruitment-email.service';
 
 /**
  * The job behind recruitment interview reminders.
@@ -29,6 +30,7 @@ export class RecruitmentInterviewReminderScheduler implements OnModuleInit, OnMo
 
   constructor(
     private readonly reminders: RecruitmentInterviewReminderService,
+    private readonly candidateEmails: RecruitmentEmailService,
     // Optional so the service can be constructed directly in a test without a Redis.
     private readonly redis?: RedisService,
     private readonly cache?: CacheService,
@@ -69,6 +71,18 @@ export class RecruitmentInterviewReminderScheduler implements OnModuleInit, OnMo
       // A failed pass must not stop the timer: the next tick is ten minutes away and the window
       // has slack enough that a single bad pass loses nothing.
       this.log.error(`Recruitment interview reminder pass failed: ${(ex as Error).message}`);
+    }
+    /*
+     * The candidate's own 24-hour reminder email, on the same tick: crm-worker only (this scheduler
+     * runs nowhere else), once across the cluster, every 10 minutes. After the staff reminders and
+     * in its own try, so neither can stop the other. RECRUITMENT_CANDIDATE_REMINDER_DISABLED=1
+     * switches off this half alone.
+     */
+    if (process.env.RECRUITMENT_CANDIDATE_REMINDER_DISABLED === '1') return;
+    try {
+      await this.candidateEmails.runReminders();
+    } catch (ex) {
+      this.log.error(`Candidate interview reminder pass failed: ${(ex as Error).message}`);
     }
   }
 }

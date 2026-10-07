@@ -3466,6 +3466,7 @@ model recruitment_candidates {
   onboarding  recruitment_onboarding_items[]
   events      recruitment_events[]
   messages    recruitment_messages[]
+  recruitment_emails   recruitment_emails[]
 
   @@index([status])
   @@index([assigned_recruiter_id])
@@ -3527,6 +3528,39 @@ model recruitment_messages {
   @@index([sent_at])
 }
 
+/// Email to a candidate from Recruitment: hand-sent ones and the automatic 24-hour interview
+/// reminder. `dedupe_key` (interview id + scheduled time) is unique, so a reminder is sent once
+/// however many sweeps overlap. Migration 20261007120000_recruitment_candidate_emails.
+model recruitment_emails {
+  id              Int       @id @default(autoincrement())
+  candidate_id    Int
+  interview_id    Int?
+  /// manual | interview_reminder
+  kind            String    @db.VarChar(32)
+  dedupe_key      String?   @unique @db.VarChar(160)
+  /// sending | sent | failed | skipped
+  status          String    @default("sending") @db.VarChar(16)
+  to_email        String?   @db.VarChar(255)
+  from_email      String?   @db.VarChar(255)
+  subject         String    @db.VarChar(255)
+  body            String    @db.Text
+  error_message   String?   @db.VarChar(500)
+  attempts        Int       @default(0)
+  last_attempt_at DateTime? @db.Timestamp(0)
+  sent_at         DateTime? @db.Timestamp(0)
+  created_by      String?   @db.VarChar(255)
+  user_id         Int?
+  created_at      DateTime? @db.Timestamp(0)
+  updated_at      DateTime? @db.Timestamp(0)
+
+  candidate recruitment_candidates  @relation(fields: [candidate_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  interview recruitment_interviews? @relation(fields: [interview_id], references: [id], onDelete: SetNull, onUpdate: Restrict)
+
+  @@index([candidate_id])
+  @@index([interview_id])
+  @@index([status])
+}
+
 model recruitment_interviews {
   id             Int       @id @default(autoincrement())
   candidate_id   Int
@@ -3539,11 +3573,15 @@ model recruitment_interviews {
   mode           String?   @db.VarChar(16)
   location       String?   @db.VarChar(255)
   feedback       String?   @db.Text
+  /// When the current `scheduled_at` was set — on booking and on every move. The 24-hour candidate
+  /// reminder goes only to an interview whose time was set at least 24 hours ahead.
+  scheduled_set_at DateTime? @db.Timestamp(0)
   created_by     String?   @db.VarChar(255)
   created_at     DateTime? @db.Timestamp(0)
   updated_at     DateTime? @db.Timestamp(0)
 
   candidate recruitment_candidates @relation(fields: [candidate_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  emails    recruitment_emails[]
 
   @@index([candidate_id])
   @@index([status])

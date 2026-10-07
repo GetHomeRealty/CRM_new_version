@@ -2,7 +2,7 @@ import api from './axios';
 import type {
   AgentCreated, CandidateDetail, CandidateDocument, CandidateList, CandidateNote, CandidateStatus,
   Followup, Interview, InterviewList, InterviewStatus, OnboardingItem, PendingFollowups, Recommendation,
-  RecruitmentMessage, RecruitmentPerson, RecruitmentStats, SmsComposer,
+  RecruitmentMessage, RecruitmentPerson, RecruitmentStats, SmsComposer, EmailComposer, RecruitmentEmail,
 } from '../types/recruitment';
 
 /**
@@ -121,6 +121,21 @@ export const completeOnboardingItem = (id: number, itemId: number): Promise<{ da
  * The composer's opening state. The number comes from the SERVER, read off the candidate — the
  * screen never tells the server where to send, it is only shown where the server would send.
  */
+/** Email to a candidate, from the brokerage's CRM mail account. Recruitment: edit; history needs view. */
+export const emailComposer = (id: number): Promise<EmailComposer> =>
+  api.get<EmailComposer>(`/api/recruitment/candidates/${id}/email`).then((r) => r.data);
+
+export const previewCandidateEmail = (
+  id: number, body: { subject: string; message: string },
+): Promise<{ to: string; from: { name: string; email: string } | null; subject: string; html: string }> =>
+  api.post(`/api/recruitment/candidates/${id}/email/preview`, body).then((r) => r.data);
+
+export const sendCandidateEmail = (id: number, body: { subject: string; message: string }): Promise<{ data: RecruitmentEmail }> =>
+  api.post(`/api/recruitment/candidates/${id}/email`, body).then((r) => r.data);
+
+export const candidateEmails = (id: number): Promise<{ data: RecruitmentEmail[] }> =>
+  api.get<{ data: RecruitmentEmail[] }>(`/api/recruitment/candidates/${id}/emails`).then((r) => r.data);
+
 export const smsComposer = (id: number): Promise<SmsComposer> =>
   api.get<SmsComposer>(`/api/recruitment/candidates/${id}/sms`).then((r) => r.data);
 

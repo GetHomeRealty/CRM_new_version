@@ -137,6 +137,7 @@ const DERIVED: Record<string, string> = {
   recruitment_onboarding_items: 'recruitment_candidates',
   recruitment_events: 'recruitment_candidates',
   recruitment_messages: 'recruitment_candidates',
+  recruitment_emails: 'recruitment_candidates',
   lead_emails: 'leads', lead_messages: 'leads',
   // One row per Meta form submission; read only through its lead, and cascades with it.
   meta_lead_inquiries: 'leads',

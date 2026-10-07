@@ -215,6 +215,33 @@ export interface RecruitmentStats {
 }
 
 /** The delivery record for one text sent to a candidate. */
+/** An email to a candidate — hand-sent, or the automatic 24-hour interview reminder. */
+export interface RecruitmentEmail {
+  id: number;
+  candidate_id: number;
+  interview_id: number | null;
+  kind: 'manual' | 'interview_reminder';
+  /** sending | sent | failed | skipped (a reminder that could not be attempted, with the reason). */
+  status: 'sending' | 'sent' | 'failed' | 'skipped';
+  to_email: string | null;
+  from_email: string | null;
+  subject: string;
+  body: string;
+  error_message: string | null;
+  attempts: number;
+  sent_at: string | null;
+  created_by: string | null;
+  created_at: string | null;
+}
+
+/** What the Send Mail composer opens with. */
+export interface EmailComposer {
+  candidate: { id: number; name: string; email: string | null };
+  from: { name: string; email: string } | null;
+  can_send: boolean;
+  blocked_reason: string | null;
+}
+
 export interface RecruitmentMessage {
   id: number;
   candidate_id: number;
