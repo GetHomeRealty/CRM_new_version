@@ -146,6 +146,80 @@ describe('Send Mail', () => {
   });
 });
 
+describe('a confirmed email moves a New candidate to Contacted', () => {
+  const statusOf = async (id: number) => (await prisma.recruitment_candidates.findUniqueOrThrow({ where: { id } })).status;
+  const statusEvents = (id: number) => prisma.recruitment_events.findMany({ where: { candidate_id: id, action: 'status' } });
+
+  it('New → Contacted after a successful send, recorded with the sender', async () => {
+    const c = await candidate({ status: 'new' });
+    const { svc } = harness();
+    const r = await svc.send(ADMIN, c.id, { subject: 'Hello', message: 'Hi' });
+    expect(r.contacted).toBe(true);
+    expect(await statusOf(c.id)).toBe('contacted');
+    const events = await statusEvents(c.id);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ actor_name: 'ZZ Admin', detail: 'New → Contacted, after an email was sent.' });
+  });
+
+  it('a repeated send changes nothing further', async () => {
+    const c = await candidate({ status: 'new' });
+    const { svc, sent } = harness();
+    expect((await svc.send(ADMIN, c.id, { subject: 'One', message: 'x' })).contacted).toBe(true);
+    expect((await svc.send(ADMIN, c.id, { subject: 'Two', message: 'y' })).contacted).toBe(false);
+    expect(sent).toHaveLength(2);
+    expect(await statusOf(c.id)).toBe('contacted');
+    expect(await statusEvents(c.id)).toHaveLength(1);
+  });
+
+  it('concurrent sends move the candidate exactly once', async () => {
+    const c = await candidate({ status: 'new' });
+    const { svc } = harness();
+    const results = await Promise.all([1, 2, 3].map((n) => svc.send(ADMIN, c.id, { subject: `S${n}`, message: 'm' })));
+    expect(results.filter((r) => r.contacted)).toHaveLength(1);
+    expect(await statusOf(c.id)).toBe('contacted');
+    expect(await statusEvents(c.id)).toHaveLength(1);
+  });
+
+  it('a failed send leaves the candidate New — refused or unconfirmed alike', async () => {
+    const refused = await candidate({ status: 'new' });
+    await expect(harness({ fail: () => smtpError(550, 'no such user') }).svc.send(ADMIN, refused.id, { subject: 's', message: 'm' })).rejects.toBeInstanceOf(UnprocessableEntityException);
+    expect(await statusOf(refused.id)).toBe('new');
+
+    const unconfirmed = await candidate({ status: 'new' });
+    const lost = Object.assign(new Error('Connection closed unexpectedly'), { code: 'ECONNECTION', command: 'CONN' });
+    await expect(harness({ fail: () => lost }).svc.send(ADMIN, unconfirmed.id, { subject: 's', message: 'm' })).rejects.toThrow(/may still have been delivered/);
+    expect(await statusOf(unconfirmed.id)).toBe('new');
+
+    expect(await statusEvents(refused.id)).toHaveLength(0);
+    expect(await statusEvents(unconfirmed.id)).toHaveLength(0);
+  });
+
+  it('opening the composer and previewing change nothing', async () => {
+    const c = await candidate({ status: 'new' });
+    const { svc, sent } = harness();
+    await svc.composer(ADMIN, c.id);
+    await svc.preview(ADMIN, c.id, { subject: 's', message: 'm' });
+    expect(sent).toHaveLength(0);
+    expect(await statusOf(c.id)).toBe('new');
+  });
+
+  it('a send that never reaches the transport (no CRM account) leaves the candidate New', async () => {
+    const c = await candidate({ status: 'new' });
+    await expect(harness({ sender: null }).svc.send(ADMIN, c.id, { subject: 's', message: 'm' })).rejects.toBeInstanceOf(UnprocessableEntityException);
+    expect(await statusOf(c.id)).toBe('new');
+  });
+
+  it.each(['contacted', 'interview', 'approved', 'onboarding', 'active', 'hold', 'not_selected'])('a %s candidate keeps their status', async (status) => {
+    const c = await candidate({ status });
+    const { svc, sent } = harness();
+    const r = await svc.send(ADMIN, c.id, { subject: 's', message: 'm' });
+    expect(sent).toHaveLength(1);
+    expect(r.contacted).toBe(false);
+    expect(await statusOf(c.id)).toBe(status);
+    expect(await statusEvents(c.id)).toHaveLength(0);
+  });
+});
+
 describe('who may send mail', () => {
   it('a recruiter cannot reach a candidate assigned to somebody else', async () => {
     const c = await candidate({ assigned_recruiter_id: 1 });

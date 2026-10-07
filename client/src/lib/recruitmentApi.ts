@@ -130,7 +130,8 @@ export const previewCandidateEmail = (
 ): Promise<{ to: string; from: { name: string; email: string } | null; subject: string; html: string }> =>
   api.post(`/api/recruitment/candidates/${id}/email/preview`, body).then((r) => r.data);
 
-export const sendCandidateEmail = (id: number, body: { subject: string; message: string }): Promise<{ data: RecruitmentEmail }> =>
+/** `contacted` is true when this send moved the candidate from New to Contacted. */
+export const sendCandidateEmail = (id: number, body: { subject: string; message: string }): Promise<{ data: RecruitmentEmail; contacted?: boolean }> =>
   api.post(`/api/recruitment/candidates/${id}/email`, body).then((r) => r.data);
 
 export const candidateEmails = (id: number): Promise<{ data: RecruitmentEmail[] }> =>

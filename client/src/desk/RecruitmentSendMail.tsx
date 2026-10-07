@@ -77,8 +77,8 @@ export default function RecruitmentSendMail({
     if (!ready || !preview) return;
     setBusy(true);
     try {
-      await sendCandidateEmail(candidateId, { subject: s, message: m });
-      toast('Email sent.', 'ok');
+      const r = await sendCandidateEmail(candidateId, { subject: s, message: m });
+      toast(r.contacted ? 'Email sent. Moved to Contacted.' : 'Email sent.', 'ok');
       onSent?.();
       onClose();
     } catch (ex) {

@@ -809,8 +809,9 @@ export default function RecruitmentPage() {
       )}
 
       {mailing !== null && (
-        // The list shows no email state, so nothing here needs refreshing after a send.
-        <RecruitmentSendMail candidateId={mailing} onClose={() => setMailing(null)} />
+        // A send can move a New candidate to Contacted, so the list and the counts are re-read in
+        // place — same filters, same page, no reload.
+        <RecruitmentSendMail candidateId={mailing} onClose={() => setMailing(null)} onSent={() => void load()} />
       )}
     </>
   );
