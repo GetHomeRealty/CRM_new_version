@@ -41,6 +41,32 @@ const dateTime = (v: string | null): string => (v ? new Date(v).toLocaleString()
  * Hiding it is not the control. The server checks the capability inside the transaction that does
  * the work, and every button below can be reached by hand and refused on its merits.
  */
+/** The Overview fields a recruiter may edit — the same five the candidate update endpoint accepts. */
+interface OverviewForm { name: string; email: string; phone: string; location: string; source: string }
+
+/** The column widths in recruitment_candidates, so a long value is refused here rather than by the database. */
+const OVERVIEW_MAX = { name: 255, email: 255, phone: 64, location: 255 } as const;
+
+/** The sources the Add Candidate form offers, in the same order. */
+const SOURCE_OPTIONS: [string, string][] = [
+  ['referral', 'Referral'], ['website', 'Website'], ['walk-in', 'Walk-in'], ['agency', 'Agency'], ['other', 'Other'],
+];
+
+/** The same email shape the server checks, so the form says so before the round trip. */
+const EMAIL_SHAPE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/** What is wrong with the form, by field. Empty when it may be sent. */
+function overviewProblems(f: OverviewForm): Partial<Record<keyof OverviewForm, string>> {
+  const out: Partial<Record<keyof OverviewForm, string>> = {};
+  // The server keeps the old name when sent a blank one; saying so here beats a save that silently ignores it.
+  if (!f.name.trim()) out.name = 'A candidate needs a name.';
+  if (!EMAIL_SHAPE.test(f.email.trim())) out.email = 'A valid email address is required.';
+  for (const k of ['name', 'email', 'phone', 'location'] as const) {
+    if (!out[k] && f[k].trim().length > OVERVIEW_MAX[k]) out[k] = `At most ${OVERVIEW_MAX[k]} characters.`;
+  }
+  return out;
+}
+
 export default function RecruitmentCandidatePage() {
   const { id } = useParams();
   const candidateId = Number(id);
@@ -69,6 +95,13 @@ export default function RecruitmentCandidatePage() {
    * somebody else edits the record.
    */
   const [exp, setExp] = useState<Record<string, string> | null>(null);
+  /*
+   * The Overview panel, open or closed, on the same terms as `exp`: `null` is closed and the form is
+   * filled FROM the candidate when it opens. `ovErrors` holds what this form can tell before asking
+   * the server; anything the server refuses arrives through `run` like every other action.
+   */
+  const [ov, setOv] = useState<OverviewForm | null>(null);
+  const [ovErrors, setOvErrors] = useState<Partial<Record<keyof OverviewForm, string>>>({});
   const [texting, setTexting] = useState(false);
   const [messages, setMessages] = useState<RecruitmentMessage[]>([]);
 
@@ -186,7 +219,95 @@ export default function RecruitmentCandidatePage() {
         <div>
           {/* ---------------------------------------------------------------- overview */}
           <div className="card">
-            <div className="modal-sub">Overview</div>
+            <div className="toolbar-row" style={{ justifyContent: 'space-between' }}>
+              <div className="modal-sub">Overview</div>
+              {canEdit && ov === null && (
+                <button
+                  className="btn ghost sm"
+                  type="button"
+                  onClick={() => {
+                    setOvErrors({});
+                    setOv({
+                      name: c.name ?? '',
+                      email: c.email ?? '',
+                      phone: c.phone ?? '',
+                      location: c.location ?? '',
+                      source: c.source ?? '',
+                    });
+                  }}
+                >
+                  Edit
+                </button>
+              )}
+            </div>
+            {ov !== null && (
+              <>
+                <div className="g2">
+                  <div className="field">
+                    <label>Name <span className="req">*</span></label>
+                    <input value={ov.name} maxLength={OVERVIEW_MAX.name} onChange={(e) => setOv({ ...ov, name: e.target.value })} />
+                    {ovErrors.name && <div className="field-err">{ovErrors.name}</div>}
+                  </div>
+                  <div className="field">
+                    <label>Email <span className="req">*</span></label>
+                    <input type="email" value={ov.email} maxLength={OVERVIEW_MAX.email} onChange={(e) => setOv({ ...ov, email: e.target.value })} />
+                    {ovErrors.email && <div className="field-err">{ovErrors.email}</div>}
+                  </div>
+                  <div className="field">
+                    <label>Phone</label>
+                    <input type="tel" value={ov.phone} maxLength={OVERVIEW_MAX.phone} onChange={(e) => setOv({ ...ov, phone: e.target.value })} />
+                    {ovErrors.phone && <div className="field-err">{ovErrors.phone}</div>}
+                  </div>
+                  <div className="field">
+                    <label>Location</label>
+                    <input value={ov.location} maxLength={OVERVIEW_MAX.location} onChange={(e) => setOv({ ...ov, location: e.target.value })} />
+                    {ovErrors.location && <div className="field-err">{ovErrors.location}</div>}
+                  </div>
+                  <div className="field">
+                    <label>Source</label>
+                    <select value={ov.source} onChange={(e) => setOv({ ...ov, source: e.target.value })}>
+                      <option value="">Not recorded</option>
+                      {SOURCE_OPTIONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                      {/* A stored value the list no longer offers stays selectable, so saving does not change it. */}
+                      {ov.source && !SOURCE_OPTIONS.some(([v]) => v === ov.source) && <option value={ov.source}>{ov.source}</option>}
+                    </select>
+                  </div>
+                </div>
+                <div className="toolbar-row" style={{ justifyContent: 'flex-end', gap: 8, marginBottom: 10 }}>
+                  <button className="btn ghost sm" type="button" disabled={busy !== ''} onClick={() => { setOv(null); setOvErrors({}); }}>
+                    Cancel
+                  </button>
+                  <button
+                    className="btn primary sm"
+                    type="button"
+                    disabled={busy !== ''}
+                    onClick={() => {
+                      const problems = overviewProblems(ov);
+                      setOvErrors(problems);
+                      if (Object.keys(problems).length) return;
+                      void run(
+                        'overview',
+                        /*
+                         * These five and nothing else. Recruiter, status, referral, texting consent and
+                         * Added are not in the request, so the server leaves every one of them as it is.
+                         */
+                        () => updateCandidate(c.id, {
+                          name: ov.name.trim(),
+                          email: ov.email.trim(),
+                          phone: ov.phone.trim(),
+                          location: ov.location.trim(),
+                          source: ov.source,
+                        }),
+                        'Overview saved.',
+                        () => setOv(null),
+                      );
+                    }}
+                  >
+                    {busy === 'overview' ? 'Saving…' : 'Save'}
+                  </button>
+                </div>
+              </>
+            )}
             <dl className="lead-dl">
               <dt>Email</dt><dd>{c.email}</dd>
               <dt>Phone</dt>
