@@ -21,6 +21,13 @@ export const downloadImportSample = (): Promise<void> =>
 export const downloadImportErrors = (batchId: string): Promise<void> =>
   download(`/api/transaction-imports/${batchId}/errors`, `import-errors-${batchId}.xlsx`);
 
+/**
+ * 2026-10-07 - the user's own uploaded file back, with an App Trade Number column holding the
+ * number the app gave each row.
+ */
+export const downloadNumberedImport = (batchId: string): Promise<void> =>
+  download(`/api/transaction-imports/${batchId}/numbered-file`, `import-${batchId}-with-app-trade-numbers.xlsx`);
+
 /** Read a File into the base64 payload the API expects. */
 export function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {

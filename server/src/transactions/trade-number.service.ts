@@ -3,118 +3,75 @@ import type { Prisma } from '@prisma/client';
 
 type Tx = Prisma.TransactionClient;
 
-/** One numbering series. Each owns a band and never leaves it. */
-type Series = { label: string; start: number; end: number; suffix: string };
+/**
+ * ONE COUNTER FOR EVERY DEAL, 000001 UPWARDS - the brokerage's decision of 2026-10-07.
+ *
+ * Until then each deal type owned a band (Listing 100000-199999, Buying 200000-299999,
+ * Preconstruction 300000-399999, Lease 400000-499999, Referral 500000-599999_NB) and a number could
+ * also be chosen by hand, or taken from the bulk-import sheet as it stood. Sai, 2026-10-05/07:
+ * "i want a trade number like first trade number 000001, six digit generic number", the app gives
+ * every number - on screen and in the bulk import alike - and nobody types one.
+ *
+ * WHAT STAYS EXACTLY AS IT WAS:
+ *   - Deals that already exist keep their numbers. Renumbering them is a separate, later step.
+ *   - A Referral keeps its `_NB` suffix on the same counter: 000045_NB, never a second 000045.
+ *   - A spent number stays spent, deleted deal or not, and two creates at once never share one.
+ *
+ * WHY 000001-099999 AND NOT AN OPEN-ENDED COUNT. Every number in use today is 100000 or above, so
+ * a counter that stays below 100000 cannot collide with any of them - and the deal invoice, which
+ * is "GHR-" + the trade number, cannot collide with an existing invoice either. 99,999 deals is
+ * centuries at this brokerage's volume; if it is ever reached the counter refuses loudly rather
+ * than walking into the old numbers.
+ */
+const SERIES = { start: 1, end: 99999, width: 6 } as const;
 
 /**
- * TD-076 — the advisory-lock class for trade-number allocation.
+ * TD-076 - the advisory-lock class for trade-number allocation.
  *
- * Advisory locks share one global space, so the class namespaces this rule; the second argument is
- * the band's start, which is unique per series and reads sensibly in `pg_locks`.
+ * Advisory locks share one global space, so the class namespaces this rule. With one counter
+ * there is one lock; the second argument is kept so the key reads the same in `pg_locks`.
  */
 const TRADE_NUMBER_LOCK_CLASS = 7601;
+const TRADE_NUMBER_LOCK_KEY = 1;
 
-const SERIES: Record<string, Series> = {
-  listing:  { label: 'Listing / Sale',            start: 100000, end: 199999, suffix: '' },
-  buying:   { label: 'Buying',                    start: 200000, end: 299999, suffix: '' },
-  precon:   { label: 'Preconstruction',           start: 300000, end: 399999, suffix: '' },
-  lease:    { label: 'Lease',                     start: 400000, end: 499999, suffix: '' },
-  referral: { label: 'Referral (National Bank)',  start: 500000, end: 599999, suffix: '_NB' },
-};
+/** Referral deals carry the brokerage's National Bank suffix on the shared counter. */
+const suffixFor = (type: string): string => (String(type ?? '').trim() === 'Referral' ? '_NB' : '');
 
-/** Series by transaction type, keyed on what the deal IS rather than its property class. */
-const BY_TYPE: Record<string, keyof typeof SERIES> = {
-  'Residential Sale Listing': 'listing',
-  'Residential Lease Listing': 'listing',
-  'Commercial Property Sale Listing': 'listing',
-  'Commercial Property Lease Listing': 'listing',
-  'Business Sale': 'listing',
-  'Residential Buying': 'buying',
-  'Commercial Property Buying': 'buying',
-  'Business Buying': 'buying',
-  'Preconstruction': 'precon',
-  'Residential Lease': 'lease',
-  'Commercial Property Lease': 'lease',
-  'Referral': 'referral',
-};
+const pad = (n: number): string => String(n).padStart(SERIES.width, '0');
 
 @Injectable()
 export class TradeNumberService {
   /*
-   * TD-127. The old allocator gave each series a `matches` predicate and walked up from its
-   * start to the first gap. Residential Buying was 1-99, so once those were used `candidate`
-   * reached 100 - which was NOT in `used`, because the predicate had filtered it out as a Lease
-   * number. The loop stopped there and returned 100. And 100 every time after that, since a
-   * number outside the predicate can never enter the set the loop tests against. The 100th
-   * buying deal collided with an existing lease and was refused by the unique index, which is
-   * the only thing that stopped a genuine duplicate.
+   * TD-008 - ONE ROW, NOT THE TABLE. The highest number already issued on the counter is found by
+   * the database with `ORDER BY trade_no DESC LIMIT 1` over a range on the indexed column, which
+   * walks the index backwards and stops at the first row (0.1 ms on 400,000 seeded numbers, where
+   * MAX() over an expression read the whole range). The comparison is on text, and every value it
+   * can see here is six zero-padded digits, where text order and number order coincide.
    *
-   * Two things changed. A series now REFUSES when it is full instead of falling through into
-   * the next one's range. And allocation is MONOTONIC - one above the highest ever issued in
-   * that band, gaps left alone - because a trade number that has appeared on a client document
-   * should not be handed to a second deal.
-   */
-  /*
-   * TD-008. This read the WHOLE transactions table on every create — `findMany({ select: {
-   * trade_no: true } })` with no `where` — pulled every number into memory and scanned them in
-   * JavaScript, inside the create's transaction. Harmless at nine rows; a full table read per
-   * create at brokerage scale, holding a write transaction open while it happens.
+   * THE SHAPE FILTER IS STILL NEEDED. The table holds numbers like '001' from before any series
+   * existed; '001' sorts inside '000001'..'100000' as text, so without the regex it could be taken
+   * for the highest. With it, the backward scan simply skips such a row.
    *
-   * It is now one row: the highest number already issued in this series, found by the database.
+   * TD-127 - monotonic: one above the highest ever issued, gaps left alone, because a number that
+   * has appeared on a client document should not be handed to a second deal.
    *
-   * WHY A RANGE PREDICATE RATHER THAN A REGEX ALONE. `trade_no` is `@unique`, so it carries a
-   * btree index, and `>= '200000' AND < '300000'` is a range scan on that index. A regex cannot
-   * use the index and would scan regardless. The comparison is on text, but every value it can
-   * distinguish here is six digits of equal length, where lexicographic and numeric order
-   * coincide; the band's own boundary is settled by the FIRST character ('2' vs '3'), which no
-   * collation reorders.
-   *
-   * WHY `ORDER BY ... DESC LIMIT 1` AND NOT `MAX(...)`. Measured on 400,000 seeded numbers, the
-   * obvious `MAX(LEFT(trade_no, 6)::int)` used the index and still took 76 ms, reading all 100,000
-   * rows of the band: an aggregate over an EXPRESSION cannot use the index's ordering to stop
-   * early, so Postgres walks the whole range and computes the maximum row by row. Ordering by the
-   * bare indexed column instead walks the index backwards and stops at the first row — 0.1 ms, one
-   * heap fetch, and flat as the table grows. The six digits are parsed here rather than in SQL for
-   * the same reason: casting inside the query is what made it an expression.
-   *
-   * THE REGEX IS STILL NEEDED, as a filter on top: this table holds numbers like '001' from
-   * before the series existed, and nothing in the schema prevents a non-conforming value. '001'
-   * falls outside every band's range anyway, but a hypothetical '2abc' would sort inside one, and
-   * taking a lexicographic maximum without the shape check could hand back a number derived from
-   * it. With the filter, the backward scan simply skips such a row and takes the next.
-   *
-   * NOT A DATABASE SEQUENCE, though the defect offers one. A trade number may also be chosen BY
-   * HAND — `manualProblem` exists for exactly that, filing a historical deal under the number it
-   * already carried — and a sequence would not know about those, so it would eventually hand out
-   * a number a manual entry had already taken. Deriving from what is actually stored keeps manual
-   * and automatic allocation on the same line.
-   *
-   * Soft-deleted rows are still included, on purpose and as before: their numbers occupy the
-   * unique index, and a number that has been issued is spent whether or not the deal survived.
+   * Soft-deleted rows are included on purpose: their numbers occupy the unique index, and a number
+   * that has been issued is spent whether or not the deal survived.
    */
   async next(db: Tx, type: string): Promise<string> {
-    const s = SERIES[BY_TYPE[type] ?? 'buying'];
-    const lo = String(s.start);
-    const hi = String(s.end + 1);
+    const suffix = suffixFor(type);
+    const lo = pad(SERIES.start);
+    const hi = String(SERIES.end + 1);
 
     /*
-     * TD-076 — TWO CREATES AT ONCE MUST NOT BE HANDED THE SAME NUMBER.
-     *
-     * Allocation is read-then-insert: this finds the highest number in the band, adds one, and the
-     * caller inserts it. Two creates racing each other both read the same highest value, both
-     * compute the same candidate, and the second insert dies on the `trade_no` unique index — a
-     * 500 on a save that was in no way the user's fault. It is the same shape as the duplicate
-     * guard's race, and it fires between UNRELATED deals: only the band has to match.
-     *
-     * The band is serialised for the rest of the transaction, so the read and the insert that
-     * follows it are one step as far as any other create is concerned. Per band, so a Listing and
-     * a Buying create never wait for each other, and the wait that does happen is the length of one
-     * insert.
+     * TD-076 - TWO CREATES AT ONCE MUST NOT BE HANDED THE SAME NUMBER. Allocation is read-then-
+     * insert, so the counter is serialised for the rest of the transaction and the read and the
+     * insert that follows it are one step as far as any other create is concerned.
      *
      * `pg_advisory_xact_lock(int, int)` with the casts spelled out: Prisma sends a JS number as a
      * bigint parameter, and there is no two-argument bigint form of the function.
      */
-    await db.$executeRawUnsafe('SELECT pg_advisory_xact_lock($1::int, $2::int)', TRADE_NUMBER_LOCK_CLASS, s.start);
+    await db.$executeRawUnsafe('SELECT pg_advisory_xact_lock($1::int, $2::int)', TRADE_NUMBER_LOCK_CLASS, TRADE_NUMBER_LOCK_KEY);
     const rows = await db.$queryRaw<{ trade_no: string }[]>`
       SELECT trade_no
         FROM transactions
@@ -125,83 +82,45 @@ export class TradeNumberService {
        LIMIT 1
     `;
     const top = rows[0]?.trade_no;
-    const highest = top === undefined ? s.start - 1 : parseInt(top.slice(0, 6), 10);
+    const highest = top === undefined ? SERIES.start - 1 : parseInt(top.slice(0, SERIES.width), 10);
     const candidate = highest + 1;
-    if (candidate <= s.end) return String(candidate) + s.suffix;
+    if (candidate <= SERIES.end) return pad(candidate) + suffix;
 
     /*
-     * TD-140 - ONE DEAL AT THE TOP OF A BAND MUST NOT KILL THE WHOLE SERIES.
-     *
-     * highest+1 is right almost always, and spent numbers staying spent is right too - an issued
-     * number should never be handed out twice, deleted deal or not. Together, though, a SINGLE
-     * row at the ceiling ended the series for good.
-     *
-     * Not hypothetical: on 2026-09-06 all five bands were dead, each holding one soft-deleted
-     * deal at its ceiling - 199999, 299999, 399999, 499999, 599999_NB - left by boundary testing.
-     * No deal of ANY type could be created through a screen that does not ask for a trade number,
-     * while thousands of numbers sat unused below.
-     *
-     * So when the top is taken, fall back to the LOWEST unused number in the band. Nothing is
-     * re-issued: the anti-join asks the table itself, so a number held by any row, deleted or
-     * live, is skipped. The series simply stops calling itself full while it demonstrably is not.
-     *
-     * ONLY ON THE FALLBACK, which is why the scan is affordable - ordinary allocation is still
-     * the single indexed row-read above. generate_series is already ordered, so LIMIT 1 stops at
-     * the first gap rather than walking the range.
+     * TD-140 - ONE DEAL AT THE TOP MUST NOT KILL THE COUNTER. When the ceiling is taken, fall back
+     * to the LOWEST number nobody holds - in EITHER form, plain or _NB, because both share the
+     * counter. Nothing is re-issued: the anti-join asks the table itself, so a number held by any
+     * row, deleted or live, is skipped. Only on the fallback, so ordinary allocation stays the
+     * single indexed read above.
      */
     const gap = await db.$queryRawUnsafe<{ n: number }[]>(
       `SELECT g.n::int AS n
          FROM generate_series($1::int, $2::int) AS g(n)
         WHERE NOT EXISTS (
               SELECT 1 FROM transactions t
-               WHERE t.trade_no = lpad(g.n::text, 6, '0') || $3
+               WHERE t.trade_no IN (lpad(g.n::text, 6, '0'), lpad(g.n::text, 6, '0') || '_NB')
             )
         ORDER BY g.n
         LIMIT 1`,
-      s.start, s.end, s.suffix);
-    if (gap.length && gap[0] && gap[0].n !== null && gap[0].n !== undefined) return String(gap[0].n) + s.suffix;
+      SERIES.start, SERIES.end);
+    if (gap.length && gap[0] && gap[0].n !== null && gap[0].n !== undefined) return pad(gap[0].n) + suffix;
 
-    const msg = `The ${s.label} trade number series (${s.start}-${s.end}) is full. `
-      + 'Every number in the range has been issued. No further deals of this type can be numbered '
-      + 'until the range is extended.';
+    const msg = `Every trade number from ${pad(SERIES.start)} to ${pad(SERIES.end)} has been issued. `
+      + 'No further deals can be numbered until the counter is extended.';
     throw new UnprocessableEntityException({ message: msg, errors: { trade_no: [msg] } });
   }
 
-  /** The band a type belongs to, for callers validating a manually-chosen number. */
-  seriesFor(type: string): Series {
-    return SERIES[BY_TYPE[type] ?? 'buying'];
-  }
-
-  /*
-   * Why this hand-picked trade number cannot be used, or null if it can.
+  /**
+   * Why a typed-in trade number cannot be used, or null when none was typed.
    *
-   * A number may be chosen by hand - filing a historical deal under the number it already
-   * carried - but it must still belong to its type's band, or the bands stop meaning anything
-   * and the next automatic allocation walks into it. Three ways it can be wrong, each answered
-   * separately, because "invalid" tells somebody nothing about which of the three they hit.
-   *
-   * Returns a SENTENCE, not a boolean: the caller shows it to a person who has just typed a
-   * number, or puts it in the import review table beside the row that carried it.
+   * Since 2026-10-07 THE APP GIVES EVERY NUMBER. A number arriving from a screen, the API or the
+   * bulk-import sheet is refused rather than quietly replaced, so whoever sent it finds out instead
+   * of believing it was used. The bulk import clears the sheet's column before it gets here and
+   * hands the file back afterwards with the number the app gave each row.
    */
-  async manualProblem(db: Tx, type: string, raw: unknown): Promise<string | null> {
-    const s = this.seriesFor(type);
+  async manualProblem(_db: Tx, _type: string, raw: unknown): Promise<string | null> {
     const value = String(raw ?? '').trim();
     if (!value) return null;
-    const m = /^(\d{6})(_NB)?$/.exec(value);
-    const shape = s.suffix ? `six digits followed by ${s.suffix}` : 'six digits';
-    if (!m) return `"${value}" is not a trade number. Use ${shape} - for example ${s.start}${s.suffix}.`;
-    if ((m[2] ?? '') !== s.suffix) {
-      return `"${value}" has the wrong form for a ${s.label} deal. Use ${shape} - for example ${s.start}${s.suffix}.`;
-    }
-    const n = parseInt(m[1], 10);
-    if (n < s.start || n > s.end) {
-      return `${value} is outside the ${s.label} series (${s.start}-${s.end}). Each transaction type keeps its own range, so a ${s.label} deal cannot take a number from another one.`;
-    }
-    const taken = await db.transactions.findFirst({ where: { trade_no: value }, select: { property: true } });
-    if (taken) {
-      const where = taken.property ? ` (${taken.property})` : '';
-      return `Trade number ${value} is already assigned${where}. Choose another, or leave it blank to have one allocated.`;
-    }
-    return null;
+    return `"${value}" cannot be used: trade numbers are given by the app automatically. Leave the trade number blank.`;
   }
 }

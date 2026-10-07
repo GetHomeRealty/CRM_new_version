@@ -2,7 +2,7 @@ import { deskPath } from './area';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  downloadImportTemplate, downloadImportSample, downloadImportErrors, fileToBase64,
+  downloadImportTemplate, downloadImportSample, downloadImportErrors, downloadNumberedImport, fileToBase64,
   validateImport, confirmImport, importHistory, undoTransactionImport,
 } from '../lib/importApi';
 import ConfirmDialog from './ConfirmDialog';
@@ -248,6 +248,12 @@ export default function BulkImportPage() {
           {result.issues.length > 0 && <IssueTable issues={result.issues} />}
           <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
             <button className="btn" onClick={() => nav(deskPath('transactions'))}>Go to Transactions</button>
+            {/* 2026-10-07 - the uploaded file back, with the trade number the app gave each row. */}
+            {result.imported_rows > 0 && (
+              <button className="btn ghost" onClick={() => downloadNumberedImport(result.batch_id).catch((e) => toast(apiErrorMessage(e, 'Download failed'), 'bad'))}>
+                Download my file with App Trade Numbers
+              </button>
+            )}
             {result.issues.length > 0 && (
               <button className="btn ghost" onClick={() => downloadImportErrors(result.batch_id).catch((e) => toast(apiErrorMessage(e, 'Download failed'), 'bad'))}>
                 Download Validation Report
@@ -298,6 +304,12 @@ export default function BulkImportPage() {
                       <button className="btn ghost sm" onClick={() => downloadImportErrors(b.batch_id).catch((e) => toast(apiErrorMessage(e, 'Download failed'), 'bad'))}>
                         Report
                       </button>
+                      {b.imported_rows > 0 && (
+                        <button className="btn ghost sm" style={{ marginLeft: 6 }}
+                          onClick={() => downloadNumberedImport(b.batch_id).catch((e) => toast(apiErrorMessage(e, 'Download failed'), 'bad'))}>
+                          File with App Trade Numbers
+                        </button>
+                      )}
                       {/*
                         TD-142 — offered only where it can do something: an import that still has
                         deals of its own. An import made before this feature existed carries no
