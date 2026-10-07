@@ -955,7 +955,7 @@ export default function MetaPage() {
           <div className="lead-scroll">
             <table className="list-table">
               <thead>
-                <tr><th>Name</th><th>Contact</th><th>Enquiry</th><th>Status</th><th>Received</th><th></th></tr>
+                <tr><th>Name</th><th>Contact</th><th>Enquiry</th><th>Status</th><th>Assigned To</th><th>Received</th><th></th></tr>
               </thead>
               <tbody>
                 {leads.map((l) => (
@@ -968,6 +968,7 @@ export default function MetaPage() {
                     </td>
                     <td className="muted">{l.message || l.property || '—'}</td>
                     <td>{l.lead_status ? <span className="pill info">{l.lead_status}</span> : '—'}</td>
+                    <td>{l.assigned_to_name ?? <span className="muted">Unassigned</span>}</td>
                     <td>{stamp(l.created_at)}</td>
                     <td><button className="btn ghost sm" type="button" onClick={() => openLead(l)}>Open</button></td>
                   </tr>
