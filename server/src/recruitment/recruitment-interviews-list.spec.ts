@@ -1,5 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
-import { PrismaClient } from '@prisma/client';
+import { Prisma, PrismaClient } from '@prisma/client';
 import type { PrismaService } from '../prisma/prisma.service';
 import type { AuthUserRecord } from '../auth/auth.types';
 import { RecruitmentService } from './recruitment.service';
@@ -16,9 +16,14 @@ const ROLLBACK = '__rollback__';
 let seq = 0;
 const tag = (): string => { seq += 1; return `${Date.now()}-${seq}`; };
 
+/*
+ * REPEATABLE READ, like recruitment-reports-drilldown.spec.ts: the card count and the list total are
+ * two queries, and other suites commit candidates and interviews in parallel. One snapshot for the
+ * whole test means both reads see the same rows, so they can only differ if the code is wrong.
+ */
 async function inRollback(fn: (tx: PrismaService) => Promise<void>) {
   try {
-    await prisma.$transaction(async (tx) => { await fn(tx as unknown as PrismaService); throw new Error(ROLLBACK); }, { timeout: 60000 });
+    await prisma.$transaction(async (tx) => { await fn(tx as unknown as PrismaService); throw new Error(ROLLBACK); }, { timeout: 60000, isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
   } catch (e) {
     if (!String((e as Error).message).includes(ROLLBACK)) throw e;
   }

@@ -157,7 +157,7 @@ export class RecruitmentEmailService {
     };
   }
 
-  async send(user: AuthUserRecord, candidateId: number, body: Record<string, unknown>): Promise<{ data: recruitment_emails }> {
+  async send(user: AuthUserRecord, candidateId: number, body: Record<string, unknown>): Promise<{ data: recruitment_emails; contacted: boolean }> {
     const c = await this.recruitment.candidateFor(user, candidateId);
     const { subject, message } = this.validated(body);
     const to = (c.email ?? '').trim();
@@ -203,7 +203,26 @@ export class RecruitmentEmailService {
       where: { id: row.id }, data: { status: 'sent', sent_at: new Date(), updated_at: new Date() },
     });
     await this.recruitment.event(this.prisma, c.id, 'email_sent', `Email sent to ${to}: "${subject}".`, user);
-    return { data: sent };
+
+    /*
+     * A NEW CANDIDATE WHO HAS JUST BEEN EMAILED HAS BEEN CONTACTED. Only after the transport confirmed
+     * the send — a failed or unconfirmed send threw above and never gets here, and composing or
+     * previewing never calls this at all.
+     *
+     * One conditional write, `status = 'new'` in the WHERE, so the database decides atomically: of two
+     * sends racing for the same candidate exactly one moves them, and a candidate at any other status
+     * — Contacted already, Interview, Hold, Approved — is left exactly where they are. Recorded in the
+     * candidate's history the way a hand status change is, with the sender's name.
+     */
+    const moved = await this.prisma.recruitment_candidates.updateMany({
+      where: { id: c.id, status: 'new', deleted_at: null },
+      data: { status: 'contacted', updated_at: new Date() },
+    });
+    const contacted = moved.count === 1;
+    if (contacted) {
+      await this.recruitment.event(this.prisma, c.id, 'status', 'New → Contacted, after an email was sent.', user);
+    }
+    return { data: sent, contacted };
   }
 
   /** Every email to this candidate, newest first — hand-sent and reminders, with what became of each. */
