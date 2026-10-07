@@ -392,6 +392,28 @@ export default function TransactionDetailPage() {
       // Refresh the raw transaction only — never `form`, which would fight whatever the
       // user is typing right now (cursor jumps, dropped keystrokes mid-flight).
       setTxn(updated);
+      /*
+       * TD-033 - THE ONE EXCEPTION: A NEW CONDITION LEARNS ITS ID.
+       *
+       * A condition added in this session reached the server, was given an id, and the form never
+       * heard - so the next auto-save sent it again without one and the server deleted and
+       * re-created it, with a new id and a new condition document each time. Only the id is copied,
+       * only onto a row that has none, and only when the row at that position is the same condition,
+       * so nothing the user is typing is touched.
+       */
+      const server = (updated.conditions || []) as { id?: number; type?: string | null }[];
+      setForm((prev) => {
+        if (!prev || !prev.conditions.some((c) => !(c as { id?: number }).id)) return prev;
+        let changed = false;
+        const conditions = prev.conditions.map((c, i) => {
+          const mine = c as { id?: number; type?: string | null };
+          const theirs = server[i];
+          if (mine.id || !theirs?.id || (theirs.type || '') !== (mine.type || '')) return c;
+          changed = true;
+          return { ...c, id: theirs.id };
+        });
+        return changed ? { ...prev, conditions } : prev;
+      });
       setAutoState('saved'); setAutoMsg('');
     } catch (err) {
       // A stale save is not "could not save" — the write was understood and deliberately refused,
