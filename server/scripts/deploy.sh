@@ -55,6 +55,25 @@ if ! printf '%s' "$MIGRATE_STATUS" | grep -q "Database schema is up to date"; th
 fi
 echo "==> database is up to date"
 
+# 2026-10-07 - THE GATE'S OWN TEST DATABASE GETS THE SAME DATABASE CHANGES, AUTOMATICALLY.
+#
+# The gate runs against TEST_DATABASE_URL, a separate practice copy, and nothing ever migrated it:
+# after a schema change somebody had to remember to run apply-migrations.sh against it by hand
+# (2 Oct it was 15 migrations behind; 6 Oct, TD-204, it was done by hand). Same script, same owner
+# rules, aimed at the test database - and only if its name says it is one, so this can never be
+# pointed at production by a mistyped .env.
+TEST_DB_URL=$( { grep '^TEST_DATABASE_URL=' .env 2>/dev/null || true; } | cut -d= -f2- | sed 's/^"//; s/"$//')
+if [ -n "$TEST_DB_URL" ]; then
+  TEST_DB_NAME=$(node -e "console.log(new URL(process.argv[1]).pathname.slice(1).split('?')[0])" "$TEST_DB_URL")
+  case "$TEST_DB_NAME" in
+    *test*|*staging*|*qa*|*scratch*)
+      echo "==> test database $TEST_DB_NAME: applying any database changes"
+      DATABASE_URL="$TEST_DB_URL" bash scripts/apply-migrations.sh || { echo "!! the test database could not be brought up to date"; exit 1; } ;;
+    *)
+      echo "!! TEST_DATABASE_URL names '$TEST_DB_NAME', which does not look like a test database - refusing."; exit 1 ;;
+  esac
+fi
+
 # TD-206, 2026-10-06 - REFRESH THE DATABASE CLIENT, THEN BUILD, AND PUT THE OLD BUILD BACK IF IT FAILS.
 #
 # The TD-204 deploy changed schema.prisma and the build failed: the generated Prisma client on this
