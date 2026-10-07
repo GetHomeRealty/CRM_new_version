@@ -80,6 +80,28 @@ const VIEW_KEY = 'meta_last_form_view';
 const FORM_PAGE_SIZE = 50;
 
 type SavedView = { form: string; all: boolean; page: number };
+
+/**
+ * WHERE A LEAD WAS OPENED FROM — the whole list state, written just before the lead opens.
+ *
+ * The URL the lead page goes back to carries the same thing (`fbpage`, `form`, `leads`, `lpage`,
+ * `focus`), and that copy is what survives a refresh of the lead page. This one adds what a URL
+ * should not hold: the scroll position, and the lead's name for the message if it has gone.
+ */
+const RETURN_KEY = 'meta_return';
+type MetaReturn = {
+  url: string; pageId: string; form: string | null; all: boolean; lpage: number;
+  scrollY: number; leadId: number; leadName: string;
+};
+function saveReturn(r: MetaReturn): void {
+  try { sessionStorage.setItem(RETURN_KEY, JSON.stringify(r)); } catch { /* the URL still carries it */ }
+}
+function readReturn(leadId: number): MetaReturn | null {
+  try {
+    const r = JSON.parse(sessionStorage.getItem(RETURN_KEY) ?? 'null') as MetaReturn | null;
+    return r && r.leadId === leadId ? r : null;
+  } catch { return null; }
+}
 function saveView(v: SavedView | null): void {
   try {
     if (v) sessionStorage.setItem(VIEW_KEY, JSON.stringify(v)); else sessionStorage.removeItem(VIEW_KEY);
@@ -225,6 +247,21 @@ export default function MetaPage() {
    */
   const [arrivedFiltered] = useState(() => !!params.get('form'));
   const scrolledOnArrival = useRef(false);
+  /**
+   * COMING BACK FROM A LEAD: which lead, and which Page it was opened under. Read once, at mount —
+   * only the visit that returns from the lead acts on them, and they are taken out of the URL as
+   * soon as they have been used, so a later refresh of this screen does not replay the return.
+   */
+  const [focusLead] = useState<number | null>(() => {
+    const n = Number(params.get('focus'));
+    return Number.isInteger(n) && n > 0 ? n : null;
+  });
+  const [returnPage] = useState(() => params.get('fbpage') || '');
+  const focusDone = useRef(false);
+  /** The row lit up for a moment after coming back to it. */
+  const [flashLead, setFlashLead] = useState<number | null>(null);
+  /** Set when the lead that was opened is not in the list it was opened from any more. */
+  const [focusMissing, setFocusMissing] = useState<{ id: number; name: string } | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState('');
 
@@ -362,6 +399,7 @@ export default function MetaPage() {
       if (id) next.set('form', id); else next.delete('form');
       return next;
     }, { replace: true });
+    setFocusMissing(null);
     const saved = readView();
     if (!id || saved?.form !== id) saveView(null);
     // Written on the way past, so leaving by any route remembers it. Clearing the filter clears
@@ -384,9 +422,25 @@ export default function MetaPage() {
    * `location.search` goes along with the path, so the FORM FILTER comes back too. The Page needs
    * no carrying: it is stored against the person and restores itself.
    */
-  const openLead = (leadId: number) => {
-    const back = `${location.pathname}${location.search}`;
-    navigate(`${crmPath(`lead/${leadId}`)}?returnTo=${encodeURIComponent(back)}`);
+  const openLead = (lead: { id: number; name: string }) => {
+    /*
+     * THE RETURN POINT NAMES THE PAGE AND THE LEAD as well as the form, its view and its page, so
+     * coming back can put the reader on the row they left rather than at the top of the list.
+     *
+     * THIS HISTORY ENTRY IS REWRITTEN TO IT FIRST (replace, so no extra Back press) — the browser's
+     * Back button returns to this entry, not to the lead page's `returnTo`, and must land on the
+     * same row as "Back to Meta" does.
+     */
+    const next = new URLSearchParams(params);
+    if (selectedPage) next.set('fbpage', selectedPage); else next.delete('fbpage');
+    next.set('focus', String(lead.id));
+    const back = `${location.pathname}?${next.toString()}`;
+    saveReturn({
+      url: back, pageId: selectedPage, form: params.get('form'), all: showAllOfForm, lpage: listPage,
+      scrollY: window.scrollY, leadId: lead.id, leadName: lead.name,
+    });
+    navigate(back, { replace: true });
+    navigate(`${crmPath(`lead/${lead.id}`)}?returnTo=${encodeURIComponent(back)}`);
   };
 
   /** Clicking a form shows its leads; clicking the same form again goes back to all of them. */
@@ -409,6 +463,7 @@ export default function MetaPage() {
       if (all && page > 1) next.set('lpage', String(page)); else next.delete('lpage');
       return next;
     }, { replace: true });
+    setFocusMissing(null);
     const form = params.get('form');
     if (form) saveView(all ? { form, all: true, page } : null);
   }, [params, setParams]);
@@ -477,12 +532,14 @@ export default function MetaPage() {
       cur && orderedPages.some((p) => p.id === cur)
         ? cur
         : (
-          (stored ? orderedPages.find((p) => p.id === stored) : undefined)
+          // Coming back from a lead: the Page it was opened under, if this connection still has it.
+          (returnPage ? orderedPages.find((p) => p.id === returnPage) : undefined)
+          ?? (stored ? orderedPages.find((p) => p.id === stored) : undefined)
           ?? named(DEFAULT_PAGE_NAME)
           ?? orderedPages[0]
         ).id
     ));
-  }, [orderedPages, pagesReady, status?.default_meta_page_id]);
+  }, [orderedPages, pagesReady, status?.default_meta_page_id, returnPage]);
 
   /**
    * THE ONE PLACE THE FILTER IS DECIDED: the URL, checked against the forms this Page returned.
@@ -569,11 +626,57 @@ export default function MetaPage() {
    * who had scrolled away deliberately.
    */
   useEffect(() => {
-    if (!arrivedFiltered || scrolledOnArrival.current) return;
+    // Coming back from a lead scrolls to that lead's row instead — see below.
+    if (focusLead || !arrivedFiltered || scrolledOnArrival.current) return;
     if (!formFilter || !leadsLoaded) return;
     scrolledOnArrival.current = true;
     leadsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  }, [arrivedFiltered, formFilter, leadsLoaded]);
+  }, [arrivedFiltered, formFilter, leadsLoaded, focusLead]);
+
+  /**
+   * BACK ON THE ROW THAT WAS OPENED, once the list it was opened from has loaded.
+   *
+   * Waits for the form named in the URL to be applied (or to be known gone), because before then the
+   * list is not the one the lead was opened from and the row would be "missing" only for a moment.
+   * The scroll position saved on the way out comes back first, so the screen looks as it was left;
+   * if that leaves the row out of view, the row is brought into the middle of it.
+   *
+   * A lead no longer in that list — reassigned, moved to another form, deleted — keeps every filter
+   * as it was and says so, rather than silently showing a list without it.
+   */
+  useEffect(() => {
+    if (!focusLead || focusDone.current || !leadsLoaded) return;
+    const wanted = params.get('form');
+    if (wanted && formFilter?.id !== wanted && !formsLoaded) return;
+    focusDone.current = true;
+    setParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.delete('focus');
+      next.delete('fbpage');
+      return next;
+    }, { replace: true });
+    if (leadsError) return;   // the list says it could not be read; nothing else to add
+    const saved = readReturn(focusLead);
+    if (leads.some((l) => l.id === focusLead)) {
+      setFlashLead(focusLead);
+      requestAnimationFrame(() => {
+        if (saved) window.scrollTo({ top: saved.scrollY });
+        const row = document.querySelector(`[data-lead-row="${focusLead}"]`);
+        if (!row) return;
+        const r = row.getBoundingClientRect();
+        if (r.top < 0 || r.bottom > window.innerHeight) row.scrollIntoView({ block: 'center' });
+      });
+    } else {
+      setFocusMissing({ id: focusLead, name: saved?.leadName ?? '' });
+      requestAnimationFrame(() => leadsRef.current?.scrollIntoView({ block: 'start' }));
+    }
+  }, [focusLead, leadsLoaded, leadsError, leads, formFilter, formsLoaded, params, setParams]);
+
+  useEffect(() => {
+    if (flashLead === null) return;
+    const t = window.setTimeout(() => setFlashLead(null), 2500);
+    return () => window.clearTimeout(t);
+  }, [flashLead]);
 
   useEffect(() => {
     /*
@@ -824,6 +927,17 @@ export default function MetaPage() {
             onPage={(n) => setListView(true, n)}
           />
         )}
+        {focusMissing && (
+          <div className="toolbar-row" data-testid="meta-return-missing" role="status"
+            style={{ gap: 8, margin: '0 0 8px', alignItems: 'center' }}>
+            <span className="help bad" style={{ margin: 0 }}>
+              {focusMissing.name ? `${focusMissing.name} (#${focusMissing.id})` : `Lead #${focusMissing.id}`} is no longer
+              in this list — it may have been reassigned, moved to another form or removed. Your Page, form and page
+              are as you left them.
+            </span>
+            <button className="btn ghost sm" type="button" onClick={() => setFocusMissing(null)}>Dismiss</button>
+          </div>
+        )}
         {leadsError ? (
           <p className="help bad">
             {leadsError} — this is a failure to READ the leads, not a statement that there are none.
@@ -845,7 +959,8 @@ export default function MetaPage() {
               </thead>
               <tbody>
                 {leads.map((l) => (
-                  <tr key={l.id}>
+                  <tr key={l.id} data-lead-row={l.id} data-focused={flashLead === l.id ? 'true' : undefined}
+                    style={{ transition: 'background-color .6s', ...(flashLead === l.id ? { backgroundColor: 'var(--warn-soft)' } : {}) }}>
                     <td>{l.name}</td>
                     <td className="muted">
                       <div>{l.email.endsWith('@meta.invalid') ? <em>No email provided</em> : l.email}</div>
@@ -854,7 +969,7 @@ export default function MetaPage() {
                     <td className="muted">{l.message || l.property || '—'}</td>
                     <td>{l.lead_status ? <span className="pill info">{l.lead_status}</span> : '—'}</td>
                     <td>{stamp(l.created_at)}</td>
-                    <td><button className="btn ghost sm" type="button" onClick={() => openLead(l.id)}>Open</button></td>
+                    <td><button className="btn ghost sm" type="button" onClick={() => openLead(l)}>Open</button></td>
                   </tr>
                 ))}
               </tbody>
