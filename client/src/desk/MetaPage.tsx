@@ -118,6 +118,17 @@ function readView(): SavedView | null {
 const FORM_COUNTS_HINT = 'Facebook counts every submission. The CRM shows each person once, without deleted leads, '
   + 'test leads, leads older than about 90 days, or leads you cannot see.';
 
+/**
+ * THREE DIFFERENT THINGS, which the row used to show as "active" and "Connected" side by side:
+ * Meta's own status for the form, whether this CRM imports its leads, and whether any ad is running.
+ */
+const FORM_STATUS_HINT = "Meta form status is Facebook's own status for this lead form (Active until it is archived in Meta). "
+  + "CRM sync is whether this CRM imports the form's leads; turning it on or off never changes the form on Facebook. "
+  + 'Neither one says whether an ad campaign is running — that is set in Meta Ads Manager.';
+
+/** Meta's form status as Meta sends it ("ACTIVE", "ARCHIVED"), worded for reading: "Active", "Archived". */
+const metaFormStatus = (s: string): string => s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
+
 const pageRank = (name: string): number => {
   const n = name.trim().toLowerCase();
   const i = PAGE_ORDER.findIndex((x) => x.trim().toLowerCase() === n);
@@ -885,11 +896,14 @@ export default function MetaPage() {
                     {/* Two counts from two places, labelled so they are never read as one. */}
                     <div className="muted" title={FORM_COUNTS_HINT}>
                       {f.leads_count} on Facebook · {f.crm_count ?? 0} in CRM
-                      {f.status ? ` · ${f.status.toLowerCase()}` : ''}
+                      {/* Meta's value, untouched by CRM sync; nothing is shown when Meta sent none. */}
+                      {f.status && <span title={FORM_STATUS_HINT}> · Meta form: {metaFormStatus(f.status)}</span>}
                     </div>
                   </button>
                   <div className="toolbar-row">
-                    <span className={`pill ${f.is_connected ? 'ok' : ''}`}>{f.is_connected ? 'Connected' : 'Off'}</span>
+                    <span className={`pill ${f.is_connected ? 'ok' : ''}`} title={FORM_STATUS_HINT}>
+                      {f.is_connected ? 'CRM sync: On' : 'CRM sync: Off'}
+                    </span>
                     {canEdit && (
                       <button className="btn ghost sm" type="button" disabled={busy !== ''} onClick={() => toggle(f)}>
                         {f.is_connected ? 'Disconnect' : 'Connect'}
