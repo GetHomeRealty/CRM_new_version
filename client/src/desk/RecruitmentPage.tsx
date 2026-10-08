@@ -6,6 +6,7 @@ import {
 } from '../lib/recruitmentApi';
 import { apiErrorMessage } from '../lib/apiError';
 import RecruitmentSendMail from './RecruitmentSendMail';
+import RecruitmentAddNote from './RecruitmentAddNote';
 import { useToast } from './toast';
 import { useAuth } from '../context/AuthContext';
 import {
@@ -62,6 +63,8 @@ export default function RecruitmentPage() {
   const [params, setParams] = useSearchParams();
 
   const canEdit = can('recruitment', 'edit');
+  /** The candidate whose notes the Add Note modal is open for, from an Interviews or follow-up row. */
+  const [noting, setNoting] = useState<{ id: number; name: string } | null>(null);
   /** Approval and account creation. `recruitment.decide` is admin and manager — Super Admin and Admin. */
   const canDecide = isAdminOrAbove;
 
@@ -562,7 +565,14 @@ export default function RecruitmentPage() {
                       <td>{iv.mode || '—'}{iv.location ? <div className="muted">{iv.location}</div> : null}</td>
                       <td><span className={statusPill(iv.status)}>{statusLabel(iv.status)}</span></td>
                       <td>
-                        <button className="btn ghost sm" type="button" onClick={() => navigate(crmPath(`recruitment/${iv.candidate.id}`))}>Open</button>
+                        <div className="toolbar-row" style={{ gap: 6, flexWrap: 'nowrap' }}>
+                          <button className="btn ghost sm" type="button" onClick={() => navigate(crmPath(`recruitment/${iv.candidate.id}`))}>Open</button>
+                          {canEdit && (
+                            <button className="btn ghost sm" type="button" onClick={() => setNoting({ id: iv.candidate.id, name: iv.candidate.name })}>
+                              Add Note
+                            </button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -609,7 +619,14 @@ export default function RecruitmentPage() {
                         <td>{f.candidate.name}</td>
                         <td><span className={statusPill(f.candidate.status)}>{statusLabel(f.candidate.status)}</span></td>
                         <td>
-                          <button className="btn ghost sm" type="button" onClick={() => navigate(crmPath(`recruitment/${f.candidate.id}`))}>Open</button>
+                          <div className="toolbar-row" style={{ gap: 6, flexWrap: 'nowrap' }}>
+                            <button className="btn ghost sm" type="button" onClick={() => navigate(crmPath(`recruitment/${f.candidate.id}`))}>Open</button>
+                            {canEdit && (
+                              <button className="btn ghost sm" type="button" onClick={() => setNoting({ id: f.candidate.id, name: f.candidate.name })}>
+                                Add Note
+                              </button>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     );
@@ -812,6 +829,11 @@ export default function RecruitmentPage() {
         // A send can move a New candidate to Contacted, so the list and the counts are re-read in
         // place — same filters, same page, no reload.
         <RecruitmentSendMail candidateId={mailing} onClose={() => setMailing(null)} onSent={() => void load()} />
+      )}
+
+      {noting !== null && (
+        // Nothing on the Interviews tab is re-read after a note: a note changes no status, count or row.
+        <RecruitmentAddNote candidateId={noting.id} candidateName={noting.name} onClose={() => setNoting(null)} />
       )}
     </>
   );
