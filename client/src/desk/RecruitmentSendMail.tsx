@@ -1,11 +1,22 @@
 import { useCallback, useEffect, useState } from 'react';
-import { emailComposer, previewCandidateEmail, sendCandidateEmail } from '../lib/recruitmentApi';
+import {
+  draftCandidateEmail, emailComposer, previewCandidateEmail, sendCandidateEmail, type EmailDraftPurpose,
+} from '../lib/recruitmentApi';
 import { apiErrorMessage } from '../lib/apiError';
 import { useToast } from './toast';
 import type { EmailComposer, RecruitmentEmail } from '../types/recruitment';
 
 const SUBJECT_MAX = 255;
 const MESSAGE_MAX = 20_000;
+const INSTRUCTIONS_MAX = 1000;
+
+const PURPOSES: { value: EmailDraftPurpose; label: string }[] = [
+  { value: 'introduction', label: 'Introduction' },
+  { value: 'follow_up', label: 'Follow-up' },
+  { value: 'interview_invitation', label: 'Interview invitation' },
+  { value: 'document_request', label: 'Document request' },
+  { value: 'custom', label: 'Custom' },
+];
 
 /** How an email's status reads in the history. */
 export function emailStatusPill(s: RecruitmentEmail['status']): string {
@@ -37,6 +48,41 @@ export default function RecruitmentSendMail({
   const [message, setMessage] = useState('');
   const [preview, setPreview] = useState<{ to: string; subject: string; html: string } | null>(null);
   const [busy, setBusy] = useState(false);
+
+  /*
+   * AI DRAFT — a suggestion beside the boxes, never written into them until "Use draft".
+   *
+   * Whatever is already typed stays exactly as it is while a draft is generated, if generation fails,
+   * and if the draft is discarded. Generating sends no mail and changes no status; the email still
+   * goes through Preview → Send like any other.
+   */
+  const [purpose, setPurpose] = useState<EmailDraftPurpose>('introduction');
+  const [instructions, setInstructions] = useState('');
+  const [drafting, setDrafting] = useState(false);
+  const [draftError, setDraftError] = useState('');
+  const [draft, setDraft] = useState<{ subject: string; message: string } | null>(null);
+  const draftProblem = purpose === 'custom' && !instructions.trim()
+    ? 'Describe the email you want in the instructions for a custom email.'
+    : instructions.length > INSTRUCTIONS_MAX ? `Instructions can be at most ${INSTRUCTIONS_MAX} characters.` : null;
+
+  const generate = async () => {
+    if (drafting || draftProblem) return;
+    setDrafting(true);
+    setDraftError('');
+    try {
+      setDraft(await draftCandidateEmail(candidateId, { purpose, instructions: instructions.trim() }));
+    } catch (ex) {
+      setDraftError(apiErrorMessage(ex, 'The AI draft could not be generated'));
+    } finally {
+      setDrafting(false);
+    }
+  };
+  const useDraft = () => {
+    if (!draft) return;
+    setSubject(draft.subject);
+    setMessage(draft.message);
+    setDraft(null);
+  };
 
   const load = useCallback(async () => {
     try {
@@ -119,6 +165,54 @@ export default function RecruitmentSendMail({
 
             {!preview ? (
               <>
+                {state.can_send && (
+                  <div className="card" data-testid="ai-draft" style={{ padding: 12, marginBottom: 10 }}>
+                    <div className="modal-sub" style={{ marginTop: 0 }}>Draft with AI</div>
+                    <div className="field">
+                      <label htmlFor="ai-draft-purpose">Purpose</label>
+                      <select id="ai-draft-purpose" value={purpose} disabled={drafting}
+                        onChange={(e) => setPurpose(e.target.value as EmailDraftPurpose)}>
+                        {PURPOSES.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+                      </select>
+                    </div>
+                    <div className="field">
+                      <label htmlFor="ai-draft-instructions">
+                        Instructions <span className="muted">({purpose === 'custom' ? 'required' : 'optional'})</span>
+                      </label>
+                      <textarea id="ai-draft-instructions" rows={3} value={instructions} disabled={drafting}
+                        maxLength={INSTRUCTIONS_MAX}
+                        placeholder="Details to include, e.g. interview Tue 14 Oct at 2 pm on Zoom. The AI will not invent dates, fees or promises."
+                        onChange={(e) => setInstructions(e.target.value)} />
+                      {draftProblem && instructions.length > 0 && <span className="help bad">{draftProblem}</span>}
+                    </div>
+                    <div className="toolbar-row" style={{ gap: 8, alignItems: 'center' }}>
+                      <button className="btn ghost sm" type="button" disabled={drafting || busy || !!draftProblem}
+                        title={draftProblem ?? undefined} onClick={() => void generate()}>
+                        {drafting ? 'Generating…' : 'Generate with AI'}
+                      </button>
+                      <span className="help" style={{ margin: 0 }}>Only the candidate's first name and your instructions are sent to the AI.</span>
+                    </div>
+                    {draftError && <p className="help bad" role="alert" data-testid="ai-draft-error">{draftError}</p>}
+                    {draft && (
+                      <div data-testid="ai-draft-result" style={{ marginTop: 10 }}>
+                        <p className="help" style={{ marginTop: 0 }}>
+                          AI draft — review it before using. Fill in anything in [brackets]; nothing has been sent.
+                        </p>
+                        <div className="card" style={{ padding: 10 }}>
+                          <div style={{ fontWeight: 600, marginBottom: 6 }} data-testid="ai-draft-subject">{draft.subject}</div>
+                          <div style={{ whiteSpace: 'pre-wrap' }} data-testid="ai-draft-message">{draft.message}</div>
+                        </div>
+                        <div className="toolbar-row" style={{ justifyContent: 'flex-end', gap: 8, marginTop: 8 }}>
+                          <button className="btn ghost sm" type="button" onClick={() => setDraft(null)}>Discard</button>
+                          <button className="btn primary sm" type="button" onClick={useDraft}
+                            title={subject.trim() || message.trim() ? 'Replaces the subject and message you have now' : undefined}>
+                            Use draft
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
                 <div className="field">
                   <label>Subject</label>
                   <input value={subject} maxLength={SUBJECT_MAX} disabled={!state.can_send} onChange={(e) => setSubject(e.target.value)} />

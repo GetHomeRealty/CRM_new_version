@@ -131,6 +131,15 @@ export const previewCandidateEmail = (
   api.post(`/api/recruitment/candidates/${id}/email/preview`, body).then((r) => r.data);
 
 /** `contacted` is true when this send moved the candidate from New to Contacted. */
+/** What an AI draft is for. `custom` needs instructions. */
+export type EmailDraftPurpose = 'introduction' | 'follow_up' | 'interview_invitation' | 'document_request' | 'custom';
+
+/** An AI-written subject and message for the composer. Sends nothing and changes nothing on the server. */
+export const draftCandidateEmail = (
+  id: number, body: { purpose: EmailDraftPurpose; instructions: string },
+): Promise<{ subject: string; message: string }> =>
+  api.post(`/api/recruitment/candidates/${id}/email/draft`, body).then((r) => r.data);
+
 export const sendCandidateEmail = (id: number, body: { subject: string; message: string }): Promise<{ data: RecruitmentEmail; contacted?: boolean }> =>
   api.post(`/api/recruitment/candidates/${id}/email`, body).then((r) => r.data);
 

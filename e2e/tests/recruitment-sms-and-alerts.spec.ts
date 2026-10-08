@@ -140,7 +140,7 @@ test.describe('the Send Mail composer', () => {
       await expect(modal.locator('.modal-h')).toHaveText('Send mail');
 
       const subject = modal.locator('.field').filter({ hasText: 'Subject' }).locator('input');
-      const message = modal.locator('textarea');
+      const message = modal.locator('.field').filter({ hasText: /^Message/ }).locator('textarea');
 
       // No subject: nothing to preview, and the reason is on screen.
       await subject.fill('');
@@ -190,7 +190,7 @@ test.describe('the Send Mail composer', () => {
       if (from) await expect(modal.locator('dd').nth(1)).toContainText(from.email);
 
       const subject = modal.locator('.field').filter({ hasText: 'Subject' }).locator('input');
-      const message = modal.locator('textarea');
+      const message = modal.locator('.field').filter({ hasText: /^Message/ }).locator('textarea');
       // Opens with a starting point already in both boxes.
       await expect(subject).not.toHaveValue('');
       await expect(message).toHaveValue(/^Hi /);
@@ -242,7 +242,7 @@ test.describe('the Send Mail composer', () => {
       const modal = page.locator('.modal');
       // No texting refusal in the email composer, and nothing standing in the way of sending.
       await expect(modal.getByText(/texted/i)).toHaveCount(0);
-      await modal.locator('textarea').fill('Hi, a quick note about your application.');
+      await modal.locator('.field').filter({ hasText: /^Message/ }).locator('textarea').fill('Hi, a quick note about your application.');
       await expect(modal.getByRole('button', { name: 'Preview' })).toBeEnabled();
       await modal.getByRole('button', { name: 'Preview' }).click();
       await modal.getByRole('button', { name: 'Send', exact: true }).click();

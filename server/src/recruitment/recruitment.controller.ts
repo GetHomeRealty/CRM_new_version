@@ -1,6 +1,7 @@
 import {
   Body, Controller, Delete, Get, HttpCode, Param, ParseIntPipe, Post, Put, Query, UseGuards,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { AuthGuard } from '../auth/guards/auth.guard';
 import { ScreenGuard } from '../auth/guards/screen.guard';
 import { CurrentUser, Screen } from '../auth/decorators';
@@ -9,6 +10,7 @@ import { RecruitmentService } from './recruitment.service';
 import { RecruitmentAgentService } from './recruitment-agent.service';
 import { RecruitmentSmsService } from './recruitment-sms.service';
 import { RecruitmentEmailService } from './recruitment-email.service';
+import { RecruitmentEmailDraftService } from './recruitment-email-draft.service';
 import { RecruitmentNoAgentsGuard } from './recruitment-no-agents.guard';
 import { CANDIDATE_STATUSES, INTERVIEW_STATUSES, allowedNext, isCandidateStatus } from './recruitment.status';
 
@@ -35,6 +37,7 @@ export class RecruitmentController {
     private readonly agents: RecruitmentAgentService,
     private readonly sms: RecruitmentSmsService,
     private readonly email: RecruitmentEmailService,
+    private readonly drafts: RecruitmentEmailDraftService,
   ) {}
 
   /** The vocabulary, so the client never hardcodes a status or guesses what follows one. */
@@ -229,6 +232,23 @@ export class RecruitmentController {
     @Body() body: Record<string, unknown>,
   ): Promise<Record<string, unknown>> {
     return this.email.preview(user, id, body ?? {});
+  }
+
+  /**
+   * AN AI DRAFT for the composer — subject and message only. Sends nothing and changes nothing; the
+   * draft still goes through Preview → Send. Same permission and candidate scope as sending, and a
+   * per-person limit, because each press is a paid call to an outside provider.
+   */
+  @Post('candidates/:id/email/draft')
+  @HttpCode(200)
+  @Throttle({ default: { ttl: 60_000, limit: 10 } })
+  @Screen('recruitment', 'edit')
+  emailDraft(
+    @CurrentUser() user: AuthUserRecord,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    return this.drafts.draft(user, id, body ?? {});
   }
 
   @Post('candidates/:id/email')

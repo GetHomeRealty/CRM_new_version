@@ -181,14 +181,14 @@ describe('agents are refused on every Recruitment route, even on the fallback pe
     for (const role of ['admin', 'manager', 'recruiter']) expect(guard.canActivate(contextFor(role))).toBe(true);
   });
 
-  it('it guards the whole RecruitmentController — every read, update, delete, interview, document, text, mail, consent and approval route (31)', () => {
+  it('it guards the whole RecruitmentController — every read, update, delete, interview, document, text, mail, consent, AI-draft and approval route (32)', () => {
     const classGuards = (Reflect.getMetadata(GUARDS_METADATA, RecruitmentController) ?? []) as unknown[];
     expect(classGuards).toContain(RecruitmentNoAgentsGuard);
     // Every route on the controller inherits the class guards; count them so a route moved to a new
     // controller (and out from under this guard) shows up here.
     const proto = RecruitmentController.prototype as unknown as Record<string, unknown>;
     const routes = Object.getOwnPropertyNames(proto).filter((m) => m !== 'constructor' && Reflect.getMetadata(PATH_METADATA, proto[m] as object) !== undefined);
-    expect(routes.length).toBe(31);
+    expect(routes.length).toBe(32);
     // The referral route is the only one outside it, and it is the agents' submission door.
     expect((Reflect.getMetadata(GUARDS_METADATA, RecruitmentReferralController) ?? []) as unknown[]).not.toContain(RecruitmentNoAgentsGuard);
   });

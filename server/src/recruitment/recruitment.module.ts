@@ -10,6 +10,8 @@ import { RecruitmentReferralController } from './recruitment-referral.controller
 import { RecruitmentReferralService } from './recruitment-referral.service';
 import { RecruitmentSmsService } from './recruitment-sms.service';
 import { RecruitmentEmailService } from './recruitment-email.service';
+import { RecruitmentEmailDraftService } from './recruitment-email-draft.service';
+import { AiDisclosureService } from '../common/ai-disclosure.service';
 import { RecruitmentInterviewNotifyService } from './recruitment-interview-notify.service';
 import { RecruitmentInterviewReminderService } from './recruitment-interview-reminder.service';
 import { RecruitmentInterviewReminderScheduler } from './recruitment-interview-reminder.scheduler';
@@ -45,6 +47,9 @@ import { RecruitmentInterviewReminderScheduler } from './recruitment-interview-r
     RecruitmentReferralService,
     RecruitmentSmsService,
     RecruitmentEmailService,
+    // The AI draft for the composer, and the shared writer that records what it sent to the provider.
+    RecruitmentEmailDraftService,
+    AiDisclosureService,
     RecruitmentInterviewNotifyService,
     RecruitmentInterviewReminderService,
     RecruitmentInterviewReminderScheduler,
