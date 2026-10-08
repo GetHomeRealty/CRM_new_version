@@ -1477,6 +1477,9 @@ export class TransactionsWriteService {
       if (Object.prototype.hasOwnProperty.call(data, 'conditions')) await this.syncConditions(tx, txnId, asArray(data.conditions));
       if (Object.prototype.hasOwnProperty.call(data, 'inter_board_listings')) await this.syncInterBoard(tx, txnId, asArray(data.inter_board_listings));
       if (Object.prototype.hasOwnProperty.call(data, 'brokerage')) await this.syncBrokerage(tx, txnId, data.brokerage === null ? null : asObject(data.brokerage));
+      // 2026-10-08 - an invoice made before the brokerage was known (the bulk import does exactly
+      // that) takes the brokerage as its customer now. Blanks only, unsent only.
+      if (Object.prototype.hasOwnProperty.call(data, 'brokerage')) await this.txnInvoices.fillMissingCustomer(tx, txnId, actor);
 
       await this.syncClientPayment(tx, txnId);
       await this.syncAdjustmentStatuses(tx, txnId);

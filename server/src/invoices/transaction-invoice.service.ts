@@ -116,6 +116,50 @@ export class TransactionInvoiceService {
    *     commission line it wrote. A line somebody added by hand is theirs, and rewriting the whole
    *     invoice from the deal would delete it.
    */
+  /**
+   * 2026-10-08 - A DEAL INVOICE WITH NO CUSTOMER TAKES THE DEAL'S BROKERAGE, ONCE THERE IS ONE.
+   *
+   * A deal invoice is billed to the co-operating brokerage (generate() copies its name, phone,
+   * invoice email and address). The bulk import creates the deal - and so its invoice - BEFORE it
+   * saves the brokerage section, so every imported deal's invoice was born with an empty Bill To:
+   * 494 of them on 2026-10-08, 491 of whose deals had a brokerage by then.
+   *
+   * Only blanks are filled, never an existing customer; only invoices this deal generated
+   * (source 'transaction'), live, and NOT SENT - a document that has gone to somebody is not
+   * changed. Money, status and numbers are not touched, and updated_at is left alone. Each fill is
+   * written to the deal's history. Returns how many invoices were filled.
+   */
+  async fillMissingCustomer(db: Tx, transactionId: number, actor: ActingUser | null): Promise<number> {
+    const brok = await db.brokerages.findFirst({ where: { transaction_id: transactionId } });
+    const name = String(brok?.name ?? '').trim();
+    if (!brok || !name) return 0;
+    const blank = await db.invoices.findMany({
+      where: {
+        transaction_id: transactionId, source: 'transaction', deleted_at: null, sent_at: null,
+        OR: [{ customer_name: null }, { customer_name: '' }],
+      },
+      select: { id: true, invoice_no: true, customer_phone: true, customer_email: true, customer_address: true, customer_country: true },
+    });
+    for (const inv of blank) {
+      await db.invoices.update({
+        where: { id: inv.id },
+        data: {
+          customer_name: name,
+          ...(inv.customer_phone ? {} : { customer_phone: brok.phone ?? null }),
+          ...(inv.customer_email ? {} : { customer_email: brok.invoice_email ?? null }),
+          ...(inv.customer_address ? {} : { customer_address: brok.address ?? null }),
+          ...(inv.customer_country ? {} : { customer_country: 'Canada' }),
+        },
+      });
+      await this.audit.record(transactionId, actor, {
+        section: 'Quick Actions — Invoice', field: `Invoice ${inv.invoice_no} — Customer`, action: 'Updated',
+        source: 'System', old: '', new: name,
+        details: "The invoice had no customer; filled from the deal's co-operating brokerage.",
+      });
+    }
+    return blank.length;
+  }
+
   async refreshFromDeal(db: Tx, transactionId: number, actor: ActingUser | null): Promise<number> {
     const t = await db.transactions.findUnique({
       where: { id: transactionId },
