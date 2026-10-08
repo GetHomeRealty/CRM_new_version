@@ -119,25 +119,24 @@ function readView(): SavedView | null {
 const FORM_COUNTS_HINT = 'Facebook counts every submission. The CRM shows each person once, without deleted leads, '
   + 'test leads, leads older than about 90 days, or leads you cannot see.';
 
-/**
- * THREE DIFFERENT THINGS, which the row used to show as "active" and "Connected" side by side:
- * Meta's own status for the form, whether this CRM imports its leads, and whether any ad is enabled.
- */
-const FORM_STATUS_HINT = "Meta form status is Facebook's own status for this lead form (Active until it is archived in Meta). "
-  + "CRM sync is whether this CRM imports the form's leads; turning it on or off never changes the form on Facebook. "
-  + 'Neither one says anything about ad campaigns — "Ads" beside them is read from Meta\'s ads separately.';
-
-/** The third, separate thing: whether any ad for this form is enabled, read from Meta's ads by form id. */
-const AD_STATUS_HINT = 'Ads is read from Meta\'s ads API (read-only), matched to this form by its id. "Enabled" means Meta '
-  + 'reports the ad as active (its campaign and ad set too), its schedule is current and its ad account is active. It does '
+/** The ad-status badge: whether any ad for this form is enabled, read from Meta's ads by form id. */
+const AD_STATUS_HINT = 'Read from Meta\'s ads API (read-only), matched to this form by its id. "Active" means Meta reports '
+  + 'an ad for this form as active (its campaign and ad set too), its schedule is current and its ad account is active. It does '
   + 'NOT confirm the ad is delivering — budget, bidding, audience or review can still stop impressions; check Ads Manager for '
   + 'delivery. It never comes from the form status, lead counts or CRM sync.';
-/** Said wherever "Enabled" is shown in detail, so it is never read as "getting impressions". */
-const ENABLED_CAVEAT = 'Enabled = Meta status and schedule checks only. It does not confirm actual delivery.';
-const adPill = (s: MetaFormAdStatus['state']): string => (s === 'enabled' ? 'ok' : s === 'unknown' ? 'warn' : '');
+/** Said wherever "Active" is shown in detail, so it is never read as "getting impressions". */
+const ENABLED_CAVEAT = 'Active = Meta status and schedule checks only. It does not confirm actual delivery.';
 
-/** Meta's form status as Meta sends it ("ACTIVE", "ARCHIVED"), worded for reading: "Active", "Archived". */
-const metaFormStatus = (s: string): string => s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
+/**
+ * THE BADGE SAYS ONLY WHAT WAS VERIFIED. Active is an enabled ad; Inactive is a complete result with
+ * ads but none enabled, or with no linked ads at all. Unknown — and a check still loading or failed —
+ * shows NO badge: it is never turned into Inactive, because "we could not tell" is not "it is off".
+ */
+const adBadge = (s: MetaFormAdStatus['state']): { text: string; cls: string } | null => (
+  s === 'enabled' ? { text: 'Active', cls: 'ok' }
+    : s === 'not_enabled' || s === 'no_ads' ? { text: 'Inactive', cls: '' }
+      : null
+);
 
 const pageRank = (name: string): number => {
   const n = name.trim().toLowerCase();
@@ -952,26 +951,31 @@ export default function MetaPage() {
                     {/* Two counts from two places, labelled so they are never read as one. */}
                     <div className="muted" title={FORM_COUNTS_HINT}>
                       {f.leads_count} on Facebook · {f.crm_count ?? 0} in CRM
-                      {/* Meta's value, untouched by CRM sync; nothing is shown when Meta sent none. */}
-                      {f.status && <span title={FORM_STATUS_HINT}> · Meta form: {metaFormStatus(f.status)}</span>}
                     </div>
                   </button>
                   <div className="toolbar-row">
-                    <span className={`pill ${f.is_connected ? 'ok' : ''}`} title={FORM_STATUS_HINT}>
-                      {f.is_connected ? 'CRM sync: On' : 'CRM sync: Off'}
-                    </span>
                     {(() => {
                       const ad = adFor(f.id);
-                      if (!ad) return <span className="pill" data-testid="meta-ad-pill" title={AD_STATUS_HINT}>Ads: {adLoading ? 'Checking…' : '—'}</span>;
+                      if (!ad) return null;   // still checking: no badge until there is a verified answer
+                      const badge = adBadge(ad.state);
                       const hasDetail = ad.ads.length > 0 || !!ad.reason;
                       return (
-                        <button type="button" className={`pill ${adPill(ad.state)}`} data-testid="meta-ad-pill" data-state={ad.state}
-                          title={`${ad.reason ? `${ad.reason}\n\n` : ''}${AD_STATUS_HINT}`}
-                          aria-expanded={hasDetail ? adOpen === f.id : undefined}
-                          onClick={() => hasDetail && setAdOpen((o) => (o === f.id ? null : f.id))}
-                          style={{ cursor: hasDetail ? 'pointer' : 'default', border: 0 }}>
-                          Ads: {ad.summary}{hasDetail ? (adOpen === f.id ? ' ▴' : ' ▾') : ''}
-                        </button>
+                        <>
+                          {badge && (
+                            <span className={`pill ${badge.cls}`} data-testid="meta-ad-badge" data-state={ad.state}
+                              title={`${ad.summary}\n\n${AD_STATUS_HINT}`}>
+                              {badge.text}
+                            </span>
+                          )}
+                          {/* The details — every ad and its reason, or why it could not be verified — stay reachable
+                              even when there is no badge to click. */}
+                          {hasDetail && (
+                            <button type="button" className="btn ghost sm" data-testid="meta-ad-details-toggle"
+                              aria-expanded={adOpen === f.id} onClick={() => setAdOpen((o) => (o === f.id ? null : f.id))}>
+                              Ad details {adOpen === f.id ? '▴' : '▾'}
+                            </button>
+                          )}
+                        </>
                       );
                     })()}
                     {canEdit && (
@@ -1087,7 +1091,7 @@ function AdDetails({ status }: { status: MetaFormAdStatus }) {
                 <td className="muted">{a.account_name}</td>
                 <td>
                   <span className={`pill ${a.enabled ? 'ok' : ''}`} title={a.effective_status ? `Meta effective status: ${a.effective_status}` : undefined}>
-                    {a.label}
+                    {a.enabled ? 'Active' : a.label}
                   </span>
                 </td>
               </tr>
