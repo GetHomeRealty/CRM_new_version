@@ -36,6 +36,10 @@ const AD_STATUS_FIELDS = 'id,name,effective_status,configured_status,'
  */
 const ARCHIVED_ONLY = JSON.stringify(['ARCHIVED']);
 
+/** Lead forms per Graph request, and the most a Page's list may hold before it is reported as too long. */
+const FORMS_PAGE_SIZE = 100;
+const MAX_FORMS_PER_PAGE = 1000;
+
 /** A Graph call that failed, carrying Meta's own message so the UI can show the real cause. */
 export class GraphError extends Error {
   constructor(message: string, readonly status: number, readonly code?: number, readonly subcode?: number) {
@@ -139,9 +143,30 @@ export class MetaGraphService {
     return nested.accounts?.data ?? [];
   }
 
+  /**
+   * EVERY lead form on a Page — following Graph's cursor to the end.
+   *
+   * IT USED TO READ ONE PAGE. `/{page}/leadgen_forms` answers in pages (25 forms by default) and the
+   * cursor was never followed, so a Page with more forms than that lost the rest silently: they were
+   * simply absent from the screen, with nothing saying the list was short.
+   *
+   * ALL OR NOTHING. A page that fails throws, a cursor that repeats or a Page with more forms than
+   * `MAX_FORMS_PER_PAGE` throws too — the screen shows an error rather than a list that looks
+   * complete and is not. A form listed on two pages (cursors can overlap) is listed once.
+   */
   async forms(pageId: string, pageToken: string): Promise<GraphForm[]> {
-    const data = await this.get<{ data?: GraphForm[] }>(`/${pageId}/leadgen_forms`, pageToken, { fields: FORM_FIELDS });
-    return data.data ?? [];
+    const url = new URL(`${graphOrigin()}/${pageId}/leadgen_forms`);
+    url.searchParams.set('fields', FORM_FIELDS);
+    url.searchParams.set('limit', String(FORMS_PAGE_SIZE));
+    const { rows, truncated, repeated } = await this.walk<GraphForm>(url, pageToken, MAX_FORMS_PER_PAGE, `/${pageId}/leadgen_forms`);
+    if (repeated) {
+      throw new GraphError('Meta stopped part-way through the list of lead forms for this Page (its paging repeated), so the list is incomplete. Try again.', 502);
+    }
+    if (truncated) {
+      throw new GraphError(`This Page has more than ${MAX_FORMS_PER_PAGE} lead forms, more than can be listed here. Archive unused forms in Meta, then try again.`, 502);
+    }
+    const seen = new Set<string>();
+    return rows.filter((f) => (f?.id && !seen.has(f.id) ? (seen.add(f.id), true) : false));
   }
 
   /**
@@ -277,13 +302,15 @@ export class MetaGraphService {
   }
 
   /** Follow Graph's `next` cursor until it runs out or `cap` rows are read. Same guard as `walkLeads`. */
-  private async walk<T>(first: URL, token: string, cap: number, label: string): Promise<{ rows: T[]; truncated: boolean }> {
+  private async walk<T>(first: URL, token: string, cap: number, label: string): Promise<{ rows: T[]; truncated: boolean; repeated: boolean }> {
     const out: T[] = [];
     const seen = new Set<string>();
     let next: URL | null = first;
+    let repeated = false;
     while (next && out.length < cap) {
       const href = next.toString();
-      if (seen.has(href)) break;
+      // A cursor pointing back at a page already read: the walk stops, and says it did not finish.
+      if (seen.has(href)) { repeated = true; this.log.warn(`Meta returned a repeating cursor for ${label}; stopping.`); break; }
       seen.add(href);
       const page: { data?: T[]; paging?: { next?: string } } =
         await this.fetchJson(next, `Graph request failed: ${label}`, { Authorization: `Bearer ${token}` });
@@ -291,9 +318,10 @@ export class MetaGraphService {
       out.push(...batch);
       next = batch.length && page.paging?.next ? new URL(page.paging.next) : null;
     }
-    const truncated = out.length >= cap && next !== null;
+    // Not read to the end — whether the ceiling or a repeating cursor stopped it.
+    const truncated = (out.length >= cap && next !== null) || repeated;
     if (out.length > cap) out.length = cap;
-    return { rows: out, truncated };
+    return { rows: out, truncated, repeated };
   }
 
   /**

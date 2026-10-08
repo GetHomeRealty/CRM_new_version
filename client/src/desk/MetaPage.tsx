@@ -250,6 +250,10 @@ export default function MetaPage() {
    * empty `forms`, and only the second means a remembered form can never be restored.
    */
   const [formsLoaded, setFormsLoaded] = useState(false);
+  /** Why the forms could not be listed — shown in place of the list, never as "no forms". */
+  const [formsError, setFormsError] = useState('');
+  /** Bumped by Retry to ask for the forms again. */
+  const [formsReload, setFormsReload] = useState(0);
   /*
    * A form this visit is expected to restore — from the URL, or from what the session remembers.
    * Read once, at mount, because it decides whether the leads request must WAIT for the form list.
@@ -727,14 +731,27 @@ export default function MetaPage() {
      * `metaPages()` returns — pressing Refresh leaves it true, so a form filter already chosen is
      * not cleared out from under the person who chose it.
      */
-    if (!selectedPage || !pagesReady) { setForms([]); return; }
+    if (!selectedPage || !pagesReady) { setForms([]); setFormsError(''); return; }
+    /*
+     * ONLY THE ANSWER FOR THE PAGE STILL SELECTED is used: switching Page while a slow request is out
+     * must not paint the previous Page's forms under the new one. And a failure is SHOWN as a failure —
+     * it used to clear the list and read "No lead forms found on this Page", a statement about the
+     * Page made from a request that never completed.
+     */
+    let live = true;
+    setFormsError('');
     metaForms(selectedPage)
-      .then((r) => setForms(r.forms))
-      .catch((ex) => { setForms([]); toast(apiErrorMessage(ex, 'Could not load lead forms'), 'bad'); })
+      .then((r) => { if (live) setForms(r.forms); })
+      .catch((ex) => {
+        if (!live) return;
+        setForms([]);
+        setFormsError(apiErrorMessage(ex, 'Could not load the lead forms for this Page'));
+      })
       // Success or failure, the waiting is over — a Graph error must not leave the leads list
       // hanging on a restore that is never coming.
-      .finally(() => setFormsLoaded(true));
-  }, [selectedPage, pagesReady, toast]);
+      .finally(() => { if (live) setFormsLoaded(true); });
+    return () => { live = false; };
+  }, [selectedPage, pagesReady, formsReload]);
 
   /*
    * ADVERTISING STATUS, asked for once the forms are on screen and kept apart from everything else
@@ -964,6 +981,13 @@ export default function MetaPage() {
           )}
           {!status?.is_connected ? (
             <p className="help">Connect Meta to choose lead forms.</p>
+          ) : formsError ? (
+            <div className="toolbar-row" data-testid="meta-forms-error" role="alert" style={{ gap: 8, alignItems: 'center' }}>
+              <span className="help bad" style={{ margin: 0 }}>
+                {formsError} No forms are shown rather than an incomplete list.
+              </span>
+              <button className="btn ghost sm" type="button" onClick={() => setFormsReload((n) => n + 1)}>Retry</button>
+            </div>
           ) : forms.length === 0 ? (
             <p className="help">No lead forms found on this Page.</p>
           ) : (
