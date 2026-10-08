@@ -1,5 +1,6 @@
 import { AREAS, AREA_LABEL, type Area } from './area';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import Icon from '../ui/Icon';
 import { getUsers, getUsersCatalog, createUser, updateUser, deleteUser, getUserDealHistory, getAgentLoans, uploadUserPhoto, getOffboarding, type OffboardingChecklist, type OnboardingKind } from '../lib/api';
 import { fileToBase64 } from '../lib/importApi';
@@ -81,19 +82,35 @@ export default function UsersPage() {
    * `admin` renders as "Super Admin" and a person searching for what they can see should find it.
    */
   const [query, setQuery] = useState('');
+  /*
+   * TEAM LEADS ONLY — `?show=team_leads`, which the Dashboard's "Team Lead Users" card opens, so the
+   * list shows the people that card counted. In the URL so a refresh keeps it; cleared from here.
+   * Never for a Team Lead, whose own list holds no Team Leads to show.
+   */
+  const [params, setParams] = useSearchParams();
+  const teamLeadsOnly = !teamLeadMode && params.get('show') === 'team_leads';
+  const clearTeamLeadsOnly = () => setParams((prev) => {
+    const next = new URLSearchParams(prev);
+    next.delete('show');
+    return next;
+  }, { replace: true });
+  const listed = useMemo(
+    () => (teamLeadsOnly ? users.filter((u) => u.role === 'agent' && u.is_team_lead) : users),
+    [users, teamLeadsOnly],
+  );
   const shown = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return users;
+    if (!q) return listed;
     // Every term must match something, so "dana agent" narrows rather than widens.
     const terms = q.split(/\s+/);
-    return users.filter((u) => {
+    return listed.filter((u) => {
       const hay = [
         u.name, u.email, u.username, u.role, userRoleLabel(u), u.status,
         u.department, u.designation,
       ].filter(Boolean).join(' ').toLowerCase();
       return terms.every((t) => hay.includes(t));
     });
-  }, [users, query]);
+  }, [listed, query]);
   const [catalog, setCatalog] = useState<UsersCatalog | null>(null);
   const [loading, setLoading] = useState(true);
   // Team Leads, for the Team Lead column and pickers. A Team Lead's own list holds none, and needs none.
@@ -193,9 +210,14 @@ export default function UsersPage() {
         <span className="pill info" style={{ fontSize: 11 }}>
           {/* Honest about the filter: "12 users" while 109 are hidden reads as the brokerage shrinking. */}
           {query.trim()
-            ? `${shown.length} of ${users.length} ${teamLeadMode ? 'agents in my team' : 'users'}`
-            : `${users.length} ${teamLeadMode ? 'agents in my team' : 'users'}`}
+            ? `${shown.length} of ${listed.length} ${teamLeadMode ? 'agents in my team' : teamLeadsOnly ? 'team leads' : 'users'}`
+            : `${listed.length} ${teamLeadMode ? 'agents in my team' : teamLeadsOnly ? 'team leads' : 'users'}`}
         </span>
+        {teamLeadsOnly && (
+          <button className="btn ghost sm" type="button" onClick={clearTeamLeadsOnly} title="Show every user again">
+            Team Leads only ✕ Show all users
+          </button>
+        )}
         <div className="field" style={{ margin: 0, minWidth: 260 }}>
           <input value={query} onChange={(e) => setQuery(e.target.value)}
             placeholder={teamLeadMode ? 'Search my team by name, email, username or department' : 'Search by name, email, username, role or department'}
@@ -233,7 +255,8 @@ export default function UsersPage() {
               <td colSpan={teamLeadMode ? 5 : 7} className="help" style={{ padding: 16 }}>
                 {query.trim()
                   ? <>No user matches “{query.trim()}”.</>
-                  : (teamLeadMode ? 'No agents in your team yet. Use + Create Agent to add one.' : 'No users yet.')}
+                  : (teamLeadMode ? 'No agents in your team yet. Use + Create Agent to add one.'
+                    : teamLeadsOnly ? 'No Team Leads yet.' : 'No users yet.')}
               </td>
             </tr>
           ) : shown.map((u) => (

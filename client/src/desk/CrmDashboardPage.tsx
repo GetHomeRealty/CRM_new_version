@@ -66,7 +66,7 @@ function CardLink({ title, onOpen, children }: { title: string; onOpen?: () => v
 export default function CrmDashboardPage() {
   const toast = useToast();
   const navigate = useNavigate();
-  const { can } = useAuth();
+  const { can, user } = useAuth();
   const canSeeLeads = can('lead', 'view');
 
   const [data, setData] = useState<CrmDashboard | null>(null);
@@ -335,7 +335,8 @@ export default function CrmDashboardPage() {
       {structure?.scope === 'admin' && (
         <>
           <div className="tiles">
-            <CardLink title="Open Users" onOpen={go('users')}>
+            {/* Opens Users narrowed to Team Leads — the people this card counts, and no one else. */}
+            <CardLink title="Open Team Leads in Users" onOpen={() => navigate(`${areaPath('crm', 'users')}?show=team_leads`)}>
               {/* Not "Total Team Leads": that card above counts LEADS a team owns. This counts people. */}
               <Tile label="Team Lead Users" value={structure.team_leads.total}
                 sub={<Breakdown parts={[
@@ -351,33 +352,21 @@ export default function CrmDashboardPage() {
                 ]} />} />
             </CardLink>
           </div>
-          {structure.teams.length > 0 && (
-            <div className="card">
-              <div className="card-h"><h3 style={{ margin: 0 }}>Agents by Team Lead</h3></div>
-              <table className="list-table">
-                <thead><tr><th>Team Lead</th><th>Status</th><th>Agents</th><th>Active</th><th>Inactive</th></tr></thead>
-                <tbody>
-                  {structure.teams.map((t) => (
-                    <tr key={t.team_lead_id ?? 'none'}>
-                      <td>{t.team_lead_name ?? <span className="muted">No Team Lead</span>}</td>
-                      <td>{t.team_lead_status
-                        ? <span className={`pill ${t.team_lead_status === 'Active' ? 'ok' : 'bad'}`}>{t.team_lead_status}</span>
-                        : <span className="muted">—</span>}</td>
-                      <td>{t.agents.total}</td>
-                      <td>{t.agents.active}</td>
-                      <td>{t.agents.inactive}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
         </>
       )}
 
       {structure?.scope === 'team_lead' && (
         <>
           <div className="tiles">
+            {/* The Team Lead's own card: who leads this team, and the team at a glance. */}
+            <CardLink title="Open my team in Users" onOpen={go('users')}>
+              <Tile label="Team Lead" value={<span style={{ fontSize: 20 }}>{user?.name ?? 'You'}</span>}
+                sub={<Breakdown parts={[
+                  { n: structure.agents.total, label: structure.agents.total === 1 ? 'agent' : 'agents' },
+                  { n: structure.agents.active, label: 'active', tone: 'ok' },
+                  { n: structure.agents.inactive, label: 'inactive', tone: 'bad' },
+                ]} />} />
+            </CardLink>
             <CardLink title="Open my team in Users" onOpen={go('users')}>
               <Tile label="Total Agents in My Team" value={structure.agents.total}
                 sub={<span className="tile-breakdown"><span className="tile-part">agents reporting to you</span></span>} />
