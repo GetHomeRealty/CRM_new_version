@@ -254,6 +254,12 @@ export default function MetaPage() {
   const [formsError, setFormsError] = useState('');
   /** Bumped by Retry to ask for the forms again. */
   const [formsReload, setFormsReload] = useState(0);
+  /**
+   * "Search lead forms…" — narrows the CARDS ON SCREEN only. It never changes which form is selected,
+   * the lead list, or what is fetched (every form is still read and counted); a different Page clears it.
+   */
+  const [formSearch, setFormSearch] = useState('');
+  useEffect(() => { setFormSearch(''); }, [selectedPage]);
   /*
    * A form this visit is expected to restore — from the URL, or from what the session remembers.
    * Read once, at mount, because it decides whether the leads request must WAIT for the form list.
@@ -839,6 +845,8 @@ export default function MetaPage() {
   }
 
   const connectedForms = forms.filter((f) => f.is_connected).length;
+  const searchText = formSearch.trim().toLowerCase();
+  const shownForms = searchText ? forms.filter((f) => f.name.toLowerCase().includes(searchText)) : forms;
 
   return (
     // `display: contents` adds no box, so the layout is exactly as before; only visibility changes.
@@ -915,8 +923,8 @@ export default function MetaPage() {
         <Stat label="This week" value={leadStats.week} />
       </div>
 
-      <div className="g2">
-        <div className="card">
+      {/* Connection and Pages first, full width; Lead Forms below it, full width. */}
+      <div className="card">
           <div className="modal-sub">Connection</div>
           {!status?.is_connected ? (
             <>
@@ -963,9 +971,9 @@ export default function MetaPage() {
               )}
             </>
           )}
-        </div>
+      </div>
 
-        <div className="card">
+      <div className="card">
           <div className="modal-sub">Lead Forms{status?.is_connected ? ` (${connectedForms} connected)` : ''}</div>
           {status?.is_connected && forms.length > 0 && (
             <div className="toolbar-row" data-testid="meta-ad-status-bar" style={{ gap: 8, margin: '0 0 8px', alignItems: 'center' }}>
@@ -991,10 +999,31 @@ export default function MetaPage() {
           ) : forms.length === 0 ? (
             <p className="help">No lead forms found on this Page.</p>
           ) : (
-            <ul className="meta-forms">
-              {forms.map((f) => (
+            <>
+            <div className="toolbar-row" style={{ gap: 8, margin: '0 0 10px', alignItems: 'center', flexWrap: 'wrap' }}>
+              <div className="field" style={{ margin: 0, minWidth: 260, flex: '0 1 360px' }}>
+                <input type="search" value={formSearch} onChange={(e) => setFormSearch(e.target.value)}
+                  placeholder="Search lead forms…" aria-label="Search lead forms" data-testid="meta-form-search"
+                  style={{ width: '100%' }} />
+              </div>
+              {formSearch && (
+                <button className="btn ghost sm" type="button" onClick={() => setFormSearch('')}>Clear</button>
+              )}
+              <span className="help" style={{ margin: 0 }} data-testid="meta-form-count">
+                Showing {shownForms.length} of {forms.length} forms
+              </span>
+            </div>
+            {shownForms.length === 0 ? (
+              <p className="help" data-testid="meta-form-no-match">No matching forms</p>
+            ) : (
+            // The shared three-up grid: three across on a desktop, two on a tablet, one on a phone.
+            <ul className="meta-forms g3">
+              {shownForms.map((f) => (
                 <li key={f.id}
-                  style={formFilter?.id === f.id ? { borderColor: 'var(--accent)', boxShadow: 'inset 3px 0 0 var(--accent)' } : undefined}>
+                  style={{
+                    margin: 0, alignContent: 'flex-start', minWidth: 0,
+                    ...(formFilter?.id === f.id ? { borderColor: 'var(--accent)', boxShadow: 'inset 3px 0 0 var(--accent)' } : {}),
+                  }}>
                   {/* The name and counts are the button, not the whole row: Connect/Disconnect
                       beside it keeps its own job, so pressing it never also filters the list. */}
                   <button type="button" onClick={() => showForm(f)} aria-pressed={formFilter?.id === f.id}
@@ -1041,12 +1070,13 @@ export default function MetaPage() {
                 </li>
               ))}
             </ul>
+            )}
+            </>
           )}
           <p className="help">
             Click a form to see its leads below. Only connected forms are read. Leads also arrive instantly by webhook once the
             subscription is configured in Meta.
           </p>
-        </div>
       </div>
 
       <div className="card" ref={leadsRef}>
@@ -1130,7 +1160,7 @@ export default function MetaPage() {
 /** Every ad using a form, each with its own status from Meta; or why the answer is Unknown. */
 function AdDetails({ status }: { status: MetaFormAdStatus }) {
   return (
-    <div data-testid="meta-ad-details" style={{ flexBasis: '100%', fontSize: 12 }}>
+    <div data-testid="meta-ad-details" style={{ flexBasis: '100%', fontSize: 12, minWidth: 0, overflowX: 'auto' }}>
       {status.reason && <p className="help" style={{ margin: '0 0 6px' }}>{status.reason}</p>}
       {status.ads.length > 0 && <p className="help" data-testid="meta-ad-caveat" style={{ margin: '0 0 6px' }}>{ENABLED_CAVEAT}</p>}
       {status.ads.length > 0 && (
