@@ -11,6 +11,7 @@ import { RecruitmentAgentService } from './recruitment-agent.service';
 import { RecruitmentSmsService } from './recruitment-sms.service';
 import { RecruitmentEmailService } from './recruitment-email.service';
 import { RecruitmentEmailDraftService } from './recruitment-email-draft.service';
+import { RecruitmentImportService } from './recruitment-import.service';
 import { RecruitmentNoAgentsGuard } from './recruitment-no-agents.guard';
 import { CANDIDATE_STATUSES, INTERVIEW_STATUSES, allowedNext, isCandidateStatus } from './recruitment.status';
 
@@ -38,6 +39,7 @@ export class RecruitmentController {
     private readonly sms: RecruitmentSmsService,
     private readonly email: RecruitmentEmailService,
     private readonly drafts: RecruitmentEmailDraftService,
+    private readonly importer: RecruitmentImportService,
   ) {}
 
   /** The vocabulary, so the client never hardcodes a status or guesses what follows one. */
@@ -94,6 +96,33 @@ export class RecruitmentController {
   @Screen('recruitment', 'view')
   show(@CurrentUser() user: AuthUserRecord, @Param('id', ParseIntPipe) id: number): Promise<Record<string, unknown>> {
     return this.recruitment.show(user, id);
+  }
+
+  /*
+   * BULK IMPORT — template, preview, import. Same permission as Add Candidate (Recruitment: edit), and
+   * agents are refused by the guard on this controller. Preview writes nothing; import re-checks
+   * everything and creates only valid, non-duplicate rows. Declared before `candidates/:id` routes.
+   */
+  @Get('candidates/import/template')
+  @Screen('recruitment', 'edit')
+  importTemplate(): Promise<Record<string, unknown>> {
+    return this.importer.template();
+  }
+
+  @Post('candidates/import/preview')
+  @HttpCode(200)
+  @Throttle({ default: { ttl: 60_000, limit: 20 } })
+  @Screen('recruitment', 'edit')
+  importPreview(@CurrentUser() user: AuthUserRecord, @Body() body: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return this.importer.preview(user, body ?? {});
+  }
+
+  @Post('candidates/import')
+  @HttpCode(200)
+  @Throttle({ default: { ttl: 60_000, limit: 10 } })
+  @Screen('recruitment', 'edit')
+  importCandidates(@CurrentUser() user: AuthUserRecord, @Body() body: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return this.importer.import(user, body ?? {});
   }
 
   @Post('candidates')

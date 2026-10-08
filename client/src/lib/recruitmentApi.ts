@@ -138,6 +138,29 @@ export const previewCandidateEmail = (
   api.post(`/api/recruitment/candidates/${id}/email/preview`, body).then((r) => r.data);
 
 /** `contacted` is true when this send moved the candidate from New to Contacted. */
+/* ------------------------------------------------------------------ bulk import */
+
+export interface ImportPreviewRow {
+  row: number; name: string; email: string; phone: string; source: string; recruiter_email: string; note: string;
+  status: 'valid' | 'duplicate' | 'error';
+  reasons: string[];
+}
+export interface ImportPreview { rows: ImportPreviewRow[]; counts: { total: number; valid: number; duplicate: number; error: number } }
+export interface ImportResult {
+  added: number; skipped: number; failed: number;
+  results: { row: number; name: string; email: string; outcome: 'added' | 'skipped' | 'failed'; reason: string; candidate_id: number | null }[];
+}
+type ImportFile = { filename: string; content_base64: string };
+
+export const importTemplate = (): Promise<ImportFile> =>
+  api.get<ImportFile>('/api/recruitment/candidates/import/template').then((r) => r.data);
+/** Checks the file; saves nothing. */
+export const previewCandidateImport = (file: ImportFile): Promise<ImportPreview> =>
+  api.post<ImportPreview>('/api/recruitment/candidates/import/preview', file).then((r) => r.data);
+/** Re-checks the file and creates the valid, non-duplicate rows. */
+export const importCandidates = (file: ImportFile): Promise<ImportResult> =>
+  api.post<ImportResult>('/api/recruitment/candidates/import', file).then((r) => r.data);
+
 /** What an AI draft is for. `custom` needs instructions. */
 export type EmailDraftPurpose = 'introduction' | 'follow_up' | 'interview_invitation' | 'document_request' | 'custom';
 

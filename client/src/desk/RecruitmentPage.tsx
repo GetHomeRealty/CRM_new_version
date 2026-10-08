@@ -7,6 +7,7 @@ import {
 import { apiErrorMessage } from '../lib/apiError';
 import RecruitmentSendMail from './RecruitmentSendMail';
 import RecruitmentAddNote from './RecruitmentAddNote';
+import RecruitmentImport from './RecruitmentImport';
 import { useToast } from './toast';
 import { useAuth } from '../context/AuthContext';
 import {
@@ -269,6 +270,8 @@ export default function RecruitmentPage() {
   const [mailing, setMailing] = useState<number | null>(null);
 
   const [adding, setAdding] = useState(false);
+  /** The bulk import modal. */
+  const [importing, setImporting] = useState(false);
   const [form, setForm] = useState(BLANK_CANDIDATE);
 
   const add = async () => {
@@ -360,7 +363,10 @@ export default function RecruitmentPage() {
             </p>
           </div>
           {canEdit && (
-            <button className="btn primary" type="button" onClick={() => setAdding(true)}>+ Add Candidate</button>
+            <div className="toolbar-row" style={{ gap: 8 }}>
+              <button className="btn ghost" type="button" onClick={() => setImporting(true)}>Import Excel</button>
+              <button className="btn primary" type="button" onClick={() => setAdding(true)}>+ Add Candidate</button>
+            </div>
           )}
         </div>
       </div>
@@ -854,6 +860,11 @@ export default function RecruitmentPage() {
         // A send can move a New candidate to Contacted, so the list and the counts are re-read in
         // place — same filters, same page, no reload.
         <RecruitmentSendMail candidateId={mailing} onClose={() => setMailing(null)} onSent={() => void load()} />
+      )}
+
+      {importing && (
+        // After an import the list and the summary counts are re-read in place — same filters, same page.
+        <RecruitmentImport onClose={() => setImporting(false)} onImported={() => void load()} />
       )}
 
       {noting !== null && (
