@@ -65,6 +65,12 @@ export default function RecruitmentPage() {
   const canEdit = can('recruitment', 'edit');
   /** The candidate whose notes the Add Note modal is open for, from an Interviews or follow-up row. */
   const [noting, setNoting] = useState<{ id: number; name: string } | null>(null);
+  /** Set when a note was added, edited or deleted in the modal, so closing it refreshes the Latest Note column. */
+  const notesChanged = useRef(false);
+  const closeNotes = () => {
+    setNoting(null);
+    if (notesChanged.current) { notesChanged.current = false; void load(); }
+  };
   /** Approval and account creation. `recruitment.decide` is admin and manager — Super Admin and Admin. */
   const canDecide = isAdminOrAbove;
 
@@ -453,7 +459,7 @@ export default function RecruitmentPage() {
                 <thead>
                   <tr>
                     <th>Name</th><th>Contact</th><th>Recruiter</th><th>Status</th>
-                    <th>Source</th><th>Added</th><th></th>
+                    <th>Latest Note</th><th>Source</th><th>Added</th><th></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -484,6 +490,25 @@ export default function RecruitmentPage() {
                         {c.recommendation && !c.approved_at && (
                           <div className="muted">Recommended: {statusLabel(c.recommendation)}</div>
                         )}
+                      </td>
+                      {/*
+                        * THE NEWEST NOTE, previewed — by when it was written, so an edit never reorders it.
+                        * Delivered with the list itself (one query for the page), so no row asks separately.
+                        */}
+                      <td data-testid="latest-note" style={{ maxWidth: 260 }}>
+                        {c.latest_note ? (
+                          <>
+                            <div style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
+                              {c.latest_note.preview}{c.latest_note.truncated ? '…' : ''}
+                            </div>
+                            <div className="muted">
+                              {c.latest_note.author || 'Someone'} · {c.latest_note.created_at ? date(c.latest_note.created_at) : '—'}
+                            </div>
+                            <button className="btn ghost sm" type="button" onClick={() => setNoting({ id: c.id, name: c.name })}>
+                              View notes
+                            </button>
+                          </>
+                        ) : '—'}
                       </td>
                       <td>{c.source ? sourceLabel(c.source) : <span className="muted">Not recorded</span>}</td>
                       <td>{date(c.created_at)}</td>
@@ -833,7 +858,8 @@ export default function RecruitmentPage() {
 
       {noting !== null && (
         // Nothing on the Interviews tab is re-read after a note: a note changes no status, count or row.
-        <RecruitmentAddNote candidateId={noting.id} candidateName={noting.name} onClose={() => setNoting(null)} />
+        <RecruitmentAddNote candidateId={noting.id} candidateName={noting.name} canEdit={canEdit}
+          onChanged={() => { notesChanged.current = true; }} onClose={closeNotes} />
       )}
     </>
   );

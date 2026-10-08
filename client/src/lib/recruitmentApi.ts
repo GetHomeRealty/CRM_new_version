@@ -85,6 +85,13 @@ export const recommendCandidate = (id: number, recommendation: Recommendation): 
 export const addCandidateNote = (id: number, body: string): Promise<{ data: CandidateNote }> =>
   api.post(`/api/recruitment/candidates/${id}/notes`, { body }).then((r) => r.data);
 
+/** Change a note's text; its author and creation time stay. */
+export const updateCandidateNote = (id: number, noteId: number, body: string): Promise<{ data: CandidateNote }> =>
+  api.put(`/api/recruitment/candidates/${id}/notes/${noteId}`, { body }).then((r) => r.data);
+
+export const deleteCandidateNote = (id: number, noteId: number): Promise<{ deleted: boolean }> =>
+  api.delete(`/api/recruitment/candidates/${id}/notes/${noteId}`).then((r) => r.data);
+
 export const addFollowup = (id: number, body: { title: string; due_at: string }): Promise<{ data: Followup }> =>
   api.post(`/api/recruitment/candidates/${id}/followups`, body).then((r) => r.data);
 

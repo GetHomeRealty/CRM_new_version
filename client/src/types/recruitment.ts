@@ -56,6 +56,16 @@ export interface RecruitmentPerson {
   role: string;
 }
 
+/** The newest note on a candidate, as the Candidates list previews it. */
+export interface LatestNote {
+  id: number;
+  preview: string;
+  /** The note is longer than the preview; the full text is in the notes modal. */
+  truncated: boolean;
+  author: string | null;
+  created_at: string | null;
+}
+
 export interface Candidate {
   id: number;
   name: string;
@@ -74,6 +84,8 @@ export interface Candidate {
   /** Set only once an administrator created the account. Null means no account exists. */
   agent_user_id: number | null;
   activated_at: string | null;
+  /** Present on the list endpoint: the newest note by creation time, or null when there is none. */
+  latest_note?: LatestNote | null;
   /*
    * Experience and licence. Every one nullable, and null means NOT ASKED rather than "no" — see
    * `yesNoUnknown`, which is how the screen says the difference.

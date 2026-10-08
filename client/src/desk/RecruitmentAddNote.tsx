@@ -1,10 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { addCandidateNote, getCandidate } from '../lib/recruitmentApi';
 import { apiErrorMessage } from '../lib/apiError';
 import { useToast } from './toast';
+import RecruitmentNoteItem from './RecruitmentNoteItem';
 import type { CandidateNote } from '../types/recruitment';
-
-const dateTime = (v: string | null): string => (v ? new Date(v).toLocaleString() : '—');
 
 /**
  * ADD NOTE, from a row on the Interviews tab — the candidate's own notes, without leaving the list.
@@ -19,11 +18,15 @@ const dateTime = (v: string | null): string => (v ? new Date(v).toLocaleString()
  * the button is only offered to people who hold that permission.
  */
 export default function RecruitmentAddNote({
-  candidateId, candidateName, onClose,
+  candidateId, candidateName, onClose, canEdit = true, onChanged,
 }: {
   candidateId: number;
   candidateName: string;
   onClose: () => void;
+  /** False for view-only: the notes are shown to read, with no add, edit or delete. */
+  canEdit?: boolean;
+  /** Called after any note is added, edited or deleted, so a list showing a preview can refresh it. */
+  onChanged?: () => void;
 }) {
   const toast = useToast();
   const [notes, setNotes] = useState<CandidateNote[] | null>(null);
@@ -31,13 +34,17 @@ export default function RecruitmentAddNote({
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
-    let live = true;
-    getCandidate(candidateId)
-      .then((d) => { if (live) { setNotes(d.notes); setLoadError(''); } })
-      .catch((ex) => { if (live) setLoadError(apiErrorMessage(ex, 'Could not load this candidate\'s notes')); });
-    return () => { live = false; };
+  const loadNotes = useCallback(async () => {
+    try {
+      const d = await getCandidate(candidateId);
+      setNotes(d.notes);
+      setLoadError('');
+    } catch (ex) {
+      setLoadError(apiErrorMessage(ex, 'Could not load this candidate\'s notes'));
+    }
   }, [candidateId]);
+  useEffect(() => { void loadNotes(); }, [loadNotes]);
+  const changed = async () => { onChanged?.(); await loadNotes(); };
 
   const body = text.trim();
   const save = async () => {
@@ -46,6 +53,7 @@ export default function RecruitmentAddNote({
     try {
       await addCandidateNote(candidateId, body);
       toast('Note added.', 'ok');
+      onChanged?.();
       onClose();
     } catch (ex) {
       // Stays open with the text intact, so nothing typed is lost to a failed save.
@@ -59,24 +67,32 @@ export default function RecruitmentAddNote({
     <div className="overlay open" onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}>
       <div className="modal" role="dialog" aria-modal="true" aria-labelledby="recruitment-add-note-title">
         <button className="close" type="button" onClick={onClose} disabled={busy} aria-label="Close">✕</button>
-        <div className="modal-h" id="recruitment-add-note-title">Add note</div>
+        <div className="modal-h" id="recruitment-add-note-title">{canEdit ? 'Add note' : 'Notes'}</div>
         <p className="help" style={{ marginTop: 0 }}>
           Candidate: <strong data-testid="add-note-candidate">{candidateName}</strong>
         </p>
 
-        <div className="field">
-          <label htmlFor="recruitment-add-note-text">Note <span className="muted">(required)</span></label>
-          <textarea id="recruitment-add-note-text" rows={5} value={text} required autoFocus
-            placeholder="Interest, availability, how the follow-up went…"
-            onChange={(e) => setText(e.target.value)} />
-        </div>
-        <div className="toolbar-row" style={{ justifyContent: 'flex-end', gap: 8 }}>
-          <button className="btn ghost" type="button" onClick={onClose} disabled={busy}>Cancel</button>
-          <button className="btn primary" type="button" disabled={!body || busy || !!loadError}
-            title={!body ? 'Write a note first' : undefined} onClick={() => void save()}>
-            {busy ? 'Saving…' : 'Save'}
-          </button>
-        </div>
+        {canEdit ? (
+          <>
+            <div className="field">
+              <label htmlFor="recruitment-add-note-text">Note <span className="muted">(required)</span></label>
+              <textarea id="recruitment-add-note-text" rows={5} value={text} required autoFocus
+                placeholder="Interest, availability, how the follow-up went…"
+                onChange={(e) => setText(e.target.value)} />
+            </div>
+            <div className="toolbar-row" style={{ justifyContent: 'flex-end', gap: 8 }}>
+              <button className="btn ghost" type="button" onClick={onClose} disabled={busy}>Cancel</button>
+              <button className="btn primary" type="button" disabled={!body || busy || !!loadError}
+                title={!body ? 'Write a note first' : undefined} onClick={() => void save()}>
+                {busy ? 'Saving…' : 'Save'}
+              </button>
+            </div>
+          </>
+        ) : (
+          <div className="toolbar-row" style={{ justifyContent: 'flex-end' }}>
+            <button className="btn ghost" type="button" onClick={onClose}>Close</button>
+          </div>
+        )}
 
         <div className="modal-sub" style={{ marginTop: 12 }}>Notes</div>
         <div data-testid="add-note-history" style={{ maxHeight: 260, overflowY: 'auto' }}>
@@ -87,10 +103,7 @@ export default function RecruitmentAddNote({
           ) : notes.length === 0 ? (
             <p className="help">No notes yet.</p>
           ) : notes.map((n) => (
-            <div key={n.id} data-note-id={n.id} style={{ marginBottom: 8 }}>
-              <div style={{ whiteSpace: 'pre-wrap' }}>{n.body}</div>
-              <div className="muted">{n.author || 'Someone'} · {dateTime(n.created_at)}</div>
-            </div>
+            <RecruitmentNoteItem key={n.id} candidateId={candidateId} note={n} canEdit={canEdit} onChanged={changed} />
           ))}
         </div>
       </div>

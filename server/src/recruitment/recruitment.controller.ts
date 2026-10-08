@@ -304,6 +304,28 @@ export class RecruitmentController {
     return this.recruitment.addNote(user, id, body);
   }
 
+  /** Edit or delete one saved note — Recruitment: edit, the candidate's scope, and the note must be theirs. */
+  @Put('candidates/:id/notes/:noteId')
+  @Screen('recruitment', 'edit')
+  updateNote(
+    @CurrentUser() user: AuthUserRecord,
+    @Param('id', ParseIntPipe) id: number,
+    @Param('noteId', ParseIntPipe) noteId: number,
+    @Body() body: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    return this.recruitment.updateNote(user, id, noteId, body ?? {});
+  }
+
+  @Delete('candidates/:id/notes/:noteId')
+  @Screen('recruitment', 'edit')
+  deleteNote(
+    @CurrentUser() user: AuthUserRecord,
+    @Param('id', ParseIntPipe) id: number,
+    @Param('noteId', ParseIntPipe) noteId: number,
+  ): Promise<Record<string, unknown>> {
+    return this.recruitment.deleteNote(user, id, noteId);
+  }
+
   @Post('candidates/:id/followups')
   @HttpCode(200)
   @Screen('recruitment', 'edit')

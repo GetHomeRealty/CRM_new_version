@@ -1,5 +1,5 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import type { Prisma } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { RecruitmentInterviewNotifyService } from './recruitment-interview-notify.service';
 import type { AuthUserRecord } from '../auth/auth.types';
@@ -10,6 +10,8 @@ import {
 } from './recruitment.status';
 
 const str = (v: unknown): string => String(v ?? '').trim();
+/** Characters of the newest note shown in the Candidates list; the full text is read in the notes modal. */
+const NOTE_PREVIEW = 140;
 
 /**
  * The filter keys for the two "nobody" rows in Reports. Sentinels rather than empty strings, so
@@ -368,11 +370,13 @@ export class RecruitmentService {
       take: perPage,
     });
     const names = await this.namesFor(rows.map((r) => r.assigned_recruiter_id));
+    const latest = await this.latestNotes(rows.map((r) => r.id));
     return {
       data: rows.map((r) => ({
         ...r,
         // Null when unassigned, so the screen can say "Unassigned" rather than inventing a name.
         assigned_recruiter_name: r.assigned_recruiter_id ? (names.get(r.assigned_recruiter_id) ?? null) : null,
+        latest_note: latest.get(r.id) ?? null,
       })),
       total,
       page,
@@ -767,6 +771,72 @@ export class RecruitmentService {
     });
     await this.event(this.prisma, id, 'note', 'Note added.', user);
     return { data: row };
+  }
+
+  /**
+   * THE NEWEST NOTE OF EACH CANDIDATE ON A PAGE — one query for the whole page, never one per row.
+   *
+   * Newest by when the note was WRITTEN (`created_at`, then `id` for two in the same second), so
+   * editing a note never moves it, and deleting the newest leaves the next one in its place. Only a
+   * preview travels with the list; the full text is read where the notes are opened.
+   */
+  private async latestNotes(candidateIds: number[]): Promise<Map<number, {
+    id: number; preview: string; truncated: boolean; author: string | null; created_at: Date | null;
+  }>> {
+    if (!candidateIds.length) return new Map();
+    const rows = await this.prisma.$queryRaw<{
+      id: number; candidate_id: number; preview: string; full_length: number; author: string | null; created_at: Date | null;
+    }[]>`
+      SELECT DISTINCT ON (candidate_id)
+        id, candidate_id, LEFT(body, ${NOTE_PREVIEW}::int) AS preview, LENGTH(body)::int AS full_length, author, created_at
+      FROM recruitment_notes
+      WHERE candidate_id IN (${Prisma.join(candidateIds)})
+      ORDER BY candidate_id, created_at DESC NULLS LAST, id DESC
+    `;
+    return new Map(rows.map((r) => [r.candidate_id, {
+      id: r.id, preview: r.preview, truncated: r.full_length > NOTE_PREVIEW, author: r.author, created_at: r.created_at,
+    }]));
+  }
+
+  /** The note, only if it is this candidate's. Someone else's note id answers exactly like a missing one. */
+  private async noteOf(candidateId: number, noteId: number) {
+    const note = await this.prisma.recruitment_notes.findFirst({ where: { id: noteId, candidate_id: candidateId } });
+    if (!note) throw new NotFoundException({ message: 'Note not found.' });
+    return note;
+  }
+
+  /** "written by Sam on 2026-10-08" — so the history says WHICH note, in words a reader recognises. */
+  private noteLabel(note: { author: string | null; created_at: Date | null }): string {
+    return `written by ${note.author || 'someone'}${note.created_at ? ` on ${note.created_at.toISOString().slice(0, 10)}` : ''}`;
+  }
+
+  /**
+   * Change a note's TEXT. Its author and the time it was written stay as they were — the note is still
+   * theirs, from then — and the edit itself is recorded in the candidate's history with who made it.
+   */
+  async updateNote(user: AuthUserRecord, id: number, noteId: number, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+    await this.mine(user, id);
+    const note = await this.noteOf(id, noteId);
+    const text = str(body.body);
+    if (!text) throw new BadRequestException({ message: 'A note needs something in it.' });
+    if (text === note.body) return { data: note };
+    const row = await this.prisma.$transaction(async (tx) => {
+      const updated = await tx.recruitment_notes.update({ where: { id: note.id }, data: { body: text } });
+      await this.event(tx, id, 'note', `Note edited (${this.noteLabel(note)}).`, user);
+      return updated;
+    });
+    return { data: row };
+  }
+
+  /** Remove a note, recording in the candidate's history which note it was and who removed it. */
+  async deleteNote(user: AuthUserRecord, id: number, noteId: number): Promise<Record<string, unknown>> {
+    await this.mine(user, id);
+    const note = await this.noteOf(id, noteId);
+    await this.prisma.$transaction(async (tx) => {
+      await tx.recruitment_notes.delete({ where: { id: note.id } });
+      await this.event(tx, id, 'note', `Note deleted (${this.noteLabel(note)}).`, user);
+    });
+    return { deleted: true };
   }
 
   async addFollowup(user: AuthUserRecord, id: number, body: Record<string, unknown>): Promise<Record<string, unknown>> {

@@ -14,6 +14,7 @@ import { candidateEmails, setSmsConsent } from '../lib/recruitmentApi';
 import { useToast } from './toast';
 import { useAuth } from '../context/AuthContext';
 import ConfirmDialog, { useConfirm } from './ConfirmDialog';
+import RecruitmentNoteItem from './RecruitmentNoteItem';
 import { statusLabel, statusPill } from './RecruitmentPage';
 import { availabilityLabel, yesNoUnknown } from '../types/recruitment';
 import type {
@@ -723,10 +724,8 @@ export default function RecruitmentCandidatePage() {
             <div className="modal-sub">Notes</div>
             {data.notes.length === 0 && <p className="help">No notes yet.</p>}
             {data.notes.map((n) => (
-              <div key={n.id} style={{ marginBottom: 8 }}>
-                <div style={{ whiteSpace: 'pre-wrap' }}>{n.body}</div>
-                <div className="muted">{n.author || 'Someone'} · {dateTime(n.created_at)}</div>
-              </div>
+              // Edit and Delete beside each saved note; re-reads the page after a change, like every other panel.
+              <RecruitmentNoteItem key={n.id} candidateId={c.id} note={n} canEdit={canEdit} onChanged={load} />
             ))}
             {canEdit && (
               <>
