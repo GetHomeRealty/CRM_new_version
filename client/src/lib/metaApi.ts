@@ -1,10 +1,19 @@
 import api from './axios';
 import type {
-  MetaAdAccount, MetaDefaultPageResponse, MetaDiagnostics, MetaForm, MetaLeadsResponse, MetaPage,
+  MetaAdAccount, MetaAdStatusResponse, MetaDefaultPageResponse, MetaDiagnostics, MetaForm, MetaLeadsResponse, MetaPage,
   MetaStatus, MetaSyncResult, MetaSyncRun, MetaWebhookHealth,
 } from '../types';
 
 /** Meta API. No endpoint here ever returns an access token — those stay on the server. */
+
+/**
+ * Advertising status of the given lead forms — read-only on the server. `refresh` re-reads Meta
+ * instead of using the last check.
+ */
+export const metaAdStatus = (formIds: string[], refresh = false): Promise<MetaAdStatusResponse> =>
+  api.get<MetaAdStatusResponse>('/api/meta/ad-status', {
+    params: { form_ids: formIds.join(','), refresh: refresh ? '1' : undefined },
+  }).then((r) => r.data);
 
 export const metaStatus = (): Promise<MetaStatus> =>
   api.get<MetaStatus>('/api/meta/status').then((r) => r.data);

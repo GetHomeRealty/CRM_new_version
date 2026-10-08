@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { createLatest, shouldFetchLeads } from './metaLeadsRequest';
 import {
-  disconnectMeta, metaAuthUrl, metaDiagnostics, metaForms, metaLeads, metaPages, metaStatus,
+  disconnectMeta, metaAdStatus, metaAuthUrl, metaDiagnostics, metaForms, metaLeads, metaPages, metaStatus,
   metaWebhookHealth, refreshMetaPages, setMetaDefaultPage, syncMetaLeads, toggleMetaForm,
 } from '../lib/metaApi';
 import { apiErrorMessage } from '../lib/apiError';
@@ -11,7 +11,8 @@ import { useToast } from './toast';
 import { useAuth } from '../context/AuthContext';
 import ConfirmDialog, { useConfirm } from './ConfirmDialog';
 import type {
-  MetaDiagnostics, MetaForm, MetaLeadRow, MetaPage as MetaPageInfo, MetaStatus, MetaWebhookHealth,
+  MetaAdStatusResponse, MetaDiagnostics, MetaForm, MetaFormAdStatus, MetaLeadRow, MetaPage as MetaPageInfo, MetaStatus,
+  MetaWebhookHealth,
 } from '../types';
 
 /** What each `meta_error` code from the OAuth callback means to a person. */
@@ -120,11 +121,20 @@ const FORM_COUNTS_HINT = 'Facebook counts every submission. The CRM shows each p
 
 /**
  * THREE DIFFERENT THINGS, which the row used to show as "active" and "Connected" side by side:
- * Meta's own status for the form, whether this CRM imports its leads, and whether any ad is running.
+ * Meta's own status for the form, whether this CRM imports its leads, and whether any ad is enabled.
  */
 const FORM_STATUS_HINT = "Meta form status is Facebook's own status for this lead form (Active until it is archived in Meta). "
   + "CRM sync is whether this CRM imports the form's leads; turning it on or off never changes the form on Facebook. "
-  + 'Neither one says whether an ad campaign is running — that is set in Meta Ads Manager.';
+  + 'Neither one says anything about ad campaigns — "Ads" beside them is read from Meta\'s ads separately.';
+
+/** The third, separate thing: whether any ad for this form is enabled, read from Meta's ads by form id. */
+const AD_STATUS_HINT = 'Ads is read from Meta\'s ads API (read-only), matched to this form by its id. "Enabled" means Meta '
+  + 'reports the ad as active (its campaign and ad set too), its schedule is current and its ad account is active. It does '
+  + 'NOT confirm the ad is delivering — budget, bidding, audience or review can still stop impressions; check Ads Manager for '
+  + 'delivery. It never comes from the form status, lead counts or CRM sync.';
+/** Said wherever "Enabled" is shown in detail, so it is never read as "getting impressions". */
+const ENABLED_CAVEAT = 'Enabled = Meta status and schedule checks only. It does not confirm actual delivery.';
+const adPill = (s: MetaFormAdStatus['state']): string => (s === 'enabled' ? 'ok' : s === 'unknown' ? 'warn' : '');
 
 /** Meta's form status as Meta sends it ("ACTIVE", "ARCHIVED"), worded for reading: "Active", "Archived". */
 const metaFormStatus = (s: string): string => s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
@@ -706,6 +716,40 @@ export default function MetaPage() {
       .finally(() => setFormsLoaded(true));
   }, [selectedPage, pagesReady, toast]);
 
+  /*
+   * ADVERTISING STATUS, asked for once the forms are on screen and kept apart from everything else
+   * the row says. A failed request is reported as Unknown with its reason — never as "not enabled".
+   * Only the newest answer is kept, so switching Page mid-request cannot paint one Page's ads on another.
+   */
+  const [adStatus, setAdStatus] = useState<MetaAdStatusResponse | null>(null);
+  const [adLoading, setAdLoading] = useState(false);
+  const [adError, setAdError] = useState('');
+  const [adOpen, setAdOpen] = useState<string | null>(null);
+  const adLatest = useRef(createLatest()).current;
+  const formIdsKey = forms.map((f) => f.id).join(',');
+  const loadAdStatus = useCallback(async (refresh: boolean) => {
+    if (!formIdsKey) { setAdStatus(null); setAdError(''); return; }
+    const ticket = adLatest.begin();
+    setAdLoading(true);
+    try {
+      const res = await metaAdStatus(formIdsKey.split(','), refresh);
+      if (!adLatest.isCurrent(ticket)) return;
+      setAdStatus(res);
+      setAdError('');
+    } catch (ex) {
+      if (!adLatest.isCurrent(ticket)) return;
+      setAdStatus(null);
+      setAdError(apiErrorMessage(ex, 'Could not check advertising status'));
+    } finally {
+      if (adLatest.isCurrent(ticket)) setAdLoading(false);
+    }
+  }, [formIdsKey, adLatest]);
+  useEffect(() => { void loadAdStatus(false); }, [loadAdStatus]);
+  const adFor = (formId: string): MetaFormAdStatus | null => {
+    if (adError) return { state: 'unknown', summary: 'Unknown', reason: adError, ads: [] };
+    return adStatus?.forms[formId] ?? null;
+  };
+
   const run = async (key: string, fn: () => Promise<unknown>, ok?: string) => {
     setBusy(key);
     try {
@@ -878,6 +922,18 @@ export default function MetaPage() {
 
         <div className="card">
           <div className="modal-sub">Lead Forms{status?.is_connected ? ` (${connectedForms} connected)` : ''}</div>
+          {status?.is_connected && forms.length > 0 && (
+            <div className="toolbar-row" data-testid="meta-ad-status-bar" style={{ gap: 8, margin: '0 0 8px', alignItems: 'center' }}>
+              <span className="help" style={{ margin: 0 }} title={AD_STATUS_HINT}>
+                {adLoading ? 'Checking ads…'
+                  : adStatus ? `Ad status last checked ${new Date(adStatus.checked_at).toLocaleString()}`
+                    : adError ? 'Ad status could not be checked' : 'Ad status not checked yet'}
+              </span>
+              <button className="btn ghost sm" type="button" disabled={adLoading} onClick={() => void loadAdStatus(true)}>
+                Refresh ad status
+              </button>
+            </div>
+          )}
           {!status?.is_connected ? (
             <p className="help">Connect Meta to choose lead forms.</p>
           ) : forms.length === 0 ? (
@@ -904,12 +960,27 @@ export default function MetaPage() {
                     <span className={`pill ${f.is_connected ? 'ok' : ''}`} title={FORM_STATUS_HINT}>
                       {f.is_connected ? 'CRM sync: On' : 'CRM sync: Off'}
                     </span>
+                    {(() => {
+                      const ad = adFor(f.id);
+                      if (!ad) return <span className="pill" data-testid="meta-ad-pill" title={AD_STATUS_HINT}>Ads: {adLoading ? 'Checking…' : '—'}</span>;
+                      const hasDetail = ad.ads.length > 0 || !!ad.reason;
+                      return (
+                        <button type="button" className={`pill ${adPill(ad.state)}`} data-testid="meta-ad-pill" data-state={ad.state}
+                          title={`${ad.reason ? `${ad.reason}\n\n` : ''}${AD_STATUS_HINT}`}
+                          aria-expanded={hasDetail ? adOpen === f.id : undefined}
+                          onClick={() => hasDetail && setAdOpen((o) => (o === f.id ? null : f.id))}
+                          style={{ cursor: hasDetail ? 'pointer' : 'default', border: 0 }}>
+                          Ads: {ad.summary}{hasDetail ? (adOpen === f.id ? ' ▴' : ' ▾') : ''}
+                        </button>
+                      );
+                    })()}
                     {canEdit && (
                       <button className="btn ghost sm" type="button" disabled={busy !== ''} onClick={() => toggle(f)}>
                         {f.is_connected ? 'Disconnect' : 'Connect'}
                       </button>
                     )}
                   </div>
+                  {adOpen === f.id && adFor(f.id) && <AdDetails status={adFor(f.id)!} />}
                 </li>
               ))}
             </ul>
@@ -996,6 +1067,35 @@ export default function MetaPage() {
       {diagnostics && <DiagnosticsModal d={diagnostics} webhook={webhook} onClose={() => setDiagnostics(null)} />}
       <ConfirmDialog confirm={confirm} onClose={closeConfirm} />
     </>
+  );
+}
+
+/** Every ad using a form, each with its own status from Meta; or why the answer is Unknown. */
+function AdDetails({ status }: { status: MetaFormAdStatus }) {
+  return (
+    <div data-testid="meta-ad-details" style={{ flexBasis: '100%', fontSize: 12 }}>
+      {status.reason && <p className="help" style={{ margin: '0 0 6px' }}>{status.reason}</p>}
+      {status.ads.length > 0 && <p className="help" data-testid="meta-ad-caveat" style={{ margin: '0 0 6px' }}>{ENABLED_CAVEAT}</p>}
+      {status.ads.length > 0 && (
+        <table className="list-table">
+          <thead><tr><th>Ad</th><th>Campaign › Ad set</th><th>Ad account</th><th>Status</th></tr></thead>
+          <tbody>
+            {status.ads.map((a) => (
+              <tr key={a.ad_id} data-ad-id={a.ad_id}>
+                <td>{a.ad_name}</td>
+                <td className="muted">{a.campaign_name ?? '—'} › {a.adset_name ?? '—'}</td>
+                <td className="muted">{a.account_name}</td>
+                <td>
+                  <span className={`pill ${a.enabled ? 'ok' : ''}`} title={a.effective_status ? `Meta effective status: ${a.effective_status}` : undefined}>
+                    {a.label}
+                  </span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
   );
 }
 

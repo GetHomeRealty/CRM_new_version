@@ -11,6 +11,8 @@ import { MetaSyncSchedulerService } from './meta-sync-scheduler.service';
 import { MetaStateService } from './meta-state.service';
 import { MetaApiBudgetService } from './meta-api-budget.service';
 import { MetaAlertService } from './meta-alert.service';
+import { MetaAdStatusService } from './meta-ad-status.service';
+import { MetaAdStatusController } from './meta-ad-status.controller';
 import { LeadAuditService } from '../leads/lead-audit.service';
 import { LeadsModule } from '../leads/leads.module';
 
@@ -24,8 +26,8 @@ import { LeadsModule } from '../leads/leads.module';
  */
 @Module({
   imports: [NotificationDispatcherModule, AuthModule, LeadsModule, EmailModule],
-  controllers: [MetaPublicController, MetaController],
-  providers: [MetaConnectionService, MetaGraphService, MetaSyncService, MetaSyncSchedulerService, MetaStateService, LeadAuditService, MetaApiBudgetService, MetaAlertService],
+  controllers: [MetaPublicController, MetaController, MetaAdStatusController],
+  providers: [MetaConnectionService, MetaGraphService, MetaSyncService, MetaSyncSchedulerService, MetaStateService, LeadAuditService, MetaApiBudgetService, MetaAlertService, MetaAdStatusService],
   exports: [MetaSyncService, MetaConnectionService],
 })
 export class MetaModule {}

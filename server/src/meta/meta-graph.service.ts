@@ -9,6 +9,32 @@ import {
 export interface GraphPage { id: string; name: string; access_token: string }
 export interface GraphForm { id: string; name: string; status?: string; leads_count?: number; created_time?: string }
 export interface GraphLead { id: string; created_time?: string; field_data?: { name?: string; values?: string[] }[] }
+export interface GraphAdAccount { id: string; name?: string; account_status?: number }
+/** An ad as the advertising-status check reads it. Every field is Meta's own; nothing is derived here. */
+export interface GraphAd {
+  id: string;
+  name?: string;
+  effective_status?: string;
+  configured_status?: string;
+  adset?: { id: string; name?: string; effective_status?: string; start_time?: string; end_time?: string };
+  campaign?: { id: string; name?: string; effective_status?: string; objective?: string; stop_time?: string };
+  creative?: Record<string, unknown>;
+}
+
+/** Ad fields for the status check: the ad, its parents' own statuses and schedule, and the creative that names the form. */
+const AD_STATUS_FIELDS = 'id,name,effective_status,configured_status,'
+  + 'adset{id,name,effective_status,start_time,end_time},'
+  + 'campaign{id,name,effective_status,objective,stop_time},'
+  + 'creative{object_story_spec,asset_feed_spec}';
+/*
+ * WHICH ADS AN EDGE RETURNS. Meta's "Manage Your Ad Object's Status" guide: read as an edge WITHOUT a
+ * filter, `/act_{id}/ads` returns live ads only (every status but archived and deleted); archived ads
+ * "are not returned by default" and need `effective_status=["ARCHIVED"]`. The edge's own list of
+ * accepted filter values differs between documentation versions, and ARCHIVED is the only value of
+ * interest that every version lists — so live ads are read unfiltered and archived ones with that
+ * single value, rather than trusting a long list some versions would reject. Deleted ads are never read.
+ */
+const ARCHIVED_ONLY = JSON.stringify(['ARCHIVED']);
 
 /** A Graph call that failed, carrying Meta's own message so the UI can show the real cause. */
 export class GraphError extends Error {
@@ -205,6 +231,69 @@ export class MetaGraphService {
       this.log.warn(`Ad accounts unavailable: ${(err as Error).message}`);
       return [];
     }
+  }
+
+  /**
+   * Ad accounts the user can read, for the advertising-status check — READ ONLY.
+   *
+   * Unlike `adAccounts` above, a failure is THROWN rather than turned into an empty list: "no
+   * permission" and "no ad accounts" are different answers, and the status check has to say which.
+   */
+  async readableAdAccounts(token: string, cap: number): Promise<{ accounts: GraphAdAccount[]; truncated: boolean }> {
+    const url = new URL(`${graphOrigin()}/me/adaccounts`);
+    url.searchParams.set('fields', 'id,name,account_status');
+    url.searchParams.set('limit', '100');
+    const { rows, truncated } = await this.walk<GraphAdAccount>(url, token, cap, '/me/adaccounts');
+    return { accounts: rows, truncated };
+  }
+
+  /**
+   * The ads in one ad account, with their own and their parents' statuses — READ ONLY (GET).
+   *
+   * Two reads, per the note on ARCHIVED_ONLY: live ads unfiltered, then archived ads. A failure of the
+   * live read is thrown. If Meta refuses the archived filter, `archivedIncluded` is false and the
+   * caller must treat its coverage as incomplete; any other failure of that read is thrown too.
+   */
+  async adsInAccount(accountId: string, token: string, cap: number): Promise<{ ads: GraphAd[]; truncated: boolean; archivedIncluded: boolean }> {
+    const url = (archived: boolean): URL => {
+      const u = new URL(`${graphOrigin()}/${accountId}/ads`);
+      u.searchParams.set('fields', AD_STATUS_FIELDS);
+      u.searchParams.set('limit', '100');
+      if (archived) u.searchParams.set('effective_status', ARCHIVED_ONLY);
+      return u;
+    };
+    const live = await this.walk<GraphAd>(url(false), token, cap, `/${accountId}/ads`);
+    let archived: { rows: GraphAd[]; truncated: boolean } = { rows: [], truncated: false };
+    let archivedIncluded = true;
+    try {
+      archived = await this.walk<GraphAd>(url(true), token, cap, `/${accountId}/ads (archived)`);
+    } catch (err) {
+      if (!(err instanceof GraphError) || err.code !== 100) throw err;
+      archivedIncluded = false;
+    }
+    const seen = new Set<string>();
+    const ads = [...live.rows, ...archived.rows].filter((a) => (seen.has(a.id) ? false : (seen.add(a.id), true)));
+    return { ads, truncated: live.truncated || archived.truncated, archivedIncluded };
+  }
+
+  /** Follow Graph's `next` cursor until it runs out or `cap` rows are read. Same guard as `walkLeads`. */
+  private async walk<T>(first: URL, token: string, cap: number, label: string): Promise<{ rows: T[]; truncated: boolean }> {
+    const out: T[] = [];
+    const seen = new Set<string>();
+    let next: URL | null = first;
+    while (next && out.length < cap) {
+      const href = next.toString();
+      if (seen.has(href)) break;
+      seen.add(href);
+      const page: { data?: T[]; paging?: { next?: string } } =
+        await this.fetchJson(next, `Graph request failed: ${label}`, { Authorization: `Bearer ${token}` });
+      const batch = page.data ?? [];
+      out.push(...batch);
+      next = batch.length && page.paging?.next ? new URL(page.paging.next) : null;
+    }
+    const truncated = out.length >= cap && next !== null;
+    if (out.length > cap) out.length = cap;
+    return { rows: out, truncated };
   }
 
   /**

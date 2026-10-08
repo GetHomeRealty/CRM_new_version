@@ -94,6 +94,34 @@ export interface MetaForm {
   is_connected: boolean;
 }
 
+/**
+ * Whether any ad for a lead form is ENABLED (Meta status and schedule — not proof of delivery), read from
+ * Meta's ads by form id. Separate from the form's own
+ * status and from CRM sync; "unknown" always carries the reason.
+ */
+export type MetaAdState = 'enabled' | 'not_enabled' | 'no_ads' | 'unknown';
+
+export interface MetaAdRow {
+  ad_id: string; ad_name: string;
+  adset_id: string | null; adset_name: string | null;
+  campaign_id: string | null; campaign_name: string | null;
+  account_id: string; account_name: string;
+  effective_status: string | null;
+  label: string;
+  /** Enabled by Meta status and schedule checks. Not a statement that the ad is delivering. */
+  enabled: boolean;
+}
+
+export interface MetaFormAdStatus { state: MetaAdState; summary: string; reason: string | null; ads: MetaAdRow[] }
+
+export interface MetaAdStatusResponse {
+  checked_at: string;
+  blocked: { code: string; message: string } | null;
+  accounts_checked: number;
+  accounts_failed: { id: string; name: string; reason: string }[];
+  forms: Record<string, MetaFormAdStatus>;
+}
+
 export interface MetaLeadRow {
   id: number;
   name: string;
