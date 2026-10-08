@@ -1664,7 +1664,8 @@ export class TransactionImportService {
       try {
         // TD-142 — stamped on every row this batch writes, which is what makes the import
         // reversible as one action rather than a deal at a time.
-        const res = await this.write.store(user, { ...r.data, import_batch_id: batchId });
+        // Quiet: an imported deal does not email its agent on the way in (2026-10-08, import-is-quiet.spec.ts).
+        const res = await this.write.store(user, { ...r.data, import_batch_id: batchId }, { quiet: true });
         const data = res.data as Record<string, unknown>;
         txnId = Number(data.id);
         tradeNo = String(data.trade_no ?? '');
@@ -1841,7 +1842,7 @@ export class TransactionImportService {
     const combined: Record<string, unknown> = {};
     for (const [, body] of entries) Object.assign(combined, body);
     try {
-      await this.write.update(user, txnId, combined);
+      await this.write.update(user, txnId, combined, { quiet: true });
       return { applied: entries.map(([name]) => name), skipped: [] };
     } catch {
       // fall through to per-area writes
@@ -1851,7 +1852,7 @@ export class TransactionImportService {
     const skipped: string[] = [];
     for (const [name, body] of entries) {
       try {
-        await this.write.update(user, txnId, body);
+        await this.write.update(user, txnId, body, { quiet: true });
         applied.push(name);
       } catch (err) {
         skipped.push(name);

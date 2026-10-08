@@ -325,7 +325,11 @@ export class TransactionsWriteService {
   }
 
   /** Create a transaction (port of TransactionController::store). */
-  async store(user: AuthUserRecord | null, body: Record<string, unknown>): Promise<{ data: Record<string, unknown> }> {
+  /**
+   * `opts.quiet` - set by the bulk import only (2026-10-08). The save is the same; the instant
+   * emails to the agent (lawyer details, status changed) are not sent. See import-is-quiet.spec.ts.
+   */
+  async store(user: AuthUserRecord | null, body: Record<string, unknown>, opts: { quiet?: boolean } = {}): Promise<{ data: Record<string, unknown> }> {
     /*
      * TD-050 — a caller may send the name the screens show, and it is stored as the value behind it.
      *
@@ -638,7 +642,8 @@ export class TransactionsWriteService {
       }
     }
     // Best-effort nudge if buyer/seller lawyer details are missing on a Buying/Lease deal.
-    void this.lawyerReminder.maybeRemind(txnId);
+    // Not for a deal the bulk import is saving - see store()'s note on opts.quiet.
+    if (!opts.quiet) void this.lawyerReminder.maybeRemind(txnId);
     // Columns with a non-null DB default that store() never sets → null in the in-memory
     // model Laravel returns from create (mls_type, precon_listing_type, precon_details_of_terms).
     return this.loadResource(txnId, user, ['mls_type', 'precon_listing_type', 'precon_details_of_terms']);
@@ -819,7 +824,7 @@ export class TransactionsWriteService {
     });
   }
 
-  async update(user: AuthUserRecord | null, txnId: number, body: Record<string, unknown>): Promise<{ data: Record<string, unknown>; message?: string }> {
+  async update(user: AuthUserRecord | null, txnId: number, body: Record<string, unknown>, opts: { quiet?: boolean } = {}): Promise<{ data: Record<string, unknown>; message?: string }> {
     const t = await this.prisma.transactions.findFirst({ where: { id: txnId, deleted_at: null } });
     if (!t) throw new NotFoundException({ message: `No query results for model [App\\Models\\Transaction] ${txnId}.` });
 
@@ -1527,7 +1532,8 @@ export class TransactionsWriteService {
     }
 
     // Re-check lawyer details after the edit — only re-emails when the missing set actually changed.
-    void this.lawyerReminder.maybeRemind(txnId);
+    // Not while the bulk import is saving the deal (opts.quiet, see store()).
+    if (!opts.quiet) void this.lawyerReminder.maybeRemind(txnId);
 
     /*
      * TD-009 — the deal became firm, or ended, and its agent is told.
@@ -1537,7 +1543,7 @@ export class TransactionsWriteService {
      * and the delivery record carries the failure for anybody who looks. Who receives it, and
      * whether the person who made the change is skipped, is decided in `statusChanged`.
      */
-    if (enteredStatuses.length) {
+    if (enteredStatuses.length && !opts.quiet) {
       void this.reminders.statusChanged(txnId, enteredStatuses, actor?.name ?? null, previousStatuses);
     }
 
