@@ -282,6 +282,21 @@ export default function MetaPage() {
   const [flashLead, setFlashLead] = useState<number | null>(null);
   /** Set when the lead that was opened is not in the list it was opened from any more. */
   const [focusMissing, setFocusMissing] = useState<{ id: number; name: string } | null>(null);
+  /**
+   * COMING BACK, THE SCREEN IS NOT SHOWN UNTIL IT IS WHERE IT WAS LEFT.
+   *
+   * The Page, forms and leads arrive one after another, and until the list is in place there is
+   * nothing to scroll to — so the screen used to appear at the top and then glide down to the row,
+   * because `html { scroll-behavior: smooth }` animates every scroll that does not say otherwise. Now
+   * the content keeps its layout but stays invisible while a return is pending, is moved INSTANTLY,
+   * and only then shown. Bounded: if the return cannot finish, the screen is shown anyway.
+   */
+  const [restoring, setRestoring] = useState(() => focusLead !== null);
+  useEffect(() => {
+    if (!restoring) return;
+    const t = window.setTimeout(() => setRestoring(false), 10_000);
+    return () => window.clearTimeout(t);
+  }, [restoring]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState('');
 
@@ -675,21 +690,27 @@ export default function MetaPage() {
       next.delete('fbpage');
       return next;
     }, { replace: true });
-    if (leadsError) return;   // the list says it could not be read; nothing else to add
+    if (leadsError) { setRestoring(false); return; }   // the list says it could not be read; nothing else to add
     const saved = readReturn(focusLead);
+    /*
+     * INSTANT, NOT SMOOTH, and done here rather than a frame later: the effect runs after the list has
+     * been committed, so the row is already laid out (invisible, not absent) and can be measured. The
+     * screen is revealed only after the move, so the person never sees it travel.
+     */
+    const instant = 'instant' as ScrollBehavior;
     if (leads.some((l) => l.id === focusLead)) {
       setFlashLead(focusLead);
-      requestAnimationFrame(() => {
-        if (saved) window.scrollTo({ top: saved.scrollY });
-        const row = document.querySelector(`[data-lead-row="${focusLead}"]`);
-        if (!row) return;
+      if (saved) window.scrollTo({ top: saved.scrollY, behavior: instant });
+      const row = document.querySelector(`[data-lead-row="${focusLead}"]`);
+      if (row) {
         const r = row.getBoundingClientRect();
-        if (r.top < 0 || r.bottom > window.innerHeight) row.scrollIntoView({ block: 'center' });
-      });
+        if (r.top < 0 || r.bottom > window.innerHeight) row.scrollIntoView({ block: 'center', behavior: instant });
+      }
     } else {
       setFocusMissing({ id: focusLead, name: saved?.leadName ?? '' });
-      requestAnimationFrame(() => leadsRef.current?.scrollIntoView({ block: 'start' }));
+      leadsRef.current?.scrollIntoView({ block: 'start', behavior: instant });
     }
+    setRestoring(false);
   }, [focusLead, leadsLoaded, leadsError, leads, formFilter, formsLoaded, params, setParams]);
 
   useEffect(() => {
@@ -796,12 +817,20 @@ export default function MetaPage() {
     toast(res.message, 'ok');
   });
 
-  if (loading) return <div className="card"><p className="help">Loading Meta…</p></div>;
+  if (loading) {
+    return <div className="card"><p className="help">{restoring ? 'Returning to your place in Meta leads…' : 'Loading Meta…'}</p></div>;
+  }
 
   const connectedForms = forms.filter((f) => f.is_connected).length;
 
   return (
-    <>
+    // `display: contents` adds no box, so the layout is exactly as before; only visibility changes.
+    <div style={{ display: 'contents', visibility: restoring ? 'hidden' : undefined }} data-meta-restoring={restoring ? 'true' : undefined}>
+      {restoring && (
+        <p className="help" role="status" style={{ visibility: 'visible', position: 'fixed', top: 72, left: '50%', transform: 'translateX(-50%)', zIndex: 5 }}>
+          Returning to your place in Meta leads…
+        </p>
+      )}
       {status && !status.configured && (
         <div className="card meta-alert bad">
           <strong>Meta is not configured on this server.</strong>
@@ -1070,7 +1099,7 @@ export default function MetaPage() {
 
       {diagnostics && <DiagnosticsModal d={diagnostics} webhook={webhook} onClose={() => setDiagnostics(null)} />}
       <ConfirmDialog confirm={confirm} onClose={closeConfirm} />
-    </>
+    </div>
   );
 }
 
