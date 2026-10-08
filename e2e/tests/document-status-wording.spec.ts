@@ -54,7 +54,8 @@ test('an agent and an administrator read the same word on the same document row 
     /** The status cell of a row, as the signed-in role sees it. */
     const statusCellText = async (title: string = target.title): Promise<string> => {
       await page.goto(`/desk/transactions/${id}?mode=view`);
-      await page.getByRole('button', { name: /legal & docs/i }).first().click();
+      // The Quick Action is labelled "Documents" (it read "Legal & Docs" when this test was written).
+      await page.getByRole('button', { name: /^Documents$/ }).first().click();
       const row = page.locator('.doc-row').filter({ hasText: title }).first();
       await expect(row).toBeVisible();
       // A dropdown for an administrator, static text for an agent — both carry `doc-status`, so

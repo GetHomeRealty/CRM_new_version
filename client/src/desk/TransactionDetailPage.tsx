@@ -292,7 +292,9 @@ export default function TransactionDetailPage() {
     listAgents().then(setAgents).catch(() => {});
     // Loaded lazily so the invoice editor can open in-context on this page.
     getCompanySettings().then(setInvSettings).catch(() => {});
-    getCustomers().then(setInvCustomers).catch(() => {});
+    // Only for people who may see invoices — the same `invoice: view` the server requires for
+    // `/api/customers`. Asked by everyone else it was a refused request (403) on every deal opened.
+    if (can('invoice', 'view')) getCustomers().then(setInvCustomers).catch(() => {});
     getBrokerageSuggestions().then(setBrokSuggestions).catch(() => {});
   }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -493,7 +495,16 @@ export default function TransactionDetailPage() {
   // docs-only split members (added later) are view-only except for uploading documents.
   const myTeamAccess = txn?.my_team_access; // 'full' | 'docs' | null
   const isSplitViewerEarly = isAgent && form.agent !== user?.name && myTeamAccess !== 'full';
-  const view = mode === 'view' || isSplitViewerEarly || isDocumentation;
+  const view = mode === 'view' || isSplitViewerEarly;
+  /*
+   * DOCUMENTATION (Transaction Coordinator) edits the deal's own details — basic info, offer and
+   * status, clients, brokerage — through the same Edit flow as everyone else, and Documents as before.
+   * The sections that are money or administration stay read-only to this role whatever the mode:
+   * Team Split, Financial, Lawyer, Admin, Agent Payment Readiness and Adjustments, plus the
+   * pre-construction commission/terms and the commercial-lease terms on the page. The server drops
+   * those fields from this role's saves too (DOCUMENTATION_EDITABLE), so the two always agree.
+   */
+  const sectionView = view || isDocumentation;
   const listing = isListingType(form.type);
   const precon = isPreconType(form.type);
   const commercialLease = isCommercialLeaseType(form.type);
@@ -506,7 +517,8 @@ export default function TransactionDetailPage() {
   const priceLabel = isLease ? 'Total lease price' : isSaleListing ? 'Total Sale Price' : 'Total Purchase Price';
   // Lawyer Details is hidden for lease / preconstruction / referral types (legal side handled differently).
   const lawyerHidden = precon || /lease/i.test(form.type) || referral;
-  const statusOptions = statusOptionsFor(form.type);
+  const statusOptions = statusOptionsFor(form.type)
+    .filter((o) => !(isDocumentation && o === 'Closed' && !form.statuses.includes('Closed')));
   const ro = view; // read-only flag
 
   function set<K extends keyof DetailForm>(k: K, v: DetailForm[K]) { setForm((f) => (f ? { ...f, [k]: v } : f)); }
@@ -830,7 +842,7 @@ export default function TransactionDetailPage() {
   // Team Split: hidden entirely once closed & paid (Super Admin only);
   // after Notice of Sale is sent, agents can't be added/removed/renamed (Admin+ retain access).
   const teamSplitVisible = !closedAndPaid || isSuperAdmin;
-  const teamReadOnly = view || (closedAndPaid && !isSuperAdmin) || !teamSplitEditableByRole;
+  const teamReadOnly = sectionView || (closedAndPaid && !isSuperAdmin) || !teamSplitEditableByRole;
   /*
    * TD-058 — which of the three locks is on, said in the modal.
    *
@@ -848,7 +860,7 @@ export default function TransactionDetailPage() {
   const teamLockAgents = nosSent && !isAdminOrAbove && !agentPaid;
   // Adjustment / advance / client referral / external brokerage referral: locked to
   // Super Admin once the deal is closed and the agent commission is paid.
-  const adjReadOnly = view || (closedAndPaid && !isSuperAdmin);
+  const adjReadOnly = sectionView || (closedAndPaid && !isSuperAdmin);
   const editRequests = txn?.edit_requests || [];
   // The DFT/Closed lock uses general (non-financial) requests; financial-scoped ones
   // are handled inside the Financial modal.
@@ -1057,8 +1069,6 @@ export default function TransactionDetailPage() {
                 {isAdminOrAbove && !pendingReq && <button className="btn ghost sm" onClick={() => askReason('edit')}><Icon name="unlock" size={13} /> Request Edit</button>}
                 {pendingReq && <span className="pill warn" style={{ fontSize: 10 }}>Awaiting approval</span>}
               </>)
-            : isDocumentation
-            ? <span className="pill info" style={{ fontSize: 10 }} title="Documentation role: edit Documents from its section. All other sections are view-only."><Icon name="doc" size={11} /> Documents editable</span>
             : view
             ? <button className="btn primary sm" onClick={() => setMode('edit')}><Icon name="edit" size={13} /> Edit{lockedForUser && approvedReq ? ' (approved)' : ''}</button>
             : (<>
@@ -1476,7 +1486,7 @@ export default function TransactionDetailPage() {
         </div>
 
       {/* Commercial Lease calculator (structure / rent / commission) */}
-      {commercialLease && <CommercialLeaseCard cl={cl} setCl={setCl} ro={ro} />}
+      {commercialLease && <CommercialLeaseCard cl={cl} setCl={setCl} ro={ro || isDocumentation} />}
 
       {/* Preconstruction details */}
       {precon && (
@@ -1516,7 +1526,7 @@ export default function TransactionDetailPage() {
                 * keep its text rather than be silently blanked, so it reopens as an external name. */}
               <select
                 value={externalCommissionAgent || (!!form.commission_agent && !agents.includes(form.commission_agent)) ? '__external__' : (form.commission_agent || '')}
-                disabled={ro}
+                disabled={ro || isDocumentation}
                 onChange={(e) => {
                   if (e.target.value === '__external__') { setExternalCommissionAgent(true); set('commission_agent', ''); }
                   else { setExternalCommissionAgent(false); set('commission_agent', e.target.value); }
@@ -1527,11 +1537,11 @@ export default function TransactionDetailPage() {
                 <option value="__external__">External / co-op agent…</option>
               </select>
               {(externalCommissionAgent || (!!form.commission_agent && !agents.includes(form.commission_agent))) && (
-                <input value={form.commission_agent} disabled={ro} onChange={(e) => set('commission_agent', e.target.value)} placeholder="External agent name" style={{ marginTop: 6 }} />
+                <input value={form.commission_agent} disabled={ro || isDocumentation} onChange={(e) => set('commission_agent', e.target.value)} placeholder="External agent name" style={{ marginTop: 6 }} />
               )}
             </Field>
             <Field label="Commission Receivable in Terms">
-              <input type="number" min="0" max="200" value={form.precon_term_count} disabled={ro} onChange={(e) => set('precon_term_count', e.target.value)} placeholder="e.g. 3" />
+              <input type="number" min="0" max="200" value={form.precon_term_count} disabled={ro || isDocumentation} onChange={(e) => set('precon_term_count', e.target.value)} placeholder="e.g. 3" />
             </Field>
           </div>
           {(() => {
@@ -1543,7 +1553,7 @@ export default function TransactionDetailPage() {
                 <div className="g3">
                   {Array.from({ length: tc }, (_, i) => i + 1).map((k) => (
                     <Field key={k} label={tc === 1 ? 'Closing Date' : `Term ${k} Closing Date`}>
-                      <input type="date" value={preconTermClosing(k)} disabled={ro} onChange={(e) => setPreconTermClosing(k, e.target.value)} />
+                      <input type="date" value={preconTermClosing(k)} disabled={ro || isDocumentation} onChange={(e) => setPreconTermClosing(k, e.target.value)} />
                     </Field>
                   ))}
                 </div>
@@ -1767,7 +1777,7 @@ export default function TransactionDetailPage() {
           termCount={precon ? (parseInt(String(form.precon_term_count), 10) || 0) : undefined}
           hideClientCommission={slDepositOnly}
           dftNA={stDFT}
-          readOnly={view || isAgent || (closedAndPaid && !isSuperAdmin)}
+          readOnly={sectionView || isAgent || (closedAndPaid && !isSuperAdmin)}
           isAgent={isAgent}
           onSaved={applyUpdated}
         />
@@ -1785,7 +1795,7 @@ export default function TransactionDetailPage() {
         <TradeSheetModal open={tsOpen} onClose={() => setTsOpen(false)} txn={txn} />
       )}
       {lawyerOpen && txn && (
-        <LawyerModal open={lawyerOpen} onClose={() => setLawyerOpen(false)} transactionId={id} txn={txn} onSaved={applyUpdated} readOnly={view} isAgent={isAgent} />
+        <LawyerModal open={lawyerOpen} onClose={() => setLawyerOpen(false)} transactionId={id} txn={txn} onSaved={applyUpdated} readOnly={sectionView} isAgent={isAgent} />
       )}
       {auditOpen && txn && (
         <AuditTrailModal
@@ -1798,10 +1808,10 @@ export default function TransactionDetailPage() {
         />
       )}
       {adminOpen && txn && (
-        <AdminActivitiesModal open onClose={() => setAdminOpen(false)} transactionId={id} txn={txn} onSaved={applyUpdated} depositOnly={slDepositOnly} dftNA={stDFT} readOnly={view} termCount={precon ? (parseInt(String(form.precon_term_count), 10) || 0) : undefined} />
+        <AdminActivitiesModal open onClose={() => setAdminOpen(false)} transactionId={id} txn={txn} onSaved={applyUpdated} depositOnly={slDepositOnly} dftNA={stDFT} readOnly={sectionView} termCount={precon ? (parseInt(String(form.precon_term_count), 10) || 0) : undefined} />
       )}
       {faqOpen && txn && (
-        <AgentFaqModal open onClose={() => setFaqOpen(false)} transactionId={id} txn={txn} onSaved={applyUpdated} depositSlipOnly={slDepositOnly} dftNA={stDFT} readOnly={view || isAgent} allowBatchEmail={isAgent} isAgent={isAgent} termCount={precon ? (parseInt(String(form.precon_term_count), 10) || 0) : undefined} />
+        <AgentFaqModal open onClose={() => setFaqOpen(false)} transactionId={id} txn={txn} onSaved={applyUpdated} depositSlipOnly={slDepositOnly} dftNA={stDFT} readOnly={sectionView || isAgent} allowBatchEmail={isAgent} isAgent={isAgent} termCount={precon ? (parseInt(String(form.precon_term_count), 10) || 0) : undefined} />
       )}
       {adjOpen && txn && (
         <AdjustmentModal open onClose={() => setAdjOpen(false)} transactionId={id} txn={txn} onSaved={applyUpdated} readOnly={adjReadOnly} termCount={precon ? (parseInt(String(form.precon_term_count), 10) || 0) : undefined} />

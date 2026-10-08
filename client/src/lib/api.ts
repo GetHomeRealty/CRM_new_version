@@ -79,6 +79,8 @@ export const listTransactions = (): Promise<Transaction[]> =>
 
 /** Filters accepted by the paginated list. Names match the query string the API expects. */
 export interface TransactionQuery {
+  /** Required documents: 'missing_uploads' | 'needs_review'. */
+  docs?: string;
   page?: number;
   per_page?: number;
   q?: string;

@@ -24,6 +24,31 @@ const dateAt = (v: string | undefined): Date | null => {
 
 const has = (v: string | undefined): v is string => typeof v === 'string' && v.trim() !== '';
 
+/*
+ * A DEAL'S REQUIRED DOCUMENTS, by the checklist's own rules.
+ *
+ * Required — a mandatory checklist item that is not deleted and not yet Valid: the same rule the
+ * Dashboard counts its outstanding documents by. Mandatory is the item's flag as the checklist and
+ * its interlinks maintain it for the deal's type and status; nothing is re-derived here.
+ *
+ * Has a file — `file_path`, or a non-empty `files` list (per-client and multi-file items): the same
+ * test the document-dates migration used for "holds a file". An agent's draft is not a file on the
+ * checklist until a coordinator accepts it, so it does not count.
+ */
+const REQUIRED_NOT_VALID: Prisma.documentsWhereInput = { deleted_at: null, mandatory: true, validation: { not: 'Valid' } };
+const NO_FILE: Prisma.documentsWhereInput = {
+  AND: [
+    { OR: [{ file_path: null }, { file_path: '' }] },
+    { OR: [{ files: null }, { files: { in: ['', '[]'] } }] },
+  ],
+};
+const HAS_FILE: Prisma.documentsWhereInput = {
+  OR: [
+    { AND: [{ file_path: { not: null } }, { file_path: { not: '' } }] },
+    { AND: [{ files: { not: null } }, { files: { notIn: ['', '[]'] } }] },
+  ],
+};
+
 export function filterClauses(q: ListTransactionsDto): Prisma.transactionsWhereInput[] {
   const out: Prisma.transactionsWhereInput[] = [];
 
@@ -67,6 +92,10 @@ export function filterClauses(q: ListTransactionsDto): Prisma.transactionsWhereI
   if (has(q.type)) out.push({ type: q.type });
   if (has(q.validation)) out.push({ valid_status: q.validation });
   if (has(q.agent)) out.push({ agent: { contains: q.agent.trim(), mode: 'insensitive' } });
+
+  // Missing uploads / Needs review. A deal can match both, through different items.
+  if (q.docs === 'missing_uploads') out.push({ documents: { some: { AND: [REQUIRED_NOT_VALID, NO_FILE] } } });
+  if (q.docs === 'needs_review') out.push({ documents: { some: { AND: [REQUIRED_NOT_VALID, HAS_FILE] } } });
 
   // comm_status is NOT NULL with a default, so a plain inequality is safe here.
   if (q.commission === 'Received') out.push({ comm_status: 'Received' });

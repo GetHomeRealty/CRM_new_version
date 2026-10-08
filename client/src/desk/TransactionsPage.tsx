@@ -23,6 +23,8 @@ interface Filters {
   validation: string;
   agent: string;
   commission: string;
+  /** Required documents — '' | 'missing_uploads' | 'needs_review' (server-side; see transaction-filters). */
+  docs: string;
   status: string;
   offerFrom: string;
   offerTo: string;
@@ -41,7 +43,7 @@ const TYPED_KEYS: (keyof Filters)[] = ['q', 'agent', 'client', 'brokerage'];
 /** UI filter names → the query string the API expects. */
 const toQuery = (f: Filters): TransactionQuery => ({
   q: f.q, year: f.year, type: f.type, validation: f.validation, agent: f.agent,
-  commission: f.commission, status: f.status, payout: f.payout, client: f.client, brokerage: f.brokerage,
+  commission: f.commission, docs: f.docs, status: f.status, payout: f.payout, client: f.client, brokerage: f.brokerage,
   offer_from: f.offerFrom, offer_to: f.offerTo, closing_from: f.closingFrom, closing_to: f.closingTo,
 });
 
@@ -62,7 +64,7 @@ const toQuery = (f: Filters): TransactionQuery => ({
 const OPEN_AND_FIRM = 'Secured Firm,Active,Sold Conditional';
 
 const EMPTY_FILTERS: Filters = {
-  q: '', year: '', type: '', validation: '', agent: '', commission: '', status: OPEN_AND_FIRM,
+  q: '', year: '', type: '', validation: '', agent: '', commission: '', docs: '', status: OPEN_AND_FIRM,
   // Advanced ribbon filters
   offerFrom: '', offerTo: '', closingFrom: '', closingTo: '', payout: '', client: '', brokerage: '',
 };
@@ -315,6 +317,13 @@ export default function TransactionsPage() {
         <input style={{ width: 'auto', flex: '0 1 auto', minWidth: 120 }} placeholder="All agents" value={filters.agent} onChange={(e) => setF('agent', e.target.value)} />
         <select value={filters.commission} onChange={(e) => setF('commission', e.target.value)}>
           <option value="">Commission: any</option><option>Received</option><option>Not received</option>
+        </select>
+        {/* Chasing paperwork from the list: a required document nobody has uploaded, or one uploaded and not yet Valid. */}
+        <select value={filters.docs} onChange={(e) => setF('docs', e.target.value)} aria-label="Required documents"
+          title="Required documents: a mandatory checklist item that is not yet Valid">
+          <option value="">Documents: any</option>
+          <option value="missing_uploads">Missing uploads</option>
+          <option value="needs_review">Needs review</option>
         </select>
         <select value={filters.status} onChange={(e) => setF('status', e.target.value)}>
           {/*

@@ -157,6 +157,20 @@ export const FILL_KEYS = [
   'conditional_offer', 'inter_board_enabled',
 ] as const;
 
+/**
+ * What a Documentation user (Transaction Coordinator) may change on a deal: basic details, offer,
+ * conditions and status, clients, co-op/listing brokerage and the builder's contact details.
+ * Anything not named here is dropped from their update — see the comment in `update`.
+ */
+export const DOCUMENTATION_EDITABLE: ReadonlySet<string> = new Set([
+  'type', 'property', 'agent', 'price', 'deposit',
+  'offer_date', 'closing_date', 'listing_contract_date', 'listing_expiry_date',
+  'mls_type', 'mls_num', 'mls_verified',
+  'conditional_offer', 'conditions', 'inter_board_enabled', 'inter_board_listings',
+  'statuses', 'clients', 'brokerage',
+  'precon_listing_type', 'builder',
+]);
+
 // Agents cannot modify these.
 const AGENT_LOCKED = [
   'comm_type', 'comm_value', 'comm_pct', 'comm_amt',
@@ -882,6 +896,24 @@ export class TransactionsWriteService {
       }
     }
 
+    /*
+     * DOCUMENTATION (Transaction Coordinator) — the deal's own details, and nothing that is money.
+     *
+     * The coordinator keeps a deal's paperwork straight: its basic details, offer, conditions and
+     * status, its clients and the co-op brokerage. Those fields are kept from the request; everything
+     * else in it — commission and financial fields, Team Split, admin activities, adjustments, lawyer
+     * details, pre-construction terms, commercial-lease terms, validation and commission status — is
+     * dropped, the same way `AGENT_LOCKED` drops an agent's. The screen shows those sections
+     * read-only to this role, so a normal save carries them unchanged; the drop is what makes a
+     * hand-made request unable to change them.
+     *
+     * Every other rule still applies after this: the Closed and DFT locks, the Team Split lock, the
+     * status and money validation, and optimistic locking.
+     */
+    if (user?.role === 'documentation') {
+      for (const k of Object.keys(data)) if (!DOCUMENTATION_EDITABLE.has(k)) delete data[k];
+    }
+
     // TD-058 - the server half of the Team Split lock (see teamChangeAfterNoticeProblem).
     if (Object.prototype.hasOwnProperty.call(data, 'team')) {
       const current = await this.prisma.team_members.findMany({ where: { transaction_id: txnId }, select: { name: true, split: true } });
@@ -1221,6 +1253,15 @@ export class TransactionsWriteService {
 
     if (statuses.includes('Closed') && !isSuperAdmin(user)) {
       throw new ForbiddenException({ message: 'This transaction is Closed — only a Super Admin can edit it.' });
+    }
+    /*
+     * Editing a deal's status is part of the coordinator's job; CLOSING it is not. Closing settles the
+     * commission and locks the deal, and stays with the roles that held it before this role could edit
+     * statuses at all.
+     */
+    if (user?.role === 'documentation' && Object.prototype.hasOwnProperty.call(data, 'statuses')
+      && (data.statuses as unknown[]).map(String).includes('Closed') && !statuses.includes('Closed')) {
+      throw new ForbiddenException({ message: 'A Documentation user cannot close a deal. Ask an administrator to close it.' });
     }
     /*
      * TD-075 - AN AGENT MAY NOT MOVE THE MONEY ON A SAVED DEAL WITHOUT APPROVAL.

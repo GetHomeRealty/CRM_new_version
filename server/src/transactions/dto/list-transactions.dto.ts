@@ -1,4 +1,4 @@
-import { IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
+import { IsIn, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
 import { Transform } from 'class-transformer';
 
 const toInt = ({ value }: { value: unknown }): unknown => {
@@ -38,6 +38,12 @@ export class ListTransactionsDto {
   @IsOptional() @IsString() agent?: string;
   /** 'Received' | 'Not received'. */
   @IsOptional() @IsString() commission?: string;
+  /**
+   * The deal's required documents: 'missing_uploads' — a mandatory item with no file that is not
+   * Valid; 'needs_review' — a mandatory item with a file that is not Valid. Empty means any, like every
+   * other filter here. See `filterClauses`.
+   */
+  @IsOptional() @IsIn(['', 'missing_uploads', 'needs_review']) docs?: string;
   /** One transaction status, e.g. Open / Closed / Sold. */
   @IsOptional() @IsString() status?: string;
 
