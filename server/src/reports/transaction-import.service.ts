@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException, Logger } from '@nestjs/common';
 import * as ExcelJS from 'exceljs';
 import { promises as fs } from 'fs';
 import * as path from 'path';
@@ -111,6 +111,9 @@ export interface ImportResult {
 /** Hard ceiling on one upload — protects the API from an accidental enormous file. */
 export const MAX_IMPORT_ROWS = 1000;
 
+/** TD-212 - a background import with no progress for this long has lost its process. */
+export const STALE_IMPORT_MS = 5 * 60 * 1000;
+
 /**
  * 2026-10-09 - listing statuses that mean the listing is over. Only the bulk import ever required an
  * expiry date - the screen and the server never did - and it required one on every listing, which
@@ -155,6 +158,8 @@ const APP_TRADE_NUMBER_COLUMN = 'App Trade Number';
 
 @Injectable()
 export class TransactionImportService {
+  private readonly log = new Logger(TransactionImportService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly write: TransactionsWriteService,
@@ -1642,6 +1647,84 @@ export class TransactionImportService {
     return this.write.sameProperty(a, b);
   }
 
+  // ---------------------------------------------------------------- confirm (background, TD-212)
+  /**
+   * TD-212, 2026-10-09 - START the import and answer at once; the screen then follows status().
+   *
+   * The confirm used to be one request held open for the whole import: 852 rows took 91.8 s on the
+   * live server, the browser/proxy stopped waiting at about 60 s, and the screen said the import had
+   * failed while the server imported all 852. Now the batch is CLAIMED here (Validated -> Importing,
+   * a conditional update, so a second press - or a second tab - is refused rather than importing
+   * twice) and the unchanged confirm() runs in the background in this process.
+   */
+  async startConfirm(batchId: string, user: AuthUserRecord): Promise<Record<string, unknown>> {
+    this.assertCanImport(user);
+    const batch = await this.prisma.import_batches.findUnique({ where: { batch_id: batchId } });
+    if (!batch) throw new NotFoundException({ message: 'Import batch not found.' });
+    const claim = await this.prisma.import_batches.updateMany({
+      where: { batch_id: batchId, status: 'Validated' },
+      data: { status: 'Importing', updated_at: new Date() },
+    });
+    if (claim.count !== 1) {
+      throw new BadRequestException({ message: `This import has already been started or processed (status: ${batch.status}).` });
+    }
+    void this.confirm(batchId, user, { claimed: true }).catch(async (err) => {
+      // Rows written so far stay, stamped with the batch, so Undo can still reverse them.
+      await this.prisma.import_batches.update({
+        where: { batch_id: batchId },
+        data: { status: 'Failed', completed_at: new Date(), updated_at: new Date() },
+      }).catch(() => undefined);
+      this.log.error(`Background import ${batchId} stopped: ${err instanceof Error ? err.message : String(err)}`);
+    });
+    return { batch_id: batchId, status: 'Importing', total_rows: batch.total_rows, valid_rows: batch.valid_rows, imported_rows: 0 };
+  }
+
+  /** How far a batch has got - and, once finished, the same result the screen used to receive. */
+  async status(batchId: string, user: AuthUserRecord): Promise<Record<string, unknown>> {
+    this.assertCanImport(user);
+    let batch = await this.prisma.import_batches.findUnique({ where: { batch_id: batchId } });
+    if (!batch) throw new NotFoundException({ message: 'Import batch not found.' });
+    // A background import writes progress after every row. Five minutes with none means the process
+    // it ran in has gone (a restart, a deploy): say so, rather than leave the screen waiting forever.
+    if (batch.status === 'Importing' && batch.updated_at && Date.now() - batch.updated_at.getTime() > STALE_IMPORT_MS) {
+      batch = await this.prisma.import_batches.update({
+        where: { batch_id: batchId },
+        data: { status: 'Interrupted', completed_at: new Date(), updated_at: new Date() },
+      });
+    }
+    const done = batch.status !== 'Importing' && batch.status !== 'Validated';
+    const base = {
+      batch_id: batch.batch_id, status: batch.status, done,
+      total_rows: batch.total_rows, valid_rows: batch.valid_rows, imported_rows: batch.imported_rows,
+      failed_rows: batch.failed_rows, duplicate_rows: batch.duplicate_rows,
+    };
+    if (!done) return { ...base, result: null };
+    const stored = JSON.parse(batch.errors ?? '{}') as { issues?: RowIssue[]; created?: Partial<ImportResult['created'][number]>[] };
+    const created = (stored.created ?? []).map((c) => ({
+      row: Number(c.row), trade_no: String(c.trade_no ?? ''), property: c.property ?? null, sections: c.sections ?? [], skipped: c.skipped ?? [],
+    }));
+    const issues = stored.issues ?? [];
+    const result: ImportResult = {
+      batch_id: batch.batch_id, status: batch.status, total_rows: batch.total_rows,
+      imported_rows: batch.imported_rows, failed_rows: batch.failed_rows, duplicate_rows: batch.duplicate_rows,
+      skipped_sections: issues.filter((i) => i.severity === 'warning' && i.section).length,
+      issues, created,
+    };
+    return { ...base, result };
+  }
+
+  private async reportProgress(batchId: string, created: ImportResult['created'], failed: number, snapshot: { issues: RowIssue[]; rows: unknown[] } | null): Promise<void> {
+    try {
+      await this.prisma.import_batches.update({
+        where: { batch_id: batchId },
+        data: {
+          imported_rows: created.length, failed_rows: failed, updated_at: new Date(),
+          ...(snapshot ? { errors: JSON.stringify({ ...snapshot, created }) } : {}),
+        },
+      });
+    } catch { /* progress is best-effort; the final write below records the outcome */ }
+  }
+
   // ---------------------------------------------------------------- confirm
   /**
    * Import the rows that passed validation. Each row is created through the normal
@@ -1654,11 +1737,12 @@ export class TransactionImportService {
    *     follow-up write is retried area by area, so one malformed adjustment costs only the
    *     adjustments, not the clients or the team split.
    */
-  async confirm(batchId: string, user: AuthUserRecord): Promise<ImportResult> {
+  async confirm(batchId: string, user: AuthUserRecord, opts: { claimed?: boolean } = {}): Promise<ImportResult> {
     this.assertCanImport(user);
     const batch = await this.prisma.import_batches.findUnique({ where: { batch_id: batchId } });
     if (!batch) throw new NotFoundException({ message: 'Import batch not found.' });
-    if (batch.status !== 'Validated') {
+    // TD-212 - startConfirm() has already moved the batch to 'Importing' when it runs this.
+    if (batch.status !== (opts.claimed ? 'Importing' : 'Validated')) {
       throw new BadRequestException({ message: `This import has already been processed (status: ${batch.status}).` });
     }
 
@@ -1709,6 +1793,10 @@ export class TransactionImportService {
         });
       });
       created.push({ row: r.row, trade_no: tradeNo, property, sections: applied, skipped });
+      // TD-212 - progress for the screen that is following a background import. The row count after
+      // every row (a small write); the rows already numbered every 50, so an import interrupted part
+      // way still hands back the numbers it gave.
+      if (opts.claimed) await this.reportProgress(batchId, created, failed + batch.failed_rows, created.length % 50 === 0 ? { issues, rows: stored.rows ?? [] } : null);
     }
 
     const status = created.length === 0 ? 'Failed'
@@ -1722,7 +1810,8 @@ export class TransactionImportService {
         imported_rows: created.length,
         failed_rows: batch.failed_rows + failed,
         // `created` is what numberedFile() writes back into the user's own file: row -> trade number.
-        errors: JSON.stringify({ issues, rows: stored.rows ?? [], created: created.map((c) => ({ row: c.row, trade_no: c.trade_no })) }),
+        // The whole entry is kept (TD-212) so status() can hand a background import's result back.
+        errors: JSON.stringify({ issues, rows: stored.rows ?? [], created }),
       },
     });
 
@@ -1951,7 +2040,7 @@ export class TransactionImportService {
    * database. The brokerage ruled on 2026-09-13 that they may be reversed. Add a status here and
    * every gate moves together.
    */
-  private readonly UNDOABLE_BATCH_STATUSES = ['Imported', 'Partially Imported'];
+  private readonly UNDOABLE_BATCH_STATUSES = ['Imported', 'Partially Imported', 'Interrupted', 'Failed'];   // TD-212
 
   // ------------------------------------------------------------------ history
   /** Import history (most recent first) for the Bulk Import History screen. */

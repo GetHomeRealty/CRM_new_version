@@ -45,9 +45,37 @@ export function fileToBase64(file: File): Promise<string> {
 export const validateImport = (fileName: string, content: string): Promise<ImportPreview> =>
   api.post<ImportPreview>('/api/transaction-imports/validate', { file_name: fileName, content }).then((r) => r.data);
 
-/** Create the rows that passed validation. */
-export const confirmImport = (batchId: string): Promise<ImportResult> =>
-  api.post<ImportResult>(`/api/transaction-imports/${batchId}/confirm`).then((r) => r.data);
+/** TD-212 - progress of an import that is running on the server, and its result once finished. */
+export interface ImportStatus {
+  batch_id: string; status: string; done: boolean;
+  total_rows: number; valid_rows: number; imported_rows: number; failed_rows: number; duplicate_rows: number;
+  result: ImportResult | null;
+}
+export const importStatus = (batchId: string): Promise<ImportStatus> =>
+  api.get<ImportStatus>(`/api/transaction-imports/${batchId}/status`).then((r) => r.data);
+
+/**
+ * Create the rows that passed validation.
+ *
+ * TD-212 - the server STARTS the import and answers at once; this then follows it every two seconds
+ * until it is finished, and resolves with the same result as before. A long import used to outlive
+ * the browser's wait and be reported as failed while it was in fact succeeding.
+ */
+export const confirmImport = async (batchId: string, onProgress?: (s: ImportStatus) => void): Promise<ImportResult> => {
+  await api.post(`/api/transaction-imports/${batchId}/confirm`);
+  let misses = 0;
+  for (;;) {
+    await new Promise((r) => setTimeout(r, 2000));
+    let st: ImportStatus;
+    try { st = await importStatus(batchId); misses = 0; } catch (e) {
+      // A dropped check is not a failed import - keep following it for a while before giving up.
+      if (++misses >= 15) throw e;
+      continue;
+    }
+    onProgress?.(st);
+    if (st.done && st.result) return st.result;
+  }
+};
 
 /**
  * TD-142 — put one import back. Its deals move to the Recycle Bin, where they can be restored, so

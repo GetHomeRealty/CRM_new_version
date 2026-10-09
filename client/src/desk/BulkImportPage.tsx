@@ -25,6 +25,8 @@ export default function BulkImportPage() {
   const [preview, setPreview] = useState<ImportPreview | null>(null);
   const [result, setResult] = useState<ImportResult | null>(null);
   const [busy, setBusy] = useState('');
+  // TD-212 - how far the server has got with a running import.
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [error, setError] = useState('');
   const [history, setHistory] = useState<ImportBatch[]>([]);
   const [undoing, setUndoing] = useState(false);
@@ -94,16 +96,19 @@ export default function BulkImportPage() {
 
   const confirm = async () => {
     if (!preview) return;
-    setBusy('importing'); setError('');
+    setBusy('importing'); setError(''); setProgress({ done: 0, total: preview.valid_rows });
     try {
-      const r = await confirmImport(preview.batch_id);
+      const r = await confirmImport(preview.batch_id, (st) => setProgress({ done: st.imported_rows + st.failed_rows, total: st.valid_rows || preview.valid_rows }));
       setResult(r);
       loadHistory();
       toast(`${r.imported_rows} transaction${r.imported_rows === 1 ? '' : 's'} imported`
         + (r.failed_rows ? ` · ${r.failed_rows} rejected` : ''), r.imported_rows ? 'ok' : 'bad');
     } catch (e) {
-      setError(apiErrorMessage(e, 'The import could not be completed'));
-    } finally { setBusy(''); }
+      // TD-212 - the import may still be running on the server; never tell the user it failed when
+      // all we know is that we stopped hearing from it. Import History has the real outcome.
+      setError(apiErrorMessage(e, 'Lost contact with the import while it was running. It may still be finishing - check Import History below before trying again.'));
+      loadHistory();
+    } finally { setBusy(''); setProgress(null); }
   };
 
   return (
@@ -195,7 +200,9 @@ export default function BulkImportPage() {
 
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 14, flexWrap: 'wrap' }}>
             <button className="btn" disabled={busy !== '' || preview.valid_rows === 0} onClick={confirm}>
-              {busy === 'importing' ? 'Importing…' : `Import ${preview.valid_rows} transaction${preview.valid_rows === 1 ? '' : 's'}`}
+              {busy === 'importing'
+                ? (progress && progress.total ? `Importing… ${progress.done} of ${progress.total}` : 'Importing…')
+                : `Import ${preview.valid_rows} transaction${preview.valid_rows === 1 ? '' : 's'}`}
             </button>
             {preview.issues.length > 0 && (
               <button className="btn ghost" onClick={() => downloadImportErrors(preview.batch_id).catch((e) => toast(apiErrorMessage(e, 'Download failed'), 'bad'))}>
@@ -299,7 +306,7 @@ export default function BulkImportPage() {
                     <td>{b.imported_rows}</td>
                     <td>{b.failed_rows}</td>
                     <td>{b.duplicate_rows}</td>
-                    <td><span className={`pill ${b.status === 'Imported' ? 'ok' : b.status === 'Failed' ? 'bad' : 'warn'}`}>{b.status}</span></td>
+                    <td><span className={`pill ${b.status === 'Imported' ? 'ok' : b.status === 'Failed' || b.status === 'Interrupted' ? 'bad' : 'warn'}`}>{b.status}</span></td>
                     <td>
                       <button className="btn ghost sm" onClick={() => downloadImportErrors(b.batch_id).catch((e) => toast(apiErrorMessage(e, 'Download failed'), 'bad'))}>
                         Report

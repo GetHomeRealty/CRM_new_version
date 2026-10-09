@@ -79,11 +79,20 @@ export class TransactionImportController {
     return this.imports.validate(fileName, buffer, user);
   }
 
-  /** Create the rows that passed validation (invalid rows are skipped, never blocking). */
+  /**
+   * Create the rows that passed validation (invalid rows are skipped, never blocking).
+   * TD-212 - STARTS the import and answers at once; the screen follows GET :batchId/status.
+   */
   @Post(':batchId/confirm')
   @HttpCode(200)
   confirm(@CurrentUser() user: AuthUserRecord, @Param('batchId') batchId: string): Promise<unknown> {
-    return this.imports.confirm(batchId, user);
+    return this.imports.startConfirm(batchId, user);
+  }
+
+  /** TD-212 - progress of a running import, and its result once finished. */
+  @Get(':batchId/status')
+  status(@CurrentUser() user: AuthUserRecord, @Param('batchId') batchId: string): Promise<unknown> {
+    return this.imports.status(batchId, user);
   }
 
   /** Downloadable validation report: row, field, invalid value, error, suggested correction. */
