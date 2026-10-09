@@ -79,7 +79,23 @@ interface FinancialModalProps {
 
 export default function FinancialModal({ open, onClose, transactionId, txn, termCount: termCountProp, onSaved, hideClientCommission = false, dftNA = false, readOnly: readOnlyProp = false, isAgent = false }: FinancialModalProps) {
   const toast = useToast();
-  const { isSuperAdmin } = useAuth();
+  const { isSuperAdmin, user } = useAuth();
+  /*
+   * THE DOCUMENTATION ROLE ONLY. Everybody else keeps the screen exactly as it was.
+   *
+   * The same test the transaction page already makes (`user?.role === 'documentation'`), read here
+   * rather than drilled through as a prop, because this modal already reads the signed-in user for
+   * `isSuperAdmin` and the page would otherwise have to grow a prop to say something the modal can
+   * see for itself.
+   *
+   * WHAT THIS CHANGES IS WORDING AND ICONS, NOTHING ELSE. This role is read-only on Financial —
+   * the page passes `sectionView = view || isDocumentation`, so `readOnly` is always true for them
+   * and the whole body sits inside `<fieldset disabled>`. Every control hidden below is therefore
+   * already inert for this role: hiding it takes away a thing to click at, not a thing they could
+   * do. `finLock`, `readOnly`, the disabled fieldset, the calculations and the save path are all
+   * untouched.
+   */
+  const isDocumentation = user?.role === 'documentation';
   // Financial edit lock: Price, Deposit and Commission fields are locked for everyone
   // except a Super Admin. Each field shows an edit pencil; clicking it sends an edit
   // request that a Super Admin must approve. One approval unlocks these fields; they
@@ -104,7 +120,9 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
   const rejectFinReq = async () => { if (!pendingFinReq) return; setReqBusy(true); try { await rejectEditRequest(pendingFinReq.id); toast('Request rejected', 'ok'); await refreshTxn(); } catch { toast('Could not reject', 'bad'); } finally { setReqBusy(false); } };
   const finLockStyle: CSSProperties = { background: 'var(--surface-3)', cursor: 'not-allowed' };
   // Edit pencil rendered next to a locked field's label (mirrors Agent Comm %).
-  const finPencil = (): ReactNode => (finLock ? (
+  // Not for Documentation: that role cannot edit these fields at all, so an invitation to request
+  // approval to edit them is an offer that goes nowhere.
+  const finPencil = (): ReactNode => (finLock && !isDocumentation ? (
     <button type="button" className="row-rm" disabled={reqBusy || !!pendingFinReq}
       title={pendingFinReq ? 'Edit approval pending with Super Admin' : 'Locked — click to request Super Admin approval to edit'}
       onClick={() => { setReason(''); setReasonOpen(true); }} style={{ marginLeft: 4, color: pendingFinReq ? 'var(--warn)' : 'var(--brand)' }}>
@@ -472,8 +490,15 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
         <button className="close" onClick={onClose}><Icon name="close" size={15} /></button>
         <div className="modal-h">Financial Information {listing && <span className="pill type-res-sell" style={{ fontSize: 10 }}>Listing</span>}{precon && <span className="pill type-pre" style={{ fontSize: 10 }}>Preconstruction</span>}</div>
 
-        {/* Locked-fields hint + pending state (the 🔒✏ pencils sit on each field). */}
-        {finLock && (
+        {/*
+          Locked-fields hint + pending state (the 🔒✏ pencils sit on each field).
+
+          HIDDEN FROM DOCUMENTATION, because its whole message is "click the 🔒✏ beside a field to
+          request approval" and that control is not rendered for them. Left up, it would point at
+          something that is not there. They get the plain "View" banner below instead, which is why
+          that one now shows for this role even though `finLock` is set.
+        */}
+        {finLock && !isDocumentation && (
           <div className="card" style={{ borderLeft: '4px solid #d97706', background: 'var(--warn-bg-2)', marginBottom: 12, fontSize: 12.5, color: 'var(--warn-ink-deep)' }}>
             <strong style={{ color: 'var(--warn-ink)' }}><Icon name="lock" size={13} /> Price, Deposit &amp; Commission fields are locked.</strong>{' '}
             {pendingFinReq
@@ -490,7 +515,13 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
             <button className="btn ghost sm" onClick={rejectFinReq} disabled={reqBusy}><Icon name="close" size={13} /> Reject</button>
           </div>
         )}
-        {approvedFinReq && !isSuperAdmin && (
+        {/*
+          Also hidden from Documentation. An approval belongs to whoever asked for it, and
+          `approvedFinReq` is simply "this deal has one" — so this banner would tell a Documentation
+          user to "edit the fields and Save" on the strength of somebody else's approval, which
+          their disabled fieldset will not let them do. They keep the plain "View" banner.
+        */}
+        {approvedFinReq && !isSuperAdmin && !isDocumentation && (
           <div className="card" style={{ borderLeft: '4px solid #16a34a', background: 'var(--ok-bg)', marginBottom: 12 }}>
             <span style={{ fontSize: 12.5, color: 'var(--ok-ink)' }}><Icon name="unlock" size={13} /> <strong>Approved</strong>{approvedFinReq.reviewed_by_name ? ` by ${approvedFinReq.reviewed_by_name}` : ''} — edit the fields and Save. The section re-locks after you save.</span>
           </div>
@@ -505,9 +536,17 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
         {/* NOTE: the original JS referenced an undefined `finLocked` here (a typo that
             would throw when this branch rendered); corrected to `finLock`, the clearly
             intended flag — the view-only banner hides while the finLock banner shows. */}
-        {readOnly && !dftNA && !isAgent && !finLock && (
+        {readOnly && !dftNA && !isAgent && (!finLock || isDocumentation) && (
           <div className="card" style={{ borderLeft: '4px solid #2563eb', background: 'var(--info-bg)', marginBottom: 12 }}>
-            <span style={{ fontSize: 12.5, color: 'var(--info-ink)' }}><Icon name="lock" size={13} /> View-only — click <strong>Edit</strong> on the transaction to make changes.</span>
+            {/*
+              Documentation gets the word and nothing else — no icon, no instruction. Every other
+              role keeps the sentence it has always had.
+            */}
+            <span style={{ fontSize: 12.5, color: 'var(--info-ink)' }} data-testid="fin-readonly-banner">
+              {isDocumentation
+                ? 'View'
+                : <><Icon name="lock" size={13} /> View-only — click <strong>Edit</strong> on the transaction to make changes.</>}
+            </span>
           </div>
         )}
         {(pendingLoanAgents.length > 0 || adjustedLoanAgents.length > 0) && (
@@ -612,7 +651,10 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
                 <div key={k} style={{ background: 'var(--surface-2)', border: '1px solid var(--line)', borderRadius: 8, padding: 12, marginBottom: 10 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
                     <strong>Term {k}</strong>
-                    <button type="button" className="btn ghost sm" style={{ padding: '4px 8px', lineHeight: 1 }} title={locked ? 'Unlock to edit Commission %' : 'Lock Commission %'} onClick={() => toggleLock(k)}>{locked ? <Icon name="edit" size={13} /> : <Icon name="lock" size={13} />}</button>
+                    {/* The lock/unlock beside a commission-term heading — not shown to Documentation. */}
+                    {!isDocumentation && (
+                      <button type="button" className="btn ghost sm" style={{ padding: '4px 8px', lineHeight: 1 }} title={locked ? 'Unlock to edit Commission %' : 'Lock Commission %'} onClick={() => toggleLock(k)}>{locked ? <Icon name="edit" size={13} /> : <Icon name="lock" size={13} />}</button>
+                    )}
                   </div>
                   <div className="g4">
                     <div className="field" style={{ marginBottom: 0 }}><label>Commission %</label><input type="number" value={t.pct} readOnly={locked} style={locked ? { background: 'var(--surface-3)', cursor: 'not-allowed', ...pctStyle } : pctStyle} onChange={(e) => setTermPct(idx, e.target.value)} /></div>
@@ -640,7 +682,9 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
                         <div className="g4">
                           <div className="field" style={{ marginBottom: 0 }}>
                             <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>Agent Comm (%)
-                              <button type="button" className="row-rm" style={{ color: 'var(--brand)', lineHeight: 1 }} title={agentUnlock[i] ? 'Lock Agent Comm %' : 'Unlock to edit Agent Comm %'} onClick={() => setAgentUnlock((u) => ({ ...u, [i]: !u[i] }))}>{agentUnlock[i] ? <Icon name="unlock" size={13} /> : <Icon name="edit" size={13} />}</button>
+                              {!isDocumentation && (
+                                <button type="button" className="row-rm" style={{ color: 'var(--brand)', lineHeight: 1 }} title={agentUnlock[i] ? 'Lock Agent Comm %' : 'Unlock to edit Agent Comm %'} onClick={() => setAgentUnlock((u) => ({ ...u, [i]: !u[i] }))}>{agentUnlock[i] ? <Icon name="unlock" size={13} /> : <Icon name="edit" size={13} />}</button>
+                              )}
                             </label>
                             <input type="number" value={m.agent_pct} readOnly={!agentUnlock[i]} style={!agentUnlock[i] ? { ...lockField, ...pctStyle } : pctStyle} onChange={(e) => setMember(i, 'agent_pct', e.target.value)} />
                           </div>
@@ -689,7 +733,7 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
                       <div className="brok-card" key={i}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}><strong style={{ fontSize: 13 }}>{(m.name || '').toUpperCase()}</strong><span className="pill" style={{ background: '#f3e8ff', color: '#6b21a8', border: '1px solid #d8b4fe', fontSize: 10 }}>Split: {m.split}%</span></div>
                         <div className="g4">
-                          <div className="field" style={{ marginBottom: 0 }}><label>Brok Comm (%) <Icon name="lock" size={11} /></label><input type="number" value={m.brok_pct} readOnly style={{ ...lockField, ...pctStyle }} /></div>
+                          <div className="field" style={{ marginBottom: 0 }}><label>Brok Comm (%) {!isDocumentation && <Icon name="lock" size={11} />}</label><input type="number" value={m.brok_pct} readOnly style={{ ...lockField, ...pctStyle }} /></div>
                           <div className="field" style={{ marginBottom: 0 }}><label>Commission</label><input readOnly value={formatCurrency(b.commission)} /></div>
                           <div className="field" style={{ marginBottom: 0 }}><label>HST</label><input readOnly value={formatCurrency(b.hst)} /></div>
                           <div className="field" style={{ marginBottom: 0 }}><label>Total</label><input readOnly style={{ fontWeight: 700, color: '#5b21b6' }} value={formatCurrency(b.total)} /></div>
@@ -777,7 +821,7 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
 
             {/* Listing Split / Members / Brokerage — Residential-Buying card design */}
             {!hideClientCommission && (
-              <AgentCommissionBlocks rows={listingRows} setMember={setListMember} minBrok={lb.minBrok} agentDefaults={agentDefaults} isLease={leaseType} hideT4A={isAgent} hadSavedTeam={hadSavedTeam} finLock={finLock} finPencil={finPencil} />
+              <AgentCommissionBlocks rows={listingRows} setMember={setListMember} minBrok={lb.minBrok} agentDefaults={agentDefaults} isLease={leaseType} hideT4A={isAgent} hadSavedTeam={hadSavedTeam} finLock={finLock} finPencil={finPencil} hideLocks={isDocumentation} />
             )}
 
             {/* Trust Verification */}
@@ -824,7 +868,7 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
             </div>
 
             <ReferralSections data={stdRefView} />
-            <AgentCommissionBlocks rows={memberRows} setMember={setMember} minBrok={{ commission: 200, hst: 26, total: 226 }} agentDefaults={agentDefaults} isLease={leaseType} hideT4A={isAgent} hadSavedTeam={hadSavedTeam} finLock={finLock} finPencil={finPencil} />
+            <AgentCommissionBlocks rows={memberRows} setMember={setMember} minBrok={{ commission: 200, hst: 26, total: 226 }} agentDefaults={agentDefaults} isLease={leaseType} hideT4A={isAgent} hadSavedTeam={hadSavedTeam} finLock={finLock} finPencil={finPencil} hideLocks={isDocumentation} />
           </>
         )}
 
@@ -871,12 +915,14 @@ interface AgentCommissionBlocksProps {
   hadSavedTeam?: boolean;
   finLock?: boolean;
   finPencil?: (() => ReactNode) | null;
+  /** Documentation role: render the figures without the lock and unlock furniture around them. */
+  hideLocks?: boolean;
 }
 
 // Shared per-agent commission cards (Agent Commission / Agent T4A / Brokerage
 // Commission + min-brokerage floor). Used by both the standard and listing
 // variants so they render identically. `minBrok` carries the type-specific floor.
-function AgentCommissionBlocks({ rows, setMember, minBrok, agentDefaults = {}, isLease = false, hideT4A = false, hadSavedTeam = false, finLock = false, finPencil = null }: AgentCommissionBlocksProps) {
+function AgentCommissionBlocks({ rows, setMember, minBrok, agentDefaults = {}, isLease = false, hideT4A = false, hadSavedTeam = false, finLock = false, finPencil = null, hideLocks = false }: AgentCommissionBlocksProps) {
   // Agent Comm (%) is locked by default (click the pencil to edit); Brok Comm (%)
   // is always locked — it auto-fills as the complement of Agent Comm.
   const [unlocked, setUnlocked] = useState<Record<number, boolean>>({});
@@ -905,7 +951,7 @@ function AgentCommissionBlocks({ rows, setMember, minBrok, agentDefaults = {}, i
             <div className="field" style={{ marginBottom: 0 }}>
               <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>Agent Comm (%)
                 {/* When financially locked, the approval pencil replaces the local unlock. */}
-                {(finLock && finPencil) ? finPencil() : (
+                {hideLocks ? null : (finLock && finPencil) ? finPencil() : (
                   <button type="button" className="row-rm" style={{ color: 'var(--brand)', lineHeight: 1 }} title={unlocked[i] ? 'Lock Agent Comm %' : 'Unlock to edit Agent Comm %'} onClick={() => setUnlocked((u) => ({ ...u, [i]: !u[i] }))}>{unlocked[i] ? <Icon name="unlock" size={13} /> : <Icon name="edit" size={13} />}</button>
                 )}
               </label>
@@ -953,7 +999,7 @@ function AgentCommissionBlocks({ rows, setMember, minBrok, agentDefaults = {}, i
         <div className="brok-card" key={i}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}><strong style={{ fontSize: 13 }}>{(r.m.name || '').toUpperCase()}</strong><span className="pill" style={{ background: '#f3e8ff', color: '#6b21a8', border: '1px solid #d8b4fe', fontSize: 10 }}>Split: {r.m.split}%</span></div>
           <div className="g4">
-            <div className="field" style={{ marginBottom: 0 }}><label>Brok Comm (%) <Icon name="lock" size={11} /></label><input type="number" value={r.m.brok_pct} readOnly style={{ ...lockField, ...pctStyle }} /></div>
+            <div className="field" style={{ marginBottom: 0 }}><label>Brok Comm (%) {!hideLocks && <Icon name="lock" size={11} />}</label><input type="number" value={r.m.brok_pct} readOnly style={{ ...lockField, ...pctStyle }} /></div>
             <div className="field" style={{ marginBottom: 0 }}><label>Commission</label><input readOnly style={cs(r.brok.commission)} value={formatCurrency(r.brok.commission)} /></div>
             <div className="field" style={{ marginBottom: 0 }}><label>HST</label><input readOnly style={cs(r.brok.hst)} value={formatCurrency(r.brok.hst)} /></div>
             <div className="field" style={{ marginBottom: 0 }}><label>Total</label><input readOnly style={ts(r.brok.total)} value={formatCurrency(r.brok.total)} /></div>
