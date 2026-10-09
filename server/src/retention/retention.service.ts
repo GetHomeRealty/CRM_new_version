@@ -69,6 +69,18 @@ export interface RetentionPlan {
 export interface RetentionResult extends RetentionPlan {
   deleted: RetentionPlan['counts'];
   files_removed: number;
+  /**
+   * Files the sweep tried to remove and could not — a permission error, a locked file, or a path
+   * that resolves outside the storage root. Counted rather than swallowed: a sweep that quietly
+   * skipped them would report a clean run while the bytes stayed, which is how the Recycle Bin's
+   * own leak went unnoticed for so long.
+   */
+  files_failed: number;
+  /**
+   * Records left in place BECAUSE their files could not be removed. They stay eligible, so the next
+   * sweep tries again once whatever blocked it is cleared.
+   */
+  records_retained: number;
   capped: boolean;
 }
 
@@ -93,6 +105,14 @@ const trashedInvoiceWithoutPayments = (cut: Date) => ({
 @Injectable()
 export class RetentionService {
   private readonly log = new Logger(RetentionService.name);
+
+  /**
+   * Rows per batch. `protected` rather than a bare constant so a test can shrink it and exercise
+   * the MULTI-BATCH path — the cursor, and what happens to the batches after one that kept a
+   * record. Seeding 500 deals to reach the second batch would make that test unrunnable, so the
+   * property would go untested, which is how a cursor bug survives.
+   */
+  protected readonly batchSize: number = BATCH;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -186,7 +206,9 @@ export class RetentionService {
       audit_logs_desk: 0, trashed_transactions: 0, trashed_documents: 0, trashed_invoices: 0,
       trashed_payments: 0, trashed_rows: 0, transaction_reminders: 0, document_reminders: 0,
     };
-    const result: RetentionResult = { ...plan, deleted: { ...empty }, files_removed: 0, capped: false };
+    const result: RetentionResult = {
+      ...plan, deleted: { ...empty }, files_removed: 0, files_failed: 0, records_retained: 0, capped: false,
+    };
 
     if (!plan.enabled) {
       this.log.log(
@@ -241,59 +263,177 @@ export class RetentionService {
     return result;
   }
 
-  /** Purge trashed deals: unlink their document files, then delete the deal and let it cascade. */
+  /**
+   * Purge trashed deals: unlink their document files, then delete the deal and let it cascade.
+   *
+   * A DEAL WHOSE FILES COULD NOT BE REMOVED IS LEFT ALONE — the row and its paths are the only way
+   * back to those bytes, so losing them would strand the files permanently. It stays eligible and
+   * the next sweep tries again. One unreachable file therefore costs one deal, not the pass.
+   *
+   * THE BATCH IS WALKED BY CURSOR rather than re-queried from the start. While every fetched row
+   * was deleted, re-querying terminated naturally; now that a row can be RETAINED it would be
+   * fetched again for ever. `id > lastSeen` steps past it instead.
+   */
   private async purgeTransactions(cut: Date, result: RetentionResult): Promise<number> {
     let removed = 0;
+    let after = 0;
     for (;;) {
       if (removed >= MAX_PER_SWEEP) { result.capped = true; break; }
       const batch = await this.prisma.transactions.findMany({
-        where: trashedDealWithoutPayments(cut), select: { id: true }, take: BATCH, orderBy: { id: 'asc' },
+        where: { AND: [trashedDealWithoutPayments(cut), { id: { gt: after } }] },
+        select: { id: true }, take: this.batchSize, orderBy: { id: 'asc' },
       });
       if (!batch.length) break;
       const ids = batch.map((t) => t.id);
+      after = ids[ids.length - 1];
+
       const docs = await this.prisma.documents.findMany({
         where: { transaction_id: { in: ids } },
-        select: { file_path: true, validation_file_path: true, files: true },
+        select: { transaction_id: true, file_path: true, validation_file_path: true, files: true, draft_files: true },
       });
-      for (const d of docs) result.files_removed += await this.purgeDocumentFiles(d);
-      const done = await this.prisma.transactions.deleteMany({ where: { id: { in: ids } } });
-      removed += done.count;
+
+      // Which deals in this batch still hold a file nobody could remove.
+      const blocked = new Set<number>();
+      for (const d of docs) {
+        const outcome = await this.purgeDocumentFiles(d);
+        result.files_removed += outcome.removed;
+        if (outcome.failed.length) {
+          result.files_failed += outcome.failed.length;
+          blocked.add(d.transaction_id);
+          this.log.warn(`Retention kept deal ${d.transaction_id}: ${outcome.failed.join('; ')}`);
+        }
+      }
+
+      const deletable = ids.filter((id) => !blocked.has(id));
+      result.records_retained += blocked.size;
+      if (deletable.length) {
+        const done = await this.prisma.transactions.deleteMany({ where: { id: { in: deletable } } });
+        removed += done.count;
+      }
     }
     return removed;
   }
 
-  /** Documents trashed on their own, whose transaction is still live. */
+  /** Documents trashed on their own, whose transaction is still live. Same rules as the deal path. */
   private async purgeDocuments(cut: Date, result: RetentionResult): Promise<number> {
     let removed = 0;
+    let after = 0;
     for (;;) {
       if (removed >= MAX_PER_SWEEP) { result.capped = true; break; }
       const batch = await this.prisma.documents.findMany({
-        where: { deleted_at: { lt: cut } },
-        select: { id: true, file_path: true, validation_file_path: true, files: true },
-        take: BATCH, orderBy: { id: 'asc' },
+        where: { deleted_at: { lt: cut }, id: { gt: after } },
+        select: { id: true, file_path: true, validation_file_path: true, files: true, draft_files: true },
+        take: this.batchSize, orderBy: { id: 'asc' },
       });
       if (!batch.length) break;
-      for (const d of batch) result.files_removed += await this.purgeDocumentFiles(d);
-      const done = await this.prisma.documents.deleteMany({ where: { id: { in: batch.map((d) => d.id) } } });
-      removed += done.count;
+      after = batch[batch.length - 1].id;
+
+      const deletable: number[] = [];
+      for (const d of batch) {
+        const outcome = await this.purgeDocumentFiles(d);
+        result.files_removed += outcome.removed;
+        if (outcome.failed.length) {
+          result.files_failed += outcome.failed.length;
+          result.records_retained += 1;
+          this.log.warn(`Retention kept document ${d.id}: ${outcome.failed.join('; ')}`);
+          continue;
+        }
+        deletable.push(d.id);
+      }
+
+      if (deletable.length) {
+        const done = await this.prisma.documents.deleteMany({ where: { id: { in: deletable } } });
+        removed += done.count;
+      }
     }
     return removed;
   }
 
+  /** Is this resolved path textually inside `root`? */
+  private static within(root: string, abs: string): boolean {
+    const rel = path.relative(root, abs);
+    return !!rel && !rel.startsWith('..') && !path.isAbsolute(rel);
+  }
+
   /**
-   * Remove the files a document points at. Best-effort per file: a missing file is the state we
-   * wanted anyway, and one unreadable path must not stop the pass.
+   * The storage root with links resolved. The root itself may be one — a deployment pointing
+   * `storage/app` at a mounted volume is ordinary — and comparing a resolved file against an
+   * unresolved root would put every legitimate file "outside" and purge nothing.
    */
-  private async purgeDocumentFiles(d: { file_path: string | null; validation_file_path: string | null; files: string | null }): Promise<number> {
-    let n = 0;
+  private async realStorageRoot(): Promise<string> {
+    const root = path.resolve(STORAGE_ROOT);
+    return fs.realpath(root).catch(() => root);
+  }
+
+  /**
+   * What to do with one stored path: unlink this absolute path, treat it as already gone, or refuse.
+   *
+   * TWO CHECKS, BECAUSE THEY CATCH DIFFERENT THINGS. The textual one stops `../../.env`, which
+   * `path.join` would resolve happily and which `realpath` cannot help with when the target does
+   * not exist. The second RESOLVES LINKS: `documents/x/f.pdf` is textually inside the root however
+   * many symlinks lie along it, so if `documents/x` points at another volume only `realpath` can
+   * tell. Containment is a question about the filesystem, not about the spelling of a string.
+   *
+   * This mirrors `RecycleBinService`, deliberately and with the duplication acknowledged: both
+   * paths unlink the same files under the same root and must not disagree about what is reachable.
+   * Worth extracting to a shared helper, which is a change to both modules rather than this one.
+   */
+  private async resolveForUnlink(rel: string): Promise<{ abs: string } | { gone: true } | { refuse: string }> {
+    const root = await this.realStorageRoot();
+    const abs = path.resolve(root, rel);
+    if (!RetentionService.within(root, abs)) return { refuse: 'outside the storage root' };
+
+    let real: string;
+    try {
+      real = await fs.realpath(abs);
+    } catch (ex) {
+      const code = (ex as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT') return { gone: true };
+      return { refuse: code ?? (ex as Error).message };
+    }
+    if (!RetentionService.within(root, real)) return { refuse: 'resolves outside the storage root through a link' };
+    return { abs: real };
+  }
+
+  /**
+   * Remove every file a document points at — all four sources, including the agent's unsubmitted
+   * `draft_files`, which this sweep used to ignore entirely and so orphaned on every purge.
+   *
+   * ALREADY GONE IS SUCCESS, ANYTHING ELSE IS NOT. `ENOENT` means the file is in the state the
+   * sweep wanted. A permission error, a locked file or a path that escapes the root is a real
+   * failure, and the caller keeps the record so the paths survive for the next pass.
+   *
+   * EVERY FILE IS ATTEMPTED even once one has failed, so an operator sees the whole problem at once
+   * rather than discovering it one sweep at a time. Nothing is thrown: this runs over many records
+   * and one bad file must cost its own record, not the pass.
+   */
+  private async purgeDocumentFiles(
+    d: { file_path: string | null; validation_file_path: string | null; files: string | null; draft_files?: string | null },
+  ): Promise<{ removed: number; failed: string[] }> {
+    let removed = 0;
+    const failed: string[] = [];
+
     const unlink = async (rel: string | null | undefined): Promise<void> => {
       if (!rel) return;
-      try { await fs.unlink(path.join(STORAGE_ROOT, rel)); n++; } catch { /* already gone */ }
+      const target = await this.resolveForUnlink(rel);
+      if ('gone' in target) return;                                    // nothing there — already done
+      if ('refuse' in target) { failed.push(`${rel} (${target.refuse})`); return; }
+      try {
+        await fs.unlink(target.abs);
+        removed += 1;
+      } catch (ex) {
+        const code = (ex as NodeJS.ErrnoException).code;
+        if (code === 'ENOENT') return;   // removed between the check and the unlink; still done
+        failed.push(`${rel} (${code ?? (ex as Error).message})`);
+      }
     };
+
     await unlink(d.file_path);
     await unlink(d.validation_file_path);
     for (const f of (parseJson<{ file_path?: string }[]>(d.files) ?? [])) await unlink(f?.file_path);
-    return n;
+    for (const f of (parseJson<{ file_path?: string }[]>(d.draft_files) ?? [])) await unlink(f?.file_path);
+
+    return { removed, failed };
   }
 
   /** Delete in batches until nothing is left or the per-sweep ceiling is reached. */
@@ -329,14 +469,22 @@ export class RetentionService {
    */
   private async record(r: RetentionResult): Promise<void> {
     const summary = Object.entries(r.deleted).filter(([, v]) => v > 0).map(([k, v]) => `${v} ${k}`).join(', ');
-    if (!summary && !r.files_removed) return;
-    this.log.log(`Retention removed ${summary || 'nothing'}${r.files_removed ? `, ${r.files_removed} file(s)` : ''} (cutoff ${r.cutoff.slice(0, 10)})${r.capped ? ' — capped, more remains' : ''}.`);
+    if (!summary && !r.files_removed && !r.files_failed) return;
+    /*
+     * The failures are named in the same breath as the successes. A run that removed nine hundred
+     * files and could not remove three is not a clean run, and a summary that mentioned only the
+     * nine hundred would read like one.
+     */
+    const trouble = r.files_failed
+      ? `; ${r.files_failed} file(s) could not be removed, ${r.records_retained} record(s) kept for the next sweep`
+      : '';
+    this.log.log(`Retention removed ${summary || 'nothing'}${r.files_removed ? `, ${r.files_removed} file(s)` : ''}${trouble} (cutoff ${r.cutoff.slice(0, 10)})${r.capped ? ' — capped, more remains' : ''}.`);
     await this.audit.logModule(null, 'Retention', {
       section: 'Transaction Desk Retention',
       field: `Older than ${RETENTION_MONTHS} months`,
       action: 'Records purged',
       source: 'System',
-      details: `${summary || 'nothing'}${r.files_removed ? `; ${r.files_removed} file(s)` : ''}; cutoff ${r.cutoff.slice(0, 10)}${r.capped ? '; capped' : ''}`,
+      details: `${summary || 'nothing'}${r.files_removed ? `; ${r.files_removed} file(s)` : ''}${trouble}; cutoff ${r.cutoff.slice(0, 10)}${r.capped ? '; capped' : ''}`,
     });
   }
 }
