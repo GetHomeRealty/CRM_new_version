@@ -846,7 +846,31 @@ export default function MetaPage() {
 
   const connectedForms = forms.filter((f) => f.is_connected).length;
   const searchText = formSearch.trim().toLowerCase();
-  const shownForms = searchText ? forms.filter((f) => f.name.toLowerCase().includes(searchText)) : forms;
+  const matching = searchText ? forms.filter((f) => f.name.toLowerCase().includes(searchText)) : forms;
+
+  /*
+   * Active forms first, everything else after, each group in the order Facebook gave it.
+   *
+   * THE FORM'S OWN STATUS, NOT WHETHER IT IS CONNECTED. Those are different questions and they
+   * disagree often: a paused form can still be connected to the CRM, and an active one may never
+   * have been connected at all. Ordering by the connection would answer the wrong one.
+   *
+   * TWO PASSES RATHER THAN `sort`, which keeps each group in exactly the order it arrived. A
+   * comparator would too, since `Array.sort` is specified as stable, but it says so only to
+   * somebody who already knows that; this says it in the shape of the code.
+   *
+   * Compared case-insensitively because `status` is Facebook's own string passed through untouched
+   * (`meta.controller.ts`) — `ACTIVE` today, with nothing on our side guaranteeing the casing
+   * tomorrow. A missing status is not active, so it sorts with the rest rather than being promoted
+   * on a technicality.
+   *
+   * Ordered HERE, where the list is built, so it is already in this order before anything
+   * downstream slices it. Nothing pages the forms today — `FormLeadsPager` belongs to the leads
+   * list, not this one — and ordering at the source is what keeps this correct if something ever
+   * does.
+   */
+  const isActive = (f: MetaForm) => (f.status ?? '').trim().toUpperCase() === 'ACTIVE';
+  const shownForms = [...matching.filter(isActive), ...matching.filter((f) => !isActive(f))];
 
   return (
     // `display: contents` adds no box, so the layout is exactly as before; only visibility changes.
@@ -1016,8 +1040,12 @@ export default function MetaPage() {
             {shownForms.length === 0 ? (
               <p className="help" data-testid="meta-form-no-match">No matching forms</p>
             ) : (
-            // The shared three-up grid: three across on a desktop, two on a tablet, one on a phone.
-            <ul className="meta-forms g3">
+            /*
+             * Two across, and scrolling inside its own box rather than growing the page. A Page with
+             * sixty forms used to push the leads below it out of reach; the heading, the search and
+             * the count stay put above while only the list itself moves.
+             */
+            <ul className="meta-forms meta-forms-grid" data-testid="meta-forms-list">
               {shownForms.map((f) => (
                 <li key={f.id}
                   style={{

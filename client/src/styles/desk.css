@@ -1100,6 +1100,27 @@ input[type="number"],.numeric,.stat-card .val{font-variant-numeric:tabular-nums;
 
 .meta-forms{list-style:none;margin:0 0 10px;padding:0}
 .meta-forms li{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;border:1px solid var(--line-2);border-radius:10px;padding:10px 12px;margin-bottom:8px}
+/* ---------------------------------------------------------------------------
+ * The Lead Forms list — two columns, with its own scrollbar.
+ *
+ * SCOPED, NOT A CHANGE TO `.g3`. That class is the shared three-up grid used elsewhere on the Meta
+ * and Analytics screens; this list wants two columns and a height limit, which is a different
+ * thing wearing the same clothes.
+ *
+ * THE HEIGHT IS THE POINT. A Page with sixty forms produced a card taller than the viewport, so
+ * reaching the leads underneath meant scrolling past every form first. Only the list scrolls — the
+ * heading, the search box and the "showing n of m" count stay where they are.
+ *
+ * `vh` rather than a fixed pixel height on a phone: one column is twice as tall for the same forms,
+ * and a value that suits a laptop leaves a phone scrolling a tall box inside a tall page.
+ * --------------------------------------------------------------------------- */
+.meta-forms-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:16px;max-height:420px;overflow-y:auto;
+  /* Room for the scrollbar, so it never sits over a card's Connect button. */
+  padding-right:6px}
+.meta-forms-grid li{margin-bottom:0}
+
+@media(max-width:760px){.meta-forms-grid{grid-template-columns:1fr;max-height:60vh}}
+
 .meta-forms li strong{font-size:13px}
 .meta-forms li .muted{font-size:11.5px;margin-top:2px}
 
