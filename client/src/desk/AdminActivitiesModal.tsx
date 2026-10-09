@@ -85,6 +85,19 @@ interface AdminActivitiesModalProps {
 export default function AdminActivitiesModal({ open, onClose, transactionId, txn, onSaved, termCount: termCountProp, depositOnly = false, dftNA = false, readOnly = false }: AdminActivitiesModalProps) {
   const na = (v: string | undefined): string | undefined => (dftNA ? 'N/A' : v); // §5.1 DFT — status dropdowns default to N/A
   const { user, isSuperAdmin } = useAuth();
+  /*
+   * THE DOCUMENTATION ROLE ONLY — the same test the transaction page makes, and the same one
+   * `FinancialModal` makes for the same reason.
+   *
+   * This role is view-only on Admin Activities (the page passes `readOnly={sectionView}`, and
+   * `sectionView = view || isDocumentation`), so telling them to "click Edit on the transaction"
+   * points at something they will never be given. Every other role keeps that sentence, because
+   * for them it is true and actionable.
+   *
+   * WORDING ONLY. `readOnly`, the disabled fieldset below it, and every payment and transfer
+   * control are untouched.
+   */
+  const isDocumentation = user?.role === 'documentation';
   const toast = useToast();
   const listing = isListingType(txn.type);
   const precon = isPreconType(txn.type);
@@ -266,7 +279,11 @@ export default function AdminActivitiesModal({ open, onClose, transactionId, txn
         )}
         {readOnly && !dftNA && (
           <div className="card" style={{ borderLeft: '4px solid #2563eb', background: 'var(--info-bg)', marginBottom: 12 }}>
-            <span style={{ fontSize: 12.5, color: 'var(--info-ink)' }}><Icon name="lock" size={13} /> View-only — click <strong>Edit</strong> on the transaction to make changes.</span>
+            <span style={{ fontSize: 12.5, color: 'var(--info-ink)' }} data-testid="admin-readonly-banner">
+              {isDocumentation
+                ? 'View'
+                : <><Icon name="lock" size={13} /> View-only — click <strong>Edit</strong> on the transaction to make changes.</>}
+            </span>
           </div>
         )}
 
