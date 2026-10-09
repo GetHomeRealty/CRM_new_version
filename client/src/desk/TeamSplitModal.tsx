@@ -190,7 +190,7 @@ export default function TeamSplitModal({ open, onClose, transactionId, primaryAg
         */}
         {readOnly && (
           <div className="card" style={{ borderLeft: '4px solid #2563eb', background: 'var(--info-bg)', marginBottom: 12 }}>
-            <span style={{ fontSize: 12.5, color: 'var(--info-ink)' }}>View</span>
+            <span style={{ fontSize: 12.5, color: 'var(--info-ink)' }} data-testid="team-readonly-banner">View</span>
           </div>
         )}
         {!readOnly && lockAgents && (

@@ -65,10 +65,18 @@ test('an agent in View Only cannot edit the Team Split, and is told why (TD-058)
     await expect(isSplit).toBeDisabled();
     await expect(isSplit).toHaveValue('No');
 
-    // No Save — and the lock is explained rather than silent. The banner used to be hidden from
-    // agents, which is the one role the defect was reported on.
+    /*
+     * No Save — and the state is stated rather than silent. The banner used to be hidden from
+     * agents, which is the one role the defect was reported on, so its PRESENCE is the point.
+     *
+     * It reads "View". It used to read "View-only — click Edit on the transaction to make
+     * changes." and this line matched /view-only|read-only/; the wording was shortened
+     * deliberately, so the assertion is now on the banner itself rather than on a phrase that is
+     * free to change again. What TD-058 requires is that something is there saying so.
+     */
     await expect(modal.getByRole('button', { name: /^save$/i })).toHaveCount(0);
-    await expect(modal.getByText(/view-only|read-only/i)).toBeVisible();
+    await expect(modal.getByTestId('team-readonly-banner')).toBeVisible();
+    await expect(modal.getByTestId('team-readonly-banner')).toHaveText('View');
   } finally {
     await signOut(page);
     await signIn(page, 'superAdmin');
