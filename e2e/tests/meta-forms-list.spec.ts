@@ -318,3 +318,155 @@ test.describe('the Lead Forms list', () => {
     expect(await renderedOrder(page)).toEqual(EXPECTED);
   });
 });
+
+/* ===================================================================================================
+ * ORDERING BY AD STATUS, and the red Disconnect.
+ *
+ * The group above orders by the FORM's own status (Facebook's ACTIVE/PAUSED/…). This group is about
+ * the AD status — the separate per-form check behind the Active / Inactive badge — which is the
+ * primary key: Active first, Inactive next, unknown last, with the form-status order preserved
+ * inside each group.
+ *
+ * Those earlier tests still hold because their ad-status stub is empty, which puts every form in
+ * the unknown group and leaves the form-status order untouched. That is not a coincidence worth
+ * relying on silently, so it is written down here.
+ * =================================================================================================== */
+
+type AdState = 'enabled' | 'not_enabled' | 'no_ads' | 'unknown';
+
+/** An ad-status response assigning the given state to each form number. */
+const adStates = (byNumber: Record<number, AdState>) => ({
+  checked_at: '2026-10-08T12:00:00.000Z', blocked: null, accounts_checked: 1, accounts_failed: [],
+  forms: Object.fromEntries(Object.entries(byNumber).map(([n, state]) => [
+    `form-${n}`, { state, summary: String(state), reason: null, ads: [] },
+  ])),
+});
+
+/**
+ * Opens the list with a specific ad-status payload.
+ *
+ * `openForms` registers its own empty ad-status handler, and Playwright checks handlers in reverse
+ * order of registration — so this one goes on AFTER it, and the page is reloaded to fetch through
+ * it.
+ */
+async function openWithAdStatus(page: Page, ads: unknown): Promise<void> {
+  await openForms(page);
+  await page.route(AD_STATUS, (r) => r.fulfill(json(ads)));
+  await page.reload();
+  await expect(page.getByTestId('meta-forms-list').locator('li')).toHaveCount(forms.length);
+  // The badges are what prove the stub arrived; without them the ordering tests would be vacuous.
+  await expect(page.getByTestId('meta-ad-badge').first()).toBeVisible();
+}
+
+/*
+ * 2 and 14 have active ads; 3 and 4 are inactive; the rest are unknown.
+ *
+ * CONNECTED AND DISCONNECTED ON BOTH SIDES, which is the case worth covering. `CONNECTED` holds
+ * {1,3,5,7,11,2}: among the active-ad forms 2 is connected and 14 is not, and among the inactive
+ * 3 is connected and 4 is not. An ordering that read `is_connected` cannot produce the expected
+ * sequence.
+ */
+const ADS: Record<number, AdState> = { 2: 'enabled', 14: 'enabled', 3: 'not_enabled', 4: 'no_ads' };
+const adRank = (n: number): number => (ADS[n] === 'enabled' ? 0 : ADS[n] ? 1 : 2);
+
+test.describe('the Lead Forms list, ordered by ad status', () => {
+  test('ACTIVE ADS FIRST, THEN INACTIVE, THEN UNKNOWN', async ({ page }) => {
+    await signIn(page, 'admin');
+    await openWithAdStatus(page, adStates(ADS));
+
+    const order = await renderedOrder(page);
+    const ranks = order.map(adRank);
+
+    // Ranks never decrease: every Active precedes every Inactive precedes every unknown.
+    expect(ranks).toEqual([...ranks].sort((a, b) => a - b));
+    expect(ranks.slice(0, 2)).toEqual([0, 0]);
+    expect(ranks.slice(2, 4)).toEqual([1, 1]);
+
+    // Exactly, so a reshuffle INSIDE a group is caught too: the form-status order restricted to
+    // each ad-status group in turn, which is what "preserve the existing order" means here.
+    expect(order).toEqual([0, 1, 2].flatMap((r) => EXPECTED.filter((n) => adRank(n) === r)));
+  });
+
+  test('IT IS THE AD STATUS, NOT THE CONNECTION, that decides', async ({ page }) => {
+    await signIn(page, 'admin');
+    await openWithAdStatus(page, adStates(ADS));
+    const order = await renderedOrder(page);
+
+    // The two forms with active ads lead the list — one connected (2), one not (14).
+    expect(order.slice(0, 2).sort((a, b) => a - b)).toEqual([2, 14]);
+    expect(CONNECTED.has(2)).toBe(true);
+    expect(CONNECTED.has(14)).toBe(false);
+
+    // Connected forms without an active ad are NOT promoted: 1, 5, 7 and 11 are all connected.
+    for (const n of [1, 5, 7, 11]) expect(order.indexOf(n)).toBeGreaterThan(order.indexOf(14));
+  });
+
+  test('the badge a row shows AGREES with where it sorted', async ({ page }) => {
+    // The strongest reading of "use the actual ad status": read the rendered badges, top to bottom.
+    await signIn(page, 'admin');
+    await openWithAdStatus(page, adStates(ADS));
+
+    const badges = await page.getByTestId('meta-forms-list').locator('li').evaluateAll((els) =>
+      els.map((e) => e.querySelector('[data-testid="meta-ad-badge"]')?.textContent?.trim() ?? ''));
+
+    expect(badges.slice(0, 2)).toEqual(['Active', 'Active']);
+    expect(badges.slice(2, 4)).toEqual(['Inactive', 'Inactive']);
+    expect(badges.slice(4).every((b) => b === '')).toBe(true);
+  });
+
+  test('searching keeps the ad-status order', async ({ page }) => {
+    await signIn(page, 'admin');
+    await openWithAdStatus(page, adStates(ADS));
+
+    await page.getByTestId('meta-form-search').fill('active');
+    const order = await renderedOrder(page);
+    expect(order.length).toBeGreaterThan(2);
+    // 02 and 14 both match by name and both have active ads, so they must still lead.
+    expect(order.slice(0, 2).sort((a, b) => a - b)).toEqual([2, 14]);
+  });
+
+  test('REFRESHING THE AD STATUS RE-ORDERS the list', async ({ page }) => {
+    await signIn(page, 'admin');
+    await openWithAdStatus(page, adStates(ADS));
+    expect((await renderedOrder(page)).slice(0, 2).sort((a, b) => a - b)).toEqual([2, 14]);
+
+    // The next check reports a different picture; the list must follow it, not the first one.
+    await page.route(AD_STATUS, (r) => r.fulfill(json(adStates({ 5: 'enabled', 2: 'no_ads', 14: 'no_ads' }))));
+    await page.getByRole('button', { name: /Refresh ad status/i }).click();
+
+    await expect.poll(async () => (await renderedOrder(page))[0]).toBe(5);
+    const after = await renderedOrder(page);
+    expect(after.indexOf(2)).toBeGreaterThan(after.indexOf(5));
+    expect(after.indexOf(14)).toBeGreaterThan(after.indexOf(5));
+  });
+});
+
+test.describe('the Disconnect button', () => {
+  test('IS RED, AND CONNECT IS NOT', async ({ page }) => {
+    await signIn(page, 'admin');
+    await openForms(page);
+
+    const disconnects = page.getByTestId('meta-form-disconnect');
+    const connects = page.getByTestId('meta-form-connect');
+    // The fixture has both kinds, or this proves only half of what it claims.
+    expect(await disconnects.count()).toBe(CONNECTED.size);
+    expect(await connects.count()).toBe(forms.length - CONNECTED.size);
+
+    // The existing destructive class, not a new colour invented here.
+    for (const b of await disconnects.all()) await expect(b).toHaveClass(/\bdanger\b/);
+    for (const b of await connects.all()) await expect(b).not.toHaveClass(/\bdanger\b/);
+
+    // And it actually renders red, rather than merely carrying a class that might not be styled.
+    const danger = await disconnects.first().evaluate((el) => getComputedStyle(el).color);
+    const plain = await connects.first().evaluate((el) => getComputedStyle(el).color);
+    expect(danger).not.toBe(plain);
+  });
+
+  test('still says Disconnect, and is still the same control', async ({ page }) => {
+    // The colour is the only change: the label and the click target are untouched.
+    await signIn(page, 'admin');
+    await openForms(page);
+    await expect(page.getByTestId('meta-form-disconnect').first()).toHaveText('Disconnect');
+    await expect(page.getByTestId('meta-form-connect').first()).toHaveText('Connect');
+  });
+});

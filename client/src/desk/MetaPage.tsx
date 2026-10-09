@@ -870,7 +870,35 @@ export default function MetaPage() {
    * does.
    */
   const isActive = (f: MetaForm) => (f.status ?? '').trim().toUpperCase() === 'ACTIVE';
-  const shownForms = [...matching.filter(isActive), ...matching.filter((f) => !isActive(f))];
+  const byFormStatus = [...matching.filter(isActive), ...matching.filter((f) => !isActive(f))];
+
+  /*
+   * THEN BY AD STATUS, which is what the list is really read for: Active first, Inactive next,
+   * unknown last.
+   *
+   * THE SAME VALUE THAT DRIVES THE BADGE, taken from `adFor` rather than re-derived, so a row
+   * showing "Active" can never sort as anything else. `adBadge` maps `enabled` to Active and both
+   * `not_enabled` and `no_ads` to Inactive; `unknown` gets no badge at all, and neither does a
+   * form the ad check has not reached yet (`adFor` returns null). Those two are the same thing to
+   * a reader — "we cannot say" — so they share the last group.
+   *
+   * NOT BY CONNECTED/DISCONNECTED. An active form may well still show "Connect", and ordering by
+   * the connection would answer a different question from the one the badge asks.
+   *
+   * ORDERED ON TOP OF `byFormStatus` RATHER THAN INSTEAD OF IT. Three stable passes, so within an
+   * ad-status group the list keeps exactly the order it already had — active forms first, then
+   * Facebook's own order. That is what "preserve the existing order within each group" protects.
+   *
+   * COMPUTED IN RENDER, deliberately. `adFor` reads `adStatus` and `adError` state, so pressing
+   * "Refresh ad status" re-ranks the list without anything extra having to remember to.
+   */
+  const adRank = (f: MetaForm): number => {
+    const state = adFor(f.id)?.state;
+    if (state === 'enabled') return 0;                               // badge: Active
+    if (state === 'not_enabled' || state === 'no_ads') return 1;     // badge: Inactive
+    return 2;                                                        // unknown, or not checked yet
+  };
+  const shownForms = [0, 1, 2].flatMap((rank) => byFormStatus.filter((f) => adRank(f) === rank));
 
   return (
     // `display: contents` adds no box, so the layout is exactly as before; only visibility changes.
@@ -1089,7 +1117,15 @@ export default function MetaPage() {
                       );
                     })()}
                     {canEdit && (
-                      <button className="btn ghost sm" type="button" disabled={busy !== ''} onClick={() => toggle(f)}>
+                      /*
+                        Disconnect is red; Connect is not. `danger` is the existing destructive
+                        class (`.btn.ghost.danger`), the same one the Roles and Communications
+                        panels use, so this adds no new styling — only the tint that says which of
+                        the two this press would be. The action and its confirmation are untouched.
+                      */
+                      <button className={`btn ghost sm${f.is_connected ? ' danger' : ''}`} type="button"
+                        data-testid={f.is_connected ? 'meta-form-disconnect' : 'meta-form-connect'}
+                        disabled={busy !== ''} onClick={() => toggle(f)}>
                         {f.is_connected ? 'Disconnect' : 'Connect'}
                       </button>
                     )}
