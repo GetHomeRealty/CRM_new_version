@@ -28,12 +28,16 @@ interface TeamSplitModalProps {
   onSaved?: (updated: Transaction) => void;
   readOnly?: boolean;
   /**
-   * TD-058 — WHY the form is locked, in the words of whoever locked it.
+   * NOT DISPLAYED. The banner reads "View" and nothing else, by request.
    *
-   * The modal knows it is read-only; only the page knows whether that is because View Only is on,
-   * because the deal is closed and paid, or because this member may not touch the split. Without
-   * it the banner had to guess, and it guessed by role — so an AGENT, the person the defect was
-   * reported on, saw a dead form with no explanation at all.
+   * Still accepted, and still passed by `TransactionDetailPage`, so that the caller does not have
+   * to change and the reason is here the moment anyone wants it back. Anything assigned to it goes
+   * nowhere on screen today — do not add a message here expecting a person to read it.
+   *
+   * It was TD-058: the modal knows it is read-only, but only the page knows whether that is View
+   * Only, a closed-and-paid deal, or a member who may not touch the split. The banner used to
+   * guess by role, so an AGENT — the person the defect was reported on — saw a dead form with no
+   * explanation at all.
    */
   readOnlyReason?: string;
   lockAgents?: boolean;
@@ -55,7 +59,7 @@ interface TeamSplitModalProps {
  * COLLECTS a value rather than announcing one, so they need a real input dialog and are left for
  * that work rather than half-converted here.
  */
-export default function TeamSplitModal({ open, onClose, transactionId, primaryAgent, initialTeam, agents, isPrecon, isLease = false, termCount = 0, onSaved, readOnly = false, readOnlyReason, lockAgents = false, canManageAccess = false }: TeamSplitModalProps) {
+export default function TeamSplitModal({ open, onClose, transactionId, primaryAgent, initialTeam, agents, isPrecon, isLease = false, termCount = 0, onSaved, readOnly = false, lockAgents = false, canManageAccess = false }: TeamSplitModalProps) {
   const toast = useToast();
   const seed = (): TeamMemberData[] => {
     if (initialTeam && initialTeam.length) return initialTeam.map((m) => ({ ...m }));
@@ -173,16 +177,20 @@ export default function TeamSplitModal({ open, onClose, transactionId, primaryAg
         <div className="modal-h">Team Split</div>
 
         {/*
-          TD-058 — a locked form says so, to everyone.
-          The fields below are inside a disabled fieldset, which is what stopped this modal
-          accepting a split it would then throw away. A disabled form with no explanation is the
-          smaller version of the same complaint, and it was shown to agents only.
+          A read-only form says so. The word, and only the word, by request.
+
+          DELIBERATELY TERSE — not an unfinished string to be helpfully expanded. It used to read
+          "View-only — click Edit on the transaction to make changes." and to fall back to
+          `readOnlyReason` for the particular cause; both were asked for and then asked away again.
+          `readOnlyReason` is still accepted and still ignored, documented where it is declared.
+
+          WHAT DOES THE ACTUAL WORK IS BELOW, not here: the fields sit inside a disabled fieldset,
+          which is what stopped this modal accepting a split it would then throw away. This banner
+          only ever explained that; shortening it cannot unlock anything.
         */}
         {readOnly && (
           <div className="card" style={{ borderLeft: '4px solid #2563eb', background: 'var(--info-bg)', marginBottom: 12 }}>
-            <span style={{ fontSize: 12.5, color: 'var(--info-ink)' }}>🔒 {readOnlyReason
-              ? readOnlyReason
-              : <>View-only — click <strong>Edit</strong> on the transaction to make changes.</>}</span>
+            <span style={{ fontSize: 12.5, color: 'var(--info-ink)' }}>View</span>
           </div>
         )}
         {!readOnly && lockAgents && (
@@ -226,7 +234,12 @@ export default function TeamSplitModal({ open, onClose, transactionId, primaryAg
             {members.map((m, i) => (
               <div className="team-card" key={i}>
                 {i !== 0 && !readOnly && !lockAgents && <button className="row-rm" style={{ position: 'absolute', top: 8, right: 8 }} onClick={() => rm(i)}>🗑️</button>}
-                <strong style={{ fontSize: 13 }}>{i === 0 ? 'Primary Agent' : `Team Member ${i + 1}`}{i === 0 && <span className="pill" style={{ fontSize: 9, padding: '2px 6px', marginLeft: 6, background: 'var(--surface-3)', color: '#6b7280', border: '1px solid var(--line)' }}>🔒 Locked</span>}</strong>
+                {/*
+                  No "Locked" badge beside Primary Agent. The row is still read-only — that is the
+                  `disabled` on its input below, not this label — so removing the badge changes what
+                  is said about the row, never what can be done to it.
+                */}
+                <strong style={{ fontSize: 13 }}>{i === 0 ? 'Primary Agent' : `Team Member ${i + 1}`}</strong>
                 <div className="field" style={{ marginTop: 10 }}>
                   <label>Select Agent</label>
                   {i === 0
