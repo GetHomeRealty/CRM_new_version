@@ -110,6 +110,18 @@ export interface ImportResult {
 
 /** Hard ceiling on one upload — protects the API from an accidental enormous file. */
 export const MAX_IMPORT_ROWS = 1000;
+
+/**
+ * 2026-10-09 - listing statuses that mean the listing is over. Only the bulk import ever required an
+ * expiry date - the screen and the server never did - and it required one on every listing, which
+ * held back 369 finished listings from the brokerage's 2021-2024 history (Sai: expiry is needed when
+ * the listing is active). An expiry date drives only live-listing work - the automatic Expired
+ * status and the expiry reminders - and both skip a listing that has none. Named positively, so a
+ * status this list does not know (or a blank one) keeps the requirement.
+ */
+export const ENDED_LISTING_STATUSES: ReadonlySet<string> = new Set([
+  'Sold', 'Leased', 'Mutual Release', 'DFT', 'Void', 'Expired', 'Terminated', 'Suspended', 'Cancelled', 'Closed',
+]);
 /** Ceiling on child rows, so a malformed child sheet can't blow up memory. */
 const MAX_CHILD_ROWS = 20000;
 
@@ -972,6 +984,10 @@ export class TransactionImportService {
          */
         const split = splitClassificationNote(type);
         for (const col of requiredColumnsFor(type)) {
+          // 2026-10-09 - a listing that has ended (Sold, Leased, Expired...) imports without an
+          // expiry date; a live one, or one whose status is unreadable, still needs it. See
+          // ENDED_LISTING_STATUSES and import-listing-expiry-live-only.spec.ts.
+          if (col === 'Listing Expiry Date' && ENDED_LISTING_STATUSES.has(get('Deal Status'))) continue;
           if (!get(col)) {
             const f = IMPORT_FIELDS.find((x) => x.column === col)!;
             add(col, '', `${col} is required for ${type}.`, withSplitNote(`Enter a value — ${f.hint}`, split));
