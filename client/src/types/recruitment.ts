@@ -152,6 +152,11 @@ export interface CandidateNote {
   candidate_id: number;
   body: string;
   author: string | null;
+  /**
+   * Kept at the top of the candidate's notes. Shared, not per-viewer: everyone who may see the
+   * candidate sees the same notes pinned. Several may be pinned at once.
+   */
+  pinned: boolean;
   created_at: string | null;
 }
 

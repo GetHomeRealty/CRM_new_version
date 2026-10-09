@@ -3598,6 +3598,12 @@ model recruitment_notes {
   body         String    @db.Text
   author       String?   @db.VarChar(255)
   user_id      Int?
+  /**
+   * Kept at the top of this candidate's notes. Several may be pinned at once — it is not a single
+   * slot. Shared state, not a per-viewer preference: whoever may see the candidate sees the same
+   * notes pinned.
+   */
+  pinned       Boolean   @default(false)
   created_at   DateTime? @db.Timestamp(0)
 
   candidate recruitment_candidates @relation(fields: [candidate_id], references: [id], onDelete: Cascade, onUpdate: Restrict)

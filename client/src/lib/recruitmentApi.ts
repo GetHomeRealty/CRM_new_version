@@ -89,6 +89,13 @@ export const addCandidateNote = (id: number, body: string): Promise<{ data: Cand
 export const updateCandidateNote = (id: number, noteId: number, body: string): Promise<{ data: CandidateNote }> =>
   api.put(`/api/recruitment/candidates/${id}/notes/${noteId}`, { body }).then((r) => r.data);
 
+/**
+ * Pin or unpin a note. Sends no text, so it cannot overwrite an edit in flight, and the note's
+ * author and creation time are untouched.
+ */
+export const setCandidateNotePinned = (id: number, noteId: number, pinned: boolean): Promise<{ data: CandidateNote }> =>
+  api.post(`/api/recruitment/candidates/${id}/notes/${noteId}/pin`, { pinned }).then((r) => r.data);
+
 export const deleteCandidateNote = (id: number, noteId: number): Promise<{ deleted: boolean }> =>
   api.delete(`/api/recruitment/candidates/${id}/notes/${noteId}`).then((r) => r.data);
 

@@ -345,6 +345,22 @@ export class RecruitmentController {
     return this.recruitment.updateNote(user, id, noteId, body ?? {});
   }
 
+  /**
+   * Pin or unpin one note. The same guard, scope and ownership checks as editing it — pinning is
+   * shared state that everyone who may see the candidate sees, so it is not a lesser permission.
+   */
+  @Post('candidates/:id/notes/:noteId/pin')
+  @HttpCode(200)
+  @Screen('recruitment', 'edit')
+  setNotePinned(
+    @CurrentUser() user: AuthUserRecord,
+    @Param('id', ParseIntPipe) id: number,
+    @Param('noteId', ParseIntPipe) noteId: number,
+    @Body() body: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    return this.recruitment.setNotePinned(user, id, noteId, body ?? {});
+  }
+
   @Delete('candidates/:id/notes/:noteId')
   @Screen('recruitment', 'edit')
   deleteNote(

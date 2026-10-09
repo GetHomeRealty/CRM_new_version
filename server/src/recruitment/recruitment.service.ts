@@ -10,6 +10,19 @@ import {
 } from './recruitment.status';
 
 const str = (v: unknown): string => String(v ?? '').trim();
+/**
+ * A boolean from a request body, or null when the caller did not actually say.
+ *
+ * STRINGS ARE ACCEPTED because a body that arrived as form data or from a client that stringifies
+ * everything carries "true", not true. ANYTHING ELSE IS NULL rather than false — a missing or
+ * malformed flag is a caller mistake worth a 400, not a silent "no".
+ */
+const bool = (v: unknown): boolean | null => {
+  if (typeof v === 'boolean') return v;
+  if (v === 'true' || v === '1') return true;
+  if (v === 'false' || v === '0') return false;
+  return null;
+};
 /** Characters of the newest note shown in the Candidates list; the full text is read in the notes modal. */
 const NOTE_PREVIEW = 140;
 
@@ -389,7 +402,15 @@ export class RecruitmentService {
     const candidate = await this.mine(user, id);
     const [interviews, notes, followups, documents, onboarding, events] = await Promise.all([
       this.prisma.recruitment_interviews.findMany({ where: { candidate_id: id }, orderBy: [{ scheduled_at: 'desc' }, { id: 'desc' }] }),
-      this.prisma.recruitment_notes.findMany({ where: { candidate_id: id }, orderBy: { id: 'desc' } }),
+      /*
+       * Pinned notes first, and WITHIN each group the order that was already there — newest first
+       * by id. Two keys, not a replacement for the old one: unpinning a note must put it back
+       * exactly where it would have been, which only holds if `id desc` still decides everything
+       * after `pinned`.
+       */
+      this.prisma.recruitment_notes.findMany({
+        where: { candidate_id: id }, orderBy: [{ pinned: 'desc' }, { id: 'desc' }],
+      }),
       this.prisma.recruitment_followups.findMany({ where: { candidate_id: id }, orderBy: [{ done_at: 'asc' }, { due_at: 'asc' }] }),
       this.prisma.recruitment_documents.findMany({ where: { candidate_id: id }, orderBy: { id: 'asc' } }),
       this.prisma.recruitment_onboarding_items.findMany({ where: { candidate_id: id }, orderBy: [{ position: 'asc' }, { id: 'asc' }] }),
@@ -825,6 +846,33 @@ export class RecruitmentService {
       await this.event(tx, id, 'note', `Note edited (${this.noteLabel(note)}).`, user);
       return updated;
     });
+    return { data: row };
+  }
+
+  /**
+   * Pin or unpin a note, so it sits at the top of this candidate's notes.
+   *
+   * ITS OWN ENDPOINT RATHER THAN A FIELD ON `updateNote`. Pinning sends no text, so it cannot
+   * overwrite an edit somebody else is part-way through saving — and `updateNote` rejects a body
+   * that is empty, which a pin has no business satisfying. The two operations stay independent.
+   *
+   * NOTHING ELSE ON THE ROW MOVES. The text, author, `user_id` and `created_at` are untouched, so
+   * a pinned note is the same note, in a different place.
+   *
+   * NOT WRITTEN TO THE CANDIDATE'S HISTORY, unlike an edit or a delete. Those change or destroy
+   * what the note says; this only changes where it sits, and somebody tidying a long list would
+   * otherwise bury the history under entries nobody needs to read.
+   *
+   * Idempotent: pinning an already-pinned note is a no-op that still answers with the note, so a
+   * double click or a retry after a dropped response cannot land in a different state than one.
+   */
+  async setNotePinned(user: AuthUserRecord, id: number, noteId: number, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+    await this.mine(user, id);
+    const note = await this.noteOf(id, noteId);
+    const pinned = bool(body.pinned);
+    if (pinned === null) throw new BadRequestException({ message: 'Say whether the note should be pinned.' });
+    if (pinned === note.pinned) return { data: note };
+    const row = await this.prisma.recruitment_notes.update({ where: { id: note.id }, data: { pinned } });
     return { data: row };
   }
 
