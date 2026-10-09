@@ -1072,6 +1072,30 @@ input[type="number"],.numeric,.stat-card .val{font-variant-numeric:tabular-nums;
 .meta-alert code{background:rgba(15,23,42,.07);border-radius:5px;padding:1px 5px;font-size:11.5px}
 
 .meta-stat{text-align:center;padding:16px;margin-bottom:0}
+
+/* ---------------------------------------------------------------------------
+ * Recruitment's pipeline cards — denser, and four to a row.
+ *
+ * SCOPED, NOT A CHANGE TO `.stat-grid`. That class and `.meta-stat` are shared with the Meta and
+ * Analytics screens, which have three and four cards respectively and read correctly at three to a
+ * row. Recruitment has eleven, so three-up produced four tall rows of mostly whitespace. Widening
+ * the shared class would have quietly relaid out two screens nobody asked about.
+ *
+ * The breakpoints are the two this stylesheet already uses most (1100px and 760px) rather than new
+ * ones, so these cards reflow at the same widths as everything around them.
+ *
+ * HEIGHTS NEED NO RULE. Grid rows stretch their items by default, so every card in a row is as tall
+ * as the tallest — including when a label wraps to two lines at the narrow end. A fixed height would
+ * clip exactly that case.
+ * --------------------------------------------------------------------------- */
+.recruit-stats{grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:12px}
+.recruit-stats .meta-stat{padding:10px 8px}
+.recruit-stats .meta-stat-n{font-size:20px}
+/* 12px is the floor here: small enough to shrink the card, still a readable label. */
+.recruit-stats .muted{font-size:12px;line-height:1.3}
+
+@media(max-width:1100px){.recruit-stats{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:760px){.recruit-stats{grid-template-columns:1fr}}
 .meta-stat-n{font-size:26px;font-weight:700;letter-spacing:-0.03em;color:var(--text)}
 
 .meta-forms{list-style:none;margin:0 0 10px;padding:0}

@@ -372,7 +372,7 @@ export default function RecruitmentPage() {
       </div>
 
       {/* The pipeline at a glance. Figures come from the API already scoped to what you may see. */}
-      <div className="stat-grid">
+      <div className="stat-grid recruit-stats">
         {/* Each card opens the list it counts. */}
         <Stat label="Total Candidates" value={stats?.total ?? 0} onOpen={() => openCandidates('')} />
         <Stat label="New" value={stats?.candidates.new ?? 0} onOpen={() => openCandidates('new')} />
