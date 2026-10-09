@@ -107,11 +107,12 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
    */
   const countedDocs = shownDocs.filter((d) => !!d.mandatory);
   /*
-   * A DOCUMENT SOMEBODY ADDED BY HAND IS NOT "NOT REQUIRED" - IT IS THE ONE THEY CAME FOR.
+   * A DOCUMENT SOMEBODY ADDED BY HAND IS NOT AN OPTIONAL ONE - IT IS THE ONE THEY CAME FOR.
    *
-   * Hand-added rows carry mandatory = false, so they were filed behind "Show N more documents that
-   * are not required": the person typed a name, pressed Add, and what they created landed somewhere
-   * invisible. They now sit in the main list beside the required ones.
+   * Hand-added rows carry mandatory = false, so they were filed away behind the collapsed link
+   * below: the person typed a name, pressed Add, and what they created landed somewhere invisible.
+   * They now sit in the main list beside the required ones, which is why `manual` is excluded here
+   * and not only `mandatory`.
    *
    * THE COUNTS ABOVE ARE UNTOUCHED - countedDocs still counts only mandatory documents, so
    * "MANDATORY DOCUMENTS RECEIVED" and every compliance figure read exactly as before. Only which
@@ -702,8 +703,8 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
               style={{ background: 'none', border: 'none', color: 'var(--brand)', fontSize: 12.5,
                 fontWeight: 600, cursor: 'pointer', textDecoration: 'underline' }}>
               {showOptional
-                ? `Hide the ${optionalCount} document${optionalCount === 1 ? '' : 's'} that are not required`
-                : `Show ${optionalCount} more document${optionalCount === 1 ? '' : 's'} that are not required`}
+                ? `Hide ${optionalCount} document${optionalCount === 1 ? '' : 's'}`
+                : `Show ${optionalCount} more document${optionalCount === 1 ? '' : 's'}`}
             </button>
           </div>
         )}
