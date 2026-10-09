@@ -2,6 +2,7 @@ import { useState, useEffect, type ChangeEventHandler, type CSSProperties } from
 import { updateTransaction, getAgentLoans } from '../lib/api';
 import { batchNo, parseNumber, formatCurrency, isPreconType } from './format';
 import { useToast } from './toast';
+import { useAuth } from '../context/AuthContext';
 import { apiErrorMessage } from '../lib/apiError';
 import SavedBadge from './SavedBadge';
 import ConfirmDialog, { useConfirm } from './ConfirmDialog';
@@ -84,6 +85,18 @@ interface AdjustmentModalProps {
 }
 
 export default function AdjustmentModal({ open, onClose, transactionId, txn, onSaved, termCount: termCountProp, readOnly = false }: AdjustmentModalProps) {
+  const { user } = useAuth();
+  /*
+   * THE DOCUMENTATION ROLE ONLY — the same test the transaction page makes, and the same one
+   * `FinancialModal` and `AdminActivitiesModal` make for the same reason.
+   *
+   * This role is view-only here, so an instruction to click Edit, or to ask for edit rights,
+   * points at something they are never given. Every other role keeps its wording and icons,
+   * because for them the instruction is true and actionable.
+   *
+   * WORDING ONLY. `readOnly`, the disabled fieldset and every control below are untouched.
+   */
+  const isDocumentation = user?.role === 'documentation';
   const toast = useToast();
   const precon = isPreconType(txn.type);
   const termCount = (typeof termCountProp === 'number' ? termCountProp : (parseInt(String(txn.precon_term_count), 10) || 0));
@@ -273,7 +286,11 @@ export default function AdjustmentModal({ open, onClose, transactionId, txn, onS
 
         {readOnly && (
           <div className="card" style={{ borderLeft: '4px solid #2563eb', background: 'var(--info-bg)', marginBottom: 12 }}>
-            <span style={{ fontSize: 12.5, color: 'var(--info-ink)' }}>🔒 Locked — adjustments, advance payments and referrals can’t be changed once the agent payment is complete (or while viewing). Click <strong>Edit</strong> if the transaction is still open.</span>
+            <span style={{ fontSize: 12.5, color: 'var(--info-ink)' }} data-testid="adjustment-readonly-banner">
+              {isDocumentation
+                ? 'View'
+                : <>🔒 Locked — adjustments, advance payments and referrals can’t be changed once the agent payment is complete (or while viewing). Click <strong>Edit</strong> if the transaction is still open.</>}
+            </span>
           </div>
         )}
 

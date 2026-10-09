@@ -3,6 +3,7 @@ import { updateTransaction } from '../lib/api';
 import { isListingType, isPreconType, formatCurrency } from './format';
 import { printDoc } from './printDoc';
 import { useToast } from './toast';
+import { useAuth } from '../context/AuthContext';
 import { apiErrorMessage } from '../lib/apiError';
 import SavedBadge from './SavedBadge';
 import { sentStatusLabel } from './invoiceStatus';
@@ -76,6 +77,18 @@ interface AgentFaqModalProps {
 }
 
 export default function AgentFaqModal({ open, onClose, transactionId, txn, onSaved, termCount: termCountProp, depositSlipOnly = false, dftNA = false, readOnly = false, allowBatchEmail = false, isAgent = false }: AgentFaqModalProps) {
+  const { user } = useAuth();
+  /*
+   * THE DOCUMENTATION ROLE ONLY — the same test the transaction page makes, and the same one
+   * `FinancialModal` and `AdminActivitiesModal` make for the same reason.
+   *
+   * This role is view-only here, so an instruction to click Edit, or to ask for edit rights,
+   * points at something they are never given. Every other role keeps its wording and icons,
+   * because for them the instruction is true and actionable.
+   *
+   * WORDING ONLY. `readOnly`, the disabled fieldset and every control below are untouched.
+   */
+  const isDocumentation = user?.role === 'documentation';
   const na = (v: string) => (dftNA ? 'N/A' : v); // §5.1 DFT — status dropdowns default to N/A
   const toast = useToast();
   const listing = isListingType(txn.type);
@@ -405,7 +418,11 @@ export default function AgentFaqModal({ open, onClose, transactionId, txn, onSav
         )}
         {readOnly && !dftNA && !isAgent && (
           <div className="card" style={{ borderLeft: '4px solid #2563eb', background: '#eff6ff', marginBottom: 12 }}>
-            <span style={{ fontSize: 12.5, color: '#1e3a8a' }}>🔒 View-only — click <strong>Edit</strong> on the transaction to make changes.</span>
+            <span style={{ fontSize: 12.5, color: '#1e3a8a' }} data-testid="faq-readonly-banner">
+              {isDocumentation
+                ? 'View'
+                : <>🔒 View-only — click <strong>Edit</strong> on the transaction to make changes.</>}
+            </span>
           </div>
         )}
 
