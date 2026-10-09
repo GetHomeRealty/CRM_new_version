@@ -71,6 +71,26 @@ async function realFile(folder: string, name: string): Promise<string> {
 const onDisk = (rel: string): Promise<boolean> =>
   fs.access(path.join(STORAGE_ROOT, rel)).then(() => true, () => false);
 
+/**
+ * Every unlink the sweep attempts, counted per path.
+ *
+ * COUNTING REMOVALS IS NOT THE SAME AS COUNTING ATTEMPTS, and only the second can see duplicate
+ * processing. A record visited twice is unlinked twice — the first call removes the file and the
+ * second returns ENOENT, which `files_removed` deliberately does not count. So the result object
+ * looks identical whether a record was processed once or five times; the spy is what tells them
+ * apart.
+ */
+function countUnlinks(): { per: Map<string, number>; restore: () => void } {
+  const per = new Map<string, number>();
+  const real = fs.unlink.bind(fs);
+  const spy = jest.spyOn(fs, 'unlink').mockImplementation(async (p) => {
+    const name = path.basename(String(p));
+    per.set(name, (per.get(name) ?? 0) + 1);
+    return real(p as string);
+  });
+  return { per, restore: () => spy.mockRestore() };
+}
+
 function folderName(): string {
   seq += 1;
   const f = `zz-retain-${Date.now()}-${seq}`;
@@ -330,17 +350,25 @@ describe('the retention sweep removes every file a document points at', () => {
           files.push(f);
         }
 
-        const r = await smallSvc(tx).sweep();
+        const attempts = countUnlinks();
+        let r;
+        try { r = await smallSvc(tx).sweep(); } finally { attempts.restore(); }
 
         // Terminated, and reached every batch behind the blocked one.
         expect(r.records_retained).toBe(1);
         expect(r.files_failed).toBe(1);
         expect(await Promise.all(files.map(onDisk))).toEqual([false, false, false, false]);
-
-        // NOT PROCESSED TWICE: four real files, four removals. A second visit would have found
-        // them already gone and counted nothing, so an inflated figure is impossible — but a
-        // SHORT one would mean a record was skipped, which is the other half of the risk.
         expect(r.files_removed).toBe(4);
+
+        /*
+         * EACH FILE ATTEMPTED EXACTLY ONCE — the direct test for duplicate processing. `>1` means
+         * a record was visited twice; `0` means it was skipped. Neither is visible in the counters,
+         * because a second visit finds the file already gone and is not counted as a removal.
+         */
+        for (let i = 0; i < 4; i += 1) {
+          expect({ file: `batch-${i}.pdf`, attempts: attempts.per.get(`batch-${i}.pdf`) })
+            .toEqual({ file: `batch-${i}.pdf`, attempts: 1 });
+        }
 
         expect(await tx.transactions.findUnique({ where: { id: blocked } })).not.toBeNull();
         for (const id of deals.slice(1)) {
@@ -364,11 +392,17 @@ describe('the retention sweep removes every file a document points at', () => {
           files.push(f);
         }
 
-        const r = await smallSvc(tx).sweep();
+        const attempts = countUnlinks();
+        let r;
+        try { r = await smallSvc(tx).sweep(); } finally { attempts.restore(); }
 
         expect(r.records_retained).toBe(1);
         expect(r.files_removed).toBe(4);
         expect(await Promise.all(files.map(onDisk))).toEqual([false, false, false, false]);
+        for (let i = 0; i < 4; i += 1) {
+          expect({ file: `doc-batch-${i}.pdf`, attempts: attempts.per.get(`doc-batch-${i}.pdf`) })
+            .toEqual({ file: `doc-batch-${i}.pdf`, attempts: 1 });
+        }
         expect(await tx.documents.findUnique({ where: { id: blocked } })).not.toBeNull();
         for (const id of docs) expect(await tx.documents.findUnique({ where: { id } })).toBeNull();
       });
@@ -401,76 +435,187 @@ describe('the retention sweep removes every file a document points at', () => {
   });
 
   describe('when the database delete fails after the files are gone', () => {
-    /** A client that passes everything through but refuses one model's `deleteMany`. */
-    const failingDeleteOn = (tx: PrismaService, model: string): PrismaService =>
+    /**
+     * A client that refuses a model's deletes. `many` alone fails the batch statement and leaves
+     * the per-row fallback working; `all` refuses both, standing in for a row the database will
+     * not part with however it is asked.
+     */
+    const refusingDeletes = (tx: PrismaService, model: string, scope: 'many' | 'all'): PrismaService =>
       new Proxy(tx as unknown as Record<string, unknown>, {
         get(target, prop, receiver) {
           if (prop !== model) return Reflect.get(target, prop, receiver);
           const real = Reflect.get(target, prop, receiver) as Record<string, unknown>;
           return new Proxy(real, {
             get(t2, p2, r2) {
-              if (p2 === 'deleteMany') return async () => { throw new Error('database delete failed'); };
+              if (p2 === 'deleteMany') return async () => { throw new Error('batch delete failed'); };
+              if (p2 === 'delete' && scope === 'all') return async () => { throw new Error('row delete failed'); };
               return Reflect.get(t2, p2, r2);
             },
           });
         },
       }) as unknown as PrismaService;
 
-    it('DOES NOT MARK THE RECORD PURGED, and leaves it retryable', async () => {
+    it('A BATCH FAILURE COSTS NOTHING — the rows go one at a time instead', async () => {
       /*
-       * Files first is the deliberate order: a failed unlink must not cost the paths. The price is
-       * this case — the delete fails with the files already gone. What must hold is that nothing
-       * claims the record was purged, the row and its paths survive, and the error surfaces so the
-       * scheduler logs it rather than recording a successful sweep.
+       * `deleteMany` is all or nothing, so one row the database refuses used to take its whole
+       * batch with it. The fallback means a batch statement failing is a performance event, not a
+       * correctness one.
        */
       await inRollback(async (tx) => {
         const folder = folderName();
-        const file = await realFile(folder, 'db-fails.pdf');
-        const txn = await trashedDeal(tx);
-        await document(tx, txn, { file_path: file });
+        const ids: number[] = [];
+        for (let i = 0; i < 3; i += 1) {
+          const id = await trashedDeal(tx);
+          await document(tx, id, { file_path: await realFile(folder, `batchfail-${i}.pdf`) });
+          ids.push(id);
+        }
 
-        await expect(svc(failingDeleteOn(tx, 'transactions')).sweep())
-          .rejects.toThrow('database delete failed');
+        const r = await svc(refusingDeletes(tx, 'transactions', 'many')).sweep();
 
-        // Nothing was deleted, and the path is still there to try again with.
-        const kept = await tx.documents.findFirst({ where: { transaction_id: txn } });
-        expect(kept?.file_path).toBe(file);
-        expect(await tx.transactions.findUnique({ where: { id: txn } })).not.toBeNull();
+        expect(r.delete_failures).toBe(0);
+        expect(r.deleted.trashed_transactions).toBe(3);
+        for (const id of ids) expect(await tx.transactions.findUnique({ where: { id } })).toBeNull();
       });
     });
 
-    it('the retry completes, because the already-removed files read as ENOENT', async () => {
+    it('AN EARLY DELETE FAILURE RETAINS THAT RECORD AND THE SWEEP CARRIES ON', async () => {
+      /*
+       * The case this follow-up is for. One undeletable deal must not abort the pass: it is kept
+       * with its paths, counted, and every later eligible record is still purged.
+       *
+       * Only the first deal is refused — by id, so the rest take the ordinary route.
+       */
       await inRollback(async (tx) => {
         const folder = folderName();
-        const file = await realFile(folder, 'db-retry.pdf');
+        const stubborn = await trashedDeal(tx);
+        const stubbornFile = await realFile(folder, 'stubborn.pdf');
+        await document(tx, stubborn, { file_path: stubbornFile });
+
+        const later: number[] = [];
+        for (let i = 0; i < 3; i += 1) {
+          const id = await trashedDeal(tx);
+          await document(tx, id, { file_path: await realFile(folder, `later-${i}.pdf`) });
+          later.push(id);
+        }
+
+        const onlyStubborn = new Proxy(tx as unknown as Record<string, unknown>, {
+          get(target, prop, receiver) {
+            if (prop !== 'transactions') return Reflect.get(target, prop, receiver);
+            const real = Reflect.get(target, prop, receiver) as Record<string, unknown>;
+            return new Proxy(real, {
+              get(t2, p2, r2) {
+                if (p2 === 'deleteMany') return async () => { throw new Error('batch delete failed'); };
+                if (p2 === 'delete') {
+                  return async (args: { where: { id: number } }) => {
+                    if (args.where.id === stubborn) throw new Error('row delete failed');
+                    return (Reflect.get(t2, 'delete', r2) as (a: unknown) => Promise<unknown>)(args);
+                  };
+                }
+                return Reflect.get(t2, p2, r2);
+              },
+            });
+          },
+        }) as unknown as PrismaService;
+
+        const r = await svc(onlyStubborn).sweep();
+
+        // Reported, not swallowed, and separated from the file-level count.
+        expect(r.delete_failures).toBe(1);
+        expect(r.records_retained).toBe(1);
+        expect(r.files_failed).toBe(0);
+        expect(r.deleted.trashed_transactions).toBe(3);
+
+        // The stubborn one survives WITH its path; the rest are gone.
+        const kept = await tx.documents.findFirst({ where: { transaction_id: stubborn } });
+        expect(kept?.file_path).toBe(stubbornFile);
+        expect(await tx.transactions.findUnique({ where: { id: stubborn } })).not.toBeNull();
+        for (const id of later) expect(await tx.transactions.findUnique({ where: { id } })).toBeNull();
+      });
+    });
+
+    it('the retry succeeds once the database will part with it, counting no phantom removal', async () => {
+      await inRollback(async (tx) => {
+        const folder = folderName();
+        const file = await realFile(folder, 'retry-me.pdf');
         const txn = await trashedDeal(tx);
         await document(tx, txn, { file_path: file });
 
-        await expect(svc(failingDeleteOn(tx, 'transactions')).sweep()).rejects.toThrow();
-        expect(await onDisk(file)).toBe(false);          // the unlink did happen
+        const first = await svc(refusingDeletes(tx, 'transactions', 'all')).sweep();
+        expect(first.delete_failures).toBe(1);
+        expect(first.deleted.trashed_transactions).toBe(0);
+        expect(await onDisk(file)).toBe(false);      // files-first: the unlink did happen
 
         const second = await svc(tx).sweep();
-        // Already gone is not a removal and not a failure — the second pass counts neither.
+        expect(second.delete_failures).toBe(0);
         expect(second.files_failed).toBe(0);
-        expect(second.files_removed).toBe(0);
+        expect(second.files_removed).toBe(0);        // already gone is not a removal
+        expect(second.deleted.trashed_transactions).toBe(1);
         expect(await tx.transactions.findUnique({ where: { id: txn } })).toBeNull();
       });
     });
 
-    it('a failed document delete behaves the same way', async () => {
+    it('a refused document delete behaves the same way', async () => {
       await inRollback(async (tx) => {
         const folder = folderName();
-        const file = await realFile(folder, 'db-doc-fails.pdf');
+        const file = await realFile(folder, 'doc-refused.pdf');
         const live = await trashedDeal(tx, RECENT);
         await tx.transactions.update({ where: { id: live }, data: { deleted_at: null } });
         const doc = await document(tx, live, { deleted_at: OLD, file_path: file });
 
-        await expect(svc(failingDeleteOn(tx, 'documents')).sweep())
-          .rejects.toThrow('database delete failed');
+        const r = await svc(refusingDeletes(tx, 'documents', 'all')).sweep();
 
+        expect(r.delete_failures).toBe(1);
+        expect(r.records_retained).toBe(1);
         const kept = await tx.documents.findUnique({ where: { id: doc } });
-        expect(kept).not.toBeNull();
         expect(kept?.file_path).toBe(file);
+      });
+    });
+  });
+
+  describe('a broader failure', () => {
+    it('ABORTS, BUT SAYS WHAT IT HAD ALREADY DONE', async () => {
+      /*
+       * Something that is not record-level — a lost connection, a statement timeout. The error
+       * belongs to the scheduler, so it is re-thrown; what must not happen is the counts dying
+       * with it, leaving a log that cannot distinguish a sweep that did nothing from one that did
+       * almost everything.
+       */
+      await inRollback(async (tx) => {
+        const folder = folderName();
+        const file = await realFile(folder, 'before-the-fall.pdf');
+        const txn = await trashedDeal(tx);
+        await document(tx, txn, { file_path: file });
+
+        // The deals pass completes; the invoices pass that follows it does not.
+        const brokenLater = new Proxy(tx as unknown as Record<string, unknown>, {
+          get(target, prop, receiver) {
+            if (prop !== 'invoices') return Reflect.get(target, prop, receiver);
+            const real = Reflect.get(target, prop, receiver) as Record<string, unknown>;
+            return new Proxy(real, {
+              get(t2, p2, r2) {
+                if (p2 === 'findMany') return async () => { throw new Error('connection lost'); };
+                return Reflect.get(t2, p2, r2);
+              },
+            });
+          },
+        }) as unknown as PrismaService;
+
+        const service = svc(brokenLater);
+        const logged: string[] = [];
+        const spy = jest.spyOn((service as unknown as { log: { error: (m: string) => void } }).log, 'error')
+          .mockImplementation((m: string) => { logged.push(String(m)); });
+
+        try {
+          await expect(service.sweep()).rejects.toThrow('connection lost');
+        } finally {
+          spy.mockRestore();
+        }
+
+        // The work already done is named in the abort log, not lost with the exception.
+        expect(logged.join(' ')).toMatch(/ABORTED/);
+        expect(logged.join(' ')).toMatch(/connection lost/);
+        expect(logged.join(' ')).toMatch(/Completed before it stopped: .*1 file\(s\)/);
+        expect(await onDisk(file)).toBe(false);
       });
     });
   });

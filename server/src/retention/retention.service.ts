@@ -77,10 +77,17 @@ export interface RetentionResult extends RetentionPlan {
    */
   files_failed: number;
   /**
-   * Records left in place BECAUSE their files could not be removed. They stay eligible, so the next
-   * sweep tries again once whatever blocked it is cleared.
+   * Records left in place rather than purged — because their files could not be removed, or
+   * because the delete itself failed. They stay eligible, so the next sweep tries again once
+   * whatever blocked it is cleared.
    */
   records_retained: number;
+  /**
+   * Records whose DATABASE delete failed. Counted apart from `files_failed` because the two mean
+   * different things to whoever reads the log: one says storage is unhappy, the other says the
+   * database refused, and they are fixed in different places.
+   */
+  delete_failures: number;
   capped: boolean;
 }
 
@@ -207,7 +214,8 @@ export class RetentionService {
       trashed_payments: 0, trashed_rows: 0, transaction_reminders: 0, document_reminders: 0,
     };
     const result: RetentionResult = {
-      ...plan, deleted: { ...empty }, files_removed: 0, files_failed: 0, records_retained: 0, capped: false,
+      ...plan, deleted: { ...empty }, files_removed: 0, files_failed: 0, records_retained: 0,
+      delete_failures: 0, capped: false,
     };
 
     if (!plan.enabled) {
@@ -222,6 +230,42 @@ export class RetentionService {
     }
 
     const cut = this.cutoff(now);
+
+    /*
+     * A FAILURE THAT ESCAPES THE PER-RECORD HANDLING STILL HAS TO SAY WHAT HAD ALREADY HAPPENED.
+     *
+     * Record-level trouble is handled where it happens and the pass carries on. What reaches here
+     * is broader — a lost connection, a statement timeout — and it used to propagate with the
+     * counts still in a local variable, so the scheduler logged "Retention sweep failed: …" and
+     * nothing recorded the nine hundred files the pass HAD removed before it died. The next person
+     * reading the log could not tell a sweep that did nothing from one that did almost everything.
+     *
+     * The error is re-thrown unchanged: the scheduler owns the decision about a failed pass, and
+     * swallowing it here would turn an aborted sweep into a reported success.
+     */
+    try {
+      return await this.sweepFrom(cut, result);
+    } catch (ex) {
+      this.log.error(
+        `Retention sweep ABORTED (cutoff ${plan.cutoff.slice(0, 10)}): ${(ex as Error).message}. `
+        + `Completed before it stopped: ${this.summarise(result) || 'nothing'}.`,
+      );
+      throw ex;
+    }
+  }
+
+  /** One line naming everything a pass did, used by both the abort log and the audit entry. */
+  private summarise(r: RetentionResult): string {
+    const rows = Object.entries(r.deleted).filter(([, v]) => v > 0).map(([k, v]) => `${v} ${k}`).join(', ');
+    const parts = [rows, r.files_removed ? `${r.files_removed} file(s)` : ''].filter(Boolean);
+    if (r.files_failed) parts.push(`${r.files_failed} file(s) unremovable`);
+    if (r.delete_failures) parts.push(`${r.delete_failures} delete(s) refused`);
+    if (r.records_retained) parts.push(`${r.records_retained} record(s) kept for the next sweep`);
+    return parts.join('; ');
+  }
+
+  /** The passes themselves, in order. Split out so `sweep` can report what was done if one throws. */
+  private async sweepFrom(cut: Date, result: RetentionResult): Promise<RetentionResult> {
 
     // 1. Trashed transactions — files first, then the row, and the cascade does the rest.
     result.deleted.trashed_transactions = await this.purgeTransactions(cut, result);
@@ -306,10 +350,9 @@ export class RetentionService {
 
       const deletable = ids.filter((id) => !blocked.has(id));
       result.records_retained += blocked.size;
-      if (deletable.length) {
-        const done = await this.prisma.transactions.deleteMany({ where: { id: { in: deletable } } });
-        removed += done.count;
-      }
+      removed += await this.deleteIsolated(
+        this.prisma.transactions as never, 'deal', deletable, result,
+      );
     }
     return removed;
   }
@@ -341,12 +384,50 @@ export class RetentionService {
         deletable.push(d.id);
       }
 
-      if (deletable.length) {
-        const done = await this.prisma.documents.deleteMany({ where: { id: { in: deletable } } });
-        removed += done.count;
-      }
+      removed += await this.deleteIsolated(
+        this.prisma.documents as never, 'document', deletable, result,
+      );
     }
     return removed;
+  }
+
+  /**
+   * Delete these rows, isolating a failure to the records it actually affects.
+   *
+   * ONE STATEMENT FIRST, BECAUSE THAT IS THE NORMAL CASE and a row-at-a-time sweep over five years
+   * of history would be thousands of round trips for no reason. But a `deleteMany` is all or
+   * nothing: one row the database refuses — a foreign key nobody expected, a lock held by somebody
+   * else — took its whole batch down with it, and before this took the entire sweep with it too.
+   *
+   * So a failure drops to one row at a time. The rows that can go, go; the ones that cannot are
+   * counted, logged by id, and left exactly as they were, with their paths, for the next sweep.
+   * The files of a retained row are already gone — that is the cost of unlinking first, and the
+   * reason the row must survive: it is the only record that those files ever existed.
+   */
+  private async deleteIsolated(
+    table: { deleteMany: (a: unknown) => Promise<{ count: number }>; delete: (a: unknown) => Promise<unknown> },
+    label: string,
+    ids: number[],
+    result: RetentionResult,
+  ): Promise<number> {
+    if (!ids.length) return 0;
+    try {
+      return (await table.deleteMany({ where: { id: { in: ids } } })).count;
+    } catch (ex) {
+      this.log.warn(`Retention: deleting ${ids.length} ${label} together failed (${(ex as Error).message}); trying them one at a time.`);
+      let done = 0;
+      for (const id of ids) {
+        try {
+          await table.delete({ where: { id } });
+          done += 1;
+        } catch (inner) {
+          result.delete_failures += 1;
+          result.records_retained += 1;
+          this.log.warn(`Retention kept ${label} ${id}: delete failed (${(inner as Error).message}).`);
+        }
+      }
+      return done;
+    }
   }
 
   /** Is this resolved path textually inside `root`? */
@@ -468,23 +549,21 @@ export class RetentionService {
    * `desk` and it is itself subject to the same six months.
    */
   private async record(r: RetentionResult): Promise<void> {
-    const summary = Object.entries(r.deleted).filter(([, v]) => v > 0).map(([k, v]) => `${v} ${k}`).join(', ');
-    if (!summary && !r.files_removed && !r.files_failed) return;
     /*
      * The failures are named in the same breath as the successes. A run that removed nine hundred
-     * files and could not remove three is not a clean run, and a summary that mentioned only the
-     * nine hundred would read like one.
+     * files and could not remove three is not a clean run, and a summary mentioning only the nine
+     * hundred would read like one — so `summarise` carries both, and the audit entry and the log
+     * line say the same thing rather than drifting apart.
      */
-    const trouble = r.files_failed
-      ? `; ${r.files_failed} file(s) could not be removed, ${r.records_retained} record(s) kept for the next sweep`
-      : '';
-    this.log.log(`Retention removed ${summary || 'nothing'}${r.files_removed ? `, ${r.files_removed} file(s)` : ''}${trouble} (cutoff ${r.cutoff.slice(0, 10)})${r.capped ? ' — capped, more remains' : ''}.`);
+    const summary = this.summarise(r);
+    if (!summary) return;
+    this.log.log(`Retention: ${summary} (cutoff ${r.cutoff.slice(0, 10)})${r.capped ? ' — capped, more remains' : ''}.`);
     await this.audit.logModule(null, 'Retention', {
       section: 'Transaction Desk Retention',
       field: `Older than ${RETENTION_MONTHS} months`,
       action: 'Records purged',
       source: 'System',
-      details: `${summary || 'nothing'}${r.files_removed ? `; ${r.files_removed} file(s)` : ''}${trouble}; cutoff ${r.cutoff.slice(0, 10)}${r.capped ? '; capped' : ''}`,
+      details: `${summary}; cutoff ${r.cutoff.slice(0, 10)}${r.capped ? '; capped' : ''}`,
     });
   }
 }
