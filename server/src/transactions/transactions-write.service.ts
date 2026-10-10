@@ -163,12 +163,60 @@ export const FILL_KEYS = [
  * Anything not named here is dropped from their update — see the comment in `update`.
  */
 export const DOCUMENTATION_EDITABLE: ReadonlySet<string> = new Set([
-  'type', 'property', 'agent', 'price', 'deposit',
-  'offer_date', 'closing_date', 'listing_contract_date', 'listing_expiry_date',
-  'mls_type', 'mls_num', 'mls_verified',
+  /*
+   * BASIC INFO IS NOT IN THIS LIST, AND ITS ABSENCE IS THE POINT.
+   *
+   * `type`, `property`, `agent`, `price`, `deposit`, the four dates, the three `mls_*` fields and
+   * `precon_listing_type` were all here and were all removed: the brokerage decided this role
+   * does not change a deal's basic details. The screen shows that section read-only to them, and
+   * this is the half that makes a hand-made request — or a `?mode=edit` URL — unable to do it
+   * anyway. A field dropped here is silently ignored rather than refused, which is how the rest of
+   * a legitimate save still goes through.
+   *
+   * WHAT REMAINS IS THE REST OF THE COORDINATOR'S JOB: conditions and the conditional offer,
+   * statuses, the clients, the co-op/listing brokerage, the inter-board listings and the
+   * builder's contact details. Each is its own section on the page, none is Basic Info, and each
+   * is work this role is expected to do.
+   *
+   * Commission is not here and never was. This role proposes a commission change for a Super
+   * Admin to approve — see `COMMISSION_SCOPE` in the workflows module — rather than writing one.
+   */
   'conditional_offer', 'conditions', 'inter_board_enabled', 'inter_board_listings',
-  'statuses', 'clients', 'brokerage',
-  'precon_listing_type', 'builder',
+  'clients', 'brokerage',
+  'builder',
+  // Preconstruction Details, not Basic Info — a separate card, and this role's to maintain.
+  'precon_listing_type',
+]);
+
+/**
+ * EVERY FIELD THE BASIC INFO CARD RENDERS, mapped to the key an API request would carry.
+ *
+ * Written out rather than left implicit because "no editable Basic Info" is only as good as the
+ * list it is checked against, and the card and the whitelist are in different files: a field added
+ * to one would otherwise be silently editable in the other. `DOCUMENTATION_EDITABLE` is asserted
+ * against this set in `transaction-docs-filter.spec.ts`, so the two cannot drift.
+ *
+ * `statuses` IS HERE. The Status multi-select sits in this card, between Type and Trade Number —
+ * it reads like its own thing and is not. It was left editable for this role on exactly that
+ * misreading, which is the reason this map exists at all.
+ *
+ * `trade_no` is rendered too and is absent deliberately: it is `readOnly` for every role, so there
+ * is nothing to withhold.
+ */
+export const BASIC_INFO_FIELDS: ReadonlySet<string> = new Set([
+  'type',                    // Type
+  'statuses',                // Status
+  'agent',                   // Agent Name
+  'property',                // Property Address
+  'price',                   // Price / Purchase Price
+  'deposit',                 // Deposit
+  'offer_date',              // Offer Date
+  'closing_date',            // Closing Date
+  'listing_contract_date',   // Listing Contract Date
+  'listing_expiry_date',     // Listing Expiry Date
+  'mls_type',                // Listing Type (MLS / Exclusive)
+  'mls_num',                 // MLS #
+  'mls_verified',            // Mark Verified
 ]);
 
 // Agents cannot modify these.
@@ -330,9 +378,11 @@ export class TransactionsWriteService {
    * was; the reports fall back to parsing it for this row, which is correct and merely slower.
    * `verify-payment-cache.cjs` is what surfaces a row that has drifted this way.
    */
-  private async refreshPaymentCache(txnId: number): Promise<void> {
+  private async refreshPaymentCache(txnId: number, db?: Prisma.TransactionClient): Promise<void> {
     try {
-      await this.paymentCache.recomputeOne(txnId);
+      // `db` when a caller owns the transaction: these are the same rows they hold locks on,
+      // and a second connection would simply wait for them until that transaction expired.
+      await this.paymentCache.recomputeOne(txnId, db);
     } catch {
       // Deliberately swallowed — see above. The service logs its own reason.
     }
@@ -838,8 +888,32 @@ export class TransactionsWriteService {
     });
   }
 
-  async update(user: AuthUserRecord | null, txnId: number, body: Record<string, unknown>, opts: { quiet?: boolean } = {}): Promise<{ data: Record<string, unknown>; message?: string }> {
-    const t = await this.prisma.transactions.findFirst({ where: { id: txnId, deleted_at: null } });
+  async update(
+    user: AuthUserRecord | null,
+    txnId: number,
+    body: Record<string, unknown>,
+    /*
+     * `tx` LETS A CALLER OWN THE TRANSACTION.
+     *
+     * Approving a commission change has to claim the request, apply the figures, write the audit
+     * trail and mark the request approved as ONE unit — a failure anywhere must leave the deal and
+     * the request exactly as they were. That is only possible if this method writes through the
+     * caller's client rather than opening its own.
+     *
+     * OPTIONAL, AND ABSENT IT NOTHING CHANGES. Every existing caller passes no `tx`, gets
+     * `this.prisma`, and this method opens its own transactions exactly as it always has.
+     */
+    opts: { quiet?: boolean; tx?: Prisma.TransactionClient } = {},
+  ): Promise<{ data: Record<string, unknown>; message?: string }> {
+    /*
+     * One alias for every read and write below. When a caller supplied a client this IS that
+     * client, so the whole method joins their transaction; otherwise it is the service's own and
+     * the behaviour is unchanged.
+     */
+    const db: Prisma.TransactionClient = opts.tx ?? this.prisma;
+    /** True when this call is a participant in somebody else's transaction, not the owner. */
+    const joined = opts.tx !== undefined;
+    const t = await db.transactions.findFirst({ where: { id: txnId, deleted_at: null } });
     if (!t) throw new NotFoundException({ message: `No query results for model [App\\Models\\Transaction] ${txnId}.` });
 
     /*
@@ -882,7 +956,7 @@ export class TransactionsWriteService {
       // Identity by id where the row has one — see `common/transaction-scope.ts`. A namesake must
       // not inherit edit rights, and must not be able to write their own name over the agent field.
       const isOwner = ownsTransaction(user, t);
-      const isFullMember = (await this.prisma.team_members.findFirst({
+      const isFullMember = (await db.team_members.findFirst({
         where: { transaction_id: txnId, access: 'full', ...teamMemberIdentity(user) },
       })) !== null;
       if (!isOwner && !isFullMember) throw new ForbiddenException({ message: 'You do not have edit access to this transaction.' });
@@ -916,7 +990,7 @@ export class TransactionsWriteService {
 
     // TD-058 - the server half of the Team Split lock (see teamChangeAfterNoticeProblem).
     if (Object.prototype.hasOwnProperty.call(data, 'team')) {
-      const current = await this.prisma.team_members.findMany({ where: { transaction_id: txnId }, select: { name: true, split: true } });
+      const current = await db.team_members.findMany({ where: { transaction_id: txnId }, select: { name: true, split: true } });
       const problem = teamChangeAfterNoticeProblem(isAdminOrAbove(user), t, current, asArray(data.team));
       if (problem) throw new UnprocessableEntityException({ message: problem, errors: { team: [problem] } });
     }
@@ -1101,7 +1175,7 @@ export class TransactionsWriteService {
        */
       const newlyPaid = hasNewlyPaidPayout(parseJsonObject(t.admin_activities), data.admin_activities);
       if (newlyPaid) {
-        const invs = await this.prisma.invoices.findMany({ where: { transaction_id: txnId, deleted_at: null }, select: { commission_received_date: true } });
+        const invs = await db.invoices.findMany({ where: { transaction_id: txnId, deleted_at: null }, select: { commission_received_date: true } });
         const collected = invs.some((i) => i.commission_received_date !== null);
         if (!collected) {
           const m = 'This deal has not received its commission yet, so an agent payout cannot be recorded against it. Record the commission payment on the invoice first - the received date fills in automatically - then pay the agent.';
@@ -1299,7 +1373,7 @@ export class TransactionsWriteService {
           Math.abs(money(data[k]) - money((t as unknown as Record<string, unknown>)[k])) > 0.005,
       );
       if (movedMoney.length) {
-        const approvedFin = await this.prisma.transaction_edit_requests.findFirst({
+        const approvedFin = await db.transaction_edit_requests.findFirst({
           where: { transaction_id: txnId, scope: 'financial', status: 'approved' },
           orderBy: [{ created_at: 'desc' }, { id: 'asc' }],
         });
@@ -1312,14 +1386,14 @@ export class TransactionsWriteService {
     }
 
     if (statuses.includes('DFT') && !isSuperAdmin(user)) {
-      const approved = await this.prisma.transaction_edit_requests.findFirst({
+      const approved = await db.transaction_edit_requests.findFirst({
         // TD-159 - WHICH approval, not just any. Unfiltered, an approval to untick one
         // Mandatory box would also have unlocked the whole deal for editing.
         where: { transaction_id: txnId, status: 'approved', ...UNLOCKING_SCOPE_FILTER },
         orderBy: [{ created_at: 'desc' }, { id: 'asc' }],
       });
       if (!approved) throw new ForbiddenException({ message: 'This transaction is DFT — edits require Super Admin approval. Use “Request Edit”.' });
-      await this.prisma.transaction_edit_requests.update({ where: { id: approved.id }, data: { status: 'applied', updated_at: new Date() } });
+      await db.transaction_edit_requests.update({ where: { id: approved.id }, data: { status: 'applied', updated_at: new Date() } });
     }
 
     /*
@@ -1359,14 +1433,22 @@ export class TransactionsWriteService {
 
     // The two dates every reminder schedule hangs off, read before the save so a move can be
     // noticed afterwards and the schedule recalculated.
-    const datesBefore = await this.prisma.transactions.findUnique({
+    const datesBefore = await db.transactions.findUnique({
       where: { id: txnId },
       select: { closing_date: true, listing_expiry_date: true },
     });
 
     const before = await this.audit.snapshot(txnId);
 
-    await this.prisma.$transaction(async (tx) => {
+    /*
+     * JOINED RATHER THAN NESTED. Prisma has no nested interactive transactions — opening one
+     * inside the caller's would either error or commit independently of it, which is the whole
+     * thing this is meant to prevent. With a caller's client the body simply runs on it.
+     */
+    const inTx = async (fn: (tx: Prisma.TransactionClient) => Promise<void>): Promise<void> => (
+      opts.tx ? fn(opts.tx) : this.prisma.$transaction(fn)
+    );
+    await inTx(async (tx) => {
       const fill: Record<string, unknown> = {};
       for (const k of FILL_KEYS) {
         if (Object.prototype.hasOwnProperty.call(data, k)) fill[k] = this.normalizeFill(k, data[k]);
@@ -1426,7 +1508,7 @@ export class TransactionsWriteService {
           // Somebody committed between the read above and this statement. Re-read on the outer
           // connection — `tx` is about to roll back, and its snapshot cannot see their commit — so
           // the reply carries the version they actually have to reconcile against.
-          const now = await this.prisma.transactions.findUnique({
+          const now = await db.transactions.findUnique({
             where: { id: txnId }, select: { version: true, updated_at: true },
           });
           throw this.staleTransaction(expectedVersion, now?.version ?? null, now?.updated_at ?? null);
@@ -1532,7 +1614,7 @@ export class TransactionsWriteService {
     });
 
     if (Object.keys(data).some((k) => FINANCIAL_FIELDS.has(k))) {
-      await this.prisma.transaction_edit_requests.updateMany({
+      await db.transaction_edit_requests.updateMany({
         where: { transaction_id: txnId, scope: 'financial', status: 'approved' },
         data: { status: 'applied', updated_at: new Date() },
       });
@@ -1554,7 +1636,7 @@ export class TransactionsWriteService {
        * smaller window.
        */
       try {
-        await this.prisma.$transaction((tx) => this.txnInvoices.refreshFromDeal(tx, txnId, actor));
+        await inTx((tx) => this.txnInvoices.refreshFromDeal(tx, txnId, actor).then(() => undefined));
       } catch {
         // Never let it fail the save: the deal itself is correct either way, and the next financial
         // save runs this again. The alternative — refusing the save because an invoice could not be
@@ -1563,18 +1645,30 @@ export class TransactionsWriteService {
     }
 
     const source = isAgent(user) ? 'Agent' : 'Manual';
-    const changed = await this.audit.recordChanges(txnId, actor, before, await this.audit.snapshot(txnId), source);
+    const changed = await this.audit.recordChanges(txnId, actor, before, await this.audit.snapshot(txnId), source, db);
 
     // An agent editing a field that was rejected is the correction half of the review lifecycle: the
     // original rejection moves to Corrected rather than a second, unrelated record being opened.
     // Only an agent's own save counts — the office editing the same field is not the agent fixing it.
     if (source === 'Agent' && changed.length) {
-      await this.reviews.markCorrected(txnId, actor?.name ?? null, changed);
+      await this.reviews.markCorrected(txnId, actor?.name ?? null, changed, db);
     }
 
     // Re-check lawyer details after the edit — only re-emails when the missing set actually changed.
     // Not while the bulk import is saving the deal (opts.quiet, see store()).
-    if (!opts.quiet) void this.lawyerReminder.maybeRemind(txnId);
+    /*
+     * THE FIRE-AND-FORGET SIDE EFFECTS DO NOT RUN INSIDE SOMEBODY ELSE'S TRANSACTION.
+     *
+     * Each of these is `void`-ed, so it escapes the await chain and writes on its own connection —
+     * outside the caller's transaction, and therefore BEFORE the commit that may never come. A
+     * rolled-back approval would leave a reminder scheduled for a commission change that did not
+     * happen, and `maybeRemind` can send mail besides.
+     *
+     * Only the approval path takes this branch (`joined` is false for every existing caller), and
+     * on a commission-only body neither reminder is reachable anyway — their guards are a status
+     * or a date change. This makes that explicit rather than incidental.
+     */
+    if (!opts.quiet && !joined) void this.lawyerReminder.maybeRemind(txnId);
 
     /*
      * TD-009 — the deal became firm, or ended, and its agent is told.
@@ -1585,14 +1679,14 @@ export class TransactionsWriteService {
      * whether the person who made the change is skipped, is decided in `statusChanged`.
      */
     if (enteredStatuses.length && !opts.quiet) {
-      void this.reminders.statusChanged(txnId, enteredStatuses, actor?.name ?? null, previousStatuses);
+      if (!joined) void this.reminders.statusChanged(txnId, enteredStatuses, actor?.name ?? null, previousStatuses);
     }
 
     // A moved closing or expiry date means the reminder cadence is computed against a different
     // day from now on. Nothing is scheduled ahead — the sweep derives it nightly — so the schedule
     // recalculates by construction; this records that it happened and releases today's claim, so a
     // date brought forward can be chased today rather than tomorrow.
-    const datesAfter = await this.prisma.transactions.findUnique({
+    const datesAfter = await db.transactions.findUnique({
       where: { id: txnId },
       select: { closing_date: true, listing_expiry_date: true },
     });
@@ -1600,13 +1694,13 @@ export class TransactionsWriteService {
       const was = datesBefore?.[field] ?? null;
       const now = datesAfter?.[field] ?? null;
       if (was?.getTime() !== now?.getTime()) {
-        void this.reminders.dateChanged(txnId, field, was, now);
+        if (!joined) void this.reminders.dateChanged(txnId, field, was, now);
       }
     }
 
-    await this.refreshPaymentCache(txnId);
+    await this.refreshPaymentCache(txnId, opts.tx);
 
-    const full = (await this.prisma.transactions.findUnique({ where: { id: txnId }, include: txnShowIncludeFor(user) })) as unknown as LoadedTxn;
+    const full = (await db.transactions.findUnique({ where: { id: txnId }, include: txnShowIncludeFor(user) })) as unknown as LoadedTxn;
     const ctx = { user: user ? ({ id: user.id, role: user.role, name: user.name } as ResourceUser) : null, commission: this.commission, prisma: this.prisma };
     /*
      * TD-074, the announcing half: the save that causes the automatic status change is the one

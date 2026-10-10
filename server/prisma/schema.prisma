@@ -2278,6 +2278,17 @@ model transaction_edit_requests {
   reviewed_by       Int?
   reviewed_by_name  String?      @db.VarChar(255)
   reviewed_at       DateTime?    @db.Timestamp(0)
+  /**
+   * A COMMISSION CHANGE REQUEST carries the numbers it asks for; an ordinary unlock request leaves
+   * both of these null and behaves exactly as it always has.
+   *
+   * `proposed` is the values being asked for, `baseline` the same keys as they stood when the
+   * request was raised. Baseline is stored rather than re-read so the reviewer is shown the
+   * comparison the REQUESTER saw, and so a request can be refused as stale when the live figures
+   * have moved underneath it.
+   */
+  proposed          Json?        @db.JsonB
+  baseline          Json?        @db.JsonB
   created_at        DateTime?    @db.Timestamp(0)
   updated_at        DateTime?    @db.Timestamp(0)
   transactions      transactions @relation(fields: [transaction_id], references: [id], onDelete: Cascade, onUpdate: Restrict)

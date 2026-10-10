@@ -534,6 +534,20 @@ export default function TransactionDetailPage() {
   const statusOptions = statusOptionsFor(form.type)
     .filter((o) => !(isDocumentation && o === 'Closed' && !form.statuses.includes('Closed')));
   const ro = view; // read-only flag
+  /*
+   * BASIC INFO IS READ-ONLY FOR DOCUMENTATION, in edit mode as well as view.
+   *
+   * `ro` above is the page-wide flag and drives sixty-odd controls across Conditions, Clients,
+   * Brokerage and the rest — all of which this role is still expected to maintain. So the Basic
+   * Info lock is its own flag, applied to that card alone, rather than a widening of `ro` that
+   * would quietly take away the rest of the coordinator's job.
+   *
+   * IT IS NOT THE ENFORCEMENT, only the half a person sees. `?mode=edit` renders an editable page
+   * for anyone who may edit the deal, and the server drops every Basic Info key from this role's
+   * saves regardless — see `DOCUMENTATION_EDITABLE`. This stops them typing into something that
+   * would be discarded.
+   */
+  const basicRo = ro || isDocumentation;
 
   function set<K extends keyof DetailForm>(k: K, v: DetailForm[K]) { setForm((f) => (f ? { ...f, [k]: v } : f)); }
   function setBrok<K extends keyof BrokerageForm>(k: K, v: BrokerageForm[K]) { setForm((f) => (f ? { ...f, brokerage: { ...f.brokerage, [k]: v } } : f)); }
@@ -1369,34 +1383,34 @@ export default function TransactionDetailPage() {
               {!referral && !precon && (
               <Field label={OFFER_CLOSING_LISTING_TYPES.includes(form.type) && form.mls_type !== 'exclusive' && !slMarkVerifiedHidden ? (
                 <span style={{ whiteSpace: 'nowrap' }}>Listing Type{' '}
-                  <span role="button" onClick={(e) => { e.preventDefault(); e.stopPropagation(); if (!ro) set('mls_verified', !form.mls_verified); }}
-                    style={{ cursor: ro ? 'default' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10.5, fontWeight: 700, textTransform: 'none', padding: '2px 8px', borderRadius: 6, border: `1px solid ${form.mls_verified ? 'var(--ok-600)' : 'var(--brand-red)'}`, color: form.mls_verified ? 'var(--ok-600)' : 'var(--brand-red)', background: form.mls_verified ? 'var(--ok-bg)' : '#fff1f2' }}>
+                  <span role="button" onClick={(e) => { e.preventDefault(); e.stopPropagation(); if (!basicRo) set('mls_verified', !form.mls_verified); }}
+                    style={{ cursor: basicRo ? 'default' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10.5, fontWeight: 700, textTransform: 'none', padding: '2px 8px', borderRadius: 6, border: `1px solid ${form.mls_verified ? 'var(--ok-600)' : 'var(--brand-red)'}`, color: form.mls_verified ? 'var(--ok-600)' : 'var(--brand-red)', background: form.mls_verified ? 'var(--ok-bg)' : '#fff1f2' }}>
                     <span style={{ width: 10, height: 10, borderRadius: '50%', border: '1px solid currentColor', background: form.mls_verified ? 'currentColor' : 'transparent', display: 'inline-block', flexShrink: 0 }} />{form.mls_verified ? 'Verified' : 'Mark Verified'}
                   </span>
                 </span>
               ) : 'Listing Type'}>
                 <div className="seg-toggle">
-                  <button type="button" className={`seg-btn ${form.mls_type !== 'exclusive' ? 'active' : ''}`} disabled={ro} onClick={() => setListingType('mls')}>MLS</button>
-                  <button type="button" className={`seg-btn ${form.mls_type === 'exclusive' ? 'active' : ''}`} disabled={ro} onClick={() => setListingType('exclusive')}>Exclusive</button>
+                  <button type="button" className={`seg-btn ${form.mls_type !== 'exclusive' ? 'active' : ''}`} disabled={basicRo} onClick={() => setListingType('mls')}>MLS</button>
+                  <button type="button" className={`seg-btn ${form.mls_type === 'exclusive' ? 'active' : ''}`} disabled={basicRo} onClick={() => setListingType('exclusive')}>Exclusive</button>
                 </div>
                 {form.mls_type !== 'exclusive'
-                  ? <input style={{ marginTop: 6 }} value={form.mls_num} disabled={ro} onChange={(e) => set('mls_num', e.target.value.toUpperCase())} placeholder="e.g. E12345678" />
+                  ? <input style={{ marginTop: 6 }} value={form.mls_num} disabled={basicRo} onChange={(e) => set('mls_num', e.target.value.toUpperCase())} placeholder="e.g. E12345678" />
                   : <span className="pill type-pre" style={{ marginTop: 6, display: 'inline-block', padding: '6px 12px' }}>Exclusive Listing</span>}
                 {listing && !OFFER_CLOSING_LISTING_TYPES.includes(form.type) && form.mls_type !== 'exclusive' && !slMarkVerifiedHidden && (
-                  <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--muted)', marginTop: 8, cursor: ro ? 'default' : 'pointer' }}>
-                    <input type="radio" checked={!!form.mls_verified} disabled={ro} onClick={() => !ro && set('mls_verified', !form.mls_verified)} readOnly />
+                  <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--muted)', marginTop: 8, cursor: basicRo ? 'default' : 'pointer' }}>
+                    <input type="radio" checked={!!form.mls_verified} disabled={basicRo} onClick={() => !basicRo && set('mls_verified', !form.mls_verified)} readOnly />
                     Mark Verified {form.mls_verified && <span className="pill ok" style={{ fontSize: 10 }}>Verified</span>}
                   </label>
                 )}
               </Field>
               )}
               <Field label="Type">
-                <select value={form.type} disabled={ro} onChange={(e) => onTypeChange(e.target.value)}>
+                <select value={form.type} disabled={basicRo} onChange={(e) => onTypeChange(e.target.value)}>
                   {TRANSACTION_TYPES.map((t) => <option key={t} value={t}>{typeLabel(t)}</option>)}
                 </select>
               </Field>
               <Field label="Status">
-                <StatusMultiSelect options={statusOptions} selected={form.statuses} disabled={ro} onToggle={toggleStatus} />
+                <StatusMultiSelect options={statusOptions} selected={form.statuses} disabled={basicRo} onToggle={toggleStatus} />
               </Field>
               {OFFER_CLOSING_LISTING_TYPES.includes(form.type) && (
                 <Field label="Trade Number"><input value={form.trade_no} readOnly style={{ background: 'var(--surface-2)' }} /></Field>
@@ -1414,7 +1428,7 @@ export default function TransactionDetailPage() {
                       * that stays possible - but as a deliberate choice rather than a typo. */}
                     <select
                       value={externalAgent || (!!form.agent && !agents.includes(form.agent)) ? '__external__' : (form.agent || '')}
-                      disabled={ro}
+                      disabled={basicRo}
                       onChange={(e) => {
                         if (e.target.value === '__external__') { setExternalAgent(true); set('agent', ''); }
                         else { setExternalAgent(false); set('agent', e.target.value); }
@@ -1425,33 +1439,33 @@ export default function TransactionDetailPage() {
                       <option value="__external__">External / co-op agent…</option>
                     </select>
                     {(externalAgent || (!!form.agent && !agents.includes(form.agent))) && (
-                      <input value={form.agent} disabled={ro} onChange={(e) => set('agent', e.target.value)} placeholder="External agent name" style={{ marginTop: 6 }} />
+                      <input value={form.agent} disabled={basicRo} onChange={(e) => set('agent', e.target.value)} placeholder="External agent name" style={{ marginTop: 6 }} />
                     )}
                   </>)}
               </Field>
-              <Field label="Property Address" req><input value={form.property} disabled={ro} onChange={(e) => set('property', e.target.value)} /></Field>
-              {!hidePriceDeposit && <Field label={priceLabel}><MoneyInput value={form.price} disabled={ro} onChange={(v) => set('price', v)} /></Field>}
-              {!hidePriceDeposit && !referral && <Field label="Deposit"><MoneyInput value={form.deposit} disabled={ro} onChange={(v) => set('deposit', v)} /></Field>}
+              <Field label="Property Address" req><input value={form.property} disabled={basicRo} onChange={(e) => set('property', e.target.value)} /></Field>
+              {!hidePriceDeposit && <Field label={priceLabel}><MoneyInput value={form.price} disabled={basicRo} onChange={(v) => set('price', v)} /></Field>}
+              {!hidePriceDeposit && !referral && <Field label="Deposit"><MoneyInput value={form.deposit} disabled={basicRo} onChange={(v) => set('deposit', v)} /></Field>}
             </div>
             {!OFFER_CLOSING_LISTING_TYPES.includes(form.type) && (
               <div className="g3">
                 <Field label="Trade Number"><input value={form.trade_no} readOnly style={{ background: 'var(--surface-2)' }} /></Field>
                 {listing && (<>
-                  <Field label="Listing Contract Date"><input type="date" value={form.listing_contract_date} disabled={ro} onChange={(e) => set('listing_contract_date', e.target.value)} /></Field>
-                  <Field label="Listing Expiry Date"><input type="date" value={form.listing_expiry_date} disabled={ro} onChange={(e) => set('listing_expiry_date', e.target.value)} /></Field>
+                  <Field label="Listing Contract Date"><input type="date" value={form.listing_contract_date} disabled={basicRo} onChange={(e) => set('listing_contract_date', e.target.value)} /></Field>
+                  <Field label="Listing Expiry Date"><input type="date" value={form.listing_expiry_date} disabled={basicRo} onChange={(e) => set('listing_expiry_date', e.target.value)} /></Field>
                 </>)}
                 {!listing && (<>
-                  <Field label="Offer Date"><input type="date" value={form.offer_date} disabled={ro} onChange={(e) => set('offer_date', e.target.value)} /></Field>
-                  <Field label="Closing Date"><input type="date" value={form.closing_date} disabled={ro} onChange={(e) => set('closing_date', e.target.value)} /></Field>
+                  <Field label="Offer Date"><input type="date" value={form.offer_date} disabled={basicRo} onChange={(e) => set('offer_date', e.target.value)} /></Field>
+                  <Field label="Closing Date"><input type="date" value={form.closing_date} disabled={basicRo} onChange={(e) => set('closing_date', e.target.value)} /></Field>
                 </>)}
               </div>
             )}
             {OFFER_CLOSING_LISTING_TYPES.includes(form.type) && (
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12, marginTop: 12 }}>
-                <Field label="Listing Contract Date"><input type="date" value={form.listing_contract_date} disabled={ro} onChange={(e) => set('listing_contract_date', e.target.value)} /></Field>
-                <Field label="Listing Expiry Date"><input type="date" value={form.listing_expiry_date} disabled={ro} onChange={(e) => set('listing_expiry_date', e.target.value)} /></Field>
-                {!slHideBasic && <Field label="Offer Date"><input type="date" value={form.offer_date} disabled={ro} onChange={(e) => set('offer_date', e.target.value)} /></Field>}
-                {!slHideBasic && <Field label="Closing Date"><input type="date" value={form.closing_date} disabled={ro} onChange={(e) => set('closing_date', e.target.value)} /></Field>}
+                <Field label="Listing Contract Date"><input type="date" value={form.listing_contract_date} disabled={basicRo} onChange={(e) => set('listing_contract_date', e.target.value)} /></Field>
+                <Field label="Listing Expiry Date"><input type="date" value={form.listing_expiry_date} disabled={basicRo} onChange={(e) => set('listing_expiry_date', e.target.value)} /></Field>
+                {!slHideBasic && <Field label="Offer Date"><input type="date" value={form.offer_date} disabled={basicRo} onChange={(e) => set('offer_date', e.target.value)} /></Field>}
+                {!slHideBasic && <Field label="Closing Date"><input type="date" value={form.closing_date} disabled={basicRo} onChange={(e) => set('closing_date', e.target.value)} /></Field>}
               </div>
             )}
           </div>

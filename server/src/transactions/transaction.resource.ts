@@ -639,6 +639,16 @@ export async function transactionResource(t: LoadedTxn, ctx: ResourceCtx): Promi
       status_at_request: r.status_at_request,
       requested_by_name: r.requested_by_name,
       reason: r.reason,
+      /*
+       * A COMMISSION CHANGE REQUEST'S NUMBERS — what is being asked for, and what it was asked
+       * FROM. Null on an ordinary unlock request, which proposes nothing.
+       *
+       * Both travel because the reviewer's whole job is the comparison: the proposal alone would
+       * show them a figure with nothing to judge it against, and reading "current" live would
+       * show whatever the deal says now rather than what the requester was looking at.
+       */
+      proposed: r.proposed ?? null,
+      baseline: r.baseline ?? null,
       reviewed_by_name: r.reviewed_by_name,
       reviewed_at: toDateTimeString(r.reviewed_at),
       stamp: toDateTimeString(r.created_at),

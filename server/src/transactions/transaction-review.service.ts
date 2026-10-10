@@ -208,7 +208,13 @@ export class TransactionReviewService {
    * Deliberately updates the ORIGINAL record instead of opening a second one, so an issue is one
    * row from beginning to end rather than a pile of disconnected events.
    */
-  async markCorrected(txnId: number, actorName: string | null, fieldLabels: string[]): Promise<number> {
+  async markCorrected(
+    txnId: number,
+    actorName: string | null,
+    fieldLabels: string[],
+    /** Defaults to this service's own client, so existing callers are unaffected. */
+    db: Prisma.TransactionClient = this.prisma,
+  ): Promise<number> {
     const labels = [...new Set(fieldLabels.filter(Boolean))];
     if (labels.length === 0) return 0;
 
@@ -218,12 +224,12 @@ export class TransactionReviewService {
     // Fixing it IS a response, and for most agents it is the only one they make. Written before the
     // status moves, and only where nothing was recorded yet, so a reply that came first keeps its
     // earlier time — the metric is "how long before anyone answered", not "the last time they did".
-    await this.prisma.transaction_reviews.updateMany({
+    await db.transaction_reviews.updateMany({
       where: { ...where, first_response_at: null },
       data: { first_response_at: now },
     });
 
-    const done = await this.prisma.transaction_reviews.updateMany({
+    const done = await db.transaction_reviews.updateMany({
       where,
       data: { resolution_status: 'Corrected', corrected_at: now, corrected_by: actorName, updated_at: now },
     });

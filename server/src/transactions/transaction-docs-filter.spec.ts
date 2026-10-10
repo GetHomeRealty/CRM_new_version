@@ -3,7 +3,7 @@ import { BadRequestException, ValidationPipe } from '@nestjs/common';
 import { filterClauses } from './transaction-filters';
 import { transactionScopeWhere } from '../common/transaction-scope';
 import { ListTransactionsDto } from './dto/list-transactions.dto';
-import { DOCUMENTATION_EDITABLE } from './transactions-write.service';
+import { DOCUMENTATION_EDITABLE, BASIC_INFO_FIELDS } from './transactions-write.service';
 
 /**
  * "MISSING UPLOADS" AND "NEEDS REVIEW" — the Transactions list's required-documents filters, run as
@@ -142,12 +142,45 @@ describe('required-documents filters', () => {
 });
 
 describe('what a Documentation user may change on a deal', () => {
-  it('basic details, offer and status, clients and brokerage — never money, team, admin, lawyer or validation', () => {
-    for (const k of ['property', 'price', 'deposit', 'offer_date', 'closing_date', 'statuses', 'clients', 'brokerage', 'conditions', 'type', 'agent']) {
+  /*
+   * BASIC INFO WAS REMOVED FROM THIS LIST, and this test is where that decision is pinned.
+   *
+   * It used to assert the opposite — `property`, `price`, `type`, `agent` and the dates were all
+   * expected to be editable. The brokerage decided this role does not change a deal's basic
+   * details, so the assertion is inverted rather than deleted: the fields are named on the other
+   * side, so putting one back is a visible change to a test rather than a quiet widening.
+   */
+  it(`NOT ONE FIELD OF BASIC INFO — checked against the card's own map, not a copy of it`, () => {
+    /*
+     * Driven off `BASIC_INFO_FIELDS` rather than a list repeated here. A field added to the Basic
+     * Info card is added to that set, and this fails until it is withheld from the role too —
+     * which is the only way the two files stay in step.
+     */
+    expect(BASIC_INFO_FIELDS.size).toBeGreaterThan(10);
+    for (const k of BASIC_INFO_FIELDS) {
+      expect([k, DOCUMENTATION_EDITABLE.has(k)]).toEqual([k, false]);
+    }
+  });
+
+  it('Status is Basic Info, and is the field this was originally wrong about', () => {
+    // The Status multi-select sits inside the Basic Info card between Type and Trade Number. It
+    // reads like a section of its own, was treated as one, and stayed editable because of it.
+    expect(BASIC_INFO_FIELDS.has('statuses')).toBe(true);
+    expect(DOCUMENTATION_EDITABLE.has('statuses')).toBe(false);
+  });
+
+  it(`the rest of the coordinator's job is untouched — conditions, status, clients, brokerage, builder`, () => {
+    for (const k of ['clients', 'brokerage', 'conditions', 'conditional_offer', 'inter_board_enabled', 'inter_board_listings', 'builder', 'precon_listing_type']) {
       expect(DOCUMENTATION_EDITABLE.has(k)).toBe(true);
     }
-    for (const k of ['comm_type', 'comm_value', 'team', 'admin_activities', 'adjustments', 'lawyer_name', 'valid_status', 'comm_status',
-      'comm_paid_status', 'precon_terms', 'commercial_lease', 'commission_agent', 'activity_tracker', 'payment_type']) {
+  });
+
+  it('never money, team, admin, lawyer or validation', () => {
+    // Unchanged. Commission in particular is proposed through the approval workflow by this role,
+    // never written directly — see COMMISSION_SCOPE.
+    for (const k of ['comm_type', 'comm_value', 'comm_pct', 'comm_amt', 'team', 'admin_activities', 'adjustments', 'lawyer_name',
+      'valid_status', 'comm_status', 'comm_paid_status', 'precon_terms', 'commercial_lease', 'commission_agent',
+      'activity_tracker', 'payment_type']) {
       expect(DOCUMENTATION_EDITABLE.has(k)).toBe(false);
     }
   });

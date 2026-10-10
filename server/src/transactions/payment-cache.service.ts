@@ -93,11 +93,26 @@ export class PaymentCacheService {
    * ids and loading them in one query would hold the whole brokerage in memory to write five numbers
    * per row.
    */
-  async recompute(ids: number[], batchSize = 500): Promise<number> {
+  async recompute(
+    ids: number[],
+    batchSize = 500,
+    /*
+     * The client to work through, defaulting to this service's own.
+     *
+     * A caller inside a transaction MUST pass theirs. These rows are the same `transactions` rows
+     * the caller is holding locks on, so a second connection blocks on them until the transaction
+     * times out — which is exactly what an approval did before this parameter existed: thirty
+     * seconds, then a deadlock reported as a 500.
+     *
+     * It is also right on the merits: the cache is derived from the values being changed, so a
+     * rolled-back approval must take the recomputed cache back with it.
+     */
+    db: Prisma.TransactionClient = this.prisma,
+  ): Promise<number> {
     let written = 0;
     for (let i = 0; i < ids.length; i += batchSize) {
       const slice = ids.slice(i, i + batchSize);
-      const rows = await this.prisma.transactions.findMany({
+      const rows = await db.transactions.findMany({
         where: { id: { in: slice } },
         include: commissionInclude,
       });
@@ -105,7 +120,7 @@ export class PaymentCacheService {
       for (const t of rows) {
         try {
           const v = await this.computeFor(t);
-          await this.prisma.transactions.update({
+          await db.transactions.update({
             where: { id: t.id },
             data: { ...v, calc_at: now },
           });
@@ -124,8 +139,8 @@ export class PaymentCacheService {
   }
 
   /** Recompute one deal, after a write that could have moved any of its inputs. */
-  async recomputeOne(id: number): Promise<void> {
-    await this.recompute([id]);
+  async recomputeOne(id: number, db?: Prisma.TransactionClient): Promise<void> {
+    await this.recompute([id], 500, db);
   }
 }
 

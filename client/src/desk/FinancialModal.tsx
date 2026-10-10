@@ -100,6 +100,21 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
    * calculations and the save path are untouched, and every other role sees exactly what it did.
    */
   const readsOnly = user?.role === 'documentation' || user?.role === 'accounting';
+
+  /*
+   * DOCUMENTATION ALONE MAY PROPOSE A COMMISSION CHANGE — not Accounting, which reads these
+   * figures and raises nothing. Separate from `readsOnly` above because the two answer different
+   * questions: that one is "may this person type here", this one is "may they ask for a change".
+   */
+  const mayProposeCommission = user?.role === 'documentation';
+  const [proposeOpen, setProposeOpen] = useState(false);
+  const [proposeReason, setProposeReason] = useState('');
+  const [proposeBusy, setProposeBusy] = useState(false);
+  const [proposeError, setProposeError] = useState('');
+  /** Proposed values, keyed as the server expects them. Empty string means "leave this alone". */
+  const [proposal, setProposal] = useState<Record<string, string>>({});
+  /** Proposed Agent Comm %, by the member's position in the split. */
+  const [proposedAgentPct, setProposedAgentPct] = useState<Record<number, string>>({});
   // Financial edit lock: Price, Deposit and Commission fields are locked for everyone
   // except a Super Admin. Each field shows an edit pencil; clicking it sends an edit
   // request that a Super Admin must approve. One approval unlocks these fields; they
@@ -123,6 +138,7 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
   const approveFinReq = async () => { if (!pendingFinReq) return; setReqBusy(true); try { await approveEditRequest(pendingFinReq.id); toast('Approved — financial fields unlocked', 'ok'); await refreshTxn(); } catch { toast('Could not approve', 'bad'); } finally { setReqBusy(false); } };
   const rejectFinReq = async () => { if (!pendingFinReq) return; setReqBusy(true); try { await rejectEditRequest(pendingFinReq.id); toast('Request rejected', 'ok'); await refreshTxn(); } catch { toast('Could not reject', 'bad'); } finally { setReqBusy(false); } };
   const finLockStyle: CSSProperties = { background: 'var(--surface-3)', cursor: 'not-allowed' };
+
   // Edit pencil rendered next to a locked field's label (mirrors Agent Comm %).
   // Not for Documentation: that role cannot edit these fields at all, so an invitation to request
   // approval to edit them is an offer that goes nowhere.
@@ -154,6 +170,76 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
     const t: TeamMemberData[] = (txn.team && txn.team.length) ? txn.team : (txn.agent ? [{ name: txn.agent, split: 100, agent_pct: 90, brok_pct: 10 }] : []);
     return t.map((m) => ({ name: m.name, split: m.split ?? 100, agent_pct: m.agent_pct ?? 90, brok_pct: m.brok_pct ?? 10, scope: m.scope || 'Entire', terms: m.terms || [] }));
   });
+
+  /**
+   * The fields this deal can have a commission change proposed for, with what they say now.
+   *
+   * Driven off the deal's own type, so a preconstruction deal proposes its master percentage and
+   * amount and an ordinary one proposes `comm_pct` / `comm_amt`. The CURRENT column is read from
+   * the saved transaction rather than from the form state: the form is what a Super Admin would
+   * be editing, and this dialog is for somebody who cannot edit it.
+   */
+  const proposableFields: { key: string; label: string; current: number | string | null }[] = precon
+    ? [
+      { key: 'precon_comm_pct', label: 'Commission %', current: txn.precon_comm_pct ?? null },
+      { key: 'precon_comm_amt_manual', label: 'Commission Amount', current: txn.precon_comm_amt_manual ?? null },
+    ]
+    : [
+      { key: 'comm_pct', label: 'Commission %', current: txn.comm_pct ?? null },
+      { key: 'comm_amt', label: 'Commission Amount', current: txn.comm_amt ?? null },
+    ];
+
+  /** Only what the person actually filled in — an untouched row proposes nothing. */
+  const buildProposal = (): Record<string, unknown> => {
+    const out: Record<string, unknown> = {};
+    for (const f of proposableFields) {
+      const v = (proposal[f.key] ?? '').trim();
+      if (v !== '') out[f.key] = parseNumber(v);
+    }
+    const touchedAgents = Object.entries(proposedAgentPct).filter(([, v]) => String(v ?? '').trim() !== '');
+    if (touchedAgents.length) {
+      /*
+       * THE WHOLE TEAM TRAVELS, not just the rows that changed. Applying a team is a replacement,
+       * so a partial array would delete the members left out — the untouched ones are sent exactly
+       * as they stand.
+       */
+      /*
+       * ONLY THE ROWS THAT CHANGED, and only their commission.
+       *
+       * The server refuses a proposal carrying anything but `name`, `split`, `agent_pct` and
+       * `brok_pct` inside `team`, and merges what it is given onto the live rows — so an agent's
+       * access and the terms they are on are preserved by the server rather than round-tripped
+       * through here, where a stale copy could quietly write them back.
+       */
+      out.team = touchedAgents.map(([i, v]) => ({
+        name: members[Number(i)]?.name ?? '',
+        agent_pct: parseNumber(v),
+      }));
+    }
+    return out;
+  };
+
+  const sendProposal = async () => {
+    const proposed = buildProposal();
+    if (!Object.keys(proposed).length) { setProposeError('Propose at least one new value.'); return; }
+    if (!proposeReason.trim()) { setProposeError('Give a reason for the change.'); return; }
+    setProposeBusy(true);
+    setProposeError('');
+    try {
+      await requestTransactionEdit(transactionId, proposeReason.trim(), 'commission', proposed);
+      toast('Commission change sent to a Super Admin for approval', 'ok');
+      setProposeOpen(false);
+      setProposal({});
+      setProposedAgentPct({});
+      setProposeReason('');
+      await refreshTxn();
+    } catch (e) {
+      // On the dialog, not as a toast: what was typed is still there and this says why it stayed.
+      setProposeError(apiErrorMessage(e, 'The request could not be sent'));
+    } finally {
+      setProposeBusy(false);
+    }
+  };
   // Agent Comm (%) and Brok Comm (%) are complementary: editing one fills the
   // other with the remaining percentage (e.g. Agent 80 → Brokerage 20).
   const setMember = (i: number, k: FinMemberKey, v: string) => setMembers((ms) => ms.map((m, idx) => {
@@ -546,6 +632,17 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
               Documentation gets the word and nothing else — no icon, no instruction. Every other
               role keeps the sentence it has always had.
             */}
+            {mayProposeCommission && (
+              /*
+                The one thing this role CAN do here. Beside the banner rather than among the
+                figures, because it is about the section as a whole.
+              */
+              <button className="btn primary sm" type="button" data-testid="request-commission-change"
+                style={{ float: 'right', marginLeft: 10 }}
+                onClick={() => { setProposeError(''); setProposeOpen(true); }}>
+                Request Commission Change
+              </button>
+            )}
             <span style={{ fontSize: 12.5, color: 'var(--info-ink)' }} data-testid="fin-readonly-banner">
               {readsOnly
                 ? 'View'
@@ -901,6 +998,74 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
             <div className="actions">
               <button className="btn ghost" onClick={() => setReasonOpen(false)} disabled={reqBusy}>Cancel</button>
               <button className="btn primary" onClick={askFinancialEdit} disabled={reqBusy || !reason.trim()}>{reqBusy ? 'Sending…' : 'Send request'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/*
+        * PROPOSE A COMMISSION CHANGE.
+        *
+        * A separate dialog from "Request edit approval" above, because it asks a different
+        * question. That one asks to be let into the fields; this one states the numbers, and
+        * approving it applies them. Current sits beside Proposed on every row so the reviewer —
+        * and the requester — can see exactly what is being asked for.
+        *
+        * A BLANK ROW PROPOSES NOTHING. Leaving a field empty is how you say "not this one", which
+        * is why the placeholder shows the current value rather than pre-filling it: a pre-filled
+        * form would propose every figure on the deal every time.
+      */}
+      {proposeOpen && (
+        <div className="modal-backdrop" style={{ zIndex: 60 }} data-testid="commission-change-dialog">
+          <div className="modal">
+            <div className="modal-h">Request a commission change</div>
+            <p style={{ fontSize: 13, marginTop: 4 }}>
+              A Super Admin reviews this. Nothing changes on the deal until they approve it.
+            </p>
+
+            <table className="tbl" style={{ marginTop: 10 }}>
+              <thead><tr><th>Field</th><th>Current</th><th>Proposed</th></tr></thead>
+              <tbody>
+                {proposableFields.map((f) => (
+                  <tr key={f.key}>
+                    <td>{f.label}</td>
+                    <td data-testid={`current-${f.key}`}>{f.current === null || f.current === '' ? '—' : String(f.current)}</td>
+                    <td>
+                      <input type="number" value={proposal[f.key] ?? ''} data-testid={`proposed-${f.key}`}
+                        placeholder={f.current === null ? 'unset' : String(f.current)}
+                        onChange={(e) => setProposal((p) => ({ ...p, [f.key]: e.target.value }))} />
+                    </td>
+                  </tr>
+                ))}
+                {members.map((m, i) => (
+                  <tr key={`agent-${i}`}>
+                    <td>Agent Comm % — {m.name || `Member ${i + 1}`}</td>
+                    <td data-testid={`current-agent-${i}`}>{String(m.agent_pct ?? '—')}</td>
+                    <td>
+                      <input type="number" value={proposedAgentPct[i] ?? ''} data-testid={`proposed-agent-${i}`}
+                        placeholder={String(m.agent_pct ?? '')}
+                        onChange={(e) => setProposedAgentPct((p) => ({ ...p, [i]: e.target.value }))} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+
+            <div className="field" style={{ marginTop: 10 }}>
+              <label>Reason <span className="req">*</span></label>
+              <textarea rows={3} value={proposeReason} onChange={(e) => setProposeReason(e.target.value)}
+                data-testid="commission-change-reason"
+                placeholder="e.g. The brokerage agreed 3% with the builder on 4 October" />
+            </div>
+
+            {proposeError && <p className="help bad" role="alert" style={{ margin: '4px 0 0' }}>{proposeError}</p>}
+
+            <div className="actions">
+              <button className="btn ghost" onClick={() => setProposeOpen(false)} disabled={proposeBusy}>Cancel</button>
+              <button className="btn primary" data-testid="commission-change-submit"
+                onClick={() => void sendProposal()} disabled={proposeBusy || !proposeReason.trim()}>
+                {proposeBusy ? 'Sending…' : 'Send for approval'}
+              </button>
             </div>
           </div>
         </div>

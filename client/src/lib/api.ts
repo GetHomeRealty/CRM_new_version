@@ -311,8 +311,17 @@ export const getTransactionMessages = (id: Id): Promise<ChatMessage[]> =>
   api.get<ChatMessage[]>(`/api/transactions/${id}/messages`).then((r) => r.data);
 
 // --- §5.1 edit-approval workflow (DFT / Closed) ---
-export const requestTransactionEdit = (id: Id, reason: string, scope: string | null = null): Promise<unknown> =>
-  api.post(`/api/transactions/${id}/edit-requests`, { reason, scope }).then((r) => r.data);
+/**
+ * Ask for an edit, or — with `proposed` — propose specific commission values.
+ *
+ * `proposed` is omitted entirely rather than sent as null for an ordinary request, so the existing
+ * callers put exactly the body on the wire that they always did.
+ */
+export const requestTransactionEdit = (
+  id: Id, reason: string, scope: string | null = null, proposed?: Record<string, unknown>,
+): Promise<unknown> =>
+  api.post(`/api/transactions/${id}/edit-requests`, proposed ? { reason, scope, proposed } : { reason, scope })
+    .then((r) => r.data);
 export const approveEditRequest = (reqId: Id): Promise<unknown> =>
   api.post(`/api/edit-requests/${reqId}/approve`).then((r) => r.data);
 export const rejectEditRequest = (reqId: Id): Promise<unknown> =>

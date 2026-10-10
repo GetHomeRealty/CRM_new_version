@@ -30,7 +30,7 @@ export class EditRequestsController {
     @Param('transaction', ParseIntPipe) txnId: number,
     @Body() dto: EditRequestDto,
   ): Promise<Record<string, unknown>> {
-    return this.editRequests.store(requireUser(user), txnId, dto.reason ?? null, dto.scope ?? null);
+    return this.editRequests.store(requireUser(user), txnId, dto.reason ?? null, dto.scope ?? null, dto.proposed ?? null);
   }
 
   @Post('edit-requests/:editRequest/approve')

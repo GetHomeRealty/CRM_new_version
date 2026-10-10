@@ -230,10 +230,19 @@ export class AuditService {
     before: Record<string, SnapEntry>,
     after: Record<string, SnapEntry>,
     source = 'Manual',
+    /*
+     * The client to write through, defaulting to this service's own — so every existing caller
+     * behaves exactly as before and only a caller that HAS a transaction need mention one.
+     *
+     * It matters because these rows are part of the change they describe: an approval that
+     * applies a commission and then fails must take its audit entries back with it, or the trail
+     * records something that did not happen.
+     */
+    db: Prisma.TransactionClient = this.prisma,
   ): Promise<string[]> {
     const labels: string[] = [];
     for (const change of this.diff(before, after)) {
-      await this.record(txnId, user, { ...change, source });
+      await this.record(txnId, user, { ...change, source }, db);
       if (change.field) labels.push(change.field);
     }
     return labels;
