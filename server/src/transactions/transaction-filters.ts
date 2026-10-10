@@ -109,6 +109,17 @@ export function filterClauses(q: ListTransactionsDto): Prisma.transactionsWhereI
     const y = q.year.trim();
     out.push({ closing_date: { gte: new Date(`${y}-01-01T00:00:00.000Z`), lte: new Date(`${y}-12-31T00:00:00.000Z`) } });
   }
+  /*
+   * 2026-10-10 - "2026+" = THIS YEAR ONWARD, AND THE DEALS WITH NO CLOSING DATE YET. The Transactions
+   * list opens on it (Sai: "i want that to be the current year by default"). A plain year drops every
+   * deal with no closing date - most live listings - and every live deal closing next year (live on
+   * 10 Oct: 72 and 37 of the 170 deals being worked), so the default keeps them; a single year
+   * chosen from the list still means exactly that year.
+   */
+  if (has(q.year) && /^\d{4}\+$/.test(q.year.trim())) {
+    const y = q.year.trim().slice(0, 4);
+    out.push({ OR: [{ closing_date: { gte: new Date(`${y}-01-01T00:00:00.000Z`) } }, { closing_date: null }] });
+  }
 
   if (has(q.type)) out.push({ type: q.type });
   if (has(q.validation)) out.push({ valid_status: q.validation });

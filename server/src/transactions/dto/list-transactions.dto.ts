@@ -28,7 +28,7 @@ export class ListTransactionsDto {
   /** Free text over property, trade number and agent. */
   @IsOptional() @IsString() q?: string;
 
-  /** Four-digit closing-date year. */
+  /** Four-digit closing-date year, or "YYYY+" for that year onward plus deals with no closing date. */
   @IsOptional() @IsString() year?: string;
 
   @IsOptional() @IsString() type?: string;

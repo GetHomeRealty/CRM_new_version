@@ -17,7 +17,7 @@ import type { Transaction } from '../types';
 
 interface Filters {
   q: string;
-  /** Closing-date year, or '' for all — matches the Dashboard's "Year (by closing date)". */
+  /** Closing-date year: 'YYYY' that year only, 'YYYY+' that year onward plus no closing date (the default), '' all years. */
   year: string;
   type: string;
   validation: string;
@@ -71,8 +71,17 @@ const toQuery = (f: Filters): TransactionQuery => ({
  */
 const OPEN_AND_FIRM = 'Secured Firm,Active,Sold Conditional';
 
+/*
+ * 2026-10-10 - THE LIST OPENS ON THIS YEAR ONWARD, by closing date, at the brokerage's instruction ("i
+ * want that to be the current year by default, if any one wants to check for any other years they can
+ * set the required filters"). Deals with no closing date yet - most live listings - and live deals
+ * closing in later years stay in it; "All years" and each single year sit in the same dropdown.
+ * Worked out when the page opens, so it moves to the new year by itself on 1 January.
+ */
+const THIS_YEAR_ONWARD = `${new Date().getFullYear()}+`;
+
 const EMPTY_FILTERS: Filters = {
-  q: '', year: '', type: '', validation: '', agent: '', commission: '', docs: '', approvals: '', status: OPEN_AND_FIRM,
+  q: '', year: THIS_YEAR_ONWARD, type: '', validation: '', agent: '', commission: '', docs: '', approvals: '', status: OPEN_AND_FIRM,
   // Advanced ribbon filters
   offerFrom: '', offerTo: '', closingFrom: '', closingTo: '', payout: '', client: '', brokerage: '',
 };
@@ -147,7 +156,8 @@ export default function TransactionsPage() {
   const [deleteReason, setDeleteReason] = useState('');
   const [filters, setFilters] = useState<Filters>(
     // Arriving on the approvals queue also opens the status filter up — see `arrivedPending`.
-    arrivedPending ? { ...EMPTY_FILTERS, approvals: 'pending', status: '' } : EMPTY_FILTERS,
+    // ...and the year, so the queue lists every pending deal the dashboard tile counted.
+    arrivedPending ? { ...EMPTY_FILTERS, approvals: 'pending', status: '', year: '' } : EMPTY_FILTERS,
   );
   const [showRibbon, setShowRibbon] = useState(false);
   // bulk selection + export/download
@@ -341,8 +351,9 @@ export default function TransactionsPage() {
             and never tried a client's name. */}
         <input className="inp with-search" placeholder="Search property, trade #, agent, client" value={filters.q} onChange={(e) => setF('q', e.target.value)} />
         <select value={filters.year} onChange={(e) => setF('year', e.target.value)} title="Year (by closing date)">
+          <option value={THIS_YEAR_ONWARD}>{THIS_YEAR_ONWARD.slice(0, 4)} onward + no closing date</option>
           <option value="">All years (by closing date)</option>
-          {years.map((y) => <option key={y} value={y}>{y}</option>)}
+          {years.map((y) => <option key={y} value={y}>{y} only</option>)}
         </select>
         <select value={filters.type} onChange={(e) => setF('type', e.target.value)}>
           <option value="">All types</option>
