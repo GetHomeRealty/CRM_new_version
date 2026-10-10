@@ -229,6 +229,20 @@ export default function TransactionDetailPage() {
   // (Basic Info, Team Split, Financial, Adjustment, Admin Activities) is view-only, and
   // the Invoice module is hidden.
   const isDocumentation = user?.role === 'documentation';
+  /*
+   * Accounting: works in Invoice and the money, not in the deal's paperwork.
+   *
+   * The role identifier the session already carries, the same way `isDocumentation` above reads
+   * it — not a permission, because this is about which job the person does rather than which
+   * screens they hold.
+   *
+   * DELIBERATELY NOT FOLDED INTO `sectionView`. That flag makes EVERY section read-only — Basic
+   * Info, Team Split, Adjustment, Admin Activities — which is right for Documentation and wrong
+   * here: only Financial was asked for, and Accounting's other work on a deal is unchanged. So
+   * this is applied to the Financial modal's own `readOnly` and to three buttons, and nowhere
+   * else.
+   */
+  const isAccounting = user?.role === 'accounting';
   const canEdit = can('transactions', 'edit');
   const canInvoice = can('invoice', 'edit');
   const [generating, setGenerating] = useState(false);
@@ -1024,7 +1038,7 @@ export default function TransactionDetailPage() {
           {!isAgent && (isListingFinancialType(form.type) ? (
             !hideStmtNos && <button className="btn ghost sm" onClick={() => setLawyerStmtOpen(true)}><Icon name="doc" size={13} /> Lawyer Statement</button>
           ) : (
-            !docsOnly && !isDocumentation && <button className="btn ghost sm" style={invoicePaid ? { color: 'var(--ok-ink)', borderColor: 'var(--ok-ring-2)', background: 'var(--ok-bg)', fontWeight: 700 } : undefined} onClick={openInvoice}><Icon name="receipt" size={13} /> Invoice{invoicePaid ? ' Paid' : (invoiceSent ? ' sent' : '')}</button>
+            !docsOnly && !isDocumentation && !isAccounting && <button className="btn ghost sm" data-testid="txn-invoice-btn" style={invoicePaid ? { color: 'var(--ok-ink)', borderColor: 'var(--ok-ring-2)', background: 'var(--ok-bg)', fontWeight: 700 } : undefined} onClick={openInvoice}><Icon name="receipt" size={13} /> Invoice{invoicePaid ? ' Paid' : (invoiceSent ? ' sent' : '')}</button>
           ))}
           {/*
             * TD-116, REVERSED BY THE BROKERAGE ON 2026-09-23 - THE CLOSING PAPERWORK IS THE
@@ -1053,8 +1067,8 @@ export default function TransactionDetailPage() {
             * early for the document to mean anything. They hide these actions from an
             * administrator as readily as from an agent, which is why they stay.
             */}
-          {!isAgent && !docsOnly && !hideTradeSheet && <button className="btn ghost sm" onClick={() => setTsOpen(true)}><Icon name="clipboard" size={13} /> Trade Sheet{tradeSheetSent ? ' sent' : ''}</button>}
-          {!isAgent && !docsOnly && !hideStmtNos && <button className="btn ghost sm" style={nosSent ? { color: 'var(--ok-ink)', borderColor: 'var(--ok-ring-2)', background: 'var(--ok-bg)', fontWeight: 700 } : undefined} onClick={() => setNosOpen(true)}><Icon name="doc" size={13} /> Notice of Sale{nosSent ? ' Sent' : ''}</button>}
+          {!isAgent && !docsOnly && !isAccounting && !hideTradeSheet && <button className="btn ghost sm" data-testid="txn-trade-sheet-btn" onClick={() => setTsOpen(true)}><Icon name="clipboard" size={13} /> Trade Sheet{tradeSheetSent ? ' sent' : ''}</button>}
+          {!isAgent && !docsOnly && !isAccounting && !hideStmtNos && <button className="btn ghost sm" data-testid="txn-notice-of-sale-btn" style={nosSent ? { color: 'var(--ok-ink)', borderColor: 'var(--ok-ring-2)', background: 'var(--ok-bg)', fontWeight: 700 } : undefined} onClick={() => setNosOpen(true)}><Icon name="doc" size={13} /> Notice of Sale{nosSent ? ' Sent' : ''}</button>}
           <button className="btn ghost sm" onClick={() => setChatOpen(true)}><Icon name="message" size={13} /> Chat</button>
           <span style={{ width: 1, height: 18, background: 'var(--line)', margin: '0 4px' }} />
           {!canEdit
@@ -1777,7 +1791,13 @@ export default function TransactionDetailPage() {
           termCount={precon ? (parseInt(String(form.precon_term_count), 10) || 0) : undefined}
           hideClientCommission={slDepositOnly}
           dftNA={stDFT}
-          readOnly={sectionView || isAgent || (closedAndPaid && !isSuperAdmin)}
+          /*
+            Accounting joins the roles for whom this section is read. They hold
+            `transactions: 'edit'`, so without this the modal would accept input in edit mode —
+            the figures here are the brokerage's commission record, and Accounting reads them
+            rather than setting them.
+          */
+          readOnly={sectionView || isAgent || isAccounting || (closedAndPaid && !isSuperAdmin)}
           isAgent={isAgent}
           onSaved={applyUpdated}
         />
