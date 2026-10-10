@@ -339,3 +339,179 @@ test.describe('Basic Info is closed to Documentation', () => {
     }
   });
 });
+
+/* ===================================================================================================
+ * DECIDING A COMMISSION CHANGE FROM REVIEW HISTORY.
+ *
+ * WHAT WAS WRONG, AND WHY IT IS WORTH WRITING DOWN. A pending request appeared nowhere a reviewer
+ * would look. Review History reads `transaction_reviews` — field-level review decisions — and a
+ * change request is a `transaction_edit_requests` row, a table that panel never asked for. The one
+ * approve/reject UI that did exist, in the Financial modal, filters to `scope === 'financial'`, so
+ * a commission request did not match it either. Between them: a request that could be raised from
+ * the screen and only decided through the API.
+ * =================================================================================================== */
+
+const reviewHistory = (page: Page) => page.getByTestId('pending-commission-approvals');
+
+test.describe('deciding a commission change from Review History', () => {
+  test('A PENDING REQUEST IS SHOWN, with current, requested and who asked', async ({ page }) => {
+    await signIn(page, 'superAdmin');
+    const made: Made = { deals: [] };
+    try {
+      const { id } = await deal(page, made);
+      await raise(page, id, { comm_pct: 3 }, 'Brokerage agreed 3%');
+
+      await page.goto(`/desk/transactions/${id}?mode=view`);
+      const block = reviewHistory(page);
+      await expect(block).toBeVisible({ timeout: 15_000 });
+
+      // The comparison, and who to ask about it.
+      await expect(block).toContainText('Commission %');
+      await expect(block).toContainText('2.5');
+      await expect(block).toContainText('3');
+      await expect(block).toContainText(ACCOUNTS.admin.name);
+      await expect(block).toContainText('Brokerage agreed 3%');
+    } finally {
+      await cleanUp(page, made);
+    }
+  });
+
+  test('IT IS SHOWN EVEN ON A DEAL WITH NO REVIEW HISTORY', async ({ page }) => {
+    /*
+     * The early-return branch. A deal that has never been reviewed is the one most likely to be
+     * carrying its first request, and the panel used to return before drawing anything else —
+     * which is why a pending change appeared nowhere at all.
+     */
+    await signIn(page, 'superAdmin');
+    const made: Made = { deals: [] };
+    try {
+      const { id } = await deal(page, made);
+      await raise(page, id, { comm_pct: 3 }, 'first ever');
+
+      await page.goto(`/desk/transactions/${id}?mode=view`);
+      await expect(page.getByText('No review decisions have been recorded')).toBeVisible({ timeout: 15_000 });
+      await expect(reviewHistory(page)).toBeVisible();
+    } finally {
+      await cleanUp(page, made);
+    }
+  });
+
+  test('ACCEPT APPLIES THE CHANGE, and the request leaves the queue', async ({ page }) => {
+    await signIn(page, 'superAdmin');
+    const made: Made = { deals: [] };
+    try {
+      const { id } = await deal(page, made);
+      const reqId = await raise(page, id, { comm_pct: 3, comm_amt: 15000 }, 'agreed');
+
+      await page.goto(`/desk/transactions/${id}?mode=view`);
+      await expect(page.getByTestId(`accept-${reqId}`)).toBeVisible({ timeout: 15_000 });
+      await page.getByTestId(`accept-${reqId}`).click();
+
+      // The block clears itself without a reload — the page re-reads the deal and the history.
+      await expect(page.getByTestId(`commission-request-${reqId}`)).toHaveCount(0, { timeout: 15_000 });
+      expect(await figures(page, id)).toMatchObject({ comm_pct: 3, comm_amt: 15000 });
+    } finally {
+      await cleanUp(page, made);
+    }
+  });
+
+  test('REJECT LEAVES THE FIGURES ALONE, and the request leaves the queue', async ({ page }) => {
+    await signIn(page, 'superAdmin');
+    const made: Made = { deals: [] };
+    try {
+      const { id } = await deal(page, made);
+      const before = await figures(page, id);
+      const reqId = await raise(page, id, { comm_pct: 4 }, 'no');
+
+      await page.goto(`/desk/transactions/${id}?mode=view`);
+      await page.getByTestId(`reject-${reqId}`).click();
+
+      await expect(page.getByTestId(`commission-request-${reqId}`)).toHaveCount(0, { timeout: 15_000 });
+      expect(await figures(page, id)).toEqual(before);
+    } finally {
+      await cleanUp(page, made);
+    }
+  });
+
+  test('A DECIDED REQUEST SHOWS NO BUTTONS', async ({ page }) => {
+    await signIn(page, 'superAdmin');
+    const made: Made = { deals: [] };
+    try {
+      const { id } = await deal(page, made);
+      const reqId = await raise(page, id, { comm_pct: 3 }, 'already handled');
+      expect((await apiSend(page, 'POST', `/api/edit-requests/${reqId}/approve`)).status).toBe(200);
+
+      await page.goto(`/desk/transactions/${id}?mode=view`);
+      await expect(page.getByRole('heading', { name: /Basic Info/ }).or(page.getByText('Basic Info')).first())
+        .toBeVisible({ timeout: 15_000 });
+      await expect(page.getByTestId(`commission-request-${reqId}`)).toHaveCount(0);
+      await expect(page.getByTestId(`accept-${reqId}`)).toHaveCount(0);
+      await expect(page.getByTestId(`reject-${reqId}`)).toHaveCount(0);
+    } finally {
+      await cleanUp(page, made);
+    }
+  });
+
+  test('APPROVAL IS AVAILABLE IN VIEW ONLY MODE', async ({ page }) => {
+    // Deciding somebody else's proposal is not an edit of this screen, so it must not require
+    // pressing Edit first.
+    await signIn(page, 'superAdmin');
+    const made: Made = { deals: [] };
+    try {
+      const { id } = await deal(page, made);
+      const reqId = await raise(page, id, { comm_pct: 3 }, 'in view mode');
+
+      await page.goto(`/desk/transactions/${id}?mode=view`);
+      const accept = page.getByTestId(`accept-${reqId}`);
+      await expect(accept).toBeVisible({ timeout: 15_000 });
+      await expect(accept).toBeEnabled();
+    } finally {
+      await cleanUp(page, made);
+    }
+  });
+
+  test('SOMEBODY WHO MAY NOT DECIDE SEES THE REQUEST BUT NO BUTTONS', async ({ page }) => {
+    await signIn(page, 'superAdmin');
+    const made: Made = { deals: [] };
+    try {
+      const { id } = await deal(page, made);
+      const reqId = await raise(page, id, { comm_pct: 3 }, 'not yours to decide');
+
+      // The real Documentation account — the role that raised it cannot also approve it.
+      await page.context().clearCookies();
+      await signIn(page, 'docs');
+      await page.goto(`/desk/transactions/${id}?mode=view`);
+
+      await expect(page.getByTestId(`commission-request-${reqId}`)).toBeVisible({ timeout: 15_000 });
+      await expect(page.getByTestId(`accept-${reqId}`)).toHaveCount(0);
+      await expect(page.getByTestId(`reject-${reqId}`)).toHaveCount(0);
+    } finally {
+      await page.context().clearCookies();
+      await signIn(page, 'superAdmin');
+      await cleanUp(page, made);
+    }
+  });
+
+  test('A STALE REQUEST SAYS SO ON THE CARD, and stays for another look', async ({ page }) => {
+    await signIn(page, 'superAdmin');
+    const made: Made = { deals: [] };
+    try {
+      const { id } = await deal(page, made);
+      const reqId = await raise(page, id, { comm_pct: 3 }, 'from 2.5');
+      // Somebody moves the commission after the request was raised.
+      await apiSend(page, 'PUT', `/api/transactions/${id}`, { comm_pct: 2.75 });
+
+      await page.goto(`/desk/transactions/${id}?mode=view`);
+      await page.getByTestId(`accept-${reqId}`).click();
+
+      // The refusal is on the card, not a toast that fades — it tells the reviewer what to do next.
+      await expect(page.getByTestId(`commission-request-${reqId}`).getByRole('alert'))
+        .toContainText(/changed since/i, { timeout: 15_000 });
+      // Still there to be decided, and the newer figure survived.
+      await expect(page.getByTestId(`commission-request-${reqId}`)).toBeVisible();
+      expect((await figures(page, id)).comm_pct).toBe(2.75);
+    } finally {
+      await cleanUp(page, made);
+    }
+  });
+});

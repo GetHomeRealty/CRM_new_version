@@ -220,6 +220,16 @@ export interface EditRequest {
   reviewed_by_name?: string;
   reviewed_at?: string | null;
   stamp?: string;
+  /**
+   * A commission change request's numbers: what is being asked for, and the same keys as they
+   * stood when it was raised. Null on an ordinary unlock request, which proposes nothing.
+   *
+   * Both are needed to show a reviewer a comparison. `baseline` rather than the deal's current
+   * figures, deliberately — it is what the REQUESTER was looking at, and the server refuses the
+   * approval outright if the live values have moved away from it.
+   */
+  proposed?: Record<string, unknown> | null;
+  baseline?: Record<string, unknown> | null;
 }
 export interface ClientLite { id?: number; name?: string; email?: string; phone?: string; }
 export interface BrokerageLite { name?: string; address?: string; email?: string; invoice_email?: string; agent_email?: string; phone?: string; hst_number?: string; agents?: string[]; }

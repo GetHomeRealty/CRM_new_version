@@ -1307,7 +1307,19 @@ export default function TransactionDetailPage() {
       )}
 
       {/* The permanent record of every decision on this deal — office and assigned agent alike. */}
-      <ReviewHistoryPanel key={reviewsKey} txnId={Number(id)} />
+      {/*
+        The deal's pending change requests are shown here, with Accept and Reject — this is where
+        somebody looks for what the office has yet to decide. `edit_requests` travels with the
+        transaction already, so it is passed down rather than fetched again.
+
+        `isSuperAdmin` matches the server's own rule for who may decide; it hides a button that
+        would be refused rather than granting anything. NOT gated on view mode: approving somebody
+        else's proposal is not an edit of this screen.
+      */}
+      <ReviewHistoryPanel key={reviewsKey} txnId={Number(id)}
+        editRequests={txn?.edit_requests ?? []}
+        canDecide={isSuperAdmin}
+        onDecided={async () => { await reloadTxn(); setReviewsKey((k) => k + 1); }} />
 
       {/* §5.2 — Active sale listing: reminder for pending core documents */}
       {stActive && coreDocReminders.length > 0 && (
