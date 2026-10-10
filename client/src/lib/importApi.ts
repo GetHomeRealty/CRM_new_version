@@ -62,7 +62,9 @@ export const importStatus = (batchId: string): Promise<ImportStatus> =>
  * the browser's wait and be reported as failed while it was in fact succeeding.
  */
 export const confirmImport = async (batchId: string, onProgress?: (s: ImportStatus) => void): Promise<ImportResult> => {
-  await api.post(`/api/transaction-imports/${batchId}/confirm`);
+  // ?follow=1 asks for the background import; without it the server waits and answers with the
+  // result, which is what a tab still holding the screen from before TD-212 expects.
+  await api.post(`/api/transaction-imports/${batchId}/confirm?follow=1`);
   let misses = 0;
   for (;;) {
     await new Promise((r) => setTimeout(r, 2000));

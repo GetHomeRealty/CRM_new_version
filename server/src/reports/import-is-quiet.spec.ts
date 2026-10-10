@@ -82,7 +82,9 @@ describe('a deal saved by the bulk import sends no instant email', () => {
     const status = upd.indexOf('this.reminders.statusChanged(txnId');
     expect(lawyer).toBeGreaterThan(-1);
     expect(status).toBeGreaterThan(-1);
-    expect(upd.slice(Math.max(0, lawyer - 80), lawyer)).toMatch(/if \(!opts\.quiet\)/);
+    // 2026-10-10 - madhu's e2f4152 added '&& !joined' (no email while saving inside an approval); the
+    // quiet guard is still the first condition, which is what this protects.
+    expect(upd.slice(Math.max(0, lawyer - 80), lawyer)).toMatch(/if \(!opts\.quiet(\)| &&)/);
     expect(upd.slice(Math.max(0, status - 80), status)).toMatch(/!opts\.quiet/);
   });
 

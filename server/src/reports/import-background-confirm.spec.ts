@@ -1,4 +1,5 @@
 import { TransactionImportService } from './transaction-import.service';
+import { TransactionImportController } from './transaction-import.controller';
 import type { PrismaService } from '../prisma/prisma.service';
 import type { TransactionsWriteService } from '../transactions/transactions-write.service';
 import type { AuthUserRecord } from '../auth/auth.types';
@@ -102,6 +103,44 @@ describe('a long import runs in the background and the screen follows it (TD-212
     const h = harness(5, { status: 'Importing', updatedAgoMs: 30 * 1000 });
     const st = await (h.svc as unknown as Svc).status('IMP-ZZ-1', admin);
     expect(st).toMatchObject({ status: 'Importing', done: false });
+  });
+
+  /*
+   * 2026-10-10 - A TAB STILL HOLDING THE SCREEN FROM BEFORE TD-212 (live 9 Oct, IMP-MV14K32L-1E7A:
+   * one confirm, no status requests, "0 transactions imported" and a crashed page while all 16 rows
+   * were imported). Without ?follow=1 the confirm waits and answers with the finished result.
+   */
+  it('answers a screen that does not follow the import with the finished result', async () => {
+    const h = harness();
+    const svc = h.svc as unknown as { confirmAndWait: (b: string, u: AuthUserRecord) => Promise<{ status: string; imported_rows: number; created: { trade_no: string }[]; issues: unknown[] }> };
+    const pending = svc.confirmAndWait('IMP-ZZ-1', admin);
+    await tick(); h.release();
+    const r = await pending;
+    expect(r.status).toBe('Imported');
+    expect(r.imported_rows).toBe(5);
+    expect(r.created.map((c) => c.trade_no)).toEqual(['000001', '000002', '000003', '000004', '000005']);
+    expect(Array.isArray(r.issues)).toBe(true);
+    expect(h.batch.status).toBe('Imported');
+  });
+
+  it('refuses a second press while the waiting import runs, from either screen', async () => {
+    const h = harness();
+    const svc = h.svc as unknown as Svc & { confirmAndWait: (b: string, u: AuthUserRecord) => Promise<unknown> };
+    const pending = svc.confirmAndWait('IMP-ZZ-1', admin);
+    await tick();
+    await expect(svc.confirmAndWait('IMP-ZZ-1', admin)).rejects.toThrow(/already/i);
+    await expect(svc.startConfirm('IMP-ZZ-1', admin)).rejects.toThrow(/already/i);
+    h.release(); await pending;
+    expect(h.created()).toBe(5);
+  });
+
+  it('the confirm route starts in the background only when the screen asks to follow it', async () => {
+    const calls: string[] = [];
+    const imports = { startConfirm: async () => { calls.push('background'); return {}; }, confirmAndWait: async () => { calls.push('wait'); return {}; } };
+    const ctl = new TransactionImportController(imports as unknown as TransactionImportService);
+    await ctl.confirm(admin, 'IMP-ZZ-1', '1');
+    await ctl.confirm(admin, 'IMP-ZZ-1', undefined);
+    expect(calls).toEqual(['background', 'wait']);
   });
 
   it('offers Undo on an Interrupted batch, like a partial import', () => {

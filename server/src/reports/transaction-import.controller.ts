@@ -81,12 +81,14 @@ export class TransactionImportController {
 
   /**
    * Create the rows that passed validation (invalid rows are skipped, never blocking).
-   * TD-212 - STARTS the import and answers at once; the screen follows GET :batchId/status.
+   * TD-212 - with ?follow=1 (the current screen) it STARTS the import and answers at once; the
+   * screen follows GET :batchId/status. Without it (a tab still holding the screen from before
+   * TD-212) it runs the import to the end and answers with the result, as it always used to.
    */
   @Post(':batchId/confirm')
   @HttpCode(200)
-  confirm(@CurrentUser() user: AuthUserRecord, @Param('batchId') batchId: string): Promise<unknown> {
-    return this.imports.startConfirm(batchId, user);
+  confirm(@CurrentUser() user: AuthUserRecord, @Param('batchId') batchId: string, @Query('follow') follow?: string): Promise<unknown> {
+    return follow === '1' ? this.imports.startConfirm(batchId, user) : this.imports.confirmAndWait(batchId, user);
   }
 
   /** TD-212 - progress of a running import, and its result once finished. */

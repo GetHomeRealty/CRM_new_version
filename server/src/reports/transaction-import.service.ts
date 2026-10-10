@@ -1658,6 +1658,38 @@ export class TransactionImportService {
    * twice) and the unchanged confirm() runs in the background in this process.
    */
   async startConfirm(batchId: string, user: AuthUserRecord): Promise<Record<string, unknown>> {
+    const batch = await this.claimBatch(batchId, user);
+    void this.confirm(batchId, user, { claimed: true }).catch(async (err) => {
+      await this.markFailed(batchId);
+      this.log.error(`Background import ${batchId} stopped: ${err instanceof Error ? err.message : String(err)}`);
+    });
+    return { batch_id: batchId, status: 'Importing', total_rows: batch.total_rows, valid_rows: batch.valid_rows, imported_rows: 0 };
+  }
+
+  /**
+   * 2026-10-10 - THE SAME IMPORT FOR A SCREEN THAT CANNOT FOLLOW IT: run it to the end, answer with
+   * the result.
+   *
+   * A browser tab opened before TD-212 went live still holds the old screen, which reads whatever the
+   * confirm answers as the finished result. Answered "Importing" by startConfirm(), it showed
+   * "0 transactions imported" and then "This page could not be displayed" while the server imported
+   * all 16 rows correctly (live, 9 Oct, batch IMP-MV14K32L-1E7A - the web log shows the confirm and
+   * not one status request). The new screen asks for the background import by name (?follow=1); a
+   * request that does not is answered the way the old screen expects. Same claim, so a second press
+   * or a second tab is still refused; the same confirm(); a failure is recorded as before.
+   */
+  async confirmAndWait(batchId: string, user: AuthUserRecord): Promise<ImportResult> {
+    await this.claimBatch(batchId, user);
+    try {
+      return await this.confirm(batchId, user, { claimed: true });
+    } catch (err) {
+      await this.markFailed(batchId);
+      throw err;
+    }
+  }
+
+  /** Validated -> Importing, once: a conditional update, so a second press or tab is refused. */
+  private async claimBatch(batchId: string, user: AuthUserRecord) {
     this.assertCanImport(user);
     const batch = await this.prisma.import_batches.findUnique({ where: { batch_id: batchId } });
     if (!batch) throw new NotFoundException({ message: 'Import batch not found.' });
@@ -1668,15 +1700,15 @@ export class TransactionImportService {
     if (claim.count !== 1) {
       throw new BadRequestException({ message: `This import has already been started or processed (status: ${batch.status}).` });
     }
-    void this.confirm(batchId, user, { claimed: true }).catch(async (err) => {
-      // Rows written so far stay, stamped with the batch, so Undo can still reverse them.
-      await this.prisma.import_batches.update({
-        where: { batch_id: batchId },
-        data: { status: 'Failed', completed_at: new Date(), updated_at: new Date() },
-      }).catch(() => undefined);
-      this.log.error(`Background import ${batchId} stopped: ${err instanceof Error ? err.message : String(err)}`);
-    });
-    return { batch_id: batchId, status: 'Importing', total_rows: batch.total_rows, valid_rows: batch.valid_rows, imported_rows: 0 };
+    return batch;
+  }
+
+  /** Rows written so far stay, stamped with the batch, so Undo can still reverse them. */
+  private async markFailed(batchId: string): Promise<void> {
+    await this.prisma.import_batches.update({
+      where: { batch_id: batchId },
+      data: { status: 'Failed', completed_at: new Date(), updated_at: new Date() },
+    }).catch(() => undefined);
   }
 
   /** How far a batch has got - and, once finished, the same result the screen used to receive. */
