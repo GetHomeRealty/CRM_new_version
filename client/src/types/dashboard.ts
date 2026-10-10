@@ -62,6 +62,14 @@ export interface DeskDashboard {
   invoices: { total: number; unpaid: number; billed: number; collected: number; outstanding: number } | null;
   calendar: { upcoming: number; today: number };
   todos: { total: number; pending: number; overdue: number };
+  /**
+   * Deals with an edit-approval request still awaiting a decision, counted once per DEAL however
+   * many requests it carries, and scoped exactly like `transactions.total`.
+   *
+   * The tile links to `/desk/transactions?approvals=pending`, which applies the same clause on the
+   * server — so the number and the length of the list it opens are the same query asked twice.
+   */
+  approvals: { pending: number };
 }
 
 /**

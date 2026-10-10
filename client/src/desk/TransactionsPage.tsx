@@ -1,6 +1,6 @@
 import { deskPath } from './area';
 import { useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { listTransactionsPage, getMatchingTransactionIds, deleteTransaction, requestTransactionDeletion, type TransactionQuery } from '../lib/api';
 import { formatPrice, typeClass, typeLabel, TRANSACTION_TYPES, ALL_STATUSES } from './format';
 import { useToast } from './toast';
@@ -25,6 +25,14 @@ interface Filters {
   commission: string;
   /** Required documents — '' | 'missing_uploads' | 'needs_review' (server-side; see transaction-filters). */
   docs: string;
+  /**
+   * Approval queue — '' | 'pending' (server-side; the same clause the dashboard tile counts with).
+   *
+   * THE ONE FILTER THAT LIVES IN THE URL, because it is the one arrived at from somewhere else.
+   * Everything beside it is a choice made on this screen and is deliberately forgotten between
+   * visits; this one is a destination, so a refresh or a shared link has to land in the same place.
+   */
+  approvals: string;
   status: string;
   offerFrom: string;
   offerTo: string;
@@ -43,7 +51,7 @@ const TYPED_KEYS: (keyof Filters)[] = ['q', 'agent', 'client', 'brokerage'];
 /** UI filter names → the query string the API expects. */
 const toQuery = (f: Filters): TransactionQuery => ({
   q: f.q, year: f.year, type: f.type, validation: f.validation, agent: f.agent,
-  commission: f.commission, docs: f.docs, status: f.status, payout: f.payout, client: f.client, brokerage: f.brokerage,
+  commission: f.commission, docs: f.docs, approvals: f.approvals, status: f.status, payout: f.payout, client: f.client, brokerage: f.brokerage,
   offer_from: f.offerFrom, offer_to: f.offerTo, closing_from: f.closingFrom, closing_to: f.closingTo,
 });
 
@@ -64,7 +72,7 @@ const toQuery = (f: Filters): TransactionQuery => ({
 const OPEN_AND_FIRM = 'Secured Firm,Active,Sold Conditional';
 
 const EMPTY_FILTERS: Filters = {
-  q: '', year: '', type: '', validation: '', agent: '', commission: '', docs: '', status: OPEN_AND_FIRM,
+  q: '', year: '', type: '', validation: '', agent: '', commission: '', docs: '', approvals: '', status: OPEN_AND_FIRM,
   // Advanced ribbon filters
   offerFrom: '', offerTo: '', closingFrom: '', closingTo: '', payout: '', client: '', brokerage: '',
 };
@@ -104,6 +112,20 @@ export default function TransactionsPage() {
   // Whole-result-set facts the server reports alongside the page: the ids behind "select all",
   // the year options, the deletion-request banner, and the total. None can be derived from the
   // rows on screen once the list is paged.
+  /*
+   * ARRIVING FROM THE DASHBOARD TILE, and surviving a refresh.
+   *
+   * `?approvals=pending` is read once, as the initial filter state, rather than watched: after
+   * that the screen owns its filters, so clearing the dropdown clears the list without the URL
+   * fighting it back. The URL is then kept in step by `setF`.
+   *
+   * STATUS IS OPENED UP AT THE SAME TIME. This screen defaults to open-and-firm deals, and an
+   * edit-approval request is usually about a Closed or DFT one — the statuses that default hides.
+   * Landing with the default intact would show a shorter list than the tile counted, which is
+   * exactly the disagreement the shared clause exists to prevent.
+   */
+  const [params, setParams] = useSearchParams();
+  const arrivedPending = params.get('approvals') === 'pending';
   const [page, setPage] = useState(1);
   const [lastPage, setLastPage] = useState(1);
   const [total, setTotal] = useState(0);
@@ -123,7 +145,10 @@ export default function TransactionsPage() {
    */
   const [toDelete, setToDelete] = useState<Transaction | null>(null);
   const [deleteReason, setDeleteReason] = useState('');
-  const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
+  const [filters, setFilters] = useState<Filters>(
+    // Arriving on the approvals queue also opens the status filter up — see `arrivedPending`.
+    arrivedPending ? { ...EMPTY_FILTERS, approvals: 'pending', status: '' } : EMPTY_FILTERS,
+  );
   const [showRibbon, setShowRibbon] = useState(false);
   // bulk selection + export/download
   const [selected, setSelected] = useState<number[]>([]);
@@ -220,7 +245,19 @@ export default function TransactionsPage() {
     return visible.every((id) => s.includes(id)) ? s.filter((id) => !visible.includes(id)) : [...new Set([...s, ...visible])];
   });
 
-  const setF = (k: keyof Filters, v: string) => setFilters((p) => ({ ...p, [k]: v }));
+  const setF = (k: keyof Filters, v: string) => {
+    setFilters((p) => ({ ...p, [k]: v }));
+    /*
+     * The approvals filter is mirrored into the URL so a refresh keeps it and the link can be
+     * shared; clearing it takes it back out rather than leaving `?approvals=` behind. Replace, not
+     * push, so turning the filter off is not a Back-button trap.
+     */
+    if (k === 'approvals') {
+      const next = new URLSearchParams(params);
+      if (v) next.set('approvals', v); else next.delete('approvals');
+      setParams(next, { replace: true });
+    }
+  };
   /*
    * "HAS THE USER NARROWED ANYTHING?" - asked WITHOUT the status, deliberately.
    *
@@ -324,6 +361,17 @@ export default function TransactionsPage() {
           <option value="">Documents: any</option>
           <option value="missing_uploads">Missing uploads</option>
           <option value="needs_review">Needs review</option>
+        </select>
+        {/*
+          Approvals, beside Documents: both are "what on this deal is waiting for somebody".
+          A plain select, so it reads and clears exactly like every other filter on this row —
+          choosing "any" is how a reader gets back to all the deals they can see.
+        */}
+        <select value={filters.approvals} onChange={(e) => setF('approvals', e.target.value)}
+          aria-label="Approval requests" data-testid="txn-approvals-filter"
+          title="Deals with an edit-approval request still awaiting a decision">
+          <option value="">Approvals: any</option>
+          <option value="pending">Pending approval</option>
         </select>
         <select value={filters.status} onChange={(e) => setF('status', e.target.value)}>
           {/*

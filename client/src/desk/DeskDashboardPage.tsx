@@ -4,6 +4,7 @@ import { getDashboardCommissions, getDeskDashboard } from '../lib/api';
 import { deskPath } from './area';
 import { formatCurrency } from './format';
 import { useToast } from './toast';
+import { useNotificationStream } from './useNotificationStream';
 import { useAuth } from '../context/AuthContext';
 import { apiErrorMessage } from '../lib/apiError';
 import TodoList from './TodoList';
@@ -56,15 +57,47 @@ export default function DeskDashboardPage() {
   const [comm, setComm] = useState<DashboardCommissions | null>(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
+  /*
+   * THE FIRST LOAD SHOWS A SPINNER; A REFRESH DOES NOT.
+   *
+   * Split out so the same read can be re-run without the screen blanking underneath somebody who
+   * is already looking at it. `quiet` is what distinguishes the two.
+   */
+  const load = useCallback((quiet = false) => {
+    if (!quiet) setLoading(true);
     // The commission read is allowed to fail on its own — the deal, document and invoice counts are
     // still worth showing if the aggregate cannot be computed.
-    Promise.all([getDeskDashboard(), getDashboardCommissions().catch(() => null)])
+    return Promise.all([getDeskDashboard(), getDashboardCommissions().catch(() => null)])
       .then(([d, c]) => { setData(d); setComm(c); })
-      .catch((e) => toast(apiErrorMessage(e, 'Could not load the dashboard'), 'bad'))
+      // A background refresh that fails says nothing: the figures on screen are still the last
+      // good ones, and a toast for something nobody asked for is noise.
+      .catch((e) => { if (!quiet) toast(apiErrorMessage(e, 'Could not load the dashboard'), 'bad'); })
       .finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => { void load(); }, [load]);
+
+  /*
+   * PENDING APPROVALS GOES STALE IN A WAY THE OTHER TILES DO NOT, because it is a queue somebody
+   * else fills and a third person empties. Two existing mechanisms cover the two directions:
+   *
+   *   the notification stream — the same signal the bells use. Submitting a request notifies the
+   *     reviewers, so the tile re-reads on exactly the event that makes it wrong.
+   *
+   *   returning to the tab — `visibilitychange`, as `InboxPage` already does. An approval or a
+   *     rejection raises no notification of its own (deliberately: that is the existing workflow,
+   *     unchanged), so this is what catches a decision made on another screen.
+   *
+   * Both are quiet refreshes of the whole payload rather than a tile-specific endpoint; the read
+   * is one request and a second one would be a second thing to keep in agreement.
+   */
+  useNotificationStream(() => { void load(true); });
+  useEffect(() => {
+    const onVisible = () => { if (document.visibilityState === 'visible') void load(true); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [load]);
 
   const [todoTotal, setTodoTotal] = useState<number | null>(null);
   const takeTodoCounts = useCallback((c: { total: number }) => setTodoTotal(c.total), []);
@@ -156,6 +189,28 @@ export default function DeskDashboardPage() {
             { n: data.calendar.upcoming, label: 'next 30 days' },
           ]} />
         } />
+        {/*
+          * PENDING APPROVALS — beside the other "needs attention" tiles.
+          *
+          * The link carries the filter rather than dropping the reader on an unfiltered list: this
+          * is the one tile whose whole purpose is a queue, and `?approvals=pending` is the same
+          * condition the number was counted with.
+          *
+          * IT ALSO CLEARS THE STATUS FILTER, which the Transactions screen does on arrival. That
+          * screen opens on open-and-firm deals by default, and an approval request is most often
+          * about a CLOSED or DFT deal — precisely the ones that default would hide. Without it the
+          * tile would read 3 and open a list of none, which is the failure a dashboard tile exists
+          * to avoid.
+        */}
+        <Tile onOpen={go('transactions')
+          ? () => navigate(`${deskPath('transactions')}?approvals=pending`)
+          : undefined}
+          label="Pending Approvals" value={data.approvals.pending}
+          color={data.approvals.pending > 0 ? 'var(--warn-ink)' : undefined}
+          sub={data.approvals.pending > 0
+            ? <button className="prop-link" type="button"
+              onClick={() => navigate(`${deskPath('transactions')}?approvals=pending`)}>review requests</button>
+            : <span className="muted">nothing waiting</span>} />
         <Tile label="Todo List" value={todoTotal ?? data.todos.total} sub={
           <Breakdown parts={[
             { n: data.todos.pending, label: 'pending', tone: 'info' },

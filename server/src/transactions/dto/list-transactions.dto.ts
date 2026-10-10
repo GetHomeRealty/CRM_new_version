@@ -44,6 +44,15 @@ export class ListTransactionsDto {
    * other filter here. See `filterClauses`.
    */
   @IsOptional() @IsIn(['', 'missing_uploads', 'needs_review']) docs?: string;
+
+  /**
+   * Deals with an approval request still awaiting a decision — what the Desk dashboard's
+   * "Pending Approvals" tile links to.
+   *
+   * Enumerated rather than a free string, like `docs` above: the only accepted value is the one
+   * the tile sends, so a typo is a 422 rather than a filter that silently matches everything.
+   */
+  @IsOptional() @IsIn(['', 'pending']) approvals?: string;
   /** One transaction status, e.g. Open / Closed / Sold. */
   @IsOptional() @IsString() status?: string;
 

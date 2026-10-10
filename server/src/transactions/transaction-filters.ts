@@ -49,6 +49,27 @@ const HAS_FILE: Prisma.documentsWhereInput = {
   ],
 };
 
+/**
+ * A DEAL WITH AT LEAST ONE APPROVAL REQUEST STILL WAITING ON A DECISION.
+ *
+ * EXPORTED, AND THE ONLY DEFINITION. The Desk dashboard's "Pending Approvals" tile counts with this
+ * exact clause and the Transactions list filters with it, so the number on the card and the length
+ * of the list it opens cannot drift apart. A second, dashboard-local copy of "what pending means"
+ * is precisely how a tile starts lying.
+ *
+ * `some` IS A SEMI-JOIN, which is what makes the count per TRANSACTION rather than per request: a
+ * deal with four pending requests matches once. That is a property of the query shape, not
+ * something a `DISTINCT` has to be remembered for.
+ *
+ * THE APPROVAL WORKFLOW, NOT VALIDATION OR COMMISSION. `transaction_edit_requests.status` is the
+ * column `EditRequestsService` writes — 'pending' until a Super Admin approves or rejects it, and
+ * then 'approved' / 'rejected' / 'applied'. `valid_status` and `comm_status` are different
+ * questions on different columns and are deliberately not consulted here.
+ */
+export const PENDING_APPROVAL: Prisma.transactionsWhereInput = {
+  transaction_edit_requests: { some: { status: 'pending' } },
+};
+
 export function filterClauses(q: ListTransactionsDto): Prisma.transactionsWhereInput[] {
   const out: Prisma.transactionsWhereInput[] = [];
 
@@ -92,6 +113,9 @@ export function filterClauses(q: ListTransactionsDto): Prisma.transactionsWhereI
   if (has(q.type)) out.push({ type: q.type });
   if (has(q.validation)) out.push({ valid_status: q.validation });
   if (has(q.agent)) out.push({ agent: { contains: q.agent.trim(), mode: 'insensitive' } });
+
+  // Waiting on a Super Admin's decision. One clause, shared with the dashboard tile that links here.
+  if (q.approvals === 'pending') out.push(PENDING_APPROVAL);
 
   // Missing uploads / Needs review. A deal can match both, through different items.
   if (q.docs === 'missing_uploads') out.push({ documents: { some: { AND: [REQUIRED_NOT_VALID, NO_FILE] } } });

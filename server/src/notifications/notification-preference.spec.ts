@@ -205,10 +205,16 @@ describe('notification preferences', () => {
      * The three `crm_*` greetings on in-app and push — these are sent to a CLIENT, who has no
      * in-app inbox and no browser subscription because they do not use the product. Unlike the pair
      * above these are not a decision that could be revisited: there is nothing to deliver to.
+     *
+     * `approval_requested` on email and push — the bell is where a reviewer's queue lives, and the
+     * Desk dashboard already carries the count. Nothing sends these two, so they are marked
+     * unsupported rather than offered as switches that would do nothing. If a sender is ever
+     * built, this list is where the decision gets revisited.
      */
     const unsupported = NOTIFICATION_CATEGORIES.flatMap((c) =>
       NOTIFICATION_CHANNELS.filter((ch) => c.channels[ch] === 'unsupported').map((ch) => `${c.key}:${ch}`));
     expect(unsupported).toEqual([
+      'approval_requested:email', 'approval_requested:push',
       'inbox_new_mail:email',
       'crm_birthday:in_app', 'crm_birthday:push',
       'crm_anniversary:in_app', 'crm_anniversary:push',

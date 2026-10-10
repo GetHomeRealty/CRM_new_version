@@ -81,6 +81,8 @@ export const listTransactions = (): Promise<Transaction[]> =>
 export interface TransactionQuery {
   /** Required documents: 'missing_uploads' | 'needs_review'. */
   docs?: string;
+  /** 'pending' — deals with an approval request still awaiting a decision. */
+  approvals?: string;
   page?: number;
   per_page?: number;
   q?: string;

@@ -9,6 +9,9 @@ import { unreadInboxCount } from '../inbox/mailbox-scope';
 import { PermissionService } from '../auth/permission.service';
 import { CacheService } from '../redis/cache.service';
 import { transactionScopeWhere } from '../common/transaction-scope';
+// The one definition of "waiting on a decision", shared with the Transactions list filter this
+// tile links to. Imported rather than restated so the tile and the list cannot drift apart.
+import { PENDING_APPROVAL } from '../transactions/transaction-filters';
 /**
  * The two dashboards, as two separate reads.
  *
@@ -54,6 +57,15 @@ export interface DeskDashboard {
   invoices: { total: number; unpaid: number; billed: number; collected: number; outstanding: number } | null;
   calendar: { upcoming: number; today: number };
   todos: { total: number; pending: number; overdue: number };
+  /**
+   * Deals with an edit-approval request still awaiting a decision, counted once per DEAL however
+   * many requests it carries.
+   *
+   * Scoped exactly like `transactions.total` above, so an agent's figure counts only deals they
+   * can open — and the Transactions list this tile links to applies the same two conditions, which
+   * is what keeps the number and the list it opens in agreement.
+   */
+  approvals: { pending: number };
 }
 
 @Injectable()
@@ -358,6 +370,7 @@ export class AreaDashboardService {
       invoiceCount, invoiceUnpaid, invoiceMoney,
       calUpcoming, calToday,
       todoTotal, todoPending, todoOverdue,
+      approvalsPending,
     ] = await Promise.all([
       this.prisma.transactions.count({ where: live }),
       this.prisma.transactions.groupBy({ by: ['valid_status'], _count: { _all: true }, where: live }),
@@ -423,6 +436,20 @@ export class AreaDashboardService {
       this.prisma.todos.count({ where: { ...personal, ...this.areaOr('desk') } }),
       this.prisma.todos.count({ where: { ...personal, ...this.areaOr('desk'), status: 'pending' } }),
       this.prisma.todos.count({ where: { ...personal, ...this.areaOr('desk'), status: 'pending', due_date: { lt: today } } }),
+
+      /*
+       * PENDING APPROVALS — `live` AND the shared clause, nothing else.
+       *
+       * `live` is the same scope every figure above uses, so this counts deals this person can
+       * already open; `PENDING_APPROVAL` is the same relation filter `?approvals=pending` applies
+       * on the list. Both halves are shared rather than restated, which is the whole reason the
+       * card can be trusted to open a list of exactly that many rows.
+       *
+       * `count` over TRANSACTIONS with a `some` relation filter is one row per deal regardless of
+       * how many requests it has — the "count each transaction once" requirement is structural
+       * here rather than something enforced after the fact.
+       */
+      this.prisma.transactions.count({ where: { AND: [live, PENDING_APPROVAL] } }),
     ]);
 
     /*
@@ -476,6 +503,7 @@ export class AreaDashboardService {
         : null,
       calendar: { upcoming: calUpcoming + derivedSoon, today: calToday + derivedToday },
       todos: { total: todoTotal, pending: todoPending, overdue: todoOverdue },
+      approvals: { pending: approvalsPending },
     };
   }
 }

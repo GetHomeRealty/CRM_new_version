@@ -161,6 +161,22 @@ export const NOTIFICATION_CATEGORIES: readonly NotificationCategory[] = [
     areas: ['desk'],
   },
   {
+    key: 'approval_requested',
+    label: 'Approval requests to review',
+    description: 'Somebody has asked for approval to edit a deal, and you are one of its reviewers.',
+    /*
+     * ITS OWN KEY RATHER THAN `transaction_approvals`, which is the OUTCOME told to the person who
+     * asked ("approved or turned down"). This is the opposite direction: the request arriving in
+     * front of the people who decide. One switch for both would mean a reviewer who muted decision
+     * notices silently stopped being told there was anything to decide.
+     *
+     * IN-APP ONLY, and the readiness map says so. The bell is where the work queue lives; the
+     * dashboard tile already carries the count, and nobody asked for this to reach a mailbox.
+     */
+    channels: { in_app: 'live', email: 'unsupported', push: 'unsupported' },
+    areas: ['desk'],
+  },
+  {
     key: 'inbox_new_mail',
     label: 'New inbox emails',
     description: 'Mail arriving in a mailbox you have connected.',
