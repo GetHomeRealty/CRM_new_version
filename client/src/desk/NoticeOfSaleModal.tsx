@@ -80,6 +80,17 @@ export default function NoticeOfSaleModal({ open, onClose, txn, onSaved = null }
     if (!lines.length) return '';
     return formatCurrency(lines.reduce((s, a) => s + Number(a.brokerage?.total ?? a.brokerage_from_member ?? 0), 0));
   };
+  /*
+   * 2026-10-12 - EACH AGENT'S OWN COMMISSION on their own row (Sai: "yes to each agent row"). The box
+   * used to repeat the sum of every agent's T4A on every row, so a member with a 0% split showed the
+   * other agent's money. Now: that agent's T4A total from the same breakdown, summed over the terms of
+   * a pre-construction deal. With no breakdown for the deal it falls back to the deal's rate, as before.
+   */
+  const ownCommission = (name: string | null | undefined): string => {
+    const lines = name ? brokLines(name) : [];
+    if (!lines.length || t4aTotal <= 0) return commRate;
+    return formatCurrency(lines.reduce((s, a) => s + Number(a.t4a?.total ?? a.earned ?? 0), 0));
+  };
   const brokPct = (m: { brok_pct?: number | string | null; agent_pct?: number | string | null }): string => {
     if (m.brok_pct !== null && m.brok_pct !== undefined && m.brok_pct !== '') return `${Number(m.brok_pct)}%`;
     if (m.agent_pct !== null && m.agent_pct !== undefined && m.agent_pct !== '') return `${100 - Number(m.agent_pct)}%`;
@@ -277,7 +288,7 @@ export default function NoticeOfSaleModal({ open, onClose, txn, onSaved = null }
             {team.map((m, i) => (
               <div style={grid5} key={i}>
                 <Field label={`Name of ${ordinal(i)}${i > 0 ? ' (if any)' : ''}`} value={m.name} />
-                <Field label="Commission in %/$" value={commRate} />
+                <Field label="Commission in %/$" value={ownCommission(m.name)} />
                 <Field label="Split in %" value={`${m.split}%`} />
                 <Field label="Brokerage %" value={brokPct(m)} />
                 <Field label="Brokerage $" value={brokAmount(m.name)} />
