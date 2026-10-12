@@ -12,6 +12,13 @@ import { MAX_RECIPIENTS, SEND_DELAY_MS } from './campaign.constants';
 import type { AuthUserRecord } from '../auth/auth.types';
 import { Prisma } from '@prisma/client';
 import { can } from '../core/authz';
+/*
+ * The same html-to-text used by personal lead mail. A pure string function in a module with no
+ * imports of its own, so sharing it couples nothing — and sharing it is the point: two
+ * implementations of "what does this message look like as text" would drift, and the one that
+ * drifted would be the one nobody reads.
+ */
+import { htmlToText } from '../email/html-to-text';
 import { leadScopeWhere } from '../common/lead-scope';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -48,15 +55,113 @@ const domainOf = (email: string): string => String(email ?? '').split('@')[1]?.t
  * Gmail and Outlook actually surface as an unsubscribe button. One-Click requires the target to
  * accept POST, which is why the unsubscribe endpoint is a POST.
  */
-function unsubHeaders(baseUrl: string, campaignId: number, token: string): Record<string, string> {
+/**
+ * Why this base URL cannot carry an unsubscribe link, or null when it can.
+ *
+ * EVERY ROUTE OUT OF A CAMPAIGN IS AN ABSOLUTE URL — the `List-Unsubscribe` header, the One-Click
+ * POST target and the footer link in the body are all built from this one value. So a base URL
+ * that is missing or not publicly resolvable does not merely degrade tracking, which is optional:
+ * it removes the recipient's ability to opt out, which is not. That is a CASL and CAN-SPAM
+ * problem as well as a deliverability one, and it is silent — the mail sends and looks fine.
+ *
+ * HTTPS IS REQUIRED, WITH LOCALHOST EXCEPTED. A plain-http link in marketing mail is flagged by
+ * mail clients and may be rewritten or blocked, so the opt-out would be unreachable exactly when
+ * somebody tried to use it. Development and the test suite run over http on localhost, and
+ * refusing those would mean no campaign could be exercised outside production.
+ *
+ * Returns a sentence fit to show somebody, naming the setting that fixes it.
+ */
+export function publicBaseUrlProblem(baseUrl: string): string | null {
+  const raw = String(baseUrl ?? '').trim();
+  if (!raw) {
+    return 'This campaign cannot be sent: no public address is configured for the CRM, so the '
+      + 'unsubscribe link in the email would not work. Set CAMPAIGN_PUBLIC_URL to the public '
+      + 'https address of this CRM and try again.';
+  }
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return `This campaign cannot be sent: "${raw}" is not a valid address, so the unsubscribe `
+      + 'link in the email would not work. Set CAMPAIGN_PUBLIC_URL to the public https address '
+      + 'of this CRM.';
+  }
+  if (!url.hostname) {
+    return 'This campaign cannot be sent: the configured public address has no host, so the '
+      + 'unsubscribe link in the email would not work. Set CAMPAIGN_PUBLIC_URL.';
+  }
+  const local = ['localhost', '127.0.0.1', '[::1]', '::1'].includes(url.hostname.toLowerCase());
+  if (url.protocol !== 'https:' && !(url.protocol === 'http:' && local)) {
+    return `This campaign cannot be sent: the public address (${raw}) is not https, so the `
+      + 'unsubscribe link in the email may be blocked by mail clients. Set CAMPAIGN_PUBLIC_URL '
+      + 'to the public https address of this CRM.';
+  }
+  return null;
+}
+
+function unsubUrl(baseUrl: string, campaignId: number, token: string): string {
   const base = String(baseUrl ?? '').replace(/\/+$/, '');
-  if (!base) return {};
-  const url = `${base}/api/campaigns/unsubscribe?c=${campaignId}&t=${encodeURIComponent(token)}`;
+  return base ? `${base}/api/campaigns/unsubscribe?c=${campaignId}&t=${encodeURIComponent(token)}` : '';
+}
+
+function unsubHeaders(baseUrl: string, campaignId: number, token: string): Record<string, string> {
+  const url = unsubUrl(baseUrl, campaignId, token);
+  if (!url) return {};
   return {
     'List-Unsubscribe': `<${url}>`,
     'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
   };
 }
+/**
+ * The text/plain alternative for a campaign message.
+ *
+ * `htmlToText` KEEPS LINK TEXT AND DROPS THE HREF, which is right for prose — a text part full of
+ * bracketed URLs is harder to read, not easier. But it leaves the unsubscribe footer as the bare
+ * word "Unsubscribe", with no way to act on it: a reader in a plain-text client would see an
+ * instruction and no means of following it.
+ *
+ * So the URL is appended explicitly, and only when the text does not already carry it. The
+ * `List-Unsubscribe` header is unaffected and still does the work for clients that surface a
+ * button; this is for the person reading the words.
+ */
+/**
+ * The text/plain alternative for a campaign message.
+ *
+ * `html` is what is actually sent, footer and all, and is what the text is normally built from
+ * so the two parts of the message cannot disagree. `bodyHtml` is the same content BEFORE the
+ * unsubscribe footer was appended, and exists for one decision: whether the message says
+ * anything at all. Asking the final HTML that always answers yes, because the footer is text.
+ *
+ * `htmlToText` KEEPS LINK TEXT AND DROPS THE HREF, which is right for prose — a text part full
+ * of bracketed URLs is harder to read. But it leaves the footer as the bare word "Unsubscribe"
+ * with no way to act on it, so the URL is appended explicitly.
+ */
+function campaignText(html: string, bodyHtml: string, unsubscribeUrl: string, subject: string): string {
+  let text = htmlToText(html);
+
+  /*
+   * AN IMAGE-LED TEMPLATE REDUCES TO NOTHING, and a text part carrying only an unsubscribe line
+   * is worse than a considered one: to a reader in a plain-text client it is an email that
+   * appears to say nothing but "unsubscribe".
+   *
+   * The `alt` attributes are the content in that case — they are what the template author wrote
+   * for exactly this situation, and for screen readers. Falling back to the subject after that
+   * means the part always says what the message is about.
+   */
+  if (!htmlToText(bodyHtml).trim()) {
+    const alts = [...String(bodyHtml ?? '').matchAll(/<img\b[^>]*\balt\s*=\s*["']([^"']+)["']/gi)]
+      .map((m) => m[1].trim())
+      .filter(Boolean);
+    text = alts.length
+      ? alts.join('\n\n')
+      : `${String(subject ?? '').trim() || 'A message from your agent'}\n\n`
+        + 'This email is made up of images. Please view it in an email client that shows images.';
+  }
+
+  if (!unsubscribeUrl || text.includes(unsubscribeUrl)) return text;
+  return `${text}\n\nUnsubscribe: ${unsubscribeUrl}`;
+}
+
 const parseJsonArray = (v: string | null): string[] => {
   try { const a = JSON.parse(v ?? '[]'); return Array.isArray(a) ? a.map(String) : []; } catch { return []; }
 };
@@ -914,6 +1019,27 @@ export class CampaignsService {
   }): Promise<void> {
    // Already going out. Whatever this pass was asked to send, the pass that holds the campaign is
    // working through the same `pending` rows and will reach them.
+
+    /*
+     * REFUSED BEFORE THE FIRST MESSAGE, and before the try below.
+     *
+     * `deliver` catches everything inside its try, logs it and marks the campaign `partial`
+     * WITHOUT rethrowing — which is right for a send that died mid-flight and wrong for a refusal
+     * that must reach the caller. Raised here, the error propagates and nothing is sent.
+     *
+     * This is the one path every send reaches — immediate, resumed and scheduled all arrive here.
+     * A hard stop rather than a warning: marketing mail with no working unsubscribe is a
+     * compliance failure, and the quiet version of it is worse than a refusal somebody has to read.
+     */
+    const baseUrlProblem = publicBaseUrlProblem(job.baseUrl);
+    if (baseUrlProblem) {
+      this.log.error(`Campaign #${job.campaignId} refused: ${baseUrlProblem}`);
+      await this.prisma.campaigns
+        .update({ where: { id: job.campaignId }, data: { status: 'failed', updated_at: new Date() } })
+        .catch(() => undefined);
+      throw new BadRequestException({ message: baseUrlProblem });
+    }
+
    if (this.delivering.has(job.campaignId)) {
      this.log.warn(`Campaign #${job.campaignId} is already being delivered — this pass was skipped rather than sending twice.`);
      return;
@@ -1015,6 +1141,13 @@ export class CampaignsService {
       // Rewrite BEFORE injectTracking appends the unsubscribe link, so that link stays direct —
       // opting out must not depend on the click endpoint being healthy.
       html = this.audience.rewriteLinks(html, { baseUrl, campaignId: campaign.id, token: tokens[i], links: linkIds });
+      /*
+       * The body as the author wrote it, before the unsubscribe footer is appended. The text part
+       * needs it to tell an image-only message from one with prose: after injection EVERY message
+       * strips to at least "Unsubscribe from these emails.", so asking the final HTML whether it
+       * says anything always answers yes.
+       */
+      const bodyHtml = html;
       html = this.audience.injectTracking(html, { baseUrl, campaignId: campaign.id, token: tokens[i] });
 
       /*
@@ -1073,6 +1206,23 @@ export class CampaignsService {
           // spam — which then reads as a list problem. One-Click points at the POST endpoint,
           // which is why that endpoint had to exist as a POST.
           headers: unsubHeaders(baseUrl, campaign.id, tokens[i]),
+          /*
+           * THE text/plain ALTERNATIVE, which campaign mail did not have.
+           *
+           * Every campaign message left as HTML-only while personal lead mail has sent multipart
+           * for some time — the mailer has supported it all along and this call simply never
+           * passed it. Real correspondence is almost always multipart/alternative, so HTML-only
+           * is one of the cheap signals that marks a message as machine-generated; it also leaves
+           * the message unreadable in a text client and weakens the preview line a mail app shows.
+           *
+           * Derived from the SAME html that is sent, AFTER personalisation, link rewriting and
+           * the unsubscribe footer — so the text part says what the HTML part says, including the
+           * unsubscribe link. A text part that disagreed with the HTML would be worse than none.
+           *
+           * It makes no promise about which Gmail tab anything lands in. It is a structural
+           * correction to how the message is assembled, and nothing more.
+           */
+          text: campaignText(html, bodyHtml, unsubUrl(baseUrl, campaign.id, tokens[i]), subject),
         });
         sent++;
         await this.markRecipient(row.id, { status: 'sent', bounced: false, error: null, bounce_type: null, next_retry_at: null });

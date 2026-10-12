@@ -6,6 +6,35 @@ import type {
 
 /** Campaigns API. */
 
+/** One authentication mechanism, as DNS currently answers for it. */
+export interface AuthCheck {
+  name: 'SPF' | 'DKIM' | 'DMARC';
+  status: 'pass' | 'warn' | 'fail' | 'unknown';
+  detail: string;
+  /** The record to publish, when there is a concrete one worth naming. */
+  fix?: string;
+}
+
+export interface DeliverabilityReport {
+  domain: string;
+  auth: AuthCheck[];
+  content: { links: number; images: number; textRatio: number; imageOnly: boolean; signals: string[] } | null;
+  risk: 'low' | 'medium' | 'high';
+  checked_at: string;
+  /** Present instead of a report when no sending mailbox is connected. */
+  error?: string;
+}
+
+/**
+ * Check what DNS says about the sending domain.
+ *
+ * The domain is omitted deliberately: the server defaults it to the address this user's campaigns
+ * would actually leave from, and a report about a domain nobody sends from is a report about
+ * nothing.
+ */
+export const deliverabilityReport = (): Promise<DeliverabilityReport> =>
+  api.get<DeliverabilityReport>('/api/campaigns/deliverability').then((r) => r.data);
+
 export const campaignOptions = (): Promise<CampaignOptions> =>
   api.get<CampaignOptions>('/api/campaigns/options').then((r) => r.data);
 

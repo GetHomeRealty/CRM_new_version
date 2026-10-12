@@ -315,11 +315,20 @@ export class MailerService {
        * deliver a second copy.
        */
       maxAttempts?: number;
+      /**
+       * The `text/plain` alternative, making the message multipart.
+       *
+       * OPTIONAL, AND OMITTING IT IS BYTE-IDENTICAL to before — `dispatch` has always added the
+       * part only when given one, and every existing caller of this method passes nothing. It is
+       * exposed here because `sendDirect` already had it and this one did not, which is the only
+       * reason campaign mail went out HTML-only while personal mail did not.
+       */
+      text?: string | null;
     },
   ): Promise<{ messageId: string | null }> {
     return this.dispatch(
       account, opts.to, opts.subject, opts.html, opts.cc ?? [], opts.attachments ?? [], opts.headers, opts.bcc ?? [],
-      null, opts.maxAttempts,
+      opts.text ?? null, opts.maxAttempts,
     );
   }
 

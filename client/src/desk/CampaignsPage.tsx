@@ -15,6 +15,7 @@ import { useAuth } from '../context/AuthContext';
 import ConfirmDialog from './ConfirmDialog';
 import CampaignTemplates from './CampaignTemplates';
 import SuppressionsPanel from './SuppressionsPanel';
+import DeliverabilityPanel from './DeliverabilityPanel';
 import type {
   AudienceFilter, AudiencePreview, CampaignDetail, CampaignOptions,
   CampaignRecipientRow, CampaignSummary, TrackingHealth,
@@ -537,6 +538,13 @@ export default function CampaignsPage() {
           )}
         </div>
       </div>
+
+      {/*
+        Whether this brokerage's sending domain is authenticated at all. It sits above the tabs
+        because it is true of every campaign rather than of one, and it is collapsed by default so
+        a healthy domain costs no attention.
+      */}
+      <DeliverabilityPanel />
 
       {/* Two views, one at a time — the same tab pattern Email Settings uses. */}
       {/* The two section buttons that used to open this row have moved to the sidebar, which now

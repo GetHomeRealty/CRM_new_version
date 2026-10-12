@@ -56,7 +56,7 @@ async function pendingCampaign(tx: PrismaService, email: string) {
     data: {
       name: `ZZ claim ${tag()}`, subject: 'Hello {{leadName}}', content: '<p>Hi</p>',
       status: 'sending', created_by: 'ZZ Prober', created_by_id: null,
-      tracking_base_url: '', created_at: now, updated_at: now,
+      tracking_base_url: 'https://crm.test', created_at: now, updated_at: now,
     },
   });
   const r = await tx.campaign_recipients.create({

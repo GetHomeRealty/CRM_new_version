@@ -89,7 +89,7 @@ async function committedCampaign(
       name: `${MARK} ${run}`, subject: 'Hello', content: '<p>Hi</p>',
       status, created_by: 'ZZ Prober', created_by_id: null,
       // Empty on purpose: link rewriting and open tracking belong to other specs.
-      tracking_base_url: '',
+      tracking_base_url: 'https://crm.test',
       /*
        * DUE IN THE FUTURE, deliberately. `dispatchDue` — which several other specs exercise —
        * selects every campaign that is `scheduled` AND due now, across the whole table. A fixture
