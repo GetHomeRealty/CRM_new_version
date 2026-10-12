@@ -1259,6 +1259,35 @@ model campaigns {
   /// Where this campaign's tracking links point. Persisted so a resumed send builds the same
   /// URLs as the messages already delivered.
   tracking_base_url String?               @db.VarChar(500)
+
+  /**
+   * The mail account this campaign was told to send from, or null to resolve one at send time.
+   *
+   * NULL IS THE EXISTING BEHAVIOUR, unchanged: `MailerService.resolveSenderInArea` picks the
+   * sender, which is what every campaign created before this column did. A value means somebody
+   * chose an address, and the send uses that one or refuses — it does not quietly fall back,
+   * because falling back is how a scheduled campaign leaves from a mailbox nobody picked.
+   *
+   * NOT A FOREIGN KEY, deliberately. A relation would need `onDelete`, and both answers are wrong
+   * for a historical record: `SetNull` erases which account was used the moment somebody
+   * disconnects it, and `Restrict` makes a finished campaign block the removal of a mailbox.
+   * `sender_email` below is what screens display, so a dangling id costs nothing and the id is
+   * kept because it is what the send actually resolved.
+   */
+  sender_account_id Int?
+
+  /**
+   * The address this campaign's mail ACTUALLY left from, stamped once the sender is resolved.
+   *
+   * WHY A COPY RATHER THAN A LOOKUP. `mail_accounts.from_email` is editable and the row is
+   * deletable, so joining to it answers "what would this account send as today", not "what did
+   * this campaign send as". Those differ precisely when somebody asks — after a mailbox was
+   * changed or disconnected. A campaign's sender is history, so it is stored like history.
+   *
+   * NULL on every campaign that pre-dates this column, and on one that never got as far as
+   * resolving a sender. Screens show "not recorded" rather than guessing.
+   */
+  sender_email      String?               @db.VarChar(255)
   created_by        String?               @db.VarChar(255)
   created_by_id     Int?
   /**

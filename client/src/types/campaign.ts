@@ -16,6 +16,16 @@ export interface CampaignSummary {
   status: CampaignStatus;
   tags: string[];
   stats: CampaignStats;
+  /**
+   * The address this campaign's mail ACTUALLY left from, as recorded when the send resolved it.
+   *
+   * A stored snapshot rather than a live lookup, so it still answers correctly after the mailbox
+   * has been edited or disconnected. Null on campaigns that pre-date the column and on any that
+   * never reached the point of resolving a sender — screens say "not recorded", never a guess.
+   */
+  sender_email?: string | null;
+  /** The account chosen when the campaign was built, or null for "whatever the server resolves". */
+  sender_account_id?: number | null;
   created_by: string | null;
   created_at: string | null;
   /**
@@ -126,9 +136,27 @@ export interface CampaignOptions {
    * confirmation saying nothing about the sender rather than naming the wrong one.
    */
   sender_email?: string | null;
+  /**
+   * The mailboxes this person may choose to send from: their own, plus the brokerage's shared ones.
+   *
+   * From the server, built from the same clause that authorises the id when it is sent back, so the
+   * picker cannot offer something the endpoint will refuse. Optional, and an empty list is a normal
+   * answer — a deployment with nothing connected has no choice to offer, and `sender_email` above
+   * already says what will happen instead.
+   */
+  sender_accounts?: CampaignSenderAccount[];
   max_recipients: number;
   tags: string[];
   templates: CampaignTemplate[];
+}
+
+/** One mailbox a campaign may be sent from. */
+export interface CampaignSenderAccount {
+  id: number;
+  /** The label the account was connected under, for telling two addresses on one domain apart. */
+  name: string;
+  from_email: string;
+  from_name: string | null;
 }
 
 /** The lead segment a campaign targets. */

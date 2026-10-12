@@ -142,6 +142,39 @@ describe('a scheduled campaign goes out when it is due', () => {
       expect(sent).toHaveLength(0);
     });
   }, 60000);
+
+  it('A SEND REFUSED OUTRIGHT IS LEFT `failed`, not relabelled `partial` by the sweep', async () => {
+    /*
+     * `partial` and `failed` mean different things to whoever reads the campaign list: "some of
+     * them got it" against "nobody did". This catch wrote `partial` over EVERY failure, including
+     * the two that refuse a send before the first message leaves — no working unsubscribe URL, and
+     * a chosen sender mailbox that has been disconnected. Both mark the campaign `failed` and
+     * throw, landing here, so every refusal was reported as a half-delivered campaign.
+     *
+     * DRIVEN THROUGH THE MISSING BASE URL because it needs no mail-account fixture: an empty
+     * `tracking_base_url` means every unsubscribe route out of the message would be broken, which
+     * `publicBaseUrlProblem` refuses. The sender-mailbox refusal reaches this same catch by the
+     * same route, and is asserted in `campaign-sender-selection.spec.ts`.
+     *
+     * THIS FILE OWNS THE SWEEP. `dispatchDue` dispatches everything the shared test database has
+     * due, so a second spec file calling it in a parallel worker steals these fixtures and has its
+     * own stolen in return. That is why the sender spec dates its scheduled rows in the future and
+     * claims them by id, and why this assertion lives here rather than there.
+     */
+    await withCleanup(async (db) => {
+      const sent: string[] = [];
+      const c = await campaignWith(db, {
+        status: 'scheduled',
+        scheduled_for: new Date(Date.now() - 60_000),
+        tracking_base_url: '',
+      });
+
+      await services(db, sent).resume.dispatchDue();
+
+      expect(sent).toHaveLength(0);
+      expect((await statusOf(db, c.id))?.status).toBe('failed');
+    });
+  }, 60000);
 });
 
 describe('recovery after a restart', () => {

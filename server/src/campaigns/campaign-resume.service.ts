@@ -140,11 +140,23 @@ export class CampaignResumeService implements OnModuleInit {
         this.log.error(
           `Scheduled campaign #${c.id} failed to start: ${err instanceof Error ? err.message : String(err)}`,
         );
-        // Left as `partial` rather than `scheduled`: retrying on the next tick would hammer a
-        // broken send every minute, and a campaign nobody can explain is worse than one that
-        // visibly stopped.
+        /*
+         * Left as `partial` rather than `scheduled`: retrying on the next tick would hammer a
+         * broken send every minute, and a campaign nobody can explain is worse than one that
+         * visibly stopped.
+         *
+         * EXCEPT WHERE THE SEND WAS REFUSED OUTRIGHT, which the refusal has already recorded as
+         * `failed`. The two statuses mean different things to the person reading the list —
+         * `partial` is "some of them got it", `failed` is "nobody did" — and the guards that refuse
+         * a send before the first message (no unsubscribe URL, a disconnected sender mailbox) throw
+         * from inside `dispatchScheduled`, landing here. Overwriting their verdict would report
+         * every one of those as a half-delivered campaign.
+         */
         await this.prisma.campaigns
-          .update({ where: { id: c.id }, data: { status: 'partial', updated_at: new Date() } })
+          .updateMany({
+            where: { id: c.id, status: { not: 'failed' } },
+            data: { status: 'partial', updated_at: new Date() },
+          })
           .catch(() => undefined);
       }
     }

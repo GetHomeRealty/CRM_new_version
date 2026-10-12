@@ -4,13 +4,20 @@ import { CampaignAuditService } from './campaign-audit.service';
 import { CrmAdvancedEmailService } from '../crm-settings/crm-advanced-email.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { MailerService, type MailAttachment } from '../email/mailer.service';
+/*
+ * Imported for ONE STATIC METHOD — `crmSenderWhere`, the definition of which mailboxes a person may
+ * send a campaign from. Not injected: this service is constructed positionally in fourteen specs,
+ * and the rule is a `where` clause rather than behaviour, so a second constructor parameter would
+ * cost more than it bought.
+ */
+import { MailAccountService } from '../email/mail-account.service';
 import { CampaignAudienceService, type AudienceFilter } from './campaign-audience.service';
 import { CampaignTemplatesService } from './campaign-templates.service';
 import { MailDeliverabilityService } from './mail-deliverability.service';
 import { classifyBounce, nextRetryAt, MAX_SOFT_RETRIES } from './bounce-classifier';
 import { MAX_RECIPIENTS, SEND_DELAY_MS } from './campaign.constants';
 import type { AuthUserRecord } from '../auth/auth.types';
-import { Prisma } from '@prisma/client';
+import { Prisma, type mail_accounts } from '@prisma/client';
 import { can } from '../core/authz';
 /*
  * The same html-to-text used by personal lead mail. A pure string function in a module with no
@@ -177,6 +184,15 @@ export interface SendCampaignInput {
   clientType?: unknown;
   tag?: unknown;
   tags?: unknown;
+  /**
+   * The connected mail account to send from, or absent to let the server resolve one.
+   *
+   * ABSENT IS THE EXISTING BEHAVIOUR, unchanged — `resolveSenderInArea` picks the sender, which is
+   * what every campaign did before this field existed. A value is a deliberate choice and is
+   * honoured exactly: the send uses that mailbox or refuses, and never silently substitutes
+   * another, because substituting one is how a campaign goes out from an address nobody picked.
+   */
+  sender_account_id?: unknown;
   /** Absolute, publicly reachable base URL for tracking links. */
   baseUrl: string;
   /**
@@ -459,6 +475,21 @@ export class CampaignsService {
     });
     if (!template) throw new NotFoundException({ message: 'Template not found.' });
 
+    /*
+     * THE CHOSEN MAILBOX IS CHECKED HERE, when somebody is still watching.
+     *
+     * Refused at create rather than at delivery because that is the moment there is a person to
+     * tell: delivery runs detached, minutes or days later, and an error raised there reaches a log
+     * and a status pill. The same test runs again before the first message goes out — see
+     * `campaignSender` — because what is connected can change in between, and a scheduled campaign
+     * is exactly the case where it does.
+     *
+     * `crmSenderWhere` IS THE WHOLE AUTHORISATION. It is the same clause the picker is built from,
+     * so an id that was guessed, kept from a stale screen or posted directly is refused here — a
+     * dropdown that omits a colleague's mailbox does not stop anyone from naming it by hand.
+     */
+    const senderAccountId = await this.validateSenderChoice(input.sender_account_id, user);
+
     const filter: AudienceFilter = {
       leadStatus: String(input.leadStatus ?? '') || undefined,
       leadType: String(input.leadType ?? '') || undefined,
@@ -493,6 +524,9 @@ export class CampaignsService {
       tags: JSON.stringify(tags),
       status: 'sending',
       total: recipients.length,
+      // Null means "resolve a sender at send time", which is what every campaign did before this
+      // column existed. `sender_email` is stamped once the send resolves one, either way.
+      sender_account_id: senderAccountId,
       created_by: user.name,
       created_by_id: user.id ?? null,
       idempotency_key: idempotencyKey,
@@ -587,6 +621,7 @@ export class CampaignsService {
     void this.deliver({
       campaignId: campaign.id, name, recipients, rows: campaign.recipients, tokens,
       template, agentVars, attachments, baseUrl: input.baseUrl, userId: user.id ?? null,
+      senderAccountId,
     });
 
     return this.summary(await this.prisma.campaigns.findUniqueOrThrow({ where: { id: campaign.id } }));
@@ -1000,6 +1035,16 @@ export class CampaignsService {
       attachments,
       baseUrl: campaign.tracking_base_url ?? '',
       userId: campaign.created_by_id ?? null,
+      /*
+       * READ FROM THE ROW, not resolved again.
+       *
+       * This is the whole point of storing it. A scheduled campaign is dispatched days after it was
+       * built, by a background sweep with no user session, and `resolveSenderInArea` would answer
+       * with whatever is connected THEN — which is how a campaign confirmed as going out from one
+       * address leaves from another. Null still means "resolve one", so campaigns created before
+       * this column resume exactly as they did.
+       */
+      senderAccountId: campaign.sender_account_id ?? null,
     });
   }
 
@@ -1016,6 +1061,8 @@ export class CampaignsService {
     rows: { id: number; retry_count?: number | null }[]; tokens: string[]; template: { subject: string; content: string };
     agentVars: Record<string, string | undefined>; attachments: MailAttachment[];
     baseUrl: string; userId: number | null;
+    /** The mailbox chosen for this campaign, or null to resolve one the way sends always have. */
+    senderAccountId?: number | null;
   }): Promise<void> {
    // Already going out. Whatever this pass was asked to send, the pass that holds the campaign is
    // working through the same `pending` rows and will reach them.
@@ -1044,6 +1091,21 @@ export class CampaignsService {
      this.log.warn(`Campaign #${job.campaignId} is already being delivered — this pass was skipped rather than sending twice.`);
      return;
    }
+
+   /*
+    * THE SENDER IS SETTLED BEFORE THE CAMPAIGN IS CLAIMED, and before the try below.
+    *
+    * BEFORE THE TRY, for the same reason as the base-URL guard: everything inside it is caught,
+    * logged and recorded as `partial` WITHOUT rethrowing, which is right for a send that died
+    * half-way and wrong for a refusal that has to reach the caller.
+    *
+    * BEFORE `delivering.add`, which is not cosmetic — the `finally` that releases that claim
+    * belongs to the try. A throw between the add and the try would leave this campaign marked as
+    * delivering for the lifetime of the process, and every later attempt to send it would be
+    * skipped as a duplicate.
+    */
+   const senderAccount = await this.campaignSender(job);
+
    this.delivering.add(job.campaignId);
    try {
     const { recipients, tokens, template, agentVars, attachments, baseUrl } = job;
@@ -1097,23 +1159,6 @@ export class CampaignsService {
      * change mid-send, and the log wants the same answer against every row of one campaign.
      */
     const mailRedirect = MailerService.redirectTarget();
-
-    /*
-     * THE MAILBOX THIS CAMPAIGN SENDS FROM, resolved once and IN THE CRM AREA.
-     *
-     * It was resolved per recipient through `sendDirect`, which ignores `scope` - so a CRM
-     * campaign left from whatever mailbox that person happened to have, including a Transaction
-     * Desk one, and in the last-resort case from a COLLEAGUE'S. CRM Account Settings meanwhile
-     * told the reader that each area keeps its own accounts, which was true of every other CRM
-     * send and false of this one.
-     *
-     * Resolving once also removes a per-recipient database round trip, and guarantees one
-     * campaign cannot change sender halfway through a run.
-     *
-     * A failure here throws before any message is sent, which is the right moment: no mailbox
-     * means nothing should go out, rather than the first half going out from the wrong address.
-     */
-    const senderAccount = await this.mailer.resolveSenderInArea(user.id ?? null, 'crm');
 
     for (let i = 0; i < recipients.length; i++) {
       const r = recipients[i];
@@ -1445,6 +1490,117 @@ export class CampaignsService {
    * Null rather than throwing when no account exists at all: this feeds a confirmation dialog, and
    * a screen that cannot name the sender should say so rather than fail to open.
    */
+  /**
+   * The id of the mailbox this caller asked to send from, or null for "resolve one".
+   *
+   * REFUSES RATHER THAN FALLING BACK. An id that names an account which does not exist, is
+   * deactivated, or belongs to a colleague is a 400 — not a quiet revert to automatic resolution.
+   * Somebody who chose an address has told us which one matters; sending from a different one
+   * because theirs was unavailable is the failure this whole change exists to prevent.
+   *
+   * ABSENT, NULL AND EMPTY ALL MEAN "resolve one", because that is what the builder sends when the
+   * picker is left on its default and what every existing client sends by sending nothing.
+   */
+  private async validateSenderChoice(raw: unknown, user: AuthUserRecord): Promise<number | null> {
+    if (raw === undefined || raw === null || raw === '') return null;
+    const id = Number(raw);
+    if (!Number.isInteger(id) || id <= 0) {
+      throw new BadRequestException({
+        message: 'The sender account is not valid. Choose one of your connected email accounts.',
+        errors: { sender_account_id: ['Must be one of your connected email accounts.'] },
+      });
+    }
+    const account = await this.prisma.mail_accounts.findFirst({
+      where: { id, ...MailAccountService.crmSenderWhere(user.id ?? null) },
+      select: { id: true },
+    });
+    /*
+     * ONE MESSAGE FOR "does not exist" AND FOR "is not yours".
+     *
+     * Distinguishing them would answer, for any id somebody cares to try, whether an account exists
+     * — which is the addresses of every colleague's mailbox, one probe at a time. The same reason
+     * `get` and `remove` return "Campaign not found" rather than "not yours".
+     */
+    if (!account) {
+      throw new NotFoundException({
+        message: 'That email account is not available to send from. It may have been disconnected or deactivated.',
+      });
+    }
+    return id;
+  }
+
+  /**
+   * The mailbox this delivery pass will send from, verified as available, and recorded.
+   *
+   * TWO ROUTES IN, ONE ANSWER OUT:
+   *   - a chosen account is re-checked against the same allow-list the choice was made from, and
+   *     the send is REFUSED if it is gone — see `validateSenderChoice` for why not a fallback;
+   *   - no choice resolves a sender exactly as every campaign always has, through
+   *     `resolveSenderInArea`, which is scoped to the CRM area and throws when nothing is connected.
+   *
+   * RE-CHECKED EVEN THOUGH CREATE ALREADY CHECKED. For an immediate send the two happen seconds
+   * apart and this is nearly free. For a scheduled one they are days apart, and "the mailbox was
+   * connected when this was scheduled" says nothing about whether it still is — which is precisely
+   * what requirement 3 is about.
+   *
+   * THE ADDRESS IS STAMPED ON THE CAMPAIGN HERE, because this is the only place that knows it. It
+   * is written once and never overwritten: a half-sent campaign's first address is the honest
+   * answer to "what did these people see", and a resume that resolves something else must not
+   * erase it. That case is logged rather than hidden.
+   */
+  private async campaignSender(job: {
+    campaignId: number; senderAccountId?: number | null; userId: number | null;
+  }): Promise<mail_accounts> {
+    let account: mail_accounts;
+
+    if (job.senderAccountId) {
+      const chosen = await this.prisma.mail_accounts.findFirst({
+        where: { id: job.senderAccountId, ...MailAccountService.crmSenderWhere(job.userId) },
+      });
+      if (!chosen) {
+        const problem = 'This campaign cannot be sent: the email account it was set to send from is no '
+          + 'longer connected, or has been deactivated. Reconnect it under Settings, then send this '
+          + 'campaign again — or create it again choosing a different sender.';
+        this.log.error(
+          `Campaign #${job.campaignId} refused: sender account #${job.senderAccountId} is no longer available to user ${job.userId ?? 'none'}.`,
+        );
+        await this.prisma.campaigns
+          .update({ where: { id: job.campaignId }, data: { status: 'failed', updated_at: new Date() } })
+          .catch(() => undefined);
+        throw new BadRequestException({ message: problem });
+      }
+      account = chosen;
+    } else {
+      /*
+       * Resolved once for the whole run and IN THE CRM AREA. It was once resolved per recipient
+       * through `sendDirect`, which ignores `scope` — so a CRM campaign left from whatever mailbox
+       * that person happened to have, including a Transaction Desk one. Resolving once also removes
+       * a per-recipient round trip and means one campaign cannot change sender halfway through.
+       */
+      account = await this.mailer.resolveSenderInArea(job.userId ?? null, 'crm');
+    }
+
+    const from = account.from_email || null;
+    if (from) {
+      const current = await this.prisma.campaigns
+        .findUnique({ where: { id: job.campaignId }, select: { sender_email: true } })
+        .catch(() => null);
+      if (!current?.sender_email) {
+        await this.prisma.campaigns
+          .update({ where: { id: job.campaignId }, data: { sender_email: from, updated_at: new Date() } })
+          .catch(() => undefined);
+      } else if (current.sender_email !== from) {
+        // Only reachable on a resume with no chosen account, where what is connected has changed
+        // since the first pass. The recorded address stays as it is; this says so out loud.
+        this.log.warn(
+          `Campaign #${job.campaignId} is resuming from ${from} but was recorded as sent from ${current.sender_email} — the recorded address is left as it was.`,
+        );
+      }
+    }
+
+    return account;
+  }
+
   async senderEmail(user: AuthUserRecord): Promise<string | null> {
     try {
       /*
@@ -1819,6 +1975,16 @@ export class CampaignsService {
         total: c.total, sent: c.sent, failed: c.failed,
         opened: c.opened, unsubscribed: c.unsubscribed, bounced: c.bounced,
       },
+      /*
+       * THE ADDRESS THIS CAMPAIGN ACTUALLY SENT FROM, and the account it was told to use.
+       *
+       * `sender_email` is a stored snapshot, not a join: `mail_accounts.from_email` is editable and
+       * the row is deletable, so looking it up live would answer what that account would send as
+       * today rather than what this campaign sent as. Null on campaigns that pre-date the column,
+       * and screens say "not recorded" rather than naming an address that might be wrong.
+       */
+      sender_email: c.sender_email ?? null,
+      sender_account_id: c.sender_account_id ?? null,
       created_by: c.created_by,
       created_at: c.created_at instanceof Date ? c.created_at.toISOString() : null,
       // Always an absolute instant, never a local wall-clock string: the screen renders it in the

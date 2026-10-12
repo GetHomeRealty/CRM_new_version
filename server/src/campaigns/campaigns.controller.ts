@@ -11,6 +11,7 @@ import { LeadImportJobService } from '../leads/lead-import-job.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { can } from '../core/authz';
 import { MailDeliverabilityService } from './mail-deliverability.service';
+import { MailAccountService } from '../email/mail-account.service';
 import {
   LEAD_STATUS, LEAD_TYPE, LEAD_SOURCE, CLIENT_TYPE, TAG_OPTIONS,
   CAMPAIGN_CATEGORIES, FILLABLE_TOKENS, LEAD_SOURCED_TOKENS, MAX_RECIPIENTS,
@@ -28,6 +29,8 @@ export class CampaignsController {
     private readonly imports: LeadImportJobService,
     private readonly prisma: PrismaService,
     private readonly deliverability: MailDeliverabilityService,
+    /** Exported by EmailModule, which this module already imports — see `sendersForCrm`. */
+    private readonly accounts: MailAccountService,
   ) {}
 
   /** Vocabularies + templates for the campaign builder. */
@@ -77,6 +80,23 @@ export class CampaignsController {
       // The address the send will really leave from, so the confirmation names the sender rather
       // than the screen assuming it. Null when the deployment has no active mail account.
       sender_email: await this.campaigns.senderEmail(user),
+      /*
+       * THE MAILBOXES THIS PERSON MAY CHOOSE BETWEEN: their own, plus the brokerage's shared ones.
+       *
+       * Sent from the server rather than assembled in the browser from the Settings screen's data,
+       * so the list offered is built from the same clause that will authorise the id when it comes
+       * back — `MailAccountService.crmSenderWhere`. A picker and a guard with separate notions of
+       * who may send from what is how a screen comes to offer something the endpoint refuses, or
+       * worse, accepts.
+       *
+       * An EMPTY list is a normal answer and not an error: a deployment with nothing connected has
+       * no choice to offer, and `sender_email` above already says what will happen instead.
+       */
+      sender_accounts: (await this.accounts.sendersForCrm(user.id ?? null))
+        // Four fields, not the whole account resource: a picker needs to name an address, and
+        // `resource()` also carries host, port, username and the IMAP settings, none of which a
+        // campaign screen has any business receiving.
+        .map((a) => ({ id: a.id, name: a.name, from_email: a.from_email, from_name: a.from_name })),
       tags: await this.campaigns.leadTags(user),
       // Each template's tokens, so the builder can warn about ones that can't be filled.
       templates: templates.map((t) => ({

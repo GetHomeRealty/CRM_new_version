@@ -54,6 +54,56 @@ export class MailAccountService {
   }
 
   /**
+   * Every mailbox THIS PERSON may send a CRM campaign from.
+   *
+   * TWO SETS, AND THE BOUNDARY BETWEEN THEM IS THE POINT:
+   *   - their own active accounts, so an agent's campaign can leave from their own address, and
+   *   - the brokerage's shared accounts (`user_id` NULL), which exist to be sent from by anybody.
+   *
+   * A COLLEAGUE'S PERSONAL MAILBOX IS EXCLUDED, and that exclusion is the security property here.
+   * `senderFor` can already end up on one as a last resort when a brokerage has connected nothing
+   * shared — the "sent through Veena" case documented on that method. That is an accident worth
+   * fixing; offering it in a dropdown would make sending as another agent a feature, which is a
+   * different and worse thing. Anyone who needs to send from a shared address connects one.
+   *
+   * `scope` IS NOT FILTERED, matching `senderFor` rather than `sendersForDesk`. Every account
+   * connected since the 2026-09-04 Hub change is stamped `scope: null`, so filtering on 'crm'
+   * would return an empty list for most deployments — a picker with nothing in it, and the same
+   * trap recorded in `campaign-sender-area.spec.ts`.
+   *
+   * Ordered shared-first, then by name: the brokerage address is the one most sends should use, so
+   * it reads first rather than being found among personal ones.
+   */
+  async sendersForCrm(userId: number | null): Promise<Record<string, unknown>[]> {
+    const rows = await this.prisma.mail_accounts.findMany({ where: MailAccountService.crmSenderWhere(userId) });
+    rows.sort((a, b) =>
+      Number(a.user_id !== null) - Number(b.user_id !== null)
+      || a.name.localeCompare(b.name, 'en', { sensitivity: 'base' })
+      || a.id - b.id);
+    return rows.map((a) => this.resource(a));
+  }
+
+  /**
+   * THE RULE ITSELF, as a `where` clause, so the screen that offers the choice and the server that
+   * honours it cannot disagree about who may send from what.
+   *
+   * STATIC AND EXPORTED because `CampaignsService` has to apply the same test and must not grow a
+   * second copy of it — the pattern `CampaignTemplatesService.authoredWhere` already uses for the
+   * template library. A dropdown is not an access control: the picker offers this set, and this is
+   * what is checked when an id arrives, so an id that was guessed, kept from an older session or
+   * posted directly is refused rather than sent from.
+   *
+   * `userId` null (a system-initiated send with no user) leaves only the shared accounts, which is
+   * the correct answer rather than an empty one.
+   */
+  static crmSenderWhere(userId: number | null): { is_active: true; OR: { user_id: number | null }[] } {
+    return {
+      is_active: true,
+      OR: [{ user_id: null }, ...(userId ? [{ user_id: userId }] : [])],
+    };
+  }
+
+  /**
    * The account to fall back on when a template names none.
    *
    * Scoped, because `is_default` is per-user-and-area: with a default on each side an unscoped

@@ -70,6 +70,14 @@ export const sendCampaign = (
      * two deliberately identical campaigns a week apart from collapsing into one.
      */
     idempotency_key?: string;
+    /**
+     * The connected account to send from, or omitted to let the server resolve one.
+     *
+     * OMITTING IT IS THE BEHAVIOUR THIS SCREEN HAD: the server resolves a sender exactly as it
+     * always has. A value is honoured exactly — the send uses that mailbox or is refused, and never
+     * quietly substitutes another, which is what makes it worth choosing for a scheduled campaign.
+     */
+    sender_account_id?: number | null;
   },
 ): Promise<CampaignSummary> =>
   api.post<CampaignSummary>('/api/campaigns', body).then((r) => r.data);

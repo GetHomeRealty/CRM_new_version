@@ -16,6 +16,7 @@ import ConfirmDialog from './ConfirmDialog';
 import CampaignTemplates from './CampaignTemplates';
 import SuppressionsPanel from './SuppressionsPanel';
 import DeliverabilityPanel from './DeliverabilityPanel';
+import CampaignRecipientList from './CampaignRecipientList';
 import type {
   AudienceFilter, AudiencePreview, CampaignDetail, CampaignOptions,
   CampaignRecipientRow, CampaignSummary, TrackingHealth,
@@ -24,6 +25,13 @@ import type {
 const ANY = 'any';
 const emptyForm = {
   name: '', template_id: '', categoryFilter: 'all', leadStatus: ANY, leadType: ANY, leadSource: ANY, clientType: ANY, tag: ANY,
+  /**
+   * The mail account to send from, as a string because it comes from a `<select>`.
+   *
+   * EMPTY IS THE DEFAULT AND MEANS "let the server resolve one" — exactly what this screen did
+   * before there was a picker, so the behaviour of someone who never touches it is unchanged.
+   */
+  sender_account_id: '',
   /** 'now' or 'later'. */
   sendMode: 'now',
   /** `datetime-local` value — local wall-clock, converted to an absolute instant on send. */
@@ -376,7 +384,13 @@ export default function CampaignsPage() {
       count: audience.count,
       // The server's answer too - `brokerage_audience` is the capability the send path consults.
       audience: options?.brokerage_audience ? 'Brokerage-wide' : 'Your leads only',
-      sender: options?.sender_email ?? 'the brokerage account',
+      /*
+       * The CHOSEN address where there is one, because that is what will be used — the resolved
+       * `sender_email` describes what would happen on Automatic and would be a different send.
+       */
+      sender: (form.sender_account_id
+        ? options?.sender_accounts?.find((a) => String(a.id) === form.sender_account_id)?.from_email
+        : options?.sender_email) ?? options?.sender_email ?? 'the brokerage account',
       subject: template?.subject ?? '(the template subject)',
       // The opening words, so somebody who skipped the pane still sees the message at the moment
       // they commit to sending it.
@@ -416,6 +430,8 @@ export default function CampaignsPage() {
         ...toFilter(form),
         tags: form.tag === ANY ? [] : [form.tag],
         scheduled_for: at ? at.toISOString() : null,
+        // Null, not an empty string: the field is "which account", and absent means resolve one.
+        sender_account_id: form.sender_account_id ? Number(form.sender_account_id) : null,
         idempotency_key: commitKey,
       });
       if (c.status === 'scheduled') {
@@ -865,6 +881,44 @@ export default function CampaignsPage() {
             </div>
 
             {/*
+              WHICH MAILBOX THIS LEAVES FROM.
+              Shown only when there is more than one answer: with a single connected account a
+              dropdown holding one option is a decision nobody is being asked to make, and the
+              line beneath the audience already names the address.
+              The default is deliberately NOT the first account — it is "resolve one", which is
+              what every campaign did before this existed. Choosing an account opts into the
+              stronger promise: that account or nothing, including days later on a schedule.
+            */}
+            {(options.sender_accounts?.length ?? 0) > 1 && (
+              <div className="camp-section">
+                <strong>Send from</strong>
+                <select
+                  value={form.sender_account_id}
+                  onChange={(e) => setF('sender_account_id', e.target.value)}
+                  style={{ marginTop: 8, maxWidth: 420 }}
+                  data-testid="campaign-sender-select"
+                >
+                  <option value="">
+                    Automatic{options.sender_email ? ` — ${options.sender_email}` : ''}
+                  </option>
+                  {options.sender_accounts?.map((a) => (
+                    <option key={a.id} value={String(a.id)}>
+                      {a.from_email}{a.from_name ? ` (${a.from_name})` : a.name && a.name !== a.from_email ? ` (${a.name})` : ''}
+                    </option>
+                  ))}
+                </select>
+                <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                  {form.sender_account_id
+                    ? 'This campaign will be sent from this address, and kept with the campaign — a '
+                      + 'scheduled send uses it too. If the account is disconnected before then, the '
+                      + 'campaign stops rather than going out from a different address.'
+                    : 'Leave this on Automatic to use whichever account is set up for campaigns at the '
+                      + 'time of sending.'}
+                </div>
+              </div>
+            )}
+
+            {/*
               When to send.
               Copy gets written when the agent has time, which is rarely when it should go out —
               Tuesday morning beats Friday evening, and nobody is at their desk for either.
@@ -920,80 +974,40 @@ export default function CampaignsPage() {
       )}
 
       {/* ---- results ---- */}
-      {detail && (() => {
-        const r = detail.recipients;
-        const list = detailView === 'opened' ? r.filter((x) => x.opened)
-          : detailView === 'unsubscribed' ? r.filter((x) => x.unsubscribed)
-            : detailView === 'bounced' ? r.filter((x) => x.bounced || x.status === 'failed') : r;
-        const tile = (key: typeof detailView, value: number, label: string, cls: string) => (
-          <button type="button" className={`camp-tile ${cls}${detailView === key ? ' on' : ''}`} onClick={() => setDetailView(key)}>
-            <strong>{value}</strong><span>{label}</span>
-          </button>
-        );
-        return (
-          <div className="overlay open" onMouseDown={(e) => { if (e.target === e.currentTarget) setDetail(null); }}>
-            <div className="modal" style={{ maxWidth: 720 }}>
-              <button className="close" onClick={() => setDetail(null)}>✕</button>
-              <div className="modal-h">
-                {detail.name} <span className={`pill ${statusPill(detail.status)}`}>{detail.status}</span>
-                <button className="btn ghost sm" style={{ marginLeft: 10 }} onClick={() => downloadReport(detail)}>Download report</button>
-              </div>
-              <div className="camp-tiles">
-                {tile('all', detail.stats.total, 'Recipients', '')}
-                {tile('all', detail.stats.sent, 'Sent', 'good')}
-                {tile('opened', detail.stats.opened, opensUnmeasured ? 'Opened (not measured)' : 'Opened', opensUnmeasured ? '' : 'info')}
-                {tile('bounced', detail.stats.bounced, 'Bounced', 'bad')}
-                {tile('unsubscribed', detail.stats.unsubscribed, 'Unsubscribed', 'warn')}
-              </div>
-              {opensUnmeasured && (
-                /* Said here as well as on the tile, because this modal is reachable from a
-                   notification link without passing the banner on the page behind it. */
-                <div className="help" style={{ color: 'var(--warn-ink-alt)' }}>
-                  ⚠ Open tracking is not working, so the Opened figure counts only what happened to
-                  be recorded. Treat it as a minimum, not a result - and do not compare it with a
-                  campaign sent while tracking was working.
-                </div>
-              )}
-              <div className="muted" style={{ fontSize: 13 }}><strong>Subject:</strong> {detail.subject}</div>
-              <div className="camp-list">
-                {list.length === 0 ? <div className="help">No one in this group yet.</div> : list.map((x) => (
-                  <div key={x.id} className="camp-row">
-                    <div style={{ minWidth: 0 }}>
-                      <strong>{x.name || x.email}</strong>
-                      <div className="muted" style={{ fontSize: 12 }}>{x.email}</div>
-                      {x.error && <div style={{ color: 'var(--bad)', fontSize: 12 }}>{x.error}</div>}
-                    </div>
-                    <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                      {x.opened && <span className="pill info">Opened</span>}
-                      {x.unsubscribed && <span className="pill warn">Unsub</span>}
-                      {/*
-                        The three failures read very differently and must not share one label.
-                        A hard bounce is a dead mailbox and the address is now suppressed; a soft
-                        one is queued for another attempt; "unknown" is our own mail server and
-                        says nothing about the recipient. Calling all three "Bounced" is what once
-                        made an expired SMTP password look like a dead list.
-                      */}
-                      {x.bounce_type === 'hard' ? <span className="pill bad" title="The mailbox does not exist. This address has been added to the suppression list.">Hard bounce</span>
-                        : x.bounce_type === 'soft' && x.status === 'pending' ? (
-                          <span className="pill warn" title={x.next_retry_at ? `Next attempt ${when(x.next_retry_at)}` : 'Queued for another attempt'}>
-                            Retrying{x.retry_count ? ` (${x.retry_count})` : ''}
-                          </span>
-                        )
-                          : x.bounce_type === 'soft' ? <span className="pill bad" title="The receiving server kept deferring us. The address is not suppressed.">Deferred — gave up</span>
-                            : x.bounce_type === 'unknown' ? <span className="pill bad" title="A problem with our mail account or connection, not with this address.">Send error</span>
-                              : (
-                                <span className={`pill ${x.status === 'sent' ? 'ok' : ''}`}>
-                                  {x.status === 'sent' ? 'Sent' : x.status === 'failed' ? 'Failed' : 'Pending'}
-                                </span>
-                              )}
-                    </div>
-                  </div>
-                ))}
+      {detail && (
+        <div className="overlay open" onMouseDown={(e) => { if (e.target === e.currentTarget) setDetail(null); }}>
+          <div className="modal" style={{ maxWidth: 720 }}>
+            <button className="close" onClick={() => setDetail(null)}>✕</button>
+            <div className="modal-h">
+              {detail.name} <span className={`pill ${statusPill(detail.status)}`}>{detail.status}</span>
+              <button className="btn ghost sm" style={{ marginLeft: 10 }} onClick={() => downloadReport(detail)}>Download report</button>
+            </div>
+            <div className="camp-meta">
+              <div><span className="muted">Subject</span><strong>{detail.subject}</strong></div>
+              {/* The address it went out from, read from the campaign's own record. */}
+              <div data-testid="results-from">
+                <span className="muted">From</span>
+                {detail.sender_email
+                  ? <strong>{detail.sender_email}</strong>
+                  : <span className="muted" title="This campaign was sent before the sending address was recorded.">Not recorded</span>}
               </div>
             </div>
+            {/*
+              The counts and the list come from one component, shared with the sent-email popup
+              below — see `CampaignRecipientList` for why that is not two copies of this markup.
+              `initialView` keeps the deep link from a notification working: it opens on the group
+              the link named, and the reader moves from there.
+            */}
+            <CampaignRecipientList
+              recipients={detail.recipients}
+              stats={detail.stats}
+              opensUnmeasured={opensUnmeasured}
+              initialView={detailView}
+              when={when}
+            />
           </div>
-        );
-      })()}
+        </div>
+      )}
 
       {/* ---- sent email preview ---- */}
       {sentEmail && (
@@ -1004,9 +1018,40 @@ export default function CampaignsPage() {
             <div className="camp-meta">
               <div><span className="muted">Subject</span><strong>{sentEmail.subject}</strong></div>
               <div><span className="muted">Template</span>{sentEmail.template_name ?? '—'}</div>
-              <div><span className="muted">Sent to</span>{sentEmail.stats.total} recipient{sentEmail.stats.total === 1 ? '' : 's'}</div>
+              {/*
+                THE ADDRESS THIS ACTUALLY WENT OUT FROM, read from the campaign's own record rather
+                than from whatever is connected now — those differ precisely when somebody asks,
+                which is after a mailbox was changed or disconnected.
+
+                Campaigns sent before this was recorded say so instead of naming an address: the
+                sender was resolved at send time and discarded, so there is no honest answer for
+                them and a plausible-looking guess is worse than none.
+              */}
+              <div data-testid="sent-email-from">
+                <span className="muted">From</span>
+                {sentEmail.sender_email
+                  ? <strong>{sentEmail.sender_email}</strong>
+                  : <span className="muted" title="This campaign was sent before the sending address was recorded.">Not recorded</span>}
+              </div>
+              <div>
+                <span className="muted">Sent to</span>
+                {sentEmail.stats.total} recipient{sentEmail.stats.total === 1 ? '' : 's'}
+              </div>
               <div><span className="muted">Sent on</span>{when(sentEmail.sent_at)}</div>
             </div>
+            {/*
+              WHO IT WENT TO, not just how many.
+              A recipient count answers nothing somebody opens this popup to ask. The questions are
+              "did this person get it" and "which of them failed", and both need the list and the
+              search box — the same ones the results modal uses, from the same component.
+            */}
+            <CampaignRecipientList
+              recipients={sentEmail.recipients}
+              stats={sentEmail.stats}
+              opensUnmeasured={opensUnmeasured}
+              when={when}
+            />
+
             {/* Locked-down iframe: `sandbox` with no tokens blocks scripts, forms and
                 same-origin access, so stored template HTML can't execute against the app. */}
             <iframe title="Sent email preview" sandbox="" srcDoc={sentEmail.content} className="camp-preview" />
