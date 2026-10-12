@@ -26,6 +26,8 @@ const boxField: CSSProperties = { background: '#f9fafb', border: '1px solid #e6e
 const boxInput: CSSProperties = { ...boxField, width: '100%', display: 'block' };
 const sectionTitle: CSSProperties = { fontSize: 13, fontWeight: 700, letterSpacing: '.04em', textTransform: 'uppercase', margin: '4px 0 12px' };
 const grid3: CSSProperties = { display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 14, marginBottom: 12 };
+// Activity rows: name, commission, split, then the brokerage's share (2026-10-12).
+const grid5: CSSProperties = { display: 'grid', gridTemplateColumns: '1.4fr 1fr 0.8fr 0.8fr 1fr', gap: 14, marginBottom: 12 };
 const divider: CSSProperties = { borderTop: '1px solid #eef0f5', margin: '6px 0 16px' };
 
 function Field({ label: lbl, value }: { label: ReactNode; value: ReactNode }) {
@@ -51,7 +53,7 @@ export default function NoticeOfSaleModal({ open, onClose, txn, onSaved = null }
   const [docs, setDocs] = useState<DeskDocument[]>([]);
 
   const clients = txn.clients || [];
-  const team: { name?: string | null; split?: number | string | null }[] = (txn.team && txn.team.length) ? txn.team : (txn.agent ? [{ name: txn.agent, split: 100 }] : []);
+  const team: { name?: string | null; split?: number | string | null; agent_pct?: number | string | null; brok_pct?: number | string | null }[] = (txn.team && txn.team.length) ? txn.team : (txn.agent ? [{ name: txn.agent, split: 100 }] : []);
   // Commission in %/$: the value shown beside "Agent (T4A)" in Financial Information.
   const fin = txn.financial || {};
   let t4aTotal = 0;
@@ -62,6 +64,27 @@ export default function NoticeOfSaleModal({ open, onClose, txn, onSaved = null }
     ? formatCurrency(t4aTotal)
     : (txn.comm_type === 'Fixed' ? formatCurrency(txn.comm_value) : `${txn.comm_value || txn.comm_pct || 0}%`);
   // Lawyer Information source: Buyer Lawyer for Buying deals, Seller Lawyer otherwise.
+  /*
+   * 2026-10-12 - THE BROKERAGE'S SHARE OF EACH AGENT'S COMMISSION, on the Notice of Sale (Sai: "our own,
+   * dollar amount too"). The % is the member's Brokerage % from the Team Split (100 - Agent % when only
+   * that is known); the $ is the brokerage line the server's commission breakdown already gives each
+   * agent - the same figure the Financial screen and the agent's commission statement use - summed over
+   * the terms of a pre-construction deal. Nothing is calculated here that the app does not already state.
+   */
+  const brokLines = (name: string) => (fin.terms?.length
+    ? fin.terms.flatMap((t) => (t.agents || []).filter((a) => a.name === name))
+    : (fin.agents?.length ? fin.agents : (fin.members || [])).filter((a) => a.name === name));
+  const brokAmount = (name: string | null | undefined): string => {
+    if (!name) return '';
+    const lines = brokLines(name);
+    if (!lines.length) return '';
+    return formatCurrency(lines.reduce((s, a) => s + Number(a.brokerage?.total ?? a.brokerage_from_member ?? 0), 0));
+  };
+  const brokPct = (m: { brok_pct?: number | string | null; agent_pct?: number | string | null }): string => {
+    if (m.brok_pct !== null && m.brok_pct !== undefined && m.brok_pct !== '') return `${Number(m.brok_pct)}%`;
+    if (m.agent_pct !== null && m.agent_pct !== undefined && m.agent_pct !== '') return `${100 - Number(m.agent_pct)}%`;
+    return '';
+  };
   const useBuyerLawyer = /buying/i.test(txn.type);
   const lw = (field: LawyerField): string => {
     const wantPrefix = useBuyerLawyer ? 'buyer_lawyer_' as const : 'seller_lawyer_' as const;
@@ -252,10 +275,12 @@ export default function NoticeOfSaleModal({ open, onClose, txn, onSaved = null }
             <div style={divider} />
             <div style={sectionTitle}>Activity</div>
             {team.map((m, i) => (
-              <div style={grid3} key={i}>
+              <div style={grid5} key={i}>
                 <Field label={`Name of ${ordinal(i)}${i > 0 ? ' (if any)' : ''}`} value={m.name} />
                 <Field label="Commission in %/$" value={commRate} />
                 <Field label="Split in %" value={`${m.split}%`} />
+                <Field label="Brokerage %" value={brokPct(m)} />
+                <Field label="Brokerage $" value={brokAmount(m.name)} />
               </div>
             ))}
             {team.length === 0 && <div style={{ fontSize: 12, color: '#64748b' }}>No salespersons assigned (set the agent / Team Split).</div>}
