@@ -538,7 +538,8 @@ export default function TransactionDetailPage() {
     .filter((o) => !(isDocumentation && o === 'Closed' && !form.statuses.includes('Closed')));
   const ro = view; // read-only flag
   // Documentation edits Type and Status only. Remaining Basic Info fields stay locked.
-  const basicRo = ro || isDocumentation;
+  // Accounting reads Basic Info and edits none of it (the server drops it too: ACCOUNTING_LOCKED).
+  const basicRo = ro || isDocumentation || isAccounting;
 
   function set<K extends keyof DetailForm>(k: K, v: DetailForm[K]) { setForm((f) => (f ? { ...f, [k]: v } : f)); }
   function setBrok<K extends keyof BrokerageForm>(k: K, v: BrokerageForm[K]) { setForm((f) => (f ? { ...f, brokerage: { ...f.brokerage, [k]: v } } : f)); }
@@ -1854,7 +1855,7 @@ export default function TransactionDetailPage() {
         Authentication and the `transactions: 'edit'` screen permission are untouched.
       */}
       {docsOpen && (
-        <DocsModal open={docsOpen} onClose={() => setDocsOpen(false)} transactionId={id} txn={txn} readOnly={isAgent ? false : (isDocumentation ? false : view)} agentMode={isAgent} canDeleteConditionDocs={isSuperAdmin} onSaved={reloadTxn} />
+        <DocsModal open={docsOpen} onClose={() => setDocsOpen(false)} transactionId={id} txn={txn} readOnly={isAgent ? false : (isDocumentation ? false : (view || isAccounting))} agentMode={isAgent} canDeleteConditionDocs={isSuperAdmin} onSaved={reloadTxn} />
       )}
       {invoiceOpen && txn && (
         <InvoiceModal open={invoiceOpen} onClose={() => setInvoiceOpen(false)} txn={txn} />

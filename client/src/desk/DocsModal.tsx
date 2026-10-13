@@ -30,7 +30,9 @@ interface DocsModalProps {
 
 export default function DocsModal({ open, onClose, transactionId, txn = null, readOnly = false, agentMode = false, canDeleteConditionDocs = false, onSaved = null }: DocsModalProps) {
   const toast = useToast();
-  const { isSuperAdmin } = useAuth();
+  const { isSuperAdmin, user } = useAuth();
+  // Accounting reads documents only — there is no Edit mode that would let it change them.
+  const isAccounting = user?.role === 'accounting';
   const { confirm, askDelete, closeConfirm } = useConfirm();
   // Wrap a blob view/download so failures surface a toast instead of a dead link.
   // The doc-id passed is guaranteed present at each call site (a file exists there).
@@ -331,7 +333,9 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
 
         {readOnly && (
           <div className="card" style={{ borderLeft: '4px solid #2563eb', background: 'var(--info-bg)', marginBottom: 12 }}>
-            <span style={{ fontSize: 12.5, color: 'var(--info-ink)' }}><Icon name="lock" size={13} /> View-only — click <strong>Edit</strong> on the transaction to change documents. (View &amp; download remain available.)</span>
+            <span style={{ fontSize: 12.5, color: 'var(--info-ink)' }} data-testid="docs-readonly-banner">{isAccounting
+              ? <><Icon name="lock" size={13} /> View-only — documents can be viewed and downloaded, not changed.</>
+              : <><Icon name="lock" size={13} /> View-only — click <strong>Edit</strong> on the transaction to change documents. (View &amp; download remain available.)</>}</span>
           </div>
         )}
 

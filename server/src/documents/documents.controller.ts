@@ -6,6 +6,7 @@ import type { Response } from 'express';
 import { createZip } from '../common/archive';
 import { AuthGuard } from '../auth/guards/auth.guard';
 import { ScreenGuard } from '../auth/guards/screen.guard';
+import { AccountingReadOnlyGuard } from './accounting-readonly.guard';
 import { CurrentUser, Screen } from '../auth/decorators';
 import type { AuthUserRecord } from '../auth/auth.types';
 import { DocumentsService } from './documents.service';
@@ -46,7 +47,8 @@ const MB20 = 20480 * 1024;
  * behind a Super Admin's approval, and `documents.override-valid` keeps a document already marked
  * Valid from being replaced or deleted by anyone below admin rank.
  */
-@UseGuards(AuthGuard, ScreenGuard)
+// AccountingReadOnlyGuard runs after AuthGuard, which sets the user it reads.
+@UseGuards(AuthGuard, ScreenGuard, AccountingReadOnlyGuard)
 @Screen('transactions', 'view')
 export class DocumentsController {
   constructor(private readonly docs: DocumentsService, private readonly prisma: PrismaService) {}

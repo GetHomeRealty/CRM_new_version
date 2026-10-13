@@ -3,7 +3,7 @@ import { BadRequestException, ValidationPipe } from '@nestjs/common';
 import { filterClauses } from './transaction-filters';
 import { transactionScopeWhere } from '../common/transaction-scope';
 import { ListTransactionsDto } from './dto/list-transactions.dto';
-import { DOCUMENTATION_EDITABLE, BASIC_INFO_FIELDS } from './transactions-write.service';
+import { DOCUMENTATION_EDITABLE, BASIC_INFO_FIELDS, ACCOUNTING_LOCKED } from './transactions-write.service';
 
 /**
  * "MISSING UPLOADS" AND "NEEDS REVIEW" — the Transactions list's required-documents filters, run as
@@ -208,6 +208,28 @@ describe('what a Documentation user may change on a deal', () => {
       'valid_status', 'comm_status', 'comm_paid_status', 'precon_terms', 'commercial_lease', 'commission_agent',
       'activity_tracker', 'payment_type']) {
       expect(DOCUMENTATION_EDITABLE.has(k)).toBe(false);
+    }
+  });
+});
+
+describe('what an Accounting user may NOT change on a deal', () => {
+  it(`EVERY BASIC INFO FIELD is locked — checked against the card's own map`, () => {
+    for (const k of BASIC_INFO_FIELDS) expect([k, ACCOUNTING_LOCKED.has(k)]).toEqual([k, true]);
+  });
+
+  it(`THE FINANCIAL PANEL'S FIGURES are locked, for every deal type`, () => {
+    for (const k of ['comm_type', 'comm_value', 'comm_pct', 'comm_amt', 'comm_adjust_enabled', 'comm_adjust_before', 'comm_adjust_after',
+      'listing_comm_pct', 'coop_comm_pct', 'listing_comm_flat', 'coop_comm_flat', 'trust_payable',
+      'listing_adj_enabled', 'listing_adj_before', 'listing_adj_after', 'coop_adj_enabled', 'coop_adj_before', 'coop_adj_after',
+      'precon_net_of_hst', 'precon_comm_pct', 'precon_comm_amt_manual', 'precon_comm_bonus', 'precon_details_of_terms']) {
+      expect([k, ACCOUNTING_LOCKED.has(k)]).toEqual([k, true]);
+    }
+  });
+
+  it(`THE REST OF THE ROLE'S WORK IS NOT — status, payments, adjustments, admin, team, terms, clients`, () => {
+    for (const k of ['comm_status', 'comm_paid_status', 'payment_type', 'adjustments', 'admin_activities', 'team',
+      'precon_terms', 'precon_term_count', 'clients', 'conditions', 'brokerage', 'activity_tracker']) {
+      expect([k, ACCOUNTING_LOCKED.has(k)]).toEqual([k, false]);
     }
   });
 });

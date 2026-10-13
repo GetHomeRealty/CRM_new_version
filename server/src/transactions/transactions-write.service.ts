@@ -199,6 +199,29 @@ export const BASIC_INFO_FIELDS: ReadonlySet<string> = new Set([
   'mls_verified',            // Mark Verified
 ]);
 
+/**
+ * ACCOUNTING READS BASIC INFO AND FINANCIAL; IT DOES NOT CHANGE THEM (brokerage request,
+ * 2026-10-13).
+ *
+ * Basic Info is the whole card (`BASIC_INFO_FIELDS`). Financial is what only the Financial panel
+ * writes: the commission rate, amount and adjustments for each deal type. Everything else this
+ * role does is untouched - commission and payment status, adjustments, admin activities, Team
+ * Split, the preconstruction details - so those keys are deliberately NOT listed here.
+ *
+ * Dropped rather than refused, like `AGENT_LOCKED` and `DOCUMENTATION_EDITABLE`: the detail page
+ * sends the whole deal on every save, so a refusal would block this role's legitimate edits to
+ * the sections it does maintain.
+ */
+export const ACCOUNTING_LOCKED: ReadonlySet<string> = new Set([
+  ...BASIC_INFO_FIELDS,
+  'comm_type', 'comm_value', 'comm_pct', 'comm_amt',
+  'comm_adjust_enabled', 'comm_adjust_before', 'comm_adjust_after',
+  'listing_comm_pct', 'coop_comm_pct', 'listing_comm_flat', 'coop_comm_flat', 'trust_payable',
+  'listing_adj_enabled', 'listing_adj_before', 'listing_adj_after',
+  'coop_adj_enabled', 'coop_adj_before', 'coop_adj_after',
+  'precon_net_of_hst', 'precon_comm_pct', 'precon_comm_amt_manual', 'precon_comm_bonus', 'precon_details_of_terms',
+]);
+
 // Agents cannot modify these.
 const AGENT_LOCKED = [
   'comm_type', 'comm_value', 'comm_pct', 'comm_amt',
@@ -966,6 +989,24 @@ export class TransactionsWriteService {
      */
     if (user?.role === 'documentation') {
       for (const k of Object.keys(data)) if (!DOCUMENTATION_EDITABLE.has(k)) delete data[k];
+    }
+
+    // ACCOUNTING — Basic Info and the Financial panel's figures are view-only (see ACCOUNTING_LOCKED).
+    if (user?.role === 'accounting') {
+      for (const k of ACCOUNTING_LOCKED) delete data[k];
+      /*
+       * A preconstruction term's commission (`pct`, `amt`) is Financial; its closing date is
+       * Preconstruction Details, which this role still maintains. `syncPreconTerms` keeps the stored
+       * value of any key a term row does not send, so removing the two keeps the commission as it
+       * is while the date still saves.
+       */
+      if (Array.isArray(data.precon_terms)) {
+        data.precon_terms = (data.precon_terms as unknown[]).map((term) => {
+          if (!term || typeof term !== 'object') return term;
+          const { pct: _pct, amt: _amt, ...rest } = term as Record<string, unknown>;
+          return rest;
+        });
+      }
     }
 
     // TD-058 - the server half of the Team Split lock (see teamChangeAfterNoticeProblem).
