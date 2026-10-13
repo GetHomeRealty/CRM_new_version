@@ -14,6 +14,9 @@ const ORD = ['', '2nd', '3rd', '4th', '5th', '6th', '7th', '8th', '9th', '10th']
 const ordinal = (i: number) => (i === 0 ? 'Salesperson' : `${ORD[i] || `${i + 1}th`} Salesperson`);
 
 const todayISO = () => new Date().toISOString().slice(0, 10);
+const brokerageTodayISO = () => new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'America/Toronto', year: 'numeric', month: '2-digit', day: '2-digit',
+}).format(new Date());
 const fmtDMY = (iso: string | null | undefined) => {
   if (!iso) return '';
   const [y, m, d] = String(iso).slice(0, 10).split('-');
@@ -46,10 +49,11 @@ interface NoticeOfSaleModalProps {
   onClose: () => void;
   txn: Transaction;
   onSaved?: (() => void) | null;
+  autoDate?: boolean;
 }
 type LawyerField = 'name' | 'phone' | 'email';
 
-export default function NoticeOfSaleModal({ open, onClose, txn, onSaved = null }: NoticeOfSaleModalProps) {
+export default function NoticeOfSaleModal({ open, onClose, txn, onSaved = null, autoDate = false }: NoticeOfSaleModalProps) {
   const toast = useToast();
   const { user } = useAuth();
   const isDocumentation = user?.role === 'documentation';
@@ -118,6 +122,7 @@ export default function NoticeOfSaleModal({ open, onClose, txn, onSaved = null }
 
   // Signatories = the deal's primary agent + any split agents (the Team), who sign at the bottom.
   const signatories = team.map((m) => m.name).filter((n): n is string => !!n);
+  const defaultDate = autoDate ? brokerageTodayISO() : '';
 
   // The Mutual Release document is a Mutual-Release-status artefact and must never
   // appear on the Notice of Sale.
@@ -168,14 +173,20 @@ export default function NoticeOfSaleModal({ open, onClose, txn, onSaved = null }
   const onSig = (name: string, file: File | undefined) => {
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = () => setAgents((a) => ({ ...a, [name]: { ...(a[name] || {}), signature: reader.result as string, signed_date: a[name]?.signed_date || todayISO() } }));
+    reader.onload = () => setAgents((a) => ({ ...a, [name]: { ...(a[name] || {}), signature: reader.result as string, signed_date: a[name]?.signed_date || defaultDate || todayISO() } }));
     reader.readAsDataURL(file);
   };
   const clearSig = (name: string) => setAgents((a) => ({ ...a, [name]: { ...(a[name] || {}), signature: null } }));
 
   const toArr = (s: string) => s.split(',').map((x) => x.trim()).filter(Boolean);
   const persist = async (): Promise<NoticeOfSaleData> => {
-    const res = await saveNoticeOfSale(txn.id, { buyers: toArr(buyers), sellers: toArr(sellers), date: null, agents });
+    const datedAgents = { ...agents };
+    if (autoDate) {
+      for (const name of signatories) {
+        datedAgents[name] = { ...datedAgents[name], signed_date: datedAgents[name]?.signed_date || defaultDate };
+      }
+    }
+    const res = await saveNoticeOfSale(txn.id, { buyers: toArr(buyers), sellers: toArr(sellers), date: null, agents: datedAgents });
     applyNotice(res);
     return res;
   };
@@ -189,8 +200,8 @@ export default function NoticeOfSaleModal({ open, onClose, txn, onSaved = null }
     if (!names.length) { toast('No salesperson to send to', 'info'); return; }
     setSaving(true);
     try {
-      await persist();
-      const pdf = await buildDocBase64();
+      const saved = await persist();
+      const pdf = await buildDocBase64(autoDate ? saved : undefined);
       const extra = pdf ? { pdf, filename: `Notice of Sale ${txn.trade_no}.pdf` } : {};
       const res = await sendNoticeOfSale(txn.id, names, extra);
       applyNotice(res);
@@ -202,7 +213,7 @@ export default function NoticeOfSaleModal({ open, onClose, txn, onSaved = null }
   };
 
   // Build a print-ready clone: live inputs → styled text, edit-only controls removed.
-  const buildPrintClone = (): HTMLElement | null => {
+  const buildPrintClone = (notice?: NoticeOfSaleData): HTMLElement | null => {
     const root = ref.current;
     if (!root) return null;
     root.querySelectorAll('input').forEach((el) => el.setAttribute('value', el.value));
@@ -211,7 +222,9 @@ export default function NoticeOfSaleModal({ open, onClose, txn, onSaved = null }
     clone.querySelectorAll('input').forEach((el) => {
       const div = document.createElement('div');
       div.style.cssText = 'background:#f9fafb;border:1px solid #e6e8ef;border-radius:8px;padding:9px 11px;font-size:13px;color:#0f172a;min-height:38px';
-      div.textContent = el.getAttribute('type') === 'date' ? fmtDMY(el.getAttribute('value')) : (el.getAttribute('value') || ' ');
+      const name = el.dataset.noticeAgent;
+      const value = name && notice ? notice.agents?.[name]?.signed_date : el.getAttribute('value');
+      div.textContent = el.getAttribute('type') === 'date' ? fmtDMY(value) : (value || ' ');
       el.replaceWith(div);
     });
     return clone;
@@ -221,8 +234,8 @@ export default function NoticeOfSaleModal({ open, onClose, txn, onSaved = null }
     if (clone) printDoc(`Notice of Sale ${txn.trade_no}`, clone.innerHTML);
   };
   // Render the notice to a PDF (base64) for attaching to the email — best-effort.
-  const buildDocBase64 = async (): Promise<string | null> => {
-    const clone = buildPrintClone();
+  const buildDocBase64 = async (notice?: NoticeOfSaleData): Promise<string | null> => {
+    const clone = buildPrintClone(notice);
     if (!clone) return null;
     const holder = document.createElement('div');
     holder.style.cssText = 'position:fixed;left:-10000px;top:0;width:760px;background:#ffffff;padding:16px;font-family:Inter,Arial,sans-serif;color:#0f172a;';
@@ -348,7 +361,7 @@ export default function NoticeOfSaleModal({ open, onClose, txn, onSaved = null }
                     <span style={label}>Name</span>
                     <div style={{ fontSize: 14, fontWeight: 600, paddingBottom: 6, borderBottom: '1px solid #cbd5e1', marginBottom: 12 }}>{name || ' '}</div>
                     <span style={label}>Date (dd/mm/yyyy)</span>
-                    <input type="date" style={{ ...boxInput, marginBottom: 12 }} value={a.signed_date ? String(a.signed_date).slice(0, 10) : ''} onChange={(e) => setAgentDate(name, e.target.value)} />
+                    <input type="date" data-notice-agent={name} style={{ ...boxInput, marginBottom: 12 }} value={a.signed_date ? String(a.signed_date).slice(0, 10) : defaultDate} onChange={(e) => setAgentDate(name, e.target.value)} />
                     <span style={label}>Signature</span>
                     {a.signature
                       ? <img src={a.signature} alt="signature" style={{ maxHeight: 48, maxWidth: '100%' }} />

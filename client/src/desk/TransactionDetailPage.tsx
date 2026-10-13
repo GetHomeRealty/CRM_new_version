@@ -537,19 +537,7 @@ export default function TransactionDetailPage() {
   const statusOptions = statusOptionsFor(form.type)
     .filter((o) => !(isDocumentation && o === 'Closed' && !form.statuses.includes('Closed')));
   const ro = view; // read-only flag
-  /*
-   * BASIC INFO IS READ-ONLY FOR DOCUMENTATION, in edit mode as well as view.
-   *
-   * `ro` above is the page-wide flag and drives sixty-odd controls across Conditions, Clients,
-   * Brokerage and the rest — all of which this role is still expected to maintain. So the Basic
-   * Info lock is its own flag, applied to that card alone, rather than a widening of `ro` that
-   * would quietly take away the rest of the coordinator's job.
-   *
-   * IT IS NOT THE ENFORCEMENT, only the half a person sees. `?mode=edit` renders an editable page
-   * for anyone who may edit the deal, and the server drops every Basic Info key from this role's
-   * saves regardless — see `DOCUMENTATION_EDITABLE`. This stops them typing into something that
-   * would be discarded.
-   */
+  // Documentation edits Type and Status only. Remaining Basic Info fields stay locked.
   const basicRo = ro || isDocumentation;
 
   function set<K extends keyof DetailForm>(k: K, v: DetailForm[K]) { setForm((f) => (f ? { ...f, [k]: v } : f)); }
@@ -850,7 +838,10 @@ export default function TransactionDetailPage() {
   // §5.1 — DFT / Closed lock direct edits; Admins request, Super Admin approves.
   const stClosed = form.statuses.includes('Closed');
   const stDFT = form.statuses.includes('DFT');
-  const editLocked = stClosed || stDFT;
+  // Lock Documentation against the saved lifecycle, so selecting DFT can save before it locks.
+  const editLocked = isDocumentation
+    ? (txn?.statuses || []).some((s) => s === 'Closed' || s === 'DFT')
+    : stClosed || stDFT;
   const lockedForUser = editLocked && !isSuperAdmin;
 
   // Agent portal — full access (primary OR founding team member) vs docs-only member.
@@ -928,6 +919,7 @@ export default function TransactionDetailPage() {
     && !conflict
     && !(stClosed && !isSuperAdmin)
     && !(lockedForUser && !approvedReq);
+  const basicTypeStatusRo = isDocumentation ? !autoSaveOn : basicRo;
   autoOnRef.current = autoSaveOn;
 
   // Is there an edit the server hasn't got yet? Computed during render, not in an
@@ -1438,12 +1430,12 @@ export default function TransactionDetailPage() {
               </Field>
               )}
               <Field label="Type">
-                <select value={form.type} disabled={basicRo} onChange={(e) => onTypeChange(e.target.value)}>
+                <select value={form.type} disabled={basicTypeStatusRo} onChange={(e) => onTypeChange(e.target.value)}>
                   {TRANSACTION_TYPES.map((t) => <option key={t} value={t}>{typeLabel(t)}</option>)}
                 </select>
               </Field>
               <Field label="Status">
-                <StatusMultiSelect options={statusOptions} selected={form.statuses} disabled={basicRo} onToggle={toggleStatus} />
+                <StatusMultiSelect options={statusOptions} selected={form.statuses} disabled={basicTypeStatusRo} onToggle={toggleStatus} />
               </Field>
               {OFFER_CLOSING_LISTING_TYPES.includes(form.type) && (
                 <Field label="Trade Number"><input value={form.trade_no} readOnly style={{ background: 'var(--surface-2)' }} /></Field>
@@ -1868,7 +1860,7 @@ export default function TransactionDetailPage() {
         <InvoiceModal open={invoiceOpen} onClose={() => setInvoiceOpen(false)} txn={txn} />
       )}
       {nosOpen && txn && (
-        <NoticeOfSaleModal open={nosOpen} onClose={() => setNosOpen(false)} txn={txn} onSaved={reloadTxn} />
+        <NoticeOfSaleModal open={nosOpen} onClose={() => setNosOpen(false)} txn={txn} onSaved={reloadTxn} autoDate={isDocumentation} />
       )}
       {tsOpen && txn && (
         <TradeSheetModal open={tsOpen} onClose={() => setTsOpen(false)} txn={txn} />

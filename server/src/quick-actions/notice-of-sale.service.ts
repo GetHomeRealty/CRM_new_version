@@ -13,6 +13,9 @@ const SECTION = 'Quick Actions — Notice of Sale';
 type Actor = AuthUserRecord | null;
 type Notice = { buyers: string[]; sellers: string[]; date: string | null; sent_at: string | null; agents: Record<string, { signature?: string | null; signed_date?: string | null; sent_at?: string | null }> };
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const brokerageTodayISO = () => new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'America/Toronto', year: 'numeric', month: '2-digit', day: '2-digit',
+}).format(new Date());
 
 @Injectable()
 export class NoticeOfSaleService {
@@ -94,6 +97,12 @@ export class NoticeOfSaleService {
         sent_at: existing.sent_at ?? null,
       };
     }
+    if (user?.role === 'documentation') {
+      const today = brokerageTodayISO();
+      for (const row of Object.values(current.agents)) {
+        if (!row.signed_date) row.signed_date = today;
+      }
+    }
 
     const prevBuyers = (previous.buyers ?? []).join(', ');
     const prevSellers = (previous.sellers ?? []).join(', ');
@@ -170,9 +179,11 @@ export class NoticeOfSaleService {
     const agents = (body.agents as unknown[]).map(String);
     const current = this.normalize(t.notice_of_sale);
     const now = new Date().toISOString().replace(/\.\d{3}Z$/, '+00:00');
+    const defaultDate = user?.role === 'documentation' ? brokerageTodayISO() : null;
     current.sent_at = now;
     for (const name of agents) {
       const existing = current.agents[name] ?? { signature: null, signed_date: null };
+      if (defaultDate && !existing.signed_date) existing.signed_date = defaultDate;
       existing.sent_at = now;
       current.agents[name] = existing;
     }

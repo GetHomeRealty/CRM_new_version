@@ -163,24 +163,9 @@ export const FILL_KEYS = [
  * Anything not named here is dropped from their update — see the comment in `update`.
  */
 export const DOCUMENTATION_EDITABLE: ReadonlySet<string> = new Set([
-  /*
-   * BASIC INFO IS NOT IN THIS LIST, AND ITS ABSENCE IS THE POINT.
-   *
-   * `type`, `property`, `agent`, `price`, `deposit`, the four dates, the three `mls_*` fields and
-   * `precon_listing_type` were all here and were all removed: the brokerage decided this role
-   * does not change a deal's basic details. The screen shows that section read-only to them, and
-   * this is the half that makes a hand-made request — or a `?mode=edit` URL — unable to do it
-   * anyway. A field dropped here is silently ignored rather than refused, which is how the rest of
-   * a legitimate save still goes through.
-   *
-   * WHAT REMAINS IS THE REST OF THE COORDINATOR'S JOB: conditions and the conditional offer,
-   * statuses, the clients, the co-op/listing brokerage, the inter-board listings and the
-   * builder's contact details. Each is its own section on the page, none is Basic Info, and each
-   * is work this role is expected to do.
-   *
-   * Commission is not here and never was. This role proposes a commission change for a Super
-   * Admin to approve — see `COMMISSION_SCOPE` in the workflows module — rather than writing one.
-   */
+  // Documentation may edit Type and Status in Basic Info. Other basic fields remain locked;
+  // Price, Deposit and Commission Amount still use the Super Admin approval workflow.
+  'type', 'statuses',
   'conditional_offer', 'conditions', 'inter_board_enabled', 'inter_board_listings',
   'clients', 'brokerage',
   'builder',
@@ -195,20 +180,8 @@ export const DOCUMENTATION_EDITABLE: ReadonlySet<string> = new Set([
    */
 ]);
 
-/**
- * EVERY FIELD THE BASIC INFO CARD RENDERS, mapped to the key an API request would carry.
- *
- * Written out rather than left implicit because "no editable Basic Info" is only as good as the
- * list it is checked against, and the card and the whitelist are in different files: a field added
- * to one would otherwise be silently editable in the other. `DOCUMENTATION_EDITABLE` is asserted
- * against this set in `transaction-docs-filter.spec.ts`, so the two cannot drift.
- *
- * `statuses` IS HERE. The Status multi-select sits in this card, between Type and Trade Number —
- * it reads like its own thing and is not. It was left editable for this role on exactly that
- * misreading, which is the reason this map exists at all.
- *
- * `trade_no` is rendered too and is absent deliberately: it is `readOnly` for every role, so there
- * is nothing to withhold.
+/** Basic Info API keys, checked against the Documentation allow-list in its permission tests.
+ * Trade Number is omitted because it is read-only for every role.
  */
 export const BASIC_INFO_FIELDS: ReadonlySet<string> = new Set([
   'type',                    // Type
