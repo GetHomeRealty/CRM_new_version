@@ -63,7 +63,8 @@ test('THE PENCIL SENDS A REQUEST; NOTHING MOVES UNTIL A SUPER ADMIN APPROVES', a
 
     await page.getByTestId('closing-date-edit').click();
     const dialog = page.getByTestId('closing-date-request-dialog');
-    await expect(dialog).toBeVisible();
+    // On screen, over the page — not merely present somewhere in the document.
+    await expect(dialog).toBeInViewport();
     await dialog.getByTestId('closing-date-new').fill('2027-01-15');
     await dialog.getByTestId('closing-date-reason').fill('ZZ-DOCDATE builder extended closing');
     await dialog.getByTestId('closing-date-submit').click();

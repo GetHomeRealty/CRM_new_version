@@ -51,8 +51,9 @@ export default function ClosingDateRequestDialog({ open, onClose, transactionId,
   };
 
   return (
-    <div className="modal-backdrop" style={{ zIndex: 60 }} data-testid="closing-date-request-dialog">
-      <div className="modal" style={{ maxWidth: 460 }}>
+    <div className="overlay open" style={{ position: 'fixed', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 4000 }}
+      onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}>
+      <div className="modal" style={{ maxWidth: 460, margin: 0 }} data-testid="closing-date-request-dialog">
         <div className="modal-h">Request closing date change</div>
         <p style={{ fontSize: 13, marginTop: 4 }}>
           A Super Admin reviews this. The closing date stays as it is until they approve it.

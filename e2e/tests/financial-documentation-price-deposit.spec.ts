@@ -237,6 +237,8 @@ test.describe('the screen edits by pencil and sends a request', () => {
       await modal.getByTestId('fin-send-request').click();
 
       const dialog = page.getByTestId('commission-change-dialog');
+      // On screen, over the panel — not merely present somewhere in the document.
+      await expect(dialog).toBeInViewport();
       await expect(dialog.getByTestId('proposed-price')).toContainText('642,000');
       await expect(dialog.getByTestId('proposed-deposit')).toContainText('31,000');
       await expect(dialog.getByTestId('proposed-comm_amt')).toContainText('16,050');

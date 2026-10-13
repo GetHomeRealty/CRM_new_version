@@ -1071,8 +1071,9 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
         * them; rejecting leaves the deal as it is.
       */}
       {proposeOpen && (
-        <div className="modal-backdrop" style={{ zIndex: 60 }} data-testid="commission-change-dialog">
-          <div className="modal">
+        <div className="overlay open" style={{ position: 'fixed', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 4000 }}
+          onMouseDown={(e) => { if (e.target === e.currentTarget && !proposeBusy) setProposeOpen(false); }}>
+          <div className="modal" style={{ maxWidth: 520, margin: 0 }} data-testid="commission-change-dialog">
             <div className="modal-h">Send change request</div>
             <p style={{ fontSize: 13, marginTop: 4 }}>
               A Super Admin reviews this. Nothing changes on the deal until they approve it.
