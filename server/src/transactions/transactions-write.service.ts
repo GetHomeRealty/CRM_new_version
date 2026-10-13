@@ -186,6 +186,31 @@ export const DOCUMENTATION_EDITABLE: ReadonlySet<string> = new Set([
   'builder',
   // Preconstruction Details, not Basic Info — a separate card, and this role's to maintain.
   'precon_listing_type',
+
+  /*
+   * ============================================================================================
+   * PRICE AND DEPOSIT — the two exceptions to "no Basic Info", added 2026-10-13.
+   *
+   * WHY THEY ARE HERE AT ALL. The brokerage asked for this role to be able to correct the two
+   * figures a deal is priced from, from the Financial Information panel. They were removed from
+   * this list on 2026-10-12 along with the rest of Basic Info; this is a deliberate partial
+   * reversal of that decision, for these two keys and no others. `type`, `statuses`, `agent`,
+   * `property`, the dates and the `mls_*` fields remain withheld.
+   *
+   * WHAT THIS DOES NOT ENFORCE, AND IT MATTERS. A field is permitted or it is not — there is no
+   * way to permit it "only from the Financial screen", because a request does not say which screen
+   * it came from. So although the Basic Info card still RENDERS these two read-only for this role,
+   * that is now presentation rather than a restriction: a request made outside that screen can set
+   * them. The brokerage chose this shape on 2026-10-13 with that limitation stated.
+   *
+   * WHAT IS STILL REFUSED is everything the money actually depends on: commission percentages and
+   * amounts, the flat fees, the adjustments, the trust settlement and the `team` splits. A Price
+   * change therefore cannot move a commission figure by way of this filter, which is the
+   * requirement — and `FinancialModal` additionally sends only these two keys for this role, so
+   * the screen does not even ask.
+   * ============================================================================================
+   */
+  'price', 'deposit',
 ]);
 
 /**
@@ -1614,10 +1639,26 @@ export class TransactionsWriteService {
     });
 
     if (Object.keys(data).some((k) => FINANCIAL_FIELDS.has(k))) {
-      await db.transaction_edit_requests.updateMany({
-        where: { transaction_id: txnId, scope: 'financial', status: 'approved' },
-        data: { status: 'applied', updated_at: new Date() },
-      });
+      /*
+       * RETIRING THE APPROVAL IS NOT FOR THE DOCUMENTATION ROLE TO DO.
+       *
+       * An approved `financial` request is a one-shot unlock: somebody asked, a Super Admin
+       * approved, and the first financial save spends it. Since 2026-10-13 this role may write
+       * `price` and `deposit` by allow-list — it never holds such an unlock and never needs one —
+       * so without this check a coordinator correcting a price would silently spend an unlock that
+       * had been granted to an Admin who had not used it yet. The Admin would then find the fields
+       * locked again with the approval marked `applied`, and nothing on screen to explain it.
+       *
+       * The invoice refresh below is NOT skipped, deliberately: the money on the deal really has
+       * changed, and an unsent invoice stating one price while charging commission worked out on
+       * another is TD-083, which is a defect whoever typed the price.
+       */
+      if (user?.role !== 'documentation') {
+        await db.transaction_edit_requests.updateMany({
+          where: { transaction_id: txnId, scope: 'financial', status: 'approved' },
+          data: { status: 'applied', updated_at: new Date() },
+        });
+      }
 
       /*
        * TD-083 — the commission invoice follows the deal while it is still unsent.

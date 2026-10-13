@@ -150,7 +150,17 @@ describe('what a Documentation user may change on a deal', () => {
    * details, so the assertion is inverted rather than deleted: the fields are named on the other
    * side, so putting one back is a visible change to a test rather than a quiet widening.
    */
-  it(`NOT ONE FIELD OF BASIC INFO — checked against the card's own map, not a copy of it`, () => {
+  /*
+   * PRICE AND DEPOSIT ARE THE ONLY BASIC INFO FIELDS THIS ROLE MAY WRITE, since 2026-10-13.
+   *
+   * Named here as an explicit pair rather than loosened into the loop below, so that the guard
+   * keeps its whole point: a field added to the Basic Info card still fails this spec until
+   * somebody decides, in writing, whether this role may write it. Two exceptions that have to be
+   * listed is a very different thing from a check that no longer asks.
+   */
+  const DOCUMENTATION_BASIC_INFO_EXCEPTIONS = new Set(['price', 'deposit']);
+
+  it(`NOT ONE FIELD OF BASIC INFO BUT PRICE AND DEPOSIT — checked against the card's own map`, () => {
     /*
      * Driven off `BASIC_INFO_FIELDS` rather than a list repeated here. A field added to the Basic
      * Info card is added to that set, and this fails until it is withheld from the role too —
@@ -158,6 +168,26 @@ describe('what a Documentation user may change on a deal', () => {
      */
     expect(BASIC_INFO_FIELDS.size).toBeGreaterThan(10);
     for (const k of BASIC_INFO_FIELDS) {
+      const allowed = DOCUMENTATION_BASIC_INFO_EXCEPTIONS.has(k);
+      expect([k, DOCUMENTATION_EDITABLE.has(k)]).toEqual([k, allowed]);
+    }
+  });
+
+  it('PRICE AND DEPOSIT ARE WRITABLE, and they are Basic Info fields — both halves stated', () => {
+    /*
+     * Both assertions matter. The first is the capability the brokerage asked for; the second
+     * records WHY it needed a decision at all, so this does not read later as an oversight.
+     */
+    for (const k of ['price', 'deposit']) {
+      expect(DOCUMENTATION_EDITABLE.has(k)).toBe(true);
+      expect(BASIC_INFO_FIELDS.has(k)).toBe(true);
+    }
+  });
+
+  it('THE REST OF BASIC INFO IS STILL WITHHELD, named one by one', () => {
+    // Spelled out rather than inferred, because this is the list somebody will want to read when
+    // they ask what the 2026-10-13 change did and did not open up.
+    for (const k of ['type', 'statuses', 'agent', 'property', 'offer_date', 'closing_date']) {
       expect([k, DOCUMENTATION_EDITABLE.has(k)]).toEqual([k, false]);
     }
   });

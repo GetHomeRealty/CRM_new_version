@@ -92,8 +92,25 @@ const sourceFiles = (dir: string): string[] => {
 };
 
 /** Comments carry the history of these faults; they must not be mistaken for the faults. */
+/**
+ * Source with its comments removed, so these guards read code rather than prose about code.
+ *
+ * `[^\r\n]*` RATHER THAN `.*$`, AND THAT IS A FIX. In JavaScript `.` does not match `\r`, and
+ * every file in this repository is CRLF — so after `split('\n')` each line still ended in `\r`,
+ * `.*` stopped before it, `$` (no `m` flag) could not match, and the line-comment strip QUIETLY
+ * DID NOTHING. It had never worked.
+ *
+ * The guards here still passed, by accident. A `/*` sequence inside a line comment starts a region
+ * that the block regex runs past where it should, and the `//` comments were being swallowed as
+ * collateral. Adding one ordinary JSX comment to `TransactionDetailPage.tsx` on 2026-10-13 shifted
+ * that pairing, the accidental swallowing stopped, and five long-standing "Legal &" comments
+ * surfaced as stray website labels — so the guard was reporting on its own parsing rather than on
+ * the code. Found because that is exactly what it did.
+ *
+ * Anchorless, so a `//` comment is stripped wherever on the line it begins.
+ */
 const withoutComments = (src: string): string =>
-  src.replace(/\/\*[\s\S]*?\*\//g, '').split('\n').map((l) => l.replace(/\/\/.*$/, '')).join('\n');
+  src.replace(/\/\*[\s\S]*?\*\//g, '').split('\n').map((l) => l.replace(/\/\/[^\r\n]*/, '')).join('\n');
 
 /** Phrases compared against a DOCUMENT's title, file by file. */
 const titleComparisons = (): { file: string; phrase: string }[] => {

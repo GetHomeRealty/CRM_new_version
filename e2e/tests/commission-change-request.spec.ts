@@ -251,8 +251,24 @@ test.describe('Basic Info is closed to Documentation', () => {
       await page.context().clearCookies();
       await signIn(page, 'docs');
 
+      /*
+       * PRICE IS NO LONGER SENT HERE, and that is a change of requirement rather than a weakening
+       * of this test.
+       *
+       * On 2026-10-12 the brokerage closed all of Basic Info to this role, `price` included, and
+       * this test sent `price: 999999` alongside the address and type to prove the server dropped
+       * all three. On 2026-10-13 it asked for Price and Deposit to come back, from the Financial
+       * panel — so the server now accepts those two keys by design, and asserting they are dropped
+       * would assert against the brokerage's current decision.
+       *
+       * WHAT THIS TEST IS STILL FOR is the rest of Basic Info, which is untouched: the address and
+       * the deal type are still refused from a hand-made request by this role. The two exceptions
+       * are covered on their own terms in `financial-documentation-price-deposit.spec.ts`,
+       * including the assertion that `property` and `type` stay put when sent in the SAME payload
+       * as a legitimate price.
+       */
       const res = await apiSend(page, 'PUT', `/api/transactions/${id}`, {
-        property: 'ZZ HIJACKED ADDRESS', price: 999999, type: 'Residential Selling',
+        property: 'ZZ HIJACKED ADDRESS', type: 'Residential Selling',
       });
       // Accepted as a request — the keys are simply dropped — but nothing moved.
       expect(res.status).toBeLessThan(500);
@@ -262,8 +278,9 @@ test.describe('Basic Info is closed to Documentation', () => {
       const r = await apiGet(page, `/api/transactions/${id}`);
       const d = ((r.body as { data?: Record<string, unknown> }).data ?? r.body) as Record<string, unknown>;
       expect(d.property).toBe(property);
-      expect(Number(d.price)).toBe(500000);
       expect(d.type).toBe('Residential Buying');
+      // Unchanged because nothing asked it to change — the price key was not sent.
+      expect(Number(d.price)).toBe(500000);
     } finally {
       await page.context().clearCookies();
       await signIn(page, 'superAdmin');

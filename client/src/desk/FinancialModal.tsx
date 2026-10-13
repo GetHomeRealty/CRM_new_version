@@ -100,6 +100,18 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
    * calculations and the save path are untouched, and every other role sees exactly what it did.
    */
   const readsOnly = user?.role === 'documentation' || user?.role === 'accounting';
+  /**
+   * Documentation edits exactly two figures here: Price and Deposit.
+   *
+   * WHY THE ROLE IS NAMED RATHER THAN A PERMISSION. `readsOnly` groups Documentation with
+   * Accounting, and this is the one place they differ — Accounting reads these figures and does not
+   * set them. A capability would be the better shape if a third role ever joined; with two, naming
+   * the one that differs is clearer than inventing a flag that only ever has one holder.
+   *
+   * NOT WHEN THE DEAL IS DFT/NA, which blanks this whole panel for every role.
+   */
+  const isDocumentation = user?.role === 'documentation';
+  const docEdits = isDocumentation && !dftNA;
 
   /*
    * DOCUMENTATION ALONE MAY PROPOSE A COMMISSION CHANGE — not Accounting, which reads these
@@ -157,6 +169,12 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
   const termCount = (termCountProp != null && termCountProp !== '') ? Number(termCountProp) : (Number(txn.precon_term_count) || 0);
 
   const [price, setPrice] = useState<number | string>(txn.price ?? 0);
+  /*
+   * DEPOSIT WAS DISPLAY-ONLY HERE FOR EVERY ROLE — a mirror of the Basic Info figure, rendered
+   * `readOnly` and sent back unchanged. It gains state because Documentation now edits it, and the
+   * state is seeded from the transaction so every other role keeps showing exactly what it showed.
+   */
+  const [deposit, setDeposit] = useState<number | string>(txn.deposit ?? 0);
   const [saving, setSaving] = useState(false);
   const [savedOk, setSavedOk] = useState(false); // §3.2 — "Saved" then auto-close
 
@@ -504,6 +522,36 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
       if (parseNumber(listPct) > 0 && parseNumber(listFlat) > 0) { toast('Enter a Listing Commission % OR Amount, not both', 'bad'); return; }
       if (parseNumber(coopPct) > 0 && parseNumber(coopFlat) > 0) { toast('Enter a Co-op Commission % OR Amount, not both', 'bad'); return; }
     }
+    /*
+     * A DOCUMENTATION SAVE SENDS TWO FIELDS, AND ONLY TWO.
+     *
+     * The payloads below carry the whole panel — commission percentages, the adjustments and the
+     * `team` splits — because for an editing role that is what Save means. The server's
+     * `DOCUMENTATION_EDITABLE` filter would drop all of it for this role anyway, so relying on
+     * that alone would work; it would also mean this screen routinely ASKS to rewrite commission
+     * and agent splits and is silently refused, which is a bad habit to build on. Requirement 5 is
+     * that a Price or Deposit change must not disturb commission, splits or approved values -
+     * easiest kept by not mentioning them.
+     *
+     * Returned early rather than merged into the branches below, because the three branches
+     * differ by deal type and none of that applies when the payload is two numbers.
+     */
+    if (docEdits) {
+      setSaving(true);
+      try {
+        const updated = await updateTransaction(transactionId, {
+          price: parseNumber(price),
+          deposit: parseNumber(deposit),
+        });
+        onSaved?.(updated);
+        setSavedOk(true);
+        setTimeout(() => setSavedOk(false), 1500);
+      } catch (e) {
+        toast(apiErrorMessage(e, 'Could not save'), 'bad');
+      } finally { setSaving(false); }
+      return;
+    }
+
     const payload = precon
       ? {
           price: parseNumber(price), precon_net_of_hst: netHst,
@@ -672,30 +720,51 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
           </div>
         )}
 
-        <fieldset disabled={dftNA || readOnly} style={{ border: 0, margin: 0, padding: 0, minInlineSize: 0 }}>
+        {/*
+          THE PRICE ROW SITS IN ITS OWN FIELDSET, and the reason is a rule of HTML rather than a
+          preference: a control inside a DISABLED fieldset cannot be re-enabled by anything nested
+          within it. Documentation needs two live inputs on a panel that is otherwise disabled
+          wholesale, so those two have to live outside the disabled set.
+          THE CONDITION IS THE SAME AS THE MAIN FIELDSET'S FOR EVERY OTHER ROLE — `dftNA || readOnly`
+          with the Documentation exception added — so nobody else's panel changes. The siblings in
+          this row that are NOT Price or Deposit carry their own `readOnly={readOnly || ...}` below,
+          which is what keeps Documentation out of them now that the fieldset no longer does it.
+        */}
+        <fieldset disabled={dftNA || (readOnly && !docEdits)} style={{ border: 0, margin: 0, padding: 0, minInlineSize: 0 }}>
 
         {precon ? (
           <div className="g3">
-            <div className="field"><label>Price {finPencil()}</label><MoneyInput value={price} onChange={(v) => setPrice(v)} onBlur={(e) => setPrice(parseNumber(e.target.value))} readOnly={finLock} style={finLock ? finLockStyle : undefined} /></div>
-            <div className="field"><label>NET of HST</label><select value={netHst ? 'Yes' : 'No'} onChange={(e) => setNetHst(e.target.value === 'Yes')}><option>No</option><option>Yes</option></select></div>
-            <div className="field"><label>Deposit {finPencil()}</label><input value={txn.deposit ?? 0} readOnly style={{ background: 'var(--surface-2)' }} /></div>
+            <div className="field"><label>Price {!docEdits && finPencil()}</label><MoneyInput value={price} onChange={(v) => setPrice(v)} onBlur={(e) => setPrice(parseNumber(e.target.value))} readOnly={!docEdits && finLock} style={!docEdits && finLock ? finLockStyle : undefined} data-testid="fin-price" /></div>
+            <div className="field"><label>NET of HST</label><select value={netHst ? 'Yes' : 'No'} disabled={readOnly} onChange={(e) => setNetHst(e.target.value === 'Yes')}><option>No</option><option>Yes</option></select></div>
+            <div className="field"><label>Deposit {!docEdits && finPencil()}</label>{docEdits
+              ? <MoneyInput value={deposit} onChange={(v) => setDeposit(v)} onBlur={(e) => setDeposit(parseNumber(e.target.value))} data-testid="fin-deposit" />
+              : <input value={txn.deposit ?? 0} readOnly style={{ background: 'var(--surface-2)' }} data-testid="fin-deposit" />}</div>
           </div>
         ) : listing ? (
           <div className={referral ? '' : 'g2'}>
-            <div className="field"><label>Price {finPencil()}</label><MoneyInput value={price} onChange={(v) => setPrice(v)} onBlur={(e) => setPrice(parseNumber(e.target.value))} readOnly={finLock} style={finLock ? finLockStyle : undefined} /></div>
-            {!referral && <div className="field"><label>Deposit {finPencil()}</label><input value={txn.deposit ?? 0} readOnly style={{ background: 'var(--surface-2)' }} /></div>}
+            <div className="field"><label>Price {!docEdits && finPencil()}</label><MoneyInput value={price} onChange={(v) => setPrice(v)} onBlur={(e) => setPrice(parseNumber(e.target.value))} readOnly={!docEdits && finLock} style={!docEdits && finLock ? finLockStyle : undefined} data-testid="fin-price" /></div>
+            {!referral && <div className="field"><label>Deposit {!docEdits && finPencil()}</label>{docEdits
+              ? <MoneyInput value={deposit} onChange={(v) => setDeposit(v)} onBlur={(e) => setDeposit(parseNumber(e.target.value))} data-testid="fin-deposit" />
+              : <input value={txn.deposit ?? 0} readOnly style={{ background: 'var(--surface-2)' }} data-testid="fin-deposit" />}</div>}
           </div>
         ) : (
           /* Buying / Lease: Price, Deposit, Commission % and Commission Amount are the four
              figures the deal is priced from, so they read as one row rather than two stacked
              pairs. Referral has no deposit, so it drops to three columns. */
           <div className={referral ? 'g3' : 'g4'}>
-            <div className="field"><label>Price {finPencil()}</label><MoneyInput value={price} onChange={(v) => setPrice(v)} onBlur={(e) => setPrice(parseNumber(e.target.value))} readOnly={finLock} style={finLock ? finLockStyle : undefined} /></div>
-            {!referral && <div className="field"><label>Deposit {finPencil()}</label><input value={txn.deposit ?? 0} readOnly style={{ background: 'var(--surface-2)' }} /></div>}
-            <div className="field"><label>Commission % {finPencil()}</label><input value={commPct} onChange={(e) => onPct(e.target.value)} placeholder="e.g. 5" readOnly={finLock} style={finLock ? { ...finLockStyle, ...pctStyle } : pctStyle} /></div>
-            <div className="field"><label>Commission Amount {finPencil()}</label><MoneyInput value={commAmt} onChange={(v) => onAmt(v)} placeholder="0.00" readOnly={finLock} style={finLock ? finLockStyle : undefined} /></div>
+            <div className="field"><label>Price {!docEdits && finPencil()}</label><MoneyInput value={price} onChange={(v) => setPrice(v)} onBlur={(e) => setPrice(parseNumber(e.target.value))} readOnly={!docEdits && finLock} style={!docEdits && finLock ? finLockStyle : undefined} data-testid="fin-price" /></div>
+            {!referral && <div className="field"><label>Deposit {!docEdits && finPencil()}</label>{docEdits
+              ? <MoneyInput value={deposit} onChange={(v) => setDeposit(v)} onBlur={(e) => setDeposit(parseNumber(e.target.value))} data-testid="fin-deposit" />
+              : <input value={txn.deposit ?? 0} readOnly style={{ background: 'var(--surface-2)' }} data-testid="fin-deposit" />}</div>}
+            <div className="field"><label>Commission % {finPencil()}</label><input value={commPct} onChange={(e) => onPct(e.target.value)} placeholder="e.g. 5" readOnly={readOnly || finLock} style={finLock ? { ...finLockStyle, ...pctStyle } : pctStyle} /></div>
+            <div className="field"><label>Commission Amount {finPencil()}</label><MoneyInput value={commAmt} onChange={(v) => onAmt(v)} placeholder="0.00" readOnly={readOnly || finLock} style={finLock ? finLockStyle : undefined} /></div>
           </div>
         )}
+
+        </fieldset>
+
+        {/* Everything from here down is read-only for Documentation, as it was before. */}
+        <fieldset disabled={dftNA || readOnly} style={{ border: 0, margin: 0, padding: 0, minInlineSize: 0 }}>
 
         {precon ? (
           <>
@@ -987,7 +1056,12 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
 
         <div className="actions">
           <button className="btn ghost" onClick={onClose}>Close</button>
-          {!readOnly && <button className="btn primary" onClick={save} disabled={saving || dftNA || savedOk}>{savedOk ? <><Icon name="check" size={13} /> Saved</> : (saving ? 'Saving…' : 'Save')}</button>}
+          {/*
+            Documentation gets a Save button although the panel is otherwise read-only to it: there
+            are two fields it may change, and a screen that offers inputs and no way to commit them
+            is worse than offering neither.
+          */}
+          {(!readOnly || docEdits) && <button className="btn primary" onClick={save} disabled={saving || dftNA || savedOk} data-testid="fin-save">{savedOk ? <><Icon name="check" size={13} /> Saved</> : (saving ? 'Saving…' : 'Save')}</button>}
         </div>
       </div>
 

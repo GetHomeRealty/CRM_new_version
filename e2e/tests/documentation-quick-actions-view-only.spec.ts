@@ -229,7 +229,6 @@ test.describe('each Quick Action reads as a record, not as a stuck form', () => 
   for (const [name, label] of [
     ['Documents', /^Documents$/i],
     ['Admin', /^Admin$/i],
-    ['Financial', /^Financial$/i],
     ['Adjustment', /^Adjustment$/i],
     ['Agent Payment Readiness', /Agent Payment Readiness/i],
   ] as const) {
@@ -249,6 +248,29 @@ test.describe('each Quick Action reads as a record, not as a stuck form', () => 
       await expect(page.locator('.modal')).toHaveCount(0, { timeout: 10_000 });
     });
   }
+
+  test('FINANCIAL IS READ-ONLY EXCEPT PRICE AND DEPOSIT, which this role may correct', async ({ page }) => {
+    /*
+     * FINANCIAL IS DELIBERATELY NOT IN THE LOOP ABOVE, as of 2026-10-13.
+     *
+     * The brokerage asked for this role to be able to correct the two figures a deal is priced
+     * from. Everything else on the panel — the commission percentages and amounts, the flat fees,
+     * the adjustments, the trust settlement and the agent splits — stays read-only, and
+     * `financial-documentation-price-deposit.spec.ts` holds the server half.
+     *
+     * Asserted as a COUNT of two rather than by naming the two, so a third editable field added
+     * here fails this test rather than slipping in unnoticed.
+     */
+    const modal = await openQuickAction(page, /^Financial$/i);
+    test.skip(!modal, 'Financial is not offered to this role on this deal');
+
+    await expect(modal!.getByTestId('fin-price')).toBeEditable();
+    await expect(modal!.getByTestId('fin-deposit')).toBeEditable();
+    // And a way to commit them, since offering inputs with no Save would be worse than neither.
+    await expect(modal!.getByTestId('fin-save')).toBeVisible();
+
+    expect(await editableCount(modal!)).toBe(2);
+  });
 
   test('AUDIT TRAIL KEEPS ITS FILTER AND SEARCH, which are navigation and not modification', async ({ page }) => {
     /*
