@@ -1491,13 +1491,13 @@ export default function TransactionDetailPage() {
                   <Icon name="receipt" size={13} /> {generating ? 'Creating…' : (precon ? `Create Term Invoice${(parseInt(String(form.precon_term_count), 10) || 0) === 1 ? '' : 's'}` : 'Create Invoice')}
                 </button>
               )}
-              {!docsOnly && !slNoSections && canEdit && form.agent && teamSplitVisible && <button className="btn ghost sm" style={{ textAlign: 'left' }} onClick={() => setTeamOpen(true)}><Icon name="users" size={13} /> Team Split{isDocumentation ? ' (View Only)' : ''}</button>}
+              {!docsOnly && !slNoSections && canEdit && form.agent && teamSplitVisible && <button className="btn ghost sm" style={{ textAlign: 'left' }} onClick={() => setTeamOpen(true)}><Icon name="users" size={13} /> Team Split</button>}
               {!docsOnly && !slHideLawyer && canEdit && !lawyerHidden && <button className="btn ghost sm" style={{ textAlign: 'left' }} onClick={() => setLawyerOpen(true)}><Icon name="scale" size={13} /> Lawyer Details</button>}
               {canEdit && <button className="btn ghost sm" style={{ textAlign: 'left' }} onClick={() => setDocsOpen(true)}><Icon name="report" size={13} /> Documents</button>}
               {/* Admin Activities, Adjustment and Audit Trail are admin-only (hidden from agents). */}
-              {!isAgent && !docsOnly && !slNoSections && canEdit && <button className="btn ghost sm" style={{ textAlign: 'left' }} onClick={() => setAdminOpen(true)}><Icon name="wrench" size={13} /> Admin{isDocumentation ? ' (View Only)' : ''}</button>}
+              {!isAgent && !docsOnly && !slNoSections && canEdit && <button className="btn ghost sm" style={{ textAlign: 'left' }} onClick={() => setAdminOpen(true)}><Icon name="wrench" size={13} /> Admin</button>}
               {!docsOnly && !slNoSections && canEdit && <button className="btn ghost sm" style={{ textAlign: 'left' }} onClick={() => setFinOpen(true)}><Icon name="dollar" size={13} /> Financial</button>}
-              {!isAgent && !docsOnly && canEdit && <button className="btn ghost sm" style={{ textAlign: 'left' }} onClick={() => setAdjOpen(true)}><Icon name="scale" size={13} /> Adjustment{isDocumentation ? ' (View Only)' : ''}</button>}
+              {!isAgent && !docsOnly && canEdit && <button className="btn ghost sm" style={{ textAlign: 'left' }} onClick={() => setAdjOpen(true)}><Icon name="scale" size={13} /> Adjustment</button>}
               {/*
                 TD-049 — was "Agent FAQ Center", which described nothing in it. The panel is the
                 agent-payment readiness workflow, and under the old name the people who needed it
@@ -1510,7 +1510,7 @@ export default function TransactionDetailPage() {
                 and the `agent_faq.batch_review` mail template, whose key identifies saved
                 templates in the database.
               */}
-              {!docsOnly && !slNoSections && canEdit && <button className="btn ghost sm" style={{ textAlign: 'left' }} onClick={() => setFaqOpen(true)}><Icon name="analytics" size={13} /> Agent Payment Readiness{isDocumentation ? ' (View Only)' : ''}</button>}
+              {!docsOnly && !slNoSections && canEdit && <button className="btn ghost sm" style={{ textAlign: 'left' }} onClick={() => setFaqOpen(true)}><Icon name="analytics" size={13} /> Agent Payment Readiness</button>}
               {!isAgent && <button className="btn ghost sm" style={{ textAlign: 'left' }} onClick={() => setAuditOpen(true)}><Icon name="clipboard" size={13} /> Audit Trail</button>}
               {/*
                 TD-110 — an agent can see what THEY changed on their own deal.

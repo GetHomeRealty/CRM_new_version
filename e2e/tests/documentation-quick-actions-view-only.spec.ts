@@ -289,15 +289,8 @@ test.describe('each Quick Action reads as a record, not as a stuck form', () => 
   });
 
   for (const [name, label] of [
-/*
- * THE QUICK ACTION LABELS CARRY " (View Only)" FOR THE DOCUMENTATION ROLE, since 2026-10-13, so an
- * anchored `/^Admin$/` no longer matches for that seat. The optional group keeps the anchoring —
- * which is what stops "Adjustment" matching the "Adjustment & Advance Payment" heading — while
- * admitting the suffix. Other roles' labels are unchanged, and the specs that run as those roles
- * still use the bare anchored form.
- */
-    ['Admin', /^Admin( \(View Only\))?$/i],
-    ['Adjustment', /^Adjustment( \(View Only\))?$/i],
+    ['Admin', /^Admin$/i],
+    ['Adjustment', /^Adjustment$/i],
     ['Agent Payment Readiness', /Agent Payment Readiness/i],
   ] as const) {
     test(`${name} IS STRICTLY READ-ONLY — no control accepts input`, async ({ page }) => {
@@ -400,26 +393,28 @@ test.describe('each Quick Action reads as a record, not as a stuck form', () => 
 // =====================================================================================
 test.describe('the four view-only panels say so in their heading', () => {
   /*
-   * ADDED 2026-10-13. The blue "View" bar above the fields was removed earlier the same day — with
-   * the controls rendered as plain text it was furniture — and the brokerage then asked for the
-   * fact to be stated where it costs nothing: in the heading, and on the Quick Action button that
-   * opens it.
+   * ADDED 2026-10-13, THEN NARROWED THE SAME DAY. The blue "View" bar above the fields had been
+   * removed earlier — with the controls rendered as plain text it was furniture — and the fact was
+   * restated in the heading AND on the Quick Action button. The button half was then dropped: the
+   * Quick Actions column is a list of destinations, and a suffix on four of seven made it read as
+   * a status board rather than a menu. The heading, which the reader sees the moment the panel
+   * opens, carries it.
    *
-   * THE PAIRS ARE ASSERTED TOGETHER, button and heading, because they are two different strings in
-   * two different files and only one of them is what somebody reads before clicking.
+   * SO THE BUTTONS ARE ASSERTED NOT TO CARRY IT. That is the half that would silently come back if
+   * somebody re-applied the earlier change, and it is the reason this list keeps both strings.
    *
    * DOCUMENTS AND FINANCIAL ARE ABSENT ON PURPOSE. Documents is editable for this role again
    * (792347b) and Financial takes edits by approval request (f5ecb33); labelling either "View Only"
    * would be stating something untrue.
    */
   const PANELS = [
-    { button: /^Team Split( \(View Only\))?$/i, heading: 'Team Split' },
-    { button: /^Admin( \(View Only\))?$/i, heading: 'Admin Activities' },
-    { button: /^Adjustment( \(View Only\))?$/i, heading: 'Adjustment & Advance Payment' },
-    { button: /^Agent Payment Readiness( \(View Only\))?$/i, heading: 'Agent Payment Readiness' },
+    { button: /^Team Split$/i, heading: 'Team Split' },
+    { button: /^Admin$/i, heading: 'Admin Activities' },
+    { button: /^Adjustment$/i, heading: 'Adjustment & Advance Payment' },
+    { button: /^Agent Payment Readiness$/i, heading: 'Agent Payment Readiness' },
   ] as const;
 
-  test('THE DOCUMENTATION SEAT SEES "(View Only)" ON ALL FOUR BUTTONS AND HEADINGS', async ({ page }) => {
+  test('THE DOCUMENTATION SEAT SEES "(View Only)" IN ALL FOUR HEADINGS, AND ON NO BUTTON', async ({ page }) => {
     await signIn(page, 'superAdmin');
     const id = await createDeal(page);
     try {
@@ -432,7 +427,8 @@ test.describe('the four view-only panels say so in their heading', () => {
         const button = page.getByRole('button', { name: p.button }).first();
         if (!(await button.count())) continue;
 
-        await expect(button).toContainText('(View Only)');
+        // The button keeps its plain name — the Quick Actions column is a menu, not a status board.
+        await expect(button).not.toContainText('(View Only)');
 
         await button.click();
         const modal = page.locator('.modal').first();
