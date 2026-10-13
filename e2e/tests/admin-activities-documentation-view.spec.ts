@@ -41,7 +41,9 @@ async function deal(page: Page): Promise<number> {
 
 async function openAdminActivities(page: Page, id: number): Promise<void> {
   await page.goto(`/desk/transactions/${id}?mode=view`);
-  await page.getByRole('button', { name: /^Admin$/ }).first().click();
+  // " (View Only)" is appended for this role since 2026-10-13; the optional group keeps the
+  // anchoring that stops this matching the "Admin Activities" heading.
+  await page.getByRole('button', { name: /^Admin( \(View Only\))?$/ }).first().click();
   await expect(page.getByRole('heading', { name: 'Admin Activities' }).or(page.locator('.modal-h', { hasText: 'Admin Activities' })).first()).toBeVisible({ timeout: 15_000 });
 }
 

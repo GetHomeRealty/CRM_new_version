@@ -270,7 +270,14 @@ export default function AdminActivitiesModal({ open, onClose, transactionId, txn
       {/* `view-flat` renders already-disabled controls as plain text — see desk.css. */}
       <div className={`modal lg${isDocumentation ? ' view-flat' : ''}`}>
         <button className="close" onClick={onClose}><Icon name="close" size={15} /></button>
-        <div className="modal-h">Admin Activities</div>
+        {/*
+          The heading says so for the Documentation role, which reads these four panels and cannot
+          change them. A label rather than a banner: the blue bar that used to sit above the fields
+          was removed on 2026-10-13 because the flattened controls made it redundant furniture, and
+          the heading is where the same fact costs no space. Scoped to the role, so every other
+          seat's heading is unchanged.
+        */}
+        <div className="modal-h">Admin Activities{isDocumentation ? ' (View Only)' : ''}</div>
 
         {dftNA && (
           <div className="card" style={{ borderLeft: '4px solid var(--bad)', background: 'var(--warn-bg)', marginBottom: 12 }}>

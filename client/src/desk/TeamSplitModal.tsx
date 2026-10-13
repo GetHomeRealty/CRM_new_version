@@ -183,7 +183,14 @@ export default function TeamSplitModal({ open, onClose, transactionId, primaryAg
         */}
       <div className={`modal lg${isDocumentation ? ' view-flat' : ''}`}>
         <button className="close" onClick={onClose}>✕</button>
-        <div className="modal-h">Team Split</div>
+        {/*
+          The heading says so for the Documentation role, which reads these four panels and cannot
+          change them. A label rather than a banner: the blue bar that used to sit above the fields
+          was removed on 2026-10-13 because the flattened controls made it redundant furniture, and
+          the heading is where the same fact costs no space. Scoped to the role, so every other
+          seat's heading is unchanged.
+        */}
+        <div className="modal-h">Team Split{isDocumentation ? ' (View Only)' : ''}</div>
 
         {/*
           A read-only form says so. The word, and only the word, by request.

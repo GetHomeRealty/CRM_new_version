@@ -65,14 +65,15 @@ const asDocumentation = (page: Page) => page.route('**/api/user', async (route) 
 const SECTIONS = [
   {
     name: 'Adjustment',
-    button: /^Adjustment$/,
+    // The Documentation seat's label carries " (View Only)" since 2026-10-13.
+    button: /^Adjustment( \(View Only\))?$/,
     heading: 'Adjustment & Advance Payment',
     banner: 'adjustment-readonly-banner',
     keeps: /Locked — adjustments, advance payments and referrals/,
   },
   {
     name: 'Agent Payment Readiness',
-    button: /^Agent Payment Readiness$/,
+    button: /^Agent Payment Readiness( \(View Only\))?$/,
     heading: 'Agent Payment Readiness',
     banner: 'faq-readonly-banner',
     keeps: /View-only — click/,

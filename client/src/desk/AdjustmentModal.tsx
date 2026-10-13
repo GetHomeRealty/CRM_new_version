@@ -283,7 +283,14 @@ export default function AdjustmentModal({ open, onClose, transactionId, txn, onS
       {/* `view-flat` renders already-disabled controls as plain text — see desk.css. */}
       <div className={`modal lg${isDocumentation ? ' view-flat' : ''}`}>
         <button className="close" onClick={onClose}>✕</button>
-        <div className="modal-h">Adjustment &amp; Advance Payment</div>
+        {/*
+          The heading says so for the Documentation role, which reads these four panels and cannot
+          change them. A label rather than a banner: the blue bar that used to sit above the fields
+          was removed on 2026-10-13 because the flattened controls made it redundant furniture, and
+          the heading is where the same fact costs no space. Scoped to the role, so every other
+          seat's heading is unchanged.
+        */}
+        <div className="modal-h">Adjustment &amp; Advance Payment{isDocumentation ? ' (View Only)' : ''}</div>
 
         {/* Hidden for Documentation — see TeamSplitModal for why, and why only for that role. */}
         {readOnly && !isDocumentation && (

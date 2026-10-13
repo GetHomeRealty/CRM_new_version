@@ -289,8 +289,15 @@ test.describe('each Quick Action reads as a record, not as a stuck form', () => 
   });
 
   for (const [name, label] of [
-    ['Admin', /^Admin$/i],
-    ['Adjustment', /^Adjustment$/i],
+/*
+ * THE QUICK ACTION LABELS CARRY " (View Only)" FOR THE DOCUMENTATION ROLE, since 2026-10-13, so an
+ * anchored `/^Admin$/` no longer matches for that seat. The optional group keeps the anchoring —
+ * which is what stops "Adjustment" matching the "Adjustment & Advance Payment" heading — while
+ * admitting the suffix. Other roles' labels are unchanged, and the specs that run as those roles
+ * still use the bare anchored form.
+ */
+    ['Admin', /^Admin( \(View Only\))?$/i],
+    ['Adjustment', /^Adjustment( \(View Only\))?$/i],
     ['Agent Payment Readiness', /Agent Payment Readiness/i],
   ] as const) {
     test(`${name} IS STRICTLY READ-ONLY — no control accepts input`, async ({ page }) => {
@@ -387,6 +394,116 @@ test.describe('each Quick Action reads as a record, not as a stuck form', () => 
     // And there is nothing here that saves, submits or approves.
     const writeButtons = await modal!.getByRole('button', { name: /save|submit|approve|reject|request|delete|remove|add/i }).count();
     expect(writeButtons).toBe(0);
+  });
+});
+
+// =====================================================================================
+test.describe('the four view-only panels say so in their heading', () => {
+  /*
+   * ADDED 2026-10-13. The blue "View" bar above the fields was removed earlier the same day — with
+   * the controls rendered as plain text it was furniture — and the brokerage then asked for the
+   * fact to be stated where it costs nothing: in the heading, and on the Quick Action button that
+   * opens it.
+   *
+   * THE PAIRS ARE ASSERTED TOGETHER, button and heading, because they are two different strings in
+   * two different files and only one of them is what somebody reads before clicking.
+   *
+   * DOCUMENTS AND FINANCIAL ARE ABSENT ON PURPOSE. Documents is editable for this role again
+   * (792347b) and Financial takes edits by approval request (f5ecb33); labelling either "View Only"
+   * would be stating something untrue.
+   */
+  const PANELS = [
+    { button: /^Team Split( \(View Only\))?$/i, heading: 'Team Split' },
+    { button: /^Admin( \(View Only\))?$/i, heading: 'Admin Activities' },
+    { button: /^Adjustment( \(View Only\))?$/i, heading: 'Adjustment & Advance Payment' },
+    { button: /^Agent Payment Readiness( \(View Only\))?$/i, heading: 'Agent Payment Readiness' },
+  ] as const;
+
+  test('THE DOCUMENTATION SEAT SEES "(View Only)" ON ALL FOUR BUTTONS AND HEADINGS', async ({ page }) => {
+    await signIn(page, 'superAdmin');
+    const id = await createDeal(page);
+    try {
+      await signOut(page);
+      await signIn(page, 'docs');
+      await page.goto(`/desk/transactions/${id}`);
+      await expect(page.getByRole('button', { name: /^Back$/ })).toBeVisible({ timeout: 20_000 });
+
+      for (const p of PANELS) {
+        const button = page.getByRole('button', { name: p.button }).first();
+        if (!(await button.count())) continue;
+
+        await expect(button).toContainText('(View Only)');
+
+        await button.click();
+        const modal = page.locator('.modal').first();
+        await expect(modal).toBeVisible({ timeout: 15_000 });
+        // The heading keeps its own name AND carries the suffix.
+        await expect(modal.locator('.modal-h').first()).toContainText(p.heading);
+        await expect(modal.locator('.modal-h').first()).toContainText('(View Only)');
+
+        await modal.locator('.close').first().click();
+        await expect(page.locator('.modal')).toHaveCount(0, { timeout: 10_000 });
+      }
+    } finally {
+      await signOut(page);
+      await signIn(page, 'superAdmin');
+      await removeDeal(page, id);
+    }
+  });
+
+  test('NO OTHER ROLE SEES IT — the label is the one thing that changed, and only for one seat', async ({ page }) => {
+    /*
+     * The requirement that would be quietly broken by appending the suffix unconditionally. A Super
+     * Admin edits these panels; telling them they are read-only would be false.
+     */
+    await signIn(page, 'superAdmin');
+    const id = await createDeal(page);
+    try {
+      await page.goto(`/desk/transactions/${id}?mode=edit`);
+      await expect(page.getByRole('button', { name: /^Back$/ })).toBeVisible({ timeout: 20_000 });
+
+      // Nothing anywhere on the page carries it for this seat.
+      await expect(page.getByText('(View Only)')).toHaveCount(0);
+
+      for (const p of PANELS) {
+        const button = page.getByRole('button', { name: p.button }).first();
+        if (!(await button.count())) continue;
+        await expect(button).not.toContainText('(View Only)');
+
+        await button.click();
+        const modal = page.locator('.modal').first();
+        await expect(modal).toBeVisible({ timeout: 15_000 });
+        await expect(modal.locator('.modal-h').first()).toContainText(p.heading);
+        await expect(modal.locator('.modal-h').first()).not.toContainText('(View Only)');
+
+        await modal.locator('.close').first().click();
+        await expect(page.locator('.modal')).toHaveCount(0, { timeout: 10_000 });
+      }
+    } finally {
+      await removeDeal(page, id);
+    }
+  });
+
+  test('DOCUMENTS AND FINANCIAL ARE NOT LABELLED, because neither is view-only for this role', async ({ page }) => {
+    // Documents is editable again and Financial takes edits by request. Either label would be a lie.
+    await signIn(page, 'superAdmin');
+    const id = await createDeal(page);
+    try {
+      await signOut(page);
+      await signIn(page, 'docs');
+      await page.goto(`/desk/transactions/${id}`);
+      await expect(page.getByRole('button', { name: /^Back$/ })).toBeVisible({ timeout: 20_000 });
+
+      for (const name of [/^Documents$/i, /^Financial$/i]) {
+        const button = page.getByRole('button', { name }).first();
+        if (!(await button.count())) continue;
+        await expect(button).not.toContainText('(View Only)');
+      }
+    } finally {
+      await signOut(page);
+      await signIn(page, 'superAdmin');
+      await removeDeal(page, id);
+    }
   });
 });
 
