@@ -1,7 +1,7 @@
 import api from './axios';
 import type {
   AudienceFilter, AudiencePreview, CampaignDetail, CampaignOptions,
-  CampaignSummary, SuppressionPage, TrackingHealth,
+  CampaignSummary, EmailPreview, SuppressionPage, TrackingHealth,
 } from '../types';
 
 /** Campaigns API. */
@@ -78,9 +78,28 @@ export const sendCampaign = (
      * quietly substitutes another, which is what makes it worth choosing for a scheduled campaign.
      */
     sender_account_id?: number | null;
+    /**
+     * 'simple' for the text-focused body, or omitted for the standard design.
+     *
+     * OMITTING IT IS THE BEHAVIOUR THIS SCREEN HAD. An unrecognised value is treated as standard
+     * rather than refused - the mode is a presentation choice, and failing a send over a typo in
+     * it would be worse than sending the campaign the way it has always been sent.
+     */
+    body_mode?: 'simple' | null;
   },
 ): Promise<CampaignSummary> =>
   api.post<CampaignSummary>('/api/campaigns', body).then((r) => r.data);
+
+/**
+ * The message as a recipient will see it. Creates nothing and sends nothing.
+ *
+ * Takes the audience filter as well as the template, because the greeting is filled with a real
+ * lead's name from that segment - the server will not preview a name for somebody who is not in it.
+ */
+export const previewEmail = (
+  body: AudienceFilter & { template_id: number; body_mode?: 'simple' | null },
+): Promise<EmailPreview> =>
+  api.post<EmailPreview>('/api/campaigns/preview-email', body).then((r) => r.data);
 
 /** Call off a campaign that has not gone out yet. Only possible while it is still `scheduled`. */
 export const cancelScheduledCampaign = (id: number): Promise<{ cancelled: boolean }> =>

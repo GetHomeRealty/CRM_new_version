@@ -364,6 +364,27 @@ export class CampaignsController {
     return this.campaigns.preview(parseAudience(body), user);
   }
 
+  /**
+   * The message as a recipient will see it. Creates nothing, sends nothing.
+   *
+   * A POST because it carries the audience filter, not because it changes anything - the same
+   * reason `preview` above is a POST with an explicit 200.
+   */
+  @Post('preview-email')
+  @HttpCode(200)
+  @Screen('campaigns', 'view')
+  previewEmail(
+    @CurrentUser() user: AuthUserRecord,
+    @Body() body: Record<string, unknown>,
+    @Req() req: Request,
+  ): Promise<unknown> {
+    return this.campaigns.previewEmail(
+      { ...parseAudience(body), template_id: body.template_id, body_mode: body.body_mode },
+      user,
+      trackingBaseUrl(req),
+    );
+  }
+
   /** Create the campaign and send it. */
   @Post()
   @HttpCode(201)

@@ -112,7 +112,17 @@ async function campaignWith(db: PrismaService, over: Record<string, unknown> = {
     data: {
       name: `ZZSENDER ${t}`, subject: 'S', content: '<p>Hi</p>',
       created_by: 'ZZ Prober', created_by_id: ME, tracking_base_url: 'https://crm.test',
-      status: 'sending', total: recipients, sent: 0, failed: 0,
+      /*
+       * 'draft', NOT 'sending', and that is about other spec files rather than this one.
+       * `CampaignResumeService.resumeAll` adopts EVERY campaign in the database whose status is
+       * 'sending' — it is the restart-recovery sweep — so a fixture left in that state while this
+       * test runs can be picked up and delivered by a parallel worker running
+       * `schedule-and-recovery.spec.ts`, which then spends this campaign's send delay inside its
+       * own 60-second timeout. `deliver` writes the final status unconditionally when it finishes,
+       * so starting as a draft changes nothing this file asserts and makes the fixture invisible
+       * to that sweep.
+       */
+      status: 'draft', total: recipients, sent: 0, failed: 0,
       created_at: now, updated_at: now, ...over,
     },
   });

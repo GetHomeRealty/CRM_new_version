@@ -6,7 +6,7 @@ import {
   // `previewSegment` and `tagSegment` are no longer imported: the only caller was the Tag Leads
   // modal removed below. Both are still exported by `campaignsApi`, and the routes behind them
   // still exist — this screen simply no longer uses them.
-  previewAudience, sendCampaign, trackingHealth, sendTestEmail,
+  previewAudience, sendCampaign, trackingHealth, sendTestEmail, previewEmail,
 } from '../lib/campaignsApi';
 import { apiErrorMessage } from '../lib/apiError';
 import { csvCell } from '../lib/csv';
@@ -19,7 +19,7 @@ import DeliverabilityPanel from './DeliverabilityPanel';
 import CampaignRecipientList from './CampaignRecipientList';
 import type {
   AudienceFilter, AudiencePreview, CampaignDetail, CampaignOptions,
-  CampaignRecipientRow, CampaignSummary, TrackingHealth,
+  CampaignRecipientRow, CampaignSummary, EmailPreview, TrackingHealth,
 } from '../types';
 
 const ANY = 'any';
@@ -31,6 +31,13 @@ const emptyForm = {
    * EMPTY IS THE DEFAULT AND MEANS "let the server resolve one" — exactly what this screen did
    * before there was a picker, so the behaviour of someone who never touches it is unchanged.
    */
+  /**
+   * '' for the Standard Campaign, 'simple' for the text-focused one.
+   *
+   * EMPTY IS THE DEFAULT AND IS THE EXISTING DESIGN, so a campaign built without touching this is
+   * byte-for-byte the campaign this screen has always produced.
+   */
+  body_mode: '',
   sender_account_id: '',
   /** 'now' or 'later'. */
   sendMode: 'now',
@@ -199,6 +206,9 @@ export default function CampaignsPage() {
     count: number; audience: string; sender: string; subject: string; opening: string; at: Date | null;
   }>(null);
   const [previewing, setPreviewing] = useState(false);
+  /** The server-rendered message, shown in a modal. Null when the preview is closed. */
+  const [emailPreview, setEmailPreview] = useState<EmailPreview | null>(null);
+  const [previewBusy, setPreviewBusy] = useState(false);
   const [sending, setSending] = useState(false);
   /*
    * NAMES ONE COMMIT ATTEMPT, so a repeat cannot become a second campaign.
@@ -365,6 +375,27 @@ export default function CampaignsPage() {
    * confirmation step must not become a place where the rules quietly changed. They are cheap, and
    * running them here means a dialog never opens on a campaign that could not go anyway.
    */
+  /**
+   * Ask the server what this message will look like.
+   *
+   * FETCHED RATHER THAN RENDERED HERE on purpose: the body, the personalisation, the footer and
+   * the tracking decisions are all the send path's, and a browser-side approximation of them would
+   * be a second implementation free to drift from the first.
+   */
+  const openPreview = async () => {
+    if (!form.template_id) { toast('Select a template first', 'bad'); return; }
+    setPreviewBusy(true);
+    try {
+      setEmailPreview(await previewEmail({
+        ...toFilter(form),
+        template_id: Number(form.template_id),
+        body_mode: form.body_mode === 'simple' ? 'simple' : null,
+      }));
+    } catch (e) {
+      toast(apiErrorMessage(e, 'Could not build the preview'), 'bad');
+    } finally { setPreviewBusy(false); }
+  };
+
   const requestSend = () => {
     if (!form.name.trim()) return toast('Name your campaign', 'bad');
     if (!form.template_id) return toast('Select a template', 'bad');
@@ -432,6 +463,7 @@ export default function CampaignsPage() {
         scheduled_for: at ? at.toISOString() : null,
         // Null, not an empty string: the field is "which account", and absent means resolve one.
         sender_account_id: form.sender_account_id ? Number(form.sender_account_id) : null,
+        body_mode: form.body_mode === 'simple' ? 'simple' : null,
         idempotency_key: commitKey,
       });
       if (c.status === 'scheduled') {
@@ -881,6 +913,49 @@ export default function CampaignsPage() {
             </div>
 
             {/*
+              HOW THE MESSAGE IS PUT TOGETHER.
+              Two renderings of the SAME template, so nothing has to be written twice and the
+              library is untouched. Standard is the existing design, unchanged and the default.
+              Simple strips the message back to the words - no banner, no buttons, no tracking
+              redirects - which is lighter and easier to read.
+              The honest part is stated on screen rather than implied: opens and clicks are not
+              measured for a Simple Email, and no arrangement of either decides the Gmail tab.
+            */}
+            <div className="camp-section">
+              <strong>Email style</strong>
+              <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start', flexWrap: 'wrap', marginTop: 8 }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+                  <input type="radio" name="bodyMode" checked={form.body_mode !== 'simple'}
+                    onChange={() => setF('body_mode', '')} data-testid="mode-standard" />
+                  Standard campaign
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+                  <input type="radio" name="bodyMode" checked={form.body_mode === 'simple'}
+                    onChange={() => setF('body_mode', 'simple')} data-testid="mode-simple" />
+                  Simple email
+                </label>
+                <button className="btn ghost sm" type="button" style={{ marginLeft: 'auto' }}
+                  disabled={previewBusy || !form.template_id} onClick={() => void openPreview()}
+                  data-testid="open-email-preview">
+                  {previewBusy ? 'Building…' : 'Preview email'}
+                </button>
+              </div>
+              <div className="muted" style={{ fontSize: 12, marginTop: 4 }} data-testid="mode-note">
+                {form.body_mode === 'simple'
+                  ? 'The template\u2019s words with the banner, buttons and styling removed, and no tracking '
+                    + 'redirects. Opens and clicks are NOT measured \u2014 deliveries, bounces and unsubscribes '
+                    + 'still are. The unsubscribe link and headers are included, as they are on every campaign.'
+                  : 'Your template exactly as designed, with open and click tracking.'}
+              </div>
+              {form.body_mode === 'simple' && (
+                <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                  This can make a message easier to read. It is <strong>not</strong> a way around Gmail’s
+                  Promotions tab, which Gmail decides for each recipient from their own history.
+                </div>
+              )}
+            </div>
+
+            {/*
               WHICH MAILBOX THIS LEAVES FROM.
               Shown only when there is more than one answer: with a single connected account a
               dropdown holding one option is a decision nobody is being asked to make, and the
@@ -998,13 +1073,89 @@ export default function CampaignsPage() {
               `initialView` keeps the deep link from a notification working: it opens on the group
               the link named, and the reader moves from there.
             */}
+            {/*
+              A SIMPLE EMAIL CARRIES NO OPEN PIXEL AND NO CLICK REDIRECTS, so its Opened figure is
+              not a small number - it is not a measurement at all. Reporting a truthful-looking
+              zero would be the worse answer, and it is the one somebody would act on.
+            */}
             <CampaignRecipientList
               recipients={detail.recipients}
               stats={detail.stats}
-              opensUnmeasured={opensUnmeasured}
+              opensUnmeasured={opensUnmeasured || detail.body_mode === 'simple'}
+              unmeasuredNote={detail.body_mode === 'simple'
+                ? 'This was sent as a Simple Email, which carries no open pixel and no click tracking. '
+                  + 'Opens and clicks were never recorded for it. Deliveries, bounces and unsubscribes are accurate.'
+                : undefined}
               initialView={detailView}
               when={when}
             />
+          </div>
+        </div>
+      )}
+
+      {/* ---- the message as a recipient will see it, rendered by the server ---- */}
+      {emailPreview && (
+        <div className="overlay open" onMouseDown={(e) => { if (e.target === e.currentTarget) setEmailPreview(null); }}>
+          <div className="modal" style={{ maxWidth: 760 }} data-testid="email-preview-modal">
+            <button className="close" onClick={() => setEmailPreview(null)}>✕</button>
+            <div className="modal-h">
+              Preview
+              <span className={`pill ${emailPreview.body_mode === 'simple' ? 'info' : ''}`} style={{ marginLeft: 8, fontSize: 10 }}>
+                {emailPreview.body_mode === 'simple' ? 'Simple email' : 'Standard campaign'}
+              </span>
+            </div>
+            <div className="camp-meta">
+              <div><span className="muted">Subject</span><strong data-testid="preview-subject">{emailPreview.subject}</strong></div>
+              {/* Named, so the reader can see the greeting was filled from a real lead in this
+                  segment rather than from a placeholder the screen invented. */}
+              <div>
+                <span className="muted">Personalised for</span>
+                {emailPreview.sample_name
+                  ? emailPreview.sample_name
+                  : <span className="muted">no lead matched this segment yet</span>}
+              </div>
+            </div>
+
+            {/*
+              Rendered in a locked-down iframe: `sandbox` with no tokens blocks scripts, forms and
+              same-origin access, so template HTML cannot execute against the app. The same
+              treatment the sent-email preview already gets.
+            */}
+            <iframe title="Email preview" sandbox="" srcDoc={emailPreview.html} className="camp-preview"
+              style={{ width: '100%', height: 320, border: '1px solid var(--line)', borderRadius: 8, background: '#fff' }}
+              data-testid="preview-frame" />
+
+            <div className="muted" style={{ fontSize: 12, marginTop: 6 }} data-testid="preview-tracking">
+              {emailPreview.tracking.note}
+            </div>
+
+            {emailPreview.signals.length > 0 && (
+              <div className="reminder-warn" style={{ marginTop: 8 }} data-testid="preview-signals">
+                <strong>Things that correlate with the Promotions tab:</strong>
+                <ul style={{ margin: '4px 0 0 18px', fontSize: 12.5 }}>
+                  {emailPreview.signals.map((sig) => <li key={sig}>{sig}</li>)}
+                </ul>
+                {/* Said every time this list appears, because the list invites exactly the wrong
+                    conclusion if it is not. */}
+                <div style={{ marginTop: 4, fontSize: 12 }}>
+                  These are observations, not a score. Gmail decides the tab per recipient from
+                  their own history, and no change here guarantees the Primary inbox.
+                </div>
+              </div>
+            )}
+
+            <details style={{ marginTop: 8 }}>
+              <summary className="muted" style={{ fontSize: 12, cursor: 'pointer' }}>
+                Plain-text version (what a text-only mail client shows)
+              </summary>
+              <pre style={{ whiteSpace: 'pre-wrap', fontSize: 12, marginTop: 6 }} data-testid="preview-text">
+                {emailPreview.text}
+              </pre>
+            </details>
+
+            <div className="actions">
+              <button className="btn ghost" onClick={() => setEmailPreview(null)}>Close</button>
+            </div>
           </div>
         </div>
       )}
@@ -1048,7 +1199,11 @@ export default function CampaignsPage() {
             <CampaignRecipientList
               recipients={sentEmail.recipients}
               stats={sentEmail.stats}
-              opensUnmeasured={opensUnmeasured}
+              opensUnmeasured={opensUnmeasured || sentEmail.body_mode === 'simple'}
+              unmeasuredNote={sentEmail.body_mode === 'simple'
+                ? 'This was sent as a Simple Email, which carries no open pixel and no click tracking. '
+                  + 'Opens and clicks were never recorded for it. Deliveries, bounces and unsubscribes are accurate.'
+                : undefined}
               when={when}
             />
 

@@ -201,7 +201,7 @@ test.describe('every campaign audience filter reaches the stored campaign', () =
       }
 
       // Scheduled, so nothing is delivered.
-      await builder(page).locator('input[type="radio"]').nth(1).check();
+      await builder(page).locator('input[name="sendMode"]').nth(1).check();
       await builder(page).locator('input[type="datetime-local"]')
         .fill(new Date(Date.now() + 3 * 86_400_000).toISOString().slice(0, 16));
       await commit.click();
@@ -261,7 +261,7 @@ test.describe('every campaign audience filter reaches the stored campaign', () =
     }, { timeout: 15_000 }).toBeGreaterThanOrEqual(0);
     test.skip(await commit.isDisabled(), 'no recipients match both filters');
 
-    await builder(page).locator('input[type="radio"]').nth(1).check();
+    await builder(page).locator('input[name="sendMode"]').nth(1).check();
     await builder(page).locator('input[type="datetime-local"]')
       .fill(new Date(Date.now() + 3 * 86_400_000).toISOString().slice(0, 16));
     await commit.click();

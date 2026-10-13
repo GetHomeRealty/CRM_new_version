@@ -116,7 +116,14 @@ async function scheduleFor(page: Page, daysAhead = 3) {
    * `check()` is correct here because a radio genuinely does flip on click, unlike the controlled
    * settings toggles elsewhere in this suite.
    */
-  await b.locator('input[type="radio"]').nth(1).check();
+  /*
+   * BY NAME, NOT BY POSITION. This was `input[type="radio"]').nth(1)`, which meant "the second
+   * radio anywhere in the builder" and happened to be Schedule-for-later only for as long as no
+   * other radio was added above it. Adding the Email style choice moved it, and this spec started
+   * checking "Simple email" and then waiting for a date field that was never going to appear.
+   * `name="sendMode"` says which decision is being made.
+   */
+  await b.locator('input[name="sendMode"]').nth(1).check();
   const when = new Date(Date.now() + daysAhead * 86_400_000).toISOString().slice(0, 16);
   await b.locator('input[type="datetime-local"]').fill(when);
 }

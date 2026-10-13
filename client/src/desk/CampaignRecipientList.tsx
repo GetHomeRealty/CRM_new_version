@@ -23,12 +23,21 @@ import type { CampaignRecipientRow, CampaignStats } from '../types';
 type View = 'all' | 'sent' | 'failed' | 'opened' | 'unsubscribed' | 'bounced';
 
 export default function CampaignRecipientList({
-  recipients, stats, opensUnmeasured, initialView = 'all', when,
+  recipients, stats, opensUnmeasured, unmeasuredNote, initialView = 'all', when,
 }: {
   recipients: CampaignRecipientRow[];
   stats: CampaignStats;
   /** Whether open tracking is working. Labels the Opened figure as a minimum when it is not. */
   opensUnmeasured: boolean;
+  /**
+   * Why the figure is not a measurement, when the reason is not "tracking is broken".
+   *
+   * A Simple Email carries no open pixel by design, which is a different statement from a pixel
+   * that failed - one is a choice and the other is a fault, and telling somebody their tracking is
+   * broken when they turned it off would send them looking for a problem that does not exist.
+   * Omitted keeps the original wording exactly.
+   */
+  unmeasuredNote?: string;
   initialView?: View;
   /** The page's own date formatter, passed in so both modals read times identically. */
   when: (v: string | null) => string;
@@ -131,10 +140,14 @@ export default function CampaignRecipientList({
 
       {/* Said once, under the list, rather than on the tile — the figure is a minimum, not a result. */}
       {opensUnmeasured && (
-        <div className="help" style={{ color: 'var(--warn-ink-alt)' }}>
-          ⚠ Open tracking is not working, so the Opened figure counts only what happened to
-          be recorded. Treat it as a minimum, not a result - and do not compare it with a
-          campaign sent while tracking was working.
+        <div className="help" style={{ color: 'var(--warn-ink-alt)' }} data-testid="opens-unmeasured-note">
+          {unmeasuredNote ?? (
+            <>
+              ⚠ Open tracking is not working, so the Opened figure counts only what happened to
+              be recorded. Treat it as a minimum, not a result - and do not compare it with a
+              campaign sent while tracking was working.
+            </>
+          )}
         </div>
       )}
     </>

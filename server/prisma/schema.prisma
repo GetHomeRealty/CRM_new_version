@@ -1288,6 +1288,22 @@ model campaigns {
    * resolving a sender. Screens show "not recorded" rather than guessing.
    */
   sender_email      String?               @db.VarChar(255)
+
+  /**
+   * How this campaign's body was rendered: 'simple', or null for the standard design.
+   *
+   * NULL IS THE STANDARD CAMPAIGN, which is every campaign that existed before this column and
+   * every one built without choosing otherwise. Nothing about the standard path consults this.
+   *
+   * PERSISTED RATHER THAN DECIDED AT SEND TIME, because the mode governs more than appearance: a
+   * simple send registers no click-tracking links and injects no open pixel, and a scheduled or
+   * resumed pass has to make the same choices as the first pass or one half of a campaign would
+   * carry tracking the other half does not.
+   *
+   * The rendered body itself is already snapshot in `content`, so what was sent stays readable
+   * even if the simplifier changes later.
+   */
+  body_mode         String?               @db.VarChar(16)
   created_by        String?               @db.VarChar(255)
   created_by_id     Int?
   /**

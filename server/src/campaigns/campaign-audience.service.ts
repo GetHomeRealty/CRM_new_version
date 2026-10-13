@@ -239,12 +239,40 @@ export class CampaignAudienceService {
     return [...out];
   }
 
-  injectTracking(html: string, opts: { baseUrl: string; campaignId: number; token: string }): string {
+  /**
+   * Append the unsubscribe footer, and the open pixel unless this send has none.
+   *
+   * THE FOOTER IS NOT OPTIONAL, for any mode. It is the one piece of compliance that has exactly
+   * one implementation, and it lives here precisely so that a caller assembling a body some other
+   * way — the Simple Email renderer, for instance — cannot forget it. Marketing mail without a
+   * working opt-out is a CASL and CAN-SPAM failure, and the silent version of it is the worst kind.
+   *
+   * THE PIXEL IS OPTIONAL, and `pixel: false` is what a Simple Email send passes. A text-focused
+   * message whose only image is a tracking beacon is a contradiction, and `analyseContent` already
+   * counts image-led mail among the things that correlate with the Promotions tab. The visible
+   * consequence — opens are not measured for that campaign — is reported on screen rather than
+   * shown as a truthful-looking zero.
+   *
+   * OMITTING `pixel` KEEPS TODAY'S BEHAVIOUR, byte for byte, which is what every existing caller
+   * and every standard campaign relies on.
+   *
+   * The footer styling differs by mode for the same reason the body does: a centred grey caption
+   * under a plain message reads as the newsletter furniture the simple mode exists to drop.
+   */
+  injectTracking(
+    html: string,
+    opts: { baseUrl: string; campaignId: number; token: string; pixel?: boolean; plain?: boolean },
+  ): string {
     const base = opts.baseUrl.replace(/\/+$/, '');
     const q = `c=${encodeURIComponent(String(opts.campaignId))}&t=${encodeURIComponent(opts.token)}`;
-    const unsub = `<div style="text-align:center;margin-top:16px;font-family:Arial,sans-serif;font-size:12px;color:#9ca3af;">`
-      + `<a href="${base}/api/campaigns/unsubscribe?${q}" style="color:#9ca3af;text-decoration:underline;">Unsubscribe</a> from these emails.`
-      + `</div>`;
+    const href = `${base}/api/campaigns/unsubscribe?${q}`;
+    const unsub = opts.plain
+      ? `<p style="font-size:12px;color:#666;">You are receiving this because you are a contact of `
+        + `Get Home Realty. <a href="${href}" style="color:#666;">Unsubscribe</a>.</p>`
+      : `<div style="text-align:center;margin-top:16px;font-family:Arial,sans-serif;font-size:12px;color:#9ca3af;">`
+        + `<a href="${href}" style="color:#9ca3af;text-decoration:underline;">Unsubscribe</a> from these emails.`
+        + `</div>`;
+    if (opts.pixel === false) return `${html}\n${unsub}`;
     const pixel = `<img src="${base}/api/campaigns/track/open?${q}" alt="" width="1" height="1" style="display:none;width:1px;height:1px;" />`;
     return `${html}\n${unsub}\n${pixel}`;
   }

@@ -1,0 +1,21 @@
+-- How a campaign's body was rendered: the standard design, or the Simple Email form.
+--
+-- WHY A COLUMN AND NOT A DECISION MADE AT SEND TIME. The mode governs more than appearance. A
+-- simple send registers no click-tracking links and injects no open pixel, and delivery happens in
+-- several passes — an immediate one, a scheduled one days later, a resume after a restart. Those
+-- passes have to agree, or one half of a campaign carries tracking the other half does not and the
+-- open and click figures describe a mixture of two different sends.
+--
+-- NULLABLE WITH NO DEFAULT, so every existing campaign keeps reading exactly as it does now and no
+-- backfill pass is needed. NULL is not "unknown": it is the standard campaign, which is what every
+-- campaign before this column was and what every campaign built without choosing otherwise still
+-- is. Nothing on the standard path consults this column.
+--
+-- VARCHAR(16) to match the other short enumerations on this table (`status`), and because the set
+-- of modes is small and named rather than numeric.
+--
+-- NO INDEX. Nothing queries campaigns BY mode; it is read as part of a campaign already located by
+-- id or by `created_by_id`. An index the schema does not declare would also show up permanently as
+-- drift against `migrate diff`.
+ALTER TABLE "campaigns"
+  ADD COLUMN IF NOT EXISTS "body_mode" VARCHAR(16);

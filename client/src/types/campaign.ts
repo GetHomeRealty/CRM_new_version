@@ -26,6 +26,13 @@ export interface CampaignSummary {
   sender_email?: string | null;
   /** The account chosen when the campaign was built, or null for "whatever the server resolves". */
   sender_account_id?: number | null;
+  /**
+   * How the body was rendered: 'simple' for the text-focused form, null for the standard design.
+   *
+   * Read by the results screen, which must say that opens and clicks were NOT MEASURED for a
+   * simple campaign rather than showing a zero that looks like a measurement.
+   */
+  body_mode?: 'simple' | null;
   created_by: string | null;
   created_at: string | null;
   /**
@@ -148,6 +155,27 @@ export interface CampaignOptions {
   max_recipients: number;
   tags: string[];
   templates: CampaignTemplate[];
+}
+
+/**
+ * The message as a recipient will see it, rendered by the server.
+ *
+ * Server-rendered on purpose: a preview assembled in the browser would be a second renderer, free
+ * to disagree with the one that actually sends, and the disagreement surfaces as "it looked
+ * nothing like that when I checked".
+ */
+export interface EmailPreview {
+  subject: string;
+  /** The full HTML, including the unsubscribe footer, which is part of the email. */
+  html: string;
+  /** The text/plain alternative, derived the way the send derives it. */
+  text: string;
+  body_mode: 'simple' | null;
+  /** Whose name filled the greeting - a real lead from the segment, or null if it resolved to none. */
+  sample_name: string | null;
+  tracking: { opens: boolean; clicks: boolean; unsubscribe: boolean; note: string };
+  /** Observations that CORRELATE with the Promotions tab. Never a promise about placement. */
+  signals: string[];
 }
 
 /** One mailbox a campaign may be sent from. */

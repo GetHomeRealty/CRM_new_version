@@ -11,6 +11,8 @@ import { MailerService, type MailAttachment } from '../email/mailer.service';
  * cost more than it bought.
  */
 import { MailAccountService } from '../email/mail-account.service';
+import { simpleEmailBody } from './simple-email';
+import { analyseContent } from './deliverability-report';
 import { CampaignAudienceService, type AudienceFilter } from './campaign-audience.service';
 import { CampaignTemplatesService } from './campaign-templates.service';
 import { MailDeliverabilityService } from './mail-deliverability.service';
@@ -173,6 +175,19 @@ const parseJsonArray = (v: string | null): string[] => {
   try { const a = JSON.parse(v ?? '[]'); return Array.isArray(a) ? a.map(String) : []; } catch { return []; }
 };
 
+/**
+ * How a campaign's body is rendered.
+ *
+ * 'simple' is the text-focused form; anything else - including absent, which is what every existing
+ * caller sends - is the standard design, unchanged.
+ */
+export const SIMPLE_MODE = 'simple';
+
+/** The stored mode, normalised: 'simple', or null for the standard design. */
+export function parseBodyMode(raw: unknown): string | null {
+  return String(raw ?? '').trim().toLowerCase() === SIMPLE_MODE ? SIMPLE_MODE : null;
+}
+
 export interface SendCampaignInput {
   /** ISO instant to send at. Absent or past means send now. */
   scheduled_for?: unknown;
@@ -193,6 +208,15 @@ export interface SendCampaignInput {
    * another, because substituting one is how a campaign goes out from an address nobody picked.
    */
   sender_account_id?: unknown;
+  /**
+   * 'simple' for the text-focused body, or absent for the standard design.
+   *
+   * ABSENT IS THE EXISTING BEHAVIOUR, unchanged, which is what every client that pre-dates this
+   * field sends. An unrecognised value is treated as absent rather than refused: the mode is a
+   * presentation choice, and failing a send over a typo in it would be worse than sending the
+   * campaign the way it has always been sent.
+   */
+  body_mode?: unknown;
   /** Absolute, publicly reachable base URL for tracking links. */
   baseUrl: string;
   /**
@@ -513,13 +537,29 @@ export class CampaignsService {
     const tokens = recipients.map(() => this.audience.newRecipientToken());
     const tags = Array.isArray(input.tags) ? (input.tags as unknown[]).map(String).map((t) => t.trim()).filter(Boolean) : [];
 
+    /*
+     * THE BODY IS RENDERED ONCE, HERE, AND STORED.
+     *
+     * `content` has always been a snapshot of what was sent rather than a pointer to the template -
+     * that is what stops a template edited mid-send from changing what the second half of a
+     * campaign says. The Simple Email body is rendered into that same snapshot, so the preview, the
+     * stored record and every delivery pass are looking at identical text, and a later change to
+     * the simplifier cannot retroactively alter what a sent campaign says it sent.
+     *
+     * Personalisation tokens are left intact: they are filled per recipient at send time by the
+     * same `personalize` call the standard body uses.
+     */
+    const bodyMode = parseBodyMode(input.body_mode);
+    const content = bodyMode === SIMPLE_MODE ? simpleEmailBody(template.content) : template.content;
+
     const outcome = await this.createOnce(idempotencyKey, user, {
       name,
       template_id: template.id,
       template_name: template.name,
       category: template.category,
       subject: template.subject,
-      content: template.content,
+      content,
+      body_mode: bodyMode,
       audience: JSON.stringify(filter),
       tags: JSON.stringify(tags),
       status: 'sending',
@@ -620,8 +660,9 @@ export class CampaignsService {
     );
     void this.deliver({
       campaignId: campaign.id, name, recipients, rows: campaign.recipients, tokens,
-      template, agentVars, attachments, baseUrl: input.baseUrl, userId: user.id ?? null,
-      senderAccountId,
+      template: { subject: template.subject, content },
+      agentVars, attachments, baseUrl: input.baseUrl, userId: user.id ?? null,
+      senderAccountId, bodyMode,
     });
 
     return this.summary(await this.prisma.campaigns.findUniqueOrThrow({ where: { id: campaign.id } }));
@@ -1045,6 +1086,13 @@ export class CampaignsService {
        * this column resume exactly as they did.
        */
       senderAccountId: campaign.sender_account_id ?? null,
+      /*
+       * READ FROM THE ROW, like the sender and for the same reason. A resumed or scheduled pass
+       * must make the same tracking decisions as the first pass, or one half of a campaign carries
+       * an open pixel and rewritten links that the other half does not - and the resulting open and
+       * click figures describe a mixture of two different sends.
+       */
+      bodyMode: parseBodyMode(campaign.body_mode),
     });
   }
 
@@ -1063,6 +1111,8 @@ export class CampaignsService {
     baseUrl: string; userId: number | null;
     /** The mailbox chosen for this campaign, or null to resolve one the way sends always have. */
     senderAccountId?: number | null;
+    /** 'simple' for the text-focused send, or null/absent for the standard one. */
+    bodyMode?: string | null;
   }): Promise<void> {
    // Already going out. Whatever this pass was asked to send, the pass that holds the campaign is
    // working through the same `pending` rows and will reach them.
@@ -1141,8 +1191,15 @@ export class CampaignsService {
      * in the tracking URL, so nothing is lost by sharing the link row.
      */
     const linkIds = new Map<string, number>();
+    /*
+     * A SIMPLE SEND REGISTERS NO LINKS, because it rewrites none. Registering them anyway would
+     * write a `campaign_links` row per link that nothing ever resolves, and would make the click
+     * report for that campaign look like it was measured and found nothing - which is a different
+     * claim from "not measured".
+     */
+    const simple = job.bodyMode === SIMPLE_MODE;
     try {
-      for (const url of this.audience.extractLinks(template.content)) {
+      for (const url of simple ? [] : this.audience.extractLinks(template.content)) {
         const row = await this.prisma.campaign_links.create({
           data: { campaign_id: campaign.id, url, created_at: new Date() },
         });
@@ -1183,9 +1240,17 @@ export class CampaignsService {
       lastSendByDomain.set(domainOf(r.email), Date.now());
       const subject = this.audience.personalize(template.subject, { leadName: r.name, ...agentVars }, r.vars);
       let html = this.audience.personalize(template.content, { leadName: r.name, ...agentVars }, r.vars);
-      // Rewrite BEFORE injectTracking appends the unsubscribe link, so that link stays direct —
-      // opting out must not depend on the click endpoint being healthy.
-      html = this.audience.rewriteLinks(html, { baseUrl, campaignId: campaign.id, token: tokens[i], links: linkIds });
+      /*
+       * Rewrite BEFORE injectTracking appends the unsubscribe link, so that link stays direct —
+       * opting out must not depend on the click endpoint being healthy.
+       *
+       * SKIPPED ENTIRELY FOR A SIMPLE SEND: routing a plain message's links through a redirect is
+       * the thing a text-focused email is meant not to do. `rewriteLinks` would in any case be a
+       * no-op with an empty `links` map; this says so rather than relying on it.
+       */
+      if (!simple) {
+        html = this.audience.rewriteLinks(html, { baseUrl, campaignId: campaign.id, token: tokens[i], links: linkIds });
+      }
       /*
        * The body as the author wrote it, before the unsubscribe footer is appended. The text part
        * needs it to tell an image-only message from one with prose: after injection EVERY message
@@ -1193,7 +1258,14 @@ export class CampaignsService {
        * says anything always answers yes.
        */
       const bodyHtml = html;
-      html = this.audience.injectTracking(html, { baseUrl, campaignId: campaign.id, token: tokens[i] });
+      /*
+       * The unsubscribe footer is appended for BOTH modes - it is not optional and has exactly one
+       * implementation. Only the open pixel and the footer's styling differ.
+       */
+      html = this.audience.injectTracking(html, {
+        baseUrl, campaignId: campaign.id, token: tokens[i],
+        pixel: !simple, plain: simple,
+      });
 
       /*
        * CLAIM BEFORE SENDING. This is the fix for CRM-CAMP-M02.
@@ -1601,6 +1673,99 @@ export class CampaignsService {
     return account;
   }
 
+  /**
+   * The message as one recipient will receive it, without creating or sending anything.
+   *
+   * RENDERED BY THE SEND PATH'S OWN STEPS, in the send path's order: the mode decides the body,
+   * `personalize` fills the tokens, `injectTracking` appends the footer. A preview assembled any
+   * other way is a second renderer, free to disagree with the first, and the disagreement would
+   * surface as "it looked nothing like that when I checked" - which is worse than no preview,
+   * because it invites the trust it has not earned.
+   *
+   * THE LEAD NAME COMES FROM THE AUDIENCE, not from the caller. Taking it from the request would
+   * let the screen preview a greeting for somebody who is not in the segment. `preview` is the
+   * same resolution the send performs, so the name shown belongs to a lead who will really get it.
+   *
+   * THE TEMPLATE IS SCOPED THE WAY THE SEND SCOPES IT - `authoredWhere` - so this cannot be used to
+   * read the body of a colleague's private draft by guessing its id.
+   *
+   * NO TOKENS ARE MINTED AND NO ROW IS WRITTEN. The unsubscribe link carries a placeholder, because
+   * a real per-recipient token belongs only to a real send.
+   */
+  async previewEmail(
+    input: { template_id?: unknown; body_mode?: unknown } & AudienceFilter,
+    user: AuthUserRecord,
+    baseUrl: string,
+  ): Promise<Record<string, unknown>> {
+    const templateId = Number(input.template_id);
+    if (!Number.isInteger(templateId) || templateId <= 0) {
+      throw new BadRequestException({ message: 'A valid template must be selected.' });
+    }
+    const template = await this.prisma.campaign_templates.findFirst({
+      where: { id: templateId, deleted_at: null, ...CampaignTemplatesService.authoredWhere(user) },
+    });
+    if (!template) throw new NotFoundException({ message: 'Template not found.' });
+
+    const bodyMode = parseBodyMode(input.body_mode);
+    const simple = bodyMode === SIMPLE_MODE;
+
+    const filter: AudienceFilter = {
+      leadStatus: String(input.leadStatus ?? '') || undefined,
+      leadType: String(input.leadType ?? '') || undefined,
+      leadSource: String(input.leadSource ?? '') || undefined,
+      clientType: String(input.clientType ?? '') || undefined,
+      tag: String(input.tag ?? '') || undefined,
+    };
+    // Never allowed to fail the preview: a segment that resolves to nobody still has a message
+    // worth looking at, and the composer reports an empty audience separately.
+    const sample = await this.preview(filter, user).catch(() => ({ sample: [] as { name: string; email: string }[] }));
+    const leadName = sample.sample[0]?.name || '';
+
+    const agentVars = await this.agentVarsFor(user);
+    const rendered = simple ? simpleEmailBody(template.content) : template.content;
+
+    const subject = this.audience.personalize(template.subject, { leadName, ...agentVars });
+    const body = this.audience.personalize(rendered, { leadName, ...agentVars });
+    const html = this.audience.injectTracking(body, {
+      baseUrl, campaignId: 0, token: 'preview', pixel: !simple, plain: simple,
+    });
+
+    return {
+      subject,
+      html,
+      /** The text/plain alternative, derived the same way the send derives it. */
+      text: htmlToText(html),
+      body_mode: bodyMode,
+      /** Whose name filled the greeting, so the reader knows it is a real lead and not a guess. */
+      sample_name: leadName || null,
+      /*
+       * WHAT IS AND IS NOT MEASURED. Stated here rather than inferred in the browser, because the
+       * server is what decides it. A simple send records deliveries, bounces and unsubscribes
+       * exactly as a standard one does; it does not record opens or clicks.
+       */
+      tracking: {
+        opens: !simple,
+        clicks: !simple,
+        unsubscribe: true,
+        note: simple
+          ? 'Opens and clicks are not measured for a Simple Email. Deliveries, bounces and unsubscribes are recorded as usual.'
+          /*
+           * The one way this preview differs from the delivered message, said rather than hidden:
+           * links are shown as the author wrote them so their destinations can be proofread, and
+           * are rewritten to a redirect at send time so clicks can be counted.
+           */
+          : 'Opens and clicks are measured. Links are shown here as you wrote them; each is '
+            + 'rewritten to a tracking redirect when the campaign is sent.',
+      },
+      /*
+       * The same content observations the deliverability report makes, on the body as it will
+       * actually be sent. Signals that CORRELATE with the Promotions tab - never a promise about
+       * placement, which Gmail decides per recipient from engagement history.
+       */
+      signals: analyseContent(html).signals,
+    };
+  }
+
   async senderEmail(user: AuthUserRecord): Promise<string | null> {
     try {
       /*
@@ -1985,6 +2150,11 @@ export class CampaignsService {
        */
       sender_email: c.sender_email ?? null,
       sender_account_id: c.sender_account_id ?? null,
+      /*
+       * HOW THIS CAMPAIGN WAS SENT, so the results screen can say that opens and clicks were not
+       * measured rather than reporting a zero that looks like a measurement.
+       */
+      body_mode: c.body_mode ?? null,
       created_by: c.created_by,
       created_at: c.created_at instanceof Date ? c.created_at.toISOString() : null,
       // Always an absolute instant, never a local wall-clock string: the screen renders it in the
