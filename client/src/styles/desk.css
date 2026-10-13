@@ -1744,3 +1744,49 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
   .overlay.beside-nav{left:0}
   .modal.full .tpl-build{grid-template-columns:1fr}
 }
+
+/* ============================================================================
+   VIEW-ONLY QUICK ACTIONS (Documentation role)
+
+   WHAT THIS IS FOR. The Quick Action modals already DISABLE every control for a
+   role that may not edit — that part was correct and is untouched. What they
+   still did was render those controls as controls: a greyed <select> with an
+   arrow, a bordered input box, a date field with a picker icon. To a reader that
+   is a form that happens to be stuck, not a record, and it is why a Team Split
+   that cannot be changed was reported as "still has an interactive dropdown".
+
+   SO THIS CHANGES PRESENTATION, NOT BEHAVIOUR. Every rule below is scoped to
+   :disabled, so it can only ever restyle a control the component had already
+   decided nobody may touch. It cannot make an enabled control look read-only,
+   and it cannot make a read-only one editable.
+
+   SCOPED TO `.view-flat`, which the modals add only for the Documentation role.
+   Every other role's screens are byte-identical to before.
+
+   CHECKBOXES AND RADIOS ARE DELIBERATELY LEFT ALONE. A ticked box is already a
+   plain statement of fact rather than an invitation, and the alternatives — CSS
+   that fakes a tick, or hiding the control and printing Yes/No — either lie
+   about the state or need per-field work in six files for five controls.
+   ========================================================================= */
+.view-flat input:disabled,
+.view-flat select:disabled,
+.view-flat textarea:disabled{
+  appearance:none;-webkit-appearance:none;
+  border:0;background:transparent;box-shadow:none;outline:0;
+  padding-left:0;padding-right:0;
+  /* Not the greyed disabled colour: this is the record, and it has to be as
+     legible as any other text on the page. */
+  color:var(--text);opacity:1;-webkit-text-fill-color:var(--text);
+  cursor:default;resize:none;
+}
+/* The affordances that say "you can change this". */
+.view-flat select:disabled{background-image:none;text-indent:0}
+.view-flat input[type="date"]:disabled::-webkit-calendar-picker-indicator{display:none}
+.view-flat input[type="number"]:disabled::-webkit-outer-spin-button,
+.view-flat input[type="number"]:disabled::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+.view-flat input[type="number"]:disabled{-moz-appearance:textfield}
+/* A disabled textarea collapses to its content rather than keeping a scrollbox. */
+.view-flat textarea:disabled{min-height:0;height:auto;overflow:hidden}
+/* An empty value would otherwise render as nothing at all, leaving the label
+   looking like a field that failed to load rather than one with no value. */
+.view-flat input:disabled:placeholder-shown::placeholder{color:var(--muted);opacity:1}

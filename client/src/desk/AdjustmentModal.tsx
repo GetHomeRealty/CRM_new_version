@@ -280,11 +280,13 @@ export default function AdjustmentModal({ open, onClose, transactionId, txn, onS
 
   return (
     <div className="overlay open" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="modal lg">
+      {/* `view-flat` renders already-disabled controls as plain text — see desk.css. */}
+      <div className={`modal lg${isDocumentation ? ' view-flat' : ''}`}>
         <button className="close" onClick={onClose}>✕</button>
         <div className="modal-h">Adjustment &amp; Advance Payment</div>
 
-        {readOnly && (
+        {/* Hidden for Documentation — see TeamSplitModal for why, and why only for that role. */}
+        {readOnly && !isDocumentation && (
           <div className="card" style={{ borderLeft: '4px solid #2563eb', background: 'var(--info-bg)', marginBottom: 12 }}>
             <span style={{ fontSize: 12.5, color: 'var(--info-ink)' }} data-testid="adjustment-readonly-banner">
               {isDocumentation

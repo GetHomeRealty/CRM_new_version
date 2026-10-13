@@ -1828,8 +1828,18 @@ export default function TransactionDetailPage() {
           onSaved={applyUpdated}
         />
       )}
+      {/*
+        DOCUMENTATION READS DOCUMENTS, IT NO LONGER WRITES THEM.
+        This was `isDocumentation ? false` — an explicit exemption that made Documents the one
+        Quick Action this role could edit. The brokerage asked on 2026-10-13 for every Quick
+        Action to be strictly view-only for the role, which includes this one, so the exemption
+        is gone. It is a real reduction in what the role can do: uploading, replacing,
+        submitting and deleting document drafts are all now closed to it, and
+        `server/src/documents/documentation-readonly.spec.ts` holds the server half so a request made
+        outside this screen is refused rather than quietly accepted.
+      */}
       {docsOpen && (
-        <DocsModal open={docsOpen} onClose={() => setDocsOpen(false)} transactionId={id} txn={txn} readOnly={isAgent ? false : (isDocumentation ? false : view)} agentMode={isAgent} canDeleteConditionDocs={isSuperAdmin} onSaved={reloadTxn} />
+        <DocsModal open={docsOpen} onClose={() => setDocsOpen(false)} transactionId={id} txn={txn} readOnly={isAgent ? false : (isDocumentation ? true : view)} agentMode={isAgent} canDeleteConditionDocs={isSuperAdmin} onSaved={reloadTxn} />
       )}
       {invoiceOpen && txn && (
         <InvoiceModal open={invoiceOpen} onClose={() => setInvoiceOpen(false)} txn={txn} />

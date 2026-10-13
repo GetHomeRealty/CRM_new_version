@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { updateTransaction, getAgentCommissions } from '../lib/api';
 import { useToast } from './toast';
 import { apiErrorMessage } from '../lib/apiError';
+import { useAuth } from '../context/AuthContext';
 import SavedBadge from './SavedBadge';
 import ConfirmDialog, { useConfirm } from './ConfirmDialog';
 import type { AgentCommissionMap, TeamMemberData, Transaction } from '../types';
@@ -69,6 +70,8 @@ export default function TeamSplitModal({ open, onClose, transactionId, primaryAg
   // Preserve the original JS default: `!(initialTeam?.length <= 1)` — with no team,
   // `undefined <= 1` is false, so isSplit defaults to true.
   const [isSplit, setIsSplit] = useState<boolean>(() => { const n = initialTeam?.length; return !(n !== undefined && n <= 1); });
+  const { user } = useAuth();
+  const isDocumentation = user?.role === 'documentation';
   const [saving, setSaving] = useState(false);
   const [savedOk, setSavedOk] = useState(false); // §3.2 — show "Saved" briefly, then auto-close
   const [agentComm, setAgentComm] = useState<AgentCommissionMap>({}); // registered agent splits (User profiles)
@@ -172,7 +175,13 @@ export default function TeamSplitModal({ open, onClose, transactionId, primaryAg
 
   return (
     <div className="overlay open" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="modal lg">
+{/*
+          READ AS A RECORD, NOT AS A STUCK FORM. `view-flat` restyles controls this component has
+          ALREADY disabled so they render as plain text — see the block at the end of desk.css. It
+          is scoped to :disabled, so it cannot make an editable control look read-only, nor the
+          reverse, and it is applied for the Documentation role alone.
+        */}
+      <div className={`modal lg${isDocumentation ? ' view-flat' : ''}`}>
         <button className="close" onClick={onClose}>✕</button>
         <div className="modal-h">Team Split</div>
 
@@ -188,7 +197,18 @@ export default function TeamSplitModal({ open, onClose, transactionId, primaryAg
           which is what stopped this modal accepting a split it would then throw away. This banner
           only ever explained that; shortening it cannot unlock anything.
         */}
-        {readOnly && (
+{/*
+          THE "View" BAR IS HIDDEN FOR DOCUMENTATION, AND KEPT FOR EVERYONE ELSE.
+          It was asked for in the first place because this panel still LOOKED editable to a role
+          that could not edit it — a banner explaining why the controls below would not respond.
+          With `view-flat` rendering those controls as plain text for Documentation, there is
+          nothing left for it to explain to that role, and the brokerage asked on 2026-10-13 for it
+          to go.
+          NOT REMOVED OUTRIGHT, because it is doing its original job for the roles whose panel is
+          still a disabled form: an agent in View Only, and Accounting. `team-split-view-only.spec`
+          and `accounting-transaction-view.spec` both assert they still see it.
+        */}
+        {readOnly && !isDocumentation && (
           <div className="card" style={{ borderLeft: '4px solid #2563eb', background: 'var(--info-bg)', marginBottom: 12 }}>
             <span style={{ fontSize: 12.5, color: 'var(--info-ink)' }} data-testid="team-readonly-banner">View</span>
           </div>

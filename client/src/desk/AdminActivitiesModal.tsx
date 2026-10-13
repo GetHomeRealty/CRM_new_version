@@ -267,7 +267,8 @@ export default function AdminActivitiesModal({ open, onClose, transactionId, txn
 
   return (
     <div className="overlay open" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="modal lg">
+      {/* `view-flat` renders already-disabled controls as plain text — see desk.css. */}
+      <div className={`modal lg${isDocumentation ? ' view-flat' : ''}`}>
         <button className="close" onClick={onClose}><Icon name="close" size={15} /></button>
         <div className="modal-h">Admin Activities</div>
 
@@ -277,7 +278,8 @@ export default function AdminActivitiesModal({ open, onClose, transactionId, txn
             <span style={{ fontSize: 12.5, color: 'var(--warn-ink-deep)' }}>All statuses default to N/A and are locked.</span>
           </div>
         )}
-        {readOnly && !dftNA && (
+        {/* Hidden for Documentation — see TeamSplitModal for why, and why only for that role. */}
+        {readOnly && !dftNA && !isDocumentation && (
           <div className="card" style={{ borderLeft: '4px solid #2563eb', background: 'var(--info-bg)', marginBottom: 12 }}>
             <span style={{ fontSize: 12.5, color: 'var(--info-ink)' }} data-testid="admin-readonly-banner">
               {isDocumentation

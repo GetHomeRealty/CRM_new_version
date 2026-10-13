@@ -81,16 +81,29 @@ test('EVERY OTHER ROLE KEEPS THE SENTENCE IT HAD', async ({ page }) => {
   }
 });
 
-test('A DOCUMENTATION USER SEES EXACTLY "View", WITH NO LOCK ICON', async ({ page }) => {
+test('A DOCUMENTATION USER SEES NO READ-ONLY BANNER AT ALL', async ({ page }) => {
   await signIn(page, 'superAdmin');
   const id = await deal(page);
   try {
     await asDocumentation(page);
     await openAdminActivities(page, id);
-    const banner = page.locator('.modal').getByTestId('admin-readonly-banner');
-
-    await expect(banner).toHaveText('View');
-    expect(await banner.locator('svg').count()).toBe(0);
+    /*
+     * THE BANNER IS GONE FOR THIS ROLE, and this assertion is the reverse of what it was.
+     *
+     * It used to read `toHaveText('View')`. That wording was asked for when this panel still
+     * rendered as a disabled FORM to this role, and a bar was the only thing explaining why the
+     * controls would not respond. The brokerage asked on 2026-10-13 for the Quick Actions to be
+     * strictly view-only, with the controls shown as plain text — at which point the bar explains
+     * nothing and is furniture, so it was removed FOR THIS ROLE ONLY.
+     *
+     * Other roles still see it and still assert on it: `team-split-view-only.spec.ts` for an agent
+     * in View Only, `accounting-transaction-view.spec.ts` for Accounting. Those were run and pass
+     * unchanged, which is what makes this a scoped change rather than a deletion.
+     *
+     * WHAT IS STILL ASSERTED BELOW is the part that always mattered: nothing in the panel accepts
+     * input, and nothing suggests this role may edit.
+     */
+    await expect(page.locator('.modal').getByTestId('admin-readonly-banner')).toHaveCount(0);
     // No instruction suggesting they can edit.
     await expect(page.locator('.modal').getByText(/click .*Edit.* on the transaction/)).toHaveCount(0);
 

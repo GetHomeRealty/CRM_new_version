@@ -576,7 +576,8 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
           </div>
         </div>
       )}
-      <div className="modal xl">
+      {/* `view-flat` renders already-disabled controls as plain text — see desk.css. */}
+      <div className={`modal xl${user?.role === 'documentation' ? ' view-flat' : ''}`}>
         <button className="close" onClick={onClose}><Icon name="close" size={15} /></button>
         <div className="modal-h">Financial Information {listing && <span className="pill type-res-sell" style={{ fontSize: 10 }}>Listing</span>}{precon && <span className="pill type-pre" style={{ fontSize: 10 }}>Preconstruction</span>}</div>
 
@@ -643,11 +644,18 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
                 Request Commission Change
               </button>
             )}
+            {/*
+              Hidden for Documentation and kept for Accounting — see TeamSplitModal for why. The
+              Request Commission Change button above is untouched: that is this role's authorized
+              way to affect these figures, and it is not an editing control on this panel.
+            */}
+            {user?.role !== 'documentation' && (
             <span style={{ fontSize: 12.5, color: 'var(--info-ink)' }} data-testid="fin-readonly-banner">
               {readsOnly
                 ? 'View'
                 : <><Icon name="lock" size={13} /> View-only — click <strong>Edit</strong> on the transaction to make changes.</>}
             </span>
+            )}
           </div>
         )}
         {(pendingLoanAgents.length > 0 || adjustedLoanAgents.length > 0) && (

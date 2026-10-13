@@ -123,7 +123,23 @@ test('A DOCUMENTATION USER SEES "View" AND NONE OF THE LOCK FURNITURE', async ({
     const modal = page.locator('.modal.xl');
 
     // The banner is the word and nothing else.
-    await expect(modal.getByTestId('fin-readonly-banner')).toHaveText('View');
+    /*
+     * THE BANNER IS GONE FOR THIS ROLE, and this assertion is the reverse of what it was.
+     *
+     * It used to read `toHaveText('View')`. That wording was asked for when this panel still
+     * rendered as a disabled FORM to this role, and a bar was the only thing explaining why the
+     * controls would not respond. The brokerage asked on 2026-10-13 for the Quick Actions to be
+     * strictly view-only, with the controls shown as plain text — at which point the bar explains
+     * nothing and is furniture, so it was removed FOR THIS ROLE ONLY.
+     *
+     * Other roles still see it and still assert on it: `team-split-view-only.spec.ts` for an agent
+     * in View Only, `accounting-transaction-view.spec.ts` for Accounting. Those were run and pass
+     * unchanged, which is what makes this a scoped change rather than a deletion.
+     *
+     * WHAT IS STILL ASSERTED BELOW is the part that always mattered: nothing in the panel accepts
+     * input, and nothing suggests this role may edit.
+     */
+    await expect(modal.getByTestId('fin-readonly-banner')).toHaveCount(0);
 
     // None of the wording that used to tell them to ask for edit rights.
     await expect(modal.getByText(/View-only — click/)).toHaveCount(0);

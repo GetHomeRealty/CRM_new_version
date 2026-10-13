@@ -30,7 +30,8 @@ interface DocsModalProps {
 
 export default function DocsModal({ open, onClose, transactionId, txn = null, readOnly = false, agentMode = false, canDeleteConditionDocs = false, onSaved = null }: DocsModalProps) {
   const toast = useToast();
-  const { isSuperAdmin } = useAuth();
+  const { isSuperAdmin, user } = useAuth();
+  const isDocumentation = user?.role === 'documentation';
   const { confirm, askDelete, closeConfirm } = useConfirm();
   // Wrap a blob view/download so failures surface a toast instead of a dead link.
   // The doc-id passed is guaranteed present at each call site (a file exists there).
@@ -315,7 +316,8 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
 
   return (
     <div className="overlay open" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="modal xl" style={{ maxHeight: '92vh', overflowY: 'auto' }}>
+      {/* `view-flat` renders already-disabled controls as plain text — see desk.css. */}
+      <div className={`modal xl${isDocumentation ? ' view-flat' : ''}`} style={{ maxHeight: '92vh', overflowY: 'auto' }}>
         <button className="close" onClick={onClose}><Icon name="close" size={15} /></button>
         <div className="modal-h" style={{ marginBottom: 4 }}>Documents</div>
         <div style={{ fontSize: 12, color: 'var(--muted)', margin: '0 0 16px 12px' }}>Track receipt &amp; validation of every required document for this transaction.</div>

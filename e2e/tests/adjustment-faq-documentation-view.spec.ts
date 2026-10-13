@@ -104,18 +104,24 @@ for (const s of SECTIONS) {
     }
   });
 
-  test(`${s.name}: A DOCUMENTATION USER SEES "View", WITH NO ICON OR EDIT INSTRUCTION`, async ({ page }) => {
+  test(`${s.name}: A DOCUMENTATION USER SEES NO READ-ONLY BANNER AT ALL`, async ({ page }) => {
     await signIn(page, 'superAdmin');
     const id = await deal(page);
     try {
       await asDocumentation(page);
       await openSection(page, id, s);
       const modal = page.locator('.modal').filter({ hasText: s.heading }).first();
-      const banner = page.getByTestId(s.banner);
-
-      await expect(banner).toHaveText('View');
-      await expect(banner).not.toContainText('🔒');
-      expect(await banner.locator('svg').count()).toBe(0);
+      /*
+       * THE BANNER IS GONE FOR THIS ROLE, and this assertion is the reverse of what it was.
+       *
+       * It read `toHaveText('View')`. That wording was asked for when this panel still rendered as
+       * a disabled FORM to this role and a bar was the only thing explaining why the controls would
+       * not respond. The brokerage asked on 2026-10-13 for the Quick Actions to be strictly
+       * view-only with their controls shown as plain text, at which point the bar explains nothing.
+       * Removed FOR THIS ROLE ONLY — the test above, for an agent in View Only, still asserts the
+       * padlock banner and still passes.
+       */
+      await expect(page.getByTestId(s.banner)).toHaveCount(0);
 
       // Nothing anywhere in the modal still suggests they can edit or ask to.
       await expect(modal.getByText(/click .*Edit.* (on the transaction|if the transaction)/)).toHaveCount(0);

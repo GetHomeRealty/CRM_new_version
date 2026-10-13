@@ -399,7 +399,8 @@ export default function AgentFaqModal({ open, onClose, transactionId, txn, onSav
 
   return (
     <div className="overlay open" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="modal xl">
+      {/* `view-flat` renders already-disabled controls as plain text — see desk.css. */}
+      <div className={`modal xl${isDocumentation ? ' view-flat' : ''}`}>
         <button className="close" onClick={onClose}>✕</button>
         {/*
           TD-049 — named for what it does. This panel holds no FAQ and never did: it is the
@@ -416,7 +417,8 @@ export default function AgentFaqModal({ open, onClose, transactionId, txn, onSav
             <span style={{ fontSize: 12.5, color: '#7c2d12' }}>All statuses default to N/A and are locked.</span>
           </div>
         )}
-        {readOnly && !dftNA && !isAgent && (
+        {/* Hidden for Documentation — see TeamSplitModal for why, and why only for that role. */}
+        {readOnly && !dftNA && !isAgent && !isDocumentation && (
           <div className="card" style={{ borderLeft: '4px solid #2563eb', background: '#eff6ff', marginBottom: 12 }}>
             <span style={{ fontSize: 12.5, color: '#1e3a8a' }} data-testid="faq-readonly-banner">
               {isDocumentation

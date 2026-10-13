@@ -9,6 +9,7 @@ import { ScreenGuard } from '../auth/guards/screen.guard';
 import { CurrentUser, Screen } from '../auth/decorators';
 import type { AuthUserRecord } from '../auth/auth.types';
 import { DocumentsService } from './documents.service';
+import { DocumentationReadOnlyGuard } from './documentation-readonly.guard';
 import { PrismaService } from '../prisma/prisma.service';
 import { STORAGE_ROOT } from '../config/storage';
 
@@ -34,7 +35,12 @@ const MB20 = 20480 * 1024;
  * access for the screen's area, so a login without Transaction Management is refused here too.
  */
 @Controller()
-@UseGuards(AuthGuard, ScreenGuard)
+/*
+ * `DocumentationReadOnlyGuard` runs after authentication and screen permission, and refuses any
+ * non-read on this controller to the Documentation role. It is here rather than on each route so
+ * that a route added later is covered without anybody having to remember — see the guard.
+ */
+@UseGuards(AuthGuard, ScreenGuard, DocumentationReadOnlyGuard)
 @Screen('transactions', 'view')
 export class DocumentsController {
   constructor(private readonly docs: DocumentsService, private readonly prisma: PrismaService) {}
