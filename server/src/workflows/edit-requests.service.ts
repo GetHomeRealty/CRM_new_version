@@ -64,12 +64,15 @@ export const COMMISSION_SCOPE = 'commission';
  * `precon_comm_*`                     the preconstruction equivalents, including the bonus
  * `precon_terms`                      per-term commission, the shape the Financial modal sends
  * `team`                              per-agent commission within the split
+ * `price` / `deposit`                 the figures the commission is calculated from
  *
- * Price and deposit are deliberately absent: they are not commission, they already have their own
- * approval gate in the write service, and widening this list is how a "commission change" quietly
- * becomes a change to the money the commission is calculated from.
+ * PRICE AND DEPOSIT JOINED ON 2026-10-13, at the brokerage's request: Documentation corrects
+ * Price, Deposit and Commission Amount from the Financial panel as ONE request, and a Super Admin
+ * approves all of it together. They are applied through the same write path as every other key
+ * here, so the usual price/deposit validation still runs on approval.
  */
 export const COMMISSION_PROPOSABLE: ReadonlySet<string> = new Set([
+  'price', 'deposit',
   'comm_pct', 'comm_amt',
   'precon_comm_pct', 'precon_comm_amt_manual', 'precon_comm_bonus',
   'precon_terms', 'team',

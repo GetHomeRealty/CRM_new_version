@@ -151,16 +151,13 @@ describe('what a Documentation user may change on a deal', () => {
    * side, so putting one back is a visible change to a test rather than a quiet widening.
    */
   /*
-   * PRICE AND DEPOSIT ARE THE ONLY BASIC INFO FIELDS THIS ROLE MAY WRITE, since 2026-10-13.
-   *
-   * Named here as an explicit pair rather than loosened into the loop below, so that the guard
-   * keeps its whole point: a field added to the Basic Info card still fails this spec until
-   * somebody decides, in writing, whether this role may write it. Two exceptions that have to be
-   * listed is a very different thing from a check that no longer asks.
+   * NO BASIC INFO FIELD IS AN EXCEPTION. Price and Deposit were for part of 2026-10-13; this role
+   * now requests them for approval instead. Kept as a named set so that adding one back is an
+   * explicit, visible decision rather than a loosened loop.
    */
-  const DOCUMENTATION_BASIC_INFO_EXCEPTIONS = new Set(['price', 'deposit']);
+  const DOCUMENTATION_BASIC_INFO_EXCEPTIONS = new Set<string>();
 
-  it(`NOT ONE FIELD OF BASIC INFO BUT PRICE AND DEPOSIT — checked against the card's own map`, () => {
+  it(`NOT ONE FIELD OF BASIC INFO — checked against the card's own map`, () => {
     /*
      * Driven off `BASIC_INFO_FIELDS` rather than a list repeated here. A field added to the Basic
      * Info card is added to that set, and this fails until it is withheld from the role too —
@@ -173,13 +170,10 @@ describe('what a Documentation user may change on a deal', () => {
     }
   });
 
-  it('PRICE AND DEPOSIT ARE WRITABLE, and they are Basic Info fields — both halves stated', () => {
-    /*
-     * Both assertions matter. The first is the capability the brokerage asked for; the second
-     * records WHY it needed a decision at all, so this does not read later as an oversight.
-     */
+  it('PRICE AND DEPOSIT ARE NOT WRITTEN DIRECTLY — this role requests them for approval', () => {
+    // See COMMISSION_PROPOSABLE: Price, Deposit and Commission Amount go to a Super Admin together.
     for (const k of ['price', 'deposit']) {
-      expect(DOCUMENTATION_EDITABLE.has(k)).toBe(true);
+      expect(DOCUMENTATION_EDITABLE.has(k)).toBe(false);
       expect(BASIC_INFO_FIELDS.has(k)).toBe(true);
     }
   });

@@ -188,29 +188,11 @@ export const DOCUMENTATION_EDITABLE: ReadonlySet<string> = new Set([
   'precon_listing_type',
 
   /*
-   * ============================================================================================
-   * PRICE AND DEPOSIT — the two exceptions to "no Basic Info", added 2026-10-13.
-   *
-   * WHY THEY ARE HERE AT ALL. The brokerage asked for this role to be able to correct the two
-   * figures a deal is priced from, from the Financial Information panel. They were removed from
-   * this list on 2026-10-12 along with the rest of Basic Info; this is a deliberate partial
-   * reversal of that decision, for these two keys and no others. `type`, `statuses`, `agent`,
-   * `property`, the dates and the `mls_*` fields remain withheld.
-   *
-   * WHAT THIS DOES NOT ENFORCE, AND IT MATTERS. A field is permitted or it is not — there is no
-   * way to permit it "only from the Financial screen", because a request does not say which screen
-   * it came from. So although the Basic Info card still RENDERS these two read-only for this role,
-   * that is now presentation rather than a restriction: a request made outside that screen can set
-   * them. The brokerage chose this shape on 2026-10-13 with that limitation stated.
-   *
-   * WHAT IS STILL REFUSED is everything the money actually depends on: commission percentages and
-   * amounts, the flat fees, the adjustments, the trust settlement and the `team` splits. A Price
-   * change therefore cannot move a commission figure by way of this filter, which is the
-   * requirement — and `FinancialModal` additionally sends only these two keys for this role, so
-   * the screen does not even ask.
-   * ============================================================================================
+   * PRICE AND DEPOSIT ARE NOT HERE EITHER. They were added on 2026-10-13 and taken out again the
+   * same day: this role now changes them by request — Price, Deposit and Commission Amount go to a
+   * Super Admin together (`COMMISSION_PROPOSABLE` in the workflows module) and are applied only on
+   * approval. Leaving them here would let a direct save skip that approval.
    */
-  'price', 'deposit',
 ]);
 
 /**

@@ -336,6 +336,8 @@ function PendingCommissionApprovals({
 
 /** Human labels for the keys a commission proposal can carry. */
 const COMMISSION_LABELS: Record<string, string> = {
+  price: 'Price',
+  deposit: 'Deposit',
   comm_pct: 'Commission %',
   comm_amt: 'Commission Amount',
   precon_comm_pct: 'Commission %',

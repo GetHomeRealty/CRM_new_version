@@ -101,7 +101,8 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
    */
   const readsOnly = user?.role === 'documentation' || user?.role === 'accounting';
   /**
-   * Documentation edits exactly two figures here: Price and Deposit.
+   * Documentation proposes changes to three figures here — Price, Deposit and Commission Amount —
+   * each unlocked by its pencil and sent to a Super Admin as one approval request.
    *
    * WHY THE ROLE IS NAMED RATHER THAN A PERMISSION. `readsOnly` groups Documentation with
    * Accounting, and this is the one place they differ — Accounting reads these figures and does not
@@ -114,19 +115,19 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
   const docEdits = isDocumentation && !dftNA;
 
   /*
-   * DOCUMENTATION ALONE MAY PROPOSE A COMMISSION CHANGE — not Accounting, which reads these
-   * figures and raises nothing. Separate from `readsOnly` above because the two answer different
-   * questions: that one is "may this person type here", this one is "may they ask for a change".
+   * DOCUMENTATION CHANGES PRICE, DEPOSIT AND COMMISSION AMOUNT BY REQUEST, NOT BY SAVE.
+   *
+   * Each of the three is locked until its pencil is clicked; the edited values are then sent as
+   * one approval request (scope 'commission'), and a Super Admin's approval applies them. Nothing
+   * on the deal moves until then.
    */
-  const mayProposeCommission = user?.role === 'documentation';
+  type DocField = 'price' | 'deposit' | 'commAmt';
+  const [docUnlock, setDocUnlock] = useState<Record<DocField, boolean>>({ price: false, deposit: false, commAmt: false });
   const [proposeOpen, setProposeOpen] = useState(false);
   const [proposeReason, setProposeReason] = useState('');
   const [proposeBusy, setProposeBusy] = useState(false);
   const [proposeError, setProposeError] = useState('');
-  /** Proposed values, keyed as the server expects them. Empty string means "leave this alone". */
-  const [proposal, setProposal] = useState<Record<string, string>>({});
-  /** Proposed Agent Comm %, by the member's position in the split. */
-  const [proposedAgentPct, setProposedAgentPct] = useState<Record<number, string>>({});
+  const pendingChangeReq = (txn.edit_requests || []).find((r) => r.scope === 'commission' && r.status === 'pending');
   // Financial edit lock: Price, Deposit and Commission fields are locked for everyone
   // except a Super Admin. Each field shows an edit pencil; clicking it sends an edit
   // request that a Super Admin must approve. One approval unlocks these fields; they
@@ -189,67 +190,53 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
     return t.map((m) => ({ name: m.name, split: m.split ?? 100, agent_pct: m.agent_pct ?? 90, brok_pct: m.brok_pct ?? 10, scope: m.scope || 'Entire', terms: m.terms || [] }));
   });
 
-  /**
-   * The fields this deal can have a commission change proposed for, with what they say now.
-   *
-   * Driven off the deal's own type, so a preconstruction deal proposes its master percentage and
-   * amount and an ordinary one proposes `comm_pct` / `comm_amt`. The CURRENT column is read from
-   * the saved transaction rather than from the form state: the form is what a Super Admin would
-   * be editing, and this dialog is for somebody who cannot edit it.
+  /*
+   * THE CHANGES DOCUMENTATION IS ASKING FOR — only the fields whose value actually differs from the
+   * saved deal, keyed as the server expects them. Commission Amount is the deal type's own key:
+   * `precon_comm_amt_manual` on preconstruction, `comm_amt` otherwise; listings have neither.
    */
-  const proposableFields: { key: string; label: string; current: number | string | null }[] = precon
-    ? [
-      { key: 'precon_comm_pct', label: 'Commission %', current: txn.precon_comm_pct ?? null },
-      { key: 'precon_comm_amt_manual', label: 'Commission Amount', current: txn.precon_comm_amt_manual ?? null },
-    ]
-    : [
-      { key: 'comm_pct', label: 'Commission %', current: txn.comm_pct ?? null },
-      { key: 'comm_amt', label: 'Commission Amount', current: txn.comm_amt ?? null },
+  const commAmtKey = precon ? 'precon_comm_amt_manual' : listing ? null : 'comm_amt';
+  const amtOrNull = (v: number | string | null | undefined): number | null =>
+    (v === null || v === undefined || String(v).trim() === '' ? null : r2(parseNumber(v)));
+  const docChanges = (): { key: string; label: string; from: number | null; to: number | null }[] => {
+    const rows: { key: string; label: string; from: number | null; to: number | null }[] = [
+      { key: 'price', label: 'Price', from: amtOrNull(txn.price ?? 0), to: amtOrNull(price) ?? 0 },
     ];
+    if (!referral) rows.push({ key: 'deposit', label: 'Deposit', from: amtOrNull(txn.deposit ?? 0), to: amtOrNull(deposit) ?? 0 });
+    if (commAmtKey) {
+      rows.push({
+        key: commAmtKey,
+        label: 'Commission Amount',
+        from: amtOrNull(precon ? txn.precon_comm_amt_manual : txn.comm_amt),
+        to: amtOrNull(precon ? masterAmtManual : commAmt),
+      });
+    }
+    return rows.filter((r) => r.from !== r.to);
+  };
 
-  /** Only what the person actually filled in — an untouched row proposes nothing. */
-  const buildProposal = (): Record<string, unknown> => {
-    const out: Record<string, unknown> = {};
-    for (const f of proposableFields) {
-      const v = (proposal[f.key] ?? '').trim();
-      if (v !== '') out[f.key] = parseNumber(v);
-    }
-    const touchedAgents = Object.entries(proposedAgentPct).filter(([, v]) => String(v ?? '').trim() !== '');
-    if (touchedAgents.length) {
-      /*
-       * THE WHOLE TEAM TRAVELS, not just the rows that changed. Applying a team is a replacement,
-       * so a partial array would delete the members left out — the untouched ones are sent exactly
-       * as they stand.
-       */
-      /*
-       * ONLY THE ROWS THAT CHANGED, and only their commission.
-       *
-       * The server refuses a proposal carrying anything but `name`, `split`, `agent_pct` and
-       * `brok_pct` inside `team`, and merges what it is given onto the live rows — so an agent's
-       * access and the terms they are on are preserved by the server rather than round-tripped
-       * through here, where a stale copy could quietly write them back.
-       */
-      out.team = touchedAgents.map(([i, v]) => ({
-        name: members[Number(i)]?.name ?? '',
-        agent_pct: parseNumber(v),
-      }));
-    }
-    return out;
+  /** Put the three fields back to the saved deal and lock them again. */
+  const resetDocEdits = () => {
+    setPrice(txn.price ?? 0);
+    setDeposit(txn.deposit ?? 0);
+    setCommAmt(txn.comm_amt ?? '');
+    setCommPct(txn.comm_pct ?? (txn.comm_type === '%' ? txn.comm_value : '') ?? '');
+    setMasterAmtManual(txn.precon_comm_amt_manual ?? '');
+    setDocUnlock({ price: false, deposit: false, commAmt: false });
   };
 
   const sendProposal = async () => {
-    const proposed = buildProposal();
-    if (!Object.keys(proposed).length) { setProposeError('Propose at least one new value.'); return; }
+    const changes = docChanges();
+    if (!changes.length) { setProposeError('Change at least one value first.'); return; }
     if (!proposeReason.trim()) { setProposeError('Give a reason for the change.'); return; }
     setProposeBusy(true);
     setProposeError('');
     try {
+      const proposed = Object.fromEntries(changes.map((c) => [c.key, c.to]));
       await requestTransactionEdit(transactionId, proposeReason.trim(), 'commission', proposed);
-      toast('Commission change sent to a Super Admin for approval', 'ok');
+      toast('Change request sent to a Super Admin for approval', 'ok');
       setProposeOpen(false);
-      setProposal({});
-      setProposedAgentPct({});
       setProposeReason('');
+      resetDocEdits();
       await refreshTxn();
     } catch (e) {
       // On the dialog, not as a toast: what was typed is still there and this says why it stayed.
@@ -258,6 +245,19 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
       setProposeBusy(false);
     }
   };
+
+  /** The pencil beside a Documentation-editable label: unlocks that one field for editing. */
+  const docPencil = (f: DocField): ReactNode => (docEdits ? (
+    <button type="button" className="row-rm" data-testid={`fin-edit-${f}`}
+      disabled={!!pendingChangeReq}
+      title={pendingChangeReq ? 'A change request is awaiting Super Admin approval' : docUnlock[f] ? 'Editing' : 'Click to edit'}
+      onClick={() => setDocUnlock((u) => ({ ...u, [f]: true }))}
+      style={{ marginLeft: 4, color: pendingChangeReq ? 'var(--warn)' : 'var(--brand)' }}>
+      <Icon name={pendingChangeReq ? 'clock' : 'edit'} size={14} />
+    </button>
+  ) : null);
+  /** Locked (rendered as plain text by `view-flat`) until its pencil is clicked. */
+  const docLocked = (f: DocField) => !docUnlock[f] || !!pendingChangeReq;
   // Agent Comm (%) and Brok Comm (%) are complementary: editing one fills the
   // other with the remaining percentage (e.g. Agent 80 → Brokerage 20).
   const setMember = (i: number, k: FinMemberKey, v: string) => setMembers((ms) => ms.map((m, idx) => {
@@ -522,35 +522,8 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
       if (parseNumber(listPct) > 0 && parseNumber(listFlat) > 0) { toast('Enter a Listing Commission % OR Amount, not both', 'bad'); return; }
       if (parseNumber(coopPct) > 0 && parseNumber(coopFlat) > 0) { toast('Enter a Co-op Commission % OR Amount, not both', 'bad'); return; }
     }
-    /*
-     * A DOCUMENTATION SAVE SENDS TWO FIELDS, AND ONLY TWO.
-     *
-     * The payloads below carry the whole panel — commission percentages, the adjustments and the
-     * `team` splits — because for an editing role that is what Save means. The server's
-     * `DOCUMENTATION_EDITABLE` filter would drop all of it for this role anyway, so relying on
-     * that alone would work; it would also mean this screen routinely ASKS to rewrite commission
-     * and agent splits and is silently refused, which is a bad habit to build on. Requirement 5 is
-     * that a Price or Deposit change must not disturb commission, splits or approved values -
-     * easiest kept by not mentioning them.
-     *
-     * Returned early rather than merged into the branches below, because the three branches
-     * differ by deal type and none of that applies when the payload is two numbers.
-     */
-    if (docEdits) {
-      setSaving(true);
-      try {
-        const updated = await updateTransaction(transactionId, {
-          price: parseNumber(price),
-          deposit: parseNumber(deposit),
-        });
-        onSaved?.(updated);
-        setSavedOk(true);
-        setTimeout(() => setSavedOk(false), 1500);
-      } catch (e) {
-        toast(apiErrorMessage(e, 'Could not save'), 'bad');
-      } finally { setSaving(false); }
-      return;
-    }
+    // Documentation never saves here — its edits go to a Super Admin as a request (sendProposal).
+    if (docEdits) return;
 
     const payload = precon
       ? {
@@ -598,6 +571,17 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
       setSaving(false);
     }
   };
+
+  // Price and Deposit render the same in all three layouts below. For Documentation each is
+  // locked until its pencil is clicked; for everyone else they are exactly as before.
+  const priceField = (
+    <div className="field"><label>Price {docEdits ? docPencil('price') : finPencil()}</label><MoneyInput value={price} onChange={(v) => setPrice(v)} onBlur={(e) => setPrice(parseNumber(e.target.value))} disabled={docEdits ? docLocked('price') : undefined} readOnly={!docEdits && finLock} style={!docEdits && finLock ? finLockStyle : undefined} data-testid="fin-price" /></div>
+  );
+  const depositField = (
+    <div className="field"><label>Deposit {docEdits ? docPencil('deposit') : finPencil()}</label>{docEdits
+      ? <MoneyInput value={deposit} onChange={(v) => setDeposit(v)} onBlur={(e) => setDeposit(parseNumber(e.target.value))} disabled={docLocked('deposit')} data-testid="fin-deposit" />
+      : <input value={txn.deposit ?? 0} readOnly style={{ background: 'var(--surface-2)' }} data-testid="fin-deposit" />}</div>
+  );
 
   return (
     <div className="overlay open" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
@@ -675,35 +659,21 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
         {/* NOTE: the original JS referenced an undefined `finLocked` here (a typo that
             would throw when this branch rendered); corrected to `finLock`, the clearly
             intended flag — the view-only banner hides while the finLock banner shows. */}
-        {readOnly && !dftNA && !isAgent && (!finLock || readsOnly) && (
+        {readOnly && !dftNA && !isAgent && !isDocumentation && (!finLock || readsOnly) && (
           <div className="card" style={{ borderLeft: '4px solid #2563eb', background: 'var(--info-bg)', marginBottom: 12 }}>
-            {/*
-              Documentation gets the word and nothing else — no icon, no instruction. Every other
-              role keeps the sentence it has always had.
-            */}
-            {mayProposeCommission && (
-              /*
-                The one thing this role CAN do here. Beside the banner rather than among the
-                figures, because it is about the section as a whole.
-              */
-              <button className="btn primary sm" type="button" data-testid="request-commission-change"
-                style={{ float: 'right', marginLeft: 10 }}
-                onClick={() => { setProposeError(''); setProposeOpen(true); }}>
-                Request Commission Change
-              </button>
-            )}
-            {/*
-              Hidden for Documentation and kept for Accounting — see TeamSplitModal for why. The
-              Request Commission Change button above is untouched: that is this role's authorized
-              way to affect these figures, and it is not an editing control on this panel.
-            */}
-            {user?.role !== 'documentation' && (
+            {/* Not shown to Documentation, which has its pencils and Send Request instead. */}
             <span style={{ fontSize: 12.5, color: 'var(--info-ink)' }} data-testid="fin-readonly-banner">
               {readsOnly
                 ? 'View'
                 : <><Icon name="lock" size={13} /> View-only — click <strong>Edit</strong> on the transaction to make changes.</>}
             </span>
-            )}
+          </div>
+        )}
+        {/* Documentation: a change request it sent is waiting on a Super Admin. */}
+        {docEdits && pendingChangeReq && (
+          <div className="card" style={{ borderLeft: '4px solid #d97706', background: 'var(--warn-bg-2)', marginBottom: 12, fontSize: 12.5, color: 'var(--warn-ink-deep)' }} data-testid="fin-change-pending">
+            <strong style={{ color: 'var(--warn-ink)' }}><Icon name="clock" size={13} /> Change request awaiting Super Admin approval.</strong>{' '}
+            <span>The figures below update once it is approved.</span>
           </div>
         )}
         {(pendingLoanAgents.length > 0 || adjustedLoanAgents.length > 0) && (
@@ -723,8 +693,8 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
         {/*
           THE PRICE ROW SITS IN ITS OWN FIELDSET, and the reason is a rule of HTML rather than a
           preference: a control inside a DISABLED fieldset cannot be re-enabled by anything nested
-          within it. Documentation needs two live inputs on a panel that is otherwise disabled
-          wholesale, so those two have to live outside the disabled set.
+          within it. Documentation needs live inputs (Price, Deposit, Commission Amount) on a panel
+          that is otherwise disabled wholesale, so those have to live outside the disabled set.
           THE CONDITION IS THE SAME AS THE MAIN FIELDSET'S FOR EVERY OTHER ROLE — `dftNA || readOnly`
           with the Documentation exception added — so nobody else's panel changes. The siblings in
           this row that are NOT Price or Deposit carry their own `readOnly={readOnly || ...}` below,
@@ -734,31 +704,44 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
 
         {precon ? (
           <div className="g3">
-            <div className="field"><label>Price {!docEdits && finPencil()}</label><MoneyInput value={price} onChange={(v) => setPrice(v)} onBlur={(e) => setPrice(parseNumber(e.target.value))} readOnly={!docEdits && finLock} style={!docEdits && finLock ? finLockStyle : undefined} data-testid="fin-price" /></div>
+            {priceField}
             <div className="field"><label>NET of HST</label><select value={netHst ? 'Yes' : 'No'} disabled={readOnly} onChange={(e) => setNetHst(e.target.value === 'Yes')}><option>No</option><option>Yes</option></select></div>
-            <div className="field"><label>Deposit {!docEdits && finPencil()}</label>{docEdits
-              ? <MoneyInput value={deposit} onChange={(v) => setDeposit(v)} onBlur={(e) => setDeposit(parseNumber(e.target.value))} data-testid="fin-deposit" />
-              : <input value={txn.deposit ?? 0} readOnly style={{ background: 'var(--surface-2)' }} data-testid="fin-deposit" />}</div>
+            {depositField}
           </div>
         ) : listing ? (
           <div className={referral ? '' : 'g2'}>
-            <div className="field"><label>Price {!docEdits && finPencil()}</label><MoneyInput value={price} onChange={(v) => setPrice(v)} onBlur={(e) => setPrice(parseNumber(e.target.value))} readOnly={!docEdits && finLock} style={!docEdits && finLock ? finLockStyle : undefined} data-testid="fin-price" /></div>
-            {!referral && <div className="field"><label>Deposit {!docEdits && finPencil()}</label>{docEdits
-              ? <MoneyInput value={deposit} onChange={(v) => setDeposit(v)} onBlur={(e) => setDeposit(parseNumber(e.target.value))} data-testid="fin-deposit" />
-              : <input value={txn.deposit ?? 0} readOnly style={{ background: 'var(--surface-2)' }} data-testid="fin-deposit" />}</div>}
+            {priceField}
+            {!referral && depositField}
           </div>
         ) : (
           /* Buying / Lease: Price, Deposit, Commission % and Commission Amount are the four
              figures the deal is priced from, so they read as one row rather than two stacked
              pairs. Referral has no deposit, so it drops to three columns. */
           <div className={referral ? 'g3' : 'g4'}>
-            <div className="field"><label>Price {!docEdits && finPencil()}</label><MoneyInput value={price} onChange={(v) => setPrice(v)} onBlur={(e) => setPrice(parseNumber(e.target.value))} readOnly={!docEdits && finLock} style={!docEdits && finLock ? finLockStyle : undefined} data-testid="fin-price" /></div>
-            {!referral && <div className="field"><label>Deposit {!docEdits && finPencil()}</label>{docEdits
-              ? <MoneyInput value={deposit} onChange={(v) => setDeposit(v)} onBlur={(e) => setDeposit(parseNumber(e.target.value))} data-testid="fin-deposit" />
-              : <input value={txn.deposit ?? 0} readOnly style={{ background: 'var(--surface-2)' }} data-testid="fin-deposit" />}</div>}
+            {priceField}
+            {!referral && depositField}
             <div className="field"><label>Commission % {finPencil()}</label><input value={commPct} onChange={(e) => onPct(e.target.value)} placeholder="e.g. 5" readOnly={readOnly || finLock} style={finLock ? { ...finLockStyle, ...pctStyle } : pctStyle} /></div>
-            <div className="field"><label>Commission Amount {finPencil()}</label><MoneyInput value={commAmt} onChange={(v) => onAmt(v)} placeholder="0.00" readOnly={readOnly || finLock} style={finLock ? finLockStyle : undefined} /></div>
+            <div className="field"><label>Commission Amount {docEdits ? docPencil('commAmt') : finPencil()}</label><MoneyInput value={commAmt} onChange={(v) => onAmt(v)} placeholder="0.00" disabled={docEdits ? docLocked('commAmt') : undefined} readOnly={!docEdits && (readOnly || finLock)} style={!docEdits && finLock ? finLockStyle : undefined} data-testid="fin-comm-amt" /></div>
           </div>
+        )}
+
+        {/*
+          The preconstruction Commission row lives in this first fieldset too, so Documentation's
+          Commission Amount can be unlocked by its pencil. Its other controls are disabled for
+          Documentation explicitly (`readOnly || docEdits`), since this fieldset no longer does it.
+        */}
+        {precon && (
+          <>
+            <div className="modal-sub">Commission</div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10, marginBottom: 10 }}>
+              <div className="field" style={{ marginBottom: 0 }}><label>Commission % {finPencil()}</label><input type="number" value={masterPct} onChange={(e) => setMasterPct(e.target.value)} placeholder="e.g. 4" disabled={readOnly || docEdits} readOnly={finLock} style={finLock ? { ...finLockStyle, ...pctStyle } : pctStyle} /></div>
+              <div className="field" style={{ marginBottom: 0 }}><label>Commission Amount {docEdits ? docPencil('commAmt') : finPencil()}</label><MoneyInput value={masterAmtManual} onChange={(v) => setMasterAmtManual(v)} placeholder="0.00" disabled={docEdits ? docLocked('commAmt') : readOnly} readOnly={!docEdits && finLock} style={!docEdits && finLock ? finLockStyle : undefined} data-testid="fin-comm-amt" /></div>
+              <div className="field" style={{ marginBottom: 0 }}><label>Bonus {finPencil()}</label><select value={masterBonusOn ? 'Yes' : 'No'} disabled={finLock || readOnly || docEdits} onChange={(e) => { const on = e.target.value === 'Yes'; setMasterBonusOn(on); if (!on) setMasterBonus(''); }} style={finLock ? finLockStyle : undefined}><option>No</option><option>Yes</option></select></div>
+              {!masterBonusOn
+                ? <div className="field" style={{ marginBottom: 0 }} />
+                : <div className="field" style={{ marginBottom: 0 }}><label>Bonus Amount {finPencil()}</label><MoneyInput value={masterBonus} onChange={(v) => setMasterBonus(v)} placeholder="0.00" disabled={readOnly || docEdits} readOnly={finLock} style={finLock ? finLockStyle : undefined} /></div>}
+            </div>
+          </>
         )}
 
         </fieldset>
@@ -768,15 +751,6 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
 
         {precon ? (
           <>
-            <div className="modal-sub">Commission</div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10, marginBottom: 10 }}>
-              <div className="field" style={{ marginBottom: 0 }}><label>Commission % {finPencil()}</label><input type="number" value={masterPct} onChange={(e) => setMasterPct(e.target.value)} placeholder="e.g. 4" readOnly={finLock} style={finLock ? { ...finLockStyle, ...pctStyle } : pctStyle} /></div>
-              <div className="field" style={{ marginBottom: 0 }}><label>Commission Amount {finPencil()}</label><MoneyInput value={masterAmtManual} onChange={(v) => setMasterAmtManual(v)} placeholder="0.00" readOnly={finLock} style={finLock ? finLockStyle : undefined} /></div>
-              <div className="field" style={{ marginBottom: 0 }}><label>Bonus {finPencil()}</label><select value={masterBonusOn ? 'Yes' : 'No'} disabled={finLock} onChange={(e) => { const on = e.target.value === 'Yes'; setMasterBonusOn(on); if (!on) setMasterBonus(''); }} style={finLock ? finLockStyle : undefined}><option>No</option><option>Yes</option></select></div>
-              {!masterBonusOn
-                ? <div className="field" style={{ marginBottom: 0 }} />
-                : <div className="field" style={{ marginBottom: 0 }}><label>Bonus Amount {finPencil()}</label><MoneyInput value={masterBonus} onChange={(v) => setMasterBonus(v)} placeholder="0.00" readOnly={finLock} style={finLock ? finLockStyle : undefined} /></div>}
-            </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10, marginBottom: 14 }}>
               <div className="field" style={{ marginBottom: 0 }}><label>Commission</label><input readOnly style={cs(mComm)} value={formatCurrency(mComm)} />{adjEnabled && adjB !== 0 && <div className="help" style={{ margin: '4px 0 0' }}>{adjNote(adjB, 'before HST')}</div>}</div>
               <div className="field" style={{ marginBottom: 0 }}><label>HST</label><input readOnly style={cs(mHst)} value={formatCurrency(mHst)} /></div>
@@ -1056,12 +1030,16 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
 
         <div className="actions">
           <button className="btn ghost" onClick={onClose}>Close</button>
-          {/*
-            Documentation gets a Save button although the panel is otherwise read-only to it: there
-            are two fields it may change, and a screen that offers inputs and no way to commit them
-            is worse than offering neither.
-          */}
-          {(!readOnly || docEdits) && <button className="btn primary" onClick={save} disabled={saving || dftNA || savedOk} data-testid="fin-save">{savedOk ? <><Icon name="check" size={13} /> Saved</> : (saving ? 'Saving…' : 'Save')}</button>}
+          {/* Documentation sends its edits to a Super Admin for approval instead of saving them. */}
+          {docEdits && (
+            <button className="btn primary" data-testid="fin-send-request"
+              disabled={!!pendingChangeReq || docChanges().length === 0}
+              title={pendingChangeReq ? 'A change request is already awaiting approval' : docChanges().length === 0 ? 'Click ✏ beside Price, Deposit or Commission Amount to make a change' : undefined}
+              onClick={() => { setProposeError(''); setProposeOpen(true); }}>
+              Send Request
+            </button>
+          )}
+          {!readOnly && !docEdits && <button className="btn primary" onClick={save} disabled={saving || dftNA || savedOk} data-testid="fin-save">{savedOk ? <><Icon name="check" size={13} /> Saved</> : (saving ? 'Saving…' : 'Save')}</button>}
         </div>
       </div>
 
@@ -1086,21 +1064,16 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
       )}
 
       {/*
-        * PROPOSE A COMMISSION CHANGE.
+        * SEND THE DOCUMENTATION EDITS FOR APPROVAL.
         *
-        * A separate dialog from "Request edit approval" above, because it asks a different
-        * question. That one asks to be let into the fields; this one states the numbers, and
-        * approving it applies them. Current sits beside Proposed on every row so the reviewer —
-        * and the requester — can see exactly what is being asked for.
-        *
-        * A BLANK ROW PROPOSES NOTHING. Leaving a field empty is how you say "not this one", which
-        * is why the placeholder shows the current value rather than pre-filling it: a pre-filled
-        * form would propose every figure on the deal every time.
+        * Lists only the fields that were actually changed, current beside proposed, so the
+        * requester sees exactly what the Super Admin will be asked to approve. Approving applies
+        * them; rejecting leaves the deal as it is.
       */}
       {proposeOpen && (
         <div className="modal-backdrop" style={{ zIndex: 60 }} data-testid="commission-change-dialog">
           <div className="modal">
-            <div className="modal-h">Request a commission change</div>
+            <div className="modal-h">Send change request</div>
             <p style={{ fontSize: 13, marginTop: 4 }}>
               A Super Admin reviews this. Nothing changes on the deal until they approve it.
             </p>
@@ -1108,26 +1081,11 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
             <table className="tbl" style={{ marginTop: 10 }}>
               <thead><tr><th>Field</th><th>Current</th><th>Proposed</th></tr></thead>
               <tbody>
-                {proposableFields.map((f) => (
-                  <tr key={f.key}>
-                    <td>{f.label}</td>
-                    <td data-testid={`current-${f.key}`}>{f.current === null || f.current === '' ? '—' : String(f.current)}</td>
-                    <td>
-                      <input type="number" value={proposal[f.key] ?? ''} data-testid={`proposed-${f.key}`}
-                        placeholder={f.current === null ? 'unset' : String(f.current)}
-                        onChange={(e) => setProposal((p) => ({ ...p, [f.key]: e.target.value }))} />
-                    </td>
-                  </tr>
-                ))}
-                {members.map((m, i) => (
-                  <tr key={`agent-${i}`}>
-                    <td>Agent Comm % — {m.name || `Member ${i + 1}`}</td>
-                    <td data-testid={`current-agent-${i}`}>{String(m.agent_pct ?? '—')}</td>
-                    <td>
-                      <input type="number" value={proposedAgentPct[i] ?? ''} data-testid={`proposed-agent-${i}`}
-                        placeholder={String(m.agent_pct ?? '')}
-                        onChange={(e) => setProposedAgentPct((p) => ({ ...p, [i]: e.target.value }))} />
-                    </td>
+                {docChanges().map((c) => (
+                  <tr key={c.key}>
+                    <td>{c.label}</td>
+                    <td data-testid={`current-${c.key}`}>{c.from === null ? '—' : formatCurrency(c.from)}</td>
+                    <td data-testid={`proposed-${c.key}`}><strong>{c.to === null ? '—' : formatCurrency(c.to)}</strong></td>
                   </tr>
                 ))}
               </tbody>
@@ -1136,8 +1094,8 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
             <div className="field" style={{ marginTop: 10 }}>
               <label>Reason <span className="req">*</span></label>
               <textarea rows={3} value={proposeReason} onChange={(e) => setProposeReason(e.target.value)}
-                data-testid="commission-change-reason"
-                placeholder="e.g. The brokerage agreed 3% with the builder on 4 October" />
+                data-testid="commission-change-reason" autoFocus
+                placeholder="e.g. Price corrected to match the signed APS" />
             </div>
 
             {proposeError && <p className="help bad" role="alert" style={{ margin: '4px 0 0' }}>{proposeError}</p>}

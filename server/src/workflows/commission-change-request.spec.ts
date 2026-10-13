@@ -186,8 +186,7 @@ describe('submitting a commission change request', () => {
       // Nothing proposed — a reviewer would be asked to approve no change.
       await expect(svc(tx).store(me, id, 'why', COMMISSION_SCOPE, {})).rejects.toBeInstanceOf(UnprocessableEntityException);
 
-      // Not a commission field. Price in particular has its own gate and is not this workflow's.
-      await expect(svc(tx).store(me, id, 'why', COMMISSION_SCOPE, { price: 1 })).rejects.toBeInstanceOf(UnprocessableEntityException);
+      // Not a field this workflow may change.
       await expect(svc(tx).store(me, id, 'why', COMMISSION_SCOPE, { valid_status: 'Valid' })).rejects.toBeInstanceOf(UnprocessableEntityException);
 
       // A reason is the reviewer's only context for a number.
@@ -223,11 +222,11 @@ describe('submitting a commission change request', () => {
     });
   });
 
-  it('the proposable fields are commission only — never price or deposit', () => {
-    for (const k of ['comm_pct', 'comm_amt', 'precon_comm_pct', 'precon_comm_amt_manual', 'precon_comm_bonus', 'precon_terms', 'team']) {
+  it('the proposable fields are commission plus price and deposit — nothing else', () => {
+    for (const k of ['price', 'deposit', 'comm_pct', 'comm_amt', 'precon_comm_pct', 'precon_comm_amt_manual', 'precon_comm_bonus', 'precon_terms', 'team']) {
       expect(COMMISSION_PROPOSABLE.has(k)).toBe(true);
     }
-    for (const k of ['price', 'deposit', 'valid_status', 'comm_status', 'statuses', 'clients']) {
+    for (const k of ['valid_status', 'comm_status', 'statuses', 'clients']) {
       expect(COMMISSION_PROPOSABLE.has(k)).toBe(false);
     }
   });
