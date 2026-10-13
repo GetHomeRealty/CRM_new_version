@@ -9,7 +9,6 @@ import { ScreenGuard } from '../auth/guards/screen.guard';
 import { CurrentUser, Screen } from '../auth/decorators';
 import type { AuthUserRecord } from '../auth/auth.types';
 import { DocumentsService } from './documents.service';
-import { DocumentationReadOnlyGuard } from './documentation-readonly.guard';
 import { PrismaService } from '../prisma/prisma.service';
 import { STORAGE_ROOT } from '../config/storage';
 
@@ -36,11 +35,18 @@ const MB20 = 20480 * 1024;
  */
 @Controller()
 /*
- * `DocumentationReadOnlyGuard` runs after authentication and screen permission, and refuses any
- * non-read on this controller to the Documentation role. It is here rather than on each route so
- * that a route added later is covered without anybody having to remember — see the guard.
+ * AUTHENTICATION AND THE SCREEN PERMISSION, and nothing role-specific.
+ *
+ * A `DocumentationReadOnlyGuard` sat here briefly on 2026-10-13, refusing every non-read on this
+ * controller to the Documentation role. It was removed the same day: that role's job is the
+ * paperwork, and a coordinator who cannot attach a document cannot do it.
+ *
+ * The two restrictions that matter here never depended on it and are still enforced in the
+ * service, per document rather than per role: `requireMandatoryApproval` keeps a Mandatory change
+ * behind a Super Admin's approval, and `documents.override-valid` keeps a document already marked
+ * Valid from being replaced or deleted by anyone below admin rank.
  */
-@UseGuards(AuthGuard, ScreenGuard, DocumentationReadOnlyGuard)
+@UseGuards(AuthGuard, ScreenGuard)
 @Screen('transactions', 'view')
 export class DocumentsController {
   constructor(private readonly docs: DocumentsService, private readonly prisma: PrismaService) {}

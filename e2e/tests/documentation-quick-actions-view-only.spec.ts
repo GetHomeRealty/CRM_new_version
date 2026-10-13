@@ -10,16 +10,17 @@ import { signIn, signOut, apiGet, apiSend, ACCOUNTS } from './helpers';
  * explaining why it will not respond is a label compensating for exactly that. Both are gone for
  * this role: the controls render as plain text, so the bar has nothing left to explain.
  *
- * THE RESTRICTION THAT IS REAL, AND NEW. Documents was genuinely editable for this role, in both
- * halves — the screen passed `readOnly={false}` for it specifically, and the eleven document write
- * routes are gated on `transactions: 'edit'`, which this role holds. Uploading, replacing,
- * submitting and deleting drafts were all allowed and are now refused, on the server as well as on
- * screen. That is a REDUCTION in what the role can do, asked for on 2026-10-13.
+ * DOCUMENTS IS NOT ONE OF THEM, and that is the correction of 2026-10-13. It was briefly closed
+ * along with the rest — a `DocumentationReadOnlyGuard` refused every document write on the server
+ * and the screen passed `readOnly` — and reopened the same day, because a Transaction Coordinator
+ * who cannot attach a document cannot do the work. Upload, add, save, the validation radios, the
+ * reminder flags and the RECO audit fields are all live for this role.
  *
- * WHY THE API TESTS CARRY THE WEIGHT. A disabled input is a courtesy; the 403 is the restriction.
- * These send real requests from a real Documentation session, which is also the only honest proof
- * the guard is WIRED UP rather than merely written — the unit spec cannot import that controller
- * (it pulls in an ESM-only zip library), so this is where that is established.
+ * WHY THE API TESTS STILL CARRY THE WEIGHT. A disabled input is a courtesy; what the endpoint does
+ * is the rule. These send real requests from a real Documentation session — both to prove the
+ * document writes are allowed, and to prove the two restrictions that survived the reopening are
+ * still enforced: Mandatory needs a Super Admin (`requireMandatoryApproval`), and a document
+ * already marked Valid needs `documents.override-valid`. Neither ever depended on that guard.
  *
  * ONE DEAL, CREATED AND DELETED. The suite leaves the database as it found it, and asserts against
  * a transaction whose shape it chose rather than whichever row happened to sort first.
@@ -61,22 +62,52 @@ const editableCount = (modal: ReturnType<Page['locator']>) =>
     .filter((f) => !f.matches(':disabled') && !(f as HTMLInputElement).readOnly).length);
 
 // =====================================================================================
-test.describe('the server refuses document changes from a Documentation session', () => {
-  test('REFUSES EVERY SHAPE OF DOCUMENT WRITE, which is the half a hand-made request meets', async ({ page }) => {
+test.describe('documents are the Documentation role\'s to maintain', () => {
+  /*
+   * REVERSED ON 2026-10-13, THE SAME DAY IT WAS INTRODUCED.
+   *
+   * These two tests asserted the opposite: that every document write was refused with a 403 by a
+   * `DocumentationReadOnlyGuard`. Making every Quick Action strictly view-only had closed Documents
+   * too, and closing it took away the one thing this role exists to do — a Transaction Coordinator
+   * who cannot attach a document cannot do the work. The guard is gone and these now assert the
+   * capability rather than its absence.
+   *
+   * WHAT IS STILL REFUSED is asserted below, because it is the part that must not be lost in the
+   * reversal: a Mandatory change still needs a Super Admin, and a document already marked Valid
+   * still cannot be replaced or deleted below admin rank. Neither ever depended on that guard —
+   * `requireMandatoryApproval` and the `documents.override-valid` capability enforce them per
+   * document, in the service.
+   */
+  test('CAN WRITE DOCUMENTS AGAIN — the bulk update the Save button calls', async ({ page }) => {
     await signIn(page, 'superAdmin');
     const id = await createDeal(page);
     try {
       await signOut(page);
       await signIn(page, 'docs');
 
-      // The bulk update the Documents modal's Save used to call.
-      const put = await apiSend(page, 'PUT', `/api/transactions/${id}/documents`, { documents: [] });
-      expect(put.status).toBe(403);
-      expect(JSON.stringify(put.body)).toMatch(/view-only/i);
+      const read = await apiGet(page, `/api/transactions/${id}/documents`);
+      expect(read.status).toBe(200);
+      const current = ((read.body as { documents?: unknown[] }).documents ?? []) as unknown[];
 
-      // Other shapes, so this is a rule about the resource rather than one guarded route.
-      expect((await apiSend(page, 'POST', `/api/transactions/${id}/documents/submit`, { draft_ids: [] })).status).toBe(403);
-      expect((await apiSend(page, 'POST', `/api/transactions/${id}/documents/send-reminders`, {})).status).toBe(403);
+      // Sent with the documents exactly as they already are: authorised-and-harmless, so this
+      // asserts the permission without being a change the test has to undo.
+      const put = await apiSend(page, 'PUT', `/api/transactions/${id}/documents`, { documents: current });
+      expect(put.status).not.toBe(403);
+
+      // Reminders too — one of the capabilities named in the brief.
+      expect((await apiSend(page, 'POST', `/api/transactions/${id}/documents/send-reminders`, {})).status).not.toBe(403);
+
+      /*
+       * DRAFT SUBMISSION IS NOT IN THIS LIST, AND SHOULD NOT BE. `submitDrafts` refuses anybody who
+       * is not an agent — "Only agents submit draft uploads." — and always has: it is how an AGENT
+       * sends their uploads to the office for review, not something a coordinator does. An earlier
+       * draft of this test asserted it was open to this role, which was wrong about the feature
+       * rather than about the permission. Asserted as still-refused, so reopening document writes is
+       * not mistaken for reopening that.
+       */
+      const submit = await apiSend(page, 'POST', `/api/transactions/${id}/documents/submit`, { draft_ids: [] });
+      expect(submit.status).toBe(403);
+      expect(JSON.stringify(submit.body)).toMatch(/only agents/i);
     } finally {
       await signOut(page);
       await signIn(page, 'superAdmin');
@@ -84,13 +115,44 @@ test.describe('the server refuses document changes from a Documentation session'
     }
   });
 
-  test('STILL ALLOWS READING — the role\'s job is the paperwork, and taking that away is not the ask', async ({ page }) => {
+  test('STILL READS AND DOWNLOADS, which was never in question', async ({ page }) => {
     await signIn(page, 'superAdmin');
     const id = await createDeal(page);
     try {
       await signOut(page);
       await signIn(page, 'docs');
       expect((await apiGet(page, `/api/transactions/${id}/documents`)).status).toBe(200);
+      expect((await apiGet(page, `/api/transactions/${id}/documents/download-all`)).status).not.toBe(403);
+    } finally {
+      await signOut(page);
+      await signIn(page, 'superAdmin');
+      await removeDeal(page, id);
+    }
+  });
+
+  test('A MANDATORY CHANGE STILL NEEDS A SUPER ADMIN, which reopening write access did not loosen', async ({ page }) => {
+    /*
+     * The restriction the brief says to keep, asserted against the real endpoint. `mandatoryMoves`
+     * compares what was sent against what is stored and `requireMandatoryApproval` refuses the
+     * move without an approval — per document, independent of the role's write access.
+     */
+    await signIn(page, 'superAdmin');
+    const id = await createDeal(page);
+    try {
+      const read = await apiGet(page, `/api/transactions/${id}/documents`);
+      const docs = ((read.body as { documents?: Record<string, unknown>[] }).documents ?? []);
+      test.skip(!docs.length, 'this deal has no document rows to flip');
+
+      // Flip the first row's Mandatory flag to the opposite of what is stored.
+      const flipped = docs.map((d, i) => (i === 0 ? { ...d, mandatory: !d.mandatory } : d));
+
+      await signOut(page);
+      await signIn(page, 'docs');
+      const res = await apiSend(page, 'PUT', `/api/transactions/${id}/documents`, { documents: flipped });
+
+      // Refused, and refused for the RIGHT reason — not a blanket role refusal.
+      expect(res.status).toBeGreaterThanOrEqual(400);
+      expect(JSON.stringify(res.body)).toMatch(/mandatory|approval|super admin/i);
     } finally {
       await signOut(page);
       await signIn(page, 'superAdmin');
@@ -227,7 +289,6 @@ test.describe('each Quick Action reads as a record, not as a stuck form', () => 
   });
 
   for (const [name, label] of [
-    ['Documents', /^Documents$/i],
     ['Admin', /^Admin$/i],
     ['Adjustment', /^Adjustment$/i],
     ['Agent Payment Readiness', /Agent Payment Readiness/i],
@@ -249,27 +310,54 @@ test.describe('each Quick Action reads as a record, not as a stuck form', () => 
     });
   }
 
+  test('DOCUMENTS IS EDITABLE, with Mandatory still locked to a Super Admin', async ({ page }) => {
+    /*
+     * DOCUMENTS IS DELIBERATELY NOT IN THE LOOP ABOVE. It is this role's own panel again as of
+     * 2026-10-13 — upload, add, save, the validation radios, the reminder flags and the RECO audit
+     * fields are all live. The one control that stays shut is Mandatory, which needs a Super
+     * Admin; asserting that here is what stops the reversal quietly taking it with it.
+     */
+    const modal = await openQuickAction(page, /^Documents$/i);
+    test.skip(!modal, 'Documents is not offered to this role on this deal');
+
+    // Not flattened: this panel is a form for this role, not a record.
+    await expect(modal!).not.toHaveClass(/view-flat/);
+    // And there is something to type in.
+    expect(await editableCount(modal!)).toBeGreaterThan(0);
+    // The Save button exists.
+    await expect(modal!.getByRole('button', { name: /^Save$/ })).toBeVisible();
+
+    // Every Mandatory checkbox is still disabled for this role.
+    const mandatory = modal!.locator('label', { hasText: /^Mandatory$/ }).locator('input[type="checkbox"]');
+    const n = await mandatory.count();
+    for (let i = 0; i < n; i += 1) await expect(mandatory.nth(i)).toBeDisabled();
+  });
+
   test('FINANCIAL IS READ-ONLY EXCEPT PRICE AND DEPOSIT, which this role may correct', async ({ page }) => {
     /*
-     * FINANCIAL IS DELIBERATELY NOT IN THE LOOP ABOVE, as of 2026-10-13.
+     * FINANCIAL IS DELIBERATELY NOT IN THE LOOP ABOVE.
      *
-     * The brokerage asked for this role to be able to correct the two figures a deal is priced
-     * from. Everything else on the panel — the commission percentages and amounts, the flat fees,
-     * the adjustments, the trust settlement and the agent splits — stays read-only, and
-     * `financial-documentation-price-deposit.spec.ts` holds the server half.
-     *
-     * Asserted as a COUNT of two rather than by naming the two, so a third editable field added
-     * here fails this test rather than slipping in unnoticed.
+     * CORRECTED FOR f5ecb33, which this test had not caught up with. That commit replaced the
+     * direct Price/Deposit save with a pencil per field: nothing on the panel accepts input until
+     * its pencil is clicked, and the edited values then go to a Super Admin as one `commission`
+     * request. This test still asserted the earlier design — `fin-price` editable on open — and so
+     * was failing on `origin/version_3` before this change touched the file. The behaviour it
+     * asserts in detail lives in `financial-documentation-price-deposit.spec.ts`; what is checked
+     * here is only that the panel starts closed and offers the authorized ask.
      */
     const modal = await openQuickAction(page, /^Financial$/i);
     test.skip(!modal, 'Financial is not offered to this role on this deal');
 
-    await expect(modal!.getByTestId('fin-price')).toBeEditable();
-    await expect(modal!.getByTestId('fin-deposit')).toBeEditable();
-    // And a way to commit them, since offering inputs with no Save would be worse than neither.
-    await expect(modal!.getByTestId('fin-save')).toBeVisible();
-
-    expect(await editableCount(modal!)).toBe(2);
+    // Closed on open: the pencils are the way in, so nothing accepts input yet.
+    expect(await editableCount(modal!)).toBe(0);
+    /*
+     * And the authorized route out is offered. `fin-send-request` rather than a label match: that
+     * button reads "Send Request" since f5ecb33, and an earlier draft of this line looked for
+     * "Request Commission Change" — the label it had under the previous design.
+     * Visible rather than enabled: it is deliberately disabled until a pencil has been clicked and
+     * something actually differs from the saved deal.
+     */
+    await expect(modal!.getByTestId('fin-send-request')).toBeVisible();
   });
 
   test('AUDIT TRAIL KEEPS ITS FILTER AND SEARCH, which are navigation and not modification', async ({ page }) => {

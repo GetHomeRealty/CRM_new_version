@@ -1829,17 +1829,19 @@ export default function TransactionDetailPage() {
         />
       )}
       {/*
-        DOCUMENTATION READS DOCUMENTS, IT NO LONGER WRITES THEM.
-        This was `isDocumentation ? false` — an explicit exemption that made Documents the one
-        Quick Action this role could edit. The brokerage asked on 2026-10-13 for every Quick
-        Action to be strictly view-only for the role, which includes this one, so the exemption
-        is gone. It is a real reduction in what the role can do: uploading, replacing,
-        submitting and deleting document drafts are all now closed to it, and
-        `server/src/documents/documentation-readonly.spec.ts` holds the server half so a request made
-        outside this screen is refused rather than quietly accepted.
+        DOCUMENTATION WRITES DOCUMENTS AGAIN, which is the role's own job.
+        It was closed on 2026-10-13 when every Quick Action was made strictly view-only, and
+        reopened the same day: a Transaction Coordinator who cannot attach a document cannot do
+        the work. Upload, add, save, the validation radios, the reminder flags and the RECO audit
+        fields are all live again, and the server-side `DocumentationReadOnlyGuard` that enforced
+        the closure is gone with it.
+        WHAT DID NOT COME BACK WITH IT, because each is guarded independently of that flag:
+        Mandatory still needs a Super Admin (`requireMandatoryApproval`), and a document already
+        marked Valid still cannot be replaced or deleted without `documents.override-valid`.
+        Authentication and the `transactions: 'edit'` screen permission are untouched.
       */}
       {docsOpen && (
-        <DocsModal open={docsOpen} onClose={() => setDocsOpen(false)} transactionId={id} txn={txn} readOnly={isAgent ? false : (isDocumentation ? true : view)} agentMode={isAgent} canDeleteConditionDocs={isSuperAdmin} onSaved={reloadTxn} />
+        <DocsModal open={docsOpen} onClose={() => setDocsOpen(false)} transactionId={id} txn={txn} readOnly={isAgent ? false : (isDocumentation ? false : view)} agentMode={isAgent} canDeleteConditionDocs={isSuperAdmin} onSaved={reloadTxn} />
       )}
       {invoiceOpen && txn && (
         <InvoiceModal open={invoiceOpen} onClose={() => setInvoiceOpen(false)} txn={txn} />
