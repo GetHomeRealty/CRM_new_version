@@ -5,6 +5,7 @@ import { printDoc } from './printDoc';
 import BrandMark from './BrandMark';
 import { elementToPdfBase64 } from './pdf';
 import { useToast } from './toast';
+import { useAuth } from '../context/AuthContext';
 import type { AgentSignature, DeskDocument, NoticeOfSaleData, Transaction } from '../types';
 
 const BRAND = '#c8102e';
@@ -28,6 +29,7 @@ const sectionTitle: CSSProperties = { fontSize: 13, fontWeight: 700, letterSpaci
 const grid3: CSSProperties = { display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 14, marginBottom: 12 };
 // Activity rows: name, commission, split, then the brokerage's share (2026-10-12).
 const grid5: CSSProperties = { display: 'grid', gridTemplateColumns: '1.4fr 1fr 0.8fr 0.8fr 1fr', gap: 14, marginBottom: 12 };
+const documentationActivityGrid: CSSProperties = { ...grid5, gridTemplateColumns: 'minmax(0, 1.5fr) minmax(0, 1.1fr) repeat(3, minmax(0, 0.8fr)) minmax(0, 1fr)', gap: 10 };
 const divider: CSSProperties = { borderTop: '1px solid #eef0f5', margin: '6px 0 16px' };
 
 function Field({ label: lbl, value }: { label: ReactNode; value: ReactNode }) {
@@ -49,6 +51,8 @@ type LawyerField = 'name' | 'phone' | 'email';
 
 export default function NoticeOfSaleModal({ open, onClose, txn, onSaved = null }: NoticeOfSaleModalProps) {
   const toast = useToast();
+  const { user } = useAuth();
+  const isDocumentation = user?.role === 'documentation';
   const ref = useRef<HTMLDivElement>(null);
   const [docs, setDocs] = useState<DeskDocument[]>([]);
 
@@ -94,6 +98,12 @@ export default function NoticeOfSaleModal({ open, onClose, txn, onSaved = null }
   const brokPct = (m: { brok_pct?: number | string | null; agent_pct?: number | string | null }): string => {
     if (m.brok_pct !== null && m.brok_pct !== undefined && m.brok_pct !== '') return `${Number(m.brok_pct)}%`;
     if (m.agent_pct !== null && m.agent_pct !== undefined && m.agent_pct !== '') return `${100 - Number(m.agent_pct)}%`;
+    return '';
+  };
+  // Agent Split is the agent/brokerage rate; Team Split is the member's share of the deal.
+  const agentPct = (m: { brok_pct?: number | string | null; agent_pct?: number | string | null }): string => {
+    if (m.agent_pct !== null && m.agent_pct !== undefined && m.agent_pct !== '') return `${Number(m.agent_pct)}%`;
+    if (m.brok_pct !== null && m.brok_pct !== undefined && m.brok_pct !== '') return `${100 - Number(m.brok_pct)}%`;
     return '';
   };
   const useBuyerLawyer = /buying/i.test(txn.type);
@@ -286,10 +296,15 @@ export default function NoticeOfSaleModal({ open, onClose, txn, onSaved = null }
             <div style={divider} />
             <div style={sectionTitle}>Activity</div>
             {team.map((m, i) => (
-              <div style={grid5} key={i}>
+              <div style={isDocumentation ? documentationActivityGrid : grid5} key={i}>
                 <Field label={`Name of ${ordinal(i)}${i > 0 ? ' (if any)' : ''}`} value={m.name} />
                 <Field label="Commission in %/$" value={ownCommission(m.name)} />
-                <Field label="Split in %" value={`${m.split}%`} />
+                {isDocumentation ? (
+                  <>
+                    <Field label="Agent Split %" value={agentPct(m)} />
+                    <Field label="Team Split %" value={m.split !== null && m.split !== undefined && m.split !== '' ? `${m.split}%` : ''} />
+                  </>
+                ) : <Field label="Split in %" value={`${m.split}%`} />}
                 <Field label="Brokerage %" value={brokPct(m)} />
                 <Field label="Brokerage $" value={brokAmount(m.name)} />
               </div>
