@@ -151,13 +151,14 @@ describe('what a Documentation user may change on a deal', () => {
    * side, so putting one back is a visible change to a test rather than a quiet widening.
    */
   /*
-   * NO BASIC INFO FIELD IS AN EXCEPTION. Price and Deposit were for part of 2026-10-13; this role
-   * now requests them for approval instead. Kept as a named set so that adding one back is an
+   * TYPE AND STATUS ARE THE ONLY BASIC INFO FIELDS THIS ROLE WRITES, since 2026-10-13 (commit
+   * "default notice dates and allow type and status edits"). Price, Deposit and Closing Date are
+   * requested for Super Admin approval instead. Kept as a named set so that adding one is an
    * explicit, visible decision rather than a loosened loop.
    */
-  const DOCUMENTATION_BASIC_INFO_EXCEPTIONS = new Set<string>();
+  const DOCUMENTATION_BASIC_INFO_EXCEPTIONS = new Set<string>(['type', 'statuses']);
 
-  it(`NOT ONE FIELD OF BASIC INFO — checked against the card's own map`, () => {
+  it(`NO BASIC INFO FIELD BUT TYPE AND STATUS — checked against the card's own map`, () => {
     /*
      * Driven off `BASIC_INFO_FIELDS` rather than a list repeated here. A field added to the Basic
      * Info card is added to that set, and this fails until it is withheld from the role too —
@@ -181,16 +182,17 @@ describe('what a Documentation user may change on a deal', () => {
   it('THE REST OF BASIC INFO IS STILL WITHHELD, named one by one', () => {
     // Spelled out rather than inferred, because this is the list somebody will want to read when
     // they ask what the 2026-10-13 change did and did not open up.
-    for (const k of ['type', 'statuses', 'agent', 'property', 'offer_date', 'closing_date']) {
+    for (const k of ['agent', 'property', 'offer_date', 'closing_date']) {
       expect([k, DOCUMENTATION_EDITABLE.has(k)]).toEqual([k, false]);
     }
   });
 
-  it('Status is Basic Info, and is the field this was originally wrong about', () => {
-    // The Status multi-select sits inside the Basic Info card between Type and Trade Number. It
-    // reads like a section of its own, was treated as one, and stayed editable because of it.
-    expect(BASIC_INFO_FIELDS.has('statuses')).toBe(true);
-    expect(DOCUMENTATION_EDITABLE.has('statuses')).toBe(false);
+  it('TYPE AND STATUS ARE BASIC INFO, and this role may now write both', () => {
+    // Closing a deal stays refused for this role by its own rule in `update`.
+    for (const k of ['type', 'statuses']) {
+      expect(BASIC_INFO_FIELDS.has(k)).toBe(true);
+      expect(DOCUMENTATION_EDITABLE.has(k)).toBe(true);
+    }
   });
 
   it(`the rest of the coordinator's job is untouched — conditions, status, clients, brokerage, builder`, () => {

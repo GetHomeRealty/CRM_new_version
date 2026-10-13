@@ -114,20 +114,18 @@ test.describe('everything else on the panel is still refused', () => {
     });
   });
 
-  test('CANNOT CHANGE THE REST OF BASIC INFO — the 2026-10-12 rule still holds for those fields', async ({ page }) => {
-    // No Basic Info field is written directly by this role — Status, Type, Agent, Property, the
-    // dates, and now Price and Deposit too.
+  test('CANNOT CHANGE THE REST OF BASIC INFO — only Type and Status are written by this role', async ({ page }) => {
+    // Agent, Property, the dates, Price and Deposit are not written directly by this role.
+    // (Type and Status are, since 2026-10-13 — so this sends neither.)
     await asDocumentation(page, async (id) => {
       const before = await readDeal(page, id);
       await apiSend(page, 'PUT', `/api/transactions/${id}`, {
         price: 530000,
         property: 'ZZ-DOCPRICE SHOULD NOT CHANGE',
-        type: 'Residential Selling',
       });
       const after = await readDeal(page, id);
       expect(num(after.price)).toBe(500000);
       expect(after.property).toBe(before.property);
-      expect(after.type).toBe(before.type);
     });
   });
 });
