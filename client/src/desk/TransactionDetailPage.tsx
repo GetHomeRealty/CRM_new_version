@@ -1,6 +1,7 @@
 import { deskPath } from './area';
 import { createPortal } from 'react-dom';
 import Icon from '../ui/Icon';
+import ClosingDateRequestDialog from './ClosingDateRequestDialog';
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { getTransaction, updateTransaction, listAgents, generateTransactionInvoices, getCompanySettings, getCustomers, getBrokerageSuggestions, requestTransactionEdit, approveEditRequest, rejectEditRequest, reviewAgentChanges, rejectAgentChange, requestTransactionDeletion, forwardDeleteRequest, approveDeleteRequest, rejectDeleteRequest, getDocuments, markTransactionReviewsSeen, bulkReviewAction, type OpenReviewItem } from '../lib/api';
@@ -285,6 +286,8 @@ export default function TransactionDetailPage() {
    */
   const [reasonAsk, setReasonAsk] = useState<null | 'delete' | 'forward' | 'edit'>(null);
   const [reasonText, setReasonText] = useState('');
+  // Documentation's Closing Date pencil — opens ClosingDateRequestDialog.
+  const [dateReqOpen, setDateReqOpen] = useState(false);
   const [coreDocReminders, setCoreDocReminders] = useState<string[]>([]); // §5.2 Active: pending core listing docs
 
   // Close-guard and review-decision state. Declared up here with the rest of the state rather
@@ -896,6 +899,24 @@ export default function TransactionDetailPage() {
   // would silently admit every scope added later, starting with 'mandatory'.
   const pendingReq = editRequests.find((r) => r.status === 'pending' && !r.scope);
   const approvedReq = editRequests.find((r) => r.status === 'approved' && !r.scope);
+  /*
+   * Documentation cannot write Basic Info, but may ASK for a new Closing Date (scope
+   * 'closing_date'), which a Super Admin approves. Not on a DFT deal, where the dates no longer
+   * describe anything.
+   */
+  const canRequestClosingDate = isDocumentation && !stDFT;
+  const pendingDateReq = editRequests.find((r) => r.status === 'pending' && r.scope === 'closing_date');
+  const closingDateLabel = canRequestClosingDate ? (
+    <>Closing Date{' '}
+      <button type="button" className="row-rm" data-testid="closing-date-edit"
+        disabled={!!pendingDateReq}
+        title={pendingDateReq ? 'A closing date change is awaiting Super Admin approval' : 'Request a closing date change'}
+        onClick={() => setDateReqOpen(true)}
+        style={{ marginLeft: 4, color: pendingDateReq ? 'var(--warn)' : 'var(--brand)' }}>
+        <Icon name={pendingDateReq ? 'clock' : 'edit'} size={14} />
+      </button>
+    </>
+  ) : 'Closing Date';
 
   // Auto-save is allowed exactly when the Save button would have been offered — same
   // permission, role and lifecycle-lock gate, so it can never write where a manual
@@ -1468,7 +1489,7 @@ export default function TransactionDetailPage() {
                 </>)}
                 {!listing && (<>
                   <Field label="Offer Date"><input type="date" value={form.offer_date} disabled={basicRo} onChange={(e) => set('offer_date', e.target.value)} /></Field>
-                  <Field label="Closing Date"><input type="date" value={form.closing_date} disabled={basicRo} onChange={(e) => set('closing_date', e.target.value)} /></Field>
+                  <Field label={closingDateLabel}><input type="date" value={form.closing_date} disabled={basicRo} onChange={(e) => set('closing_date', e.target.value)} /></Field>
                 </>)}
               </div>
             )}
@@ -1477,7 +1498,7 @@ export default function TransactionDetailPage() {
                 <Field label="Listing Contract Date"><input type="date" value={form.listing_contract_date} disabled={basicRo} onChange={(e) => set('listing_contract_date', e.target.value)} /></Field>
                 <Field label="Listing Expiry Date"><input type="date" value={form.listing_expiry_date} disabled={basicRo} onChange={(e) => set('listing_expiry_date', e.target.value)} /></Field>
                 {!slHideBasic && <Field label="Offer Date"><input type="date" value={form.offer_date} disabled={basicRo} onChange={(e) => set('offer_date', e.target.value)} /></Field>}
-                {!slHideBasic && <Field label="Closing Date"><input type="date" value={form.closing_date} disabled={basicRo} onChange={(e) => set('closing_date', e.target.value)} /></Field>}
+                {!slHideBasic && <Field label={closingDateLabel}><input type="date" value={form.closing_date} disabled={basicRo} onChange={(e) => set('closing_date', e.target.value)} /></Field>}
               </div>
             )}
           </div>
@@ -1948,6 +1969,10 @@ export default function TransactionDetailPage() {
         } : null}
         onClose={() => setReasonAsk(null)}
       />
+      {canRequestClosingDate && (
+        <ClosingDateRequestDialog open={dateReqOpen} onClose={() => setDateReqOpen(false)}
+          transactionId={id} current={form.closing_date || ''} onSent={reloadTxn} />
+      )}
     </>
   );
 }

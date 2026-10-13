@@ -269,7 +269,8 @@ function PendingCommissionApprovals({
     setError('');
     try {
       await (accept ? approveEditRequest(req.id) : rejectEditRequest(req.id));
-      toast(accept ? 'Commission change approved and applied.' : 'Commission change rejected.', 'ok');
+      const what = req.scope === 'closing_date' ? 'Closing date change' : 'Commission change';
+      toast(accept ? `${what} approved and applied.` : `${what} rejected.`, 'ok');
       // Both the request and the history move on a decision, so the caller reloads both.
       await onDecided();
     } catch (e) {
@@ -338,6 +339,7 @@ function PendingCommissionApprovals({
 const COMMISSION_LABELS: Record<string, string> = {
   price: 'Price',
   deposit: 'Deposit',
+  closing_date: 'Closing Date',
   comm_pct: 'Commission %',
   comm_amt: 'Commission Amount',
   precon_comm_pct: 'Commission %',

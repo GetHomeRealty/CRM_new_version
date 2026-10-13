@@ -1,7 +1,7 @@
 import { UnprocessableEntityException } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
 import type { PrismaService } from '../prisma/prisma.service';
-import { EditRequestsService, COMMISSION_SCOPE, COMMISSION_PROPOSABLE } from './edit-requests.service';
+import { EditRequestsService, COMMISSION_SCOPE, COMMISSION_PROPOSABLE, CLOSING_DATE_SCOPE } from './edit-requests.service';
 import { AuditService } from '../audit/audit.service';
 import type { TransactionsWriteService } from '../transactions/transactions-write.service';
 import type { NotificationDispatcher } from '../notifications/notification-dispatcher.service';
@@ -229,6 +229,86 @@ describe('submitting a commission change request', () => {
     for (const k of ['valid_status', 'comm_status', 'statuses', 'clients']) {
       expect(COMMISSION_PROPOSABLE.has(k)).toBe(false);
     }
+  });
+});
+
+describe('a closing date change request', () => {
+  /** The commission deal, with a closing date to propose against. */
+  const dated = async (tx: PrismaService): Promise<number> => {
+    const id = await deal(tx);
+    await tx.transactions.update({ where: { id }, data: { closing_date: new Date('2027-06-16') } });
+    return id;
+  };
+
+  it('CHANGES NOTHING ON SUBMIT, and records the date it was asked from', async () => {
+    await inRollback(async (tx) => {
+      await user(tx, 'admin', 'super');
+      const doc = await user(tx, 'documentation', 'coordinator');
+      const id = await dated(tx);
+      const { applied, writes } = writeRecorder();
+
+      await svc(tx, { writes }).store(asUser('documentation', doc.id, doc.name), id, 'Builder extended closing',
+        CLOSING_DATE_SCOPE, { closing_date: '2027-07-30' });
+
+      expect(applied).toHaveLength(0);
+      const row = await tx.transactions.findUniqueOrThrow({ where: { id }, select: { closing_date: true } });
+      expect(row.closing_date?.toISOString().slice(0, 10)).toBe('2027-06-16');
+      const req = await tx.transaction_edit_requests.findFirstOrThrow({ where: { transaction_id: id } });
+      expect(req.scope).toBe(CLOSING_DATE_SCOPE);
+      expect(req.proposed).toEqual({ closing_date: '2027-07-30' });
+      expect(req.baseline).toEqual({ closing_date: '2027-06-16' });
+    });
+  });
+
+  it('APPROVAL APPLIES THE NEW DATE through the write service, as the approver', async () => {
+    await inRollback(async (tx) => {
+      const sup = await user(tx, 'admin', 'super');
+      const doc = await user(tx, 'documentation', 'coordinator');
+      const id = await dated(tx);
+      const { applied, writes } = writeRecorder();
+      const s = svc(tx, { writes });
+
+      const req = await s.store(asUser('documentation', doc.id, doc.name), id, 'Builder extended closing',
+        CLOSING_DATE_SCOPE, { closing_date: '2027-07-30' });
+      await s.approve(asUser('admin', sup.id, sup.name), req.id as number);
+
+      expect(applied).toHaveLength(1);
+      expect(applied[0].user.id).toBe(sup.id);
+      expect(applied[0].body).toMatchObject({ closing_date: '2027-07-30' });
+      // Nothing but the date (and the version token) is written.
+      expect(Object.keys(applied[0].body).sort()).toEqual(['closing_date', 'version']);
+    });
+  });
+
+  it('refuses any other field, a bad date and a missing reason', async () => {
+    await inRollback(async (tx) => {
+      const doc = await user(tx, 'documentation', 'coordinator');
+      const id = await dated(tx);
+      const me = asUser('documentation', doc.id, doc.name);
+      const s = svc(tx);
+
+      await expect(s.store(me, id, 'why', CLOSING_DATE_SCOPE, { offer_date: '2027-01-01' })).rejects.toBeInstanceOf(UnprocessableEntityException);
+      await expect(s.store(me, id, 'why', CLOSING_DATE_SCOPE, { closing_date: '2027-07-30', price: 1 })).rejects.toBeInstanceOf(UnprocessableEntityException);
+      await expect(s.store(me, id, 'why', CLOSING_DATE_SCOPE, { closing_date: 'next week' })).rejects.toBeInstanceOf(UnprocessableEntityException);
+      await expect(s.store(me, id, '  ', CLOSING_DATE_SCOPE, { closing_date: '2027-07-30' })).rejects.toBeInstanceOf(UnprocessableEntityException);
+      expect(await tx.transaction_edit_requests.count({ where: { transaction_id: id } })).toBe(0);
+    });
+  });
+
+  it('DOES NOT BLOCK, AND IS NOT BLOCKED BY, a pending commission request', async () => {
+    await inRollback(async (tx) => {
+      await user(tx, 'admin', 'super');
+      const doc = await user(tx, 'documentation', 'coordinator');
+      const id = await dated(tx);
+      const me = asUser('documentation', doc.id, doc.name);
+      const s = svc(tx);
+
+      await s.store(me, id, 'price', COMMISSION_SCOPE, { price: 510000 });
+      await expect(s.store(me, id, 'date', CLOSING_DATE_SCOPE, { closing_date: '2027-07-30' })).resolves.toBeDefined();
+      // But only one open date request per deal.
+      await expect(s.store(me, id, 'again', CLOSING_DATE_SCOPE, { closing_date: '2027-08-30' }))
+        .rejects.toBeInstanceOf(UnprocessableEntityException);
+    });
   });
 });
 
