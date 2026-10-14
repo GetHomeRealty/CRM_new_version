@@ -265,6 +265,38 @@ test.describe('the screen edits by pencil and sends a request', () => {
       expect(num(after.comm_amt)).toBe(16050);
     });
   });
+
+  test('COMMISSION % HAS ITS OWN PENCIL, and is requested and applied the same way', async ({ page }) => {
+    await asDocumentation(page, async (id) => {
+      const modal = await openFinancial(page, id);
+      await expect(modal.getByTestId('fin-comm-pct')).not.toBeEditable();
+      await modal.getByTestId('fin-edit-commPct').click();
+      await expect(modal.getByTestId('fin-comm-pct')).toBeEditable();
+      await expect(modal.getByTestId('fin-price')).not.toBeEditable();
+      await modal.getByTestId('fin-comm-pct').fill('3.25');
+      await modal.getByTestId('fin-send-request').click();
+
+      const dialog = page.getByTestId('commission-change-dialog');
+      await expect(dialog).toBeInViewport();
+      await expect(dialog.getByTestId('current-comm_pct')).toContainText('2.5%');
+      await expect(dialog.getByTestId('proposed-comm_pct')).toContainText('3.25%');
+      await dialog.getByTestId('commission-change-reason').fill('ZZ-DOCPRICE commission % from the APS');
+      await dialog.getByTestId('commission-change-submit').click();
+      await expect(modal.getByTestId('fin-change-pending')).toBeVisible({ timeout: 15_000 });
+
+      const pending = await readDeal(page, id);
+      expect(num(pending.comm_pct)).toBe(2.5);
+      const req = ((pending.edit_requests ?? []) as { id: number; status: string; scope: string | null }[])
+        .find((r) => r.scope === 'commission' && r.status === 'pending');
+      expect(req).toBeTruthy();
+
+      await signOut(page);
+      await signIn(page, 'superAdmin');
+      const approved = await apiSend(page, 'POST', `/api/edit-requests/${req!.id}/approve`, {});
+      expect(approved.status).toBeLessThan(300);
+      expect(num((await readDeal(page, id)).comm_pct)).toBe(3.25);
+    });
+  });
 });
 
 // =====================================================================================

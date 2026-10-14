@@ -121,8 +121,8 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
    * one approval request (scope 'commission'), and a Super Admin's approval applies them. Nothing
    * on the deal moves until then.
    */
-  type DocField = 'price' | 'deposit' | 'commAmt';
-  const [docUnlock, setDocUnlock] = useState<Record<DocField, boolean>>({ price: false, deposit: false, commAmt: false });
+  type DocField = 'price' | 'deposit' | 'commAmt' | 'commPct';
+  const [docUnlock, setDocUnlock] = useState<Record<DocField, boolean>>({ price: false, deposit: false, commAmt: false, commPct: false });
   const [proposeOpen, setProposeOpen] = useState(false);
   const [proposeReason, setProposeReason] = useState('');
   const [proposeBusy, setProposeBusy] = useState(false);
@@ -198,8 +198,11 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
   const commAmtKey = precon ? 'precon_comm_amt_manual' : listing ? null : 'comm_amt';
   const amtOrNull = (v: number | string | null | undefined): number | null =>
     (v === null || v === undefined || String(v).trim() === '' ? null : r2(parseNumber(v)));
-  const docChanges = (): { key: string; label: string; from: number | null; to: number | null }[] => {
-    const rows: { key: string; label: string; from: number | null; to: number | null }[] = [
+  /** A percentage as typed — not rounded to cents, since terms like 1.443242 % are real. */
+  const pctOrNull = (v: number | string | null | undefined): number | null =>
+    (v === null || v === undefined || String(v).trim() === '' ? null : parseNumber(v));
+  const docChanges = (): { key: string; label: string; from: number | null; to: number | null; pct?: boolean }[] => {
+    const rows: { key: string; label: string; from: number | null; to: number | null; pct?: boolean }[] = [
       { key: 'price', label: 'Price', from: amtOrNull(txn.price ?? 0), to: amtOrNull(price) ?? 0 },
     ];
     if (!referral) rows.push({ key: 'deposit', label: 'Deposit', from: amtOrNull(txn.deposit ?? 0), to: amtOrNull(deposit) ?? 0 });
@@ -209,6 +212,20 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
         label: 'Commission Amount',
         from: amtOrNull(precon ? txn.precon_comm_amt_manual : txn.comm_amt),
         to: amtOrNull(precon ? masterAmtManual : commAmt),
+      });
+    }
+    /*
+     * COMMISSION %, only once its pencil has been used — so a request for the Amount alone carries
+     * exactly what it did before. On Buying / Lease, typing a % empties the Amount (the two are
+     * exclusive there), and the Amount row above then carries that too, as an ordinary save would.
+     */
+    if (commAmtKey && docUnlock.commPct) {
+      rows.push({
+        key: precon ? 'precon_comm_pct' : 'comm_pct',
+        label: 'Commission %',
+        from: pctOrNull(precon ? txn.precon_comm_pct : (txn.comm_pct ?? (txn.comm_type === '%' ? txn.comm_value : null))),
+        to: pctOrNull(precon ? masterPct : commPct),
+        pct: true,
       });
     }
     return rows.filter((r) => r.from !== r.to);
@@ -221,7 +238,8 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
     setCommAmt(txn.comm_amt ?? '');
     setCommPct(txn.comm_pct ?? (txn.comm_type === '%' ? txn.comm_value : '') ?? '');
     setMasterAmtManual(txn.precon_comm_amt_manual ?? '');
-    setDocUnlock({ price: false, deposit: false, commAmt: false });
+    setMasterPct(txn.precon_comm_pct ?? '');
+    setDocUnlock({ price: false, deposit: false, commAmt: false, commPct: false });
   };
 
   const sendProposal = async () => {
@@ -720,7 +738,7 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
           <div className={referral ? 'g3' : 'g4'}>
             {priceField}
             {!referral && depositField}
-            <div className="field"><label>Commission % {finPencil()}</label><input value={commPct} onChange={(e) => onPct(e.target.value)} placeholder="e.g. 5" readOnly={readOnly || finLock} style={finLock ? { ...finLockStyle, ...pctStyle } : pctStyle} /></div>
+            <div className="field"><label>Commission % {docEdits ? docPencil('commPct') : finPencil()}</label><input value={commPct} onChange={(e) => onPct(e.target.value)} placeholder="e.g. 5" disabled={docEdits ? docLocked('commPct') : undefined} readOnly={!docEdits && (readOnly || finLock)} style={!docEdits && finLock ? { ...finLockStyle, ...pctStyle } : pctStyle} data-testid="fin-comm-pct" /></div>
             <div className="field"><label>Commission Amount {docEdits ? docPencil('commAmt') : finPencil()}</label><MoneyInput value={commAmt} onChange={(v) => onAmt(v)} placeholder="0.00" disabled={docEdits ? docLocked('commAmt') : undefined} readOnly={!docEdits && (readOnly || finLock)} style={!docEdits && finLock ? finLockStyle : undefined} data-testid="fin-comm-amt" /></div>
           </div>
         )}
@@ -734,7 +752,7 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
           <>
             <div className="modal-sub">Commission</div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10, marginBottom: 10 }}>
-              <div className="field" style={{ marginBottom: 0 }}><label>Commission % {finPencil()}</label><input type="number" value={masterPct} onChange={(e) => setMasterPct(e.target.value)} placeholder="e.g. 4" disabled={readOnly || docEdits} readOnly={finLock} style={finLock ? { ...finLockStyle, ...pctStyle } : pctStyle} /></div>
+              <div className="field" style={{ marginBottom: 0 }}><label>Commission % {docEdits ? docPencil('commPct') : finPencil()}</label><input type="number" value={masterPct} onChange={(e) => setMasterPct(e.target.value)} placeholder="e.g. 4" disabled={docEdits ? docLocked('commPct') : readOnly} readOnly={!docEdits && finLock} style={!docEdits && finLock ? { ...finLockStyle, ...pctStyle } : pctStyle} data-testid="fin-comm-pct" /></div>
               <div className="field" style={{ marginBottom: 0 }}><label>Commission Amount {docEdits ? docPencil('commAmt') : finPencil()}</label><MoneyInput value={masterAmtManual} onChange={(v) => setMasterAmtManual(v)} placeholder="0.00" disabled={docEdits ? docLocked('commAmt') : readOnly} readOnly={!docEdits && finLock} style={!docEdits && finLock ? finLockStyle : undefined} data-testid="fin-comm-amt" /></div>
               <div className="field" style={{ marginBottom: 0 }}><label>Bonus {finPencil()}</label><select value={masterBonusOn ? 'Yes' : 'No'} disabled={finLock || readOnly || docEdits} onChange={(e) => { const on = e.target.value === 'Yes'; setMasterBonusOn(on); if (!on) setMasterBonus(''); }} style={finLock ? finLockStyle : undefined}><option>No</option><option>Yes</option></select></div>
               {!masterBonusOn
@@ -1034,7 +1052,7 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
           {docEdits && (
             <button className="btn primary" data-testid="fin-send-request"
               disabled={!!pendingChangeReq || docChanges().length === 0}
-              title={pendingChangeReq ? 'A change request is already awaiting approval' : docChanges().length === 0 ? 'Click ✏ beside Price, Deposit or Commission Amount to make a change' : undefined}
+              title={pendingChangeReq ? 'A change request is already awaiting approval' : docChanges().length === 0 ? 'Click ✏ beside Price, Deposit, Commission % or Commission Amount to make a change' : undefined}
               onClick={() => { setProposeError(''); setProposeOpen(true); }}>
               Send Request
             </button>
@@ -1085,8 +1103,8 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
                 {docChanges().map((c) => (
                   <tr key={c.key}>
                     <td>{c.label}</td>
-                    <td data-testid={`current-${c.key}`}>{c.from === null ? '—' : formatCurrency(c.from)}</td>
-                    <td data-testid={`proposed-${c.key}`}><strong>{c.to === null ? '—' : formatCurrency(c.to)}</strong></td>
+                    <td data-testid={`current-${c.key}`}>{c.from === null ? '—' : c.pct ? `${c.from}%` : formatCurrency(c.from)}</td>
+                    <td data-testid={`proposed-${c.key}`}><strong>{c.to === null ? '—' : c.pct ? `${c.to}%` : formatCurrency(c.to)}</strong></td>
                   </tr>
                 ))}
               </tbody>
