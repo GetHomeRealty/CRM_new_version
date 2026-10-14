@@ -1246,6 +1246,27 @@ export const MAIL_EVENTS: Record<string, MailEvent> = {
       + '<p><strong>{{ lead_name }}</strong> submitted {{ form_name }}.</p>'
       + '<p><a href="{{ open_link }}">Open the lead</a></p>',
   },
+  /*
+   * A SECOND ENQUIRY FROM SOMEBODY ALREADY ON THE BOOKS.
+   *
+   * Distinct from `crm.meta_lead_received`, which announces a lead ARRIVING. This one says a person
+   * the brokerage already knows has asked about something else, and the useful part is which
+   * property or form — the lead itself is not news to the agent who already holds it.
+   *
+   * NO MIGRATION. `CrmEventNotifier.templated` seeds `email_templates` from this registry the first
+   * time the key is used, so adding the entry is the whole change.
+   */
+  'crm.meta_repeat_enquiry': {
+    module: 'CRM',
+    label: 'CRM — New Enquiry From An Existing Lead',
+    variables: ['user_name', 'lead_name', 'form_name', 'enquiry_about', 'open_link', 'current_date', 'current_year'],
+    default_subject: 'New enquiry from an existing lead: {{ lead_name }}',
+    default_body_html:
+      '<p>Hello {{ user_name }},</p>'
+      + '<p><strong>{{ lead_name }}</strong> — already one of your leads — submitted {{ form_name }}.</p>'
+      + '<p>{{ enquiry_about }}</p>'
+      + '<p><a href="{{ open_link }}">Open the lead</a></p>',
+  },
   'crm.campaign_completed': {
     module: 'CRM',
     label: 'CRM — Campaign Finished',

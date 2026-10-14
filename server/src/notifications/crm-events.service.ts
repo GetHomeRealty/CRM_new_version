@@ -323,6 +323,65 @@ export class CrmEventNotifier {
     });
   }
 
+  /**
+   * A PERSON ALREADY ON THE BOOKS HAS ASKED ABOUT SOMETHING ELSE.
+   *
+   * WHY THIS IS A SEPARATE EVENT FROM `metaLeadArrived`. That one announces a lead ARRIVING, and
+   * deduplication deliberately suppressed it — "an existing lead being updated is not a new lead
+   * arriving", which is right. But a second submission is not an update to the first: it is a fresh
+   * enquiry, usually about a different property, and the agent who holds the relationship was being
+   * told nothing at all. Reusing `metaLeadArrived` would have meant either announcing a new lead
+   * that is not new, or keeping the silence.
+   *
+   * THE RECIPIENT IS THE CALLER'S DECISION, as with every other event here: only the call site
+   * knows who currently holds the lead. Null is returned early rather than guessed at.
+   *
+   * KEYED ON META'S OWN SUBMISSION ID. `facebookLeadId` identifies the SUBMISSION, not the person,
+   * so the scheduled poll and the webhook delivering the same one collapse to a single notice while
+   * a genuinely different submission from the same person gets its own. That is the durable half of
+   * the idempotency; the caller's half is that it only calls here when a row was actually inserted.
+   *
+   * EMAIL IS SENT, unlike `metaLeadArrived`. The reason that one gives up its email is that
+   * `notifyNewLead` already mails the agent about the same arrival — and on a repeat enquiry
+   * nothing else mails at all, so suppressing it here would mean an agent who only reads email
+   * never hears about it.
+   */
+  async metaRepeatEnquiry(lead: {
+    id: number; first_name?: string | null; last_name?: string | null; email?: string | null;
+  }, recipientUserId: number | null | undefined, facebookLeadId: string, details?: {
+    formName?: string | null; propertyAddress?: string | null; projectName?: string | null;
+  }): Promise<void> {
+    if (!recipientUserId || !facebookLeadId) return;
+
+    /*
+     * WHAT THEY ASKED ABOUT, which is the only part of a repeat enquiry that is news. Property
+     * address first, then a named project; a form that asked for neither says so rather than
+     * leaving the sentence dangling.
+     */
+    const about = details?.propertyAddress?.trim() || details?.projectName?.trim() || '';
+    const form = details?.formName ? `"${details.formName}"` : 'a Facebook lead form';
+
+    const tpl = await this.templated('crm.meta_repeat_enquiry', {
+      user_name: await this.userName(recipientUserId),
+      lead_name: this.nameOf(lead),
+      form_name: form,
+      enquiry_about: about ? `Enquiry about: ${about}` : 'The form recorded no property or project.',
+      open_link: this.absoluteLink(this.leadLink(lead.id)),
+    });
+
+    await this.send({
+      ...tpl,
+      // The same preference category as the arrival notice: an agent who wants Facebook lead
+      // notices wants these, and a new category would silently default somebody into or out of it.
+      category: 'lead_meta',
+      userId: recipientUserId,
+      title: 'New enquiry from an existing lead',
+      body: `${this.nameOf(lead)} submitted ${form}${about ? ` about ${about}` : ''}.`,
+      link: this.leadLink(lead.id),
+      dedupeKey: `meta-repeat:${facebookLeadId}:${recipientUserId}`,
+    });
+  }
+
   // ========================================================================== 4. task due
 
   /**

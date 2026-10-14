@@ -56,6 +56,13 @@ const CRM_NOTIFICATION_KEYS = [
   'crm.campaign_completed', 'crm.campaign_failed',
   // The two events added when task assignment and showings gained notifications.
   'crm.task_assigned', 'crm.showing_created',
+  /*
+   * A second enquiry from somebody already on the books. Listed here because it HAS a sender —
+   * `CrmEventNotifier.metaRepeatEnquiry` — which is the condition this test exists to enforce.
+   * Distinct from `crm.meta_lead_received`: that one announces a lead arriving, and dedupe
+   * deliberately suppresses it for a person who is already a lead.
+   */
+  'crm.meta_repeat_enquiry',
 ];
 
 describe('CRM templates — registration', () => {

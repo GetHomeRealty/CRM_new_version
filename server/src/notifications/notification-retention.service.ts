@@ -34,7 +34,17 @@ import { RETENTION_MONTHS } from '../retention/retention.service';
  * WHY THE CATEGORIES WITHOUT A GUARD ARE SAFE — checked one at a time rather than assumed, because
  * "probably one-shot" is how the `lead_task_due` case would have been missed too:
  *
- *   lead_created, lead_meta, lead_assigned   raised when the thing happens; no sweep re-selects them
+ *   lead_created, lead_assigned              raised when the thing happens; no sweep re-selects them
+ *   lead_meta                                raised when the thing happens, and ONE reader re-selects
+ *                                            it: `MetaSyncService.repeatEnquiryNotice` treats the
+ *                                            absence of a `meta-repeat:` claim as "nobody has been
+ *                                            told yet" and raises the notice. Purging such a row
+ *                                            would make an old submission look un-notified, so that
+ *                                            reader bounds itself by THIS policy's window — it will
+ *                                            not re-notify for an enquiry recorded before the
+ *                                            cutoff. The guard therefore lives at the reader rather
+ *                                            than as a `STILL_LIVE` entry here, because the row is
+ *                                            genuinely dead once the enquiry is that old.
  *   campaign_completed, campaign_failed      terminal states of a campaign that has stopped
  *   transaction_approvals, document_review   raised by a person's decision
  *   mention                                  keyed to one message and one reader
