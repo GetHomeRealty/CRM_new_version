@@ -291,7 +291,7 @@ test.describe('each Quick Action reads as a record, not as a stuck form', () => 
   for (const [name, label] of [
     ['Admin', /^Admin$/i],
     ['Adjustment', /^Adjustment$/i],
-    ['Agent Payment Readiness', /Agent Payment Readiness/i],
+    // Agent Payment Readiness left this list on 2026-10-14 — see the test after this loop.
   ] as const) {
     test(`${name} IS STRICTLY READ-ONLY — no control accepts input`, async ({ page }) => {
       /*
@@ -309,6 +309,45 @@ test.describe('each Quick Action reads as a record, not as a stuck form', () => 
       await expect(page.locator('.modal')).toHaveCount(0, { timeout: 10_000 });
     });
   }
+
+  test('AGENT PAYMENT READINESS: ONLY THE THREE READINESS FIELDS ACCEPT INPUT', async ({ page }) => {
+    /*
+     * Valid Docs Cleared from Agent, Final Validation and Ready to Process Agent Payment are this
+     * role's to set (brokerage request, 2026-10-14); everything else in the panel stays read-only.
+     */
+    const modal = await openQuickAction(page, /Agent Payment Readiness/i);
+    test.skip(!modal, 'Agent Payment Readiness is not offered to this role on this deal');
+    await expect(modal!.locator('.modal-h').first()).not.toContainText('(View Only)');
+    expect(await editableCount(modal!)).toBe(3);
+    await expect(modal!.getByRole('button', { name: /^Save$/ })).toBeVisible();
+  });
+
+  test('AGENT PAYMENT READINESS SAVES THE READINESS FIELDS, and the server keeps nothing else', async ({ page }) => {
+    const modal = await openQuickAction(page, /Agent Payment Readiness/i);
+    test.skip(!modal, 'Agent Payment Readiness is not offered to this role on this deal');
+    const selects = modal!.locator('select:enabled');
+    await selects.nth(0).selectOption('Yes');      // Valid Docs Cleared from Agent
+    await selects.nth(1).selectOption('Done');     // Final Validation
+    await modal!.getByRole('button', { name: /^Save$/ }).click();
+    await expect(page.locator('.modal')).toHaveCount(0, { timeout: 10_000 });
+
+    const read = async () => {
+      const r = await apiGet(page, `/api/transactions/${dealId}`);
+      const d = ((r.body as { data?: unknown }).data ?? r.body) as { activity_tracker?: Record<string, unknown> };
+      return d.activity_tracker ?? {};
+    };
+    expect(await read()).toMatchObject({ docs_cleared: 'Yes', final_validation: 'Done', ready_to_process: 'Yes' });
+
+    // A hand-made request carrying other tracker keys changes only the readiness fields.
+    await apiSend(page, 'PUT', `/api/transactions/${dealId}`, {
+      activity_tracker: { final_validation: 'Pending', client_account_no: 'ZZ-HACK', batch_review_email: true, agent_commission_paid_status: 'Yes' },
+    });
+    const after = await read();
+    expect(after.final_validation).toBe('Pending');
+    expect(after.client_account_no).not.toBe('ZZ-HACK');
+    expect(after.batch_review_email).not.toBe(true);
+    expect(after.agent_commission_paid_status).not.toBe('Yes');
+  });
 
   test('DOCUMENTS IS EDITABLE, with Mandatory still locked to a Super Admin', async ({ page }) => {
     /*
@@ -391,7 +430,7 @@ test.describe('each Quick Action reads as a record, not as a stuck form', () => 
 });
 
 // =====================================================================================
-test.describe('the four view-only panels say so in their heading', () => {
+test.describe('the view-only panels say so in their heading', () => {
   /*
    * ADDED 2026-10-13, THEN NARROWED THE SAME DAY. The blue "View" bar above the fields had been
    * removed earlier — with the controls rendered as plain text it was furniture — and the fact was
@@ -413,8 +452,10 @@ test.describe('the four view-only panels say so in their heading', () => {
     { button: /^Adjustment$/i, heading: 'Adjustment & Advance Payment' },
     { button: /^Agent Payment Readiness$/i, heading: 'Agent Payment Readiness' },
   ] as const;
+  // Agent Payment Readiness is no longer view-only for this role (2026-10-14): its readiness fields are editable.
+  const VIEW_ONLY_FOR_DOCS = PANELS.filter((p) => p.heading !== 'Agent Payment Readiness');
 
-  test('THE DOCUMENTATION SEAT SEES "(View Only)" IN ALL FOUR HEADINGS, AND ON NO BUTTON', async ({ page }) => {
+  test('THE DOCUMENTATION SEAT SEES "(View Only)" IN ALL THREE HEADINGS, AND ON NO BUTTON', async ({ page }) => {
     await signIn(page, 'superAdmin');
     const id = await createDeal(page);
     try {
@@ -423,7 +464,7 @@ test.describe('the four view-only panels say so in their heading', () => {
       await page.goto(`/desk/transactions/${id}`);
       await expect(page.getByRole('button', { name: /^Back$/ })).toBeVisible({ timeout: 20_000 });
 
-      for (const p of PANELS) {
+      for (const p of VIEW_ONLY_FOR_DOCS) {
         const button = page.getByRole('button', { name: p.button }).first();
         if (!(await button.count())) continue;
 

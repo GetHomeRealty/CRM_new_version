@@ -180,6 +180,47 @@ export const DOCUMENTATION_EDITABLE: ReadonlySet<string> = new Set([
    */
 ]);
 
+/**
+ * AGENT PAYMENT READINESS: the part a Documentation user may set (brokerage request, 2026-10-14).
+ *
+ * `activity_tracker` as a whole stays out of `DOCUMENTATION_EDITABLE` — it also holds the deposit
+ * slips, the client's bank details and payment status. Only these keys are taken from this role's
+ * save, merged onto the stored record, the same way an agent's save keeps only
+ * `batch_review_email`. Final Validation Remarks travels with Final Validation: it is the reason
+ * an "Invalid" needs.
+ */
+export const DOCUMENTATION_READINESS_KEYS: readonly string[] = ['docs_cleared', 'final_validation', 'final_validation_remarks', 'ready_to_process'];
+/** The same three on each preconstruction term (`term_tracker[n]`), which has no remarks of its own. */
+export const DOCUMENTATION_READINESS_TERM_KEYS: readonly string[] = ['docs_cleared', 'final_validation', 'ready_to_process'];
+
+/**
+ * The stored tracker with only the readiness keys taken from `sent`. Anything else in `sent` is
+ * ignored; a key `sent` does not carry keeps its stored value. Values are kept only as strings.
+ */
+export function mergeDocumentationReadiness(stored: Record<string, unknown>, sent: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...stored };
+  const take = (into: Record<string, unknown>, from: Record<string, unknown>, keys: readonly string[]) => {
+    for (const k of keys) {
+      if (Object.prototype.hasOwnProperty.call(from, k)) into[k] = typeof from[k] === 'string' ? (from[k] as string).slice(0, 2000) : '';
+    }
+  };
+  take(out, sent, DOCUMENTATION_READINESS_KEYS);
+  const sentTerms = sent.term_tracker;
+  if (sentTerms && typeof sentTerms === 'object' && !Array.isArray(sentTerms)) {
+    const storedTerms = (stored.term_tracker && typeof stored.term_tracker === 'object' && !Array.isArray(stored.term_tracker))
+      ? stored.term_tracker as Record<string, unknown> : {};
+    const terms: Record<string, unknown> = { ...storedTerms };
+    for (const [n, row] of Object.entries(sentTerms as Record<string, unknown>)) {
+      if (!/^\d{1,3}$/.test(n) || !row || typeof row !== 'object' || Array.isArray(row)) continue;
+      const cur = (terms[n] && typeof terms[n] === 'object' && !Array.isArray(terms[n])) ? { ...(terms[n] as Record<string, unknown>) } : {};
+      take(cur, row as Record<string, unknown>, DOCUMENTATION_READINESS_TERM_KEYS);
+      terms[n] = cur;
+    }
+    out.term_tracker = terms;
+  }
+  return out;
+}
+
 /** Basic Info API keys, checked against the Documentation allow-list in its permission tests.
  * Trade Number is omitted because it is read-only for every role.
  */
@@ -988,7 +1029,10 @@ export class TransactionsWriteService {
      * status and money validation, and optimistic locking.
      */
     if (user?.role === 'documentation') {
+      const sentTracker = Object.prototype.hasOwnProperty.call(data, 'activity_tracker') ? asObject(data.activity_tracker) : null;
       for (const k of Object.keys(data)) if (!DOCUMENTATION_EDITABLE.has(k)) delete data[k];
+      // Agent Payment Readiness: only its readiness fields — see `mergeDocumentationReadiness`.
+      if (sentTracker) data.activity_tracker = mergeDocumentationReadiness(parseJsonObject(t.activity_tracker), sentTracker);
     }
 
     // ACCOUNTING — Basic Info and the Financial panel's figures are view-only (see ACCOUNTING_LOCKED).
