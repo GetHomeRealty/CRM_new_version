@@ -753,6 +753,205 @@ describe('recovery is bounded by the notification retention window', () => {
 });
 
 // =====================================================================================
+describe("a lead's own arrival is never re-announced as a repeat", () => {
+  /*
+   * WHY THIS NEEDS ITS OWN CASE. `repeatEnquiryNotice` recognises "this submission IS this lead"
+   * by comparing `leads.facebook_lead_id` with the submission id. That column is not stable: the
+   * `existing` branch moves it on to the newest submission whenever a newer one lands. So once a
+   * second enquiry has arrived, the FIRST one — the submission that created the lead, already
+   * announced by `metaArrived` at the time — no longer matches the column, and re-reading it
+   * would announce a months-old arrival as "a new enquiry from an existing lead".
+   *
+   * Re-reading an old submission is not hypothetical: it is exactly what the `seen` branch exists
+   * for, and a form re-sync or a replayed webhook does it in bulk.
+   */
+  it('RE-SYNCING THE SUBMISSION THAT CREATED THE LEAD raises nothing, even after a later one moved the lead on', async () => {
+    await inRollback(async (tx) => {
+      const admin = await makeUser(tx, 'admin', 'adm');
+      const agent = await makeUser(tx, 'agent', 'ag');
+      const first = `m-${tag()}`;
+      const second = `m-${tag()}`;
+      const sent: Sent[] = [];
+      const svc = syncService(tx, sent);
+      const ctx = ctxFor(admin, null);
+
+      // 1. The arrival. Creates the lead and stamps `first` on it.
+      const made = await svc.upsertLead(submission(first, { phone: '4165550144', property: '1 Arrival Way' }, day(20)), ctx);
+      const leadId = made.leadId as number;
+      await tx.leads.update({ where: { id: leadId }, data: { assigned_to: agent.id } });
+
+      // 2. A genuine repeat, which moves the lead's Meta columns on to `second`.
+      await svc.upsertLead(submission(second, { phone: '4165550144', property: '2 Repeat Rd' }, day(21)), ctx);
+      expect(sent.filter((x) => x.event === 'repeat' && x.metaId === second)).toHaveLength(1);
+      expect((await tx.leads.findUnique({ where: { id: leadId }, select: { facebook_lead_id: true } }))!.facebook_lead_id)
+        .toBe(second);
+
+      // 3. The arrival is read again — a re-sync, a backfill, a replayed webhook.
+      sent.length = 0;
+      await svc.upsertLead(submission(first, { phone: '4165550144', property: '1 Arrival Way' }, day(20)), ctx);
+
+      expect(sent.filter((x) => x.event === 'repeat')).toHaveLength(0);
+      // And nothing was duplicated while proving it.
+      expect(await inquiriesOf(tx, leadId)).toHaveLength(2);
+    });
+  }, 60000);
+
+  it('A STAMPED REPEAT WHOSE NOTICE WAS LOST RECOVERS, EXACTLY ONCE', async () => {
+    /*
+     * THE DURABILITY HALF OF THE SAME BUG. A repeat matched through the existing-lead branch moves
+     * `facebook_lead_id` on to itself. If the notice never reached the dispatcher — it threw, the
+     * process died — no claim exists, and a classifier that read that column would call the
+     * submission "the lead's own arrival" on every replay and never recover it.
+     *
+     * The state below is what that leaves behind: the enquiry row committed, the stamp advanced,
+     * and NO delivery claim.
+     */
+    await inRollback(async (tx) => {
+      const admin = await makeUser(tx, 'admin', 'adm');
+      const agent = await makeUser(tx, 'agent', 'ag');
+      const first = `m-${tag()}`;
+      const second = `m-${tag()}`;
+      const sent: Sent[] = [];
+      const svc = syncService(tx, sent);
+      const ctx = ctxFor(admin, null);
+
+      const made = await svc.upsertLead(submission(first, { phone: '4165550177', property: '1 Arrival Way' }, day(20)), ctx);
+      const leadId = made.leadId as number;
+      await tx.leads.update({ where: { id: leadId }, data: { assigned_to: agent.id } });
+
+      // The repeat lands and the stamp advances, but nothing is told: the claim is removed to
+      // stand for a dispatch that was never reached.
+      await svc.upsertLead(submission(second, { phone: '4165550177', property: '2 Repeat Rd' }, day(21)), ctx);
+      await tx.notification_deliveries.deleteMany({
+        where: { user_id: agent.id, dedupe_key: `meta-repeat:${second}:${agent.id}` },
+      });
+      expect((await tx.leads.findUnique({ where: { id: leadId }, select: { facebook_lead_id: true } }))!.facebook_lead_id)
+        .toBe(second);
+
+      // Replay one: it recovers.
+      sent.length = 0;
+      await svc.upsertLead(submission(second, { phone: '4165550177', property: '2 Repeat Rd' }, day(21)), ctx);
+      const recovered = sent.filter((x) => x.event === 'repeat' && x.metaId === second);
+      expect(recovered).toHaveLength(1);
+      expect(recovered[0].recipient).toBe(agent.id);
+
+      // Replay two: it does not recover again — the claim the dispatcher wrote is now there.
+      sent.length = 0;
+      await svc.upsertLead(submission(second, { phone: '4165550177', property: '2 Repeat Rd' }, day(21)), ctx);
+      expect(sent.filter((x) => x.event === 'repeat')).toHaveLength(0);
+
+      // And none of it duplicated the enquiry.
+      expect(await inquiriesOf(tx, leadId)).toHaveLength(2);
+    });
+  }, 60000);
+
+  it("A LEGACY LEAD'S OWN SUBMISSION STAYS SUPPRESSED, though its enquiry row is written long after", async () => {
+    /*
+     * A lead created by Meta BEFORE `meta_lead_inquiries` existed: it carries the submission id and
+     * no enquiry row at all. The first sync to see that submission again writes the row — `now`,
+     * months after the lead — and must not announce the lead's own arrival as news.
+     *
+     * Its timestamps do not line up the way a modern arrival's do, which is why the test is `<=`
+     * against `created_at` rather than equality.
+     */
+    await inRollback(async (tx) => {
+      const admin = await makeUser(tx, 'admin', 'adm');
+      const agent = await makeUser(tx, 'agent', 'ag');
+      const metaId = `m-${tag()}`;
+      const t = tag();
+      const now = new Date();
+      // Created by the old Meta path: wall-clock `created_at`, LATER than the submission.
+      const lead = await tx.leads.create({
+        data: {
+          name: `ZZ Legacy ${t}`, email: `zz-legacy-${t}@probe.test`,
+          phone: '4165550188', phone_normalized: '4165550188',
+          source: 'facebook_meta', lead_source: 'meta', lead_status: 'cold',
+          created_by: 'Meta · Get Home Realty',
+          facebook_lead_id: metaId,
+          owner_user_id: null, assigned_to: agent.id,
+          created_at: day(5), updated_at: now,
+        },
+      });
+
+      const sent: Sent[] = [];
+      await syncService(tx, sent).upsertLead(
+        submission(metaId, { phone: '4165550188', property: '1 Legacy Lane' }, day(4)),
+        ctxFor(admin, null),
+      );
+
+      expect(sent.filter((x) => x.event === 'repeat')).toHaveLength(0);
+      // The enquiry itself IS recorded — only the notice is withheld.
+      expect(await inquiriesOf(tx, lead.id)).toHaveLength(1);
+    });
+  }, 60000);
+
+  it('A LATER REPEAT ON THAT LEGACY LEAD STILL NOTIFIES, and recovers if its notice was lost', async () => {
+    await inRollback(async (tx) => {
+      const admin = await makeUser(tx, 'admin', 'adm');
+      const agent = await makeUser(tx, 'agent', 'ag');
+      const original = `m-${tag()}`;
+      const later = `m-${tag()}`;
+      const t = tag();
+      const now = new Date();
+      await tx.leads.create({
+        data: {
+          name: `ZZ Legacy ${t}`, email: `zz-legacy-${t}@probe.test`,
+          phone: '4165550199', phone_normalized: '4165550199',
+          source: 'facebook_meta', lead_source: 'meta', lead_status: 'cold',
+          created_by: 'Meta · Get Home Realty',
+          facebook_lead_id: original,
+          owner_user_id: null, assigned_to: agent.id,
+          created_at: day(5), updated_at: now,
+        },
+      });
+
+      const sent: Sent[] = [];
+      const svc = syncService(tx, sent);
+      const ctx = ctxFor(admin, null);
+
+      // A genuine later enquiry from the same person.
+      await svc.upsertLead(submission(later, { phone: '4165550199', property: '9 Newer Ave' }, day(22)), ctx);
+      expect(sent.filter((x) => x.event === 'repeat' && x.metaId === later)).toHaveLength(1);
+
+      // Its notice is lost, and the stamp has advanced to it. The replay recovers.
+      await tx.notification_deliveries.deleteMany({
+        where: { user_id: agent.id, dedupe_key: `meta-repeat:${later}:${agent.id}` },
+      });
+      sent.length = 0;
+      await svc.upsertLead(submission(later, { phone: '4165550199', property: '9 Newer Ave' }, day(22)), ctx);
+      expect(sent.filter((x) => x.event === 'repeat' && x.metaId === later)).toHaveLength(1);
+
+      // The lead's ORIGINAL submission is still suppressed, stamp or no stamp.
+      sent.length = 0;
+      await svc.upsertLead(submission(original, { phone: '4165550199', property: '1 Legacy Lane' }, day(4)), ctx);
+      expect(sent.filter((x) => x.event === 'repeat')).toHaveLength(0);
+    });
+  }, 60000);
+
+  it('A GENUINE REPEAT STILL NOTIFIES on a Meta-created lead — the guard did not become a blanket', async () => {
+    await inRollback(async (tx) => {
+      const admin = await makeUser(tx, 'admin', 'adm');
+      const agent = await makeUser(tx, 'agent', 'ag');
+      const first = `m-${tag()}`;
+      const sent: Sent[] = [];
+      const svc = syncService(tx, sent);
+      const ctx = ctxFor(admin, null);
+
+      const made = await svc.upsertLead(submission(first, { phone: '4165550155', property: '1 Arrival Way' }, day(20)), ctx);
+      const leadId = made.leadId as number;
+      await tx.leads.update({ where: { id: leadId }, data: { assigned_to: agent.id } });
+
+      sent.length = 0;
+      await svc.upsertLead(submission(`m-${tag()}`, { phone: '4165550155', property: '9 Second Ask St' }, day(22)), ctx);
+
+      const repeats = sent.filter((x) => x.event === 'repeat');
+      expect(repeats).toHaveLength(1);
+      expect(repeats[0].recipient).toBe(agent.id);
+    });
+  }, 60000);
+});
+
+// =====================================================================================
 describe('an unassigned brokerage lead uses the existing routing', () => {
   it('FALLS BACK TO THE IMPORTING USER, with no wider recipient list invented', async () => {
     /*

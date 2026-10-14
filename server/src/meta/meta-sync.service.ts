@@ -22,6 +22,15 @@ import type { AuthUserRecord } from '../auth/auth.types';
 
 const str = (v: unknown): string => String(v ?? '').trim();
 const EMAIL_SHAPE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+/*
+ * `leads.created_by` as this service writes it — `Meta` alone, or `Meta · <page name>`.
+ *
+ * It is the only column that still says where a lead CAME FROM after it has been worked. It is
+ * written once, by whichever path created the row (`Meta…` here, the user's name in
+ * `lead-import.engine.ts`), and no update in this file or that one touches it again. The separator
+ * is matched loosely so a page name is optional and a renamed page does not change the answer.
+ */
+const CREATED_BY_META = /^Meta(?:\s|·|$)/;
 
 export interface SyncResult {
   imported: number;
@@ -367,12 +376,13 @@ export class MetaSyncService {
 
     /*
      * The prefilter. `regexp_replace(phone, '[^0-9]', '', 'g')` is the same "digits only" step the
-     * rule starts with. A CHARACTER CLASS RATHER THAN `\D`, and not for style: inside a template
-     * literal TypeScript collapses the unrecognised escape `\D` to a bare `D`, so the first draft
-     * of this query asked Postgres to strip the letter D and matched nothing at all.
-     * starts with, and every branch of it returns a suffix of those digits — so a candidate whose
-     * stripped phone does not END with the target cannot normalise to it. Narrowed to the
-     * brokerage's own live leads first, so the scan is over that book rather than the table.
+     * rule starts with, and every branch of that rule returns a SUFFIX of those digits — so a
+     * candidate whose stripped phone does not END with the target cannot normalise to it. Narrowed
+     * to the brokerage's own live leads first, so the scan is over that book rather than the table.
+     *
+     * A CHARACTER CLASS RATHER THAN `\D`, and not for style: inside a template literal TypeScript
+     * collapses the unrecognised escape `\D` to a bare `D`, so the first draft of this query asked
+     * Postgres to strip the letter D and matched nothing at all.
      */
     const candidates = await this.prisma.$queryRaw<{ id: number; phone: string | null }[]>`
       SELECT id, phone
@@ -452,8 +462,9 @@ export class MetaSyncService {
       where: { facebook_lead_id: facebookLeadId },
       select: {
         lead_id: true, property_address: true, project_name: true, meta_form_name: true,
-        // The PERSISTED time, which is what bounds recovery — see `repeatEnquiryNotice`.
-        created_at: true,
+        // The PERSISTED times. `created_at` bounds recovery; `submitted_at` is how an arrival is
+        // told from a repeat without trusting a column that moves. See `repeatEnquiryNotice`.
+        created_at: true, submitted_at: true,
       },
     });
     if (seen) {
@@ -671,46 +682,73 @@ export class MetaSyncService {
     facebookLeadId: string,
     inquiry: {
       property_address: string | null; project_name: string | null; meta_form_name: string | null;
-      /** When the enquiry row was written. Absent on the paths that are inserting it right now. */
+      /** When the enquiry ROW was written — wall clock, and `now` on the paths inserting it. */
       created_at?: Date | null;
+      /** When META says the form was submitted. Equals the lead's `created_at` iff it made it. */
+      submitted_at?: Date | null;
     },
     ctx: LeadContext,
   ): Promise<void> {
     try {
       const lead = await this.prisma.leads.findUnique({
         where: { id: leadId },
-        select: { id: true, name: true, email: true, assigned_to: true, owner_user_id: true, facebook_lead_id: true },
+        select: {
+          id: true, name: true, email: true, assigned_to: true, owner_user_id: true,
+          // Provenance, not state: who made this lead and when. Neither is rewritten by a repeat.
+          created_by: true, created_at: true,
+        },
       });
       if (!lead) return;
 
       /*
-       * THIS SUBMISSION IS THE LEAD'S OWN ARRIVAL, NOT A REPEAT.
+       * IS THIS SUBMISSION THE ONE THAT CREATED THE LEAD?
        *
-       * A submission that CREATED a lead stamps its id on the row, and it was announced by
-       * `notifyNewLead` and `metaArrived` at the time. Without this check the recovery above would
-       * find no `meta-repeat:` claim for it — there is none, and never should be — and announce a
-       * brand-new lead as "a new enquiry from an existing lead" on the next sync pass, for ever.
+       * An arrival was already announced by `notifyNewLead` and `metaArrived` when it happened, and
+       * it has no `meta-repeat:` claim — there is none, and never should be. So without this test
+       * the ledger check below would read "nobody has been told" and announce a brand-new lead as
+       * "a new enquiry from an existing lead" the next time its submission is read.
+       *
+       * ASKED OF PROVENANCE, AND DELIBERATELY NOT OF `facebook_lead_id`. That column holds the
+       * lead's LATEST submission, not its first — the branch that attaches a repeat moves it on —
+       * so it answers a different question each time a repeat lands. Using it here cost both
+       * correctness and durability: once a second enquiry had landed, re-reading the ORIGINAL
+       * submission no longer matched and announced a months-old arrival as new; and a repeat whose
+       * notice was lost after the stamp advanced matched for ever after, so it could never recover.
+       * Two columns that do not move answer it properly:
+       *
+       *   `created_by` SAYS WHERE THE LEAD CAME FROM. Written once by whichever path created the
+       *   row and never rewritten — not by the repeat branch here, which writes the Meta columns,
+       *   `source` and blanks but never this. A lead the CSV importer made carries a person's name,
+       *   so it is never mistaken for a Meta arrival however many Meta enquiries it later gathers.
+       *
+       *   `created_at` SAYS WHEN. A submission that created a lead cannot postdate it, and a
+       *   genuine repeat always does — the person enquired again after the lead existed. The create
+       *   path writes `leads.created_at` and the inquiry's `submitted_at` from the SAME value, so an
+       *   arrival is an exact equality; `<=` rather than `===` additionally covers a lead made by an
+       *   older Meta path that stamped wall-clock time, which is the legacy row whose enquiry is
+       *   written long afterwards by the `meta lead id` branch.
+       *
+       * ASSUMPTIONS, since this is timestamp reasoning and they should be stated:
+       *   1. `created_by` is set at creation and never updated. True of both writers in this
+       *      repository (`Meta…` below, `ctx.userName` in `lead-import.engine.ts`).
+       *   2. A lead not created by Meta is never an arrival, whatever its timestamps — which is
+       *      what keeps an imported contact whose Meta enquiry PREDATES the import (a backfilled
+       *      list) correctly treated as a repeat.
+       *   3. Two submissions inside the same second, the first creating the lead, make the second
+       *      look like the arrival and silence its notice. The enquiry row is still recorded and
+       *      visible on the lead; it is a notice, not data, and the alternative is trusting a
+       *      column that moves.
+       *
+       * This reads PROVENANCE ONLY. Whether anybody was actually told is a separate question,
+       * answered by the delivery ledger below, and the two are deliberately not mixed.
        */
-      if (lead.facebook_lead_id && lead.facebook_lead_id === facebookLeadId) return;
+      const submittedAt = inquiry.submitted_at ?? null;
+      if (CREATED_BY_META.test(lead.created_by ?? '') && submittedAt && lead.created_at
+        && submittedAt.getTime() <= lead.created_at.getTime()) return;
 
       const recipient = lead.assigned_to ?? lead.owner_user_id ?? ctx.userId;
       if (!recipient) return;
 
-      /*
-       * HAS THE DISPATCHER ALREADY BEEN REACHED FOR THIS SUBMISSION AND THIS PERSON?
-       *
-       * `notification_deliveries` is this repository's delivery ledger: the dispatcher CLAIMS a row
-       * per (recipient, category, occurrence, channel) with status `pending` before it does
-       * anything, then settles it. So the absence of any row means the dispatcher was never
-       * reached — the notice threw, or the process died — and this pass should try again. The
-       * presence of one, whatever its status, means it ran and owns the outcome from there:
-       * `muted` is a preference, `failed` is its own business, and re-announcing either on every
-       * sync would be a loop rather than a recovery.
-       *
-       * The key is built exactly as `metaRepeatEnquiry` builds it, so this reads the same row the
-       * dispatcher will write. Both are keyed on META'S OWN SUBMISSION ID, which is what keeps
-       * submission-and-recipient deduplication intact across the poll, the webhook and a retry.
-       */
       /*
        * OLDER THAN THE RETENTION WINDOW: LEAVE IT ALONE.
        *
@@ -721,10 +759,11 @@ export class MetaSyncService {
        * purged would look un-notified and the notice would be raised again: a notification the
        * brokerage had already seen, read and aged out, arriving a year later.
        *
-       * BOUNDED BY THE ENQUIRY'S OWN PERSISTED `created_at`, not by the submission's Meta timestamp
-       * and not by now. The row is the thing whose notification may have been purged, so the row's
-       * age is the question. A freshly inserted enquiry has no stored time to consult here and is
-       * never old, so normal delivery is untouched.
+       * BOUNDED BY THE ENQUIRY ROW'S OWN `created_at`, not by the submission's Meta timestamp. The
+       * row is the thing whose notification may have been purged, so the row's age is the question,
+       * and a form backfilled with a two-year-old `submitted_at` is still news if it was only
+       * recorded today. The paths inserting a row pass `now`, which is never older than the cutoff,
+       * so normal delivery is untouched.
        *
        * `months() === 0` means the sweep is off and nothing is ever purged, so recovery is
        * unbounded — the correct reading of a disabled retention policy rather than a special case.
@@ -742,6 +781,22 @@ export class MetaSyncService {
         }
       }
 
+      /*
+       * HAS THE DISPATCHER ALREADY BEEN REACHED FOR THIS SUBMISSION AND THIS PERSON?
+       *
+       * `notification_deliveries` is this repository's delivery ledger: the dispatcher CLAIMS a row
+       * per (recipient, category, occurrence, channel) with status `pending` before it does
+       * anything, then settles it. So the absence of any row means the dispatcher was never
+       * reached — the notice threw, or the process died — and this pass should try again. The
+       * presence of one, whatever its status, means it ran and owns the outcome from there:
+       * `muted` is a preference, `failed` is its own business, and re-announcing either on every
+       * sync would be a loop rather than a recovery.
+       *
+       * The key is built exactly as the dispatcher STORES it — `metaRepeatEnquiry` passes the same
+       * string and `NotificationDispatcherService` truncates it to 190 — so this reads the row that
+       * will be written. Both are keyed on META'S OWN SUBMISSION ID, which is what keeps
+       * submission-and-recipient deduplication intact across the poll, the webhook and a retry.
+       */
       const alreadyDispatched = await this.prisma.notification_deliveries.findFirst({
         where: {
           user_id: recipient,
