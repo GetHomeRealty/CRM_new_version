@@ -774,13 +774,25 @@ export default function MetaPage() {
     if (!formIdsKey) { setAdStatus(null); setAdError(''); return; }
     const ticket = adLatest.begin();
     setAdLoading(true);
+    // True once an answer is on screen, so a failed follow-up keeps it instead of turning it Unknown.
+    let shown = false;
     try {
       const res = await metaAdStatus(formIdsKey.split(','), refresh);
       if (!adLatest.isCurrent(ticket)) return;
       setAdStatus(res);
       setAdError('');
+      shown = true;
+      /*
+       * AN EARLIER CHECK, SHOWN AT ONCE so the badges do not wait on Meta. The server is already
+       * reading the ads again; asking with `refresh` waits for that read and swaps it in.
+       */
+      if (res.stale) {
+        const fresh = await metaAdStatus(formIdsKey.split(','), true);
+        if (!adLatest.isCurrent(ticket)) return;
+        setAdStatus(fresh);
+      }
     } catch (ex) {
-      if (!adLatest.isCurrent(ticket)) return;
+      if (!adLatest.isCurrent(ticket) || shown) return;
       setAdStatus(null);
       setAdError(apiErrorMessage(ex, 'Could not check advertising status'));
     } finally {
@@ -1030,8 +1042,8 @@ export default function MetaPage() {
           {status?.is_connected && forms.length > 0 && (
             <div className="toolbar-row" data-testid="meta-ad-status-bar" style={{ gap: 8, margin: '0 0 8px', alignItems: 'center' }}>
               <span className="help" style={{ margin: 0 }} title={AD_STATUS_HINT}>
-                {adLoading ? 'Checking ads…'
-                  : adStatus ? `Ad status last checked ${new Date(adStatus.checked_at).toLocaleString()}`
+                {adLoading && !adStatus ? 'Checking ads…'
+                  : adStatus ? `Ad status last checked ${new Date(adStatus.checked_at).toLocaleString()}${adLoading ? ' · updating…' : ''}`
                     : adError ? 'Ad status could not be checked' : 'Ad status not checked yet'}
               </span>
               <button className="btn ghost sm" type="button" disabled={adLoading} onClick={() => void loadAdStatus(true)}>

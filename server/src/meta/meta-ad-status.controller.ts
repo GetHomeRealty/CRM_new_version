@@ -33,6 +33,7 @@ export class MetaAdStatusController {
     const scan = await this.adStatus.scanFor(user.id ?? 0, refresh === '1' || refresh === 'true');
     return {
       checked_at: scan.checked_at,
+      ...(scan.stale ? { stale: true } : {}),
       blocked: scan.blocked,
       accounts_checked: scan.accounts_checked,
       accounts_failed: scan.accounts_failed,

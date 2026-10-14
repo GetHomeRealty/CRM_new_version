@@ -59,6 +59,8 @@ export interface AdScan {
   ads: AdRow[];
   /** form id -> indexes into `ads`. */
   by_form: Record<string, number[]>;
+  /** Set when this is an earlier check served while a newer one runs; ask again with `refresh` for it. */
+  stale?: boolean;
 }
 
 const MAX_ACCOUNTS = 25;
@@ -182,6 +184,8 @@ export class MetaAdStatusService {
    * read. In memory — a lost cache costs one re-read.
    */
   private readonly cache = new Map<number, { key: string; scan: AdScan }>();
+  /** A scan already under way for this person and connection, so a second request waits for it instead of reading again. */
+  private readonly inflight = new Map<number, { key: string; job: Promise<AdScan> }>();
 
   constructor(
     private readonly connections: MetaConnectionService,
@@ -207,12 +211,36 @@ export class MetaAdStatusService {
       return this.empty({ code: 'not_connected', message: 'Meta is not connected.' });
     }
     const cached = this.cache.get(userId);
-    if (!refresh && cached && cached.key === key && Date.now() - Date.parse(cached.scan.checked_at) < CACHE_MS) return cached.scan;
-    const scan = await this.scan(userId);
-    // A scan that could not start because of the shared budget is not remembered: the next view retries.
-    if (scan.blocked?.code === 'budget') this.cache.delete(userId);
-    else this.cache.set(userId, { key, scan });
-    return scan;
+    if (!refresh && cached && cached.key === key) {
+      if (Date.now() - Date.parse(cached.scan.checked_at) < CACHE_MS) return cached.scan;
+      /*
+       * OLDER THAN CACHE_MS, BUT FROM THIS SAME CONNECTION: answered at once rather than making the
+       * screen wait for every ad account to be read again. A new check starts behind it, and `stale`
+       * tells the screen to ask for that one (`refresh`, which joins it rather than starting another).
+       * `checked_at` still says when this answer was read, so its age is never hidden.
+       */
+      void this.startScan(userId, key).catch(() => undefined);
+      return { ...cached.scan, stale: true };
+    }
+    return this.startScan(userId, key);
+  }
+
+  /**
+   * One scan per person at a time: a request arriving while one runs waits for that one — but only if
+   * it was started with the same connection, so a reconnect never joins a read made with the old login.
+   */
+  private startScan(userId: number, key: string): Promise<AdScan> {
+    const running = this.inflight.get(userId);
+    if (running?.key === key) return running.job;
+    const job = (async () => {
+      const scan = await this.scan(userId);
+      // A scan that could not start because of the shared budget is not remembered: the next view retries.
+      if (scan.blocked?.code === 'budget') this.cache.delete(userId);
+      else this.cache.set(userId, { key, scan });
+      return scan;
+    })().finally(() => { if (this.inflight.get(userId)?.job === job) this.inflight.delete(userId); });
+    this.inflight.set(userId, { key, job });
+    return job;
   }
 
   /** Identity of the current Meta connection, or null when there is none. Never stores the token itself. */

@@ -251,6 +251,25 @@ describe('last checked, refresh, and a connection that changes', () => {
     expect(graph.readableAdAccounts).toHaveBeenCalledTimes(2);
   });
 
+  it('an answer past the cache window is served at once, marked stale, while a new read runs', async () => {
+    const { svc, graph } = setup({ accounts: { accounts: [ACC1] }, ads: { act_1: [ad('1', 'ACTIVE', FORM_A)] } });
+    const first = await svc.scanFor(7, false);
+    const now = Date.now();
+    const clock = jest.spyOn(Date, 'now').mockReturnValue(now + 16 * 60_000);
+    try {
+      const quick = await svc.scanFor(7, false);
+      expect(quick.stale).toBe(true);
+      expect(quick.checked_at).toBe(first.checked_at);
+      expect(formStatus(quick, FORM_A).state).toBe('enabled');
+      // The new read is already under way; `refresh` joins it rather than starting a third.
+      const fresh = await svc.scanFor(7, true);
+      expect(fresh.stale).toBeUndefined();
+      expect(graph.readableAdAccounts).toHaveBeenCalledTimes(2);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it('disconnecting drops the cached answer at once — nothing from the old login is served', async () => {
     const { svc, conn, graph } = setup({ accounts: { accounts: [ACC1] }, ads: { act_1: [ad('1', 'ACTIVE', FORM_A)] } });
     expect(formStatus(await svc.scanFor(7, false), FORM_A).state).toBe('enabled');

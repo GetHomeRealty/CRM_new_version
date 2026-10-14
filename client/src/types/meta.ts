@@ -116,6 +116,8 @@ export interface MetaFormAdStatus { state: MetaAdState; summary: string; reason:
 
 export interface MetaAdStatusResponse {
   checked_at: string;
+  /** An earlier check, served at once while a newer one runs; asking again with `refresh` returns that one. */
+  stale?: boolean;
   blocked: { code: string; message: string } | null;
   accounts_checked: number;
   accounts_failed: { id: string; name: string; reason: string }[];
