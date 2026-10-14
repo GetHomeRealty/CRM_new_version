@@ -1191,13 +1191,25 @@ export default function MetaPage() {
           <div className="lead-scroll">
             <table className="list-table">
               <thead>
-                <tr><th>Name</th><th>Contact</th><th>Enquiry</th><th>Status</th><th>Assigned To</th><th>Received</th><th></th></tr>
+                <tr><th>Name</th><th>Latest Note</th><th>Contact</th><th>Enquiry</th><th>Status</th><th>Assigned To</th><th>Received</th><th></th></tr>
               </thead>
               <tbody>
                 {leads.map((l) => (
                   <tr key={l.id} data-lead-row={l.id} data-focused={flashLead === l.id ? 'true' : undefined}
                     style={{ transition: 'background-color .6s', ...(flashLead === l.id ? { backgroundColor: 'var(--warn-soft)' } : {}) }}>
                     <td>{l.name}</td>
+                    <td data-testid="meta-latest-note" style={{ maxWidth: 280 }}>
+                      {l.latest_note ? (
+                        <>
+                          <div style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
+                            {l.latest_note.preview}{l.latest_note.truncated ? '…' : ''}
+                          </div>
+                          <div className="muted">
+                            {l.latest_note.author || 'Someone'} · {stamp(l.latest_note.created_at)}
+                          </div>
+                        </>
+                      ) : <span className="muted">—</span>}
+                    </td>
                     <td className="muted">
                       <div>{l.email.endsWith('@meta.invalid') ? <em>No email provided</em> : l.email}</div>
                       <div>{l.phone || '—'}</div>

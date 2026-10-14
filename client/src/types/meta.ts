@@ -135,6 +135,14 @@ export interface MetaLeadRow {
   /** The agent the lead is assigned to; null when nobody is. */
   assigned_to?: number | null;
   assigned_to_name?: string | null;
+  /** The newest note on the lead by creation time, previewed; null when it has none. */
+  latest_note?: {
+    preview: string;
+    /** The note is longer than the preview; the full text is on the lead. */
+    truncated: boolean;
+    author: string | null;
+    created_at: string | null;
+  } | null;
 }
 
 export interface MetaDefaultPageResponse {

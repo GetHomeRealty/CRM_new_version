@@ -2,6 +2,7 @@ import {
   BadRequestException, Body, Controller, Delete, Get, HttpCode, Post, Query, Req, UseGuards,
 } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
+import { Prisma } from '@prisma/client';
 import type { Request } from 'express';
 import { META_SYNC_LIMIT } from '../config/rate-limits';
 import { AuthGuard } from '../auth/guards/auth.guard';
@@ -21,6 +22,9 @@ import {
 } from './meta.constants';
 
 const str = (v: unknown): string => String(v ?? '').trim();
+
+/** How much of a lead's newest note the Meta leads list previews; the full text is on the lead. */
+const NOTE_PREVIEW = 140;
 
 /** Origin of the incoming request, used when META_PUBLIC_URL isn't set. */
 function origin(req: Request): string {
@@ -417,6 +421,29 @@ export class MetaController {
         .map((u) => [u.id, u.name] as const)
       : []);
 
+    /*
+     * THE NEWEST NOTE ON EACH LEAD, previewed — so what was last said about a lead is visible from
+     * the list without opening it. One query for the whole page, by when the note was written, so
+     * editing an older note never makes it "newest". Only rows the scope above returned are read.
+     */
+    const ids = rows.map((r) => r.id);
+    const notes = ids.length
+      ? await this.prisma.$queryRaw<{
+        lead_id: number; preview: string; full_length: number; author: string | null; created_at: Date | null;
+      }[]>`
+        SELECT DISTINCT ON (lead_id)
+          lead_id, LEFT(content, ${NOTE_PREVIEW}::int) AS preview, LENGTH(content)::int AS full_length,
+          created_by AS author, created_at
+        FROM lead_notes
+        WHERE lead_id IN (${Prisma.join(ids)})
+        ORDER BY lead_id, created_at DESC NULLS LAST, id DESC
+      `
+      : [];
+    const latestNote = new Map(notes.map((n) => [n.lead_id, {
+      preview: n.preview, truncated: n.full_length > NOTE_PREVIEW, author: n.author,
+      created_at: n.created_at?.toISOString() ?? null,
+    }]));
+
     return {
       stats: { total, today, week },
       ...(form ? { form_total: formTotal } : {}),
@@ -429,6 +456,7 @@ export class MetaController {
         created_at: r.created_at?.toISOString() ?? null,
         assigned_to: r.assigned_to ?? null,
         assigned_to_name: r.assigned_to ? assignees.get(r.assigned_to) ?? null : null,
+        latest_note: latestNote.get(r.id) ?? null,
       })),
     };
   }
