@@ -10,6 +10,12 @@ import { MetaApiBudgetService } from './meta-api-budget.service';
 import { MetaAlertService } from './meta-alert.service';
 import { mapMetaInquiry, mapMetaLead, normalizePhone, type MappedMetaLead } from './meta-lead-mapper';
 import { ownerAtIntake } from '../common/lead-scope';
+/*
+ * The notification retention window, read from the service that owns it rather than restated here.
+ * `months()` is static and consults `NOTIFICATION_RETENTION_MONTHS`; 0 means the sweep is off and
+ * nothing is ever purged. See `repeatEnquiryNotice` for why this file needs to know.
+ */
+import { NotificationRetentionService } from '../notifications/notification-retention.service';
 import { MAX_LEADS_PER_FORM, META_RAW_MAX_CHARS, META_RAW_RETENTION_DAYS, WEBHOOK_QUIET_ALERT_MS } from './meta.constants';
 import { isSuperAdmin } from '../core/authz';
 import type { AuthUserRecord } from '../auth/auth.types';
@@ -207,26 +213,186 @@ export class MetaSyncService {
       where: { facebook_lead_id: facebookLeadId },
       select: { id: true },
     });
+    // Globally unique, and therefore not an identity question: this is the same submission arriving
+    // again, and the row it finds is by definition the one that delivery already created.
     if (byMetaId) return { id: byMetaId.id, rule: 'meta lead id' };
 
     const mine = this.matchBook(ctx);
 
-    if (mapped.email && EMAIL_SHAPE.test(mapped.email)) {
-      const byEmail = await this.prisma.leads.findFirst({
+    /*
+     * EVERY CANDIDATE, NOT THE FIRST ONE.
+     *
+     * This used to take `findFirst` on email and, failing that, `findFirst` on phone — so email
+     * silently outranked phone, and "two leads share this address" silently resolved to whichever
+     * row the database yielded first. Both are identity questions the sync is not entitled to
+     * answer on its own: attaching an enquiry to the wrong person files a stranger's conversation
+     * in somebody's record, and nothing on screen would ever say so.
+     *
+     * Still inside `matchBook`, so the private-book restriction is untouched — this changes how
+     * ambiguity is handled, not which records are visible.
+     */
+    const emailIds = mapped.email && EMAIL_SHAPE.test(mapped.email)
+      ? (await this.prisma.leads.findMany({
         where: { AND: [{ email: { equals: mapped.email, mode: 'insensitive' }, deleted_at: null }, mine] },
         select: { id: true },
-      });
-      if (byEmail) return { id: byEmail.id, rule: 'email address' };
-    }
+        take: 10,
+      })).map((r) => r.id)
+      : [];
 
-    if (mapped.phone_normalized) {
-      const byPhone = await this.prisma.leads.findFirst({
+    const phoneIds = mapped.phone_normalized
+      ? (await this.prisma.leads.findMany({
         where: { AND: [{ phone_normalized: mapped.phone_normalized, deleted_at: null }, mine] },
         select: { id: true },
-      });
-      if (byPhone) return { id: byPhone.id, rule: 'phone number' };
+        take: 10,
+      })).map((r) => r.id)
+      : [];
+
+    /*
+     * THE MATCHING POLICY: EXACT EMAIL TAKES PRECEDENCE; CONFLICTING PHONE MATCHES ARE LOGGED.
+     *
+     * This is a deliberate choice about which identifier the brokerage trusts, not a claim that any
+     * other choice is impossible. Two reasons it was made this way:
+     *
+     *   A PHONE IS ROUTINELY SHARED — a household, a couple, an office line — whereas an email
+     *   address is usually one person's. So an exact email is the stronger signal, and a phone
+     *   pointing elsewhere is weak evidence against it. Treating the disagreement as a blocker
+     *   would turn ordinary shared numbers into lost enquiries.
+     *
+     *   AND THE ALTERNATIVE COSTS MORE THAN IT LOOKS. Refusing here means falling through to
+     *   creating a lead, which collides with `UNIQUE (COALESCE(owner_user_id, 0), LOWER(email))`
+     *   when the email is the shared identifier — so "refuse" would in practice mean "drop the
+     *   enquiry", not "file it safely". Choosing to drop it is available; it is simply a worse
+     *   outcome than attaching to the email's lead and saying so.
+     *
+     * An email being unique within a book does NOT prove two records are the same person — it is a
+     * storage constraint, not an identity proof. The disagreement is therefore logged with both
+     * lead ids so somebody can confirm or merge them.
+     */
+    if (emailIds.length === 1) {
+      const other = phoneIds.filter((id) => id !== emailIds[0]);
+      if (other.length) {
+        this.log.warn(
+          `Meta submission ${facebookLeadId}: attached by email address to lead ${emailIds[0]}, `
+          + `whose phone number also matches lead(s) ${other.join(', ')}. The email is exact and one `
+          + 'address belongs to one lead per book, so it decides; check whether those leads are the '
+          + 'same person.',
+        );
+      }
+      return { id: emailIds[0], rule: 'email address' };
     }
+
+    /*
+     * MORE THAN ONE LEAD ON THE SAME ADDRESS inside one book is what the unique index is there to
+     * prevent, so reaching here means the index is absent, disabled, or the rows pre-date it.
+     * Which of those cannot be told from here, and neither lead is a safer guess than the other,
+     * so this refuses and names both.
+     */
+    if (emailIds.length > 1) {
+      this.logIdentityConflict(facebookLeadId, emailIds, 'on the same email address in the importing book');
+      return null;
+    }
+
+    if (phoneIds.length === 1) return { id: phoneIds[0], rule: 'phone number' };
+
+    if (phoneIds.length > 1) {
+      /*
+       * SEVERAL LEADS ON ONE NUMBER, and no email to break the tie. This is the conflict worth
+       * refusing: picking one files a stranger's enquiry in somebody's record. Creating a lead is
+       * possible here — the address is free — so the existing behaviour stands and the ids are
+       * logged for somebody to merge.
+       */
+      this.logIdentityConflict(facebookLeadId, phoneIds, 'on the same phone number in the importing book');
+      return null;
+    }
+
     return null;
+  }
+
+  /**
+   * Say that a submission could not be placed, in terms somebody can act on and without quoting
+   * the person.
+   *
+   * NO EMAIL ADDRESS AND NO PHONE NUMBER IN THE MESSAGE. Logs are read by more people than the CRM
+   * is, are shipped off the machine, and are kept longer than a lead is. The lead ids are enough to
+   * resolve the conflict — they open directly in the CRM — and the Meta submission id is enough to
+   * find the enquiry itself. Neither identifies anybody to a reader who cannot already see them.
+   */
+  private logIdentityConflict(facebookLeadId: string, leadIds: number[], where: string): void {
+    this.log.warn(
+      `Meta submission ${facebookLeadId} matches ${leadIds.length} leads ${where} `
+      + `(ids: ${leadIds.join(', ')}) — identity is ambiguous, so a new lead was created rather than `
+      + 'attaching the enquiry to one of them. Merge or correct those leads to resolve it.',
+    );
+  }
+
+  /**
+   * A BROKERAGE LEAD THIS PERSON ALREADY IS, found when `findExisting` matched nothing.
+   *
+   * WHAT THIS FIXES. `findExisting` matches a phone only against `leads.phone_normalized`, which is
+   * a DERIVED column written by the Meta mapper and by `LeadsService`. The CSV importer
+   * (`lead-import.engine.ts`) creates leads without it — four `create` calls, no `normalizePhone` —
+   * so an IMPORTED lead carries a phone number and a null normalised form. A person on such a lead
+   * who enquires again by phone matched nothing at all, and the sync created a second, unassigned
+   * lead while the agent holding the first was told nothing. That is the reported defect.
+   *
+   * ONE IMPLEMENTATION OF THE RULE, NOT TWO. `normalizePhone` has branches — strip a leading
+   * country 1, keep anything longer than eleven digits, otherwise take the last ten — and writing
+   * that again in SQL would be a second copy free to drift from the first. So SQL does a cheap
+   * prefilter (stripped digits ENDING with the target, which every branch of the rule satisfies)
+   * and the real function confirms each candidate in TypeScript.
+   *
+   * BROKERAGE-OWNED ONLY, AND NEVER AN AGENT'S PRIVATE BOOK. `ownership_type` is a generated column
+   * — 'PRIVATE' once `owner_user_id` is set — so `owner_user_id IS NULL` is exactly the brokerage's
+   * own book and is the whole search space here. An agent's lead is a different agent's
+   * relationship with the same person, which is the rule `ownBook` exists to protect and this does
+   * not weaken.
+   *
+   * BROKERAGE INTAKE ONLY. An agent who connected their own ad account keeps the existing
+   * restriction untouched: their submissions match their book and nothing else.
+   *
+   * AMBIGUITY IS NOT RESOLVED HERE. Two brokerage leads whose phones normalise the same way are two
+   * relationships, and picking one would silently merge somebody's enquiry into the wrong file. The
+   * caller is told `ambiguous` and falls back to creating a lead, which is the behaviour that
+   * exists today.
+   */
+  private async findBrokerageFallback(
+    mapped: MappedMetaLead,
+    ctx: LeadContext,
+  ): Promise<{ id: number; rule: string } | { ambiguous: true; ids: number[] } | null> {
+    // Agent-owned advertising connections keep their current book restriction.
+    if (this.ownerFor(ctx) !== null) return null;
+
+    const target = mapped.phone_normalized;
+    if (!target) return null;
+
+    /*
+     * The prefilter. `regexp_replace(phone, '[^0-9]', '', 'g')` is the same "digits only" step the
+     * rule starts with. A CHARACTER CLASS RATHER THAN `\D`, and not for style: inside a template
+     * literal TypeScript collapses the unrecognised escape `\D` to a bare `D`, so the first draft
+     * of this query asked Postgres to strip the letter D and matched nothing at all.
+     * starts with, and every branch of it returns a suffix of those digits — so a candidate whose
+     * stripped phone does not END with the target cannot normalise to it. Narrowed to the
+     * brokerage's own live leads first, so the scan is over that book rather than the table.
+     */
+    const candidates = await this.prisma.$queryRaw<{ id: number; phone: string | null }[]>`
+      SELECT id, phone
+      FROM leads
+      WHERE owner_user_id IS NULL
+        AND deleted_at IS NULL
+        AND phone IS NOT NULL
+        AND regexp_replace(phone, '[^0-9]', '', 'g') LIKE ${'%' + target}
+      LIMIT 25
+    `;
+
+    // The single existing rule decides. A prefilter hit that does not normalise to the same value
+    // is not a match.
+    const matched = [...new Set(
+      candidates.filter((c) => normalizePhone(c.phone) === target).map((c) => c.id),
+    )];
+
+    if (matched.length === 0) return null;
+    if (matched.length > 1) return { ambiguous: true, ids: matched };
+    return { id: matched[0], rule: 'phone number (brokerage)' };
   }
 
   /**
@@ -275,12 +441,25 @@ export class MetaSyncService {
     /*
      * THIS SUBMISSION, ALREADY RECORDED: skip, and write nothing. Re-writing the lead here is what
      * let whichever submission the scheduler read last become "the" enquiry for a returning person.
+     *
+     * AND IT IS WHERE A LOST NOTIFICATION IS RECOVERED. This early return is the path every retry
+     * of an already-recorded submission takes — so if the notice failed the first time, or the
+     * process died between the insert and the dispatcher, this is the only place that will ever
+     * see it again. `repeatEnquiryNotice` reads the delivery ledger and does nothing when the
+     * dispatcher was already reached, so the common case costs one indexed lookup.
      */
     const seen = await this.prisma.meta_lead_inquiries.findUnique({
       where: { facebook_lead_id: facebookLeadId },
-      select: { lead_id: true },
+      select: {
+        lead_id: true, property_address: true, project_name: true, meta_form_name: true,
+        // The PERSISTED time, which is what bounds recovery — see `repeatEnquiryNotice`.
+        created_at: true,
+      },
     });
-    if (seen) return { outcome: 'updated', leadId: seen.lead_id, rule: 'meta lead id' };
+    if (seen) {
+      await this.repeatEnquiryNotice(seen.lead_id, facebookLeadId, seen, ctx);
+      return { outcome: 'updated', leadId: seen.lead_id, rule: 'meta lead id' };
+    }
 
     const mapped = this.mapLead(lead.field_data);
     const attribution = this.attribution(lead);
@@ -329,6 +508,20 @@ export class MetaSyncService {
         data: [{ ...inquiry, lead_id: existing.id }],
         skipDuplicates: true,
       });
+
+      /*
+       * THE ENQUIRY IS RECORDED, SO SOMEBODY SHOULD HEAR ABOUT IT — now or on a later pass.
+       *
+       * NOT GATED ON `count`, and that is the durability fix. `count === 1` identifies the pass
+       * that inserted, which is the right answer to "is this a new enquiry"; it is the wrong answer
+       * to "has anybody been told". If the notice failed, or the process died between the insert
+       * and the dispatcher, the row is committed, `count` is 0 for ever after, and nobody would
+       * ever be told. `repeatEnquiryNotice` therefore decides from the DELIVERY LEDGER instead.
+       *
+       * Deliberately BEFORE the `meta lead id` early return below.
+       */
+      await this.repeatEnquiryNotice(existing.id, facebookLeadId, inquiry, ctx);
+
       // The lead's own Meta id was this submission (imported before inquiries existed): now recorded.
       if (existing.rule === 'meta lead id' || count === 0) return { outcome: 'updated', leadId: existing.id, rule: 'meta lead id' };
 
@@ -353,6 +546,39 @@ export class MetaSyncService {
         });
       }
       return { outcome: 'duplicate', leadId: existing.id, rule: existing.rule };
+    }
+
+    /*
+     * NOTHING IN THE IMPORTER'S BOOK — TRY THE BROKERAGE'S OWN.
+     *
+     * Reached only when `findExisting` matched nothing, so email has already failed and this can
+     * only be a phone match. `findBrokerageFallback` says why it exists and what it refuses to do.
+     *
+     * ATTACH ONLY. Unlike the branch above, this writes NOTHING to the lead — not the Meta columns,
+     * not the blanks, not `source`. The lead was created somewhere else, by somebody who may have
+     * typed its contact details, and a phone-shaped match across books is a weaker claim than an
+     * email match inside one. The enquiry row carries the submission whole, which is the record
+     * that was missing; the lead keeps its assignee, owner, Team Lead, team, status and source.
+     */
+    const fallback = await this.findBrokerageFallback(mapped, ctx);
+    if (fallback && 'ambiguous' in fallback) {
+      /*
+       * TWO BROKERAGE LEADS NORMALISE TO THE SAME NUMBER. Picking one would file somebody's enquiry
+       * against the wrong person, so the existing behaviour stands — a lead is created below — and
+       * the conflict is recorded as a warning on the sync log, which is the internal channel this
+       * service already uses for a submission it could not place. No lead-review mechanism exists
+       * to raise it on, and inventing a notification recipient for it is outside this change.
+       */
+      this.logIdentityConflict(facebookLeadId, fallback.ids, 'in the brokerage book');
+    } else if (fallback) {
+      // The insert result is deliberately not consulted: `repeatEnquiryNotice` decides from the
+      // delivery ledger, so a notice lost on an earlier pass is recovered on a later one.
+      await this.prisma.meta_lead_inquiries.createMany({
+        data: [{ ...inquiry, lead_id: fallback.id }],
+        skipDuplicates: true,
+      });
+      await this.repeatEnquiryNotice(fallback.id, facebookLeadId, inquiry, ctx);
+      return { outcome: 'duplicate', leadId: fallback.id, rule: fallback.rule };
     }
 
     // A Meta form can omit email entirely. `leads.email` is required, so a placeholder keyed to
@@ -425,6 +651,123 @@ export class MetaSyncService {
     void this.notifications.notifyNewLead(row);
     void this.metaArrived(row, ctx, facebookLeadId);
     return { outcome: 'imported', leadId: row.id };
+  }
+
+  /**
+   * Tell whoever holds this lead that the same person has enquired again.
+   *
+   * THE RECIPIENT IS THE LEAD'S, NOT THE CONNECTION'S. `metaArrived` notifies the importing user,
+   * which is right for an arrival — they are the one whose ad produced it. A repeat enquiry belongs
+   * to whoever is working the relationship, so the assignee comes first, then the owner for an
+   * agent-owned lead, and only then the importing user. That last step is the existing authorised
+   * routing for a brokerage lead nobody has been given yet: the person whose connection delivered
+   * the enquiry already sees this intake. No wider list is invented.
+   *
+   * NEVER THROWS. Reached from the middle of a sync that has already written the enquiry row; a
+   * notification failure must not lose that or abort the rest of the run.
+   */
+  private async repeatEnquiryNotice(
+    leadId: number,
+    facebookLeadId: string,
+    inquiry: {
+      property_address: string | null; project_name: string | null; meta_form_name: string | null;
+      /** When the enquiry row was written. Absent on the paths that are inserting it right now. */
+      created_at?: Date | null;
+    },
+    ctx: LeadContext,
+  ): Promise<void> {
+    try {
+      const lead = await this.prisma.leads.findUnique({
+        where: { id: leadId },
+        select: { id: true, name: true, email: true, assigned_to: true, owner_user_id: true, facebook_lead_id: true },
+      });
+      if (!lead) return;
+
+      /*
+       * THIS SUBMISSION IS THE LEAD'S OWN ARRIVAL, NOT A REPEAT.
+       *
+       * A submission that CREATED a lead stamps its id on the row, and it was announced by
+       * `notifyNewLead` and `metaArrived` at the time. Without this check the recovery above would
+       * find no `meta-repeat:` claim for it — there is none, and never should be — and announce a
+       * brand-new lead as "a new enquiry from an existing lead" on the next sync pass, for ever.
+       */
+      if (lead.facebook_lead_id && lead.facebook_lead_id === facebookLeadId) return;
+
+      const recipient = lead.assigned_to ?? lead.owner_user_id ?? ctx.userId;
+      if (!recipient) return;
+
+      /*
+       * HAS THE DISPATCHER ALREADY BEEN REACHED FOR THIS SUBMISSION AND THIS PERSON?
+       *
+       * `notification_deliveries` is this repository's delivery ledger: the dispatcher CLAIMS a row
+       * per (recipient, category, occurrence, channel) with status `pending` before it does
+       * anything, then settles it. So the absence of any row means the dispatcher was never
+       * reached — the notice threw, or the process died — and this pass should try again. The
+       * presence of one, whatever its status, means it ran and owns the outcome from there:
+       * `muted` is a preference, `failed` is its own business, and re-announcing either on every
+       * sync would be a loop rather than a recovery.
+       *
+       * The key is built exactly as `metaRepeatEnquiry` builds it, so this reads the same row the
+       * dispatcher will write. Both are keyed on META'S OWN SUBMISSION ID, which is what keeps
+       * submission-and-recipient deduplication intact across the poll, the webhook and a retry.
+       */
+      /*
+       * OLDER THAN THE RETENTION WINDOW: LEAVE IT ALONE.
+       *
+       * The ledger check below reads "no claim row" as "the dispatcher was never reached". That is
+       * true for a recent enquiry and FALSE for an old one, because `NotificationRetentionService`
+       * purges `notification_deliveries` by age — and `lead_meta` carries no `STILL_LIVE` guard, so
+       * its rows are purgeable. Without this bound, a submission re-synced after its claim had been
+       * purged would look un-notified and the notice would be raised again: a notification the
+       * brokerage had already seen, read and aged out, arriving a year later.
+       *
+       * BOUNDED BY THE ENQUIRY'S OWN PERSISTED `created_at`, not by the submission's Meta timestamp
+       * and not by now. The row is the thing whose notification may have been purged, so the row's
+       * age is the question. A freshly inserted enquiry has no stored time to consult here and is
+       * never old, so normal delivery is untouched.
+       *
+       * `months() === 0` means the sweep is off and nothing is ever purged, so recovery is
+       * unbounded — the correct reading of a disabled retention policy rather than a special case.
+       */
+      const months = NotificationRetentionService.months();
+      if (months > 0 && inquiry.created_at) {
+        const cutoff = new Date();
+        cutoff.setMonth(cutoff.getMonth() - months);
+        if (inquiry.created_at.getTime() < cutoff.getTime()) {
+          this.log.debug?.(
+            `Meta submission ${facebookLeadId}: enquiry recorded ${inquiry.created_at.toISOString()} is `
+            + `older than the ${months}-month notification retention window; not re-notifying.`,
+          );
+          return;
+        }
+      }
+
+      const alreadyDispatched = await this.prisma.notification_deliveries.findFirst({
+        where: {
+          user_id: recipient,
+          category: 'lead_meta',
+          dedupe_key: `meta-repeat:${facebookLeadId}:${recipient}`.slice(0, 190),
+        },
+        select: { id: true },
+      });
+      if (alreadyDispatched) return;
+
+      await this.crmEvents?.metaRepeatEnquiry(
+        { id: lead.id, first_name: lead.name, last_name: null, email: lead.email },
+        recipient,
+        facebookLeadId,
+        {
+          formName: inquiry.meta_form_name ?? ctx.formName ?? ctx.pageName ?? null,
+          propertyAddress: inquiry.property_address,
+          projectName: inquiry.project_name,
+        },
+      );
+    } catch (err) {
+      this.log.warn(
+        `Meta submission ${facebookLeadId}: the enquiry was recorded but its notification failed — `
+        + `${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   /**
