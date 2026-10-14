@@ -89,6 +89,15 @@ export default function AgentFaqModal({ open, onClose, transactionId, txn, onSav
    * WORDING ONLY. `readOnly`, the disabled fieldset and every control below are untouched.
    */
   const isDocumentation = user?.role === 'documentation';
+  /*
+   * DOCUMENTATION SETS THE READINESS FIELDS HERE (brokerage request, 2026-10-14): Valid Docs Cleared
+   * from Agent, Final Validation (with its remarks) and Ready to Process — on each term for
+   * preconstruction. Everything else in the panel stays read-only for this role: the fieldset is
+   * opened for it, and `lockRest` disables every other control by hand. The server keeps only these
+   * keys from this role's save (`mergeDocumentationReadiness`).
+   */
+  const docEdit = isDocumentation && !dftNA && !depositSlipOnly;
+  const lockRest = docEdit;
   const na = (v: string) => (dftNA ? 'N/A' : v); // §5.1 DFT — status dropdowns default to N/A
   const toast = useToast();
   const listing = isListingType(txn.type);
@@ -416,7 +425,7 @@ export default function AgentFaqModal({ open, onClose, transactionId, txn, onSav
           the heading is where the same fact costs no space. Scoped to the role, so every other
           seat's heading is unchanged.
         */}
-        <div className="modal-h">Agent Payment Readiness{isDocumentation ? ' (View Only)' : ''}</div>
+        <div className="modal-h">Agent Payment Readiness{isDocumentation && !docEdit ? ' (View Only)' : ''}</div>
 
         {dftNA && (
           <div className="card" style={{ borderLeft: '4px solid var(--bad)', background: '#fff7ed', marginBottom: 12 }}>
@@ -447,26 +456,26 @@ export default function AgentFaqModal({ open, onClose, transactionId, txn, onSav
         </div>
         )}
 
-        <fieldset disabled={dftNA || readOnly} style={{ border: 0, margin: 0, padding: 0, minInlineSize: 0 }}>
+        <fieldset disabled={dftNA || (readOnly && !docEdit)} style={{ border: 0, margin: 0, padding: 0, minInlineSize: 0 }}>
 
         {depositSlipOnly ? (
           <div className="card">
             <div className="modal-sub" style={{ marginTop: 0 }}>Deposit Slip</div>
             <div className="help" style={{ marginBottom: 8 }}>Upload one or more deposit slip files.</div>
-            <input type="file" multiple accept="image/*,application/pdf" onChange={(e) => { addSlips(e.target.files); e.target.value = ''; }} />
+            <input type="file" multiple accept="image/*,application/pdf" disabled={lockRest} onChange={(e) => { addSlips(e.target.files); e.target.value = ''; }} />
             {(form.deposit_slips || []).length === 0
               ? <div className="help" style={{ marginTop: 8 }}>No deposit slips uploaded yet.</div>
               : <div style={{ marginTop: 8 }}>{form.deposit_slips.map((s, i) => (
                 <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12.5, padding: '3px 0' }}>
                   <a className="prop-link" href={s.data} target="_blank" rel="noreferrer" download={s.name}>{s.name}</a>
-                  <button className="row-rm" onClick={() => rmSlip(i)}>🗑️</button>
+                  <button className="row-rm" disabled={lockRest} onClick={() => rmSlip(i)}>🗑️</button>
                 </div>))}</div>}
           </div>
         ) : (<>
 
         {precon && (<>
           <div className="field" style={{ maxWidth: 280 }}><label style={lbl}>Details of Terms — Show</label>
-            <select value={termFilter} onChange={(e) => setTermFilter(e.target.value)}>
+            <select value={termFilter} disabled={lockRest} onChange={(e) => setTermFilter(e.target.value)}>
               <option value="All">All Terms</option>
               {termsArr.map((k) => <option key={k} value={k}>Term {k}</option>)}
             </select></div>
@@ -477,16 +486,16 @@ export default function AgentFaqModal({ open, onClose, transactionId, txn, onSav
               <div className="card" key={k} style={{ marginBottom: 14 }}>
                 <div className="modal-sub" style={{ marginTop: 0 }}>Term {k} — Validation</div>
                 <div className="g3">
-                  <div className="field"><label style={lbl}>Invoice Sent</label><select value={na(t.invoice_sent)} onChange={(e) => setTT(k, { invoice_sent: e.target.value })}><option value="">Select</option><option>Yes</option><option>No</option><option>N/A</option></select></div>
-                  <div className="field"><label style={lbl}>Invoice Number</label><input value={t.invoice_number} onChange={(e) => setTT(k, { invoice_number: e.target.value })} placeholder="INV-####" /></div>
-                  <div className="field"><label style={lbl}>Commission Received Date</label><input type="date" value={invByTerm[k]?.commission_received_date || t.commission_received_date || ''} readOnly style={{ background: '#f9fafb' }} /><span className="help">Auto-reflected from Admin Activities.</span></div>
+                  <div className="field"><label style={lbl}>Invoice Sent</label><select value={na(t.invoice_sent)} disabled={lockRest} onChange={(e) => setTT(k, { invoice_sent: e.target.value })}><option value="">Select</option><option>Yes</option><option>No</option><option>N/A</option></select></div>
+                  <div className="field"><label style={lbl}>Invoice Number</label><input value={t.invoice_number} disabled={lockRest} onChange={(e) => setTT(k, { invoice_number: e.target.value })} placeholder="INV-####" /></div>
+                  <div className="field"><label style={lbl}>Commission Received Date</label><input type="date" value={invByTerm[k]?.commission_received_date || t.commission_received_date || ''} readOnly disabled={lockRest} style={{ background: '#f9fafb' }} /><span className="help">Auto-reflected from Admin Activities.</span></div>
                 </div>
                 <div className="g3">
                   <div className="field"><label style={lbl}>Valid Docs Cleared from Agent</label><select value={t.docs_cleared} onChange={(e) => setTT(k, { docs_cleared: e.target.value })}><option value="">Select</option><option>Yes</option><option>No</option></select></div>
                   <div className="field"><label style={lbl}>Final Validation</label><select value={t.final_validation} onChange={(e) => setTT(k, { final_validation: e.target.value })}><option value="">Select</option><option>Done</option><option>Pending</option><option>Invalid</option></select><span className="help">Auto-set to Pending when docs cleared = Yes.</span></div>
                   <div className="field"><label style={lbl}>Ready to Process This Week</label><select value={na(t.ready_to_process)} onChange={(e) => setTT(k, { ready_to_process: e.target.value })}><option value="">Select</option><option>Yes</option><option>No</option><option>N/A</option></select></div>
                 </div>
-                <div className="field" style={{ marginTop: 8 }}><label style={lbl}>Remarks</label><textarea rows={2} value={t.remarks} onChange={(e) => setTT(k, { remarks: e.target.value })} placeholder={`Remarks for Term ${k}…`} /></div>
+                <div className="field" style={{ marginTop: 8 }}><label style={lbl}>Remarks</label><textarea rows={2} value={t.remarks} disabled={lockRest} onChange={(e) => setTT(k, { remarks: e.target.value })} placeholder={`Remarks for Term ${k}…`} /></div>
               </div>
             );
           })}
@@ -498,25 +507,25 @@ export default function AgentFaqModal({ open, onClose, transactionId, txn, onSav
             <div className="card">
               <div className="modal-sub" style={{ marginTop: 0 }}>Deposit Slip</div>
               <div className="help" style={{ marginBottom: 8 }}>Upload one or more deposit slip files.</div>
-              <input type="file" multiple accept="image/*,application/pdf" onChange={(e) => { addSlips(e.target.files); e.target.value = ''; }} />
+              <input type="file" multiple accept="image/*,application/pdf" disabled={lockRest} onChange={(e) => { addSlips(e.target.files); e.target.value = ''; }} />
               {(form.deposit_slips || []).length === 0
                 ? <div className="help" style={{ marginTop: 8 }}>No deposit slips uploaded yet.</div>
                 : <div style={{ marginTop: 8 }}>{form.deposit_slips.map((s, i) => (
                   <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12.5, padding: '3px 0' }}>
                     <a className="prop-link" href={s.data} target="_blank" rel="noreferrer" download={s.name}>{s.name}</a>
-                    <button className="row-rm" onClick={() => rmSlip(i)}>🗑️</button>
+                    <button className="row-rm" disabled={lockRest} onClick={() => rmSlip(i)}>🗑️</button>
                   </div>))}</div>}
             </div>
             {!clientNA && (
               <div className="card">
                 <div className="modal-sub" style={{ marginTop: 0 }}>Client Void Cheque</div>
                 <div className="help" style={{ marginBottom: 8 }}>Upload the client void cheque (single file).</div>
-                <input type="file" accept="image/*,application/pdf" onChange={(e) => { setVoidCheque(e.target.files?.[0]); e.target.value = ''; }} />
+                <input type="file" accept="image/*,application/pdf" disabled={lockRest} onChange={(e) => { setVoidCheque(e.target.files?.[0]); e.target.value = ''; }} />
                 {!form.void_cheque
                   ? <div className="help" style={{ marginTop: 8 }}>No void cheque uploaded yet.</div>
                   : <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12.5, marginTop: 8 }}>
                     <a className="prop-link" href={form.void_cheque.data} target="_blank" rel="noreferrer" download={form.void_cheque.name}>{form.void_cheque.name}</a>
-                    <button className="row-rm" onClick={rmVoidCheque}>🗑️</button>
+                    <button className="row-rm" disabled={lockRest} onClick={rmVoidCheque}>🗑️</button>
                   </div>}
               </div>
             )}
@@ -538,12 +547,12 @@ export default function AgentFaqModal({ open, onClose, transactionId, txn, onSav
               <select value={na(form.ready_to_process)} onChange={(e) => set('ready_to_process', e.target.value)}><option value="">Select</option><option>Yes</option><option>No</option><option>N/A</option></select>
               <span className="help">Auto-set to Yes when Final Validation = Done (change to N/A manually if needed); No when Docs cleared = Yes but validation still Pending.</span></div>
             <div className="field"><label style={lbl}>Client Payment Paid</label>
-              <select value={na(clientNA ? 'N/A' : form.client_payment_paid)} disabled={clientNA} onChange={(e) => set('client_payment_paid', e.target.value)}><option value="">Select</option><option>Yes</option><option>No</option><option>N/A</option></select>
+              <select value={na(clientNA ? 'N/A' : form.client_payment_paid)} disabled={clientNA || lockRest} onChange={(e) => set('client_payment_paid', e.target.value)}><option value="">Select</option><option>Yes</option><option>No</option><option>N/A</option></select>
               <span className="help">{clientNA ? 'Payable to Client is $0 — set to N/A automatically.' : 'Auto-set to Yes when Admin Activities “Paid to Client?” is Yes. When Yes, the Breakdown Summary (Client) card appears below.'}</span></div>
           </div>
           <div className="g2">
             <div className="field"><label style={lbl}>Agent Commission Paid Status</label>
-              <input value={na(form.agent_commission_paid_status) || 'No'} readOnly style={{ background: '#f9fafb', fontWeight: 600 }} />
+              <input value={na(form.agent_commission_paid_status) || 'No'} readOnly disabled={lockRest} style={{ background: '#f9fafb', fontWeight: 600 }} />
               <span className="help">Auto — stays No until <strong>every</strong> agent's payment is resolved in Admin Activities (Paid Type + Paid Date, or fully covered → N/A). Each agent's own status and breakdown appear individually below.</span></div>
           </div>
           {perAgentStatusCard}
@@ -553,8 +562,8 @@ export default function AgentFaqModal({ open, onClose, transactionId, txn, onSav
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, gap: 8, flexWrap: 'wrap' }}>
                 <div className="modal-sub" style={{ margin: 0 }}>Breakdown Summary (Client)</div>
                 <div style={{ display: 'flex', gap: 6 }}>
-                  <button className="btn ghost sm" onClick={() => printDoc(clientDocTitle, clientDocHtml, false)}>👁 View</button>
-                  <button className="btn primary sm" onClick={() => printDoc(clientDocTitle, clientDocHtml)}>📄 Download PDF</button>
+                  <button className="btn ghost sm" disabled={lockRest} onClick={() => printDoc(clientDocTitle, clientDocHtml, false)}>👁 View</button>
+                  <button className="btn primary sm" disabled={lockRest} onClick={() => printDoc(clientDocTitle, clientDocHtml)}>📄 Download PDF</button>
                 </div>
               </div>
               <div style={{ textAlign: 'center', marginBottom: 6 }}>
@@ -578,14 +587,14 @@ export default function AgentFaqModal({ open, onClose, transactionId, txn, onSav
               </ul>
               <p style={{ fontWeight: 700, textDecoration: 'underline', margin: '12px 0 4px' }}>Breakdown Summary:</p>
               <ul style={{ lineHeight: 1.9, margin: 0, paddingLeft: 20, fontSize: 13 }}>
-                <li><strong>Client Name:</strong> <input value={form.client_name} onChange={(e) => set('client_name', e.target.value)} style={editLine} /></li>
-                <li><strong>Name on Received Client Void Cheque:</strong> <input value={form.void_cheque_name} onChange={(e) => set('void_cheque_name', e.target.value)} style={editLine} /></li>
+                <li><strong>Client Name:</strong> <input value={form.client_name} disabled={lockRest} onChange={(e) => set('client_name', e.target.value)} style={editLine} /></li>
+                <li><strong>Name on Received Client Void Cheque:</strong> <input value={form.void_cheque_name} disabled={lockRest} onChange={(e) => set('void_cheque_name', e.target.value)} style={editLine} /></li>
                 <li><strong>Client Account Details (Payment Made To):</strong></li>
                 <li style={{ listStyle: 'none', marginLeft: -20 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'nowrap' }}>
-                    <span style={{ display: 'flex', alignItems: 'center', gap: 4, flex: 1, minWidth: 0 }}>Inst no.: <input value={form.client_inst_no} onChange={(e) => set('client_inst_no', e.target.value)} style={{ ...editLine, minWidth: 0, flex: 1 }} /></span>
-                    <span style={{ display: 'flex', alignItems: 'center', gap: 4, flex: 1, minWidth: 0 }}>Transit no.: <input value={form.client_transit_no} onChange={(e) => set('client_transit_no', e.target.value)} style={{ ...editLine, minWidth: 0, flex: 1 }} /></span>
-                    <span style={{ display: 'flex', alignItems: 'center', gap: 4, flex: 1, minWidth: 0 }}>Account no.: <input value={form.client_account_no} onChange={(e) => set('client_account_no', e.target.value)} style={{ ...editLine, minWidth: 0, flex: 1 }} /></span>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 4, flex: 1, minWidth: 0 }}>Inst no.: <input value={form.client_inst_no} disabled={lockRest} onChange={(e) => set('client_inst_no', e.target.value)} style={{ ...editLine, minWidth: 0, flex: 1 }} /></span>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 4, flex: 1, minWidth: 0 }}>Transit no.: <input value={form.client_transit_no} disabled={lockRest} onChange={(e) => set('client_transit_no', e.target.value)} style={{ ...editLine, minWidth: 0, flex: 1 }} /></span>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 4, flex: 1, minWidth: 0 }}>Account no.: <input value={form.client_account_no} disabled={lockRest} onChange={(e) => set('client_account_no', e.target.value)} style={{ ...editLine, minWidth: 0, flex: 1 }} /></span>
                   </div>
                 </li>
                 <li><strong>Deposit Received:</strong> {formatCurrency(txn.deposit)}</li>
@@ -606,8 +615,8 @@ export default function AgentFaqModal({ open, onClose, transactionId, txn, onSav
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, gap: 8, flexWrap: 'wrap' }}>
                 <div className="modal-sub" style={{ margin: 0 }}>Breakdown Summary (Agent)</div>
                 <div style={{ display: 'flex', gap: 6 }}>
-                  <button className="btn ghost sm" onClick={() => printDoc(agentDocTitle, agentDocHtml, false)}>👁 View</button>
-                  <button className="btn primary sm" onClick={() => printDoc(agentDocTitle, agentDocHtml)}>📄 Download PDF</button>
+                  <button className="btn ghost sm" disabled={lockRest} onClick={() => printDoc(agentDocTitle, agentDocHtml, false)}>👁 View</button>
+                  <button className="btn primary sm" disabled={lockRest} onClick={() => printDoc(agentDocTitle, agentDocHtml)}>📄 Download PDF</button>
                 </div>
               </div>
               <div dangerouslySetInnerHTML={{ __html: agentDocHtml }} />
@@ -620,9 +629,9 @@ export default function AgentFaqModal({ open, onClose, transactionId, txn, onSav
           {/* TD-048 — this panel repeated Admin Activities' value under Admin Activities' label, so
               it inherited the same ambiguity: it said "Draft" for an issued, overdue invoice. Both
               questions are now asked by name, with the invoice's own word first. */}
-          <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Invoice Status</label><input value={invAdmin.invoice_status || '—'} readOnly style={{ background: '#f9fafb' }} /><span className="help">Auto-reflected from Admin Activities.</span></div>
-          <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Invoice Sent</label><input value={sentStatusLabel(invAdmin.invoice_sent_status)} readOnly style={{ background: '#f9fafb' }} /><span className="help">Auto-reflected from Admin Activities.</span></div>
-          <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Commission Received Date</label><input type="date" value={invAdmin.commission_received_date || form.commission_received_date || ''} readOnly style={{ background: '#f9fafb' }} /><span className="help">Auto-reflected from Admin Activities.</span></div>
+          <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Invoice Status</label><input value={invAdmin.invoice_status || '—'} readOnly disabled={lockRest} style={{ background: '#f9fafb' }} /><span className="help">Auto-reflected from Admin Activities.</span></div>
+          <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Invoice Sent</label><input value={sentStatusLabel(invAdmin.invoice_sent_status)} readOnly disabled={lockRest} style={{ background: '#f9fafb' }} /><span className="help">Auto-reflected from Admin Activities.</span></div>
+          <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Commission Received Date</label><input type="date" value={invAdmin.commission_received_date || form.commission_received_date || ''} readOnly disabled={lockRest} style={{ background: '#f9fafb' }} /><span className="help">Auto-reflected from Admin Activities.</span></div>
           <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Valid Docs Cleared from Agent</label>
             <select value={form.docs_cleared} onChange={(e) => set('docs_cleared', e.target.value)}><option value="">Select</option><option>Yes</option><option>No</option></select>
             <span className="help">Auto-set to Yes when every document is Received &amp; Valid.</span></div>
@@ -638,11 +647,11 @@ export default function AgentFaqModal({ open, onClose, transactionId, txn, onSav
             <select value={form.ready_to_process} onChange={(e) => set('ready_to_process', e.target.value)}><option value="">Select</option><option>Yes</option><option>No</option><option>N/A</option></select>
             <span className="help">Auto-set to Yes when Final Validation = Done (change to N/A manually if needed); No when Docs cleared = Yes but validation still Pending.</span></div>
           <div className="field"><label style={lbl}>Agent Commission Paid Status</label>
-            <input value={na(form.agent_commission_paid_status) || 'No'} readOnly style={{ background: '#f9fafb', fontWeight: 600 }} />
+            <input value={na(form.agent_commission_paid_status) || 'No'} readOnly disabled={lockRest} style={{ background: '#f9fafb', fontWeight: 600 }} />
             <span className="help">Auto — stays No until <strong>every</strong> agent's payment is resolved in Admin Activities (Paid Type + Paid Date, or fully covered → N/A). Each agent's own status and breakdown appear individually below.</span></div>
           {listing && (
             <div className="field"><label style={lbl}>Client Payment Paid</label>
-              <select value={na(form.client_payment_paid)} onChange={(e) => set('client_payment_paid', e.target.value)}><option value="">Select</option><option>Yes</option><option>No</option><option>N/A</option></select></div>
+              <select value={na(form.client_payment_paid)} disabled={lockRest} onChange={(e) => set('client_payment_paid', e.target.value)}><option value="">Select</option><option>Yes</option><option>No</option><option>N/A</option></select></div>
           )}
         </div>
         {perAgentStatusCard}
@@ -652,8 +661,8 @@ export default function AgentFaqModal({ open, onClose, transactionId, txn, onSav
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, gap: 8, flexWrap: 'wrap' }}>
               <div className="modal-sub" style={{ margin: 0 }}>Breakdown Summary (Agent)</div>
               <div style={{ display: 'flex', gap: 6 }}>
-                <button className="btn ghost sm" onClick={() => printDoc(agentDocTitle, agentDocHtml, false)}>👁 View</button>
-                <button className="btn primary sm" onClick={() => printDoc(agentDocTitle, agentDocHtml)}>📄 Download PDF</button>
+                <button className="btn ghost sm" disabled={lockRest} onClick={() => printDoc(agentDocTitle, agentDocHtml, false)}>👁 View</button>
+                <button className="btn primary sm" disabled={lockRest} onClick={() => printDoc(agentDocTitle, agentDocHtml)}>📄 Download PDF</button>
               </div>
             </div>
             <div dangerouslySetInnerHTML={{ __html: agentDocHtml }} />
@@ -670,7 +679,7 @@ export default function AgentFaqModal({ open, onClose, transactionId, txn, onSav
 
         <div className="actions">
           <button className="btn ghost" onClick={onClose}>Close</button>
-          {(!readOnly || allowBatchEmail) && <button className="btn primary" onClick={save} disabled={saving || dftNA || savedOk}>{savedOk ? '✓ Saved' : (saving ? 'Saving…' : 'Save')}</button>}
+          {(!readOnly || allowBatchEmail || docEdit) && <button className="btn primary" onClick={save} disabled={saving || dftNA || savedOk}>{savedOk ? '✓ Saved' : (saving ? 'Saving…' : 'Save')}</button>}
         </div>
       </div>
     </div>

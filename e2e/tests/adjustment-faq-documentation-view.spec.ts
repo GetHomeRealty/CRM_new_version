@@ -136,10 +136,16 @@ for (const s of SECTIONS) {
         const fields = [...el.querySelectorAll('input, select, textarea')] as HTMLInputElement[];
         return fields.filter((f) => !f.matches(':disabled') && !f.readOnly).length;
       });
-      expect(editable).toBe(0);
+      /*
+       * AGENT PAYMENT READINESS IS THE EXCEPTION since 2026-10-14: its three readiness fields (Valid
+       * Docs Cleared, Final Validation, Ready to Process) are this role's to set, with a Save. The
+       * server keeps only those keys from this role's save.
+       */
+      const readiness = s.heading === 'Agent Payment Readiness';
+      expect(editable).toBe(readiness ? 3 : 0);
 
-      // No Save button either, so there is no way to attempt a write from here.
-      await expect(modal.getByRole('button', { name: /^save$/i })).toHaveCount(0);
+      // No Save button on a panel that is read-only, so there is no way to attempt a write from it.
+      await expect(modal.getByRole('button', { name: /^save$/i })).toHaveCount(readiness ? 1 : 0);
     } finally {
       await page.unroute('**/api/user');
       await removeDeal(page, id);

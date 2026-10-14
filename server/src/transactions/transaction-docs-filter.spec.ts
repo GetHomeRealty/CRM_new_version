@@ -3,7 +3,7 @@ import { BadRequestException, ValidationPipe } from '@nestjs/common';
 import { filterClauses } from './transaction-filters';
 import { transactionScopeWhere } from '../common/transaction-scope';
 import { ListTransactionsDto } from './dto/list-transactions.dto';
-import { DOCUMENTATION_EDITABLE, BASIC_INFO_FIELDS, ACCOUNTING_LOCKED } from './transactions-write.service';
+import { DOCUMENTATION_EDITABLE, BASIC_INFO_FIELDS, ACCOUNTING_LOCKED, mergeDocumentationReadiness } from './transactions-write.service';
 
 /**
  * "MISSING UPLOADS" AND "NEEDS REVIEW" — the Transactions list's required-documents filters, run as
@@ -209,6 +209,45 @@ describe('what a Documentation user may change on a deal', () => {
       'activity_tracker', 'payment_type']) {
       expect(DOCUMENTATION_EDITABLE.has(k)).toBe(false);
     }
+  });
+});
+
+describe('Agent Payment Readiness: what a Documentation save keeps', () => {
+  const stored = {
+    docs_cleared: '', final_validation: '', ready_to_process: 'No', batch_review_email: true,
+    client_account_no: '123', deposit_slips: [{ name: 'slip.pdf', data: 'x' }], agent_commission_paid_status: 'No',
+    term_tracker: { 1: { docs_cleared: '', invoice_number: 'INV-1', remarks: 'kept' } },
+  };
+
+  it('TAKES THE READINESS FIELDS, and nothing else in the tracker', () => {
+    const out = mergeDocumentationReadiness(stored, {
+      docs_cleared: 'Yes', final_validation: 'Invalid', final_validation_remarks: 'Missing APS', ready_to_process: 'No',
+      batch_review_email: false, client_account_no: '999', deposit_slips: [], agent_commission_paid_status: 'Yes',
+    });
+    expect(out).toMatchObject({ docs_cleared: 'Yes', final_validation: 'Invalid', final_validation_remarks: 'Missing APS', ready_to_process: 'No' });
+    expect(out.batch_review_email).toBe(true);
+    expect(out.client_account_no).toBe('123');
+    expect(out.deposit_slips).toEqual(stored.deposit_slips);
+    expect(out.agent_commission_paid_status).toBe('No');
+  });
+
+  it('A KEY NOT SENT KEEPS ITS STORED VALUE, and a non-string is stored as blank', () => {
+    const out = mergeDocumentationReadiness({ ...stored, final_validation: 'Done' }, { docs_cleared: { evil: 1 } });
+    expect(out.final_validation).toBe('Done');
+    expect(out.docs_cleared).toBe('');
+  });
+
+  it("ON A PRECONSTRUCTION TERM, only that term's three readiness fields", () => {
+    const out = mergeDocumentationReadiness(stored, {
+      term_tracker: { 1: { docs_cleared: 'Yes', final_validation: 'Done', ready_to_process: 'Yes', invoice_number: 'HACK', remarks: 'x' }, bad: { docs_cleared: 'Yes' } },
+    });
+    const terms = out.term_tracker as Record<string, Record<string, unknown>>;
+    expect(terms['1']).toMatchObject({ docs_cleared: 'Yes', final_validation: 'Done', ready_to_process: 'Yes', invoice_number: 'INV-1', remarks: 'kept' });
+    expect(terms.bad).toBeUndefined();
+  });
+
+  it("THE TRACKER AS A WHOLE IS STILL NOT THIS ROLE'S TO WRITE", () => {
+    expect(DOCUMENTATION_EDITABLE.has('activity_tracker')).toBe(false);
   });
 });
 
