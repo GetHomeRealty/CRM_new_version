@@ -94,7 +94,7 @@ test.describe('Financial information, for Accounting', () => {
     }
   });
 
-  test('ACCOUNTING SEES EXACTLY "View", AND NO LOCK OR EDIT CONTROLS', async ({ page }) => {
+  test('ACCOUNTING SEES EXACTLY "View Only", AND NO LOCK OR EDIT CONTROLS', async ({ page }) => {
     await signIn(page, 'superAdmin');
     const made: Made = { deals: [] };
     try {
@@ -103,7 +103,7 @@ test.describe('Financial information, for Accounting', () => {
       await openFinancial(page, id);
       const modal = page.locator('.modal.xl');
 
-      await expect(modal.getByTestId('fin-readonly-banner')).toHaveText('View');
+      await expect(modal.getByTestId('fin-readonly-banner')).toHaveText('View Only');
 
       // None of the wording that would suggest they can change or ask to change the figures.
       await expect(modal.getByText(/View-only — click/)).toHaveCount(0);
@@ -148,7 +148,7 @@ test.describe('Financial information, for Accounting', () => {
         return fields.filter((f) => !f.matches(':disabled') && !f.readOnly).length;
       });
       expect(editable).toBe(0);
-      await expect(modal.getByTestId('fin-readonly-banner')).toHaveText('View');
+      await expect(modal.getByTestId('fin-readonly-banner')).toHaveText('View Only');
       await expect(modal.getByRole('button', { name: /^save$/i })).toHaveCount(0);
     } finally {
       await page.unroute('**/api/user');

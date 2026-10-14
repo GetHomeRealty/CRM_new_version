@@ -216,7 +216,7 @@ test.describe('proposing a commission change', () => {
       });
       await openFinancial(page, id);
 
-      await expect(page.getByTestId('fin-readonly-banner')).toHaveText('View');
+      await expect(page.getByTestId('fin-readonly-banner')).toHaveText('View Only');
       await expect(page.getByTestId('request-commission-change')).toHaveCount(0);
     } finally {
       await page.unroute('**/api/user');

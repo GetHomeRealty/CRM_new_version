@@ -682,7 +682,7 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
             {/* Not shown to Documentation, which has its pencils and Send Request instead. */}
             <span style={{ fontSize: 12.5, color: 'var(--info-ink)' }} data-testid="fin-readonly-banner">
               {readsOnly
-                ? 'View'
+                ? 'View Only'
                 : <><Icon name="lock" size={13} /> View-only — click <strong>Edit</strong> on the transaction to make changes.</>}
             </span>
           </div>
