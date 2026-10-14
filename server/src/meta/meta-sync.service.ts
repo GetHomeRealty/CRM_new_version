@@ -708,43 +708,68 @@ export class MetaSyncService {
        * the ledger check below would read "nobody has been told" and announce a brand-new lead as
        * "a new enquiry from an existing lead" the next time its submission is read.
        *
-       * ASKED OF PROVENANCE, AND DELIBERATELY NOT OF `facebook_lead_id`. That column holds the
-       * lead's LATEST submission, not its first — the branch that attaches a repeat moves it on —
-       * so it answers a different question each time a repeat lands. Using it here cost both
-       * correctness and durability: once a second enquiry had landed, re-reading the ORIGINAL
-       * submission no longer matched and announced a months-old arrival as new; and a repeat whose
-       * notice was lost after the stamp advanced matched for ever after, so it could never recover.
-       * Two columns that do not move answer it properly:
+       * NOT `facebook_lead_id`, AND NOT TIMESTAMP ORDER. Both have been tried here and both answer
+       * a different question:
        *
-       *   `created_by` SAYS WHERE THE LEAD CAME FROM. Written once by whichever path created the
-       *   row and never rewritten — not by the repeat branch here, which writes the Meta columns,
-       *   `source` and blanks but never this. A lead the CSV importer made carries a person's name,
-       *   so it is never mistaken for a Meta arrival however many Meta enquiries it later gathers.
+       *   `leads.facebook_lead_id` holds the lead's LATEST submission, not its first — the repeat
+       *   branch moves it on — so after one repeat the originating submission stops matching, and a
+       *   repeat whose notice was lost after the stamp advanced matches for ever and can never
+       *   recover.
        *
-       *   `created_at` SAYS WHEN. A submission that created a lead cannot postdate it, and a
-       *   genuine repeat always does — the person enquired again after the lead existed. The create
-       *   path writes `leads.created_at` and the inquiry's `submitted_at` from the SAME value, so an
-       *   arrival is an exact equality; `<=` rather than `===` additionally covers a lead made by an
-       *   older Meta path that stamped wall-clock time, which is the legacy row whose enquiry is
-       *   written long afterwards by the `meta lead id` branch.
+       *   "AT OR BEFORE THE LEAD'S `created_at`" is not identity either. `submitted_at` is
+       *   `Timestamp(0)`, whole seconds, so two submissions genuinely share one — and Meta is read
+       *   by form rather than in order, so a submission that PREDATES the lead arrives later all
+       *   the time: a form connected after the fact, a backfill, older submissions becoming visible.
+       *   Both are distinct enquiries the agent should hear about, and both were being silenced.
        *
-       * ASSUMPTIONS, since this is timestamp reasoning and they should be stated:
+       * SO ASK THE ENQUIRY ROW, WHICH CARRIES THE SUBMISSION'S OWN ID. The create path writes the
+       * lead and its first inquiry in ONE statement, so the lead's lowest-`id` enquiry IS the
+       * submission that made it — `meta_lead_inquiries.id` is a serial, never rewritten, and no
+       * later row can take a lower one. That is durable identity rather than a clock comparison,
+       * and it separates two submissions that share a timestamp.
+       *
+       * A LEAD WHOSE HISTORY DID NOT BEGIN AT ITS CREATION IS A SEPARATE, UNCERTAIN CASE. A lead
+       * made before `meta_lead_inquiries` existed has no row from that moment: its earliest row is
+       * whichever submission was read first afterwards, which may be a repeat, so the lowest id
+       * proves nothing. Those are told apart by exactly the property the create path guarantees —
+       * the first row's `submitted_at` equals the lead's `created_at`, both written from one value.
+       * When that does not hold, this falls back to the conservative timestamp test, which is what
+       * the legacy rows have always had. New records never reach that branch.
+       *
+       * ASSUMPTIONS:
        *   1. `created_by` is set at creation and never updated. True of both writers in this
-       *      repository (`Meta…` below, `ctx.userName` in `lead-import.engine.ts`).
-       *   2. A lead not created by Meta is never an arrival, whatever its timestamps — which is
-       *      what keeps an imported contact whose Meta enquiry PREDATES the import (a backfilled
-       *      list) correctly treated as a repeat.
-       *   3. Two submissions inside the same second, the first creating the lead, make the second
-       *      look like the arrival and silence its notice. The enquiry row is still recorded and
-       *      visible on the lead; it is a notice, not data, and the alternative is trusting a
-       *      column that moves.
+       *      repository (`Meta…` below, `ctx.userName` in `lead-import.engine.ts`), and it is what
+       *      keeps an imported contact a repeat however many Meta enquiries it later gathers.
+       *   2. `meta_lead_inquiries.id` orders rows by insertion for one lead. A row cannot predate
+       *      the lead it hangs off, so the lowest id on a lead created with its first enquiry is
+       *      that enquiry.
+       *   3. Deleting a lead's first enquiry row demotes it to the legacy branch — conservative,
+       *      not wrong.
        *
        * This reads PROVENANCE ONLY. Whether anybody was actually told is a separate question,
        * answered by the delivery ledger below, and the two are deliberately not mixed.
        */
       const submittedAt = inquiry.submitted_at ?? null;
-      if (CREATED_BY_META.test(lead.created_by ?? '') && submittedAt && lead.created_at
-        && submittedAt.getTime() <= lead.created_at.getTime()) return;
+      if (CREATED_BY_META.test(lead.created_by ?? '')) {
+        const firstEver = await this.prisma.meta_lead_inquiries.findFirst({
+          where: { lead_id: leadId },
+          orderBy: { id: 'asc' },
+          select: { facebook_lead_id: true, submitted_at: true },
+        });
+        const historyBeganAtCreation = !!(
+          firstEver?.submitted_at && lead.created_at
+          && firstEver.submitted_at.getTime() === lead.created_at.getTime()
+        );
+
+        if (historyBeganAtCreation) {
+          // Durable identity: this submission either IS the one that made the lead, or it is news.
+          if (firstEver!.facebook_lead_id === facebookLeadId) return;
+        } else if (submittedAt && lead.created_at
+          && submittedAt.getTime() <= lead.created_at.getTime()) {
+          // The uncertain legacy case only.
+          return;
+        }
+      }
 
       const recipient = lead.assigned_to ?? lead.owner_user_id ?? ctx.userId;
       if (!recipient) return;

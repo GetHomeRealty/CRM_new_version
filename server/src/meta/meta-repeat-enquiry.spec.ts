@@ -928,6 +928,90 @@ describe("a lead's own arrival is never re-announced as a repeat", () => {
     });
   }, 60000);
 
+  it('TWO SUBMISSIONS AT THE SAME INSTANT are two enquiries, and only the first one is the arrival', async () => {
+    /*
+     * `submitted_at` is `Timestamp(0)` — whole seconds — so "the same time" is not exotic: one
+     * person submitting two forms in the same second, or an advertiser's forms stamped alike, is
+     * enough. Ordering by time cannot separate them, and classifying by "at or before the lead's
+     * creation" calls the SECOND one an arrival and silently drops its notice.
+     *
+     * The enquiry row's own identity can separate them: the row created with the lead is the
+     * arrival, whatever any clock says.
+     */
+    await inRollback(async (tx) => {
+      const admin = await makeUser(tx, 'admin', 'adm');
+      const agent = await makeUser(tx, 'agent', 'ag');
+      const origin = `m-${tag()}`;
+      const twin = `m-${tag()}`;
+      const at = day(20);                                   // ONE timestamp, two submissions
+      const sent: Sent[] = [];
+      const svc = syncService(tx, sent);
+      const ctx = ctxFor(admin, null);
+
+      const made = await svc.upsertLead(submission(origin, { phone: '4165550211', property: '1 Origin Way' }, at), ctx);
+      const leadId = made.leadId as number;
+      await tx.leads.update({ where: { id: leadId }, data: { assigned_to: agent.id } });
+
+      sent.length = 0;
+      await svc.upsertLead(submission(twin, { phone: '4165550211', property: '2 Same Second St' }, at), ctx);
+
+      const repeats = sent.filter((x) => x.event === 'repeat');
+      expect(repeats).toHaveLength(1);
+      expect(repeats[0].metaId).toBe(twin);
+      expect(repeats[0].recipient).toBe(agent.id);
+
+      // The one that actually created the lead stays silent, however often it is read again.
+      sent.length = 0;
+      await svc.upsertLead(submission(origin, { phone: '4165550211', property: '1 Origin Way' }, at), ctx);
+      expect(sent.filter((x) => x.event === 'repeat')).toHaveLength(0);
+
+      expect(await inquiriesOf(tx, leadId)).toHaveLength(2);
+    });
+  }, 60000);
+
+  it('A SUBMISSION OLDER THAN THE LEAD, ingested later, is still a repeat and still notifies', async () => {
+    /*
+     * Meta is read by form, not in order. A form connected after the fact, a backfill, a page whose
+     * older submissions only become visible later — any of them delivers a submission whose
+     * `submitted_at` PREDATES the one that created the lead. It is a distinct enquiry and the agent
+     * should hear about it; "older than the lead" is not the same question as "made the lead".
+     */
+    await inRollback(async (tx) => {
+      const admin = await makeUser(tx, 'admin', 'adm');
+      const agent = await makeUser(tx, 'agent', 'ag');
+      const origin = `m-${tag()}`;
+      const older = `m-${tag()}`;
+      const sent: Sent[] = [];
+      const svc = syncService(tx, sent);
+      const ctx = ctxFor(admin, null);
+
+      const made = await svc.upsertLead(submission(origin, { phone: '4165550222', property: '1 Origin Way' }, day(20)), ctx);
+      const leadId = made.leadId as number;
+      await tx.leads.update({ where: { id: leadId }, data: { assigned_to: agent.id } });
+
+      // Ingested now, submitted ten days BEFORE the lead existed.
+      sent.length = 0;
+      await svc.upsertLead(submission(older, { phone: '4165550222', property: '3 Earlier Ave' }, day(10)), ctx);
+
+      const repeats = sent.filter((x) => x.event === 'repeat');
+      expect(repeats).toHaveLength(1);
+      expect(repeats[0].metaId).toBe(older);
+      expect(repeats[0].recipient).toBe(agent.id);
+
+      // Still exactly once: a replay finds the dispatcher's claim.
+      sent.length = 0;
+      await svc.upsertLead(submission(older, { phone: '4165550222', property: '3 Earlier Ave' }, day(10)), ctx);
+      expect(sent.filter((x) => x.event === 'repeat')).toHaveLength(0);
+
+      // And the originating submission is still silent.
+      sent.length = 0;
+      await svc.upsertLead(submission(origin, { phone: '4165550222', property: '1 Origin Way' }, day(20)), ctx);
+      expect(sent.filter((x) => x.event === 'repeat')).toHaveLength(0);
+
+      expect(await inquiriesOf(tx, leadId)).toHaveLength(2);
+    });
+  }, 60000);
+
   it('A GENUINE REPEAT STILL NOTIFIES on a Meta-created lead — the guard did not become a blanket', async () => {
     await inRollback(async (tx) => {
       const admin = await makeUser(tx, 'admin', 'adm');
