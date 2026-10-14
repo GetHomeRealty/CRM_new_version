@@ -181,6 +181,40 @@ export class MailerService {
     await this.dispatch(account, to, subject, html, [], attachments, headers);
   }
 
+  /** Reply-only transport: caller must first persist a unique submission receipt.
+   * Never substitutes another sender and never retries an uncertain SMTP result.
+   * No controller calls this until durable submission/recovery is implemented.
+   */
+  /** Read-only preparation for an explicitly confirmed Desk reminder. No sender fallback on delivery. */
+  async prepareDocumentReminder(vars: Record<string, unknown>) { return this.prepareDeskMail('document.pending_reminder', vars); }
+  async prepareDeskMail(event: 'document.pending_reminder' | 'invoice.send' | 'invoice.reminder', vars: Record<string, unknown>) {
+    const template = await this.prisma.email_templates.findUnique({ where: { event_key: event }, include: { mail_accounts: true } });
+    if (template && !template.is_active) throw new Error('The Desk mail template is inactive.');
+    const meta = MAIL_EVENTS[event];
+    const account = template?.mail_accounts?.is_active ? template.mail_accounts : await this.accounts.defaultSender('desk');
+    if (!account || ![null, 'desk'].includes(account.scope)) throw new Error('Configure an active Desk reminder sender.');
+    const stored = template ? await this.prisma.email_template_attachments.findMany({ where: { template_id: template.id }, select: { filename: true, content_type: true, data: true } }) : [];
+    if (stored.length > 10 || stored.reduce((total, file) => total + file.data.length, 0) > 20 * 1024 * 1024) throw new Error('Reminder template attachments exceed the mobile delivery limit.');
+    const now = new Date(), merged = { current_date: `${MONTHS[now.getUTCMonth()]} ${now.getUTCDate()}, ${now.getUTCFullYear()}`, current_year: String(now.getUTCFullYear()), ...vars };
+    return { accountId: account.id, sender: account.from_email, subject: renderTemplate(template?.subject ?? meta.default_subject, merged), html: renderTemplate(template?.body_html ?? meta.default_body_html, merged), attachments: stored.map(file => ({ data: Buffer.from(file.data).toString('base64'), name: file.filename, mime: file.content_type })) };
+  }
+  /** Exactly one transport attempt; no retry or alternate account after uncertain acceptance. */
+  async deliverDocumentReminderOnce(prepared: Awaited<ReturnType<MailerService['prepareDocumentReminder']>>, recipients: string[]): Promise<void> {
+    const account = await this.prisma.mail_accounts.findFirst({ where: { id: prepared.accountId, is_active: true, from_email: prepared.sender, OR: [{ scope: 'desk' }, { scope: null }] } });
+    if (!account) throw new Error('The reviewed Desk sender is no longer available.');
+    await this.dispatch(account, recipients, prepared.subject, prepared.html, [], prepared.attachments, undefined, 1, true);
+  }
+
+  async sendOwnedReplyOnce(userId: number, accountId: number, to: string, subject: string, html: string, attachments: MailAttachment[], originalMessageId?: string | null): Promise<void> {
+    if (!Number.isSafeInteger(userId) || userId < 1 || !Number.isSafeInteger(accountId) || accountId < 1) throw new Error('Sending account unavailable.');
+    const account = await this.prisma.mail_accounts.findFirst({ where: { id: accountId, user_id: userId, is_active: true } });
+    if (!account) throw new Error('Sending account unavailable.');
+    // Only a validated server-stored RFC Message-ID may become a threading header.
+    const parent = originalMessageId && originalMessageId.length <= 512 && /^<[^<>\s\x00-\x1f\x7f]+@[^<>\s\x00-\x1f\x7f]+>$/.test(originalMessageId) ? originalMessageId : null;
+    await this.dispatch(account, to, subject, html, [], attachments,
+      parent ? { 'In-Reply-To': parent, References: parent } : undefined, 1);
+  }
+
   /**
    * Pick the mail account a campaign/direct send would use for this user, most specific first:
    *   1. an explicitly chosen account,
@@ -226,7 +260,7 @@ export class MailerService {
     await this.dispatch(account, to, subject, body);
   }
 
-  private async dispatch(account: mail_accounts, to: string | string[], subject: string, body: string, cc: string[] = [], attachments: MailAttachment[] = [], headers?: Record<string, string>): Promise<void> {
+  private async dispatch(account: mail_accounts, to: string | string[], subject: string, body: string, cc: string[] = [], attachments: MailAttachment[] = [], headers?: Record<string, string>, attempts = SEND_ATTEMPTS, requireAllRecipients = false): Promise<void> {
     const transport = account.encryption === 'oauth'
       // Google OAuth account: `password` holds the encrypted refresh token. Nodemailer mints a
       // fresh access token from it (via the app's client id/secret) for each send with XOAUTH2.
@@ -304,14 +338,15 @@ export class MailerService {
      * than the minutes a background queue could afford.
      */
     let lastError: unknown;
-    for (let attempt = 1; attempt <= SEND_ATTEMPTS; attempt++) {
+    for (let attempt = 1; attempt <= attempts; attempt++) {
       try {
-        await transport.sendMail(message);
+        const outcome = await transport.sendMail(message);
+        if (requireAllRecipients && Array.isArray(outcome?.rejected) && outcome.rejected.length) throw new Error('Recipient acceptance was incomplete. Do not automatically resend.');
         if (attempt > 1) this.log.log(`Delivery to ${realTo} succeeded on attempt ${attempt}.`);
         return;
       } catch (err) {
         lastError = err;
-        if (attempt === SEND_ATTEMPTS || !isTransient(err)) break;
+        if (attempt === attempts || !isTransient(err)) break;
         const wait = RETRY_BACKOFF_MS[attempt - 1];
         this.log.warn(`Delivery to ${realTo} failed (${(err as Error)?.message ?? err}); retrying in ${wait / 1000}s.`);
         await new Promise((r) => setTimeout(r, wait));

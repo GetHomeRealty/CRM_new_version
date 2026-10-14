@@ -1,7 +1,9 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AREA_LABEL, type Area } from '../common/domain';
+import { inboxAddress } from './reply-submission';
+import { archiveMetadata } from './mail-archive';
 
 /**
  * Reads a user's synced inbound mail. Every method is scoped to `userId`, so an inbox query can
@@ -31,6 +33,14 @@ const MAX_PAGE = 20_000;
 @Injectable()
 export class InboxService {
   constructor(private readonly prisma: PrismaService) {}
+
+  async composeContext(userId: number, area: Area) {
+    if (!Number.isSafeInteger(userId) || userId < 1) throw new NotFoundException('Mailbox not found.');
+    const primary = await this.primaryAccount(userId, area);
+    const account = primary && await this.prisma.mail_accounts.findFirst({ where: { id: primary.id, user_id: userId, is_active: true }, select: { id: true, from_email: true } });
+    if (!account) throw new BadRequestException('Connect an active primary mailbox before composing email.');
+    return { message_id: 0, from: inboxAddress(account.from_email), to: '', subject: '', recipient_source: 'compose' as const, sending_enabled: process.env.INBOX_REPLY_SENDING_ENABLED === 'true', account_id: account.id };
+  }
 
   /**
    * The user's Hub-wide primary mailbox. Both CRM and Transactions resolve the same account.
@@ -174,6 +184,7 @@ export class InboxService {
     return {
       id: row.id, from_email: row.from_email, from_name: row.from_name, to_email: row.to_email,
       subject: row.subject, body_text: row.body_text, body_html: row.body_html,
+      attachments: archiveMetadata(row.attachments),
       received_at: row.received_at.toISOString(), seen: true,
       lead_id: row.lead_id, lead_name: lead?.name ?? null,
     };
@@ -187,5 +198,41 @@ export class InboxService {
     if (!row) throw await this.missingError(userId, area, id);
     await this.prisma.inbound_emails.update({ where: { id }, data: { seen } });
     return { seen };
+  }
+
+  /** Read-only preparation. A future send must recheck ownership and sender availability.
+   * Do not use get(): opening a reply draft must not mutate read state.
+   * Prefer the synced Reply-To address; older messages fall back to their sender.
+   */
+  async replyContext(userId: number, area: Area, id: number) {
+    if (!Number.isSafeInteger(id) || id < 1 || !Number.isSafeInteger(userId) || userId < 1) {
+      throw new NotFoundException('Message not found.');
+    }
+    const row = await this.prisma.inbound_emails.findFirst({
+      where: { id, user_id: userId, ...this.scopeFor(await this.primaryAccount(userId, area), area) },
+      select: { id: true, account_id: true, from_email: true, reply_to_email: true, subject: true },
+    });
+    if (!row) throw new NotFoundException('Message not found.');
+    // Never fall back to a brokerage address or accept an account chosen by the client.
+    const account = await this.prisma.mail_accounts.findFirst({
+      where: { id: row.account_id, user_id: userId, is_active: true },
+      select: { from_email: true },
+    });
+    if (!account) throw new BadRequestException('The original sending account is unavailable.');
+    const address = (value: string | null) => {
+      const trimmed = value?.trim() ?? '';
+      return trimmed.length <= 254 && /^[^\s<>(),;:"\\@]+@[^\s<>(),;:"\\@]+\.[^\s<>(),;:"\\@]+$/.test(trimmed)
+        && !/[\x00-\x1f\x7f]/.test(trimmed) ? trimmed : null;
+    };
+    const to = address(row.reply_to_email || row.from_email);
+    const from = address(account.from_email);
+    if (!to || !from) throw new BadRequestException('A valid sender and recipient address are required.');
+    const original = (row.subject ?? '').replace(/[\x00-\x1f\x7f]/g, ' ').trim();
+    const subject = /^re:/i.test(original) ? original : `Re: ${original || '(no subject)'}`;
+    return {
+      message_id: row.id, from, to, subject: subject.slice(0, 255),
+      recipient_source: row.reply_to_email ? 'reply-to' as const : 'sender' as const,
+      sending_enabled: process.env.INBOX_REPLY_SENDING_ENABLED === 'true',
+    };
   }
 }

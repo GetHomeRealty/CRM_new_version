@@ -42,6 +42,7 @@ async function seed(tx: PrismaService, licence?: { crm?: boolean; desk?: boolean
     // unique index on a constant expression, so there is no unique column to address it by.
     const existingLicence = await tx.subscriptions.findFirst({ select: { id: true } });
     const licenceData = {
+      company_id: 1,
       crm_enabled: licence.crm ?? true,
       transaction_enabled: licence.desk ?? true,
       status: licence.status ?? 'active',

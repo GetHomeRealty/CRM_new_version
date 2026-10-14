@@ -1,0 +1,20 @@
+import { Test } from '@nestjs/testing';
+import request from 'supertest';
+import type { INestApplication } from '@nestjs/common';
+import { ProviderSentController } from './provider-sent.controller';
+import { ProviderSentService } from './provider-sent.service';
+import { AuthGuard } from '../auth/guards/auth.guard';
+import { AuthService } from '../auth/auth.service';
+import { MobileSessionService } from '../auth/mobile-session.service';
+import { AreaGuard } from '../core/area.guard';
+import { ModuleAccessService } from '../core/module-access.service';
+describe('Provider Sent HTTP authorization',()=>{
+ let app:INestApplication;
+ const sent={list:jest.fn().mockResolvedValue({available:false,data:[]}),detail:jest.fn().mockResolvedValue({uid:9})};
+ const modules={canOpen:jest.fn().mockResolvedValue(true),licence:async()=>({crm:true,desk:true})};
+ beforeAll(async()=>{const module=await Test.createTestingModule({controllers:[ProviderSentController],providers:[AuthGuard,AreaGuard,{provide:ProviderSentService,useValue:sent},{provide:AuthService,useValue:{loadUser:async(id:number)=>({id})}},{provide:MobileSessionService,useValue:{authenticate:async(header:string)=>header==='Bearer synthetic'?{userId:7,sid:'test'}:null}},{provide:ModuleAccessService,useValue:modules}]}).compile();app=module.createNestApplication();await app.listen(0,'127.0.0.1');});
+ afterAll(async()=>{await app.close();});beforeEach(()=>{jest.clearAllMocks();modules.canOpen.mockResolvedValue(true);});
+ it('guards list and detail before any provider access',async()=>{for(const path of ['/account/provider-sent','/account/provider-sent/9']){await request(app.getHttpServer()).get(path+'?area=crm').expect(401);await request(app.getHttpServer()).get(path+'?area=invalid').set('Authorization','Bearer synthetic').expect(400);modules.canOpen.mockResolvedValue(false);await request(app.getHttpServer()).get(path+'?area=crm').set('Authorization','Bearer synthetic').expect(403);modules.canOpen.mockResolvedValue(true);}expect(sent.list).not.toHaveBeenCalled();expect(sent.detail).not.toHaveBeenCalled();});
+ it('pins server-authenticated user, carries abort signal and disables response caching',async()=>{await request(app.getHttpServer()).get('/account/provider-sent?area=crm&user_id=999').set('Authorization','Bearer synthetic').expect(200).expect('Cache-Control','no-store');expect(sent.list.mock.calls[0][0]).toBe(7);expect(sent.list.mock.calls[0][2]).toBeInstanceOf(AbortSignal);await request(app.getHttpServer()).get('/account/provider-sent/9?area=desk&account=1&validity=101&user_id=999').set('Authorization','Bearer synthetic').expect(200).expect('Cache-Control','no-store');expect(sent.detail.mock.calls[0].slice(0,3)).toEqual([7,'9',{area:'desk',account:'1',validity:'101',user_id:'999'}]);});
+ it('has no send, edit or delete routes',async()=>{for(const method of ['post','put','delete'])await request(app.getHttpServer())[method]('/account/provider-sent/9?area=crm').set('Authorization','Bearer synthetic').expect(404);expect(sent.detail).not.toHaveBeenCalled();});
+});

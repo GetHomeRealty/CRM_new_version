@@ -1,3 +1,4 @@
+import { checklistVisibility } from './checklist-visibility';
 import { ForbiddenException, Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
 import { NotificationDispatcher } from '../notifications/notification-dispatcher.service';
 import { promises as fs } from 'fs';
@@ -17,6 +18,8 @@ import { parseJson, toDateString } from '../common/serialize';
 import type { AuthUserRecord } from '../auth/auth.types';
 import { STORAGE_ROOT } from '../config/storage';
 
+import { recoVersion } from './reco-version';
+import { documentReviewVersion } from './document-review-version';
 import { assertCan, can, isAgent } from '../core/authz';
 import { ResourceAccessService } from '../core/resource-access.service';
 const SECTION = 'Legal & Documents';
@@ -591,10 +594,12 @@ export class DocumentsService {
   // ---- payload ----
 
   async payload(txnId: number): Promise<Record<string, unknown>> {
-    const txn = await this.prisma.transactions.findUnique({ where: { id: txnId }, select: { reco_audit_ready: true, reco_audit_remarks: true } });
+    const txn = await this.prisma.transactions.findUnique({ where: { id: txnId }, select: { type: true, reco_audit_ready: true, reco_audit_remarks: true } });
     const allDocs = await this.docs(txnId);
     const deletedDocs = allDocs.filter((d) => d.pending_delete);
     const docs = allDocs.filter((d) => !d.pending_delete);
+    const statuses = await this.prisma.transaction_statuses.findMany({ where: { transaction_id: txnId }, select: { status: true } });
+    const visibleDocs = docs.filter(checklistVisibility(txn?.type ?? null, statuses.map(row => row.status)));
     const total = docs.length;
     const mandatory = docs.filter((d) => d.mandatory).length;
     const received = docs.filter((d) => d.status === 'Received').length;
@@ -610,12 +615,15 @@ export class DocumentsService {
 
     return {
       clients,
+      visible_document_ids: visibleDocs.map(doc => doc.id),
+      reco_audit_version: recoVersion(txnId, txn?.reco_audit_ready ?? null, txn?.reco_audit_remarks ?? null),
       reco_audit_ready: txn?.reco_audit_ready ?? null,
       reco_audit_remarks: txn?.reco_audit_remarks ?? null,
       documents: docs.map((d) => {
         const files = (parseJson<FileEntry[]>(d.files) ?? []) as FileEntry[];
         return {
           id: d.id,
+          review_version: documentReviewVersion(d),
           title: d.title,
           mandatory: !!d.mandatory,
           is_condition: !!d.is_condition,

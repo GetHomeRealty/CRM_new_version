@@ -41,3 +41,6 @@ e2e/.testdb
 # away from the history. A pushed dump is not undone by deleting it: it stays in every clone and
 # every fork. Same reasoning as the line above.
 backups-qa/
+
+# Local provider credentials and public test environment overlays
+.env.providers.local

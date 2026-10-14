@@ -1,5 +1,6 @@
 import { deskPath } from './area';
 import Icon from '../ui/Icon';
+import { dealStatusLabel } from './format';
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { getTransaction, updateTransaction, listAgents, generateTransactionInvoices, getCompanySettings, getCustomers, getBrokerageSuggestions, requestTransactionEdit, approveEditRequest, rejectEditRequest, reviewAgentChanges, rejectAgentChange, requestTransactionDeletion, forwardDeleteRequest, approveDeleteRequest, rejectDeleteRequest, getDocuments, markTransactionReviewsSeen, bulkReviewAction, type OpenReviewItem } from '../lib/api';
@@ -43,7 +44,7 @@ interface ClientRow { id?: number; name: string; email?: string | null; phone?: 
 interface ConditionRow { id?: number; type: string; custom_name?: string | null; deadline?: string | null; status: string; }
 interface InterBoardRow { id?: number; name?: string; board_id?: string; verified?: boolean; }
 interface BrokerageForm { name: string; address: string; email: string; invoice_email: string; agent_email: string; phone: string; agents: string[]; }
-interface BuilderForm { name: string; vendor: string; project: string; address: string; office_email: string; invoice_email: string; phone: string; }
+interface BuilderForm { name: string; vendor: string; project: string; lot_number: string; city: string; description: string; address: string; office_email: string; invoice_email: string; phone: string; }
 interface PreconTermForm { term_no: number; pct: number | null; closing_date: string; }
 interface DetailForm {
   id: number;
@@ -102,6 +103,7 @@ function toForm(t: Transaction): DetailForm {
     commission_agent: t.commission_agent || '',
     builder: {
       name: t.builder?.name || '', vendor: t.builder?.vendor || '', project: t.builder?.project || '',
+      lot_number: t.builder?.lot_number || '', city: t.builder?.city || '', description: t.builder?.description || '',
       address: t.builder?.address || '', office_email: t.builder?.office_email || '',
       invoice_email: t.builder?.invoice_email || '', phone: t.builder?.phone || '',
     },
@@ -148,6 +150,7 @@ function buildPayload(form: DetailForm): Record<string, unknown> {
     payload.commission_agent = form.commission_agent || null;
     payload.builder = {
       name: form.builder.name || null, vendor: form.builder.vendor || null, project: form.builder.project || null,
+      lot_number: form.builder.lot_number || null, city: form.builder.city || null, description: form.builder.description || null,
       address: form.builder.address || null, office_email: form.builder.office_email || null,
       invoice_email: form.builder.invoice_email || null, phone: form.builder.phone || null,
     };
@@ -392,7 +395,7 @@ export default function TransactionDetailPage() {
   const priceLabel = isLease ? 'Total lease price' : isSaleListing ? 'Total Sale Price' : 'Total Purchase Price';
   // Lawyer Details is hidden for lease / preconstruction / referral types (legal side handled differently).
   const lawyerHidden = precon || /lease/i.test(form.type) || referral;
-  const statusOptions = statusOptionsFor(form.type);
+  const statusOptions = Array.from(new Set([...statusOptionsFor(form.type), ...form.statuses]));
   const ro = view; // read-only flag
 
   function set<K extends keyof DetailForm>(k: K, v: DetailForm[K]) { setForm((f) => (f ? { ...f, [k]: v } : f)); }
@@ -572,7 +575,7 @@ export default function TransactionDetailPage() {
   const stActive = saleListing && form.statuses.includes('Active');
   // A listing that's still Active has no price/deposit yet — hide those fields.
   const hidePriceDeposit = listing && form.statuses.includes('Active');
-  const stSoldCond = saleListing && form.statuses.includes('Sold Conditional');
+  const stSoldCond = saleListing && (form.statuses.includes('Sold Conditional') || form.statuses.includes('Conditional'));
   const stTerminated = saleListing && form.statuses.includes('Terminated');
 
   // §5.1 — deal-side Mutual Release / Void restrict the page to Legal & Docs only
@@ -580,14 +583,14 @@ export default function TransactionDetailPage() {
   const dealSide = !isListingStatusFamily(form.type);
   const stVoid = dealSide && form.statuses.includes('Void');
   const stMutualRelease = dealSide && form.statuses.includes('Mutual Release');
-  const stSecuredFirm = form.statuses.includes('Secured Firm'); // hides Conditional Offer
+  const stSecuredFirm = form.statuses.includes('Secured Firm') || form.statuses.includes('Firm'); // hides Conditional Offer
   // Once Sold / Leased, hide the Conditional Offer section (its saved data stays
   // interlinked — e.g. Legal & Documentation condition docs remain).
   const stSoldOrLeased = form.statuses.includes('Sold') || form.statuses.includes('Leased');
   // Header doc buttons: Active hides Lawyer Statement + Notice of Sale + Trade Sheet;
   // Sold/Lease Conditional hides Lawyer Statement + Notice of Sale (Trade Sheet stays).
   const stHdrActive = form.statuses.includes('Active');
-  const stHdrConditional = form.statuses.includes('Sold Conditional') || form.statuses.includes('Lease Conditional');
+  const stHdrConditional = form.statuses.includes('Conditional') || form.statuses.includes('Sold Conditional') || form.statuses.includes('Lease Conditional');
   const hideStmtNos = stHdrActive || stHdrConditional; // Lawyer Statement + Notice of Sale
   const hideTradeSheet = stHdrActive;
   const docsOnly = stVoid || stMutualRelease;
@@ -1013,8 +1016,8 @@ export default function TransactionDetailPage() {
           {/* Basic Info */}
           <div className="card" style={{ marginBottom: 0 }}>
             <div className="modal-h" style={{ fontSize: 14 }}>Basic Info</div>
-            <div style={{ display: 'grid', gridTemplateColumns: referral ? '1.2fr 1.6fr' : (OFFER_CLOSING_LISTING_TYPES.includes(form.type) ? '1.7fr 1.1fr 1fr 1fr' : '1.1fr 1.2fr 1.6fr'), gap: 12, marginBottom: 12 }}>
-              {!referral && (
+            <div style={{ display: 'grid', gridTemplateColumns: referral || precon ? '1.2fr 1.6fr' : (OFFER_CLOSING_LISTING_TYPES.includes(form.type) ? '1.7fr 1.1fr 1fr 1fr' : '1.1fr 1.2fr 1.6fr'), gap: 12, marginBottom: 12 }}>
+              {!referral && !precon && (
               <Field label={OFFER_CLOSING_LISTING_TYPES.includes(form.type) && form.mls_type !== 'exclusive' && !slMarkVerifiedHidden ? (
                 <span style={{ whiteSpace: 'nowrap' }}>Listing Type{' '}
                   <span role="button" onClick={(e) => { e.preventDefault(); e.stopPropagation(); if (!ro) set('mls_verified', !form.mls_verified); }}
@@ -1045,6 +1048,7 @@ export default function TransactionDetailPage() {
               </Field>
               <Field label="Status">
                 <StatusMultiSelect options={statusOptions} selected={form.statuses} disabled={ro} onToggle={toggleStatus} />
+                {form.statuses.includes('Firm') && <span className="help">Remains open until closing. Mark Closed when closing is confirmed.</span>}
               </Field>
               {OFFER_CLOSING_LISTING_TYPES.includes(form.type) && (
                 <Field label="Trade Number"><input value={form.trade_no} readOnly style={{ background: 'var(--surface-2)' }} /></Field>
@@ -1159,8 +1163,13 @@ export default function TransactionDetailPage() {
           </div>
           <div className="g2">
             <Field label="Project Name"><input value={form.builder.project} disabled={ro} onChange={(e) => setBuilder('project', e.target.value)} /></Field>
+            <Field label="Lot Number"><input maxLength={255} value={form.builder.lot_number} disabled={ro} onChange={(e) => setBuilder('lot_number', e.target.value)} /></Field>
+          </div>
+          <div className="g2">
+            <Field label="City"><input maxLength={255} value={form.builder.city} disabled={ro} onChange={(e) => setBuilder('city', e.target.value)} /></Field>
             <Field label="Address"><input value={form.builder.address} disabled={ro} onChange={(e) => setBuilder('address', e.target.value)} /></Field>
           </div>
+          <Field label="Project Description"><textarea rows={3} maxLength={10000} value={form.builder.description} disabled={ro} onChange={(e) => setBuilder('description', e.target.value)} placeholder="Other details about the project" /></Field>
           <div className="g3">
             <Field label="Builder Office Email"><input type="email" value={form.builder.office_email} disabled={ro} onChange={(e) => setBuilder('office_email', e.target.value)} /></Field>
             <Field label="Invoice Email"><input type="email" value={form.builder.invoice_email} disabled={ro} onChange={(e) => setBuilder('invoice_email', e.target.value)} /></Field>
@@ -1439,7 +1448,7 @@ function StatusMultiSelect({ options, selected, disabled, onToggle }: { options:
     return () => document.removeEventListener('mousedown', onDoc);
   }, [open]);
 
-  const label = selected.length ? selected.join(', ') : 'Select status';
+  const label = selected.length ? selected.map(dealStatusLabel).join(', ') : 'Select status';
 
   return (
     <div ref={ref} style={{ position: 'relative' }}>
@@ -1469,7 +1478,7 @@ function StatusMultiSelect({ options, selected, disabled, onToggle }: { options:
                   cursor: blocked ? 'not-allowed' : 'pointer', opacity: blocked ? 0.4 : 1,
                   background: on ? 'var(--brand-soft, #eef2ff)' : 'transparent' }}
               >
-                <input type="checkbox" checked={on} disabled={blocked} onChange={() => onToggle(s)} />{s}
+                <input type="checkbox" checked={on} disabled={blocked} onChange={() => onToggle(s)} />{dealStatusLabel(s)}
               </label>
             );
           })}

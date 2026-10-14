@@ -28,15 +28,17 @@ async function statsTheOldWay(where: Prisma.leadsWhereInput): Promise<Record<str
   const since = new Date(Date.now() - RECENT_LEAD_DAYS * 24 * 60 * 60 * 1000);
   const count = (extra: Prisma.leadsWhereInput) => prisma.leads.count({ where: { AND: [where, extra] } });
 
-  const [total, noCalls, websiteEnquiries, recent, hot, warm, cold, mild, closed, ...sourceCounts] = await Promise.all([
+  const [total, noCalls, websiteEnquiries, recent, hot, warm, cold, mild, offerSubmitted, offerAccepted, closed, ...sourceCounts] = await Promise.all([
     prisma.leads.count({ where }),
     count({ lead_calls: { none: {} } }),
     count({ lead_source: { in: [...WEBSITE_ENQUIRY_SOURCES] } }),
-    count({ created_at: { gte: since } }),
+    count({ updated_at: { gte: since } }),
     count({ lead_status: 'hot' }),
     count({ lead_status: 'warm' }),
     count({ lead_status: 'cold' }),
     count({ lead_status: 'mild' }),
+    count({ lead_status: 'offer submitted' }),
+    count({ lead_status: 'offer accepted' }),
     count({ lead_status: 'closed' }),
     ...DASHBOARD_LEAD_SOURCES.map((s) => count({ lead_source: s.value })),
   ]);
@@ -45,7 +47,14 @@ async function statsTheOldWay(where: Prisma.leadsWhereInput): Promise<Record<str
   DASHBOARD_LEAD_SOURCES.forEach((s, i) => { bySource[s.key] = sourceCounts[i]; });
   bySource.other = total - sourceCounts.reduce((a, b) => a + b, 0);
 
-  return { total, noCalls, websiteEnquiries, recent, byStatus: { hot, warm, cold, mild, closed }, bySource };
+  return {
+    total, noCalls, websiteEnquiries, recent,
+    byStatus: {
+      hot, warm: warm + mild, cold,
+      'offer submitted': offerSubmitted, 'offer accepted': offerAccepted, closed,
+    },
+    bySource,
+  };
 }
 
 /** The implementation as it stands now, copied from `LeadsService.statsGrouped`. */
@@ -57,7 +66,7 @@ async function statsTheNewWay(where: Prisma.leadsWhereInput): Promise<Record<str
     prisma.leads.groupBy({ by: ['lead_status'], where, _count: { _all: true } }),
     prisma.leads.groupBy({ by: ['lead_source'], where, _count: { _all: true } }),
     count({ lead_calls: { none: {} } }),
-    count({ created_at: { gte: since } }),
+    count({ updated_at: { gte: since } }),
   ]);
 
   const statusCounts = new Map(byStatusRows.map((r) => [r.lead_status ?? '', r._count._all]));
@@ -74,8 +83,11 @@ async function statsTheNewWay(where: Prisma.leadsWhereInput): Promise<Record<str
   return {
     total, noCalls, websiteEnquiries, recent,
     byStatus: {
-      hot: status('hot'), warm: status('warm'), cold: status('cold'),
-      mild: status('mild'), closed: status('closed'),
+      hot: status('hot'), warm: status('warm') + status('mild'),
+      cold: status('cold'),
+      'offer submitted': status('offer submitted'),
+      'offer accepted': status('offer accepted'),
+      closed: status('closed'),
     },
     bySource,
   };

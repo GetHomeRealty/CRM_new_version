@@ -1,0 +1,142 @@
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs'), vm = require('node:vm'), ts = require('typescript'), path = require('node:path');
+const React = require('react'), { createRoot } = require('react-dom/client'), { JSDOM } = require('jsdom');
+test('Template editor retains failed drafts, confirms discard and prevents duplicate saves', async () => {
+  const dom = new JSDOM('<div id="root"></div>'); const previous = { window: global.window, document: global.document };
+  global.window = dom.window; global.document = dom.window.document; global.IS_REACT_ACT_ENVIRONMENT = true;
+  const fields = {}, calls = []; let fail = true, deferred = false, resolve, buttons, saved = 0, closed = 0;
+  class UnconfirmedTemplateSaveError extends Error {}
+  let uncertain = false;
+  let fileSize = 4, uploadFailure = '', uploadPending = false, uploadSignal;
+  let pickerCancelled = false, pickedUri = 'file:///cache/picked.txt', readFailure = false;
+  const primitive = ({ children }) => React.createElement('div', null, children);
+  const api = {};
+  vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(__dirname, '../src/components/template-metadata-editor.tsx'), 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, { exports: api, AbortController, Error, require: name => {
+    if (name === 'react' || name === 'react/jsx-runtime') return require(name);
+    if (name === 'react-native') return { Platform: { OS: 'ios' }, Modal: primitive, ScrollView: primitive, ActivityIndicator: primitive, StyleSheet: { create: x => x }, Alert: { alert: (_title, _body, actions) => { buttons = actions; } },
+      TextInput: ({ accessibilityLabel, value, onChangeText, editable }) => { fields[accessibilityLabel] = onChangeText; return React.createElement('input', { value, readOnly: true, disabled: !editable }); },
+      Pressable: ({ children, onPress, disabled }) => React.createElement('button', { onClick: onPress, disabled }, children) };
+    if (name === 'react-native-safe-area-context') return { SafeAreaProvider: primitive, SafeAreaView: primitive };
+    if (name === 'expo-sharing') return { isAvailableAsync: async () => true, shareAsync: async uri => { calls.push({ shared: uri }); } };
+    if (name === 'expo-document-picker') return { getDocumentAsync: async () => ({ canceled: pickerCancelled, assets: [{ uri: pickedUri, name: 'picked.txt', mimeType: 'text/plain' }] }) };
+    if (name === 'expo-file-system') return { Paths: { cache: { uri: 'file:///cache/' } }, File: class { constructor(uri) { this.uri = uri; } get size() { return fileSize; } exists = true; base64 = async () => { calls.push({ read: true }); if (readFailure) throw Error('Cannot read file'); return 'dGVzdA=='; }; delete() { calls.push({ pickerDisposed: true }); } } };
+    if (name.includes('document-download')) return { downloadTemplateAttachment: async (token, id, attachmentId) => { calls.push({ download: attachmentId, id }); return { uri: 'file:///synthetic.txt', dispose: () => calls.push({ disposed: true }) }; } };
+    if (name.includes('themed-text')) return { ThemedText: primitive };
+    if (name.includes('use-theme')) return { useTheme: () => ({}) };
+    if (name.includes('access-policy')) return require('./access-policy-loader.cjs');
+    if (name.includes('auth-context')) return { useMobileAuth: () => ({ token: 'synthetic', user: { modules: ['crm'], permissions: { campaigns: 'edit' } } }) };
+    if (name.includes('template-edit-api')) return { UnconfirmedTemplateSaveError, templateCategories: ['welcome', 'follow-up', 'showing', 'property-update', 'thank-you', 'custom'],
+      uploadTemplateAttachment: async (token, id, input, signal) => { calls.push({ upload: input, id }); uploadSignal = signal; if (uploadFailure === 'denied') throw Error('You do not have permission to edit templates.'); if (uploadFailure === 'uncertain') throw new UnconfirmedTemplateSaveError('Refresh before retrying'); if (uploadPending) return new Promise(r => { resolve = r; }); },
+      removeTemplateAttachment: async (token, id, attachmentId) => { calls.push({ token, id, attachmentId }); return new Promise(r => { resolve = r; }); },
+      createTemplate: async (token, input) => { calls.push({ token, input }); if (uncertain) throw new UnconfirmedTemplateSaveError('Refresh before retrying'); },
+      updateTemplateBody: async (token, id, content) => { calls.push({ token, id, content }); },
+      updateTemplateMetadata: async (token, id, patch) => { calls.push({ token, id, patch }); if (fail) throw Error('Denied'); if (deferred) return new Promise(r => { resolve = r; }); } };
+    throw Error(name);
+  } });
+  const root = createRoot(document.getElementById('root'));
+  const button = text => [...document.querySelectorAll('button')].find(b => b.textContent === text);
+  const click = text => React.act(async () => button(text).click());
+  try {
+    await React.act(async () => root.render(React.createElement(api.TemplateMetadataEditor, { template: { id: 1, name: 'Original', subject: 'Subject' }, onClose: () => closed++, onSaved: () => saved++ })));
+    assert.equal(button('Save template details').disabled, true);
+    await React.act(async () => fields['Template name']('Changed'));
+    await click('Cancel'); assert.equal(closed, 0); assert.equal(buttons[0].text, 'Keep editing');
+    await click('Save template details'); assert.match(document.body.textContent, /Denied/); assert.equal(document.querySelector('input').value, 'Changed');
+    assert.deepEqual(JSON.parse(JSON.stringify(calls[0].patch)), { name: 'Changed' });
+    fail = false; deferred = true;
+    await click('Save template details'); await click('Save template details');
+    assert.equal(calls.length, 2); assert.equal(button('Cancel').disabled, true); assert.equal(document.querySelector('input').disabled, true);
+    await React.act(async () => resolve()); assert.equal(saved, 1);
+    await click('Cancel'); await React.act(async () => buttons[1].onPress()); assert.equal(closed, 1);
+    deferred = false;
+    await click('○ follow-up'); await click('Inactive — tap to change');
+    await click('Save template details');
+    assert.deepEqual(JSON.parse(JSON.stringify(calls.at(-1).patch)), { name: 'Changed', category: 'follow-up', is_active: true });
+    saved = 1;
+    await React.act(async () => root.render(React.createElement(api.TemplateMetadataEditor, { key: 'body', mode: 'body', template: { id: 1, name: 'Original', subject: 'Subject', content: '<p>{{LEAD_NAME}}</p>' }, onClose: () => closed++, onSaved: () => saved++ })));
+    assert.equal(button('Save email body').disabled, true);
+    await React.act(async () => fields['Template body source']('<p>Hello {{LEAD_NAME}}</p>'));
+    await click('Save email body'); assert.equal(calls.at(-1).content, '<p>Hello {{LEAD_NAME}}</p>'); assert.equal(saved, 2);
+    await React.act(async () => root.render(React.createElement(api.TemplateMetadataEditor, { key: 'create', mode: 'create', template: { id: 0, name: '', subject: '', content: '' }, onClose: () => closed++, onSaved: () => saved++ })));
+    await React.act(async () => { fields['Template name']('Draft'); fields['Template subject']('Hello'); fields['Template body source']('<p>Test</p>'); });
+    uncertain = true; const before = calls.length;
+    await click('Create inactive template'); await click('Create inactive template');
+    assert.equal(calls.length, before + 1); assert.equal(button('Create inactive template').disabled, true);
+    assert.match(document.body.textContent, /Refresh before retrying/); assert.equal(saved, 2);
+    await React.act(async () => root.render(React.createElement(api.TemplateMetadataEditor, { key: 'attachments', template: { id: 1, name: 'Draft', subject: 'Hello', category: 'custom', is_active: false, attachments: [{ id: 8, filename: 'synthetic.txt' }] }, onClose: () => closed++, onSaved: () => saved++ })));
+    await click('Open or save synthetic.txt');
+    assert.equal(calls.at(-1).shared, 'file:///synthetic.txt');
+    assert.equal(calls.at(-2).download, 8);
+    const beforeRemoval = calls.length;
+    await click('Remove synthetic.txt'); assert.equal(calls.length, beforeRemoval);
+    assert.equal(buttons[0].text, 'Keep attachment');
+    await React.act(async () => { buttons[1].onPress(); buttons[1].onPress(); });
+    assert.equal(calls.length, beforeRemoval + 1); assert.equal(calls.at(-1).attachmentId, 8);
+    assert.equal(button('Cancel').disabled, true);
+    await React.act(async () => resolve());
+    assert.equal(button('Remove synthetic.txt'), undefined);
+    assert.match(document.body.textContent, /Cancelling this editor will not restore it/);
+    await click('Choose attachment');
+    assert.match(document.body.textContent, /Selected: picked.txt/);
+    assert.equal(calls.some(call => call.upload), false);
+    assert.ok(calls.some(call => call.pickerDisposed));
+    await click('Confirm attachment upload');
+    assert.equal(calls.at(-1).upload.data, 'dGVzdA==');
+    assert.match(document.body.textContent, /Attachment uploaded/);
+    assert.equal(button('Choose attachment').disabled, true);
+    const renderUpload = key => React.act(async () => root.render(React.createElement(api.TemplateMetadataEditor, { key, template: { id: 1, name: 'Draft', subject: 'Hello', category: 'custom', is_active: false, attachments: [] }, onClose: () => closed++, onSaved: () => saved++ })));
+    await renderUpload('oversized'); fileSize = 5 * 1024 * 1024 + 1;
+    const readsBefore = calls.filter(call => call.read).length;
+    const uploadsBefore = calls.filter(call => call.upload).length;
+    await click('Choose attachment');
+    assert.match(document.body.textContent, /no more than 5 MB/);
+    assert.equal(calls.filter(call => call.read).length, readsBefore);
+    assert.equal(calls.filter(call => call.upload).length, uploadsBefore);
+    assert.equal(button('Confirm attachment upload'), undefined);
+    assert.equal(calls.at(-1).pickerDisposed, true);
+    await renderUpload('cancelled-picker'); pickerCancelled = true;
+    const beforeCancel = calls.length;
+    await click('Choose attachment');
+    assert.equal(calls.length, beforeCancel);
+    assert.equal(button('Choose attachment').disabled, false);
+    assert.equal(button('Confirm attachment upload'), undefined);
+    pickerCancelled = false; fileSize = 0; await renderUpload('empty-file');
+    await click('Choose attachment');
+    assert.match(document.body.textContent, /nonempty file/);
+    assert.equal(calls.filter(call => call.read).length, readsBefore);
+    assert.equal(calls.at(-1).pickerDisposed, true);
+    fileSize = 4; pickedUri = 'file:///documents/original.txt'; await renderUpload('outside-cache');
+    const beforeOutside = calls.length;
+    await click('Choose attachment');
+    assert.match(document.body.textContent, /not copied to private cache/);
+    assert.equal(calls.length, beforeOutside, 'Never read or delete the original outside private cache');
+    pickedUri = 'file:///cache/picked.txt'; readFailure = true; await renderUpload('read-failure');
+    await click('Choose attachment');
+    assert.match(document.body.textContent, /Cannot read file/);
+    assert.equal(calls.at(-1).pickerDisposed, true);
+    assert.equal(button('Choose attachment').disabled, false);
+    assert.equal(button('Confirm attachment upload'), undefined);
+    assert.equal(calls.filter(call => call.upload).length, uploadsBefore);
+    readFailure = false;
+    fileSize = 4; await renderUpload('denied'); uploadFailure = 'denied';
+    await click('Choose attachment'); await click('Confirm attachment upload');
+    assert.match(document.body.textContent, /do not have permission/);
+    assert.match(document.body.textContent, /Selected: picked.txt/);
+    assert.equal(button('Confirm attachment upload').disabled, false);
+    uploadFailure = 'uncertain'; await click('Confirm attachment upload');
+    assert.match(document.body.textContent, /Refresh before retrying/);
+    assert.equal(button('Confirm attachment upload').disabled, true);
+    const attempts = calls.filter(call => call.upload).length;
+    await click('Confirm attachment upload'); assert.equal(calls.filter(call => call.upload).length, attempts);
+    await renderUpload('interrupted'); uploadFailure = ''; uploadPending = true;
+    await click('Choose attachment'); await click('Confirm attachment upload');
+    assert.equal(button('Cancel').disabled, true);
+    await React.act(async () => root.render(null));
+    assert.equal(uploadSignal.aborted, true);
+    await React.act(async () => resolve());
+    assert.equal(document.body.textContent, '');
+  } finally {
+    await React.act(async () => root.unmount()); dom.window.close(); global.window = previous.window; global.document = previous.document; delete global.IS_REACT_ACT_ENVIRONMENT;
+  }
+});

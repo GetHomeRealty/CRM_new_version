@@ -50,6 +50,7 @@
     "mailparser": "^3.9.14",
     "node-ical": "^0.27.1",
     "nodemailer": "^9.0.3",
+    "pdf-lib": "1.17.1",
     "pdfmake": "^0.3.11",
     "pg": "^8.22.0",
     "reflect-metadata": "^0.2.2",

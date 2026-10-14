@@ -47,6 +47,7 @@ import { GoogleModule } from './google/google.module';
 import { MarketingInventoryModule } from './marketing-inventory/marketing-inventory.module';
 import { MlsModule } from './mls/mls.module';
 import { FavoritesModule } from './favorites/favorites.module';
+import { ClientReviewsModule } from './client-reviews/client-reviews.module';
 import { TwilioVoiceModule } from './twilio-voice/twilio-voice.module';
 
 @Module({
@@ -103,6 +104,7 @@ import { TwilioVoiceModule } from './twilio-voice/twilio-voice.module';
     MarketingInventoryModule,
     MlsModule,
     FavoritesModule,
+    ClientReviewsModule,
     TwilioVoiceModule,
   ],
   controllers: [AppController, HealthController],

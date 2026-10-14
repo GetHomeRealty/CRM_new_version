@@ -5,14 +5,13 @@ import { PersonResolver } from '../core/person-resolver.service';
 import { AuditService, type ActingUser } from '../audit/audit.service';
 import { CommissionService } from './commission.service';
 import { normalizeCommissionTxn } from './commission.loader';
-import { parseJsonObject, phpEmpty, phpFloat, phpJsonNormalize, round2, toFloat } from '../common/serialize';
-import { isInvoiceableType, isListingType, SECURED_DEAL_TYPES } from '../reference/transaction.constants';
+import { parseJson, parseJsonObject, phpEmpty, phpFloat, phpJsonNormalize, round2, toFloat } from '../common/serialize';
+import { isInvoiceableType, isListingType, defaultStatusFor } from '../reference/transaction.constants';
 import { TradeNumberService } from './trade-number.service';
 import { TransactionLawyerReminderService } from './transaction-lawyer-reminder.service';
 import { TransactionReviewService } from './transaction-review.service';
 import { ReminderSweepService } from './reminder-sweep.service';
 import { TransactionInvoiceService } from '../invoices/transaction-invoice.service';
-import { parseJson } from '../common/serialize';
 import {
   transactionResource,
   txnShowInclude,
@@ -90,6 +89,16 @@ export class TransactionsWriteService {
     private readonly reviews: TransactionReviewService,
     private readonly reminders: ReminderSweepService,
   ) {}
+
+  /** Mobile workspace validates access/versions/fields before using the existing normalization helpers. */
+  async applyMobileFinance(tx:Tx,id:number,fill:Record<string,unknown>,team?:Record<string,unknown>[],terms?:Record<string,unknown>[],actor:ActingUser|null=null):Promise<void>{
+    const txn=await tx.transactions.findUniqueOrThrow({where:{id}});
+    await this.captureRemovedRows(tx,txn,actor,{...fill,...(team?{team}:{}),...(terms?{precon_terms:terms}:{})});
+    const data:Record<string,unknown>={};for(const [key,value]of Object.entries(fill))data[key]=this.normalizeFill(key,value);
+    if(Object.keys(data).length)await tx.transactions.update({where:{id},data:{...data,updated_at:new Date()} as Prisma.transactionsUpdateInput});
+    if(team)await this.syncTeam(tx,id,txn.type,team,true);if(terms)await this.syncPreconTerms(tx,id,terms);
+    await this.syncClientPayment(tx,id);await this.syncAdjustmentStatuses(tx,id);
+  }
 
   /** Create a transaction (port of TransactionController::store). */
   async store(user: AuthUserRecord | null, body: Record<string, unknown>): Promise<{ data: Record<string, unknown> }> {
@@ -354,7 +363,13 @@ export class TransactionsWriteService {
       }
       if (Object.prototype.hasOwnProperty.call(data, 'builder') && data.builder && typeof data.builder === 'object') {
         const b = asObject(data.builder);
-        for (const key of ['name', 'vendor', 'project', 'address', 'office_email', 'invoice_email', 'phone']) {
+        for (const key of ['name', 'vendor', 'project', 'address', 'office_email', 'invoice_email', 'phone', 'lot_number', 'city', 'description']) {
+          if (['lot_number', 'city', 'description'].includes(key)) {
+            if (!Object.prototype.hasOwnProperty.call(b, key)) continue;
+            if (b[key] !== null && (typeof b[key] !== 'string' || (b[key] as string).length > (key === 'description' ? 10000 : 255))) {
+              throw new UnprocessableEntityException(`Invalid builder ${key.replace('_', ' ')}.`);
+            }
+          }
           fill['builder_' + key] = (b[key] ?? null) as string | null;
         }
       }
@@ -367,7 +382,7 @@ export class TransactionsWriteService {
       if (Object.prototype.hasOwnProperty.call(data, 'precon_terms')) await this.syncPreconTerms(tx, txnId, asArray(data.precon_terms));
 
       if (Object.prototype.hasOwnProperty.call(data, 'statuses')) {
-        const finals = ['Sold', 'Leased'];
+        const finals = ['Sold', 'Leased', 'Firm'];
         const oldStatuses = statuses;
         const newStatuses = (data.statuses as unknown[]).filter(Boolean).map(String);
         const type = String(fill.type ?? t.type);
@@ -449,8 +464,7 @@ export class TransactionsWriteService {
   }
 
   private defaultStatus(type: string): string {
-    if (isListingStatusFamily(type)) return 'Active';
-    return (SECURED_DEAL_TYPES as readonly string[]).includes(type) ? '' : 'Open';
+    return defaultStatusFor(type);
   }
 
   private async syncPreconTerms(tx: Tx, txnId: number, terms: Record<string, unknown>[]): Promise<void> {
@@ -505,7 +519,7 @@ export class TransactionsWriteService {
     await tx.users.update({ where: { id: user.id }, data: { profile: JSON.stringify(phpJsonNormalize(profile)), updated_at: new Date() } });
   }
 
-  private async syncTeam(tx: Tx, txnId: number, type: string, team: Record<string, unknown>[]): Promise<void> {
+  private async syncTeam(tx: Tx, txnId: number, type: string, team: Record<string, unknown>[], canonicalIds = false): Promise<void> {
     const prev = await tx.team_members.findMany({ where: { transaction_id: txnId }, select: { name: true, access: true } });
     const prevAccess = new Map(prev.map((m) => [m.name, m.access]));
     await tx.team_members.deleteMany({ where: { transaction_id: txnId } });
@@ -515,7 +529,7 @@ export class TransactionsWriteService {
       const name = String(m.name ?? '');
       // Resolved once for the row: the same person answers both "whose split is this?" and "who is
       // this member?", so looking them up twice invites the two to disagree.
-      const person = await this.people.resolve(null, name, { client: tx });
+      const person = await this.people.resolve(canonicalIds && typeof m.user_id === 'number' ? m.user_id : null, name, { client: tx });
       const hasAgentPct = m.agent_pct !== undefined && m.agent_pct !== null && m.agent_pct !== '';
       let agentPct: number;
       let brokPct: number;

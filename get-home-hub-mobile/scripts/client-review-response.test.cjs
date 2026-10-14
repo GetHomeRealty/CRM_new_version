@@ -1,0 +1,11 @@
+/* global __dirname */
+const {test}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm'),ts=require('typescript'),{JSDOM}=require('jsdom');
+test('Actual client response page removes link fragment, posts once without staff cookies and leaves feedback inert',async()=>{
+ const api={},noop=()=>()=>{},nest=new Proxy({}, {get:()=>noop});
+ const source=fs.readFileSync(path.join(__dirname,'../../server/src/client-reviews/client-reviews.controller.ts'),'utf8');
+ vm.runInNewContext(ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS,experimentalDecorators:true}}).outputText,{exports:api,require:id=>id==='node:crypto'?require(id):id==='@nestjs/common'?nest:id.includes('decorators')?{CurrentUser:noop,Screen:noop}:{}});
+ const headers={},response={setHeader:(key,value)=>headers[key]=value,type(){return this;},send(html){this.html=html;}};new api.ClientReviewResponseController({}).form(response);
+ assert.equal(headers['Referrer-Policy'],'no-referrer');assert.equal(headers['Cache-Control'],'no-store');assert.match(headers['Content-Security-Policy'],/frame-ancestors 'none'/);
+ const token='a'.repeat(64),calls=[];const dom=new JSDOM(response.html,{url:'https://example.invalid/api/client-reviews/respond#'+token,runScripts:'dangerously',beforeParse(window){window.fetch=async(url,options)=>{calls.push({url,options});return{ok:true,json:async()=>({submitted:true})};};}});
+ try{assert.equal(dom.window.location.hash,'');dom.window.document.getElementById('rating').value='5';dom.window.document.getElementById('comment').value='<script>inert</script>';const form=dom.window.document.getElementById('review');form.dispatchEvent(new dom.window.Event('submit',{cancelable:true}));form.dispatchEvent(new dom.window.Event('submit',{cancelable:true}));await new Promise(resolve=>setTimeout(resolve,0));assert.equal(calls.length,1);assert.equal(calls[0].options.credentials,'omit');assert.deepEqual(JSON.parse(calls[0].options.body),{token,rating:5,comment:'<script>inert</script>'});assert(form.hidden);assert.match(dom.window.document.getElementById('status').textContent,/Thank you/);}finally{dom.window.close();}
+});

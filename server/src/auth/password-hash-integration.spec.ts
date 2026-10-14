@@ -48,7 +48,7 @@ function authService(tx: PrismaService, rounds: number) {
     new PermissionService(),
     new ModuleAccessService(tx),
     new AccountLockoutService(),
-    hasher(rounds),
+    { get: (key: string) => key === 'bcryptRounds' ? rounds : undefined } as unknown as ConfigService,
   );
 }
 

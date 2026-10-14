@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import { PrismaService } from '../prisma/prisma.service';
 import { MailerService } from '../email/mailer.service';
+import { MobilePushService } from './mobile-push.service';
 import { WebPushService } from '../calendar/web-push.service';
 import {
   NOTIFICATION_CHANNELS,
@@ -247,22 +248,14 @@ export class NotificationDispatcher {
     user: { id: number },
   ): Promise<true | SkipReason> {
     const push = this.resolve(WebPushService);
-    if (!push || !push.configured()) return 'not_configured';
-
-    /*
-     * The category is deliberately NOT passed to `sendToUser`. That argument makes it re-check the
-     * preference, and the preference has already been checked here — passing it would mean two
-     * lookups per push, and a second place the answer could differ from the one that decided to
-     * send. `sendToUser` never throws, so a `sent: 0` (no subscribed browser) is reported as a skip
-     * rather than a failure.
-     */
-    const outcome = await push.sendToUser(user.id, {
-      title: request.push?.title ?? request.title,
-      body: request.push?.body ?? request.body ?? '',
-      url: request.push?.url ?? request.link ?? undefined,
-    } as never);
-
-    return outcome.sent > 0 ? true : 'not_configured';
+    const native = this.resolve(MobilePushService);
+    const results = await Promise.allSettled([
+      push?.configured() ? push.sendToUser(user.id, { title: request.push?.title ?? request.title, body: request.push?.body ?? request.body ?? '', url: request.push?.url ?? request.link ?? undefined } as never) : Promise.resolve({ sent: 0 }),
+      native?.configured() ? native.sendToUser(user.id) : Promise.resolve({ accepted: 0, failed: 0 }),
+    ]);
+    if (results.some(result => result.status === 'fulfilled' && (('sent' in result.value && result.value.sent > 0) || ('accepted' in result.value && result.value.accepted > 0)))) return true;
+    if (results.some(result => result.status === 'rejected' || (result.status === 'fulfilled' && 'failed' in result.value && result.value.failed > 0))) throw new Error('Push delivery could not be confirmed.');
+    return 'not_configured';
   }
 
   // ========================================================================== helpers

@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, Logger, NotFoundException, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ImapFlow } from 'imapflow';
 import { simpleParser } from 'mailparser';
+import { archiveFiles } from './mail-archive';
 import { PrismaService } from '../prisma/prisma.service';
 import { schedulersEnabled, schedulerSkipReason } from '../common/schedulers';
 import { LaravelCryptService } from '../common/laravel-crypt.service';
@@ -34,6 +35,44 @@ export interface SyncResult {
   fetched: number;
   matched: number;
   error: string | null;
+}
+
+/**
+ * Make untrusted message text safe for Prisma's JSON protocol and PostgreSQL text columns.
+ *
+ * Mail is allowed to contain arbitrary bytes. `mailparser` normally gives us valid Unicode, but
+ * malformed MIME bodies can still leave NUL characters or unmatched UTF-16 surrogates in a JS
+ * string. PostgreSQL rejects NUL outright, while Prisma's engine rejects malformed Unicode before
+ * issuing the query. One such message must not stop the mailbox at the same UID forever.
+ *
+ * Length limits are applied after cleaning and the result is cleaned once more because a UTF-16
+ * slice can split a valid surrogate pair at its boundary.
+ */
+export function normalizeInboundText(value: string, maxLength?: number): string {
+  const clean = (input: string): string => {
+    let output = '';
+    for (let i = 0; i < input.length; i += 1) {
+      const code = input.charCodeAt(i);
+      if (code === 0) continue;
+      if (code >= 0xd800 && code <= 0xdbff) {
+        const next = input.charCodeAt(i + 1);
+        if (next >= 0xdc00 && next <= 0xdfff) {
+          output += input[i] + input[i + 1];
+          i += 1;
+        } else {
+          output += '\ufffd';
+        }
+      } else if (code >= 0xdc00 && code <= 0xdfff) {
+        output += '\ufffd';
+      } else {
+        output += input[i];
+      }
+    }
+    return output;
+  };
+
+  const cleaned = clean(value);
+  return maxLength === undefined ? cleaned : clean(cleaned.slice(0, maxLength));
 }
 
 /**
@@ -381,8 +420,10 @@ export class ImapSyncService implements OnModuleInit, OnModuleDestroy {
               data: {
                 user_id: account.user_id ?? -1, account_id: account.id, uid,
                 message_id: record.message_id, from_email: record.from_email, from_name: record.from_name,
+                reply_to_email: record.reply_to_email,
                 to_email: record.to_email, subject: record.subject, snippet: record.snippet,
                 body_text: record.body_text, body_html: record.body_html,
+                ...(process.env.INBOX_ARCHIVE_ENABLED === 'true' ? { attachments: record.attachments } : {}),
                 received_at: record.received_at, lead_id: leadId, created_at: new Date(),
               },
             });
@@ -459,26 +500,29 @@ export class ImapSyncService implements OnModuleInit, OnModuleDestroy {
 
   /** Fetch and parse a single message into the shape we store. */
   private async fetchOne(client: ImapFlow, uid: number): Promise<{
-    message_id: string | null; from_email: string | null; from_name: string | null; to_email: string | null;
+    message_id: string | null; reply_to_email: string | null; from_email: string | null; from_name: string | null; to_email: string | null;
     subject: string | null; snippet: string | null; body_text: string | null; body_html: string | null;
     received_at: Date;
+    attachments: ReturnType<typeof archiveFiles>;
   } | null> {
     const msg = await client.fetchOne(String(uid), { source: true }, { uid: true });
     if (!msg || !msg.source) return null;
     const p = await simpleParser(msg.source);
     const fromAddr = p.from?.value?.[0];
     const toText = Array.isArray(p.to) ? p.to.map((t) => t.text).join(', ') : p.to?.text ?? null;
-    const text = (p.text ?? '').trim();
+    const text = normalizeInboundText((p.text ?? '').trim());
     return {
-      message_id: p.messageId ? p.messageId.slice(0, 512) : null,
-      from_email: fromAddr?.address ? fromAddr.address.toLowerCase().slice(0, 320) : null,
-      from_name: fromAddr?.name ? fromAddr.name.slice(0, 255) : null,
-      to_email: toText ? toText.slice(0, 320) : null,
-      subject: p.subject ? p.subject.slice(0, 998) : null,
-      snippet: text ? text.replace(/\s+/g, ' ').slice(0, 300) : null,
+      message_id: p.messageId ? normalizeInboundText(p.messageId, 512) : null,
+      reply_to_email: p.replyTo?.value?.[0]?.address ? normalizeInboundText(p.replyTo.value[0].address, 320) : null,
+      from_email: fromAddr?.address ? normalizeInboundText(fromAddr.address.toLowerCase(), 320) : null,
+      from_name: fromAddr?.name ? normalizeInboundText(fromAddr.name, 255) : null,
+      to_email: toText ? normalizeInboundText(toText, 320) : null,
+      subject: p.subject ? normalizeInboundText(p.subject, 998) : null,
+      snippet: text ? normalizeInboundText(text.replace(/\s+/g, ' '), 300) : null,
       body_text: text || null,
-      body_html: typeof p.html === 'string' ? p.html : null,
+      body_html: typeof p.html === 'string' ? normalizeInboundText(p.html) : null,
       received_at: p.date ?? new Date(),
+      attachments: archiveFiles(process.env.INBOX_ARCHIVE_ENABLED === 'true' ? p.attachments : []),
     };
   }
 

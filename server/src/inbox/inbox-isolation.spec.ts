@@ -180,8 +180,8 @@ describe('one agent cannot reach another agent\'s mail', () => {
   });
 });
 
-describe('the two areas are separate inboxes, not one with a label', () => {
-  it('a CRM message is not in the Transaction Desk list', async () => {
+describe('CRM and Transaction Desk share the owner’s primary inbox', () => {
+  it('both areas use the same primary account, excluding secondary mailbox messages', async () => {
     await inRollback(async (tx) => {
       const inbox = new InboxService(tx);
       const crm = await agentWithMail(tx, 'crm', `ZZ CRM ${tag()}`);
@@ -191,7 +191,7 @@ describe('the two areas are separate inboxes, not one with a label', () => {
       const deskAccount = await tx.mail_accounts.create({
         data: {
           name: `probe desk ${t}`, from_email: `zz-desk-${t}@probe.test`, host: 'smtp.probe.test',
-          port: 587, is_active: true, is_default: true, user_id: crm.userId, scope: 'desk',
+          port: 587, is_active: true, is_default: false, user_id: crm.userId, scope: 'desk',
           imap_host: 'imap.probe.test', inbound_enabled: true, created_at: now, updated_at: now,
         },
         select: { id: true },
@@ -206,20 +206,15 @@ describe('the two areas are separate inboxes, not one with a label', () => {
       });
 
       expect(subjectsIn(await inbox.list(crm.userId, 'crm'))).toEqual([crm.subject]);
-      expect(subjectsIn(await inbox.list(crm.userId, 'desk'))).toEqual([deskSubject]);
+      expect(subjectsIn(await inbox.list(crm.userId, 'desk'))).toEqual([crm.subject]);
     });
   });
 
-  it('asking the wrong area for your own message says where it is, rather than "not found"', async () => {
-    /*
-     * This is a usability rule with a disclosure edge, so it is worth an explicit test: the helpful
-     * message is produced ONLY for a message the caller already owns. The lookup behind it is bounded
-     * by `user_id`, so it cannot describe anybody else's.
-     */
+  it('opens the owner’s primary message from either area', async () => {
     await inRollback(async (tx) => {
       const inbox = new InboxService(tx);
       const crm = await agentWithMail(tx, 'crm', `ZZ CRM ${tag()}`);
-      await expect(inbox.get(crm.userId, 'desk', crm.mailId)).rejects.toThrow(/Customer Relationship Management inbox/i);
+      expect(await inbox.get(crm.userId, 'desk', crm.mailId)).toMatchObject({ id: crm.mailId, subject: crm.subject });
     });
   });
 

@@ -2,7 +2,7 @@ import { BadRequestException, ForbiddenException, Injectable, NotFoundException 
 import * as ExcelJS from 'exceljs';
 import { PrismaService } from '../prisma/prisma.service';
 import { TransactionsWriteService } from '../transactions/transactions-write.service';
-import { TRANSACTION_TYPES, isListingType, statusOptionsFor, defaultStatusFor } from '../reference/transaction.constants';
+import { TRANSACTION_TYPES, isListingType, importStatusOptionsFor as statusOptionsFor, defaultStatusFor } from '../reference/transaction.constants';
 import {
   IMPORT_FIELDS, FINANCIAL_FIELDS, CHILD_SHEETS, REQUIRED_COLUMNS, REF_COLUMN,
   requiredColumnsFor, forbiddenColumnsFor, statusReference, flatColumn, flatColumns,
@@ -216,7 +216,7 @@ export class TransactionImportService {
     const txns: Record<string, string>[] = [
       {
         Ref: 'T1', 'Transaction Type': 'Residential Buying', 'Property Address': '212 Prosser Circle, Oshawa, ON',
-        'Deal Status': 'Secured Firm', 'Primary Agent': a1, Price: '840000', Deposit: '30000',
+        'Deal Status': 'Firm', 'Primary Agent': a1, Price: '840000', Deposit: '30000',
         'Offer Date': '2026-03-14', 'Closing Date': '2026-06-30', 'Commission Type': '%', 'Commission Value': '2.5',
         'MLS Type': 'mls', 'MLS Number': 'W12467618', 'MLS Verified': 'Yes', 'Payment Type': 'Cheque',
         'Conditional Offer': 'Yes', 'Inter-Board Listing': 'No',
@@ -228,19 +228,19 @@ export class TransactionImportService {
       },
       {
         Ref: 'T2', 'Transaction Type': 'Residential Lease', 'Property Address': '5 Elm Avenue, Unit 402, Toronto, ON',
-        'Deal Status': 'Secured Firm', 'Primary Agent': a2, Price: '3200', Deposit: '6400',
+        'Deal Status': 'Firm', 'Primary Agent': a2, Price: '3200', Deposit: '6400',
         'Offer Date': '2026-04-01', 'Closing Date': '2026-05-01', 'Commission Type': 'Fixed', 'Commission Value': '3200',
         'MLS Type': 'mls', 'MLS Number': 'C12500001', 'Conditional Offer': 'No', 'Payment Type': 'TDB-EFT',
       },
       {
         Ref: 'T3', 'Transaction Type': 'Residential Sale Listing', 'Property Address': '9 Oak Road, Whitby, ON',
-        'Deal Status': 'Active', 'Primary Agent': a1,
+        'Deal Status': 'Conditional', 'Primary Agent': a1,
         'Listing Contract Date': '2026-03-01', 'Listing Expiry Date': '2026-09-01',
         'MLS Type': 'mls', 'MLS Number': 'E12488990', 'MLS Verified': 'Yes',
       },
       {
         Ref: 'T4', 'Transaction Type': 'Preconstruction', 'Property Address': '77 Tower Blvd, Suite 1802, Mississauga, ON',
-        'Deal Status': 'Open', 'Primary Agent': a3, Price: '695000', Deposit: '35000',
+        'Deal Status': 'Conditional', 'Primary Agent': a3, Price: '695000', Deposit: '35000',
         'Offer Date': '2026-02-10', 'Closing Date': '2028-11-30', 'Commission Type': '%', 'Commission Value': '3',
         'MLS Type': 'exclusive', 'Conditional Offer': 'No',
       },

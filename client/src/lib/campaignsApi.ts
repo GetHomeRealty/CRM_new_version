@@ -25,9 +25,8 @@ export const previewAudience = (filter: AudienceFilter): Promise<AudiencePreview
 /**
  * Create the campaign and send it to the resolved audience.
  *
- * `scheduled_for` is an ISO instant. Omitted or in the past means send now — the server treats a
- * time that has just passed as "now" rather than refusing it, so a 9:00 send confirmed at 9:00:04
- * goes out instead of erroring about a moment that has gone.
+ * `scheduled_for` is a future ISO instant with timezone. Omitted means send now.
+ * An invalid or expired explicit schedule is rejected, never changed to immediate delivery.
  */
 export const sendCampaign = (
   body: AudienceFilter & { name: string; template_id: number; tags?: string[]; scheduled_for?: string | null },

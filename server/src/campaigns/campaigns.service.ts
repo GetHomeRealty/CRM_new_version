@@ -1,4 +1,5 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, GoneException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { createHash } from 'node:crypto';
 import { CrmEventNotifier } from '../notifications/crm-events.service';
 import { CampaignAuditService } from './campaign-audit.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -28,14 +29,18 @@ const parseVars = (raw: string | null): Record<string, string> => {
 /**
  * The requested send time, or null for send-now.
  *
- * Anything unparseable is treated as "now" rather than rejected: a campaign the author believed
- * they had queued must not sit in a draft state because a date string was malformed. Sending
- * immediately is the visible outcome; silently never sending is not.
+ * An explicit schedule must never silently become an immediate send.
  */
 const parseSchedule = (raw: unknown): Date | null => {
   if (raw === null || raw === undefined || raw === '') return null;
-  const d = new Date(String(raw));
-  return Number.isNaN(d.getTime()) ? null : d;
+  if (typeof raw !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?(?:Z|[+-]\d{2}:\d{2})$/.test(raw)) {
+    throw new BadRequestException({ message: 'Schedule must be an ISO date/time with a timezone.' });
+  }
+  const d = new Date(raw);
+  if (!Number.isFinite(d.getTime()) || d.getTime() <= Date.now()) {
+    throw new BadRequestException({ message: 'Schedule must be in the future.' });
+  }
+  return d;
 };
 
 const domainOf = (email: string): string => String(email ?? '').split('@')[1]?.toLowerCase() ?? '';
@@ -61,7 +66,9 @@ const parseJsonArray = (v: string | null): string[] => {
 };
 
 export interface SendCampaignInput {
-  /** ISO instant to send at. Absent or past means send now. */
+  /** Stable UUID for the dedicated mobile submission endpoint. */
+  request_key?: string;
+  /** Future ISO instant to send at. Absent means send now. */
   scheduled_for?: unknown;
   name?: unknown;
   template_id?: unknown;
@@ -193,6 +200,19 @@ export class CampaignsService {
    * sending stalls, and each recipient's outcome is recorded individually.
    */
   async createAndSend(input: SendCampaignInput, user: AuthUserRecord): Promise<Record<string, unknown>> {
+    const requestKey = input.request_key;
+    let fingerprint: string | undefined;
+    if (requestKey !== undefined) {
+      this.validateSubmissionKey(requestKey);
+      fingerprint = createHash('sha256').update(JSON.stringify([
+        input.name, input.template_id, input.scheduled_for ?? null,
+        input.leadStatus ?? '', input.leadType ?? '', input.leadSource ?? '',
+        input.clientType ?? '', input.tag ?? '', input.tags ?? [],
+      ])).digest('hex');
+      const previous = await this.submissionReceipt(requestKey, user, fingerprint);
+      if (previous) return previous;
+    }
+    const scheduledFor = parseSchedule(input.scheduled_for);
     const name = String(input.name ?? '').trim();
     if (!name) throw new BadRequestException({ message: 'Campaign name is required.' });
     /*
@@ -213,7 +233,10 @@ export class CampaignsService {
     }
     // Campaign templates only — Email Settings' transactional templates are a separate library
     // and must never be sent as marketing mail.
-    const template = await this.prisma.campaign_templates.findFirst({ where: { id: templateId, deleted_at: null } });
+    const template = await this.prisma.campaign_templates.findFirst({ where: {
+      id: templateId, deleted_at: null, is_active: true,
+      OR: [{ user_id: null }, { user_id: user.id ?? -1 }],
+    } });
     if (!template) throw new NotFoundException({ message: 'Template not found.' });
 
     const filter: AudienceFilter = {
@@ -236,10 +259,13 @@ export class CampaignsService {
     }
 
     const now = new Date();
+    if (scheduledFor && scheduledFor.getTime() <= now.getTime()) {
+      throw new BadRequestException({ message: 'Schedule expired while preparing the audience. Choose a future time.' });
+    }
     const tokens = recipients.map(() => this.audience.newRecipientToken());
     const tags = Array.isArray(input.tags) ? (input.tags as unknown[]).map(String).map((t) => t.trim()).filter(Boolean) : [];
 
-    const campaign = await this.prisma.campaigns.create({
+    const createArgs = {
       data: {
         name,
         template_id: template.id,
@@ -249,7 +275,9 @@ export class CampaignsService {
         content: template.content,
         audience: JSON.stringify(filter),
         tags: JSON.stringify(tags),
-        status: 'sending',
+        status: scheduledFor ? 'scheduled' : 'sending',
+        scheduled_for: scheduledFor,
+        tracking_base_url: input.baseUrl,
         total: recipients.length,
         created_by: user.name,
         created_by_id: user.id ?? null,
@@ -262,8 +290,27 @@ export class CampaignsService {
           })),
         },
       },
-      include: { recipients: { orderBy: { id: 'asc' } } },
-    });
+      include: { recipients: { orderBy: { id: 'asc' as const } } },
+    };
+    // Receipt and campaign/recipients commit together. The unique account/key constraint
+    // chooses one winner across processes; losing transactions roll back completely.
+    let campaign;
+    if (requestKey && fingerprint) {
+      try {
+        campaign = await this.prisma.$transaction(async tx => {
+          await tx.campaign_submissions.create({ data: { user_id: user.id, request_key: requestKey, fingerprint: fingerprint!, campaign_id: 0 } });
+          const created = await tx.campaigns.create(createArgs);
+          await tx.campaign_submissions.update({ where: { user_id_request_key: { user_id: user.id, request_key: requestKey } }, data: { campaign_id: created.id } });
+          return created;
+        });
+      } catch (error) {
+        if ((error as { code?: string })?.code === 'P2002') {
+          const previous = await this.submissionReceipt(requestKey, user, fingerprint);
+          if (previous) return previous;
+        }
+        throw error;
+      }
+    } else campaign = await this.prisma.campaigns.create(createArgs);
 
     const agentVars = await this.agentVarsFor(user);
     // Loaded once and reused for every recipient — re-reading the blobs per send would pull the
@@ -292,26 +339,16 @@ export class CampaignsService {
      * tracking base URL — which is what makes a delayed send safe: it delivers what was written,
      * not what the template happens to say next Tuesday.
      *
-     * A time in the past is treated as "now" rather than refused. Somebody scheduling 9am at 9:01,
-     * or a clock a few seconds out, means send it — not an error about a moment that has passed.
+     * Schedule intent was validated before persistence. Keep it scheduled even if time advances
+     * during preparation; only the dispatcher may claim it, never this request's immediate path.
      */
-    const scheduledFor = parseSchedule(input.scheduled_for);
-    if (scheduledFor && scheduledFor.getTime() > Date.now()) {
-      const held = await this.prisma.campaigns.update({
-        where: { id: campaign.id },
-        data: {
-          status: 'scheduled',
-          scheduled_for: scheduledFor,
-          tracking_base_url: input.baseUrl,
-          updated_at: new Date(),
-        },
-      });
+    if (scheduledFor) {
       this.log.log(`Campaign "${name}" (#${campaign.id}) scheduled for ${scheduledFor.toISOString()} (${recipients.length} recipients).`);
       await this.audit?.record(
         user, 'Campaign scheduled', name,
         `${recipients.length} recipient(s), to send ${scheduledFor.toISOString()}`,
       );
-      return this.summary(held);
+      return this.summary(campaign);
     }
 
     await this.prisma.campaigns.update({
@@ -338,6 +375,28 @@ export class CampaignsService {
     });
 
     return this.summary(await this.prisma.campaigns.findUniqueOrThrow({ where: { id: campaign.id } }));
+  }
+
+  private validateSubmissionKey(key: string) {
+    if (typeof key !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(key)) {
+      throw new BadRequestException('A lowercase UUID v4 submission key is required.');
+    }
+  }
+
+  private async submissionReceipt(key: string, user: AuthUserRecord, fingerprint?: string) {
+    const receipt = await this.prisma.campaign_submissions.findUnique({ where: { user_id_request_key: { user_id: user.id, request_key: key } } });
+    if (!receipt) return null;
+    if (fingerprint && receipt.fingerprint !== fingerprint) throw new ConflictException('This submission key was already used for a different campaign request.');
+    const campaign = await this.prisma.campaigns.findFirst({ where: { id: receipt.campaign_id, created_by_id: user.id } });
+    if (!campaign) throw new GoneException('The submitted campaign was removed. This request cannot be submitted again.');
+    return this.summary(campaign);
+  }
+
+  async recoverSubmission(key: string, user: AuthUserRecord) {
+    this.validateSubmissionKey(key);
+    const result = await this.submissionReceipt(key, user);
+    if (!result) throw new NotFoundException('No committed submission found. An in-flight request may still finish; do not start a new submission.');
+    return result;
   }
 
   // ------------------------------------------------------------- suppression list

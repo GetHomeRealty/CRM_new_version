@@ -8,7 +8,8 @@ export class SsoAuthorizeDto {
   @MaxLength(64)
   client_id!: string;
 
-  @IsUrl({ require_protocol: true, require_tld: false }, { message: 'redirect_uri must be an absolute URL.' })
+  @IsString()
+  @Matches(/^(?:https?:\/\/|gethomehub:\/\/)/, { message: 'redirect_uri must be an approved absolute URL.' })
   @MaxLength(2048)
   redirect_uri!: string;
 
@@ -37,6 +38,27 @@ export class SsoTokenDto {
 
   @IsUrl({ require_protocol: true, require_tld: false }, { message: 'redirect_uri must be an absolute URL.' })
   @MaxLength(2048)
+  redirect_uri!: string;
+
+  @IsString()
+  @Length(43, 128)
+  code!: string;
+
+  @IsString()
+  @Length(43, 128)
+  @Matches(PKCE)
+  code_verifier!: string;
+}
+
+export class MobileSsoTokenDto {
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(64)
+  client_id!: string;
+
+  @IsString()
+  @Length(1, 2048)
+  @Matches(/^gethomehub:\/\/auth\/callback$/, { message: 'redirect_uri is not an approved mobile callback.' })
   redirect_uri!: string;
 
   @IsString()

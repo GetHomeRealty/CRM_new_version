@@ -61,13 +61,21 @@ const listingStatuses = (type: string): string[] => {
 };
 
 /** Statuses a transaction of this type may be given. */
-export function statusOptionsFor(type: string): string[] {
+export function statusOptionsFor(_type: string): string[] {
+  return ['Conditional', 'Firm', 'Closed', 'DFT', 'Void', 'Mutual Release'];
+}
+
+/** Legacy imports remain readable; these are not offered as new UI selections. */
+export function importStatusOptionsFor(type: string): string[] {
+  return [...new Set([...statusOptionsFor(type), ...legacyStatusOptionsFor(type)])];
+}
+function legacyStatusOptionsFor(type: string): string[] {
   if (type === 'Referral') return STATUS_REFERRAL;
   if (isListingStatusFamily(type)) return listingStatuses(type);
   if ((SECURED_DEAL_TYPES as readonly string[]).includes(type)) return STATUS_DEAL_SECURED;
   return STATUS_DEAL;
 }
 
-/** Secured deal types deliberately start with no status — the user picks one. */
-export const defaultStatusFor = (type: string): string =>
-  isListingStatusFamily(type) ? 'Active' : ((SECURED_DEAL_TYPES as readonly string[]).includes(type) ? '' : 'Open');
+/** Do not assume a new deal is conditional or firm; the user picks its status. */
+export const defaultStatusFor = (_type: string): string =>
+  '';

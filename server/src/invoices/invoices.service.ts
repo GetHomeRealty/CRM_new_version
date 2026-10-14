@@ -48,7 +48,7 @@ export class InvoicesService {
       include: {
         customers: true,
         invoice_line_items: { orderBy: { row_no: 'asc' } },
-        invoice_payments: { orderBy: { paid_on: 'asc' } },
+        invoice_payments: { where: { deleted_at: null }, orderBy: { paid_on: 'asc' } },
         transactions: { include: { brokerages: { include: { brokerage_agents: { orderBy: { position: 'asc' } } } } } },
       },
     });

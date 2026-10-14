@@ -4,7 +4,13 @@
  * campaign audience filters keep matching.
  */
 
-export const LEAD_STATUS = ['hot', 'warm', 'cold', 'mild', 'closed'] as const;
+export const LEAD_STATUS = ['hot', 'warm', 'cold', 'offer submitted', 'offer accepted', 'closed'] as const;
+
+export const LEAD_ESTIMATION = [
+  'prospecting buyer', 'prospecting seller', 'prospecting investor',
+] as const;
+
+export const LEAD_QUALITY = ['gold', 'diamond', 'silver', 'bronze'] as const;
 
 export const LEAD_RESPONSE = [
   'active', 'inactive', 'not answering', 'not actively answering', 'always responding',
@@ -37,7 +43,7 @@ export const CLIENT_TYPE = [
 
 export const GENDERS = ['male', 'female', 'other', 'prefer not to say'] as const;
 
-export const LANGUAGES = ['English', 'French', 'Spanish', 'Mandarin', 'Hindi', 'Punjabi', 'Other'] as const;
+export const LANGUAGES = ['English', 'French', 'Hindi', 'Punjabi', 'Telugu', 'Other'] as const;
 
 export const RELIGIONS = [
   'Christianity', 'Islam', 'Hinduism', 'Buddhism', 'Sikhism', 'Judaism', 'Other', 'Prefer not to say',
@@ -156,7 +162,10 @@ export const EMAIL_SHAPE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const has = <T extends readonly string[]>(list: T, v: string): v is T[number] =>
   (list as readonly string[]).includes(v);
 
-export const isLeadStatus = (v: string): boolean => has(LEAD_STATUS, v);
+// `mild` remains accepted for historical rows while the UI consolidates it into Warm.
+export const isLeadStatus = (v: string): boolean => has(LEAD_STATUS, v) || v === 'mild';
+export const isLeadEstimation = (v: string): boolean => has(LEAD_ESTIMATION, v);
+export const isLeadQuality = (v: string): boolean => has(LEAD_QUALITY, v);
 export const isLeadResponse = (v: string): boolean => has(LEAD_RESPONSE, v);
 export const isLeadSource = (v: string): boolean => has(LEAD_SOURCE, v);
 export const isLeadType = (v: string): boolean => has(LEAD_TYPE, v);

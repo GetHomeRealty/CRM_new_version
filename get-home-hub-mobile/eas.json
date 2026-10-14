@@ -1,0 +1,19 @@
+{
+  "build": {
+    "provider-preview": {
+      "distribution": "internal",
+      "environment": "preview",
+      "android": { "buildType": "apk" },
+      "ios": { "simulator": false },
+      "env": {
+        "GHH_PROVIDER_PREVIEW": "true",
+        "EXPO_PUBLIC_NATIVE_PUSH_ENABLED": "false",
+        "EXPO_PUBLIC_META_MANAGEMENT_ENABLED": "false",
+        "EXPO_PUBLIC_INBOX_REPLY_SENDING_ENABLED": "false",
+        "EXPO_PUBLIC_CAMPAIGN_SENDING_ENABLED": "false",
+        "EXPO_PUBLIC_LOCAL_CAMPAIGN_SEND_TESTING": "false",
+        "EXPO_PUBLIC_LEAD_IMPORT_ENABLED": "false"
+      }
+    }
+  }
+}

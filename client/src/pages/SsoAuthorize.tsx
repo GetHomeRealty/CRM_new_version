@@ -20,7 +20,7 @@ function requestFrom(params: URLSearchParams): SsoAuthorizeRequest | null {
   };
 }
 
-/** Completes a Precon sign-in using the already authenticated CRM browser session. */
+/** Completes a shared sign-in using the already authenticated CRM browser session. */
 export default function SsoAuthorize() {
   const { user, loading } = useAuth();
   const location = useLocation();
@@ -28,6 +28,7 @@ export default function SsoAuthorize() {
   const [attempt, setAttempt] = useState(0);
   const started = useRef(false);
   const request = useMemo(() => requestFrom(new URLSearchParams(location.search)), [location.search]);
+  const destinationName = request?.client_id === 'get-home-hub-mobile' ? 'Get Home Hub' : 'Precon/Canada';
 
   useEffect(() => {
     if (loading || !user || !request || started.current) return;
@@ -36,16 +37,16 @@ export default function SsoAuthorize() {
       .then((destination) => { window.location.assign(destination); })
       .catch((err) => {
         started.current = false;
-        setError(apiErrorMessage(err, 'Could not securely open Precon.'));
+        setError(apiErrorMessage(err, `Could not securely open ${destinationName}.`));
       });
-  }, [attempt, loading, request, user]);
+  }, [attempt, destinationName, loading, request, user]);
 
   if (loading) return <div className="centered" role="status">Checking your sign-in…</div>;
   if (!request) {
     return (
       <div className="auth-shell"><div className="auth-card">
         <h1>Invalid sign-in request</h1>
-        <p className="error">The Precon sign-in link is incomplete. Return to CRM and open Precon again.</p>
+        <p className="error">This shared sign-in link is incomplete. Return to the application and try again.</p>
       </div></div>
     );
   }
@@ -55,7 +56,7 @@ export default function SsoAuthorize() {
 
   return (
     <div className="auth-shell"><div className="auth-card" aria-live="polite">
-      <h1>Opening Precon/Canada</h1>
+      <h1>Opening {destinationName}</h1>
       {error ? (
         <>
           <p className="error">{error}</p>

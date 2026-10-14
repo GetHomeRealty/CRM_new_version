@@ -301,6 +301,7 @@ export class MetaSyncService {
         owner_user_id: ctx.userId,
         created_by: `Meta${ctx.pageName ? ` · ${ctx.pageName}` : ''}`,
         created_at: createdAt,
+        updated_at: createdAt,
       },
     });
     // Best-effort "new lead from Meta" email to the assigned agent; never blocks the sync.

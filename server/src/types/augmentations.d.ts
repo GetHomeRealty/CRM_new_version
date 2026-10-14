@@ -25,6 +25,9 @@ declare global {
   namespace Express {
     interface Request {
       authUser?: AuthUserRecord;
+      /** Validated opaque credential used by the native Get Home Hub app. */
+      mobileSessionSid?: string;
+      mobileUserId?: number;
     }
   }
 }

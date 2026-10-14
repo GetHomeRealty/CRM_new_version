@@ -34,7 +34,8 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   const toast = useCallback<ToastFn>((msg, type = '') => {
     const id = `t${(seq.current += 1)}`;
     setToasts((t) => [...t.filter((x) => x.type !== type), { id, msg, type }].slice(-3));
-    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 2600);
+    // Errors stay long enough to read and act on; routine confirmations remain brief.
+    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), type === 'bad' ? 6000 : 2600);
   }, []);
 
   return (

@@ -1,0 +1,12 @@
+import { PermissionService } from '../auth/permission.service';
+import { can } from '../core/authz';
+import { ScreenGuard } from '../auth/guards/screen.guard';
+import { Reflector } from '@nestjs/core';
+import { LeadsController } from './leads.controller';
+import { SCREEN_META } from '../auth/decorators';
+const permissions=new PermissionService();
+describe('CRM lead role/field comparison contract',()=>{
+ it.each(['admin','manager','accounting','documentation','crm','agent','custom'])('%s read/write grants and identity privilege remain separate',async(role)=>{const modules:any={assignedFrom:()=>['crm'],licence:async()=>({crm:true,desk:true})};const reflector:any={getAllAndOverride:jest.fn()};const guard=new ScreenGuard(reflector,permissions,modules);const user:any={id:7,role,user_modules:[],user_permissions:[]};const context:any={getHandler:()=>()=>{},getClass:()=>class{},switchToHttp:()=>({getRequest:()=>({authUser:user})})};for(const level of ['view','edit']){reflector.getAllAndOverride.mockReturnValue({screen:'lead',level});if(permissions.can(role,[],'lead',level))expect(await guard.canActivate(context)).toBe(true);else await expect(guard.canActivate(context)).rejects.toThrow();}expect(can(user,'leads.rewrite-identity')).toBe(['admin','manager'].includes(role));if(role!=='admin'){user.user_permissions=[{screen:'lead',level:'none'}];reflector.getAllAndOverride.mockReturnValue({screen:'lead',level:'view'});await expect(guard.canActivate(context)).rejects.toThrow();}});
+ it('CRM module absence or disabled licence denies even an edit grant',async()=>{const modules:any={assignedFrom:()=>[],licence:async()=>({crm:true,desk:true})};const guard=new ScreenGuard({getAllAndOverride:()=>({screen:'lead',level:'edit'})} as any,permissions,modules);const context:any={getHandler:()=>()=>{},getClass:()=>class{},switchToHttp:()=>({getRequest:()=>({authUser:{id:7,role:'agent',user_modules:[],user_permissions:[]}})})};await expect(guard.canActivate(context)).rejects.toThrow();modules.assignedFrom=()=>['crm'];modules.licence=async()=>({crm:false,desk:true});await expect(guard.canActivate(context)).rejects.toThrow();});
+ it('actual lead create/update/read routes declare the same screen contract used by mobile',()=>{const reflector=new Reflector();for(const [method,level] of [['create','edit'],['update','edit'],['get','view']] as const){const handler=(LeadsController.prototype as any)[method];expect(handler).toBeDefined();expect(reflector.get(SCREEN_META,handler)).toMatchObject({screen:'lead',level});}});
+});

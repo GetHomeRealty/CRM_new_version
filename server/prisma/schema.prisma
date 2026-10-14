@@ -153,6 +153,7 @@ model client_identifications {
 }
 
 model clients {
+  client_review_requests client_review_requests[]
   id             Int          @id @default(autoincrement())
   transaction_id Int
   name           String       @db.VarChar(255)
@@ -207,12 +208,15 @@ model company_settings {
   crm_referral_codes     crm_referral_codes[]
   crm_email_log          crm_email_log[]
   crm_broadcasts         crm_broadcasts[]
+  crm_settings           crm_settings[]
+  crm_trigger_settings   crm_trigger_settings[]
   email_suppressions     email_suppressions[]
   import_batches         import_batches[]
   export_jobs            export_jobs[]
   lead_import_jobs       lead_import_jobs[]
   personal_access_tokens personal_access_tokens[]
   meta_webhook_events    meta_webhook_events[]
+  mfa_policies           mfa_policies[]
 }
 
 model conditions {
@@ -298,7 +302,7 @@ model documents {
 model leads {
   id                   Int                   @id @default(autoincrement())
   name                 String                @db.VarChar(255)
-  email                String                @db.VarChar(255)
+  email                String?               @db.VarChar(255)
   phone                String?               @db.VarChar(64)
   /**
    * cold | warm | hot | mild
@@ -324,6 +328,8 @@ model leads {
    * converted | not-converted
    */
   lead_conversion      String?               @db.VarChar(24)
+  lead_estimation      String?               @db.VarChar(32)
+  lead_quality         String?               @db.VarChar(16)
   /**
    * JSON array of free-form tags.
    */
@@ -371,6 +377,7 @@ model leads {
   custom_fields        String?               @db.Text
   // ---- Meta attribution (all nullable; blank for manually created leads) ----
   first_name           String?               @db.VarChar(128)
+  middle_name          String?               @db.VarChar(128)
   last_name            String?               @db.VarChar(128)
   /**
    * Digits-only phone, used for duplicate detection across formats.
@@ -593,6 +600,9 @@ model crm_settings {
   /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
   company_id Int @default(1)
 
+  user    users?           @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  company company_settings @relation(fields: [company_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
   @@index([company_id])
 }
 
@@ -617,6 +627,24 @@ model crm_email_settings {
   /// The brokerage this row belongs to. See src/core/tenancy.spec.ts for why this table carries one.
   company_id Int              @default(1)
   company    company_settings @relation(fields: [company_id], references: [id], onUpdate: NoAction)
+
+  @@unique([company_id])
+  @@index([company_id])
+}
+
+/**
+ * One person's CRM trigger choices. A missing row inherits the brokerage defaults.
+ */
+model crm_trigger_settings {
+  id               Int              @id @default(autoincrement())
+  user_id          Int              @unique
+  template_toggles String?          @db.Text
+  updated_by       String?          @db.VarChar(255)
+  created_at       DateTime?        @db.Timestamp(0)
+  updated_at       DateTime?        @db.Timestamp(0)
+  company_id       Int              @default(1)
+  company          company_settings @relation(fields: [company_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  user             users            @relation(fields: [user_id], references: [id], onDelete: Cascade)
 
   @@index([company_id])
 }
@@ -1050,7 +1078,6 @@ model lead_call_recordings {
   size         Int
   /**
    * The bytes, for recordings written before they moved to disk.
-   *
    * Nullable now, and null on everything created since. Rows that still carry it are served from
    * it — nothing was migrated automatically, because a migration that silently fails to copy a file
    * loses a recording of a client conversation. `scripts/migrate-recordings.cjs` moves them across
@@ -1059,7 +1086,6 @@ model lead_call_recordings {
   data         Bytes?
   /**
    * Path under RECORDING_STORAGE_DIR, POSIX-style and relative — e.g. `2026/08/<random>.m4a`.
-   *
    * Relative so the storage root can move between environments without rewriting rows. Exactly one
    * of `data` and `storage_path` is set; see RecordingStorageService for why the bytes left the
    * database (backup and restore time, not query performance).
@@ -1186,6 +1212,31 @@ model lead_tags {
  * An email campaign: a template sent to a resolved lead segment. Subject/content are
  * snapshotted so the record stays accurate even if the template is later edited or deleted.
  */
+/// Durable request receipts survive campaign deletion; a used key must never send twice.
+model inbox_reply_submissions {
+  user_id Int
+  request_key String @db.VarChar(36)
+  fingerprint String @db.VarChar(64)
+  message_id Int
+  status String @db.VarChar(16)
+  snapshot Json?
+  created_at DateTime @default(now()) @db.Timestamp(3)
+  updated_at DateTime @default(now()) @db.Timestamp(3)
+
+  @@id([user_id, request_key])
+  @@index([user_id, status, updated_at(sort: Desc)], map: "inbox_reply_submissions_user_status_updated_idx")
+}
+
+model campaign_submissions {
+  user_id Int
+  request_key String @db.VarChar(36)
+  fingerprint String @db.VarChar(64)
+  campaign_id Int
+  created_at DateTime @default(now()) @db.Timestamp(3)
+
+  @@id([user_id, request_key])
+}
+
 model campaigns {
   id            Int                   @id @default(autoincrement())
   name          String                @db.VarChar(255)
@@ -1221,7 +1272,6 @@ model campaigns {
   created_by_id Int?
   /**
    * When this campaign should go out, or null for send-now.
-   *
    * An absolute instant, always stored UTC. A local wall-clock string would drift by an hour
    * across the two DST transitions the brokerage sits through every year.
    */
@@ -1484,13 +1534,19 @@ model calendar_events {
   user_id               Int?
   created_by            String?       @db.VarChar(255)
   domain                String?       @db.VarChar(8)
-  google_calendar_id    String?       @db.VarChar(255)
-  last_synced_to_google DateTime?     @db.Timestamp(0)
-  created_at            DateTime?     @db.Timestamp(0)
+  google_calendar_id        String?       @db.VarChar(255)
+  last_synced_to_google     DateTime?     @db.Timestamp(0)
+  google_sync_error         String?       @db.VarChar(500)
+  google_sync_attempts      Int           @default(0)
+  google_sync_next_retry_at DateTime?     @db.Timestamp(0)
+  google_disconnected_at    DateTime?     @db.Timestamp(0)
+  created_at                DateTime?     @db.Timestamp(0)
   updated_at            DateTime?     @db.Timestamp(0)
   deleted_at            DateTime?     @db.Timestamp(0)
   transactions          transactions? @relation(fields: [transaction_id], references: [id], onDelete: SetNull, onUpdate: Restrict)
   reminders             calendar_event_reminders[]
+  recurrence            calendar_events?           @relation("calendar_event_recurrence", fields: [recurrence_id], references: [id], onDelete: SetNull, onUpdate: NoAction, map: "calendar_events_recurrence_fk")
+  occurrences           calendar_events[]          @relation("calendar_event_recurrence")
 
   /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
   company_id Int @default(1)
@@ -1510,7 +1566,6 @@ model calendar_events {
 
 /**
  * One appointment reminder, sent or attempted.
- *
  * `calendar_events.reminder_sent` is a single boolean and cannot say WHICH reminder it refers to,
  * so a day-before and an hour-before notice for the same appointment would overwrite each other on
  * it. A row per (event, lead time) with a unique index is what makes the sweep idempotent: a second
@@ -1518,7 +1573,6 @@ model calendar_events {
  */
 /**
  * A browser that has asked to be told about upcoming appointments.
- *
  * One row per browser, not per person: a phone and a desktop are two subscriptions and a reminder
  * reaches both. The endpoint is issued by the push service and identifies the device; the two keys
  * encrypt the payload so the push service cannot read the appointment it is carrying.
@@ -1526,13 +1580,11 @@ model calendar_events {
 /**
  * Which push notifications a person wants. One row per (user, category), and a row exists only
  * once someone has expressed a preference.
- *
  * ABSENCE MEANS ENABLED. That is deliberate: the alternative — seeding a row per user per
  * category, or defaulting to off — would either need a backfill that silently goes stale as
  * categories are added, or would switch off notifications people already rely on the moment this
  * shipped. Opting out is an explicit act and leaves an explicit row; everything else keeps
  * behaving exactly as it did.
- *
  * Deliberately NOT scoped by area. A subscription carries a scope because a browser asks for one
  * area's reminders, but "I don't want listing-expiry pushes" is a statement about the person, not
  * about which screen they were on when they said it.
@@ -1543,6 +1595,7 @@ model notification_preferences {
   /// Category key from NOTIFICATION_CATEGORIES — validated in the service, not by the database,
   /// so adding a category needs no migration.
   category   String    @db.VarChar(64)
+  channel    String    @default("push") @db.VarChar(16)
   enabled    Boolean   @default(true)
   created_at DateTime?
   updated_at DateTime?
@@ -1552,8 +1605,9 @@ model notification_preferences {
   /// Denormalised tenant, equal to the parent row company_id. Enforced by tenancy.spec.ts.
   company_id Int @default(1)
 
-  @@unique([user_id, category])
+  @@unique([user_id, category, channel])
   @@index([user_id])
+  @@index([user_id, category])
   @@index([company_id])
 }
 
@@ -1696,6 +1750,7 @@ model import_batches {
  * modelled here so it is tracked by migrations instead of showing up as schema drift.
  */
 model user_sessions {
+  mobile_push_devices mobile_push_devices[]
   sid    String   @id(map: "session_pkey") @db.VarChar
   sess   Json     @db.Json
   expire DateTime @db.Timestamp(6)
@@ -1830,6 +1885,8 @@ model invoice_line_items {
 }
 
 model invoice_payments {
+  mobile_request_id String? @db.Uuid
+  mobile_fingerprint String? @db.VarChar(64)
   id         Int       @id @default(autoincrement())
   invoice_id Int
   paid_on    DateTime  @db.Date
@@ -1846,9 +1903,13 @@ model invoice_payments {
 
   @@index([invoice_id])
   @@index([company_id])
+  @@unique([invoice_id, mobile_request_id])
+
 }
 
 model invoices {
+  mobile_create_request_id String? @db.Uuid
+  mobile_create_fingerprint String? @db.VarChar(64)
   id                       Int                  @id @default(autoincrement())
   invoice_no               String               @unique @db.VarChar(255)
   transaction_id           Int?
@@ -1905,6 +1966,8 @@ model invoices {
   @@index([customer_id])
   @@index([transaction_id])
   @@index([company_id])
+  @@unique([created_by, mobile_create_request_id])
+
 }
 
 model job_batches {
@@ -2013,6 +2076,7 @@ model inbound_emails {
    * RFC Message-ID, kept for cross-referencing and as a secondary dedupe key.
    */
   message_id   String?       @db.VarChar(512)
+  reply_to_email String?     @db.VarChar(320)
   from_email   String?       @db.VarChar(320)
   from_name    String?       @db.VarChar(255)
   to_email     String?       @db.VarChar(320)
@@ -2023,6 +2087,7 @@ model inbound_emails {
   snippet      String?       @db.VarChar(300)
   body_text    String?       @db.Text
   body_html    String?       @db.Text
+  attachments Json?
   received_at  DateTime      @db.Timestamp(0)
   /**
    * Read/unread in our UI, independent of the mailbox's own \Seen flag.
@@ -2224,6 +2289,7 @@ model transaction_messages {
   user_id        Int?
   author         String?      @db.VarChar(255)
   body           String       @db.Text
+  mentions       String?      @db.Text
   created_at     DateTime?    @db.Timestamp(0)
   updated_at     DateTime?    @db.Timestamp(0)
   transactions   transactions @relation(fields: [transaction_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
@@ -2454,6 +2520,8 @@ model transaction_statuses {
 }
 
 model transactions {
+  document_reminder_receipts document_reminder_receipts[]
+  client_review_requests client_review_requests[]
   id                          Int                           @id @default(autoincrement())
   trade_no                    String                        @unique @db.VarChar(255)
   type                        String                        @db.VarChar(255)
@@ -2504,6 +2572,9 @@ model transactions {
   builder_name                String?                       @db.VarChar(255)
   builder_vendor              String?                       @db.VarChar(255)
   builder_project             String?                       @db.VarChar(255)
+  builder_lot_number          String?                       @db.VarChar(255)
+  builder_city                String?                       @db.VarChar(255)
+  builder_description         String?                       @db.Text
   builder_address             String?                       @db.VarChar(255)
   builder_office_email        String?                       @db.VarChar(255)
   builder_invoice_email       String?                       @db.VarChar(255)
@@ -2624,6 +2695,8 @@ model user_permissions {
 }
 
 model users {
+  document_reminder_receipts document_reminder_receipts[]
+  client_review_requests client_review_requests[]
   id                        Int                         @id @default(autoincrement())
   name                      String                      @db.VarChar(255)
   username                  String?                     @unique @db.VarChar(255)
@@ -2655,17 +2728,123 @@ model users {
   /// The brokerage this row belongs to. See src/core/tenancy.spec.ts for why this table carries one.
   push_subscriptions push_subscriptions[]
   notification_preferences notification_preferences[]
+  crm_settings             crm_settings[]
+  crm_trigger_settings     crm_trigger_settings[]
+  notifications            notifications[]
+  user_mfa_methods         user_mfa_methods[]
+  mfa_recovery_codes       mfa_recovery_codes[]
+  mfa_trusted_devices      mfa_trusted_devices[]
+  mfa_challenges           mfa_challenges[]
 
   company_id Int              @default(1)
   company    company_settings @relation(fields: [company_id], references: [id], onUpdate: NoAction)
-
-  @@index([company_id])
 
   /// CASE-INSENSITIVE UNIQUENESS on `email` and `username` is enforced by two functional indexes
   /// Prisma cannot express here — `users_email_lower_key` and `users_username_lower_key`, added by
   /// migration `20260803000000_users_ci_unique`. The `@unique` attributes above are case-SENSITIVE,
   /// which let `PRIYA@X.CA` and `priya@x.ca` both exist as separate accounts. Do not drop either
   /// index believing `@unique` covers it — `users-validation.spec.ts` fails if they go missing.
+
+  @@index([company_id])
+}
+
+model user_mfa_methods {
+  id           Int       @id @default(autoincrement())
+  user_id      Int
+  users        users     @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  type         String    @db.VarChar(16)
+  secret       String?   @db.Text
+  destination  String?   @db.VarChar(255)
+  confirmed_at DateTime? @db.Timestamp(0)
+  last_step    BigInt?
+  last_used_at DateTime? @db.Timestamp(0)
+  created_at   DateTime  @db.Timestamp(0)
+  updated_at   DateTime  @db.Timestamp(0)
+  company_id   Int       @default(1)
+
+  @@unique([user_id, type])
+  @@index([user_id])
+}
+
+model mfa_recovery_codes {
+  id         Int       @id @default(autoincrement())
+  user_id    Int
+  users      users     @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  code_hash  String    @db.VarChar(64)
+  used_at    DateTime? @db.Timestamp(0)
+  used_ip    String?   @db.VarChar(64)
+  created_at DateTime  @db.Timestamp(0)
+  company_id Int       @default(1)
+
+  @@index([user_id])
+  @@index([code_hash])
+}
+
+model mfa_trusted_devices {
+  id           Int       @id @default(autoincrement())
+  user_id      Int
+  users        users     @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  token_hash   String    @unique @db.VarChar(64)
+  label        String?   @db.VarChar(120)
+  user_agent   String?   @db.VarChar(255)
+  ip           String?   @db.VarChar(64)
+  last_seen_at DateTime? @db.Timestamp(0)
+  expires_at   DateTime  @db.Timestamp(0)
+  revoked_at   DateTime? @db.Timestamp(0)
+  created_at   DateTime  @db.Timestamp(0)
+  company_id   Int       @default(1)
+
+  @@index([user_id])
+  @@index([expires_at])
+}
+
+model mfa_challenges {
+  id          Int       @id @default(autoincrement())
+  user_id     Int
+  users       users     @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  method      String    @db.VarChar(16)
+  code_hash   String    @db.VarChar(64)
+  attempts    Int       @default(0)
+  expires_at  DateTime  @db.Timestamp(0)
+  consumed_at DateTime? @db.Timestamp(0)
+  created_at  DateTime  @db.Timestamp(0)
+  company_id  Int       @default(1)
+
+  @@index([user_id])
+  @@index([expires_at])
+}
+
+model mfa_policies {
+  id         Int              @id @default(autoincrement())
+  role       String           @db.VarChar(64)
+  required   Boolean          @default(false)
+  grace_days Int              @default(7)
+  created_at DateTime         @db.Timestamp(0)
+  updated_at DateTime         @db.Timestamp(0)
+  company_id Int              @default(1)
+  company    company_settings @relation(fields: [company_id], references: [id], onUpdate: NoAction)
+
+  @@unique([company_id, role])
+  @@index([company_id])
+}
+
+model notifications {
+  id         Int       @id @default(autoincrement())
+  user_id    Int
+  users      users     @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  category   String    @db.VarChar(64)
+  title      String    @db.VarChar(255)
+  body       String?   @db.Text
+  link       String?   @db.VarChar(255)
+  dedupe_key String?   @db.VarChar(190)
+  read_at    DateTime? @db.Timestamp(0)
+  created_at DateTime  @db.Timestamp(0)
+  company_id Int       @default(1)
+
+  @@unique([user_id, dedupe_key])
+  @@index([user_id, read_at])
+  @@index([user_id, created_at])
+  @@index([company_id])
 }
 
 /// Short-lived, single-use authorization codes issued by the shared CRM sign-in service.
@@ -2856,7 +3035,6 @@ model lead_import_jobs {
 
 /**
  * A link that appeared in a campaign, recorded at send time.
- *
  * The destination lives here rather than in the tracking URL. Putting it in the query string would
  * make the redirect endpoint an open redirect — anyone could hand out
  * `…/track/click?u=https://evil.example` carrying the brokerage's domain and reputation. The
@@ -2884,7 +3062,6 @@ model campaign_links {
 
 /**
  * One row per recipient per link, not per click.
- *
  * Kept distinct from `campaign_links.clicks` on purpose: one person clicking the same listing five
  * times is five clicks but one interested party, and reporting the former as engagement overstates
  * how many people are actually in play.
@@ -2942,4 +3119,81 @@ model meta_api_budget {
   calls        Int      @default(0)
 
   @@index([window_start])
+}
+
+/** Native tokens are session-scoped and expire unless renewed by an active app. */
+model mobile_push_devices {
+  id Int @id @default(autoincrement())
+  user_id Int
+  session_sid String @unique @db.VarChar
+  push_token String @unique @db.VarChar(160)
+  platform String @db.VarChar(16)
+  expires_at DateTime @db.Timestamp(6)
+  session user_sessions @relation(fields: [session_sid], references: [sid], onDelete: Cascade)
+  receipts mobile_push_receipts[]
+  @@index([user_id, expires_at])
+}
+model mobile_push_receipts {
+  ticket_id String @id @db.VarChar(128)
+  device_id Int
+  push_token String @db.VarChar(160)
+  status String @default("pending") @db.VarChar(16)
+  created_at DateTime @default(now()) @db.Timestamp(6)
+  device mobile_push_devices @relation(fields: [device_id], references: [id], onDelete: Cascade)
+  @@index([status, created_at])
+}
+
+/// Private client feedback, collected only from an authorised closed transaction.
+model client_review_requests {
+  id Int @id @default(autoincrement())
+  owner_user_id Int
+  transaction_id Int
+  client_id Int
+  submission_id String @db.Uuid
+  token_hash String @unique @db.VarChar(64)
+  link_ciphertext String @db.Text
+  client_name String @db.VarChar(255)
+  client_email String @db.VarChar(255)
+  status String @default("ready") @db.VarChar(16)
+  rating Int?
+  comment String? @db.VarChar(5000)
+  created_at DateTime @default(now()) @db.Timestamptz(3)
+  expires_at DateTime @db.Timestamptz(3)
+  submitted_at DateTime? @db.Timestamptz(3)
+  owner users @relation(fields: [owner_user_id], references: [id], onDelete: Cascade)
+  transaction transactions @relation(fields: [transaction_id], references: [id], onDelete: Cascade)
+  client clients @relation(fields: [client_id], references: [id], onDelete: Cascade)
+  @@unique([owner_user_id, submission_id])
+  @@index([owner_user_id, id])
+}
+
+model document_reminder_receipts {
+ id Int @id @default(autoincrement())
+ owner_user_id Int
+ transaction_id Int
+ request_id String @db.Uuid
+ version String @db.VarChar(64)
+ status String @db.VarChar(16)
+ document_count Int
+ recipient_count Int
+ created_at DateTime @default(now()) @db.Timestamptz(3)
+ updated_at DateTime @default(now()) @db.Timestamptz(3)
+ owner users @relation(fields: [owner_user_id], references: [id], onDelete: Cascade)
+ transaction transactions @relation(fields: [transaction_id], references: [id], onDelete: Cascade)
+ @@unique([owner_user_id, request_id])
+ @@index([transaction_id])
+}
+
+model mobile_invoice_mail_receipts {
+ id Int @id @default(autoincrement())
+ owner_user_id Int
+ invoice_id Int
+ request_id String @db.Uuid
+ event String @db.VarChar(16)
+ version String @db.VarChar(64)
+ status String @db.VarChar(16)
+ created_at DateTime @default(now()) @db.Timestamptz(3)
+ updated_at DateTime @default(now()) @db.Timestamptz(3)
+ @@unique([owner_user_id, request_id])
+ @@index([invoice_id])
 }

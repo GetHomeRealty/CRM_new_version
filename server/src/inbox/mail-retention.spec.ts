@@ -145,6 +145,18 @@ describe('inbound mail retention', () => {
     });
   });
 
+  it('strips old attachment-only messages but preserves recent and lead-linked attachments', async () => {
+    await inRollback(async (tx) => {
+      const s = await scene(tx);
+      const attachments = { total: 1, files: [{ name: 'test.txt', size: 4, data: 'dGVzdA==' }] };
+      await tx.inbound_emails.updateMany({ where: { id: { in: [s.old.id, s.recent.id, s.linked.id] } }, data: { body_text: null, body_html: null, attachments } });
+      await withEnv({ MAIL_STRIP_BODIES_AFTER_DAYS: '365', MAIL_RETENTION_DAYS: '', MAIL_RETENTION_INCLUDE_LINKED: '' }, async () => { await svcFor(tx).sweep(); });
+      expect((await tx.inbound_emails.findUniqueOrThrow({ where: { id: s.old.id } })).attachments).toBeNull();
+      expect((await tx.inbound_emails.findUniqueOrThrow({ where: { id: s.recent.id } })).attachments).toEqual(attachments);
+      expect((await tx.inbound_emails.findUniqueOrThrow({ where: { id: s.linked.id } })).attachments).toEqual(attachments);
+    });
+  });
+
   it('reports what a sweep would do without doing it', async () => {
     await inRollback(async (tx) => {
       const s = await scene(tx);

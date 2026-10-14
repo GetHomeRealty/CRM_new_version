@@ -581,7 +581,7 @@ function SendEmailCard({ seasons, onSent }: { seasons: string[]; onSent: () => P
           if (cancelled) return;
           setLeadMatches(r.data
             .filter((l) => !!l.email)
-            .map((l) => ({ id: l.id, name: l.name, email: l.email })));
+            .map((l) => ({ id: l.id, name: l.name, email: l.email! })));
         })
         .catch(() => { if (!cancelled) setLeadMatches([]); })
         .finally(() => { if (!cancelled) setSearchingLeads(false); });

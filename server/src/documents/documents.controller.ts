@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, HttpCode, NotFoundException, Param, ParseIntPipe, Post, Put, Query, Res, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, NotFoundException, Param, ParseIntPipe, Post, Put, Query, Res, UploadedFile, UnprocessableEntityException, UseGuards, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { promises as fs } from 'fs';
 import * as path from 'path';
@@ -8,6 +8,11 @@ import { AuthGuard } from '../auth/guards/auth.guard';
 import { ScreenGuard } from '../auth/guards/screen.guard';
 import { CurrentUser, Screen } from '../auth/decorators';
 import type { AuthUserRecord } from '../auth/auth.types';
+import { ValidFileReplacementService } from './valid-file-replacement.service';
+import { ChecklistActionsService } from './checklist-actions.service';
+import { DocumentLifecycleService } from './document-lifecycle.service';
+import { ValidationAttachmentService } from './validation-attachment.service';
+import { DocumentReviewService } from './document-review.service';
 import { DocumentsService } from './documents.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { STORAGE_ROOT } from '../config/storage';
@@ -18,11 +23,12 @@ const u = (x: AuthUserRecord | undefined): AuthUserRecord | null => x ?? null;
 const MB20 = 20480 * 1024;
 
 @Controller()
-@UseGuards(AuthGuard)
+@Screen('transactions', 'view')
+@UseGuards(AuthGuard, ScreenGuard)
 export class DocumentsController {
-  constructor(private readonly docs: DocumentsService, private readonly prisma: PrismaService) {}
+  constructor(private readonly docs: DocumentsService, private readonly prisma: PrismaService, private readonly reviews: DocumentReviewService, private readonly attachments: ValidationAttachmentService, private readonly lifecycle?: DocumentLifecycleService, private readonly checklist?: ChecklistActionsService, private readonly validReplacement?: ValidFileReplacementService) {}
 
-  // ---- reads (auth only) ----
+  // ---- reads (Desk transaction view; resource scope enforced by service) ----
   @Get('transactions/:transaction/documents')
   index(@CurrentUser() user: AuthUserRecord | undefined, @Param('transaction', ParseIntPipe) txnId: number): Promise<Res0> {
     return this.docs.index(u(user), txnId);
@@ -85,6 +91,76 @@ export class DocumentsController {
     zip.pipe(res);
     for (const en of entries) zip.file(en.abs, { name: en.name });
     await zip.finalize();
+  }
+
+  @Post('transactions/:transaction/documents/:document/valid-file-replacement')
+  @HttpCode(200)
+  @Screen('transactions', 'edit')
+  @UseGuards(AuthGuard, ScreenGuard)
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MB20 } }))
+  replaceValidFile(@CurrentUser() user: AuthUserRecord | undefined, @Param('transaction', ParseIntPipe) txnId: number, @Param('document', ParseIntPipe) docId: number, @Body() body: Res0, @UploadedFile() file: Express.Multer.File) {
+    return this.validReplacement!.replace(u(user), txnId, docId, body, file);
+  }
+
+  @Post('transactions/:transaction/documents/manual')
+  @HttpCode(200)
+  @Screen('transactions', 'edit')
+  @UseGuards(AuthGuard, ScreenGuard)
+  addManualDocument(@CurrentUser() user: AuthUserRecord | undefined, @Param('transaction', ParseIntPipe) txnId: number, @Body() body: Res0) {
+    return this.checklist!.create(u(user), txnId, body);
+  }
+
+  @Put('transactions/:transaction/documents/reco-readiness')
+  @Screen('transactions', 'edit')
+  @UseGuards(AuthGuard, ScreenGuard)
+  saveRecoReadiness(@CurrentUser() user: AuthUserRecord | undefined, @Param('transaction', ParseIntPipe) txnId: number, @Body() body: Res0) {
+    return this.checklist!.readiness(u(user), txnId, body);
+  }
+
+  @Delete('transactions/:transaction/documents/:document/attachment')
+  @Screen('transactions', 'edit')
+  @UseGuards(AuthGuard, ScreenGuard)
+  removeAttachment(@CurrentUser() user: AuthUserRecord | undefined, @Param('transaction', ParseIntPipe) txnId: number, @Param('document', ParseIntPipe) docId: number, @Body() body: Res0) {
+    return this.checklist!.removeFile(u(user), txnId, docId, body);
+  }
+
+  @Get('transactions/:transaction/documents/lifecycle')
+  @Screen('transactions', 'view')
+  @UseGuards(AuthGuard, ScreenGuard)
+  documentLifecycle(@CurrentUser() user: AuthUserRecord | undefined, @Param('transaction', ParseIntPipe) txnId: number) {
+    return this.lifecycle!.list(u(user), txnId);
+  }
+
+  @Post('transactions/:transaction/documents/:document/lifecycle')
+  @HttpCode(200)
+  @Screen('transactions', 'edit')
+  @UseGuards(AuthGuard, ScreenGuard)
+  changeDocumentLifecycle(@CurrentUser() user: AuthUserRecord | undefined, @Param('transaction', ParseIntPipe) txnId: number, @Param('document', ParseIntPipe) docId: number, @Body() body: Res0): Promise<{ message: string }> {
+    return this.lifecycle!.change(u(user), txnId, docId, body);
+  }
+
+  @Post('transactions/:transaction/documents/:document/validation-attachment')
+  @HttpCode(200)
+  @Screen('transactions', 'edit')
+  @UseGuards(AuthGuard, ScreenGuard)
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MB20 } }))
+  saveValidationAttachment(@CurrentUser() user: AuthUserRecord | undefined, @Param('transaction', ParseIntPipe) txnId: number, @Param('document', ParseIntPipe) docId: number, @Body() body: Res0, @UploadedFile() file: Express.Multer.File): Promise<{ message: string }> {
+    if (!file) throw new UnprocessableEntityException({ message: 'Choose a file to upload.' });
+    return this.attachments.save(u(user), txnId, docId, body?.review_version, file);
+  }
+
+  @Delete('transactions/:transaction/documents/:document/validation-attachment')
+  @Screen('transactions', 'edit')
+  @UseGuards(AuthGuard, ScreenGuard)
+  removeValidationAttachment(@CurrentUser() user: AuthUserRecord | undefined, @Param('transaction', ParseIntPipe) txnId: number, @Param('document', ParseIntPipe) docId: number, @Body() body: Res0): Promise<{ message: string }> {
+    return this.attachments.save(u(user), txnId, docId, body?.review_version);
+  }
+
+  @Put('transactions/:transaction/documents/:document/review')
+  @Screen('transactions', 'edit')
+  @UseGuards(AuthGuard, ScreenGuard)
+  review(@CurrentUser() user: AuthUserRecord | undefined, @Param('transaction', ParseIntPipe) txnId: number, @Param('document', ParseIntPipe) docId: number, @Body() body: Res0): Promise<{ message: string }> {
+    return this.reviews.save(u(user), txnId, docId, body);
   }
 
   // ---- writes (screen:transactions,edit) ----

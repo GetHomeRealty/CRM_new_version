@@ -1,4 +1,5 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { schedulersEnabled, schedulerSkipReason } from '../common/schedulers';
 import { clusterTick } from '../redis/cluster-tick';
@@ -145,10 +146,10 @@ export class MailRetentionService implements OnModuleInit, OnModuleDestroy {
 
     try {
       if (policy.stripBodiesAfterDays) {
-        // updateMany, not a loop: this rewrites two columns and holds no rows in memory.
+        // updateMany, not a loop: bodies and attachment bytes are cleared without loading them.
         const r = await this.prisma.inbound_emails.updateMany({
           where: this.stripWhere(policy),
-          data: { body_text: null, body_html: null },
+          data: { body_text: null, body_html: null, attachments: Prisma.DbNull },
         });
         stripped = r.count;
       }
@@ -188,7 +189,7 @@ export class MailRetentionService implements OnModuleInit, OnModuleDestroy {
   private stripWhere(policy: RetentionPolicy): Record<string, unknown> {
     return {
       received_at: { lt: this.cutoff(policy.stripBodiesAfterDays) },
-      OR: [{ body_text: { not: null } }, { body_html: { not: null } }],
+      OR: [{ body_text: { not: null } }, { body_html: { not: null } }, { attachments: { not: Prisma.DbNull } }],
       ...(policy.includeLinked ? {} : { lead_id: null }),
     };
   }

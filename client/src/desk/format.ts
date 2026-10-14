@@ -116,16 +116,14 @@ export function listingStatuses(type: string): string[] {
     'Closed', 'Mutual Release', 'DFT', 'Void', 'Suspended', 'Terminated', 'Expired'];
 }
 
-export function statusOptionsFor(type: string): string[] {
-  if (type === 'Referral') return STATUS_REFERRAL;
-  if (isListingStatusFamily(type)) return listingStatuses(type);
-  if (SECURED_DEAL_TYPES.includes(type)) return STATUS_DEAL_SECURED;
-  return STATUS_DEAL;
+export const DEAL_STATUS_OPTIONS = ['Conditional', 'Firm', 'Closed', 'DFT', 'Void', 'Mutual Release'];
+export const dealStatusLabel = (status: string): string => status === 'Void' ? 'Void (conditions failed)' : status;
+export function statusOptionsFor(_type: string): string[] {
+  return [...DEAL_STATUS_OPTIONS];
 }
 
-// Secured deal types start with NO status (the user picks Secured Firm/Conditionally).
-export const defaultStatusFor = (type: string): string =>
-  (isListingStatusFamily(type) ? 'Active' : (SECURED_DEAL_TYPES.includes(type) ? '' : 'Open'));
+// Do not assume a new deal is conditional or firm; the user picks its status.
+export const defaultStatusFor = (_type: string): string => '';
 
 // Valid multi-select groupings (4.3). Selecting within a group disables statuses
 // outside it; any single status alone is always valid ("All Singles").
@@ -158,16 +156,8 @@ export function allowedStatuses(type: string, selected: string[] | null | undefi
 }
 
 // Map legacy stored statuses to the current vocabulary for display/matching.
-export function normalizeStatus(type: string, s: string): string {
-  // Buy/Lease/Business deal types replaced "Open" with the Secured lifecycle.
-  if (SECURED_DEAL_TYPES.includes(type) && (s === 'Open' || s === 'Hold')) return 'Secured Conditional';
-  if (s === 'Hold') return 'Open';
-  if (s === 'Mutual release') return 'Mutual Release';
-  if (s === 'Sold conditional') return /lease/i.test(type) ? 'Lease Conditional' : 'Sold Conditional';
-  if (isListingStatusFamily(type)) {
-    if (s === 'Open') return 'Active';
-    if (s === 'Sold' && /lease/i.test(type)) return 'Leased';
-  }
+export function normalizeStatus(_type: string, s: string): string {
+  // Existing records must keep their saved vocabulary, including during autosave.
   return s;
 }
 

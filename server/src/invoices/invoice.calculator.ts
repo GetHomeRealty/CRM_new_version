@@ -12,23 +12,12 @@ export class InvoiceCalculator {
   async recalculate(db: Tx, invoiceId: number, taxRate: number): Promise<void> {
     const inv = await db.invoices.findUnique({
       where: { id: invoiceId },
-      include: { invoice_line_items: true, invoice_payments: true },
+      include: { invoice_line_items: true, invoice_payments: { where: { deleted_at: null } } },
     });
     if (!inv) return;
 
-    let subTotal = 0;
-    let taxable = 0;
-    for (const it of inv.invoice_line_items) {
-      const amount = round2(Number(it.qty) * Number(it.rate));
-      subTotal += amount;
-      if (it.is_taxable) taxable += amount;
-    }
-    const taxTotal = round2((taxable * taxRate) / 100);
-    const discount = round2(Number(inv.discount ?? 0));
-    const total = round2(subTotal + taxTotal - discount);
-    const paid = round2(inv.invoice_payments.reduce((s, p) => s + Number(p.amount), 0));
-    const balance = round2(total - paid);
-
+    const amounts=this.amounts(inv.invoice_line_items,Number(inv.discount??0),taxRate,inv.invoice_payments.map(p=>Number(p.amount)));
+    const {sub_total:subTotal,tax_total:taxTotal,total,amount_paid:paid,balance_due:balance}=amounts;
     await db.invoices.update({
       where: { id: invoiceId },
       data: {
@@ -41,6 +30,10 @@ export class InvoiceCalculator {
         updated_at: new Date(),
       },
     });
+  }
+
+  amounts(lines:{qty:unknown;rate:unknown;is_taxable:boolean}[],discount:number,taxRate:number,payments:number[]=[]){
+    let subTotal=0,taxable=0;for(const line of lines){const amount=round2(Number(line.qty)*Number(line.rate));subTotal+=amount;if(line.is_taxable)taxable+=amount;}const taxTotal=round2(taxable*taxRate/100),total=round2(subTotal+taxTotal-round2(discount)),paid=round2(payments.reduce((sum,amount)=>sum+amount,0));return{sub_total:round2(subTotal),tax_total:taxTotal,total,amount_paid:paid,balance_due:round2(total-paid)};
   }
 
   private status(current: string, total: number, paid: number, balance: number): string {

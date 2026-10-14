@@ -25,6 +25,8 @@ interface CodeExchange {
   codeVerifier: string;
 }
 
+interface PublicCodeExchange extends Omit<CodeExchange, 'clientSecret'> {}
+
 export interface SsoIdentity {
   sub: string;
   name: string;
@@ -75,8 +77,21 @@ export class SsoAuthorizationService {
   }
 
   async exchange(request: CodeExchange): Promise<SsoIdentity> {
-    const client = this.assertClient(request.clientId, request.redirectUri);
+    const client = this.assertConfidentialClient(request.clientId, request.redirectUri);
     this.assertClientSecret(request.clientSecret, client.clientSecret);
+    return this.redeem(request);
+  }
+
+  async exchangeMobile(request: PublicCodeExchange): Promise<{ userId: number; identity: SsoIdentity }> {
+    this.assertMobileClient(request.clientId, request.redirectUri);
+    return this.redeemWithUserId(request);
+  }
+
+  private async redeem(request: PublicCodeExchange): Promise<SsoIdentity> {
+    return (await this.redeemWithUserId(request)).identity;
+  }
+
+  private async redeemWithUserId(request: PublicCodeExchange): Promise<{ userId: number; identity: SsoIdentity }> {
     this.assertPkceValue(request.codeVerifier, 'code_verifier');
 
     const now = new Date();
@@ -88,7 +103,7 @@ export class SsoAuthorizationService {
     const redeemed = await this.prisma.sso_authorization_codes.updateMany({
       where: {
         code_hash: codeHash,
-        client_id: client.clientId,
+        client_id: request.clientId,
         redirect_uri: request.redirectUri,
         code_challenge: challenge,
         consumed_at: null,
@@ -108,15 +123,27 @@ export class SsoAuthorizationService {
     this.assertActive(record.users.status);
 
     return {
-      sub: String(record.users.id),
-      name: record.users.name,
-      email: record.users.email,
-      username: record.users.username,
-      role: record.users.role,
+      userId: record.users.id,
+      identity: {
+        sub: String(record.users.id),
+        name: record.users.name,
+        email: record.users.email,
+        username: record.users.username,
+        role: record.users.role,
+      },
     };
   }
 
-  private assertClient(clientId: string, redirectUri: string): { clientId: string; clientSecret: string } {
+  private assertClient(clientId: string, redirectUri: string): { clientId: string } {
+    const cfg = this.config.get<AppConfig['sso']>('sso');
+    if (clientId === cfg?.mobileClientId && cfg.mobileRedirectUris.includes(redirectUri)) {
+      this.assertMobileRedirect(redirectUri);
+      return { clientId };
+    }
+    return this.assertConfidentialClient(clientId, redirectUri);
+  }
+
+  private assertConfidentialClient(clientId: string, redirectUri: string): { clientId: string; clientSecret: string } {
     const cfg = this.config.get<AppConfig['sso']>('sso');
     if (!cfg?.clientSecret || cfg.clientSecret.length < SsoAuthorizationService.MIN_SECRET_BYTES || !cfg.redirectUris.length) {
       throw new ServiceUnavailableException({ message: 'Shared sign-in is not configured.' });
@@ -130,6 +157,20 @@ export class SsoAuthorizationService {
       throw new BadRequestException({ message: 'SSO redirect URIs must use HTTPS except on localhost.' });
     }
     return { clientId: cfg.clientId, clientSecret: cfg.clientSecret };
+  }
+
+  private assertMobileClient(clientId: string, redirectUri: string): void {
+    const cfg = this.config.get<AppConfig['sso']>('sso');
+    if (!cfg?.mobileClientId || clientId !== cfg.mobileClientId || !cfg.mobileRedirectUris.includes(redirectUri)) {
+      throw new BadRequestException({ message: 'Unknown mobile SSO client or redirect URI.' });
+    }
+    this.assertMobileRedirect(redirectUri);
+  }
+
+  private assertMobileRedirect(redirectUri: string): void {
+    if (redirectUri !== 'gethomehub://auth/callback') {
+      throw new BadRequestException({ message: 'Mobile SSO redirect URI is not approved.' });
+    }
   }
 
   private assertClientSecret(given: string, expected: string): void {

@@ -108,6 +108,15 @@ export class InboxController {
     };
   }
 
+  @Get(':id/reply-context')
+  replyContext(
+    @CurrentUser() user: AuthUserRecord,
+    @Param('id', ParseIntPipe) id: number,
+    @Query('area') area?: string,
+  ): Promise<unknown> {
+    return this.inbox.replyContext(user.id ?? -1, parseArea(area), id);
+  }
+
   @Get(':id')
   get(
     @CurrentUser() user: AuthUserRecord,

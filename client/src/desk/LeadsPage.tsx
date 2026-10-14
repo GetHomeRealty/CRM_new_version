@@ -29,7 +29,7 @@ const EMPTY_FILTERS: LeadFilters = {
 
 const EMPTY_STATS: LeadStats = {
   total: 0, noCalls: 0, websiteEnquiries: 0, recent: 0,
-  byStatus: { hot: 0, warm: 0, cold: 0, mild: 0, closed: 0 },
+  byStatus: { hot: 0, warm: 0, cold: 0, 'offer submitted': 0, 'offer accepted': 0, closed: 0 },
   bySource: { google: 0, meta: 0, website: 0, referral: 0, other: 0 },
 };
 
@@ -39,7 +39,8 @@ const STATUS_TABS: { key: keyof LeadStats['byStatus'] | 'all'; label: string }[]
   { key: 'hot', label: 'Hot' },
   { key: 'warm', label: 'Warm' },
   { key: 'cold', label: 'Cold' },
-  { key: 'mild', label: 'Mild' },
+  { key: 'offer submitted', label: 'Offer Submitted' },
+  { key: 'offer accepted', label: 'Offer Accepted' },
   { key: 'closed', label: 'Closed' },
 ];
 
@@ -48,7 +49,7 @@ const statusPill = (s: string | null): string => {
     case 'hot': return 'bad';
     case 'warm': return 'warn';
     case 'cold': return 'info';
-    case 'mild': return 'ok';
+    case 'mild': return 'warn';
     case 'closed': return 'type-res-sell';
     default: return '';
   }
@@ -447,7 +448,7 @@ export default function LeadsPage() {
                     <div className="muted">{l.phone || '—'}</div>
                     <div className="muted">{l.location || 'No location'}</div>
                   </td>
-                  <td>{l.lead_status ? <span className={`pill ${statusPill(l.lead_status)}`}>{label(l.lead_status)}</span> : <span className="muted">—</span>}</td>
+                  <td>{l.lead_status ? <span className={`pill ${statusPill(l.lead_status)}`}>{label(l.lead_status === 'mild' ? 'warm' : l.lead_status)}</span> : <span className="muted">—</span>}</td>
                   <td>{l.lead_type ? <span className={`pill ${typePill(l.lead_type)}`}>{label(l.lead_type)}</span> : <span className="muted">—</span>}</td>
                   <td><SourceCell lead={l} /></td>
                   <td>

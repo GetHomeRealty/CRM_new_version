@@ -7,6 +7,9 @@ const CLIENT = {
   clientSecret: 's'.repeat(48),
   redirectUris: ['https://precon.gethomerealty.ca/api/auth/crm/callback'],
   codeLifetimeSeconds: 60,
+  mobileClientId: 'get-home-hub-mobile',
+  mobileRedirectUris: ['gethomehub://auth/callback'],
+  mobileSessionLifetimeDays: 30,
 };
 const VERIFIER = 'v'.repeat(43);
 const CHALLENGE = createHash('sha256').update(VERIFIER).digest('base64url');
@@ -111,5 +114,29 @@ describe('SsoAuthorizationService', () => {
       code: issued.code,
       codeVerifier: 'x'.repeat(43),
     })).rejects.toBeInstanceOf(UnauthorizedException);
+  });
+
+  it('exchanges a mobile PKCE code without requiring an embedded client secret', async () => {
+    const { service } = fixture();
+    const issued = await service.issue(user() as never, {
+      clientId: CLIENT.mobileClientId,
+      redirectUri: CLIENT.mobileRedirectUris[0],
+      codeChallenge: CHALLENGE,
+    });
+    await expect(service.exchangeMobile({
+      clientId: CLIENT.mobileClientId,
+      redirectUri: CLIENT.mobileRedirectUris[0],
+      code: issued.code,
+      codeVerifier: VERIFIER,
+    })).resolves.toMatchObject({ userId: 7, identity: { sub: '7', email: 'prudhvi@example.com' } });
+  });
+
+  it('does not let the mobile client use an unapproved custom-scheme callback', async () => {
+    const { service } = fixture();
+    await expect(service.issue(user() as never, {
+      clientId: CLIENT.mobileClientId,
+      redirectUri: 'gethomehub://evil/callback',
+      codeChallenge: CHALLENGE,
+    })).rejects.toBeInstanceOf(BadRequestException);
   });
 });

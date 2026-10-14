@@ -1,0 +1,10 @@
+import { checklistVisibility } from './checklist-visibility';
+const docs = ['Agreement of Purchase and Sale','APS amendment','Agreement to Lease','Mutual Release','Deposit Receipt','Listing Agreement','MLS Data Sheet','Client Photo ID','FINTRAC','Cancellation','Condition Financing','Other'];
+const visible = (type: string, statuses: string[]) => docs.filter(title => checklistVisibility(type,statuses)({title}));
+test('Void deals restrict legal titles and take precedence over Mutual Release',()=>expect(visible('Purchase',['Void','Mutual Release'])).toEqual(docs.slice(0,3)));
+test('Mutual Release deals include release/deposit but hide other saved rows',()=>expect(visible('Purchase',['Mutual Release'])).toEqual(docs.slice(0,5)));
+test.each(['Residential Sale Listing','Commercial Property Sale Listing','Business Sale'])('Active %s restricts core checklist',type=>expect(visible(type,['Active'])).toEqual(docs.slice(5,9)));
+test('Terminated sale listing includes cancellation',()=>expect(visible('Residential Sale Listing',['Terminated'])).toEqual(docs.slice(5,10)));
+test.each(['Residential Lease Listing','Commercial Property Lease Listing'])('Lease %s has no sale listing restriction or deal-side restriction',type=>expect(visible(type,['Active','Void','Mutual Release'])).toEqual(docs.filter(title=>title!=='Mutual Release')));
+test('Open/Sold/Conditional and unknown types preserve normal checklist except Mutual Release',()=>{for(const [type,status] of [['Purchase','Open'],['Residential Sale Listing','Sold'],['Residential Sale Listing','Sold Conditional'],['Future Type','Active']]) expect(visible(type,[status])).toEqual(docs.filter(title=>title!=='Mutual Release'));});
+test('Matching is case-insensitive and condition/manual titles receive the same policy',()=>{const filter=checklistVisibility('Purchase',['Void']);expect(filter({title:'aPs condition evidence'})).toBe(true);expect(filter({title:'Condition Financing'})).toBe(false);expect(filter({title:null})).toBe(false);});

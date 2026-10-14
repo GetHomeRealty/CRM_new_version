@@ -248,11 +248,13 @@ export class LeadImportEngine {
     const now = new Date();
     const toCreate: Prisma.leadsCreateManyInput[] = [];
     const toTag: { id: number; tags: string }[] = [];
+    const repeatIds = new Set<number>();
 
     for (const c of candidates) {
       const hit = byKey.get(c.key);
       if (hit) {
         tally.duplicate++;
+        if (mine(hit)) repeatIds.add(hit.id);
         // Only tag it if it is actually this user's lead. Someone else's is left alone.
         if (ctx.tag && mine(hit)) {
           const tags = parseJsonArray(hit.tags);
@@ -329,6 +331,9 @@ export class LeadImportEngine {
     // duration of a 50,000-row import and block every agent working at the same time; per batch,
     // a failure loses at most this batch and the job records where it stopped.
     await this.inTransaction(async (tx) => {
+      if (repeatIds.size) {
+        await tx.leads.updateMany({ where: { id: { in: [...repeatIds] } }, data: { updated_at: now } });
+      }
       if (toCreate.length) {
         // skipDuplicates covers the race where the same address lands in the SAME BOOK between the
         // lookup above and this write — a concurrent import by the same person, or them adding the

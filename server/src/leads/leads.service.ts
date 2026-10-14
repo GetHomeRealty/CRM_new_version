@@ -12,7 +12,8 @@ import { throwValidation } from '../common/laravel-exceptions';
 import {
   EMAIL_SHAPE, FEED_PER_PAGE, LEADS_PER_PAGE, MAX_PER_PAGE, MAX_EXPORT_ROWS, NONE_FILTER_VALUE,
   RECENT_LEAD_DAYS, WEBSITE_ENQUIRY_SOURCES, DASHBOARD_LEAD_SOURCES,
-  isClientType, isConversion, isGender, isLeadResponse, isLeadSource, isLeadStatus, isLeadType, isTaskStatus,
+  isClientType, isConversion, isGender, isLeadEstimation, isLeadQuality, isLeadResponse, isLeadSource,
+  isLeadStatus, isLeadType, isTaskStatus,
 } from './lead.constants';
 
 const str = (v: unknown): string => String(v ?? '').trim();
@@ -23,9 +24,10 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 /** Everything the client may send when creating or updating a lead. */
 export interface LeadInput {
-  name?: unknown; email?: unknown; phone?: unknown; location?: unknown; property?: unknown;
+  name?: unknown; first_name?: unknown; middle_name?: unknown; last_name?: unknown;
+  email?: unknown; phone?: unknown; location?: unknown; property?: unknown;
   lead_status?: unknown; lead_type?: unknown; lead_source?: unknown; lead_response?: unknown;
-  client_type?: unknown; lead_conversion?: unknown;
+  client_type?: unknown; lead_conversion?: unknown; lead_estimation?: unknown; lead_quality?: unknown;
   gender?: unknown; language?: unknown; religion?: unknown; age?: unknown;
   date_of_birth?: unknown; marriage_day?: unknown;
   notes?: unknown; tags?: unknown; assigned_to?: unknown;
@@ -151,7 +153,7 @@ export class LeadsService {
     const [rows, total, stats] = await Promise.all([
       this.prisma.leads.findMany({
         where,
-        orderBy: [{ created_at: 'desc' }, { id: 'desc' }],
+        orderBy: [{ updated_at: 'desc' }, { created_at: 'desc' }, { id: 'desc' }],
         skip: (page - 1) * limit,
         take: limit,
         include: {
@@ -213,7 +215,7 @@ export class LeadsService {
       // The one counter that cannot join the others: an anti-join against lead_calls is a different
       // question about a different table, not a bucket of this one.
       count({ lead_calls: { none: {} } }),
-      count({ created_at: { gte: since } }),
+      count({ updated_at: { gte: since } }),
     ]);
 
     // groupBy returns only the buckets that exist, so a status nobody holds must read 0 rather than
@@ -241,8 +243,11 @@ export class LeadsService {
       websiteEnquiries,
       recent,
       byStatus: {
-        hot: status('hot'), warm: status('warm'), cold: status('cold'),
-        mild: status('mild'), closed: status('closed'),
+        hot: status('hot'), warm: status('warm') + status('mild'),
+        cold: status('cold'),
+        'offer submitted': status('offer submitted'),
+        'offer accepted': status('offer accepted'),
+        closed: status('closed'),
       },
       bySource,
     };
@@ -465,13 +470,39 @@ export class LeadsService {
 
   // ----------------------------------------------------------------- write
   async create(input: LeadInput, user: AuthUserRecord): Promise<Record<string, unknown>> {
-    const data = await this.validate(input, true, undefined, user);
+    const ownerId = user.id ?? null;
+    const email = str(input.email);
+    const phoneNormalized = normalizePhone(input.phone);
+    const identity = [
+      ...(email ? [{ email: { equals: email, mode: 'insensitive' as const } }] : []),
+      ...(phoneNormalized ? [{ phone_normalized: phoneNormalized }] : []),
+    ];
+    const repeat = identity.length ? await this.prisma.leads.findFirst({
+      where: { owner_user_id: ownerId, deleted_at: null, OR: identity },
+    }) : null;
+    const data = await this.validate(input, true, repeat?.id, user, repeat?.owner_user_id);
     const now = new Date();
+    if (repeat) {
+      // A repeat intake enriches the record; blanks in a short web/ad form must not erase details
+      // already collected by an agent. Explicit clearing remains available through normal Edit.
+      const refreshed = Object.fromEntries(Object.entries(data).filter(([key, value]) => {
+        if (value === null || value === '') return false;
+        if (key === 'tags' && value === '[]') return false;
+        return true;
+      }));
+      const row = await this.prisma.leads.update({
+        where: { id: repeat.id },
+        data: { ...refreshed, updated_at: now },
+        include: { _count: { select: { lead_calls: true, lead_tasks: true } } },
+      });
+      await this.audit.record(user, 'Repeat lead updated', row.name, 'Matched by email or phone; refreshed with the latest submission');
+      return { ...this.present(row, await this.assigneeNames([row.assigned_to])), duplicate_updated: true };
+    }
     const row = await this.prisma.leads.create({
       data: {
         ...data,
         name: data.name as string,
-        email: data.email as string,
+        email: data.email as string | null,
         // May be left unassigned; the creator still sees it through owner_user_id below, so a new
         // lead does not have to be assigned to anyone to be visible to the person who made it.
         assigned_to: (data.assigned_to as number | null | undefined) ?? null,
@@ -481,8 +512,11 @@ export class LeadsService {
         updated_at: now,
       },
       include: { _count: { select: { lead_calls: true, lead_tasks: true } } },
-    }).catch((err: unknown) => this.rethrowEmailClash(err, data.email as string, user.id ?? null));
-    await this.audit.record(user, 'Lead created', row.name, `${row.email}${row.phone ? ` · ${row.phone}` : ''}`);
+    }).catch((err: unknown) => {
+      if (typeof data.email === 'string') return this.rethrowEmailClash(err, data.email, user.id ?? null);
+      throw err;
+    });
+    await this.audit.record(user, 'Lead created', row.name, [row.email, row.phone].filter(Boolean).join(' · '));
     // Best-effort inbound-lead email (Meta / Google Ads / Website only); never blocks creation.
     void this.notifications.notifyNewLead(row);
 
@@ -530,6 +564,9 @@ export class LeadsService {
     // The name is who the lead IS. An agent working someone else's lead may record everything about
     // the conversation and change nothing about the identity.
     name: 'name',
+    first_name: 'first name',
+    middle_name: 'middle name',
+    last_name: 'last name',
     email: 'email address',
     phone: 'phone number',
     lead_source: 'lead source',
@@ -712,7 +749,7 @@ export class LeadsService {
     const row = await this.prisma.leads.findFirst({ where: { id, deleted_at: { not: null }, ...this.scopeWhere(user) } });
     if (!row) throw new NotFoundException({ message: 'Deleted lead not found.' });
     await this.prisma.leads.delete({ where: { id } });
-    await this.audit.record(user, 'Lead permanently deleted', row.name, row.email);
+    await this.audit.record(user, 'Lead permanently deleted', row.name, row.email ?? 'No email address');
     return { purged: true };
   }
 
@@ -749,7 +786,7 @@ export class LeadsService {
       : this.buildWhere(user, q);
     const [total, rows] = await Promise.all([
       this.prisma.leads.count({ where }),
-      this.prisma.leads.findMany({ where, orderBy: [{ created_at: 'desc' }, { id: 'desc' }], take: MAX_EXPORT_ROWS }),
+      this.prisma.leads.findMany({ where, orderBy: [{ updated_at: 'desc' }, { created_at: 'desc' }, { id: 'desc' }], take: MAX_EXPORT_ROWS }),
     ]);
     const assignees = await this.assigneeNames(rows.map((r) => r.assigned_to));
     const data = rows.map((r) => ({
@@ -763,6 +800,8 @@ export class LeadsService {
       Source: r.lead_source ?? '',
       Response: r.lead_response ?? '',
       'Client Type': r.client_type ?? '',
+      'Lead Estimation': r.lead_estimation ?? '',
+      'Lead Quality': r.lead_quality ?? '',
       Tags: parseJsonArray(r.tags).join(' | '),
       'Assigned To': r.assigned_to ? assignees.get(r.assigned_to) ?? '' : '',
       Unsubscribed: r.unsubscribed ? 'Yes' : 'No',
@@ -913,7 +952,11 @@ export class LeadsService {
       if (v === NONE_FILTER_VALUE) and.push({ OR: [{ [col]: null }, { [col]: '' }] } as Prisma.leadsWhereInput);
       else and.push({ [col]: v } as Prisma.leadsWhereInput);
     };
-    field('lead_status', q.leadStatus);
+    if (str(q.leadStatus) === 'warm') {
+      and.push({ lead_status: { in: ['warm', 'mild'] } });
+    } else {
+      field('lead_status', q.leadStatus);
+    }
     field('lead_type', q.leadType);
     field('lead_source', q.leadSource);
     field('lead_response', q.leadResponse);
@@ -941,7 +984,7 @@ export class LeadsService {
     else if (assigned && Number(assigned) > 0) and.push({ assigned_to: Number(assigned) });
 
     if (str(q.recent) === 'true') {
-      and.push({ created_at: { gte: new Date(Date.now() - RECENT_LEAD_DAYS * 24 * 60 * 60 * 1000) } });
+      and.push({ updated_at: { gte: new Date(Date.now() - RECENT_LEAD_DAYS * 24 * 60 * 60 * 1000) } });
     }
 
     return { AND: and };
@@ -972,9 +1015,16 @@ export class LeadsService {
       else out.name = name;
     }
 
+    for (const [key, label] of [['first_name', 'first name'], ['middle_name', 'middle name'], ['last_name', 'last name']] as const) {
+      if (!has(key)) continue;
+      const value = str(input[key]);
+      if (value.length > 128) add(key, `The ${label} must be 128 characters or fewer.`);
+      else out[key] = value || null;
+    }
+
     if (requireCore || has('email')) {
       const email = str(input.email);
-      if (!email) add('email', 'An email address is required.');
+      if (!email) out.email = null;
       else if (!EMAIL_SHAPE.test(email)) add('email', 'Enter a valid email address.');
       else if (email.length > 255) add('email', 'The email must be 255 characters or fewer.');
       else {
@@ -1022,9 +1072,18 @@ export class LeadsService {
       }
     }
 
+    if (requireCore || has('phone')) {
+      const phone = str(input.phone);
+      if (!phone) add('phone', 'A phone number is required.');
+      else if (phone.length > 64) add('phone', 'Must be 64 characters or fewer.');
+      else {
+        out.phone = phone;
+        out.phone_normalized = normalizePhone(phone);
+      }
+    }
+
     // --- optional free text ---
     const text: [keyof LeadInput, string, number][] = [
-      ['phone', 'phone', 64],
       ['location', 'location', 255],
       ['property', 'property', 255],
       ['language', 'language', 64],
@@ -1044,10 +1103,6 @@ export class LeadsService {
       else out[field] = v === '' ? null : v;
     }
 
-    // Keep the digits-only form in step with the phone. Meta lead import matches on it to avoid
-    // creating a second record for someone already on file under a different number format.
-    if (has('phone')) out.phone_normalized = normalizePhone(input.phone);
-
     // --- vocabularies: an empty value clears the field ---
     const vocab: [keyof LeadInput, string, (v: string) => boolean, string][] = [
       ['lead_status', 'lead_status', isLeadStatus, 'lead status'],
@@ -1056,6 +1111,8 @@ export class LeadsService {
       ['lead_response', 'lead_response', isLeadResponse, 'lead response'],
       ['client_type', 'client_type', isClientType, 'client type'],
       ['lead_conversion', 'lead_conversion', isConversion, 'conversion'],
+      ['lead_estimation', 'lead_estimation', isLeadEstimation, 'lead estimation'],
+      ['lead_quality', 'lead_quality', isLeadQuality, 'lead quality'],
       ['gender', 'gender', isGender, 'gender'],
     ];
     for (const [key, field, valid, label] of vocab) {
@@ -1063,7 +1120,7 @@ export class LeadsService {
       const v = str(input[key]);
       if (v === '') out[field] = null;
       else if (!valid(v)) add(field, `That is not a recognised ${label}.`);
-      else out[field] = v;
+      else out[field] = key === 'lead_status' && v === 'mild' ? 'warm' : v;
     }
 
     // --- age ---
@@ -1177,6 +1234,8 @@ export class LeadsService {
       lead_response: r.lead_response,
       client_type: r.client_type,
       lead_conversion: r.lead_conversion,
+      lead_estimation: r.lead_estimation,
+      lead_quality: r.lead_quality,
       tags: parseJsonArray(r.tags as string | null),
       gender: r.gender,
       language: r.language,
@@ -1207,6 +1266,7 @@ export class LeadsService {
       // ---- provenance: blank for a manually created lead, populated for a Meta import ----
       source: r.source,
       first_name: r.first_name,
+      middle_name: r.middle_name,
       last_name: r.last_name,
       facebook_lead_id: r.facebook_lead_id,
       meta: r.source === 'facebook_meta' ? {

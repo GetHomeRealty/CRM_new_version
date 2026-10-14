@@ -175,7 +175,7 @@ describe('module access is enforced on every screen, not only the four that name
       const now = new Date();
       // Singleton row, so find-then-write rather than a keyed upsert.
       const existing = await tx.subscriptions.findFirst({ select: { id: true } });
-      const data = { crm_enabled: false, transaction_enabled: true, status: 'active', updated_at: now };
+      const data = { company_id: 1, crm_enabled: false, transaction_enabled: true, status: 'active', updated_at: now };
       if (existing) await tx.subscriptions.update({ where: { id: existing.id }, data });
       else await tx.subscriptions.create({ data: { ...data, created_at: now } });
       const user = await adminAssigned(tx, ['crm', 'desk']);

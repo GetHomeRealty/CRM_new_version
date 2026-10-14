@@ -62,6 +62,20 @@ export class CampaignsController {
     return this.campaigns.list(user, Number(limit) || 100);
   }
 
+  @Post('submissions')
+  @HttpCode(201)
+  @Screen('campaigns', 'edit')
+  submitOnce(@CurrentUser() user: AuthUserRecord, @Body() body: Record<string, unknown>, @Req() req: Request): Promise<unknown> {
+    if (typeof body.request_key !== 'string') throw new BadRequestException('Submission key required.');
+    return this.campaigns.createAndSend({ ...body, baseUrl: trackingBaseUrl(req) } as never, user);
+  }
+
+  @Get('submissions/:key')
+  @Screen('campaigns', 'view')
+  recoverSubmission(@CurrentUser() user: AuthUserRecord, @Param('key') key: string): Promise<unknown> {
+    return this.campaigns.recoverSubmission(key, user);
+  }
+
   /**
    * Whether the address baked into tracking pixels is reachable from the internet.
    * Open tracking fails silently when it isn't, so this makes that visible before a send.
