@@ -27,6 +27,8 @@ const parseJsonArray = (v: string | null): string[] => {
   try { const a = JSON.parse(v ?? '[]'); return Array.isArray(a) ? a.map(String) : []; } catch { return []; }
 };
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+/** How much of a lead's newest note the Leads list previews; the full text is on the lead. */
+const NOTE_PREVIEW = 140;
 
 /** Everything the client may send when creating or updating a lead. */
 export interface LeadInput {
@@ -213,13 +215,41 @@ export class LeadsService {
       this.statsGrouped(scopeOnly),
     ]);
 
-    const assignees = await this.assigneeNames(rows.map((r) => r.assigned_to));
+    const [assignees, latestNotes] = await Promise.all([
+      this.assigneeNames(rows.map((r) => r.assigned_to)),
+      this.latestNotes(rows.map((r) => r.id)),
+    ]);
 
     return {
-      data: rows.map((r) => this.present(r, assignees, user)),
+      data: rows.map((r) => ({ ...this.present(r, assignees, user), latest_note: latestNotes.get(r.id) ?? null })),
       meta: { current_page: page, per_page: limit, last_page: Math.max(1, Math.ceil(total / limit)), total },
       stats,
     };
+  }
+
+  /**
+   * THE NEWEST NOTE ON EACH LEAD, previewed, so what was last said about a lead shows in the list
+   * without opening it. One query for the page, ordered by when the note was WRITTEN — editing an
+   * older note never makes it the newest — and only for leads the scoped list already returned, so
+   * it shows nothing the viewer could not read by opening the lead.
+   */
+  private async latestNotes(ids: number[]): Promise<Map<number, {
+    preview: string; truncated: boolean; author: string | null; created_at: string | null; count: number;
+  }>> {
+    if (!ids.length) return new Map();
+    const rows = await this.prisma.$queryRaw<{
+      lead_id: number; preview: string; full_length: number; author: string | null; created_at: Date | null; count: number;
+    }[]>`
+      SELECT DISTINCT ON (lead_id)
+        lead_id, LEFT(content, ${NOTE_PREVIEW}::int) AS preview, LENGTH(content)::int AS full_length,
+        created_by AS author, created_at, (COUNT(*) OVER (PARTITION BY lead_id))::int AS count
+      FROM lead_notes
+      WHERE lead_id IN (${Prisma.join(ids)})
+      ORDER BY lead_id, created_at DESC NULLS LAST, id DESC`;
+    return new Map(rows.map((n) => [n.lead_id, {
+      preview: n.preview, truncated: n.full_length > NOTE_PREVIEW, author: n.author,
+      created_at: n.created_at?.toISOString() ?? null, count: n.count,
+    }]));
   }
 
   /**

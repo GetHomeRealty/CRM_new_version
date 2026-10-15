@@ -70,6 +70,16 @@ export interface Lead {
   date_of_birth: string | null;
   marriage_day: string | null;
   notes: string | null;
+  /** List only: the newest note on the lead by when it was written, previewed; null when it has none. */
+  latest_note?: {
+    preview: string;
+    /** The note is longer than the preview; the full text is on the lead. */
+    truncated: boolean;
+    author: string | null;
+    created_at: string | null;
+    /** How many notes the lead has in all. */
+    count: number;
+  } | null;
   /**
    * A lead may keep several sets — a home to live in and a property to let, say. Always a list
    * from the API; a legacy single object is wrapped server-side. Null when none were recorded.

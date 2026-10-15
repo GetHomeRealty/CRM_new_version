@@ -739,6 +739,7 @@ export default function LeadsPage() {
                   <input type="checkbox" checked={allChecked} onChange={toggleAll} aria-label="Select all leads" />
                 </th>
                 <th>Name</th>
+                <th title="The newest note on the lead">Latest Note</th>
                 <th>Contact</th>
                 <th>Status</th>
                 <th>Type</th>
@@ -751,9 +752,9 @@ export default function LeadsPage() {
               </tr>
             </thead>
             <tbody>
-              {loading && <tr><td colSpan={11} className="empty-cell">Loading leads…</td></tr>}
+              {loading && <tr><td colSpan={12} className="empty-cell">Loading leads…</td></tr>}
               {!loading && leads.length === 0 && (
-                <tr><td colSpan={11} className="empty-cell">
+                <tr><td colSpan={12} className="empty-cell">
                   No leads match these filters.{canEdit ? ' Add one, or import a CSV.' : ''}
                 </td></tr>
               )}
@@ -765,6 +766,23 @@ export default function LeadsPage() {
                   <td className="lead-inline-cell">
                     <button className="prop-link" type="button" onClick={() => navigate(crmPath(`lead/${l.id}`))}>{l.name}</button>
                     {l.unsubscribed && <span className="pill bad lead-unsub" title="Opted out of email — excluded from campaigns">Unsubscribed</span>}
+                  </td>
+                  <td className="lead-note-cell">
+                    {/* The newest note; a lead with none falls back to its Summary Notes. */}
+                    {l.latest_note ? (
+                      <>
+                        <div className="lead-note-text">{l.latest_note.preview}{l.latest_note.truncated ? '…' : ''}</div>
+                        <div className="muted lead-note-meta">
+                          {l.latest_note.author || 'Someone'} · {shortDate(l.latest_note.created_at)}
+                          {l.latest_note.count > 1 && ` · +${l.latest_note.count - 1} older`}
+                        </div>
+                      </>
+                    ) : l.notes?.trim() ? (
+                      <>
+                        <div className="lead-note-text">{l.notes.trim()}</div>
+                        <div className="muted lead-note-meta">Summary note</div>
+                      </>
+                    ) : <span className="muted">—</span>}
                   </td>
                   <td className="lead-contact">
                     <div>{l.email}</div>

@@ -835,7 +835,11 @@ input[type="number"],.numeric,.stat-card .val{font-variant-numeric:tabular-nums;
 .list-table tr.clickable{cursor:pointer}
 .list-table tr.clickable:hover{background:var(--brand-soft)}
 .due-overdue{color:var(--bad);font-weight:600;white-space:nowrap}
-.lead-table{min-width:1300px}
+.lead-table{min-width:1500px}
+/* Latest Note column: at most three lines of the note, the rest is on the lead */
+.lead-note-cell{min-width:180px;max-width:260px}
+.lead-note-text{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;white-space:pre-line;overflow-wrap:anywhere;font-size:12.5px;line-height:1.4}
+.lead-note-meta{font-size:11px;margin-top:3px}
 /* The global input rule stretches checkboxes across their column — pin them to a box. */
 .lead-sel-col{width:38px;text-align:center}
 .lead-sel-col input[type=checkbox]{padding:0;width:15px;min-width:15px;max-width:15px;height:15px;margin:0;cursor:pointer}
