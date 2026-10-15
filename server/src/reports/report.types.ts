@@ -58,7 +58,8 @@ export type ReportCategory =
   | 'Documentation and Compliance Reports';
 
 /** Optional report "sections" (only the Transaction Payment Status report uses these). */
-export interface ReportSectionDef { key: string; label: string; description?: string }
+/** `group` puts a heading above a run of sections (e.g. "Agent Payments" over Listing, Buying …). */
+export interface ReportSectionDef { key: string; label: string; description?: string; group?: string }
 
 /** Static metadata about a report (drives the dashboard cards + column endpoints). */
 export interface ReportMeta {
@@ -137,7 +138,7 @@ export interface ReportResult {
   last_page: number;
   applied_filters: { label: string; value: string }[]; // for the report header + exports
   /** In-table sections (payment-status report): order, counts and per-section subtotals. */
-  sections?: { key: string; label: string; count: number; totals?: ReportTotals }[];
+  sections?: { key: string; label: string; count: number; totals?: ReportTotals; group?: string; description?: string }[];
   /** Reports with `dealTypesFromRows`: the deal types in the result, for the Deal Type dropdown. */
   deal_types?: string[];
 }

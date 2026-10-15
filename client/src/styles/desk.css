@@ -399,6 +399,11 @@ input[type="number"],.numeric,.stat-card .val{font-variant-numeric:tabular-nums;
 /* In-table horizontal sections (Transaction Payment Status) */
 .report-section-row td{background:linear-gradient(90deg,var(--brand-soft),transparent);border-top:2px solid var(--brand-light);border-bottom:1px solid var(--line);font-weight:700;color:var(--brand-dark);letter-spacing:.01em;white-space:nowrap;padding:9px 12px;height:38px}
 .report-section-row .sec-count{color:var(--muted);font-weight:600;margin-left:8px}
+/* A section's standing instruction from the Payment Sheet, beside its heading */
+.report-section-row .sec-note{color:var(--muted);font-weight:500;font-style:italic;margin-left:14px}
+/* Group heading over a run of sections (Pending Payments: "Agent Payments") */
+.report-group-row td{background:var(--brand);color:#fff;font-weight:700;font-size:13px;letter-spacing:.02em;padding:9px 12px;height:38px}
+.report-section-row.in-group td{padding-left:26px}
 /* ---- campaigns ---- */
 .camp-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px}
 .camp-card{display:flex;flex-direction:column;gap:6px}

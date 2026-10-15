@@ -34,9 +34,12 @@ export default function ReportDetailPage() {
       ? ['admin', 'manager', 'accounting'].includes(role)
       : ['admin', 'manager', 'accounting', 'documentation'].includes(role);
   };
-  /** Reflect a saved cell in the rows on screen without re-running the report. */
-  const patchRow = (ri: number, key: string, value: string) => setResult((r) => (r
-    ? { ...r, rows: r.rows.map((row, i) => (i === ri ? { ...row, [key]: value } : row)) }
+  /**
+   * Reflect a saved cell on screen without re-running the report — on EVERY row of that deal, since
+   * one deal can appear several times (its client, co-op and each agent's payment).
+   */
+  const patchDeal = (txnId: string | number | null, key: string, value: string) => setResult((r) => (r
+    ? { ...r, rows: r.rows.map((row) => (row.txn_id === txnId ? { ...row, [key]: value } : row)) }
     : r));
 
   const [meta, setMeta] = useState<ReportMeta | null>(null);
@@ -280,14 +283,27 @@ export default function ReportDetailPage() {
                 <tr><td colSpan={span} style={{ textAlign: 'center', color: 'var(--muted)', padding: 24 }}>No records found for the selected filters.</td></tr>
               ) : result.sections ? (
                 // section-grouped: a heading row per section, its rows, then its subtotal
-                result.sections.map((s) => (
+                result.sections.map((s, si) => (
                   <Fragment key={s.key}>
-                    <tr className="report-section-row"><td colSpan={span}>{s.label}<span className="sec-count">{s.count ?? 0} record{(s.count ?? 0) === 1 ? '' : 's'}</span></td></tr>
+                    {/* A group heading (e.g. "Agent Payments") above the first of its sections. */}
+                    {s.group && s.group !== result.sections![si - 1]?.group && (
+                      <tr className="report-group-row"><td colSpan={span}>{s.group}</td></tr>
+                    )}
+                    <tr className={`report-section-row${s.group ? ' in-group' : ''}`}><td colSpan={span}>
+                      {s.label}<span className="sec-count">{s.count ?? 0} record{(s.count ?? 0) === 1 ? '' : 's'}</span>
+                      {s.description && <span className="sec-note">{s.description}</span>}
+                    </td></tr>
                     {headerRow('head-' + s.key)}
                     {result.rows.filter((r) => r.section === s.key).map((row, ri) => (
                       <tr key={s.key + ri}>
                         {selectable && <td className="report-sel-col">{selBox(row)}</td>}
-                        {cols.map((c) => <td key={c.key} className={cellClass(c)} title={tooltip(row[c.key], c)}>{fmt(row[c.key], c)}</td>)}
+                        {cols.map((c) => (
+                          <td key={c.key} className={cellClass(c)} title={c.edit ? undefined : tooltip(row[c.key], c)}>
+                            {c.edit
+                              ? <ReportEditableCell row={row} column={c} canEdit={canEditCell(c)} onSaved={(v) => patchDeal(row.txn_id, c.key, v)} />
+                              : fmt(row[c.key], c)}
+                          </td>
+                        ))}
                       </tr>
                     ))}
                     {(s.count ?? 0) > 0 && s.totals && (
@@ -313,7 +329,7 @@ export default function ReportDetailPage() {
                         <td key={c.key} className={cellClass(c)} title={c.edit ? undefined : tooltip(row[c.key], c)}>
                           {meta.expandable && ci === 0 && <span className="report-expand-ind">{isOpen ? '▾' : '▸'}</span>}
                           {c.edit
-                            ? <ReportEditableCell row={row} column={c} canEdit={canEditCell(c)} onSaved={(v) => patchRow(ri, c.key, v)} />
+                            ? <ReportEditableCell row={row} column={c} canEdit={canEditCell(c)} onSaved={(v) => patchDeal(row.txn_id, c.key, v)} />
                             : fmt(row[c.key], c)}
                         </td>
                       ))}
@@ -343,14 +359,15 @@ export default function ReportDetailPage() {
 
         <div className="report-pager">
           <div className="pg-left"><strong>{result?.total_count ?? 0}</strong> record{(result?.total_count ?? 0) === 1 ? '' : 's'}{running && <span className="muted"> · loading…</span>}</div>
-          <div className="pg-mid">
+          {/* A single-page report (Pending Payments) is one sheet: no pages to step through. */}
+          {!meta.singlePage && <><div className="pg-mid">
             <button className="btn ghost sm" disabled={page <= 1 || !!result?.sections} onClick={() => setPage((p) => Math.max(1, p - 1))}>← Prev</button>
             <span>Page {result?.page ?? 1} of {result?.last_page ?? 1}</span>
             <button className="btn ghost sm" disabled={!result || page >= result.last_page} onClick={() => setPage((p) => p + 1)}>Next →</button>
           </div>
           <div className="pg-right"><span>Rows</span>
             <select value={perPage} onChange={(e) => { setPerPage(Number(e.target.value)); setPage(1); }} disabled={!!result?.sections}>{PER_PAGE_OPTIONS.map((n) => <option key={n} value={n}>{n}</option>)}</select>
-          </div>
+          </div></>}
         </div>
       </div>
 

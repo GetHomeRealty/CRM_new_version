@@ -23,7 +23,8 @@ export interface ReportListItem {
   category: string;
 }
 
-export interface ReportSection { key: string; label: string; description?: string; count?: number; totals?: ReportTotals }
+/** `group` is a heading shown above a run of sections (e.g. "Agent Payments" over Listing, Buying …). */
+export interface ReportSection { key: string; label: string; description?: string; group?: string; count?: number; totals?: ReportTotals }
 
 export interface ReportFilterDef {
   key: string;
@@ -52,6 +53,8 @@ export interface ReportMeta {
   hideFilters?: string[];
   /** The Deal Type dropdown lists only the types found in this report (`ReportResult.deal_types`). */
   dealTypesFromRows?: boolean;
+  /** Every row comes on one page (Pending Payments) — no pager. */
+  singlePage?: boolean;
 }
 
 /** One document inside an expanded deal (GET /api/reports/documents/:transactionId). */

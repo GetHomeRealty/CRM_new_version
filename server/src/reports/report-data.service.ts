@@ -59,6 +59,28 @@ function readinessText(tracker: Record<string, unknown>): { docs_cleared: string
 }
 
 /**
+ * Each agent's own position on a deal: commission (summed across a preconstruction deal's terms),
+ * advance, payments and the balance still owed — one entry per agent, in split order.
+ *
+ * Advance rows name their agent; a row that names nobody belongs to the deal's first agent, so on
+ * a team deal it is not counted once per member.
+ */
+function agentBalances(lines: Record<string, unknown>[], admin: Record<string, unknown>, adjustments: Record<string, unknown>): EnrichedTxn['agent_lines'] {
+  const names = [...new Set(lines.map((l) => String(l.name ?? '')).filter(Boolean))];
+  const advanceRows = String(adjustments.advance_payment) === 'Yes' && Array.isArray(adjustments.advance_rows)
+    ? (adjustments.advance_rows as Record<string, unknown>[]) : [];
+  return names.map((name, i) => {
+    const total = money(lines.filter((l) => String(l.name) === name)
+      .reduce((s, l) => s + num(((l.agent ?? {}) as Record<string, unknown>).total), 0));
+    const advance = money(advanceRows
+      .filter((r) => (r?.agent == null || String(r.agent) === '' ? i === 0 : String(r.agent) === name))
+      .reduce((s, r) => s + num(r.amount), 0));
+    const paid = agentPaymentsPaid(admin, [name]).totalPaid;
+    return { name, total, advance, paid, balance: balanceOf(total, advance, paid) };
+  });
+}
+
+/**
  * Which Admin Activities Remarks note is the newest (`admin_activities.notes`), by when it was written;
  * -1 when none has text. The Pending Payments report shows this note and edits this same one.
  */
@@ -158,6 +180,19 @@ export interface EnrichedTxn {
   final_validation_remarks: string | null;
   /** The newest Remarks note in Admin Activities — what accounting last wrote on the deal. */
   accounting_remarks: string | null;
+  /** Agent Payment Readiness → Ready to Process Agent Payment (Yes / No / N/A). */
+  ready_to_process: string | null;
+
+  // ---- Pending Payments: what is still owed, to whom (the brokerage's Payment Sheet) ----
+  /** Trust → Payable to Client from the commission breakdown (deposit − commission), ≥ 0. */
+  client_payable: number;
+  /** Admin Activities → Paid to Client? (Yes / No / N/A, '' when unset). */
+  client_paid: string;
+  /** Admin Activities → Co-op invoice received? (Yes / No / N/A, '' when unset) and its paid date. */
+  coop_invoice_received: string;
+  coop_paid_date: string | null;
+  /** Each agent's own commission, advance, payments and balance (scoped like `splits`). */
+  agent_lines: { name: string; total: number; advance: number; paid: number; balance: number }[];
 
   // ---- documentation reporting (§ Documentation Reports) ----
   /** Client names on the deal (buyer/seller/landlord/tenant), joined for display. */
@@ -549,6 +584,7 @@ export class ReportDataService {
       commission_received: false,
       // Accounting's notes are about the money, which this member is not shown.
       accounting_remarks: null,
+      client_payable: 0, agent_lines: [],
     };
   }
 
@@ -690,6 +726,12 @@ export class ReportDataService {
       gift_coupon_issued_at: dateStr(rec.gift_coupon_issued_at as Date | null),
       ...readinessText(tracker),
       accounting_remarks: latestAdminNote(admin),
+      ready_to_process: text(tracker.ready_to_process) || null,
+      client_payable: Math.max(0, num(((bd.trust ?? {}) as Record<string, unknown>).payable_to_client)),
+      client_paid: text(((admin.paid_client ?? {}) as Record<string, unknown>).enabled),
+      coop_invoice_received: text(((admin.coop_invoice ?? {}) as Record<string, unknown>).enabled),
+      coop_paid_date: text(((admin.coop_invoice ?? {}) as Record<string, unknown>).date) || null,
+      agent_lines: agentBalances(scopedLines, admin, adjustments),
     };
   }
 

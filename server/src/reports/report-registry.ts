@@ -20,7 +20,7 @@ export interface ReportDef {
   /** Row values (defaults to baseRow); return report-specific keys merged over the base. */
   map?: (t: EnrichedTxn) => ReportRow;
   /** Emit MULTIPLE rows per transaction (e.g. one row per split agent). Overrides `map`. */
-  expand?: (t: EnrichedTxn) => ReportRow[];
+  expand?: (t: EnrichedTxn, f?: ReportFilters) => ReportRow[];
   /** Section key for section-grouped reports (rendered as in-table horizontal sections). */
   section?: (t: EnrichedTxn) => string | null;
   /** Section keys whose subtotal row is suppressed (e.g. Mutual Release). */
@@ -38,6 +38,10 @@ export interface ReportDef {
   hideFilters?: ('offer_date' | 'payment_type' | 'payout_status')[];
   /** The Deal Type dropdown offers only the types that occur in this report's own rows. */
   dealTypesFromRows?: boolean;
+  /** Section reports: leave out sections with no rows, sort inside each section, and number each from 1. */
+  compactSections?: boolean;
+  /** Return every row on one page — the report is read as one sheet (Pending Payments). */
+  singlePage?: boolean;
 
   /**
    * Which documentation relations this report reads. Absent means NONE of them.
@@ -158,6 +162,19 @@ const statusFilter = (label: string, values: string[]): ReportFilterDef => ({
   key: 'status', label, type: 'select', options: [{ value: '', label: 'All' }, ...values.map((v) => ({ value: v, label: v }))],
 });
 const dateRange = (key: string, label: string): ReportFilterDef => ({ key, label, type: 'daterange' });
+
+/**
+ * Pending Payments — the Payment Sheet's agent-payment groups and the CRM deal types in each.
+ * National Bank is the Sheet's name for referral deals (their trade numbers carry the _NB suffix).
+ * Declared here, above REPORTS, because the report's section list is built from it.
+ */
+const AGENT_GROUPS: { key: string; label: string; types: string[] }[] = [
+  { key: 'listing', label: 'Listing', types: ['Residential Sale Listing', 'Commercial Property Sale Listing', 'Business Sale'] },
+  { key: 'buying', label: 'Buying', types: ['Residential Buying', 'Commercial Property Buying', 'Business Buying'] },
+  { key: 'lease', label: 'Lease', types: ['Residential Lease', 'Residential Lease Listing', 'Commercial Property Lease', 'Commercial Property Lease Listing'] },
+  { key: 'precon', label: 'Pre-Construction', types: ['Preconstruction'] },
+  { key: 'nb', label: 'National Bank', types: ['Referral'] },
+];
 
 // ---- shared column groups ----
 const TOTAL3 = (): ReportColumn[] => [col.totalWo(), col.totalHst(), col.totalW()];
@@ -500,9 +517,9 @@ export const REPORTS: ReportDef[] = [
   {
     type: 'pending-payments',
     name: 'Pending Payments Report',
-    description: 'Closed deals where agent commission is still owed, with the balance due and how long it has been pending.',
+    description: 'Everything still to be paid, as on the Payment Sheet — client payments, co-op payments, and agent payments by deal type.',
     category: 'Payment Reports',
-    // Column order as the brokerage specified it (2026-10-15).
+    // Column order as the brokerage specified it (2026-10-15), plus the Sheet's Payment Schedule.
     columns: [
       { key: 'sl_no', label: 'Sl No.', type: 'number', default: true, width: 6 },
       col.tradeNo(), col.closingDate(),
@@ -512,35 +529,37 @@ export const REPORTS: ReportDef[] = [
       { key: 'docs_status', label: 'Docs Status', type: 'status', default: true, sortable: true, width: 11 },
       { key: 'final_validation', label: 'Validation Status', type: 'status', default: true, sortable: true, width: 12 },
       { key: 'final_validation_remarks', label: 'Validation Comments', type: 'text', default: true, width: 22, edit: 'validation_comments' },
+      // Agent Payment Readiness → Ready to Process Agent Payment, in the Sheet's words.
+      { key: 'payment_schedule', label: 'Payment Schedule', type: 'status', default: true, sortable: true, width: 12 },
       { key: 'accounting_remarks', label: 'Accounting Remarks', type: 'text', default: true, width: 22, edit: 'accounting_remarks' },
       col.agentW(), col.advanceAmount(), col.balanceDue(),
       { key: 'payout_status', label: 'Agent Payment Status', type: 'status', default: true, sortable: true, width: 14 },
     ],
+    /*
+     * THE PAYMENT SHEET'S SECTIONS (Payments sheet.pdf, 2026-10-14), in its order. Only the sections
+     * with something owed are shown. Agent payments are grouped as the Sheet groups them; every CRM
+     * deal type falls in one of the five, and anything new falls in "Other".
+     */
+    sections: [
+      { key: 'client', label: 'Client Payments', description: 'Must make payments within 1 day (max 1–5 days)' },
+      { key: 'coop', label: 'Co-op Payments', description: 'Must make payments within 7 calendar days' },
+      ...AGENT_GROUPS.map((g) => ({ key: `agent_${g.key}`, label: g.label, group: 'Agent Payments' })),
+      { key: 'agent_other', label: 'Other', group: 'Agent Payments' },
+    ],
+    compactSections: true,
+    singlePage: true,
+    noSort: true,
     // "Pending" is deliberately not offered (brokerage request); All still includes those deals.
+    // Choosing a payout status narrows to agent payments, the only rows it describes.
     filters: [statusFilter('Payout Status', ['Partially Paid', '50% Paid'])],
     // Offer dates, payment type and the general payout status do not apply to this report.
     hideFilters: ['offer_date', 'payment_type', 'payout_status'],
     dealTypesFromRows: true,
     defaultSort: { key: 'closing_date', dir: 'asc' },
-    // Only closed deals can qualify — an exact superset of `is_closed` that keeps open deals' documents unread.
-    sqlWhere: () => ({ transaction_statuses: { some: { status: 'Closed' } } }),
-    predicate: (t, f) => {
-      if (!t.is_closed || isDeadDeal(t) || t.agent_balance <= 0) return false;
-      if (t.agent_payment_status !== 'Pending' && t.agent_payment_status !== 'Partially Paid') return false;
-      return !f.status || payoutStatus(t) === f.status;
-    },
-    // TD-109 — the name on the row is the name the (scoped) money belongs to.
-    map: (t) => ({
-      ...baseRow(t),
-      agent: t.agent_names.join(', ') || t.agent,
-      days_pending: daysBetween(t.closing_date, today()),
-      docs_status: docsStatus(t.docs_cleared),
-      // Unset reads as Pending, as the panel treats it.
-      final_validation: t.final_validation || 'Pending',
-      final_validation_remarks: t.final_validation_remarks,
-      accounting_remarks: t.accounting_remarks,
-      payout_status: payoutStatus(t),
-    }),
+    predicate: (t, f) => pendingPaymentRows(t, f).length > 0,
+    expand: (t, f) => pendingPaymentRows(t, f ?? {}),
+    // Every row names its own section; this is only the engine's fallback.
+    section: () => 'agent_other',
   },
   // 11b ---------------------------------------------------------------
   {
@@ -907,15 +926,81 @@ function daysBetween(from: string | null, to: string | null): number | null {
   return Math.round((Date.parse(to) - Date.parse(from)) / 86_400_000);
 }
 /**
- * Pending Payments — how much of the agent's commission has gone out (advance + payments):
+ * Pending Payments — how much of one agent's commission has gone out (advance + payments):
  * nothing → Pending · under half → Partially Paid · half or more, balance still due → 50% Paid.
  */
-function payoutStatus(t: EnrichedTxn): string {
-  const due = t.agentComm.total;
-  const out = t.advance + t.agent_paid;
-  if (due <= 0 || out <= 0) return 'Pending';
-  return out / due >= 0.5 ? '50% Paid' : 'Partially Paid';
+function linePayoutStatus(l: EnrichedTxn['agent_lines'][number]): string {
+  const out = l.advance + l.paid;
+  if (l.total <= 0 || out <= 0) return 'Pending';
+  return out / l.total >= 0.5 ? '50% Paid' : 'Partially Paid';
 }
+/** Ready to Process Agent Payment, in the Payment Sheet's words. */
+function paymentSchedule(t: EnrichedTxn): string {
+  if (t.ready_to_process === 'Yes') return 'Proceed to Pay';
+  if (t.ready_to_process === 'N/A') return 'N/A';
+  return 'Not Ready';
+}
+/** Void, terminated and DFT deals owe nothing; a mutual release can still owe the client a refund. */
+function isVoidDeal(t: EnrichedTxn): boolean {
+  return t.statuses.some((s) => s === 'DFT' || s === 'Terminated' || s === 'Void');
+}
+
+/**
+ * Pending Payments — every payment still owed on a deal, one row each, in the Payment Sheet's sections:
+ *
+ *   Client Payments   Trust → Payable to Client > 0, and Admin Activities → Paid to Client? not Yes/N/A.
+ *   Co-op Payments    a co-op payout, and Co-op invoice received? not N/A and not yet paid (no paid date).
+ *   Agent Payments    a closed deal whose agent commission is unpaid or part-paid: one row per agent
+ *                     still owed, grouped by deal type as the Sheet groups them.
+ *
+ * A chosen Payout Status describes agent payments only, so it leaves the other two sections out.
+ */
+function pendingPaymentRows(t: EnrichedTxn, f: ReportFilters): ReportRow[] {
+  const days = daysBetween(t.closing_date, today());
+  const common: ReportRow = {
+    ...baseRow(t),
+    agent: t.agent_names.join(', ') || t.agent,
+    days_pending: days != null && days >= 0 ? days : null,
+    docs_status: docsStatus(t.docs_cleared),
+    // Unset reads as Pending, as the panel treats it.
+    final_validation: t.final_validation || 'Pending',
+    final_validation_remarks: t.final_validation_remarks,
+    payment_schedule: paymentSchedule(t),
+    accounting_remarks: t.accounting_remarks,
+    agent_w: null, advance: null,
+  };
+  const rows: ReportRow[] = [];
+
+  if (!f.status) {
+    if (!isVoidDeal(t) && t.client_payable > 0 && t.client_paid !== 'Yes' && t.client_paid !== 'N/A') {
+      rows.push({ ...common, section: 'client', agent_balance: t.client_payable, payout_status: 'Pending' });
+    }
+    const coopPaid = t.coop_invoice_received === 'Yes' && !!t.coop_paid_date;
+    if (!isDeadDeal(t) && t.coopOut.total > 0 && t.coop_invoice_received !== 'N/A' && !coopPaid) {
+      rows.push({
+        ...common, section: 'coop', agent_balance: t.coopOut.total,
+        payout_status: t.coop_invoice_received === 'Yes' ? 'Invoice Received' : 'Invoice Pending',
+      });
+    }
+  }
+
+  const agentOwed = t.is_closed && !isDeadDeal(t)
+    && (t.agent_payment_status === 'Pending' || t.agent_payment_status === 'Partially Paid');
+  if (agentOwed) {
+    const group = AGENT_GROUPS.find((g) => g.types.includes(t.type));
+    for (const l of t.agent_lines) {
+      if (l.balance <= 0) continue;
+      const status = linePayoutStatus(l);
+      if (f.status && status !== f.status) continue;
+      rows.push({
+        ...common, section: group ? `agent_${group.key}` : 'agent_other',
+        agent: l.name, agent_w: l.total, advance: l.advance, agent_balance: l.balance, payout_status: status,
+      });
+    }
+  }
+  return rows;
+}
+
 /** Valid Docs Cleared from Agent, as a status: Yes → Cleared; No or unset → Pending (per term on precon). */
 function docsStatus(v: string | null): string {
   if (!v) return 'Pending';

@@ -19,7 +19,7 @@ import {
 import { condQualify, condRowCountsSql, condRowPageSql } from './report-conds.sql';
 import { anyUncomputedSql, paymentCountsSql, paymentPageSql, paymentSectionFilteredSql, paymentStatusFilter } from './report-payments.sql';
 import type { CommissionVariant } from '../dashboard/desk-commission.sql';
-import type { ReportColumn, ReportFilters, ReportQuery, ReportResult, ReportRow, ReportTotals, ExportPayload } from './report.types';
+import type { ReportColumn, ReportFilters, ReportQuery, ReportResult, ReportRow, ReportTotals, ExportPayload, ReportSectionDef } from './report.types';
 import type { AuthUserRecord } from '../auth/auth.types';
 
 /** Payment methods offered in the Transactions module (AdminActivities + Adjustment modals). */
@@ -90,14 +90,14 @@ export class ReportsService {
   }
 
   /** Static column + filter + section metadata for one report (drives filters + Customize Fields). */
-  meta(type: string): { type: string; name: string; description: string; category: string; columns: ReportColumn[]; filters: unknown; sections?: unknown; defaultSort: unknown; noSort: boolean; expandable: boolean; custom: string | null; hideFilters: string[]; dealTypesFromRows: boolean } {
+  meta(type: string): { type: string; name: string; description: string; category: string; columns: ReportColumn[]; filters: unknown; sections?: unknown; defaultSort: unknown; noSort: boolean; expandable: boolean; custom: string | null; hideFilters: string[]; dealTypesFromRows: boolean; singlePage: boolean } {
     const def = this.require(type);
     // no-sort reports never advertise a sortable column (§7.3: no sort headers or icons)
     const columns = def.noSort ? def.columns.map((c) => (c.sortable ? { ...c, sortable: false } : c)) : def.columns;
     return {
       type: def.type, name: def.name, description: def.description, category: def.category, columns, filters: def.filters,
       sections: def.sections, defaultSort: def.defaultSort, noSort: !!def.noSort, expandable: !!def.expandable, custom: def.custom ?? null,
-      hideFilters: def.hideFilters ?? [], dealTypesFromRows: !!def.dealTypesFromRows,
+      hideFilters: def.hideFilters ?? [], dealTypesFromRows: !!def.dealTypesFromRows, singlePage: !!def.singlePage,
     };
   }
 
@@ -197,9 +197,12 @@ export class ReportsService {
      * The visible consequence, stated plainly: a section may now begin on one page and continue on
      * the next, and a page can carry rows from two sections. The section headers and their counts
      * make that legible, and it is the price of the screen loading at all.
+     *
+     * `singlePage` reports are the exception, by design: Pending Payments is read as one sheet,
+     * section by section, and its rows are the few hundred payments still owed — not the book.
      */
-    const page = Math.max(1, query.page ?? 1);
-    const perPage = Math.min(PER_PAGE_MAX, Math.max(1, query.per_page ?? PER_PAGE_DEFAULT));
+    const page = def.singlePage ? 1 : Math.max(1, query.page ?? 1);
+    const perPage = def.singlePage ? Math.max(1, rows.length) : Math.min(PER_PAGE_MAX, Math.max(1, query.per_page ?? PER_PAGE_DEFAULT));
     const total = rows.length;
     const start = (page - 1) * perPage;
     const pageRows = rows.slice(start, start + perPage);
@@ -969,7 +972,7 @@ export class ReportsService {
     let matched = all.filter((t) => this.passesGlobal(t, filters, user) && (!def.predicate || def.predicate(t, filters)));
 
     // section handling — only the requested sections survive
-    let visibleSections: { key: string; label: string }[] | undefined;
+    let visibleSections: ReportSectionDef[] | undefined;
     let wanted: string[] = [];
     if (def.section && def.sections) {
       wanted = filters.sections && filters.sections.length ? filters.sections : def.sections.map((s) => s.key);
@@ -980,7 +983,7 @@ export class ReportsService {
     // document). A row that already carries its own `section` keeps it — that lets a single
     // transaction contribute rows to more than one section (pending AND invalid documents).
     let mapped = matched.flatMap((t) => {
-      const rows = def.expand ? def.expand(t) : [def.map ? def.map(t) : baseRow(t)];
+      const rows = def.expand ? def.expand(t, filters) : [def.map ? def.map(t) : baseRow(t)];
       if (def.section) { const s = def.section(t); for (const r of rows) if (r.section == null) r.section = s; }
       return rows;
     });
@@ -1005,27 +1008,49 @@ export class ReportsService {
       //
       // Measured both ways before narrowing: with the sort applied to everything,
       // report-docs-rows fails 4; with it removed, 1 (and that one is the page-walk, unrelated).
-      const sortWithinSection = def.type === 'transaction-payment-status';
+      const sortWithinSection = def.type === 'transaction-payment-status' || !!def.compactSections;
+      // A compact section report (Pending Payments) shows only the sections that have something in them.
+      if (def.compactSections) visibleSections = visibleSections.filter((s) => mapped.some((r) => r.section === s.key));
+      // Inside a section the order is the report's own default; header sorting is off for section reports.
+      const sectionQuery = def.compactSections ? { ...query, sort: undefined, dir: undefined } : query;
       ordered = visibleSections.flatMap((s) => {
         const inSection = mapped.filter((r) => r.section === s.key);
-        return sortWithinSection ? this.sort(inSection, def, query) : inSection;
+        return sortWithinSection ? this.sort(inSection, def, sectionQuery) : inSection;
       });
       sections = visibleSections.map((s) => {
         const rows = mapped.filter((r) => r.section === s.key);
+        const totals = def.sectionsWithoutTotals?.includes(s.key) ? undefined : this.footer(rows, columns);
+        // In a compact section report a column can belong to one kind of row only (an agent's
+        // commission means nothing on a client refund); its subtotal is left blank, not $0.00.
+        if (totals && def.compactSections) {
+          for (const k of Object.keys(totals)) if (rows.every((r) => r[k] == null)) delete totals[k];
+        }
         return {
           key: s.key,
           label: s.label,
+          ...(s.group ? { group: s.group } : {}),
+          ...(s.description ? { description: s.description } : {}),
           count: rows.length,
           // Mutual Release (and any listed key) intentionally carries no subtotal row.
-          totals: def.sectionsWithoutTotals?.includes(s.key) ? undefined : this.footer(rows, columns),
+          totals,
         };
       });
     } else {
       ordered = def.noSort ? mapped : this.sort(mapped, def, query);
     }
 
-    // Sl No. counts across the whole sorted result, so page 2 continues from page 1 and exports match.
-    if (def.columns.some((c) => c.key === 'sl_no')) ordered.forEach((r, i) => { r.sl_no = i + 1; });
+    // Sl No. counts across the whole sorted result, so page 2 continues from page 1 and exports match —
+    // except in a compact section report, where each section is its own list and starts again at 1.
+    if (def.columns.some((c) => c.key === 'sl_no')) {
+      const seen = new Map<string, number>();
+      ordered.forEach((r, i) => {
+        if (!def.compactSections) { r.sl_no = i + 1; return; }
+        const k = String(r.section ?? '');
+        const n = (seen.get(k) ?? 0) + 1;
+        seen.set(k, n);
+        r.sl_no = n;
+      });
+    }
 
     /*
      * The deal types this report actually contains, for its Deal Type dropdown. Only answered while
