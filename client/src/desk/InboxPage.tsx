@@ -345,6 +345,7 @@ export default function InboxPage() {
             {hasMailAccount && (
               <button className="btn primary" type="button" onClick={() => setComposing({})}>✉ New message</button>
             )}
+            <button className="btn ghost" type="button" onClick={() => navigate(link('account'))}>⚙ Email accounts</button>
           </div>
         </div>
 
