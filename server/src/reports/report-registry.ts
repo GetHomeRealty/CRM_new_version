@@ -508,10 +508,11 @@ export const REPORTS: ReportDef[] = [
       col.tradeNo(), col.closingDate(),
       { key: 'days_pending', label: 'Days Since Closing', type: 'number', default: true, sortable: true, width: 10 },
       col.property(), col.agent(),
-      { ...col.docStatus(), label: 'Docs Status' },
-      { key: 'final_validation', label: 'Validation Status', type: 'status', default: true, sortable: true, width: 12 },
+      // Agent Payment Readiness → Valid Docs Cleared from Agent: Cleared, else Pending.
+      { key: 'docs_status', label: 'Docs Status', type: 'status', default: true, sortable: true, width: 11 },
+      { key: 'final_validation', label: 'Validation Status', type: 'status', default: true, sortable: true, width: 12, edit: 'final_validation' },
       { key: 'final_validation_remarks', label: 'Validation Comments', type: 'text', default: true, width: 22 },
-      { key: 'accounting_remarks', label: 'Accounting Remarks', type: 'text', default: true, width: 22 },
+      { key: 'accounting_remarks', label: 'Accounting Remarks', type: 'text', default: true, width: 22, edit: 'accounting_remarks' },
       col.agentW(), col.advanceAmount(), col.balanceDue(),
       { key: 'payout_status', label: 'Agent Payment Status', type: 'status', default: true, sortable: true, width: 14 },
     ],
@@ -521,8 +522,6 @@ export const REPORTS: ReportDef[] = [
     hideFilters: ['offer_date', 'payment_type', 'payout_status'],
     dealTypesFromRows: true,
     defaultSort: { key: 'closing_date', dir: 'asc' },
-    // Docs Status reads the deal's documents.
-    needs: { documents: true },
     // Only closed deals can qualify — an exact superset of `is_closed` that keeps open deals' documents unread.
     sqlWhere: () => ({ transaction_statuses: { some: { status: 'Closed' } } }),
     predicate: (t, f) => {
@@ -535,7 +534,9 @@ export const REPORTS: ReportDef[] = [
       ...baseRow(t),
       agent: t.agent_names.join(', ') || t.agent,
       days_pending: daysBetween(t.closing_date, today()),
-      final_validation: t.final_validation,
+      docs_status: docsStatus(t.docs_cleared),
+      // Unset reads as Pending, as the panel treats it.
+      final_validation: t.final_validation || 'Pending',
       final_validation_remarks: t.final_validation_remarks,
       accounting_remarks: t.accounting_remarks,
       payout_status: payoutStatus(t),
@@ -914,6 +915,11 @@ function payoutStatus(t: EnrichedTxn): string {
   const out = t.advance + t.agent_paid;
   if (due <= 0 || out <= 0) return 'Pending';
   return out / due >= 0.5 ? '50% Paid' : 'Partially Paid';
+}
+/** Valid Docs Cleared from Agent, as a status: Yes → Cleared; No or unset → Pending (per term on precon). */
+function docsStatus(v: string | null): string {
+  if (!v) return 'Pending';
+  return v.replace(/\bYes\b/g, 'Cleared').replace(/\bNo\b/g, 'Pending');
 }
 /** An open deal's payment schedule is its closing date. */
 function scheduleStatus(t: EnrichedTxn): string {

@@ -11,6 +11,7 @@ import type {
   ReportSearchBody, ReportDocuments, ReminderScope, ReminderPreview,
 } from '../types';
 import { previewReminders, sendReminders } from '../lib/reportsApi';
+import { ReportEditableCell } from './ReportEditableCell';
 
 const PER_PAGE_OPTIONS = [25, 50, 100, 200];
 
@@ -18,8 +19,22 @@ export default function ReportDetailPage() {
   const { reportType = '' } = useParams();
   const toast = useToast();
   const nav = useNavigate();
-  const { user } = useAuth();
+  const { user, can } = useAuth();
   const isAgent = (user?.role ?? 'agent') === 'agent';
+  /*
+   * Who may edit a report's editable cells — the same people who may edit them in the deal's own
+   * panels. The server is the authority; this only decides whether to offer the control.
+   */
+  const canEditCell = (c: ReportColumn): boolean => {
+    if (!c.edit || isAgent || !can('transactions', 'edit')) return false;
+    // Accounting Remarks are Admin Activities notes, which only accounting and administrators write.
+    if (c.edit === 'accounting_remarks') return ['admin', 'manager', 'accounting'].includes(user?.role ?? '');
+    return true;
+  };
+  /** Reflect a saved cell in the rows on screen without re-running the report. */
+  const patchRow = (ri: number, key: string, value: string) => setResult((r) => (r
+    ? { ...r, rows: r.rows.map((row, i) => (i === ri ? { ...row, [key]: value } : row)) }
+    : r));
 
   const [meta, setMeta] = useState<ReportMeta | null>(null);
   const [options, setOptions] = useState<ReportFilterOptions | null>(null);
@@ -172,13 +187,33 @@ export default function ReportDetailPage() {
 
       {/* filters */}
       <div className="card report-filters">
+        {/* Reports with their own deal-type list show it as one horizontal row; a click applies it. */}
+        {meta.dealTypesFromRows && (
+          <div className="toolbar-row" style={{ gap: 6, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10 }} role="group" aria-label="Deal Type">
+            <span className="muted" style={{ fontSize: 12, fontWeight: 600, marginRight: 4 }}>Deal Type</span>
+            {[{ value: '', label: 'All' }, ...dealTypeOptions].map((o) => {
+              const chosen = draft.deal_type ?? [];
+              const on = o.value === '' ? chosen.length === 0 : chosen.includes(o.value);
+              return (
+                <button key={o.value || 'all'} type="button" className={`btn sm ${on ? 'primary' : 'ghost'}`} aria-pressed={on}
+                  onClick={() => {
+                    const next = o.value === '' ? [] : (on ? chosen.filter((v) => v !== o.value) : [...chosen, o.value]);
+                    const d = { ...draft, deal_type: next.length ? next : undefined };
+                    setDraft(d); setApplied(d); setPage(1);
+                  }}>
+                  {o.label}
+                </button>
+              );
+            })}
+          </div>
+        )}
         <div className="toolbar-row">
           <label className="report-field" style={{ flex: '1 1 220px' }}><span>Search</span>
             <input placeholder="Property, trade no., agent…" value={draft.search ?? ''} onChange={(e) => setD('search', e.target.value)} />
           </label>
-          <div className="report-field"><span>Deal Type</span>
+          {!meta.dealTypesFromRows && <div className="report-field"><span>Deal Type</span>
             <MultiSelect label="All" options={dealTypeOptions} value={draft.deal_type ?? []} onChange={(v) => setD('deal_type', v)} />
-          </div>
+          </div>}
           {!isAgent && <div className="report-field"><span>Agent</span>
             <MultiSelect label="All" options={options?.agent ?? []} value={draft.agent ?? []} onChange={(v) => setD('agent', v)} />
           </div>}
@@ -272,9 +307,11 @@ export default function ReportDetailPage() {
                     >
                       {selectable && <td className="report-sel-col" onClick={(e) => e.stopPropagation()}>{selBox(row)}</td>}
                       {cols.map((c, ci) => (
-                        <td key={c.key} className={cellClass(c)} title={tooltip(row[c.key], c)}>
+                        <td key={c.key} className={cellClass(c)} title={c.edit ? undefined : tooltip(row[c.key], c)}>
                           {meta.expandable && ci === 0 && <span className="report-expand-ind">{isOpen ? '▾' : '▸'}</span>}
-                          {fmt(row[c.key], c)}
+                          {c.edit
+                            ? <ReportEditableCell row={row} column={c} canEdit={canEditCell(c)} user={user} onSaved={(v) => patchRow(ri, c.key, v)} />
+                            : fmt(row[c.key], c)}
                         </td>
                       ))}
                     </tr>

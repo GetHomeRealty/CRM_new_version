@@ -40,9 +40,10 @@ const text = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
  * Final Validation and its remarks from Agent Payment Readiness (`activity_tracker`). The deal-level
  * keys when set; otherwise a preconstruction deal's per-term values, labelled by term.
  */
-function readinessText(tracker: Record<string, unknown>): { final_validation: string | null; final_validation_remarks: string | null } {
+function readinessText(tracker: Record<string, unknown>): { docs_cleared: string | null; final_validation: string | null; final_validation_remarks: string | null } {
   const top = text(tracker.final_validation);
   const topRemarks = text(tracker.final_validation_remarks);
+  const topCleared = text(tracker.docs_cleared);
   const terms = (tracker.term_tracker && typeof tracker.term_tracker === 'object' ? tracker.term_tracker : {}) as Record<string, Record<string, unknown>>;
   const keys = Object.keys(terms).sort((a, b) => Number(a) - Number(b));
   const perTerm = (field: string): string => keys
@@ -51,6 +52,7 @@ function readinessText(tracker: Record<string, unknown>): { final_validation: st
     .map(([k, v]) => `T${k} ${v}`)
     .join(' · ');
   return {
+    docs_cleared: topCleared || perTerm('docs_cleared') || null,
     final_validation: top || perTerm('final_validation') || null,
     final_validation_remarks: topRemarks || perTerm('remarks') || null,
   };
@@ -139,7 +141,9 @@ export interface EnrichedTxn {
   /**
    * Agent Payment Readiness → Final Validation (Done / Pending / Invalid) and its remarks. A
    * preconstruction deal records them per term, so there they read "T1 Done · T2 Pending".
+   * `docs_cleared` is the same panel's Valid Docs Cleared from Agent (Yes / No).
    */
+  docs_cleared: string | null;
   final_validation: string | null;
   final_validation_remarks: string | null;
   /** The newest Remarks note in Admin Activities — what accounting last wrote on the deal. */
