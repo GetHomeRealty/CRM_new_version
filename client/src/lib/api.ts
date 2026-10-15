@@ -79,6 +79,9 @@ export const listTransactions = (): Promise<Transaction[]> =>
 
 /** Filters accepted by the paginated list. Names match the query string the API expects. */
 export interface TransactionQuery {
+  /** Header sort: 'offer_date' | 'closing_date', with 'asc' | 'desc'. Absent keeps newest-first. */
+  sort?: string;
+  dir?: string;
   /** Required documents: 'missing_uploads' | 'needs_review'. */
   docs?: string;
   /** 'pending' — deals with an approval request still awaiting a decision. */

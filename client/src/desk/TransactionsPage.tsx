@@ -1,13 +1,13 @@
 import { deskPath } from './area';
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { listTransactionsPage, getMatchingTransactionIds, deleteTransaction, requestTransactionDeletion, type TransactionQuery } from '../lib/api';
+import { listTransactionsPage, getMatchingTransactionIds, deleteTransaction, requestTransactionDeletion, listAgents, type TransactionQuery } from '../lib/api';
 import { formatPrice, typeClass, typeLabel, TRANSACTION_TYPES, ALL_STATUSES } from './format';
 import { useToast } from './toast';
 import { apiErrorMessage } from '../lib/apiError';
 import { useAuth } from '../context/AuthContext';
 import Icon from '../ui/Icon';
-import { exportCompleteXlsx, ALL_TRANSACTIONS } from '../lib/bulkApi';
+import { exportCompleteXlsx, exportCompleteCsv, ALL_TRANSACTIONS } from '../lib/bulkApi';
 import { queueExport } from '../lib/exportCentreApi';
 import AddTransactionModal from './AddTransactionModal';
 import ChatModal from './ChatModal';
@@ -164,24 +164,38 @@ export default function TransactionsPage() {
   const [selected, setSelected] = useState<number[]>([]);
   const [bulk, setBulk] = useState<'data' | 'documents' | null>(null);
   const [downloadingAll, setDownloadingAll] = useState(false);
+  /** Download All: the confirm step, with the file format and which deals. */
+  const [downloadAsk, setDownloadAsk] = useState<{ format: 'xlsx' | 'csv'; scope: 'list' | 'all' } | null>(null);
+  /** Header sort on Offer / Closing; empty keeps the server's newest-first. */
+  const [sort, setSort] = useState<{ key: '' | 'offer_date' | 'closing_date'; dir: 'asc' | 'desc' }>({ key: '', dir: 'desc' });
+  /** Agent names for the Agent filter (everyone this user may see deals for). */
+  const [agentNames, setAgentNames] = useState<string[]>([]);
+  useEffect(() => { listAgents().then((a) => setAgentNames([...a].sort((x, y) => x.localeCompare(y)))).catch(() => setAgentNames([])); }, []);
   const toggleSel = (id: number) => setSelected((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
 
   /**
-   * One click = every transaction, every detail, one row each. Small sets stream straight
-   * back; large ones are queued and collected from the Download Centre, because a request
-   * that spends minutes building a workbook would otherwise time out in the browser.
+   * One click = every transaction, every detail, one row each — after a confirm step that names
+   * the file format and which deals: THIS LIST (exactly the deals the filters on screen match) or
+   * every transaction this user may see. Small sets stream straight back; large ones are queued and
+   * collected from the Download Centre, because a request that spends minutes building a workbook
+   * would otherwise time out in the browser.
    */
-  const downloadEverything = async () => {
+  const downloadEverything = async (format: 'xlsx' | 'csv', scope: 'list' | 'all') => {
     setDownloadingAll(true);
     try {
+      const sel = scope === 'all'
+        ? ALL_TRANSACTIONS
+        : { transaction_ids: await getMatchingTransactionIds(toQuery(filters)), all_matching: false };
+      const count = scope === 'all' ? null : sel.transaction_ids.length;
+      if (count === 0) { toast('No transactions match the current filters', 'bad'); return; }
       // Sized by the whole set, not the visible page — otherwise every export past page one
       // would take the "small enough to stream" branch and time out.
-      if (total > 25) {
-        const job = await queueExport('transaction-complete-xlsx', ALL_TRANSACTIONS);
-        toast(`Preparing ${total} transactions (${job.export_id}) — collecting it in the Download Centre`, 'ok');
+      if (count === null || count > 25) {
+        const job = await queueExport(format === 'csv' ? 'transaction-complete-csv' : 'transaction-complete-xlsx', sel);
+        toast(`Preparing ${count === null ? 'all transactions' : `${count} transactions`} as ${format.toUpperCase()} (${job.export_id}) — collect it in the Download Centre`, 'ok');
         navigate(deskPath('transactions/downloads'));
       } else {
-        await exportCompleteXlsx(ALL_TRANSACTIONS);
+        await (format === 'csv' ? exportCompleteCsv(sel) : exportCompleteXlsx(sel));
         toast('Download started', 'ok');
       }
     } catch (e) {
@@ -198,7 +212,7 @@ export default function TransactionsPage() {
   const load = (toPage = page, f = filters) => {
     const mine = ++seq.current;
     setLoading(true);
-    listTransactionsPage({ ...toQuery(f), page: toPage, per_page: PER_PAGE })
+    listTransactionsPage({ ...toQuery(f), ...(sort.key ? { sort: sort.key, dir: sort.dir } : {}), page: toPage, per_page: PER_PAGE })
       .then((res) => {
         if (mine !== seq.current) return;
         setRows(res.data);
@@ -245,6 +259,20 @@ export default function TransactionsPage() {
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filters]);
+
+  // A header sort reloads from page 1, like a filter.
+  const firstSort = useRef(true);
+  useEffect(() => {
+    if (firstSort.current) { firstSort.current = false; return; }
+    setPage(1); load(1, filters);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sort]);
+  /** Click a sortable header: newest first, then oldest first, then back to the default order. */
+  const toggleSort = (key: 'offer_date' | 'closing_date') => setSort((s) => (
+    s.key !== key ? { key, dir: 'desc' } : s.dir === 'desc' ? { key, dir: 'asc' } : { key: '', dir: 'desc' }));
+  const sortMark = (key: 'offer_date' | 'closing_date') => (sort.key === key ? (sort.dir === 'asc' ? ' ▲' : ' ▼') : ' ⇅');
+  /** Back to how the list opens: default filters and newest-first. */
+  const resetAll = () => { setFilters(EMPTY_FILTERS); setSort({ key: '', dir: 'desc' }); setShowRibbon(false); };
 
   /**
    * Select/deselect every row on this page. Selection deliberately spans pages — paging away
@@ -350,10 +378,11 @@ export default function TransactionsPage() {
             how the missing capability stayed invisible: an agent read "property, trade #, agent"
             and never tried a client's name. */}
         <input className="inp with-search" placeholder="Search property, trade #, agent, client" value={filters.q} onChange={(e) => setF('q', e.target.value)} />
-        <select value={filters.year} onChange={(e) => setF('year', e.target.value)} title="Year (by closing date)">
-          <option value={THIS_YEAR_ONWARD}>{THIS_YEAR_ONWARD.slice(0, 4)} onward + no closing date</option>
-          <option value="">All years (by closing date)</option>
-          {years.map((y) => <option key={y} value={y}>{y} only</option>)}
+        {/* The closing-date year, labelled in the options themselves — the bare years read as a mystery. */}
+        <select value={filters.year} onChange={(e) => setF('year', e.target.value)} title="Closing year" aria-label="Closing year">
+          <option value={THIS_YEAR_ONWARD}>Closing year: {THIS_YEAR_ONWARD.slice(0, 4)} onward + no date</option>
+          <option value="">Closing year: all</option>
+          {years.map((y) => <option key={y} value={y}>Closing year: {y} only</option>)}
         </select>
         <select value={filters.type} onChange={(e) => setF('type', e.target.value)}>
           <option value="">All types</option>
@@ -362,7 +391,12 @@ export default function TransactionsPage() {
         <select value={filters.validation} onChange={(e) => setF('validation', e.target.value)}>
           <option value="">All validation</option><option>Pending</option><option>Valid</option><option>Invalid</option>
         </select>
-        <input style={{ width: 'auto', flex: '0 1 auto', minWidth: 120 }} placeholder="All agents" value={filters.agent} onChange={(e) => setF('agent', e.target.value)} />
+        {/* A list of agents rather than a text box nobody noticed; the server matches the name. */}
+        <select value={filters.agent} onChange={(e) => setF('agent', e.target.value)} aria-label="Agent">
+          <option value="">All agents</option>
+          {filters.agent && !agentNames.includes(filters.agent) && <option value={filters.agent}>{filters.agent}</option>}
+          {agentNames.map((a) => <option key={a} value={a}>{a}</option>)}
+        </select>
         <select value={filters.commission} onChange={(e) => setF('commission', e.target.value)}>
           <option value="">Commission: any</option><option>Received</option><option>Not received</option>
         </select>
@@ -391,14 +425,16 @@ export default function TransactionsPage() {
             Lease Conditional, Secured Firm and Secured Conditional entirely — so conditional and
             secured deals could not be filtered for at all.
           */}
-          <option value={OPEN_AND_FIRM}>Open &amp; firm</option>
+          {/* Named for what it holds: Active, Sold Conditional and Secured Firm deals. */}
+          <option value={OPEN_AND_FIRM}>Active, Conditional &amp; Firm</option>
           <option value="">All statuses</option>
           {ALL_STATUSES.map((s) => <option key={s}>{s}</option>)}
         </select>
         <button className={`btn ${showRibbon || activeRibbonCount ? 'primary' : 'ghost'} sm`} onClick={() => setShowRibbon((s) => !s)}>
           <Icon name="filter" size={13} /> Add Filter{activeRibbonCount ? ` (${activeRibbonCount})` : ''} {showRibbon ? <Icon name="chevronDown" size={12} className="flip" /> : <Icon name="chevronDown" size={12} />}
         </button>
-        <button className="btn ghost sm" disabled={downloadingAll || loading} onClick={downloadEverything}
+        <button className="btn ghost sm" onClick={resetAll} title="Back to the default filters and order">Reset</button>
+        <button className="btn ghost sm" disabled={downloadingAll || loading} onClick={() => setDownloadAsk({ format: 'xlsx', scope: 'list' })}
           title="Download every transaction — one row each, with team split, clients, lawyer, financial, adjustments and conditions">
           {downloadingAll ? <><Icon name="clock" size={13} /> Preparing…</> : <><Icon name="download" size={13} /> Download All Transactions</>}
         </button>
@@ -480,7 +516,10 @@ export default function TransactionsPage() {
               title="Select all transactions on this page"
             />
           </th>
-          <th>Type</th><th>Trade #</th><th>Offer</th><th>Closing</th><th>Property</th><th>Agent</th>
+          <th>Type</th><th>Trade #</th>
+          <th className="sortable" style={{ cursor: 'pointer', whiteSpace: 'nowrap' }} onClick={() => toggleSort('offer_date')} title="Sort by offer date">Offer{sortMark('offer_date')}</th>
+          <th className="sortable" style={{ cursor: 'pointer', whiteSpace: 'nowrap' }} onClick={() => toggleSort('closing_date')} title="Sort by closing date">Closing{sortMark('closing_date')}</th>
+          <th>Property</th><th>Agent</th>
           <th>Price</th><th>Status</th><th>Actions</th>
         </tr></thead>
         <tbody>
@@ -585,6 +624,44 @@ export default function TransactionsPage() {
       )}
       {bulk && (
         <BulkExportModal mode={bulk} transactionIds={selected} onClose={() => setBulk(null)} />
+      )}
+
+      {/* Download All — confirm the file format and which deals before anything is built. */}
+      {downloadAsk && (
+        <div className="overlay open" onMouseDown={(e) => { if (e.target === e.currentTarget) setDownloadAsk(null); }}>
+          <div className="modal" style={{ maxWidth: 460 }} role="dialog" aria-label="Download transactions">
+            <div className="modal-h">Download transactions</div>
+            <div className="modal-sub">Every detail of each deal, one row each — team split, clients, lawyer, financial, adjustments and conditions.</div>
+            <div className="field" style={{ marginTop: 12 }}>
+              <label>Which transactions</label>
+              <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontWeight: 400 }}>
+                <input type="radio" checked={downloadAsk.scope === 'list'} onChange={() => setDownloadAsk({ ...downloadAsk, scope: 'list' })} />
+                This list — the {total} transaction{total === 1 ? '' : 's'} matching the filters on screen
+              </label>
+              <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontWeight: 400 }}>
+                <input type="radio" checked={downloadAsk.scope === 'all'} onChange={() => setDownloadAsk({ ...downloadAsk, scope: 'all' })} />
+                All transactions, ignoring the filters
+              </label>
+            </div>
+            <div className="field">
+              <label>File format</label>
+              <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontWeight: 400 }}>
+                <input type="radio" checked={downloadAsk.format === 'xlsx'} onChange={() => setDownloadAsk({ ...downloadAsk, format: 'xlsx' })} /> Excel (XLSX)
+              </label>
+              <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontWeight: 400 }}>
+                <input type="radio" checked={downloadAsk.format === 'csv'} onChange={() => setDownloadAsk({ ...downloadAsk, format: 'csv' })} /> CSV
+              </label>
+            </div>
+            <p className="help">Larger downloads are prepared in the background and collected from the Download Centre.</p>
+            <div className="actions">
+              <button className="btn ghost" onClick={() => setDownloadAsk(null)}>Cancel</button>
+              <button className="btn primary" disabled={downloadingAll}
+                onClick={() => { const a = downloadAsk; setDownloadAsk(null); void downloadEverything(a.format, a.scope); }}>
+                Download
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/*

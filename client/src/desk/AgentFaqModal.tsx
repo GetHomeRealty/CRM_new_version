@@ -214,8 +214,10 @@ export default function AgentFaqModal({ open, onClose, transactionId, txn, onSav
     const paid = pays.some((p) => (p.paid_type && p.paid_type !== 'N/A' && p.paid_date) || p.paid_status === 'Paid' || p.paid_status === 'N/A');
     return paid ? 'Paid' : 'Pending';
   };
-  // Reveal the per-agent breakdown as soon as ANY agent is resolved (Paid or N/A).
-  const anyAgentPaid = agentNames.some((n) => agentPaidLabel(n) !== 'Pending');
+  // Reveal the per-agent breakdown as soon as ANY agent is resolved (Paid or N/A) —
+  // and for Accounting from the start, since they prepare the payments (brokerage request, 2026-10-15).
+  const isAccounting = user?.role === 'accounting';
+  const anyAgentPaid = agentNames.some((n) => agentPaidLabel(n) !== 'Pending') || (isAccounting && agentNames.length > 0);
   const STATUS_COLORS: Record<string, { bg: string; fg: string }> = { Paid: { bg: '#dcfce7', fg: '#166534' }, Pending: { bg: '#fef9c3', fg: '#854d0e' }, 'N/A': { bg: '#e5e7eb', fg: '#374151' } };
   const perAgentStatusCard = agentNames.length > 1 ? (
     <div className="card" style={{ marginTop: 12 }}>
@@ -339,7 +341,8 @@ export default function AgentFaqModal({ open, onClose, transactionId, txn, onSav
   };
   // Only agents whose payment is resolved (Paid or N/A) get a breakdown block — a
   // still-pending agent shows in the status list but has no breakdown yet.
-  const breakdownAgents = (fin.agents || []).filter((a) => agentPaidLabel(a.name || '') !== 'Pending');
+  // Accounting sees every agent's breakdown, paid or not; everyone else only the resolved ones.
+  const breakdownAgents = (fin.agents || []).filter((a) => isAccounting || agentPaidLabel(a.name || '') !== 'Pending');
   const agentDocHtml = breakdownAgents.length
     ? breakdownAgents.map(agentBlockHtml).join('')
     : '<div style="padding:14px;color:#64748b;font-size:13px">No agent commission breakdown available.</div>';
@@ -557,7 +560,7 @@ export default function AgentFaqModal({ open, onClose, transactionId, txn, onSav
           </div>
           {perAgentStatusCard}
 
-          {form.client_payment_paid === 'Yes' && (
+          {(form.client_payment_paid === 'Yes' || (isAccounting && !clientNA)) && (
             <div className="card" style={{ marginTop: 14 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, gap: 8, flexWrap: 'wrap' }}>
                 <div className="modal-sub" style={{ margin: 0 }}>Breakdown Summary (Client)</div>

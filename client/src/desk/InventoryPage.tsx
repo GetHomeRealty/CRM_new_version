@@ -65,8 +65,14 @@ const fmtDate = (value?: string) => {
 
 export default function InventoryPage() {
   const toast = useToast();
-  const { can } = useAuth();
+  const { can, user } = useAuth();
   const canManage = can('inventory', 'edit');
+  /**
+   * Whether this user sees the whole inventory (every item, every agent's stake): managers, and
+   * Accounting, which reconciles stock across all agents (brokerage request, 2026-10-15). The
+   * server decides the same way. Add / edit / delete stay with `canManage`.
+   */
+  const seesAll = canManage || user?.role === 'accounting';
   const { confirm, askDelete, closeConfirm } = useConfirm();
 
   const [items, setItems] = useState<MarketingInventoryItem[]>([]);
@@ -113,7 +119,7 @@ export default function InventoryPage() {
     // Managers see a card for every catalogue type, even ones with nothing in stock yet. 'Custom'
     // is a placeholder — custom items surface under their own name via displayType, so skip it here.
     // Agents only see the types actually assigned to them, so no empty cards are seeded for them.
-    if (canManage) {
+    if (seesAll) {
       for (const t of MARKETING_ITEM_TYPES) {
         if (t === 'Custom') continue;
         map.set(t, { label: t, total: 0, out: 0, onHand: 0 });
@@ -133,7 +139,7 @@ export default function InventoryPage() {
       return i === -1 ? MARKETING_ITEM_TYPES.length : i;
     };
     return Array.from(map.values()).sort((a, b) => order(a.label) - order(b.label) || a.label.localeCompare(b.label));
-  }, [items, canManage]);
+  }, [items, seesAll]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -254,7 +260,7 @@ export default function InventoryPage() {
         <div>
           <h2 style={{ margin: 0 }}>Inventory</h2>
           <div className="muted" style={{ fontSize: 13, marginTop: 2 }}>
-            {canManage ? 'Signboards, lock boxes, banners and other marketing material' : 'Marketing material currently assigned to you'}
+            {seesAll ? 'Signboards, lock boxes, banners and other marketing material' : 'Marketing material currently assigned to you'}
           </div>
         </div>
         {canManage && (
@@ -287,18 +293,18 @@ export default function InventoryPage() {
             style={{ textAlign: 'left', cursor: 'pointer', outline: typeFilter === null ? '2px solid var(--brand)' : 'none' }}>
             <div className="lbl">📦 All Types</div>
             <div className="val">{typeSummaries.reduce((s, t) => s + t.total, 0)}</div>
-            <div className="muted" style={{ fontSize: 11 }}>{items.length} {items.length === 1 ? 'entry' : 'entries'} · {canManage ? 'total units' : 'assigned to you'}</div>
+            <div className="muted" style={{ fontSize: 11 }}>{items.length} {items.length === 1 ? 'entry' : 'entries'} · {seesAll ? 'total units' : 'assigned to you'}</div>
           </button>
           {typeSummaries.map((t) => {
             const active = typeFilter === t.label;
             return (
               <button key={t.label} className="stat-card" onClick={() => setTypeFilter(active ? null : t.label)}
-                title={canManage ? `${t.label} — ${t.total} total, ${t.out} still out, ${t.onHand} on hand` : `${t.label} — ${t.total} assigned to you, ${t.out} not yet returned`}
+                title={seesAll ? `${t.label} — ${t.total} total, ${t.out} still out, ${t.onHand} on hand` : `${t.label} — ${t.total} assigned to you, ${t.out} not yet returned`}
                 style={{ textAlign: 'left', cursor: 'pointer', outline: active ? '2px solid var(--brand)' : 'none' }}>
                 <div className="lbl" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>📦 {t.label}</div>
-                <div className="val">{canManage ? t.onHand : t.out}<span className="muted" style={{ fontSize: 12, fontWeight: 400 }}> / {t.total}</span></div>
+                <div className="val">{seesAll ? t.onHand : t.out}<span className="muted" style={{ fontSize: 12, fontWeight: 400 }}> / {t.total}</span></div>
                 <div className="muted" style={{ fontSize: 11 }}>
-                  {canManage ? <>on hand{t.out > 0 && <span style={{ color: 'var(--warn, #b45309)' }}> · {t.out} out</span>}</>
+                  {seesAll ? <>on hand{t.out > 0 && <span style={{ color: 'var(--warn, #b45309)' }}> · {t.out} out</span>}</>
                     : <>still with you{t.total - t.out > 0 && <span style={{ color: 'var(--ok, #15803d)' }}> · {t.total - t.out} returned</span>}</>}
                 </div>
               </button>
@@ -314,10 +320,10 @@ export default function InventoryPage() {
       {/* Table */}
       {filtered.length === 0 ? (
         <div className="card centered" style={{ padding: 40 }}>
-          <h3 style={{ margin: 0 }}>{search || typeFilter ? 'No matching items' : showDeleted ? 'Nothing deleted' : canManage ? 'No inventory yet' : 'Nothing assigned to you'}</h3>
+          <h3 style={{ margin: 0 }}>{search || typeFilter ? 'No matching items' : showDeleted ? 'Nothing deleted' : seesAll ? 'No inventory yet' : 'Nothing assigned to you'}</h3>
           <p className="muted" style={{ marginTop: 6 }}>
             {search || typeFilter ? 'Try a different search or type.' : showDeleted ? 'Deleted items appear here and can be restored.'
-              : canManage ? 'Click “Add Inventory” to record your first item.' : 'Marketing material assigned to you will appear here.'}
+              : seesAll ? 'Click “Add Inventory” to record your first item.' : 'Marketing material assigned to you will appear here.'}
           </p>
           {typeFilter && <button className="btn ghost sm" onClick={() => setTypeFilter(null)}>Show all types</button>}
         </div>
@@ -327,12 +333,12 @@ export default function InventoryPage() {
             <thead>
               <tr>
                 <th>S.No</th><th>As on Date</th><th>Type</th>
-                {canManage && <th style={{ textAlign: 'right' }}>Count</th>}
-                <th style={{ textAlign: 'right' }}>{canManage ? 'Assigned' : 'Qty With You'}</th>
+                {seesAll && <th style={{ textAlign: 'right' }}>Count</th>}
+                <th style={{ textAlign: 'right' }}>{seesAll ? 'Assigned' : 'Qty With You'}</th>
                 <th>Assigned To</th>
-                {canManage && <th style={{ textAlign: 'right' }}>Balance</th>}
+                {seesAll && <th style={{ textAlign: 'right' }}>Balance</th>}
                 <th>Assigned Date</th><th>Returned Date</th><th>Status</th>
-                {canManage && <th style={{ textAlign: 'right' }}>Count as on Date</th>}
+                {seesAll && <th style={{ textAlign: 'right' }}>Count as on Date</th>}
                 <th>Remarks</th>
                 {canManage && <th></th>}
               </tr>
@@ -346,7 +352,7 @@ export default function InventoryPage() {
                     <td className="muted">{idx + 1}</td>
                     <td style={{ whiteSpace: 'nowrap' }}>{fmtDate(item.asOnDate)}</td>
                     <td style={{ fontWeight: 600 }}>{displayType(item)}</td>
-                    {canManage && <td style={{ textAlign: 'right' }}>{item.count}</td>}
+                    {seesAll && <td style={{ textAlign: 'right' }}>{item.count}</td>}
                     <td style={{ textAlign: 'right' }}>{totalAssignedQty(item)}</td>
                     <td>
                       {rows.length === 0 ? '—' : rows.map((a, i) => (
@@ -357,13 +363,13 @@ export default function InventoryPage() {
                         </div>
                       ))}
                     </td>
-                    {canManage && <td style={{ textAlign: 'right', fontWeight: 600 }}>{balanceFor(item)}</td>}
+                    {seesAll && <td style={{ textAlign: 'right', fontWeight: 600 }}>{balanceFor(item)}</td>}
                     <td style={{ whiteSpace: 'nowrap' }}>{rows.length === 0 ? '—' : rows.map((a, i) => <div key={i} style={{ fontSize: 13 }}>{fmtDate(a.assignedDate)}</div>)}</td>
                     <td style={{ whiteSpace: 'nowrap' }}>{rows.length === 0 ? '—' : rows.map((a, i) => (
                       <div key={i} style={{ fontSize: 13 }}>{fmtDate(a.returnedDate)}{isReturnScheduled(a.returnedDate) && <span style={{ marginLeft: 4, fontSize: 11, color: 'var(--warn, #b45309)' }}>(due)</span>}</div>
                     ))}</td>
                     <td><span className={`pill ${stPill(liveStatus)}`}>{liveStatus}</span></td>
-                    {canManage && <td style={{ textAlign: 'right', fontWeight: 600 }} title={`${item.count} total − ${outstandingQty(item)} still out`}>{countAsOnDateFor(item)}</td>}
+                    {seesAll && <td style={{ textAlign: 'right', fontWeight: 600 }} title={`${item.count} total − ${outstandingQty(item)} still out`}>{countAsOnDateFor(item)}</td>}
                     <td style={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={item.remarks}>{item.remarks || '—'}</td>
                     {canManage && (
                       <td>

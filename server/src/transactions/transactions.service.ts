@@ -95,7 +95,11 @@ export class TransactionsService {
          * Adding a unique second key makes the total order deterministic, so every row belongs to
          * exactly one page. `desc` matches the `created_at` direction, keeping newest-first intact.
          */
-        orderBy: [{ created_at: 'desc' }, { id: 'desc' }],
+        // A header sort (Offer / Closing date) keeps the same unique tie-break, so paging stays stable;
+        // deals with no such date go last whichever way the column is sorted.
+        orderBy: query.sort === 'offer_date' || query.sort === 'closing_date'
+          ? [{ [query.sort]: { sort: query.dir === 'asc' ? 'asc' : 'desc', nulls: 'last' } }, { id: 'desc' }]
+          : [{ created_at: 'desc' }, { id: 'desc' }],
         include: txnIndexInclude,
         omit: txnIndexOmit,
         ...(paged ? { skip: (Math.max(1, query.page ?? 1) - 1) * perPage, take: perPage } : {}),

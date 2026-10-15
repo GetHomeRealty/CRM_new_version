@@ -434,14 +434,17 @@ export default function DeskLayout({ area = DEFAULT_AREA }: { area?: Area }) {
           {AREA_TAB[a]}
         </button>
       ))}
-      <button
-        type="button"
-        className="area-option precon"
-        aria-label="Open Precon/Canada in a new tab"
-        onClick={() => window.open('https://precon.gethomerealty.ca', '_blank', 'noopener,noreferrer')}
-      >
-        <span>Precon/Canada</span><span className="area-external" aria-hidden="true">↗</span>
-      </button>
+      {/* Precon/Canada is not part of the accounts team's work (brokerage request, 2026-10-15). */}
+      {user?.role !== 'accounting' && (
+        <button
+          type="button"
+          className="area-option precon"
+          aria-label="Open Precon/Canada in a new tab"
+          onClick={() => window.open('https://precon.gethomerealty.ca', '_blank', 'noopener,noreferrer')}
+        >
+          <span>Precon/Canada</span><span className="area-external" aria-hidden="true">↗</span>
+        </button>
+      )}
     </div>
   );
 

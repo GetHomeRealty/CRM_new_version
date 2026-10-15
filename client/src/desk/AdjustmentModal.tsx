@@ -274,6 +274,9 @@ export default function AdjustmentModal({ open, onClose, transactionId, txn, onS
       <select value={val ?? ''} onChange={onCh}><option value="">Select agent</option>{opts.map((n) => <option key={n} value={n}>{n}</option>)}</select>
     );
   };
+  // A deal with one agent fills that agent in on every new row: there is nothing to choose
+  // (brokerage request, 2026-10-15), and a row left without an agent is never given a status.
+  const soleAgent = new Set(agentNames).size === 1 ? agentNames[0] : '';
   const usedIn = (key: RowKey, i: number): string[] => form[key].filter((_, idx) => idx !== i).map((r) => r.agent).filter((a): a is string => !!a);
   // For non-preconstruction, you can't add more rows than there are agents.
   const canAddFor = (key: RowKey) => precon || form[key].length < agentNames.length;
@@ -308,7 +311,7 @@ export default function AdjustmentModal({ open, onClose, transactionId, txn, onS
         {/* Adjustment Details */}
         <div className="modal-sub">Adjustment Details</div>
         <div className="field" style={{ maxWidth: 220 }}><label style={lbl}>Agent Adjust</label>
-          <select value={form.agent_adjust} onChange={(e) => { const v = e.target.value; if (v !== 'Yes') { switchSectionOff('agent_adjust', 'adjustment_rows', 'Agent Adjust'); return; } set('agent_adjust', v); if (form.adjustment_rows.length === 0) addRow('adjustment_rows', { agent: '', amount: '', status: '', remarks: '', is_loan: false }); }}><option>No</option><option>Yes</option></select></div>
+          <select value={form.agent_adjust} onChange={(e) => { const v = e.target.value; if (v !== 'Yes') { switchSectionOff('agent_adjust', 'adjustment_rows', 'Agent Adjust'); return; } set('agent_adjust', v); if (form.adjustment_rows.length === 0) addRow('adjustment_rows', { agent: soleAgent, amount: '', status: '', remarks: '', is_loan: false }); }}><option>No</option><option>Yes</option></select></div>
         {form.agent_adjust === 'Yes' && (<>
           {form.adjustment_rows.map((r, i) => (
             <div className="dyn-list-box" key={i}>
@@ -336,13 +339,13 @@ export default function AdjustmentModal({ open, onClose, transactionId, txn, onS
               <div style={{ textAlign: 'right', marginTop: 6 }}><button className="row-rm" onClick={() => rmRow('adjustment_rows', i)}>🗑️</button></div>
             </div>
           ))}
-          {canAddFor('adjustment_rows') && <button className="btn primary sm" onClick={() => addRow('adjustment_rows', { agent: '', amount: '', status: '', remarks: '', is_loan: false })}>+ Add New</button>}
+          {canAddFor('adjustment_rows') && <button className="btn primary sm" onClick={() => addRow('adjustment_rows', { agent: soleAgent, amount: '', status: '', remarks: '', is_loan: false })}>+ Add New</button>}
         </>)}
 
         {/* Advance Payment */}
         <div className="modal-sub">Advance Payment Details</div>
         <div className="field" style={{ maxWidth: 220 }}><label style={lbl}>Advance Payment</label>
-          <select value={form.advance_payment} onChange={(e) => { const v = e.target.value; if (v !== 'Yes') { switchSectionOff('advance_payment', 'advance_rows', 'Advance Payment'); return; } set('advance_payment', v); if (form.advance_rows.length === 0) addRow('advance_rows', { agent: '', amount: '', paid_type: 'N/A', paid_date: '', batch_no: '', remarks: '' }); }}><option>No</option><option>Yes</option></select></div>
+          <select value={form.advance_payment} onChange={(e) => { const v = e.target.value; if (v !== 'Yes') { switchSectionOff('advance_payment', 'advance_rows', 'Advance Payment'); return; } set('advance_payment', v); if (form.advance_rows.length === 0) addRow('advance_rows', { agent: soleAgent, amount: '', paid_type: 'N/A', paid_date: '', batch_no: '', remarks: '' }); }}><option>No</option><option>Yes</option></select></div>
         {form.advance_payment === 'Yes' && (<>
           {form.advance_rows.map((r, i) => (
             <div className="dyn-list-box" key={i}>
@@ -358,7 +361,7 @@ export default function AdjustmentModal({ open, onClose, transactionId, txn, onS
               <div style={{ textAlign: 'right', marginTop: 6 }}><button className="row-rm" onClick={() => rmRow('advance_rows', i)}>🗑️</button></div>
             </div>
           ))}
-          {canAddFor('advance_rows') && <button className="btn primary sm" onClick={() => addRow('advance_rows', { agent: '', amount: '', paid_type: 'N/A', paid_date: '', batch_no: '', remarks: '' })}>+ Add New</button>}
+          {canAddFor('advance_rows') && <button className="btn primary sm" onClick={() => addRow('advance_rows', { agent: soleAgent, amount: '', paid_type: 'N/A', paid_date: '', batch_no: '', remarks: '' })}>+ Add New</button>}
         </>)}
 
         {/* Client Referral */}

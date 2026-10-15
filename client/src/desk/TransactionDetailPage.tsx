@@ -1066,7 +1066,7 @@ export default function TransactionDetailPage() {
           {!isAgent && (isListingFinancialType(form.type) ? (
             !hideStmtNos && <button className="btn ghost sm" onClick={() => setLawyerStmtOpen(true)}><Icon name="doc" size={13} /> Lawyer Statement</button>
           ) : (
-            !docsOnly && !isDocumentation && !isAccounting && <button className="btn ghost sm" data-testid="txn-invoice-btn" style={invoicePaid ? { color: 'var(--ok-ink)', borderColor: 'var(--ok-ring-2)', background: 'var(--ok-bg)', fontWeight: 700 } : undefined} onClick={openInvoice}><Icon name="receipt" size={13} /> Invoice{invoicePaid ? ' Paid' : (invoiceSent ? ' sent' : '')}</button>
+            !docsOnly && !isDocumentation && <button className="btn ghost sm" data-testid="txn-invoice-btn" style={invoicePaid ? { color: 'var(--ok-ink)', borderColor: 'var(--ok-ring-2)', background: 'var(--ok-bg)', fontWeight: 700 } : undefined} onClick={openInvoice}><Icon name="receipt" size={13} /> Invoice{invoicePaid ? ' Paid' : (invoiceSent ? ' sent' : '')}</button>
           ))}
           {/*
             * TD-116, REVERSED BY THE BROKERAGE ON 2026-09-23 - THE CLOSING PAPERWORK IS THE
@@ -1508,9 +1508,10 @@ export default function TransactionDetailPage() {
               {!docsOnly && !slNoSections && canEdit && form.agent && teamSplitVisible && <button className="btn ghost sm" style={{ textAlign: 'left' }} onClick={() => setTeamOpen(true)}><Icon name="users" size={13} /> Team Split</button>}
               {!docsOnly && !slHideLawyer && canEdit && !lawyerHidden && <button className="btn ghost sm" style={{ textAlign: 'left' }} onClick={() => setLawyerOpen(true)}><Icon name="scale" size={13} /> Lawyer Details</button>}
               {canEdit && <button className="btn ghost sm" style={{ textAlign: 'left' }} onClick={() => setDocsOpen(true)}><Icon name="report" size={13} /> Documents</button>}
+              {/* Order: Documents, then Financial, then Admin (brokerage request, 2026-10-15). */}
+              {!docsOnly && !slNoSections && canEdit && <button className="btn ghost sm" style={{ textAlign: 'left' }} onClick={() => setFinOpen(true)}><Icon name="dollar" size={13} /> Financial</button>}
               {/* Admin Activities, Adjustment and Audit Trail are admin-only (hidden from agents). */}
               {!isAgent && !docsOnly && !slNoSections && canEdit && <button className="btn ghost sm" style={{ textAlign: 'left' }} onClick={() => setAdminOpen(true)}><Icon name="wrench" size={13} /> Admin</button>}
-              {!docsOnly && !slNoSections && canEdit && <button className="btn ghost sm" style={{ textAlign: 'left' }} onClick={() => setFinOpen(true)}><Icon name="dollar" size={13} /> Financial</button>}
               {!isAgent && !docsOnly && canEdit && <button className="btn ghost sm" style={{ textAlign: 'left' }} onClick={() => setAdjOpen(true)}><Icon name="scale" size={13} /> Adjustment</button>}
               {/*
                 TD-049 — was "Agent FAQ Center", which described nothing in it. The panel is the

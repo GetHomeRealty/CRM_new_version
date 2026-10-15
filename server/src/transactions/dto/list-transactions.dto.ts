@@ -67,4 +67,8 @@ export class ListTransactionsDto {
   @IsOptional() @IsString() client?: string;
   /** Substring of the brokerage name. */
   @IsOptional() @IsString() brokerage?: string;
+
+  /** Column sort from the list's Offer / Closing headers; absent keeps newest-first. */
+  @IsOptional() @IsIn(['', 'offer_date', 'closing_date']) sort?: string;
+  @IsOptional() @IsIn(['', 'asc', 'desc']) dir?: string;
 }

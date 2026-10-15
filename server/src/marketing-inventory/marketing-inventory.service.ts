@@ -37,6 +37,15 @@ export class MarketingInventoryService {
     return this.permissions.can(user.role || 'agent', user.user_permissions, 'inventory', 'edit');
   }
 
+  /**
+   * Who sees the WHOLE inventory — every item, every agent's stake. Managers, and Accounting, which
+   * reconciles the company's stock across all agents rather than holding any itself (brokerage
+   * request, 2026-10-15). Seeing is not managing: Accounting's edits still need inventory:edit.
+   */
+  private seesAll(user: AuthUserRecord): boolean {
+    return this.canManage(user) || user.role === 'accounting';
+  }
+
   /** DB row → the camelCase logical item the model + client expect. */
   private toItem(row: Row): MarketingInventoryItem {
     const assignments = Array.isArray(row.assignments) ? (row.assignments as unknown as InventoryAssignment[]) : [];
@@ -105,7 +114,7 @@ export class MarketingInventoryService {
     let items = rows.map((r) => this.toItem(r));
 
     // Scope non-admins to their own stock, then reduce each row to their stake.
-    if (!manage) {
+    if (!this.seesAll(user)) {
       const name = (user.name || '').trim();
       items = items.filter((i) => this.holdsAny(i, name)).map((i) => this.reduceToHolder(i, name));
     }
@@ -131,7 +140,7 @@ export class MarketingInventoryService {
     const row = await this.prisma.marketing_inventory.findUnique({ where: { id } });
     if (!row) throw new NotFoundException({ error: 'Item not found' });
     const item = this.toItem(row);
-    if (this.canManage(user)) return item;
+    if (this.seesAll(user)) return item;
     // 404 (not 403) — an agent should not learn a row they cannot see exists.
     if (!this.holdsAny(item, user.name || '')) throw new NotFoundException({ error: 'Item not found' });
     return this.reduceToHolder(item, user.name || '');

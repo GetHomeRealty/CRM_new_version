@@ -707,6 +707,12 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
             </div>
           );
         })}
+        </fieldset>
+
+        {/*
+          Outside the fieldset on purpose: it only shows or hides rows, so a read-only viewer
+          (Accounting) must be able to use it — inside a disabled fieldset the button was dead.
+        */}
         {!loading && optionalCount > 0 && (
           <div style={{ textAlign: 'center', padding: '8px 0 2px' }}>
             <button type="button" onClick={() => setShowOptional((v) => !v)}
@@ -718,8 +724,6 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
             </button>
           </div>
         )}
-
-        </fieldset>
 
         {/*
           A "Deleted Documents — pending review" panel used to sit here, with Restore and Delete
