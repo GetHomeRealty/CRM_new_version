@@ -653,8 +653,14 @@ export default function DeskLayout({ area = DEFAULT_AREA }: { area?: Area }) {
                   says something the row still says without it: the locale is fixed, the name is on
                   the avatar's tooltip, and the padlock is the same control as the word. */}
               <div className="topbar-locale" style={{ fontSize: 13, color: '#374151' }}>{'\u{1F1E8}\u{1F1E6}'} English</div>
-              <UserAvatar userId={user?.id ?? null} name={user?.name} size={34} title={user?.name ?? undefined} />
-              <span className="topbar-who" style={{ fontSize: 12, color: 'var(--muted)' }}>{user?.name || 'Gethomerealty'}</span>
+              {/* The avatar and name open the user's own Settings page — profile, email accounts,
+                  preferences — the same page the Inbox's "Email accounts" button opens. */}
+              <button type="button" onClick={() => go('account')} title="My settings — profile, email accounts and preferences"
+                aria-label="Open my settings"
+                style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'none', border: 0, padding: 0, cursor: 'pointer', font: 'inherit' }}>
+                <UserAvatar userId={user?.id ?? null} name={user?.name} size={34} title={user?.name ?? undefined} />
+                <span className="topbar-who" style={{ fontSize: 12, color: 'var(--muted)' }}>{user?.name || 'Gethomerealty'}</span>
+              </button>
               <button className="btn ghost sm" onClick={() => setPwOpen(true)} title="Change your password">
                 <Icon name="lock" size={13} /> <span className="topbar-pw-label">Password</span>
               </button>
