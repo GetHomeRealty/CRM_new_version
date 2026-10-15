@@ -397,6 +397,10 @@ input[type="number"],.numeric,.stat-card .val{font-variant-numeric:tabular-nums;
 /* Property sized to its text; dates and the totals row never wrap. */
 .report-table th.col-property,.report-table td.col-property{white-space:nowrap;max-width:none;width:1%}
 .report-table th.col-date,.report-table td.col-date{white-space:nowrap;max-width:none}
+/* Pending Payments (a one-sheet report): a long address wraps at a set width instead of widening the
+   column for every row, and agent names get room to sit on one line. Other reports are unchanged. */
+.report-table.sheet th.col-property,.report-table.sheet td.col-property{white-space:normal;width:auto;min-width:150px;max-width:230px}
+.report-table.sheet th.col-agent,.report-table.sheet td.col-agent{min-width:150px;max-width:230px}
 .report-totals td{font-weight:700;background:var(--brand-soft);border-top:2px solid var(--line);position:sticky;bottom:0;text-align:left;vertical-align:middle;padding:10px 12px;height:44px;white-space:nowrap}
 /* In-table horizontal sections (Transaction Payment Status) */
 .report-section-row td{background:linear-gradient(90deg,var(--brand-soft),transparent);border-top:2px solid var(--brand-light);border-bottom:1px solid var(--line);font-weight:700;color:var(--brand-dark);letter-spacing:.01em;white-space:nowrap;padding:9px 12px;height:38px}

@@ -278,7 +278,7 @@ export default function ReportDetailPage() {
       {/* results */}
       <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
         <div className="report-table-wrap">
-          <table className="list-table report-table">
+          <table className={`list-table report-table${meta.singlePage ? ' sheet' : ''}`}>
             {/* section-grouped reports repeat the headers inside each section instead */}
             {!result?.sections && <thead>{headerRow()}</thead>}
             <tbody>
@@ -512,6 +512,7 @@ function cellClass(c: ReportColumn): string {
   // Sl No. holds a short number; it takes only the width it needs instead of a share of the table.
   if (c.key === 'sl_no') return 'col-slno';
   if (c.key === 'property') return 'col-property';
+  if (c.key === 'agent') return 'col-agent';
   if (c.type === 'date' || c.type === 'datetime') return 'col-date';
   return '';
 }
