@@ -11,6 +11,7 @@ import { BulkExportService } from './bulk-export.service';
 import { ExportCentreController } from './export-centre.controller';
 import { ExportJobService } from './export-job.service';
 import { ReportsService } from './reports.service';
+import { ReportRemarksService } from './report-remarks.service';
 import { ReportDataService } from './report-data.service';
 import { ReportExportService } from './report-export.service';
 import { DocumentReminderService } from './document-reminder.service';
@@ -19,6 +20,6 @@ import { DocumentReminderService } from './document-reminder.service';
 @Module({
   imports: [AuthModule, SettingsModule, EmailModule, TransactionsModule],
   controllers: [ReportsController, TransactionImportController, BulkExportController, ExportCentreController],
-  providers: [ReportsService, ReportDataService, ReportExportService, DocumentReminderService, TransactionImportService, BulkExportService, ExportJobService],
+  providers: [ReportsService, ReportDataService, ReportRemarksService, ReportExportService, DocumentReminderService, TransactionImportService, BulkExportService, ExportJobService],
 })
 export class ReportsModule {}

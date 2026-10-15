@@ -58,18 +58,28 @@ function readinessText(tracker: Record<string, unknown>): { docs_cleared: string
   };
 }
 
-/** The newest Remarks note in Admin Activities (`admin_activities.notes`), by when it was written. */
-function latestAdminNote(admin: Record<string, unknown>): string | null {
-  const notes = (Array.isArray(admin.notes) ? admin.notes : []) as Record<string, unknown>[];
-  let best: { at: string; text: string } | null = null;
-  notes.forEach((n) => {
-    const t = text(n?.text);
-    if (!t) return;
+/**
+ * Which Admin Activities Remarks note is the newest (`admin_activities.notes`), by when it was written;
+ * -1 when none has text. The Pending Payments report shows this note and edits this same one.
+ */
+export function latestNoteIndex(notes: unknown[]): number {
+  let best = -1;
+  let bestAt = '';
+  notes.forEach((raw, i) => {
+    const n = (raw ?? {}) as Record<string, unknown>;
+    if (!text(n.text)) return;
     const at = text(n.created_at) || text(n.date);
     // Later in the list wins a tie — notes are appended, so the last one added is the newest.
-    if (!best || at >= best.at) best = { at, text: t };
+    if (best === -1 || at >= bestAt) { best = i; bestAt = at; }
   });
-  return best ? (best as { text: string }).text : null;
+  return best;
+}
+
+/** The newest Remarks note's text in Admin Activities. */
+export function latestAdminNote(admin: Record<string, unknown>): string | null {
+  const notes = Array.isArray(admin.notes) ? admin.notes : [];
+  const i = latestNoteIndex(notes);
+  return i === -1 ? null : text((notes[i] as Record<string, unknown>).text);
 }
 
 /** A fully-computed transaction row with every field any of the 14 reports may need. */

@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, Param, Post, Res, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Param, ParseIntPipe, Post, Put, Res, UseGuards } from '@nestjs/common';
 import type { Response } from 'express';
 import { AuthGuard } from '../auth/guards/auth.guard';
 import { ScreenGuard } from '../auth/guards/screen.guard';
@@ -10,6 +10,7 @@ import { ReportExportService } from './report-export.service';
 import { DocumentReminderService, type ReminderRequest, type ReminderScope } from './document-reminder.service';
 import type { ReportFilters, ReportQuery } from './report.types';
 import { contentDisposition } from '../common/content-disposition';
+import { ReportRemarksService, type RemarkField } from './report-remarks.service';
 
 /** Reports API — all endpoints require the `reports` screen (agents are auto-scoped in the service). */
 @Controller('reports')
@@ -21,11 +22,25 @@ export class ReportsController {
     private readonly exporter: ReportExportService,
     private readonly settings: CompanySettingsService,
     private readonly reminders: DocumentReminderService,
+    private readonly remarks: ReportRemarksService,
   ) {}
 
   @Get()
   list(): { type: string; name: string; description: string; category: string }[] {
     return this.reports.list();
+  }
+
+  /**
+   * Pending Payments: save a deal's Validation Comments or Accounting Remarks from the report.
+   * Declared before the `:reportType` routes; the service decides who may write which field.
+   */
+  @Put('pending-payments/:transaction/remarks')
+  saveRemark(
+    @CurrentUser() user: AuthUserRecord,
+    @Param('transaction', ParseIntPipe) transaction: number,
+    @Body() body: { field?: RemarkField; text?: unknown },
+  ): Promise<{ value: string | null }> {
+    return this.remarks.save(user, transaction, body?.field as RemarkField, body?.text);
   }
 
   @Get('filter-options')

@@ -38,3 +38,10 @@ export async function exportReport(type: string, format: 'xlsx' | 'pdf', body: R
   // fallback still carries the extension, so a hidden header costs the report's name, not its type.
   saveBlob(res.data as Blob, filenameFromDisposition(res.headers, `${type}.${format}`), 60_000);
 }
+
+/**
+ * Pending Payments: save a deal's Validation Comments or Accounting Remarks. Empty text clears it.
+ * Answers with what the cell now shows (for Accounting Remarks, the newest remaining note).
+ */
+export const saveReportRemark = (transactionId: number, field: 'validation_comments' | 'accounting_remarks', text: string): Promise<{ value: string | null }> =>
+  api.put<{ value: string | null }>(`/api/reports/pending-payments/${transactionId}/remarks`, { field, text }).then((r) => r.data);

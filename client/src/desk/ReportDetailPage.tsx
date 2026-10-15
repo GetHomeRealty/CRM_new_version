@@ -22,14 +22,17 @@ export default function ReportDetailPage() {
   const { user, can } = useAuth();
   const isAgent = (user?.role ?? 'agent') === 'agent';
   /*
-   * Who may edit a report's editable cells — the same people who may edit them in the deal's own
-   * panels. The server is the authority; this only decides whether to offer the control.
+   * Who may edit a report's editable cells. The server is the authority; this only decides whether
+   * to offer the control.
    */
   const canEditCell = (c: ReportColumn): boolean => {
-    if (!c.edit || isAgent || !can('transactions', 'edit')) return false;
-    // Accounting Remarks are Admin Activities notes, which only accounting and administrators write.
-    if (c.edit === 'accounting_remarks') return ['admin', 'manager', 'accounting'].includes(user?.role ?? '');
-    return true;
+    if (!c.edit || !can('reports', 'view')) return false;
+    // The same roles the server's remarks route accepts (report-remarks.service.ts → WRITERS):
+    // Super Admin, Admin and Accounting for both; Documentation for Validation Comments too.
+    const role = user?.role ?? '';
+    return c.edit === 'accounting_remarks'
+      ? ['admin', 'manager', 'accounting'].includes(role)
+      : ['admin', 'manager', 'accounting', 'documentation'].includes(role);
   };
   /** Reflect a saved cell in the rows on screen without re-running the report. */
   const patchRow = (ri: number, key: string, value: string) => setResult((r) => (r
@@ -310,7 +313,7 @@ export default function ReportDetailPage() {
                         <td key={c.key} className={cellClass(c)} title={c.edit ? undefined : tooltip(row[c.key], c)}>
                           {meta.expandable && ci === 0 && <span className="report-expand-ind">{isOpen ? '▾' : '▸'}</span>}
                           {c.edit
-                            ? <ReportEditableCell row={row} column={c} canEdit={canEditCell(c)} user={user} onSaved={(v) => patchRow(ri, c.key, v)} />
+                            ? <ReportEditableCell row={row} column={c} canEdit={canEditCell(c)} onSaved={(v) => patchRow(ri, c.key, v)} />
                             : fmt(row[c.key], c)}
                         </td>
                       ))}
