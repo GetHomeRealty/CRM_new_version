@@ -132,6 +132,8 @@ export interface ReportResult {
   applied_filters: { label: string; value: string }[]; // for the report header + exports
   /** In-table sections (payment-status report): order, counts and per-section subtotals. */
   sections?: { key: string; label: string; count: number; totals?: ReportTotals }[];
+  /** Reports with `dealTypesFromRows`: the deal types in the result, for the Deal Type dropdown. */
+  deal_types?: string[];
 }
 
 /** Everything an export renderer needs. */

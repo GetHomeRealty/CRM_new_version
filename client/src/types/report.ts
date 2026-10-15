@@ -46,6 +46,10 @@ export interface ReportMeta {
   expandable?: boolean;
   /** Non-transaction data source ('loans' | 'reminders') — those rows aren't selectable. */
   custom?: string;
+  /** Global filters this report does not show: 'offer_date', 'payment_type', 'payout_status'. */
+  hideFilters?: string[];
+  /** The Deal Type dropdown lists only the types found in this report (`ReportResult.deal_types`). */
+  dealTypesFromRows?: boolean;
 }
 
 /** One document inside an expanded deal (GET /api/reports/documents/:transactionId). */
@@ -116,6 +120,8 @@ export interface ReportResult {
   last_page: number;
   applied_filters: { label: string; value: string }[];
   sections?: ReportSection[];
+  /** Reports with `dealTypesFromRows`: the deal types in the result (sent while no type is selected). */
+  deal_types?: string[];
 }
 
 export interface ReportFilterOptions {

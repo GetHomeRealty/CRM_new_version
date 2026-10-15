@@ -34,6 +34,42 @@ const trimRatio = trimPct;
 const balanceOf = (due: number, ...deductions: number[]): number =>
   money(Decimal.max(0, deductions.reduce((acc, d) => acc.minus(num(d)), new Decimal(num(due)))));
 
+const text = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
+
+/**
+ * Final Validation and its remarks from Agent Payment Readiness (`activity_tracker`). The deal-level
+ * keys when set; otherwise a preconstruction deal's per-term values, labelled by term.
+ */
+function readinessText(tracker: Record<string, unknown>): { final_validation: string | null; final_validation_remarks: string | null } {
+  const top = text(tracker.final_validation);
+  const topRemarks = text(tracker.final_validation_remarks);
+  const terms = (tracker.term_tracker && typeof tracker.term_tracker === 'object' ? tracker.term_tracker : {}) as Record<string, Record<string, unknown>>;
+  const keys = Object.keys(terms).sort((a, b) => Number(a) - Number(b));
+  const perTerm = (field: string): string => keys
+    .map((k) => [k, text(terms[k]?.[field])] as const)
+    .filter(([, v]) => v)
+    .map(([k, v]) => `T${k} ${v}`)
+    .join(' · ');
+  return {
+    final_validation: top || perTerm('final_validation') || null,
+    final_validation_remarks: topRemarks || perTerm('remarks') || null,
+  };
+}
+
+/** The newest Remarks note in Admin Activities (`admin_activities.notes`), by when it was written. */
+function latestAdminNote(admin: Record<string, unknown>): string | null {
+  const notes = (Array.isArray(admin.notes) ? admin.notes : []) as Record<string, unknown>[];
+  let best: { at: string; text: string } | null = null;
+  notes.forEach((n) => {
+    const t = text(n?.text);
+    if (!t) return;
+    const at = text(n.created_at) || text(n.date);
+    // Later in the list wins a tie — notes are appended, so the last one added is the newest.
+    if (!best || at >= best.at) best = { at, text: t };
+  });
+  return best ? (best as { text: string }).text : null;
+}
+
 /** A fully-computed transaction row with every field any of the 14 reports may need. */
 export interface EnrichedTxn {
   id: number;
@@ -99,6 +135,15 @@ export interface EnrichedTxn {
   review_received_at: string | null;
   gift_coupon_value: number | null;
   gift_coupon_issued_at: string | null;
+
+  /**
+   * Agent Payment Readiness → Final Validation (Done / Pending / Invalid) and its remarks. A
+   * preconstruction deal records them per term, so there they read "T1 Done · T2 Pending".
+   */
+  final_validation: string | null;
+  final_validation_remarks: string | null;
+  /** The newest Remarks note in Admin Activities — what accounting last wrote on the deal. */
+  accounting_remarks: string | null;
 
   // ---- documentation reporting (§ Documentation Reports) ----
   /** Client names on the deal (buyer/seller/landlord/tenant), joined for display. */
@@ -488,6 +533,8 @@ export class ReportDataService {
       cashback: { ...e.cashback, total: 0 },
       referral: null,
       commission_received: false,
+      // Accounting's notes are about the money, which this member is not shown.
+      accounting_remarks: null,
     };
   }
 
@@ -627,6 +674,8 @@ export class ReportDataService {
       amendment_status: groupStatus(docs.filter((d) => isAmendment(d.title))),
       gift_coupon_value: rec.gift_coupon_value != null ? num(rec.gift_coupon_value) : null,
       gift_coupon_issued_at: dateStr(rec.gift_coupon_issued_at as Date | null),
+      ...readinessText(tracker),
+      accounting_remarks: latestAdminNote(admin),
     };
   }
 

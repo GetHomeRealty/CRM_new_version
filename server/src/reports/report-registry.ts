@@ -31,6 +31,13 @@ export interface ReportDef {
   expandable?: boolean;
   /** Non-transaction data source (Agent Loan report / reminder history). */
   custom?: 'loans' | 'reminders';
+  /**
+   * Global filters this report does not show: 'offer_date' (From/To), 'payment_type', 'payout_status'.
+   * The engine also ignores them for this report, so a stale value cannot narrow it unseen.
+   */
+  hideFilters?: ('offer_date' | 'payment_type' | 'payout_status')[];
+  /** The Deal Type dropdown offers only the types that occur in this report's own rows. */
+  dealTypesFromRows?: boolean;
 
   /**
    * Which documentation relations this report reads. Absent means NONE of them.
@@ -495,22 +502,44 @@ export const REPORTS: ReportDef[] = [
     name: 'Pending Payments Report',
     description: 'Closed deals where agent commission is still owed, with the balance due and how long it has been pending.',
     category: 'Payment Reports',
+    // Column order as the brokerage specified it (2026-10-15).
     columns: [
-      ...HEAD(), col.tradeNo(),
-      col.agentW(), col.advanceAmount(), col.agentPaid('Amount Paid'), col.balanceDue(),
+      { key: 'sl_no', label: 'Sl No.', type: 'number', default: true, width: 6 },
+      col.tradeNo(), col.closingDate(),
       { key: 'days_pending', label: 'Days Since Closing', type: 'number', default: true, sortable: true, width: 10 },
-      col.agentPaymentStatus(), col.paymentType(),
+      col.property(), col.agent(),
+      { ...col.docStatus(), label: 'Docs Status' },
+      { key: 'final_validation', label: 'Validation Status', type: 'status', default: true, sortable: true, width: 12 },
+      { key: 'final_validation_remarks', label: 'Validation Comments', type: 'text', default: true, width: 22 },
+      { key: 'accounting_remarks', label: 'Accounting Remarks', type: 'text', default: true, width: 22 },
+      col.agentW(), col.advanceAmount(), col.balanceDue(),
+      { key: 'payout_status', label: 'Agent Payment Status', type: 'status', default: true, sortable: true, width: 14 },
     ],
-    filters: [statusFilter('Payment Status', ['Pending', 'Partially Paid'])],
+    // "Pending" is deliberately not offered (brokerage request); All still includes those deals.
+    filters: [statusFilter('Payout Status', ['Partially Paid', '50% Paid'])],
+    // Offer dates, payment type and the general payout status do not apply to this report.
+    hideFilters: ['offer_date', 'payment_type', 'payout_status'],
+    dealTypesFromRows: true,
     defaultSort: { key: 'closing_date', dir: 'asc' },
-    // Derived from admin_activities (payment status, balance) — no honest SQL superset; see sqlWhere.
+    // Docs Status reads the deal's documents.
+    needs: { documents: true },
+    // Only closed deals can qualify — an exact superset of `is_closed` that keeps open deals' documents unread.
+    sqlWhere: () => ({ transaction_statuses: { some: { status: 'Closed' } } }),
     predicate: (t, f) => {
       if (!t.is_closed || isDeadDeal(t) || t.agent_balance <= 0) return false;
       if (t.agent_payment_status !== 'Pending' && t.agent_payment_status !== 'Partially Paid') return false;
-      return !f.status || t.agent_payment_status === f.status;
+      return !f.status || payoutStatus(t) === f.status;
     },
     // TD-109 — the name on the row is the name the (scoped) money belongs to.
-    map: (t) => ({ ...baseRow(t), agent: t.agent_names.join(', ') || t.agent, days_pending: daysBetween(t.closing_date, today()) }),
+    map: (t) => ({
+      ...baseRow(t),
+      agent: t.agent_names.join(', ') || t.agent,
+      days_pending: daysBetween(t.closing_date, today()),
+      final_validation: t.final_validation,
+      final_validation_remarks: t.final_validation_remarks,
+      accounting_remarks: t.accounting_remarks,
+      payout_status: payoutStatus(t),
+    }),
   },
   // 11b ---------------------------------------------------------------
   {
@@ -875,6 +904,16 @@ const today = (): string => new Date().toISOString().slice(0, 10);
 function daysBetween(from: string | null, to: string | null): number | null {
   if (!from || !to) return null;
   return Math.round((Date.parse(to) - Date.parse(from)) / 86_400_000);
+}
+/**
+ * Pending Payments — how much of the agent's commission has gone out (advance + payments):
+ * nothing → Pending · under half → Partially Paid · half or more, balance still due → 50% Paid.
+ */
+function payoutStatus(t: EnrichedTxn): string {
+  const due = t.agentComm.total;
+  const out = t.advance + t.agent_paid;
+  if (due <= 0 || out <= 0) return 'Pending';
+  return out / due >= 0.5 ? '50% Paid' : 'Partially Paid';
 }
 /** An open deal's payment schedule is its closing date. */
 function scheduleStatus(t: EnrichedTxn): string {

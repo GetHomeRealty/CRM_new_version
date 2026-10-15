@@ -90,11 +90,15 @@ export class ReportsService {
   }
 
   /** Static column + filter + section metadata for one report (drives filters + Customize Fields). */
-  meta(type: string): { type: string; name: string; description: string; category: string; columns: ReportColumn[]; filters: unknown; sections?: unknown; defaultSort: unknown; noSort: boolean; expandable: boolean; custom: string | null } {
+  meta(type: string): { type: string; name: string; description: string; category: string; columns: ReportColumn[]; filters: unknown; sections?: unknown; defaultSort: unknown; noSort: boolean; expandable: boolean; custom: string | null; hideFilters: string[]; dealTypesFromRows: boolean } {
     const def = this.require(type);
     // no-sort reports never advertise a sortable column (§7.3: no sort headers or icons)
     const columns = def.noSort ? def.columns.map((c) => (c.sortable ? { ...c, sortable: false } : c)) : def.columns;
-    return { type: def.type, name: def.name, description: def.description, category: def.category, columns, filters: def.filters, sections: def.sections, defaultSort: def.defaultSort, noSort: !!def.noSort, expandable: !!def.expandable, custom: def.custom ?? null };
+    return {
+      type: def.type, name: def.name, description: def.description, category: def.category, columns, filters: def.filters,
+      sections: def.sections, defaultSort: def.defaultSort, noSort: !!def.noSort, expandable: !!def.expandable, custom: def.custom ?? null,
+      hideFilters: def.hideFilters ?? [], dealTypesFromRows: !!def.dealTypesFromRows,
+    };
   }
 
   private require(type: string): ReportDef {
@@ -141,8 +145,9 @@ export class ReportsService {
   }
 
   /** Run a report: filter → predicate → map → totals(all) → sort → paginate. */
-  async run(type: string, user: AuthUserRecord, query: ReportQuery): Promise<ReportResult> {
+  async run(type: string, user: AuthUserRecord, rawQuery: ReportQuery): Promise<ReportResult> {
     const def = this.require(type);
+    const query = this.dropHiddenFilters(def, rawQuery);
 
     /*
      * THE FAST PATH: page in the database, total in the database, enrich twenty-five rows.
@@ -165,7 +170,7 @@ export class ReportsService {
       ?? (await this.runFast(def, user, query));
     if (fast) return fast;
 
-    const { rows, columns, totals, sections } = await this.compute(def, user, query);
+    const { rows, columns, totals, sections, deal_types: dealTypes } = await this.compute(def, user, query);
 
     /*
      * EVERY REPORT PAGES, INCLUDING THE SECTION-GROUPED ONES.
@@ -210,7 +215,23 @@ export class ReportsService {
       last_page: Math.max(1, Math.ceil(total / perPage)),
       applied_filters: this.appliedFilters(def, user, query.filters),
       sections,
+      ...(dealTypes ? { deal_types: dealTypes } : {}),
     };
+  }
+
+  /**
+   * The query without the global filters this report hides (`ReportDef.hideFilters`), so a value
+   * left over from another report — or sent by hand — can never narrow it unseen.
+   */
+  private dropHiddenFilters(def: ReportDef, query: ReportQuery): ReportQuery {
+    if (!def.hideFilters?.length) return query;
+    const f = { ...(query.filters ?? {}) } as ReportFilters;
+    for (const h of def.hideFilters) {
+      if (h === 'offer_date') { delete f.offer_date_from; delete f.offer_date_to; }
+      if (h === 'payment_type') delete f.payment_type;
+      if (h === 'payout_status') delete f.payout_status;
+    }
+    return { ...query, filters: f };
   }
 
   /**
@@ -884,8 +905,9 @@ export class ReportsService {
   }
 
   /** Build the export payload — identical filtering/columns/totals but the COMPLETE dataset. */
-  async exportData(type: string, user: AuthUserRecord, query: ReportQuery, branding: string): Promise<ExportPayload> {
+  async exportData(type: string, user: AuthUserRecord, rawQuery: ReportQuery, branding: string): Promise<ExportPayload> {
     const def = this.require(type);
+    const query = this.dropHiddenFilters(def, rawQuery);
     const { rows, columns, totals, sections } = await this.compute(def, user, query);
     const dealTypeHeading = (query.filters.deal_type ?? []).length === 1 ? query.filters.deal_type![0] : null;
     return {
@@ -903,7 +925,7 @@ export class ReportsService {
   }
 
   // ---- core compute (shared by run + export) ----
-  private async compute(def: ReportDef, user: AuthUserRecord, query: ReportQuery): Promise<{ rows: ReportRow[]; columns: ReportColumn[]; totals: ReportTotals; sections?: { key: string; label: string; count: number }[] }> {
+  private async compute(def: ReportDef, user: AuthUserRecord, query: ReportQuery): Promise<{ rows: ReportRow[]; columns: ReportColumn[]; totals: ReportTotals; sections?: { key: string; label: string; count: number }[]; deal_types?: string[] }> {
     const filters = this.sanitize(query.filters ?? {}, user);
     const columns = this.resolveColumns(def, query.columns, filters);
 
@@ -1002,8 +1024,20 @@ export class ReportsService {
       ordered = def.noSort ? mapped : this.sort(mapped, def, query);
     }
 
+    // Sl No. counts across the whole sorted result, so page 2 continues from page 1 and exports match.
+    if (def.columns.some((c) => c.key === 'sl_no')) ordered.forEach((r, i) => { r.sl_no = i + 1; });
+
+    /*
+     * The deal types this report actually contains, for its Deal Type dropdown. Only answered while
+     * no deal type is selected: the database read above is already narrowed by that selection, so a
+     * list computed under it would hide every other type. The screen keeps the last full list.
+     */
+    const dealTypes = def.dealTypesFromRows && !(filters.deal_type ?? []).length
+      ? [...new Set(matched.map((t) => t.type).filter(Boolean))].sort((a, b) => a.localeCompare(b))
+      : undefined;
+
     const totals = this.footer(ordered, columns);
-    return { rows: ordered, columns, totals, sections };
+    return { rows: ordered, columns, totals, sections, ...(dealTypes ? { deal_types: dealTypes } : {}) };
   }
 
   private async computeLoans(def: ReportDef, user: AuthUserRecord, filters: ReportFilters, query: ReportQuery, columns: ReportColumn[]): Promise<{ rows: ReportRow[]; columns: ReportColumn[]; totals: ReportTotals }> {

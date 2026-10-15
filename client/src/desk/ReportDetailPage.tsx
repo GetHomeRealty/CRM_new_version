@@ -40,6 +40,8 @@ export default function ReportDetailPage() {
   const [expanded, setExpanded] = useState<number | null>(null);
   const [docs, setDocs] = useState<ReportDocuments | null>(null);
   const [docsLoading, setDocsLoading] = useState(false);
+  /** The deal types found in this report (only for `dealTypesFromRows` reports); kept while a type is selected. */
+  const [rowDealTypes, setRowDealTypes] = useState<string[] | null>(null);
 
   // ---- row selection + bulk reminder actions (documentation reports) ----
   const [selected, setSelected] = useState<number[]>([]);
@@ -67,7 +69,7 @@ export default function ReportDetailPage() {
   // load report metadata + filter options whenever the report changes
   useEffect(() => {
     setLoading(true); setError(''); setMeta(null); setResult(null);
-    setDraft({}); setApplied({}); setSelectedCols(null); setSections(null); setSort(null); setPage(1);
+    setDraft({}); setApplied({}); setSelectedCols(null); setSections(null); setSort(null); setPage(1); setRowDealTypes(null);
     Promise.all([reportColumns(reportType), reportFilterOptions()])
       .then(([m, o]) => { setMeta(m); setOptions(o); })
       .catch((e) => setError(apiErrorMessage(e, 'Could not load report')))
@@ -86,7 +88,7 @@ export default function ReportDetailPage() {
     if (!meta) return;
     setRunning(true); setError('');
     runReport(reportType, body)
-      .then(setResult)
+      .then((r) => { setResult(r); if (r.deal_types) setRowDealTypes(r.deal_types); })
       .catch((e) => { const m = apiErrorMessage(e, 'Could not run report'); setError(m); toast(m, 'bad'); })
       .finally(() => setRunning(false));
   }, [meta, reportType, body]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -111,6 +113,16 @@ export default function ReportDetailPage() {
 
   const cols = result?.columns ?? meta.columns.filter((c) => c.default);
   const totals = result?.totals ?? {};
+
+  /** Global filters this report hides (e.g. Pending Payments: offer dates, payment type, payout status). */
+  const shows = (f: string) => !meta.hideFilters?.includes(f);
+  /*
+   * Deal Type options. A report flagged `dealTypesFromRows` offers only the types its own rows
+   * contain — the server sends them while no type is selected — plus anything already chosen.
+   */
+  const dealTypeOptions = meta.dealTypesFromRows && rowDealTypes
+    ? [...new Set([...rowDealTypes, ...(draft.deal_type ?? [])])].map((v) => ({ value: v, label: v }))
+    : options?.deal_type ?? [];
 
   /** Column count including the selection checkbox column, for full-width cells. */
   const span = cols.length + (selectable ? 1 : 0);
@@ -165,14 +177,14 @@ export default function ReportDetailPage() {
             <input placeholder="Property, trade no., agent…" value={draft.search ?? ''} onChange={(e) => setD('search', e.target.value)} />
           </label>
           <div className="report-field"><span>Deal Type</span>
-            <MultiSelect label="All" options={options?.deal_type ?? []} value={draft.deal_type ?? []} onChange={(v) => setD('deal_type', v)} />
+            <MultiSelect label="All" options={dealTypeOptions} value={draft.deal_type ?? []} onChange={(v) => setD('deal_type', v)} />
           </div>
           {!isAgent && <div className="report-field"><span>Agent</span>
             <MultiSelect label="All" options={options?.agent ?? []} value={draft.agent ?? []} onChange={(v) => setD('agent', v)} />
           </div>}
-          <div className="report-field"><span>Payment Type</span>
+          {shows('payment_type') && <div className="report-field"><span>Payment Type</span>
             <MultiSelect label="All" options={options?.payment_type ?? []} value={draft.payment_type ?? []} onChange={(v) => setD('payment_type', v)} />
-          </div>
+          </div>}
           <div className="report-actions">
             <button className="btn primary sm" onClick={apply}>Apply Filters</button>
             <button className="btn ghost sm" onClick={reset}>Reset</button>
@@ -182,8 +194,10 @@ export default function ReportDetailPage() {
           </div>
         </div>
         <div className="toolbar-row report-row2">
-          <label className="report-field"><span>Offer From</span><input type="date" value={draft.offer_date_from ?? ''} onChange={(e) => setD('offer_date_from', e.target.value)} /></label>
-          <label className="report-field"><span>Offer To</span><input type="date" value={draft.offer_date_to ?? ''} onChange={(e) => setD('offer_date_to', e.target.value)} /></label>
+          {shows('offer_date') && <>
+            <label className="report-field"><span>Offer From</span><input type="date" value={draft.offer_date_from ?? ''} onChange={(e) => setD('offer_date_from', e.target.value)} /></label>
+            <label className="report-field"><span>Offer To</span><input type="date" value={draft.offer_date_to ?? ''} onChange={(e) => setD('offer_date_to', e.target.value)} /></label>
+          </>}
           <label className="report-field"><span>Closing From</span><input type="date" value={draft.closing_date_from ?? ''} onChange={(e) => setD('closing_date_from', e.target.value)} /></label>
           <label className="report-field"><span>Closing To</span><input type="date" value={draft.closing_date_to ?? ''} onChange={(e) => setD('closing_date_to', e.target.value)} /></label>
           <label className="report-field"><span>Closing Year</span>
@@ -192,12 +206,12 @@ export default function ReportDetailPage() {
               {(options?.year ?? []).map((y) => <option key={y.value} value={y.value}>{y.label}</option>)}
             </select>
           </label>
-          <label className="report-field"><span>Payout Status</span>
+          {shows('payout_status') && <label className="report-field"><span>Payout Status</span>
             <select value={draft.payout_status ?? ''} onChange={(e) => setD('payout_status', e.target.value)}>
               <option value="">Any</option>
               {(options?.payout_status ?? []).map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
             </select>
-          </label>
+          </label>}
           {/* report-specific filters */}
           {meta.filters.map((f) => <ReportFilter key={f.key} def={f} options={options} value={draft} setD={setD} />)}
         </div>
