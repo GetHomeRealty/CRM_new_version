@@ -12,8 +12,8 @@ export interface ReportColumn {
   average?: boolean;
   mandatory?: boolean;
   width?: number;
-  /** Editable from the report: Final Validation, or a new Admin Activities Remarks note. */
-  edit?: 'final_validation' | 'accounting_remarks';
+  /** Editable from the report: Final Validation Remarks, or a new Admin Activities Remarks note. */
+  edit?: 'validation_comments' | 'accounting_remarks';
 }
 
 export interface ReportListItem {

@@ -510,8 +510,8 @@ export const REPORTS: ReportDef[] = [
       col.property(), col.agent(),
       // Agent Payment Readiness → Valid Docs Cleared from Agent: Cleared, else Pending.
       { key: 'docs_status', label: 'Docs Status', type: 'status', default: true, sortable: true, width: 11 },
-      { key: 'final_validation', label: 'Validation Status', type: 'status', default: true, sortable: true, width: 12, edit: 'final_validation' },
-      { key: 'final_validation_remarks', label: 'Validation Comments', type: 'text', default: true, width: 22 },
+      { key: 'final_validation', label: 'Validation Status', type: 'status', default: true, sortable: true, width: 12 },
+      { key: 'final_validation_remarks', label: 'Validation Comments', type: 'text', default: true, width: 22, edit: 'validation_comments' },
       { key: 'accounting_remarks', label: 'Accounting Remarks', type: 'text', default: true, width: 22, edit: 'accounting_remarks' },
       col.agentW(), col.advanceAmount(), col.balanceDue(),
       { key: 'payout_status', label: 'Agent Payment Status', type: 'status', default: true, sortable: true, width: 14 },

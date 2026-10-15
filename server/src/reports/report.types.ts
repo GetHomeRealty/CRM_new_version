@@ -22,11 +22,11 @@ export interface ReportColumn {
   /** For percent columns: the footer shows an AVERAGE (never a sum) when true. */
   average?: boolean;
   /**
-   * The cell can be edited from the report (Pending Payments): 'final_validation' writes Agent
-   * Payment Readiness → Final Validation, 'accounting_remarks' adds an Admin Activities Remarks
-   * note. The screen saves through the ordinary transaction update, so its permissions apply.
+   * The cell can be edited from the report (Pending Payments): 'validation_comments' writes Agent
+   * Payment Readiness → Final Validation Remarks, 'accounting_remarks' adds an Admin Activities
+   * Remarks note. The screen saves through the ordinary transaction update, so its permissions apply.
    */
-  edit?: 'final_validation' | 'accounting_remarks';
+  edit?: 'validation_comments' | 'accounting_remarks';
   /** Mandatory identifier that must always appear in exports even if unchecked (e.g. Trade No.). */
   mandatory?: boolean;
   /** Approx width hint (chars) for export column sizing. */
