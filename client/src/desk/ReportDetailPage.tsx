@@ -8,7 +8,7 @@ import { useToast } from './toast';
 import { useAuth } from '../context/AuthContext';
 import type {
   ReportMeta, ReportResult, ReportFilterOptions, ReportFilterValues, ReportColumn,
-  ReportSearchBody, ReportDocuments, ReminderScope, ReminderPreview,
+  ReportSearchBody, ReportDocuments, ReminderScope, ReminderPreview, ReportSection,
 } from '../types';
 import { previewReminders, sendReminders } from '../lib/reportsApi';
 import { ReportEditableCell } from './ReportEditableCell';
@@ -156,7 +156,9 @@ export default function ReportDetailPage() {
   };
 
   /** Column header row — rendered once in <thead>, or once per section for grouped reports. */
-  const headerRow = (key?: string) => (
+  /** A section's own title for a column, or blank where the column does not apply there. */
+  const colLabel = (c: ReportColumn, s?: ReportSection): string => (s?.blankColumns?.includes(c.key) ? '' : s?.columnLabels?.[c.key] ?? c.label);
+  const headerRow = (key?: string, s?: ReportSection) => (
     <tr key={key} className={key ? 'report-head-row' : undefined}>{[
       ...(selectable ? [(
         <th key="__sel" className="report-sel-col">
@@ -168,7 +170,7 @@ export default function ReportDetailPage() {
       const active = sort?.key === c.key;
       return (
         <th key={c.key} className={`${canSort ? 'sortable ' : ''}${cellClass(c)}`} onClick={() => canSort && toggleSort(c)} title={canSort ? 'Sort' : undefined}>
-          {c.label}
+          {colLabel(c, s)}
           {canSort && <span className={`sort-ind${active ? ' on' : ''}`}>{active ? (sort!.dir === 'asc' ? '▲' : '▼') : '⇅'}</span>}
         </th>
       );
@@ -293,13 +295,13 @@ export default function ReportDetailPage() {
                       {s.label}<span className="sec-count">{s.count ?? 0} record{(s.count ?? 0) === 1 ? '' : 's'}</span>
                       {s.description && <span className="sec-note">{s.description}</span>}
                     </td></tr>
-                    {headerRow('head-' + s.key)}
+                    {headerRow('head-' + s.key, s)}
                     {result.rows.filter((r) => r.section === s.key).map((row, ri) => (
                       <tr key={s.key + ri}>
                         {selectable && <td className="report-sel-col">{selBox(row)}</td>}
                         {cols.map((c) => (
                           <td key={c.key} className={cellClass(c)} title={c.edit ? undefined : tooltip(row[c.key], c)}>
-                            {c.edit
+                            {s.blankColumns?.includes(c.key) ? null : c.edit
                               ? <ReportEditableCell row={row} column={c} canEdit={canEditCell(c)} onSaved={(v) => patchDeal(row.txn_id, c.key, v)} />
                               : fmt(row[c.key], c)}
                           </td>

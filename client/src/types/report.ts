@@ -14,6 +14,8 @@ export interface ReportColumn {
   width?: number;
   /** Editable from the report: Final Validation Remarks, or a new Admin Activities Remarks note. */
   edit?: 'validation_comments' | 'accounting_remarks';
+  /** Another row field shown in front of this one (Payment Schedule before the Accounting Remark). */
+  prefixKey?: string;
 }
 
 export interface ReportListItem {
@@ -24,7 +26,13 @@ export interface ReportListItem {
 }
 
 /** `group` is a heading shown above a run of sections (e.g. "Agent Payments" over Listing, Buying …). */
-export interface ReportSection { key: string; label: string; description?: string; group?: string; count?: number; totals?: ReportTotals }
+export interface ReportSection {
+  key: string; label: string; description?: string; group?: string; count?: number; totals?: ReportTotals;
+  /** Column titles that read differently in this section (e.g. "Total Client Payment"). */
+  columnLabels?: Record<string, string>;
+  /** Columns that do not apply in this section: blank title and blank cells. */
+  blankColumns?: string[];
+}
 
 export interface ReportFilterDef {
   key: string;

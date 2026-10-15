@@ -7,6 +7,24 @@ import type { ExportPayload, ReportColumn, ReportRow, ReportTotals } from './rep
 interface Block { label: string | null; count: number; rows: ReportRow[]; totals: ReportTotals | null }
 
 const BRAND = '#4f46e5', MUTED = '#64748b', LINE = '#e7e9f1', ZEBRA = '#fafbff';
+
+/** One section of a Payment Sheet style export, with its own titles and column labels. */
+interface SheetBlock {
+  label: string | null; group: string | null; description: string | null; count: number;
+  rows: ReportRow[]; totals: ReportTotals | null; labels: Record<string, string>; blank: string[];
+}
+/** The Payment Sheet's palette (Payments sheet.pdf — Google Sheets' standard colours). */
+const SHEET = {
+  head: '#20124d', title: '#ff0000', subtitle: '#980000', text: '#000000', grid: '#000000',
+  total: '#efefef', muted: '#434343',
+};
+/** Status cells tinted as the Sheet tints them: green done, red not yet, orange part-way, yellow in hand. */
+const SHEET_STATUS_FILL: Record<string, string> = {
+  'Cleared': '#b6d7a8', 'Done': '#b6d7a8', 'Proceed to Pay': '#b6d7a8',
+  'Pending': '#f4cccc', 'Not Ready': '#f4cccc', 'Invoice Pending': '#f4cccc',
+  'Invalid': '#f9cb9c', 'Partially Paid': '#f9cb9c', '50% Paid': '#fce5cd',
+  'Invoice Received': '#ffff00', 'N/A': '#efefef',
+};
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 /** More columns than this render landscape; fewer render portrait. */
 const LANDSCAPE_MIN_COLS = 7;
@@ -105,6 +123,7 @@ export class ReportExportService {
 
   // ---- XLSX ----
   async xlsx(p: ExportPayload): Promise<Buffer> {
+    if (p.sheetStyle) return this.sheetXlsx(p);
     const wb = new ExcelJS.Workbook();
     wb.creator = p.branding;
     wb.created = p.generatedAt;
@@ -227,6 +246,7 @@ export class ReportExportService {
 
   // ---- PDF ----
   async pdf(p: ExportPayload): Promise<Buffer> {
+    if (p.sheetStyle) return this.sheetPdf(p);
     const doc = new PDFDocument({
       size: 'A4',
       layout: this.isLandscape(p) ? 'landscape' : 'portrait',
@@ -339,6 +359,264 @@ export class ReportExportService {
 
     doc.end();
     return done;
+  }
+
+  // ---- Payment Sheet style (Pending Payments) ----
+  /*
+   * THE BROKERAGE'S PAYMENT SHEET, reproduced (Payments sheet.pdf, 2026-10-14 — a Google Sheets
+   * export). Navy column headers with white text, red section titles (dark red under a group), black
+   * text on white with black gridlines, and the status cells tinted as the Sheet tints them. EVERY
+   * CELL STAYS ON ONE LINE (brokerage request): text that does not fit ends in "…" — the XLSX keeps
+   * the full text in the cell — and the totals label runs across the empty columns beside it rather
+   * than being squeezed into the first one.
+   */
+
+  /** One block per section, with what it needs to draw its own headings and column titles. */
+  private sheetBlocks(p: ExportPayload): SheetBlock[] {
+    if (!p.sections?.length) return [{ label: null, group: null, description: null, count: p.rows.length, rows: p.rows, totals: p.totals, labels: {}, blank: [] }];
+    return p.sections.map((s) => ({
+      label: s.label, group: s.group ?? null, description: s.description ?? null, count: s.count,
+      rows: p.rows.filter((r) => r.section === s.key), totals: s.totals ?? null,
+      labels: s.columnLabels ?? {}, blank: s.blankColumns ?? [],
+    }));
+  }
+  private sheetLabel(b: SheetBlock, c: ReportColumn): string { return b.blank.includes(c.key) ? '' : (b.labels[c.key] ?? c.label); }
+  /** A body cell's text: blank where the column does not apply, and a prefix field in front of it. */
+  private sheetCell(b: SheetBlock, row: ReportRow, c: ReportColumn): string {
+    if (b.blank.includes(c.key)) return '';
+    const v = this.cell(row, c);
+    if (!c.prefixKey) return v;
+    const pre = row[c.prefixKey];
+    if (pre == null || pre === '') return v;
+    return v === '—' ? String(pre) : `${pre} · ${v}`;
+  }
+  /** The totals band's cells: the label, then each column's total; the label's run of empty columns. */
+  private sheetTotals(cols: ReportColumn[], totals: ReportTotals, count: number, label: string): { cells: string[]; span: number } {
+    const cells = cols.map((c, i) => (i === 0 ? `${label} (${count} record${count === 1 ? '' : 's'})` : this.totalCell(totals, count, c, false)));
+    let span = 1;
+    while (span < cells.length && !cells[span]) span++;
+    return { cells, span };
+  }
+  /** Fill for a status cell, in the Sheet's palette; null leaves it white. */
+  private sheetFill(c: ReportColumn, text: string): string | null {
+    if (c.type !== 'status' && !c.prefixKey) return null;
+    const head = c.prefixKey ? text.split(' · ')[0] : text;
+    return SHEET_STATUS_FILL[head] ?? null;
+  }
+
+  private async sheetPdf(p: ExportPayload): Promise<Buffer> {
+    const doc = new PDFDocument({ size: 'A4', layout: 'landscape', margins: { top: 26, bottom: 40, left: 20, right: 20 }, bufferPages: true });
+    const chunks: Buffer[] = [];
+    doc.on('data', (c: Buffer) => chunks.push(c));
+    const done = new Promise<Buffer>((resolve, reject) => { doc.on('end', () => resolve(Buffer.concat(chunks))); doc.on('error', reject); });
+
+    const left = doc.page.margins.left;
+    const right = doc.page.width - doc.page.margins.right;
+    const bottom = doc.page.height - doc.page.margins.bottom;
+    const avail = right - left;
+    const FS = 6.6, PAD = 2.6, ROW = FS + PAD * 2 + 1.4;
+
+    /** `text` cut to `width` with an ellipsis — never wrapped. */
+    const fit = (text: string, width: number): string => {
+      if (!text || doc.widthOfString(text) <= width) return text;
+      let lo = 0, hi = text.length;
+      while (lo < hi) { const mid = Math.ceil((lo + hi) / 2); if (doc.widthOfString(text.slice(0, mid) + '…') <= width) lo = mid; else hi = mid - 1; }
+      return text.slice(0, lo).trimEnd() + '…';
+    };
+    const line = (x: number, y: number, w: number, h: number) => doc.rect(x, y, w, h).lineWidth(0.4).strokeColor(SHEET.grid).stroke();
+
+    // heading: brokerage, then the report title on the right as the Sheet has it, then filters
+    doc.font('Helvetica-Bold').fontSize(10).fillColor(SHEET.text).text(p.branding, left, doc.page.margins.top, { width: avail / 2, lineBreak: false });
+    doc.font('Helvetica-Bold').fontSize(13).fillColor(SHEET.text).text(p.reportName.toUpperCase(), left + avail / 2, doc.page.margins.top - 1, { width: avail / 2, align: 'right', lineBreak: false });
+    let y = doc.page.margins.top + 16;
+    doc.font('Helvetica').fontSize(7).fillColor(SHEET.muted);
+    doc.text(`Updated as on: ${longStamp(p.generatedAt)}`, left, y, { width: avail, lineBreak: false });
+    y += 10;
+    for (const l of this.headingLines(p)) { doc.text(fit(l, avail), left, y, { width: avail, lineBreak: false }); y += 10; }
+    y += 4;
+
+    const weights = p.columns.map((c) => Math.max(4, c.width ?? c.label.length));
+    const sum = weights.reduce((a, b) => a + b, 0);
+    const colW = weights.map((w) => (w / sum) * avail);
+    const xs: number[] = []; let acc = left; for (const w of colW) { xs.push(acc); acc += w; }
+
+    const drawHeader = (b: SheetBlock, y0: number): number => {
+      const labels = p.columns.map((c) => this.sheetLabel(b, c));
+      // Column titles may take up to three lines (whole words only); body cells never do.
+      doc.font('Helvetica-Bold').fontSize(FS);
+      const h = Math.max(ROW, ...labels.map((t, i) => Math.min(doc.heightOfString(t || ' ', { width: colW[i] - PAD * 2 }), FS * 3.9) + PAD * 2));
+      doc.rect(left, y0, avail, h).fill(SHEET.head);
+      doc.fillColor('#ffffff');
+      labels.forEach((t, i) => {
+        doc.text(t, xs[i] + PAD, y0 + PAD, { width: colW[i] - PAD * 2, height: h - PAD * 2, ellipsis: true });
+        line(xs[i], y0, colW[i], h);
+      });
+      return y0 + h;
+    };
+    const ensure = (b: SheetBlock, need: number): void => {
+      if (y + need <= bottom) return;
+      doc.addPage(); y = doc.page.margins.top; y = drawHeader(b, y);
+    };
+    const drawTotals = (b: SheetBlock, totals: ReportTotals, count: number, label: string): void => {
+      const { cells, span } = this.sheetTotals(p.columns, totals, count, label);
+      ensure(b, ROW);
+      doc.rect(left, y, avail, ROW).fill(SHEET.total);
+      doc.font('Helvetica-Bold').fontSize(FS).fillColor(SHEET.text);
+      const spanW = colW.slice(0, span).reduce((a, w) => a + w, 0);
+      doc.text(fit(cells[0], spanW - PAD * 2), left + PAD, y + PAD + 0.6, { width: spanW - PAD * 2, lineBreak: false });
+      line(left, y, spanW, ROW);
+      for (let i = span; i < cells.length; i++) {
+        doc.text(fit(cells[i], colW[i] - PAD * 2), xs[i] + PAD, y + PAD + 0.6, { width: colW[i] - PAD * 2, lineBreak: false });
+        line(xs[i], y, colW[i], ROW);
+      }
+      y += ROW;
+    };
+
+    const blocks = this.sheetBlocks(p);
+    blocks.forEach((b, bi) => {
+      if (b.label !== null) {
+        y += bi > 0 ? 8 : 2;
+        // a group title (e.g. "Agent Payments:") above the first of its sections
+        if (b.group && b.group !== blocks[bi - 1]?.group) {
+          if (y + ROW * 4 > bottom) { doc.addPage(); y = doc.page.margins.top; }
+          doc.font('Helvetica-Bold').fontSize(FS + 2.4).fillColor(SHEET.title).text(`${b.group}:`, left, y, { lineBreak: false });
+          y += FS + 7;
+        }
+        if (y + ROW * 3 > bottom) { doc.addPage(); y = doc.page.margins.top; }
+        const indent = b.group ? 14 : 0;
+        const title = `${b.label}:`;
+        doc.font('Helvetica-Bold').fontSize(FS + (b.group ? 1.4 : 2.4)).fillColor(b.group ? SHEET.subtitle : SHEET.title);
+        doc.text(title, left + indent, y, { lineBreak: false });
+        const tw = doc.widthOfString(title);
+        doc.font('Helvetica-Oblique').fontSize(FS).fillColor(SHEET.text);
+        const note = `${b.count} record${b.count === 1 ? '' : 's'}${b.description ? `   ·   ${b.description}` : ''}`;
+        doc.text(fit(note, avail - indent - tw - 12), left + indent + tw + 8, y + 1.6, { lineBreak: false });
+        y += FS + 7;
+      }
+      y = drawHeader(b, y);
+
+      for (const row of b.rows) {
+        ensure(b, ROW);
+        doc.font('Helvetica').fontSize(FS);
+        p.columns.forEach((c, i) => {
+          const text = this.sheetCell(b, row, c);
+          const fill = text ? this.sheetFill(c, text) : null;
+          if (fill) doc.rect(xs[i], y, colW[i], ROW).fill(fill);
+          doc.fillColor(SHEET.text).text(fit(text, colW[i] - PAD * 2), xs[i] + PAD, y + PAD + 0.6, { width: colW[i] - PAD * 2, lineBreak: false });
+          line(xs[i], y, colW[i], ROW);
+        });
+        y += ROW;
+      }
+      if (b.totals) drawTotals(b, b.totals, b.totals.count ?? b.count, b.label ? `${b.label} total` : 'Totals');
+    });
+
+    // grand total under a section-grouped report
+    if (p.sections?.length) { y += 6; drawTotals(blocks[blocks.length - 1], p.totals, p.totals.count ?? p.rows.length, 'Total pending'); }
+
+    const range = doc.bufferedPageRange();
+    const stamp = this.footerLeft(p);
+    for (let i = 0; i < range.count; i++) {
+      doc.switchToPage(range.start + i);
+      const saved = doc.page.margins.bottom;
+      doc.page.margins.bottom = 0;
+      const fy = doc.page.height - 24;
+      doc.font('Helvetica').fontSize(7).fillColor(SHEET.muted);
+      doc.text(stamp, left, fy, { width: avail / 2, align: 'left', lineBreak: false });
+      doc.text(`Page ${i + 1} of ${range.count}`, left + avail / 2, fy, { width: avail / 2, align: 'right', lineBreak: false });
+      doc.page.margins.bottom = saved;
+    }
+    doc.end();
+    return done;
+  }
+
+  private async sheetXlsx(p: ExportPayload): Promise<Buffer> {
+    const wb = new ExcelJS.Workbook();
+    wb.creator = p.branding;
+    wb.created = p.generatedAt;
+    const ws = wb.addWorksheet(p.reportName.slice(0, 28) || 'Report');
+    const nCols = Math.max(1, p.columns.length);
+    const argb = (hex: string) => 'FF' + hex.replace('#', '').toUpperCase();
+    const thin = { style: 'thin' as const, color: { argb: argb(SHEET.grid) } };
+    const grid = { top: thin, left: thin, bottom: thin, right: thin };
+    const oneLine = { horizontal: 'left' as const, vertical: 'middle' as const, wrapText: false };
+
+    const title = ws.addRow([p.branding]);
+    title.font = { bold: true, size: 11 };
+    ws.mergeCells(title.number, 1, title.number, Math.ceil(nCols / 2));
+    title.getCell(Math.ceil(nCols / 2) + 1).value = p.reportName.toUpperCase();
+    title.getCell(Math.ceil(nCols / 2) + 1).font = { bold: true, size: 14 };
+    ws.mergeCells(title.number, Math.ceil(nCols / 2) + 1, title.number, nCols);
+    title.getCell(Math.ceil(nCols / 2) + 1).alignment = { horizontal: 'right' };
+    for (const l of [`Updated as on: ${longStamp(p.generatedAt)}`, ...this.headingLines(p)]) {
+      const r = ws.addRow([l]);
+      r.font = { italic: true, size: 9, color: { argb: argb(SHEET.muted) } };
+      ws.mergeCells(r.number, 1, r.number, nCols);
+    }
+    ws.addRow([]);
+
+    let firstHeader = 0;
+    const blocks = this.sheetBlocks(p);
+    const addTotals = (totals: ReportTotals, count: number, label: string): void => {
+      const { cells, span } = this.sheetTotals(p.columns, totals, count, label);
+      const r = ws.addRow(p.columns.map((c, i) => (i === 0 ? cells[0] : (c.total || c.average) && totals[c.key] !== undefined ? totals[c.key] : '')));
+      r.height = 18;
+      if (span > 1) ws.mergeCells(r.number, 1, r.number, span);
+      p.columns.forEach((c, i) => {
+        const cell = r.getCell(i + 1);
+        cell.font = { bold: true };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: argb(SHEET.total) } };
+        cell.border = grid;
+        cell.alignment = oneLine;
+        if (c.type === 'currency') cell.numFmt = '$#,##0.00';
+      });
+    };
+    blocks.forEach((b, bi) => {
+      if (b.label !== null) {
+        if (bi > 0) ws.addRow([]);
+        if (b.group && b.group !== blocks[bi - 1]?.group) {
+          const g = ws.addRow([`${b.group}:`]);
+          g.font = { bold: true, size: 12, color: { argb: argb(SHEET.title) } };
+        }
+        const t = ws.addRow([`${b.label}:`, `${b.count} record${b.count === 1 ? '' : 's'}${b.description ? ` · ${b.description}` : ''}`]);
+        t.getCell(1).font = { bold: true, size: b.group ? 11 : 12, color: { argb: argb(b.group ? SHEET.subtitle : SHEET.title) } };
+        t.getCell(2).font = { italic: true, size: 9 };
+        ws.mergeCells(t.number, 2, t.number, nCols);
+      }
+      const head = ws.addRow(p.columns.map((c) => this.sheetLabel(b, c)));
+      if (!firstHeader) firstHeader = head.number;
+      head.height = 30;
+      head.eachCell({ includeEmpty: true }, (cell) => {
+        cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: argb(SHEET.head) } };
+        cell.alignment = { horizontal: 'left', vertical: 'middle', wrapText: true };
+        cell.border = grid;
+      });
+      for (const row of b.rows) {
+        const r = ws.addRow(p.columns.map((c) => {
+          if (b.blank.includes(c.key)) return '';
+          return c.prefixKey ? this.sheetCell(b, row, c) : this.cellValue(row, c);
+        }));
+        r.height = 16;
+        p.columns.forEach((c, i) => {
+          const cell = r.getCell(i + 1);
+          if (c.type === 'currency') cell.numFmt = '$#,##0.00';
+          else if (c.type === 'date' || c.type === 'datetime') cell.numFmt = 'mmmm d, yyyy';
+          cell.alignment = oneLine;
+          cell.border = grid;
+          const fill = this.sheetFill(c, String(cell.value ?? ''));
+          if (fill) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: argb(fill) } };
+        });
+      }
+      if (b.totals) addTotals(b.totals, b.totals.count ?? b.count, b.label ? `${b.label} total` : 'Totals');
+    });
+    if (p.sections?.length) { ws.addRow([]); addTotals(p.totals, p.totals.count ?? p.rows.length, 'Total pending'); }
+
+    // Widths are in PDF points at 6.6 pt (about 3.3 pt a character); the same characters fit the cell.
+    p.columns.forEach((c, i) => { ws.getColumn(i + 1).width = Math.max(6, Math.round((c.width ?? c.label.length * 3.3) / 3.3) + 2); });
+    if (firstHeader) ws.views = [{ state: 'frozen', ySplit: firstHeader }];
+    ws.pageSetup = { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0, margins: { left: 0.25, right: 0.25, top: 0.4, bottom: 0.5, header: 0.2, footer: 0.2 } };
+    ws.headerFooter = { oddFooter: `&L&8${this.footerLeft(p).replace(/&/g, '&&')}&R&8Page &P of &N` };
+    return Buffer.from(await wb.xlsx.writeBuffer());
   }
 
   /**

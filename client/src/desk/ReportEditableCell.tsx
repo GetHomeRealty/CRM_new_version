@@ -65,9 +65,14 @@ export function ReportEditableCell({ row, column, canEdit, onSaved }: {
     );
   }
   const label = column.edit === 'validation_comments' ? 'Edit validation comments' : 'Edit accounting remarks';
+  // e.g. Payment Schedule ("Proceed to Pay") shown above the remark; it is not part of what is edited.
+  const prefix = column.prefixKey && row[column.prefixKey] != null && row[column.prefixKey] !== '' ? String(row[column.prefixKey]) : '';
   return (
     <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6 }}>
-      <span style={{ flex: 1, whiteSpace: 'pre-line' }} title={perTerm ? 'Set per term in Agent Payment Readiness' : undefined}>{current || '—'}</span>
+      <span style={{ flex: 1, whiteSpace: 'pre-line' }} title={perTerm ? 'Set per term in Agent Payment Readiness' : undefined}>
+        {prefix && <strong style={{ display: 'block', fontSize: 11.5 }}>{prefix}</strong>}
+        {current || (prefix ? '' : '—')}
+      </span>
       {allowed && (
         <button type="button" className="btn ghost sm" title={label} aria-label={label}
           style={{ padding: '2px 6px' }} onClick={() => { setDraft(current); setEditing(true); }}>✎</button>

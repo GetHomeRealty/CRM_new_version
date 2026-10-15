@@ -19,7 +19,7 @@ import {
 import { condQualify, condRowCountsSql, condRowPageSql } from './report-conds.sql';
 import { anyUncomputedSql, paymentCountsSql, paymentPageSql, paymentSectionFilteredSql, paymentStatusFilter } from './report-payments.sql';
 import type { CommissionVariant } from '../dashboard/desk-commission.sql';
-import type { ReportColumn, ReportFilters, ReportQuery, ReportResult, ReportRow, ReportTotals, ExportPayload, ReportSectionDef } from './report.types';
+import type { ReportColumn, ReportFilters, ReportQuery, ReportResult, ReportRow, ReportTotals, ExportPayload, ReportSectionDef, ReportSectionOut } from './report.types';
 import type { AuthUserRecord } from '../auth/auth.types';
 
 /** Payment methods offered in the Transactions module (AdminActivities + Adjustment modals). */
@@ -924,11 +924,12 @@ export class ReportsService {
       totals,
       branding,
       sections,
+      ...(def.sheetStyle ? { sheetStyle: true } : {}),
     };
   }
 
   // ---- core compute (shared by run + export) ----
-  private async compute(def: ReportDef, user: AuthUserRecord, query: ReportQuery): Promise<{ rows: ReportRow[]; columns: ReportColumn[]; totals: ReportTotals; sections?: { key: string; label: string; count: number }[]; deal_types?: string[] }> {
+  private async compute(def: ReportDef, user: AuthUserRecord, query: ReportQuery): Promise<{ rows: ReportRow[]; columns: ReportColumn[]; totals: ReportTotals; sections?: ReportSectionOut[]; deal_types?: string[] }> {
     const filters = this.sanitize(query.filters ?? {}, user);
     const columns = this.resolveColumns(def, query.columns, filters);
 
@@ -991,7 +992,7 @@ export class ReportsService {
     if (visibleSections) mapped = mapped.filter((r) => wanted.includes(String(r.section ?? '')));
 
     // Section reports render in fixed section order, each section sorted by the report's own default (TD-181).
-    let sections: { key: string; label: string; count: number; totals?: ReportTotals }[] | undefined;
+    let sections: ReportSectionOut[] | undefined;
     let ordered: ReportRow[];
     if (visibleSections) {
       // TD-181, NARROWED 2026-09-13 - IT APPLIES TO ONE REPORT, NOT BOTH.
@@ -1030,6 +1031,8 @@ export class ReportsService {
           label: s.label,
           ...(s.group ? { group: s.group } : {}),
           ...(s.description ? { description: s.description } : {}),
+          ...(s.columnLabels ? { columnLabels: s.columnLabels } : {}),
+          ...(s.blankColumns ? { blankColumns: s.blankColumns } : {}),
           count: rows.length,
           // Mutual Release (and any listed key) intentionally carries no subtotal row.
           totals,
@@ -1062,6 +1065,8 @@ export class ReportsService {
       : undefined;
 
     const totals = this.footer(ordered, columns);
+    // A report whose sections total different things keeps only the columns that add up across them.
+    if (def.grandTotalColumns) for (const k of Object.keys(totals)) if (k !== 'count' && !def.grandTotalColumns.includes(k)) delete totals[k];
     return { rows: ordered, columns, totals, sections, ...(dealTypes ? { deal_types: dealTypes } : {}) };
   }
 

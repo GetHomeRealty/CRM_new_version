@@ -27,6 +27,8 @@ export interface ReportColumn {
    * Remarks note. The screen saves through the ordinary transaction update, so its permissions apply.
    */
   edit?: 'validation_comments' | 'accounting_remarks';
+  /** Another row field shown in front of this one (Pending Payments: Payment Schedule before the remark). */
+  prefixKey?: string;
   /** Mandatory identifier that must always appear in exports even if unchecked (e.g. Trade No.). */
   mandatory?: boolean;
   /** Approx width hint (chars) for export column sizing. */
@@ -59,7 +61,15 @@ export type ReportCategory =
 
 /** Optional report "sections" (only the Transaction Payment Status report uses these). */
 /** `group` puts a heading above a run of sections (e.g. "Agent Payments" over Listing, Buying …). */
-export interface ReportSectionDef { key: string; label: string; description?: string; group?: string }
+export interface ReportSectionDef {
+  key: string; label: string; description?: string; group?: string;
+  /** Column titles that read differently in this section (e.g. "Total Client Payment"). */
+  columnLabels?: Record<string, string>;
+  /** Columns that do not apply in this section: blank title and blank cells (e.g. Advance on Co-op). */
+  blankColumns?: string[];
+}
+/** What a result or export carries for each section shown. */
+export type ReportSectionOut = { key: string; label: string; count: number; totals?: ReportTotals; group?: string; description?: string; columnLabels?: Record<string, string>; blankColumns?: string[] };
 
 /** Static metadata about a report (drives the dashboard cards + column endpoints). */
 export interface ReportMeta {
@@ -138,7 +148,7 @@ export interface ReportResult {
   last_page: number;
   applied_filters: { label: string; value: string }[]; // for the report header + exports
   /** In-table sections (payment-status report): order, counts and per-section subtotals. */
-  sections?: { key: string; label: string; count: number; totals?: ReportTotals; group?: string; description?: string }[];
+  sections?: ReportSectionOut[];
   /** Reports with `dealTypesFromRows`: the deal types in the result, for the Deal Type dropdown. */
   deal_types?: string[];
 }
@@ -161,5 +171,10 @@ export interface ExportPayload {
    * of a single flat table. A section with `totals: undefined` (Mutual Release) shows no
    * financial subtotal. Rows are matched to a section via `row.section`.
    */
-  sections?: { key: string; label: string; count: number; totals?: ReportTotals }[];
+  sections?: ReportSectionOut[];
+  /**
+   * Render in the brokerage's Payment Sheet style (Pending Payments): navy headers, red section
+   * titles, black gridlines, coloured status cells, and every cell on one line.
+   */
+  sheetStyle?: boolean;
 }

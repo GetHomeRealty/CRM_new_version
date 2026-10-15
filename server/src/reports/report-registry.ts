@@ -42,6 +42,10 @@ export interface ReportDef {
   compactSections?: boolean;
   /** Return every row on one page — the report is read as one sheet (Pending Payments). */
   singlePage?: boolean;
+  /** Grand-total only these columns — the ones that add up across all sections. */
+  grandTotalColumns?: string[];
+  /** Export in the brokerage's Payment Sheet style (see ExportPayload.sheetStyle). */
+  sheetStyle?: boolean;
 
   /**
    * Which documentation relations this report reads. Absent means NONE of them.
@@ -519,21 +523,25 @@ export const REPORTS: ReportDef[] = [
     name: 'Pending Payments Report',
     description: 'Everything still to be paid, as on the Payment Sheet — client payments, co-op payments, and agent payments by deal type.',
     category: 'Payment Reports',
-    // Column order as the brokerage specified it (2026-10-15), plus the Sheet's Payment Schedule.
+    // Column order as the brokerage specified it (2026-10-15). Widths are the export's proportions,
+    // measured for the landscape PDF: a full date, $1,234,567.89 and "Invoice Received" fit whole;
+    // the address, names and the two free-text columns share the rest.
     columns: [
-      { key: 'sl_no', label: 'Sl No.', type: 'number', default: true, width: 6 },
-      col.tradeNo(), col.closingDate(),
-      { key: 'days_pending', label: 'Days Since Closing', type: 'number', default: true, sortable: true, width: 10 },
-      col.property(), col.agent(),
+      { key: 'sl_no', label: 'Sl No.', type: 'number', default: true, width: 24 },
+      { ...col.tradeNo(), width: 41 }, { ...col.closingDate(), width: 66 },
+      { key: 'days_pending', label: 'Days Since Closing', type: 'number', default: true, sortable: true, width: 28 },
+      { ...col.property(), width: 98 }, { ...col.agent(), width: 86 },
       // Agent Payment Readiness → Valid Docs Cleared from Agent: Cleared, else Pending.
-      { key: 'docs_status', label: 'Docs Status', type: 'status', default: true, sortable: true, width: 11 },
-      { key: 'final_validation', label: 'Validation Status', type: 'status', default: true, sortable: true, width: 12 },
-      { key: 'final_validation_remarks', label: 'Validation Comments', type: 'text', default: true, width: 22, edit: 'validation_comments' },
-      // Agent Payment Readiness → Ready to Process Agent Payment, in the Sheet's words.
-      { key: 'payment_schedule', label: 'Payment Schedule', type: 'status', default: true, sortable: true, width: 12 },
-      { key: 'accounting_remarks', label: 'Accounting Remarks', type: 'text', default: true, width: 22, edit: 'accounting_remarks' },
-      col.agentW(), col.advanceAmount(), col.balanceDue(),
-      { key: 'payout_status', label: 'Agent Payment Status', type: 'status', default: true, sortable: true, width: 14 },
+      { key: 'docs_status', label: 'Docs Status', type: 'status', default: true, sortable: true, width: 34 },
+      { key: 'final_validation', label: 'Validation Status', type: 'status', default: true, sortable: true, width: 38 },
+      { key: 'final_validation_remarks', label: 'Validation Comments', type: 'text', default: true, width: 72, edit: 'validation_comments' },
+      /*
+       * Payment Schedule (Agent Payment Readiness → Ready to Process: Proceed to Pay / Not Ready / N/A)
+       * travels in front of the remark rather than as a column of its own (brokerage request).
+       */
+      { key: 'accounting_remarks', label: 'Accounting Remarks', type: 'text', default: true, width: 108, edit: 'accounting_remarks', prefixKey: 'payment_schedule' },
+      { ...col.agentW(), width: 52 }, { ...col.advanceAmount(), width: 48 }, { ...col.balanceDue(), width: 52 },
+      { key: 'payout_status', label: 'Agent Payment Status', type: 'status', default: true, sortable: true, width: 55 },
     ],
     /*
      * THE PAYMENT SHEET'S SECTIONS (Payments sheet.pdf, 2026-10-14), in its order. Only the sections
@@ -541,14 +549,23 @@ export const REPORTS: ReportDef[] = [
      * deal type falls in one of the five, and anything new falls in "Other".
      */
     sections: [
-      { key: 'client', label: 'Client Payments', description: 'Must make payments within 1 day (max 1–5 days)' },
-      { key: 'coop', label: 'Co-op Payments', description: 'Must make payments within 7 calendar days' },
+      {
+        key: 'client', label: 'Client Payments', description: 'Must make payments within 1 day (max 1–5 days)',
+        columnLabels: { agent_w: 'Total Client Payment', payout_status: 'Client Payment Status' }, blankColumns: ['advance'],
+      },
+      {
+        key: 'coop', label: 'Co-op Payments', description: 'Must make payments within 7 calendar days',
+        columnLabels: { agent_w: 'Total Co-op Commission', payout_status: 'Co-op Payment Status' }, blankColumns: ['advance'],
+      },
       ...AGENT_GROUPS.map((g) => ({ key: `agent_${g.key}`, label: g.label, group: 'Agent Payments' })),
       { key: 'agent_other', label: 'Other', group: 'Agent Payments' },
     ],
     compactSections: true,
     singlePage: true,
     noSort: true,
+    sheetStyle: true,
+    // Balance Due is the one figure that means the same in every section: what is still owed.
+    grandTotalColumns: ['agent_balance'],
     // "Pending" is deliberately not offered (brokerage request); All still includes those deals.
     // Choosing a payout status narrows to agent payments, the only rows it describes.
     filters: [statusFilter('Payout Status', ['Partially Paid', '50% Paid'])],
@@ -920,6 +937,8 @@ function isDeadDeal(t: EnrichedTxn): boolean {
   return t.statuses.some((s) => s === 'DFT' || s === 'Mutual Release' || s === 'Terminated' || s === 'Void');
 }
 const today = (): string => new Date().toISOString().slice(0, 10);
+/** Today moved by `n` days, as YYYY-MM-DD. */
+const shiftDays = (n: number): string => new Date(Date.now() + n * 86_400_000).toISOString().slice(0, 10);
 /** Whole days from `from` to `to` (YYYY-MM-DD); null when either is missing. */
 function daysBetween(from: string | null, to: string | null): number | null {
   if (!from || !to) return null;
@@ -972,13 +991,27 @@ function pendingPaymentRows(t: EnrichedTxn, f: ReportFilters): ReportRow[] {
   const rows: ReportRow[] = [];
 
   if (!f.status) {
-    if (!isVoidDeal(t) && t.client_payable > 0 && t.client_paid !== 'Yes' && t.client_paid !== 'N/A') {
-      rows.push({ ...common, section: 'client', agent_balance: t.client_payable, payout_status: 'Pending' });
+    /*
+     * Client and co-op money falls due at closing, so only a deal that is closed or closes within
+     * the next 30 days can owe it (a mutual release owes the client a refund regardless). A status
+     * somebody set to No always counts; one nobody ever set counts only on a recent deal — closed in
+     * the last 90 days or closing in the next 30 — so years of untouched old deals do not appear.
+     */
+    const due = t.is_closed || (!!t.closing_date && t.closing_date <= shiftDays(30));
+    const recent = !!t.closing_date && t.closing_date >= shiftDays(-90) && t.closing_date <= shiftDays(30);
+
+    const clientOwed = t.client_payable > 0 && t.client_paid !== 'Yes' && t.client_paid !== 'N/A'
+      && (due || t.is_mutual_release) && (t.client_paid === 'No' || recent);
+    if (!isVoidDeal(t) && clientOwed) {
+      rows.push({ ...common, section: 'client', agent_w: t.client_payable, agent_balance: t.client_payable, payout_status: 'Pending' });
     }
+
     const coopPaid = t.coop_invoice_received === 'Yes' && !!t.coop_paid_date;
-    if (!isDeadDeal(t) && t.coopOut.total > 0 && t.coop_invoice_received !== 'N/A' && !coopPaid) {
+    const coopOwed = t.coopOut.total > 0 && t.coop_invoice_received !== 'N/A' && !coopPaid && due
+      && (t.coop_invoice_received !== '' || recent);
+    if (!isDeadDeal(t) && coopOwed) {
       rows.push({
-        ...common, section: 'coop', agent_balance: t.coopOut.total,
+        ...common, section: 'coop', agent_w: t.coopOut.total, agent_balance: t.coopOut.total,
         payout_status: t.coop_invoice_received === 'Yes' ? 'Invoice Received' : 'Invoice Pending',
       });
     }
