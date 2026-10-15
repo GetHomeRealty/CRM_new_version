@@ -350,7 +350,7 @@ describe('the Analytics aggregate matches summing the same rows in TypeScript', 
       const out = await analyticsFor(tx).summary({ id: 99_000_001, name: 'Nobody At All', role: 'agent' });
       expect(out).toEqual({
         totals: { total: 0, paid: 0, pending: 0, paid_count: 0, pending_count: 0 },
-        by_month: [], by_agent: [], by_type: [],
+        by_month: [], by_agent: [], by_agent_month: [], by_type: [],
       });
     });
   });

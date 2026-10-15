@@ -36,6 +36,63 @@ import type { DeskAnalytics } from '../types';
  */
 const EMPTY: AnalyticsQuery = { from: '', to: '', agent_user_id: '', type: '', status: '' };
 
+/*
+ * PERIOD WINDOW. With years of history the month chart and the agent table were mostly the past.
+ * Both now open on the last twelve months, newest first, and load earlier years twelve months at a
+ * time. The window applies only when no From/To range is set — a chosen range is shown whole. It is
+ * a view over the response, not a filter: the totals cards and the export still cover everything.
+ */
+const WINDOW = 12;
+/** First `YYYY-MM` shown with `chunks` blocks loaded: this month and the 12·chunks − 1 before it. */
+function cutoffMonth(chunks: number): string {
+  const d = new Date();
+  d.setDate(1);
+  d.setMonth(d.getMonth() - (WINDOW * chunks - 1));
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+/** `2025-11` → `Nov 2025`. */
+function monthLabel(ym: string): string {
+  const [y, m] = ym.split('-').map(Number);
+  return new Date(y, m - 1, 1).toLocaleString('en-CA', { month: 'short', year: 'numeric' });
+}
+
+type AgentRow = DeskAnalytics['by_agent'][number];
+/** The agent table over deals closing from `cut` on; deals with no closing date belong to no period. */
+function agentsSince(agents: AgentRow[], byMonth: NonNullable<DeskAnalytics['by_agent_month']>, cut: string): AgentRow[] {
+  const sums = new Map<number, { count: number; total: number }>();
+  for (const r of byMonth) {
+    if (r.month === 'none' || r.month < cut) continue;
+    const s = sums.get(r.agent_id) ?? { count: 0, total: 0 };
+    s.count += r.count;
+    s.total += r.total ?? 0;
+    sums.set(r.agent_id, s);
+  }
+  return agents
+    .filter((a) => a.id !== undefined && sums.has(a.id))
+    .map((a) => {
+      const s = sums.get(a.id!)!;
+      // Rounded once here: the per-month figures are already to the cent.
+      return { ...a, count: s.count, total: typeof a.total === 'number' ? Math.round(s.total * 100) / 100 : a.total };
+    })
+    .sort((x, y) => (y.total ?? 0) - (x.total ?? 0) || y.count - x.count || x.agent.localeCompare(y.agent));
+}
+
+/** "Showing … · Load previous 12 months · Show latest 12 months" under a windowed card. */
+function WindowBar({ from, older, expanded, onMore, onLess }: {
+  from: string; older: boolean; expanded: boolean; onMore: () => void; onLess: () => void;
+}) {
+  if (!older && !expanded) return null;
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
+      <span className="help" style={{ flex: 1 }}>
+        {older ? `Showing closings from ${monthLabel(from)} onward.` : 'Showing all closings.'}
+      </span>
+      {older && <button className="btn sm" onClick={onMore}>Load previous 12 months</button>}
+      {expanded && <button className="btn ghost sm" onClick={onLess}>Show latest 12 months</button>}
+    </div>
+  );
+}
+
 export default function AnalyticsPage() {
   const toast = useToast();
   const [data, setData] = useState<DeskAnalytics | null>(null);
@@ -44,11 +101,15 @@ export default function AnalyticsPage() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [exporting, setExporting] = useState(false);
+  /** Whether the figures on screen were loaded with a From/To range — which turns the window off. */
+  const [ranged, setRanged] = useState(false);
+  const [monthChunks, setMonthChunks] = useState(1);
+  const [agentChunks, setAgentChunks] = useState(1);
 
   const load = (f: AnalyticsQuery) => {
     setBusy(true);
     return getDeskAnalytics(f)
-      .then(setData)
+      .then((d) => { setData(d); setRanged(!!f.from || !!f.to); setMonthChunks(1); setAgentChunks(1); })
       .catch((e) => toast(apiErrorMessage(e, 'Could not load analytics'), 'bad'))
       .finally(() => { setBusy(false); setLoading(false); });
   };
@@ -85,7 +146,22 @@ export default function AnalyticsPage() {
   if (!data) return <div className="card stub"><h2>Nothing to show</h2><p className="help">Analytics could not be loaded. Try Refresh.</p></div>;
 
   const { totals, by_month: months, by_agent: agents, by_type: types } = data;
-  const maxMonth = Math.max(1, ...months.map((m) => m.total));
+
+  // Newest month first; the "No closing date" bucket stays last and is always shown.
+  const dated = months.filter((m) => m.month !== 'none').sort((a, b) => b.month.localeCompare(a.month));
+  const undated = months.find((m) => m.month === 'none');
+  const monthCut = cutoffMonth(monthChunks);
+  const shownMonths = ranged ? dated : dated.filter((m) => m.month >= monthCut);
+  const olderMonths = shownMonths.length < dated.length;
+  const monthRows = undated ? [...shownMonths, undated] : shownMonths;
+  const maxMonth = Math.max(1, ...monthRows.map((m) => m.total));
+
+  // The agent table over the same kind of window, when the server sent the per-month split.
+  const agentCut = cutoffMonth(agentChunks);
+  const agentMonths = data.by_agent_month;
+  const olderAgents = !ranged && !!agentMonths && agentMonths.some((r) => r.month !== 'none' && r.month < agentCut);
+  const agentRows = olderAgents ? agentsSince(agents, agentMonths!, agentCut) : agents;
+  const showMoney = agents.some((x) => typeof x.total === 'number');
 
   return (
     <>
@@ -160,7 +236,9 @@ export default function AnalyticsPage() {
 
       <div className="card">
         <div className="modal-h" style={{ fontSize: 14 }}>Commission by Closing Month <span className="help" style={{ fontWeight: 400 }}>· before HST</span></div>
-        {months.length === 0 ? <div className="help">No transactions yet.</div> : months.map((m) => (
+        {months.length === 0 && <div className="help">No transactions yet.</div>}
+        {months.length > 0 && shownMonths.length === 0 && <div className="help" style={{ padding: '5px 0' }}>No closings in this period.</div>}
+        {monthRows.map((m) => (
           /*
            * TD-092 — a deal with no closing date has its own bar, labelled as such.
            *
@@ -179,6 +257,8 @@ export default function AnalyticsPage() {
             <strong style={{ width: 110, textAlign: 'right', fontSize: 12 }}>{formatCurrency(m.total)}</strong>
           </div>
         ))}
+        <WindowBar from={monthCut} older={olderMonths} expanded={monthChunks > 1}
+          onMore={() => setMonthChunks((n) => n + 1)} onLess={() => setMonthChunks(1)} />
       </div>
 
       <div className="g2">
@@ -197,12 +277,14 @@ export default function AnalyticsPage() {
           <table className="list-table">{/* TD-002. The column is drawn only when the API sends commission at all. Driven by the
               data, not by the role: the server decides who may see money, and repeating that rule
               here would be a second copy of it to drift out of step. */}
-            <thead><tr><th>Primary Agent</th><th>Deals</th>{agents.some((x) => typeof x.total === 'number') && <th>Deal Commission</th>}</tr></thead>
+            <thead><tr><th>Primary Agent</th><th>Deals</th>{showMoney && <th>Deal Commission</th>}</tr></thead>
             <tbody>
-              {agents.length === 0 && <tr><td colSpan={agents.some((x) => typeof x.total === 'number') ? 3 : 2} style={{ textAlign: 'center', color: 'var(--muted)', padding: 14 }}>No data.</td></tr>}
-              {agents.map((a) => <tr key={a.agent}><td>{a.agent}</td><td>{a.count}</td>{agents.some((x) => typeof x.total === 'number') && <td>{formatCurrency(a.total ?? 0)}</td>}</tr>)}
+              {agentRows.length === 0 && <tr><td colSpan={showMoney ? 3 : 2} style={{ textAlign: 'center', color: 'var(--muted)', padding: 14 }}>{agents.length === 0 ? 'No data.' : 'No closings in this period.'}</td></tr>}
+              {agentRows.map((a) => <tr key={a.id ?? a.agent}><td>{a.agent}</td><td>{a.count}</td>{showMoney && <td>{formatCurrency(a.total ?? 0)}</td>}</tr>)}
             </tbody>
           </table>
+          <WindowBar from={agentCut} older={olderAgents} expanded={agentChunks > 1}
+            onMore={() => setAgentChunks((n) => n + 1)} onLess={() => setAgentChunks(1)} />
         </div>
         <div className="card">
           <div className="modal-h" style={{ fontSize: 14 }}>By Transaction Type</div>

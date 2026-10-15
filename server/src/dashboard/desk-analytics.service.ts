@@ -55,8 +55,16 @@ export interface DeskAnalytics {
   totals: { total: number; paid: number; pending: number; paid_count: number; pending_count: number };
   /** Ascending by month (`YYYY-MM`). Deals with neither date are omitted, as on the screen. */
   by_month: { month: string; total: number }[];
-  /** Descending by commission. `Unassigned` covers deals with no agent, as on the screen. */
-  by_agent: { agent: string; count: number; total: number | null }[];
+  /**
+   * Descending by commission. `Unassigned` covers deals with no agent, as on the screen. `id` is this
+   * response's own row number for the agent — not a user id — and is what `by_agent_month` refers to.
+   */
+  by_agent: { id: number; agent: string; count: number; total: number | null }[];
+  /**
+   * The same rows split by closing month (`none` when there is no closing date), so the screen can
+   * show the last twelve months and load earlier ones without another request. They sum to `by_agent`.
+   */
+  by_agent_month: { agent_id: number; month: string; count: number; total: number | null }[];
   by_type: { type: string; count: number; total: number }[];
 }
 
@@ -101,6 +109,21 @@ const PAID = `(COALESCE(t.comm_paid_status = 'Yes', false) OR t.comm_status = 'R
  * screen and the export both translate it into words; nothing renders the sentinel itself.
  */
 export const NO_CLOSING_DATE = 'none';
+
+/** The closing month a deal is charted under — `none` when it has no closing date (TD-092). */
+const MONTH = `COALESCE(to_char(t.closing_date, 'YYYY-MM'), '${NO_CLOSING_DATE}')`;
+
+/*
+ * TD-045 - one agent, one row, keyed on IDENTITY rather than on the typed name. Grouping on the
+ * resolved NAME would be worse: two accounts sharing a name would pool their commission, and a
+ * rename would split one agent's history across the old and new label. So the group key is the
+ * account id where there is one, and only the DISPLAY is the name. A deal with no id falls back to
+ * its trimmed, case-folded name - an external/co-op agent, which is legitimate. An ambiguous name is
+ * left alone rather than guessed at. Shared by `by_agent` and `by_agent_month` so they group alike.
+ */
+const AGENT_JOIN = `LEFT JOIN users au ON au.id = COALESCE(t.agent_user_id, (SELECT MIN(u2.id) FROM users u2 WHERE u2.name = btrim(t.agent) HAVING COUNT(*) = 1))`;
+const AGENT_KEY = `COALESCE(au.id::text, 'n:' || lower(btrim(COALESCE(t.agent, ''))))`;
+const AGENT_NAME = `COALESCE(NULLIF(btrim(au.name), ''), NULLIF(btrim(t.agent), ''), 'Unassigned')`;
 
 /**
  * The screen's filters, as extra SQL predicates.
@@ -175,6 +198,8 @@ function filterSql(f: AnalyticsFilters, params: unknown[]): string {
 type TotalsRow = { paid: string | null; pending: string | null; paid_count: bigint; pending_count: bigint };
 type MonthRow = { month: string; total: string };
 type GroupRow = { key: string | null; count: bigint; total: string };
+type AgentRow = GroupRow & { gkey: string };
+type AgentMonthRow = { gkey: string; month: string; count: bigint; total: string };
 
 const money = (v: string | null): number => round2(Number(v ?? 0));
 
@@ -192,7 +217,7 @@ export class DeskAnalyticsService {
     // A scope that can match nothing short-circuits: there is no query to run, and no aggregate
     // that would return the right shape for "no rows" without one.
     if (scope === null) {
-      return { totals: { total: 0, paid: 0, pending: 0, paid_count: 0, pending_count: 0 }, by_month: [], by_agent: [], by_type: [] };
+      return { totals: { total: 0, paid: 0, pending: 0, paid_count: 0, pending_count: 0 }, by_month: [], by_agent: [], by_agent_month: [], by_type: [] };
     }
 
     /*
@@ -204,7 +229,7 @@ export class DeskAnalyticsService {
     const params: unknown[] = [];
     const narrowed = filterSql(filters, params);
 
-    const [totals, byMonth, byAgent, byType] = await Promise.all([
+    const [totals, byMonth, byAgent, byAgentMonth, byType] = await Promise.all([
       this.prisma.$queryRawUnsafe<TotalsRow[]>(`
         SELECT
           COALESCE(SUM(${AMOUNT}) FILTER (WHERE ${PAID}), 0)     AS paid,
@@ -255,21 +280,24 @@ export class DeskAnalyticsService {
       // Highest commission first — the order the two tables have always rendered in. The tie-break
       // on the key is not cosmetic: without it two agents on identical totals could swap places
       // between requests, and a table that reorders itself for no reason reads as a bug.
-      this.prisma.$queryRawUnsafe<GroupRow[]>(`
-        -- TD-045 - one agent, one row, keyed on IDENTITY rather than on the typed name. Grouping
-        -- on the resolved NAME would be worse: two accounts sharing a name would pool their
-        -- commission, and a rename would split one agent's history across the old and new label.
-        -- So the GROUP BY is the account id where there is one, and only the DISPLAY is the name.
-        -- A deal with no id falls back to its trimmed, case-folded name - an external/co-op agent,
-        -- which is legitimate. An ambiguous name is left alone rather than guessed at.
-        SELECT COALESCE(NULLIF(btrim(au.name), ''), NULLIF(btrim(t.agent), ''), 'Unassigned') AS key,
+      // One agent, one row — see AGENT_KEY (TD-045).
+      this.prisma.$queryRawUnsafe<AgentRow[]>(`
+        SELECT ${AGENT_NAME} AS key, ${AGENT_KEY} AS gkey,
                COUNT(*) AS count, COALESCE(SUM(${AMOUNT}), 0) AS total
         FROM transactions t
-        LEFT JOIN users au ON au.id = COALESCE(t.agent_user_id, (SELECT MIN(u2.id) FROM users u2 WHERE u2.name = btrim(t.agent) HAVING COUNT(*) = 1))
+        ${AGENT_JOIN}
         WHERE t.deleted_at IS NULL AND ${scope}${narrowed}
-        GROUP BY COALESCE(au.id::text, 'n:' || lower(btrim(COALESCE(t.agent, '')))),
-                 COALESCE(NULLIF(btrim(au.name), ''), NULLIF(btrim(t.agent), ''), 'Unassigned')
-        ORDER BY 3 DESC, 1 ASC`, ...params),
+        GROUP BY ${AGENT_KEY}, ${AGENT_NAME}
+        ORDER BY 4 DESC, 1 ASC`, ...params),
+
+      // The same grouping, split by closing month — lets the screen window the table by period.
+      this.prisma.$queryRawUnsafe<AgentMonthRow[]>(`
+        SELECT ${AGENT_KEY} AS gkey, ${MONTH} AS month,
+               COUNT(*) AS count, COALESCE(SUM(${AMOUNT}), 0) AS total
+        FROM transactions t
+        ${AGENT_JOIN}
+        WHERE t.deleted_at IS NULL AND ${scope}${narrowed}
+        GROUP BY 1, 2`, ...params),
 
       this.prisma.$queryRawUnsafe<GroupRow[]>(`
         SELECT t.type AS key, COUNT(*) AS count, COALESCE(SUM(${AMOUNT}), 0) AS total
@@ -282,6 +310,7 @@ export class DeskAnalyticsService {
     const row = totals[0] ?? { paid: '0', pending: '0', paid_count: 0n, pending_count: 0n };
     const paid = money(row.paid);
     const pending = money(row.pending);
+    const agentIds = new Map(byAgent.map((r, i) => [r.gkey, i + 1]));
 
     return {
       totals: {
@@ -305,11 +334,19 @@ export class DeskAnalyticsService {
        * text (TD-045), and this file already warns that the brokerage has two active accounts
        * sharing a name - a namesake would be handed the other's figures by an exact string match.
        */
-      by_agent: byAgent.map((r) => ({
+      by_agent: byAgent.map((r, i) => ({
+        id: i + 1,
         agent: r.key ?? 'Unassigned',
         count: Number(r.count),
         total: isAgent(user) ? null : money(r.total),
       })),
+      // Referred to by row number, never by the group key: that would hand an agent other users' ids.
+      by_agent_month: byAgentMonth.flatMap((r) => {
+        const id = agentIds.get(r.gkey);
+        return id === undefined ? [] : [{
+          agent_id: id, month: r.month, count: Number(r.count), total: isAgent(user) ? null : money(r.total),
+        }];
+      }),
       by_type: byType.map((r) => ({ type: r.key ?? '', count: Number(r.count), total: money(r.total) })),
     };
   }

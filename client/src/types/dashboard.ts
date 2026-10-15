@@ -83,7 +83,9 @@ export interface DeskAnalytics {
   totals: { total: number; paid: number; pending: number; paid_count: number; pending_count: number };
   /** Ascending by `YYYY-MM`. Deals with neither a closing nor an offer date are omitted. */
   by_month: { month: string; total: number }[];
-  /** Descending by commission. `Unassigned` covers deals with no agent. */
-  by_agent: { agent: string; count: number; total: number }[];
+  /** Descending by commission. `Unassigned` covers deals with no agent. `id` is a row number, not a user id. */
+  by_agent: { id?: number; agent: string; count: number; total: number }[];
+  /** `by_agent` split by closing month (`none` = no closing date); `agent_id` is a `by_agent` id. */
+  by_agent_month?: { agent_id: number; month: string; count: number; total: number | null }[];
   by_type: { type: string; count: number; total: number }[];
 }
