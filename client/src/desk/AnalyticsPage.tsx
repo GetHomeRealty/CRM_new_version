@@ -4,6 +4,7 @@ import {
   type AnalyticsQuery, type AnalyticsFilterOptions,
 } from '../lib/api';
 import { formatCurrency, typeClass } from './format';
+import MonthCommissionChart from './MonthCommissionChart';
 import { useToast } from './toast';
 import { apiErrorMessage } from '../lib/apiError';
 import type { DeskAnalytics } from '../types';
@@ -37,10 +38,11 @@ import type { DeskAnalytics } from '../types';
 const EMPTY: AnalyticsQuery = { from: '', to: '', agent_user_id: '', type: '', status: '' };
 
 /*
- * PERIOD WINDOW. With years of history the month chart and the agent table were mostly the past.
- * Both now open on the last twelve months, newest first, and load earlier years twelve months at a
- * time. The window applies only when no From/To range is set — a chosen range is shown whole. It is
- * a view over the response, not a filter: the totals cards and the export still cover everything.
+ * PERIOD WINDOW. With years of history the agent table was mostly the past. It now opens on deals
+ * closing in the last twelve months onward, and loads earlier years twelve months at a time. (The
+ * month chart has its own period picker — see MonthCommissionChart.) The window applies only when
+ * no From/To range is set — a chosen range is shown whole. It is a view over the response, not a
+ * filter: the totals cards and the export still cover everything.
  */
 const WINDOW = 12;
 /** First `YYYY-MM` shown with `chunks` blocks loaded: this month and the 12·chunks − 1 before it. */
@@ -103,13 +105,17 @@ export default function AnalyticsPage() {
   const [exporting, setExporting] = useState(false);
   /** Whether the figures on screen were loaded with a From/To range — which turns the window off. */
   const [ranged, setRanged] = useState(false);
-  const [monthChunks, setMonthChunks] = useState(1);
+  /** The From/To the figures on screen were loaded with — not what is typed in the inputs. */
+  const [appliedRange, setAppliedRange] = useState<{ from?: string; to?: string }>({});
   const [agentChunks, setAgentChunks] = useState(1);
 
   const load = (f: AnalyticsQuery) => {
     setBusy(true);
     return getDeskAnalytics(f)
-      .then((d) => { setData(d); setRanged(!!f.from || !!f.to); setMonthChunks(1); setAgentChunks(1); })
+      .then((d) => {
+        setData(d); setRanged(!!f.from || !!f.to); setAgentChunks(1);
+        setAppliedRange({ from: f.from || undefined, to: f.to || undefined });
+      })
       .catch((e) => toast(apiErrorMessage(e, 'Could not load analytics'), 'bad'))
       .finally(() => { setBusy(false); setLoading(false); });
   };
@@ -148,13 +154,6 @@ export default function AnalyticsPage() {
   const { totals, by_month: months, by_agent: agents, by_type: types } = data;
 
   // Newest month first; the "No closing date" bucket stays last and is always shown.
-  const dated = months.filter((m) => m.month !== 'none').sort((a, b) => b.month.localeCompare(a.month));
-  const undated = months.find((m) => m.month === 'none');
-  const monthCut = cutoffMonth(monthChunks);
-  const shownMonths = ranged ? dated : dated.filter((m) => m.month >= monthCut);
-  const olderMonths = shownMonths.length < dated.length;
-  const monthRows = undated ? [...shownMonths, undated] : shownMonths;
-  const maxMonth = Math.max(1, ...monthRows.map((m) => m.total));
 
   // The agent table over the same kind of window, when the server sent the per-month split.
   const agentCut = cutoffMonth(agentChunks);
@@ -236,29 +235,11 @@ export default function AnalyticsPage() {
 
       <div className="card">
         <div className="modal-h" style={{ fontSize: 14 }}>Commission by Closing Month <span className="help" style={{ fontWeight: 400 }}>· before HST</span></div>
-        {months.length === 0 && <div className="help">No transactions yet.</div>}
-        {months.length > 0 && shownMonths.length === 0 && <div className="help" style={{ padding: '5px 0' }}>No closings in this period.</div>}
-        {monthRows.map((m) => (
-          /*
-           * TD-092 — a deal with no closing date has its own bar, labelled as such.
-           *
-           * It used to be charted under its OFFER month — asserted to close in a month it has no
-           * closing date for, on a chart headed "by Closing Month" — or, with no offer date either,
-           * dropped from the chart entirely. The bucket carries the sentinel `none` from the API;
-           * the words belong here, where they are read.
-           */
-          <div key={m.month} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '5px 0' }}>
-            <span style={{ width: 108, fontSize: 12, color: m.month === 'none' ? 'var(--warn-ink)' : 'var(--muted)' }}>
-              {m.month === 'none' ? 'No closing date' : m.month}
-            </span>
-            <div style={{ flex: 1, background: 'var(--surface-3)', height: 16, borderRadius: 6, overflow: 'hidden' }}>
-              <div style={{ height: '100%', width: `${(m.total / maxMonth) * 100}%`, background: 'linear-gradient(90deg,#c8102e,#9c0c24)' }} />
-            </div>
-            <strong style={{ width: 110, textAlign: 'right', fontSize: 12 }}>{formatCurrency(m.total)}</strong>
-          </div>
-        ))}
-        <WindowBar from={monthCut} older={olderMonths} expanded={monthChunks > 1}
-          onMore={() => setMonthChunks((n) => n + 1)} onLess={() => setMonthChunks(1)} />
+        {/* TD-092 — deals with no closing date (the API's `none` bucket) are stated under the chart,
+            never charted under another month. Keyed by the applied range so a new range opens on it. */}
+        {months.length === 0
+          ? <div className="help">No transactions yet.</div>
+          : <MonthCommissionChart key={`${appliedRange.from}|${appliedRange.to}`} months={months} from={appliedRange.from} to={appliedRange.to} />}
       </div>
 
       <div className="g2">
