@@ -39,7 +39,7 @@ export default function ReportsPage() {
       {[...cats, ...extras].map((cat) => (
         <div key={cat} style={{ marginBottom: 18 }}>
           <div className="modal-h" style={{ fontSize: 13, margin: '0 0 10px' }}>{cat}</div>
-          <div className="report-grid">
+          <div className={cat === 'Payment Reports' ? 'report-grid one-row' : 'report-grid'}>
             {reports.filter((r) => r.category === cat).map((r) => (
               <div key={r.type} className="card report-card">
                 <div>

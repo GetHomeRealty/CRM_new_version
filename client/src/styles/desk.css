@@ -358,6 +358,8 @@ input[type="number"],.numeric,.stat-card .val{font-variant-numeric:tabular-nums;
 
 /* ---- Reports module ---- */
 .report-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(288px,1fr));gap:14px}
+/* Payment Reports: all six cards share one row on wide screens, wrapping only when they must */
+.report-grid.one-row{grid-template-columns:repeat(auto-fit,minmax(200px,1fr))}
 .report-card{display:flex;flex-direction:column;justify-content:space-between;gap:12px;min-height:126px;transition:border-color .18s, box-shadow .18s, transform .18s}
 .report-card:hover{border-color:#c7d2fe;box-shadow:var(--shadow);transform:translateY(-2px)}
 .report-card-name{font-weight:700;color:var(--text);margin-bottom:4px;letter-spacing:-0.01em}

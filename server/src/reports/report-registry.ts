@@ -124,6 +124,9 @@ const MENTIONS = (column: 'adjustments' | 'admin_activities' | 'activity_tracker
  */
 export const AGENT_PAYMENT_STATUSES = ['Paid', 'Partially Paid', 'Pending', 'Upcoming', 'Not Applicable'];
 
+/** Scheduled Payments Report — an open deal's schedule, read from its closing date. */
+export const SCHEDULE_STATUSES = ['Scheduled', 'Closing Date Passed', 'Not Scheduled'];
+
 /** Reminder types recorded on the reminder log (individual / whole deal / bulk). */
 export const REMINDER_TYPES = ['individual', 'deal_pending', 'deal_invalid', 'deal_all', 'bulk_pending', 'bulk_invalid', 'bulk_all'];
 
@@ -486,6 +489,57 @@ export const REPORTS: ReportDef[] = [
     predicate: (t, f) => (!f.status || t.agent_payment_status === f.status),
     map: (t) => ({ ...baseRow(t), adjustments: t.adjustments_total, agent_paid_w: t.agent_paid, paid_date: t.agent_paid_date, payment_status: t.agent_payment_status }),
   },
+  // 11a ---------------------------------------------------------------
+  {
+    type: 'pending-payments',
+    name: 'Pending Payments Report',
+    description: 'Closed deals where agent commission is still owed, with the balance due and how long it has been pending.',
+    category: 'Payment Reports',
+    columns: [
+      ...HEAD(), col.tradeNo(),
+      col.agentW(), col.advanceAmount(), col.agentPaid('Amount Paid'), col.balanceDue(),
+      { key: 'days_pending', label: 'Days Since Closing', type: 'number', default: true, sortable: true, width: 10 },
+      col.agentPaymentStatus(), col.paymentType(),
+    ],
+    filters: [statusFilter('Payment Status', ['Pending', 'Partially Paid'])],
+    defaultSort: { key: 'closing_date', dir: 'asc' },
+    // Derived from admin_activities (payment status, balance) — no honest SQL superset; see sqlWhere.
+    predicate: (t, f) => {
+      if (!t.is_closed || isDeadDeal(t) || t.agent_balance <= 0) return false;
+      if (t.agent_payment_status !== 'Pending' && t.agent_payment_status !== 'Partially Paid') return false;
+      return !f.status || t.agent_payment_status === f.status;
+    },
+    // TD-109 — the name on the row is the name the (scoped) money belongs to.
+    map: (t) => ({ ...baseRow(t), agent: t.agent_names.join(', ') || t.agent, days_pending: daysBetween(t.closing_date, today()) }),
+  },
+  // 11b ---------------------------------------------------------------
+  {
+    type: 'scheduled-payments',
+    name: 'Scheduled Payments Report',
+    description: 'Deals not yet closed with agent commission scheduled to be paid on the upcoming closing date.',
+    category: 'Payment Reports',
+    columns: [
+      ...HEAD(), col.tradeNo(),
+      col.agentW(), col.advanceAmount(),
+      { key: 'agent_balance', label: 'Scheduled Amount', type: 'currency', default: true, sortable: true, total: true, width: 14 },
+      { key: 'days_to_closing', label: 'Days to Closing', type: 'number', default: true, sortable: true, width: 10 },
+      { key: 'schedule_status', label: 'Schedule Status', type: 'status', default: true, sortable: true, width: 14 },
+      col.agentPaymentStatus(), col.paymentType(),
+    ],
+    filters: [statusFilter('Schedule Status', SCHEDULE_STATUSES)],
+    defaultSort: { key: 'closing_date', dir: 'asc' },
+    predicate: (t, f) => {
+      if (t.is_closed || isDeadDeal(t) || t.agent_balance <= 0) return false;
+      if (t.agent_payment_status === 'Paid' || t.agent_payment_status === 'Not Applicable') return false;
+      return !f.status || scheduleStatus(t) === f.status;
+    },
+    map: (t) => ({
+      ...baseRow(t),
+      agent: t.agent_names.join(', ') || t.agent,
+      days_to_closing: daysBetween(today(), t.closing_date),
+      schedule_status: scheduleStatus(t),
+    }),
+  },
   // 12 ----------------------------------------------------------------
   {
     type: 'agent-loan',
@@ -811,6 +865,21 @@ function partialStatus(t: EnrichedTxn): string {
   if (t.advance > 0 && t.agent_paid <= 0) return 'Advance Paid';
   if (t.agent_paid > 0 || t.advance > 0) return 'Partially Paid';
   return 'Balance Pending';
+}
+/** DFT, mutually released, terminated or void deals earn no commission (see desk-commission.sql.ts). */
+function isDeadDeal(t: EnrichedTxn): boolean {
+  return t.statuses.some((s) => s === 'DFT' || s === 'Mutual Release' || s === 'Terminated' || s === 'Void');
+}
+const today = (): string => new Date().toISOString().slice(0, 10);
+/** Whole days from `from` to `to` (YYYY-MM-DD); null when either is missing. */
+function daysBetween(from: string | null, to: string | null): number | null {
+  if (!from || !to) return null;
+  return Math.round((Date.parse(to) - Date.parse(from)) / 86_400_000);
+}
+/** An open deal's payment schedule is its closing date. */
+function scheduleStatus(t: EnrichedTxn): string {
+  if (!t.closing_date) return 'Not Scheduled';
+  return t.closing_date < today() ? 'Closing Date Passed' : 'Scheduled';
 }
 function cashbackStatus(t: EnrichedTxn): string {
   return t.cashback.pendingTotal <= 0 && t.cashback.total > 0 ? 'Completed' : 'Pending';
