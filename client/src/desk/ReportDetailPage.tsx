@@ -314,7 +314,7 @@ export default function ReportDetailPage() {
                     {(s.count ?? 0) > 0 && s.totals && (
                       <tr className="report-subtotal-row">
                         {selectable && <td className="report-sel-col" />}
-                        {cols.map((c, i) => <td key={c.key} className={cellClass(c)}>{footer(c, s.totals!, i === 0, s.count ?? 0, s.label + ' total')}</td>)}
+                        {footerCells(cols, (c, i) => footer(c, s.totals!, i === 0, s.count ?? 0, s.label + ' total'))}
                       </tr>
                     )}
                   </Fragment>
@@ -355,7 +355,7 @@ export default function ReportDetailPage() {
               <tfoot>
                 <tr className="report-totals">
                   {selectable && <td className="report-sel-col" />}
-                  {cols.map((c, i) => <td key={c.key} className={cellClass(c)}>{footer(c, totals, i === 0, result.total_count)}</td>)}
+                  {footerCells(cols, (c, i) => footer(c, totals, i === 0, result.total_count))}
                 </tr>
               </tfoot>
             )}
@@ -494,7 +494,23 @@ function fmt(v: string | number | null, c: ReportColumn): string {
 }
 function tooltip(v: string | number | null, c: ReportColumn): string | undefined { return c.type === 'text' && v ? String(v) : undefined; }
 /** Everything is left-aligned; property + date columns don't wrap (property sized to its text). */
+/**
+ * A totals row's cells, with the label in the first cell running across the empty cells beside it —
+ * so "Pre-Construction total (36)" never widens a narrow first column (Sl No.) for every row above.
+ */
+function footerCells(cols: ReportColumn[], text: (c: ReportColumn, i: number) => string) {
+  const texts = cols.map((c, i) => text(c, i));
+  let span = 1;
+  while (span < texts.length && !texts[span]) span++;
+  return [
+    <td key={cols[0]?.key ?? 'label'} colSpan={span} style={{ whiteSpace: 'nowrap' }}>{texts[0]}</td>,
+    ...cols.slice(span).map((c, j) => <td key={c.key} className={cellClass(c)}>{texts[span + j]}</td>),
+  ];
+}
+
 function cellClass(c: ReportColumn): string {
+  // Sl No. holds a short number; it takes only the width it needs instead of a share of the table.
+  if (c.key === 'sl_no') return 'col-slno';
   if (c.key === 'property') return 'col-property';
   if (c.type === 'date' || c.type === 'datetime') return 'col-date';
   return '';

@@ -388,6 +388,8 @@ input[type="number"],.numeric,.stat-card .val{font-variant-numeric:tabular-nums;
 .report-table th,.report-table td{text-align:left;vertical-align:middle;white-space:normal;overflow-wrap:break-word;word-break:normal;hyphens:none;padding:10px 12px;height:44px;max-width:220px}
 .report-table thead th{position:sticky;top:0;z-index:2;line-height:1.25;height:46px;white-space:normal}
 .report-table th.sortable{cursor:pointer;user-select:none;padding-right:20px;position:relative}
+/* Sl No.: as narrow as its contents (width:1% shrinks an auto-layout column to fit) */
+.report-table th.col-slno,.report-table td.col-slno{width:1%;white-space:nowrap;padding-right:6px}
 /* Subtle always-visible sort affordance; strengthens when the column is the active sort. */
 .report-table th.sortable .sort-ind{position:absolute;right:7px;top:50%;transform:translateY(-50%);font-size:9px;line-height:1;opacity:.32;transition:opacity .15s}
 .report-table th.sortable:hover .sort-ind{opacity:.6}
