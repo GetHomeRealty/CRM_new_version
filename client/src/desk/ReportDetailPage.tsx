@@ -61,8 +61,13 @@ export default function ReportDetailPage() {
   const [expanded, setExpanded] = useState<number | null>(null);
   const [docs, setDocs] = useState<ReportDocuments | null>(null);
   const [docsLoading, setDocsLoading] = useState(false);
-  /** The deal types found in this report (only for `dealTypesFromRows` reports); kept while a type is selected. */
-  const [rowDealTypes, setRowDealTypes] = useState<string[] | null>(null);
+  /**
+   * The values found in this report (only for `dealTypesFromRows` reports): deal types, closing years
+   * and accounting remarks, taken from its unfiltered run so choosing one value never hides the rest.
+   */
+  const [facets, setFacets] = useState<NonNullable<ReportResult['facets']> | null>(null);
+  /** Compact-toolbar reports: whether the filter fields are open (Add Filters). */
+  const [filtersOpen, setFiltersOpen] = useState(false);
 
   // ---- row selection + bulk reminder actions (documentation reports) ----
   const [selected, setSelected] = useState<number[]>([]);
@@ -90,7 +95,7 @@ export default function ReportDetailPage() {
   // load report metadata + filter options whenever the report changes
   useEffect(() => {
     setLoading(true); setError(''); setMeta(null); setResult(null);
-    setDraft({}); setApplied({}); setSelectedCols(null); setSections(null); setSort(null); setPage(1); setRowDealTypes(null);
+    setDraft({}); setApplied({}); setSelectedCols(null); setSections(null); setSort(null); setPage(1); setFacets(null); setFiltersOpen(false);
     Promise.all([reportColumns(reportType), reportFilterOptions()])
       .then(([m, o]) => { setMeta(m); setOptions(o); })
       .catch((e) => setError(apiErrorMessage(e, 'Could not load report')))
@@ -109,7 +114,12 @@ export default function ReportDetailPage() {
     if (!meta) return;
     setRunning(true); setError('');
     runReport(reportType, body)
-      .then((r) => { setResult(r); if (r.deal_types) setRowDealTypes(r.deal_types); })
+      .then((r) => {
+        setResult(r);
+        // Lists are learnt from an unfiltered run only (search aside), so they always offer every value.
+        const filtered = Object.entries(body.filters).some(([k, v]) => k !== 'search' && k !== 'sections' && v != null && v !== '' && !(Array.isArray(v) && !v.length));
+        if (r.facets && (!filtered || !facets)) setFacets(r.facets);
+      })
       .catch((e) => { const m = apiErrorMessage(e, 'Could not run report'); setError(m); toast(m, 'bad'); })
       .finally(() => setRunning(false));
   }, [meta, reportType, body]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -139,11 +149,15 @@ export default function ReportDetailPage() {
   const shows = (f: string) => !meta.hideFilters?.includes(f);
   /*
    * Deal Type options. A report flagged `dealTypesFromRows` offers only the types its own rows
-   * contain — the server sends them while no type is selected — plus anything already chosen.
+   * contain (from its unfiltered run), plus anything already chosen.
    */
-  const dealTypeOptions = meta.dealTypesFromRows && rowDealTypes
-    ? [...new Set([...rowDealTypes, ...(draft.deal_type ?? [])])].map((v) => ({ value: v, label: v }))
+  const dealTypeOptions = meta.dealTypesFromRows && facets
+    ? [...new Set([...facets.deal_type, ...(draft.deal_type ?? [])])].map((v) => ({ value: v, label: v }))
     : options?.deal_type ?? [];
+  /** Closing Year options: the years in this report's own rows when it has them, else every year. */
+  const yearOptions = meta.dealTypesFromRows && facets ? facets.year.map((y) => ({ value: y, label: y })) : options?.year ?? [];
+  /** How many filters are applied (search aside), for the Add Filters button. */
+  const activeFilters = Object.entries(applied).filter(([k, v]) => k !== 'search' && v != null && v !== '' && !(Array.isArray(v) && !v.length)).length;
 
   /** Column count including the selection checkbox column, for full-width cells. */
   const span = cols.length + (selectable ? 1 : 0);
@@ -195,33 +209,21 @@ export default function ReportDetailPage() {
 
       {/* filters */}
       <div className="card report-filters">
-        {/* Reports with their own deal-type list show it as one horizontal row; a click applies it. */}
-        {meta.dealTypesFromRows && (
-          <div className="toolbar-row" style={{ gap: 6, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10 }} role="group" aria-label="Deal Type">
-            <span className="muted" style={{ fontSize: 12, fontWeight: 600, marginRight: 4 }}>Deal Type</span>
-            {[{ value: '', label: 'All' }, ...dealTypeOptions].map((o) => {
-              const chosen = draft.deal_type ?? [];
-              const on = o.value === '' ? chosen.length === 0 : chosen.includes(o.value);
-              return (
-                <button key={o.value || 'all'} type="button" className={`btn sm ${on ? 'primary' : 'ghost'}`} aria-pressed={on}
-                  onClick={() => {
-                    const next = o.value === '' ? [] : (on ? chosen.filter((v) => v !== o.value) : [...chosen, o.value]);
-                    const d = { ...draft, deal_type: next.length ? next : undefined };
-                    setDraft(d); setApplied(d); setPage(1);
-                  }}>
-                  {o.label}
-                </button>
-              );
-            })}
-          </div>
-        )}
+        {meta.compactFilters ? (
+          <CompactFilterBar
+            draft={draft} setD={setD} apply={apply} reset={reset} open={filtersOpen} setOpen={setFiltersOpen}
+            activeCount={activeFilters} isAgent={isAgent} options={options} meta={meta}
+            dealTypeOptions={dealTypeOptions} yearOptions={yearOptions} remarks={facets?.remark ?? []}
+            onCustomize={() => setShowCustomize(true)} exporting={exporting} canExport={!!result?.total_count} doExport={doExport}
+          />
+        ) : (<>
         <div className="toolbar-row">
           <label className="report-field" style={{ flex: '1 1 220px' }}><span>Search</span>
             <input placeholder="Property, trade no., agent…" value={draft.search ?? ''} onChange={(e) => setD('search', e.target.value)} />
           </label>
-          {!meta.dealTypesFromRows && <div className="report-field"><span>Deal Type</span>
+          <div className="report-field"><span>Deal Type</span>
             <MultiSelect label="All" options={dealTypeOptions} value={draft.deal_type ?? []} onChange={(v) => setD('deal_type', v)} />
-          </div>}
+          </div>
           {!isAgent && <div className="report-field"><span>Agent</span>
             <MultiSelect label="All" options={options?.agent ?? []} value={draft.agent ?? []} onChange={(v) => setD('agent', v)} />
           </div>}
@@ -246,7 +248,7 @@ export default function ReportDetailPage() {
           <label className="report-field"><span>Closing Year</span>
             <select value={String(draft.year ?? '')} onChange={(e) => setD('year', e.target.value)}>
               <option value="">All</option>
-              {(options?.year ?? []).map((y) => <option key={y.value} value={y.value}>{y.label}</option>)}
+              {yearOptions.map((y) => <option key={y.value} value={y.value}>{y.label}</option>)}
             </select>
           </label>
           {shows('payout_status') && <label className="report-field"><span>Payout Status</span>
@@ -258,6 +260,7 @@ export default function ReportDetailPage() {
           {/* report-specific filters */}
           {meta.filters.map((f) => <ReportFilter key={f.key} def={f} options={options} value={draft} setD={setD} />)}
         </div>
+        </>)}
       </div>
 
       {/* bulk action bar — appears once rows are selected */}
@@ -601,6 +604,74 @@ function ReportFilter({ def, options, value, setD }: { def: ReportMeta['filters'
 }
 
 // ---- compact multiselect (button + checkbox dropdown) ----
+/**
+ * The one-line toolbar (Pending Payments): Search · Add Filters · Reset · Customize Fields · XLSX · PDF.
+ * The filter fields stay out of the way until Add Filters opens them; Enter in the search box applies.
+ * Deal Type, Closing Year and Accounting Remarks list only what the report itself contains.
+ */
+const PAYMENT_HEADS = [
+  { value: 'client', label: 'Client Payments' },
+  { value: 'coop', label: 'Co-op Payments' },
+  { value: 'agent', label: 'Agent Payments' },
+];
+function CompactFilterBar({ draft, setD, apply, reset, open, setOpen, activeCount, isAgent, options, meta, dealTypeOptions, yearOptions, remarks, onCustomize, exporting, canExport, doExport }: {
+  draft: ReportFilterValues; setD: (k: keyof ReportFilterValues, v: unknown) => void; apply: () => void; reset: () => void;
+  open: boolean; setOpen: (v: boolean) => void; activeCount: number; isAgent: boolean;
+  options: ReportFilterOptions | null; meta: ReportMeta;
+  dealTypeOptions: { value: string; label: string }[]; yearOptions: { value: string; label: string }[]; remarks: string[];
+  onCustomize: () => void; exporting: string; canExport: boolean; doExport: (fmt: 'xlsx' | 'pdf') => void;
+}) {
+  return (
+    <>
+      <div className="toolbar-row" style={{ flexWrap: 'nowrap', alignItems: 'center', gap: 8 }}>
+        <input style={{ flex: '1 1 260px', minWidth: 160 }} placeholder="Search property, trade no., agent… (Enter)" aria-label="Search"
+          value={draft.search ?? ''} onChange={(e) => setD('search', e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') apply(); }} />
+        <button className={`btn sm ${open ? 'primary' : 'ghost'}`} aria-expanded={open} onClick={() => setOpen(!open)}>
+          {open ? '− Hide Filters' : '+ Add Filters'}{activeCount > 0 ? ` (${activeCount})` : ''}
+        </button>
+        <button className="btn ghost sm" onClick={() => { reset(); }}>Reset</button>
+        <button className="btn ghost sm" onClick={onCustomize}>⚙ Customize Fields</button>
+        <button className="btn ghost sm" disabled={!!exporting || !canExport} onClick={() => doExport('xlsx')}>{exporting === 'xlsx' ? '…' : '⬇ XLSX'}</button>
+        <button className="btn ghost sm" disabled={!!exporting || !canExport} onClick={() => doExport('pdf')}>{exporting === 'pdf' ? '…' : '⬇ PDF'}</button>
+      </div>
+      {open && (
+        <div className="toolbar-row report-row2" style={{ marginTop: 10, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+          <div className="report-field"><span>Deal Type</span>
+            <MultiSelect label="All" options={dealTypeOptions} value={draft.deal_type ?? []} onChange={(v) => setD('deal_type', v)} />
+          </div>
+          <label className="report-field"><span>Payment Head</span>
+            <select value={draft.payment_head ?? ''} onChange={(e) => setD('payment_head', e.target.value)}>
+              <option value="">All</option>
+              {PAYMENT_HEADS.map((h) => <option key={h.value} value={h.value}>{h.label}</option>)}
+            </select>
+          </label>
+          {!isAgent && <div className="report-field"><span>Agent</span>
+            <MultiSelect label="All" options={options?.agent ?? []} value={draft.agent ?? []} onChange={(v) => setD('agent', v)} />
+          </div>}
+          <label className="report-field"><span>Closing From</span><input type="date" value={draft.closing_date_from ?? ''} onChange={(e) => setD('closing_date_from', e.target.value)} /></label>
+          <label className="report-field"><span>Closing To</span><input type="date" value={draft.closing_date_to ?? ''} onChange={(e) => setD('closing_date_to', e.target.value)} /></label>
+          <label className="report-field"><span>Closing Year</span>
+            <select value={String(draft.year ?? '')} onChange={(e) => setD('year', e.target.value)}>
+              <option value="">All</option>
+              {yearOptions.map((y) => <option key={y.value} value={y.value}>{y.label}</option>)}
+            </select>
+          </label>
+          {/* report-specific filters (Payout Status) */}
+          {meta.filters.map((f) => <ReportFilter key={f.key} def={f} options={options} value={draft} setD={setD} />)}
+          <label className="report-field"><span>Accounting Remarks</span>
+            <select value={draft.remark ?? ''} onChange={(e) => setD('remark', e.target.value)} style={{ maxWidth: 240 }}>
+              <option value="">All</option>
+              <option value="__blank__">(Blank)</option>
+              {remarks.map((r) => <option key={r} value={r}>{r.length > 60 ? r.slice(0, 60) + '…' : r}</option>)}
+            </select>
+          </label>
+          <button className="btn primary sm" onClick={apply}>Apply Filters</button>
+        </div>
+      )}
+    </>
+  );
+}
+
 function MultiSelect({ label, options, value, onChange }: { label: string; options: { value: string; label: string }[]; value: string[]; onChange: (v: string[]) => void }) {
   const [open, setOpen] = useState(false);
   const toggle = (v: string) => onChange(value.includes(v) ? value.filter((x) => x !== v) : [...value, v]);

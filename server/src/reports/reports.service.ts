@@ -90,14 +90,14 @@ export class ReportsService {
   }
 
   /** Static column + filter + section metadata for one report (drives filters + Customize Fields). */
-  meta(type: string): { type: string; name: string; description: string; category: string; columns: ReportColumn[]; filters: unknown; sections?: unknown; defaultSort: unknown; noSort: boolean; expandable: boolean; custom: string | null; hideFilters: string[]; dealTypesFromRows: boolean; singlePage: boolean } {
+  meta(type: string): { type: string; name: string; description: string; category: string; columns: ReportColumn[]; filters: unknown; sections?: unknown; defaultSort: unknown; noSort: boolean; expandable: boolean; custom: string | null; hideFilters: string[]; dealTypesFromRows: boolean; singlePage: boolean; compactFilters: boolean } {
     const def = this.require(type);
     // no-sort reports never advertise a sortable column (§7.3: no sort headers or icons)
     const columns = def.noSort ? def.columns.map((c) => (c.sortable ? { ...c, sortable: false } : c)) : def.columns;
     return {
       type: def.type, name: def.name, description: def.description, category: def.category, columns, filters: def.filters,
       sections: def.sections, defaultSort: def.defaultSort, noSort: !!def.noSort, expandable: !!def.expandable, custom: def.custom ?? null,
-      hideFilters: def.hideFilters ?? [], dealTypesFromRows: !!def.dealTypesFromRows, singlePage: !!def.singlePage,
+      hideFilters: def.hideFilters ?? [], dealTypesFromRows: !!def.dealTypesFromRows, singlePage: !!def.singlePage, compactFilters: !!def.compactFilters,
     };
   }
 
@@ -170,7 +170,7 @@ export class ReportsService {
       ?? (await this.runFast(def, user, query));
     if (fast) return fast;
 
-    const { rows, columns, totals, sections, deal_types: dealTypes } = await this.compute(def, user, query);
+    const { rows, columns, totals, sections, facets } = await this.compute(def, user, query);
 
     /*
      * EVERY REPORT PAGES, INCLUDING THE SECTION-GROUPED ONES.
@@ -218,7 +218,7 @@ export class ReportsService {
       last_page: Math.max(1, Math.ceil(total / perPage)),
       applied_filters: this.appliedFilters(def, user, query.filters),
       sections,
-      ...(dealTypes ? { deal_types: dealTypes } : {}),
+      ...(facets ? { facets } : {}),
     };
   }
 
@@ -929,7 +929,7 @@ export class ReportsService {
   }
 
   // ---- core compute (shared by run + export) ----
-  private async compute(def: ReportDef, user: AuthUserRecord, query: ReportQuery): Promise<{ rows: ReportRow[]; columns: ReportColumn[]; totals: ReportTotals; sections?: ReportSectionOut[]; deal_types?: string[] }> {
+  private async compute(def: ReportDef, user: AuthUserRecord, query: ReportQuery): Promise<{ rows: ReportRow[]; columns: ReportColumn[]; totals: ReportTotals; sections?: ReportSectionOut[]; facets?: ReportResult['facets'] }> {
     const filters = this.sanitize(query.filters ?? {}, user);
     const columns = this.resolveColumns(def, query.columns, filters);
 
@@ -1056,18 +1056,21 @@ export class ReportsService {
     }
 
     /*
-     * The deal types this report actually contains, for its Deal Type dropdown. Only answered while
-     * no deal type is selected: the database read above is already narrowed by that selection, so a
-     * list computed under it would hide every other type. The screen keeps the last full list.
+     * The values this report actually contains, for its dropdowns (deal types, closing years,
+     * accounting remarks). Computed over the filtered rows; the screen keeps the lists from its
+     * unfiltered run, so choosing one value never hides the others.
      */
-    const dealTypes = def.dealTypesFromRows && !(filters.deal_type ?? []).length
-      ? [...new Set(matched.map((t) => t.type).filter(Boolean))].sort((a, b) => a.localeCompare(b))
-      : undefined;
+    const sortedSet = (vals: unknown[]): string[] => [...new Set(vals.filter((v) => v != null && v !== '').map(String))].sort((a, b) => a.localeCompare(b));
+    const facets = def.dealTypesFromRows ? {
+      deal_type: sortedSet(ordered.map((r) => r.type)),
+      year: sortedSet(ordered.map((r) => (r.closing_date ? String(r.closing_date).slice(0, 4) : null))).reverse(),
+      remark: sortedSet(ordered.map((r) => r.accounting_remarks)),
+    } : undefined;
 
     const totals = this.footer(ordered, columns);
     // A report whose sections total different things keeps only the columns that add up across them.
     if (def.grandTotalColumns) for (const k of Object.keys(totals)) if (k !== 'count' && !def.grandTotalColumns.includes(k)) delete totals[k];
-    return { rows: ordered, columns, totals, sections, ...(dealTypes ? { deal_types: dealTypes } : {}) };
+    return { rows: ordered, columns, totals, sections, ...(facets ? { facets } : {}) };
   }
 
   private async computeLoans(def: ReportDef, user: AuthUserRecord, filters: ReportFilters, query: ReportQuery, columns: ReportColumn[]): Promise<{ rows: ReportRow[]; columns: ReportColumn[]; totals: ReportTotals }> {
@@ -1302,6 +1305,8 @@ export class ReportsService {
     add('Closing Date', range(f.closing_date_from, f.closing_date_to));
     add('Payout Status', f.payout_status);
     add('Status', f.status);
+    add('Payment Head', ({ client: 'Client Payments', coop: 'Co-op Payments', agent: 'Agent Payments' } as Record<string, string>)[f.payment_head ?? ''] ?? f.payment_head);
+    add('Accounting Remarks', f.remark === '__blank__' ? '(Blank)' : f.remark);
     add('Split Ratio', (f.split_ratio ?? []).join(', '));
     if (def.sections && f.sections && f.sections.length) add('Sections', f.sections.map((s) => def.sections!.find((x) => x.key === s)?.label ?? s).join(', '));
     return out;

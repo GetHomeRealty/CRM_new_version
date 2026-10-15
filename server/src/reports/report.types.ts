@@ -103,6 +103,10 @@ export interface ReportFilters {
   sent_from?: string;
   sent_to?: string;
   status?: string;             // report-specific status (Paid/Pending/…, Active/Overdue, …)
+  /** Pending Payments: 'client' | 'coop' | 'agent' — one of the Payment Sheet's heads. */
+  payment_head?: string;
+  /** Pending Payments: an exact Accounting Remark, or '__blank__' for deals with none. */
+  remark?: string;
   split_ratio?: string[];      // e.g. ['90/10','95/5']
   sections?: string[];         // Transaction Payment Status sections
   match_mode?: 'any' | 'all';  // multi-agent match mode (Team Split)
@@ -149,8 +153,12 @@ export interface ReportResult {
   applied_filters: { label: string; value: string }[]; // for the report header + exports
   /** In-table sections (payment-status report): order, counts and per-section subtotals. */
   sections?: ReportSectionOut[];
-  /** Reports with `dealTypesFromRows`: the deal types in the result, for the Deal Type dropdown. */
-  deal_types?: string[];
+  /**
+   * Reports with `dealTypesFromRows`: the values present in the result, for its dropdowns — deal
+   * types, closing years and accounting remarks. Computed over the rows the filters let through, so
+   * the screen keeps the lists from its unfiltered run.
+   */
+  facets?: { deal_type: string[]; year: string[]; remark: string[] };
 }
 
 /** Everything an export renderer needs. */

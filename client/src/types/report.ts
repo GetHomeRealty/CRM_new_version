@@ -63,6 +63,8 @@ export interface ReportMeta {
   dealTypesFromRows?: boolean;
   /** Every row comes on one page (Pending Payments) — no pager. */
   singlePage?: boolean;
+  /** One-line toolbar; the filter fields open from an Add Filters button (Pending Payments). */
+  compactFilters?: boolean;
 }
 
 /** One document inside an expanded deal (GET /api/reports/documents/:transactionId). */
@@ -133,8 +135,8 @@ export interface ReportResult {
   last_page: number;
   applied_filters: { label: string; value: string }[];
   sections?: ReportSection[];
-  /** Reports with `dealTypesFromRows`: the deal types in the result (sent while no type is selected). */
-  deal_types?: string[];
+  /** Reports with `dealTypesFromRows`: the deal types, closing years and accounting remarks in the result. */
+  facets?: { deal_type: string[]; year: string[]; remark: string[] };
 }
 
 export interface ReportFilterOptions {
@@ -163,6 +165,10 @@ export interface ReportFilterValues {
   /** RECO Audit Readiness: '' (All) | 'Yes' | 'No'. */
   reco_ready?: string;
   status?: string;
+  /** Pending Payments: 'client' | 'coop' | 'agent'. */
+  payment_head?: string;
+  /** Pending Payments: an exact Accounting Remark, or '__blank__'. */
+  remark?: string;
   split_ratio?: string[];
   sections?: string[];
   match_mode?: 'any' | 'all';

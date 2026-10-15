@@ -38,6 +38,8 @@ export interface ReportDef {
   hideFilters?: ('offer_date' | 'payment_type' | 'payout_status')[];
   /** The Deal Type dropdown offers only the types that occur in this report's own rows. */
   dealTypesFromRows?: boolean;
+  /** One-line toolbar (Search, Add Filters, Reset, Customize, XLSX, PDF); the filters open on demand. */
+  compactFilters?: boolean;
   /** Section reports: leave out sections with no rows, sort inside each section, and number each from 1. */
   compactSections?: boolean;
   /** Return every row on one page — the report is read as one sheet (Pending Payments). */
@@ -572,6 +574,7 @@ export const REPORTS: ReportDef[] = [
     // Offer dates, payment type and the general payout status do not apply to this report.
     hideFilters: ['offer_date', 'payment_type', 'payout_status'],
     dealTypesFromRows: true,
+    compactFilters: true,
     defaultSort: { key: 'closing_date', dir: 'asc' },
     predicate: (t, f) => pendingPaymentRows(t, f).length > 0,
     expand: (t, f) => pendingPaymentRows(t, f ?? {}),
@@ -973,8 +976,12 @@ function isVoidDeal(t: EnrichedTxn): boolean {
  *                     still owed, grouped by deal type as the Sheet groups them.
  *
  * A chosen Payout Status describes agent payments only, so it leaves the other two sections out.
+ * Payment Head keeps one of the three; Accounting Remarks keeps the deals with that remark (or none).
  */
 function pendingPaymentRows(t: EnrichedTxn, f: ReportFilters): ReportRow[] {
+  // Accounting Remarks filter: one exact remark, or deals with none.
+  if (f.remark && (f.remark === '__blank__' ? !!t.accounting_remarks : t.accounting_remarks !== f.remark)) return [];
+  const head = f.payment_head || '';
   const days = daysBetween(t.closing_date, today());
   const common: ReportRow = {
     ...baseRow(t),
@@ -990,7 +997,7 @@ function pendingPaymentRows(t: EnrichedTxn, f: ReportFilters): ReportRow[] {
   };
   const rows: ReportRow[] = [];
 
-  if (!f.status) {
+  if (!f.status && head !== 'agent') {
     /*
      * Client and co-op money falls due at closing, so only a deal that is closed or closes within
      * the next 30 days can owe it (a mutual release owes the client a refund regardless). A status
@@ -1002,14 +1009,14 @@ function pendingPaymentRows(t: EnrichedTxn, f: ReportFilters): ReportRow[] {
 
     const clientOwed = t.client_payable > 0 && t.client_paid !== 'Yes' && t.client_paid !== 'N/A'
       && (due || t.is_mutual_release) && (t.client_paid === 'No' || recent);
-    if (!isVoidDeal(t) && clientOwed) {
+    if (!isVoidDeal(t) && clientOwed && (!head || head === 'client')) {
       rows.push({ ...common, section: 'client', agent_w: t.client_payable, agent_balance: t.client_payable, payout_status: 'Pending' });
     }
 
     const coopPaid = t.coop_invoice_received === 'Yes' && !!t.coop_paid_date;
     const coopOwed = t.coopOut.total > 0 && t.coop_invoice_received !== 'N/A' && !coopPaid && due
       && (t.coop_invoice_received !== '' || recent);
-    if (!isDeadDeal(t) && coopOwed) {
+    if (!isDeadDeal(t) && coopOwed && (!head || head === 'coop')) {
       rows.push({
         ...common, section: 'coop', agent_w: t.coopOut.total, agent_balance: t.coopOut.total,
         payout_status: t.coop_invoice_received === 'Yes' ? 'Invoice Received' : 'Invoice Pending',
@@ -1019,7 +1026,7 @@ function pendingPaymentRows(t: EnrichedTxn, f: ReportFilters): ReportRow[] {
 
   const agentOwed = t.is_closed && !isDeadDeal(t)
     && (t.agent_payment_status === 'Pending' || t.agent_payment_status === 'Partially Paid');
-  if (agentOwed) {
+  if (agentOwed && (!head || head === 'agent')) {
     const group = AGENT_GROUPS.find((g) => g.types.includes(t.type));
     for (const l of t.agent_lines) {
       if (l.balance <= 0) continue;
