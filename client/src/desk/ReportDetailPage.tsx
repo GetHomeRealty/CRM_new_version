@@ -1,5 +1,6 @@
 import { deskPath } from './area';
-import { useEffect, useMemo, useState, useCallback, Fragment } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback, Fragment } from 'react';
+import type { RefObject } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { reportColumns, reportFilterOptions, runReport, exportReport, reportDocuments } from '../lib/reportsApi';
 import { apiErrorMessage } from '../lib/apiError';
@@ -57,6 +58,8 @@ export default function ReportDetailPage() {
   const [error, setError] = useState('');
   const [showCustomize, setShowCustomize] = useState(false);
   const [exporting, setExporting] = useState('');
+  const tableWrap = useRef<HTMLDivElement>(null);
+  useSectionHeaders(tableWrap, [result, selectedCols, loading]);
   // expanded deal → its documents (documentation reports only)
   const [expanded, setExpanded] = useState<number | null>(null);
   const [docs, setDocs] = useState<ReportDocuments | null>(null);
@@ -277,7 +280,7 @@ export default function ReportDetailPage() {
 
       {/* results */}
       <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-        <div className="report-table-wrap">
+        <div className="report-table-wrap" ref={tableWrap}>
           <table className={`list-table report-table${meta.singlePage ? ' sheet' : ''}`}>
             {/* section-grouped reports repeat the headers inside each section instead */}
             {!result?.sections && <thead>{headerRow()}</thead>}
@@ -400,6 +403,48 @@ export default function ReportDetailPage() {
       )}
     </>
   );
+}
+
+/**
+ * Grouped reports keep each section's heading and column header pinned to the top of the table while
+ * that section's rows scroll past. Sticky rows are bounded by the whole table, not by their section,
+ * so on their own every section's headers would pile up at the top; this slides the pinned pair up
+ * as the next section's heading reaches it, so the next section's headers take their place.
+ */
+function useSectionHeaders(wrapRef: RefObject<HTMLDivElement | null>, deps: unknown[]) {
+  useLayoutEffect(() => {
+    const wrap = wrapRef.current;
+    if (!wrap) return;
+    const heads = Array.from(wrap.querySelectorAll<HTMLTableRowElement>('tr.report-section-row'));
+    if (!heads.length) return;
+    const stacks = heads.map((sec) => {
+      const next = sec.nextElementSibling;
+      return next instanceof HTMLTableRowElement && next.classList.contains('report-head-row') ? [sec, next] : [sec];
+    });
+    let frame = 0;
+    const update = () => {
+      frame = 0;
+      // The column header sits just under its section's heading.
+      wrap.style.setProperty('--report-sec-h', `${heads[0].offsetHeight}px`);
+      const top = wrap.getBoundingClientRect().top;
+      stacks.forEach((rows, i) => {
+        const next = heads[i + 1];
+        const height = rows.reduce((h, r) => h + r.offsetHeight, 0);
+        const push = next ? Math.max(0, height - (next.getBoundingClientRect().top - top)) : 0;
+        for (const r of rows) r.style.transform = push ? `translateY(${-push}px)` : '';
+      });
+    };
+    const schedule = () => { if (!frame) frame = requestAnimationFrame(update); };
+    update();
+    wrap.addEventListener('scroll', schedule, { passive: true });
+    window.addEventListener('resize', schedule);
+    return () => {
+      if (frame) cancelAnimationFrame(frame);
+      wrap.removeEventListener('scroll', schedule);
+      window.removeEventListener('resize', schedule);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, deps);
 }
 
 /**
