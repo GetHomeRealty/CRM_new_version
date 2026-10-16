@@ -8,7 +8,8 @@ import { parseJsonObject, round2 } from '../common/serialize';
 import type { ResourceUser } from '../transactions/transaction.resource';
 
 import { isAgent } from '../core/authz';
-import { transactionScopeWhere } from '../common/transaction-scope';
+import { transactionScopeWhere, transactionAgentScopeWhere } from '../common/transaction-scope';
+import { marketOf, marketSql } from '../common/market';
 import { withWorkMem, workMemSetting } from '../common/work-mem';
 import {
   commissionsSqlForAgent,
@@ -170,7 +171,8 @@ export class DashboardService {
      * prove a total is current — and a commission figure that is quietly a few seconds old is a
      * different thing from a slow one.
      */
-    const key = isAgent(user) ? `agent:${user?.id ?? 0}:${user?.name ?? ''}` : 'office';
+    // The country is part of the key (India desk, 16 Oct 2026): Canada's office figures are not India's.
+    const key = `${marketOf(user)}:` + (isAgent(user) ? `agent:${user?.id ?? 0}:${user?.name ?? ''}` : 'office');
     const running = this.inflight.get(key);
     if (running) return running;
 
@@ -290,14 +292,17 @@ export class DashboardService {
    * never collapse into it.
    */
   private async scopeSql(user: ResourceUser | null): Promise<string | null> {
-    const where = transactionScopeWhere(user);
-    if (Object.keys(where).length === 0) return 'TRUE';
+    // The country is added as SQL, not folded into the id list: otherwise every staff dashboard would
+    // first fetch the id of every deal in the country (India desk, 16 Oct 2026).
+    const country = marketSql(user);
+    const where = transactionAgentScopeWhere(user);
+    if (Object.keys(where).length === 0) return country;
     const rows = await this.prisma.transactions.findMany({
       where: { AND: [{ deleted_at: null }, where] },
       select: { id: true },
     });
     if (rows.length === 0) return null;
-    return `t.id IN (${rows.map((x) => x.id).join(',')})`;
+    return `${country} AND t.id IN (${rows.map((x) => x.id).join(',')})`;
   }
 
   /**

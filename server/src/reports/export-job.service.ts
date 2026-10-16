@@ -1,4 +1,5 @@
 import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
+import { resolveMarket } from '../common/market';
 import * as crypto from 'crypto';
 import * as path from 'path';
 import * as fs from 'fs/promises';
@@ -145,7 +146,9 @@ export class ExportJobService implements OnModuleInit, OnModuleDestroy {
         status: 'Queued',
         transaction_count: txns.length,
         filters: JSON.stringify(this.bulkFilters(sel)),
-        selection: JSON.stringify(sel),
+        // The country it was asked in rides with the job (India desk, 16 Oct 2026): the worker has
+        // no request, so without this every queued export would read Canada.
+        selection: JSON.stringify({ ...sel, market: user.market ?? null }),
         request_hash: hash,
         requested_by: user.name,
         requested_by_id: user.id ?? null,
@@ -224,7 +227,7 @@ export class ExportJobService implements OnModuleInit, OnModuleDestroy {
      * a nameless principal — is what this whole comment is about; refusing is the only safe answer,
      * and the Download Centre shows the reason.
      */
-    const user = await this.requesterOf(job);
+    const user = await this.requesterOf({ requested_by_id: job.requested_by_id, market: (sel as { market?: unknown }).market });
     if (!user) {
       await this.fail(id, 'The account that requested this export no longer exists, so it cannot be generated.');
       return;
@@ -295,14 +298,18 @@ export class ExportJobService implements OnModuleInit, OnModuleDestroy {
    * to resolve the account, because a name is editable and not unique — the same reason the
    * transaction scope moved off names.
    */
-  private async requesterOf(job: { requested_by_id: number | null }): Promise<AuthUserRecord | null> {
+  private async requesterOf(job: { requested_by_id: number | null; market?: unknown }): Promise<AuthUserRecord | null> {
     if (job.requested_by_id === null) return null;
     const user = await this.prisma.users.findUnique({
       where: { id: job.requested_by_id },
       include: { user_permissions: true, user_modules: true },
     });
     if (!user) return null;
-    return (user.status ?? 'Active') === 'Inactive' ? null : user;
+    if ((user.status ?? 'Active') === 'Inactive') return null;
+    // The country the job was asked in - still only one this person may use NOW.
+    const record: AuthUserRecord = user;
+    record.market = resolveMarket(typeof job.market === 'string' ? job.market : undefined, user.markets);
+    return record;
   }
 
   /** Record a job as failed with a reason the Download Centre can show. */

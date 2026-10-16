@@ -59,6 +59,7 @@ const LEAVE_ALONE = new Set([
   'deleted_at',    // the loader filters on it; setting it makes the row invisible
   'trade_no',      // unique, and set by the fixture
   'agent_user_id', // a foreign key — pointed at a real account below
+  'market',        // the loader filters on it, like deleted_at: a probe value is no country, so the row would vanish
 ]);
 
 /** A distinctive value for a column, by declared type. */

@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { invoiceMarketWhere } from '../common/market';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import type { AuthUserRecord } from '../auth/auth.types';
@@ -361,7 +362,8 @@ export class AreaDashboardService {
     const mayReadInvoices =
       can(user, 'invoices.access')
       && this.permissions.can(user?.role || 'agent', user?.user_permissions ?? [], 'invoice', 'view');
-    const invoiceWhere: Prisma.invoicesWhereInput = { deleted_at: null };
+    // One country's invoices, like the deals beside them (India desk, 16 Oct 2026).
+    const invoiceWhere: Prisma.invoicesWhereInput = { deleted_at: null, ...invoiceMarketWhere(user?.market ?? null) };
 
     const [
       txnTotal, byValidation, byCommission,

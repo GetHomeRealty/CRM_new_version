@@ -2586,6 +2586,10 @@ model transactions {
   id                          Int                           @id @default(autoincrement())
   trade_no                    String                        @unique @db.VarChar(255)
   type                        String                        @db.VarChar(255)
+  /// Which country's desk this deal belongs to: 'CA' (Canada, every deal before 16 Oct 2026) or 'IN'
+  /// (India). Set when the deal is created, from the country the person is working in; never edited
+  /// by agents. Every read of deals is narrowed to one country - see src/common/market.ts.
+  market                      String                        @default("CA") @db.VarChar(8)
   property                    String?                       @db.VarChar(255)
   agent                       String?                       @db.VarChar(255)
   /// The user `agent` names, resolved once instead of by name on every read.
@@ -2776,6 +2780,7 @@ model transactions {
   @@index([lead_source])
   // Declared so `migrate diff` stays empty: this index EXISTS in the database, created by a
   // migration. An index the schema does not mention is one `migrate dev` offers to drop.
+  @@index([market])
   @@index([agent_user_id])
   /// Declared so `migrate diff` stays empty: this index EXISTS in the database, created by
   /// migration 20260815090000_desk_commission_sql. The list sorts newest-first over live rows and
@@ -2815,6 +2820,9 @@ model user_permissions {
 
 model users {
   id                        Int                         @id @default(autoincrement())
+  /// The countries this person may work in, comma-separated: 'CA' for everyone, 'CA,IN' once they are
+  /// given India access. See src/common/market.ts.
+  markets                   String                      @default("CA") @db.VarChar(64)
   name                      String                      @db.VarChar(255)
   username                  String?                     @unique @db.VarChar(255)
   email                     String                      @unique @db.VarChar(255)

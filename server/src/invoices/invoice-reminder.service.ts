@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { invoiceMarketWhere } from '../common/market';
 import { PrismaService } from '../prisma/prisma.service';
 import { InvoicesService } from './invoices.service';
 import { parseJson, toDateString } from '../common/serialize';
@@ -105,6 +106,9 @@ export class InvoiceReminderService {
         // "Until Paid". `Void` is not a debt and `Draft` has not been issued, so neither is chased.
         status: { notIn: ['Paid', 'Void', 'Draft'] },
         balance_due: { gt: 0 },
+        // Canada's invoices only (India desk, 16 Oct 2026): the reminder is a Canadian HST invoice's;
+        // India's wording waits for the brokerage's decision.
+        ...invoiceMarketWhere('CA'),
       },
       select: {
         id: true, invoice_no: true, auto_reminder: true, reminders: true,

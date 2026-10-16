@@ -1,7 +1,7 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { isAdminOrAbove, isAgent } from './authz';
-import { ownsTransaction, teamMemberIdentity } from '../common/transaction-scope';
+import { dealInMarket, ownsTransaction, teamMemberIdentity } from '../common/transaction-scope';
 import { hasBrokerageLeadScope, isBrokerageLead, isTeamLead, teamReaderWhere } from '../common/lead-scope';
 
 /**
@@ -36,12 +36,14 @@ export class ResourceAccessService {
    * "does deal 812 exist?" must not depend on who is asking, or the error code becomes a way to
    * enumerate other people's deals.
    */
-  async assertTransaction(user: { id?: number; name?: string | null; role?: string | null } | null, transactionId: number): Promise<void> {
+  async assertTransaction(user: { id?: number; name?: string | null; role?: string | null; market?: string | null; markets?: string | null } | null, transactionId: number): Promise<void> {
     const txn = await this.prisma.transactions.findFirst({
       where: { id: transactionId, deleted_at: null },
-      select: { id: true, agent: true, agent_user_id: true },
+      select: { id: true, agent: true, agent_user_id: true, market: true },
     });
-    if (!txn) {
+    // A deal in another country answers exactly like a deal that does not exist, for every role
+    // (India desk, 16 Oct 2026) - the same 404, so its id is no way to learn it is there.
+    if (!txn || !dealInMarket(user, txn)) {
       throw new NotFoundException({ message: `No query results for model [App\\Models\\Transaction] ${transactionId}.` });
     }
     if (!user || !isAgent(user)) return;
@@ -74,7 +76,7 @@ export class ResourceAccessService {
    * must not depend on who is asking.
    */
   async canReachTransaction(
-    user: { id?: number; name?: string | null; role?: string | null } | null,
+    user: { id?: number; name?: string | null; role?: string | null; market?: string | null; markets?: string | null } | null,
     transactionId: number,
   ): Promise<boolean> {
     try {

@@ -63,6 +63,9 @@ export class LawyerReminderSchedulerService implements OnModuleInit, OnModuleDes
       const candidates = await this.prisma.transactions.findMany({
         where: {
           deleted_at: null,
+          // Canadian deals only (India desk, 16 Oct 2026): the reminder is worded for Ontario, and an
+          // India deal gets no automatic reminder until the brokerage decides what it should say.
+          market: 'CA',
           OR: [
             { buyer_lawyer_name: null }, { buyer_lawyer_name: '' },
             { seller_lawyer_name: null }, { seller_lawyer_name: '' },

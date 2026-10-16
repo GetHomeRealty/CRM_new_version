@@ -29,6 +29,7 @@ import type { AuthUserRecord } from '../auth/auth.types';
 
 import { isAdminOrAbove, isAgent, isSuperAdmin } from '../core/authz';
 import { ownsTransaction, teamMemberIdentity } from '../common/transaction-scope';
+import { marketOf } from '../common/market';
 type Tx = Prisma.TransactionClient;
 
 /*
@@ -673,7 +674,9 @@ export class TransactionsWriteService {
 
         // Soft-deleted rows are excluded (Eloquent SoftDeletes global scope → deleted_at null).
         const candidates = await tx.transactions.findMany({
-          where: { type, price, offer_date: offerDate, deleted_at: null },
+          // Within the deal's own country: a Canadian deal is no duplicate of an Indian one, and the
+          // message below must not name a deal the person cannot see (India desk, 16 Oct 2026).
+          where: { type, price, offer_date: offerDate, deleted_at: null, market: marketOf(user) },
         });
         for (const cand of candidates) {
           if (this.propertiesSimilar(String(body.property ?? ''), String(cand.property ?? ''))) {
@@ -695,6 +698,9 @@ export class TransactionsWriteService {
             : null,
           trade_no: manualTrade || await this.tradeNumbers.next(tx, type),
           type,
+          // The country the person is working in (India desk, 16 Oct 2026). Canada unless they are
+          // in India and allowed to be - see AuthGuard and `common/market.ts`.
+          market: marketOf(user),
           property: (body.property ?? null) as string | null,
           agent: agentName,
           // Recorded beside the name, so nothing downstream has to resolve a person from a string

@@ -1,4 +1,5 @@
 import { AREAS, type Area } from '../common/domain';
+import { allowedMarkets } from '../common/market';
 import { ModuleAccessService } from '../core/module-access.service';
 import { ForbiddenException, Inject, Injectable, Logger, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
 import { PasswordHashService } from '../auth/password-hash.service';
@@ -175,6 +176,11 @@ export class UsersService {
       ...(hierarchy.is_team_lead !== undefined ? { is_team_lead: hierarchy.is_team_lead } : {}),
       ...(hierarchy.team_lead_id !== undefined
         ? { team_lead: hierarchy.team_lead_id === null ? { disconnect: true } : { connect: { id: hierarchy.team_lead_id } } }
+        : {}),
+      // India access (India desk, 16 Oct 2026) - a Super Admin decision only. From anyone else, or
+      // when the form did not send it, the stored countries are kept exactly as they are.
+      ...(isSuperAdmin(actor) && Object.prototype.hasOwnProperty.call(body, 'markets')
+        ? { markets: allowedMarkets(Array.isArray(body.markets) ? body.markets.join(',') : String(body.markets ?? '')).join(',') }
         : {}),
       updated_at: new Date(),
     };
@@ -492,6 +498,8 @@ export class UsersService {
       is_admin: isSuperAdmin(u),
       is_team_lead: u.is_team_lead,
       team_lead_id: u.team_lead_id,
+      // The countries this person may work in - for the India access switch on the Users screen.
+      markets: allowedMarkets(u.markets),
       created_by_id: u.created_by_id,
       permissions: this.permissions.effectiveFor(u.role, overrides.map((p) => ({ screen: p.screen, level: p.level }))),
       overrides: overrides.length ? Object.fromEntries(overrides.map((p) => [p.screen, p.level])) : [],

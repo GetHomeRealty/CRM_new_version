@@ -2,6 +2,7 @@ import {
   ForbiddenException, Injectable, InternalServerErrorException, Logger, NotFoundException,
   UnprocessableEntityException,
 } from '@nestjs/common';
+import { invoiceMarketWhere, marketOf } from '../common/market';
 import { promises as fs } from 'fs';
 import * as path from 'path';
 import { PrismaService } from '../prisma/prisma.service';
@@ -81,7 +82,8 @@ export class RecycleBinService {
   async transactions(user: Actor): Promise<{ count: number; items: Record<string, unknown>[] }> {
     this.guard(user);
     const rows = await this.prisma.transactions.findMany({
-      where: { deleted_at: { not: null } },
+      // One country's bin (India desk, 16 Oct 2026), like every other list of deals.
+      where: { deleted_at: { not: null }, market: marketOf(user) },
       include: { transaction_delete_requests: { orderBy: [{ created_at: 'desc' }, { id: 'desc' }] } },
       orderBy: [{ deleted_at: 'desc' }, { id: 'desc' }],
     });
@@ -203,7 +205,7 @@ export class RecycleBinService {
   async documents(user: Actor): Promise<{ count: number; items: Record<string, unknown>[] }> {
     this.guard(user);
     const rows = await this.prisma.documents.findMany({
-      where: { deleted_at: { not: null } },
+      where: { deleted_at: { not: null }, transactions: { market: marketOf(user) } },
       include: { transactions: true },
       orderBy: [{ deleted_at: 'desc' }, { id: 'desc' }],
     });
@@ -386,7 +388,7 @@ export class RecycleBinService {
   async invoices(user: Actor): Promise<{ count: number; items: Record<string, unknown>[] }> {
     this.guard(user);
     const rows = await this.prisma.invoices.findMany({
-      where: { deleted_at: { not: null } },
+      where: { deleted_at: { not: null }, ...invoiceMarketWhere(user?.market ?? null) },
       include: { transactions: true },
       orderBy: [{ deleted_at: 'desc' }, { id: 'desc' }],
     });
@@ -436,7 +438,7 @@ export class RecycleBinService {
   async payments(user: Actor): Promise<{ count: number; items: Record<string, unknown>[] }> {
     this.guard(user);
     const rows = await this.prisma.invoice_payments.findMany({
-      where: { deleted_at: { not: null } },
+      where: { deleted_at: { not: null }, invoices: invoiceMarketWhere(user?.market ?? null) },
       include: { invoices: true },
       orderBy: [{ deleted_at: 'desc' }, { id: 'desc' }],
     });
@@ -549,6 +551,7 @@ export class RecycleBinService {
   async rowItems(user: Actor): Promise<{ count: number; items: Record<string, unknown>[] }> {
     this.guard(user);
     const rows = await this.prisma.trashed_row_items.findMany({
+      where: { transactions: { market: marketOf(user) } },
       include: { transactions: true },
       orderBy: [{ created_at: 'desc' }, { id: 'desc' }],
     });

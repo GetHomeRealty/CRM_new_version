@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { marketOf } from '../common/market';
 import { Prisma } from '@prisma/client';
 import Decimal from 'decimal.js';
 import { PrismaService } from '../prisma/prisma.service';
@@ -351,6 +352,11 @@ export interface DataScope {
   lockedUserId?: number | null;
   /** admin/authorized: restrict to these agent names (from the Agent filter), else all. */
   agents?: string[];
+  /**
+   * The country the report reads (India desk, 16 Oct 2026) - the one the caller is working in.
+   * Absent = Canada, so a scope built anywhere that never heard of countries reads what it always did.
+   */
+  market?: string | null;
 }
 
 @Injectable()
@@ -437,7 +443,7 @@ export class ReportDataService {
    * `report-needs.spec.ts` rather than inferred.
    */
   async load(scope: DataScope, opts: LoadOptions = {}): Promise<EnrichedTxn[]> {
-    const where: Prisma.transactionsWhereInput = { deleted_at: null };
+    const where: Prisma.transactionsWhereInput = { deleted_at: null, market: marketOf(scope) };
     const visibility = this.visibilityWhere(scope);
     if (visibility) where.OR = visibility;
     if (opts.where) where.AND = [opts.where];
@@ -801,7 +807,7 @@ export class ReportDataService {
    * numbers are. Same scope rule, same answer, three columns.
    */
   async visibleSummaries(scope: DataScope): Promise<{ id: number; trade_no: string; property: string | null }[]> {
-    const where: Prisma.transactionsWhereInput = { deleted_at: null };
+    const where: Prisma.transactionsWhereInput = { deleted_at: null, market: marketOf(scope) };
     const visibility = this.visibilityWhere(scope);
     if (visibility) where.OR = visibility;
     return this.prisma.transactions.findMany({
@@ -824,7 +830,7 @@ export class ReportDataService {
    * would produce. Both are distinct queries over small column sets.
    */
   async splitRatioOptions(scope: DataScope): Promise<string[]> {
-    const where: Prisma.transactionsWhereInput = { deleted_at: null };
+    const where: Prisma.transactionsWhereInput = { deleted_at: null, market: marketOf(scope) };
     const visibility = this.visibilityWhere(scope);
     if (visibility) where.OR = visibility;
 

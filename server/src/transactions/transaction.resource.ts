@@ -139,6 +139,8 @@ export interface ResourceUser {
   id: number;
   role: string;
   name: string;
+  /** The country this request works in (see `common/market.ts`). Absent = Canada. */
+  market?: string | null;
 }
 
 /**

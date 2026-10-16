@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import Decimal from 'decimal.js';
 import { Prisma } from '@prisma/client';
+import { marketOf } from '../common/market';
 import { PrismaService } from '../prisma/prisma.service';
 import { ReportDataService, type DataScope, type EnrichedTxn, type LoanRow } from './report-data.service';
 import { REPORTS, getReport, AGENT_PAYMENT_STATUSES, type ReportDef } from './report-registry';
@@ -79,9 +80,10 @@ export class ReportsService {
    * same-named agents the other's deals; see `DataScope` in `report-data.service.ts`.
    */
   private scopeFor(user: AuthUserRecord, agents?: string[]): DataScope {
+    // The country rides along for everyone (India desk, 16 Oct 2026); see `DataScope.market`.
     return this.isAgentScoped(user)
-      ? { lockedAgent: user.name, lockedUserId: user.id }
-      : { agents };
+      ? { lockedAgent: user.name, lockedUserId: user.id, market: user.market ?? null }
+      : { agents, market: user.market ?? null };
   }
 
   /** List all reports (dashboard cards). */
@@ -272,7 +274,7 @@ export class ReportsService {
     const dir = (query.sort ? query.dir : def.defaultSort.dir) === 'asc' ? 'asc' : 'desc';
 
     const where: Prisma.transactionsWhereInput = {
-      AND: [{ deleted_at: null }, this.sqlNarrow(def, filters, user) ?? {}],
+      AND: [{ deleted_at: null, market: marketOf(user) }, this.sqlNarrow(def, filters, user) ?? {}],
     };
 
     /*
@@ -391,7 +393,7 @@ export class ReportsService {
     if (wanted.length === 0) return null;
 
     const ids = (await this.prisma.transactions.findMany({
-      where: { AND: [{ deleted_at: null }, this.sqlNarrow(def, filters, user) ?? {}] },
+      where: { AND: [{ deleted_at: null, market: marketOf(user) }, this.sqlNarrow(def, filters, user) ?? {}] },
       select: { id: true },
     })).map((r) => r.id);
     if (ids.length === 0) return null;
@@ -545,7 +547,7 @@ export class ReportsService {
     if (columns.some((c) => c.total || c.average)) return null;
 
     const ids = (await this.prisma.transactions.findMany({
-      where: { AND: [{ deleted_at: null }, this.sqlNarrow(def, filters, user) ?? {}] },
+      where: { AND: [{ deleted_at: null, market: marketOf(user) }, this.sqlNarrow(def, filters, user) ?? {}] },
       select: { id: true },
     })).map((r) => r.id);
 
@@ -647,7 +649,7 @@ export class ReportsService {
     if (wanted.length === 0) return null;
 
     const ids = (await this.prisma.transactions.findMany({
-      where: { AND: [{ deleted_at: null }, this.sqlNarrow(def, filters, user) ?? {}] },
+      where: { AND: [{ deleted_at: null, market: marketOf(user) }, this.sqlNarrow(def, filters, user) ?? {}] },
       select: { id: true },
     })).map((r) => r.id);
 
@@ -767,7 +769,7 @@ export class ReportsService {
      * answer.
      */
     const ids = (await this.prisma.transactions.findMany({
-      where: { AND: [{ deleted_at: null }, this.sqlNarrow(def, filters, user) ?? {}] },
+      where: { AND: [{ deleted_at: null, market: marketOf(user) }, this.sqlNarrow(def, filters, user) ?? {}] },
       select: { id: true },
     })).map((r) => r.id);
 

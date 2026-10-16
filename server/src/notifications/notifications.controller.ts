@@ -15,7 +15,7 @@ import type { Observable } from 'rxjs';
 import { NotificationEventsService } from './notification-events.service';
 
 const toResourceUser = (u: AuthUserRecord | undefined): ResourceUser | null =>
-  u ? { id: u.id, role: u.role, name: u.name } : null;
+  u ? { id: u.id, role: u.role, name: u.name, market: u.market ?? null } : null;
 
 @Controller()
 @UseGuards(AuthGuard)

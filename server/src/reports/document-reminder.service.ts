@@ -83,7 +83,9 @@ export class DocumentReminderService {
   private scopeOf(user: AuthUserRecord) {
     // Locked by user id as well as name: the id is the authorization key, the name only decides
     // which split lines are theirs. See `report-data.service.ts`.
-    return (user.role ?? 'agent') === 'agent' ? { lockedAgent: user.name, lockedUserId: user.id } : {};
+    return (user.role ?? 'agent') === 'agent'
+      ? { lockedAgent: user.name, lockedUserId: user.id, market: user.market ?? null }
+      : { market: user.market ?? null };
   }
 
   /** Documents in scope for a reminder — pending and invalid are never merged silently. */

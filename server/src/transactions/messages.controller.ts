@@ -9,7 +9,7 @@ import type { ResourceUser } from './transaction.resource';
 import { MentionService, type MentionCandidate } from './mention.service';
 
 const toResourceUser = (u: AuthUserRecord | undefined): ResourceUser | null =>
-  u ? { id: u.id, role: u.role, name: u.name } : null;
+  u ? { id: u.id, role: u.role, name: u.name, market: u.market ?? null } : null;
 
 /*
  * Behind the `transactions` screen permission, declared once on the class — same reasoning as

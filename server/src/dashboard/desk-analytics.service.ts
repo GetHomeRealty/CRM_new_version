@@ -5,7 +5,8 @@ import { CommissionService } from '../transactions/commission.service';
 import type { CommissionTxn } from '../transactions/commission.types';
 import { round2 } from '../common/serialize';
 import { isAgent } from '../core/authz';
-import { transactionScopeWhere, type ScopedUser } from '../common/transaction-scope';
+import { transactionAgentScopeWhere, type ScopedUser } from '../common/transaction-scope';
+import { marketSql } from '../common/market';
 import { ANALYTICS_DATE_SQL, type AnalyticsFilters } from './desk-analytics.filters';
 
 /**
@@ -404,15 +405,18 @@ export class DeskAnalyticsService {
    * must not collapse into it.
    */
   private async scopeSql(user: ScopedUser | null): Promise<string | null> {
-    const where = transactionScopeWhere(user);
-    if (Object.keys(where).length === 0) return 'TRUE';
+    // The country is added as SQL, not folded into the id list: otherwise every staff dashboard would
+    // first fetch the id of every deal in the country (India desk, 16 Oct 2026).
+    const country = marketSql(user);
+    const where = transactionAgentScopeWhere(user);
+    if (Object.keys(where).length === 0) return country;
 
     const rows = await this.prisma.transactions.findMany({
       where: { AND: [{ deleted_at: null }, where] },
       select: { id: true },
     });
     if (rows.length === 0) return null;
-    return `t.id IN (${rows.map((r) => r.id).join(',')})`;
+    return `${country} AND t.id IN (${rows.map((r) => r.id).join(',')})`;
   }
 
   /**

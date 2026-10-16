@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { marketOf } from '../common/market';
 import { PrismaService } from '../prisma/prisma.service';
 
 export interface LawyerSuggestion {
@@ -34,9 +35,11 @@ export class SuggestionsService {
   }
 
   /** Distinct lawyers previously entered (latest values win), newest first. */
-  async lawyers(): Promise<LawyerSuggestion[]> {
+  async lawyers(market?: string | null): Promise<LawyerSuggestion[]> {
     const rows = await this.prisma.transactions.findMany({
-      where: { deleted_at: null, NOT: [{ lawyer_name: null }, { lawyer_name: '' }] },
+      // From deals in the same country only (India desk, 16 Oct 2026): an Indian deal's lawyer is no
+      // suggestion for a Canadian one, and the other way round.
+      where: { deleted_at: null, market: marketOf({ market }), NOT: [{ lawyer_name: null }, { lawyer_name: '' }] },
       orderBy: { id: 'desc' },
       select: { lawyer_name: true, lawyer_email: true, lawyer_phone: true, lawyer_address: true },
     });

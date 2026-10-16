@@ -1,4 +1,5 @@
 import { ModuleAccessService } from '../core/module-access.service';
+import { allowedMarkets, marketOf } from '../common/market';
 import { ForbiddenException, Injectable, Logger } from '@nestjs/common';
 import { PasswordHashService } from './password-hash.service';
 import { passwordPolicyProblem } from './password-policy';
@@ -57,6 +58,10 @@ export class AuthService {
       // Team Lead stays `role: 'agent'` (see users/team-lead.ts); this is what opens Users for them.
       is_team_lead: teamLeadIdOf(user) !== null,
       permissions: this.permissions.effectiveFor(role, user.user_permissions),
+      // India desk (16 Oct 2026): the countries this person may work in, and the one this request
+      // is in. The top-bar switch shows only when there is more than one.
+      markets: allowedMarkets(user.markets),
+      market: marketOf(user),
       // Filled in by `payloadFor`. Both modules is the same answer the application gave before
       // licensing existed, so a caller that cannot await still behaves as it always did.
       modules: ['crm', 'desk'],

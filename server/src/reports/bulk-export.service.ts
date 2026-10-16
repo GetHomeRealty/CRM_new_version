@@ -144,7 +144,9 @@ export class BulkExportService {
 
     const agentScoped = (user.role ?? 'agent') === 'agent';
     // Locked by user id: this is the boundary a queued export used to cross. See DataScope.
-    const scope = agentScoped ? { lockedAgent: user.name, lockedUserId: user.id } : { agents: sel.filters?.agent };
+    const scope = agentScoped
+      ? { lockedAgent: user.name, lockedUserId: user.id, market: user.market ?? null }
+      : { agents: sel.filters?.agent, market: user.market ?? null };
     const all = await this.data.load(scope);
 
     let chosen: EnrichedTxn[];

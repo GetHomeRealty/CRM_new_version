@@ -503,6 +503,8 @@ interface UserForm {
   department: string;
   designation: string;
   modules: Area[];
+  /** India access (India desk, 16 Oct 2026): may this person switch the app to India? Super Admin only. */
+  india_access: boolean;
   brokerage_lead_structure: string;
   brokerage_lead_pct: number | string;
   brokerage_lead_brok_pct: number | string;
@@ -562,6 +564,7 @@ function UserModal({ catalog, existing, teamLeadMode, teamLeads, teamSize, onClo
     department: (existing?.department as string | null) ?? '', designation: (existing?.designation as string | null) ?? '',
     // Both when the record predates module assignment — the access such a user actually has today.
     modules: Array.isArray(existing?.modules) ? (existing.modules as Area[]) : [...AREAS],
+    india_access: Array.isArray(existing?.markets) && (existing.markets as string[]).includes('IN'),
     commission_structure: p.commission_structure || '', agent_comm_pct: p.agent_comm_pct ?? 0, brok_comm_pct: p.brok_comm_pct ?? 0,
     lease_comm_pct: p.lease_comm_pct ?? 95,
     brokerage_lead_structure: p.brokerage_lead_structure || '',
@@ -741,6 +744,8 @@ function UserModal({ catalog, existing, teamLeadMode, teamLeads, teamSize, onClo
       name: form.name.trim(), username: form.username.trim() || null, email: form.email.trim(), role: storedRole(form.role),
       department: form.department.trim() || null, designation: form.designation.trim() || null,
       modules: form.modules,
+      // Sent only by a Super Admin; the server ignores it from anyone else and keeps what is stored.
+      ...(actingUser?.is_super_admin ? { markets: form.india_access ? ['CA', 'IN'] : ['CA'] } : {}),
       status: form.status, permissions: isAdminRole ? {} : perms,
       profile: {
         mobile: form.mobile, gender: form.gender,
@@ -950,6 +955,33 @@ function UserModal({ catalog, existing, teamLeadMode, teamLeads, teamSize, onClo
             {form.modules.length === 0
               ? 'With no module selected this person can sign in but has nothing to open.'
               : 'Screen permissions below still decide what they can do inside each module.'}
+          </span></div>
+        </>)}
+
+        {/*
+          India desk (16 Oct 2026). India deals are kept apart from Canadian ones; a person sees them
+          only once given India access here, and only while they have switched the app to India.
+          A Super Admin decision, so nobody else is shown the box.
+        */}
+        {!teamLeadMode && actingUser?.is_super_admin && (<>
+        <div className="modal-sub">Country Access</div>
+        <div className="g3">
+          <label className="field" style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 0 }}>
+            <input type="checkbox" style={{ width: 16, height: 16, marginTop: 2 }} checked disabled />
+            <span style={{ fontWeight: 600 }}>Canada</span>
+          </label>
+          <label className="field" style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 0 }}>
+            <input type="checkbox" style={{ width: 16, height: 16, marginTop: 2 }}
+              checked={form.india_access}
+              onChange={(e) => setForm((f) => ({ ...f, india_access: e.target.checked }))} />
+            <span style={{ fontWeight: 600 }}>India</span>
+          </label>
+        </div>
+        <div className="g3" style={{ marginTop: 0 }}>
+          <span className="help" style={{ gridColumn: '1 / -1' }}>
+            {form.india_access
+              ? 'This person can switch the app to India and work on India deals. India deals are never shown in Canada.'
+              : 'Canada only. India deals are never shown to this person.'}
           </span></div>
         </>)}
 

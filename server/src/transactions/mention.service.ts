@@ -101,7 +101,7 @@ export class MentionService {
     for (let skip = 0; skip < MentionService.MAX_SCAN; skip += MentionService.PAGE) {
       const people = await this.prisma.users.findMany({
         where,
-        select: { id: true, name: true, role: true },
+        select: { id: true, name: true, role: true, markets: true },
         orderBy: { name: 'asc' },
         skip,
         take: MentionService.PAGE,
@@ -133,7 +133,7 @@ export class MentionService {
 
     const people = await this.prisma.users.findMany({
       where: { id: { in: ids } },
-      select: { id: true, name: true, role: true, status: true },
+      select: { id: true, name: true, role: true, status: true, markets: true },
     });
     const byId = new Map(people.map((p) => [p.id, p]));
 

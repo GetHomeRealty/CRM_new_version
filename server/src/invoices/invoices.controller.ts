@@ -44,8 +44,8 @@ export class InvoicesController {
   // ---- reads (invoice:view) ----
   @Get('invoices')
   @Screen('invoice', 'view')
-  index(@Query() query: InvoiceListQuery): Promise<InvoiceListPage> {
-    return this.invoices.index(query ?? {});
+  index(@CurrentUser() user: AuthUserRecord | undefined, @Query() query: InvoiceListQuery): Promise<InvoiceListPage> {
+    return this.invoices.index(query ?? {}, user?.market ?? null);
   }
 
   @Get('invoices/:invoice')

@@ -16,6 +16,12 @@ declare module 'express-session' {
     mfaPendingUserId?: number;
     /** When the pending sign-in stops being answerable. Enforced in code, not by the cookie. */
     mfaPendingUntil?: number;
+    /**
+     * The country this person chose to work in with the top-bar switch (India desk, 16 Oct 2026).
+     * Kept on the session, not sent per request, so downloads and plain links follow it too. Checked
+     * against `users.markets` on every request - see `resolveMarket`.
+     */
+    market?: string;
   }
 }
 

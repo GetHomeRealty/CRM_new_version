@@ -166,11 +166,13 @@ describe('a deal belongs to a person, not to a name', () => {
     });
   });
 
-  it('leaves everyone above agent unscoped', async () => {
+  it('leaves everyone above agent unscoped - within the country they are working in', async () => {
     await inRollback(async (tx) => {
       await namesakes(tx);
       for (const role of ['admin', 'manager', 'accounting', 'documentation']) {
-        expect(transactionScopeWhere({ id: 1, name: 'Somebody', role })).toEqual({});
+        // India desk (16 Oct 2026): no agent narrowing, but always one country. No country = Canada.
+        expect(transactionScopeWhere({ id: 1, name: 'Somebody', role })).toEqual({ market: 'CA' });
+        expect(transactionScopeWhere({ id: 1, name: 'Somebody', role, market: 'IN' })).toEqual({ market: 'IN' });
       }
     });
   });

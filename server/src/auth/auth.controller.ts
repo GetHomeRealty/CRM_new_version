@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  ForbiddenException,
   Get,
   HttpCode,
   Logger,
@@ -26,6 +27,7 @@ import { RegisterDto } from './dto/register.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import type { AuthPayload, AuthUserRecord } from './auth.types';
 import { throwValidation } from '../common/laravel-exceptions';
+import { allowedMarkets, type Market } from '../common/market';
 import { MfaService, type MfaChallengeView } from './mfa/mfa.service';
 import { MfaPolicyService, type MfaObligation } from './mfa/mfa-policy.service';
 import { TrustedDeviceService } from './mfa/trusted-device.service';
@@ -301,6 +303,26 @@ export class AuthController {
   @UseGuards(AuthGuard)
   me(@CurrentUser() user: AuthUserRecord | undefined): Promise<AuthPayload> {
     if (!user) throw new UnauthorizedException({ message: 'Unauthenticated.' });
+    return this.auth.payloadFor(user);
+  }
+
+  /**
+   * The top-bar country switch (India desk, 16 Oct 2026). Stores the choice on the session, so every
+   * later request - screens, downloads, links - works in that country. A country this person was not
+   * given is refused, and the answer is the payload as it now stands.
+   */
+  @Post('user/market')
+  @HttpCode(200)
+  @UseGuards(AuthGuard)
+  async setMarket(@Req() req: Request, @CurrentUser() user: AuthUserRecord | undefined, @Body() body: { market?: unknown }): Promise<AuthPayload> {
+    if (!user) throw new UnauthorizedException({ message: 'Unauthenticated.' });
+    const asked = typeof body?.market === 'string' ? body.market.trim().toUpperCase() : '';
+    if (!allowedMarkets(user.markets).includes(asked as Market)) {
+      throw new ForbiddenException({ message: 'You do not have access to that country.' });
+    }
+    req.session.market = asked;
+    await new Promise<void>((resolve, reject) => req.session.save((err) => (err ? reject(err) : resolve())));
+    user.market = asked as Market;
     return this.auth.payloadFor(user);
   }
 

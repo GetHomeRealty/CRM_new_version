@@ -39,7 +39,8 @@ export class TransactionLawyerReminderService {
    */
   async evaluate(txnId: number, intervalDays: number): Promise<void> {
     const t = await this.prisma.transactions.findFirst({
-      where: { id: txnId, deleted_at: null },
+      // Canadian deals only (India desk, 16 Oct 2026) - see lawyer-reminder-scheduler.service.ts.
+      where: { id: txnId, deleted_at: null, market: 'CA' },
       select: {
         id: true, trade_no: true, property: true, type: true, agent: true,
         buyer_lawyer_name: true, buyer_lawyer_email: true, buyer_lawyer_phone: true, seller_lawyer_name: true, seller_lawyer_email: true, seller_lawyer_phone: true, activity_tracker: true,

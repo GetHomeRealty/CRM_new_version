@@ -131,6 +131,15 @@ export interface SweepResult {
   recovered: number;
 }
 
+/**
+ * Which deals the automatic reminders write about (India desk, 16 Oct 2026): Canadian deals only.
+ *
+ * Every reminder here is worded for Ontario - RECO forms, HST, Toronto business days. Until the
+ * brokerage decides what an India deal should be reminded about, and in what words, an India deal
+ * gets none: no email, no bell. Nothing changes for a Canadian deal.
+ */
+const REMINDED = { market: 'CA' } as const;
+
 @Injectable()
 export class ReminderSweepService {
   private readonly log = new Logger(ReminderSweepService.name);
@@ -198,7 +207,7 @@ export class ReminderSweepService {
     const rows = await this.prisma.transactions.findMany({
       // Indexed on listing_expiry_date: the sweep reads the handful of listings inside the window,
       // never the table.
-      where: { deleted_at: null, listing_expiry_date: { gte: dbDay(from), lte: dbDay(to) } },
+      where: { deleted_at: null, ...REMINDED, listing_expiry_date: { gte: dbDay(from), lte: dbDay(to) } },
       select: {
         id: true, trade_no: true, property: true, agent: true, agent_user_id: true, type: true,
         listing_expiry_date: true, transaction_statuses: { select: { status: true } },
@@ -345,7 +354,7 @@ export class ReminderSweepService {
 
     const rows = await this.prisma.transactions.findMany({
       // closing_date is already indexed; this reads the deals closing inside the window only.
-      where: { deleted_at: null, closing_date: { gte: dbDay(from), lte: dbDay(to) } },
+      where: { deleted_at: null, ...REMINDED, closing_date: { gte: dbDay(from), lte: dbDay(to) } },
       select: {
         id: true, trade_no: true, property: true, agent: true, agent_user_id: true, type: true, closing_date: true,
         buyer_lawyer_name: true, buyer_lawyer_email: true, buyer_lawyer_phone: true, seller_lawyer_name: true, seller_lawyer_email: true, seller_lawyer_phone: true,
@@ -414,7 +423,7 @@ export class ReminderSweepService {
 
     const rows = await this.prisma.transactions.findMany({
       // The same indexed range read the lawyer pass uses, over a shorter window.
-      where: { deleted_at: null, closing_date: { gte: dbDay(from), lte: dbDay(to) } },
+      where: { deleted_at: null, ...REMINDED, closing_date: { gte: dbDay(from), lte: dbDay(to) } },
       select: {
         id: true, trade_no: true, property: true, agent: true, agent_user_id: true, type: true, closing_date: true,
         transaction_statuses: { select: { status: true } },
@@ -484,7 +493,7 @@ export class ReminderSweepService {
     const to = new Date(from.getFullYear(), from.getMonth(), from.getDate() + CONDITION_WINDOW_DAYS);
 
     const rows = await this.prisma.conditions.findMany({
-      where: { deadline: { gte: dbDay(from), lte: dbDay(to) } },
+      where: { deadline: { gte: dbDay(from), lte: dbDay(to) }, transactions: REMINDED },
       select: {
         deadline: true, status: true, type: true, custom_name: true,
         transactions: {
@@ -570,7 +579,7 @@ export class ReminderSweepService {
 
     const rows = await this.prisma.transactions.findMany({
       // Exactly the day the grace period ends, so this reads one day's deals rather than the table.
-      where: { deleted_at: null, offer_date: dbDay(offerDay), deposit: { gt: 0 } },
+      where: { deleted_at: null, ...REMINDED, offer_date: dbDay(offerDay), deposit: { gt: 0 } },
       select: {
         id: true, trade_no: true, property: true, agent: true, agent_user_id: true, deposit: true, offer_date: true,
         admin_activities: true,
@@ -653,7 +662,7 @@ export class ReminderSweepService {
    */
   private async commissionsReceived(today: Date, result: SweepResult): Promise<void> {
     const rows = await this.prisma.invoices.findMany({
-      where: { deleted_at: null, status: 'Paid', commission_received_date: dbDay(startOfDay(today)) },
+      where: { deleted_at: null, status: 'Paid', commission_received_date: dbDay(startOfDay(today)), transactions: REMINDED },
       select: {
         invoice_no: true, total: true, commission_received_date: true, commission_received_via: true,
         transaction_id: true,
@@ -1208,7 +1217,7 @@ export class ReminderSweepService {
     if (!entered.length) return;
 
     const t = await this.prisma.transactions.findFirst({
-      where: { id: txnId, deleted_at: null },
+      where: { id: txnId, deleted_at: null, ...REMINDED },
       select: { id: true, trade_no: true, property: true, agent: true, agent_user_id: true, type: true },
     });
     if (!t?.agent) return;

@@ -1,4 +1,5 @@
 import type { user_modules, user_permissions, users } from '@prisma/client';
+import type { Market } from '../common/market';
 
 /**
  * A user row loaded together with its per-user permission overrides and module assignments.
@@ -10,6 +11,12 @@ import type { user_modules, user_permissions, users } from '@prisma/client';
 export type AuthUserRecord = users & {
   user_permissions: user_permissions[];
   user_modules?: user_modules[];
+  /**
+   * The country this request works in, set by the auth guard from the session's choice and
+   * `users.markets` (see `common/market.ts`). Absent on records loaded outside a request, which
+   * read as Canada.
+   */
+  market?: Market;
 };
 
 /**
@@ -28,6 +35,10 @@ export interface AuthPayload {
   /** An Agent who manages their own Agents in Users. Read only by Users and Dashboard. */
   is_team_lead: boolean;
   permissions: Record<string, string>;
+  /** The countries this person may work in ('CA' always; 'IN' once given India access). */
+  markets: Market[];
+  /** The country this request worked in. */
+  market: Market;
   /**
    * The modules this person may open — licensed to the company AND assigned to them. The frontend
    * builds its navigation from this, so a module nobody bought and a module nobody was given look the

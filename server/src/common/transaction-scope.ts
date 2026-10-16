@@ -1,6 +1,7 @@
 import { Prisma } from '@prisma/client';
 import { isAgent } from '../core/authz';
 import type { AuthUserRecord } from '../auth/auth.types';
+import { allowedMarkets, isMarket, marketOf } from './market';
 
 /**
  * Which deals a signed-in user may see — written once, for every screen that asks.
@@ -33,6 +34,11 @@ import type { AuthUserRecord } from '../auth/auth.types';
  * matched no account, or more than one — and those keep behaving exactly as they did before, which
  * is what stops this from removing access anybody has today. Migration
  * 20260814090000_transaction_owner_ids re-runs the backfill and reports what is left.
+ *
+ * AND ONE COUNTRY AT A TIME (India desk, 16 Oct 2026). Every deal belongs to Canada or India
+ * (`transactions.market`), and every read below is narrowed to the country the person is working
+ * in - for every role, not only agents. A user record that carries no country is Canada, so a
+ * caller that never heard of countries sees what it always saw. See `common/market.ts`.
  */
 
 /** The subset of the signed-in user this module needs. Every caller already has these three. */
@@ -40,6 +46,13 @@ export interface ScopedUser {
   id?: number | null;
   name?: string | null;
   role?: string | null;
+  /** The country this request works in. Absent = Canada. */
+  market?: string | null;
+  /**
+   * The countries this person may work in (`users.markets`), for records about somebody who is NOT
+   * the caller - a person being @mentioned has no request, so no working country. See `dealInMarket`.
+   */
+  markets?: string | null;
 }
 
 /** A user record with no usable identity matches nothing, rather than matching everything. */
@@ -85,15 +98,36 @@ export function teamMemberIdentity(user: ScopedUser): Prisma.team_membersWhereIn
   return or.length ? { OR: or } : { id: { in: [] } };
 }
 
-/** The deals this user is the agent on. Empty for anyone who is not an agent. */
-export function transactionOwnerWhere(user: ScopedUser | null | undefined): Prisma.transactionsWhereInput {
-  if (!user || !isAgent(user)) return {};
-  const terms = ownerTerms(user);
-  return terms.length ? { OR: terms } : MATCHES_NOTHING;
+/** "Deals in the country this person is working in" - as a query term. */
+export function transactionMarketWhere(user: ScopedUser | null | undefined): Prisma.transactionsWhereInput {
+  return { market: marketOf(user) };
 }
 
-/** The deals this user is the agent on, plus the deals they are split into. */
+/** ANDs the country onto a rule, keeping "matches nothing" as it is. */
+const inMarket = (user: ScopedUser | null | undefined, rule: Prisma.transactionsWhereInput): Prisma.transactionsWhereInput =>
+  Object.keys(rule).length === 0 ? transactionMarketWhere(user) : { AND: [transactionMarketWhere(user), rule] };
+
+/** The deals this user is the agent on, in the country they are working in. Agents only narrow further. */
+export function transactionOwnerWhere(user: ScopedUser | null | undefined): Prisma.transactionsWhereInput {
+  if (!user || !isAgent(user)) return inMarket(user, {});
+  const terms = ownerTerms(user);
+  return inMarket(user, terms.length ? { OR: terms } : MATCHES_NOTHING);
+}
+
+/** The deals this user is the agent on, plus the deals they are split into - in their working country. */
 export function transactionScopeWhere(user: ScopedUser | null | undefined): Prisma.transactionsWhereInput {
+  return inMarket(user, transactionAgentScopeWhere(user));
+}
+
+/**
+ * The agent half of `transactionScopeWhere` ONLY, without the country - `{}` for anyone who is not
+ * an agent.
+ *
+ * For the two raw-SQL scopes (Dashboard, Analytics), which turn this rule into an id list: with the
+ * country inside it, every staff member's dashboard would first fetch the id of every Canadian deal.
+ * They add the country as `marketSql(user)` instead. Nothing else should call this.
+ */
+export function transactionAgentScopeWhere(user: ScopedUser | null | undefined): Prisma.transactionsWhereInput {
   if (!user || !isAgent(user)) return {};
   const terms = ownerTerms(user);
   if (!terms.length) return MATCHES_NOTHING;
@@ -120,9 +154,12 @@ export function transactionScopeWhere(user: ScopedUser | null | undefined): Pris
  */
 export function ownsTransaction(
   user: ScopedUser | null | undefined,
-  txn: { agent: string | null; agent_user_id: number | null },
+  txn: { agent: string | null; agent_user_id: number | null; market?: string | null },
 ): boolean {
   if (!user) return false;
+  // A deal in another country is nobody's here. Rows loaded without `market` are not judged on it;
+  // the per-record guards check the country themselves (`dealInMarket`).
+  if (txn.market !== undefined && !dealInMarket(user, txn)) return false;
   const id = idOf(user);
   if (txn.agent_user_id !== null) return id !== null && txn.agent_user_id === id;
   const name = nameOf(user);
@@ -152,6 +189,22 @@ export function reviewScopeWhere(user: ScopedUser | null | undefined): Prisma.tr
   return or.length ? { OR: or } : { id: { in: [] } };
 }
 
+/**
+ * Whether a deal already in hand belongs to the country this person is working in.
+ *
+ * The per-record guards (open one deal, its documents, its invoice...) ask this before anything
+ * else, for every role: an India deal opened by its id from Canada is "not found", exactly like a
+ * deal that does not exist. A deal row with no country is Canada.
+ */
+export function dealInMarket(user: ScopedUser | null | undefined, txn: { market?: string | null } | null | undefined): boolean {
+  const deal = marketOf({ market: txn?.market ?? 'CA' });
+  // The caller: the country they are working in right now.
+  if (isMarket(user?.market)) return user!.market === deal;
+  // Somebody else (no request of their own): any country they have been given.
+  if (user?.markets !== undefined) return allowedMarkets(user.markets).includes(deal);
+  return deal === 'CA';
+}
+
 /** Narrow an `AuthUserRecord` to what this module reads, for callers that hold the full record. */
 export const scopedUser = (u: AuthUserRecord | null | undefined): ScopedUser | null =>
-  u ? { id: u.id, name: u.name, role: u.role } : null;
+  u ? { id: u.id, name: u.name, role: u.role, market: u.market ?? null } : null;

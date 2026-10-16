@@ -165,7 +165,7 @@ export class DashboardController {
   @Get('commissions')
   @Screen('dashboard', 'view', 'desk')
   commissions(@CurrentUser() user: AuthUserRecord | undefined): Promise<DashboardCommissions> {
-    return this.dashboard.commissions(user ? { id: user.id, role: user.role, name: user.name } : null);
+    return this.dashboard.commissions(user ? { id: user.id, role: user.role, name: user.name, market: user.market ?? null } : null);
   }
 
   /**

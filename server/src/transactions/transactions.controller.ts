@@ -16,7 +16,7 @@ import { ListTransactionsDto } from './dto/list-transactions.dto';
 import { contentDisposition } from '../common/content-disposition';
 
 const toResourceUser = (u: AuthUserRecord | undefined): ResourceUser | null =>
-  u ? { id: u.id, role: u.role, name: u.name } : null;
+  u ? { id: u.id, role: u.role, name: u.name, market: u.market ?? null } : null;
 
 /*
  * EVERY ROUTE HERE IS BEHIND THE `transactions` SCREEN PERMISSION, DECLARED ONCE ON THE CLASS.

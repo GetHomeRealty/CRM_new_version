@@ -2,6 +2,7 @@ import { CanActivate, ExecutionContext, Injectable, UnauthorizedException } from
 import type { Request } from 'express';
 import { AuthService } from '../auth.service';
 import { MobileSessionService } from '../mobile-session.service';
+import { requestedMarket, resolveMarket } from '../../common/market';
 
 /**
  * Authentication for browser session cookies and revocable native bearer sessions. Loads the user
@@ -33,6 +34,9 @@ export class AuthGuard implements CanActivate {
     if (!user) {
       throw new UnauthorizedException({ message: 'Unauthenticated.' });
     }
+    // The country this request works in (India desk, 16 Oct 2026): the one the top-bar switch asked
+    // for if this person may use it, otherwise Canada. Every deal read narrows to it.
+    user.market = resolveMarket(requestedMarket(req), user.markets);
     req.authUser = user;
     return true;
   }

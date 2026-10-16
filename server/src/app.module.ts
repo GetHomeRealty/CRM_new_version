@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { ThrottlerModule } from '@nestjs/throttler';
+import { MarketInterceptor } from './common/market.interceptor';
 import { IdentityThrottlerGuard } from './core/identity-throttler.guard';
 import configuration from './config/configuration';
 import { GLOBAL_LIMIT } from './config/rate-limits';
@@ -113,6 +114,8 @@ import { TwilioVoiceModule } from './twilio-voice/twilio-voice.module';
   providers: [
     // One structured line per request, with a correlation id every other line inherits.
     { provide: APP_INTERCEPTOR, useClass: RequestLogInterceptor },
+    // India desk (16 Oct 2026): a deal named in the URL must belong to the country this request works in.
+    { provide: APP_INTERCEPTOR, useClass: MarketInterceptor },
     // Records unhandled errors and then hands them straight back to Nest — the response shape on
     // the wire is unchanged, because the client reads it.
     { provide: APP_FILTER, useClass: ErrorLogFilter },

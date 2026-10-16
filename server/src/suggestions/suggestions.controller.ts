@@ -1,5 +1,7 @@
 import { Controller, Get, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '../auth/guards/auth.guard';
+import { CurrentUser } from '../auth/decorators';
+import type { AuthUserRecord } from '../auth/auth.types';
 import {
   SuggestionsService,
   type BrokerageSuggestion,
@@ -13,8 +15,8 @@ export class SuggestionsController {
   constructor(private readonly suggestions: SuggestionsService) {}
 
   @Get('lawyers')
-  lawyers(): Promise<LawyerSuggestion[]> {
-    return this.suggestions.lawyers();
+  lawyers(@CurrentUser() user: AuthUserRecord | undefined): Promise<LawyerSuggestion[]> {
+    return this.suggestions.lawyers(user?.market ?? null);
   }
 
   @Get('brokerages')

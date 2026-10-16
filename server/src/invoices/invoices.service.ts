@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
+import { invoiceMarketWhere } from '../common/market';
 import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CompanySettingsService } from '../settings/company-settings.service';
@@ -123,11 +124,14 @@ export class InvoicesService {
    * aggregates over the whole ledger rather than by summing an array that happens to hold all of it.
    * The status filter narrows the TABLE, exactly as the client-side filter did, and never the tiles.
    */
-  async index(query: InvoiceListQuery = {}): Promise<InvoiceListPage> {
+  async index(query: InvoiceListQuery = {}, market?: string | null): Promise<InvoiceListPage> {
     const page = Math.max(1, Number(query.page ?? 1) || 1);
     const perPage = Math.min(PER_PAGE_MAX, Math.max(1, Number(query.per_page ?? PER_PAGE_DEFAULT) || PER_PAGE_DEFAULT));
 
-    const where: Prisma.invoicesWhereInput = { deleted_at: null, ...this.displayStatusWhere(query.status) };
+    // One country's invoices (India desk, 16 Oct 2026): a deal's invoice is its deal's country; an
+    // invoice with no deal is Canada's, as every invoice was before. The tiles follow, too.
+    const country = invoiceMarketWhere(market);
+    const where: Prisma.invoicesWhereInput = { deleted_at: null, ...country, ...this.displayStatusWhere(query.status) };
 
     const [total, rows, ledger, paidCount, owed] = await Promise.all([
       this.prisma.invoices.count({ where }),
@@ -139,14 +143,14 @@ export class InvoicesService {
         include: { transactions: TXN_FOR_SUMMARY },
       }),
       this.prisma.invoices.aggregate({
-        where: { deleted_at: null },
+        where: { deleted_at: null, ...country },
         _count: { _all: true },
         _sum: { balance_due: true },
       }),
-      this.prisma.invoices.count({ where: { deleted_at: null, status: 'Paid' } }),
+      this.prisma.invoices.count({ where: { deleted_at: null, status: 'Paid', ...country } }),
       // TD-191 - a Void invoice is not money owed. Its balance stays on the document (voiding does
       // not rewrite the figures) so it is left out here, where the balances become a total.
-      this.prisma.invoices.aggregate({ where: { deleted_at: null, status: { not: 'Void' } }, _sum: { balance_due: true } }),
+      this.prisma.invoices.aggregate({ where: { deleted_at: null, status: { not: 'Void' }, ...country }, _sum: { balance_due: true } }),
     ]);
 
     return {
