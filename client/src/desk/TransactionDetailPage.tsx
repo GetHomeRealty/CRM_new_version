@@ -1047,6 +1047,9 @@ export default function TransactionDetailPage() {
         <div className="detail-title">
           <strong>{form.property || 'Untitled'}</strong>
           <span className={`pill ${typeClass(form.type)}`}>{typeLabel(form.type)}</span>
+          {/* A deal opens only in its own country (the server answers 404 otherwise), so working in
+              India means this is an India deal (India desk, 17 Oct 2026). */}
+          {user?.market === 'IN' && <span className="badge-india" title="An India deal - never shown in Canada">{'\u{1F1EE}\u{1F1F3}'} India</span>}
           {form.statuses.map((s) => <span key={s} className={`pill ${stPill(s)}`}>{s}</span>)}
           <span className={`pill ${view ? 'info' : 'warn'}`} style={{ fontSize: 10 }}>{view ? <><Icon name="lock" size={11} /> View Only</> : <><Icon name="edit" size={11} /> Edit Mode</>}</span>
         </div>

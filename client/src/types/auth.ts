@@ -17,6 +17,9 @@ export type ScreenLevel = 'none' | 'view' | 'edit';
 /** Effective per-screen permission map, keyed by screen name. */
 export type Permissions = Record<string, ScreenLevel>;
 
+/** A country the brokerage works in (India desk, 16 Oct 2026). */
+export type Market = 'CA' | 'IN';
+
 /** The authenticated user object returned by AuthController::payload. */
 export interface AuthUser {
   id: number;
@@ -30,6 +33,10 @@ export interface AuthUser {
   /** An Agent who manages their own Agents in Users. Optional so an older server still parses. */
   is_team_lead?: boolean;
   permissions: Permissions;
+  /** The countries this person may work in. Optional so an older server still parses (= Canada). */
+  markets?: Market[];
+  /** The country this sign-in is working in now. */
+  market?: Market;
   /**
    * The modules this person may open — bought by the company AND assigned to them. Navigation is
    * built from this, so a module nobody purchased and one nobody was given look identical from here:

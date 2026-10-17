@@ -1807,3 +1807,19 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
 /* An empty value would otherwise render as nothing at all, leaving the label
    looking like a field that failed to load rather than one with no value. */
 .view-flat input:disabled:placeholder-shown::placeholder{color:var(--muted);opacity:1}
+
+/* ------------------------------------------------- country switch (India desk, 17 Oct 2026)
+   Canada | India in the topbar, for people given both; a fixed label for India-only people; nothing
+   for Canada-only people. While in India the shell carries an orange edge, so the country is never
+   in doubt. */
+.market-switch{display:flex;gap:3px;padding:3px;border:1px solid var(--line);border-radius:11px;background:var(--surface-2)}
+.market-option{padding:6px 10px;border:0;border-radius:8px;background:transparent;color:var(--muted);font:inherit;font-size:12px;font-weight:700;white-space:nowrap;cursor:pointer;transition:background .14s ease,color .14s ease}
+.market-option:hover:not(.active):not(:disabled){background:var(--surface);color:var(--text)}
+.market-option.active{background:var(--brand);color:#fff}
+.market-option.m-IN.active,.market-switch.single .market-option.active{background:#ea580c;color:#fff}
+.market-option:disabled{cursor:wait;opacity:.7}
+.market-option:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
+.market-switch.single .market-option{cursor:default}
+.app.market-in>.main>.topbar{box-shadow:inset 0 3px 0 #ea580c}
+.app.market-in .sidebar{box-shadow:inset 3px 0 0 #ea580c}
+.badge-india{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:999px;background:#fff7ed;color:#c2410c;border:1px solid #fed7aa;font-size:11px;font-weight:700;white-space:nowrap}

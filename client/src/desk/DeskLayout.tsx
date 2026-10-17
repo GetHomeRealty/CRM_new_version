@@ -10,6 +10,7 @@ import Icon from '../ui/Icon';
 import { AREA_SHORT, AREA_TAB, DEFAULT_AREA, areaPath, screenInArea, type Area } from './area';
 import { AreaProvider } from './AreaContext';
 import { useNotificationStream } from './useNotificationStream';
+import MarketSwitch from './MarketSwitch';
 
 interface NavItem {
   key: string;
@@ -507,8 +508,9 @@ export default function DeskLayout({ area = DEFAULT_AREA }: { area?: Area }) {
 
   return (
     <>
-      <div className="titlebar"><span className="dot">G</span> Get Home Realty — {AREA_SHORT[area]}</div>
-      <div className={`app${sidebarClosed ? ' sidebar-closed' : ''}`}>
+      <div className="titlebar"><span className="dot">G</span> Get Home Realty — {AREA_SHORT[area]}{user?.market === 'IN' ? ' · India' : ''}</div>
+      {/* `market-in` gives the whole shell India's edge colour, so nobody forgets which country's deals they are in. */}
+      <div className={`app${sidebarClosed ? ' sidebar-closed' : ''}${user?.market === 'IN' ? ' market-in' : ''}`}>
         <aside className="sidebar">
           <div className="logo">
             {/* The uploaded brand logo (Settings → Company), falling back to the bundled mark. */}
@@ -655,6 +657,8 @@ export default function DeskLayout({ area = DEFAULT_AREA }: { area?: Area }) {
                   the whole shell scrolled sideways on every screen in both areas. Each of these
                   says something the row still says without it: the locale is fixed, the name is on
                   the avatar's tooltip, and the padlock is the same control as the word. */}
+              {/* Canada | India - only for people given more than Canada; see MarketSwitch. */}
+              <MarketSwitch />
               <div className="topbar-locale" style={{ fontSize: 13, color: '#374151' }}>{'\u{1F1E8}\u{1F1E6}'} English</div>
               {/* The avatar and name open the user's own Settings page — profile, email accounts,
                   preferences — the same page the Inbox's "Email accounts" button opens. */}
