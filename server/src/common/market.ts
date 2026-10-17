@@ -76,6 +76,16 @@ export function marketOf(user: { market?: string | null } | null | undefined): M
   return isMarket(user?.market) ? user!.market as Market : DEFAULT_MARKET;
 }
 
+/**
+ * The deal types an India deal may have (India desk, 17 Oct 2026). Mostly pre-construction (Sai); the
+ * team will name the other kinds, and they are added here then. Canada keeps every type it had.
+ */
+export const INDIA_TYPES: readonly string[] = ['Preconstruction'];
+
+/** Whether a deal of this type may be in this country. Canada: everything it allowed before. */
+export const typeAllowedIn = (market: string | null | undefined, type: string): boolean =>
+  marketOf({ market }) !== 'IN' || INDIA_TYPES.includes(type);
+
 /** `t.market = 'CA'` for hand-written SQL. Safe to inline: the value can only be one of `MARKETS`. */
 export function marketSql(user: { market?: string | null } | null | undefined, alias = 't'): string {
   return `${alias}.market = '${marketOf(user)}'`;

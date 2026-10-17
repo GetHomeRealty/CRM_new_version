@@ -8,7 +8,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AuditService, type ActingUser } from '../audit/audit.service';
 import { documentKind, governingStatus, seedDocumentDefaults } from './document-defaults.service';
 import { applyInterlinks } from './document-interlinks';
-import { BROKERAGE_ONLY, DOC } from './checklist-definitions';
+import { BROKERAGE_ONLY, DOC, checklistKey } from './checklist-definitions';
 import { mandatoryMoves, requireMandatoryApproval } from './document-mandatory-approval';
 import { DocsValidationService } from './docs-validation.service';
 import { DocumentMailService } from './document-mail.service';
@@ -68,7 +68,7 @@ export class DocumentsService {
 
   private actor(u: Actor): ActingUser | null { return u ? { id: u.id, name: u.name } : null; }
 
-  private async txnOr404(id: number): Promise<{ id: number; type: string; agent: string | null; agent_user_id: number | null; property: string | null; trade_no: string; conditional_offer: boolean; reco_audit_ready: string | null; reco_audit_remarks: string | null }> {
+  private async txnOr404(id: number): Promise<{ id: number; type: string; agent: string | null; agent_user_id: number | null; property: string | null; trade_no: string; conditional_offer: boolean; reco_audit_ready: string | null; reco_audit_remarks: string | null; market: string }> {
     const t = await this.prisma.transactions.findFirst({ where: { id, deleted_at: null } });
     if (!t) throw new NotFoundException({ message: `No query results for model [App\\Models\\Transaction] ${id}.` });
     return t;
@@ -116,7 +116,7 @@ export class DocumentsService {
     await this.guardAgent(user, txn);
 
     if ((await this.prisma.documents.count({ where: { transaction_id: txnId, deleted_at: null, condition_id: null } })) === 0) {
-      await seedDocumentDefaults(this.prisma, txnId, txn.type, governingStatus(txn.type, await this.statusList(txnId)));
+      await seedDocumentDefaults(this.prisma, txnId, checklistKey(txn.type, txn.market), governingStatus(txn.type, await this.statusList(txnId)));
     }
 
     /*

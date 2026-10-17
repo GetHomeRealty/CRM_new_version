@@ -2,7 +2,7 @@ import { deskPath } from './area';
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { listTransactionsPage, getMatchingTransactionIds, deleteTransaction, requestTransactionDeletion, listAgents, type TransactionQuery } from '../lib/api';
-import { formatPrice, typeClass, typeLabel, TRANSACTION_TYPES, ALL_STATUSES } from './format';
+import { formatPrice, typeClass, typeLabel, typesFor, ALL_STATUSES } from './format';
 import { useToast } from './toast';
 import { apiErrorMessage } from '../lib/apiError';
 import { useAuth } from '../context/AuthContext';
@@ -386,7 +386,7 @@ export default function TransactionsPage() {
         </select>
         <select value={filters.type} onChange={(e) => setF('type', e.target.value)}>
           <option value="">All types</option>
-          {TRANSACTION_TYPES.map((t) => <option key={t} value={t}>{typeLabel(t)}</option>)}
+          {typesFor(user?.market).map((t) => <option key={t} value={t}>{typeLabel(t)}</option>)}
         </select>
         <select value={filters.validation} onChange={(e) => setF('validation', e.target.value)}>
           <option value="">All validation</option><option>Pending</option><option>Valid</option><option>Invalid</option>

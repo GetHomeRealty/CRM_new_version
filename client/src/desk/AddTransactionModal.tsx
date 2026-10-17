@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { createTransaction, listAgents } from '../lib/api';
-import { TRANSACTION_TYPES, typeLabel, isListingType, parseNumber, pickableStatusesFor } from './format';
+import { typesFor, typeLabel, isListingType, parseNumber, pickableStatusesFor } from './format';
 import { useToast } from './toast';
 import { apiErrorMessage } from '../lib/apiError';
 import { useAuth } from '../context/AuthContext';
@@ -278,7 +278,7 @@ export default function AddTransactionModal({ open, onClose, onCreated }: AddTra
           <label>Transaction Type <span className="req">*</span></label>
           <select value={form.type} onChange={(e) => set('type', e.target.value)}>
             <option value="">Select type</option>
-            {TRANSACTION_TYPES.map((t) => <option key={t} value={t}>{typeLabel(t)}</option>)}
+            {typesFor(user?.market).map((t) => <option key={t} value={t}>{typeLabel(t)}</option>)}
           </select>
         </div>
 

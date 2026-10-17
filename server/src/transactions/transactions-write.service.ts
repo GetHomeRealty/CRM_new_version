@@ -1,5 +1,6 @@
 import { governingStatus, seedDocumentDefaults } from '../documents/document-defaults.service';
 import { syncChecklistToStatus } from '../documents/document-checklist-sync';
+import { checklistKey } from '../documents/checklist-definitions';
 import { UNLOCKING_SCOPE_FILTER } from '../workflows/edit-request-scopes';
 import { hasNewlyPaidPayout } from './payout-collected';
 import { TransactionsService } from './transactions.service';
@@ -29,7 +30,7 @@ import type { AuthUserRecord } from '../auth/auth.types';
 
 import { isAdminOrAbove, isAgent, isSuperAdmin } from '../core/authz';
 import { ownsTransaction, teamMemberIdentity } from '../common/transaction-scope';
-import { marketOf } from '../common/market';
+import { INDIA_TYPES, marketOf, typeAllowedIn } from '../common/market';
 type Tx = Prisma.TransactionClient;
 
 /*
@@ -523,6 +524,10 @@ export class TransactionsWriteService {
     if (!blank(body.type) && !knownType) {
       errors.type = [`"${type}" is not a transaction type this system offers. Allowed: ${TRANSACTION_TYPES.join(', ')}.`];
     }
+    // India deals take India's types only (India desk, 17 Oct 2026).
+    if (knownType && !typeAllowedIn(marketOf(user), type)) {
+      errors.type = [`"${type}" is not offered for India deals. Allowed: ${INDIA_TYPES.join(', ')}.`];
+    }
 
     // The status the deal is being opened with has to exist for the type. Creation takes a single
     // status, so the only rule that can bite here is the vocabulary one — but a deal created
@@ -696,7 +701,7 @@ export class TransactionsWriteService {
           import_batch_id: typeof body.import_batch_id === 'string' && body.import_batch_id.trim()
             ? body.import_batch_id.trim().slice(0, 64)
             : null,
-          trade_no: manualTrade || await this.tradeNumbers.next(tx, type),
+          trade_no: manualTrade || await this.tradeNumbers.next(tx, type, marketOf(user)),
           type,
           // The country the person is working in (India desk, 16 Oct 2026). Canada unless they are
           // in India and allowed to be - see AuthGuard and `common/market.ts`.
@@ -732,7 +737,7 @@ export class TransactionsWriteService {
       // TD-155 - the checklist is created with the deal, inside the same transaction that
       // writes it, so a deal cannot exist without one even momentarily. Conditions are not
       // written on this path, so condition documents are still built by index().
-      await seedDocumentDefaults(tx, t.id, type, status);
+      await seedDocumentDefaults(tx, t.id, checklistKey(type, marketOf(user)), status);
       return t.id;
     });
 
@@ -1131,6 +1136,11 @@ export class TransactionsWriteService {
       }
       if (!(TRANSACTION_TYPES as readonly string[]).includes(submittedType)) {
         const m = `"${submittedType}" is not a transaction type this system offers. Allowed: ${TRANSACTION_TYPES.join(', ')}.`;
+        throw new UnprocessableEntityException({ message: m, errors: { type: [m] } });
+      }
+      // An India deal keeps an India type (India desk, 17 Oct 2026).
+      if (!typeAllowedIn(t.market, submittedType)) {
+        const m = `"${submittedType}" is not offered for India deals. Allowed: ${INDIA_TYPES.join(', ')}.`;
         throw new UnprocessableEntityException({ message: m, errors: { type: [m] } });
       }
     }
@@ -1644,7 +1654,7 @@ export class TransactionsWriteService {
         const sameStatuses = newStatuses.length === oldStatuses.length
           && [...newStatuses].sort().join('|') === [...oldStatuses].sort().join('|');
         if (!sameStatuses) {
-          const moved = await syncChecklistToStatus(tx, txnId, type, governingStatus(type, newStatuses));
+          const moved = await syncChecklistToStatus(tx, txnId, checklistKey(type, t.market), governingStatus(type, newStatuses));
           /*
            * AND THE DEAL'S OWN HISTORY SAYS SO, at the brokerage's instruction of 2026-09-26.
            *

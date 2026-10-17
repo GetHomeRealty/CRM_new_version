@@ -7,9 +7,22 @@ export function parseNumber(val: NumericInput): number {
   return parseFloat(val.toString().replace(/[^0-9.-]+/g, '')) || 0;
 }
 
+/**
+ * Which country's money the screens show (India desk, 17 Oct 2026). Set once from the signed-in
+ * person's working country (AuthContext); switching country reloads the page, so every amount on
+ * screen is in one currency. Canada: "$850,000.00" exactly as before. India: rupees with Indian
+ * grouping, "₹85,00,000.00".
+ */
+let displayMarket: 'CA' | 'IN' = 'CA';
+export function setDisplayMarket(market: string | null | undefined): void {
+  displayMarket = market === 'IN' ? 'IN' : 'CA';
+}
+/** The currency sign for the country being worked in. */
+export const currencySign = (): string => (displayMarket === 'IN' ? '\u20B9' : '$');
+
 export function formatCurrency(val: NumericInput): string {
   const n = typeof val === 'number' ? val : parseNumber(val);
-  return '$' + n.toLocaleString('en-CA', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return currencySign() + n.toLocaleString(displayMarket === 'IN' ? 'en-IN' : 'en-CA', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 // "$850,000.00" -> for inputs we usually drop the trailing .00 in the list
@@ -75,6 +88,16 @@ export const INVOICEABLE_TYPES: string[] = [
   'Commercial Property Buying', 'Commercial Property Lease', 'Business Buying',
 ];
 export const isInvoiceableType = (t: string): boolean => INVOICEABLE_TYPES.includes(t);
+
+/**
+ * The deal types an India deal may have (India desk, 17 Oct 2026) - the server's `INDIA_TYPES`.
+ * Mostly pre-construction; the other kinds are added when the team names them.
+ */
+export const INDIA_TYPES: string[] = ['Preconstruction'];
+
+/** The types offered while working in a country. Canada: every type, exactly as before. */
+export const typesFor = (market: string | null | undefined): string[] =>
+  market === 'IN' ? INDIA_TYPES : TRANSACTION_TYPES;
 
 export const TRANSACTION_TYPES: string[] = [
   'Residential Buying',

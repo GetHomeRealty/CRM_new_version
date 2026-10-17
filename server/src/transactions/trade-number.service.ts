@@ -35,6 +35,14 @@ const TRADE_NUMBER_LOCK_CLASS = 7601;
 const TRADE_NUMBER_LOCK_KEY = 1;
 
 /** Referral deals carry the brokerage's National Bank suffix on the shared counter. */
+/**
+ * INDIA'S OWN SERIES (India desk, 17 Oct 2026 - Sai: "separate series"). India deals are numbered
+ * IN-000001, IN-000002, ... under their own lock, so the two countries never wait on each other and
+ * Canada's counter is exactly as it was. Same rules otherwise: one above the highest ever issued
+ * (deleted deals included), never typed by hand.
+ */
+const INDIA = { prefix: 'IN-', lockKey: 2 } as const;
+
 const suffixFor = (type: string): string => (String(type ?? '').trim() === 'Referral' ? '_NB' : '');
 
 const pad = (n: number): string => String(n).padStart(SERIES.width, '0');
@@ -58,7 +66,8 @@ export class TradeNumberService {
    * Soft-deleted rows are included on purpose: their numbers occupy the unique index, and a number
    * that has been issued is spent whether or not the deal survived.
    */
-  async next(db: Tx, type: string): Promise<string> {
+  async next(db: Tx, type: string, market: string = 'CA'): Promise<string> {
+    if (market === 'IN') return this.nextIndia(db);
     const suffix = suffixFor(type);
     const lo = pad(SERIES.start);
     const hi = String(SERIES.end + 1);
@@ -118,6 +127,26 @@ export class TradeNumberService {
    * of believing it was used. The bulk import clears the sheet's column before it gets here and
    * hands the file back afterwards with the number the app gave each row.
    */
+  /** The next India number, IN-000001 onward. See `INDIA` above. */
+  private async nextIndia(db: Tx): Promise<string> {
+    await db.$executeRawUnsafe('SELECT pg_advisory_xact_lock($1::int, $2::int)', TRADE_NUMBER_LOCK_CLASS, INDIA.lockKey);
+    const rows = await db.$queryRaw<{ trade_no: string }[]>`
+      SELECT trade_no
+        FROM transactions
+       WHERE trade_no ~ '^IN-[0-9]{6}$'
+       ORDER BY trade_no DESC
+       LIMIT 1
+    `;
+    const top = rows[0]?.trade_no;
+    const highest = top === undefined ? SERIES.start - 1 : parseInt(top.slice(INDIA.prefix.length), 10);
+    const candidate = highest + 1;
+    if (candidate > SERIES.end) {
+      const msg = `Every India trade number up to ${INDIA.prefix}${pad(SERIES.end)} has been issued.`;
+      throw new UnprocessableEntityException({ message: msg, errors: { trade_no: [msg] } });
+    }
+    return INDIA.prefix + pad(candidate);
+  }
+
   async manualProblem(_db: Tx, _type: string, raw: unknown): Promise<string | null> {
     const value = String(raw ?? '').trim();
     if (!value) return null;

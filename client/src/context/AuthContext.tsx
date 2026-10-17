@@ -1,4 +1,5 @@
 import { AREAS, type Area } from '../desk/area';
+import { setDisplayMarket } from '../desk/format';
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import api, { getCsrfCookie } from '../lib/axios';
 import type { AuthContextValue, AuthUser, RegisterPayload, ScreenLevel } from '../types';
@@ -8,6 +9,8 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
+  // Amounts on every screen follow the country this sign-in works in (India desk, 17 Oct 2026).
+  setDisplayMarket(user?.market);
   const [loading, setLoading] = useState(true);
 
   // On first load, try to restore the session by asking the API who we are.

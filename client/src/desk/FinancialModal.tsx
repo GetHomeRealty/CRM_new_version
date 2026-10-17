@@ -80,6 +80,8 @@ interface FinancialModalProps {
 export default function FinancialModal({ open, onClose, transactionId, txn, termCount: termCountProp, onSaved, hideClientCommission = false, dftNA = false, readOnly: readOnlyProp = false, isAgent = false }: FinancialModalProps) {
   const toast = useToast();
   const { isSuperAdmin, user } = useAuth();
+  // India commission is not on a T4A (Sai, 17 Oct 2026): no Agent (T4A) section on India deals.
+  const india = user?.market === 'IN';
   /*
    * THE ROLES THAT READ THIS SECTION RATHER THAN WORK IN IT — Documentation and Accounting.
    *
@@ -879,8 +881,8 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
                     );
                   })}
 
-                  {!isAgent && <div className="modal-sub">Agent (T4A) — Term {k} <span style={{ color: totalColor(t4aTermTotal) }}>({formatCurrency(t4aTermTotal)})</span></div>}
-                  {!isAgent && (visible.length === 0 ? <div className="help">No agents assigned to Term {k}.</div> : visible.map(({ m, i }) => {
+                  {!isAgent && !india && <div className="modal-sub">Agent (T4A) — Term {k} <span style={{ color: totalColor(t4aTermTotal) }}>({formatCurrency(t4aTermTotal)})</span></div>}
+                  {!isAgent && !india && (visible.length === 0 ? <div className="help">No agents assigned to Term {k}.</div> : visible.map(({ m, i }) => {
                     const base = r2(tAmt * (parseNumber(m.split) / 100));
                     const a = lineOf(r2(base * parseNumber(m.agent_pct) / 100));
                     return (
@@ -991,7 +993,7 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
 
             {/* Listing Split / Members / Brokerage — Residential-Buying card design */}
             {!hideClientCommission && (
-              <AgentCommissionBlocks rows={listingRows} setMember={setListMember} minBrok={lb.minBrok} agentDefaults={agentDefaults} isLease={leaseType} hideT4A={isAgent} hadSavedTeam={hadSavedTeam} finLock={finLock} finPencil={finPencil} hideLocks={readsOnly} />
+              <AgentCommissionBlocks rows={listingRows} setMember={setListMember} minBrok={lb.minBrok} agentDefaults={agentDefaults} isLease={leaseType} hideT4A={isAgent || india} hadSavedTeam={hadSavedTeam} finLock={finLock} finPencil={finPencil} hideLocks={readsOnly} />
             )}
 
             {/* Trust Verification */}
@@ -1038,7 +1040,7 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
             </div>
 
             <ReferralSections data={stdRefView} />
-            <AgentCommissionBlocks rows={memberRows} setMember={setMember} minBrok={{ commission: 200, hst: 26, total: 226 }} agentDefaults={agentDefaults} isLease={leaseType} hideT4A={isAgent} hadSavedTeam={hadSavedTeam} finLock={finLock} finPencil={finPencil} hideLocks={readsOnly} />
+            <AgentCommissionBlocks rows={memberRows} setMember={setMember} minBrok={{ commission: 200, hst: 26, total: 226 }} agentDefaults={agentDefaults} isLease={leaseType} hideT4A={isAgent || india} hadSavedTeam={hadSavedTeam} finLock={finLock} finPencil={finPencil} hideLocks={readsOnly} />
           </>
         )}
 

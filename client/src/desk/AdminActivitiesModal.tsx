@@ -85,6 +85,8 @@ interface AdminActivitiesModalProps {
 export default function AdminActivitiesModal({ open, onClose, transactionId, txn, onSaved, termCount: termCountProp, depositOnly = false, dftNA = false, readOnly = false }: AdminActivitiesModalProps) {
   const na = (v: string | undefined): string | undefined => (dftNA ? 'N/A' : v); // §5.1 DFT — status dropdowns default to N/A
   const { user, isSuperAdmin } = useAuth();
+  // India commission is not on a T4A (Sai, 17 Oct 2026), so India deals have no T4A Year.
+  const india = user?.market === 'IN';
   /*
    * THE DOCUMENTATION ROLE ONLY — the same test the transaction page makes, and the same one
    * `FinancialModal` makes for the same reason.
@@ -341,7 +343,7 @@ export default function AdminActivitiesModal({ open, onClose, transactionId, txn
                           <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Paid Type</label><select value={na(p.paid_type)} onChange={(e) => setTRow(k, n, 'payments', i, { paid_type: e.target.value })}><option>N/A</option><option>TDB-EFT</option><option>CTA-BA Transfer</option><option>Cheque</option>{PAID_TYPES.includes(na(p.paid_type) || 'N/A') ? null : <option>{na(p.paid_type)}</option>}</select></div>
                           <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Paid Date</label><input type="date" value={p.paid_date} onChange={(e) => setTRow(k, n, 'payments', i, { paid_date: e.target.value, batch_no: batchNo(e.target.value), t4a_year: t4aYear(e.target.value) })} /></div>
                           <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Batch No.</label><input value={p.batch_no} readOnly style={{ background: 'var(--surface-2)' }} /></div>
-                          <div style={{ display: 'flex', gap: 6, alignItems: 'end' }}><div className="field" style={{ marginBottom: 0, flex: 1 }}><label style={lbl}>T4A Year</label><input value={p.t4a_year} readOnly style={{ background: 'var(--surface-2)' }} /></div><button className="row-rm" onClick={() => rmTRow(k, n, 'payments', i)}><Icon name="trash" size={13} /></button></div>
+                          <div style={{ display: 'flex', gap: 6, alignItems: 'end' }}>{!india && <div className="field" style={{ marginBottom: 0, flex: 1 }}><label style={lbl}>T4A Year</label><input value={p.t4a_year} readOnly style={{ background: 'var(--surface-2)' }} /></div>}<button className="row-rm" onClick={() => rmTRow(k, n, 'payments', i)}><Icon name="trash" size={13} /></button></div>
                         </div>
                       ))}
                     </div>
@@ -510,7 +512,7 @@ export default function AdminActivitiesModal({ open, onClose, transactionId, txn
                   <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Paid Date</label><input type="date" value={p.paid_date} onChange={(e) => onPayDate(n, i, e.target.value)} /></div>
                   <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Batch No.</label><input value={p.batch_no} readOnly style={{ background: 'var(--surface-2)' }} /></div>
                   <div style={{ display: 'flex', gap: 6, alignItems: 'end' }}>
-                    <div className="field" style={{ marginBottom: 0, flex: 1 }}><label style={lbl}>T4A Year</label><input value={p.t4a_year} readOnly style={{ background: 'var(--surface-2)' }} /></div>
+                    {!india && <div className="field" style={{ marginBottom: 0, flex: 1 }}><label style={lbl}>T4A Year</label><input value={p.t4a_year} readOnly style={{ background: 'var(--surface-2)' }} /></div>}
                     <button className="row-rm" onClick={() => rmRow(n, 'payments', i)}><Icon name="trash" size={13} /></button>
                   </div>
                 </div>

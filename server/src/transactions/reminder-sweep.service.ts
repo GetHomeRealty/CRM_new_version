@@ -132,13 +132,11 @@ export interface SweepResult {
 }
 
 /**
- * Which deals the automatic reminders write about (India desk, 16 Oct 2026): Canadian deals only.
- *
- * Every reminder here is worded for Ontario - RECO forms, HST, Toronto business days. Until the
- * brokerage decides what an India deal should be reminded about, and in what words, an India deal
- * gets none: no email, no bell. Nothing changes for a Canadian deal.
+ * Which deals the automatic reminders write about (India desk). 16 Oct 2026: Canada only, until the
+ * brokerage decided. 17 Oct 2026, Sai: India deals are reminded "just like the canada deals" - so
+ * every country. Kept as one named term so the rule stays in one place if it changes again.
  */
-const REMINDED = { market: 'CA' } as const;
+const REMINDED = {} as const;
 
 @Injectable()
 export class ReminderSweepService {

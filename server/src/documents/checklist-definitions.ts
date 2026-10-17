@@ -244,6 +244,35 @@ const REFERRAL: StatusLists = {
   'Closed': [M(DOC.REFERRAL_AGREEMENT), M(DOC.NOS), M(DOC.TRADE_SHEET)],
 };
 
+/**
+ * INDIA PRE-CONSTRUCTION (India desk, 17 Oct 2026). Sai: the builder agreement and the deposit slips
+ * are enough, and the deposit slips work like Canada's ("Deposit Slip" is the multi-file deposit row,
+ * see `documentKind`). The builder agreement is required; the deposit slip is optional, as Canada's
+ * deposit cheque is. Reached through `checklistKey`, never by a Canadian deal.
+ */
+const INDIA_BUILDER_AGREEMENT = 'Builder Agreement';
+const INDIA_DEPOSIT_SLIP = 'Deposit Slip';
+const INDIA_PRECONSTRUCTION: StatusLists = {
+  'Secured Firm': [M(INDIA_BUILDER_AGREEMENT), N(INDIA_DEPOSIT_SLIP)],
+  'Secured Conditional': [M(INDIA_BUILDER_AGREEMENT), N(INDIA_DEPOSIT_SLIP)],
+  'Closed': [M(INDIA_BUILDER_AGREEMENT), N(INDIA_DEPOSIT_SLIP)],
+  'Mutual Release': [M(INDIA_BUILDER_AGREEMENT)],
+  'DFT': [M(INDIA_BUILDER_AGREEMENT)],
+  'Void': [M(INDIA_BUILDER_AGREEMENT)],
+};
+
+/**
+ * The key a deal's checklist is looked up by: its type for Canada (exactly as before), "IN:" + type
+ * for India, so India keeps its own lists and no Canadian list is touched.
+ */
+export const checklistKey = (type: string, market: string | null | undefined): string =>
+  market === 'IN' ? `IN:${type}` : type;
+
+/** India's lists, kept apart from Canada's table so that table is exactly the brokerage's sheet. */
+const INDIA_FAMILY_OF: Record<string, StatusLists> = {
+  'IN:Preconstruction': INDIA_PRECONSTRUCTION,
+};
+
 /** Which family a deal type follows. Business Sale is absent on purpose - see the header. */
 const FAMILY_OF: Record<string, StatusLists> = {
   'Residential Buying': BUYING,
@@ -268,7 +297,8 @@ const FAMILY_OF: Record<string, StatusLists> = {
  * the type's own vocabulary all land here.
  */
 export function checklistFor(type: string | null | undefined, status: string | null | undefined): ChecklistItem[] {
-  const lists = FAMILY_OF[String(type ?? '').trim()];
+  const key = String(type ?? '').trim();
+  const lists = FAMILY_OF[key] ?? INDIA_FAMILY_OF[key];
   if (!lists) return [];
   const items = lists[String(status ?? '').trim()];
   // A FRESH COPY EVERY TIME. The lists above are module state shared by every request, and callers

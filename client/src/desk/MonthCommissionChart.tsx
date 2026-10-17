@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { formatCurrency } from './format';
+import { currencySign, formatCurrency } from './format';
 
 /**
  * Commission by Closing Month, as a compact chart.
@@ -42,9 +42,10 @@ const longLabel = (m: string): string => `${monthName(m)} ${m.slice(0, 4)}`;
 /** $1.2M / $708K / $950 — for axis and column labels, where a full amount will not fit. */
 function compact(n: number): string {
   const a = Math.abs(n);
-  if (a >= 1_000_000) return `$${(n / 1_000_000).toFixed(a >= 10_000_000 ? 0 : 1)}M`;
-  if (a >= 1_000) return `$${Math.round(n / 1_000)}K`;
-  return `$${Math.round(n)}`;
+  const s = currencySign();
+  if (a >= 1_000_000) return `${s}${(n / 1_000_000).toFixed(a >= 10_000_000 ? 0 : 1)}M`;
+  if (a >= 1_000) return `${s}${Math.round(n / 1_000)}K`;
+  return `${s}${Math.round(n)}`;
 }
 /** A round axis maximum at or above `v`: 1, 2, 2.5 or 5 × a power of ten. */
 function niceMax(v: number): number {

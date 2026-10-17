@@ -6,7 +6,7 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties, type Reac
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { getTransaction, updateTransaction, listAgents, generateTransactionInvoices, getCompanySettings, getCustomers, getBrokerageSuggestions, requestTransactionEdit, approveEditRequest, rejectEditRequest, reviewAgentChanges, rejectAgentChange, requestTransactionDeletion, forwardDeleteRequest, approveDeleteRequest, rejectDeleteRequest, getDocuments, markTransactionReviewsSeen, bulkReviewAction, type OpenReviewItem } from '../lib/api';
 import ReviewHistoryPanel from './ReviewHistoryPanel';
-import { typeClass, typeLabel, isListingType, isListingFinancialType, isListingStatusFamily, isPreconType, isCommercialLeaseType, isInvoiceableType, emailLooksValid, phoneLooksValid, parseNumber, TRANSACTION_TYPES, statusOptionsFor, normalizeStatus, defaultStatusFor } from './format';
+import { formatCurrency, typeClass, typeLabel, isListingType, isListingFinancialType, isListingStatusFamily, isPreconType, isCommercialLeaseType, isInvoiceableType, emailLooksValid, phoneLooksValid, parseNumber, typesFor, statusOptionsFor, normalizeStatus, defaultStatusFor } from './format';
 import { useToast } from './toast';
 import { apiErrorMessage } from '../lib/apiError';
 import { useAuth } from '../context/AuthContext';
@@ -1391,7 +1391,7 @@ export default function TransactionDetailPage() {
           {(() => {
             const rows = ((txn as unknown as { invoice_divergence?: { invoice_no: string; billed: number; derived: number; difference: number; sent: boolean }[] } | null)?.invoice_divergence) || [];
             if (!rows.length) return null;
-            const fmt = (n: number) => n.toLocaleString('en-CA', { style: 'currency', currency: 'CAD' });
+            const fmt = (n: number) => formatCurrency(n);
             return (
               <div style={{ margin: '0 0 12px', padding: '10px 14px', borderLeft: '3px solid var(--warn)', background: 'rgba(245, 158, 11, 0.10)', borderRadius: 6 }}>
                 <strong style={{ fontSize: 13, color: 'var(--warn)' }}>An invoice on this deal no longer matches it</strong>
@@ -1435,7 +1435,7 @@ export default function TransactionDetailPage() {
               )}
               <Field label="Type">
                 <select value={form.type} disabled={basicTypeStatusRo} onChange={(e) => onTypeChange(e.target.value)}>
-                  {TRANSACTION_TYPES.map((t) => <option key={t} value={t}>{typeLabel(t)}</option>)}
+                  {typesFor(user?.market).map((t) => <option key={t} value={t}>{typeLabel(t)}</option>)}
                 </select>
               </Field>
               <Field label="Status">
