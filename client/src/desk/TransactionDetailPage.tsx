@@ -9,6 +9,7 @@ import ReviewHistoryPanel from './ReviewHistoryPanel';
 import { formatCurrency, typeClass, typeLabel, isListingType, isListingFinancialType, isListingStatusFamily, isPreconType, isCommercialLeaseType, isInvoiceableType, emailLooksValid, phoneLooksValid, parseNumber, typesFor, statusOptionsFor, normalizeStatus, defaultStatusFor } from './format';
 import { useToast } from './toast';
 import { apiErrorMessage } from '../lib/apiError';
+import api from '../lib/axios';
 import { useAuth } from '../context/AuthContext';
 import TeamSplitModal from './TeamSplitModal';
 import FinancialModal from './FinancialModal';
@@ -250,6 +251,13 @@ export default function TransactionDetailPage() {
 
   const [form, setForm] = useState<DetailForm | null>(null);
   const [txn, setTxn] = useState<Transaction | null>(null); // raw API object (carries team + financial breakdown)
+  // India deals: the builder project list and this deal's project (stage 3b, 17 Oct 2026).
+  const [projects, setProjects] = useState<{ id: number; name: string; builder_name: string; city: string | null }[]>([]);
+  useEffect(() => {
+    if (user?.market !== 'IN') return;
+    api.get<{ data: { id: number; name: string; builder_name: string; city: string | null }[] }>('/api/builder-projects/pick')
+      .then((r) => setProjects(r.data.data)).catch(() => setProjects([]));
+  }, [user?.market]);
   const [mode, setMode] = useState<'view' | 'edit'>(params.get('mode') === 'edit' && canEdit ? 'edit' : 'view');
   const [agents, setAgents] = useState<string[]>([]);
   // TD-045 - true when the agent on this deal is an external/co-op name rather than an account.
@@ -1049,6 +1057,24 @@ export default function TransactionDetailPage() {
           <span className={`pill ${typeClass(form.type)}`}>{typeLabel(form.type)}</span>
           {/* A deal opens only in its own country (the server answers 404 otherwise), so working in
               India means this is an India deal (India desk, 17 Oct 2026). */}
+          {user?.market === 'IN' && (() => {
+            const pid = (txn as unknown as { builder_project_id?: number | null } | null)?.builder_project_id ?? null;
+            const p = projects.find((x) => x.id === pid);
+            if (view) return p ? <span className="pill info" title="Builder project">🏗 {p.name}</span> : null;
+            return (
+              <select title="Builder project" value={pid ?? ''} style={{ width: 'auto', fontSize: 12, padding: '3px 6px' }}
+                onChange={async (e) => {
+                  try {
+                    const updated = await updateTransaction(id, { builder_project_id: e.target.value === '' ? null : Number(e.target.value) });
+                    setTxn(updated);
+                    toast('Builder project saved', 'ok');
+                  } catch (err) { toast(apiErrorMessage(err, 'Could not save the builder project'), 'bad'); }
+                }}>
+                <option value="">No builder project</option>
+                {projects.map((x) => <option key={x.id} value={x.id}>🏗 {x.name} — {x.builder_name}</option>)}
+              </select>
+            );
+          })()}
           {user?.market === 'IN' && <span className="badge-india" title="An India deal - never shown in Canada">{'\u{1F1EE}\u{1F1F3}'} India</span>}
           {form.statuses.map((s) => <span key={s} className={`pill ${stPill(s)}`}>{s}</span>)}
           <span className={`pill ${view ? 'info' : 'warn'}`} style={{ fontSize: 10 }}>{view ? <><Icon name="lock" size={11} /> View Only</> : <><Icon name="edit" size={11} /> Edit Mode</>}</span>

@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { createTransaction, listAgents } from '../lib/api';
+import api from '../lib/axios';
 import { typesFor, typeLabel, isListingType, parseNumber, pickableStatusesFor } from './format';
 import { useToast } from './toast';
 import { apiErrorMessage } from '../lib/apiError';
@@ -71,6 +72,15 @@ export default function AddTransactionModal({ open, onClose, onCreated }: AddTra
   const { user } = useAuth();
   const isAgent = user?.role === 'agent';
   const [form, setForm] = useState<TransactionForm>(EMPTY);
+  // India deals: the builder project this deal is in (stage 3b, 17 Oct 2026). Optional.
+  const india = user?.market === 'IN';
+  const [projects, setProjects] = useState<{ id: number; name: string; builder_name: string; city: string | null }[]>([]);
+  const [projectId, setProjectId] = useState('');
+  useEffect(() => {
+    if (!india) return;
+    api.get<{ data: { id: number; name: string; builder_name: string; city: string | null }[] }>('/api/builder-projects/pick')
+      .then((r) => setProjects(r.data.data)).catch(() => setProjects([]));
+  }, [india]);
   const [saving, setSaving] = useState(false);
   /*
    * TD-076 — one token per filling-in of this form, so a double-click is one submission.
@@ -209,6 +219,7 @@ export default function AddTransactionModal({ open, onClose, onCreated }: AddTra
     if (!form.type || !form.property.trim()) { toast('Please fill all required fields', 'bad'); return; }
     if (!form.status) { toast('Please select a Status', 'bad'); return; }
     const payload: Record<string, unknown> = { type: form.type, property: form.property.trim(), status: form.status };
+    if (india && projectId) payload.builder_project_id = Number(projectId);
 
     if (listing) {
       payload.listing_contract_date = form.listing_contract_date || null;
@@ -284,6 +295,21 @@ export default function AddTransactionModal({ open, onClose, onCreated }: AddTra
 
         {form.type && (
           <>
+            {india && (
+              <div className="field">
+                <label>Builder project</label>
+                <select value={projectId} onChange={(e) => {
+                  const id = e.target.value;
+                  setProjectId(id);
+                  const p = projects.find((x) => String(x.id) === id);
+                  // Fills the property from the project when nothing has been typed yet.
+                  if (p && !form.property.trim()) set('property', [p.name, p.city].filter(Boolean).join(', '));
+                }}>
+                  <option value="">{projects.length ? 'Choose the project (optional)' : 'No projects yet - add them under Builders'}</option>
+                  {projects.map((p) => <option key={p.id} value={p.id}>{p.name} — {p.builder_name}{p.city ? `, ${p.city}` : ''}</option>)}
+                </select>
+              </div>
+            )}
             <div className="field" style={{ position: 'relative' }}>
               <label>Property Address <span className="req">*</span></label>
               <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>

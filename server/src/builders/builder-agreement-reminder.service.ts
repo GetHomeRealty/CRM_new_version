@@ -14,7 +14,10 @@ import { BuildersService } from './builders.service';
  * reminded about, and then again no sooner than two days later, until it expires or its expiry date
  * is moved (moving the date starts the reminders afresh; see BuildersService.update).
  *
- * One email per agreement, to every active Super Admin with an email address. Checked every six hours,
+ * The same rule chases a project's RERA registration (stage 3b, Sai: "ok" to a reminder like the
+ * agreement's) - its valid-until date, from 15 days before, every 2 days.
+ *
+ * One email per agreement or RERA, to every active Super Admin with an email address. Checked every six hours,
  * so a restart or a quiet morning never loses a day. Runs only where schedulers run (RUN_SCHEDULERS).
  */
 const WINDOW_DAYS = 15;
@@ -66,7 +69,12 @@ export class BuilderAgreementReminderService implements OnModuleInit, OnModuleDe
         include: { builder: { select: { id: true, name: true } } },
       });
       const due = candidates.filter((a) => BuilderAgreementReminderService.due(a, today));
-      if (!due.length) return { sent: 0, checked: candidates.length };
+      const reraCandidates = await this.prisma.builder_projects.findMany({
+        where: { rera_valid_until: { not: null, lte: horizon }, deleted_at: null, market: 'IN', builder: { deleted_at: null } },
+        select: { id: true, name: true, rera_number: true, rera_valid_until: true, rera_last_reminder_at: true, builder: { select: { name: true } } },
+      });
+      const reraDue = reraCandidates.filter((p) => BuilderAgreementReminderService.due({ expiry_date: p.rera_valid_until, last_reminder_at: p.rera_last_reminder_at }, today));
+      if (!due.length && !reraDue.length) return { sent: 0, checked: candidates.length + reraCandidates.length };
       const admins = await this.prisma.users.findMany({
         // Every account has a status (default Active); Inactive accounts get nothing.
         where: { role: { in: superAdminRoles() }, status: { not: 'Inactive' }, email: { not: '' } },
@@ -95,7 +103,29 @@ export class BuilderAgreementReminderService implements OnModuleInit, OnModuleDe
           sent += 1;
         }
       }
-      return { sent, checked: candidates.length };
+      for (const p of reraDue) {
+        const left = BuildersService.daysLeft(p.rera_valid_until, today) as number;
+        const when = p.rera_valid_until!.toISOString().slice(0, 10);
+        const subject = left === 0
+          ? `RERA registration expires TODAY - ${p.name}`
+          : `RERA registration expires in ${left} day${left === 1 ? '' : 's'} - ${p.name}`;
+        const html = `<p>The RERA registration${p.rera_number ? ` <strong>${esc(p.rera_number)}</strong>` : ''} of the project`
+          + ` <strong>${esc(p.name)}</strong> (${esc(p.builder.name)}) is valid until <strong>${when}</strong>`
+          + ` (${left === 0 ? 'today' : `${left} day${left === 1 ? '' : 's'} from now`}).</p>`
+          + `<p>Please get the renewed certificate and update the project in the Builders screen (India).</p>`
+          + `<p style="color:#6b7280;font-size:12px">This reminder repeats every ${EVERY_DAYS} days from ${WINDOW_DAYS} days before expiry.</p>`;
+        let ok = 0;
+        for (const addr of to) {
+          try { await this.mailer.sendDirect(addr, subject, html); ok += 1; } catch (err) {
+            this.log.warn(`RERA reminder to ${addr} failed: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
+        if (ok > 0) {
+          await this.prisma.builder_projects.update({ where: { id: p.id }, data: { rera_last_reminder_at: new Date() } });
+          sent += 1;
+        }
+      }
+      return { sent, checked: candidates.length + reraCandidates.length };
     } catch (err) {
       this.log.error(`Builder agreement reminders failed: ${err instanceof Error ? err.message : String(err)}`);
       return { sent: 0, checked: 0 };

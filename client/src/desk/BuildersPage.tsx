@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import { useToast } from './toast';
 import ConfirmDialog, { useConfirm } from './ConfirmDialog';
 import { apiErrorMessage } from '../lib/apiError';
+import BuilderProjectsTab from './BuilderProjectsTab';
 
 /**
  * INDIA BUILDER DATABASE (stage 3, 17 Oct 2026).
@@ -70,6 +71,7 @@ export default function BuildersPage() {
   const [file, setFile] = useState<File | null>(null);
   const [saving, setSaving] = useState(false);
   const inIndia = user?.market === 'IN';
+  const [tab, setTab] = useState<'builders' | 'projects'>('builders');
 
   const load = useCallback(() => {
     if (!inIndia) { setLoading(false); return; }
@@ -151,10 +153,17 @@ export default function BuildersPage() {
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
         <div>
           <h2 style={{ margin: 0 }}>Builders</h2>
-          <div className="muted" style={{ fontSize: 13, marginTop: 2 }}>India builders, their contacts and our agreement with each</div>
+          <div className="muted" style={{ fontSize: 13, marginTop: 2 }}>India builders, their contacts, our agreement with each, and their projects</div>
         </div>
-        <button className="btn primary" onClick={openAdd}>+ Add Builder</button>
+        {tab === 'builders' && <button className="btn primary" onClick={openAdd}>+ Add Builder</button>}
       </div>
+
+      <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
+        <button className={`btn ${tab === 'builders' ? 'primary' : 'ghost'} sm`} onClick={() => setTab('builders')}>Builders ({rows.length})</button>
+        <button className={`btn ${tab === 'projects' ? 'primary' : 'ghost'} sm`} onClick={() => setTab('projects')}>Projects</button>
+      </div>
+
+      {tab === 'projects' ? <BuilderProjectsTab builders={rows.map((b) => ({ id: b.id, name: b.name }))} /> : (<>
 
       <input className="search" style={{ marginBottom: 12, width: '100%' }} placeholder="Search by builder, company, contact name or number…"
         value={search} onChange={(e) => setSearch(e.target.value)} />
@@ -198,6 +207,7 @@ export default function BuildersPage() {
           </table>
         </div>
       )}
+      </>)}
 
       {open && (
         <div className="overlay open" onMouseDown={(e) => { if (e.target === e.currentTarget && !saving) setOpen(false); }}>

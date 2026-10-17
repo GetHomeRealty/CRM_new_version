@@ -60,6 +60,7 @@ const LEAVE_ALONE = new Set([
   'trade_no',      // unique, and set by the fixture
   'agent_user_id', // a foreign key — pointed at a real account below
   'market',        // the loader filters on it, like deleted_at: a probe value is no country, so the row would vanish
+  'builder_project_id', // a foreign key to an India builder project - a probe number points at nothing
 ]);
 
 /** A distinctive value for a column, by declared type. */

@@ -434,6 +434,21 @@ export class TransactionsWriteService {
     }
   }
 
+  /**
+   * The builder project an India deal may be linked to (India desk, stage 3b, 17 Oct 2026).
+   * Blank = no project. A project must be an India project that still exists, and only an India deal
+   * may have one - a Canadian deal keeps its own text fields (builder_vendor / builder_project).
+   */
+  private async projectFor(db: Pick<Prisma.TransactionClient, 'builder_projects'>, market: string | null | undefined, raw: unknown): Promise<number | null> {
+    const v = String(raw ?? '').trim();
+    if (v === '' || v === 'null') return null;
+    const id = Number(v);
+    if (marketOf({ market }) !== 'IN') throw new UnprocessableEntityException({ message: 'Only India deals are linked to a builder project.', errors: { builder_project_id: ['Only India deals are linked to a builder project.'] } });
+    const p = Number.isInteger(id) ? await db.builder_projects.findFirst({ where: { id, market: 'IN', deleted_at: null }, select: { id: true } }) : null;
+    if (!p) throw new UnprocessableEntityException({ message: 'That builder project does not exist.', errors: { builder_project_id: ['That builder project does not exist.'] } });
+    return p.id;
+  }
+
   /** Create a transaction (port of TransactionController::store). */
   /**
    * `opts.quiet` - set by the bulk import only (2026-10-08). The save is the same; the instant
@@ -706,6 +721,8 @@ export class TransactionsWriteService {
           // The country the person is working in (India desk, 16 Oct 2026). Canada unless they are
           // in India and allowed to be - see AuthGuard and `common/market.ts`.
           market: marketOf(user),
+          // India deals: the builder project picked on the form, if any (stage 3b).
+          builder_project_id: await this.projectFor(tx, marketOf(user), body.builder_project_id),
           property: (body.property ?? null) as string | null,
           agent: agentName,
           // Recorded beside the name, so nothing downstream has to resolve a person from a string
@@ -1602,6 +1619,10 @@ export class TransactionsWriteService {
       }
 
       if (Object.prototype.hasOwnProperty.call(data, 'team')) await this.syncTeam(tx, txnId, String(fill.type ?? t.type), asArray(data.team));
+      // India deals: which builder project this deal is in (stage 3b, 17 Oct 2026). Only when sent.
+      if (Object.prototype.hasOwnProperty.call(body, 'builder_project_id')) {
+        await tx.transactions.update({ where: { id: txnId }, data: { builder_project_id: await this.projectFor(tx, t.market, body.builder_project_id) } });
+      }
       if (Object.prototype.hasOwnProperty.call(data, 'precon_terms')) await this.syncPreconTerms(tx, txnId, asArray(data.precon_terms));
 
       if (Object.prototype.hasOwnProperty.call(data, 'statuses')) {

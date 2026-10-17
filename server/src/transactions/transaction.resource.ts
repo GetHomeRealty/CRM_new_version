@@ -293,6 +293,8 @@ export async function transactionResource(t: LoadedTxn, ctx: ResourceCtx): Promi
     id: t.id,
     trade_no: t.trade_no,
     type: t.type,
+    // India deals: the builder project picked for this deal (stage 3b, 17 Oct 2026); null otherwise.
+    builder_project_id: t.builder_project_id ?? null,
     property: t.property,
     agent: t.agent,
     price: num(t.price),

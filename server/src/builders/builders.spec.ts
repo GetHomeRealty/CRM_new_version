@@ -66,3 +66,35 @@ describe('agreement expiry reminders: from 15 days before, every 2 days', () => 
     expect(BuilderAgreementReminderService.due({ expiry_date: null, last_reminder_at: null }, d('2026-11-30'))).toBe(false);
   });
 });
+
+import { BuilderProjectsService } from './builder-projects.service';
+
+describe('India builder projects (stage 3b)', () => {
+  it('keeps a project with RERA, falls back to the builder\'s commission, and follows the newest price', async () => {
+    await inRollback(async (tx) => {
+      const builders = new BuildersService(tx);
+      // Already inside a rollback transaction: nested $transaction just runs on the same client.
+      const projects = new BuilderProjectsService(Object.assign(Object.create(tx), { $transaction: (fn: (c: PrismaService) => unknown) => fn(tx) }) as PrismaService);
+      const b = (await builders.create(admin('IN'), { name: 'Proj Builder', agreement: { commission_pct: '3' } })).data;
+      const p = (await projects.create(admin('IN'), {
+        builder_id: b.id, name: 'Green Valley', status: 'Now Selling', home_types: ['Villa', 'Plot', 'Nonsense'],
+        city: 'Hyderabad', starting_price: '75,00,000', rera: { number: 'P02400001234', approved_on: '2026-01-10', valid_until: '2028-01-09' },
+      })).data;
+      expect(p.home_types).toEqual(['Villa', 'Plot']);                 // unknown types dropped
+      expect(p.starting_price).toBe(7500000);                          // Indian commas read
+      expect(p.effective_commission_pct).toBe(3);                      // builder's % when the project has none
+      expect((p.rera as Record<string, unknown>).number).toBe('P02400001234');
+      const after = (await projects.addPrice(admin('IN'), p.id as number, { changed_on: '2026-10-01', starting_price: '8000000', note: 'Phase 2' }, undefined)).data;
+      expect(after.starting_price).toBe(8000000);
+      expect((after.prices as unknown[]).length).toBe(1);
+      await expect(projects.create(admin('IN'), { builder_id: b.id, name: 'X', status: 'Weird' })).rejects.toBeDefined();
+      await expect(projects.list(admin('CA'))).rejects.toMatchObject({ status: 404 });
+      expect((await projects.pickList(admin('CA'))).data).toEqual([]);
+    });
+  });
+
+  it('RERA valid-until is chased on the same rule as the agreement', () => {
+    expect(BuilderAgreementReminderService.due({ expiry_date: d('2027-01-20'), last_reminder_at: null }, d('2027-01-05'))).toBe(true);
+    expect(BuilderAgreementReminderService.due({ expiry_date: d('2027-01-20'), last_reminder_at: null }, d('2027-01-04'))).toBe(false);
+  });
+});

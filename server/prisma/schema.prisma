@@ -2590,6 +2590,10 @@ model transactions {
   /// (India). Set when the deal is created, from the country the person is working in; never edited
   /// by agents. Every read of deals is narrowed to one country - see src/common/market.ts.
   market                      String                        @default("CA") @db.VarChar(8)
+  /// India deals: the builder project this deal is in (stage 3b, 17 Oct 2026). Optional.
+  builder_project_id          Int?
+  /// (The text fields builder_vendor / builder_project above are Canada's pre-construction entries; unchanged.)
+  linked_project              builder_projects?             @relation(fields: [builder_project_id], references: [id], onDelete: SetNull, onUpdate: Restrict)
   property                    String?                       @db.VarChar(255)
   agent                       String?                       @db.VarChar(255)
   /// The user `agent` names, resolved once instead of by name on every read.
@@ -3774,6 +3778,7 @@ model builders {
   deleted_at    DateTime?           @db.Timestamp(0)
   contacts      builder_contacts[]
   agreement     builder_agreements?
+  projects      builder_projects[]
 
   @@index([market, deleted_at])
 }
@@ -3814,3 +3819,77 @@ model builder_agreements {
 
   @@index([expiry_date])
 }
+
+/// INDIA BUILDER PROJECTS (stage 3b, 17 Oct 2026). One builder's project, described the way the
+/// precon website describes one (status, home types, location, starting price, occupancy, bedrooms,
+/// overview, files by kind), so it can be shown there later - plus RERA, price history and the deals.
+model builder_projects {
+  id                     Int                     @id @default(autoincrement())
+  builder_id             Int
+  market                 String                  @default("IN") @db.VarChar(8)
+  name                   String                  @db.VarChar(255)
+  /// Coming Soon / Registration / Now Selling / Sold Out - the precon site's words.
+  status                 String                  @default("Coming Soon") @db.VarChar(32)
+  /// Comma-separated: Apartment/Flat, Villa, Independent House, Row House, Plot, Commercial.
+  home_types             String?                 @db.VarChar(255)
+  state                  String?                 @db.VarChar(128)
+  city                   String?                 @db.VarChar(128)
+  locality               String?                 @db.VarChar(255)
+  address                String?                 @db.Text
+  overview               String?                 @db.Text
+  starting_price         Decimal?                @db.Decimal(16, 2)
+  max_price              Decimal?                @db.Decimal(16, 2)
+  bedrooms               String?                 @db.VarChar(64)
+  occupancy              String?                 @db.VarChar(64)
+  /// This project's own commission %, when it differs from the builder's agreement. Empty = the builder's.
+  commission_pct         Decimal?                @db.Decimal(8, 4)
+  rera_number            String?                 @db.VarChar(128)
+  rera_approved_on       DateTime?               @db.Date
+  rera_valid_until       DateTime?               @db.Date
+  rera_last_reminder_at  DateTime?               @db.Timestamp(0)
+  created_by_id          Int?
+  created_at             DateTime                @default(now()) @db.Timestamp(0)
+  updated_at             DateTime                @default(now()) @db.Timestamp(0)
+  deleted_at             DateTime?               @db.Timestamp(0)
+  builder                builders                @relation(fields: [builder_id], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  files                  builder_project_files[]
+  prices                 builder_project_prices[]
+  transactions           transactions[]
+
+  @@index([builder_id])
+  @@index([market, deleted_at])
+  @@index([rera_valid_until])
+}
+
+/// A project's files by kind: rera_certificate, price_list, available_units, floor_plan, brochure,
+/// site_plan, photo, other. Every version is kept; the newest of a kind is shown first.
+model builder_project_files {
+  id             Int              @id @default(autoincrement())
+  project_id     Int
+  kind           String           @db.VarChar(32)
+  file_path      String           @db.VarChar(512)
+  file_name      String           @db.VarChar(255)
+  note           String?          @db.VarChar(500)
+  uploaded_by_id Int?
+  uploaded_at    DateTime         @default(now()) @db.Timestamp(0)
+  deleted_at     DateTime?        @db.Timestamp(0)
+  project        builder_projects @relation(fields: [project_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@index([project_id, kind])
+}
+
+/// Price changes, newest first: when, the new starting price, why, and the price list that came with it.
+model builder_project_prices {
+  id             Int              @id @default(autoincrement())
+  project_id     Int
+  changed_on     DateTime         @db.Date
+  starting_price Decimal?         @db.Decimal(16, 2)
+  note           String?          @db.VarChar(1000)
+  file_id        Int?
+  created_by_id  Int?
+  created_at     DateTime         @default(now()) @db.Timestamp(0)
+  project        builder_projects @relation(fields: [project_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@index([project_id, changed_on])
+}
+
