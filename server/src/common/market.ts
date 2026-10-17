@@ -10,17 +10,19 @@ import type { Request } from 'express';
  *
  * Two facts, one on each side:
  *   - `transactions.market` - the deal's country, 'CA' or 'IN'. Every deal before this change is 'CA'.
- *   - `users.markets` - the countries a person may work in, comma-separated. 'CA' for everyone;
- *     'CA,IN' once a Super Admin gives them India access.
+ *   - `users.markets` - the countries a person may work in, comma-separated. 'CA' for everyone
+ *     today; 'CA,IN' once a Super Admin gives them India access; 'IN' for somebody who works on
+ *     India deals only (Sai, 17 Oct 2026: "allow india only too... for future purposes").
  *
  * The sign-in remembers which of their countries the person is working in right now (the top-bar
  * switch stores it on the session). `resolveMarket` turns that into ONE country on every request, and
  * every read of deals is narrowed to it - see `transactionScopeWhere` in `transaction-scope.ts`.
  *
- * THE SAFE DIRECTION IS CANADA. A request that names no country, names one the person may not use,
- * or comes from a caller that never learned about countries, is treated as Canada. So a screen that
- * was missed shows exactly what it showed before, and an India deal can only ever appear where India
- * was asked for AND allowed.
+ * THE SAFE DIRECTION IS THE PERSON'S OWN FIRST COUNTRY. A request that names no country, or names one
+ * the person may not use, works in the first country they were given - Canada for everyone who has
+ * Canada, India for an India-only person. A record that carries no country at all (a caller that
+ * never learned about countries) is Canada. So a screen that was missed shows exactly what it showed
+ * before, and an India deal can only ever appear where India was asked for AND allowed.
  */
 
 export const MARKETS = ['CA', 'IN'] as const;
@@ -32,22 +34,23 @@ export const MARKET_LABEL: Record<Market, string> = { CA: 'Canada', IN: 'India' 
 
 export const isMarket = (v: unknown): v is Market => typeof v === 'string' && (MARKETS as readonly string[]).includes(v);
 
+/** The country codes named in a stored or submitted list, unknown ones dropped, in the fixed order. */
+export function parseMarkets(list: string | readonly unknown[] | null | undefined): Market[] {
+  const raw = Array.isArray(list) ? list.map((c) => String(c)) : String(list ?? '').split(',');
+  const codes = new Set(raw.map((c) => c.trim().toUpperCase()).filter(isMarket));
+  return MARKETS.filter((m) => codes.has(m));
+}
+
 /**
  * The countries a person may work in, from `users.markets`.
  *
- * Unknown codes are dropped and the order is fixed, so 'IN, ca, XX' reads as ['CA', 'IN'].
- * Canada is always included: every account works on Canadian deals today, and taking Canada away
- * from somebody is not something this column is for.
+ * Unknown codes are dropped and the order is fixed, so 'IN, ca, XX' reads as ['CA', 'IN'], and 'IN'
+ * alone is an India-only person. A value naming no country at all is Canada - the column's default and
+ * what every account was before countries existed - so a person can never end up with none.
  */
 export function allowedMarkets(stored: string | null | undefined): Market[] {
-  const codes = new Set(
-    String(stored ?? '')
-      .split(',')
-      .map((c) => c.trim().toUpperCase())
-      .filter(isMarket),
-  );
-  codes.add(DEFAULT_MARKET);
-  return MARKETS.filter((m) => codes.has(m));
+  const codes = parseMarkets(stored);
+  return codes.length ? codes : [DEFAULT_MARKET];
 }
 
 /**
@@ -59,10 +62,13 @@ export function requestedMarket(req: Pick<Request, 'session'> | null | undefined
   return typeof v === 'string' && v.trim() !== '' ? v.trim().toUpperCase() : undefined;
 }
 
-/** The one country this request works in: the one asked for if this person may use it, else Canada. */
+/**
+ * The one country this request works in: the one asked for if this person may use it, else their
+ * first country (Canada for anyone who has Canada; India for an India-only person).
+ */
 export function resolveMarket(asked: string | undefined, stored: string | null | undefined): Market {
   const allowed = allowedMarkets(stored);
-  return isMarket(asked) && allowed.includes(asked) ? asked : DEFAULT_MARKET;
+  return isMarket(asked) && allowed.includes(asked) ? asked : allowed[0];
 }
 
 /** The country a user record is working in. Anything that never carried one is Canada. */

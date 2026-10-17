@@ -1,5 +1,5 @@
 import { AREAS, type Area } from '../common/domain';
-import { allowedMarkets } from '../common/market';
+import { allowedMarkets, parseMarkets } from '../common/market';
 import { ModuleAccessService } from '../core/module-access.service';
 import { ForbiddenException, Inject, Injectable, Logger, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
 import { PasswordHashService } from '../auth/password-hash.service';
@@ -104,6 +104,12 @@ export class UsersService {
     // modules or reporting line the request carried is replaced, not merely hidden by the screen.
     if (lead !== null) body = this.teamLeadBody(body, null);
     const data = await this.validate(body, null);
+    // Country access for a new person (India desk, 17 Oct 2026): a Super Admin's choice, at least one
+    // country; from anyone else, or not sent, Canada - what every account had before countries existed.
+    const markets = isSuperAdmin(actor) && Object.prototype.hasOwnProperty.call(body, 'markets')
+      ? parseMarkets(body.markets as string | unknown[] | null)
+      : null;
+    if (markets && markets.length === 0) throwValidation({ markets: ['Choose at least one country: Canada, India or both.'] });
     const hierarchy = lead !== null
       ? { is_team_lead: false, team_lead_id: lead }
       : await this.validateHierarchy(body, null, data.role as string);
@@ -128,6 +134,7 @@ export class UsersService {
         profile: data.profile !== undefined ? JSON.stringify(data.profile) : null,
         is_team_lead: hierarchy.is_team_lead ?? false,
         team_lead_id: hierarchy.team_lead_id ?? null,
+        ...(markets ? { markets: markets.join(',') } : {}),
         created_by_id: actor?.id ?? null,
         created_at: now,
         updated_at: now,
@@ -159,6 +166,11 @@ export class UsersService {
     // reporting line never reach validation from this caller, so they cannot be changed.
     if (lead !== null) body = this.teamLeadBody(body, existing);
     const data = await this.validate(body, existing);
+    // Canada, India or both - never none (Sai, 17 Oct 2026). Only a Super Admin's choice counts.
+    const markets = isSuperAdmin(actor) && Object.prototype.hasOwnProperty.call(body, 'markets')
+      ? parseMarkets(body.markets as string | unknown[] | null)
+      : null;
+    if (markets && markets.length === 0) throwValidation({ markets: ['Choose at least one country: Canada, India or both.'] });
     const hierarchy: { is_team_lead?: boolean; team_lead_id?: number | null; reassign_to?: number | null } =
       lead !== null ? {} : await this.validateHierarchy(body, existing, data.role as string);
 
@@ -177,11 +189,10 @@ export class UsersService {
       ...(hierarchy.team_lead_id !== undefined
         ? { team_lead: hierarchy.team_lead_id === null ? { disconnect: true } : { connect: { id: hierarchy.team_lead_id } } }
         : {}),
-      // India access (India desk, 16 Oct 2026) - a Super Admin decision only. From anyone else, or
-      // when the form did not send it, the stored countries are kept exactly as they are.
-      ...(isSuperAdmin(actor) && Object.prototype.hasOwnProperty.call(body, 'markets')
-        ? { markets: allowedMarkets(Array.isArray(body.markets) ? body.markets.join(',') : String(body.markets ?? '')).join(',') }
-        : {}),
+      // Country access (India desk, 16 Oct 2026) - a Super Admin decision only. From anyone else, or
+      // when the form did not send it, the stored countries are kept exactly as they are. Checked
+      // above: at least one country.
+      ...(markets ? { markets: markets.join(',') } : {}),
       updated_at: new Date(),
     };
     if (data.password) update.password = await this.passwords.hashPassword(data.password as string);

@@ -31,13 +31,16 @@ async function inRollback(fn: (tx: PrismaService) => Promise<void>) {
 afterAll(async () => { await prisma.$disconnect(); });
 
 describe('which countries a person may work in', () => {
-  it('is Canada for everyone, plus India only when given', () => {
+  it('is Canada, India or both - and never none', () => {
     expect(allowedMarkets('CA')).toEqual(['CA']);
     expect(allowedMarkets('CA,IN')).toEqual(['CA', 'IN']);
     expect(allowedMarkets(' in , ca ')).toEqual(['CA', 'IN']);
-    // Canada is never taken away, and unknown codes are dropped.
-    expect(allowedMarkets('IN')).toEqual(['CA', 'IN']);
+    // India only (Sai, 17 Oct 2026), and unknown codes are dropped.
+    expect(allowedMarkets('IN')).toEqual(['IN']);
+    expect(allowedMarkets('IN,XX')).toEqual(['IN']);
+    // Nothing usable = Canada, what every account had before countries existed.
     expect(allowedMarkets('XX')).toEqual(['CA']);
+    expect(allowedMarkets('')).toEqual(['CA']);
     expect(allowedMarkets(null)).toEqual(['CA']);
   });
 
@@ -46,6 +49,9 @@ describe('which countries a person may work in', () => {
     expect(resolveMarket('IN', 'CA')).toBe('CA');       // asked, not given
     expect(resolveMarket(undefined, 'CA,IN')).toBe('CA'); // given, not asked
     expect(resolveMarket('US', 'CA,IN')).toBe('CA');    // no such country here
+    // An India-only person always works in India, and can never be put in Canada.
+    expect(resolveMarket(undefined, 'IN')).toBe('IN');
+    expect(resolveMarket('CA', 'IN')).toBe('IN');
   });
 
   it('treats a record that never carried a country as Canada', () => {
@@ -127,6 +133,8 @@ describe('the wall, against the database', () => {
     expect(dealInMarket({ markets: 'CA,IN' }, { market: 'IN' })).toBe(true);
     expect(dealInMarket({ markets: 'CA' }, { market: 'IN' })).toBe(false);
     expect(dealInMarket({ markets: 'CA' }, { market: 'CA' })).toBe(true);
+    expect(dealInMarket({ markets: 'IN' }, { market: 'CA' })).toBe(false);
+    expect(dealInMarket({ markets: 'IN' }, { market: 'IN' })).toBe(true);
     expect(dealInMarket({}, { market: 'IN' })).toBe(false);
   });
 

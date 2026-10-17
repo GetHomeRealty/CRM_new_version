@@ -503,8 +503,8 @@ interface UserForm {
   department: string;
   designation: string;
   modules: Area[];
-  /** India access (India desk, 16 Oct 2026): may this person switch the app to India? Super Admin only. */
-  india_access: boolean;
+  /** Country access (India desk): 'CA', 'IN' or both - never none. Super Admin only. */
+  markets: ('CA' | 'IN')[];
   brokerage_lead_structure: string;
   brokerage_lead_pct: number | string;
   brokerage_lead_brok_pct: number | string;
@@ -564,7 +564,11 @@ function UserModal({ catalog, existing, teamLeadMode, teamLeads, teamSize, onClo
     department: (existing?.department as string | null) ?? '', designation: (existing?.designation as string | null) ?? '',
     // Both when the record predates module assignment — the access such a user actually has today.
     modules: Array.isArray(existing?.modules) ? (existing.modules as Area[]) : [...AREAS],
-    india_access: Array.isArray(existing?.markets) && (existing.markets as string[]).includes('IN'),
+    // Canada for anyone the server did not say otherwise about - what every account had before countries existed.
+    markets: (() => {
+      const m = Array.isArray(existing?.markets) ? (existing.markets as string[]).filter((c): c is 'CA' | 'IN' => c === 'CA' || c === 'IN') : [];
+      return m.length ? m : ['CA'];
+    })(),
     commission_structure: p.commission_structure || '', agent_comm_pct: p.agent_comm_pct ?? 0, brok_comm_pct: p.brok_comm_pct ?? 0,
     lease_comm_pct: p.lease_comm_pct ?? 95,
     brokerage_lead_structure: p.brokerage_lead_structure || '',
@@ -745,7 +749,7 @@ function UserModal({ catalog, existing, teamLeadMode, teamLeads, teamSize, onClo
       department: form.department.trim() || null, designation: form.designation.trim() || null,
       modules: form.modules,
       // Sent only by a Super Admin; the server ignores it from anyone else and keeps what is stored.
-      ...(actingUser?.is_super_admin ? { markets: form.india_access ? ['CA', 'IN'] : ['CA'] } : {}),
+      ...(actingUser?.is_super_admin ? { markets: form.markets } : {}),
       status: form.status, permissions: isAdminRole ? {} : perms,
       profile: {
         mobile: form.mobile, gender: form.gender,
@@ -966,22 +970,34 @@ function UserModal({ catalog, existing, teamLeadMode, teamLeads, teamSize, onClo
         {!teamLeadMode && actingUser?.is_super_admin && (<>
         <div className="modal-sub">Country Access</div>
         <div className="g3">
-          <label className="field" style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 0 }}>
-            <input type="checkbox" style={{ width: 16, height: 16, marginTop: 2 }} checked disabled />
-            <span style={{ fontWeight: 600 }}>Canada</span>
-          </label>
-          <label className="field" style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 0 }}>
-            <input type="checkbox" style={{ width: 16, height: 16, marginTop: 2 }}
-              checked={form.india_access}
-              onChange={(e) => setForm((f) => ({ ...f, india_access: e.target.checked }))} />
-            <span style={{ fontWeight: 600 }}>India</span>
-          </label>
+          {(['CA', 'IN'] as const).map((c) => {
+            const on = form.markets.includes(c);
+            // The last ticked country cannot be unticked: a person always works somewhere.
+            const last = on && form.markets.length === 1;
+            return (
+              <label key={c} className="field" style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 0 }}>
+                <input type="checkbox" style={{ width: 16, height: 16, marginTop: 2 }}
+                  checked={on} disabled={last}
+                  title={last ? 'At least one country must be ticked' : undefined}
+                  onChange={(e) => setForm((f) => ({
+                    ...f,
+                    markets: e.target.checked
+                      ? (['CA', 'IN'] as const).filter((x) => x === c || f.markets.includes(x))
+                      : f.markets.filter((x) => x !== c),
+                  }))} />
+                <span style={{ fontWeight: 600 }}>{c === 'CA' ? 'Canada' : 'India'}</span>
+              </label>
+            );
+          })}
         </div>
         <div className="g3" style={{ marginTop: 0 }}>
           <span className="help" style={{ gridColumn: '1 / -1' }}>
-            {form.india_access
-              ? 'This person can switch the app to India and work on India deals. India deals are never shown in Canada.'
-              : 'Canada only. India deals are never shown to this person.'}
+            {form.markets.length === 2
+              ? 'Canada and India. This person switches between the two; the deals of one are never shown in the other.'
+              : form.markets[0] === 'IN'
+                ? 'India only. This person works on India deals only and never sees a Canadian deal.'
+                : 'Canada only. India deals are never shown to this person.'}
+            {' '}At least one country must be ticked.
           </span></div>
         </>)}
 
