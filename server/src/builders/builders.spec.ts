@@ -14,9 +14,12 @@ afterAll(async () => { await prisma.$disconnect(); });
 const ROLLBACK = '__rollback__';
 async function inRollback(fn: (tx: PrismaService) => Promise<void>) {
   try {
-    await prisma.$transaction(async (tx) => { await fn(tx as unknown as PrismaService); throw new Error(ROLLBACK); }, { timeout: 20000 });
+    await prisma.$transaction(async (tx) => { await fn(tx as unknown as PrismaService); throw new Error(ROLLBACK); }, { timeout: 60000, maxWait: 30000 });
   } catch (e) { if (!String((e as Error).message).includes(ROLLBACK)) throw e; }
 }
+/** Inside the rollback a nested $transaction just runs on the same client (reads go straight to it). */
+const nested = (tx: PrismaService): PrismaService =>
+  new Proxy(tx, { get: (t, k) => (k === '$transaction' ? (fn: (c: PrismaService) => unknown) => fn(t) : Reflect.get(t, k, t)) }) as PrismaService;
 const admin = (market: string) => ({ id: 1, name: 'A', role: 'admin', market, user_permissions: [] }) as unknown as AuthUserRecord;
 const d = (s: string) => new Date(`${s}T00:00:00Z`);
 
@@ -74,7 +77,7 @@ describe('India builder projects (stage 3b)', () => {
     await inRollback(async (tx) => {
       const builders = new BuildersService(tx);
       // Already inside a rollback transaction: nested $transaction just runs on the same client.
-      const projects = new BuilderProjectsService(Object.assign(Object.create(tx), { $transaction: (fn: (c: PrismaService) => unknown) => fn(tx) }) as PrismaService);
+      const projects = new BuilderProjectsService(nested(tx));
       const b = (await builders.create(admin('IN'), { name: 'Proj Builder', agreement: { commission_pct: '3' } })).data;
       const p = (await projects.create(admin('IN'), {
         builder_id: b.id, name: 'Green Valley', status: 'Now Selling', home_types: ['Villa', 'Plot', 'Nonsense'],
@@ -96,5 +99,53 @@ describe('India builder projects (stage 3b)', () => {
   it('RERA valid-until is chased on the same rule as the agreement', () => {
     expect(BuilderAgreementReminderService.due({ expiry_date: d('2027-01-20'), last_reminder_at: null }, d('2027-01-05'))).toBe(true);
     expect(BuilderAgreementReminderService.due({ expiry_date: d('2027-01-20'), last_reminder_at: null }, d('2027-01-04'))).toBe(false);
+  });
+});
+
+import { BuilderOffersService } from './builder-offers.service';
+
+describe('builder offers (stage 4)', () => {
+  jest.setTimeout(90_000);
+  it('counts our units in order, leaves out deals that fell through, suggests, and confirms once', async () => {
+    await inRollback(async (tx) => {
+      const wrapped = nested(tx);
+      const builders = new BuildersService(tx);
+      const projects = new BuilderProjectsService(wrapped);
+      const offers = new BuilderOffersService(wrapped);
+      const b = (await builders.create(admin('IN'), { name: 'Offer Builder' })).data;
+      const p = (await projects.create(admin('IN'), { builder_id: b.id, name: 'Offer Towers' })).data;
+      const now = new Date();
+      const mk = async (n: string, offer: string, dead = false) => {
+        const t = await tx.transactions.create({ data: { trade_no: `OFFER-${n}-${Date.now()}`, type: 'Preconstruction', market: 'IN', builder_project_id: p.id as number, offer_date: d(offer), created_at: now, updated_at: now } });
+        if (dead) await tx.transaction_statuses.create({ data: { transaction_id: t.id, status: 'Void', created_at: now, updated_at: now } });
+        return t;
+      };
+      const u1 = await mk('A', '2026-01-10');
+      await mk('VOID', '2026-02-01', true);           // fell through: not a unit
+      const u2 = await mk('B', '2026-03-05');
+      const u3 = await mk('C', '2026-04-20');
+      await offers.create(admin('IN'), p.id as number, { title: '1% extra from the 3rd unit', kind: 'extra_percent', value: '1', from_unit: '3' });
+      await offers.create(admin('IN'), p.id as number, { title: 'Diwali bonus', kind: 'fixed_bonus', value: '50000', starts_on: '2026-10-01', ends_on: '2026-11-15' });
+      const list = await offers.listForProject(admin('IN'), p.id as number);
+      expect(list.units_sold).toBe(3);
+
+      const s1 = await offers.forDeal(admin('IN'), u1.id);
+      expect(s1.unit_number).toBe(1);
+      const extra = (x: typeof s1) => x.offers.find((o) => o.title.startsWith('1% extra'))!;
+      expect(extra(s1).may_apply).toBe(false);          // unit 1 < 3
+      const s3 = await offers.forDeal(admin('IN'), u3.id);
+      expect(s3.unit_number).toBe(3);
+      expect(extra(s3).may_apply).toBe(true);
+      expect(s3.offers.find((o) => o.title === 'Diwali bonus')!.may_apply).toBe(false); // closed on 2026-04-20
+      expect((await offers.forDeal(admin('IN'), u2.id)).unit_number).toBe(2);
+
+      const after = await offers.apply(admin('IN'), u3.id, extra(s3).id, { agreed: '1% extra agreed with the builder on 20 Apr', agreed_value: '1' });
+      expect(extra(after).applied?.unit_number).toBe(3);
+      expect(extra(after).may_apply).toBe(false);
+      await expect(offers.apply(admin('IN'), u3.id, extra(s3).id, { agreed: 'again' })).rejects.toBeDefined();
+      await expect(offers.destroy(admin('IN'), extra(s3).id)).rejects.toBeDefined();      // confirmed: end it, don't remove
+      expect(await tx.audit_logs.count({ where: { transaction_id: u3.id, section: 'Builder offers' } })).toBe(1);
+      await expect(offers.forDeal(admin('CA'), u3.id)).rejects.toMatchObject({ status: 404 });
+    });
   });
 });

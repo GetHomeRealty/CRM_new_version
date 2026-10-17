@@ -4,6 +4,7 @@ import { useToast } from './toast';
 import ConfirmDialog, { useConfirm } from './ConfirmDialog';
 import { apiErrorMessage } from '../lib/apiError';
 import { formatPrice } from './format';
+import { ProjectOffersSection } from './BuilderOffers';
 
 /**
  * INDIA BUILDER PROJECTS (stage 3b, 17 Oct 2026) - the Projects tab of the Builders screen.
@@ -309,6 +310,8 @@ export default function BuilderProjectsTab({ builders }: { builders: BuilderOpt[
                 <button className="btn ghost sm" onClick={addFile} disabled={!upFile}>+ Upload</button>
               </div>
               <div className="help" style={{ marginTop: 8 }}>{editing.deals} India deal{editing.deals === 1 ? ' is' : 's are'} linked to this project.</div>
+
+              <ProjectOffersSection projectId={editing.id} />
             </>) : <div className="help" style={{ marginTop: 8 }}>Save the project first; then you can add its files, available units and price changes.</div>}
 
             <div className="actions">

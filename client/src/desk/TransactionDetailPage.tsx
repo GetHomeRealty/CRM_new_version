@@ -6,6 +6,7 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties, type Reac
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { getTransaction, updateTransaction, listAgents, generateTransactionInvoices, getCompanySettings, getCustomers, getBrokerageSuggestions, requestTransactionEdit, approveEditRequest, rejectEditRequest, reviewAgentChanges, rejectAgentChange, requestTransactionDeletion, forwardDeleteRequest, approveDeleteRequest, rejectDeleteRequest, getDocuments, markTransactionReviewsSeen, bulkReviewAction, type OpenReviewItem } from '../lib/api';
 import ReviewHistoryPanel from './ReviewHistoryPanel';
+import { DealOffersPanel } from './BuilderOffers';
 import { formatCurrency, typeClass, typeLabel, isListingType, isListingFinancialType, isListingStatusFamily, isPreconType, isCommercialLeaseType, isInvoiceableType, emailLooksValid, phoneLooksValid, parseNumber, typesFor, statusOptionsFor, normalizeStatus, defaultStatusFor } from './format';
 import { useToast } from './toast';
 import { apiErrorMessage } from '../lib/apiError';
@@ -1363,6 +1364,10 @@ export default function TransactionDetailPage() {
         editRequests={txn?.edit_requests ?? []}
         canDecide={isSuperAdmin}
         onDecided={async () => { await reloadTxn(); setReviewsKey((k) => k + 1); }} />
+
+      {/* India deal in a builder project: the builder's offers - suggested, confirmed or not for this deal (stage 4). */}
+      {user?.market === 'IN' && isSuperAdmin && (txn as unknown as { builder_project_id?: number | null } | null)?.builder_project_id
+        ? <DealOffersPanel key={`offers-${(txn as unknown as { builder_project_id?: number | null }).builder_project_id}`} txnId={id} /> : null}
 
       {/* §5.2 — Active sale listing: reminder for pending core documents */}
       {stActive && coreDocReminders.length > 0 && (

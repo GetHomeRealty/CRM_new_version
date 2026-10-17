@@ -2594,6 +2594,7 @@ model transactions {
   builder_project_id          Int?
   /// (The text fields builder_vendor / builder_project above are Canada's pre-construction entries; unchanged.)
   linked_project              builder_projects?             @relation(fields: [builder_project_id], references: [id], onDelete: SetNull, onUpdate: Restrict)
+  offer_applications          builder_offer_applications[]
   property                    String?                       @db.VarChar(255)
   agent                       String?                       @db.VarChar(255)
   /// The user `agent` names, resolved once instead of by name on every read.
@@ -3855,6 +3856,7 @@ model builder_projects {
   files                  builder_project_files[]
   prices                 builder_project_prices[]
   transactions           transactions[]
+  offers                 builder_project_offers[]
 
   @@index([builder_id])
   @@index([market, deleted_at])
@@ -3891,5 +3893,52 @@ model builder_project_prices {
   project        builder_projects @relation(fields: [project_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
 
   @@index([project_id, changed_on])
+}
+
+/// BUILDER OFFERS (stage 4, 17 Oct 2026). Builders give offers in meetings, with no fixed pattern, so an
+/// offer is recorded when it is given - in plain words, with optional structure (kind, value, from which
+/// unit, dates) and the proof. The app counts our units in the project and SUGGESTS an offer may apply;
+/// a person confirms what was actually agreed. The app never changes a commission by itself.
+model builder_project_offers {
+  id               Int                          @id @default(autoincrement())
+  project_id       Int
+  title            String                       @db.VarChar(255)
+  details          String?                      @db.Text
+  /// extra_percent / fixed_bonus / discount / other.
+  kind             String                       @default("other") @db.VarChar(32)
+  /// The amount or % the builder named, when there is one.
+  value            Decimal?                     @db.Decimal(16, 4)
+  /// Applies from our Nth unit in this project (e.g. 3 = the third and later). Empty = every unit.
+  from_unit        Int?
+  starts_on        DateTime?                    @db.Date
+  ends_on          DateTime?                    @db.Date
+  proof_path       String?                      @db.VarChar(512)
+  proof_name       String?                      @db.VarChar(255)
+  created_by_id    Int?
+  created_at       DateTime                     @default(now()) @db.Timestamp(0)
+  updated_at       DateTime                     @default(now()) @db.Timestamp(0)
+  deleted_at       DateTime?                    @db.Timestamp(0)
+  project          builder_projects             @relation(fields: [project_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  applications     builder_offer_applications[]
+
+  @@index([project_id, deleted_at])
+}
+
+/// An offer confirmed on a deal: which unit it was in the project, and what was actually agreed.
+model builder_offer_applications {
+  id             Int                    @id @default(autoincrement())
+  offer_id       Int
+  transaction_id Int
+  unit_number    Int?
+  agreed         String                 @db.Text
+  agreed_value   Decimal?               @db.Decimal(16, 4)
+  applied_by_id  Int?
+  applied_by     String?                @db.VarChar(255)
+  applied_at     DateTime               @default(now()) @db.Timestamp(0)
+  offer          builder_project_offers @relation(fields: [offer_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  transaction    transactions           @relation(fields: [transaction_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@unique([offer_id, transaction_id])
+  @@index([transaction_id])
 }
 

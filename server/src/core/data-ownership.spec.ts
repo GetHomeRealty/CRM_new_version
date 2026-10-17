@@ -162,6 +162,7 @@ const DERIVED: Record<string, string> = {
   // via builders (India builder database)
   builder_contacts: 'builders', builder_agreements: 'builders', builder_projects: 'builders',
   builder_project_files: 'builder_projects', builder_project_prices: 'builder_projects',
+  builder_project_offers: 'builder_projects', builder_offer_applications: 'builder_project_offers',
   // via invoices / customers
   invoices: 'transactions', invoice_line_items: 'invoices', invoice_payments: 'invoices',
   // via campaigns / templates / mail
