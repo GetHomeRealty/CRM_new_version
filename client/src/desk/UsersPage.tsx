@@ -970,35 +970,25 @@ function UserModal({ catalog, existing, teamLeadMode, teamLeads, teamSize, onClo
         {!teamLeadMode && actingUser?.is_super_admin && (<>
         <div className="modal-sub">Country Access</div>
         <div className="g3">
-          {(['CA', 'IN'] as const).map((c) => {
-            const on = form.markets.includes(c);
-            // The last ticked country cannot be unticked: a person always works somewhere.
-            const last = on && form.markets.length === 1;
-            return (
-              <label key={c} className="field" style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 0 }}>
-                <input type="checkbox" style={{ width: 16, height: 16, marginTop: 2 }}
-                  checked={on} disabled={last}
-                  title={last ? 'At least one country must be ticked' : undefined}
-                  onChange={(e) => setForm((f) => ({
-                    ...f,
-                    markets: e.target.checked
-                      ? (['CA', 'IN'] as const).filter((x) => x === c || f.markets.includes(x))
-                      : f.markets.filter((x) => x !== c),
-                  }))} />
-                <span style={{ fontWeight: 600 }}>{c === 'CA' ? 'Canada' : 'India'}</span>
-              </label>
-            );
-          })}
+          {/*
+            One choice rather than two boxes (Sai, 17 Oct 2026): every option is a valid answer, so
+            "no country" cannot be picked, and there is no order of clicks to remember.
+          */}
+          <div className="field"><label>Works in</label>
+            <select data-field="markets" value={form.markets.join(',')}
+              onChange={(e) => setForm((f) => ({ ...f, markets: e.target.value.split(',') as ('CA' | 'IN')[] }))}>
+              <option value="CA">Canada only</option>
+              <option value="IN">India only</option>
+              <option value="CA,IN">Canada and India</option>
+            </select>
+            <span className="help">
+              {form.markets.length === 2
+                ? 'Switches between the two; the deals of one are never shown in the other.'
+                : form.markets[0] === 'IN'
+                  ? 'Works on India deals only and never sees a Canadian deal.'
+                  : 'India deals are never shown to this person.'}
+            </span></div>
         </div>
-        <div className="g3" style={{ marginTop: 0 }}>
-          <span className="help" style={{ gridColumn: '1 / -1' }}>
-            {form.markets.length === 2
-              ? 'Canada and India. This person switches between the two; the deals of one are never shown in the other.'
-              : form.markets[0] === 'IN'
-                ? 'India only. This person works on India deals only and never sees a Canadian deal.'
-                : 'Canada only. India deals are never shown to this person.'}
-            {' '}At least one country must be ticked.
-          </span></div>
         </>)}
 
         {/*
