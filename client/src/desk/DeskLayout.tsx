@@ -17,6 +17,8 @@ interface NavItem {
   label: string;
   ico: string;
   superAdmin?: boolean;
+  /** Only while working in India (India desk, 17 Oct 2026) - the Builders database. */
+  indiaOnly?: boolean;
   /** With superAdmin: shown to a Team Lead too (Users, their own Agents). */
   orTeamLead?: boolean;
   /** Shown only to agents — their own personal settings, self-scoped. */
@@ -192,6 +194,8 @@ const NAV: NavItem[] = [
    */
   { key: 'triggers', label: 'Triggers', ico: 'zap' },
   { key: 'recycle-bin', label: 'Recycle Bin', ico: 'trash', superAdmin: true },
+  // India builder database (stage 3, 17 Oct 2026): Super Admin, and only while working in India.
+  { key: 'builders', label: 'Builders', ico: 'building', superAdmin: true, indiaOnly: true },
 ];
 
 const TITLES: Record<string, string> = Object.fromEntries(NAV.map((n): [string, string] => [n.key, n.label]));
@@ -311,6 +315,7 @@ export default function DeskLayout({ area = DEFAULT_AREA }: { area?: Area }) {
     // Only this area's modules. Permission is unchanged by the split — a screen the user could
     // open before is still openable, it is simply listed under the area it belongs to.
     .filter((n) => screenInArea(n.key, area))
+    .filter((n) => !n.indiaOnly || user?.market === 'IN')
     .filter((n) => (n.agentOnly ? isAgent : n.superAdmin ? (isSuperAdmin || (!!n.orTeamLead && !!user?.is_team_lead)) : can(n.key, 'view')))
     // Drop sections the user has no permission for or that belong to the other area, and flatten
     // an entry back to a plain link when only one is left — an expander that reveals a single

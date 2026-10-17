@@ -46,6 +46,8 @@ const ROOT = [
   'campaigns',
   'agents',
   'marketing_inventory',
+  // India builder database (17 Oct 2026): the brokerage's own record of the builders it works with.
+  'builders',
   'lead_tags',
   'crm_email_settings',
   'crm_referral_codes',
@@ -157,6 +159,8 @@ const DERIVED: Record<string, string> = {
   client_identifications: 'transactions', document_reminders: 'transactions',
   inter_board_listings: 'transactions', trashed_row_items: 'transactions',
   team_member_terms: 'team_members', brokerage_agents: 'brokerages',
+  // via builders (India builder database)
+  builder_contacts: 'builders', builder_agreements: 'builders',
   // via invoices / customers
   invoices: 'transactions', invoice_line_items: 'invoices', invoice_payments: 'invoices',
   // via campaigns / templates / mail

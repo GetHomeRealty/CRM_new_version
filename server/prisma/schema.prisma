@@ -3753,3 +3753,64 @@ model recruitment_events {
   @@index([candidate_id])
   @@index([created_at])
 }
+
+/// INDIA BUILDER DATABASE (stage 3, 17 Oct 2026). India's builders, kept by the office: who they are,
+/// how to reach them, and the one agreement Get Home Realty has with each. Super Admin only for now
+/// (new roles to follow). See src/builders.
+model builders {
+  id            Int                 @id @default(autoincrement())
+  /// The country these builders belong to - India only today (Sai: "Indian Builders").
+  market        String              @default("IN") @db.VarChar(8)
+  name          String              @db.VarChar(255)
+  company_name  String?             @db.VarChar(255)
+  email         String?             @db.VarChar(255)
+  phone         String?             @db.VarChar(64)
+  website       String?             @db.VarChar(255)
+  address       String?             @db.Text
+  notes         String?             @db.Text
+  created_by_id Int?
+  created_at    DateTime            @default(now()) @db.Timestamp(0)
+  updated_at    DateTime            @default(now()) @db.Timestamp(0)
+  deleted_at    DateTime?           @db.Timestamp(0)
+  contacts      builder_contacts[]
+  agreement     builder_agreements?
+
+  @@index([market, deleted_at])
+}
+
+/// The people and numbers at a builder - sales office numbers and sales persons, as many as needed.
+model builder_contacts {
+  id         Int      @id @default(autoincrement())
+  builder_id Int
+  /// 'Sales office', 'Sales person' or 'Other'.
+  kind       String   @db.VarChar(32)
+  name       String?  @db.VarChar(255)
+  phone      String?  @db.VarChar(64)
+  email      String?  @db.VarChar(255)
+  position   Int      @default(0)
+  created_at DateTime @default(now()) @db.Timestamp(0)
+  updated_at DateTime @default(now()) @db.Timestamp(0)
+  builder    builders @relation(fields: [builder_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@index([builder_id])
+}
+
+/// ONE agreement per builder (Sai). Its expiry is chased from 15 days out, every 2 days.
+model builder_agreements {
+  id               Int       @id @default(autoincrement())
+  builder_id       Int       @unique
+  start_date       DateTime? @db.Date
+  expiry_date      DateTime? @db.Date
+  commission_pct   Decimal?  @db.Decimal(8, 4)
+  payment_terms    String?   @db.Text
+  file_path        String?   @db.VarChar(512)
+  file_name        String?   @db.VarChar(255)
+  file_uploaded_at DateTime? @db.Timestamp(0)
+  /// When the last expiry reminder went out, so the next waits two days.
+  last_reminder_at DateTime? @db.Timestamp(0)
+  created_at       DateTime  @default(now()) @db.Timestamp(0)
+  updated_at       DateTime  @default(now()) @db.Timestamp(0)
+  builder          builders  @relation(fields: [builder_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@index([expiry_date])
+}

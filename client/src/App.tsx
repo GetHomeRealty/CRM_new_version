@@ -29,6 +29,7 @@ const DeskDashboardPage = lazy(() => import('./desk/DeskDashboardPage'));
 const AnalyticsPage = lazy(() => import('./desk/AnalyticsPage'));
 const CalendarPage = lazy(() => import('./desk/CalendarPage'));
 const InventoryPage = lazy(() => import('./desk/InventoryPage'));
+const BuildersPage = lazy(() => import('./desk/BuildersPage'));
 const InvoicePage = lazy(() => import('./desk/InvoicePage'));
 const MlsModulePage = lazy(() => import('./desk/MlsModulePage'));
 const MlsDetailPage = lazy(() => import('./desk/MlsDetailPage'));
@@ -90,6 +91,8 @@ const SCREENS: ScreenRoutes[] = [
   { screen: 'campaigns', paths: [''], element: () => <CampaignsPage /> },
   { screen: 'calendar', paths: [''], element: () => <CalendarPage /> },
   { screen: 'inventory', paths: [''], element: () => <InventoryPage /> },
+  // India builder database (17 Oct 2026). Super Admin; the page and the API also require India.
+  { screen: 'builders', paths: [''], element: () => <BuildersPage />, superAdmin: true },
   { screen: 'lead', paths: ['', ':id'], element: (p) => (p === '' ? <LeadsPage /> : <LeadDetailPage />) },
   { screen: 'meta', paths: [''], element: () => <MetaPage /> },
   // `''` is the dashboard with its tabs; `:id` is one candidate. Same shape as `lead`.

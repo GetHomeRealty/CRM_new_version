@@ -79,6 +79,8 @@ export const SCREEN_AREA: Record<string, ScreenArea> = {
   // despite the general-sounding name.
   analytics: 'desk',
   'recycle-bin': 'desk',
+  // India builder database (17 Oct 2026).
+  builders: 'desk',
   // Inventory was a shared module and is now the Transaction Desk's alone, by request. It is
   // therefore not listed in the CRM and `/crm/inventory` redirects to `/desk/inventory` — the
   // records themselves are untouched, and every existing link still resolves.
