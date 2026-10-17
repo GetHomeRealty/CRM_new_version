@@ -68,8 +68,13 @@ const toQuery = (f: Filters): TransactionQuery => ({
  *
  * The server takes several statuses comma separated; a value without a comma still takes the path
  * it always did, so every other filter on this screen is unaffected.
+ *
+ * 17 Oct 2026 - SECURED CONDITIONAL ADDED (Sai: "yes include secured conditional"). A
+ * pre-construction deal is conditional as "Secured Conditional", not "Sold Conditional", so it was
+ * missing from the deals being worked - in Canada, and for nearly every India deal. The label
+ * already reads "Active, Conditional & Firm", which it now fully means.
  */
-const OPEN_AND_FIRM = 'Secured Firm,Active,Sold Conditional';
+const OPEN_AND_FIRM = 'Secured Firm,Secured Conditional,Active,Sold Conditional';
 
 /*
  * 2026-10-10 - THE LIST OPENS ON THIS YEAR ONWARD, by closing date, at the brokerage's instruction ("i
@@ -425,7 +430,7 @@ export default function TransactionsPage() {
             Lease Conditional, Secured Firm and Secured Conditional entirely — so conditional and
             secured deals could not be filtered for at all.
           */}
-          {/* Named for what it holds: Active, Sold Conditional and Secured Firm deals. */}
+          {/* Named for what it holds: Active, Sold Conditional, Secured Conditional and Secured Firm deals. */}
           <option value={OPEN_AND_FIRM}>Active, Conditional &amp; Firm</option>
           <option value="">All statuses</option>
           {ALL_STATUSES.map((s) => <option key={s}>{s}</option>)}
