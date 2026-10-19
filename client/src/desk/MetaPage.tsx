@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { createLatest, shouldFetchLeads } from './metaLeadsRequest';
 import {
-  disconnectMeta, metaAdStatus, metaAuthUrl, metaDiagnostics, metaForms, metaLeads, metaPages, metaStatus,
+  disconnectMeta, exportMetaLeads, metaAdStatus, metaAuthUrl, metaDiagnostics, metaForms, metaLeads, metaPages, metaStatus,
   metaWebhookHealth, refreshMetaPages, setMetaDefaultPage, syncMetaLeads, toggleMetaForm,
 } from '../lib/metaApi';
 import { apiErrorMessage } from '../lib/apiError';
@@ -1165,6 +1165,13 @@ export default function MetaPage() {
               Show all leads from this form
             </button>
           )}
+          {/* Every lead this list covers — not just this page of it — with all notes and the status (2026-10-19). */}
+          <button className="btn ghost sm" type="button" data-testid="meta-leads-download" style={{ marginLeft: 'auto' }}
+            disabled={busy === 'download'}
+            title={formFilter ? `Download every lead from ${formFilter.name}, with all notes` : 'Download every Meta lead on this Page, with all notes'}
+            onClick={() => void run('download', () => exportMetaLeads(selectedPage || undefined, formFilter?.id))}>
+            {busy === 'download' ? 'Preparing…' : '⬇ Download all leads'}
+          </button>
         </div>
         {formFilter && !leadsError && leadsLoaded && formTotal !== null && formTotal > 0 && (
           <FormLeadsPager
@@ -1203,12 +1210,17 @@ export default function MetaPage() {
           <div className="lead-scroll">
             <table className="list-table">
               <thead>
-                <tr><th>Name</th><th>Latest Note</th><th>Contact</th><th>Enquiry</th><th>Status</th><th>Assigned To</th><th>Received</th><th></th></tr>
+                <tr><th>Name</th><th>Latest Note</th><th>Contact</th><th>Enquiry</th><th>Status</th><th>Assigned To</th><th>Received</th></tr>
               </thead>
               <tbody>
+                {/* The whole row opens the lead (2026-10-19 — it had an Open button at the end).
+                    Focusable, and Enter opens it, so the keyboard keeps what the button gave it. */}
                 {leads.map((l) => (
                   <tr key={l.id} data-lead-row={l.id} data-focused={flashLead === l.id ? 'true' : undefined}
-                    style={{ transition: 'background-color .6s', ...(flashLead === l.id ? { backgroundColor: 'var(--warn-soft)' } : {}) }}>
+                    tabIndex={0} role="link" aria-label={`Open ${l.name}`} title="Open this lead"
+                    onClick={() => openLead(l)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') openLead(l); }}
+                    style={{ cursor: 'pointer', transition: 'background-color .6s', ...(flashLead === l.id ? { backgroundColor: 'var(--warn-soft)' } : {}) }}>
                     <td>{l.name}</td>
                     <td data-testid="meta-latest-note" style={{ maxWidth: 280 }}>
                       {l.latest_note ? (
@@ -1230,7 +1242,6 @@ export default function MetaPage() {
                     <td>{l.lead_status ? <span className="pill info">{l.lead_status}</span> : '—'}</td>
                     <td>{l.assigned_to_name ?? <span className="muted">Unassigned</span>}</td>
                     <td>{stamp(l.created_at)}</td>
-                    <td><button className="btn ghost sm" type="button" onClick={() => openLead(l)}>Open</button></td>
                   </tr>
                 ))}
               </tbody>

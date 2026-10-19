@@ -1,9 +1,11 @@
 import {
-  BadRequestException, Body, Controller, Delete, Get, HttpCode, Post, Query, Req, UseGuards,
+  BadRequestException, Body, Controller, Delete, Get, HttpCode, Post, Query, Req, Res, UseGuards,
 } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { Prisma } from '@prisma/client';
-import type { Request } from 'express';
+import type { Request, Response } from 'express';
+import { contentDisposition } from '../common/content-disposition';
+import { buildMetaLeadsXlsx } from './meta-leads-export';
 import { META_SYNC_LIMIT } from '../config/rate-limits';
 import { AuthGuard } from '../auth/guards/auth.guard';
 import { ScreenGuard } from '../auth/guards/screen.guard';
@@ -359,6 +361,29 @@ export class MetaController {
   @Screen('meta', 'view')
   webhookHealth(@CurrentUser() user: AuthUserRecord, @Query('limit') limit?: string): Promise<unknown> {
     return this.sync.webhookHealth(user, Number(limit) || 20);
+  }
+
+  /**
+   * Every Meta lead this person can see, with all of each lead's notes, as an .xlsx — the Page and
+   * form the screen is showing narrow it exactly as they narrow the list. See meta-leads-export.ts.
+   */
+  @Get('leads/export')
+  @Throttle({ default: META_SYNC_LIMIT })
+  @Screen('meta', 'view')
+  async exportLeads(
+    @CurrentUser() user: AuthUserRecord,
+    @Res() res: Response,
+    @Query('page_id') pageId?: string,
+    @Query('form_id') formId?: string,
+  ): Promise<void> {
+    const { buffer, filename } = await buildMetaLeadsXlsx(this.prisma, user, {
+      pageId: pageId?.trim().slice(0, 64) || null,
+      formId: formId?.trim().slice(0, 64) || null,
+    });
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', contentDisposition(filename));
+    res.setHeader('Content-Length', String(buffer.length));
+    res.end(buffer);
   }
 
   @Get('leads')

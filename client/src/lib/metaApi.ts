@@ -1,4 +1,5 @@
 import api from './axios';
+import { filenameFromDisposition, saveBlob } from './download';
 import type {
   MetaAdAccount, MetaAdStatusResponse, MetaDefaultPageResponse, MetaDiagnostics, MetaForm, MetaLeadsResponse, MetaPage,
   MetaStatus, MetaSyncResult, MetaSyncRun, MetaWebhookHealth,
@@ -54,6 +55,14 @@ export const metaLeads = (limit = 50, formId?: string, pageId?: string, listPage
   api.get<MetaLeadsResponse>('/api/meta/leads', {
     params: { limit, form_id: formId || undefined, page_id: pageId || undefined, list_page: listPage && listPage > 1 ? listPage : undefined },
   }).then((r) => r.data);
+
+/** Every Meta lead this person can see (narrowed to the Page / form given), with all notes, as .xlsx. */
+export async function exportMetaLeads(pageId?: string, formId?: string): Promise<void> {
+  const res = await api.get('/api/meta/leads/export', {
+    params: { page_id: pageId || undefined, form_id: formId || undefined }, responseType: 'blob',
+  });
+  saveBlob(res.data as Blob, filenameFromDisposition(res.headers, 'Meta Leads.xlsx'), 60_000);
+}
 
 export const metaDiagnostics = (): Promise<MetaDiagnostics> =>
   api.get<MetaDiagnostics>('/api/meta/diagnostics').then((r) => r.data);
