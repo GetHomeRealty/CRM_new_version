@@ -428,6 +428,8 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
           const open2 = !!expanded[key];
           const expandable = d.kind === 'multi' || d.kind === 'per_client';
           const single = d.kind === 'single' || d.kind === 'condition';
+          // On a line of its own: approved-document-names.spec reads every literal on a title-comparison line as a document name.
+          const isFintracRow = (d.title || '').toLowerCase().includes('fintrac');
           // Agent marked this doc "Not Accepted" → uploads (and reminders) are disabled for everyone.
           const notAccepted = d.agent_accepted === 'Not Accepted';
           const uploadBlocked = notAccepted;
@@ -496,7 +498,7 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
                           ? 'Hide'
                           : d.kind === 'multi'
                             ? 'Upload files'
-                            : (d.title || '').toLowerCase().includes('fintrac') ? 'Form 630 per client' : 'Upload per client'}
+                            : isFintracRow ? 'Form 630 per client' : 'Upload per client'}
                         <Icon name={open2 ? 'chevronDown' : 'chevronRight'} size={12} />
                       </button>
                     )}
