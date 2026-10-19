@@ -3,7 +3,7 @@ import {
   getDeskAnalytics, getDeskAnalyticsOptions, exportDeskAnalytics,
   type AnalyticsQuery, type AnalyticsFilterOptions,
 } from '../lib/api';
-import { formatCurrency, typeClass } from './format';
+import { formatCurrency, typeClass, taxLabel } from './format';
 import MonthCommissionChart from './MonthCommissionChart';
 import { useToast } from './toast';
 import { apiErrorMessage } from '../lib/apiError';
@@ -228,13 +228,13 @@ export default function AnalyticsPage() {
         {/* TD-002 - for an agent these figures are the WHOLE deal's commission on their own deals,
             not their personal share (Dashboard and Reports show the share). Said on the card, so the
             two numbers are not read as one disagreeing with the other. */}
-        <div className="stat-card"><div className="lbl">Total Commission{agentLocked ? ' (whole deal)' : ''}</div><div className="val">{formatCurrency(totals.total)}</div><div className="help">{agentLocked ? 'before HST · the full commission on your deals, not your share' : 'before HST'}</div></div>
-        <div className="stat-card"><div className="lbl">Paid</div><div className="val" style={{ color: 'var(--ok-ink)' }}>{formatCurrency(totals.paid)}</div><div className="help">before HST</div></div>
-        <div className="stat-card"><div className="lbl">Pending</div><div className="val" style={{ color: 'var(--warn-ink)' }}>{formatCurrency(totals.pending)}</div><div className="help">before HST</div></div>
+        <div className="stat-card"><div className="lbl">Total Commission{agentLocked ? ' (whole deal)' : ''}</div><div className="val">{formatCurrency(totals.total)}</div><div className="help">{agentLocked ? `before ${taxLabel()} · the full commission on your deals, not your share` : `before ${taxLabel()}`}</div></div>
+        <div className="stat-card"><div className="lbl">Paid</div><div className="val" style={{ color: 'var(--ok-ink)' }}>{formatCurrency(totals.paid)}</div><div className="help">before {taxLabel()}</div></div>
+        <div className="stat-card"><div className="lbl">Pending</div><div className="val" style={{ color: 'var(--warn-ink)' }}>{formatCurrency(totals.pending)}</div><div className="help">before {taxLabel()}</div></div>
       </div>
 
       <div className="card">
-        <div className="modal-h" style={{ fontSize: 14 }}>Commission by Closing Month <span className="help" style={{ fontWeight: 400 }}>· before HST</span></div>
+        <div className="modal-h" style={{ fontSize: 14 }}>Commission by Closing Month <span className="help" style={{ fontWeight: 400 }}>· before {taxLabel()}</span></div>
         {/* TD-092 — deals with no closing date (the API's `none` bucket) are stated under the chart,
             never charted under another month. Keyed by the applied range so a new range opens on it. */}
         {months.length === 0

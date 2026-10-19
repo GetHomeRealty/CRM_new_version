@@ -1,4 +1,5 @@
 import { deskPath } from './area';
+import type { IndiaBlock } from './IndiaInvoiceDoc';
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Icon from '../ui/Icon';
@@ -99,6 +100,8 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
   const sigInputRef = useRef<HTMLInputElement>(null);
   const [form, setForm] = useState<InvoiceForm | null>(null);
   const [saved, setSaved] = useState<Invoice | null>(null);
+  // An India deal's invoice (19 Oct 2026): Get Home Realty Pvt Ltd, its office, GST and bank details.
+  const india = (saved as (Invoice & { india?: IndiaBlock }) | null)?.india;
   // TD-172 - Accounting and Super Admin may correct a recorded payment; the server refuses anyone else.
   const auth = useAuth();
   const canCorrectPayments = auth.isSuperAdmin || auth.user?.role === 'accounting';
@@ -619,10 +622,10 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24, marginBottom: 18 }}>
             <div style={{ fontSize: 12.5, lineHeight: 1.8 }}>
-              <div style={{ fontWeight: 700 }}>{settings?.name || 'GetHomeRealty Inc'}</div>
-              <div style={{ color: 'var(--text-3)' }}>{settings?.address}</div>
-              <div style={{ color: 'var(--text-3)' }}>Phone: {settings?.phone}</div>
-              <div style={{ color: 'var(--text-3)' }}>Email: {settings?.email}</div>
+              <div style={{ fontWeight: 700 }}>{india ? india.company.name : (settings?.name || 'GetHomeRealty Inc')}</div>
+              <div style={{ color: 'var(--text-3)' }}>{india ? india.office.address : settings?.address}</div>
+              <div style={{ color: 'var(--text-3)' }}>Phone: {india ? india.company.phone : settings?.phone}</div>
+              <div style={{ color: 'var(--text-3)' }}>Email: {india ? india.company.email : settings?.email}</div>
               <div style={{ display: 'inline-block', marginTop: 12, border: `1px solid ${BRAND}`, color: BRAND, fontWeight: 700, padding: '8px 14px', borderRadius: 8 }}>
                 Balance Due : {formatCurrency(balanceDue)}
               </div>
@@ -690,8 +693,8 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
               <tr>
                 <td style={{ border: '1px solid var(--line)', padding: '8px 12px', fontWeight: 700 }}>
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                    HST
-                    {settings?.hst_number && <span style={{ fontWeight: 400, color: 'var(--muted)', fontSize: 12 }}>(Number : {settings.hst_number})</span>}
+                    {india ? (india.tax.kind === 'IGST' ? 'IGST' : 'CGST + SGST') : 'HST'}
+                    {!india && settings?.hst_number && <span style={{ fontWeight: 400, color: 'var(--muted)', fontSize: 12 }}>(Number : {settings.hst_number})</span>}
                     <input value={form.tax_rate} readOnly={hstLocked} onChange={(e) => set('tax_rate', e.target.value)}
                       style={{ width: 52, textAlign: 'right', padding: '3px 6px', border: '1px solid var(--line)', borderRadius: 6, background: hstLocked ? 'var(--surface-3)' : '#fff', cursor: hstLocked ? 'not-allowed' : 'text' }} />
                     <span>%</span>
@@ -756,12 +759,20 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
               <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>Deposit Instructions:</div>
               <div style={{ background: 'var(--surface-2)', border: '1px solid var(--line)', borderRadius: 8, padding: 14, fontSize: 12.5, color: 'var(--text-2)', lineHeight: 1.7 }}>
                 <div style={{ fontWeight: 700 }}>Beneficiary Bank Account Detail:</div>
+                {india ? (<>
+                  <div>Beneficiary Name : {india.bank.beneficiary || '—'}</div>
+                  <div>Bank Name: {india.bank.bank_name || '—'}</div>
+                  <div>Account Number: {india.bank.account_number || '—'}</div>
+                  <div>IFSC : {india.bank.ifsc || '—'}</div>
+                  <div style={{ fontWeight: 700 }}>GSTIN : {india.office.gstin || '—'}</div>
+                </>) : (<>
                 <div>Beneficiary Name : {settings?.bank_beneficiary || '—'}</div>
                 <div>Bank Name: {settings?.bank_name || '—'}</div>
                 <div>Bank Transit Number: {settings?.transit_no || '—'}</div>
                 <div>Account Number: {settings?.account_no || '—'}</div>
                 <div>Institution Number: {settings?.institution_no || '—'}</div>
                 <div style={{ fontWeight: 700 }}>HST Number : {settings?.hst_number || '—'}</div>
+                </>)}
               </div>
             </div>
             <div>
@@ -785,7 +796,7 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
           </div>
 
           <div style={{ marginTop: 18, textAlign: 'center', fontStyle: 'italic', fontSize: 11.5, color: 'var(--muted-2)', borderTop: '1px solid var(--surface-3)', paddingTop: 12 }}>
-            This is a system-generated invoice from {settings?.name || 'GetHomeRealty Inc'}.
+            This is a system-generated invoice from {india ? india.company.name : (settings?.name || 'GetHomeRealty Inc')}.
           </div>
 
         </div>

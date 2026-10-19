@@ -1,5 +1,6 @@
 import { formatCurrency } from './format';
 import BrandMark from './BrandMark';
+import IndiaInvoiceDoc, { type IndiaBlock } from './IndiaInvoiceDoc';
 import type { CompanySettings, Invoice } from '../types';
 
 const BRAND = '#c8102e';
@@ -10,6 +11,9 @@ const money = (v: Parameters<typeof formatCurrency>[0]) => <strong>{formatCurren
 // The printable / emailable invoice document body. Rendered inside the preview
 // modal and also offscreen when generating the PDF attachment.
 export default function InvoiceDoc({ invoice }: { invoice: Invoice }) {
+  // An India deal's invoice prints in Get Home Realty Pvt Ltd's own layout (19 Oct 2026).
+  const india = (invoice as Invoice & { india?: IndiaBlock }).india;
+  if (india) return <IndiaInvoiceDoc invoice={invoice} india={india} />;
   const co: CompanySettings = invoice.company || {};
   const items = invoice.line_items || [];
 

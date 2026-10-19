@@ -61,6 +61,7 @@ const LEAVE_ALONE = new Set([
   'agent_user_id', // a foreign key — pointed at a real account below
   'market',        // the loader filters on it, like deleted_at: a probe value is no country, so the row would vanish
   'builder_project_id', // a foreign key to an India builder project - a probe number points at nothing
+  'india_office',  // India's invoicing office: a short code ('HYD'/'VZM'); a probe string does not fit
 ]);
 
 /** A distinctive value for a column, by declared type. */

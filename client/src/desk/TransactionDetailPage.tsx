@@ -1076,6 +1076,22 @@ export default function TransactionDetailPage() {
               </select>
             );
           })()}
+          {user?.market === 'IN' && (() => {
+            // The office that invoices this India deal (19 Oct 2026).
+            const off = (txn as unknown as { india_office?: string | null } | null)?.india_office || 'HYD';
+            const name = off === 'VZM' ? 'Vizianagaram' : 'Hyderabad';
+            if (view) return <span className="pill" title="Invoicing office">🏢 {name}</span>;
+            return (
+              <select title="Invoicing office" value={off} style={{ width: 'auto', fontSize: 12, padding: '3px 6px' }}
+                onChange={async (e) => {
+                  try { setTxn(await updateTransaction(id, { india_office: e.target.value })); toast('Invoicing office saved', 'ok'); }
+                  catch (err) { toast(apiErrorMessage(err, 'Could not save the office'), 'bad'); }
+                }}>
+                <option value="HYD">🏢 Hyderabad</option>
+                <option value="VZM">🏢 Vizianagaram</option>
+              </select>
+            );
+          })()}
           {user?.market === 'IN' && <span className="badge-india" title="An India deal - never shown in Canada">{'\u{1F1EE}\u{1F1F3}'} India</span>}
           {form.statuses.map((s) => <span key={s} className={`pill ${stPill(s)}`}>{s}</span>)}
           <span className={`pill ${view ? 'info' : 'warn'}`} style={{ fontSize: 10 }}>{view ? <><Icon name="lock" size={11} /> View Only</> : <><Icon name="edit" size={11} /> Edit Mode</>}</span>

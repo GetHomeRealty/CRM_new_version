@@ -5,6 +5,7 @@ import { useToast } from './toast';
 import ConfirmDialog, { useConfirm } from './ConfirmDialog';
 import { apiErrorMessage } from '../lib/apiError';
 import BuilderProjectsTab from './BuilderProjectsTab';
+import IndiaSettingsTab from './IndiaSettingsTab';
 
 /**
  * INDIA BUILDER DATABASE (stage 3, 17 Oct 2026).
@@ -25,23 +26,26 @@ interface Agreement {
 interface Builder {
   id: number; name: string; company_name: string | null; email: string | null; phone: string | null;
   website: string | null; address: string | null; notes: string | null;
+  gstin?: string | null; billing_address?: string | null; state?: string | null;
   contacts: (Contact & { id: number })[];
   agreement: (Agreement & { commission_pct: number | string | null }) | null;
 }
 interface Form {
   name: string; company_name: string; email: string; phone: string; website: string; address: string; notes: string;
+  gstin: string; billing_address: string; state: string;
   contacts: Contact[];
   agreement: Agreement;
 }
 
 const KINDS: ContactKind[] = ['Sales office', 'Sales person', 'Other'];
 const blankAgreement: Agreement = { start_date: '', expiry_date: '', commission_pct: '', payment_terms: '' };
-const blankForm: Form = { name: '', company_name: '', email: '', phone: '', website: '', address: '', notes: '', contacts: [], agreement: blankAgreement };
+const blankForm: Form = { name: '', company_name: '', email: '', phone: '', website: '', address: '', notes: '', gstin: '', billing_address: '', state: '', contacts: [], agreement: blankAgreement };
 const s = (v: unknown): string => (v === null || v === undefined ? '' : String(v));
 
 const formOf = (b: Builder): Form => ({
   name: b.name, company_name: s(b.company_name), email: s(b.email), phone: s(b.phone), website: s(b.website),
   address: s(b.address), notes: s(b.notes),
+  gstin: s(b.gstin), billing_address: s(b.billing_address), state: s(b.state),
   contacts: b.contacts.map((c) => ({ kind: c.kind, name: s(c.name), phone: s(c.phone), email: s(c.email) })),
   agreement: b.agreement
     ? { start_date: s(b.agreement.start_date), expiry_date: s(b.agreement.expiry_date), commission_pct: s(b.agreement.commission_pct), payment_terms: s(b.agreement.payment_terms) }
@@ -71,7 +75,7 @@ export default function BuildersPage() {
   const [file, setFile] = useState<File | null>(null);
   const [saving, setSaving] = useState(false);
   const inIndia = user?.market === 'IN';
-  const [tab, setTab] = useState<'builders' | 'projects'>('builders');
+  const [tab, setTab] = useState<'builders' | 'projects' | 'settings'>('builders');
 
   const load = useCallback(() => {
     if (!inIndia) { setLoading(false); return; }
@@ -161,9 +165,12 @@ export default function BuildersPage() {
       <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
         <button className={`btn ${tab === 'builders' ? 'primary' : 'ghost'} sm`} onClick={() => setTab('builders')}>Builders ({rows.length})</button>
         <button className={`btn ${tab === 'projects' ? 'primary' : 'ghost'} sm`} onClick={() => setTab('projects')}>Projects</button>
+        <button className={`btn ${tab === 'settings' ? 'primary' : 'ghost'} sm`} onClick={() => setTab('settings')}>Invoice settings</button>
       </div>
 
-      {tab === 'projects' ? <BuilderProjectsTab builders={rows.map((b) => ({ id: b.id, name: b.name }))} /> : (<>
+      {tab === 'settings' && <IndiaSettingsTab />}
+
+      {tab === 'settings' ? null : tab === 'projects' ? <BuilderProjectsTab builders={rows.map((b) => ({ id: b.id, name: b.name }))} /> : (<>
 
       <input className="search" style={{ marginBottom: 12, width: '100%' }} placeholder="Search by builder, company, contact name or number…"
         value={search} onChange={(e) => setSearch(e.target.value)} />
@@ -223,6 +230,14 @@ export default function BuildersPage() {
               <div className="field"><label>Email</label><input value={form.email} onChange={(e) => set('email', e.target.value)} /></div>
               <div className="field"><label>Phone</label><input value={form.phone} onChange={(e) => set('phone', e.target.value)} placeholder="+91" /></div>
               <div className="field"><label>Address</label><input value={form.address} onChange={(e) => set('address', e.target.value)} /></div>
+            </div>
+
+            <div className="modal-sub">For invoices <span className="muted" style={{ fontWeight: 400 }}>· optional</span></div>
+            <div className="g3">
+              <div className="field"><label>GSTIN</label><input value={form.gstin} onChange={(e) => set('gstin', e.target.value.toUpperCase())} placeholder="e.g. 36AAAAA0000A1Z5" /></div>
+              <div className="field"><label>State</label><input value={form.state} onChange={(e) => set('state', e.target.value)} placeholder="e.g. Telangana" />
+                <span className="help">Same state as our office: CGST + SGST. Another state: IGST.</span></div>
+              <div className="field"><label>Billing address</label><input value={form.billing_address} onChange={(e) => set('billing_address', e.target.value)} placeholder="Empty = the address above" /></div>
             </div>
 
             <div className="modal-sub">Sales offices &amp; sales persons</div>

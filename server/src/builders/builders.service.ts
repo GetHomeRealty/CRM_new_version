@@ -77,6 +77,9 @@ export class BuildersService {
       website: b.website,
       address: b.address,
       notes: b.notes,
+      gstin: b.gstin,
+      billing_address: b.billing_address,
+      state: b.state,
       created_at: b.created_at,
       updated_at: b.updated_at,
       contacts: b.contacts.map((c) => ({ id: c.id, kind: c.kind, name: c.name, phone: c.phone, email: c.email })),
@@ -127,6 +130,10 @@ export class BuildersService {
       website: text(body.website),
       address: text(body.address, 2000),
       notes: text(body.notes, 5000),
+      // For the India invoice - all optional (Sai, 19 Oct 2026).
+      gstin: text(body.gstin, 32)?.toUpperCase() ?? null,
+      billing_address: text(body.billing_address, 2000),
+      state: text(body.state, 64),
     };
   }
 

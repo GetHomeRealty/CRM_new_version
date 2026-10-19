@@ -76,6 +76,8 @@ export default function AddTransactionModal({ open, onClose, onCreated }: AddTra
   const india = user?.market === 'IN';
   const [projects, setProjects] = useState<{ id: number; name: string; builder_name: string; city: string | null }[]>([]);
   const [projectId, setProjectId] = useState('');
+  // India deals: which of our offices invoices it (19 Oct 2026). Hyderabad unless chosen.
+  const [office, setOffice] = useState('HYD');
   useEffect(() => {
     if (!india) return;
     api.get<{ data: { id: number; name: string; builder_name: string; city: string | null }[] }>('/api/builder-projects/pick')
@@ -220,6 +222,7 @@ export default function AddTransactionModal({ open, onClose, onCreated }: AddTra
     if (!form.status) { toast('Please select a Status', 'bad'); return; }
     const payload: Record<string, unknown> = { type: form.type, property: form.property.trim(), status: form.status };
     if (india && projectId) payload.builder_project_id = Number(projectId);
+    if (india) payload.india_office = office;
 
     if (listing) {
       payload.listing_contract_date = form.listing_contract_date || null;
@@ -307,6 +310,15 @@ export default function AddTransactionModal({ open, onClose, onCreated }: AddTra
                 }}>
                   <option value="">{projects.length ? 'Choose the project (optional)' : 'No projects yet - add them under Builders'}</option>
                   {projects.map((p) => <option key={p.id} value={p.id}>{p.name} — {p.builder_name}{p.city ? `, ${p.city}` : ''}</option>)}
+                </select>
+              </div>
+            )}
+            {india && (
+              <div className="field">
+                <label>Invoicing office</label>
+                <select value={office} onChange={(e) => setOffice(e.target.value)}>
+                  <option value="HYD">Hyderabad</option>
+                  <option value="VZM">Vizianagaram</option>
                 </select>
               </div>
             )}

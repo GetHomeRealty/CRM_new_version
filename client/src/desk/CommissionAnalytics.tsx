@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { getDeskAnalytics } from '../lib/api';
-import { formatCurrency } from './format';
+import { formatCurrency, taxLabel } from './format';
 
 interface TileProps {
   bg: string;
@@ -56,7 +56,7 @@ export default function CommissionAnalytics() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 10 }}>
         <div>
           <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.06em' }}>Analytics Dashboard</div>
-          <div style={{ fontSize: 14, color: 'var(--text-2)', marginTop: 2 }}>Pending vs Paid commissions across all transactions · before HST</div>
+          <div style={{ fontSize: 14, color: 'var(--text-2)', marginTop: 2 }}>Pending vs Paid commissions across all transactions · before {taxLabel()}</div>
         </div>
         {/* The deal count is the sum of the two buckets, so the badge and the tiles beside it
             cannot disagree — and no deal list has to be downloaded to produce it. */}

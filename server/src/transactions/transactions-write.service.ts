@@ -723,6 +723,8 @@ export class TransactionsWriteService {
           market: marketOf(user),
           // India deals: the builder project picked on the form, if any (stage 3b).
           builder_project_id: await this.projectFor(tx, marketOf(user), body.builder_project_id),
+          // India deals: the office that invoices it (19 Oct 2026) - Hyderabad unless chosen.
+          india_office: marketOf(user) === 'IN' ? officeKey(body.india_office) : null,
           property: (body.property ?? null) as string | null,
           agent: agentName,
           // Recorded beside the name, so nothing downstream has to resolve a person from a string
@@ -1623,6 +1625,9 @@ export class TransactionsWriteService {
       if (Object.prototype.hasOwnProperty.call(body, 'builder_project_id')) {
         await tx.transactions.update({ where: { id: txnId }, data: { builder_project_id: await this.projectFor(tx, t.market, body.builder_project_id) } });
       }
+      if (Object.prototype.hasOwnProperty.call(body, 'india_office') && t.market === 'IN') {
+        await tx.transactions.update({ where: { id: txnId }, data: { india_office: officeKey(body.india_office) } });
+      }
       if (Object.prototype.hasOwnProperty.call(data, 'precon_terms')) await this.syncPreconTerms(tx, txnId, asArray(data.precon_terms));
 
       if (Object.prototype.hasOwnProperty.call(data, 'statuses')) {
@@ -2519,4 +2524,10 @@ export class TransactionsWriteService {
     if (rel === 'conditions') return { type: 'Financing', custom_name: null, deadline: null, status: 'Pending' };
     return { name: null, board_id: null, verified: false };
   }
+}
+
+/** India deals' invoicing office (19 Oct 2026): 'VZM' when chosen, otherwise Hyderabad ('HYD'). */
+function officeKey(raw: unknown): string {
+  const v = String(raw ?? '').trim().toUpperCase();
+  return v === 'VZM' ? 'VZM' : 'HYD';
 }

@@ -1,4 +1,5 @@
-import { Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
+import { Injectable, NotFoundException, Optional, UnprocessableEntityException } from '@nestjs/common';
+import { IndiaSettingsService } from '../india/india-settings.service';
 import { invoiceMarketWhere } from '../common/market';
 import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -101,6 +102,8 @@ export class InvoicesService {
     private readonly audit: AuditService,
     private readonly txnInvoices: TransactionInvoiceService,
     private readonly mailer: MailerService,
+    /** India invoicing settings (19 Oct 2026); optional so existing constructions keep working. */
+    @Optional() private readonly indiaSettings?: IndiaSettingsService,
   ) {}
 
   /**
@@ -195,11 +198,43 @@ export class InvoicesService {
         customers: true,
         invoice_line_items: { orderBy: { row_no: 'asc' } },
         invoice_payments: { where: { deleted_at: null }, orderBy: { paid_on: 'asc' } },
-        transactions: { include: { brokerages: { include: { brokerage_agents: { orderBy: { position: 'asc' } } } } } },
+        transactions: { include: {
+          brokerages: { include: { brokerage_agents: { orderBy: { position: 'asc' } } } },
+          linked_project: { select: { name: true, builder: { select: { name: true, company_name: true, gstin: true, state: true, billing_address: true, address: true } } } },
+        } },
       },
     });
     if (!inv) throw new NotFoundException({ message: `No query results for model [App\\Models\\Invoice] ${id}.` });
-    return this.detail(inv);
+    const out = await this.detail(inv);
+    // India (19 Oct 2026): what the India invoice prints besides the invoice itself.
+    if (inv.transactions?.market === 'IN' && this.indiaSettings) out.india = await this.indiaBlock(inv);
+    return out;
+  }
+
+  /**
+   * The India invoice's extra content: our company and the deal's office, the builder's GSTIN and
+   * state, the SAC code, the bank box - and the GST split. Same state as our office (or the builder's
+   * state unknown): CGST 9% + SGST 9%. A different state: IGST 18%. The tax amount is the invoice's
+   * own tax total either way; only how it is printed changes.
+   */
+  private async indiaBlock(inv: { tax_total: Prisma.Decimal | number | null; transactions: { agent: string | null; india_office: string | null; linked_project: { name: string; builder: { name: string; company_name: string | null; gstin: string | null; state: string | null; billing_address: string | null; address: string | null } } | null } | null }): Promise<Record<string, unknown>> {
+    const st = await this.indiaSettings!.get();
+    const office = this.indiaSettings!.office(st, inv.transactions?.india_office);
+    const b = inv.transactions?.linked_project?.builder ?? null;
+    const norm = (x: string | null | undefined) => String(x ?? '').trim().toLowerCase();
+    const inter = !!b?.state && norm(b.state) !== norm(office.state);
+    const tax = round2(num(inv.tax_total));
+    const cgst = inter ? 0 : round2(tax / 2);
+    return {
+      company: { name: st.company_name, cin: st.cin, phone: st.phone, email: st.email },
+      office, sac_code: st.sac_code, bank: st.bank,
+      builder: b ? { name: b.company_name || b.name, gstin: b.gstin, state: b.state, address: b.billing_address || b.address } : null,
+      project_name: inv.transactions?.linked_project?.name ?? null,
+      sales_person: inv.transactions?.agent ?? null,
+      tax: inter
+        ? { kind: 'IGST', igst_rate: 18, igst: tax }
+        : { kind: 'CGST_SGST', cgst_rate: 9, cgst, sgst_rate: 9, sgst: round2(tax - cgst) },
+    };
   }
 
   /*

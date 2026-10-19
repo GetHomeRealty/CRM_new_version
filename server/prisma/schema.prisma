@@ -180,6 +180,9 @@ model clients {
 }
 
 model company_settings {
+  /// India invoicing (19 Oct 2026): company details, the two offices (address, state, GSTIN), bank
+  /// details, SAC code and invoice prefix, edited by a Super Admin in Settings -> India.
+  india_settings              Json?
   id               Int       @id @default(autoincrement())
   feature_flags    String?   @db.Text
   name             String    @default("GetHomeRealty INC") @db.VarChar(255)
@@ -2592,6 +2595,8 @@ model transactions {
   market                      String                        @default("CA") @db.VarChar(8)
   /// India deals: the builder project this deal is in (stage 3b, 17 Oct 2026). Optional.
   builder_project_id          Int?
+  /// India deals: which of our offices invoices it - 'HYD' (Hyderabad, default) or 'VZM' (Vizianagaram).
+  india_office                String?                       @db.VarChar(8)
   /// (The text fields builder_vendor / builder_project above are Canada's pre-construction entries; unchanged.)
   linked_project              builder_projects?             @relation(fields: [builder_project_id], references: [id], onDelete: SetNull, onUpdate: Restrict)
   offer_applications          builder_offer_applications[]
@@ -3773,6 +3778,11 @@ model builders {
   website       String?             @db.VarChar(255)
   address       String?             @db.Text
   notes         String?             @db.Text
+  /// For the India invoice's customer box (19 Oct 2026) - optional (Sai: "not mandatory").
+  gstin         String?             @db.VarChar(32)
+  billing_address String?           @db.Text
+  /// The builder's Indian state - decides CGST + SGST (same state as our office) or IGST (different).
+  state         String?             @db.VarChar(64)
   created_by_id Int?
   created_at    DateTime            @default(now()) @db.Timestamp(0)
   updated_at    DateTime            @default(now()) @db.Timestamp(0)

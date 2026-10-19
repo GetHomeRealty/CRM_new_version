@@ -4,6 +4,7 @@ import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { MarketInterceptor } from './common/market.interceptor';
 import { BuildersModule } from './builders/builders.module';
+import { IndiaModule } from './india/india.module';
 import { IdentityThrottlerGuard } from './core/identity-throttler.guard';
 import configuration from './config/configuration';
 import { GLOBAL_LIMIT } from './config/rate-limits';
@@ -111,6 +112,7 @@ import { TwilioVoiceModule } from './twilio-voice/twilio-voice.module';
     FavoritesModule,
     TwilioVoiceModule,
     BuildersModule,
+    IndiaModule,
   ],
   controllers: [AppController, HealthController],
   providers: [

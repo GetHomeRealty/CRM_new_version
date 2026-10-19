@@ -16,6 +16,29 @@ const DEFAULT_PREFIX = 'GHR-';
 /** Next invoice number (prefix + continuous counter) + transaction-tied numbers. */
 @Injectable()
 export class InvoiceNumberService {
+  /**
+   * INDIA (19 Oct 2026, Sai: "ghr is enough"): GHR/2026-27/0001, GHR/2026-27/0002, ... - one series per
+   * Indian financial year (1 April - 31 March), restarting at 0001 each April. One above the highest
+   * number issued in that year, under its own advisory lock so two invoices never take the same number.
+   */
+  static indiaFinancialYear(d: Date): string {
+    const y = d.getUTCFullYear();
+    const start = d.getUTCMonth() >= 3 ? y : y - 1; // April (month 3) starts the year
+    return `${start}-${String((start + 1) % 100).padStart(2, '0')}`;
+  }
+
+  async nextIndia(db: Tx, invoiceDate: Date, prefix = 'GHR'): Promise<string> {
+    const head = `${prefix}/${InvoiceNumberService.indiaFinancialYear(invoiceDate)}/`;
+    await db.$executeRawUnsafe('SELECT pg_advisory_xact_lock($1::int, $2::int)', 7601, 3);
+    const rows = await db.$queryRaw<{ invoice_no: string }[]>`
+      SELECT invoice_no FROM invoices
+       WHERE invoice_no LIKE ${head + '%'} AND invoice_no ~ '/[0-9]{4,}$'
+       ORDER BY length(invoice_no) DESC, invoice_no DESC LIMIT 1`;
+    const top = rows[0]?.invoice_no;
+    const n = top ? parseInt(top.slice(head.length), 10) + 1 : 1;
+    return head + String(n).padStart(4, '0');
+  }
+
   /** GHR-601107 → GHR-601108, advancing the counter. */
   async next(db: Tx): Promise<string> {
     const s = await db.company_settings.findUnique({ where: { id: 1 } });

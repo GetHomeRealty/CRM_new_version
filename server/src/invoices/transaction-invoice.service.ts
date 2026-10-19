@@ -1,5 +1,6 @@
 import { UnprocessableEntityException } from '@nestjs/common';
-import { Injectable } from '@nestjs/common';
+import { IndiaSettingsService } from '../india/india-settings.service';
+import { Injectable, Optional } from '@nestjs/common';
 import type { invoices, Prisma } from '@prisma/client';
 import { CommissionService } from '../transactions/commission.service';
 import { commissionInclude, normalizeCommissionTxn } from '../transactions/commission.loader';
@@ -13,6 +14,16 @@ import { invoiceCommissionFrom } from './invoice-commission';
 type Tx = Prisma.TransactionClient;
 
 /** Generates commission invoice(s) from a transaction (port of TransactionInvoiceService). */
+/** What an India invoice puts in place of Canada's co-op values (19 Oct 2026). */
+interface IndiaInvoice {
+  invoiceNo: string;
+  customer: { name: string | null; phone: string | null; email: string | null; address: string | null };
+  taxRate: number;
+  terms: string;
+  subject: string;
+  line: string;
+}
+
 @Injectable()
 export class TransactionInvoiceService {
   constructor(
@@ -20,13 +31,19 @@ export class TransactionInvoiceService {
     private readonly calc: InvoiceCalculator,
     private readonly commission: CommissionService,
     private readonly audit: AuditService,
+    /** India invoicing settings; optional so existing constructions (and their specs) keep working. */
+    @Optional() private readonly indiaSettings?: IndiaSettingsService,
   ) {}
 
   /** Generate within an existing tx. Returns created invoices. */
   async generate(db: Tx, transactionId: number, actor: ActingUser | null, skipIfExists = false): Promise<invoices[]> {
     const t = await db.transactions.findUnique({
       where: { id: transactionId },
-      include: { ...commissionInclude, brokerages: { include: { brokerage_agents: { orderBy: { position: 'asc' } } } } },
+      include: {
+        ...commissionInclude, brokerages: { include: { brokerage_agents: { orderBy: { position: 'asc' } } } },
+        // India deals bill the BUILDER (19 Oct 2026), so its details come with the deal.
+        linked_project: { select: { name: true, builder: { select: { name: true, company_name: true, email: true, phone: true, address: true, billing_address: true } } } },
+      },
     });
     if (!t || !isInvoiceableType(t.type)) return [];
     if (skipIfExists && (await db.invoices.count({ where: { transaction_id: transactionId } })) > 0) return [];
@@ -40,6 +57,29 @@ export class TransactionInvoiceService {
     const breakdown = await this.commission.breakdown(normalizeCommissionTxn(t));
     const brok = t.brokerages;
     const brokAgents = brok ? brok.brokerage_agents.map((a) => a.name).filter(Boolean).join(', ') : '';
+
+    /*
+     * INDIA (19 Oct 2026). The builder pays, in rupees, with GST 18%; the invoice comes from Get Home
+     * Realty Pvt Ltd under its own numbers (GHR/2026-27/0001). Everything else - terms per invoice,
+     * the calculator, the payments - is the same machinery as Canada's.
+     */
+    const india = t.market === 'IN' ? await this.indiaSettings?.get() : null;
+    const indiaFor = india ? async (label: string): Promise<IndiaInvoice> => {
+      const b = t.linked_project?.builder;
+      const today = new Date(new Date().toISOString().slice(0, 10) + 'T00:00:00.000Z');
+      const project = t.linked_project?.name ?? null;
+      return {
+        invoiceNo: await this.numbers.nextIndia(db, today, india.invoice_prefix),
+        customer: {
+          name: b ? (b.company_name || b.name) : null, phone: b?.phone ?? null, email: b?.email ?? null,
+          address: b ? (b.billing_address || b.address) : null,
+        },
+        taxRate: 18,
+        terms: india.terms,
+        subject: `Commission for ${project ? `${project} - ` : ''}${t.property ?? ''}${label}`,
+        line: `Brokerage commission${project ? ` - ${project}` : ''}${t.property ? `, ${t.property}` : ''}${label}`,
+      };
+    } : null;
 
     const created: invoices[] = [];
     if (t.type === 'Preconstruction') {
@@ -75,10 +115,12 @@ export class TransactionInvoiceService {
       if (terms.length === 0) return [];
       if (!terms.every((t) => Number(t.commission) > 0)) return [];
       for (const term of terms) {
-        created.push(await this.make(db, t, brok, defaultTerms, defaultTaxRate, brokAgents, actor, Number(term.term_no), Number(term.commission), invoicePrefix));
+        created.push(await this.make(db, t, brok, defaultTerms, defaultTaxRate, brokAgents, actor, Number(term.term_no), Number(term.commission), invoicePrefix,
+          indiaFor ? await indiaFor(` - Term ${Number(term.term_no)}`) : undefined));
       }
     } else {
-      created.push(await this.make(db, t, brok, defaultTerms, defaultTaxRate, brokAgents, actor, null, Number((breakdown as { commission?: number }).commission ?? 0), invoicePrefix));
+      created.push(await this.make(db, t, brok, defaultTerms, defaultTaxRate, brokAgents, actor, null, Number((breakdown as { commission?: number }).commission ?? 0), invoicePrefix,
+        indiaFor ? await indiaFor('') : undefined));
     }
 
     for (const inv of created) {
@@ -301,13 +343,14 @@ export class TransactionInvoiceService {
     termNo: number | null,
     commission: number,
     invoicePrefix?: string,
+    india?: IndiaInvoice,
   ): Promise<invoices> {
     const now = new Date();
     const invoiceDate = new Date(now.toISOString().slice(0, 10) + 'T00:00:00.000Z');
     const suffix = termNo ? ` — Term ${termNo}` : '';
     const dueDate = this.dueDate(invoiceDate, defaultTerms, t.closing_date ?? null);
 
-    const invoiceNo = this.numbers.forTransaction(t.trade_no, termNo, invoicePrefix) ?? (await this.numbers.next(db));
+    const invoiceNo = india?.invoiceNo ?? this.numbers.forTransaction(t.trade_no, termNo, invoicePrefix) ?? (await this.numbers.next(db));
     const holder = await db.invoices.findFirst({ where: { invoice_no: invoiceNo } });
     if (holder) {
       const held = await db.invoice_payments.count({ where: { invoice_id: holder.id, deleted_at: null } });
@@ -326,18 +369,18 @@ export class TransactionInvoiceService {
         term_no: termNo,
         created_by: actor?.id ?? null,
         property_reference: t.property,
-        customer_name: brok?.name ?? null,
-        customer_phone: brok?.phone ?? null,
-        customer_email: brok?.invoice_email ?? null,
-        customer_address: brok?.address ?? null,
-        customer_country: 'Canada',
+        customer_name: india ? india.customer.name : brok?.name ?? null,
+        customer_phone: india ? india.customer.phone : brok?.phone ?? null,
+        customer_email: india ? india.customer.email : brok?.invoice_email ?? null,
+        customer_address: india ? india.customer.address : brok?.address ?? null,
+        customer_country: india ? 'India' : 'Canada',
         invoice_date: invoiceDate,
-        terms: defaultTerms,
+        terms: india ? india.terms : defaultTerms,
         due_date: dueDate,
         trade_number: t.trade_no,
         listing_agent: brokAgents || null,
         coop_salesperson: t.agent,
-        subject: 'Co-op Commission for ' + (t.property ?? '') + suffix,
+        subject: india ? india.subject : 'Co-op Commission for ' + (t.property ?? '') + suffix,
         status: 'Unpaid',
         created_at: now,
         updated_at: now,
@@ -386,7 +429,7 @@ export class TransactionInvoiceService {
       data: {
         invoice_id: invoice.id,
         row_no: 1,
-        description: 'Co-op Commission' + suffix,
+        description: india ? india.line : 'Co-op Commission' + suffix,
         qty: 1,
         rate: round2(commission),
         amount: round2(commission),
@@ -396,7 +439,7 @@ export class TransactionInvoiceService {
       },
     });
 
-    await this.calc.recalculate(db, invoice.id, defaultTaxRate);
+    await this.calc.recalculate(db, invoice.id, india ? india.taxRate : defaultTaxRate);
     return (await db.invoices.findUnique({ where: { id: invoice.id } })) as invoices;
   }
 
