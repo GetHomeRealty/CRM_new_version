@@ -1,7 +1,8 @@
 import { deskPath } from './area';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback, Fragment } from 'react';
 import type { RefObject } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
+import { readLastReport, saveLastReport, forgetLastReport } from './reportMemory';
 import { reportColumns, reportFilterOptions, runReport, exportReport, reportDocuments } from '../lib/reportsApi';
 import { apiErrorMessage } from '../lib/apiError';
 import { formatCurrency } from './format';
@@ -96,14 +97,42 @@ export default function ReportDetailPage() {
   }, [expanded, toast]);
 
   // load report metadata + filter options whenever the report changes
+  const location = useLocation();
+  const restoring = !!(location.state as { restoreReport?: boolean } | null)?.restoreReport;
   useEffect(() => {
     setLoading(true); setError(''); setMeta(null); setResult(null);
-    setDraft({}); setApplied({}); setSelectedCols(null); setSections(null); setSort(null); setPage(1); setFacets(null); setFiltersOpen(false);
+    // Reopened by the Reports list on the way back from another module: pick up where it was left.
+    const saved = restoring ? readLastReport(user?.id) : null;
+    if (saved && saved.type === reportType) {
+      setDraft(saved.draft ?? {}); setApplied(saved.applied ?? {}); setSelectedCols(saved.selectedCols ?? null);
+      setSections(saved.sections ?? null); setSort(saved.sort ?? null); setPage(saved.page || 1); setPerPage(saved.perPage || 25);
+    } else {
+      setDraft({}); setApplied({}); setSelectedCols(null); setSections(null); setSort(null); setPage(1);
+    }
+    setFacets(null); setFiltersOpen(false);
     Promise.all([reportColumns(reportType), reportFilterOptions()])
       .then(([m, o]) => { setMeta(m); setOptions(o); })
       .catch((e) => setError(apiErrorMessage(e, 'Could not load report')))
       .finally(() => setLoading(false));
-  }, [reportType]);
+  }, [reportType]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /*
+   * Remember this report, as it is now, for the way back from another module (reportMemory.ts).
+   * Not while loading: the first render still holds the defaults, and saving them would overwrite
+   * the state being restored.
+   */
+  useEffect(() => {
+    if (loading || !meta) return;
+    saveLastReport({ user: user?.id ?? null, type: reportType, draft, applied, page, perPage, sort, selectedCols, sections });
+  }, [loading, meta, reportType, draft, applied, page, perPage, sort, selectedCols, sections, user?.id]);
+  /*
+   * Leaving for the Reports list (← Reports or the browser's Back) forgets it, so the list stays
+   * reachable; leaving for any other module keeps it. By the time this runs the address is already
+   * the destination's.
+   */
+  useEffect(() => () => {
+    if (/\/reports\/?$/.test(window.location.pathname)) forgetLastReport();
+  }, []);
 
   const body = useMemo<ReportSearchBody>(() => ({
     filters: { ...applied, ...(sections ? { sections } : {}) },
