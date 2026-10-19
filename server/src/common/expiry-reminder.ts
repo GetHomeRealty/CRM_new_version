@@ -6,7 +6,7 @@ import type { Market } from './market';
  *
  *   - from 15 days before the expiry date, an email every 2 days;
  *   - always on the day before, and always on the expiry day itself;
- *   - after the expiry, if not renewed, still every 2 days for as long as it stays so;
+ *   - after the expiry, if not renewed, EVERY DAY for as long as it stays so (Sai, 19 Oct 2026);
  *   - it stops when a new expiry date is entered (the caller clears the reminder dates) or a new
  *     file is uploaded after this expiry's first reminder;
  *   - at 9:00 in the morning of the country's own time, the days counted by the country's own date.
@@ -49,7 +49,7 @@ export function expiryReminderDue(s: ExpiryReminderState, today: Date, market: M
   if (!s.last_reminder_at) return true;
   const since = Math.round((today.getTime() - localDay(s.last_reminder_at, market).day.getTime()) / 86_400_000);
   if (since <= 0) return false; // never twice on one day
-  if (left === 1 || left === 0) return true; // the day before, and the day itself - always
+  if (left <= 1) return true; // the day before, the day itself and every day after - always
   return since >= EVERY_DAYS;
 }
 
@@ -61,4 +61,4 @@ export function expiryState(left: number): string {
 }
 
 export const REMINDER_FOOTNOTE = `From ${WINDOW_DAYS} days before expiry this reminder comes every ${EVERY_DAYS} days,`
-  + ' always on the day before and on the day itself, and after the expiry until it is renewed.';
+  + ' always on the day before and on the day itself, and every day after the expiry until it is renewed.';

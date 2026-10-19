@@ -52,13 +52,13 @@ const formOf = (b: Builder): Form => ({
     : blankAgreement,
 });
 
-/** The expiry countdown as a coloured pill: red from 15 days out (when the reminders run), grey after. */
+/** The expiry countdown as a coloured pill: red from 15 days out and after expiry, while the reminders run. */
 function ExpiryPill({ a }: { a: Builder['agreement'] }) {
   if (!a?.expiry_date) return <span className="muted">—</span>;
   const d = a.days_left ?? null;
   if (d === null) return <span>{a.expiry_date}</span>;
-  if (d < 0) return <span className="pill" style={{ background: '#f3f4f6', color: '#6b7280' }}>Expired {a.expiry_date}</span>;
-  if (d <= 15) return <span className="pill bad" title="Reminders are being emailed every 2 days">{d === 0 ? 'Expires today' : `${d} day${d === 1 ? '' : 's'} left`} · {a.expiry_date}</span>;
+  if (d < 0) return <span className="pill bad" title="Reminders every day until renewed">Expired {a.expiry_date}</span>;
+  if (d <= 15) return <span className="pill bad" title="Reminders are being emailed">{d === 0 ? 'Expires today' : `${d} day${d === 1 ? '' : 's'} left`} · {a.expiry_date}</span>;
   return <span className="pill ok">{a.expiry_date}</span>;
 }
 
@@ -263,7 +263,7 @@ export default function BuildersPage() {
             <div className="g3">
               <div className="field"><label>Start date</label><input type="date" value={form.agreement.start_date} onChange={(e) => setA('start_date', e.target.value)} /></div>
               <div className="field"><label>Expiry date</label><input type="date" value={form.agreement.expiry_date} onChange={(e) => setA('expiry_date', e.target.value)} />
-                <span className="help">Reminder emails to Super Admins every 2 days from 15 days before.</span></div>
+                <span className="help">Reminders at 9:00 AM: from 15 days before every 2 days, the day before, the day itself, then every day until renewed.</span></div>
               <div className="field"><label>Commission %</label><input inputMode="decimal" value={form.agreement.commission_pct} onChange={(e) => setA('commission_pct', e.target.value)} placeholder="e.g. 3" /></div>
             </div>
             <div className="field"><label>Payment terms</label>

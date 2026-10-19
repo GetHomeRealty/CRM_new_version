@@ -13,7 +13,7 @@ import type { Market } from '../types/auth';
  * The company's own papers for the country being worked in - Canada's or India's, never both - and
  * its stakeholders / partners. Each document keeps every file ever uploaded (newest first, the older
  * ones as previous versions) and its expiry is emailed to the Super Admins (15 days before, every 2
- * days, the day before, the day itself, and after expiry until renewed). "+ Add document" takes any
+ * days, the day before, the day itself, and every day after expiry until renewed). "+ Add document" takes any
  * other paper by its own name. Each stakeholder carries as many files as needed. Super Admin only.
  */
 interface FileRow { id: number; file_name: string; note: string | null; uploaded_at: string }
@@ -49,7 +49,7 @@ const when = (iso: string) => iso.slice(0, 10);
 
 function ExpiryPill({ d }: { d: Doc }) {
   if (d.days_left === null) return <span className="muted">No expiry</span>;
-  if (d.days_left < 0) return <span className="pill bad" title="Reminders every 2 days until renewed">Expired {d.expiry_date}</span>;
+  if (d.days_left < 0) return <span className="pill bad" title="Reminders every day until renewed">Expired {d.expiry_date}</span>;
   if (d.days_left <= 15) return <span className="pill bad" title="Reminders are being emailed">{d.days_left === 0 ? 'Expires today' : `${d.days_left} day${d.days_left === 1 ? '' : 's'} left`} · {d.expiry_date}</span>;
   return <span className="pill ok">{d.expiry_date}</span>;
 }
@@ -256,7 +256,7 @@ export default function CompanyDocumentsTab() {
               <div />
               <div className="field"><label>Issue date</label><input type="date" value={df.issue_date} onChange={(e) => setD('issue_date', e.target.value)} /></div>
               <div className="field"><label>Expiry date</label><input type="date" value={df.expiry_date} onChange={(e) => setD('expiry_date', e.target.value)} />
-                <span className="help">Reminders: from 15 days before, every 2 days, the day before, the day itself, and after expiry until renewed.</span></div>
+                <span className="help">Reminders at 9:00 AM: from 15 days before every 2 days, the day before, the day itself, then every day until renewed.</span></div>
             </div>
             <div className="modal-sub">Contact at the issuing office <span className="muted" style={{ fontWeight: 400 }}>· optional</span></div>
             <div className="g3">

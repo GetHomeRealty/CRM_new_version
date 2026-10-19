@@ -12,7 +12,7 @@ import { SEND_HOUR, WINDOW_DAYS, expiryReminderDue, expiryState, localDay, REMIN
  * COMPANY DOCUMENT EXPIRY REMINDERS (19 Oct 2026). Sai's rules:
  *   - from 15 days before the expiry date, an email every 2 days;
  *   - always on the day before, and always on the expiry day itself;
- *   - after the expiry, if it was not renewed, still every 2 days - for as long as it stays so;
+ *   - after the expiry, if it was not renewed, every day - for as long as it stays so;
  *   - it stops when a new expiry date is entered or a new file is uploaded (a file uploaded after
  *     this expiry's first reminder counts as the renewal);
  *   - to the Super Admins who work in that country, at 9:00 in the morning of that country's own time

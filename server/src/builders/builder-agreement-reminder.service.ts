@@ -14,7 +14,7 @@ import {
  *
  * Sai first asked for "from last 15 days, a mail every 2 days" (17 Oct). On 19 Oct he moved them to
  * the company-document rules (common/expiry-reminder.ts): from 15 days before every 2 days, always the
- * day before and the day itself, after the expiry every 2 days until renewed - a new expiry date
+ * day before and the day itself, after the expiry every day until renewed - a new expiry date
  * (BuildersService.update clears the reminder dates) or a new agreement file uploaded after the first
  * reminder - at 9:00 India time, counted by India's date.
  *

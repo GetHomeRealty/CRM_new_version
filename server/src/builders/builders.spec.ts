@@ -61,11 +61,11 @@ describe('agreement expiry reminders: the company-document rules (Sai, 19 Oct 20
     expect(due('2026-11-30', '2026-11-15', '2026-11-16')).toBe(false);
     expect(due('2026-11-30', '2026-11-15', '2026-11-17')).toBe(true);
   });
-  it('always reminds the day before and on the expiry day, then every 2 days until renewed', () => {
+  it('always reminds the day before, on the expiry day, then every day until renewed', () => {
     expect(due('2026-11-30', '2026-11-28', '2026-11-29')).toBe(true);  // the day before, 1 day after the last
     expect(due('2026-11-30', '2026-11-29', '2026-11-30')).toBe(true);  // the expiry day, 1 day after the last
-    expect(due('2026-11-30', '2026-11-30', '2026-12-01')).toBe(false); // after expiry: every 2 days
-    expect(due('2026-11-30', '2026-11-30', '2026-12-02')).toBe(true);
+    expect(due('2026-11-30', '2026-11-30', '2026-12-01')).toBe(true);  // after expiry: every day
+    expect(due('2026-11-30', '2026-12-01', '2026-12-01')).toBe(false); // never twice on one day
   });
   it('a new agreement file after the first reminder counts as the renewal', () => {
     const s = { expiry_date: d('2026-11-30'), reminder_started_at: d('2026-11-15'), last_reminder_at: d('2026-11-17'), latest_file_at: d('2026-11-18') };

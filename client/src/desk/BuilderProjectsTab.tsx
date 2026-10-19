@@ -53,7 +53,8 @@ function ReraPill({ r }: { r: Project['rera'] }) {
   if (!r.valid_until) return r.number ? <span>{r.number}</span> : <span className="muted">—</span>;
   const d = r.days_left;
   const tag = d === null ? '' : d < 0 ? ' · expired' : d <= 15 ? ` · ${d === 0 ? 'expires today' : `${d} day${d === 1 ? '' : 's'} left`}` : '';
-  const cls = d !== null && d < 0 ? '' : d !== null && d <= 15 ? 'bad' : 'ok';
+  // Red from 15 days out and after expiry - the reminders run every day until it is renewed.
+  const cls = d !== null && d <= 15 ? 'bad' : 'ok';
   return <span title={`RERA ${r.number ?? ''} valid until ${r.valid_until}`}>{r.number && <div style={{ fontSize: 12 }}>{r.number}</div>}<span className={`pill ${cls}`}>till {r.valid_until}{tag}</span></span>;
 }
 
@@ -253,7 +254,7 @@ export default function BuilderProjectsTab({ builders }: { builders: BuilderOpt[
               <div className="field"><label>RERA number</label><input value={form.rera.number} onChange={(e) => setR('number', e.target.value)} /></div>
               <div className="field"><label>Approved on</label><input type="date" value={form.rera.approved_on} onChange={(e) => setR('approved_on', e.target.value)} /></div>
               <div className="field"><label>Valid until</label><input type="date" value={form.rera.valid_until} onChange={(e) => setR('valid_until', e.target.value)} />
-                <span className="help">Reminder emails every 2 days from 15 days before.</span></div>
+                <span className="help">Reminders at 9:00 AM: from 15 days before every 2 days, the day before, the day itself, then every day until renewed.</span></div>
             </div>
             <div className="field"><label>RERA certificate</label>
               {byKind('rera_certificate').map((f) => (

@@ -31,11 +31,11 @@ describe('company document reminders', () => {
     expect(due(dayBefore, day('2026-11-20'), 'CA')).toBe(true); // the expiry day
   });
 
-  it('after the expiry, every 2 days for as long as it is not renewed', () => {
+  it('after the expiry, every day for as long as it is not renewed', () => {
     const after = { ...base, reminder_started_at: sentOn('2026-11-05'), last_reminder_at: sentOn('2026-11-20') };
-    expect(due(after, day('2026-11-21'), 'CA')).toBe(false);
-    expect(due(after, day('2026-11-22'), 'CA')).toBe(true);
-    expect(due({ ...after, last_reminder_at: sentOn('2027-03-01') }, day('2027-03-03'), 'CA')).toBe(true);
+    expect(due(after, day('2026-11-20'), 'CA')).toBe(false); // never twice on one day
+    expect(due(after, day('2026-11-21'), 'CA')).toBe(true);
+    expect(due({ ...after, last_reminder_at: sentOn('2027-03-01') }, day('2027-03-02'), 'CA')).toBe(true);
   });
 
   it('stops when a new file is uploaded after the reminders began', () => {
