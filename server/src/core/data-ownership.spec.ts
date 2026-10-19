@@ -42,6 +42,8 @@ const ROOT = [
    */
   'recruitment_candidates',
   'transactions',
+  // The brokerage's own Payment Sheet as uploaded (Pending Payments); rows name deals by trade number only.
+  'payment_sheet_rows',
   'customers',
   'campaigns',
   'agents',

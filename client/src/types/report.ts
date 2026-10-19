@@ -137,6 +137,8 @@ export interface ReportResult {
   sections?: ReportSection[];
   /** Reports with `dealTypesFromRows`: the deal types, closing years and accounting remarks in the result. */
   facets?: { deal_type: string[]; year: string[]; remark: string[] };
+  /** Pending Payments is showing the uploaded Payment Sheet, not computed rows. */
+  sheet?: { uploaded_at: string | null; uploaded_by: string | null };
 }
 
 export interface ReportFilterOptions {

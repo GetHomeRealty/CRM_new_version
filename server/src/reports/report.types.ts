@@ -159,6 +159,8 @@ export interface ReportResult {
    * the screen keeps the lists from its unfiltered run.
    */
   facets?: { deal_type: string[]; year: string[]; remark: string[] };
+  /** Pending Payments showing the uploaded Payment Sheet rather than computed rows (payment-sheet.ts). */
+  sheet?: { uploaded_at: string | null; uploaded_by: string | null };
 }
 
 /** Everything an export renderer needs. */
@@ -185,4 +187,6 @@ export interface ExportPayload {
    * titles, black gridlines, coloured status cells, and every cell on one line.
    */
   sheetStyle?: boolean;
+  /** The uploaded Payment Sheet is text with no amounts: no "Total pending" band under it. */
+  noGrandTotal?: boolean;
 }

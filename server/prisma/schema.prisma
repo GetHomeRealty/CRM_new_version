@@ -3745,3 +3745,30 @@ model recruitment_events {
   @@index([candidate_id])
   @@index([created_at])
 }
+
+/// THE BROKERAGE'S PAYMENT SHEET, as uploaded (2026-10-19). When it holds rows, the Pending Payments
+/// report shows them exactly as written instead of computing its rows from the deals. One row per line
+/// of the sheet, in the sheet's order; an upload replaces the whole set. Nothing else reads or writes it.
+/// Created in migrations/20261019120000_payment_sheet_rows.
+model payment_sheet_rows {
+  id                  Int       @id @default(autoincrement())
+  /// Order on the sheet, from 1.
+  position            Int
+  /// client | coop | agent
+  section             String    @db.VarChar(16)
+  /// Agent payments only: Listing | Buying | Lease | Pre-Construction | National Bank
+  agent_group         String?   @db.VarChar(32)
+  trade_no            String?   @db.VarChar(64)
+  closing_date        DateTime? @db.Date
+  property            String?   @db.VarChar(255)
+  agent_name          String?   @db.VarChar(255)
+  docs_status         String?   @db.VarChar(64)
+  validation_status   String?   @db.VarChar(64)
+  validation_comments String?   @db.Text
+  payment_schedule    String?   @db.Text
+  remarks             String?   @db.Text
+  uploaded_by         String?   @db.VarChar(255)
+  uploaded_at         DateTime  @db.Timestamp(0)
+
+  @@index([position])
+}

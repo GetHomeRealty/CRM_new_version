@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import Decimal from 'decimal.js';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -21,6 +21,7 @@ import { anyUncomputedSql, paymentCountsSql, paymentPageSql, paymentSectionFilte
 import type { CommissionVariant } from '../dashboard/desk-commission.sql';
 import type { ReportColumn, ReportFilters, ReportQuery, ReportResult, ReportRow, ReportTotals, ExportPayload, ReportSectionDef, ReportSectionOut } from './report.types';
 import type { AuthUserRecord } from '../auth/auth.types';
+import { SHEET_COLUMNS, assertSheetWriter, clearSheet, loadSheet, parseSheetXlsx, replaceSheet, sheetInfo, sheetReport, sheetTemplateXlsx } from './payment-sheet';
 
 /** Payment methods offered in the Transactions module (AdminActivities + Adjustment modals). */
 export const PAYMENT_TYPES = ['N/A', 'TDB-EFT', 'CTA-BA Transfer', 'Cheque', 'Wire'] as const;
@@ -83,6 +84,16 @@ export class ReportsService {
       ? { lockedAgent: user.name, lockedUserId: user.id }
       : { agents };
   }
+
+  // ---- Pending Payments: the uploaded Payment Sheet (payment-sheet.ts) ----
+  paySheetInfo(): ReturnType<typeof sheetInfo> { return sheetInfo(this.prisma); }
+  async uploadPaySheet(user: AuthUserRecord, file: Buffer | undefined): Promise<{ count: number }> {
+    assertSheetWriter(user);
+    if (!file?.length) throw new BadRequestException({ message: 'Choose the Pay Sheet .xlsx to upload.' });
+    return replaceSheet(this.prisma, user, await parseSheetXlsx(file));
+  }
+  removePaySheet(user: AuthUserRecord): Promise<{ count: number }> { return clearSheet(this.prisma, user); }
+  paySheetTemplate(user: AuthUserRecord): Promise<Buffer> { assertSheetWriter(user); return sheetTemplateXlsx(this.prisma); }
 
   /** List all reports (dashboard cards). */
   list(): { type: string; name: string; description: string; category: string }[] {
@@ -148,6 +159,17 @@ export class ReportsService {
   async run(type: string, user: AuthUserRecord, rawQuery: ReportQuery): Promise<ReportResult> {
     const def = this.require(type);
     const query = this.dropHiddenFilters(def, rawQuery);
+
+    // Pending Payments with an uploaded Payment Sheet shows the sheet, as written (payment-sheet.ts).
+    const sheet = await this.sheetFor(def, user, query);
+    if (sheet) {
+      return {
+        report: { type: def.type, name: def.name, description: def.description },
+        columns: SHEET_COLUMNS, rows: sheet.rows, totals: {}, total_count: sheet.rows.length,
+        page: 1, per_page: Math.max(1, sheet.rows.length), last_page: 1,
+        applied_filters: sheet.applied, sections: sheet.sections, sheet: sheet.info,
+      };
+    }
 
     /*
      * THE FAST PATH: page in the database, total in the database, enrich twenty-five rows.
@@ -219,6 +241,31 @@ export class ReportsService {
       applied_filters: this.appliedFilters(def, user, query.filters),
       sections,
       ...(facets ? { facets } : {}),
+    };
+  }
+
+  /**
+   * The uploaded Payment Sheet, when this is Pending Payments, one has been uploaded, and the viewer
+   * is not an agent (the sheet names every agent's payments; an agent keeps the computed view of
+   * their own deals). Null otherwise, and the report computes its rows from the deals as before.
+   */
+  private async sheetFor(def: ReportDef, user: AuthUserRecord, query: ReportQuery): Promise<{
+    rows: ReportRow[]; sections: ReportSectionOut[]; applied: { label: string; value: string }[];
+    info: { uploaded_at: string | null; uploaded_by: string | null };
+  } | null> {
+    if (def.type !== 'pending-payments' || this.isAgentScoped(user)) return null;
+    const stored = await loadSheet(this.prisma);
+    if (!stored.length) return null;
+    const { rows, sections } = sheetReport(stored, this.sanitize(query.filters ?? {}, user));
+    const at = stored[0].uploaded_at;
+    const info = { uploaded_at: at.toISOString(), uploaded_by: stored[0].uploaded_by ?? null };
+    const when = at.toLocaleDateString('en-CA', { year: 'numeric', month: 'long', day: 'numeric' });
+    return {
+      rows, sections, info,
+      applied: [
+        { label: 'Payment Sheet', value: `uploaded ${when}${info.uploaded_by ? ` by ${info.uploaded_by}` : ''}` },
+        ...this.appliedFilters(def, user, query.filters),
+      ],
     };
   }
 
@@ -911,6 +958,14 @@ export class ReportsService {
   async exportData(type: string, user: AuthUserRecord, rawQuery: ReportQuery, branding: string): Promise<ExportPayload> {
     const def = this.require(type);
     const query = this.dropHiddenFilters(def, rawQuery);
+    const sheet = await this.sheetFor(def, user, query);
+    if (sheet) {
+      return {
+        reportName: def.name, generatedAt: new Date(), generatedBy: user.name, appliedFilters: sheet.applied,
+        dealTypeHeading: null, columns: SHEET_COLUMNS, rows: sheet.rows, totals: {}, branding,
+        sections: sheet.sections, sheetStyle: true, noGrandTotal: true,
+      };
+    }
     const { rows, columns, totals, sections } = await this.compute(def, user, query);
     const dealTypeHeading = (query.filters.deal_type ?? []).length === 1 ? query.filters.deal_type![0] : null;
     return {

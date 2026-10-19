@@ -12,7 +12,7 @@ import type {
   ReportMeta, ReportResult, ReportFilterOptions, ReportFilterValues, ReportColumn,
   ReportSearchBody, ReportDocuments, ReminderScope, ReminderPreview, ReportSection,
 } from '../types';
-import { previewReminders, sendReminders } from '../lib/reportsApi';
+import { previewReminders, sendReminders, uploadPaySheet, removePaySheet, downloadPaySheet } from '../lib/reportsApi';
 import { ReportEditableCell } from './ReportEditableCell';
 
 const PER_PAGE_OPTIONS = [25, 50, 100, 200];
@@ -233,6 +233,9 @@ export default function ReportDetailPage() {
           <div className="modal-h" style={{ fontSize: 14, margin: 0, flex: 1 }}>{meta.name}</div>
         </div>
         <div className="modal-sub" style={{ marginTop: 4 }}>{meta.description}</div>
+        {reportType === 'pending-payments' && ['admin', 'manager', 'accounting'].includes(user?.role ?? '') && (
+          <PaySheetBar showing={!!result?.sheet} onChanged={run} />
+        )}
         {result && result.applied_filters.length > 0 && (
           <div className="report-chips">
             {result.applied_filters.map((f, i) => <span key={i} className="pill info">{f.label}: {f.value}</span>)}
@@ -384,7 +387,8 @@ export default function ReportDetailPage() {
                 );
               })}
             </tbody>
-            {result && result.rows.length > 0 && (
+            {/* The uploaded Payment Sheet carries no amounts, so it has no totals row. */}
+            {result && result.rows.length > 0 && !result.sheet && (
               <tfoot>
                 <tr className="report-totals">
                   {selectable && <td className="report-sel-col" />}
@@ -432,6 +436,55 @@ export default function ReportDetailPage() {
         />
       )}
     </>
+  );
+}
+
+/**
+ * PENDING PAYMENTS ← THE BROKERAGE'S OWN PAYMENT SHEET (2026-10-19).
+ *
+ * Upload replaces the whole sheet from an .xlsx in the template's columns; while it is stored the
+ * report shows it word for word. Download gives the template filled with the sheet as it stands, to
+ * edit and upload back. Remove returns the report to the rows computed from the deals. Two presses
+ * to remove, so a stray click cannot take the sheet away. Super Admin, Admin and Accounting only;
+ * the server checks the same.
+ */
+function PaySheetBar({ showing, onChanged }: { showing: boolean; onChanged: () => void }) {
+  const toast = useToast();
+  const [busy, setBusy] = useState('');
+  const [arming, setArming] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const act = async (key: string, fn: () => Promise<unknown>, ok: string) => {
+    setBusy(key);
+    try { await fn(); toast(ok, 'ok'); onChanged(); }
+    catch (e) { toast(apiErrorMessage(e, 'That did not work'), 'bad'); }
+    finally { setBusy(''); setArming(false); }
+  };
+  return (
+    <div className="toolbar-row" data-testid="pay-sheet-bar" style={{ gap: 8, marginTop: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+      <span className="help" style={{ margin: 0 }}>
+        {showing ? 'Showing the uploaded Pay Sheet.' : 'Showing payments worked out from the deals.'}
+      </span>
+      <input ref={fileRef} type="file" accept=".xlsx" style={{ display: 'none' }} data-testid="pay-sheet-file"
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          e.target.value = '';
+          if (f) void act('upload', async () => { const r = await uploadPaySheet(f); toast(`${r.count} rows loaded`, 'ok'); }, 'Pay Sheet uploaded');
+        }} />
+      <button className="btn ghost sm" type="button" disabled={!!busy} onClick={() => fileRef.current?.click()}>
+        {busy === 'upload' ? 'Uploading…' : '⬆ Upload Pay Sheet'}
+      </button>
+      <button className="btn ghost sm" type="button" disabled={!!busy}
+        onClick={() => { setBusy('download'); downloadPaySheet().catch((e) => toast(apiErrorMessage(e, 'Download failed'), 'bad')).finally(() => setBusy('')); }}>
+        {busy === 'download' ? 'Preparing…' : showing ? '⬇ Download Pay Sheet' : '⬇ Pay Sheet template'}
+      </button>
+      {showing && (
+        <button className={`btn ghost sm${arming ? ' danger' : ''}`} type="button" disabled={!!busy}
+          onClick={() => (arming ? void act('remove', removePaySheet, 'Pay Sheet removed — showing payments from the deals') : setArming(true))}
+          onBlur={() => setArming(false)}>
+          {arming ? 'Press again to remove' : 'Remove Pay Sheet'}
+        </button>
+      )}
+    </div>
   );
 }
 
