@@ -26,6 +26,8 @@ const TERM_DAYS: Record<string, number> = { 'Due on Receipt': 0, 'Net 7': 7, 'Ne
 // (five statuses) disagreed with the map beside it (seven) — so the editor could paint a state it
 // offered no way to reach. §12.2's five are exactly `SETTABLE_STATUSES` today.
 const COMM_VIA = ['Bank Transfer', 'Cash', 'EFT', 'Interac e-Transfer', 'Cheque'];
+/** How an Indian builder pays (19 Oct 2026). */
+const COMM_VIA_IN = ['Bank Transfer', 'NEFT', 'RTGS', 'IMPS', 'UPI', 'Cheque', 'Cash'];
 const AUTO_REMINDERS = [
   { mode: '2', label: 'Every 2 days (until Paid, excl. weekends/holidays)' },
   { mode: '3', label: 'Every 3 days (until Paid, excl. weekends/holidays)' },
@@ -165,8 +167,11 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
   const taxable = form.line_items.reduce((s, it) => s + (it.is_taxable ? parseNumber(it.qty) * parseNumber(it.rate) : 0), 0);
   const tax = Math.round(taxable * parseNumber(form.tax_rate)) / 100;
   const discount = parseNumber(form.discount);
-  const displaySubTotal = Math.round((subTotal + tax) * 100) / 100; // image "Sub Total" = items + HST
-  const grandTotal = Math.round((displaySubTotal - discount) * 100) / 100;
+  // Canada: the image's "Sub Total" = items + HST. India: before GST, as the printed India invoice
+  // shows it, with the GST on its own line - the grand total is the same either way.
+  const displaySubTotal = india ? Math.round(subTotal * 100) / 100 : Math.round((subTotal + tax) * 100) / 100;
+  const grandTotal = Math.round(((india ? subTotal + tax : displaySubTotal) - discount) * 100) / 100;
+  const payVia = india ? COMM_VIA_IN : COMM_VIA;
   // Balance Due tracks the live grand total minus payments already recorded.
   const amountPaid = saved ? Number(saved.amount_paid) || 0 : 0;
   const balanceDue = Math.round((grandTotal - amountPaid) * 100) / 100;
@@ -528,8 +533,8 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
                           <input type="number" step="0.01" min="0" aria-label="Payment amount" value={editPay.amount} onChange={(e) => setEditPay({ ...editPay, amount: e.target.value })} style={{ width: '100%', border: '1px solid var(--line)', borderRadius: 6, padding: '4px 6px' }} />
                           <select aria-label="Received via" value={editPay.method} onChange={(e) => setEditPay({ ...editPay, method: e.target.value })} style={{ width: '100%', border: '1px solid var(--line)', borderRadius: 6, padding: '4px 6px' }}>
                             <option value="">Select</option>
-                            {editPay.method && !COMM_VIA.includes(editPay.method) && <option>{editPay.method}</option>}
-                            {COMM_VIA.map((v) => <option key={v}>{v}</option>)}
+                            {editPay.method && !payVia.includes(editPay.method) && <option>{editPay.method}</option>}
+                            {payVia.map((v) => <option key={v}>{v}</option>)}
                           </select>
                           <input aria-label="Reference" placeholder="Reference" value={editPay.reference} onChange={(e) => setEditPay({ ...editPay, reference: e.target.value })} style={{ width: '100%', border: '1px solid var(--line)', borderRadius: 6, padding: '4px 6px' }} />
                           <div style={{ display: 'flex', gap: 6 }}>
@@ -554,7 +559,7 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
               <input type="date" value={form.commission_received_date} onChange={(e) => set('commission_received_date', e.target.value)} style={{ width: '100%', marginBottom: 8, border: '1px solid var(--line)', borderRadius: 6, padding: '6px 8px' }} />
               <label style={{ fontSize: 11, color: 'var(--text-3)', display: 'block', marginBottom: 2 }}>Received via</label>
               <select value={form.commission_received_via} onChange={(e) => set('commission_received_via', e.target.value)} style={{ width: '100%', marginBottom: 8, border: '1px solid var(--line)', borderRadius: 6, padding: '6px 8px' }}>
-                <option value="">Select</option>{COMM_VIA.map((v) => <option key={v}>{v}</option>)}
+                <option value="">Select</option>{payVia.map((v) => <option key={v}>{v}</option>)}
               </select>
               {/* TD-121 — leave blank to record the whole outstanding balance. */}
               <label style={{ fontSize: 11, color: 'var(--text-3)', display: 'block', marginBottom: 2 }}>Amount</label>
@@ -679,7 +684,7 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
           <table style={{ borderCollapse: 'collapse', width: '100%', marginTop: 18 }}>
             <thead><tr>
               <th style={{ border: '1px solid var(--line)', background: 'var(--surface-3)', padding: '10px 12px', textAlign: 'left' }}>DESCRIPTION</th>
-              <th style={{ border: '1px solid var(--line)', background: 'var(--surface-3)', padding: '10px 12px', textAlign: 'left', width: 260 }}>AMOUNT (CAD)</th>
+              <th style={{ border: '1px solid var(--line)', background: 'var(--surface-3)', padding: '10px 12px', textAlign: 'left', width: 260 }}>AMOUNT ({india ? 'INR' : 'CAD'})</th>
               <th style={{ width: 36, border: '1px solid var(--line)', background: 'var(--surface-3)' }}></th>
             </tr></thead>
             <tbody>
@@ -712,6 +717,7 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
           <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 14 }}>
             <table style={{ minWidth: 340 }}><tbody>
               <tr><td style={{ padding: '6px 14px', color: 'var(--text-3)' }}>Sub Total</td><td style={{ padding: '6px 14px', textAlign: 'right', fontWeight: 700 }}>{formatCurrency(displaySubTotal)}</td></tr>
+              {india && <tr><td style={{ padding: '6px 14px', color: 'var(--text-3)' }}>{india.tax.kind === 'IGST' ? 'IGST' : 'CGST + SGST'} ({parseNumber(form.tax_rate)}%)</td><td style={{ padding: '6px 14px', textAlign: 'right', fontWeight: 700 }}>{formatCurrency(tax)}</td></tr>}
               {/*
                 * TD-146 - the deal has moved and this invoice has not. Shown beside the money it
                 * disagrees about, rather than as a badge somewhere else on the screen.
@@ -728,7 +734,7 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
                 return (
                   <tr><td colSpan={2} style={{ padding: '10px 14px', background: 'rgba(245, 158, 11, 0.12)', color: 'var(--warn)', fontSize: 12, lineHeight: 1.55 }}>
                     <strong>This invoice no longer matches its deal.</strong>{' '}
-                    It bills {formatCurrency(Number(d.sub_total ?? 0))} before HST, and the deal now works out at {formatCurrency(Number(d.derived_sub_total))} —{' '}
+                    It bills {formatCurrency(Number(d.sub_total ?? 0))} before {india ? 'GST' : 'HST'}, and the deal now works out at {formatCurrency(Number(d.derived_sub_total))} —{' '}
                     <strong>{under ? 'under-billed' : 'over-billed'} by {formatCurrency(Math.abs(diff))}</strong>.{' '}
                     A sent invoice is never altered automatically. Whether to amend it, re-issue it or leave it stands as a decision for the brokerage.
                   </td></tr>
@@ -756,7 +762,7 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
           {/* Deposit Instructions + Signature */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, marginTop: 18 }}>
             <div>
-              <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>Deposit Instructions:</div>
+              <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>{india ? 'Bank Details:' : 'Deposit Instructions:'}</div>
               <div style={{ background: 'var(--surface-2)', border: '1px solid var(--line)', borderRadius: 8, padding: 14, fontSize: 12.5, color: 'var(--text-2)', lineHeight: 1.7 }}>
                 <div style={{ fontWeight: 700 }}>Beneficiary Bank Account Detail:</div>
                 {india ? (<>
@@ -789,7 +795,7 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
               )}
               <div style={{ marginTop: 28, borderTop: '1px dashed var(--muted-2)', paddingTop: 6, fontSize: 11, fontStyle: 'italic', color: 'var(--muted-2)', textAlign: 'center' }}>Signature</div>
               <div style={{ marginTop: 10, fontSize: 12.5 }}>
-                <div style={{ fontStyle: 'italic', color: 'var(--text-3)', marginBottom: 4 }}>(Broker Manager / Broker of Record):</div>
+                <div style={{ fontStyle: 'italic', color: 'var(--text-3)', marginBottom: 4 }}>{india ? '(Authorised Signatory):' : '(Broker Manager / Broker of Record):'}</div>
                 <input value={form.broker_name} onChange={(e) => set('broker_name', e.target.value)} style={docInput({ width: '100%', fontWeight: 700 })} />
               </div>
             </div>

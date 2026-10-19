@@ -2,7 +2,7 @@ import {
   ForbiddenException, Injectable, InternalServerErrorException, Logger, NotFoundException,
   UnprocessableEntityException,
 } from '@nestjs/common';
-import { invoiceMarketWhere, marketOf } from '../common/market';
+import { auditMarketWhere, invoiceMarketWhere, marketOf } from '../common/market';
 import { promises as fs } from 'fs';
 import * as path from 'path';
 import { PrismaService } from '../prisma/prisma.service';
@@ -47,7 +47,8 @@ export class RecycleBinService {
     const now = new Date();
     await this.prisma.audit_logs.create({
       // The Recycle Bin is a Transaction Desk screen, so its entries belong to that trail.
-      data: { category: 'Recycle Bin', domain: 'desk', who: user?.name ?? null, user_id: user?.id ?? null, section: 'Recycle Bin', field, action, source: 'Manual', created_at: now, updated_at: now },
+      // The bin only ever shows the country being worked in, so its actions are that country's.
+      data: { category: 'Recycle Bin', domain: 'desk', who: user?.name ?? null, user_id: user?.id ?? null, section: 'Recycle Bin', field, action, source: 'Manual', market: marketOf(user), created_at: now, updated_at: now },
     });
   }
 
@@ -517,6 +518,7 @@ export class RecycleBinService {
           { OR: [{ action: { contains: 'delet', mode: 'insensitive' } }, { action: { contains: 'remov', mode: 'insensitive' } }] },
           { OR: [{ field: null }, { NOT: { field: { contains: 'Deletion Request', mode: 'insensitive' } } }] },
           domainFilter('desk'),
+          auditMarketWhere(user?.market),
         ],
       },
       include: { transactions: true },

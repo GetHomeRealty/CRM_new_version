@@ -378,7 +378,8 @@ export class TransactionInvoiceService {
         terms: india ? india.terms : defaultTerms,
         due_date: dueDate,
         trade_number: t.trade_no,
-        listing_agent: brokAgents || null,
+        // India: our own agent (the printed invoice's "Sales person"); Canada: the co-op brokerage's agents.
+        listing_agent: india ? (t.agent || null) : (brokAgents || null),
         coop_salesperson: t.agent,
         subject: india ? india.subject : 'Co-op Commission for ' + (t.property ?? '') + suffix,
         status: 'Unpaid',

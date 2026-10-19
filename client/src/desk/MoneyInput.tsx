@@ -1,4 +1,5 @@
 import type { InputHTMLAttributes } from 'react';
+import { indianGrouping } from './format';
 
 // Currency text input: shows the value with thousands separators (e.g. 750,000.00)
 // while passing a plain, comma-free numeric string to onChange. Store the raw value
@@ -15,7 +16,10 @@ export function groupMoney(v: string | number | null | undefined): string {
   const dot = body.indexOf('.');
   const int = dot === -1 ? body : body.slice(0, dot);
   const dec = dot === -1 ? '' : body.slice(dot); // keeps '.' and typed decimals
-  const grouped = int.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  // India (19 Oct 2026): 1,00,00,000 - the last three digits, then pairs - as every other India amount.
+  const grouped = indianGrouping() && int.length > 3
+    ? `${int.slice(0, -3).replace(/\B(?=(\d{2})+(?!\d))/g, ',')},${int.slice(-3)}`
+    : int.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
   return (neg ? '-' : '') + grouped + dec;
 }
 

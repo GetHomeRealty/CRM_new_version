@@ -28,6 +28,8 @@ export const taxLabel = (): string => (displayMarket === 'IN' ? 'GST' : 'HST');
 export const taxDivisor = (): number => (displayMarket === 'IN' ? 1.18 : 1.13);
 
 /** The currency sign for the country being worked in. */
+/** True while the screens are in India: amounts group as 1,00,00,000 (lakh / crore). */
+export const indianGrouping = (): boolean => displayMarket === 'IN';
 export const currencySign = (): string => (displayMarket === 'IN' ? '\u20B9' : '$');
 
 export function formatCurrency(val: NumericInput): string {

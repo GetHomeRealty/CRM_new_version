@@ -92,6 +92,21 @@ export function marketSql(user: { market?: string | null } | null | undefined, a
 }
 
 /** "Invoices in this country" as a query term. Canada includes the invoices that have no deal. */
+/**
+ * The history rows (audit_logs) one country may see (19 Oct 2026). A row tied to a deal follows the
+ * deal's country; a row not tied to one follows its own `market` (invoice and Recycle Bin rows), and a
+ * row with none - a user account change, a setting - belongs to both.
+ */
+export function auditMarketWhere(market?: string | null): Prisma.audit_logsWhereInput {
+  const m = marketOf({ market });
+  return {
+    OR: [
+      { transaction_id: { not: null }, transactions: { market: m } },
+      { transaction_id: null, OR: [{ market: m }, { market: null }] },
+    ],
+  };
+}
+
 export function invoiceMarketWhere(market?: string | null): Prisma.invoicesWhereInput {
   const m = marketOf({ market });
   return m === 'CA'

@@ -4,6 +4,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { SCREENS } from '../auth/permission.service';
 import { toDateTimeString } from '../common/serialize';
+import { auditMarketWhere } from '../common/market';
 
 const PER_PAGE = 50;
 
@@ -113,7 +114,7 @@ export class AuditLogService {
    * a filter is added to one and not the other, and the symptom would be an export that quietly does
    * not match the screen it was taken from.
    */
-  buildWhere(query: AuditLogQuery): { where: Prisma.audit_logsWhereInput; area: Area; scope: AuditScope } {
+  buildWhere(query: AuditLogQuery, market?: string | null): { where: Prisma.audit_logsWhereInput; area: Area; scope: AuditScope } {
     const area = parseArea(query.area);
     const scope: AuditScope = isScope(query.scope) ? query.scope : 'default';
 
@@ -133,6 +134,9 @@ export class AuditLogService {
        */
       ...this.domainWhere(area, scope),
     ];
+    // India desk (19 Oct 2026) - only the country being worked in. Both controllers pass it; it is
+    // optional only so the query specs can build a where without a signed-in person.
+    if (market !== undefined) and.push(auditMarketWhere(market));
 
     const cat = query.category;
     if (cat) {
@@ -192,8 +196,8 @@ export class AuditLogService {
     return { where: { AND: and }, area, scope };
   }
 
-  async index(query: AuditLogQuery): Promise<Record<string, unknown>> {
-    const { where, area, scope } = this.buildWhere(query);
+  async index(query: AuditLogQuery, market?: string | null): Promise<Record<string, unknown>> {
+    const { where, area, scope } = this.buildWhere(query, market);
 
     // Clamped rather than refused: an out-of-range page is a stale bookmark or a fat finger, not an
     // unanswerable question, and the response already reports `last_page` for the client to correct

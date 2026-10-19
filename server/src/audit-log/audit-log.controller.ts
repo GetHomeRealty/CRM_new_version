@@ -2,7 +2,9 @@ import { AreaGuard } from '../core/area.guard';
 import { Controller, Get, Header, Query, Res, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '../auth/guards/auth.guard';
 import { ScreenGuard } from '../auth/guards/screen.guard';
-import { Screen } from '../auth/decorators';
+import { CurrentUser, Screen } from '../auth/decorators';
+import type { AuthUserRecord } from '../auth/auth.types';
+import { marketOf } from '../common/market';
 import { AuditLogService, type AuditLogQuery } from './audit-log.service';
 import { AuditExportService, type ExportFormat } from './audit-export.service';
 import type { Response } from 'express';
@@ -25,8 +27,9 @@ export class AuditLogController {
    */
   @Get()
   @Screen('audit', 'view')
-  index(@Query() query: AuditLogQuery): Promise<Record<string, unknown>> {
-    return this.auditLogs.index(query ?? {});
+  index(@CurrentUser() user: AuthUserRecord | undefined, @Query() query: AuditLogQuery): Promise<Record<string, unknown>> {
+    // India desk - each country's trail shows only its own deals and invoices.
+    return this.auditLogs.index(query ?? {}, marketOf(user));
   }
 
   /**
@@ -49,11 +52,12 @@ export class AuditLogController {
   @Screen('audit', 'view')
   @Header('Cache-Control', 'no-store')
   async export(
+    @CurrentUser() user: AuthUserRecord | undefined,
     @Query() query: AuditLogQuery & { format?: string },
     @Res() res: Response,
   ): Promise<void> {
     const format: ExportFormat = String(query.format ?? 'csv').toLowerCase() === 'xlsx' ? 'xlsx' : 'csv';
-    const file = await this.exports.export(query ?? {}, format);
+    const file = await this.exports.export(query ?? {}, format, marketOf(user));
 
     res.setHeader('Content-Type', file.contentType);
     res.setHeader('Content-Disposition', contentDisposition(file.filename));

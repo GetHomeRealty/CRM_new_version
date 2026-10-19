@@ -163,14 +163,16 @@ export default function AddTransactionModal({ open, onClose, onCreated }: AddTra
     const t = setTimeout(async () => {
       setAddrLoading(true);
       try {
-        // Photon (komoot) — free OSM type-ahead geocoder, biased to Canada via bbox.
+        // Photon (komoot) — free OSM type-ahead geocoder, held to the country being worked in:
+        // Canada, or India for an India deal (19 Oct 2026 - India searched only Canada before).
+        const area = india ? { bbox: '68.1,6.5,97.4,35.7', code: 'IN' } : { bbox: '-141.0,41.7,-52.6,83.1', code: 'CA' };
         const res = await fetch(
-          `https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=8&lang=en&bbox=-141.0,41.7,-52.6,83.1`,
+          `https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=8&lang=en&bbox=${area.bbox}`,
           { signal: ctrl.signal, headers: { Accept: 'application/json' } },
         );
         const data = (await res.json()) as { features?: PhotonFeature[] };
         const feats = (Array.isArray(data.features) ? data.features : [])
-          .filter((f) => (f.properties || {}).countrycode === 'CA')
+          .filter((f) => (f.properties || {}).countrycode === area.code)
           // House-level matches first, then streets, then the rest.
           .sort((a, b) => rank(b.properties) - rank(a.properties));
         setAddrSug(feats);
@@ -179,7 +181,7 @@ export default function AddTransactionModal({ open, onClose, onCreated }: AddTra
       finally { setAddrLoading(false); }
     }, 400);
     return () => { clearTimeout(t); ctrl.abort(); };
-  }, [form.property, addrMode]);
+  }, [form.property, addrMode, india]);
 
   if (!open) return null;
 

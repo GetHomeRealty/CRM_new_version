@@ -115,7 +115,7 @@ export class AuditExportService {
 
   // ========================================================================== generation
 
-  async export(query: AuditLogQuery, format: ExportFormat): Promise<AuditExportFile> {
+  async export(query: AuditLogQuery, format: ExportFormat, market?: string | null): Promise<AuditExportFile> {
     if (format !== 'csv' && format !== 'xlsx') {
       throw new BadRequestException({
         message: `"${format}" is not an export format.`,
@@ -125,7 +125,7 @@ export class AuditExportService {
 
     // The SAME where the screen used. Invalid filters throw here exactly as they do for the
     // listing, so a bad date or user id is refused rather than silently exporting everything.
-    const { where, area } = this.auditLogs.buildWhere(query);
+    const { where, area } = this.auditLogs.buildWhere(query, market);
 
     const { rows, truncated } = await this.rows(where);
     const filename = this.filename(query, format);

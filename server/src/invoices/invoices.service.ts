@@ -311,7 +311,8 @@ export class InvoicesService {
       customer_email: i.customer_email || (brok?.invoice_email ?? null),
       customer_address: i.customer_address || (brok?.address ?? null),
       coop_salesperson: (txn?.agent ?? null) || i.coop_salesperson,
-      listing_agent: txn ? brokAgents || null : i.listing_agent,
+      // India (19 Oct 2026): our own agent - there is no co-op brokerage on an India deal.
+      listing_agent: txn ? (txn.market === 'IN' ? txn.agent ?? null : brokAgents || null) : i.listing_agent,
       customer_city: i.customer_city,
       customer_province: i.customer_province,
       customer_postal_code: i.customer_postal_code,
@@ -776,11 +777,12 @@ export class InvoicesService {
   private async auditInvoice(invoiceId: number, transactionId: number | null, actor: ActingUser | null, a: { field?: string | null; action?: string; old?: unknown; new?: unknown; details?: string | null; source?: string }): Promise<void> {
     void invoiceId;
     const entry = { ...a, section: 'Quick Actions — Invoice', source: a.source ?? 'Quick Action' };
-    await this.audit.logModule(actor, 'Invoice', entry);
-    if (transactionId) {
-      const txn = await this.prisma.transactions.findFirst({ where: { id: transactionId, deleted_at: null }, select: { id: true } });
-      if (txn) await this.audit.record(transactionId, actor, entry);
-    }
+    // The invoice's country is its deal's; an invoice with no deal is Canada's (see invoiceMarketWhere).
+    const deal = transactionId
+      ? await this.prisma.transactions.findFirst({ where: { id: transactionId }, select: { id: true, market: true, deleted_at: true } })
+      : null;
+    await this.audit.logModule(actor, 'Invoice', { ...entry, market: deal?.market ?? 'CA' });
+    if (deal && deal.deleted_at === null) await this.audit.record(deal.id, actor, entry);
   }
 
   /**
@@ -813,13 +815,21 @@ export class InvoicesService {
     }
 
     const settings = await this.settings.current();
+    // India desk (19 Oct 2026) - an India invoice is from Get Home Realty Private Limited, in rupees
+    // with Indian grouping; a Canada invoice reads exactly as before.
+    const deal = invoice.transaction_id
+      ? await this.prisma.transactions.findFirst({ where: { id: invoice.transaction_id }, select: { market: true } })
+      : null;
+    const india = deal?.market === 'IN' && this.indiaSettings ? await this.indiaSettings.get() : null;
     const vars = {
       invoice_number: invoice.invoice_no,
-      invoice_total: this.numberFormat(num(invoice.total)),
+      invoice_total: india
+        ? `₹${num(invoice.total).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+        : this.numberFormat(num(invoice.total)),
       due_date: toDateString(invoice.due_date) ?? '-',
       customer_name: invoice.customer_name ?? 'there',
       transaction_number: invoice.trade_number ?? '-',
-      company_name: settings.name,
+      company_name: india ? india.company_name : settings.name,
     };
 
     const redirect = (process.env.MAIL_REDIRECT_TO ?? '').trim();

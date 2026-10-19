@@ -57,6 +57,9 @@ model audit_logs {
   source         String?       @db.VarChar(255)
   handled        Boolean       @default(false)
   details        String?       @db.Text
+  /// India desk (19 Oct 2026): the country of a row not tied to a deal (invoice and Recycle Bin rows);
+  /// null = shown in both countries. A row tied to a deal takes the deal's country.
+  market         String?       @db.VarChar(2)
   /// Where the action came from. Null for background work, which is the honest answer — nobody
   /// pressed anything. Written centrally by AuditService from the request context; see
   /// migration 20260814140000_audit_request_context.

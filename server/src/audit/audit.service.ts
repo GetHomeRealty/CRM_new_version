@@ -69,6 +69,11 @@ export interface AuditInput {
   action?: string;
   source?: string;
   details?: string | null;
+  /**
+   * India desk (19 Oct 2026) - the country of a module entry that is not tied to a deal (an invoice,
+   * a Recycle Bin action), so each country's Audit Trail shows only its own. Left out = both.
+   */
+  market?: string | null;
 }
 
 /** Scalar columns → [section, label] (mirrors AuditService::SCALAR_MAP). */
@@ -195,6 +200,7 @@ export class AuditService {
         action: a.action ?? 'Updated',
         source: a.source ?? 'Manual',
         details: a.details ?? null,
+        market: a.market ?? null,
         ...requestContext(),
         created_at: now,
         updated_at: now,
