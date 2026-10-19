@@ -154,11 +154,12 @@ describe('what a Documentation user may change on a deal', () => {
    * TYPE AND STATUS ARE THE ONLY BASIC INFO FIELDS THIS ROLE WRITES, since 2026-10-13 (commit
    * "default notice dates and allow type and status edits"). Price, Deposit and Closing Date are
    * requested for Super Admin approval instead. Kept as a named set so that adding one is an
-   * explicit, visible decision rather than a loosened loop.
+   * explicit, visible decision rather than a loosened loop. Agent Name and Property Address were
+   * added on 2026-10-19 at the brokerage's request.
    */
-  const DOCUMENTATION_BASIC_INFO_EXCEPTIONS = new Set<string>(['type', 'statuses']);
+  const DOCUMENTATION_BASIC_INFO_EXCEPTIONS = new Set<string>(['type', 'statuses', 'agent', 'property']);
 
-  it(`NO BASIC INFO FIELD BUT TYPE AND STATUS — checked against the card's own map`, () => {
+  it(`NO BASIC INFO FIELD BUT TYPE, STATUS, AGENT AND ADDRESS — checked against the card's own map`, () => {
     /*
      * Driven off `BASIC_INFO_FIELDS` rather than a list repeated here. A field added to the Basic
      * Info card is added to that set, and this fails until it is withheld from the role too —
@@ -182,8 +183,15 @@ describe('what a Documentation user may change on a deal', () => {
   it('THE REST OF BASIC INFO IS STILL WITHHELD, named one by one', () => {
     // Spelled out rather than inferred, because this is the list somebody will want to read when
     // they ask what the 2026-10-13 change did and did not open up.
-    for (const k of ['agent', 'property', 'offer_date', 'closing_date']) {
+    for (const k of ['offer_date', 'closing_date']) {
       expect([k, DOCUMENTATION_EDITABLE.has(k)]).toEqual([k, false]);
+    }
+  });
+
+  it('AGENT NAME AND PROPERTY ADDRESS are this role\'s to write, since 2026-10-19', () => {
+    for (const k of ['agent', 'property']) {
+      expect(BASIC_INFO_FIELDS.has(k)).toBe(true);
+      expect(DOCUMENTATION_EDITABLE.has(k)).toBe(true);
     }
   });
 

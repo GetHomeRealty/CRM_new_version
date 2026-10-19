@@ -163,9 +163,10 @@ export const FILL_KEYS = [
  * Anything not named here is dropped from their update — see the comment in `update`.
  */
 export const DOCUMENTATION_EDITABLE: ReadonlySet<string> = new Set([
-  // Documentation may edit Type and Status in Basic Info. Other basic fields remain locked;
-  // Price, Deposit and Commission Amount still use the Super Admin approval workflow.
-  'type', 'statuses',
+  // Documentation may edit Type, Status, Agent Name and Property Address in Basic Info (Agent
+  // and Address added 2026-10-19 at the brokerage's request). Other basic fields remain locked;
+  // Price, Deposit, Closing Date and Commission Amount still use the Super Admin approval workflow.
+  'type', 'statuses', 'agent', 'property',
   'conditional_offer', 'conditions', 'inter_board_enabled', 'inter_board_listings',
   'clients', 'brokerage',
   'builder',

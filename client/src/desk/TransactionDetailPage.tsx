@@ -2,6 +2,7 @@ import { deskPath } from './area';
 import { createPortal } from 'react-dom';
 import Icon from '../ui/Icon';
 import ClosingDateRequestDialog from './ClosingDateRequestDialog';
+import PriceDepositRequestDialog from './PriceDepositRequestDialog';
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { getTransaction, updateTransaction, listAgents, generateTransactionInvoices, getCompanySettings, getCustomers, getBrokerageSuggestions, requestTransactionEdit, approveEditRequest, rejectEditRequest, reviewAgentChanges, rejectAgentChange, requestTransactionDeletion, forwardDeleteRequest, approveDeleteRequest, rejectDeleteRequest, getDocuments, markTransactionReviewsSeen, bulkReviewAction, type OpenReviewItem } from '../lib/api';
@@ -288,6 +289,8 @@ export default function TransactionDetailPage() {
   const [reasonText, setReasonText] = useState('');
   // Documentation's Closing Date pencil — opens ClosingDateRequestDialog.
   const [dateReqOpen, setDateReqOpen] = useState(false);
+  // Documentation's Price / Deposit pencils — open PriceDepositRequestDialog.
+  const [priceReqOpen, setPriceReqOpen] = useState(false);
   const [coreDocReminders, setCoreDocReminders] = useState<string[]>([]); // §5.2 Active: pending core listing docs
 
   // Close-guard and review-decision state. Declared up here with the rest of the state rather
@@ -909,6 +912,25 @@ export default function TransactionDetailPage() {
       </button>
     </>
   ) : 'Closing Date';
+  /*
+   * The same for Price and Deposit (brokerage request, 2026-10-19): a pencil beside each label
+   * opens PriceDepositRequestDialog, which files the `commission`-scope request the Financial
+   * panel already uses for these two figures. One such request may be pending per deal, so a
+   * pending one — from here or from Financial — shows the clock on both.
+   */
+  const canRequestPriceDeposit = isDocumentation && !stDFT;
+  const pendingPriceReq = editRequests.find((r) => r.status === 'pending' && r.scope === 'commission');
+  const priceDepositLabel = (text: string): ReactNode => (canRequestPriceDeposit ? (
+    <>{text}{' '}
+      <button type="button" className="row-rm" data-testid={text === 'Deposit' ? 'deposit-edit' : 'price-edit'}
+        disabled={!!pendingPriceReq}
+        title={pendingPriceReq ? 'A price / deposit / commission change is awaiting Super Admin approval' : `Request a ${text.toLowerCase()} change`}
+        onClick={() => setPriceReqOpen(true)}
+        style={{ marginLeft: 4, color: pendingPriceReq ? 'var(--warn)' : 'var(--brand)' }}>
+        <Icon name={pendingPriceReq ? 'clock' : 'edit'} size={14} />
+      </button>
+    </>
+  ) : text);
 
   // Auto-save is allowed exactly when the Save button would have been offered — same
   // permission, role and lifecycle-lock gate, so it can never write where a manual
@@ -920,6 +942,8 @@ export default function TransactionDetailPage() {
     && !conflict
     && !(stClosed && !isSuperAdmin)
     && !(lockedForUser && !approvedReq);
+  // Type, Status, Agent Name and Property Address — the Basic Info fields Documentation writes
+  // directly (server: DOCUMENTATION_EDITABLE). Every other role keeps `basicRo` exactly as before.
   const basicTypeStatusRo = isDocumentation ? !autoSaveOn : basicRo;
   autoOnRef.current = autoSaveOn;
 
@@ -1454,7 +1478,7 @@ export default function TransactionDetailPage() {
                       * that stays possible - but as a deliberate choice rather than a typo. */}
                     <select
                       value={externalAgent || (!!form.agent && !agents.includes(form.agent)) ? '__external__' : (form.agent || '')}
-                      disabled={basicRo}
+                      disabled={basicTypeStatusRo}
                       onChange={(e) => {
                         if (e.target.value === '__external__') { setExternalAgent(true); set('agent', ''); }
                         else { setExternalAgent(false); set('agent', e.target.value); }
@@ -1465,13 +1489,13 @@ export default function TransactionDetailPage() {
                       <option value="__external__">External / co-op agent…</option>
                     </select>
                     {(externalAgent || (!!form.agent && !agents.includes(form.agent))) && (
-                      <input value={form.agent} disabled={basicRo} onChange={(e) => set('agent', e.target.value)} placeholder="External agent name" style={{ marginTop: 6 }} />
+                      <input value={form.agent} disabled={basicTypeStatusRo} onChange={(e) => set('agent', e.target.value)} placeholder="External agent name" style={{ marginTop: 6 }} />
                     )}
                   </>)}
               </Field>
-              <Field label="Property Address" req><input value={form.property} disabled={basicRo} onChange={(e) => set('property', e.target.value)} /></Field>
-              {!hidePriceDeposit && <Field label={priceLabel}><MoneyInput value={form.price} disabled={basicRo} onChange={(v) => set('price', v)} /></Field>}
-              {!hidePriceDeposit && !referral && <Field label="Deposit"><MoneyInput value={form.deposit} disabled={basicRo} onChange={(v) => set('deposit', v)} /></Field>}
+              <Field label="Property Address" req><input value={form.property} disabled={basicTypeStatusRo} onChange={(e) => set('property', e.target.value)} /></Field>
+              {!hidePriceDeposit && <Field label={priceDepositLabel(priceLabel)}><MoneyInput value={form.price} disabled={basicRo} onChange={(v) => set('price', v)} /></Field>}
+              {!hidePriceDeposit && !referral && <Field label={priceDepositLabel('Deposit')}><MoneyInput value={form.deposit} disabled={basicRo} onChange={(v) => set('deposit', v)} /></Field>}
             </div>
             {!OFFER_CLOSING_LISTING_TYPES.includes(form.type) && (
               <div className="g3">
@@ -1966,6 +1990,11 @@ export default function TransactionDetailPage() {
       {canRequestClosingDate && (
         <ClosingDateRequestDialog open={dateReqOpen} onClose={() => setDateReqOpen(false)}
           transactionId={id} current={form.closing_date || ''} onSent={reloadTxn} />
+      )}
+      {canRequestPriceDeposit && (
+        <PriceDepositRequestDialog open={priceReqOpen} onClose={() => setPriceReqOpen(false)}
+          transactionId={id} priceLabel={priceLabel} currentPrice={txn?.price ?? form.price}
+          currentDeposit={txn?.deposit ?? form.deposit} showDeposit={!referral} onSent={reloadTxn} />
       )}
     </>
   );
