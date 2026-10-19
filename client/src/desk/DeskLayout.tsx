@@ -150,6 +150,8 @@ const NAV: NavItem[] = [
         match: (_p, q) => (new URLSearchParams(q).get('tab') ?? 'crm') === 'crm' },
       { key: 'settings-company', label: 'Company Settings', ico: 'building', screen: 'settings', path: 'settings?tab=company',
         match: (_p, q) => new URLSearchParams(q).get('tab') === 'company' },
+      { key: 'settings-documents', label: 'Company Documents', ico: 'file', superAdmin: true, path: 'settings?tab=documents',
+        match: (_p, q) => new URLSearchParams(q).get('tab') === 'documents' },
       // Same permission as the tab it opens: changing what a role grants is the same authority as
       // changing who holds it, which is the Users screen's edit right.
       { key: 'settings-roles', label: 'Roles & Permissions', ico: 'lock', screen: 'users', path: 'settings?tab=roles',

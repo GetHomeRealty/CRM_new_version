@@ -5,6 +5,7 @@ import { ThrottlerModule } from '@nestjs/throttler';
 import { MarketInterceptor } from './common/market.interceptor';
 import { BuildersModule } from './builders/builders.module';
 import { IndiaModule } from './india/india.module';
+import { CompanyDocumentsModule } from './company-documents/company-documents.module';
 import { IdentityThrottlerGuard } from './core/identity-throttler.guard';
 import configuration from './config/configuration';
 import { GLOBAL_LIMIT } from './config/rate-limits';
@@ -113,6 +114,7 @@ import { TwilioVoiceModule } from './twilio-voice/twilio-voice.module';
     TwilioVoiceModule,
     BuildersModule,
     IndiaModule,
+    CompanyDocumentsModule,
   ],
   controllers: [AppController, HealthController],
   providers: [

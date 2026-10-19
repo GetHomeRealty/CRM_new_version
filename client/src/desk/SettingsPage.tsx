@@ -10,6 +10,7 @@ import CrmSettingsPanel from './CrmSettingsPanel';
 import CrmCommunicationsPanel from './CrmCommunicationsPanel';
 import TwoFactorCard from './TwoFactorCard';
 import CompanySettingsPage from './CompanySettingsPage';
+import CompanyDocumentsTab from './CompanyDocumentsTab';
 import RolesPanel from './RolesPanel';
 import LicencePanel from './LicencePanel';
 import LeadBooksPanel from './LeadBooksPanel';
@@ -80,6 +81,9 @@ const TABS: TabDef[] = [
    */
   { key: 'teams', label: 'Teams', ico: 'users', area: 'crm', adminOrAbove: true },
   { key: 'company', label: 'Company Settings', ico: 'building', screen: 'settings' },
+  // The company's certificates and stakeholders, per country (19 Oct 2026). Super Admin only (Sai) -
+  // apart from Company Settings, so who can open that tab is unchanged.
+  { key: 'documents', label: 'Company Documents', ico: 'file', superAdmin: true },
   // Behind the Users screen rather than a Super Admin flag: changing what a role grants is the
   // same authority as changing who holds it, and the endpoint enforces exactly that.
   { key: 'roles', label: 'Roles & Permissions', ico: 'lock', screen: 'users' },
@@ -320,6 +324,7 @@ export default function SettingsPage() {
       )}
       {tab === 'teams' && isAdminOrAbove && <CrmTeamsPanel />}
       {tab === 'company' && <CompanySettingsPage />}
+      {tab === 'documents' && isSuperAdmin && <CompanyDocumentsTab />}
       {tab === 'roles' && <><LicencePanel /><RolesPanel /><LeadBooksPanel /></>}
     </>
   );

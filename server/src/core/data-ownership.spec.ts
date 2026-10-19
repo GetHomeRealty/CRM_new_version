@@ -48,6 +48,8 @@ const ROOT = [
   'marketing_inventory',
   // India builder database (17 Oct 2026): the brokerage's own record of the builders it works with.
   'builders',
+  // Company Documents (19 Oct 2026): the brokerage's own certificates and stakeholders, per country.
+  'company_documents', 'company_stakeholders',
   'lead_tags',
   'crm_email_settings',
   'crm_referral_codes',
@@ -163,6 +165,8 @@ const DERIVED: Record<string, string> = {
   builder_contacts: 'builders', builder_agreements: 'builders', builder_projects: 'builders',
   builder_project_files: 'builder_projects', builder_project_prices: 'builder_projects',
   builder_project_offers: 'builder_projects', builder_offer_applications: 'builder_project_offers',
+  // via company documents / stakeholders (Company Documents)
+  company_document_files: 'company_documents', company_stakeholder_files: 'company_stakeholders',
   // via invoices / customers
   invoices: 'transactions', invoice_line_items: 'invoices', invoice_payments: 'invoices',
   // via campaigns / templates / mail

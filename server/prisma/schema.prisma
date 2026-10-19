@@ -3955,3 +3955,88 @@ model builder_offer_applications {
   @@index([transaction_id])
 }
 
+
+/// COMPANY DOCUMENTS (19 Oct 2026). Each country's company certificates and documents - incorporation,
+/// brokerage registration, tax registrations, insurance, leases, anything added by name - with every
+/// uploaded version kept (newest first) and expiry reminders to the Super Admins. Super Admin only;
+/// Canada and India kept apart by `market`.
+model company_documents {
+  id                  Int                      @id @default(autoincrement())
+  market              String                   @db.VarChar(8)
+  kind                String                   @db.VarChar(64)
+  title               String                   @db.VarChar(255)
+  number              String?                  @db.VarChar(128)
+  issued_by           String?                  @db.VarChar(255)
+  holder              String?                  @db.VarChar(255)
+  contact_name        String?                  @db.VarChar(255)
+  contact_phone       String?                  @db.VarChar(64)
+  contact_email       String?                  @db.VarChar(255)
+  issue_date          DateTime?                @db.Date
+  expiry_date         DateTime?                @db.Date
+  notes               String?                  @db.Text
+  /// When this expiry's first reminder went out; a file uploaded after it counts as the renewal.
+  reminder_started_at DateTime?                @db.Timestamp(0)
+  last_reminder_at    DateTime?                @db.Timestamp(0)
+  created_by_id       Int?
+  created_at          DateTime                 @default(now()) @db.Timestamp(0)
+  updated_at          DateTime                 @default(now()) @db.Timestamp(0)
+  deleted_at          DateTime?                @db.Timestamp(0)
+  files               company_document_files[]
+
+  @@index([market, deleted_at])
+  @@index([expiry_date])
+}
+
+/// Every file uploaded to a company document; none is replaced, so the history stays.
+model company_document_files {
+  id             Int               @id @default(autoincrement())
+  document_id    Int
+  file_path      String            @db.VarChar(512)
+  file_name      String            @db.VarChar(255)
+  note           String?           @db.VarChar(500)
+  uploaded_by_id Int?
+  uploaded_at    DateTime          @default(now()) @db.Timestamp(0)
+  deleted_at     DateTime?         @db.Timestamp(0)
+  document       company_documents @relation(fields: [document_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@index([document_id])
+}
+
+/// The company's stakeholders / partners / directors, each with their own files.
+model company_stakeholders {
+  id            Int                         @id @default(autoincrement())
+  market        String                      @db.VarChar(8)
+  name          String                      @db.VarChar(255)
+  role          String                      @default("Other") @db.VarChar(32)
+  share_pct     Decimal?                    @db.Decimal(7, 4)
+  phone         String?                     @db.VarChar(64)
+  email         String?                     @db.VarChar(255)
+  address       String?                     @db.Text
+  /// [{ type, number }] - PAN, DIN, Aadhaar, licence number, passport...
+  id_details    Json                        @default("[]")
+  joined_on     DateTime?                   @db.Date
+  left_on       DateTime?                   @db.Date
+  notes         String?                     @db.Text
+  position      Int                         @default(0)
+  created_by_id Int?
+  created_at    DateTime                    @default(now()) @db.Timestamp(0)
+  updated_at    DateTime                    @default(now()) @db.Timestamp(0)
+  deleted_at    DateTime?                   @db.Timestamp(0)
+  files         company_stakeholder_files[]
+
+  @@index([market, deleted_at])
+}
+
+model company_stakeholder_files {
+  id             Int                  @id @default(autoincrement())
+  stakeholder_id Int
+  file_path      String               @db.VarChar(512)
+  file_name      String               @db.VarChar(255)
+  note           String?              @db.VarChar(500)
+  uploaded_by_id Int?
+  uploaded_at    DateTime             @default(now()) @db.Timestamp(0)
+  deleted_at     DateTime?            @db.Timestamp(0)
+  stakeholder    company_stakeholders @relation(fields: [stakeholder_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@index([stakeholder_id])
+}
