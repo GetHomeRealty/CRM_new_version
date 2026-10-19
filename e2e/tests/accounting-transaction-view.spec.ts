@@ -94,7 +94,7 @@ test.describe('Financial information, for Accounting', () => {
     }
   });
 
-  test('ACCOUNTING SEES EXACTLY "View Only", AND NO LOCK OR EDIT CONTROLS', async ({ page }) => {
+  test('ACCOUNTING SEES THE REQUEST PENCILS (2026-10-19), AND NO LOCK CONTROLS OR VIEW BANNER', async ({ page }) => {
     await signIn(page, 'superAdmin');
     const made: Made = { deals: [] };
     try {
@@ -103,7 +103,9 @@ test.describe('Financial information, for Accounting', () => {
       await openFinancial(page, id);
       const modal = page.locator('.modal.xl');
 
-      await expect(modal.getByTestId('fin-readonly-banner')).toHaveText('View Only');
+      // Since 2026-10-19 Accounting proposes figures as Documentation does: pencils, no "View Only" banner.
+      await expect(modal.getByTestId('fin-readonly-banner')).toHaveCount(0);
+      await expect(modal.getByTestId('fin-edit-price')).toBeVisible();
 
       // None of the wording that would suggest they can change or ask to change the figures.
       await expect(modal.getByText(/View-only — click/)).toHaveCount(0);
@@ -124,7 +126,7 @@ test.describe('Financial information, for Accounting', () => {
     }
   });
 
-  test('IT REMAINS GENUINELY READ-ONLY, even though Accounting may edit the deal', async ({ page }) => {
+  test('NOTHING IS EDITABLE UNTIL A PENCIL IS CLICKED, and there is no Save', async ({ page }) => {
     /*
      * The assertion that matters most. Accounting holds `transactions: 'edit'`, so this role can
      * put the deal into edit mode — and the Financial section still must not accept input. Opened
@@ -148,8 +150,8 @@ test.describe('Financial information, for Accounting', () => {
         return fields.filter((f) => !f.matches(':disabled') && !f.readOnly).length;
       });
       expect(editable).toBe(0);
-      await expect(modal.getByTestId('fin-readonly-banner')).toHaveText('View Only');
       await expect(modal.getByRole('button', { name: /^save$/i })).toHaveCount(0);
+      await expect(modal.getByTestId('fin-send-request')).toBeVisible();
     } finally {
       await page.unroute('**/api/user');
       await cleanUp(page, made);

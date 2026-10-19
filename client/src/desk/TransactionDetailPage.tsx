@@ -245,6 +245,12 @@ export default function TransactionDetailPage() {
    * else.
    */
   const isAccounting = user?.role === 'accounting';
+  /*
+   * Basic Info the Documentation way (2026-10-19, Accounting added): Type, Status, Agent Name and Property
+   * Address edited directly; Price, Deposit and Closing Date by request for Super Admin approval; a deal
+   * cannot be closed from here. The server agrees (DOCUMENTATION_EDITABLE, ACCOUNTING_BASIC_EDITABLE).
+   */
+  const requestsBasicInfo = isDocumentation || isAccounting;
   const canEdit = can('transactions', 'edit');
   const canInvoice = can('invoice', 'edit');
   const [generating, setGenerating] = useState(false);
@@ -538,7 +544,7 @@ export default function TransactionDetailPage() {
   // Lawyer Details is hidden for lease / preconstruction / referral types (legal side handled differently).
   const lawyerHidden = precon || /lease/i.test(form.type) || referral;
   const statusOptions = statusOptionsFor(form.type)
-    .filter((o) => !(isDocumentation && o === 'Closed' && !form.statuses.includes('Closed')));
+    .filter((o) => !(requestsBasicInfo && o === 'Closed' && !form.statuses.includes('Closed')));
   const ro = view; // read-only flag
   // Documentation edits Type and Status only. Remaining Basic Info fields stay locked.
   // Accounting reads Basic Info and edits none of it (the server drops it too: ACCOUNTING_LOCKED).
@@ -843,7 +849,7 @@ export default function TransactionDetailPage() {
   const stClosed = form.statuses.includes('Closed');
   const stDFT = form.statuses.includes('DFT');
   // Lock Documentation against the saved lifecycle, so selecting DFT can save before it locks.
-  const editLocked = isDocumentation
+  const editLocked = requestsBasicInfo
     ? (txn?.statuses || []).some((s) => s === 'Closed' || s === 'DFT')
     : stClosed || stDFT;
   const lockedForUser = editLocked && !isSuperAdmin;
@@ -899,7 +905,7 @@ export default function TransactionDetailPage() {
    * 'closing_date'), which a Super Admin approves. Not on a DFT deal, where the dates no longer
    * describe anything.
    */
-  const canRequestClosingDate = isDocumentation && !stDFT;
+  const canRequestClosingDate = requestsBasicInfo && !stDFT;
   const pendingDateReq = editRequests.find((r) => r.status === 'pending' && r.scope === 'closing_date');
   const closingDateLabel = canRequestClosingDate ? (
     <>Closing Date{' '}
@@ -918,7 +924,7 @@ export default function TransactionDetailPage() {
    * panel already uses for these two figures. One such request may be pending per deal, so a
    * pending one — from here or from Financial — shows the clock on both.
    */
-  const canRequestPriceDeposit = isDocumentation && !stDFT;
+  const canRequestPriceDeposit = requestsBasicInfo && !stDFT;
   const pendingPriceReq = editRequests.find((r) => r.status === 'pending' && r.scope === 'commission');
   const priceDepositLabel = (text: string): ReactNode => (canRequestPriceDeposit ? (
     <>{text}{' '}
@@ -944,7 +950,7 @@ export default function TransactionDetailPage() {
     && !(lockedForUser && !approvedReq);
   // Type, Status, Agent Name and Property Address — the Basic Info fields Documentation writes
   // directly (server: DOCUMENTATION_EDITABLE). Every other role keeps `basicRo` exactly as before.
-  const basicTypeStatusRo = isDocumentation ? !autoSaveOn : basicRo;
+  const basicTypeStatusRo = requestsBasicInfo ? !autoSaveOn : basicRo;
   autoOnRef.current = autoSaveOn;
 
   // Is there an edit the server hasn't got yet? Computed during render, not in an

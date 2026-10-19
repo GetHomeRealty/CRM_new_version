@@ -260,8 +260,13 @@ describe('Agent Payment Readiness: what a Documentation save keeps', () => {
 });
 
 describe('what an Accounting user may NOT change on a deal', () => {
-  it(`EVERY BASIC INFO FIELD is locked — checked against the card's own map`, () => {
-    for (const k of BASIC_INFO_FIELDS) expect([k, ACCOUNTING_LOCKED.has(k)]).toEqual([k, true]);
+  it(`BASIC INFO IS LOCKED but for Type, Status, Agent Name and Address (2026-10-19) — checked against the card's own map`, () => {
+    const editable = new Set(['type', 'statuses', 'agent', 'property']);
+    for (const k of BASIC_INFO_FIELDS) expect([k, ACCOUNTING_LOCKED.has(k)]).toEqual([k, !editable.has(k)]);
+  });
+
+  it('PRICE, DEPOSIT AND CLOSING DATE stay locked — this role requests them for approval', () => {
+    for (const k of ['price', 'deposit', 'closing_date', 'offer_date']) expect([k, ACCOUNTING_LOCKED.has(k)]).toEqual([k, true]);
   });
 
   it(`THE FINANCIAL PANEL'S FIGURES are locked, for every deal type`, () => {

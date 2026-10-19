@@ -52,11 +52,11 @@ async function asAccounting(page: Page, fn: (id: number) => Promise<void>) {
 }
 
 test.describe('the server', () => {
-  test('DROPS BASIC INFO AND FINANCIAL FROM AN ACCOUNTING SAVE, and keeps what this role owns', async ({ page }) => {
+  test('KEEPS AGENT AND ADDRESS, DROPS THE REST OF BASIC INFO AND FINANCIAL, and keeps what this role owns', async ({ page }) => {
     await asAccounting(page, async (id) => {
       const res = await apiSend(page, 'PUT', `/api/transactions/${id}`, {
-        // Basic Info
-        property: 'ZZ-ACCTVIEW SHOULD NOT CHANGE', type: 'Residential Selling',
+        // Basic Info — Property Address is this role's since 2026-10-19; Price, Deposit and Closing Date are not.
+        property: 'ZZ-ACCTVIEW Ledger Road Unit 2',
         price: 610000, deposit: 41000, closing_date: '2027-01-15',
         // Financial
         comm_pct: 9.9, comm_amt: 99999, comm_adjust_enabled: true, comm_adjust_before: 1234,
@@ -66,8 +66,7 @@ test.describe('the server', () => {
       expect(res.status).toBeLessThan(300);
 
       const after = await readDeal(page, id);
-      expect(after.property).toBe('ZZ-ACCTVIEW Ledger Road');
-      expect(after.type).toBe('Residential Buying');
+      expect(after.property).toBe('ZZ-ACCTVIEW Ledger Road Unit 2');
       expect(num(after.price)).toBe(500000);
       expect(num(after.deposit)).toBe(20000);
       expect(day(after.closing_date)).toBe('2026-11-28');
@@ -103,17 +102,20 @@ test.describe('the server', () => {
 });
 
 test.describe('the screen, in Edit mode', () => {
-  test('BASIC INFO IS READ-ONLY for Accounting', async ({ page }) => {
+  test('BASIC INFO AS DOCUMENTATION HAS IT (2026-10-19): Type, Status, Agent and Address open; dates and money by request', async ({ page }) => {
     await asAccounting(page, async (id) => {
       await page.goto(`/desk/transactions/${id}?mode=edit`);
       await expect(page.getByRole('button', { name: /^Back$/ })).toBeVisible({ timeout: 20_000 });
       const field = (label: string) => page.locator('.field', { has: page.locator('label', { hasText: new RegExp(`^${label}`) }) }).first();
-      await expect(field('Property Address').locator('input')).toBeDisabled();
-      await expect(field('Type').locator('select')).toBeDisabled();
+      await expect(field('Property Address').locator('input')).toBeEnabled();
+      await expect(field('Type').locator('select')).toBeEnabled();
+      await expect(field('Agent Name').locator('select')).toBeEnabled();
       await expect(field('Closing Date').locator('input')).toBeDisabled();
       await expect(field('Offer Date').locator('input')).toBeDisabled();
-      // The Documentation-only closing-date request is not offered here.
-      await expect(page.getByTestId('closing-date-edit')).toHaveCount(0);
+      // Closing Date, Price and Deposit change by request for Super Admin approval.
+      await expect(page.getByTestId('closing-date-edit')).toBeVisible();
+      await expect(page.getByTestId('price-edit')).toBeVisible();
+      await expect(page.getByTestId('deposit-edit')).toBeVisible();
     });
   });
 
@@ -126,6 +128,17 @@ test.describe('the screen, in Edit mode', () => {
       await expect(modal).toBeVisible({ timeout: 15_000 });
       await expect(modal.getByTestId('docs-readonly-banner')).toContainText('viewed and downloaded, not changed');
       await expect(modal.getByRole('button', { name: /^Save$/ })).toHaveCount(0);
+    });
+  });
+});
+
+test.describe('closing a deal', () => {
+  test('ACCOUNTING CANNOT CLOSE A DEAL, as Documentation cannot (2026-10-19)', async ({ page }) => {
+    await asAccounting(page, async (id) => {
+      const res = await apiSend(page, 'PUT', `/api/transactions/${id}`, { statuses: ['Closed'] });
+      expect(res.status).toBe(403);
+      const after = await readDeal(page, id);
+      expect((after.statuses as string[] | undefined) ?? []).not.toContain('Closed');
     });
   });
 });

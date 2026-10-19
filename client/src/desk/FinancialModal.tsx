@@ -112,7 +112,8 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
    * NOT WHEN THE DEAL IS DFT/NA, which blanks this whole panel for every role.
    */
   const isDocumentation = user?.role === 'documentation';
-  const docEdits = isDocumentation && !dftNA;
+  // Accounting proposes these figures the same way since 2026-10-19 (brokerage request).
+  const docEdits = (isDocumentation || user?.role === 'accounting') && !dftNA;
 
   /*
    * DOCUMENTATION CHANGES PRICE, DEPOSIT AND COMMISSION AMOUNT BY REQUEST, NOT BY SAVE.
@@ -627,7 +628,7 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
         </div>
       )}
       {/* `view-flat` renders already-disabled controls as plain text — see desk.css. */}
-      <div className={`modal xl${user?.role === 'documentation' ? ' view-flat' : ''}`}>
+      <div className={`modal xl${readsOnly ? ' view-flat' : ''}`}>
         <button className="close" onClick={onClose}><Icon name="close" size={15} /></button>
         <div className="modal-h">Financial Information {listing && <span className="pill type-res-sell" style={{ fontSize: 10 }}>Listing</span>}{precon && <span className="pill type-pre" style={{ fontSize: 10 }}>Preconstruction</span>}</div>
 
@@ -677,7 +678,7 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
         {/* NOTE: the original JS referenced an undefined `finLocked` here (a typo that
             would throw when this branch rendered); corrected to `finLock`, the clearly
             intended flag — the view-only banner hides while the finLock banner shows. */}
-        {readOnly && !dftNA && !isAgent && !isDocumentation && (!finLock || readsOnly) && (
+        {readOnly && !dftNA && !isAgent && !docEdits && (!finLock || readsOnly) && (
           <div className="card" style={{ borderLeft: '4px solid #2563eb', background: 'var(--info-bg)', marginBottom: 12 }}>
             {/* Not shown to Documentation, which has its pencils and Send Request instead. */}
             <span style={{ fontSize: 12.5, color: 'var(--info-ink)' }} data-testid="fin-readonly-banner">
