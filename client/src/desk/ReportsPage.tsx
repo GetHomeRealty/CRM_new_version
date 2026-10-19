@@ -6,7 +6,7 @@ import { apiErrorMessage } from '../lib/apiError';
 import { useToast } from './toast';
 import type { ReportListItem } from '../types';
 import { useAuth } from '../context/AuthContext';
-import { readLastReport } from './reportMemory';
+import { readLastReport, readReportFocus } from './reportMemory';
 
 const CATEGORY_ORDER = ['Deal Reports', 'Commission Reports', 'Payment Reports', 'Agent Reports', 'Client and Referral Reports', 'Review and Marketing Reports'];
 /** Categories whose six cards share one row on wide screens (Documentation added 2026-10-19). */
@@ -31,6 +31,16 @@ export default function ReportsPage() {
       .finally(() => setLoading(false));
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Back to the list: show the section of the report last opened, not the top (see reportMemory.ts).
+  useEffect(() => {
+    if (loading || !reports.length) return;
+    const focus = readReportFocus(user?.id);
+    const cat = focus ? reports.find((r) => r.type === focus)?.category : undefined;
+    if (!cat) return;
+    const el = [...document.querySelectorAll<HTMLElement>('[data-report-category]')].find((e) => e.dataset.reportCategory === cat);
+    el?.scrollIntoView({ block: 'start' });
+  }, [loading, reports]); // eslint-disable-line react-hooks/exhaustive-deps
+
   if (loading) return <div className="centered">Loading reports…</div>;
   if (error) return <div className="card" style={{ color: 'var(--bad)' }}>{error}</div>;
 
@@ -41,11 +51,13 @@ export default function ReportsPage() {
     <>
       <div className="card" style={{ marginBottom: 14 }}>
         <div className="modal-h" style={{ fontSize: 15, margin: 0 }}>Reports</div>
-        <div className="modal-sub" style={{ marginTop: 4 }}>Generate detailed transaction, commission, payment and agent reports. Select a report to filter, customize columns and export to XLSX or PDF.</div>
+        {/* Small and in brackets, at the brokerage's request (2026-10-19). */}
+        <div className="report-list-note" style={{ marginTop: 6, paddingLeft: 16, fontSize: 11.5, fontWeight: 400, color: 'var(--muted)' }}>(Generate detailed transaction, commission, payment and agent reports. Select a report to filter, customize columns and export to XLSX or PDF.)</div>
       </div>
 
       {[...cats, ...extras].map((cat) => (
-        <div key={cat} style={{ marginBottom: 18 }}>
+        // scrollMarginTop keeps the section heading clear of the sticky page header when scrolled to.
+        <div key={cat} data-report-category={cat} style={{ marginBottom: 18, scrollMarginTop: 80 }}>
           <div className="modal-h" style={{ fontSize: 13, margin: '0 0 10px' }}>{cat}</div>
           <div className={ONE_ROW.includes(cat) ? 'report-grid one-row' : 'report-grid'}>
             {reports.filter((r) => r.category === cat).map((r) => (

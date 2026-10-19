@@ -42,3 +42,23 @@ export function saveLastReport(v: LastReport): void {
 export function forgetLastReport(): void {
   try { sessionStorage.removeItem(KEY); } catch { /* storage unavailable */ }
 }
+
+/*
+ * THE SECTION TO RETURN TO (brokerage request, 2026-10-19, second part).
+ *
+ * Kept apart from the report above, and NOT forgotten on the way back to the list: going back from
+ * a Documentation and Compliance report lands on that section of the list, not at the top. Replaced
+ * each time another report is opened. Same tab, same user, same guards.
+ */
+const FOCUS_KEY = 'desk.reports.focus';
+
+export function saveReportFocus(user: number | string | null | undefined, type: string): void {
+  try { sessionStorage.setItem(FOCUS_KEY, JSON.stringify({ user: user ?? null, type })); } catch { /* storage unavailable */ }
+}
+
+export function readReportFocus(user: number | string | null | undefined): string | null {
+  try {
+    const v = JSON.parse(sessionStorage.getItem(FOCUS_KEY) || 'null') as { user: unknown; type: unknown } | null;
+    return v && typeof v.type === 'string' && v.user === (user ?? null) ? v.type : null;
+  } catch { return null; }
+}

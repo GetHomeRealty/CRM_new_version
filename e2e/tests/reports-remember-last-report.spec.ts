@@ -9,7 +9,8 @@ import { signIn } from './helpers';
  *    module — and going back to the list on purpose forgets it.
  */
 
-test.use({ viewport: { width: 1920, height: 1080 } });
+// Short enough that the Documentation section is below the fold until the list scrolls to it.
+test.use({ viewport: { width: 1920, height: 700 } });
 
 const SEARCH = 'ZZ-no-such-property-remember';
 
@@ -20,6 +21,11 @@ test('the renamed card, one row of documentation reports, and the last report re
   // The rename.
   const card = page.locator('.report-card', { hasText: 'Pending Documents Report' });
   await expect(card).toBeVisible({ timeout: 15_000 });
+
+  // The note under the title: small, plain and in brackets.
+  const note = page.locator('.report-list-note');
+  await expect(note).toHaveText(/^\(Generate detailed .*XLSX or PDF\.\)$/);
+  expect(await note.evaluate((el) => getComputedStyle(el).fontSize)).toBe('11.5px');
   await expect(page.locator('.report-card', { hasText: 'Deal Documentation Status Report' })).toHaveCount(0);
 
   // One row: every Documentation and Compliance card starts at the same height.
@@ -45,6 +51,10 @@ test('the renamed card, one row of documentation reports, and the last report re
   await page.getByRole('button', { name: '← Reports' }).click();
   await expect(page).toHaveURL(/\/desk\/reports$/);
   await expect(card).toBeVisible();
+  // ...at the Documentation and Compliance section, not the top of the list.
+  const docSection = page.locator('[data-report-category="Documentation and Compliance Reports"]');
+  await expect(docSection).toBeInViewport();
+  await expect(page.locator('.report-list-note')).not.toBeInViewport();
   await page.goto('/desk/transactions');
   await page.goto('/desk/reports');
   await expect(page.locator('.report-card', { hasText: 'Pending Documents Report' })).toBeVisible({ timeout: 15_000 });

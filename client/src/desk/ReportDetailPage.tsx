@@ -2,7 +2,7 @@ import { deskPath } from './area';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback, Fragment } from 'react';
 import type { RefObject } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
-import { readLastReport, saveLastReport, forgetLastReport } from './reportMemory';
+import { readLastReport, saveLastReport, forgetLastReport, saveReportFocus } from './reportMemory';
 import { reportColumns, reportFilterOptions, runReport, exportReport, reportDocuments } from '../lib/reportsApi';
 import { apiErrorMessage } from '../lib/apiError';
 import { formatCurrency } from './format';
@@ -110,6 +110,7 @@ export default function ReportDetailPage() {
       setDraft({}); setApplied({}); setSelectedCols(null); setSections(null); setSort(null); setPage(1);
     }
     setFacets(null); setFiltersOpen(false);
+    saveReportFocus(user?.id, reportType); // the list returns to this report's section
     Promise.all([reportColumns(reportType), reportFilterOptions()])
       .then(([m, o]) => { setMeta(m); setOptions(o); })
       .catch((e) => setError(apiErrorMessage(e, 'Could not load report')))
