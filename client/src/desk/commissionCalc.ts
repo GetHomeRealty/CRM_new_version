@@ -8,6 +8,7 @@
 // that includes HST is `commission * (1 + HST_RATE)`, and the commission is
 // back-solved as `total / (1 + HST_RATE)`.
 
+import { taxRate } from './format';
 import type {
   Adjustments,
   AdjustmentRow,
@@ -17,6 +18,7 @@ import type {
 } from '../types';
 
 export const HST_RATE = 0.13;
+// Every function below takes the rate of the country being worked in by default (format.ts taxRate).
 
 const ROUND = (x: number, n = 2): number => {
   const f = 10 ** n;
@@ -66,7 +68,7 @@ export interface CommissionResult {
   extReferralTotal: number;
 }
 
-export function computeCommission(input: CommissionInput = {}, hstRate: number = HST_RATE): CommissionResult {
+export function computeCommission(input: CommissionInput = {}, hstRate: number = taxRate()): CommissionResult {
   const HST = hstRate;
   const G1 = 1 + HST; // HST gross-up factor
 
@@ -222,7 +224,7 @@ export interface ReferralSections {
  * amounts and show flags. (The "Agent Commissions after client referral" section
  * is computed by agentCommissionsAfterClient.)
  */
-export function referralSections(dealComm: NumericInput, adjustments: Adjustments | null | undefined, hstRate: number = HST_RATE): ReferralSections {
+export function referralSections(dealComm: NumericInput, adjustments: Adjustments | null | undefined, hstRate: number = taxRate()): ReferralSections {
   const a: Adjustments = adjustments || {};
   const showBroker = a.ext_referral === 'Yes';
   const showClient = a.client_referral === 'Yes';
@@ -256,7 +258,7 @@ export interface AfterClientOpts {
  *   Total    = pool × 1.13 − Client Referral   (client referral comes off the Total, with HST)
  *   Commission = Total / 1.13 ;  HST = Total − Commission
  */
-export function agentCommissionsAfterClient(listingComm: NumericInput, members: CommissionMember[] = [], opts: AfterClientOpts = {}, hstRate: number = HST_RATE): CommissionAmounts {
+export function agentCommissionsAfterClient(listingComm: NumericInput, members: CommissionMember[] = [], opts: AfterClientOpts = {}, hstRate: number = taxRate()): CommissionAmounts {
   const { minBrokComm = 0, adjBefore = 0, adjAfter = 0, clientReferral = 0 } = opts;
   const g = 1 + hstRate;
   const lc = num(listingComm);
@@ -289,7 +291,7 @@ export function agentCommissionsAfterClient(listingComm: NumericInput, members: 
  *
  * Pass deduction = 0 for the gross (T4A) line.
  */
-export function agentCommissionLine(member: { split?: NumericInput }, ctx: { acTotal?: NumericInput }, deduction: NumericInput = 0, hstRate: number = HST_RATE): CommissionAmounts {
+export function agentCommissionLine(member: { split?: NumericInput }, ctx: { acTotal?: NumericInput }, deduction: NumericInput = 0, hstRate: number = taxRate()): CommissionAmounts {
   const g = 1 + hstRate;
   const split = num(member.split) / 100;
   const total = ROUND(num(ctx.acTotal) * split - num(deduction));
@@ -352,7 +354,7 @@ export interface ListingBreakdown {
  * commission is paid in full to the external co-op brokerage. Mirrors
  * CommissionService::breakdownListing(). Returns the report sections.
  */
-export function listingBreakdown(input: ListingInput, hstRate: number = HST_RATE): ListingBreakdown {
+export function listingBreakdown(input: ListingInput, hstRate: number = taxRate()): ListingBreakdown {
   const g = 1 + hstRate;
   const price = num(input.price);
   const deposit = num(input.deposit);

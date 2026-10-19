@@ -75,14 +75,21 @@ export interface DeskAnalytics {
  * Written once and shared by all four aggregates so they cannot drift from each other, and so the
  * only place the column list appears is here.
  */
-const GROSS = `desk_gross_amount(
+const GROSS_ARGS = (netOfTax: string): string => `
   t.type, t.price::float8, t.comm_type, t.comm_value::float8,
   t.comm_pct::float8, t.comm_amt::float8,
   t.listing_comm_pct::float8, t.coop_comm_pct::float8,
   t.listing_comm_flat::float8, t.coop_comm_flat::float8,
   t.precon_comm_pct::float8, t.precon_comm_amt_manual::float8,
-  t.precon_comm_bonus::float8, t.precon_net_of_hst
-)`;
+  t.precon_comm_bonus::float8, ${netOfTax}`;
+/*
+ * India (19 Oct 2026): a pre-construction fee entered "net of tax" includes GST 18%, not HST 13%, so
+ * its pre-tax part is the rounded fee / 1.18 - the same arithmetic summarize() uses with India's
+ * divisor. Canadian rows take the stored function exactly as before (parity-checked).
+ */
+const GROSS = `(CASE WHEN t.market = 'IN' AND t.type = 'Preconstruction' AND COALESCE(t.precon_net_of_hst, false)
+  THEN php_round2(php_round2(desk_gross_amount(${GROSS_ARGS('false')}))::float8 / 1.18::float8)::float8
+  ELSE desk_gross_amount(${GROSS_ARGS('t.precon_net_of_hst')}) END)`;
 
 /** `summarize().amount` — the gross, rounded the way the application rounds. */
 const AMOUNT = `php_round2(${GROSS})`;

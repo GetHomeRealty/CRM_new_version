@@ -1,9 +1,14 @@
 import { Injectable } from '@nestjs/common';
+import { grossDivisorFor, taxRateFor } from '../common/tax';
 import { PersonResolver } from '../core/person-resolver.service';
 import { parseJsonObject, phpFloat, round2 } from '../common/serialize';
 import { isListingType } from '../reference/transaction.constants';
 import type { CommMember, CommissionSummary, CommissionTxn, Triple } from './commission.types';
 
+/**
+ * Canada's HST. India deals use GST 18% instead (common/tax.ts); `this.rate` holds the rate of the deal
+ * being worked out, set at the start of each (synchronous) calculation.
+ */
 const HST_RATE = 0.13;
 const isPrecon = (type: string): boolean => type === 'Preconstruction';
 const isListingFinancial = (type: string): boolean => isListingType(type) || type === 'Business Sale';
@@ -28,6 +33,14 @@ export class CommissionService {
 
   private readonly r = round2;
   /** PHP is_numeric($v) ? (float)$v : 0 (used for adjustment amounts). */
+  /** The tax rate and tax-inclusive divisor of the deal being worked out (13% / 1.13 in Canada). */
+  private rate = HST_RATE;
+  private divisor = 1.13;
+  private useCountryOf(t: CommissionTxn): void {
+    this.rate = taxRateFor(t.market);
+    this.divisor = grossDivisorFor(t.market);
+  }
+
   private num(v: unknown): number {
     const x = Number(v);
     return Number.isFinite(x) ? x : 0;
@@ -43,6 +56,7 @@ export class CommissionService {
 
   /** Gross commission summary for the list / analytics tiles. */
   summarize(t: CommissionTxn): CommissionSummary {
+    this.useCountryOf(t);
     // TD-066. NET of HST means the preconstruction fee is TAX-INCLUSIVE. A 3% fee on a $1,000,000
     // deal is $30,000 in total - 26,548.67 of commission with 3,451.33 of tax already inside it.
     // grossCommission() returns that whole fee, so adding 13% on top invented tax nobody charged:
@@ -54,12 +68,12 @@ export class CommissionService {
     let hst: number;
     let total: number;
     if (isPrecon(t.type) && t.precon_net_of_hst) {
-      amount = this.r(gross / 1.13);
+      amount = this.r(gross / this.divisor);
       hst = this.r(gross - amount);
       total = gross;
     } else {
       amount = gross;
-      hst = this.r(amount * HST_RATE);
+      hst = this.r(amount * this.rate);
       total = this.r(amount + hst);
     }
     const paid = t.comm_paid_status === 'Yes' || t.comm_status === 'Received';
@@ -110,6 +124,9 @@ export class CommissionService {
    */
   async breakdown(t: CommissionTxn, profileCache?: Map<string, Record<string, unknown>>): Promise<Record<string, unknown>> {
     const members = await this.resolveMembers(t, profileCache);
+    // Set AFTER the await and immediately before the synchronous calculation, so a breakdown of a deal
+    // in the other country running at the same time cannot change the rate underneath this one.
+    this.useCountryOf(t);
     if (isPrecon(t.type)) return this.breakdownPrecon(t, members);
     if (isListingFinancial(t.type)) return this.breakdownListing(t, members);
     return this.breakdownStandard(t, members);
@@ -121,7 +138,7 @@ export class CommissionService {
     const adjAfter = t.comm_adjust_enabled ? t.comm_adjust_after : 0;
 
     const commission = this.r(base - adjBefore);
-    const hst = this.r(commission * HST_RATE);
+    const hst = this.r(commission * this.rate);
     const total = this.r(commission + hst - adjAfter);
 
     const adj = t.adjustments ?? {};
@@ -179,12 +196,12 @@ export class CommissionService {
     let hst: number;
     let total: number;
     if (netHst) {
-      commission = this.r(amount / 1.13);
+      commission = this.r(amount / this.divisor);
       hst = this.r(amount - commission);
       total = amount;
     } else {
       commission = amount;
-      hst = this.r(amount * HST_RATE);
+      hst = this.r(amount * this.rate);
       total = this.r(amount + hst);
     }
 
@@ -193,7 +210,7 @@ export class CommissionService {
       const adjA = t.comm_adjust_after;
       if (adjB !== 0) {
         commission = this.r(commission - adjB);
-        hst = this.r(commission * HST_RATE);
+        hst = this.r(commission * this.rate);
         total = this.r(commission + hst);
       }
       if (adjA !== 0) {
@@ -236,12 +253,12 @@ export class CommissionService {
       let tHst: number;
       let tTotal: number;
       if (netHst) {
-        tAmt = this.r(tGross / 1.13);
+        tAmt = this.r(tGross / this.divisor);
         tHst = this.r(tGross - tAmt);
         tTotal = tGross;
       } else {
         tAmt = tGross;
-        tHst = this.r(tGross * HST_RATE);
+        tHst = this.r(tGross * this.rate);
         tTotal = this.r(tGross + tHst);
       }
       sumGross += tGross;
@@ -315,7 +332,7 @@ export class CommissionService {
   }
 
   private breakdownListing(t: CommissionTxn, members: CommMember[]): Record<string, unknown> {
-    const hst = HST_RATE;
+    const hst = this.rate;
     const g = 1 + hst;
     const price = t.price;
     const deposit = t.deposit;
@@ -518,8 +535,8 @@ export class CommissionService {
   ): Record<string, unknown>[] {
     const line = (wo: number): Triple => ({
       commission: wo,
-      hst: this.r(wo * HST_RATE),
-      total: this.r(wo * (1 + HST_RATE)),
+      hst: this.r(wo * this.rate),
+      total: this.r(wo * (1 + this.rate)),
     });
 
     return members.map((m) => {
@@ -535,8 +552,8 @@ export class CommissionService {
       } else {
         agent = {
           commission: agentWoHst,
-          hst: this.r(agentWoHst * HST_RATE),
-          total: this.r(agentWoHst * (1 + HST_RATE) - deduction),
+          hst: this.r(agentWoHst * this.rate),
+          total: this.r(agentWoHst * (1 + this.rate) - deduction),
         };
         t4a = line(agentWoHst);
       }
@@ -576,7 +593,7 @@ export class CommissionService {
   }
 
   private agentCommissionLine(m: CommMember, ctx: { acTotal: number; pool?: number; entitlements?: Map<CommMember, number> }, deduction: number): Triple {
-    const g = 1 + HST_RATE;
+    const g = 1 + this.rate;
     // TD-025: share the pool by each member's OWN entitlement. Paying by split alone gave every
     // member the weighted-average rate, so on a mixed-plan team the 90/10 member was short and
     // the 70/30 member over by the same amount. Falls back to split when entitlements are
@@ -642,8 +659,8 @@ export class CommissionService {
     const afterBrokerComm = this.r(dealComm - this.brokerReferralAmount(adj));
     const afterBroker: Triple = {
       commission: afterBrokerComm,
-      hst: this.r(afterBrokerComm * HST_RATE),
-      total: this.r(afterBrokerComm * (1 + HST_RATE)),
+      hst: this.r(afterBrokerComm * this.rate),
+      total: this.r(afterBrokerComm * (1 + this.rate)),
     };
     return {
       broker_amount: this.r(this.brokerReferralAmount(adj)),
@@ -663,7 +680,7 @@ export class CommissionService {
     adjAfter: number,
     clientReferral: number,
   ): Triple & { pool: number; entitlements: Map<CommMember, number> } {
-    const g = 1 + HST_RATE;
+    const g = 1 + this.rate;
     /*
      * TD-080 / TD-124 - the minimum brokerage is compared on the SAME basis as the share it caps.
      *

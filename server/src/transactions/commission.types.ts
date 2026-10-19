@@ -22,6 +22,8 @@ export interface CommPreconTerm {
 /** The transaction fields + relations the commission math reads. */
 export interface CommissionTxn {
   type: string;
+  /** The deal's country - India deals use GST 18% instead of HST 13% (common/tax.ts). Absent = Canada. */
+  market?: string | null;
   price: number;
   deposit: number;
   comm_type: string;

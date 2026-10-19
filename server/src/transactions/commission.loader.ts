@@ -27,6 +27,7 @@ const numN = (d: Prisma.Decimal | number | null): number | null => (d === null ?
 export function normalizeCommissionTxn(t: TxnWithCommission): CommissionTxn {
   return {
     type: t.type,
+    market: (t as { market?: string | null }).market ?? null,
     price: num(t.price),
     deposit: num(t.deposit),
     comm_type: t.comm_type,

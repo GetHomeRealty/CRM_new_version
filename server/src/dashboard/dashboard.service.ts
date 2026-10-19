@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { sqlForMarket } from '../common/tax';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CommissionService } from '../transactions/commission.service';
@@ -218,12 +219,13 @@ export class DashboardService {
     const variantRows = await Promise.all(
       (['standard', 'listing', 'precon'] as CommissionVariant[]).map((v) =>
         this.withWorkMem<CommissionVariantRow>(
-          agent ? commissionsSqlForAgent(scope, v) : commissionsSqlForOffice(scope, v),
+          // India works in GST 18% (common/tax.ts); Canada's SQL is unchanged.
+          sqlForMarket(agent ? commissionsSqlForAgent(scope, v) : commissionsSqlForOffice(scope, v), user?.market),
           agent ? [name] : [],
         ),
       ),
     );
-    const headline = await this.headline(scope);
+    const headline = await this.headline(scope, user?.market);
 
     let paidTotal = 0, pendingTotal = 0, upcomingTotal = 0;
     let paidCount = 0, pendingCount = 0, upcomingCount = 0;
@@ -263,8 +265,8 @@ export class DashboardService {
     };
   }
 
-  private async headline(scope: string): Promise<CommissionHeadlineRow> {
-    const rows = await this.withWorkMem<CommissionHeadlineRow>(commissionsSqlHeadline(scope), []);
+  private async headline(scope: string, market?: string | null): Promise<CommissionHeadlineRow> {
+    const rows = await this.withWorkMem<CommissionHeadlineRow>(sqlForMarket(commissionsSqlHeadline(scope), market), []);
     return rows[0] ?? { gross_total: '0', ext_ref_total: '0', client_ref_total: '0' };
   }
 

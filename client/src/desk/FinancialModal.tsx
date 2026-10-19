@@ -1,6 +1,6 @@
 import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 import { updateTransaction, getAgentCommissions, getAgentLoans, getTransaction, requestTransactionEdit, approveEditRequest, rejectEditRequest } from '../lib/api';
-import { formatCurrency, parseNumber, isListingFinancialType, isPreconType } from './format';
+import { formatCurrency, parseNumber, isListingFinancialType, isPreconType, taxRate, taxLabel, taxPct, taxDivisor } from './format';
 import Icon from '../ui/Icon';
 import { agentAdjustments, referralSections, agentCommissionsAfterClient, agentCommissionLine, listingBreakdown, type AgentAdjustment } from './commissionCalc';
 import MoneyInput from './MoneyInput';
@@ -10,18 +10,18 @@ import { useAuth } from '../context/AuthContext';
 import SavedBadge from './SavedBadge';
 import type { AgentCommissionMap, AgentLoanMap, CommissionAmounts, TeamMemberData, Transaction } from '../types';
 
-const HST = 0.13;
+// The tax of the country being worked in (format.ts taxRate): HST 13% Canada, GST 18% India.
 const r2 = (n: number): number => Math.round((n + Number.EPSILON) * 100) / 100;
 const clampPct = (n: number): number => Math.max(0, Math.min(100, n));
-const lineOf = (wo: number): CommissionAmounts => ({ commission: r2(wo), hst: r2(wo * HST), total: r2(wo * (1 + HST)) });
+const lineOf = (wo: number): CommissionAmounts => ({ commission: r2(wo), hst: r2(wo * taxRate()), total: r2(wo * (1 + taxRate())) });
 // Like lineOf, but the adjustment is subtracted from the Total only — Commission
 // and HST stay at their gross values.
-const lineLessTotal = (wo: number, deduct = 0): CommissionAmounts => ({ commission: r2(wo), hst: r2(wo * HST), total: r2(wo * (1 + HST) - deduct) });
+const lineLessTotal = (wo: number, deduct = 0): CommissionAmounts => ({ commission: r2(wo), hst: r2(wo * taxRate()), total: r2(wo * (1 + taxRate()) - deduct) });
 
 // Field colours: Commission/HST blue, Total green — any negative value shows red.
 const commColor = (v: number) => (v < 0 ? 'var(--bad)' : 'var(--info)');
 const totalColor = (v: number) => (v < 0 ? 'var(--bad)' : 'var(--ok-600)');
-const cs = (v: number): CSSProperties => ({ fontWeight: 700, color: commColor(v) }); // Commission / HST style (bold, like Total)
+const cs = (v: number): CSSProperties => ({ fontWeight: 700, color: commColor(v) }); // Commission / tax style (bold, like Total)
 const pctStyle: CSSProperties = { fontWeight: 700, color: 'var(--bad)' }; // % fields: bold red
 const ts = (v: number): CSSProperties => ({ fontWeight: 700, color: totalColor(v) }); // Total style
 
@@ -441,23 +441,23 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
   const adjB = adjEnabled ? parseNumber(adjBefore) : 0;
   const adjA = adjEnabled ? parseNumber(adjAfter) : 0;
   const commWoHst = r2(gross - adjB);
-  const stdHst = r2(commWoHst * HST);
+  const stdHst = r2(commWoHst * taxRate());
   const stdTotal = r2(commWoHst + stdHst - adjA);
   // Deal-level referrals: sections are computed from the full (pre-adjustment)
   // commission; broker referral still reduces the team-split base (which keeps the
   // commission adjustment), client referral comes off the deal Total only.
-  const stdRef = referralSections(gross, txn.adjustments, HST);
+  const stdRef = referralSections(gross, txn.adjustments, taxRate());
   const stdSplitBase = r2(commWoHst - stdRef.brokerAmount);
   // "Agent Commissions after client referral" is computed off the commission AFTER the
   // external broker referral (stdSplitBase = commission − broker referral), per spec.
-  const stdAfterClient = agentCommissionsAfterClient(stdSplitBase, members, { minBrokComm: 200, adjBefore: adjB, adjAfter: adjA, clientReferral: stdRef.clientAmount }, HST);
+  const stdAfterClient = agentCommissionsAfterClient(stdSplitBase, members, { minBrokComm: 200, adjBefore: adjB, adjAfter: adjA, clientReferral: stdRef.clientAmount }, taxRate());
   const stdRefView: ReferralView = { ...stdRef, afterClient: stdAfterClient };
   const stdAgentCtx = { acTotal: stdAfterClient.total, acComm: stdAfterClient.commission, minBrokComm: 200, adjBefore: adjB, adjAfter: adjA };
   const memberRows: AgentRow[] = members.map((m, i) => {
     const base = r2(stdSplitBase * (parseNumber(m.split) / 100));
     const brokWo = r2(base * (parseNumber(m.brok_pct) / 100));
     // Agent + T4A take Split % of the after-client-referral section Total; T4A is gross (no per-agent deduction).
-    return { m, agent: agentCommissionLine(m, stdAgentCtx, memberDeduct[i].total, HST), brok: lineOf(brokWo), t4a: agentCommissionLine(m, stdAgentCtx, 0, HST), adj: memberDeduct[i] };
+    return { m, agent: agentCommissionLine(m, stdAgentCtx, memberDeduct[i].total, taxRate()), brok: lineOf(brokWo), t4a: agentCommissionLine(m, stdAgentCtx, 0, taxRate()), adj: memberDeduct[i] };
   });
 
   // ---- live listing computation (full client spec — mirrors CommissionService::breakdownListing) ----
@@ -474,25 +474,25 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
     extAmt: listExtAmt, clientReferral: listClientReferral,
     members: members.map((m) => ({ name: m.name, split: m.split, agent_pct: m.agent_pct, brok_pct: m.brok_pct })),
     deductions: memberDeduct.map((d) => d.total), isLease: listIsLease, // Agent Adjust + Advance per member
-  }, HST);
+  }, taxRate());
   // Referral sections are based on the (fixed) Listing Commission — the broker referral
   // only changes "Commissions after broker referral", never the Listing Commission itself.
-  const listRef = referralSections(lb.listing.commission, txn.adjustments, HST);
+  const listRef = referralSections(lb.listing.commission, txn.adjustments, taxRate());
   // Agent commissions are computed off the commission AFTER the external broker referral.
   const listAfterClient = agentCommissionsAfterClient(listRef.afterBroker.commission, members, {
     minBrokComm: 499,
     adjBefore: lAdjEff ? parseNumber(lBefore) : 0,
     adjAfter: lAdjEff ? parseNumber(lAfter) : 0,
     clientReferral: listRef.clientAmount,
-  }, HST);
+  }, taxRate());
   const listRefView: ReferralView = { ...listRef, afterClient: listAfterClient };
   // Reuse the Residential-Buying card design (AgentCommissionBlocks): Agent Commission =
   // payable (cash after advance), Agent (T4A) = gross earned, Brokerage = per-member keep.
   const listingRows: AgentRow[] = lb.members.map((mr, i) => ({
     m: members[i],
-    agent: { commission: r2(mr.cashToPay / (1 + HST)), hst: r2(mr.cashToPay - mr.cashToPay / (1 + HST)), total: mr.cashToPay },
+    agent: { commission: r2(mr.cashToPay / (1 + taxRate())), hst: r2(mr.cashToPay - mr.cashToPay / (1 + taxRate())), total: mr.cashToPay },
     t4a: { commission: mr.commission, hst: mr.hst, total: mr.earned },
-    brok: { commission: r2(mr.brokerageFromMember / (1 + HST)), hst: r2(mr.brokerageFromMember - mr.brokerageFromMember / (1 + HST)), total: mr.brokerageFromMember },
+    brok: { commission: r2(mr.brokerageFromMember / (1 + taxRate())), hst: r2(mr.brokerageFromMember - mr.brokerageFromMember / (1 + taxRate())), total: mr.brokerageFromMember },
     adj: memberDeduct[i], // { agentAdjust, advance, total } → "Less adjustment + advance" note
   }));
   // TD-025 - EACH MEMBER KEEPS THEIR OWN RATE. This used to broadcast agent_pct and brok_pct to
@@ -513,10 +513,10 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
   const pMasterBonus = masterBonusOn && String(masterBonus ?? '') !== '' ? parseNumber(masterBonus) : 0;
   const pMasterAmt = (parseNumber(masterAmtManual) > 0 ? parseNumber(masterAmtManual) : (parseNumber(masterPct) > 0 ? parseNumber(price) * parseNumber(masterPct) / 100 : 0)) + pMasterBonus;
   let mComm: number, mHst: number, mTotal: number;
-  if (netHst) { mComm = r2(pMasterAmt / 1.13); mHst = r2(pMasterAmt - mComm); mTotal = pMasterAmt; }
-  else { mComm = pMasterAmt; mHst = r2(pMasterAmt * HST); mTotal = r2(pMasterAmt + mHst); }
+  if (netHst) { mComm = r2(pMasterAmt / taxDivisor()); mHst = r2(pMasterAmt - mComm); mTotal = pMasterAmt; }
+  else { mComm = pMasterAmt; mHst = r2(pMasterAmt * taxRate()); mTotal = r2(pMasterAmt + mHst); }
   if (adjEnabled) {
-    if (adjB !== 0) { mComm = r2(mComm - adjB); mHst = r2(mComm * HST); mTotal = r2(mComm + mHst); }
+    if (adjB !== 0) { mComm = r2(mComm - adjB); mHst = r2(mComm * taxRate()); mTotal = r2(mComm + mHst); }
     if (adjA !== 0) { mTotal = r2(mTotal - adjA); }
   }
   /*
@@ -725,7 +725,7 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
         {precon ? (
           <div className="g3">
             {priceField}
-            <div className="field"><label>NET of HST</label><select value={netHst ? 'Yes' : 'No'} disabled={readOnly} onChange={(e) => setNetHst(e.target.value === 'Yes')}><option>No</option><option>Yes</option></select></div>
+            <div className="field"><label>NET of {taxLabel()}</label><select value={netHst ? 'Yes' : 'No'} disabled={readOnly} onChange={(e) => setNetHst(e.target.value === 'Yes')}><option>No</option><option>Yes</option></select></div>
             {depositField}
           </div>
         ) : listing ? (
@@ -772,9 +772,9 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
         {precon ? (
           <>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10, marginBottom: 14 }}>
-              <div className="field" style={{ marginBottom: 0 }}><label>Commission</label><input readOnly style={cs(mComm)} value={formatCurrency(mComm)} />{adjEnabled && adjB !== 0 && <div className="help" style={{ margin: '4px 0 0' }}>{adjNote(adjB, 'before HST')}</div>}</div>
-              <div className="field" style={{ marginBottom: 0 }}><label>HST</label><input readOnly style={cs(mHst)} value={formatCurrency(mHst)} /></div>
-              <div className="field" style={{ marginBottom: 0 }}><label>Total</label><input readOnly style={ts(mTotal)} value={formatCurrency(mTotal)} />{adjEnabled && adjA !== 0 && <div className="help" style={{ margin: '4px 0 0' }}>{adjNote(adjA, 'after HST')}</div>}</div>
+              <div className="field" style={{ marginBottom: 0 }}><label>Commission</label><input readOnly style={cs(mComm)} value={formatCurrency(mComm)} />{adjEnabled && adjB !== 0 && <div className="help" style={{ margin: '4px 0 0' }}>{adjNote(adjB, `before ${taxLabel()}`)}</div>}</div>
+              <div className="field" style={{ marginBottom: 0 }}><label>{taxLabel()}</label><input readOnly style={cs(mHst)} value={formatCurrency(mHst)} /></div>
+              <div className="field" style={{ marginBottom: 0 }}><label>Total</label><input readOnly style={ts(mTotal)} value={formatCurrency(mTotal)} />{adjEnabled && adjA !== 0 && <div className="help" style={{ margin: '4px 0 0' }}>{adjNote(adjA, `after ${taxLabel()}`)}</div>}</div>
             </div>
 
             <div className="modal-sub">Commission Structure</div>
@@ -802,8 +802,8 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
               const tTyped = (t.amt ?? '') === '' ? null : r2(parseNumber(t.amt));
               const tGross = tTyped === null ? r2(parseNumber(price) * parseNumber(t.pct) / 100) : tTyped;
               let tAmt: number, tHst: number, tTotal: number;
-              if (netHst) { tAmt = r2(tGross / 1.13); tHst = r2(tGross - tAmt); tTotal = tGross; }
-              else { tAmt = tGross; tHst = r2(tGross * HST); tTotal = r2(tGross + tHst); }
+              if (netHst) { tAmt = r2(tGross / taxDivisor()); tHst = r2(tGross - tAmt); tTotal = tGross; }
+              else { tAmt = tGross; tHst = r2(tGross * taxRate()); tTotal = r2(tGross + tHst); }
               const visible = visibleAtTerm(k);
               const termDeduct = agentAdjustments(txn.adjustments, members, k); // term-scoped, aligned to members
               const locked = isLocked(k);
@@ -836,7 +836,7 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
                   </div>
                   <div className="g4" style={{ marginTop: 8 }}>
                     <div className="field" style={{ marginBottom: 0 }}><label>Commission</label><input readOnly style={cs(tAmt)} value={formatCurrency(tAmt)} /></div>
-                    <div className="field" style={{ marginBottom: 0 }}><label>HST</label><input readOnly style={cs(tHst)} value={formatCurrency(tHst)} /></div>
+                    <div className="field" style={{ marginBottom: 0 }}><label>{taxLabel()}</label><input readOnly style={cs(tHst)} value={formatCurrency(tHst)} /></div>
                     <div className="field" style={{ marginBottom: 0 }}><label>Total</label><input readOnly style={ts(tTotal)} value={formatCurrency(tTotal)} /></div>
                     <div className="field" style={{ marginBottom: 0 }} />
                   </div>
@@ -861,7 +861,7 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
                             <input type="number" value={m.agent_pct} readOnly={!agentUnlock[i]} style={!agentUnlock[i] ? { ...lockField, ...pctStyle } : pctStyle} onChange={(e) => setMember(i, 'agent_pct', e.target.value)} />
                           </div>
                           <div className="field" style={{ marginBottom: 0 }}><label>Commission</label><input readOnly style={cs(a.commission)} value={formatCurrency(a.commission)} /></div>
-                          <div className="field" style={{ marginBottom: 0 }}><label>HST</label><input readOnly style={cs(a.hst)} value={formatCurrency(a.hst)} /></div>
+                          <div className="field" style={{ marginBottom: 0 }}><label>{taxLabel()}</label><input readOnly style={cs(a.hst)} value={formatCurrency(a.hst)} /></div>
                           <div className="field" style={{ marginBottom: 0 }}><label>Total</label><input readOnly style={{ fontWeight: 700, color: totalColor(a.total) }} value={formatCurrency(a.total)} /></div>
                         </div>
                         {(defaultPctFor(m.name) !== null
@@ -890,7 +890,7 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
                         <strong style={{ fontSize: 13 }}>{(m.name || '').toUpperCase()}</strong>
                         <div className="g3" style={{ marginTop: 10 }}>
                           <div className="field" style={{ marginBottom: 0 }}><label>Commission</label><input readOnly style={cs(a.commission)} value={formatCurrency(a.commission)} /></div>
-                          <div className="field" style={{ marginBottom: 0 }}><label>HST</label><input readOnly style={cs(a.hst)} value={formatCurrency(a.hst)} /></div>
+                          <div className="field" style={{ marginBottom: 0 }}><label>{taxLabel()}</label><input readOnly style={cs(a.hst)} value={formatCurrency(a.hst)} /></div>
                           <div className="field" style={{ marginBottom: 0 }}><label>Total</label><input readOnly style={ts(a.total)} value={formatCurrency(a.total)} /></div>
                         </div>
                       </div>
@@ -907,7 +907,7 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
                         <div className="g4">
                           <div className="field" style={{ marginBottom: 0 }}><label>Brok Comm (%) {!readsOnly && <Icon name="lock" size={11} />}</label><input type="number" value={m.brok_pct} readOnly style={{ ...lockField, ...pctStyle }} /></div>
                           <div className="field" style={{ marginBottom: 0 }}><label>Commission</label><input readOnly value={formatCurrency(b.commission)} /></div>
-                          <div className="field" style={{ marginBottom: 0 }}><label>HST</label><input readOnly value={formatCurrency(b.hst)} /></div>
+                          <div className="field" style={{ marginBottom: 0 }}><label>{taxLabel()}</label><input readOnly value={formatCurrency(b.hst)} /></div>
                           <div className="field" style={{ marginBottom: 0 }}><label>Total</label><input readOnly style={{ fontWeight: 700, color: '#5b21b6' }} value={formatCurrency(b.total)} /></div>
                         </div>
                       </div>
@@ -922,8 +922,8 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
             <div className="field" style={{ maxWidth: 220 }}><label>Commission Adjustment</label><select value={adjEnabled ? 'Yes' : 'No'} onChange={(e) => setAdjEnabled(e.target.value === 'Yes')}><option>No</option><option>Yes</option></select></div>
             {adjEnabled && (
               <div className="g2">
-                <SignedAdjField label="Adjustment (Before HST)" value={adjBefore} onChange={(nv) => excl(nv, setAdjBefore, adjAfter, setAdjAfter)} convention="sub" />
-                <SignedAdjField label="Adjustment (After HST)" value={adjAfter} onChange={(nv) => excl(nv, setAdjAfter, adjBefore, setAdjBefore)} convention="sub" />
+                <SignedAdjField label="Adjustment (Before taxRate())" value={adjBefore} onChange={(nv) => excl(nv, setAdjBefore, adjAfter, setAdjAfter)} convention="sub" />
+                <SignedAdjField label="Adjustment (After taxRate())" value={adjAfter} onChange={(nv) => excl(nv, setAdjAfter, adjBefore, setAdjBefore)} convention="sub" />
               </div>
             )}
           </>
@@ -934,7 +934,7 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
               <div className="field" style={{ marginBottom: 0 }}><label>Listing Commission %</label><input value={listPct} onChange={(e) => onListPct(e.target.value)} placeholder="e.g. 2.5" style={pctStyle} /></div>
               <div className="field" style={{ marginBottom: 0 }}><label>Listing Commission Amount</label><input value={listFlat} onChange={(e) => onListFlat(e.target.value)} placeholder="0.00" /></div>
               <div className="field" style={{ marginBottom: 0 }}><label>Commission</label><input readOnly style={cs(lb.listing.commission)} value={formatCurrency(lb.listing.commission)} /></div>
-              <div className="field" style={{ marginBottom: 0 }}><label>HST</label><input readOnly style={cs(lb.listing.hst)} value={formatCurrency(lb.listing.hst)} /></div>
+              <div className="field" style={{ marginBottom: 0 }}><label>{taxLabel()}</label><input readOnly style={cs(lb.listing.hst)} value={formatCurrency(lb.listing.hst)} /></div>
               <div className="field" style={{ marginBottom: 0 }}><label>Total</label><input readOnly style={ts(lb.listing.total)} value={formatCurrency(lb.listing.total)} /></div>
             </div>
             <div className="modal-sub">Co-op Commission</div>
@@ -942,11 +942,11 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
               <div className="field" style={{ marginBottom: 0 }}><label>Co-op Commission %</label><input value={coopPct} onChange={(e) => onCoopPct(e.target.value)} placeholder="e.g. 2.5" style={pctStyle} /></div>
               <div className="field" style={{ marginBottom: 0 }}><label>Co-op Commission Amount</label><input value={coopFlat} onChange={(e) => onCoopFlat(e.target.value)} placeholder="0.00" /></div>
               <div className="field" style={{ marginBottom: 0 }}><label>Commission</label><input readOnly style={cs(lb.coop.commission)} value={formatCurrency(lb.coop.commission)} /></div>
-              <div className="field" style={{ marginBottom: 0 }}><label>HST</label><input readOnly style={cs(lb.coop.hst)} value={formatCurrency(lb.coop.hst)} /></div>
+              <div className="field" style={{ marginBottom: 0 }}><label>{taxLabel()}</label><input readOnly style={cs(lb.coop.hst)} value={formatCurrency(lb.coop.hst)} /></div>
               <div className="field" style={{ marginBottom: 0 }}><label>Total</label><input readOnly style={ts(lb.coop.total)} value={formatCurrency(lb.coop.total)} /></div>
             </div>
             <div className="modal-sub">Total Commissions (Listing + Co-Op)</div>
-            <div className="fin-sum"><Box label="Commission" value={formatCurrency(lb.totals.commission)} /><Box label="HST" value={formatCurrency(lb.totals.hst)} /><Box label="Total" value={formatCurrency(lb.totals.total)} brand /></div>
+            <div className="fin-sum"><Box label="Commission" value={formatCurrency(lb.totals.commission)} /><Box label={taxLabel()} value={formatCurrency(lb.totals.hst)} /><Box label="Total" value={formatCurrency(lb.totals.total)} brand /></div>
 
             <div className="modal-sub">Commission Adjustment</div>
             <div className="field" style={{ maxWidth: 220 }}>
@@ -960,8 +960,8 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
                   <div className="field" style={{ marginTop: 10, marginBottom: lAdjEn ? 13 : 0 }}><label>Listing Comm Adjustment</label><select value={lAdjEn ? 'Yes' : 'No'} onChange={(e) => setLAdjEn(e.target.value === 'Yes')}><option>No</option><option>Yes</option></select></div>
                   {lAdjEn && (
                     <div className="g2">
-                      <SignedAdjField label="Adjustment (Before HST)" value={lBefore} onChange={(nv) => excl(nv, setLBefore, lAfter, setLAfter)} convention="add" />
-                      <SignedAdjField label="Adjustment (After HST)" value={lAfter} onChange={(nv) => excl(nv, setLAfter, lBefore, setLBefore)} convention="add" />
+                      <SignedAdjField label="Adjustment (Before taxRate())" value={lBefore} onChange={(nv) => excl(nv, setLBefore, lAfter, setLAfter)} convention="add" />
+                      <SignedAdjField label="Adjustment (After taxRate())" value={lAfter} onChange={(nv) => excl(nv, setLAfter, lBefore, setLBefore)} convention="add" />
                     </div>
                   )}
                 </div>
@@ -970,8 +970,8 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
                   <div className="field" style={{ marginTop: 10, marginBottom: cAdjEn ? 13 : 0 }}><label>Co-op Comm Adjustment</label><select value={cAdjEn ? 'Yes' : 'No'} onChange={(e) => setCAdjEn(e.target.value === 'Yes')}><option>No</option><option>Yes</option></select></div>
                   {cAdjEn && (
                     <div className="g2">
-                      <SignedAdjField label="Adjustment (Before HST)" value={cBefore} onChange={(nv) => excl(nv, setCBefore, cAfter, setCAfter)} convention="add" />
-                      <SignedAdjField label="Adjustment (After HST)" value={cAfter} onChange={(nv) => excl(nv, setCAfter, cBefore, setCBefore)} convention="add" />
+                      <SignedAdjField label="Adjustment (Before taxRate())" value={cBefore} onChange={(nv) => excl(nv, setCBefore, cAfter, setCAfter)} convention="add" />
+                      <SignedAdjField label="Adjustment (After taxRate())" value={cAfter} onChange={(nv) => excl(nv, setCAfter, cBefore, setCBefore)} convention="add" />
                     </div>
                   )}
                 </div>
@@ -1019,12 +1019,12 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
           /* Commission % / Amount now sit in the Price + Deposit row above. */
           <>
             <div className="fin-sum">
-              <div className="field" style={{ marginBottom: 0 }}><label>Commission</label><input value={formatCurrency(commWoHst)} readOnly />{adjB !== 0 && <div className="help" style={{ margin: '4px 0 0' }}>{adjNote(adjB, 'before HST')}</div>}</div>
-              <div className="field" style={{ marginBottom: 0 }}><label>HST</label><input value={formatCurrency(stdHst)} readOnly /></div>
-              <div className="field" style={{ marginBottom: 0 }}><label>Total</label><input style={ts(stdTotal)} value={formatCurrency(stdTotal)} readOnly />{adjA !== 0 && <div className="help" style={{ margin: '4px 0 0' }}>{adjNote(adjA, 'after HST')}</div>}</div>
+              <div className="field" style={{ marginBottom: 0 }}><label>Commission</label><input value={formatCurrency(commWoHst)} readOnly />{adjB !== 0 && <div className="help" style={{ margin: '4px 0 0' }}>{adjNote(adjB, `before ${taxLabel()}`)}</div>}</div>
+              <div className="field" style={{ marginBottom: 0 }}><label>{taxLabel()}</label><input value={formatCurrency(stdHst)} readOnly /></div>
+              <div className="field" style={{ marginBottom: 0 }}><label>Total</label><input style={ts(stdTotal)} value={formatCurrency(stdTotal)} readOnly />{adjA !== 0 && <div className="help" style={{ margin: '4px 0 0' }}>{adjNote(adjA, `after ${taxLabel()}`)}</div>}</div>
             </div>
 
-            {/* Commission Adjustment sits on one row with its Before/After HST fields when enabled,
+            {/* Commission Adjustment sits on one row with its Before/After taxRate() fields when enabled,
                 so the two adjustments read beside the toggle rather than dropping below it. */}
             <div style={{ display: 'grid', gridTemplateColumns: adjEnabled ? '220px 1fr 1fr' : '220px', gap: 16, alignItems: 'end' }}>
               <div className="field" style={{ marginBottom: 0 }}>
@@ -1033,8 +1033,8 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
               </div>
               {adjEnabled && (
                 <>
-                  <SignedAdjField label="Adjustment (Before HST)" value={adjBefore} onChange={(nv) => excl(nv, setAdjBefore, adjAfter, setAdjAfter)} convention="sub" />
-                  <SignedAdjField label="Adjustment (After HST)" value={adjAfter} onChange={(nv) => excl(nv, setAdjAfter, adjBefore, setAdjBefore)} convention="sub" />
+                  <SignedAdjField label="Adjustment (Before taxRate())" value={adjBefore} onChange={(nv) => excl(nv, setAdjBefore, adjAfter, setAdjAfter)} convention="sub" />
+                  <SignedAdjField label="Adjustment (After taxRate())" value={adjAfter} onChange={(nv) => excl(nv, setAdjAfter, adjBefore, setAdjBefore)} convention="sub" />
                 </>
               )}
             </div>
@@ -1188,7 +1188,7 @@ function AgentCommissionBlocks({ rows, setMember, minBrok, agentDefaults = {}, i
               <input type="number" value={r.m.agent_pct} readOnly={finLock || !unlocked[i]} style={(finLock || !unlocked[i]) ? { ...lockField, ...pctStyle } : pctStyle} onChange={(e) => setMember(i, 'agent_pct', e.target.value)} />
             </div>
             <div className="field" style={{ marginBottom: 0 }}><label>Commission</label><input readOnly style={cs(r.agent.commission)} value={formatCurrency(r.agent.commission)} /></div>
-            <div className="field" style={{ marginBottom: 0 }}><label>HST</label><input readOnly style={cs(r.agent.hst)} value={formatCurrency(r.agent.hst)} /></div>
+            <div className="field" style={{ marginBottom: 0 }}><label>{taxLabel()}</label><input readOnly style={cs(r.agent.hst)} value={formatCurrency(r.agent.hst)} /></div>
             <div className="field" style={{ marginBottom: 0 }}><label>Total</label><input readOnly style={{ fontWeight: 700, color: totalColor(r.agent.total) }} value={formatCurrency(r.agent.total)} /></div>
           </div>
           {(defOf(r.m.name) !== null
@@ -1209,7 +1209,7 @@ function AgentCommissionBlocks({ rows, setMember, minBrok, agentDefaults = {}, i
             <strong style={{ fontSize: 13 }}>{(r.m.name || '').toUpperCase()}</strong>
             <div className="g3" style={{ marginTop: 10 }}>
               <div className="field" style={{ marginBottom: 0 }}><label>Commission</label><input readOnly style={cs(r.t4a.commission)} value={formatCurrency(r.t4a.commission)} /></div>
-              <div className="field" style={{ marginBottom: 0 }}><label>HST</label><input readOnly style={cs(r.t4a.hst)} value={formatCurrency(r.t4a.hst)} /></div>
+              <div className="field" style={{ marginBottom: 0 }}><label>{taxLabel()}</label><input readOnly style={cs(r.t4a.hst)} value={formatCurrency(r.t4a.hst)} /></div>
               <div className="field" style={{ marginBottom: 0 }}><label>Total</label><input readOnly style={ts(r.t4a.total)} value={formatCurrency(r.t4a.total)} /></div>
             </div>
           </div>
@@ -1221,7 +1221,7 @@ function AgentCommissionBlocks({ rows, setMember, minBrok, agentDefaults = {}, i
         <strong style={{ fontSize: 12, color: '#5b21b6' }}>Minimum Brokerage Commission</strong>
         <div className="fin-sum" style={{ marginTop: 10, marginBottom: 0 }}>
           <div className="field" style={{ marginBottom: 0 }}><label>Commission</label><input value={formatCurrency(minBrok.commission)} readOnly /></div>
-          <div className="field" style={{ marginBottom: 0 }}><label>HST</label><input value={formatCurrency(minBrok.hst)} readOnly /></div>
+          <div className="field" style={{ marginBottom: 0 }}><label>{taxLabel()}</label><input value={formatCurrency(minBrok.hst)} readOnly /></div>
           <div className="field" style={{ marginBottom: 0 }}><label>Total</label><input value={formatCurrency(minBrok.total)} readOnly style={{ fontWeight: 700, color: '#5b21b6' }} /></div>
         </div>
       </div>
@@ -1231,7 +1231,7 @@ function AgentCommissionBlocks({ rows, setMember, minBrok, agentDefaults = {}, i
           <div className="g4">
             <div className="field" style={{ marginBottom: 0 }}><label>Brok Comm (%) {!hideLocks && <Icon name="lock" size={11} />}</label><input type="number" value={r.m.brok_pct} readOnly style={{ ...lockField, ...pctStyle }} /></div>
             <div className="field" style={{ marginBottom: 0 }}><label>Commission</label><input readOnly style={cs(r.brok.commission)} value={formatCurrency(r.brok.commission)} /></div>
-            <div className="field" style={{ marginBottom: 0 }}><label>HST</label><input readOnly style={cs(r.brok.hst)} value={formatCurrency(r.brok.hst)} /></div>
+            <div className="field" style={{ marginBottom: 0 }}><label>{taxLabel()}</label><input readOnly style={cs(r.brok.hst)} value={formatCurrency(r.brok.hst)} /></div>
             <div className="field" style={{ marginBottom: 0 }}><label>Total</label><input readOnly style={ts(r.brok.total)} value={formatCurrency(r.brok.total)} /></div>
           </div>
         </div>
@@ -1252,9 +1252,9 @@ function ReferralSections({ data }: { data: ReferralView | null }) {
         <>
           <span className="pill info" style={{ fontSize: 11, marginBottom: 8, display: 'inline-block' }}>Commissions after broker referral</span>
           <div className="fin-sum">
-            <Box label="Commission without HST" value={formatCurrency(data.afterBroker.commission)} />
-            <Box label="HST (13%)" value={formatCurrency(data.afterBroker.hst)} />
-            <Box label="Total Commission (With HST)" value={formatCurrency(data.afterBroker.total)} brand />
+            <Box label={`Commission without ${taxLabel()}`} value={formatCurrency(data.afterBroker.commission)} />
+            <Box label={`${taxLabel()} (${taxPct()}%)`} value={formatCurrency(data.afterBroker.hst)} />
+            <Box label="Total Commission (With taxRate())" value={formatCurrency(data.afterBroker.total)} brand />
           </div>
         </>
       )}
@@ -1262,9 +1262,9 @@ function ReferralSections({ data }: { data: ReferralView | null }) {
         <>
           <span className="pill ok" style={{ fontSize: 11, marginBottom: 8, display: 'inline-block' }}>Agent Commissions after client referral</span>
           <div className="fin-sum">
-            <Box label="Commission Without HST" value={formatCurrency(data.afterClient.commission)} />
-            <Box label="HST (13%)" value={formatCurrency(data.afterClient.hst)} />
-            <Box label="Total Commission (With HST)" value={formatCurrency(data.afterClient.total)} brand />
+            <Box label={`Commission Without ${taxLabel()}`} value={formatCurrency(data.afterClient.commission)} />
+            <Box label={`${taxLabel()} (${taxPct()}%)`} value={formatCurrency(data.afterClient.hst)} />
+            <Box label="Total Commission (With taxRate())" value={formatCurrency(data.afterClient.total)} brand />
           </div>
         </>
       )}

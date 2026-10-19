@@ -17,6 +17,16 @@ let displayMarket: 'CA' | 'IN' = 'CA';
 export function setDisplayMarket(market: string | null | undefined): void {
   displayMarket = market === 'IN' ? 'IN' : 'CA';
 }
+/**
+ * The sales tax on commission for the country being worked in (India desk, 19 Oct 2026): Canada HST 13%
+ * (unchanged), India GST 18% (CGST 9% + SGST 9%, or IGST 18% between states - the split only matters
+ * on the invoice). `taxDivisor` keeps Canada's literal 1.13, which the server and its SQL also use.
+ */
+export const taxRate = (): number => (displayMarket === 'IN' ? 0.18 : 0.13);
+export const taxPct = (): number => (displayMarket === 'IN' ? 18 : 13);
+export const taxLabel = (): string => (displayMarket === 'IN' ? 'GST' : 'HST');
+export const taxDivisor = (): number => (displayMarket === 'IN' ? 1.18 : 1.13);
+
 /** The currency sign for the country being worked in. */
 export const currencySign = (): string => (displayMarket === 'IN' ? '\u20B9' : '$');
 

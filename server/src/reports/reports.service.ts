@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { sqlForMarket } from '../common/tax';
 import Decimal from 'decimal.js';
 import { Prisma } from '@prisma/client';
 import { marketOf } from '../common/market';
@@ -295,7 +296,7 @@ export class ReportsService {
     const ids = ordered.map((r) => r.id);
 
     const [totals, pageRows] = await Promise.all([
-      this.sqlTotals(ids, totalled, def),
+      this.sqlTotals(ids, totalled, def, user.market),
       this.enrichPage(def, user, filters, ids.slice((page - 1) * perPage, (page - 1) * perPage + perPage)),
     ]);
 
@@ -419,7 +420,7 @@ export class ReportsService {
       withWorkMem(this.prisma, REPORT_WORK_MEM, REPORT_TIMEOUT_MS,
         (tx) => tx.$queryRawUnsafe<{ id: number; section: string }[]>(
           paymentPageSql(statusFilter), ids, wanted, (page - 1) * perPage, perPage)),
-      totalled.length ? this.sqlSectionTotals(ids, totalled, statusFilter) : Promise.resolve(new Map()),
+      totalled.length ? this.sqlSectionTotals(ids, totalled, statusFilter, user.market) : Promise.resolve(new Map()),
     ]);
 
     const bySection = new Map(counts.map((c) => [c.section, Number(c.n)]));
@@ -494,13 +495,13 @@ export class ReportsService {
    * the order cannot move a cent.
    */
   private async sqlSectionTotals(
-    ids: number[], totalled: ReportColumn[], statusFilter: string,
+    ids: number[], totalled: ReportColumn[], statusFilter: string, market?: string | null,
   ): Promise<Map<string, Record<string, number>>> {
     const rows = await Promise.all(
       (['standard', 'listing', 'precon'] as CommissionVariant[]).map((v) =>
         withWorkMem(this.prisma, REPORT_WORK_MEM, REPORT_TIMEOUT_MS,
           (tx) => tx.$queryRawUnsafe<ReportSectionTotalsRow[]>(
-            reportSectionTotalsSql(v, paymentSectionFilteredSql(statusFilter)), ids)),
+            sqlForMarket(reportSectionTotalsSql(v, paymentSectionFilteredSql(statusFilter)), market), ids)),
       ),
     );
 
@@ -810,7 +811,7 @@ export class ReportsService {
    * two-decimal `numeric` by the time it gets here, so adding the three subtotals is associative and
    * cannot move a cent.
    */
-  private async sqlTotals(ids: number[], totalled: ReportColumn[], def: ReportDef): Promise<ReportTotals> {
+  private async sqlTotals(ids: number[], totalled: ReportColumn[], def: ReportDef, market?: string | null): Promise<ReportTotals> {
     const out: ReportTotals = { count: ids.length };
     for (const c of totalled) out[c.key] = 0;
     if (ids.length === 0) return out;
@@ -829,7 +830,7 @@ export class ReportsService {
     const rows = await Promise.all(
       (['standard', 'listing', 'precon'] as CommissionVariant[]).map((v) =>
         withWorkMem(this.prisma, REPORT_WORK_MEM, REPORT_TIMEOUT_MS,
-          (tx) => tx.$queryRawUnsafe<ReportTotalsRow[]>(reportTotalsSql(v), ids)),
+          (tx) => tx.$queryRawUnsafe<ReportTotalsRow[]>(sqlForMarket(reportTotalsSql(v), market), ids)),
       ),
     );
 
