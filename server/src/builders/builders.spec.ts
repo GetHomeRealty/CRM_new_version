@@ -49,7 +49,7 @@ describe('who may open the builder database', () => {
   });
 });
 
-describe('agreement expiry reminders: from 15 days before, every 2 days', () => {
+describe('agreement expiry reminders: the company-document rules (Sai, 19 Oct 2026)', () => {
   const due = (expiry: string, last: string | null, today: string) =>
     BuilderAgreementReminderService.due({ expiry_date: d(expiry), last_reminder_at: last ? d(last) : null }, d(today));
 
@@ -61,9 +61,16 @@ describe('agreement expiry reminders: from 15 days before, every 2 days', () => 
     expect(due('2026-11-30', '2026-11-15', '2026-11-16')).toBe(false);
     expect(due('2026-11-30', '2026-11-15', '2026-11-17')).toBe(true);
   });
-  it('still reminds on the expiry day, and stops after it', () => {
-    expect(due('2026-11-30', '2026-11-28', '2026-11-30')).toBe(true);
-    expect(due('2026-11-30', null, '2026-12-01')).toBe(false);
+  it('always reminds the day before and on the expiry day, then every 2 days until renewed', () => {
+    expect(due('2026-11-30', '2026-11-28', '2026-11-29')).toBe(true);  // the day before, 1 day after the last
+    expect(due('2026-11-30', '2026-11-29', '2026-11-30')).toBe(true);  // the expiry day, 1 day after the last
+    expect(due('2026-11-30', '2026-11-30', '2026-12-01')).toBe(false); // after expiry: every 2 days
+    expect(due('2026-11-30', '2026-11-30', '2026-12-02')).toBe(true);
+  });
+  it('a new agreement file after the first reminder counts as the renewal', () => {
+    const s = { expiry_date: d('2026-11-30'), reminder_started_at: d('2026-11-15'), last_reminder_at: d('2026-11-17'), latest_file_at: d('2026-11-18') };
+    expect(BuilderAgreementReminderService.due(s, d('2026-11-19'))).toBe(false);
+    expect(BuilderAgreementReminderService.due({ ...s, latest_file_at: d('2026-01-01') }, d('2026-11-19'))).toBe(true);
   });
   it('an agreement with no expiry date is never chased', () => {
     expect(BuilderAgreementReminderService.due({ expiry_date: null, last_reminder_at: null }, d('2026-11-30'))).toBe(false);

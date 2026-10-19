@@ -6,6 +6,7 @@ import { allowedMarkets, type Market } from '../common/market';
 import { schedulersEnabled, schedulerSkipReason } from '../common/schedulers';
 import { registerWorker, trackedTick } from '../observability/worker-health';
 import { CompanyDocumentsService } from './company-documents.service';
+import { SEND_HOUR, WINDOW_DAYS, expiryReminderDue, expiryState, localDay, REMINDER_FOOTNOTE, type ExpiryReminderState } from '../common/expiry-reminder';
 
 /**
  * COMPANY DOCUMENT EXPIRY REMINDERS (19 Oct 2026). Sai's rules:
@@ -16,24 +17,12 @@ import { CompanyDocumentsService } from './company-documents.service';
  *     this expiry's first reminder counts as the renewal);
  *   - to the Super Admins who work in that country, at 9:00 in the morning of that country's own time
  *     (Toronto for Canada, India time for India), the days counted by that country's own date.
+ * The rules themselves live in common/expiry-reminder.ts, shared with the builder and RERA reminders.
  */
-const WINDOW_DAYS = 15;
-const EVERY_DAYS = 2;
-const SEND_HOUR = 9;
 const TICK_MS = 15 * 60 * 1000;
-export const TIME_ZONE: Record<Market, string> = { CA: 'America/Toronto', IN: 'Asia/Kolkata' };
+export { localDay } from '../common/expiry-reminder';
 
 const esc = (s: string): string => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string));
-
-/** A moment as that country's calendar date (UTC midnight of it) and hour. */
-export function localDay(at: Date, market: Market): { day: Date; hour: number } {
-  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
-    timeZone: TIME_ZONE[market], year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hourCycle: 'h23',
-  }).formatToParts(at).map((p) => [p.type, p.value]));
-  return { day: new Date(`${parts.year}-${parts.month}-${parts.day}T00:00:00Z`), hour: Number(parts.hour) };
-}
-
-interface DueInput { expiry_date: Date | null; reminder_started_at: Date | null; last_reminder_at: Date | null; latest_file_at: Date | null }
 
 @Injectable()
 export class CompanyDocumentReminderService implements OnModuleInit, OnModuleDestroy {
@@ -59,17 +48,8 @@ export class CompanyDocumentReminderService implements OnModuleInit, OnModuleDes
   }
 
   /** Is a reminder due on this country-date? Pure, so it can be tested on any day. */
-  static due(d: DueInput, today: Date, market: Market): boolean {
-    const left = CompanyDocumentsService.daysLeft(d.expiry_date, today);
-    if (left === null || left > WINDOW_DAYS) return false;
-    // Renewed by a new file uploaded after this expiry's reminders began.
-    if (d.reminder_started_at && d.latest_file_at && d.latest_file_at > d.reminder_started_at) return false;
-    if (!d.last_reminder_at) return true;
-    const last = localDay(d.last_reminder_at, market).day;
-    const since = Math.round((today.getTime() - last.getTime()) / 86_400_000);
-    if (since <= 0) return false; // never twice on one day
-    if (left === 1 || left === 0) return true; // the day before, and the day itself - always
-    return since >= EVERY_DAYS;
+  static due(d: ExpiryReminderState, today: Date, market: Market): boolean {
+    return expiryReminderDue(d, today, market);
   }
 
   async run(now: Date = new Date()): Promise<{ sent: number; checked: number }> {
@@ -99,13 +79,12 @@ export class CompanyDocumentReminderService implements OnModuleInit, OnModuleDes
         for (const d of due) {
           const left = CompanyDocumentsService.daysLeft(d.expiry_date, day) as number;
           const when = d.expiry_date!.toISOString().slice(0, 10);
-          const state = left < 0 ? `EXPIRED ${-left} day${left === -1 ? '' : 's'} ago` : left === 0 ? 'expires TODAY' : `expires in ${left} day${left === 1 ? '' : 's'}`;
+          const state = expiryState(left);
           const subject = `Company document ${state} - ${d.title} (${country})`;
           const html = `<p><strong>${esc(d.title)}</strong>${d.number ? ` (no. ${esc(d.number)})` : ''} of the ${country} company`
             + ` ${left < 0 ? 'expired' : 'expires'} on <strong>${when}</strong> - ${esc(state.toLowerCase())}.</p>`
             + `<p>Please renew it, then upload the new file or enter the new expiry date in Settings &rarr; Company Documents (${country}).</p>`
-            + `<p style="color:#6b7280;font-size:12px">From ${WINDOW_DAYS} days before expiry this reminder comes every ${EVERY_DAYS} days,`
-            + ' always on the day before and on the day itself, and after the expiry until it is renewed.</p>';
+            + `<p style="color:#6b7280;font-size:12px">${REMINDER_FOOTNOTE}</p>`;
           let ok = 0;
           for (const addr of to) {
             try { await this.mailer.sendDirect(addr, subject, html); ok += 1; } catch (err) {

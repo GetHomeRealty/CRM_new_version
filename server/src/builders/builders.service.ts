@@ -195,7 +195,7 @@ export class BuildersService {
         await tx.builder_agreements.upsert({
           where: { builder_id: id },
           create: { builder_id: id, ...agreement, created_at: now, updated_at: now },
-          update: { ...agreement, ...(moved ? { last_reminder_at: null } : {}), updated_at: now },
+          update: { ...agreement, ...(moved ? { last_reminder_at: null, reminder_started_at: null } : {}), updated_at: now },
         });
       }
     });

@@ -177,7 +177,7 @@ export class BuilderProjectsService {
     const moved = ymd(existing.rera_valid_until) !== ymd(f.rera_valid_until);
     await this.prisma.builder_projects.update({
       where: { id },
-      data: { ...f, ...(moved ? { rera_last_reminder_at: null } : {}), updated_at: new Date() },
+      data: { ...f, ...(moved ? { rera_last_reminder_at: null, rera_reminder_started_at: null } : {}), updated_at: new Date() },
     });
     return this.show(user, id);
   }
