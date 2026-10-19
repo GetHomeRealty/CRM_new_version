@@ -45,7 +45,7 @@ export default function IndiaSettingsTab() {
         <div className="field"><label>Phone</label><input value={s.phone} onChange={(e) => set('phone', e.target.value)} /></div>
         <div className="field"><label>Email</label><input value={s.email} onChange={(e) => set('email', e.target.value)} /></div>
         <div className="field"><label>HSN/SAC code</label><input value={s.sac_code} onChange={(e) => set('sac_code', e.target.value)} />
-          <span className="help">997222 = real estate commission services. Confirm with accounting.</span></div>
+          <span className="help">997222 = building sales on a fee/commission basis (channel partners, brokerages). Confirmed by Sai, 19 Oct 2026.</span></div>
         <div className="field"><label>Invoice prefix</label><input value={s.invoice_prefix} onChange={(e) => set('invoice_prefix', e.target.value)} />
           <span className="help">Numbers read {s.invoice_prefix || 'GHR'}/2026-27/0001, restarting each April.</span></div>
         <div className="field"><label>Terms</label><input value={s.terms} onChange={(e) => set('terms', e.target.value)} /></div>

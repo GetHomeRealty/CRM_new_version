@@ -28,7 +28,8 @@ export const INDIA_DEFAULTS: IndiaSettings = {
   cin: 'U68200AP2024FTC115697',
   phone: '9963206933',
   email: 'gethomerealtyindia@gmail.com',
-  // Real estate services on a fee/commission basis. Sai to confirm with the accounting team.
+  // 997222 - building sales on a fee/commission basis (channel partners and brokerages acting between
+  // builders and buyers; covers pre-construction). Confirmed by Sai, 19 Oct 2026.
   sac_code: '997222',
   invoice_prefix: 'GHR',
   terms: 'Due on Receipt',
