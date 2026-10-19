@@ -18,7 +18,39 @@ import { useToast } from './toast';
  *   - Both: the two-way switch.
  */
 export const MARKET_NAME: Record<Market, string> = { CA: 'Canada', IN: 'India' };
-const FLAG: Record<Market, string> = { CA: '\u{1F1E8}\u{1F1E6}', IN: '\u{1F1EE}\u{1F1F3}' };
+/**
+ * Drawn flags (19 Oct 2026). Flag emojis are not drawn on Windows - it shows the letters "CA" / "IN"
+ * instead - so the flags are small pictures that look the same on every computer.
+ */
+function CanadaFlag() {
+  return (
+    <svg className="market-flag" viewBox="0 0 9600 4800" aria-hidden="true">
+      <rect width="9600" height="4800" fill="#d52b1e" />
+      <rect x="2400" width="4800" height="4800" fill="#fff" />
+      <path fill="#d52b1e" d="m4890 4430-45-863a95 95 0 0 1 111-98l859 151-116-320a65 65 0 0 1 20-73l941-762-212-99a65 65 0 0 1-34-79l186-572-542 115a65 65 0 0 1-73-38l-105-247-423 454a65 65 0 0 1-111-57l204-1052-327 189a65 65 0 0 1-91-27l-332-652-332 652a65 65 0 0 1-91 27l-327-189 204 1052a65 65 0 0 1-111 57l-423-454-105 247a65 65 0 0 1-73 38l-542-115 186 572a65 65 0 0 1-34 79l-212 99 941 762a65 65 0 0 1 20 73l-116 320 859-151a95 95 0 0 1 111 98l-45 863z" />
+    </svg>
+  );
+}
+
+function IndiaFlag() {
+  const spokes = Array.from({ length: 24 }, (_, i) => i * 15);
+  return (
+    <svg className="market-flag" viewBox="0 0 900 600" aria-hidden="true">
+      <rect width="900" height="200" fill="#ff9933" />
+      <rect y="200" width="900" height="200" fill="#fff" />
+      <rect y="400" width="900" height="200" fill="#138808" />
+      <g transform="translate(450 300)" stroke="#000080" fill="none">
+        <circle r="88" strokeWidth="14" />
+        {spokes.map((a) => <line key={a} x1="0" y1="0" x2="0" y2="-82" strokeWidth="6" transform={`rotate(${a})`} />)}
+        <circle r="16" fill="#000080" stroke="none" />
+      </g>
+    </svg>
+  );
+}
+
+export function Flag({ market }: { market: Market }) {
+  return market === 'IN' ? <IndiaFlag /> : <CanadaFlag />;
+}
 
 export default function MarketSwitch() {
   const { user } = useAuth();
@@ -32,7 +64,7 @@ export default function MarketSwitch() {
   if (markets.length === 1) {
     return (
       <div className="market-switch single" title={`You work on ${MARKET_NAME[current]} deals only`}>
-        <span className="market-option active">{FLAG[current]} {MARKET_NAME[current]}</span>
+        <span className="market-option active"><Flag market={current} /> {MARKET_NAME[current]}</span>
       </div>
     );
   }
@@ -66,7 +98,7 @@ export default function MarketSwitch() {
           title={m === current ? `You are working in ${MARKET_NAME[m]}` : `Switch to ${MARKET_NAME[m]} deals`}
           onClick={() => choose(m)}
         >
-          {FLAG[m]} {MARKET_NAME[m]}
+          <Flag market={m} /> {MARKET_NAME[m]}
         </button>
       ))}
     </div>

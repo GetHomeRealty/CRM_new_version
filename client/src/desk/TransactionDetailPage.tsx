@@ -2,6 +2,7 @@ import { deskPath } from './area';
 import { createPortal } from 'react-dom';
 import Icon from '../ui/Icon';
 import ClosingDateRequestDialog from './ClosingDateRequestDialog';
+import { Flag } from './MarketSwitch';
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { getTransaction, updateTransaction, listAgents, generateTransactionInvoices, getCompanySettings, getCustomers, getBrokerageSuggestions, requestTransactionEdit, approveEditRequest, rejectEditRequest, reviewAgentChanges, rejectAgentChange, requestTransactionDeletion, forwardDeleteRequest, approveDeleteRequest, rejectDeleteRequest, getDocuments, markTransactionReviewsSeen, bulkReviewAction, type OpenReviewItem } from '../lib/api';
@@ -1092,7 +1093,7 @@ export default function TransactionDetailPage() {
               </select>
             );
           })()}
-          {user?.market === 'IN' && <span className="badge-india" title="An India deal - never shown in Canada">{'\u{1F1EE}\u{1F1F3}'} India</span>}
+          {user?.market === 'IN' && <span className="badge-india" title="An India deal - never shown in Canada"><Flag market="IN" /> India</span>}
           {form.statuses.map((s) => <span key={s} className={`pill ${stPill(s)}`}>{s}</span>)}
           <span className={`pill ${view ? 'info' : 'warn'}`} style={{ fontSize: 10 }}>{view ? <><Icon name="lock" size={11} /> View Only</> : <><Icon name="edit" size={11} /> Edit Mode</>}</span>
         </div>
