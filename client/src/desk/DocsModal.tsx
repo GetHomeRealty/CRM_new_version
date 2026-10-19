@@ -483,8 +483,23 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
                   {uploadBlocked ? (
                     <span style={{ fontSize: 11, color: 'var(--muted-2)' }}><Icon name="alert" size={11} /> Upload disabled (not accepted)</span>
                   ) : (<>
-                    {d.kind === 'multi' && <span><Icon name="doc" size={11} /> Multiple files</span>}
-                    {d.kind === 'per_client' && <span><Icon name="users" size={11} /> Per-client uploads</span>}
+                    {/* Multi-file and per-client documents upload inside the row, not here. This
+                        button opens that row (the same as the arrow by the title), so the place to
+                        upload is not hidden behind a small chevron. FINTRAC per client is a Form 630
+                        to fill, not a file, so its button says so. */}
+                    {expandable && (
+                      <button type="button" className="btn ghost sm" data-testid="doc-open-uploads"
+                        onClick={() => toggle(key)} aria-expanded={open2}
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                        <Icon name={d.kind === 'multi' ? 'doc' : 'users'} size={12} />
+                        {open2
+                          ? 'Hide'
+                          : d.kind === 'multi'
+                            ? 'Upload files'
+                            : (d.title || '').toLowerCase().includes('fintrac') ? 'Form 630 per client' : 'Upload per client'}
+                        <Icon name={open2 ? 'chevronDown' : 'chevronRight'} size={12} />
+                      </button>
+                    )}
                     {single && (agentMode && !!d.draft_files?.length
                       ? <span className="pill warn">Draft — not submitted</span>
                       : d.has_file
