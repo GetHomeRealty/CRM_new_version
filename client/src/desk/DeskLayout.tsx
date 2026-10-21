@@ -1,4 +1,4 @@
-import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { Suspense, useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { companyLogoUrl, getAgentChangeNotifications, getDocNotifications, getReviewNotifications, markDocNotificationsSeen } from '../lib/api';
@@ -18,6 +18,8 @@ interface NavItem {
   superAdmin?: boolean;
   /** With superAdmin: shown to a Team Lead too (Users, their own Agents). */
   orTeamLead?: boolean;
+  /** With superAdmin: shown to these roles too (Users → Accounting, 2026-10-21; the API agrees). */
+  orRoles?: string[];
   /** Shown only to agents — their own personal settings, self-scoped. */
   agentOnly?: boolean;
   /**
@@ -56,6 +58,8 @@ interface NavChild {
    */
   screen?: string;
   superAdmin?: boolean;
+  /** Shown only to these roles, on top of the permission check. */
+  roles?: string[];
   /**
    * Shown to every signed-in user, with no permission check.
    *
@@ -77,7 +81,17 @@ const NAV: NavItem[] = [
   { key: 'inventory', label: 'Inventory', ico: 'package' },
   // CRM group: Inbox → Lead → Campaigns
   { key: 'inbox', label: 'Inbox', ico: 'inbox' },
-  { key: 'lead', label: 'Lead', ico: 'lead' },
+  {
+    key: 'lead', label: 'Lead', ico: 'lead',
+    // Conversions is the Leads list filtered to Conversion = Converted, for Accounting only
+    // (brokerage request, 2026-10-16). Everyone else is left with one child, so Lead stays a plain link.
+    children: [
+      { key: 'lead', label: 'Leads', ico: 'lead', path: 'lead',
+        match: (_p, q) => new URLSearchParams(q).get('leadConversion') !== 'converted' },
+      { key: 'conversions', label: 'Conversions', ico: 'check', screen: 'lead', roles: ['accounting'], path: 'lead?leadConversion=converted',
+        match: (_p, q) => new URLSearchParams(q).get('leadConversion') === 'converted' },
+    ],
+  },
   {
     key: 'campaigns', label: 'Campaigns', ico: 'megaphone',
     children: [
@@ -126,7 +140,7 @@ const NAV: NavItem[] = [
   // `superAdmin` rather than the `users` screen permission, because that is what the API enforces:
   // `/api/users` is guarded by AdminGuard and never consults the grid. Driving the nav from the
   // permission produced a visible Users item that opened a page answering 403 to every request.
-  { key: 'users', label: 'Users', ico: 'users', superAdmin: true, orTeamLead: true },
+  { key: 'users', label: 'Users', ico: 'users', superAdmin: true, orTeamLead: true, orRoles: ['accounting'] },
   {
     key: 'settings', label: 'Settings', ico: 'settings',
     // Mirrors SettingsPage's own tabs, with the permissions those tabs already carried: the two
@@ -203,6 +217,11 @@ TITLES.notifications = 'Notification Preferences';
 TITLES['notification-center'] = 'Notifications';
 TITLES['refer-agent'] = 'Refer an Agent';
 
+const SIDEBAR_WIDTH_KEY = 'ghh.sidebar.width';
+const SIDEBAR_DEFAULT = 248;
+const SIDEBAR_MIN = 200;
+const SIDEBAR_MAX = 420;
+
 export default function DeskLayout({ area = DEFAULT_AREA }: { area?: Area }) {
   const { logout, user, can, isAdminOrAbove, isSuperAdmin, modules } = useAuth();
   const navigate = useNavigate();
@@ -211,6 +230,47 @@ export default function DeskLayout({ area = DEFAULT_AREA }: { area?: Area }) {
   const [sidebarClosed, setSidebarClosed] = useState(() => {
     try { return localStorage.getItem('ghh.sidebar.closed') === 'true'; } catch { return false; }
   });
+  /*
+   * The sidebar's width, dragged from its right edge (brokerage request, 2026-10-16). Kept per browser,
+   * like the open/closed choice above; double-click the edge for the default again. Set on the root
+   * element because the full-screen editor's overlay, outside this tree, is inset by the same width.
+   */
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    try {
+      const saved = Number(localStorage.getItem(SIDEBAR_WIDTH_KEY));
+      return saved >= SIDEBAR_MIN && saved <= SIDEBAR_MAX ? saved : SIDEBAR_DEFAULT;
+    } catch { return SIDEBAR_DEFAULT; }
+  });
+  const sidebarWidthRef = useRef(sidebarWidth);
+  useEffect(() => {
+    sidebarWidthRef.current = sidebarWidth;
+    document.documentElement.style.setProperty('--sidebar-w', `${sidebarWidth}px`);
+  }, [sidebarWidth]);
+  const saveSidebarWidth = (w: number) => {
+    try { localStorage.setItem(SIDEBAR_WIDTH_KEY, String(w)); } catch { /* Storage is optional. */ }
+  };
+  const clampWidth = (w: number) => Math.round(Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, w)));
+  const startResize = (e: ReactPointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    document.body.classList.add('resizing-sidebar');
+    const move = (ev: PointerEvent) => setSidebarWidth(clampWidth(ev.clientX));
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      document.body.classList.remove('resizing-sidebar');
+      saveSidebarWidth(sidebarWidthRef.current);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  };
+  const nudgeSidebar = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    e.preventDefault();
+    const w = clampWidth(sidebarWidth + (e.key === 'ArrowRight' ? 16 : -16));
+    setSidebarWidth(w);
+    saveSidebarWidth(w);
+  };
+  const resetSidebarWidth = () => { setSidebarWidth(SIDEBAR_DEFAULT); saveSidebarWidth(SIDEBAR_DEFAULT); };
   const toggleSidebar = () => setSidebarClosed(previous => {
     const next = !previous;
     try { localStorage.setItem('ghh.sidebar.closed', String(next)); } catch { /* Storage is optional. */ }
@@ -310,7 +370,7 @@ export default function DeskLayout({ area = DEFAULT_AREA }: { area?: Area }) {
     // Only this area's modules. Permission is unchanged by the split — a screen the user could
     // open before is still openable, it is simply listed under the area it belongs to.
     .filter((n) => screenInArea(n.key, area))
-    .filter((n) => (n.agentOnly ? isAgent : n.superAdmin ? (isSuperAdmin || (!!n.orTeamLead && !!user?.is_team_lead)) : can(n.key, 'view')))
+    .filter((n) => (n.agentOnly ? isAgent : n.superAdmin ? (isSuperAdmin || (!!n.orTeamLead && !!user?.is_team_lead) || !!n.orRoles?.includes(user?.role ?? '')) : can(n.key, 'view')))
     // Drop sections the user has no permission for or that belong to the other area, and flatten
     // an entry back to a plain link when only one is left — an expander that reveals a single
     // item is just a slower click.
@@ -319,6 +379,7 @@ export default function DeskLayout({ area = DEFAULT_AREA }: { area?: Area }) {
       if (!n.children) return n;
       const kids = n.children
         .filter((c) => !c.area || c.area === area)
+        .filter((c) => !c.roles || c.roles.includes(user?.role ?? ''))
         .filter((c) => (c.personal ? true : c.superAdmin ? isSuperAdmin : can(c.screen ?? c.key, 'view')));
       return kids.length > 1 || (n.keepGroup && kids.length > 0) ? { ...n, children: kids } : { ...n, children: undefined };
     });
@@ -382,9 +443,12 @@ export default function DeskLayout({ area = DEFAULT_AREA }: { area?: Area }) {
    */
   const sub = location.pathname.split('/')[3] || '';
   const TXN_SUB_TITLES: Record<string, string> = { import: 'Bulk Transaction Import', downloads: 'Export & Download Centre' };
+  // Accounting's Conversions entry is the Leads list with a filter, so it takes its name from that.
+  const onConversions = seg === 'lead' && !sub && user?.role === 'accounting'
+    && new URLSearchParams(location.search).get('leadConversion') === 'converted';
   const title = location.pathname.includes('/transactions/')
     ? (TXN_SUB_TITLES[sub] ?? 'Transaction Detail')
-    : (titleOf(seg) || AREA_SHORT[area]);
+    : onConversions ? 'Conversions' : (titleOf(seg) || AREA_SHORT[area]);
 
   const go = (key: string) => navigate(areaPath(area, key));
 
@@ -532,6 +596,12 @@ export default function DeskLayout({ area = DEFAULT_AREA }: { area?: Area }) {
             {navigation()}
           </div>
         </aside>
+        {!sidebarClosed && (
+          <div className="sidebar-resizer" role="separator" aria-orientation="vertical" aria-label="Resize the sidebar"
+            aria-valuenow={sidebarWidth} aria-valuemin={SIDEBAR_MIN} aria-valuemax={SIDEBAR_MAX} tabIndex={0}
+            title="Drag to resize · double-click to reset"
+            onPointerDown={startResize} onDoubleClick={resetSidebarWidth} onKeyDown={nudgeSidebar} />
+        )}
         <button type="button" className={`mobile-nav-backdrop ${mobileNavOpen ? 'open' : ''}`} aria-label="Close navigation menu" tabIndex={mobileNavOpen ? 0 : -1} onClick={() => setMobileNavOpen(false)} />
         <aside
           ref={mobileDrawerRef}

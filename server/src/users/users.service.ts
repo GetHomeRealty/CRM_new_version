@@ -14,7 +14,7 @@ import type { AuthUserRecord } from '../auth/auth.types';
 import { isSuperAdmin, superAdminRoles } from '../core/authz';
 import { OffboardingService } from './offboarding.service';
 import { UserRenameService } from './user-rename.service';
-import { TEAM_LEAD_EDITABLE_FIELDS, TEAM_LEAD_PROFILE_KEYS, teamLeadIdOf } from './team-lead';
+import { TEAM_LEAD_EDITABLE_FIELDS, TEAM_LEAD_PROFILE_KEYS, hasUsersFullAccess, teamLeadIdOf } from './team-lead';
 type UserWithPerms = users & { user_permissions: user_permissions[]; user_modules: user_modules[] };
 
 /** bcrypt ignores everything past 72 bytes, so accepting more would overstate the protection. */
@@ -506,7 +506,7 @@ export class UsersService {
    * handed the table. No actor at all is a caller inside the application, which is unscoped.
    */
   private teamLeadScope(actor: AuthUserRecord | null): number | null {
-    if (!actor || isSuperAdmin(actor)) return null;
+    if (!actor || hasUsersFullAccess(actor)) return null;
     const lead = teamLeadIdOf(actor);
     if (lead === null) throw new ForbiddenException({ message: 'Administrator access required.' });
     return lead;

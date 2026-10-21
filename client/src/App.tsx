@@ -80,6 +80,8 @@ interface ScreenRoutes {
   orSuperAdmin?: boolean;
   /** With `superAdmin`: lets a Team Lead in too. The API scopes what they get. */
   orTeamLead?: boolean;
+  /** With `superAdmin`: lets these roles in too (Users → Accounting, 2026-10-21; see users/team-lead.ts). */
+  orRoles?: string[];
   /** No permission gate at all — personal screens every authenticated user has. */
   open?: boolean;
 }
@@ -112,7 +114,7 @@ const SCREENS: ScreenRoutes[] = [
   // button over an empty table and two "Could not load users" toasts. The permission still governs
   // Settings → Roles & Permissions, which does honour it.
   // `orTeamLead`: a Team Lead manages their own Agents here, and the API answers them with those only.
-  { screen: 'users', paths: [''], element: () => <UsersPage />, superAdmin: true, orTeamLead: true },
+  { screen: 'users', paths: [''], element: () => <UsersPage />, superAdmin: true, orTeamLead: true, orRoles: ['accounting'] },
   // `orSuperAdmin`: Settings also hosts what used to be the Super-Admin-only Email Settings
   // screen, so a Super Admin must still get in even if their `settings` permission was revoked.
   // Each tab re-checks for itself.
@@ -202,6 +204,7 @@ function screenRoutes(area: Area): ReactElement[] {
               superAdmin={s.superAdmin}
               orSuperAdmin={s.orSuperAdmin}
               orTeamLead={s.orTeamLead}
+              orRoles={s.orRoles}
             >
               {body}
             </RequireScreen>

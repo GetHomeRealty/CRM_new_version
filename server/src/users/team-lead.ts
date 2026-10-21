@@ -29,6 +29,20 @@ interface TeamLeadPrincipal {
 }
 
 /** The Team Lead's own user id when this principal is an active Team Lead, otherwise null. */
+/**
+ * THE USERS MODULE, AS A SUPER ADMIN HAS IT, FOR ACCOUNTING TOO (brokerage request, 2026-10-21).
+ *
+ * The brokerage asked for Accounting to have this module exactly as a Super Admin does — every
+ * endpoint behind `UsersAccessGuard`, the whole table (not a Team Lead's slice), the departing-user
+ * review and anybody's profile picture. It reaches NOTHING outside the Users module: the role is not
+ * a Super Admin anywhere else, and `core/authz.ts` is unchanged. Every check in this module that
+ * asks "Super Admin?" of the person acting asks this instead.
+ */
+export const USERS_FULL_ACCESS_ROLES: readonly string[] = ['accounting'];
+export function hasUsersFullAccess(u: { role?: string | null } | null | undefined): boolean {
+  return isSuperAdmin(u as never) || USERS_FULL_ACCESS_ROLES.includes(u?.role ?? '');
+}
+
 export function teamLeadIdOf(u: TeamLeadPrincipal | null | undefined): number | null {
   if (!u?.id || !u.is_team_lead) return null;
   if ((u.role ?? '') !== 'agent') return null;
@@ -65,7 +79,7 @@ export class UsersAccessGuard implements CanActivate {
 
   canActivate(context: ExecutionContext): boolean {
     const req = context.switchToHttp().getRequest<Request>();
-    if (isSuperAdmin(req.authUser)) return true;
+    if (hasUsersFullAccess(req.authUser)) return true;
     const allowed = this.reflector.getAllAndOverride<boolean>(TEAM_LEAD_ALLOWED, [context.getHandler(), context.getClass()]);
     if (allowed && teamLeadIdOf(req.authUser) !== null) return true;
     throw new ForbiddenException({ message: 'Administrator access required.' });
