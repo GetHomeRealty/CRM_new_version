@@ -124,6 +124,13 @@ const AD_STATUS_HINT = 'Read from Meta\'s ads API (read-only), matched to this f
   + 'an ad for this form as active (its campaign and ad set too), its schedule is current and its ad account is active. It does '
   + 'NOT confirm the ad is delivering — budget, bidding, audience or review can still stop impressions; check Ads Manager for '
   + 'delivery. It never comes from the form status, lead counts or CRM sync.';
+/**
+ * THE FORM'S OWN STATUS, shown at once (brokerage request, 2026-10-21: "need Active while the form is
+ * active, and on top"). Only where the ads check has no verified answer yet — still checking, or
+ * Unknown — so a verified Active or Inactive from the ads always wins.
+ */
+const FORM_ACTIVE_HINT = 'This lead form is Active on Meta (open for new leads). Shown straight away from the form itself. '
+  + 'Whether an ad for it is running is checked separately under "Ad details"; once Meta confirms that, this shows its answer instead.';
 /** Said wherever "Active" is shown in detail, so it is never read as "getting impressions". */
 const ENABLED_CAVEAT = 'Active = Meta status and schedule checks only. It does not confirm actual delivery.';
 
@@ -886,7 +893,8 @@ export default function MetaPage() {
 
   /*
    * THEN BY AD STATUS, which is what the list is really read for: Active first, Inactive next,
-   * unknown last.
+   * unknown last. Since 2026-10-21 a form with no verified ad answer that is itself Active on Meta
+   * shows "Active" too (the form's status, at once) and sorts right after the verified Actives.
    *
    * THE SAME VALUE THAT DRIVES THE BADGE, taken from `adFor` rather than re-derived, so a row
    * showing "Active" can never sort as anything else. `adBadge` maps `enabled` to Active and both
@@ -906,11 +914,11 @@ export default function MetaPage() {
    */
   const adRank = (f: MetaForm): number => {
     const state = adFor(f.id)?.state;
-    if (state === 'enabled') return 0;                               // badge: Active
-    if (state === 'not_enabled' || state === 'no_ads') return 1;     // badge: Inactive
-    return 2;                                                        // unknown, or not checked yet
+    if (state === 'enabled') return 0;                               // badge: Active (an ad is enabled)
+    if (state === 'not_enabled' || state === 'no_ads') return 2;     // badge: Inactive
+    return isActive(f) ? 1 : 3;                                      // no ad answer: Active (form status), or nothing
   };
-  const shownForms = [0, 1, 2].flatMap((rank) => byFormStatus.filter((f) => adRank(f) === rank));
+  const shownForms = [0, 1, 2, 3].flatMap((rank) => byFormStatus.filter((f) => adRank(f) === rank));
 
   return (
     // `display: contents` adds no box, so the layout is exactly as before; only visibility changes.
@@ -1106,15 +1114,19 @@ export default function MetaPage() {
                   <div className="toolbar-row">
                     {(() => {
                       const ad = adFor(f.id);
-                      if (!ad) return null;   // still checking: no badge until there is a verified answer
-                      const badge = adBadge(ad.state);
-                      const hasDetail = ad.ads.length > 0 || !!ad.reason;
+                      const badge = ad ? adBadge(ad.state) : null;
+                      const hasDetail = !!ad && (ad.ads.length > 0 || !!ad.reason);
                       return (
                         <>
-                          {badge && (
+                          {ad && badge ? (
                             <span className={`pill ${badge.cls}`} data-testid="meta-ad-badge" data-state={ad.state}
                               title={`${ad.summary}\n\n${AD_STATUS_HINT}`}>
                               {badge.text}
+                            </span>
+                          ) : isActive(f) && (
+                            // No verified ad answer (still checking, or Unknown): the form's own status, at once.
+                            <span className="pill ok" data-testid="meta-form-active-badge" title={FORM_ACTIVE_HINT}>
+                              Active
                             </span>
                           )}
                           {/* The details — every ad and its reason, or why it could not be verified — stay reachable
