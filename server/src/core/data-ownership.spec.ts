@@ -46,6 +46,10 @@ const ROOT = [
   'payment_sheet_rows',
   'customers',
   'campaigns',
+  // Celebration flyers and annual greeting rules: `created_by_id` is a bare integer with no foreign
+  // key (like import_batches), so each row is owned directly by whoever created it.
+  'campaign_flyers',
+  'celebration_automations',
   'agents',
   'marketing_inventory',
   'lead_tags',
@@ -169,6 +173,8 @@ const DERIVED: Record<string, string> = {
   // Click tracking: the link belongs to the campaign it appeared in, and a click to both the
   // campaign and the recipient. Reached only through the campaign, so isolation travels that way.
   campaign_links: 'campaigns', campaign_clicks: 'campaigns',
+  // The one-greeting-per-address-occasion-year mark, written by a celebration campaign's send.
+  celebration_sends: 'campaigns',
   email_templates: 'mail_accounts', email_template_attachments: 'email_templates',
   inbound_emails: 'mail_accounts', meta_pages: 'meta_connections',
   /*

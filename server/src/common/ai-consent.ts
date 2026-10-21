@@ -59,6 +59,22 @@ export const AI_FEATURES = {
   },
 
   /**
+   * "Generate with AI" in Campaigns → Celebrations. See CelebrationAiService.draft.
+   *
+   * The lowest disclosure of the four: the greeting is written with merge fields that are filled
+   * in locally afterwards, so no lead's name or details are ever part of the request.
+   */
+  'campaign-greeting-drafting': {
+    env: 'AI_CAMPAIGN_DRAFTING',
+    label: 'AI celebration greetings',
+    sensitivity: 'low',
+    discloses:
+      'the occasion, the tone, length and language chosen, the instructions the author typed and the '
+      + "sender's name (the agent's or the brokerage's). No lead names, addresses or any other lead "
+      + 'data — personalisation is filled in on our own server after the text comes back.',
+  },
+
+  /**
    * FINTRAC Form 630 identity extraction. See IdExtractionService.extractIdFields.
    *
    * The most sensitive disclosure this application makes, by a distance, and the one that was

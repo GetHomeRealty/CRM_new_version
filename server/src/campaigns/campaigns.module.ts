@@ -14,6 +14,12 @@ import { CampaignTemplatesService } from './campaign-templates.service';
 import { MailDeliverabilityService } from './mail-deliverability.service';
 import { LeadsModule } from '../leads/leads.module';
 import { BounceIngestService } from './bounce-ingest.service';
+import { CelebrationsController } from './celebrations.controller';
+import { CelebrationAudienceService } from './celebration-audience.service';
+import { CelebrationCampaignsService } from './celebration-campaigns.service';
+import { CelebrationAutomationService } from './celebration-automation.service';
+import { CelebrationAiService } from './celebration-ai.service';
+import { CelebrationFlyerService } from './celebration-flyer.service';
 
 /**
  * Controller order matters: Express matches in registration order, and CampaignsController owns
@@ -28,7 +34,12 @@ import { BounceIngestService } from './bounce-ingest.service';
   // CrmSettingsModule for the CRM email log: a campaign test send is a real email leaving the
   // brokerage and has to be recorded where every other one is.
   imports: [NotificationDispatcherModule, AuthModule, EmailModule, LeadsModule, CrmSettingsModule],
-  controllers: [CampaignTrackingController, CampaignTemplatesController, CampaignsController],
-  providers: [CampaignAuditService, CampaignResumeService, CampaignsService, CampaignAudienceService, CampaignTemplatesService, MailDeliverabilityService, BounceIngestService],
+  // CelebrationsController (`campaigns/celebrations/...`) before CampaignsController for the same reason.
+  controllers: [CampaignTrackingController, CampaignTemplatesController, CelebrationsController, CampaignsController],
+  providers: [
+    CampaignAuditService, CampaignResumeService, CampaignsService, CampaignAudienceService, CampaignTemplatesService, MailDeliverabilityService, BounceIngestService,
+    // Celebration & Wishes
+    CelebrationAudienceService, CelebrationCampaignsService, CelebrationAutomationService, CelebrationAiService, CelebrationFlyerService,
+  ],
 })
 export class CampaignsModule {}
