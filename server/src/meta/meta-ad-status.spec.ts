@@ -221,7 +221,7 @@ describe('unknown, with the reason — never a guess', () => {
     const { svc } = setup({ accounts: { accounts: [ACC1] }, ads: { act_1: [ad('1', 'ACTIVE', null)] } });
     const s = formStatus(await svc.scanFor(1, true), FORM_A);
     expect(s.state).toBe('unknown');
-    expect(s.reason).toMatch(/did not name a form/);
+    expect(s.reason).toMatch(/could not be matched to a form/);
   });
 
   it('a non-lead ad without a form does not make anything unknown', async () => {
@@ -401,6 +401,57 @@ describe('the last check survives a deploy or restart, so the screen shows it at
     } as unknown as PrismaService;
     const { make } = setup({ accounts: { accounts: [ACC1] }, ads: { act_1: [ad('1', 'ACTIVE', FORM_A)] } });
     expect(formStatus(await make(broken).scanFor(7, false), FORM_A).state).toBe('enabled');
+  });
+});
+
+describe('lead ads whose creative names no form (some Advantage+ ads)', () => {
+  /** The CRM's leads, as far as this lookup goes: which ad and which form each came from. */
+  const leadsOf = (rows: { meta_ad_id: string; facebook_form_id: string }[], fail = false) => ({
+    leads: {
+      findMany: jest.fn(async ({ where }: { where: { meta_ad_id: { in: string[] } } }) => {
+        if (fail) throw new Error('database is away');
+        return rows.filter((r) => where.meta_ad_id.in.includes(r.meta_ad_id));
+      }),
+    },
+  } as unknown as PrismaService);
+
+  it('is matched to its form through the leads it brought in, so a running one makes that form Active', async () => {
+    const { make } = setup({ accounts: { accounts: [ACC1] }, ads: { act_1: [ad('7', 'ACTIVE', null)] } });
+    const scan = await make(leadsOf([{ meta_ad_id: '7', facebook_form_id: FORM_A }])).scanFor(1, true);
+    expect(formStatus(scan, FORM_A).state).toBe('enabled');
+    expect(scan.unmatched_lead_ads).toBe(0);
+    expect(formStatus(scan, FORM_B).state).toBe('no_ads');
+  });
+
+  it('a PAUSED one with no leads does not stop "Inactive": it cannot make any form Active', async () => {
+    const { make } = setup({ accounts: { accounts: [ACC1] }, ads: { act_1: [ad('1', 'PAUSED', FORM_A), ad('8', 'PAUSED', null)] } });
+    const scan = await make(leadsOf([])).scanFor(1, true);
+    expect(scan.unmatched_lead_ads).toBe(1);
+    expect(scan.unmatched_enabled_lead_ads).toBe(0);
+    expect(formStatus(scan, FORM_A).state).toBe('not_enabled');
+    expect(formStatus(scan, FORM_B).state).toBe('no_ads');
+  });
+
+  it('a RUNNING one with no leads still makes every form without a running ad Unknown — it may be theirs', async () => {
+    const { make } = setup({ accounts: { accounts: [ACC1] }, ads: { act_1: [ad('1', 'PAUSED', FORM_A), ad('9', 'ACTIVE', null)] } });
+    const scan = await make(leadsOf([])).scanFor(1, true);
+    expect(scan.unmatched_enabled_lead_ads).toBe(1);
+    expect(formStatus(scan, FORM_A)).toMatchObject({ state: 'unknown', reason: expect.stringMatching(/1 enabled lead ad could not be matched/) });
+  });
+
+  it('if the leads cannot be read, the ad simply stays unmatched — the check still finishes', async () => {
+    const { make } = setup({ accounts: { accounts: [ACC1] }, ads: { act_1: [ad('9', 'ACTIVE', null)] } });
+    const scan = await make(leadsOf([], true)).scanFor(1, true);
+    expect(scan.accounts_failed).toEqual([]);
+    expect(scan.unmatched_enabled_lead_ads).toBe(1);
+  });
+
+  it('a check saved before this change (no enabled count) still counts every unmatched ad, as it did', () => {
+    const old = {
+      checked_at: '2026-10-21T09:17:38.005Z', blocked: null, accounts_checked: 1, accounts_failed: [],
+      incomplete: [], unmatched_lead_ads: 2, ads: [], by_form: {},
+    };
+    expect(formStatus(old, FORM_A)).toMatchObject({ state: 'unknown', reason: expect.stringMatching(/2 lead ads did not name a form/) });
   });
 });
 

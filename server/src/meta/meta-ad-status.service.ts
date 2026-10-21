@@ -56,8 +56,14 @@ export interface AdScan {
   /** Fewer accounts or ads than exist were read (caps), or archived ads could not be requested — any of which
    *  stops "No ads found" or "Not enabled" from being said. */
   incomplete: string[];
-  /** Ads in lead campaigns whose creative did not name a form, so they could not be matched. */
+  /** Ads in lead campaigns whose creative did not name a form, and that no lead in the CRM ties to one. */
   unmatched_lead_ads: number;
+  /**
+   * How many of those are themselves enabled. Only these stop "Inactive" from being said: a paused ad
+   * cannot make any form Active, whichever form it belongs to. Absent from checks saved before
+   * 2026-10-21, which then count every unmatched ad, as they did.
+   */
+  unmatched_enabled_lead_ads?: number;
   ads: AdRow[];
   /** form id -> indexes into `ads`. */
   by_form: Record<string, number[]>;
@@ -119,6 +125,19 @@ export function describeAd(ad: GraphAd, account: GraphAdAccount, now: number): {
   return { label: 'Enabled', enabled: true };
 }
 
+/** Lead ads matched to no form that could still be some form's running ad — and so stop "Inactive". */
+function unmatchedGap(scan: AdScan): string[] {
+  const enabledOnes = scan.unmatched_enabled_lead_ads;
+  if (enabledOnes === undefined) {
+    return scan.unmatched_lead_ads > 0
+      ? [`${scan.unmatched_lead_ads} lead ad${scan.unmatched_lead_ads === 1 ? '' : 's'} did not name a form in their creative (for example ads using an existing post)`]
+      : [];
+  }
+  return enabledOnes > 0
+    ? [`${enabledOnes} enabled lead ad${enabledOnes === 1 ? '' : 's'} could not be matched to a form (the creative names none, and no lead in the CRM came from ${enabledOnes === 1 ? 'it' : 'them'})`]
+    : [];
+}
+
 /** One form's answer, from a finished scan. */
 export function formStatus(scan: AdScan, formId: string): FormAdStatus {
   if (scan.blocked) return { state: 'unknown', summary: 'Unknown', reason: scan.blocked.message, ads: [] };
@@ -127,9 +146,7 @@ export function formStatus(scan: AdScan, formId: string): FormAdStatus {
   const gaps: string[] = [
     ...scan.accounts_failed.map((a) => `ad account ${a.name || a.id} could not be read (${a.reason})`),
     ...scan.incomplete,
-    ...(scan.unmatched_lead_ads > 0
-      ? [`${scan.unmatched_lead_ads} lead ad${scan.unmatched_lead_ads === 1 ? '' : 's'} did not name a form in their creative (for example ads using an existing post)`]
-      : []),
+    ...unmatchedGap(scan),
   ];
   const enabled = ads.filter((a) => a.enabled);
   const n = (k: number, w: string) => `${k} ${w}${k === 1 ? '' : 's'}`;
@@ -300,7 +317,7 @@ export class MetaAdStatusService {
   private empty(blocked: AdScan['blocked']): AdScan {
     return {
       checked_at: new Date().toISOString(), blocked, accounts_checked: 0, accounts_failed: [],
-      incomplete: [], unmatched_lead_ads: 0, ads: [], by_form: {},
+      incomplete: [], unmatched_lead_ads: 0, unmatched_enabled_lead_ads: 0, ads: [], by_form: {},
     };
   }
 
@@ -347,6 +364,8 @@ export class MetaAdStatusService {
     }
 
     const now = Date.now();
+    // Lead ads whose creative named no form: matched through the CRM's own leads once every account is read.
+    const unnamed: { ad: GraphAd; account: GraphAdAccount }[] = [];
     for (const account of accounts) {
       try {
         const { ads, truncated, archivedIncluded } = await this.graph.adsInAccount(account.id, conn.token, MAX_ADS_PER_ACCOUNT);
@@ -356,18 +375,10 @@ export class MetaAdStatusService {
         for (const ad of ads) {
           const forms = formIdsInCreative(ad.creative);
           if (!forms.length) {
-            if (LEAD_OBJECTIVES.has(String(ad.campaign?.objective ?? '').toUpperCase())) scan.unmatched_lead_ads += 1;
+            if (LEAD_OBJECTIVES.has(String(ad.campaign?.objective ?? '').toUpperCase())) unnamed.push({ ad, account });
             continue;
           }
-          const { label, enabled } = describeAd(ad, account, now);
-          const idx = scan.ads.push({
-            ad_id: ad.id, ad_name: ad.name ?? ad.id,
-            adset_id: ad.adset?.id ?? null, adset_name: ad.adset?.name ?? null,
-            campaign_id: ad.campaign?.id ?? null, campaign_name: ad.campaign?.name ?? null,
-            account_id: account.id, account_name: account.name ?? account.id,
-            effective_status: ad.effective_status ?? null, label, enabled,
-          }) - 1;
-          for (const f of forms) (scan.by_form[f] ??= []).push(idx);
+          addAd(scan, ad, account, forms, now);
         }
       } catch (err) {
         const r = reasonFor(err);
@@ -376,7 +387,56 @@ export class MetaAdStatusService {
         scan.accounts_failed.push({ id: account.id, name: account.name ?? '', reason: r.message });
       }
     }
+
+    /*
+     * A LEAD AD WHOSE CREATIVE NAMES NO FORM — Meta does not return it for some Advantage+ ads — is
+     * matched through the leads it brought in: Meta records the ad and the form on every lead, and the
+     * CRM stores both from the same submission (`leads.meta_ad_id`, `leads.facebook_form_id`). An ad
+     * with no lead in the CRM stays unmatched, and only if it is ENABLED does it stop "Inactive".
+     */
+    const fromLeads = await this.formsFromLeads(unnamed.map((u) => u.ad.id));
+    for (const { ad, account } of unnamed) {
+      const forms = fromLeads.get(ad.id);
+      if (forms?.length) { addAd(scan, ad, account, forms, now); continue; }
+      scan.unmatched_lead_ads += 1;
+      if (describeAd(ad, account, now).enabled) scan.unmatched_enabled_lead_ads = (scan.unmatched_enabled_lead_ads ?? 0) + 1;
+    }
     scan.checked_at = new Date().toISOString();
     return scan;
   }
+
+  /** Ad id -> the form(s) its leads in the CRM came from. Never fatal: unreadable means unmatched. */
+  private async formsFromLeads(adIds: string[]): Promise<Map<string, string[]>> {
+    const out = new Map<string, string[]>();
+    if (!this.prisma || !adIds.length) return out;
+    try {
+      const rows = await this.prisma.leads.findMany({
+        where: { meta_ad_id: { in: adIds }, facebook_form_id: { not: null } },
+        select: { meta_ad_id: true, facebook_form_id: true },
+        distinct: ['meta_ad_id', 'facebook_form_id'],
+      });
+      for (const r of rows) {
+        if (!r.meta_ad_id || !r.facebook_form_id) continue;
+        const list = out.get(r.meta_ad_id) ?? [];
+        if (!list.includes(r.facebook_form_id)) list.push(r.facebook_form_id);
+        out.set(r.meta_ad_id, list);
+      }
+    } catch (err) {
+      this.log.warn(`Could not match lead ads through their leads: ${(err as Error).message}`);
+    }
+    return out;
+  }
+}
+
+/** One ad, with Meta's status in words, under each form it uses. */
+function addAd(scan: AdScan, ad: GraphAd, account: GraphAdAccount, forms: string[], now: number): void {
+  const { label, enabled } = describeAd(ad, account, now);
+  const idx = scan.ads.push({
+    ad_id: ad.id, ad_name: ad.name ?? ad.id,
+    adset_id: ad.adset?.id ?? null, adset_name: ad.adset?.name ?? null,
+    campaign_id: ad.campaign?.id ?? null, campaign_name: ad.campaign?.name ?? null,
+    account_id: account.id, account_name: account.name ?? account.id,
+    effective_status: ad.effective_status ?? null, label, enabled,
+  }) - 1;
+  for (const f of forms) (scan.by_form[f] ??= []).push(idx);
 }
