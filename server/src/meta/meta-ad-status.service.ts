@@ -3,7 +3,7 @@ import { Injectable, Logger, Optional } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { MetaConnectionService } from './meta-connection.service';
-import { MetaGraphService, GraphError, isAuthFailure, type GraphAd, type GraphAdAccount } from './meta-graph.service';
+import { MetaGraphService, GraphError, LEAD_OBJECTIVES, isAuthFailure, type GraphAd, type GraphAdAccount } from './meta-graph.service';
 import { MetaApiBudgetService } from './meta-api-budget.service';
 
 /**
@@ -68,7 +68,6 @@ export interface AdScan {
 const MAX_ACCOUNTS = 25;
 const MAX_ADS_PER_ACCOUNT = 1000;
 const CACHE_MS = 15 * 60_000;
-const LEAD_OBJECTIVES = new Set(['OUTCOME_LEADS', 'LEAD_GENERATION']);
 
 /** Every `lead_gen_form_id` anywhere in a creative — the spec nests it differently per ad format. */
 export function formIdsInCreative(creative: unknown): string[] {

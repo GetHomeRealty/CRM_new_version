@@ -451,4 +451,106 @@ describe('the Graph calls are read-only and cover live and archived ads', () => 
       : { body: { data: [] } }));
     await expect(new MetaGraphService().adsInAccount('act_1', 'tok', 1000)).rejects.toThrow('An unknown error occurred');
   });
+
+  describe("Meta refusing an Advantage+ ad's specs (subcode 2446211) no longer hides the whole account", () => {
+    // Meta's own words, as seen on the live server on 2026-10-21.
+    const DOF = { status: 400, body: { error: {
+      message: 'Invalid parameter', code: 100, error_subcode: 2446211,
+      error_user_title: 'First DoF value should match object story spec field',
+    } } };
+    const lead = (id: string, creative: string, status = 'ACTIVE') => ({
+      id, effective_status: status, campaign: { id: `c${id}`, objective: 'OUTCOME_LEADS' }, creative: { id: creative },
+    });
+    const specsFor = (formId: string) => ({ object_story_spec: leadCreative(formId).object_story_spec });
+    const withSpecs = (u: URL) => (u.searchParams.get('fields') ?? '').includes('creative{object_story_spec');
+
+    it("reads the ads without specs, then each lead ad's creative by id, and the form is found", async () => {
+      const seen = stub((u) => {
+        if (u.pathname.endsWith('/ads')) {
+          if (withSpecs(u)) return DOF;
+          if (u.searchParams.has('effective_status')) return { body: { data: [] } };
+          return { body: { data: [
+            lead('1', 'cr1'), lead('2', 'cr2', 'PAUSED'),
+            { id: '3', effective_status: 'ACTIVE', campaign: { id: 'c3', objective: 'OUTCOME_TRAFFIC' }, creative: { id: 'cr3' } },
+          ] } };
+        }
+        if (u.searchParams.has('ids')) {
+          return { body: { cr1: { id: 'cr1', ...specsFor(FORM_A) }, cr2: { id: 'cr2', ...specsFor(FORM_B) } } };
+        }
+        return { status: 500, body: { error: { message: 'unexpected', code: 1 } } };
+      });
+      const res = await new MetaGraphService().adsInAccount('act_1', 'tok', 1000);
+      expect(res.archivedIncluded).toBe(true);
+      const byId = Object.fromEntries(res.ads.map((a) => [a.id, formIdsInCreative(a.creative)]));
+      expect(byId).toEqual({ 1: [FORM_A], 2: [FORM_B], 3: [] });
+      // Only lead ads are looked up, in one read, and every call is a GET with the token in the header.
+      const lookups = seen.filter((x) => x.url.searchParams.has('ids'));
+      expect(lookups).toHaveLength(1);
+      expect(lookups[0].url.searchParams.get('ids')!.split(',').sort()).toEqual(['cr1', 'cr2']);
+      expect(seen.every((x) => x.method === 'GET' && x.auth === 'Bearer tok' && !x.url.search.includes('access_token'))).toBe(true);
+    });
+
+    it('a refused batch is read one creative at a time; a refused pair, one spec at a time; the unreadable one names no form', async () => {
+      stub((u) => {
+        if (u.pathname.endsWith('/ads')) {
+          if (withSpecs(u)) return DOF;
+          if (u.searchParams.has('effective_status')) return { body: { data: [] } };
+          return { body: { data: [lead('1', 'cr1'), lead('2', 'cr2'), lead('3', 'cr3')] } };
+        }
+        const ids = u.searchParams.get('ids') ?? '';
+        const fields = u.searchParams.get('fields');
+        if (ids.includes(',')) return DOF;                                     // the batch
+        if (ids === 'cr1') return { body: { cr1: { id: 'cr1', ...specsFor(FORM_A) } } };
+        if (ids === 'cr2') {                                                   // only asset_feed_spec readable
+          if (fields === 'asset_feed_spec') return { body: { cr2: { id: 'cr2', asset_feed_spec: { call_to_actions: [{ value: { lead_gen_form_id: FORM_B } }] } } } };
+          return DOF;
+        }
+        return DOF;                                                            // cr3: nothing readable
+      });
+      const res = await new MetaGraphService().adsInAccount('act_1', 'tok', 1000);
+      const byId = Object.fromEntries(res.ads.map((a) => [a.id, formIdsInCreative(a.creative)]));
+      expect(byId).toEqual({ 1: [FORM_A], 2: [FORM_B], 3: [] });
+    });
+
+    it('the same refusal on the archived read is handled the same way, not reported as "archived refused"', async () => {
+      stub((u) => {
+        if (u.pathname.endsWith('/ads')) {
+          if (withSpecs(u)) return DOF;
+          return { body: { data: u.searchParams.has('effective_status') ? [lead('9', 'cr9', 'ARCHIVED')] : [] } };
+        }
+        return { body: { cr9: { id: 'cr9', ...specsFor(FORM_C) } } };
+      });
+      const res = await new MetaGraphService().adsInAccount('act_1', 'tok', 1000);
+      expect(res.archivedIncluded).toBe(true);
+      expect(formIdsInCreative(res.ads[0].creative)).toEqual([FORM_C]);
+    });
+
+    it('any other failure while looking up creatives is not swallowed', async () => {
+      stub((u) => {
+        if (u.pathname.endsWith('/ads')) return withSpecs(u) ? DOF : { body: { data: [lead('1', 'cr1')] } };
+        return { status: 500, body: { error: { message: 'An unknown error occurred', code: 1 } } };
+      });
+      await expect(new MetaGraphService().adsInAccount('act_1', 'tok', 1000)).rejects.toThrow('An unknown error occurred');
+    });
+
+    it('end to end: the account is read, and a form whose ad is running is Active', async () => {
+      stub((u) => {
+        if (u.pathname.endsWith('/me/adaccounts')) return { body: { data: [{ id: 'act_1', name: 'A', account_status: 1 }] } };
+        if (u.pathname.endsWith('/ads')) {
+          if (withSpecs(u)) return DOF;
+          return { body: { data: u.searchParams.has('effective_status') ? [] : [lead('1', 'cr1'), lead('2', 'cr2', 'PAUSED')] } };
+        }
+        return { body: { cr1: { id: 'cr1', ...specsFor(FORM_A) }, cr2: { id: 'cr2', ...specsFor(FORM_B) } } };
+      });
+      const connections = {
+        find: jest.fn(async () => ({ id: 1, token: 'tok', connected_at: new Date('2026-10-01T00:00:00Z'), pages: [] })),
+        meta: jest.fn(async () => ({ granted_scopes: 'ads_read' })),
+      } as unknown as MetaConnectionService;
+      const budget = { consume: jest.fn(async () => ({ allowed: true, spent: 1, limit: 600, resetInSeconds: 120 })) } as unknown as MetaApiBudgetService;
+      const scan = await new MetaAdStatusService(connections, new MetaGraphService(), budget).scanFor(7, true);
+      expect(scan.accounts_failed).toEqual([]);
+      expect(formStatus(scan, FORM_A).state).toBe('enabled');
+      expect(formStatus(scan, FORM_B).state).toBe('not_enabled');
+    });
+  });
 });
