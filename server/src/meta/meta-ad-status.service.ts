@@ -1,5 +1,7 @@
 import { createHash } from 'crypto';
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
+import type { Prisma } from '@prisma/client';
+import { PrismaService } from '../prisma/prisma.service';
 import { MetaConnectionService } from './meta-connection.service';
 import { MetaGraphService, GraphError, isAuthFailure, type GraphAd, type GraphAdAccount } from './meta-graph.service';
 import { MetaApiBudgetService } from './meta-api-budget.service';
@@ -181,7 +183,8 @@ export class MetaAdStatusService {
   private readonly log = new Logger(MetaAdStatusService.name);
   /**
    * Per person, and only for the Meta connection it was read with: their login decides what they can
-   * read. In memory — a lost cache costs one re-read.
+   * read. In memory, and also kept on the person's connection row (`ad_status_scan`) so a deploy or
+   * restart does not leave the next open of the screen waiting for a whole new read.
    */
   private readonly cache = new Map<number, { key: string; scan: AdScan }>();
   /** A scan already under way for this person and connection, so a second request waits for it instead of reading again. */
@@ -191,6 +194,7 @@ export class MetaAdStatusService {
     private readonly connections: MetaConnectionService,
     private readonly graph: MetaGraphService,
     private readonly budget: MetaApiBudgetService,
+    @Optional() private readonly prisma?: PrismaService,
   ) {}
 
   /**
@@ -210,7 +214,12 @@ export class MetaAdStatusService {
       this.cache.delete(userId);
       return this.empty({ code: 'not_connected', message: 'Meta is not connected.' });
     }
-    const cached = this.cache.get(userId);
+    let cached = this.cache.get(userId);
+    if (!refresh && !cached) {
+      // Nothing in memory (a deploy or restart): the check kept on the connection row, if it was read with this login.
+      const saved = await this.loadSaved(userId);
+      if (saved?.key === key) this.cache.set(userId, cached = saved);
+    }
     if (!refresh && cached && cached.key === key) {
       if (Date.now() - Date.parse(cached.scan.checked_at) < CACHE_MS) return cached.scan;
       /*
@@ -236,11 +245,47 @@ export class MetaAdStatusService {
       const scan = await this.scan(userId);
       // A scan that could not start because of the shared budget is not remembered: the next view retries.
       if (scan.blocked?.code === 'budget') this.cache.delete(userId);
-      else this.cache.set(userId, { key, scan });
+      else {
+        this.cache.set(userId, { key, scan });
+        await this.save(userId, key, scan);
+      }
       return scan;
     })().finally(() => { if (this.inflight.get(userId)?.job === job) this.inflight.delete(userId); });
     this.inflight.set(userId, { key, job });
     return job;
+  }
+
+  /**
+   * The check kept on this person's active connection row, or null. Never fatal: if it cannot be read
+   * the screen simply waits for a new check, as it did before.
+   */
+  private async loadSaved(userId: number): Promise<{ key: string; scan: AdScan } | null> {
+    if (!this.prisma) return null;
+    try {
+      const row = await this.prisma.meta_connections.findFirst({
+        where: { user_id: userId, is_active: true }, select: { ad_status_scan: true },
+      });
+      const v = row?.ad_status_scan as { key?: unknown; scan?: AdScan } | null | undefined;
+      if (typeof v?.key !== 'string' || typeof v.scan?.checked_at !== 'string' || !Array.isArray(v.scan.ads)) return null;
+      const { stale: _stale, ...scan } = v.scan;
+      return { key: v.key, scan };
+    } catch (err) {
+      this.log.warn(`Saved ad status unreadable for user ${userId}: ${(err as Error).message}`);
+      return null;
+    }
+  }
+
+  /** Keep this check on the person's active connection row. A failure only costs the instant answer next time. */
+  private async save(userId: number, key: string, scan: AdScan): Promise<void> {
+    if (!this.prisma) return;
+    try {
+      await this.prisma.meta_connections.updateMany({
+        where: { user_id: userId, is_active: true },
+        data: { ad_status_scan: { key, scan } as unknown as Prisma.InputJsonValue },
+      });
+    } catch (err) {
+      this.log.warn(`Could not keep the ad status for user ${userId}: ${(err as Error).message}`);
+    }
   }
 
   /** Identity of the current Meta connection, or null when there is none. Never stores the token itself. */

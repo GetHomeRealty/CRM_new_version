@@ -843,6 +843,12 @@ model meta_connections {
   last_error            String?      @db.Text
   last_error_at         DateTime?    @db.Timestamp(0)
   last_webhook_at       DateTime?    @db.Timestamp(0)
+  /**
+   * The last ad-status check for this connection, kept so the Meta screen can show it the moment it
+   * opens (also after a restart) while a fresh check runs. Holds the connection key it was read
+   * with, so an answer from an earlier login is never served. Dropped with the row on disconnect.
+   */
+  ad_status_scan        Json?        @db.JsonB
   created_at            DateTime?    @db.Timestamp(0)
   updated_at            DateTime?    @db.Timestamp(0)
   pages                 meta_pages[]

@@ -2,6 +2,7 @@ import { MetaAdStatusService, formStatus, formIdsInCreative, describeAd } from '
 import { MetaGraphService, GraphError, type GraphAd, type GraphAdAccount } from './meta-graph.service';
 import type { MetaConnectionService } from './meta-connection.service';
 import type { MetaApiBudgetService } from './meta-api-budget.service';
+import type { PrismaService } from '../prisma/prisma.service';
 
 /**
  * ADVERTISING STATUS FOR LEAD FORMS — from Meta's ads, matched by form id, never inferred.
@@ -55,7 +56,11 @@ function setup(opts: { scopes?: string; accounts: Accounts; ads: Record<string, 
   const budget = {
     consume: jest.fn(async () => ({ allowed: opts.budget !== false, spent: 1, limit: 600, resetInSeconds: 120 })),
   } as unknown as MetaApiBudgetService;
-  return { svc: new MetaAdStatusService(connections, graph, budget), graph, calls, conn, budget };
+  return {
+    svc: new MetaAdStatusService(connections, graph, budget), graph, calls, conn, budget,
+    /** Another instance over the same Meta and connection — the server after a deploy or restart. */
+    make: (prisma?: PrismaService) => new MetaAdStatusService(connections, graph, budget, prisma),
+  };
 }
 const ACC1: GraphAdAccount = { id: 'act_1', name: 'Main account', account_status: 1 };
 const ACC2: GraphAdAccount = { id: 'act_2', name: 'Second account', account_status: 1 };
@@ -314,6 +319,88 @@ describe('last checked, refresh, and a connection that changes', () => {
     await svc.scanFor(7, false);
     await svc.scanFor(8, false);
     expect(graph.readableAdAccounts).toHaveBeenCalledTimes(2);
+  });
+});
+
+/** The person's connection row, as far as the kept check goes. */
+function keptStore() {
+  const rows = new Map<number, unknown>();
+  const prisma = {
+    meta_connections: {
+      findFirst: jest.fn(async ({ where }: { where: { user_id: number } }) => (rows.has(where.user_id) ? { ad_status_scan: rows.get(where.user_id) } : null)),
+      updateMany: jest.fn(async ({ where, data }: { where: { user_id: number }; data: { ad_status_scan: unknown } }) => {
+        rows.set(where.user_id, JSON.parse(JSON.stringify(data.ad_status_scan)));
+        return { count: 1 };
+      }),
+    },
+  } as unknown as PrismaService;
+  return { prisma, rows };
+}
+
+describe('the last check survives a deploy or restart, so the screen shows it at once', () => {
+  it('after a restart the kept check is shown at once, and a new read runs behind an old one', async () => {
+    const { prisma, rows } = keptStore();
+    const { make, graph } = setup({ accounts: { accounts: [ACC1] }, ads: { act_1: [ad('1', 'ACTIVE', FORM_A)] } });
+    const first = await make(prisma).scanFor(7, false);
+    expect(rows.has(7)).toBe(true);
+    expect(graph.readableAdAccounts).toHaveBeenCalledTimes(1);
+
+    // Restarted within the cache window: the kept check, without asking Meta.
+    const soon = await make(prisma).scanFor(7, false);
+    expect(soon.checked_at).toBe(first.checked_at);
+    expect(formStatus(soon, FORM_A).state).toBe('enabled');
+    expect(graph.readableAdAccounts).toHaveBeenCalledTimes(1);
+
+    // Restarted later: still shown at once, marked stale, and `refresh` joins the read already under way.
+    const clock = jest.spyOn(Date, 'now').mockReturnValue(Date.now() + 60 * 60_000);
+    try {
+      const later = make(prisma);
+      const quick = await later.scanFor(7, false);
+      expect(quick.stale).toBe(true);
+      expect(formStatus(quick, FORM_A).state).toBe('enabled');
+      const fresh = await later.scanFor(7, true);
+      expect(fresh.stale).toBeUndefined();
+      expect(graph.readableAdAccounts).toHaveBeenCalledTimes(2);
+      expect((rows.get(7) as { scan: { checked_at: string } }).scan.checked_at).toBe(fresh.checked_at);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it('a kept check read with an earlier login is never shown: it waits for a new read', async () => {
+    const { prisma } = keptStore();
+    const { make, conn, graph } = setup({ accounts: { accounts: [ACC1] }, ads: { act_1: [ad('1', 'ACTIVE', FORM_A)] } });
+    await make(prisma).scanFor(7, false);
+    conn.current = { ...conn.current!, token: 'new-token' };
+    const after = await make(prisma).scanFor(7, false);
+    expect(after.stale).toBeUndefined();
+    expect(graph.readableAdAccounts).toHaveBeenCalledTimes(2);
+  });
+
+  it("one person's kept check is never shown to another", async () => {
+    const { prisma } = keptStore();
+    const { make, graph } = setup({ accounts: { accounts: [ACC1] }, ads: {} });
+    await make(prisma).scanFor(7, false);
+    await make(prisma).scanFor(8, false);
+    expect(graph.readableAdAccounts).toHaveBeenCalledTimes(2);
+  });
+
+  it('a check that could not start (allowance spent) is not kept', async () => {
+    const { prisma, rows } = keptStore();
+    const { make } = setup({ accounts: { accounts: [ACC1] }, ads: {}, budget: false });
+    await make(prisma).scanFor(7, false);
+    expect(rows.has(7)).toBe(false);
+  });
+
+  it('a kept check that cannot be read or written never breaks the badges', async () => {
+    const broken = {
+      meta_connections: {
+        findFirst: jest.fn(async () => { throw new Error('database is away'); }),
+        updateMany: jest.fn(async () => { throw new Error('database is away'); }),
+      },
+    } as unknown as PrismaService;
+    const { make } = setup({ accounts: { accounts: [ACC1] }, ads: { act_1: [ad('1', 'ACTIVE', FORM_A)] } });
+    expect(formStatus(await make(broken).scanFor(7, false), FORM_A).state).toBe('enabled');
   });
 });
 
