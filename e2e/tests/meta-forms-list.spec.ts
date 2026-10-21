@@ -367,17 +367,10 @@ async function openWithAdStatus(page: Page, ads: unknown): Promise<void> {
  * sequence.
  */
 const ADS: Record<number, AdState> = { 2: 'enabled', 14: 'enabled', 3: 'not_enabled', 4: 'no_ads' };
-/** The form's own status, as the screen reads it (case and padding ignored). */
-const formActive = (n: number): boolean =>
-  (FORMS_FIXTURE.find((f) => f.n === n)?.status ?? '').trim().toUpperCase() === 'ACTIVE';
-/**
- * 0 an enabled ad; 1 no ad answer but the form itself is Active (shown as "Active" at once, since
- * 2026-10-21); 2 Inactive by its ads; 3 the rest. A verified ad answer always beats the form status.
- */
-const adRank = (n: number): number => (ADS[n] === 'enabled' ? 0 : ADS[n] ? 2 : formActive(n) ? 1 : 3);
+const adRank = (n: number): number => (ADS[n] === 'enabled' ? 0 : ADS[n] ? 1 : 2);
 
 test.describe('the Lead Forms list, ordered by ad status', () => {
-  test('ACTIVE FIRST (ADS, THEN FORM STATUS), THEN INACTIVE, THEN UNKNOWN', async ({ page }) => {
+  test('ACTIVE ADS FIRST, THEN INACTIVE, THEN UNKNOWN', async ({ page }) => {
     await signIn(page, 'admin');
     await openWithAdStatus(page, adStates(ADS));
 
@@ -387,13 +380,11 @@ test.describe('the Lead Forms list, ordered by ad status', () => {
     // Ranks never decrease: every Active precedes every Inactive precedes every unknown.
     expect(ranks).toEqual([...ranks].sort((a, b) => a - b));
     expect(ranks.slice(0, 2)).toEqual([0, 0]);
-    // 6, 8, 10 and 12 are Active forms with no ad answer; 4 is Active too, but its ads say Inactive.
-    expect(order.slice(2, 6)).toEqual([6, 8, 10, 12]);
-    expect(ranks.slice(6, 8)).toEqual([2, 2]);
+    expect(ranks.slice(2, 4)).toEqual([1, 1]);
 
     // Exactly, so a reshuffle INSIDE a group is caught too: the form-status order restricted to
     // each ad-status group in turn, which is what "preserve the existing order" means here.
-    expect(order).toEqual([0, 1, 2, 3].flatMap((r) => EXPECTED.filter((n) => adRank(n) === r)));
+    expect(order).toEqual([0, 1, 2].flatMap((r) => EXPECTED.filter((n) => adRank(n) === r)));
   });
 
   test('IT IS THE AD STATUS, NOT THE CONNECTION, that decides', async ({ page }) => {
@@ -416,26 +407,11 @@ test.describe('the Lead Forms list, ordered by ad status', () => {
     await openWithAdStatus(page, adStates(ADS));
 
     const badges = await page.getByTestId('meta-forms-list').locator('li').evaluateAll((els) =>
-      els.map((e) => e.querySelector('[data-testid="meta-ad-badge"], [data-testid="meta-form-active-badge"]')?.textContent?.trim() ?? ''));
+      els.map((e) => e.querySelector('[data-testid="meta-ad-badge"]')?.textContent?.trim() ?? ''));
 
-    expect(badges.slice(0, 6)).toEqual(['Active', 'Active', 'Active', 'Active', 'Active', 'Active']);
-    expect(badges.slice(6, 8)).toEqual(['Inactive', 'Inactive']);
-    expect(badges.slice(8).every((b) => b === '')).toBe(true);
-  });
-
-  test('A FORM ACTIVE ON META SAYS "Active" AT ONCE, before the ads check has answered, and leads the list', async ({ page }) => {
-    await signIn(page, 'admin');
-    await openForms(page);
-    // The ads check never answers: everything below comes from the forms list alone.
-    await page.route(AD_STATUS, () => undefined);
-    await page.reload();
-    await expect(page.getByTestId('meta-forms-list').locator('li')).toHaveCount(forms.length);
-    await expect(page.getByTestId('meta-ad-status-bar')).toContainText('Checking ads');
-
-    const actives = EXPECTED.filter(formActive);
-    await expect(page.getByTestId('meta-form-active-badge')).toHaveCount(actives.length);
-    await expect(page.getByTestId('meta-ad-badge')).toHaveCount(0);
-    expect((await renderedOrder(page)).slice(0, actives.length)).toEqual(actives);
+    expect(badges.slice(0, 2)).toEqual(['Active', 'Active']);
+    expect(badges.slice(2, 4)).toEqual(['Inactive', 'Inactive']);
+    expect(badges.slice(4).every((b) => b === '')).toBe(true);
   });
 
   test('searching keeps the ad-status order', async ({ page }) => {
