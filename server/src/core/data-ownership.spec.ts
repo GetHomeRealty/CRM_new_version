@@ -131,6 +131,9 @@ const DERIVED: Record<string, string> = {
   // via crm_teams
   crm_team_members: 'crm_teams',
   lead_notes: 'leads', lead_tasks: 'leads', lead_showings: 'leads', lead_calls: 'leads',
+  // Email about a task — the creator's confirmation and the agent's notice. Reached through the
+  // lead page only, and cascades with the task.
+  lead_task_notifications: 'lead_tasks',
   // Everything about a candidate reaches the brokerage through the candidate, and cascades with it.
   recruitment_interviews: 'recruitment_candidates',
   recruitment_notes: 'recruitment_candidates',

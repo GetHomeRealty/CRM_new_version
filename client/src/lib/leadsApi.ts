@@ -2,7 +2,7 @@ import api from './axios';
 import type {
   DeletedLead, Lead, LeadCall, LeadCallRecording, LeadDetail, LeadEmail, LeadFilters,
   LeadImportResult, LeadListResponse,
-  LeadMessage, LeadNote, LeadOptions, LeadShowing, LeadShowingRow, LeadTagCounts, LeadTask, LeadTaskRow,
+  LeadMessage, LeadNote, LeadOptions, LeadShowing, LeadShowingRow, LeadTagCounts, LeadTask, LeadTaskEmail, LeadTaskRow,
   MessageStatus, SmsGatewayStatus,
 } from '../types';
 
@@ -212,6 +212,14 @@ export const updateLeadTask = (leadId: number, taskId: number, body: Partial<Lea
 
 export const deleteLeadTask = (leadId: number, taskId: number): Promise<void> =>
   api.delete(`/api/leads/${leadId}/tasks/${taskId}`).then(() => undefined);
+
+/** The task emails on a lead — creator confirmations and agent notices — and what became of each. */
+export const listLeadTaskEmails = (leadId: number): Promise<LeadTaskEmail[]> =>
+  api.get<{ data: LeadTaskEmail[] }>(`/api/leads/${leadId}/task-notifications`).then((r) => r.data.data ?? []);
+
+/** Send a failed or not-sent task email again. */
+export const retryLeadTaskEmail = (leadId: number, emailId: number): Promise<LeadTaskEmail> =>
+  api.post<LeadTaskEmail>(`/api/leads/${leadId}/task-notifications/${emailId}/retry`).then((r) => r.data);
 
 export const addLeadShowing = (leadId: number, body: Partial<LeadShowing>): Promise<LeadShowing> =>
   api.post<LeadShowing>(`/api/leads/${leadId}/showings`, body).then((r) => r.data);

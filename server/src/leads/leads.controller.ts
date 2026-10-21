@@ -12,6 +12,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CrmAdvancedEmailService } from '../crm-settings/crm-advanced-email.service';
 import { LeadTransferService } from './lead-transfer.service';
 import { LeadTeamAssignmentService } from './lead-team-assignment.service';
+import { LeadTaskNotificationService } from './lead-task-notification.service';
 import { LeadImportJobService } from './lead-import-job.service';
 import {
   CALL_OUTCOME, CLIENT_TYPE, GENDERS, LANGUAGES, LEAD_CONVERSION, LEAD_ESTIMATION, LEAD_QUALITY, LEAD_RESPONSE, LEAD_SOURCE,
@@ -43,6 +44,7 @@ export class LeadsController {
     // For the import preflight only: whether an import will email the people in the file.
     private readonly email: CrmAdvancedEmailService,
     private readonly teamAssignment: LeadTeamAssignmentService,
+    private readonly taskEmails: LeadTaskNotificationService,
   ) {}
 
   /**
@@ -382,6 +384,21 @@ export class LeadsController {
   @Screen('lead', 'edit')
   updateTask(@CurrentUser() u: AuthUserRecord, @Param('id', ParseIntPipe) id: number, @Param('taskId', ParseIntPipe) taskId: number, @Body() b: Record<string, unknown>): Promise<unknown> {
     return this.activity.updateTask(id, taskId, b ?? {}, u);
+  }
+
+  /** The task emails on this lead and what became of each — sent, waiting, failed, or not sent and why. */
+  @Get(':id/task-notifications')
+  @Screen('lead', 'view')
+  taskNotifications(@CurrentUser() u: AuthUserRecord, @Param('id', ParseIntPipe) id: number): Promise<unknown> {
+    return this.taskEmails.forLead(u, id);
+  }
+
+  /** Send a failed or not-sent task email again. */
+  @Post(':id/task-notifications/:notificationId/retry')
+  @HttpCode(200)
+  @Screen('lead', 'edit')
+  retryTaskNotification(@CurrentUser() u: AuthUserRecord, @Param('id', ParseIntPipe) id: number, @Param('notificationId', ParseIntPipe) notificationId: number): Promise<unknown> {
+    return this.taskEmails.retry(u, id, notificationId);
   }
 
   @Delete(':id/tasks/:taskId')

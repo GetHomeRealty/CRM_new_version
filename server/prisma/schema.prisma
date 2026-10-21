@@ -1029,10 +1029,46 @@ model lead_tasks {
   created_at  DateTime? @db.Timestamp(0)
   updated_at  DateTime? @db.Timestamp(0)
   leads       leads     @relation(fields: [lead_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  /// Email about this task — see `lead_task_notifications`.
+  notifications lead_task_notifications[]
 
   @@index([lead_id])
   @@index([status])
   @@index([assigned_to])
+}
+
+/**
+ * Email about a lead task — the creator's confirmation, the assigned agent's notice, or one combined
+ * message when they are the same person. An outbox: written in the same transaction as the task, sent
+ * afterwards in the background, outcome recorded here. See migration 20261021150000.
+ *
+ * Users are referenced by id without a relation, as `lead_tasks.assigned_to` already is.
+ */
+model lead_task_notifications {
+  id                Int        @id @default(autoincrement())
+  task_id           Int
+  lead_id           Int
+  /// created | assigned | created_assigned
+  kind              String     @db.VarChar(24)
+  recipient_user_id Int
+  actor_user_id     Int?
+  dedupe_key        String     @unique @db.VarChar(190)
+  /// pending | sending | sent | failed | skipped
+  status            String     @default("pending") @db.VarChar(16)
+  to_email          String?    @db.VarChar(255)
+  subject           String?    @db.VarChar(255)
+  error_message     String?    @db.VarChar(500)
+  attempts          Int        @default(0)
+  next_attempt_at   DateTime?  @db.Timestamp(0)
+  last_attempt_at   DateTime?  @db.Timestamp(0)
+  sent_at           DateTime?  @db.Timestamp(0)
+  created_at        DateTime   @db.Timestamp(0)
+  updated_at        DateTime   @db.Timestamp(0)
+  task              lead_tasks @relation(fields: [task_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@index([task_id])
+  @@index([lead_id])
+  @@index([status, next_attempt_at])
 }
 
 model lead_showings {

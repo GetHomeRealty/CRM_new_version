@@ -100,7 +100,7 @@ export const CRM_COMMUNICATIONS: CrmCommunication[] = [
   {
     key: 'lead_assigned',
     name: 'Lead Assigned',
-    description: 'Somebody assigns or transfers a lead to you.',
+    description: 'A lead is assigned or transferred to you, by anyone including yourself.',
     kind: 'automated', audience: 'staff', channels: staff,
     preferenceCategory: 'lead_assigned',
     templateEventKey: 'crm.lead_assigned',
@@ -116,7 +116,7 @@ export const CRM_COMMUNICATIONS: CrmCommunication[] = [
   {
     key: 'task_assigned',
     name: 'Task Assigned',
-    description: 'Somebody assigns you a follow-up task on a lead.',
+    description: 'A follow-up task on a lead is assigned to you, by anyone including yourself.',
     kind: 'automated', audience: 'staff', channels: staff,
     preferenceCategory: 'task_assigned',
     templateEventKey: 'crm.task_assigned',

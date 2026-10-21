@@ -10,6 +10,7 @@ import {
   callRecordingUrl, deleteCallRecording, generateLeadEmail, getLead, leadOptions, placeLeadCall, sendLeadEmail, smsGatewayStatus, updateLeadMessage, voiceCallStatus,
   updateLeadNote, updateLeadShowing, updateLeadTask,
   deleteLeadShowing, deleteLeadNote, deleteLeadTask, deleteLeadCall, deleteLeadMessage, deleteLeadEmail,
+  listLeadTaskEmails, retryLeadTaskEmail,
 } from '../lib/leadsApi';
 import ConfirmDialog, { useConfirm } from './ConfirmDialog';
 import { apiErrorMessage } from '../lib/apiError';
@@ -25,7 +26,7 @@ import { leadTypeValues } from './leadTypeValues';
 import { identityLocked } from '../lib/leadIdentity';
 import { createEvent } from '../lib/calendarApi';
 import type {
-  CalendarEventInput, LeadCall, LeadDetail, LeadOptions, LeadShowing, MessageStatus, SmsGatewayStatus,
+  CalendarEventInput, LeadCall, LeadDetail, LeadOptions, LeadShowing, LeadTask, LeadTaskEmail, MessageStatus, SmsGatewayStatus,
 } from '../types';
 
 const stamp = (iso: string | null): string => (iso ? iso.replace('T', ' ').slice(0, 16) : '—');
@@ -422,12 +423,69 @@ function NotesPanel({ lead, canEdit, run, ask }: { lead: LeadDetail; canEdit: bo
 
 // ------------------------------------------------------------------- tasks
 function TasksPanel({ lead, options, canEdit, run, ask }: { lead: LeadDetail; options: LeadOptions | null; canEdit: boolean; run: Run; ask: Ask }) {
+  const toast = useToast();
   const [title, setTitle] = useState('');
+  const [description, setDescription] = useState('');
   const [due, setDue] = useState(today());
   const [priority, setPriority] = useState('medium');
   const [assignee, setAssignee] = useState('');
+  /*
+   * What the last save said about its emails. Kept on screen rather than toasted: "Akhil has no
+   * email address on file" is something to act on, and a toast is gone before it is read. "Queued"
+   * is all a save can honestly say — delivery happens afterwards, and the line under each task shows
+   * when it actually went.
+   */
+  const [emailNotice, setEmailNotice] = useState<{ queued: string[]; warnings: string[] } | null>(null);
+  const [emails, setEmails] = useState<LeadTaskEmail[]>([]);
 
   const pending = lead.tasks.filter((t) => t.status === 'pending').length;
+
+  const noteEmails = (saved: LeadTask) => {
+    const queued = (saved.email_notifications ?? []).filter((n) => n.status === 'queued').map((n) => n.message);
+    const warnings = saved.email_warnings ?? [];
+    setEmailNotice(queued.length || warnings.length ? { queued, warnings } : null);
+  };
+
+  // Re-read whenever the lead is reloaded, which every save on this page does.
+  const refreshEmails = useCallback(
+    () => listLeadTaskEmails(lead.id).then(setEmails).catch(() => setEmails([])),
+    [lead.id],
+  );
+  useEffect(() => { void refreshEmails(); }, [refreshEmails, lead]);
+  // Delivery is in the background: while something is about to go, look again shortly. A row
+  // waiting minutes for its next retry is left to the next reload rather than polled for.
+  useEffect(() => {
+    const soon = Date.now() + 60_000;
+    const busy = emails.some((e) => e.status === 'sending'
+      || (e.status === 'pending' && (!e.next_attempt_at || Date.parse(e.next_attempt_at) <= soon)));
+    if (!busy) return undefined;
+    const timer = setTimeout(() => void refreshEmails(), 5000);
+    return () => clearTimeout(timer);
+  }, [emails, refreshEmails]);
+
+  // A "View Task" link from an email lands here with `?task=<id>`: bring that task into view once.
+  const [params] = useSearchParams();
+  const focusTask = Number(params.get('task')) || 0;
+  const focused = useRef(false);
+  useEffect(() => {
+    if (focused.current || !focusTask) return;
+    const el = document.getElementById(`lead-task-${focusTask}`);
+    if (el) { focused.current = true; el.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
+  }, [focusTask, lead.tasks]);
+
+  const retryEmail = async (e: LeadTaskEmail) => {
+    try {
+      const after = await retryLeadTaskEmail(lead.id, e.id);
+      if (after.status === 'sent') toast('Email sent.', 'ok');
+      else if (after.status === 'pending' || after.status === 'sending') toast('Email queued — it will be retried shortly.', 'info');
+      else toast(after.error_message ?? 'Email not sent.', 'bad');
+    } catch (ex) {
+      toast(apiErrorMessage(ex, 'Could not retry the email'), 'bad');
+    }
+    await refreshEmails();
+  };
+
+  const users = options?.users ?? [];
 
   return (
     <div className="card">
@@ -442,29 +500,64 @@ function TasksPanel({ lead, options, canEdit, run, ask }: { lead: LeadDetail; op
           </select>
           <select aria-label="Task assignee" value={assignee} onChange={(e) => setAssignee(e.target.value)}>
             <option value="">Assign to me</option>
-            {(options?.users ?? []).map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+            {users.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
           </select>
+          <textarea aria-label="Task description" value={description} onChange={(e) => setDescription(e.target.value)}
+            placeholder="Description (optional)" rows={2} style={{ gridColumn: '1 / -1' }} />
           <button className="btn primary sm" type="button" disabled={!title.trim()}
             onClick={() => void run(
-              () => addLeadTask(lead.id, {
+              async () => noteEmails(await addLeadTask(lead.id, {
                 title: title.trim(), due_date: due, priority,
+                ...(description.trim() ? { description: description.trim() } : {}),
                 ...(assignee ? { assigned_to: Number(assignee) } : {}),
-              }),
+              })),
               'Task added.',
-            ).then(() => setTitle(''))}>
+            ).then(() => { setTitle(''); setDescription(''); })}>
             Add
           </button>
         </div>
         </details>
       )}
+      {emailNotice && (
+        <div role="status" style={{
+          margin: '8px 0', padding: '8px 10px', borderRadius: 8, fontSize: 12.5, lineHeight: 1.45,
+          border: `1px solid ${emailNotice.warnings.length ? 'var(--warn-ring)' : 'var(--info-ring)'}`,
+          background: emailNotice.warnings.length ? 'var(--warn-soft)' : 'var(--info-soft)',
+          color: emailNotice.warnings.length ? '#92400e' : '#1e3a8a',
+        }}>
+          {emailNotice.warnings.map((w) => <div key={w}><strong>Email:</strong> {w}</div>)}
+          {emailNotice.queued.map((q) => <div key={q}>{q}</div>)}
+          <button className="btn ghost sm" type="button" onClick={() => setEmailNotice(null)} style={{ marginTop: 4 }}>Dismiss</button>
+        </div>
+      )}
       {lead.tasks.length === 0 ? <p className="help">No tasks yet.</p> : (
         <ul className="lead-feed">
-          {lead.tasks.map((t) => (
-            <li key={t.id}>
+          {lead.tasks.map((t) => {
+            const taskEmails = emails.filter((e) => e.task_id === t.id).slice(0, 4);
+            return (
+            <li key={t.id} id={`lead-task-${t.id}`}
+              style={focusTask === t.id ? { outline: '2px solid var(--info-ring)', outlineOffset: 2, borderRadius: 8 } : undefined}>
               <div className="lead-feed-body">
                 {/* A cancelled task reads as struck through too — it is finished with, just not done. */}
                 <strong className={t.status === 'pending' ? '' : 'done'}>{t.title}</strong>
                 {t.description && <div className="muted">{t.description}</div>}
+                {taskEmails.length > 0 && (
+                  <div className="muted" style={{ fontSize: 11.5, marginTop: 2 }}>
+                    {taskEmails.map((e) => (
+                      <div key={e.id} title={e.error_message ?? undefined}>
+                        {emailWho(e)}: <span style={{ color: e.status === 'sent' ? '#166534' : e.status === 'failed' || e.status === 'skipped' ? '#991b1b' : undefined }}>
+                          {emailState(e)}
+                        </span>
+                        {(e.status === 'failed' || e.status === 'skipped') && e.error_message && (
+                          <span> — {e.error_message.length > 140 ? `${e.error_message.slice(0, 140)}…` : e.error_message}</span>
+                        )}
+                        {canEdit && e.retryable && (
+                          <button className="btn ghost sm" type="button" style={{ marginLeft: 6 }} onClick={() => void retryEmail(e)}>Retry</button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
               <div className="lead-feed-meta">
                 <span className="pill info">{t.due_date}</span>
@@ -473,6 +566,18 @@ function TasksPanel({ lead, options, canEdit, run, ask }: { lead: LeadDetail; op
                 {t.assigned_to_name && <span className="muted">{t.assigned_to_name}</span>}
                 {canEdit && (
                   <>
+                    {/* Hands the task to another agent, who is emailed. Choosing the current one changes nothing. */}
+                    {t.status === 'pending' && users.length > 0 && (
+                      <select aria-label={`Reassign ${t.title}`} value="" className="btn ghost sm"
+                        onChange={(e) => {
+                          const to = Number(e.target.value);
+                          if (!to) return;
+                          void run(async () => noteEmails(await updateLeadTask(lead.id, t.id, { assigned_to: to })), 'Task reassigned.');
+                        }}>
+                        <option value="">Reassign…</option>
+                        {users.filter((u) => u.id !== t.assigned_to).map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+                      </select>
+                    )}
                     {/* Cancelled is a third resting state, not a kind of done: the task was
                         dropped rather than finished, and it stays on the lead as a record.
                         Deleting is still there for something logged by mistake. */}
@@ -515,12 +620,30 @@ function TasksPanel({ lead, options, canEdit, run, ask }: { lead: LeadDetail; op
                 )}
               </div>
             </li>
-          ))}
+            );
+          })}
         </ul>
       )}
     </div>
   );
 }
+
+/** Which email a status line is about, in a few words. */
+const emailWho = (e: LeadTaskEmail): string => {
+  const who = e.recipient_name ?? 'recipient';
+  if (e.kind === 'created') return `Confirmation email to ${who}`;
+  if (e.kind === 'assigned') return `Assignment email to ${who}`;
+  return `Confirmation + assignment email to ${who}`;
+};
+
+/** What became of it. Only `sent` says sent — nothing else may read as delivered. */
+const emailState = (e: LeadTaskEmail): string => {
+  if (e.status === 'sent') return 'sent';
+  if (e.status === 'sending') return 'sending…';
+  if (e.status === 'pending') return e.attempts > 0 ? 'retrying' : 'queued';
+  if (e.status === 'failed') return 'failed';
+  return 'not sent';
+};
 
 /*
  * CRM-042: Reschedule asks where the showing is moving to.

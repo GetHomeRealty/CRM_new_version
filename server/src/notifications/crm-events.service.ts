@@ -220,12 +220,16 @@ export class CrmEventNotifier {
    *
    * The PREVIOUS assignee is deliberately not notified. "This is no longer yours" is a different
    * message, and inventing it here would send people a notification nobody asked for.
+   *
+   * ASSIGNING A LEAD TO YOURSELF NOTIFIES TOO. It used to be silent as noise, but the brokerage
+   * asked (21 Oct 2026) for an email with the lead's details every time an agent is assigned,
+   * whoever did it — agents keep their leads in their inbox. `actorUserId` is kept for the wording
+   * and for callers; it no longer decides whether anyone is told.
    */
   async leadAssigned(lead: {
     id: number; first_name?: string | null; last_name?: string | null; email?: string | null;
-  }, assigneeUserId: number | null | undefined, actorUserId: number | null | undefined, actorName?: string | null): Promise<void> {
+  }, assigneeUserId: number | null | undefined, _actorUserId: number | null | undefined, actorName?: string | null): Promise<void> {
     if (!assigneeUserId) return;
-    if (assigneeUserId === actorUserId) return;    // you assigned it to yourself
 
     const tpl = await this.templated('crm.lead_assigned', {
       user_name: await this.userName(assigneeUserId),
@@ -428,19 +432,26 @@ export class CrmEventNotifier {
    * assignment. Folding them together would mean muting due reminders also silenced the handover,
    * and a task assigned for next month would notify nobody until next month.
    *
-   * SELF-ASSIGNMENT IS SILENT, matching `leadAssigned`: telling somebody they have given themselves
-   * a job is noise, and it is the commonest way a task is created.
+   * SELF-ASSIGNMENT NOTIFIES TOO, matching `leadAssigned`. "Assign to me" is the commonest way a
+   * task is created, and the brokerage asked (21 Oct 2026) for every added task to reach the
+   * assignee's email with its details, so a task you give yourself is in your inbox as well.
    *
    * The key carries the task and the assignee, so re-saving the same task with the same assignee
-   * cannot notify twice, while genuinely reassigning it to somebody else can.
+   * cannot notify twice, while genuinely reassigning it to somebody else can. `opts.occurrence`
+   * numbers the task's assignments (1 = the first), so handing it BACK to an earlier agent is a new
+   * notice rather than a duplicate of the old one; the first keeps the original key shape.
+   *
+   * `opts.emailHandledElsewhere`: the Leads task screen sends its own, fuller email with retries
+   * and a delivery record (`LeadTaskNotificationService`), so it asks this for in-app and push only.
+   * Without the flag every channel is used, as before.
    */
   async taskAssigned(task: {
     id: number; title?: string | null; due_date?: Date | null;
   }, lead: {
     id: number; first_name?: string | null; last_name?: string | null; email?: string | null;
-  }, assigneeUserId: number | null | undefined, actorUserId: number | null | undefined, actorName?: string | null): Promise<void> {
+  }, assigneeUserId: number | null | undefined, _actorUserId: number | null | undefined, actorName?: string | null,
+  opts: { emailHandledElsewhere?: boolean; occurrence?: number } = {}): Promise<void> {
     if (!assigneeUserId) return;
-    if (assigneeUserId === actorUserId) return;
 
     const title = task.title?.trim() || 'A follow-up';
     const when = task.due_date ? task.due_date.toISOString().slice(0, 10) : '';
@@ -461,7 +472,8 @@ export class CrmEventNotifier {
       title: 'New task assigned',
       body: `${title} on ${this.nameOf(lead)}${when ? ` — due ${when}` : ''}${actorName ? `, assigned by ${actorName}` : ''}.`,
       link: this.leadLink(lead.id),
-      dedupeKey: `task-assigned:${task.id}:${assigneeUserId}`,
+      dedupeKey: `task-assigned:${task.id}:${assigneeUserId}${opts.occurrence && opts.occurrence > 1 ? `:${opts.occurrence}` : ''}`,
+      ...(opts.emailHandledElsewhere ? { channels: ['in_app', 'push'] as NotificationChannel[] } : {}),
     });
   }
 

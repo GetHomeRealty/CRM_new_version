@@ -13,6 +13,7 @@ import { LeadAssignmentHistoryService } from './lead-assignment-history.service'
 import { LeadTeamAssignmentService } from './lead-team-assignment.service';
 import { LeadRetentionService } from './lead-retention.service';
 import { LeadTaskReminderService } from './lead-task-reminder.service';
+import { LeadTaskNotificationService } from './lead-task-notification.service';
 import { LeadNotificationService } from './lead-notification.service';
 import { LeadImportEngine } from './lead-import.engine';
 import { LeadImportJobService } from './lead-import-job.service';
@@ -31,7 +32,7 @@ import { EmailModule } from '../email/email.module';
   // service rather than to a second copy of the rule here.
   imports: [NotificationDispatcherModule, AuthModule, SmsModule, EmailModule, CrmSettingsModule],
   controllers: [LeadsController, CrmTeamsController],
-  providers: [LeadRetentionService, LeadTaskReminderService, LeadsService, LeadActivityService, LeadAuditService, LeadNotificationService, LeadTransferService, LeadImportEngine, LeadImportJobService, RecordingStorageService, AiDisclosureService, LeadAssignmentHistoryService, LeadTeamAssignmentService, CrmTeamsService],
+  providers: [LeadRetentionService, LeadTaskReminderService, LeadTaskNotificationService, LeadsService, LeadActivityService, LeadAuditService, LeadNotificationService, LeadTransferService, LeadImportEngine, LeadImportJobService, RecordingStorageService, AiDisclosureService, LeadAssignmentHistoryService, LeadTeamAssignmentService, CrmTeamsService],
   // Campaigns imports leads through the same engine and the same queue. Exporting them is what
   // stops the two screens drifting apart again — they previously had separate implementations,
   // and only one of them de-duplicated within the uploaded file.
