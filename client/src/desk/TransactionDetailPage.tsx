@@ -295,6 +295,8 @@ export default function TransactionDetailPage() {
   const [reasonText, setReasonText] = useState('');
   // Documentation's Closing Date pencil — opens ClosingDateRequestDialog.
   const [dateReqOpen, setDateReqOpen] = useState(false);
+  // Accounting's Offer Date pencil — the same dialog, for the offer date (2026-10-22).
+  const [offerReqOpen, setOfferReqOpen] = useState(false);
   // Documentation's Price / Deposit pencils — open PriceDepositRequestDialog.
   const [priceReqOpen, setPriceReqOpen] = useState(false);
   const [coreDocReminders, setCoreDocReminders] = useState<string[]>([]); // §5.2 Active: pending core listing docs
@@ -919,6 +921,24 @@ export default function TransactionDetailPage() {
     </>
   ) : 'Closing Date';
   /*
+   * Offer Date the same way, for ACCOUNTING ONLY (brokerage request, 2026-10-22): its own
+   * 'offer_date' request scope, so it does not wait on a pending closing date request. Documentation
+   * keeps the plain label it had.
+   */
+  const canRequestOfferDate = isAccounting && !stDFT;
+  const pendingOfferReq = editRequests.find((r) => r.status === 'pending' && r.scope === 'offer_date');
+  const offerDateLabel = canRequestOfferDate ? (
+    <>Offer Date{' '}
+      <button type="button" className="row-rm" data-testid="offer-date-edit"
+        disabled={!!pendingOfferReq}
+        title={pendingOfferReq ? 'An offer date change is awaiting Super Admin approval' : 'Request an offer date change'}
+        onClick={() => setOfferReqOpen(true)}
+        style={{ marginLeft: 4, color: pendingOfferReq ? 'var(--warn)' : 'var(--brand)' }}>
+        <Icon name={pendingOfferReq ? 'clock' : 'edit'} size={14} />
+      </button>
+    </>
+  ) : 'Offer Date';
+  /*
    * The same for Price and Deposit (brokerage request, 2026-10-19): a pencil beside each label
    * opens PriceDepositRequestDialog, which files the `commission`-scope request the Financial
    * panel already uses for these two figures. One such request may be pending per deal, so a
@@ -1511,7 +1531,7 @@ export default function TransactionDetailPage() {
                   <Field label="Listing Expiry Date"><input type="date" value={form.listing_expiry_date} disabled={basicRo} onChange={(e) => set('listing_expiry_date', e.target.value)} /></Field>
                 </>)}
                 {!listing && (<>
-                  <Field label="Offer Date"><input type="date" value={form.offer_date} disabled={basicRo} onChange={(e) => set('offer_date', e.target.value)} /></Field>
+                  <Field label={offerDateLabel}><input type="date" value={form.offer_date} disabled={basicRo} onChange={(e) => set('offer_date', e.target.value)} /></Field>
                   <Field label={closingDateLabel}><input type="date" value={form.closing_date} disabled={basicRo} onChange={(e) => set('closing_date', e.target.value)} /></Field>
                 </>)}
               </div>
@@ -1520,7 +1540,7 @@ export default function TransactionDetailPage() {
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12, marginTop: 12 }}>
                 <Field label="Listing Contract Date"><input type="date" value={form.listing_contract_date} disabled={basicRo} onChange={(e) => set('listing_contract_date', e.target.value)} /></Field>
                 <Field label="Listing Expiry Date"><input type="date" value={form.listing_expiry_date} disabled={basicRo} onChange={(e) => set('listing_expiry_date', e.target.value)} /></Field>
-                {!slHideBasic && <Field label="Offer Date"><input type="date" value={form.offer_date} disabled={basicRo} onChange={(e) => set('offer_date', e.target.value)} /></Field>}
+                {!slHideBasic && <Field label={offerDateLabel}><input type="date" value={form.offer_date} disabled={basicRo} onChange={(e) => set('offer_date', e.target.value)} /></Field>}
                 {!slHideBasic && <Field label={closingDateLabel}><input type="date" value={form.closing_date} disabled={basicRo} onChange={(e) => set('closing_date', e.target.value)} /></Field>}
               </div>
             )}
@@ -1996,6 +2016,10 @@ export default function TransactionDetailPage() {
       {canRequestClosingDate && (
         <ClosingDateRequestDialog open={dateReqOpen} onClose={() => setDateReqOpen(false)}
           transactionId={id} current={form.closing_date || ''} onSent={reloadTxn} />
+      )}
+      {canRequestOfferDate && (
+        <ClosingDateRequestDialog field="offer_date" open={offerReqOpen} onClose={() => setOfferReqOpen(false)}
+          transactionId={id} current={form.offer_date || ''} onSent={reloadTxn} />
       )}
       {canRequestPriceDeposit && (
         <PriceDepositRequestDialog open={priceReqOpen} onClose={() => setPriceReqOpen(false)}

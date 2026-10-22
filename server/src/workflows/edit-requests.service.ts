@@ -76,7 +76,18 @@ export const COMMISSION_PROPOSABLE: ReadonlySet<string> = new Set([
   'comm_pct', 'comm_amt',
   'precon_comm_pct', 'precon_comm_amt_manual', 'precon_comm_bonus',
   'precon_terms', 'team',
+  /*
+   * 2026-10-22 (brokerage request, Accounting): a Listing deal's own commission figures — Listing
+   * and Co-op Commission (% or amount) and their Commission Adjustments — proposed from the
+   * Financial panel the way Price and Deposit already are, and applied the same way on approval.
+   */
+  'listing_comm_pct', 'listing_comm_flat', 'coop_comm_pct', 'coop_comm_flat',
+  'listing_adj_enabled', 'listing_adj_before', 'listing_adj_after',
+  'coop_adj_enabled', 'coop_adj_before', 'coop_adj_after',
 ]);
+
+/** The yes/no switches a commission proposal may carry — compared as booleans, not numbers. */
+const COMMISSION_BOOLEANS: ReadonlySet<string> = new Set(['listing_adj_enabled', 'coop_adj_enabled']);
 
 /**
  * INSIDE `team`, the only keys a proposal may carry.
@@ -100,6 +111,20 @@ export const COMMISSION_PROPOSABLE_TEAM: ReadonlySet<string> = new Set([
  */
 export const CLOSING_DATE_SCOPE = 'closing_date';
 export const CLOSING_DATE_PROPOSABLE: ReadonlySet<string> = new Set(['closing_date']);
+
+/**
+ * The same, for the Offer Date (2026-10-22, brokerage request: Accounting asks for it as it asks
+ * for the Closing Date). Its own scope, so it neither blocks nor is blocked by a pending closing
+ * date or commission request on the same deal.
+ */
+export const OFFER_DATE_SCOPE = 'offer_date';
+export const OFFER_DATE_PROPOSABLE: ReadonlySet<string> = new Set(['offer_date']);
+
+/** The date scopes, each proposing exactly its own one field. */
+const DATE_SCOPES: Readonly<Record<string, { key: string; label: string }>> = {
+  [CLOSING_DATE_SCOPE]: { key: 'closing_date', label: 'closing date' },
+  [OFFER_DATE_SCOPE]: { key: 'offer_date', label: 'offer date' },
+};
 
 /** Inside `precon_terms`: which term, and that term's commission. Nothing else. */
 export const COMMISSION_PROPOSABLE_TERM: ReadonlySet<string> = new Set([
@@ -190,9 +215,11 @@ export class EditRequestsService {
           select: { term_no: true, pct: true, amt: true },
         });
         out.precon_terms = terms.map((x) => ({ term_no: x.term_no, pct: num(x.pct), amt: num(x.amt) }));
-      } else if (k === 'closing_date') {
+      } else if (k === 'closing_date' || k === 'offer_date') {
         // A date column: compared as YYYY-MM-DD, the same shape the request carries.
         out[k] = toDateString(t[k] as Date | null);
+      } else if (COMMISSION_BOOLEANS.has(k)) {
+        out[k] = t[k] === null || t[k] === undefined ? null : Boolean(t[k]);
       } else {
         out[k] = num(t[k]);
       }
@@ -237,7 +264,8 @@ export class EditRequestsService {
     try {
       const ids = await this.reviewers();
       if (!ids.length) return;
-      const what = req.scope === CLOSING_DATE_SCOPE ? 'the closing date' : req.scope ? `${req.scope} fields` : 'this deal';
+      const dateScope = req.scope ? DATE_SCOPES[req.scope] : undefined;
+      const what = dateScope ? `the ${dateScope.label}` : req.scope ? `${req.scope} fields` : 'this deal';
       await this.dispatcher.dispatchMany(ids, {
         category: 'approval_requested',
         title: 'Approval requested',
@@ -306,17 +334,19 @@ export class EditRequestsService {
       // Captured now, so the reviewer is shown the comparison the REQUESTER saw — and so a figure
       // that moves afterwards can be detected rather than silently overwritten.
       baseline = await this.currentValues(txnId, keys);
-    } else if (scope === CLOSING_DATE_SCOPE) {
+    } else if (scope === CLOSING_DATE_SCOPE || scope === OFFER_DATE_SCOPE) {
+      const { key, label } = DATE_SCOPES[scope];
+      const allowed = scope === CLOSING_DATE_SCOPE ? CLOSING_DATE_PROPOSABLE : OFFER_DATE_PROPOSABLE;
       const keys = Object.keys(proposed ?? {});
-      if (keys.length !== 1 || !CLOSING_DATE_PROPOSABLE.has(keys[0])) {
-        throw new UnprocessableEntityException({ message: 'A closing date request carries the new closing date and nothing else.' });
+      if (keys.length !== 1 || !allowed.has(keys[0])) {
+        throw new UnprocessableEntityException({ message: `A ${label} request carries the new ${label} and nothing else.` });
       }
-      const v = String((proposed ?? {}).closing_date ?? '');
+      const v = String((proposed ?? {})[key] ?? '');
       if (!/^\d{4}-\d{2}-\d{2}$/.test(v) || Number.isNaN(Date.parse(v))) {
-        throw new UnprocessableEntityException({ message: 'Give the new closing date as a valid date.' });
+        throw new UnprocessableEntityException({ message: `Give the new ${label} as a valid date.` });
       }
       if (!String(reason ?? '').trim()) {
-        throw new UnprocessableEntityException({ message: 'A closing date change request needs a reason.' });
+        throw new UnprocessableEntityException({ message: `A ${label} change request needs a reason.` });
       }
       baseline = await this.currentValues(txnId, keys);
     }
@@ -324,7 +354,8 @@ export class EditRequestsService {
     // 'commission' joins 'financial' and 'mandatory': scopes anybody below Super Admin may ASK
     // about, rather than ones only an Admin may raise on a locked deal. The top tier does not
     // queue a request to itself — it can change the figures directly.
-    if (scope === 'financial' || scope === 'mandatory' || scope === COMMISSION_SCOPE || scope === CLOSING_DATE_SCOPE) {
+    if (scope === 'financial' || scope === 'mandatory' || scope === COMMISSION_SCOPE || scope === CLOSING_DATE_SCOPE
+      || scope === OFFER_DATE_SCOPE) {
       if (isSuperAdmin(user)) {
         throw new UnprocessableEntityException({
           message: scope === 'financial'
@@ -333,6 +364,8 @@ export class EditRequestsService {
               ? 'Super Admins can change the commission directly.'
               : scope === CLOSING_DATE_SCOPE
                 ? 'Super Admins can change the closing date directly.'
+              : scope === OFFER_DATE_SCOPE
+                ? 'Super Admins can change the offer date directly.'
               : 'Super Admins can change whether a document is Mandatory directly.',
         });
       }
@@ -498,7 +531,7 @@ export class EditRequestsService {
     const moved = keys.filter((k) => canonical(live[k]) !== canonical(baseline[k]));
     if (moved.length) {
       throw new UnprocessableEntityException({
-        message: (req.scope === CLOSING_DATE_SCOPE ? 'The closing date' : 'The commission')
+        message: (req.scope && DATE_SCOPES[req.scope] ? `The ${DATE_SCOPES[req.scope].label}` : 'The commission')
           + ' has changed since this was requested, so applying it would undo that change. '
           + `Ask for it again from the current figures (${moved.join(', ')}).`,
       });
@@ -594,13 +627,14 @@ export class EditRequestsService {
     if (!this.dispatcher || !req.requested_by) return;
     try {
       const approved = req.status === 'approved';
-      const what = req.scope === COMMISSION_SCOPE ? 'commission change' : req.scope === CLOSING_DATE_SCOPE ? 'closing date change' : 'edit request';
+      const dateScope = req.scope ? DATE_SCOPES[req.scope] : undefined;
+      const what = req.scope === COMMISSION_SCOPE ? 'commission change' : dateScope ? `${dateScope.label} change` : 'edit request';
       await this.dispatcher.dispatch({
         category: 'transaction_approvals',
         userId: req.requested_by,
         title: approved ? `Your ${what} was approved` : `Your ${what} was rejected`,
         body: approved
-          ? `${req.reviewed_by_name || 'A Super Admin'} approved it${req.scope === COMMISSION_SCOPE ? ' and the new figures have been applied.' : req.scope === CLOSING_DATE_SCOPE ? ' and the new closing date has been applied.' : '.'}`
+          ? `${req.reviewed_by_name || 'A Super Admin'} approved it${req.scope === COMMISSION_SCOPE ? ' and the new figures have been applied.' : dateScope ? ` and the new ${dateScope.label} has been applied.` : '.'}`
           : `${req.reviewed_by_name || 'A Super Admin'} turned it down. The existing values are unchanged.`,
         link: `/desk/transactions/${req.transaction_id}?section=approvals`,
         dedupeKey: `edit-request-decision:${req.id}:${req.status}`,

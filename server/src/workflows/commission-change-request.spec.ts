@@ -1,7 +1,7 @@
 import { UnprocessableEntityException } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
 import type { PrismaService } from '../prisma/prisma.service';
-import { EditRequestsService, COMMISSION_SCOPE, COMMISSION_PROPOSABLE, CLOSING_DATE_SCOPE } from './edit-requests.service';
+import { EditRequestsService, COMMISSION_SCOPE, COMMISSION_PROPOSABLE, CLOSING_DATE_SCOPE, OFFER_DATE_SCOPE } from './edit-requests.service';
 import { AuditService } from '../audit/audit.service';
 import type { TransactionsWriteService } from '../transactions/transactions-write.service';
 import type { NotificationDispatcher } from '../notifications/notification-dispatcher.service';
@@ -230,6 +230,14 @@ describe('submitting a commission change request', () => {
       expect(COMMISSION_PROPOSABLE.has(k)).toBe(false);
     }
   });
+
+  it(`a Listing deal's own commission is proposable too (2026-10-22) — but not its Trust payable`, () => {
+    for (const k of ['listing_comm_pct', 'listing_comm_flat', 'coop_comm_pct', 'coop_comm_flat',
+      'listing_adj_enabled', 'listing_adj_before', 'listing_adj_after', 'coop_adj_enabled', 'coop_adj_before', 'coop_adj_after']) {
+      expect([k, COMMISSION_PROPOSABLE.has(k)]).toEqual([k, true]);
+    }
+    expect(COMMISSION_PROPOSABLE.has('trust_payable')).toBe(false);
+  });
 });
 
 describe('a closing date change request', () => {
@@ -307,6 +315,163 @@ describe('a closing date change request', () => {
       await expect(s.store(me, id, 'date', CLOSING_DATE_SCOPE, { closing_date: '2027-07-30' })).resolves.toBeDefined();
       // But only one open date request per deal.
       await expect(s.store(me, id, 'again', CLOSING_DATE_SCOPE, { closing_date: '2027-08-30' }))
+        .rejects.toBeInstanceOf(UnprocessableEntityException);
+    });
+  });
+});
+
+describe('a listing commission change request (Accounting, 2026-10-22)', () => {
+  /** A Residential Lease listing with a listing and co-op rate and no adjustment yet. */
+  const listingDeal = async (tx: PrismaService): Promise<number> => {
+    const now = new Date();
+    const t = tag();
+    const row = await tx.transactions.create({
+      data: {
+        trade_no: `ZZL${t}`.slice(0, 20), type: 'Residential Lease', property: `ZZ Listing Road ${t}`,
+        price: 2900, deposit: 5800, listing_comm_pct: 50, coop_comm_pct: 50, listing_adj_enabled: false,
+        created_at: now, updated_at: now,
+      },
+      select: { id: true },
+    });
+    return row.id;
+  };
+
+  it('CHANGES NOTHING ON SUBMIT, and records the figures it was asked from — switches as Yes/No', async () => {
+    await inRollback(async (tx) => {
+      await user(tx, 'admin', 'super');
+      const acct = await user(tx, 'accounting', 'accounts');
+      const id = await listingDeal(tx);
+      const { applied, writes } = writeRecorder();
+
+      await svc(tx, { writes }).store(asUser('accounting', acct.id, acct.name), id, 'Co-op paid a flat fee',
+        COMMISSION_SCOPE, { coop_comm_pct: null, coop_comm_flat: 1450, listing_adj_enabled: true, listing_adj_before: 100 });
+
+      expect(applied).toHaveLength(0);
+      const row = await tx.transactions.findUniqueOrThrow({ where: { id }, select: { coop_comm_pct: true, coop_comm_flat: true, listing_adj_enabled: true } });
+      expect([Number(row.coop_comm_pct), row.coop_comm_flat, row.listing_adj_enabled]).toEqual([50, null, false]);
+      const req = await tx.transaction_edit_requests.findFirstOrThrow({ where: { transaction_id: id } });
+      expect(req.baseline).toEqual({ coop_comm_pct: 50, coop_comm_flat: null, listing_adj_enabled: false, listing_adj_before: 0 });
+    });
+  });
+
+  it('APPROVAL APPLIES THEM through the write service, as the approver, and nothing else', async () => {
+    await inRollback(async (tx) => {
+      const sup = await user(tx, 'admin', 'super');
+      const acct = await user(tx, 'accounting', 'accounts');
+      const id = await listingDeal(tx);
+      const { applied, writes } = writeRecorder();
+      const s = svc(tx, { writes });
+
+      const req = await s.store(asUser('accounting', acct.id, acct.name), id, 'Listing side is 60%',
+        COMMISSION_SCOPE, { listing_comm_pct: 60, coop_comm_pct: 40 });
+      await s.approve(asUser('admin', sup.id, sup.name), req.id as number);
+
+      expect(applied).toHaveLength(1);
+      expect(applied[0].user.id).toBe(sup.id);
+      expect(Object.keys(applied[0].body).sort()).toEqual(['coop_comm_pct', 'listing_comm_pct', 'version']);
+      expect(applied[0].body).toMatchObject({ listing_comm_pct: 60, coop_comm_pct: 40 });
+    });
+  });
+
+  it('a switch that has not moved is not stale — booleans compare as booleans', async () => {
+    await inRollback(async (tx) => {
+      const sup = await user(tx, 'admin', 'super');
+      const acct = await user(tx, 'accounting', 'accounts');
+      const id = await listingDeal(tx);
+      const { applied, writes } = writeRecorder();
+      const s = svc(tx, { writes });
+
+      const req = await s.store(asUser('accounting', acct.id, acct.name), id, 'Adjust co-op',
+        COMMISSION_SCOPE, { coop_adj_enabled: true, coop_adj_after: -50 });
+      await expect(s.approve(asUser('admin', sup.id, sup.name), req.id as number)).resolves.toBeDefined();
+      expect(applied[0].body).toMatchObject({ coop_adj_enabled: true, coop_adj_after: -50 });
+    });
+  });
+});
+
+describe('an offer date change request (Accounting, 2026-10-22)', () => {
+  /** The commission deal, with both dates set. */
+  const dated = async (tx: PrismaService): Promise<number> => {
+    const id = await deal(tx);
+    await tx.transactions.update({ where: { id }, data: { offer_date: new Date('2026-08-30'), closing_date: new Date('2026-10-01') } });
+    return id;
+  };
+
+  it('CHANGES NOTHING ON SUBMIT, and records the date it was asked from', async () => {
+    await inRollback(async (tx) => {
+      await user(tx, 'admin', 'super');
+      const acct = await user(tx, 'accounting', 'accounts');
+      const id = await dated(tx);
+      const { applied, writes } = writeRecorder();
+
+      await svc(tx, { writes }).store(asUser('accounting', acct.id, acct.name), id, 'APS is dated 28 Aug',
+        OFFER_DATE_SCOPE, { offer_date: '2026-08-28' });
+
+      expect(applied).toHaveLength(0);
+      const row = await tx.transactions.findUniqueOrThrow({ where: { id }, select: { offer_date: true } });
+      expect(row.offer_date?.toISOString().slice(0, 10)).toBe('2026-08-30');
+      const req = await tx.transaction_edit_requests.findFirstOrThrow({ where: { transaction_id: id } });
+      expect(req.scope).toBe(OFFER_DATE_SCOPE);
+      expect(req.proposed).toEqual({ offer_date: '2026-08-28' });
+      expect(req.baseline).toEqual({ offer_date: '2026-08-30' });
+    });
+  });
+
+  it('APPROVAL APPLIES THE NEW DATE through the write service, as the approver, and tells the requester', async () => {
+    await inRollback(async (tx) => {
+      const sup = await user(tx, 'admin', 'super');
+      const acct = await user(tx, 'accounting', 'accounts');
+      const id = await dated(tx);
+      const { applied, writes } = writeRecorder();
+      const { sent, dispatcher } = dispatchRecorder();
+      const s = svc(tx, { writes, dispatcher });
+
+      const req = await s.store(asUser('accounting', acct.id, acct.name), id, 'APS is dated 28 Aug',
+        OFFER_DATE_SCOPE, { offer_date: '2026-08-28' });
+      await s.approve(asUser('admin', sup.id, sup.name), req.id as number);
+
+      expect(applied).toHaveLength(1);
+      expect(applied[0].user.id).toBe(sup.id);
+      expect(Object.keys(applied[0].body).sort()).toEqual(['offer_date', 'version']);
+      expect(applied[0].body).toMatchObject({ offer_date: '2026-08-28' });
+      const told = sent.find((x) => x.userId === acct.id);
+      expect(told?.request.title).toBe('Your offer date change was approved');
+    });
+  });
+
+  it('refuses any other field, a bad date, a missing reason, and a Super Admin queueing one', async () => {
+    await inRollback(async (tx) => {
+      const sup = await user(tx, 'admin', 'super');
+      const acct = await user(tx, 'accounting', 'accounts');
+      const id = await dated(tx);
+      const me = asUser('accounting', acct.id, acct.name);
+      const s = svc(tx);
+
+      await expect(s.store(me, id, 'why', OFFER_DATE_SCOPE, { closing_date: '2027-01-01' })).rejects.toBeInstanceOf(UnprocessableEntityException);
+      await expect(s.store(me, id, 'why', OFFER_DATE_SCOPE, { offer_date: '2026-08-28', price: 1 })).rejects.toBeInstanceOf(UnprocessableEntityException);
+      await expect(s.store(me, id, 'why', OFFER_DATE_SCOPE, { offer_date: 'last week' })).rejects.toBeInstanceOf(UnprocessableEntityException);
+      await expect(s.store(me, id, '  ', OFFER_DATE_SCOPE, { offer_date: '2026-08-28' })).rejects.toBeInstanceOf(UnprocessableEntityException);
+      await expect(s.store(asUser('admin', sup.id, sup.name), id, 'why', OFFER_DATE_SCOPE, { offer_date: '2026-08-28' }))
+        .rejects.toBeInstanceOf(UnprocessableEntityException);
+      // The closing date scope still refuses an offer date, as it always did.
+      await expect(s.store(me, id, 'why', CLOSING_DATE_SCOPE, { offer_date: '2026-08-28' })).rejects.toBeInstanceOf(UnprocessableEntityException);
+      expect(await tx.transaction_edit_requests.count({ where: { transaction_id: id } })).toBe(0);
+    });
+  });
+
+  it('DOES NOT BLOCK, AND IS NOT BLOCKED BY, a pending closing date or commission request', async () => {
+    await inRollback(async (tx) => {
+      await user(tx, 'admin', 'super');
+      const acct = await user(tx, 'accounting', 'accounts');
+      const id = await dated(tx);
+      const me = asUser('accounting', acct.id, acct.name);
+      const s = svc(tx);
+
+      await s.store(me, id, 'price', COMMISSION_SCOPE, { price: 510000 });
+      await s.store(me, id, 'closing', CLOSING_DATE_SCOPE, { closing_date: '2026-10-15' });
+      await expect(s.store(me, id, 'offer', OFFER_DATE_SCOPE, { offer_date: '2026-08-28' })).resolves.toBeDefined();
+      // But only one open offer date request per deal.
+      await expect(s.store(me, id, 'again', OFFER_DATE_SCOPE, { offer_date: '2026-08-27' }))
         .rejects.toBeInstanceOf(UnprocessableEntityException);
     });
   });

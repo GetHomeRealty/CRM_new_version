@@ -269,7 +269,7 @@ function PendingCommissionApprovals({
     setError('');
     try {
       await (accept ? approveEditRequest(req.id) : rejectEditRequest(req.id));
-      const what = req.scope === 'closing_date' ? 'Closing date change' : 'Commission change';
+      const what = req.scope === 'closing_date' ? 'Closing date change' : req.scope === 'offer_date' ? 'Offer date change' : 'Commission change';
       toast(accept ? `${what} approved and applied.` : `${what} rejected.`, 'ok');
       // Both the request and the history move on a decision, so the caller reloads both.
       await onDecided();
@@ -340,11 +340,23 @@ const COMMISSION_LABELS: Record<string, string> = {
   price: 'Price',
   deposit: 'Deposit',
   closing_date: 'Closing Date',
+  offer_date: 'Offer Date',
   comm_pct: 'Commission %',
   comm_amt: 'Commission Amount',
   precon_comm_pct: 'Commission %',
   precon_comm_amt_manual: 'Commission Amount',
   precon_comm_bonus: 'Bonus',
+  // A Listing deal's own commission figures (2026-10-22).
+  listing_comm_pct: 'Listing Commission %',
+  listing_comm_flat: 'Listing Commission Amount',
+  coop_comm_pct: 'Co-op Commission %',
+  coop_comm_flat: 'Co-op Commission Amount',
+  listing_adj_enabled: 'Listing Comm Adjustment',
+  listing_adj_before: 'Listing Adjustment (Before HST)',
+  listing_adj_after: 'Listing Adjustment (After HST)',
+  coop_adj_enabled: 'Co-op Comm Adjustment',
+  coop_adj_before: 'Co-op Adjustment (Before HST)',
+  coop_adj_after: 'Co-op Adjustment (After HST)',
 };
 
 /**
@@ -356,7 +368,7 @@ const COMMISSION_LABELS: Record<string, string> = {
 function commissionRows(r: EditRequest): { label: string; from: string; to: string }[] {
   const proposed = (r.proposed ?? {}) as Record<string, unknown>;
   const baseline = (r.baseline ?? {}) as Record<string, unknown>;
-  const show = (v: unknown): string => (v === null || v === undefined || v === '' ? '—' : String(v));
+  const show = (v: unknown): string => (v === null || v === undefined || v === '' ? '—' : typeof v === 'boolean' ? (v ? 'Yes' : 'No') : String(v));
   const out: { label: string; from: string; to: string }[] = [];
 
   for (const [k, v] of Object.entries(proposed)) {
