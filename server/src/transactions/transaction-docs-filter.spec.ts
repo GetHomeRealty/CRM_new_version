@@ -203,10 +203,14 @@ describe('what a Documentation user may change on a deal', () => {
     }
   });
 
-  it(`the rest of the coordinator's job is untouched — conditions, status, clients, brokerage, builder`, () => {
-    for (const k of ['clients', 'brokerage', 'conditions', 'conditional_offer', 'inter_board_enabled', 'inter_board_listings', 'builder', 'precon_listing_type']) {
+  it(`the rest of the coordinator's job is untouched — conditions, status, builder`, () => {
+    for (const k of ['conditions', 'conditional_offer', 'inter_board_enabled', 'inter_board_listings', 'builder', 'precon_listing_type']) {
       expect(DOCUMENTATION_EDITABLE.has(k)).toBe(true);
     }
+  });
+
+  it('BROKERAGE AND CLIENT INFORMATION change by approval since 2026-10-22, so a direct save drops them', () => {
+    for (const k of ['clients', 'brokerage']) expect([k, DOCUMENTATION_EDITABLE.has(k)]).toEqual([k, false]);
   });
 
   it('never money, team, admin, lawyer or validation', () => {
@@ -278,10 +282,14 @@ describe('what an Accounting user may NOT change on a deal', () => {
     }
   });
 
-  it(`THE REST OF THE ROLE'S WORK IS NOT — status, payments, adjustments, admin, team, terms, clients`, () => {
+  it(`THE REST OF THE ROLE'S WORK IS NOT — status, payments, adjustments, admin, team, terms, conditions`, () => {
     for (const k of ['comm_status', 'comm_paid_status', 'payment_type', 'adjustments', 'admin_activities', 'team',
-      'precon_terms', 'precon_term_count', 'clients', 'conditions', 'brokerage', 'activity_tracker']) {
+      'precon_terms', 'precon_term_count', 'conditions', 'activity_tracker']) {
       expect([k, ACCOUNTING_LOCKED.has(k)]).toEqual([k, false]);
     }
+  });
+
+  it('BROKERAGE AND CLIENT INFORMATION, and the MLS number, change by approval (2026-10-22)', () => {
+    for (const k of ['clients', 'brokerage', 'mls_num']) expect([k, ACCOUNTING_LOCKED.has(k)]).toEqual([k, true]);
   });
 });

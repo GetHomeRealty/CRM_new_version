@@ -84,10 +84,12 @@ export const COMMISSION_PROPOSABLE: ReadonlySet<string> = new Set([
   'listing_comm_pct', 'listing_comm_flat', 'coop_comm_pct', 'coop_comm_flat',
   'listing_adj_enabled', 'listing_adj_before', 'listing_adj_after',
   'coop_adj_enabled', 'coop_adj_before', 'coop_adj_after',
+  // 2026-10-22 (Accounting): the Commission Adjustment of a Buying / Lease / Sale deal, the same way.
+  'comm_adjust_enabled', 'comm_adjust_before', 'comm_adjust_after',
 ]);
 
 /** The yes/no switches a commission proposal may carry — compared as booleans, not numbers. */
-const COMMISSION_BOOLEANS: ReadonlySet<string> = new Set(['listing_adj_enabled', 'coop_adj_enabled']);
+const COMMISSION_BOOLEANS: ReadonlySet<string> = new Set(['listing_adj_enabled', 'coop_adj_enabled', 'comm_adjust_enabled']);
 
 /**
  * INSIDE `team`, the only keys a proposal may carry.
@@ -120,11 +122,61 @@ export const CLOSING_DATE_PROPOSABLE: ReadonlySet<string> = new Set(['closing_da
 export const OFFER_DATE_SCOPE = 'offer_date';
 export const OFFER_DATE_PROPOSABLE: ReadonlySet<string> = new Set(['offer_date']);
 
-/** The date scopes, each proposing exactly its own one field. */
-const DATE_SCOPES: Readonly<Record<string, { key: string; label: string }>> = {
-  [CLOSING_DATE_SCOPE]: { key: 'closing_date', label: 'closing date' },
-  [OFFER_DATE_SCOPE]: { key: 'offer_date', label: 'offer date' },
+/**
+ * The MLS number (2026-10-22, brokerage request): Accounting asks for it the same way, by its own
+ * scope, so it neither blocks nor waits on any other pending request.
+ */
+export const MLS_SCOPE = 'mls_num';
+
+/** The single-field scopes, each proposing exactly its own one field. */
+const DATE_SCOPES: Readonly<Record<string, { key: string; label: string; kind: 'date' | 'text' }>> = {
+  [CLOSING_DATE_SCOPE]: { key: 'closing_date', label: 'closing date', kind: 'date' },
+  [OFFER_DATE_SCOPE]: { key: 'offer_date', label: 'offer date', kind: 'date' },
+  [MLS_SCOPE]: { key: 'mls_num', label: 'MLS number', kind: 'text' },
 };
+
+/**
+ * LISTING / CO-OP BROKERAGE AND CLIENT INFORMATION, by request (2026-10-22, brokerage request).
+ *
+ * Documentation and Accounting used to save these two cards directly; they now propose them and a
+ * Super Admin approves, like Price. Each card is its own scope, carrying the WHOLE card as the
+ * screen shows it, so approval writes it through the ordinary save path (`syncBrokerage`,
+ * `syncClients`), which replaces the card exactly as a direct save did.
+ */
+export const BROKERAGE_SCOPE = 'brokerage';
+export const CLIENTS_SCOPE = 'clients';
+const BROKERAGE_FIELDS = ['name', 'address', 'email', 'invoice_email', 'agent_email', 'phone'] as const;
+const CLIENT_FIELDS = ['name', 'email', 'phone'] as const;
+const PARTY_SCOPES: Readonly<Record<string, string>> = {
+  [BROKERAGE_SCOPE]: 'brokerage information',
+  [CLIENTS_SCOPE]: 'client information',
+};
+
+/** A text value as stored and compared: trimmed, with an empty box meaning "none". */
+const textOrNull = (v: unknown): string | null => {
+  const s = v === null || v === undefined ? '' : String(v).trim();
+  return s === '' ? null : s;
+};
+
+/** The brokerage card in one comparable shape — the same for the proposal and the live rows. */
+const normalBrokerage = (b: Record<string, unknown> | null | undefined): Record<string, unknown> => {
+  const src = b ?? {};
+  const out: Record<string, unknown> = {};
+  for (const f of BROKERAGE_FIELDS) out[f] = textOrNull(src[f]);
+  out.agents = (Array.isArray(src.agents) ? src.agents : []).map((a) => textOrNull(a)).filter((a): a is string => !!a);
+  return out;
+};
+
+/** The client rows in one comparable shape, in screen order. */
+const normalClients = (rows: unknown): Record<string, unknown>[] =>
+  (Array.isArray(rows) ? rows : []).map((r) => {
+    const src = (r && typeof r === 'object' ? r : {}) as Record<string, unknown>;
+    return { name: textOrNull(src.name), email: textOrNull(src.email), phone: textOrNull(src.phone) };
+  });
+
+/** What a scope is called in messages: "the closing date", "the brokerage information", … */
+const scopeLabel = (scope: string | null | undefined): string | undefined =>
+  (scope ? DATE_SCOPES[scope]?.label ?? PARTY_SCOPES[scope] : undefined);
 
 /** Inside `precon_terms`: which term, and that term's commission. Nothing else. */
 export const COMMISSION_PROPOSABLE_TERM: ReadonlySet<string> = new Set([
@@ -218,6 +270,21 @@ export class EditRequestsService {
       } else if (k === 'closing_date' || k === 'offer_date') {
         // A date column: compared as YYYY-MM-DD, the same shape the request carries.
         out[k] = toDateString(t[k] as Date | null);
+      } else if (k === 'mls_num') {
+        out[k] = textOrNull(t[k]);
+      } else if (k === 'brokerage') {
+        const b = await db.brokerages.findUnique({
+          where: { transaction_id: txnId },
+          include: { brokerage_agents: { orderBy: [{ position: 'asc' }, { id: 'asc' }], select: { name: true } } },
+        });
+        out.brokerage = normalBrokerage(b ? { ...b, agents: b.brokerage_agents.map((a) => a.name) } : null);
+      } else if (k === 'clients') {
+        const rows = await db.clients.findMany({
+          where: { transaction_id: txnId },
+          orderBy: [{ position: 'asc' }, { id: 'asc' }],
+          select: { name: true, email: true, phone: true },
+        });
+        out.clients = normalClients(rows);
       } else if (COMMISSION_BOOLEANS.has(k)) {
         out[k] = t[k] === null || t[k] === undefined ? null : Boolean(t[k]);
       } else {
@@ -264,8 +331,8 @@ export class EditRequestsService {
     try {
       const ids = await this.reviewers();
       if (!ids.length) return;
-      const dateScope = req.scope ? DATE_SCOPES[req.scope] : undefined;
-      const what = dateScope ? `the ${dateScope.label}` : req.scope ? `${req.scope} fields` : 'this deal';
+      const named = scopeLabel(req.scope);
+      const what = named ? `the ${named}` : req.scope ? `${req.scope} fields` : 'this deal';
       await this.dispatcher.dispatchMany(ids, {
         category: 'approval_requested',
         title: 'Approval requested',
@@ -334,38 +401,75 @@ export class EditRequestsService {
       // Captured now, so the reviewer is shown the comparison the REQUESTER saw — and so a figure
       // that moves afterwards can be detected rather than silently overwritten.
       baseline = await this.currentValues(txnId, keys);
-    } else if (scope === CLOSING_DATE_SCOPE || scope === OFFER_DATE_SCOPE) {
-      const { key, label } = DATE_SCOPES[scope];
-      const allowed = scope === CLOSING_DATE_SCOPE ? CLOSING_DATE_PROPOSABLE : OFFER_DATE_PROPOSABLE;
+    } else if (scope && DATE_SCOPES[scope]) {
+      const { key, label, kind } = DATE_SCOPES[scope];
       const keys = Object.keys(proposed ?? {});
-      if (keys.length !== 1 || !allowed.has(keys[0])) {
+      if (keys.length !== 1 || keys[0] !== key) {
         throw new UnprocessableEntityException({ message: `A ${label} request carries the new ${label} and nothing else.` });
       }
       const v = String((proposed ?? {})[key] ?? '');
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(v) || Number.isNaN(Date.parse(v))) {
+      if (kind === 'date' && (!/^\d{4}-\d{2}-\d{2}$/.test(v) || Number.isNaN(Date.parse(v)))) {
         throw new UnprocessableEntityException({ message: `Give the new ${label} as a valid date.` });
+      }
+      if (kind === 'text' && (!v.trim() || v.trim().length > 255)) {
+        throw new UnprocessableEntityException({ message: `Give the new ${label} (up to 255 characters).` });
       }
       if (!String(reason ?? '').trim()) {
         throw new UnprocessableEntityException({ message: `A ${label} change request needs a reason.` });
       }
       baseline = await this.currentValues(txnId, keys);
+    } else if (scope === BROKERAGE_SCOPE || scope === CLIENTS_SCOPE) {
+      const label = PARTY_SCOPES[scope];
+      const keys = Object.keys(proposed ?? {});
+      if (keys.length !== 1 || keys[0] !== scope) {
+        throw new UnprocessableEntityException({ message: `A ${label} request carries the ${label} card and nothing else.` });
+      }
+      const value = (proposed ?? {})[scope];
+      if (scope === BROKERAGE_SCOPE) {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) {
+          throw new UnprocessableEntityException({ message: 'Send the brokerage card as one record.' });
+        }
+        const bad = Object.keys(value as Record<string, unknown>).filter((k) => k !== 'agents' && !(BROKERAGE_FIELDS as readonly string[]).includes(k));
+        if (bad.length) throw new UnprocessableEntityException({ message: `These cannot be proposed for the brokerage: ${bad.join(', ')}.` });
+        if (!Array.isArray((value as Record<string, unknown>).agents ?? [])) {
+          throw new UnprocessableEntityException({ message: 'The brokerage agents must be a list of names.' });
+        }
+      } else {
+        if (!Array.isArray(value)) throw new UnprocessableEntityException({ message: 'Send the clients as a list.' });
+        (value as unknown[]).forEach((row, i) => {
+          if (!row || typeof row !== 'object' || Array.isArray(row)) {
+            throw new UnprocessableEntityException({ message: `Client ${i + 1} must be a record.` });
+          }
+          const bad = Object.keys(row as Record<string, unknown>).filter((k) => !(CLIENT_FIELDS as readonly string[]).includes(k));
+          if (bad.length) throw new UnprocessableEntityException({ message: `These cannot be proposed for a client: ${bad.join(', ')}.` });
+          if (!textOrNull((row as Record<string, unknown>).name)) {
+            throw new UnprocessableEntityException({ message: `Client ${i + 1} needs a name.` });
+          }
+        });
+      }
+      if (!String(reason ?? '').trim()) {
+        throw new UnprocessableEntityException({ message: `A ${label} change request needs a reason.` });
+      }
+      // Stored in the compared shape, so the reviewer reads exactly what will be written.
+      proposed = { [scope]: scope === BROKERAGE_SCOPE ? normalBrokerage(value as Record<string, unknown>) : normalClients(value) };
+      baseline = await this.currentValues(txnId, keys);
+      if (canonical(baseline[scope]) === canonical(proposed[scope])) {
+        throw new UnprocessableEntityException({ message: `Nothing in the ${label} has changed.` });
+      }
     }
 
     // 'commission' joins 'financial' and 'mandatory': scopes anybody below Super Admin may ASK
     // about, rather than ones only an Admin may raise on a locked deal. The top tier does not
     // queue a request to itself — it can change the figures directly.
-    if (scope === 'financial' || scope === 'mandatory' || scope === COMMISSION_SCOPE || scope === CLOSING_DATE_SCOPE
-      || scope === OFFER_DATE_SCOPE) {
+    if (scope === 'financial' || scope === 'mandatory' || scope === COMMISSION_SCOPE || !!scopeLabel(scope)) {
       if (isSuperAdmin(user)) {
         throw new UnprocessableEntityException({
           message: scope === 'financial'
             ? 'Super Admins can edit financial fields directly.'
             : scope === COMMISSION_SCOPE
               ? 'Super Admins can change the commission directly.'
-              : scope === CLOSING_DATE_SCOPE
-                ? 'Super Admins can change the closing date directly.'
-              : scope === OFFER_DATE_SCOPE
-                ? 'Super Admins can change the offer date directly.'
+              : scopeLabel(scope)
+                ? `Super Admins can change the ${scopeLabel(scope)} directly.`
               : 'Super Admins can change whether a document is Mandatory directly.',
         });
       }
@@ -531,7 +635,7 @@ export class EditRequestsService {
     const moved = keys.filter((k) => canonical(live[k]) !== canonical(baseline[k]));
     if (moved.length) {
       throw new UnprocessableEntityException({
-        message: (req.scope && DATE_SCOPES[req.scope] ? `The ${DATE_SCOPES[req.scope].label}` : 'The commission')
+        message: (scopeLabel(req.scope) ? `The ${scopeLabel(req.scope)}` : 'The commission')
           + ' has changed since this was requested, so applying it would undo that change. '
           + `Ask for it again from the current figures (${moved.join(', ')}).`,
       });
@@ -627,14 +731,14 @@ export class EditRequestsService {
     if (!this.dispatcher || !req.requested_by) return;
     try {
       const approved = req.status === 'approved';
-      const dateScope = req.scope ? DATE_SCOPES[req.scope] : undefined;
-      const what = req.scope === COMMISSION_SCOPE ? 'commission change' : dateScope ? `${dateScope.label} change` : 'edit request';
+      const named = scopeLabel(req.scope);
+      const what = req.scope === COMMISSION_SCOPE ? 'commission change' : named ? `${named} change` : 'edit request';
       await this.dispatcher.dispatch({
         category: 'transaction_approvals',
         userId: req.requested_by,
         title: approved ? `Your ${what} was approved` : `Your ${what} was rejected`,
         body: approved
-          ? `${req.reviewed_by_name || 'A Super Admin'} approved it${req.scope === COMMISSION_SCOPE ? ' and the new figures have been applied.' : dateScope ? ` and the new ${dateScope.label} has been applied.` : '.'}`
+          ? `${req.reviewed_by_name || 'A Super Admin'} approved it${req.scope === COMMISSION_SCOPE ? ' and the new figures have been applied.' : named ? ` and the new ${named} has been applied.` : '.'}`
           : `${req.reviewed_by_name || 'A Super Admin'} turned it down. The existing values are unchanged.`,
         link: `/desk/transactions/${req.transaction_id}?section=approvals`,
         dedupeKey: `edit-request-decision:${req.id}:${req.status}`,

@@ -267,6 +267,18 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
         side('coop', 'Co-op', txn.coop_adj_enabled, txn.coop_adj_before, txn.coop_adj_after, commAdjMaster && cAdjEn, cBefore, cAfter);
       }
     }
+    /*
+     * A Buying / Lease / Sale deal's Commission Adjustment, once its pencil has been used — keyed
+     * and valued as an ordinary save sends them (0 while it is off).
+     */
+    if (acctStdEdits && docUnlock.commAdj) {
+      const savedOn = !!txn.comm_adjust_enabled;
+      rows.push(
+        { key: 'comm_adjust_enabled', label: 'Commission Adjustment', from: savedOn, to: adjEnabled, bool: true },
+        { key: 'comm_adjust_before', label: 'Adjustment (Before HST)', from: savedOn ? (amtOrNull(txn.comm_adjust_before) ?? 0) : 0, to: adjEnabled ? r2(parseNumber(adjBefore)) : 0 },
+        { key: 'comm_adjust_after', label: 'Adjustment (After HST)', from: savedOn ? (amtOrNull(txn.comm_adjust_after) ?? 0) : 0, to: adjEnabled ? r2(parseNumber(adjAfter)) : 0 },
+      );
+    }
     return rows.filter((r) => r.from !== r.to);
   };
   /** One side of a requested change, as the dialog shows it. */
@@ -292,6 +304,9 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
     setCAdjEn(!!txn.coop_adj_enabled);
     setCBefore(txn.coop_adj_before ?? 0);
     setCAfter(txn.coop_adj_after ?? 0);
+    setAdjEnabled(!!txn.comm_adjust_enabled);
+    setAdjBefore(txn.comm_adjust_before ?? 0);
+    setAdjAfter(txn.comm_adjust_after ?? 0);
     setDocUnlock(NOTHING_UNLOCKED);
   };
 
@@ -344,6 +359,9 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
   const acctListingEdits = docEdits && listing && user?.role === 'accounting';
   const listPencil = (f: DocField): ReactNode => (acctListingEdits ? docPencil(f) : null);
   const listLocked = (f: DocField): boolean | undefined => (docEdits ? (!acctListingEdits || docLocked(f)) : undefined);
+  /** The same for a Buying / Lease / Sale deal's Commission Adjustment (2026-10-22, Accounting only). */
+  const acctStdEdits = docEdits && !listing && !precon && user?.role === 'accounting';
+  const stdLocked = (f: DocField): boolean | undefined => (docEdits ? (!acctStdEdits || docLocked(f)) : undefined);
   // Agent Comm (%) and Brok Comm (%) are complementary: editing one fills the
   // other with the remaining percentage (e.g. Agent 80 → Brokerage 20).
   const setMember = (i: number, k: FinMemberKey, v: string) => setMembers((ms) => ms.map((m, idx) => {
@@ -889,6 +907,38 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
           </>
         )}
 
+        {/*
+          A BUYING / LEASE / SALE DEAL'S SUMMARY AND COMMISSION ADJUSTMENT sit in this first fieldset
+          (moved here 2026-10-22) so Accounting can unlock the adjustment by pencil, as with Price.
+          Same order and layout as before; `stdLocked` keeps Documentation reading it as before, and
+          every other role is left to the fieldset exactly as it was.
+        */}
+        {!precon && !listing && (
+          <>
+            <div className="fin-sum">
+              <div className="field" style={{ marginBottom: 0 }}><label>Commission</label><input value={formatCurrency(commWoHst)} readOnly />{adjB !== 0 && <div className="help" style={{ margin: '4px 0 0' }}>{adjNote(adjB, 'before HST')}</div>}</div>
+              <div className="field" style={{ marginBottom: 0 }}><label>HST</label><input value={formatCurrency(stdHst)} readOnly /></div>
+              <div className="field" style={{ marginBottom: 0 }}><label>Total</label><input style={ts(stdTotal)} value={formatCurrency(stdTotal)} readOnly />{adjA !== 0 && <div className="help" style={{ margin: '4px 0 0' }}>{adjNote(adjA, 'after HST')}</div>}</div>
+            </div>
+
+            {/* Commission Adjustment sits on one row with its Before/After HST fields when enabled,
+                so the two adjustments read beside the toggle rather than dropping below it. */}
+            <div style={{ display: 'grid', gridTemplateColumns: adjEnabled ? '220px 1fr 1fr' : '220px', gap: 16, alignItems: 'end' }}>
+              <div className="field" style={{ marginBottom: 0 }}>
+                <label>Commission Adjustment {acctStdEdits ? docPencil('commAdj') : finPencil()}</label>
+                <select value={adjEnabled ? 'Yes' : 'No'} disabled={docEdits ? stdLocked('commAdj') : finLock} style={!docEdits && finLock ? finLockStyle : undefined} onChange={(e) => setAdjEnabled(e.target.value === 'Yes')} data-testid="fin-std-comm-adj"><option>No</option><option>Yes</option></select>
+              </div>
+              {adjEnabled && (
+                <>
+                  <SignedAdjField label="Adjustment (Before HST)" value={adjBefore} onChange={(nv) => excl(nv, setAdjBefore, adjAfter, setAdjAfter)} convention="sub" disabled={docEdits ? stdLocked('commAdj') : undefined} />
+                  <SignedAdjField label="Adjustment (After HST)" value={adjAfter} onChange={(nv) => excl(nv, setAdjAfter, adjBefore, setAdjBefore)} convention="sub" disabled={docEdits ? stdLocked('commAdj') : undefined} />
+                </>
+              )}
+            </div>
+
+          </>
+        )}
+
         </fieldset>
 
         {/* Everything from here down is read-only for Documentation, as it was before. */}
@@ -1095,27 +1145,7 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
           /* ---- STANDARD (live, like the original) ---- */
           /* Commission % / Amount now sit in the Price + Deposit row above. */
           <>
-            <div className="fin-sum">
-              <div className="field" style={{ marginBottom: 0 }}><label>Commission</label><input value={formatCurrency(commWoHst)} readOnly />{adjB !== 0 && <div className="help" style={{ margin: '4px 0 0' }}>{adjNote(adjB, 'before HST')}</div>}</div>
-              <div className="field" style={{ marginBottom: 0 }}><label>HST</label><input value={formatCurrency(stdHst)} readOnly /></div>
-              <div className="field" style={{ marginBottom: 0 }}><label>Total</label><input style={ts(stdTotal)} value={formatCurrency(stdTotal)} readOnly />{adjA !== 0 && <div className="help" style={{ margin: '4px 0 0' }}>{adjNote(adjA, 'after HST')}</div>}</div>
-            </div>
-
-            {/* Commission Adjustment sits on one row with its Before/After HST fields when enabled,
-                so the two adjustments read beside the toggle rather than dropping below it. */}
-            <div style={{ display: 'grid', gridTemplateColumns: adjEnabled ? '220px 1fr 1fr' : '220px', gap: 16, alignItems: 'end' }}>
-              <div className="field" style={{ marginBottom: 0 }}>
-                <label>Commission Adjustment {finPencil()}</label>
-                <select value={adjEnabled ? 'Yes' : 'No'} disabled={finLock} style={finLock ? finLockStyle : undefined} onChange={(e) => setAdjEnabled(e.target.value === 'Yes')}><option>No</option><option>Yes</option></select>
-              </div>
-              {adjEnabled && (
-                <>
-                  <SignedAdjField label="Adjustment (Before HST)" value={adjBefore} onChange={(nv) => excl(nv, setAdjBefore, adjAfter, setAdjAfter)} convention="sub" />
-                  <SignedAdjField label="Adjustment (After HST)" value={adjAfter} onChange={(nv) => excl(nv, setAdjAfter, adjBefore, setAdjBefore)} convention="sub" />
-                </>
-              )}
-            </div>
-
+            {/* Commission / HST / Total and the Commission Adjustment render in the first fieldset, above. */}
             <ReferralSections data={stdRefView} />
             <AgentCommissionBlocks rows={memberRows} setMember={setMember} minBrok={{ commission: 200, hst: 26, total: 226 }} agentDefaults={agentDefaults} isLease={leaseType} hideT4A={isAgent} hadSavedTeam={hadSavedTeam} finLock={finLock} finPencil={finPencil} hideLocks={readsOnly} />
           </>

@@ -4,13 +4,15 @@ import { apiErrorMessage } from '../lib/apiError';
 import { useToast } from './toast';
 
 /**
- * The two Basic Info dates this dialog can ask for. Closing Date first (Documentation, then
- * Accounting); Offer Date joined on 2026-10-22 for Accounting. Each is its own request scope on the
- * server, named after the field, so the wording and test ids below are all that differ.
+ * The Basic Info fields this dialog can ask for. Closing Date first (Documentation, then
+ * Accounting); Offer Date and the MLS number joined on 2026-10-22 for Accounting. Each is its own
+ * request scope on the server, named after the field, so the wording, input and test ids below are
+ * all that differ.
  */
 const DATE_FIELDS = {
-  closing_date: { label: 'Closing Date', lower: 'closing date', testid: 'closing-date', example: 'e.g. Builder extended the closing per the amendment' },
-  offer_date: { label: 'Offer Date', lower: 'offer date', testid: 'offer-date', example: 'e.g. Offer date entered wrong; the signed APS is dated 28 Aug' },
+  closing_date: { label: 'Closing Date', lower: 'closing date', testid: 'closing-date', input: 'date', toast: 'Closing date', example: 'e.g. Builder extended the closing per the amendment' },
+  offer_date: { label: 'Offer Date', lower: 'offer date', testid: 'offer-date', input: 'date', toast: 'Offer date', example: 'e.g. Offer date entered wrong; the signed APS is dated 28 Aug' },
+  mls_num: { label: 'MLS #', lower: 'MLS number', testid: 'mls-num', input: 'text', toast: 'MLS number', example: 'e.g. MLS number corrected to match the listing' },
 } as const;
 
 /**
@@ -45,15 +47,15 @@ export default function ClosingDateRequestDialog({ open, onClose, transactionId,
 
   if (!open) return null;
 
-  const unchanged = !date || date === current;
+  const unchanged = !date.trim() || date.trim() === current;
   const send = async () => {
-    if (unchanged) { setError(`Pick a new ${f.lower} first.`); return; }
+    if (unchanged) { setError(`${f.input === 'date' ? 'Pick' : 'Enter'} a new ${f.lower} first.`); return; }
     if (!reason.trim()) { setError('Give a reason for the change.'); return; }
     setBusy(true);
     setError('');
     try {
-      await requestTransactionEdit(transactionId, reason.trim(), field, { [field]: date });
-      toast(`${f.label.replace(' Date', ' date')} change sent to a Super Admin for approval`, 'ok');
+      await requestTransactionEdit(transactionId, reason.trim(), field, { [field]: date.trim() });
+      toast(`${f.toast} change sent to a Super Admin for approval`, 'ok');
       onClose();
       onSent();
     } catch (e) {
@@ -75,11 +77,12 @@ export default function ClosingDateRequestDialog({ open, onClose, transactionId,
         <div className="g2" style={{ marginTop: 10 }}>
           <div className="field" style={{ marginBottom: 0 }}>
             <label>Current {f.label}</label>
-            <input type="date" value={current} disabled data-testid={`${f.testid}-current`} />
+            <input type={f.input} value={current} disabled data-testid={`${f.testid}-current`} />
           </div>
           <div className="field" style={{ marginBottom: 0 }}>
             <label>New {f.label} <span className="req">*</span></label>
-            <input type="date" value={date} onChange={(e) => setDate(e.target.value)} data-testid={`${f.testid}-new`} />
+            <input type={f.input} value={date} data-testid={`${f.testid}-new`}
+              onChange={(e) => setDate(f.input === 'text' ? e.target.value.toUpperCase() : e.target.value)} />
           </div>
         </div>
         <div className="field" style={{ marginTop: 10 }}>

@@ -377,7 +377,19 @@ export default function TransactionsPage() {
         {/* TD-090 — the placeholder names what the box now searches. It was honest before, which is
             how the missing capability stayed invisible: an agent read "property, trade #, agent"
             and never tried a client's name. */}
-        <input className="inp with-search" placeholder="Search property, trade #, agent, client" value={filters.q} onChange={(e) => setF('q', e.target.value)} />
+        {/* The X clears the search in one click (2026-10-22, Accounting request); it shows only once
+            something is typed. Wrapped so the box keeps the toolbar's flexible width. */}
+        <span style={{ position: 'relative', display: 'flex', flex: '1 1 200px', minWidth: 200 }}>
+          <input className="inp with-search" placeholder="Search property, trade #, agent, client" value={filters.q} onChange={(e) => setF('q', e.target.value)}
+            style={{ width: '100%', minWidth: 0, flex: '1 1 auto', paddingRight: filters.q ? 34 : undefined }} data-testid="txn-search" />
+          {filters.q && (
+            <button type="button" className="row-rm" aria-label="Clear search" title="Clear search" data-testid="txn-search-clear"
+              onClick={() => setF('q', '')}
+              style={{ position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)', color: 'var(--muted)' }}>
+              <Icon name="close" size={14} />
+            </button>
+          )}
+        </span>
         {/* The closing-date year, labelled in the options themselves — the bare years read as a mystery. */}
         <select value={filters.year} onChange={(e) => setF('year', e.target.value)} title="Closing year" aria-label="Closing year">
           <option value={THIS_YEAR_ONWARD}>Closing year: {THIS_YEAR_ONWARD.slice(0, 4)} onward + no date</option>

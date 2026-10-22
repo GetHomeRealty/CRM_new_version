@@ -168,7 +168,8 @@ export const DOCUMENTATION_EDITABLE: ReadonlySet<string> = new Set([
   // Price, Deposit, Closing Date and Commission Amount still use the Super Admin approval workflow.
   'type', 'statuses', 'agent', 'property',
   'conditional_offer', 'conditions', 'inter_board_enabled', 'inter_board_listings',
-  'clients', 'brokerage',
+  // 'clients' and 'brokerage' left on 2026-10-22: both cards now change by Super Admin approval
+  // (the 'brokerage' and 'clients' edit-request scopes), so a direct save drops them.
   'builder',
   // Preconstruction Details, not Basic Info — a separate card, and this role's to maintain.
   'precon_listing_type',
@@ -269,6 +270,8 @@ export const ACCOUNTING_LOCKED: ReadonlySet<string> = new Set([
   'listing_adj_enabled', 'listing_adj_before', 'listing_adj_after',
   'coop_adj_enabled', 'coop_adj_before', 'coop_adj_after',
   'precon_net_of_hst', 'precon_comm_pct', 'precon_comm_amt_manual', 'precon_comm_bonus', 'precon_details_of_terms',
+  // 2026-10-22: Listing / Co-op Brokerage and Client Information change by approval, as Documentation's do.
+  'brokerage', 'clients',
 ]);
 
 // Agents cannot modify these.

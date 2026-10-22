@@ -1,7 +1,9 @@
 import { UnprocessableEntityException } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
 import type { PrismaService } from '../prisma/prisma.service';
-import { EditRequestsService, COMMISSION_SCOPE, COMMISSION_PROPOSABLE, CLOSING_DATE_SCOPE, OFFER_DATE_SCOPE } from './edit-requests.service';
+import {
+  EditRequestsService, COMMISSION_SCOPE, COMMISSION_PROPOSABLE, CLOSING_DATE_SCOPE, OFFER_DATE_SCOPE, MLS_SCOPE, BROKERAGE_SCOPE, CLIENTS_SCOPE,
+} from './edit-requests.service';
 import { AuditService } from '../audit/audit.service';
 import type { TransactionsWriteService } from '../transactions/transactions-write.service';
 import type { NotificationDispatcher } from '../notifications/notification-dispatcher.service';
@@ -238,6 +240,12 @@ describe('submitting a commission change request', () => {
     }
     expect(COMMISSION_PROPOSABLE.has('trust_payable')).toBe(false);
   });
+
+  it(`a Buying / Lease deal's Commission Adjustment is proposable too (2026-10-22)`, () => {
+    for (const k of ['comm_adjust_enabled', 'comm_adjust_before', 'comm_adjust_after']) {
+      expect([k, COMMISSION_PROPOSABLE.has(k)]).toEqual([k, true]);
+    }
+  });
 });
 
 describe('a closing date change request', () => {
@@ -473,6 +481,147 @@ describe('an offer date change request (Accounting, 2026-10-22)', () => {
       // But only one open offer date request per deal.
       await expect(s.store(me, id, 'again', OFFER_DATE_SCOPE, { offer_date: '2026-08-27' }))
         .rejects.toBeInstanceOf(UnprocessableEntityException);
+    });
+  });
+});
+
+describe('a Commission Adjustment change request on a standard deal (Accounting, 2026-10-22)', () => {
+  it('records the switch as a boolean and applies only what was proposed', async () => {
+    await inRollback(async (tx) => {
+      const sup = await user(tx, 'admin', 'super');
+      const acct = await user(tx, 'accounting', 'accounts');
+      const id = await deal(tx);
+      const { applied, writes } = writeRecorder();
+      const s = svc(tx, { writes });
+
+      const req = await s.store(asUser('accounting', acct.id, acct.name), id, 'Agent agreed to a 250 reduction',
+        COMMISSION_SCOPE, { comm_adjust_enabled: true, comm_adjust_before: 250 });
+      const row = await tx.transaction_edit_requests.findFirstOrThrow({ where: { transaction_id: id } });
+      expect(row.baseline).toEqual({ comm_adjust_enabled: false, comm_adjust_before: 0 });
+
+      await s.approve(asUser('admin', sup.id, sup.name), req.id as number);
+      expect(Object.keys(applied[0].body).sort()).toEqual(['comm_adjust_before', 'comm_adjust_enabled', 'version']);
+    });
+  });
+});
+
+describe('an MLS number change request (Accounting, 2026-10-22)', () => {
+  it('records the number it was asked from, applies only it, and refuses anything else', async () => {
+    await inRollback(async (tx) => {
+      const sup = await user(tx, 'admin', 'super');
+      const acct = await user(tx, 'accounting', 'accounts');
+      const id = await deal(tx);
+      await tx.transactions.update({ where: { id }, data: { mls_num: 'W1234567' } });
+      const me = asUser('accounting', acct.id, acct.name);
+      const { applied, writes } = writeRecorder();
+      const s = svc(tx, { writes });
+
+      await expect(s.store(me, id, 'why', MLS_SCOPE, { mls_num: '   ' })).rejects.toBeInstanceOf(UnprocessableEntityException);
+      await expect(s.store(me, id, 'why', MLS_SCOPE, { mls_num: 'W7654321', price: 1 })).rejects.toBeInstanceOf(UnprocessableEntityException);
+      await expect(s.store(me, id, ' ', MLS_SCOPE, { mls_num: 'W7654321' })).rejects.toBeInstanceOf(UnprocessableEntityException);
+      await expect(s.store(asUser('admin', sup.id, sup.name), id, 'why', MLS_SCOPE, { mls_num: 'W7654321' }))
+        .rejects.toBeInstanceOf(UnprocessableEntityException);
+
+      const req = await s.store(me, id, 'Typo in the MLS number', MLS_SCOPE, { mls_num: 'W7654321' });
+      const row = await tx.transaction_edit_requests.findFirstOrThrow({ where: { transaction_id: id } });
+      expect([row.scope, row.baseline]).toEqual([MLS_SCOPE, { mls_num: 'W1234567' }]);
+      // Its own pending slot: a closing date request is not blocked by it.
+      await tx.transactions.update({ where: { id }, data: { closing_date: new Date('2027-06-16') } });
+      await expect(s.store(me, id, 'date', CLOSING_DATE_SCOPE, { closing_date: '2027-07-30' })).resolves.toBeDefined();
+
+      await s.approve(asUser('admin', sup.id, sup.name), req.id as number);
+      expect(Object.keys(applied[0].body).sort()).toEqual(['mls_num', 'version']);
+      expect(applied[0].body.mls_num).toBe('W7654321');
+    });
+  });
+});
+
+describe('brokerage and client change requests (Documentation and Accounting, 2026-10-22)', () => {
+  /** The commission deal with a brokerage card and one client. */
+  const withParties = async (tx: PrismaService): Promise<number> => {
+    const id = await deal(tx);
+    const now = new Date();
+    const b = await tx.brokerages.create({ data: { transaction_id: id, name: 'ZZ Sutton', email: 'desk@zz.test', created_at: now, updated_at: now } });
+    await tx.brokerage_agents.create({ data: { brokerage_id: b.id, name: 'ZZ Coop Agent', position: 0, created_at: now, updated_at: now } });
+    await tx.clients.create({ data: { transaction_id: id, name: 'ZZ Client One', email: null, phone: null, position: 0, created_at: now, updated_at: now } });
+    return id;
+  };
+
+  it('A BROKERAGE REQUEST changes nothing on submit, keeps the whole card, and approval writes the card', async () => {
+    await inRollback(async (tx) => {
+      const sup = await user(tx, 'admin', 'super');
+      const doc = await user(tx, 'documentation', 'coordinator');
+      const id = await withParties(tx);
+      const { applied, writes } = writeRecorder();
+      const s = svc(tx, { writes });
+
+      const req = await s.store(asUser('documentation', doc.id, doc.name), id, 'Agent email per the APS', BROKERAGE_SCOPE, {
+        brokerage: { name: 'ZZ Sutton', address: '', email: 'desk@zz.test', invoice_email: '', agent_email: ' agent@zz.test ', phone: '', agents: ['ZZ Coop Agent', ''] },
+      });
+      const b = await tx.brokerages.findUniqueOrThrow({ where: { transaction_id: id } });
+      expect(b.agent_email).toBeNull();
+      const row = await tx.transaction_edit_requests.findFirstOrThrow({ where: { transaction_id: id } });
+      expect(row.baseline).toEqual({ brokerage: { name: 'ZZ Sutton', address: null, email: 'desk@zz.test', invoice_email: null, agent_email: null, phone: null, agents: ['ZZ Coop Agent'] } });
+      // Trimmed and emptied the same way, so the reviewer reads what will be written.
+      expect((row.proposed as Record<string, Record<string, unknown>>).brokerage.agent_email).toBe('agent@zz.test');
+
+      await s.approve(asUser('admin', sup.id, sup.name), req.id as number);
+      expect(Object.keys(applied[0].body).sort()).toEqual(['brokerage', 'version']);
+      expect((applied[0].body.brokerage as Record<string, unknown>).agents).toEqual(['ZZ Coop Agent']);
+    });
+  });
+
+  it('A CLIENT REQUEST from Accounting replaces the list on approval', async () => {
+    await inRollback(async (tx) => {
+      const sup = await user(tx, 'admin', 'super');
+      const acct = await user(tx, 'accounting', 'accounts');
+      const id = await withParties(tx);
+      const { applied, writes } = writeRecorder();
+      const s = svc(tx, { writes });
+
+      const req = await s.store(asUser('accounting', acct.id, acct.name), id, 'Second buyer added', CLIENTS_SCOPE, {
+        clients: [{ name: 'ZZ Client One', email: null, phone: null }, { name: 'ZZ Client Two', email: 'two@zz.test', phone: null }],
+      });
+      await s.approve(asUser('admin', sup.id, sup.name), req.id as number);
+      expect(applied[0].body.clients).toEqual([
+        { name: 'ZZ Client One', email: null, phone: null },
+        { name: 'ZZ Client Two', email: 'two@zz.test', phone: null },
+      ]);
+    });
+  });
+
+  it('refuses other fields, a nameless client, an unchanged card and a missing reason', async () => {
+    await inRollback(async (tx) => {
+      const doc = await user(tx, 'documentation', 'coordinator');
+      const id = await withParties(tx);
+      const me = asUser('documentation', doc.id, doc.name);
+      const s = svc(tx);
+      const card = { name: 'ZZ Sutton', address: '', email: 'desk@zz.test', invoice_email: '', agent_email: '', phone: '', agents: ['ZZ Coop Agent'] };
+
+      await expect(s.store(me, id, 'why', BROKERAGE_SCOPE, { brokerage: { ...card, bank_account: '1' } })).rejects.toBeInstanceOf(UnprocessableEntityException);
+      await expect(s.store(me, id, 'why', BROKERAGE_SCOPE, { brokerage: card, price: 1 })).rejects.toBeInstanceOf(UnprocessableEntityException);
+      await expect(s.store(me, id, 'why', BROKERAGE_SCOPE, { brokerage: card })).rejects.toBeInstanceOf(UnprocessableEntityException);
+      await expect(s.store(me, id, 'why', CLIENTS_SCOPE, { clients: [{ name: ' ', email: null, phone: null }] })).rejects.toBeInstanceOf(UnprocessableEntityException);
+      await expect(s.store(me, id, 'why', CLIENTS_SCOPE, { clients: [{ name: 'X', sin: '123' }] })).rejects.toBeInstanceOf(UnprocessableEntityException);
+      await expect(s.store(me, id, '', CLIENTS_SCOPE, { clients: [{ name: 'X', email: null, phone: null }] })).rejects.toBeInstanceOf(UnprocessableEntityException);
+      expect(await tx.transaction_edit_requests.count({ where: { transaction_id: id } })).toBe(0);
+    });
+  });
+
+  it('a brokerage request moved on by a later change is refused as stale, not applied over it', async () => {
+    await inRollback(async (tx) => {
+      const sup = await user(tx, 'admin', 'super');
+      const doc = await user(tx, 'documentation', 'coordinator');
+      const id = await withParties(tx);
+      const { applied, writes } = writeRecorder();
+      const s = svc(tx, { writes });
+
+      const req = await s.store(asUser('documentation', doc.id, doc.name), id, 'Phone added', BROKERAGE_SCOPE, {
+        brokerage: { name: 'ZZ Sutton', email: 'desk@zz.test', phone: '416-555-0100', agents: ['ZZ Coop Agent'] },
+      });
+      await tx.brokerages.update({ where: { transaction_id: id }, data: { name: 'ZZ Sutton Group' } });
+      await expect(s.approve(asUser('admin', sup.id, sup.name), req.id as number)).rejects.toBeInstanceOf(UnprocessableEntityException);
+      expect(applied).toHaveLength(0);
     });
   });
 });
