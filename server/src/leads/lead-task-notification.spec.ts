@@ -163,7 +163,7 @@ describe('changing the agent afterwards', () => {
       const me = await makeUser(tx);
       const b = await makeUser(tx);
       const c = await makeUser(tx);
-      const lead = await makeLead(tx, me.id!);
+      const lead = await makeLead(tx, me.id!, { collaborator_user_ids: [b.id, c.id] });
       const { activity, emails, sent } = wire(tx);
 
       const task = await activity.addTask(lead.id, { title: 'Follow up', due_date: '2026-10-22', assigned_to: 'unassigned' }, me) as { id: number };
@@ -201,7 +201,7 @@ describe('changing the agent afterwards', () => {
     await inRollback(async (tx) => {
       const me = await makeUser(tx);
       const b = await makeUser(tx);
-      const lead = await makeLead(tx, me.id!);
+      const lead = await makeLead(tx, me.id!, { collaborator_user_ids: [b.id] });
       const { activity, emails, sent } = wire(tx);
       const task = await activity.addTask(lead.id, { title: 'Twice', due_date: '2026-10-22', assigned_to: 'unassigned' }, me) as { id: number };
       await activity.updateTask(lead.id, task.id, { assigned_to: b.id }, me);
@@ -217,7 +217,7 @@ describe('when an email cannot go', () => {
     await inRollback(async (tx) => {
       const me = await makeUser(tx);
       const noMail = await makeUser(tx, { email: '' });
-      const lead = await makeLead(tx, me.id!);
+      const lead = await makeLead(tx, me.id!, { collaborator_user_ids: [noMail.id] });
       const { activity, emails, sent } = wire(tx);
 
       const saved = await activity.addTask(lead.id, { title: 'Call', due_date: '2026-10-22', assigned_to: noMail.id }, me) as Record<string, unknown>;
@@ -307,7 +307,7 @@ describe('when an email cannot go', () => {
     await inRollback(async (tx) => {
       const me = await makeUser(tx);
       const b = await makeUser(tx);
-      const lead = await makeLead(tx, me.id!);
+      const lead = await makeLead(tx, me.id!, { collaborator_user_ids: [b.id] });
       const { activity, emails, sent } = wire(tx, { muted: [b.id!] });
       const saved = await activity.addTask(lead.id, { title: 'Muted', due_date: '2026-10-22', assigned_to: b.id }, me) as { id: number };
       await emails.idle();
@@ -323,10 +323,20 @@ describe('what the agent is shown', () => {
       const me = await makeUser(tx);
       const outsider = await makeUser(tx);
       const onLead = await makeUser(tx);
-      const lead = await makeLead(tx, me.id!, { collaborator_user_ids: [onLead.id] });
+      const lead = await makeLead(tx, me.id!, { collaborator_user_ids: [onLead.id, outsider.id] });
       const { activity, emails, sent } = wire(tx);
 
-      await activity.addTask(lead.id, { title: 'For outsider', due_date: '2026-10-22', assigned_to: outsider.id }, me);
+      // The outsider was on the lead when the task was given, and has lost access since — the
+      // notice is delivered after that, so it must not carry the client's details.
+      const forOutsider = await activity.addTask(lead.id, { title: 'For outsider', due_date: '2026-10-22', assigned_to: 'unassigned' }, me) as { id: number };
+      await emails.idle();
+      await activity.updateTask(lead.id, forOutsider.id, { assigned_to: outsider.id }, me);
+      await tx.leads.update({ where: { id: lead.id }, data: { collaborator_user_ids: [onLead.id] } });
+      await emails.idle();
+      sent.length = 0;
+      const notice = (await rows(tx, forOutsider.id)).find((r) => r.recipient_user_id === outsider.id)!;
+      await tx.lead_task_notifications.update({ where: { id: notice.id }, data: { status: 'pending' } });
+      await emails.deliver(notice.id);
       await activity.addTask(lead.id, { title: 'For collaborator', due_date: '2026-10-22', assigned_to: onLead.id }, me);
       await emails.idle();
 
@@ -353,6 +363,64 @@ describe('what the agent is shown', () => {
       await emails.deliver(stale.id);
       expect(sent.filter((m) => m.to === b.email)).toHaveLength(0);
       expect(await tx.lead_task_notifications.findUnique({ where: { id: stale.id } })).toMatchObject({ status: 'skipped' });
+    });
+  });
+});
+
+describe('who a task can go to', () => {
+  const refusal = (name: string | null) =>
+    expect.objectContaining({ response: expect.objectContaining({ message: expect.stringMatching(new RegExp(`^${name} can't open this lead.*collaborator`)) }) });
+
+  it('refuses someone who cannot open the lead, on create and on reassignment, and queues no email', async () => {
+    await inRollback(async (tx) => {
+      const me = await makeUser(tx);
+      const accountant = await makeUser(tx, { role: 'accounting' });   // brokerage scope, not an agent's private book
+      const lead = await makeLead(tx, me.id!);
+      const { activity, emails, sent } = wire(tx);
+
+      await expect(activity.addTask(lead.id, { title: 'Process deposit', due_date: '2026-10-22', assigned_to: accountant.id }, me))
+        .rejects.toEqual(refusal(accountant.name));
+      expect(await tx.lead_tasks.count({ where: { lead_id: lead.id } })).toBe(0);
+
+      const task = await activity.addTask(lead.id, { title: 'Mine first', due_date: '2026-10-22' }, me) as { id: number };
+      await emails.idle();
+      sent.length = 0;
+      await expect(activity.updateTask(lead.id, task.id, { assigned_to: accountant.id, title: 'Renamed' }, me))
+        .rejects.toEqual(refusal(accountant.name));
+      expect(await tx.lead_tasks.findUnique({ where: { id: task.id } })).toMatchObject({ assigned_to: me.id, title: 'Mine first' });
+      await emails.idle();
+      expect(sent).toHaveLength(0);
+    });
+  });
+
+  it('accepts them once they are a collaborator, and the brokerage\'s own leads for brokerage-scope roles', async () => {
+    await inRollback(async (tx) => {
+      const me = await makeUser(tx);
+      const accountant = await makeUser(tx, { role: 'accounting' });
+      const shared = await makeLead(tx, me.id!, { collaborator_user_ids: [accountant.id] });
+      const brokerage = await makeLead(tx, me.id!, { owner_user_id: null, assigned_to: me.id });
+      const { activity, emails } = wire(tx);
+
+      await expect(activity.addTask(shared.id, { title: 'Shared', due_date: '2026-10-22', assigned_to: accountant.id }, me)).resolves.toBeDefined();
+      await expect(activity.addTask(brokerage.id, { title: 'Brokerage', due_date: '2026-10-22', assigned_to: accountant.id }, me)).resolves.toBeDefined();
+      await emails.idle();
+    });
+  });
+
+  it('still lets a task be worked when its agent has since lost access', async () => {
+    await inRollback(async (tx) => {
+      const me = await makeUser(tx);
+      const b = await makeUser(tx);
+      const lead = await makeLead(tx, me.id!, { collaborator_user_ids: [b.id] });
+      const { activity, emails } = wire(tx);
+      const task = await activity.addTask(lead.id, { title: 'Older', due_date: '2026-10-22', assigned_to: b.id }, me) as { id: number };
+      await tx.leads.update({ where: { id: lead.id }, data: { collaborator_user_ids: [] } });
+
+      // Re-saving the same agent alongside other fields is not a new assignment.
+      await activity.updateTask(lead.id, task.id, { assigned_to: b.id, status: 'completed' }, me);
+      await activity.updateTask(lead.id, task.id, { assigned_to: me.id }, me);
+      expect(await tx.lead_tasks.findUnique({ where: { id: task.id } })).toMatchObject({ assigned_to: me.id, status: 'completed' });
+      await emails.idle();
     });
   });
 });

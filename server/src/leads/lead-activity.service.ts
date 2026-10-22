@@ -297,6 +297,7 @@ export class LeadActivityService {
 
     const now = new Date();
     const assignedTo = await this.resolveAssignee(body.assigned_to, user);
+    await this.assertAssigneeCanOpen(lead.id, assignedTo, user);
     /*
      * The task and its email rows commit together (see `atomically`): the creator's confirmation
      * and the agent's notice are queued only if the task is really saved, and they are SENT only
@@ -351,7 +352,12 @@ export class LeadActivityService {
       if (!isTaskPriority(priority)) throw new BadRequestException({ message: `The priority must be one of: ${TASK_PRIORITY.join(', ')}.` });
       data.priority = priority;
     }
-    if (body.assigned_to !== undefined) data.assigned_to = await this.resolveAssignee(body.assigned_to, user);
+    if (body.assigned_to !== undefined) {
+      data.assigned_to = await this.resolveAssignee(body.assigned_to, user);
+      // Only a NEW assignee is checked: re-saving a task whose agent has since lost access to the
+      // lead (completing it, renaming it) must still work, and so must moving it to someone who can.
+      if (data.assigned_to !== existing.assigned_to) await this.assertAssigneeCanOpen(leadId, data.assigned_to as number | null, user);
+    }
 
     /*
      * ONLY A REAL CHANGE OF AGENT SENDS AN EMAIL. Completing, cancelling, renaming or re-saving the
@@ -961,6 +967,32 @@ export class LeadActivityService {
     const found = await this.prisma.users.findFirst({ where: { id }, select: { id: true } });
     if (!found) throw new BadRequestException({ message: 'That user does not exist.' });
     return id;
+  }
+
+  /**
+   * A TASK GOES ONLY TO SOMEONE WHO CAN OPEN THE LEAD.
+   *
+   * Every task control — open, complete, reschedule — sits behind `assertLead`, and so does the
+   * lead page the task email links to. A task handed to someone outside the lead (an accountant on
+   * an agent's private lead, say) reached them as an email whose button opened "Lead not found",
+   * and they could do nothing with it. Refused here instead, with the way in: sharing the lead is
+   * the owner's decision, so the task never shares it as a side effect.
+   *
+   * Asked with the same `assertLead` rule the lead page applies, so the two cannot disagree. The
+   * person saving has already passed it, so assigning to oneself is never refused.
+   */
+  private async assertAssigneeCanOpen(leadId: number, assigneeId: number | null, user: AuthUserRecord): Promise<void> {
+    if (assigneeId === null || assigneeId === user.id) return;
+    const assignee = await this.prisma.users.findFirst({ where: { id: assigneeId }, select: { id: true, name: true, role: true } });
+    if (!assignee) throw new BadRequestException({ message: 'That user does not exist.' });
+    try {
+      await this.access.assertLead(assignee, leadId);
+    } catch {
+      const who = assignee.name?.trim() || 'That person';
+      throw new BadRequestException({
+        message: `${who} can't open this lead, so the task can't be assigned to them. Add them as a collaborator on this lead first, then assign the task.`,
+      });
+    }
   }
 
   private presentNote(n: { id: number; content: string; pinned: boolean; created_by: string | null; created_at: Date | null }): Record<string, unknown> {
