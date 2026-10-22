@@ -28,6 +28,9 @@ interface DocsModalProps {
   onSaved?: (() => void) | null;
 }
 
+/** The per-row fields a person can change on this panel - kept across an upload until saved. */
+const EDITABLE_DOC_KEYS = ['title', 'mandatory', 'status', 'validation', 'drive_uploaded', 'remarks', 'reminder', 'agent_accepted'] as const;
+
 export default function DocsModal({ open, onClose, transactionId, txn = null, readOnly = false, agentMode = false, canDeleteConditionDocs = false, onSaved = null }: DocsModalProps) {
   const toast = useToast();
   const { isSuperAdmin, user } = useAuth();
@@ -79,7 +82,7 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
   const load = (showSpin = true) => {
     if (showSpin) setLoading(true);
     getDocuments(transactionId)
-      .then((d) => { setDocs(d.documents || []); setClients(d.clients || []); setRecoReady(d.reco_audit_ready || ''); setRecoRemarks(d.reco_audit_remarks || ''); })
+      .then((d) => { savedRef.current = d.documents || []; setDocs(d.documents || []); setClients(d.clients || []); setRecoReady(d.reco_audit_ready || ''); setRecoRemarks(d.reco_audit_remarks || ''); })
       .catch(() => toast('Could not load documents', 'bad'))
       .finally(() => setLoading(false));
   };
@@ -137,6 +140,40 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
   const pct = total > 0 ? Math.round((received / total) * 100) : 100;
   const pctValid = total > 0 ? Math.round((valid / total) * 100) : 100;
 
+  /*
+   * UNSAVED CHOICES SURVIVE AN UPLOAD (2026-10-22, reported by the Deals desk on video).
+   *
+   * Every upload, file removal and draft action answers with the whole list, and the panel used to
+   * take it as is - so a Validation set to "Valid" (or any Status, Remarks, Drive or reminder change)
+   * that had not been saved yet snapped back to Pending the moment another document was uploaded.
+   * Now those answers are merged: a field the person changed since the last load or save keeps
+   * their value, and everything else - including whatever the server itself changed, like the
+   * uploaded row's Received status or a linked document - comes from the server. Save still sends
+   * the whole list, exactly as before.
+   */
+  const savedRef = useRef<DeskDocument[]>([]);
+  const takeServer = (list: DeskDocument[]) => { savedRef.current = list; setDocs(list); };
+  const takeServerKeepingEdits = (list: DeskDocument[], uploadedId?: number) => {
+    const base = new Map(savedRef.current.filter((x) => x.id).map((x) => [x.id, x]));
+    setDocs((local) => {
+      const mine = new Map(local.filter((x) => x.id).map((x) => [x.id, x]));
+      const merged = list.map((s) => {
+        const l = s.id ? mine.get(s.id) : undefined;
+        const b = s.id ? base.get(s.id) : undefined;
+        if (!l || !b) return s;
+        const out = { ...s } as Record<string, unknown>;
+        for (const k of EDITABLE_DOC_KEYS) {
+          // The row just uploaded to is Received because of the upload; the server's word wins there.
+          if (k === 'status' && s.id === uploadedId) continue;
+          const lv = (l as unknown as Record<string, unknown>)[k];
+          if (lv !== (b as unknown as Record<string, unknown>)[k]) out[k] = lv;
+        }
+        return out as unknown as DeskDocument;
+      });
+      return [...merged, ...local.filter((x) => !x.id)];
+    });
+    savedRef.current = list;
+  };
   const upd = (i: number, k: string, v: unknown) => setDocs((ds) => ds.map((d, idx) => idx === i ? { ...d, [k]: v } : d));
 
   // Agent acceptance answer. "Not Accepted" also clears any reminder on that doc.
@@ -216,7 +253,7 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
     try {
       let res = await saveDocuments(transactionId, docPayload(list), { reco_audit_ready: recoReady || null, reco_audit_remarks: recoReady === 'No' ? recoRemarks : null });
       if (agentMode && submit) res = await submitDocumentDrafts(transactionId, draftIds);
-      setDocs(res.documents || []); setClients(res.clients || []);
+      takeServer(res.documents || []); setClients(res.clients || []);
       setRecoReady(res.reco_audit_ready || ''); setRecoRemarks(res.reco_audit_remarks || '');
       // Refresh the parent transaction so Agent Payment Readiness' "Valid Docs Cleared" flag is never stale.
       onSaved?.();
@@ -238,7 +275,7 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
       setSaving(true);
       try {
         const res = await deleteDocumentDraft(transactionId, doc.id, draftId);
-        setDocs(res.documents || []);
+        takeServerKeepingEdits(res.documents || [], doc.id);
         toast('Draft file deleted — nothing was sent to Admin.', 'ok');
       } catch (error) { toast(apiErrorMessage(error, 'Could not delete draft'), 'bad'); }
       finally { setSaving(false); }
@@ -248,7 +285,7 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
   const onReplaceDraft = async (doc: DeskDocument, draftId: string, file?: File) => {
     if (!doc.id || !file) return;
     setSaving(true);
-    try { const res = await replaceDocumentDraft(transactionId, doc.id, draftId, file); setDocs(res.documents || []); toast('Draft replaced — not sent to Admin.', 'ok'); }
+    try { const res = await replaceDocumentDraft(transactionId, doc.id, draftId, file); takeServerKeepingEdits(res.documents || [], doc.id); toast('Draft replaced — not sent to Admin.', 'ok'); }
     catch (error) { toast(apiErrorMessage(error, 'Could not replace draft'), 'bad'); }
     finally { setSaving(false); }
   };
@@ -258,7 +295,7 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
     setSaving(true);
     try {
       const res = await saveDocuments(transactionId, docPayload(), { reco_audit_ready: recoReady || null, reco_audit_remarks: recoReady === 'No' ? recoRemarks : null });
-      setDocs(res.documents || []); setClients(res.clients || []);
+      takeServer(res.documents || []); setClients(res.clients || []);
       const r = await sendDocumentReminders(transactionId);
       toast(r.message || `Reminder sent for ${r.count} document(s).`, 'ok');
     } catch (e) { toast(apiErrorMessage(e, 'Could not send reminders'), 'bad'); } finally { setSaving(false); }
@@ -268,30 +305,30 @@ export default function DocsModal({ open, onClose, transactionId, txn = null, re
   const onSingle = async (doc: DeskDocument, file: File | undefined) => {
     if (!file || needSaved(doc) || !doc.id) return;
     setSaving(true);
-    try { const r = await uploadDocumentFile(transactionId, doc.id, file); setDocs(r.documents || []); toast(agentMode ? 'Draft uploaded — review it, then Submit to Admin.' : 'File uploaded', 'ok'); }
+    try { const r = await uploadDocumentFile(transactionId, doc.id, file); takeServerKeepingEdits(r.documents || [], doc.id); toast(agentMode ? 'Draft uploaded — review it, then Submit to Admin.' : 'File uploaded', 'ok'); }
     catch (error) { toast(apiErrorMessage(error, 'Upload failed'), 'bad'); }
     finally { setSaving(false); }
   };
   const onMulti = async (doc: DeskDocument, file: File | undefined, clientName?: string) => {
     if (!file || needSaved(doc) || !doc.id) return;
     setSaving(true);
-    try { const r = await uploadDocClientFile(transactionId, doc.id, file, clientName); setDocs(r.documents || []); toast(agentMode ? 'Draft uploaded — review it, then Submit to Admin.' : 'File uploaded', 'ok'); }
+    try { const r = await uploadDocClientFile(transactionId, doc.id, file, clientName); takeServerKeepingEdits(r.documents || [], doc.id); toast(agentMode ? 'Draft uploaded — review it, then Submit to Admin.' : 'File uploaded', 'ok'); }
     catch (error) { toast(apiErrorMessage(error, 'Upload failed'), 'bad'); }
     finally { setSaving(false); }
   };
   const onRemoveFile = async (doc: DeskDocument, index: number) => {
     if (!doc.id) return;
-    try { const r = await deleteDocClientFile(transactionId, doc.id, index); setDocs(r.documents || []); }
+    try { const r = await deleteDocClientFile(transactionId, doc.id, index); takeServerKeepingEdits(r.documents || [], doc.id); }
     catch { toast('Could not remove file', 'bad'); }
   };
   const onValidationFile = async (doc: DeskDocument, file: File | undefined) => {
     if (!file || needSaved(doc) || !doc.id) return;
-    try { const r = await uploadDocValidationFile(transactionId, doc.id, file); setDocs(r.documents || []); toast('Attachment uploaded', 'ok'); }
+    try { const r = await uploadDocValidationFile(transactionId, doc.id, file); takeServerKeepingEdits(r.documents || []); toast('Attachment uploaded', 'ok'); }
     catch { toast('Upload failed', 'bad'); }
   };
   const onRemoveValidationFile = async (doc: DeskDocument) => {
     if (!doc.id) return;
-    try { const r = await deleteDocValidationFile(transactionId, doc.id); setDocs(r.documents || []); }
+    try { const r = await deleteDocValidationFile(transactionId, doc.id); takeServerKeepingEdits(r.documents || []); }
     catch { toast('Could not remove attachment', 'bad'); }
   };
   const onDeleteRow = (doc: DeskDocument, i: number) => {
