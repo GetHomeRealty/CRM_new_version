@@ -5,6 +5,7 @@ import ReviewThread from './ReviewThread';
 import { apiErrorMessage } from '../lib/apiError';
 import { useToast } from './toast';
 import Icon from '../ui/Icon';
+import { dayMonthYear } from './DateBox';
 
 /**
  * The review history of one deal — every decision the office made about an agent's change, and what
@@ -356,14 +357,9 @@ const BROKERAGE_LABELS: [string, string][] = [
 /** Each cell of the request table: room between the columns, and no squeezing of a date or name. */
 const REQ_CELL: CSSProperties = { padding: '6px 28px 6px 0', whiteSpace: 'nowrap', textAlign: 'left' };
 
-/** Date keys a request can carry; shown as "October 21, 2026" rather than 2026-10-21. */
+/** Date keys a request can carry; shown as "21-October-2026" (as Basic Info shows them) rather than 2026-10-21. */
 const DATE_KEYS = new Set(['closing_date', 'offer_date']);
-const longDate = (v: unknown): string => {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(v ?? ''));
-  if (!m) return v === null || v === undefined || v === '' ? '—' : String(v);
-  return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]))
-    .toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
-};
+const longDate = (v: unknown): string => (v === null || v === undefined || v === '' ? '—' : dayMonthYear(String(v)));
 
 /** Human labels for the keys a commission proposal can carry. */
 const COMMISSION_LABELS: Record<string, string> = {

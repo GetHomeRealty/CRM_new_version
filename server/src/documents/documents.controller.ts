@@ -6,7 +6,7 @@ import type { Response } from 'express';
 import { createZip } from '../common/archive';
 import { AuthGuard } from '../auth/guards/auth.guard';
 import { ScreenGuard } from '../auth/guards/screen.guard';
-import { AccountingReadOnlyGuard } from './accounting-readonly.guard';
+import { AccountingMayAdd, AccountingReadOnlyGuard } from './accounting-readonly.guard';
 import { CurrentUser, Screen } from '../auth/decorators';
 import type { AuthUserRecord } from '../auth/auth.types';
 import { DocumentsService } from './documents.service';
@@ -150,6 +150,7 @@ export class DocumentsController {
 
   @Put('transactions/:transaction/documents')
   @Screen('transactions', 'edit')
+  @AccountingMayAdd()   // new rows only for this role — see DocumentsService.bulkUpdate
   bulkUpdate(@CurrentUser() user: AuthUserRecord | undefined, @Param('transaction', ParseIntPipe) txnId: number, @Body() body: Res0): Promise<Res0> {
     return this.docs.bulkUpdate(u(user), txnId, body ?? {});
   }
@@ -164,6 +165,7 @@ export class DocumentsController {
   @Post('transactions/:transaction/documents/:document/file')
   @HttpCode(200)
   @Screen('transactions', 'edit')
+  @AccountingMayAdd()   // into an empty document only — see DocumentsService.uploadFile
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MB20 } }))
   uploadFile(@CurrentUser() user: AuthUserRecord | undefined, @Param('transaction', ParseIntPipe) txnId: number, @Param('document', ParseIntPipe) docId: number, @UploadedFile() file: Express.Multer.File): Promise<Res0> {
     return this.docs.uploadFile(u(user), txnId, docId, file);
@@ -172,6 +174,7 @@ export class DocumentsController {
   @Post('transactions/:transaction/documents/:document/files')
   @HttpCode(200)
   @Screen('transactions', 'edit')
+  @AccountingMayAdd()   // adds a file, never replaces one — see DocumentsService.uploadDocFile
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MB20 } }))
   uploadDocFile(@CurrentUser() user: AuthUserRecord | undefined, @Param('transaction', ParseIntPipe) txnId: number, @Param('document', ParseIntPipe) docId: number, @UploadedFile() file: Express.Multer.File, @Body() body: Res0): Promise<Res0> {
     const client = body?.client_name;

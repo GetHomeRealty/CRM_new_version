@@ -110,8 +110,8 @@ test.describe('the screen, in Edit mode', () => {
       await expect(field('Property Address').locator('input')).toBeEnabled();
       await expect(field('Type').locator('select')).toBeEnabled();
       await expect(field('Agent Name').locator('select')).toBeEnabled();
-      await expect(field('Closing Date').locator('input')).toBeDisabled();
-      await expect(field('Offer Date').locator('input')).toBeDisabled();
+      await expect(field('Closing Date').locator('input').first()).toBeDisabled(); // DateBox: the shown box, then its hidden picker
+      await expect(field('Offer Date').locator('input').first()).toBeDisabled(); // DateBox: the shown box, then its hidden picker
       // Closing Date, Price and Deposit change by request for Super Admin approval.
       await expect(page.getByTestId('closing-date-edit')).toBeVisible();
       await expect(page.getByTestId('price-edit')).toBeVisible();
@@ -119,7 +119,7 @@ test.describe('the screen, in Edit mode', () => {
     });
   });
 
-  test('DOCUMENTS ARE VIEW-ONLY for Accounting — no Save, and the banner says so', async ({ page }) => {
+  test('DOCUMENTS: Accounting adds, and changes nothing already there (2026-10-22) — no Save, and the banner says so', async ({ page }) => {
     await asAccounting(page, async (id) => {
       await page.goto(`/desk/transactions/${id}?mode=edit`);
       await expect(page.getByRole('button', { name: /^Back$/ })).toBeVisible({ timeout: 20_000 });
@@ -128,6 +128,7 @@ test.describe('the screen, in Edit mode', () => {
       await expect(modal).toBeVisible({ timeout: 15_000 });
       await expect(modal.getByTestId('docs-readonly-banner')).toContainText('viewed and downloaded, not changed');
       await expect(modal.getByRole('button', { name: /^Save$/ })).toHaveCount(0);
+      await expect(modal.getByRole('button', { name: '+ Add document' })).toBeEnabled();
     });
   });
 });

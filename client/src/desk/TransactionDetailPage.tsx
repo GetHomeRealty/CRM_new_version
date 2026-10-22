@@ -4,6 +4,8 @@ import Icon from '../ui/Icon';
 import ClosingDateRequestDialog from './ClosingDateRequestDialog';
 import PriceDepositRequestDialog from './PriceDepositRequestDialog';
 import PartiesRequestDialog from './PartiesRequestDialog';
+// Offer / Closing Date read "21-October-2026" (2026-10-22); the browser's calendar still picks them.
+import DateBox from './DateBox';
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { getTransaction, updateTransaction, listAgents, generateTransactionInvoices, getCompanySettings, getCustomers, getBrokerageSuggestions, requestTransactionEdit, approveEditRequest, rejectEditRequest, reviewAgentChanges, rejectAgentChange, requestTransactionDeletion, forwardDeleteRequest, approveDeleteRequest, rejectDeleteRequest, getDocuments, markTransactionReviewsSeen, bulkReviewAction, type OpenReviewItem } from '../lib/api';
@@ -1578,8 +1580,8 @@ export default function TransactionDetailPage() {
                   <Field label="Listing Expiry Date"><input type="date" value={form.listing_expiry_date} disabled={basicRo} onChange={(e) => set('listing_expiry_date', e.target.value)} /></Field>
                 </>)}
                 {!listing && (<>
-                  <Field label={offerDateLabel}><input type="date" value={form.offer_date} disabled={basicRo} onChange={(e) => set('offer_date', e.target.value)} /></Field>
-                  <Field label={closingDateLabel}><input type="date" value={form.closing_date} disabled={basicRo} onChange={(e) => set('closing_date', e.target.value)} /></Field>
+                  <Field label={offerDateLabel}><DateBox value={form.offer_date} disabled={basicRo} onChange={(v) => set('offer_date', v)} testId="basic-offer-date" /></Field>
+                  <Field label={closingDateLabel}><DateBox value={form.closing_date} disabled={basicRo} onChange={(v) => set('closing_date', v)} testId="basic-closing-date" /></Field>
                 </>)}
               </div>
             )}
@@ -1587,8 +1589,8 @@ export default function TransactionDetailPage() {
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12, marginTop: 12 }}>
                 <Field label="Listing Contract Date"><input type="date" value={form.listing_contract_date} disabled={basicRo} onChange={(e) => set('listing_contract_date', e.target.value)} /></Field>
                 <Field label="Listing Expiry Date"><input type="date" value={form.listing_expiry_date} disabled={basicRo} onChange={(e) => set('listing_expiry_date', e.target.value)} /></Field>
-                {!slHideBasic && <Field label={offerDateLabel}><input type="date" value={form.offer_date} disabled={basicRo} onChange={(e) => set('offer_date', e.target.value)} /></Field>}
-                {!slHideBasic && <Field label={closingDateLabel}><input type="date" value={form.closing_date} disabled={basicRo} onChange={(e) => set('closing_date', e.target.value)} /></Field>}
+                {!slHideBasic && <Field label={offerDateLabel}><DateBox value={form.offer_date} disabled={basicRo} onChange={(v) => set('offer_date', v)} testId="basic-offer-date" /></Field>}
+                {!slHideBasic && <Field label={closingDateLabel}><DateBox value={form.closing_date} disabled={basicRo} onChange={(v) => set('closing_date', v)} testId="basic-closing-date" /></Field>}
               </div>
             )}
           </div>

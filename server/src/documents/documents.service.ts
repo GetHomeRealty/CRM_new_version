@@ -264,6 +264,25 @@ export class DocumentsService {
     const data = this.validateBulk(body);
     const rows = data.documents as Record<string, unknown>[];
 
+    /*
+     * ACCOUNTING ADDS, AND CHANGES NOTHING ELSE (brokerage request, 2026-10-22). The screen sends
+     * the whole list; only the rows that do not exist yet are taken, as new manual documents. Every
+     * stored row - its status, validation, remarks, reminders, Drive flag and the RECO audit - is
+     * left exactly as it is, and a row missing from the list is not deleted.
+     */
+    if (user?.role === 'accounting') {
+      let pos = await this.maxPosition(txnId);
+      for (const row of rows) {
+        if (row.id) continue;
+        pos += 1;
+        const created = await this.createDoc(txnId, { title: String(row.title), mandatory: false, manual: true, status: 'Pending', validation: 'Pending', position: pos });
+        await this.audit.record(txnId, this.actor(user), { section: SECTION, field: created.title, action: 'Document added' });
+      }
+      await this.docsValidation.sync(txnId, this.actor(user));
+      await applyInterlinks(this.prisma, txnId);   // TD-159 - documents that satisfy each other
+      return this.payload(txnId, user);
+    }
+
     if (user && isAgent(user)) {
       let pos = await this.maxPosition(txnId);
       for (const row of rows) {
@@ -476,6 +495,10 @@ export class DocumentsService {
     this.guardAccepted(document);
     this.guardValidLocked(user, document);
     this.requireFile(file);
+    // Accounting uploads into an empty document; replacing a file stays with Admin / Documentation.
+    if (user?.role === 'accounting' && document.file_path) {
+      throw new ForbiddenException({ message: 'This document already has a file. Accounting can upload into an empty document, not replace one.' });
+    }
 
     if (isAgent(user)) return this.stageUpload(user, txnId, document, file!, null, true);
 
@@ -647,6 +670,10 @@ export class DocumentsService {
     if (isAgent(user)) return this.stageUpload(user, txnId, document, file!, clientName, false);
 
     let files = (parseJson<FileEntry[]>(document.files) ?? []) as FileEntry[];
+    // A per-client upload REPLACES that client's file below; Accounting may only add one.
+    if (user?.role === 'accounting' && clientName && files.some((f) => (f.client_name ?? null) === clientName)) {
+      throw new ForbiddenException({ message: `${clientName} already has a file here. Accounting can add a file, not replace one.` });
+    }
     if (clientName) {
       for (const f of files) if ((f.client_name ?? null) === clientName && f.file_path) await this.deleteFile(f.file_path);
       files = files.filter((f) => (f.client_name ?? null) !== clientName);
