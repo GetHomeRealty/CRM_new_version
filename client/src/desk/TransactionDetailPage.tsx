@@ -1824,7 +1824,8 @@ export default function TransactionDetailPage() {
           <div className="modal-h" style={{ fontSize: 14 }}>Builder Information</div>
           <div className="g2">
             <Field label="Builder Name"><input value={form.builder.name} disabled={ro} onChange={(e) => setBuilder('name', e.target.value)} /></Field>
-            <Field label="Vendor Name"><input value={form.builder.vendor} disabled={ro} onChange={(e) => setBuilder('vendor', e.target.value)} /></Field>
+            {/* India deals have no Vendor Name (Sai, 23 Oct 2026); Canada unchanged. */}
+            {user?.market !== 'IN' && <Field label="Vendor Name"><input value={form.builder.vendor} disabled={ro} onChange={(e) => setBuilder('vendor', e.target.value)} /></Field>}
           </div>
           <div className="g2">
             <Field label="Project Name"><input value={form.builder.project} disabled={ro} onChange={(e) => setBuilder('project', e.target.value)} /></Field>
