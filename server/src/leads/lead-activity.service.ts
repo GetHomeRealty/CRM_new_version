@@ -23,6 +23,7 @@ import { AiDisclosureService } from '../common/ai-disclosure.service';
 // One-to-one lead mail only. Deliberately not importable from `campaigns/` — see personal-email.ts.
 import { FALLBACK_SUBJECT, htmlToText, personalEmailSystem, toPersonalHtml } from './personal-email';
 import { CrmEventNotifier } from '../notifications/crm-events.service';
+import { LeadTaskNotificationService, type TaskEmailReport } from './lead-task-notification.service';
 const str = (v: unknown): string => String(v ?? '').trim();
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const TIME_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
@@ -107,7 +108,41 @@ export class LeadActivityService {
      * not worth failing the write for — hence the optional injection and `?.` at both call sites.
      */
     private readonly crmEvents?: CrmEventNotifier,
+    /*
+     * Task emails — the creator's confirmation and the agent's assignment notice. Optional for the
+     * same reason as `crmEvents`: without it a task still saves, it simply queues no email, which is
+     * how every existing test constructs this service.
+     */
+    private readonly taskEmails?: LeadTaskNotificationService,
   ) {}
+
+  /**
+   * Run a write and the task emails it queues as ONE transaction, so an email row exists only if the
+   * write committed.
+   *
+   * Tests hand this service a transaction client in place of `PrismaService` and roll it back
+   * afterwards; that client has no `$transaction`, and is already atomic, so the work runs on it
+   * directly.
+   */
+  private async atomically<T>(fn: (db: PrismaService) => Promise<T>): Promise<T> {
+    const prisma = this.prisma as PrismaService & { $transaction?: unknown };
+    if (typeof prisma.$transaction !== 'function') return fn(this.prisma);
+    return this.prisma.$transaction((tx) => fn(tx as unknown as PrismaService));
+  }
+
+  /** The task-email part of a save response. Never fails the save it reports on. */
+  private async emailReport(rowIds: number[]): Promise<TaskEmailReport> {
+    if (!this.taskEmails || !rowIds.length) return { email_notifications: [], email_warnings: [] };
+    try {
+      return await this.taskEmails.afterCommit(rowIds);
+    } catch (err) {
+      this.log.warn(`Task saved, but its emails could not be checked: ${(err as Error).message}`);
+      return {
+        email_notifications: [],
+        email_warnings: ['The task was saved, but its email notifications could not be checked. They will be retried in the background.'],
+      };
+    }
+  }
 
   /**
    * The lead, in the shape the notifier expects, plus WHO SHOULD BE TOLD about it.
@@ -261,27 +296,37 @@ export class LeadActivityService {
     if (!isTaskPriority(priority)) throw new BadRequestException({ message: `The priority must be one of: ${TASK_PRIORITY.join(', ')}.` });
 
     const now = new Date();
-    const task = await this.prisma.lead_tasks.create({
-      data: {
-        lead_id: lead.id, title: title.slice(0, 255), due_date: due,
-        description: str(body.description) || null, status, priority,
-        assigned_to: await this.resolveAssignee(body.assigned_to, user),
-        created_by: user.name, user_id: user.id ?? null, created_at: now, updated_at: now,
-      },
+    const assignedTo = await this.resolveAssignee(body.assigned_to, user);
+    await this.assertAssigneeCanOpen(lead.id, assignedTo, user);
+    /*
+     * The task and its email rows commit together (see `atomically`): the creator's confirmation
+     * and the agent's notice are queued only if the task is really saved, and they are SENT only
+     * after the commit, in the background — see `LeadTaskNotificationService`.
+     */
+    const { task, emailRows } = await this.atomically(async (db) => {
+      const created = await db.lead_tasks.create({
+        data: {
+          lead_id: lead.id, title: title.slice(0, 255), due_date: due,
+          description: str(body.description) || null, status, priority,
+          assigned_to: assignedTo,
+          created_by: user.name, user_id: user.id ?? null, created_at: now, updated_at: now,
+        },
+      });
+      const rows = this.taskEmails ? await this.taskEmails.queueNewTask(db, created, user.id ?? null) : [];
+      return { task: created, emailRows: rows };
     });
     await this.audit.record(user, 'Lead task added', lead.name, `${title} — due ${due.toISOString().slice(0, 10)}`);
     /*
-     * Told after the write, and never allowed to fail it.
+     * In-app and push, told after the write and never allowed to fail it.
      *
-     * `void` because the caller is a person waiting on a form: a slow mail server must not hold the
-     * response open, and a notification failure must not turn a saved task into an error. The
-     * dispatcher records its own outcome per channel in `notification_deliveries`, which is where a
-     * failure is visible — the `catch` here only stops an unhandled rejection.
+     * `void` because the caller is a person waiting on a form. The EMAIL is not sent from here any
+     * more when `taskEmails` is present — it owns it, with retries and a record the screen can read —
+     * so the notifier is asked for in-app and push only. The `catch` only stops an unhandled rejection.
      */
     void this.crmEvents
-      ?.taskAssigned(task, await this.notifyLead(lead.id), task.assigned_to, user.id ?? null, user.name)
+      ?.taskAssigned(task, await this.notifyLead(lead.id), task.assigned_to, user.id ?? null, user.name, { emailHandledElsewhere: !!this.taskEmails })
       .catch(() => undefined);
-    return this.presentTask(task);
+    return { ...this.presentTask(task), ...(await this.emailReport(emailRows)) };
   }
 
   async updateTask(leadId: number, taskId: number, body: Record<string, unknown>, user: AuthUserRecord): Promise<Record<string, unknown>> {
@@ -307,11 +352,48 @@ export class LeadActivityService {
       if (!isTaskPriority(priority)) throw new BadRequestException({ message: `The priority must be one of: ${TASK_PRIORITY.join(', ')}.` });
       data.priority = priority;
     }
-    if (body.assigned_to !== undefined) data.assigned_to = await this.resolveAssignee(body.assigned_to, user);
+    if (body.assigned_to !== undefined) {
+      data.assigned_to = await this.resolveAssignee(body.assigned_to, user);
+      // Only a NEW assignee is checked: re-saving a task whose agent has since lost access to the
+      // lead (completing it, renaming it) must still work, and so must moving it to someone who can.
+      if (data.assigned_to !== existing.assigned_to) await this.assertAssigneeCanOpen(leadId, data.assigned_to as number | null, user);
+    }
 
-    const task = await this.prisma.lead_tasks.update({ where: { id: taskId }, data });
+    /*
+     * ONLY A REAL CHANGE OF AGENT SENDS AN EMAIL. Completing, cancelling, renaming or re-saving the
+     * same agent changes nothing about who holds the task, so it queues nothing.
+     *
+     * The change is proved by the database, not by the earlier read: the update is conditional on
+     * the agent still being the one this request saw. Of two identical requests racing (a double
+     * click), one changes the agent and queues the email; the other finds the agent already
+     * changed and saves its other fields without queueing a second one.
+     */
+    const reassigning = 'assigned_to' in data && data.assigned_to !== existing.assigned_to;
+    const { task, emailRows, changed } = await this.atomically(async (db) => {
+      if (!reassigning) {
+        return { task: await db.lead_tasks.update({ where: { id: taskId }, data }), emailRows: [] as number[], changed: false };
+      }
+      const won = await db.lead_tasks.updateMany({ where: { id: taskId, lead_id: leadId, assigned_to: existing.assigned_to }, data });
+      if (won.count !== 1) {
+        const rest = { ...data };
+        delete rest.assigned_to;
+        return { task: await db.lead_tasks.update({ where: { id: taskId }, data: rest }), emailRows: [] as number[], changed: false };
+      }
+      const saved = await db.lead_tasks.findUniqueOrThrow({ where: { id: taskId } });
+      const rows = this.taskEmails
+        ? await this.taskEmails.queueReassignment(db, saved, existing.assigned_to, saved.assigned_to, user.id ?? null)
+        : [];
+      return { task: saved, emailRows: rows, changed: true };
+    });
     await this.audit.record(user, 'Lead task updated', task.title, `Status: ${task.status}`);
-    return this.presentTask(task);
+    if (changed && task.assigned_to) {
+      // Numbered like the email, so handing the task back to an earlier agent tells them again.
+      const occurrence = this.taskEmails ? await this.taskEmails.assignmentNumber(task.id) : undefined;
+      void this.crmEvents
+        ?.taskAssigned(task, await this.notifyLead(leadId), task.assigned_to, user.id ?? null, user.name, { emailHandledElsewhere: !!this.taskEmails, occurrence })
+        .catch(() => undefined);
+    }
+    return { ...this.presentTask(task), ...(await this.emailReport(emailRows)) };
   }
 
   async removeTask(leadId: number, taskId: number, user: AuthUserRecord): Promise<{ deleted: boolean }> {
@@ -885,6 +967,32 @@ export class LeadActivityService {
     const found = await this.prisma.users.findFirst({ where: { id }, select: { id: true } });
     if (!found) throw new BadRequestException({ message: 'That user does not exist.' });
     return id;
+  }
+
+  /**
+   * A TASK GOES ONLY TO SOMEONE WHO CAN OPEN THE LEAD.
+   *
+   * Every task control — open, complete, reschedule — sits behind `assertLead`, and so does the
+   * lead page the task email links to. A task handed to someone outside the lead (an accountant on
+   * an agent's private lead, say) reached them as an email whose button opened "Lead not found",
+   * and they could do nothing with it. Refused here instead, with the way in: sharing the lead is
+   * the owner's decision, so the task never shares it as a side effect.
+   *
+   * Asked with the same `assertLead` rule the lead page applies, so the two cannot disagree. The
+   * person saving has already passed it, so assigning to oneself is never refused.
+   */
+  private async assertAssigneeCanOpen(leadId: number, assigneeId: number | null, user: AuthUserRecord): Promise<void> {
+    if (assigneeId === null || assigneeId === user.id) return;
+    const assignee = await this.prisma.users.findFirst({ where: { id: assigneeId }, select: { id: true, name: true, role: true } });
+    if (!assignee) throw new BadRequestException({ message: 'That user does not exist.' });
+    try {
+      await this.access.assertLead(assignee, leadId);
+    } catch {
+      const who = assignee.name?.trim() || 'That person';
+      throw new BadRequestException({
+        message: `${who} can't open this lead, so the task can't be assigned to them. Add them as a collaborator on this lead first, then assign the task.`,
+      });
+    }
   }
 
   private presentNote(n: { id: number; content: string; pinned: boolean; created_by: string | null; created_at: Date | null }): Record<string, unknown> {

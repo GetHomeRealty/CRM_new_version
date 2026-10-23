@@ -15,8 +15,8 @@ const ORDER = ['dashboard', 'transactions', 'invoice', 'reports', 'analytics', '
 //
 // `orTeamLead` lets a Team Lead through a `superAdmin` screen as well. Only Users uses it, and the
 // API is what limits a Team Lead to their own Agents there.
-export function RequireScreen({ screen, superAdmin = false, orSuperAdmin = false, orTeamLead = false, children }: {
-  screen?: string; superAdmin?: boolean; orSuperAdmin?: boolean; orTeamLead?: boolean; children: ReactNode;
+export function RequireScreen({ screen, superAdmin = false, orSuperAdmin = false, orTeamLead = false, orRoles, children }: {
+  screen?: string; superAdmin?: boolean; orSuperAdmin?: boolean; orTeamLead?: boolean; orRoles?: string[]; children: ReactNode;
 }): ReactNode {
   const { can, isSuperAdmin, user } = useAuth();
   // `screen` is only consulted when superAdmin is false, and every non-superAdmin
@@ -28,7 +28,7 @@ export function RequireScreen({ screen, superAdmin = false, orSuperAdmin = false
   // tabs inside apply their own per-section checks, so widening the door does not widen
   // what anyone can actually see.
   const allowed = superAdmin
-    ? (isSuperAdmin || (orTeamLead && !!user?.is_team_lead))
+    ? (isSuperAdmin || (orTeamLead && !!user?.is_team_lead) || !!orRoles?.includes(user?.role ?? ''))
     : (can(screen ?? '', 'view') || (orSuperAdmin && isSuperAdmin));
   if (!allowed) {
     return (

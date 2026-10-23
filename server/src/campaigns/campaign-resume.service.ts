@@ -240,9 +240,13 @@ export class CampaignResumeService implements OnModuleInit {
          * that are already correct instead of starting a send that would do nothing.
          */
         const counts = await this.prisma.campaigns.findUnique({
-          where: { id: c.id }, select: { sent: true, failed: true },
+          where: { id: c.id }, select: { sent: true, failed: true, diverted: true, kind: true },
         });
-        const status = (counts?.sent ?? 0) === 0 ? 'failed' : (counts?.failed ?? 0) > 0 ? 'partial' : 'completed';
+        // `diverted` is only ever non-zero on a celebration, where it counts as reached for this
+        // purpose; a celebration whose every recipient was skipped is complete rather than failed.
+        const reached = (counts?.sent ?? 0) + (counts?.diverted ?? 0);
+        const status = reached === 0 && (counts?.kind !== 'celebration' || (counts?.failed ?? 0) > 0) ? 'failed'
+          : (counts?.failed ?? 0) > 0 ? 'partial' : 'completed';
         await this.prisma.campaigns.update({ where: { id: c.id }, data: { status, updated_at: new Date() } });
         this.log.log(`Campaign #${c.id} "${c.name}" was already finished; recorded as ${status}.`);
         continue;

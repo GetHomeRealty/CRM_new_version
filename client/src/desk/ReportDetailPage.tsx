@@ -1,6 +1,8 @@
 import { deskPath } from './area';
-import { useEffect, useMemo, useState, useCallback, Fragment } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback, Fragment } from 'react';
+import type { RefObject } from 'react';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
+import { readLastReport, saveLastReport, forgetLastReport, saveReportFocus } from './reportMemory';
 import { reportColumns, reportFilterOptions, runReport, exportReport, reportDocuments } from '../lib/reportsApi';
 import { apiErrorMessage } from '../lib/apiError';
 import { formatCurrency } from './format';
@@ -10,7 +12,7 @@ import type {
   ReportMeta, ReportResult, ReportFilterOptions, ReportFilterValues, ReportColumn,
   ReportSearchBody, ReportDocuments, ReminderScope, ReminderPreview, ReportSection,
 } from '../types';
-import { previewReminders, sendReminders } from '../lib/reportsApi';
+import { previewReminders, sendReminders, uploadPaySheet, removePaySheet, downloadPaySheet } from '../lib/reportsApi';
 import { ReportEditableCell } from './ReportEditableCell';
 
 const PER_PAGE_OPTIONS = [25, 50, 100, 200];
@@ -57,6 +59,8 @@ export default function ReportDetailPage() {
   const [error, setError] = useState('');
   const [showCustomize, setShowCustomize] = useState(false);
   const [exporting, setExporting] = useState('');
+  const tableWrap = useRef<HTMLDivElement>(null);
+  useSectionHeaders(tableWrap, [result, selectedCols, loading]);
   // expanded deal → its documents (documentation reports only)
   const [expanded, setExpanded] = useState<number | null>(null);
   const [docs, setDocs] = useState<ReportDocuments | null>(null);
@@ -93,14 +97,43 @@ export default function ReportDetailPage() {
   }, [expanded, toast]);
 
   // load report metadata + filter options whenever the report changes
+  const location = useLocation();
+  const restoring = !!(location.state as { restoreReport?: boolean } | null)?.restoreReport;
   useEffect(() => {
     setLoading(true); setError(''); setMeta(null); setResult(null);
-    setDraft({}); setApplied({}); setSelectedCols(null); setSections(null); setSort(null); setPage(1); setFacets(null); setFiltersOpen(false);
+    // Reopened by the Reports list on the way back from another module: pick up where it was left.
+    const saved = restoring ? readLastReport(user?.id) : null;
+    if (saved && saved.type === reportType) {
+      setDraft(saved.draft ?? {}); setApplied(saved.applied ?? {}); setSelectedCols(saved.selectedCols ?? null);
+      setSections(saved.sections ?? null); setSort(saved.sort ?? null); setPage(saved.page || 1); setPerPage(saved.perPage || 25);
+    } else {
+      setDraft({}); setApplied({}); setSelectedCols(null); setSections(null); setSort(null); setPage(1);
+    }
+    setFacets(null); setFiltersOpen(false);
+    saveReportFocus(user?.id, reportType); // the list returns to this report's section
     Promise.all([reportColumns(reportType), reportFilterOptions()])
       .then(([m, o]) => { setMeta(m); setOptions(o); })
       .catch((e) => setError(apiErrorMessage(e, 'Could not load report')))
       .finally(() => setLoading(false));
-  }, [reportType]);
+  }, [reportType]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /*
+   * Remember this report, as it is now, for the way back from another module (reportMemory.ts).
+   * Not while loading: the first render still holds the defaults, and saving them would overwrite
+   * the state being restored.
+   */
+  useEffect(() => {
+    if (loading || !meta) return;
+    saveLastReport({ user: user?.id ?? null, type: reportType, draft, applied, page, perPage, sort, selectedCols, sections });
+  }, [loading, meta, reportType, draft, applied, page, perPage, sort, selectedCols, sections, user?.id]);
+  /*
+   * Leaving for the Reports list (← Reports or the browser's Back) forgets it, so the list stays
+   * reachable; leaving for any other module keeps it. By the time this runs the address is already
+   * the destination's.
+   */
+  useEffect(() => () => {
+    if (/\/reports\/?$/.test(window.location.pathname)) forgetLastReport();
+  }, []);
 
   const body = useMemo<ReportSearchBody>(() => ({
     filters: { ...applied, ...(sections ? { sections } : {}) },
@@ -200,6 +233,10 @@ export default function ReportDetailPage() {
           <div className="modal-h" style={{ fontSize: 14, margin: 0, flex: 1 }}>{meta.name}</div>
         </div>
         <div className="modal-sub" style={{ marginTop: 4 }}>{meta.description}</div>
+        {/* The Pay Sheet is the Canada brokerage's - not offered in India (India desk, 23 Oct 2026). */}
+        {reportType === 'pending-payments' && user?.market !== 'IN' && ['admin', 'manager', 'accounting'].includes(user?.role ?? '') && (
+          <PaySheetBar showing={!!result?.sheet} onChanged={run} />
+        )}
         {result && result.applied_filters.length > 0 && (
           <div className="report-chips">
             {result.applied_filters.map((f, i) => <span key={i} className="pill info">{f.label}: {f.value}</span>)}
@@ -277,7 +314,7 @@ export default function ReportDetailPage() {
 
       {/* results */}
       <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-        <div className="report-table-wrap">
+        <div className="report-table-wrap" ref={tableWrap}>
           <table className={`list-table report-table${meta.singlePage ? ' sheet' : ''}`}>
             {/* section-grouped reports repeat the headers inside each section instead */}
             {!result?.sections && <thead>{headerRow()}</thead>}
@@ -351,7 +388,8 @@ export default function ReportDetailPage() {
                 );
               })}
             </tbody>
-            {result && result.rows.length > 0 && (
+            {/* The uploaded Payment Sheet carries no amounts, so it has no totals row. */}
+            {result && result.rows.length > 0 && !result.sheet && (
               <tfoot>
                 <tr className="report-totals">
                   {selectable && <td className="report-sel-col" />}
@@ -400,6 +438,97 @@ export default function ReportDetailPage() {
       )}
     </>
   );
+}
+
+/**
+ * PENDING PAYMENTS ← THE BROKERAGE'S OWN PAYMENT SHEET (2026-10-19).
+ *
+ * Upload replaces the whole sheet from an .xlsx in the template's columns; while it is stored the
+ * report shows it word for word. Download gives the template filled with the sheet as it stands, to
+ * edit and upload back. Remove returns the report to the rows computed from the deals. Two presses
+ * to remove, so a stray click cannot take the sheet away. Super Admin, Admin and Accounting only;
+ * the server checks the same.
+ */
+function PaySheetBar({ showing, onChanged }: { showing: boolean; onChanged: () => void }) {
+  const toast = useToast();
+  const [busy, setBusy] = useState('');
+  const [arming, setArming] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const act = async (key: string, fn: () => Promise<unknown>, ok: string) => {
+    setBusy(key);
+    try { await fn(); toast(ok, 'ok'); onChanged(); }
+    catch (e) { toast(apiErrorMessage(e, 'That did not work'), 'bad'); }
+    finally { setBusy(''); setArming(false); }
+  };
+  return (
+    <div className="toolbar-row" data-testid="pay-sheet-bar" style={{ gap: 8, marginTop: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+      <span className="help" style={{ margin: 0 }}>
+        {showing ? 'Showing the uploaded Pay Sheet.' : 'Showing payments worked out from the deals.'}
+      </span>
+      <input ref={fileRef} type="file" accept=".xlsx" style={{ display: 'none' }} data-testid="pay-sheet-file"
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          e.target.value = '';
+          if (f) void act('upload', async () => { const r = await uploadPaySheet(f); toast(`${r.count} rows loaded`, 'ok'); }, 'Pay Sheet uploaded');
+        }} />
+      <button className="btn ghost sm" type="button" disabled={!!busy} onClick={() => fileRef.current?.click()}>
+        {busy === 'upload' ? 'Uploading…' : '⬆ Upload Pay Sheet'}
+      </button>
+      <button className="btn ghost sm" type="button" disabled={!!busy}
+        onClick={() => { setBusy('download'); downloadPaySheet().catch((e) => toast(apiErrorMessage(e, 'Download failed'), 'bad')).finally(() => setBusy('')); }}>
+        {busy === 'download' ? 'Preparing…' : showing ? '⬇ Download Pay Sheet' : '⬇ Pay Sheet template'}
+      </button>
+      {showing && (
+        <button className={`btn ghost sm${arming ? ' danger' : ''}`} type="button" disabled={!!busy}
+          onClick={() => (arming ? void act('remove', removePaySheet, 'Pay Sheet removed — showing payments from the deals') : setArming(true))}
+          onBlur={() => setArming(false)}>
+          {arming ? 'Press again to remove' : 'Remove Pay Sheet'}
+        </button>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Grouped reports keep each section's heading and column header pinned to the top of the table while
+ * that section's rows scroll past. Sticky rows are bounded by the whole table, not by their section,
+ * so on their own every section's headers would pile up at the top; this slides the pinned pair up
+ * as the next section's heading reaches it, so the next section's headers take their place.
+ */
+function useSectionHeaders(wrapRef: RefObject<HTMLDivElement | null>, deps: unknown[]) {
+  useLayoutEffect(() => {
+    const wrap = wrapRef.current;
+    if (!wrap) return;
+    const heads = Array.from(wrap.querySelectorAll<HTMLTableRowElement>('tr.report-section-row'));
+    if (!heads.length) return;
+    const stacks = heads.map((sec) => {
+      const next = sec.nextElementSibling;
+      return next instanceof HTMLTableRowElement && next.classList.contains('report-head-row') ? [sec, next] : [sec];
+    });
+    let frame = 0;
+    const update = () => {
+      frame = 0;
+      // The column header sits just under its section's heading.
+      wrap.style.setProperty('--report-sec-h', `${heads[0].offsetHeight}px`);
+      const top = wrap.getBoundingClientRect().top;
+      stacks.forEach((rows, i) => {
+        const next = heads[i + 1];
+        const height = rows.reduce((h, r) => h + r.offsetHeight, 0);
+        const push = next ? Math.max(0, height - (next.getBoundingClientRect().top - top)) : 0;
+        for (const r of rows) r.style.transform = push ? `translateY(${-push}px)` : '';
+      });
+    };
+    const schedule = () => { if (!frame) frame = requestAnimationFrame(update); };
+    update();
+    wrap.addEventListener('scroll', schedule, { passive: true });
+    window.addEventListener('resize', schedule);
+    return () => {
+      if (frame) cancelAnimationFrame(frame);
+      wrap.removeEventListener('scroll', schedule);
+      window.removeEventListener('resize', schedule);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, deps);
 }
 
 /**

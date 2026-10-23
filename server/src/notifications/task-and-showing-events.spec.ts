@@ -80,9 +80,25 @@ describe('task assigned', () => {
     expect(dispatched[0].category).toBe('task_assigned');
   });
 
-  it('says nothing when you assign a task to yourself', async () => {
+  // Changed 21 Oct 2026 at the brokerage's request: a task you give yourself reaches you too.
+  it('notifies you when you assign a task to yourself', async () => {
     await notifier().taskAssigned(TASK, LEAD, 7, 7, 'Priya Raman');
-    expect(dispatched).toHaveLength(0);
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0].userId).toBe(7);
+  });
+
+  it('leaves the email to the task screen when told to, keeping in-app and push', async () => {
+    await notifier().taskAssigned(TASK, LEAD, 42, 7, 'Priya', { emailHandledElsewhere: true });
+    expect(dispatched[0].channels).toEqual(['in_app', 'push']);
+    await notifier().taskAssigned(TASK, LEAD, 42, 7, 'Priya');
+    expect(dispatched[0].channels).toBeUndefined();
+  });
+
+  it('a later assignment back to the same person is a new occurrence', async () => {
+    const n = notifier();
+    await n.taskAssigned(TASK, LEAD, 42, 7, 'Priya', { occurrence: 1 });
+    await n.taskAssigned(TASK, LEAD, 42, 7, 'Priya', { occurrence: 3 });
+    expect(dispatched.map((d) => d.dedupeKey)).toEqual(['task-assigned:5:42', 'task-assigned:5:42:3']);
   });
 
   it('says nothing when there is no assignee', async () => {

@@ -694,7 +694,8 @@ export const REPORTS: ReportDef[] = [
   // 15 ----------------------------------------------------------------
   {
     type: 'deal-documentation-status',
-    name: 'Deal Documentation Status Report',
+    // Renamed from 'Deal Documentation Status Report' at the brokerage's request (2026-10-19).
+    name: 'Pending Documents Report',
     // TD-089 — the description says which axis each count reads, because the report carries both.
     description: 'Every deal with its documentation status, how many documents have been received, '
       + 'and separate pending-validation / invalid counts.',

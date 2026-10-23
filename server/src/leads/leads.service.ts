@@ -675,9 +675,10 @@ export class LeadsService {
       user.id ?? null,
     );
 
-    // A lead created already assigned to somebody else is an assignment as far as they are
-    // concerned — they are being handed work, and that is the notification they expect.
-    if (row.assigned_to && row.assigned_to !== (user.id ?? null)) {
+    // A lead created already assigned to somebody is an assignment as far as they are concerned —
+    // they are being handed work, and that is the email they expect. Choosing yourself counts too
+    // (see `CrmEventNotifier.leadAssigned`).
+    if (row.assigned_to) {
       void this.crmEvents?.leadAssigned(
         { id: row.id, first_name: row.name, last_name: null, email: row.email },
         row.assigned_to, user.id ?? null, user.name,

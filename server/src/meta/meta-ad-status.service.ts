@@ -1,7 +1,9 @@
 import { createHash } from 'crypto';
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
+import type { Prisma } from '@prisma/client';
+import { PrismaService } from '../prisma/prisma.service';
 import { MetaConnectionService } from './meta-connection.service';
-import { MetaGraphService, GraphError, isAuthFailure, type GraphAd, type GraphAdAccount } from './meta-graph.service';
+import { MetaGraphService, GraphError, LEAD_OBJECTIVES, isAuthFailure, type GraphAd, type GraphAdAccount } from './meta-graph.service';
 import { MetaApiBudgetService } from './meta-api-budget.service';
 
 /**
@@ -54,8 +56,14 @@ export interface AdScan {
   /** Fewer accounts or ads than exist were read (caps), or archived ads could not be requested — any of which
    *  stops "No ads found" or "Not enabled" from being said. */
   incomplete: string[];
-  /** Ads in lead campaigns whose creative did not name a form, so they could not be matched. */
+  /** Ads in lead campaigns whose creative did not name a form, and that no lead in the CRM ties to one. */
   unmatched_lead_ads: number;
+  /**
+   * How many of those are themselves enabled. Only these stop "Inactive" from being said: a paused ad
+   * cannot make any form Active, whichever form it belongs to. Absent from checks saved before
+   * 2026-10-21, which then count every unmatched ad, as they did.
+   */
+  unmatched_enabled_lead_ads?: number;
   ads: AdRow[];
   /** form id -> indexes into `ads`. */
   by_form: Record<string, number[]>;
@@ -66,7 +74,6 @@ export interface AdScan {
 const MAX_ACCOUNTS = 25;
 const MAX_ADS_PER_ACCOUNT = 1000;
 const CACHE_MS = 15 * 60_000;
-const LEAD_OBJECTIVES = new Set(['OUTCOME_LEADS', 'LEAD_GENERATION']);
 
 /** Every `lead_gen_form_id` anywhere in a creative — the spec nests it differently per ad format. */
 export function formIdsInCreative(creative: unknown): string[] {
@@ -118,6 +125,19 @@ export function describeAd(ad: GraphAd, account: GraphAdAccount, now: number): {
   return { label: 'Enabled', enabled: true };
 }
 
+/** Lead ads matched to no form that could still be some form's running ad — and so stop "Inactive". */
+function unmatchedGap(scan: AdScan): string[] {
+  const enabledOnes = scan.unmatched_enabled_lead_ads;
+  if (enabledOnes === undefined) {
+    return scan.unmatched_lead_ads > 0
+      ? [`${scan.unmatched_lead_ads} lead ad${scan.unmatched_lead_ads === 1 ? '' : 's'} did not name a form in their creative (for example ads using an existing post)`]
+      : [];
+  }
+  return enabledOnes > 0
+    ? [`${enabledOnes} enabled lead ad${enabledOnes === 1 ? '' : 's'} could not be matched to a form (the creative names none, and no lead in the CRM came from ${enabledOnes === 1 ? 'it' : 'them'})`]
+    : [];
+}
+
 /** One form's answer, from a finished scan. */
 export function formStatus(scan: AdScan, formId: string): FormAdStatus {
   if (scan.blocked) return { state: 'unknown', summary: 'Unknown', reason: scan.blocked.message, ads: [] };
@@ -126,9 +146,7 @@ export function formStatus(scan: AdScan, formId: string): FormAdStatus {
   const gaps: string[] = [
     ...scan.accounts_failed.map((a) => `ad account ${a.name || a.id} could not be read (${a.reason})`),
     ...scan.incomplete,
-    ...(scan.unmatched_lead_ads > 0
-      ? [`${scan.unmatched_lead_ads} lead ad${scan.unmatched_lead_ads === 1 ? '' : 's'} did not name a form in their creative (for example ads using an existing post)`]
-      : []),
+    ...unmatchedGap(scan),
   ];
   const enabled = ads.filter((a) => a.enabled);
   const n = (k: number, w: string) => `${k} ${w}${k === 1 ? '' : 's'}`;
@@ -181,7 +199,8 @@ export class MetaAdStatusService {
   private readonly log = new Logger(MetaAdStatusService.name);
   /**
    * Per person, and only for the Meta connection it was read with: their login decides what they can
-   * read. In memory — a lost cache costs one re-read.
+   * read. In memory, and also kept on the person's connection row (`ad_status_scan`) so a deploy or
+   * restart does not leave the next open of the screen waiting for a whole new read.
    */
   private readonly cache = new Map<number, { key: string; scan: AdScan }>();
   /** A scan already under way for this person and connection, so a second request waits for it instead of reading again. */
@@ -191,6 +210,7 @@ export class MetaAdStatusService {
     private readonly connections: MetaConnectionService,
     private readonly graph: MetaGraphService,
     private readonly budget: MetaApiBudgetService,
+    @Optional() private readonly prisma?: PrismaService,
   ) {}
 
   /**
@@ -210,7 +230,12 @@ export class MetaAdStatusService {
       this.cache.delete(userId);
       return this.empty({ code: 'not_connected', message: 'Meta is not connected.' });
     }
-    const cached = this.cache.get(userId);
+    let cached = this.cache.get(userId);
+    if (!refresh && !cached) {
+      // Nothing in memory (a deploy or restart): the check kept on the connection row, if it was read with this login.
+      const saved = await this.loadSaved(userId);
+      if (saved?.key === key) this.cache.set(userId, cached = saved);
+    }
     if (!refresh && cached && cached.key === key) {
       if (Date.now() - Date.parse(cached.scan.checked_at) < CACHE_MS) return cached.scan;
       /*
@@ -236,11 +261,47 @@ export class MetaAdStatusService {
       const scan = await this.scan(userId);
       // A scan that could not start because of the shared budget is not remembered: the next view retries.
       if (scan.blocked?.code === 'budget') this.cache.delete(userId);
-      else this.cache.set(userId, { key, scan });
+      else {
+        this.cache.set(userId, { key, scan });
+        await this.save(userId, key, scan);
+      }
       return scan;
     })().finally(() => { if (this.inflight.get(userId)?.job === job) this.inflight.delete(userId); });
     this.inflight.set(userId, { key, job });
     return job;
+  }
+
+  /**
+   * The check kept on this person's active connection row, or null. Never fatal: if it cannot be read
+   * the screen simply waits for a new check, as it did before.
+   */
+  private async loadSaved(userId: number): Promise<{ key: string; scan: AdScan } | null> {
+    if (!this.prisma) return null;
+    try {
+      const row = await this.prisma.meta_connections.findFirst({
+        where: { user_id: userId, is_active: true }, select: { ad_status_scan: true },
+      });
+      const v = row?.ad_status_scan as { key?: unknown; scan?: AdScan } | null | undefined;
+      if (typeof v?.key !== 'string' || typeof v.scan?.checked_at !== 'string' || !Array.isArray(v.scan.ads)) return null;
+      const { stale: _stale, ...scan } = v.scan;
+      return { key: v.key, scan };
+    } catch (err) {
+      this.log.warn(`Saved ad status unreadable for user ${userId}: ${(err as Error).message}`);
+      return null;
+    }
+  }
+
+  /** Keep this check on the person's active connection row. A failure only costs the instant answer next time. */
+  private async save(userId: number, key: string, scan: AdScan): Promise<void> {
+    if (!this.prisma) return;
+    try {
+      await this.prisma.meta_connections.updateMany({
+        where: { user_id: userId, is_active: true },
+        data: { ad_status_scan: { key, scan } as unknown as Prisma.InputJsonValue },
+      });
+    } catch (err) {
+      this.log.warn(`Could not keep the ad status for user ${userId}: ${(err as Error).message}`);
+    }
   }
 
   /** Identity of the current Meta connection, or null when there is none. Never stores the token itself. */
@@ -256,7 +317,7 @@ export class MetaAdStatusService {
   private empty(blocked: AdScan['blocked']): AdScan {
     return {
       checked_at: new Date().toISOString(), blocked, accounts_checked: 0, accounts_failed: [],
-      incomplete: [], unmatched_lead_ads: 0, ads: [], by_form: {},
+      incomplete: [], unmatched_lead_ads: 0, unmatched_enabled_lead_ads: 0, ads: [], by_form: {},
     };
   }
 
@@ -303,6 +364,8 @@ export class MetaAdStatusService {
     }
 
     const now = Date.now();
+    // Lead ads whose creative named no form: matched through the CRM's own leads once every account is read.
+    const unnamed: { ad: GraphAd; account: GraphAdAccount }[] = [];
     for (const account of accounts) {
       try {
         const { ads, truncated, archivedIncluded } = await this.graph.adsInAccount(account.id, conn.token, MAX_ADS_PER_ACCOUNT);
@@ -312,18 +375,10 @@ export class MetaAdStatusService {
         for (const ad of ads) {
           const forms = formIdsInCreative(ad.creative);
           if (!forms.length) {
-            if (LEAD_OBJECTIVES.has(String(ad.campaign?.objective ?? '').toUpperCase())) scan.unmatched_lead_ads += 1;
+            if (LEAD_OBJECTIVES.has(String(ad.campaign?.objective ?? '').toUpperCase())) unnamed.push({ ad, account });
             continue;
           }
-          const { label, enabled } = describeAd(ad, account, now);
-          const idx = scan.ads.push({
-            ad_id: ad.id, ad_name: ad.name ?? ad.id,
-            adset_id: ad.adset?.id ?? null, adset_name: ad.adset?.name ?? null,
-            campaign_id: ad.campaign?.id ?? null, campaign_name: ad.campaign?.name ?? null,
-            account_id: account.id, account_name: account.name ?? account.id,
-            effective_status: ad.effective_status ?? null, label, enabled,
-          }) - 1;
-          for (const f of forms) (scan.by_form[f] ??= []).push(idx);
+          addAd(scan, ad, account, forms, now);
         }
       } catch (err) {
         const r = reasonFor(err);
@@ -332,7 +387,56 @@ export class MetaAdStatusService {
         scan.accounts_failed.push({ id: account.id, name: account.name ?? '', reason: r.message });
       }
     }
+
+    /*
+     * A LEAD AD WHOSE CREATIVE NAMES NO FORM — Meta does not return it for some Advantage+ ads — is
+     * matched through the leads it brought in: Meta records the ad and the form on every lead, and the
+     * CRM stores both from the same submission (`leads.meta_ad_id`, `leads.facebook_form_id`). An ad
+     * with no lead in the CRM stays unmatched, and only if it is ENABLED does it stop "Inactive".
+     */
+    const fromLeads = await this.formsFromLeads(unnamed.map((u) => u.ad.id));
+    for (const { ad, account } of unnamed) {
+      const forms = fromLeads.get(ad.id);
+      if (forms?.length) { addAd(scan, ad, account, forms, now); continue; }
+      scan.unmatched_lead_ads += 1;
+      if (describeAd(ad, account, now).enabled) scan.unmatched_enabled_lead_ads = (scan.unmatched_enabled_lead_ads ?? 0) + 1;
+    }
     scan.checked_at = new Date().toISOString();
     return scan;
   }
+
+  /** Ad id -> the form(s) its leads in the CRM came from. Never fatal: unreadable means unmatched. */
+  private async formsFromLeads(adIds: string[]): Promise<Map<string, string[]>> {
+    const out = new Map<string, string[]>();
+    if (!this.prisma || !adIds.length) return out;
+    try {
+      const rows = await this.prisma.leads.findMany({
+        where: { meta_ad_id: { in: adIds }, facebook_form_id: { not: null } },
+        select: { meta_ad_id: true, facebook_form_id: true },
+        distinct: ['meta_ad_id', 'facebook_form_id'],
+      });
+      for (const r of rows) {
+        if (!r.meta_ad_id || !r.facebook_form_id) continue;
+        const list = out.get(r.meta_ad_id) ?? [];
+        if (!list.includes(r.facebook_form_id)) list.push(r.facebook_form_id);
+        out.set(r.meta_ad_id, list);
+      }
+    } catch (err) {
+      this.log.warn(`Could not match lead ads through their leads: ${(err as Error).message}`);
+    }
+    return out;
+  }
+}
+
+/** One ad, with Meta's status in words, under each form it uses. */
+function addAd(scan: AdScan, ad: GraphAd, account: GraphAdAccount, forms: string[], now: number): void {
+  const { label, enabled } = describeAd(ad, account, now);
+  const idx = scan.ads.push({
+    ad_id: ad.id, ad_name: ad.name ?? ad.id,
+    adset_id: ad.adset?.id ?? null, adset_name: ad.adset?.name ?? null,
+    campaign_id: ad.campaign?.id ?? null, campaign_name: ad.campaign?.name ?? null,
+    account_id: account.id, account_name: account.name ?? account.id,
+    effective_status: ad.effective_status ?? null, label, enabled,
+  }) - 1;
+  for (const f of forms) (scan.by_form[f] ??= []).push(idx);
 }

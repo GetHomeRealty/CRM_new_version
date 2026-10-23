@@ -164,7 +164,8 @@ export default function TransactionsPage() {
     // ...and the year, so the queue lists every pending deal the dashboard tile counted.
     arrivedPending ? { ...EMPTY_FILTERS, approvals: 'pending', status: '', year: '' } : EMPTY_FILTERS,
   );
-  const [showRibbon, setShowRibbon] = useState(false);
+  // Arriving from "review requests" opens the filter panel, so the Pending approval filter it set is in view.
+  const [showRibbon, setShowRibbon] = useState(arrivedPending);
   // bulk selection + export/download
   const [selected, setSelected] = useState<number[]>([]);
   const [bulk, setBulk] = useState<'data' | 'documents' | null>(null);
@@ -311,6 +312,24 @@ export default function TransactionsPage() {
    */
   const otherFilters = (Object.keys(filters) as (keyof Filters)[]).some((k) => k !== 'status' && filters[k] !== '');
   const activeRibbonCount = RIBBON_KEYS.filter((k) => filters[k]).length;
+  /*
+   * Every filter away from "everything", for the Add Filter button and the line under the toolbar
+   * (2026-10-22): the filters now live behind that button, so the screen must still say when the
+   * list is narrowed. The opening defaults count too, because they narrow it.
+   */
+  const MAIN_FILTERS: (keyof Filters)[] = ['year', 'type', 'validation', 'agent', 'commission', 'docs', 'approvals', 'status'];
+  const activeFilterCount = activeRibbonCount + MAIN_FILTERS.filter((k) => filters[k]).length;
+  const filterSummary: string[] = [
+    filters.year === THIS_YEAR_ONWARD ? `Closing year ${THIS_YEAR_ONWARD.slice(0, 4)} onward + no date` : filters.year ? `Closing year ${filters.year}` : '',
+    filters.type ? typeLabel(filters.type) : '',
+    filters.validation ? `Validation ${filters.validation}` : '',
+    filters.agent ? `Agent ${filters.agent}` : '',
+    filters.commission ? `Commission ${filters.commission.toLowerCase()}` : '',
+    filters.docs === 'missing_uploads' ? 'Missing uploads' : filters.docs === 'needs_review' ? 'Documents needing review' : '',
+    filters.approvals === 'pending' ? 'Pending approval' : '',
+    filters.status === OPEN_AND_FIRM ? 'Active, Conditional & Firm' : filters.status,
+    activeRibbonCount ? `${activeRibbonCount} more in Add Filter` : '',
+  ].filter(Boolean);
   const goto = (p: number) => { const n = Math.min(Math.max(1, p), lastPage); setPage(n); load(n); };
   const clearRibbon = () => setFilters((p) => ({ ...p, offerFrom: '', offerTo: '', closingFrom: '', closingTo: '', payout: '', client: '', brokerage: '' }));
 
@@ -382,7 +401,56 @@ export default function TransactionsPage() {
         {/* TD-090 — the placeholder names what the box now searches. It was honest before, which is
             how the missing capability stayed invisible: an agent read "property, trade #, agent"
             and never tried a client's name. */}
-        <input className="inp with-search" placeholder="Search property, trade #, agent, client" value={filters.q} onChange={(e) => setF('q', e.target.value)} />
+        {/* The X clears the search in one click (2026-10-22, Accounting request); it shows only once
+            something is typed. Wrapped so the box keeps the toolbar's flexible width. */}
+        <span style={{ position: 'relative', display: 'flex', flex: '1 1 200px', minWidth: 200 }}>
+          <input className="inp with-search" placeholder="Search property, trade #, agent, client" value={filters.q} onChange={(e) => setF('q', e.target.value)}
+            style={{ width: '100%', minWidth: 0, flex: '1 1 auto', paddingRight: filters.q ? 34 : undefined }} data-testid="txn-search" />
+          {filters.q && (
+            <button type="button" className="row-rm" aria-label="Clear search" title="Clear search" data-testid="txn-search-clear"
+              onClick={() => setF('q', '')}
+              style={{ position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)', color: 'var(--muted)' }}>
+              <Icon name="close" size={14} />
+            </button>
+          )}
+        </span>
+        <button className={`btn ${showRibbon || activeFilterCount ? 'primary' : 'ghost'} sm`} onClick={() => setShowRibbon((s) => !s)}
+          data-testid="txn-add-filter" aria-expanded={showRibbon}
+          title="Closing year, type, validation, agent, commission, documents, approvals, status, dates, payout, client and brokerage">
+          <Icon name="filter" size={13} /> Add Filter{activeFilterCount ? ` (${activeFilterCount})` : ''} {showRibbon ? <Icon name="chevronDown" size={12} className="flip" /> : <Icon name="chevronDown" size={12} />}
+        </button>
+        <button className="btn ghost sm" disabled={downloadingAll || loading} onClick={() => setDownloadAsk({ format: 'xlsx', scope: 'list' })}
+          title="Download every transaction — one row each, with team split, clients, lawyer, financial, adjustments and conditions">
+          {downloadingAll ? <><Icon name="clock" size={13} /> Preparing…</> : <><Icon name="download" size={13} /> Download All Transactions</>}
+        </button>
+        <button className="btn ghost sm" onClick={() => navigate(deskPath('transactions/downloads'))} title="Past and queued exports"><Icon name="download" size={13} /> Download Centre</button>
+        {/*
+          TD-103 — offered to the tier that can actually use it. The endpoints are now Super Admin
+          only, and a button that every `transactions: edit` holder can see but only one tier can
+          use is the affordance mismatch of TD-017 all over again.
+
+          TD-057 completed the pair: the ROUTE is gated on the tier too (see `SCREENS` in App.tsx),
+          so /desk/transactions/import typed by hand answers an agent with the No access panel
+          instead of a working screen that refuses only once a file has been chosen.
+        */}
+        {isSuperAdmin && <button className="btn ghost sm" onClick={() => navigate(deskPath('transactions/import'))} title="Create many transactions from a spreadsheet"><Icon name="upload" size={13} /> Bulk Import</button>}
+        {canEdit && <button className="btn primary sm" onClick={() => setAddOpen(true)}>+ Add Transaction</button>}
+      </div>
+
+        {!showRibbon && filterSummary.length > 0 && (
+          <div className="help" style={{ marginTop: 8 }} data-testid="txn-filter-summary">
+            Showing: {filterSummary.join(' · ')}
+          </div>
+        )}
+
+        {/*
+          THE FILTER PANEL (2026-10-22, brokerage request): the top row keeps only Search, Add Filter
+          and the download / add actions; every filter, including the eight that used to sit in the
+          top row, opens here. Their values and defaults are unchanged.
+        */}
+        {showRibbon && (
+          <>
+          <div className="toolbar-row" style={{ borderTop: '1px solid var(--line)', marginTop: 10, paddingTop: 12 }} data-testid="txn-filter-panel">
         {/* The closing-date year, labelled in the options themselves — the bare years read as a mystery. */}
         <select value={filters.year} onChange={(e) => setF('year', e.target.value)} title="Closing year" aria-label="Closing year">
           <option value={THIS_YEAR_ONWARD}>Closing year: {THIS_YEAR_ONWARD.slice(0, 4)} onward + no date</option>
@@ -435,31 +503,9 @@ export default function TransactionsPage() {
           <option value="">All statuses</option>
           {ALL_STATUSES.map((s) => <option key={s}>{s}</option>)}
         </select>
-        <button className={`btn ${showRibbon || activeRibbonCount ? 'primary' : 'ghost'} sm`} onClick={() => setShowRibbon((s) => !s)}>
-          <Icon name="filter" size={13} /> Add Filter{activeRibbonCount ? ` (${activeRibbonCount})` : ''} {showRibbon ? <Icon name="chevronDown" size={12} className="flip" /> : <Icon name="chevronDown" size={12} />}
-        </button>
-        <button className="btn ghost sm" onClick={resetAll} title="Back to the default filters and order">Reset</button>
-        <button className="btn ghost sm" disabled={downloadingAll || loading} onClick={() => setDownloadAsk({ format: 'xlsx', scope: 'list' })}
-          title="Download every transaction — one row each, with team split, clients, lawyer, financial, adjustments and conditions">
-          {downloadingAll ? <><Icon name="clock" size={13} /> Preparing…</> : <><Icon name="download" size={13} /> Download All Transactions</>}
-        </button>
-        <button className="btn ghost sm" onClick={() => navigate(deskPath('transactions/downloads'))} title="Past and queued exports"><Icon name="download" size={13} /> Download Centre</button>
-        {/*
-          TD-103 — offered to the tier that can actually use it. The endpoints are now Super Admin
-          only, and a button that every `transactions: edit` holder can see but only one tier can
-          use is the affordance mismatch of TD-017 all over again.
-
-          TD-057 completed the pair: the ROUTE is gated on the tier too (see `SCREENS` in App.tsx),
-          so /desk/transactions/import typed by hand answers an agent with the No access panel
-          instead of a working screen that refuses only once a file has been chosen.
-        */}
-        {isSuperAdmin && <button className="btn ghost sm" onClick={() => navigate(deskPath('transactions/import'))} title="Create many transactions from a spreadsheet"><Icon name="upload" size={13} /> Bulk Import</button>}
-        {canEdit && <button className="btn primary sm" onClick={() => setAddOpen(true)}>+ Add Transaction</button>}
-      </div>
-
-        {/* Hidden advanced-filter ribbon */}
-        {showRibbon && (
-          <div style={{ borderTop: '1px solid var(--line)', marginTop: 10, paddingTop: 12, display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'flex-end' }}>
+            <button className="btn ghost sm" onClick={resetAll} title="Back to the default filters and order">Reset</button>
+          </div>
+          <div style={{ marginTop: 12, display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'flex-end' }}>
             <div>
               <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-2)', textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: 6 }}>Dates</div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
@@ -482,6 +528,7 @@ export default function TransactionsPage() {
             </label>
             {activeRibbonCount > 0 && <button className="btn ghost sm" onClick={clearRibbon}><Icon name="close" size={13} /> Clear filters</button>}
           </div>
+          </>
         )}
       </div>
 

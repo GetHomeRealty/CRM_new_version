@@ -380,8 +380,11 @@ input[type="number"],.numeric,.stat-card .val{font-variant-numeric:tabular-nums;
   background-image:url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%2364748b' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 10px center}
 .report-result-head{display:flex;justify-content:space-between;align-items:center;padding:13px 15px;border-bottom:1px solid var(--line)}
 .report-sections{display:flex;flex-wrap:wrap;gap:6px;padding:11px 15px;border-bottom:1px solid var(--line)}
-.report-table-wrap{overflow-x:auto;max-width:100%}
-.report-table{min-width:100%}
+/* The table scrolls inside its own box so the column headers (and, in grouped reports, each section's
+   heading) can stay pinned at its top: a sideways-scrolling wrapper stops anything sticking to the page.
+   `clip` keeps the table's rounded corners without `hidden`, which would also switch sticky off. */
+.report-table-wrap{overflow:auto;max-width:100%;max-height:calc(100vh - 150px)}
+.report-table{min-width:100%;overflow:clip}
 /* Uniform grid: every header/body/footer cell shares the same padding, height and
    left/middle alignment. Headers wrap; only the property column stays on one line. */
 /* Wrap on WORD boundaries only — never split a word or a decimal number. */
@@ -403,7 +406,11 @@ input[type="number"],.numeric,.stat-card .val{font-variant-numeric:tabular-nums;
 .report-table.sheet th.col-agent,.report-table.sheet td.col-agent{min-width:150px;max-width:230px}
 .report-totals td{font-weight:700;background:var(--brand-soft);border-top:2px solid var(--line);position:sticky;bottom:0;text-align:left;vertical-align:middle;padding:10px 12px;height:44px;white-space:nowrap}
 /* In-table horizontal sections (Transaction Payment Status) */
-.report-section-row td{background:linear-gradient(90deg,var(--brand-soft),transparent);border-top:2px solid var(--brand-light);border-bottom:1px solid var(--line);font-weight:700;color:var(--brand-dark);letter-spacing:.01em;white-space:nowrap;padding:9px 12px;height:38px}
+/* Each section's heading and its column header stay pinned while that section's rows scroll by; the
+   next section's pair pushes them off (useSectionHeaders). Opaque so rows don't show through. */
+.report-table tr.report-section-row{position:sticky;top:0;z-index:3}
+.report-table tr.report-head-row{position:sticky;top:var(--report-sec-h,38px);z-index:3}
+.report-section-row td{background:linear-gradient(90deg,var(--brand-soft),transparent) var(--surface);border-top:2px solid var(--brand-light);border-bottom:1px solid var(--line);font-weight:700;color:var(--brand-dark);letter-spacing:.01em;white-space:nowrap;padding:9px 12px;height:38px}
 .report-section-row .sec-count{color:var(--muted);font-weight:600;margin-left:8px}
 /* A section's standing instruction from the Payment Sheet, beside its heading */
 .report-section-row .sec-note{color:var(--muted);font-weight:500;font-style:italic;margin-left:14px}

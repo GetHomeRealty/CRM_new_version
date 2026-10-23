@@ -42,8 +42,14 @@ const ROOT = [
    */
   'recruitment_candidates',
   'transactions',
+  // The brokerage's own Payment Sheet as uploaded (Pending Payments); rows name deals by trade number only.
+  'payment_sheet_rows',
   'customers',
   'campaigns',
+  // Celebration flyers and annual greeting rules: `created_by_id` is a bare integer with no foreign
+  // key (like import_batches), so each row is owned directly by whoever created it.
+  'campaign_flyers',
+  'celebration_automations',
   'agents',
   'marketing_inventory',
   // India builder database (17 Oct 2026): the brokerage's own record of the builders it works with.
@@ -133,6 +139,9 @@ const DERIVED: Record<string, string> = {
   // via crm_teams
   crm_team_members: 'crm_teams',
   lead_notes: 'leads', lead_tasks: 'leads', lead_showings: 'leads', lead_calls: 'leads',
+  // Email about a task — the creator's confirmation and the agent's notice. Reached through the
+  // lead page only, and cascades with the task.
+  lead_task_notifications: 'lead_tasks',
   // Everything about a candidate reaches the brokerage through the candidate, and cascades with it.
   recruitment_interviews: 'recruitment_candidates',
   recruitment_notes: 'recruitment_candidates',
@@ -174,6 +183,8 @@ const DERIVED: Record<string, string> = {
   // Click tracking: the link belongs to the campaign it appeared in, and a click to both the
   // campaign and the recipient. Reached only through the campaign, so isolation travels that way.
   campaign_links: 'campaigns', campaign_clicks: 'campaigns',
+  // The one-greeting-per-address-occasion-year mark, written by a celebration campaign's send.
+  celebration_sends: 'campaigns',
   email_templates: 'mail_accounts', email_template_attachments: 'email_templates',
   inbound_emails: 'mail_accounts', meta_pages: 'meta_connections',
   /*

@@ -2,6 +2,7 @@ import { MetaAdStatusService, formStatus, formIdsInCreative, describeAd } from '
 import { MetaGraphService, GraphError, type GraphAd, type GraphAdAccount } from './meta-graph.service';
 import type { MetaConnectionService } from './meta-connection.service';
 import type { MetaApiBudgetService } from './meta-api-budget.service';
+import type { PrismaService } from '../prisma/prisma.service';
 
 /**
  * ADVERTISING STATUS FOR LEAD FORMS — from Meta's ads, matched by form id, never inferred.
@@ -55,7 +56,11 @@ function setup(opts: { scopes?: string; accounts: Accounts; ads: Record<string, 
   const budget = {
     consume: jest.fn(async () => ({ allowed: opts.budget !== false, spent: 1, limit: 600, resetInSeconds: 120 })),
   } as unknown as MetaApiBudgetService;
-  return { svc: new MetaAdStatusService(connections, graph, budget), graph, calls, conn, budget };
+  return {
+    svc: new MetaAdStatusService(connections, graph, budget), graph, calls, conn, budget,
+    /** Another instance over the same Meta and connection — the server after a deploy or restart. */
+    make: (prisma?: PrismaService) => new MetaAdStatusService(connections, graph, budget, prisma),
+  };
 }
 const ACC1: GraphAdAccount = { id: 'act_1', name: 'Main account', account_status: 1 };
 const ACC2: GraphAdAccount = { id: 'act_2', name: 'Second account', account_status: 1 };
@@ -216,7 +221,7 @@ describe('unknown, with the reason — never a guess', () => {
     const { svc } = setup({ accounts: { accounts: [ACC1] }, ads: { act_1: [ad('1', 'ACTIVE', null)] } });
     const s = formStatus(await svc.scanFor(1, true), FORM_A);
     expect(s.state).toBe('unknown');
-    expect(s.reason).toMatch(/did not name a form/);
+    expect(s.reason).toMatch(/could not be matched to a form/);
   });
 
   it('a non-lead ad without a form does not make anything unknown', async () => {
@@ -317,6 +322,139 @@ describe('last checked, refresh, and a connection that changes', () => {
   });
 });
 
+/** The person's connection row, as far as the kept check goes. */
+function keptStore() {
+  const rows = new Map<number, unknown>();
+  const prisma = {
+    meta_connections: {
+      findFirst: jest.fn(async ({ where }: { where: { user_id: number } }) => (rows.has(where.user_id) ? { ad_status_scan: rows.get(where.user_id) } : null)),
+      updateMany: jest.fn(async ({ where, data }: { where: { user_id: number }; data: { ad_status_scan: unknown } }) => {
+        rows.set(where.user_id, JSON.parse(JSON.stringify(data.ad_status_scan)));
+        return { count: 1 };
+      }),
+    },
+  } as unknown as PrismaService;
+  return { prisma, rows };
+}
+
+describe('the last check survives a deploy or restart, so the screen shows it at once', () => {
+  it('after a restart the kept check is shown at once, and a new read runs behind an old one', async () => {
+    const { prisma, rows } = keptStore();
+    const { make, graph } = setup({ accounts: { accounts: [ACC1] }, ads: { act_1: [ad('1', 'ACTIVE', FORM_A)] } });
+    const first = await make(prisma).scanFor(7, false);
+    expect(rows.has(7)).toBe(true);
+    expect(graph.readableAdAccounts).toHaveBeenCalledTimes(1);
+
+    // Restarted within the cache window: the kept check, without asking Meta.
+    const soon = await make(prisma).scanFor(7, false);
+    expect(soon.checked_at).toBe(first.checked_at);
+    expect(formStatus(soon, FORM_A).state).toBe('enabled');
+    expect(graph.readableAdAccounts).toHaveBeenCalledTimes(1);
+
+    // Restarted later: still shown at once, marked stale, and `refresh` joins the read already under way.
+    const clock = jest.spyOn(Date, 'now').mockReturnValue(Date.now() + 60 * 60_000);
+    try {
+      const later = make(prisma);
+      const quick = await later.scanFor(7, false);
+      expect(quick.stale).toBe(true);
+      expect(formStatus(quick, FORM_A).state).toBe('enabled');
+      const fresh = await later.scanFor(7, true);
+      expect(fresh.stale).toBeUndefined();
+      expect(graph.readableAdAccounts).toHaveBeenCalledTimes(2);
+      expect((rows.get(7) as { scan: { checked_at: string } }).scan.checked_at).toBe(fresh.checked_at);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it('a kept check read with an earlier login is never shown: it waits for a new read', async () => {
+    const { prisma } = keptStore();
+    const { make, conn, graph } = setup({ accounts: { accounts: [ACC1] }, ads: { act_1: [ad('1', 'ACTIVE', FORM_A)] } });
+    await make(prisma).scanFor(7, false);
+    conn.current = { ...conn.current!, token: 'new-token' };
+    const after = await make(prisma).scanFor(7, false);
+    expect(after.stale).toBeUndefined();
+    expect(graph.readableAdAccounts).toHaveBeenCalledTimes(2);
+  });
+
+  it("one person's kept check is never shown to another", async () => {
+    const { prisma } = keptStore();
+    const { make, graph } = setup({ accounts: { accounts: [ACC1] }, ads: {} });
+    await make(prisma).scanFor(7, false);
+    await make(prisma).scanFor(8, false);
+    expect(graph.readableAdAccounts).toHaveBeenCalledTimes(2);
+  });
+
+  it('a check that could not start (allowance spent) is not kept', async () => {
+    const { prisma, rows } = keptStore();
+    const { make } = setup({ accounts: { accounts: [ACC1] }, ads: {}, budget: false });
+    await make(prisma).scanFor(7, false);
+    expect(rows.has(7)).toBe(false);
+  });
+
+  it('a kept check that cannot be read or written never breaks the badges', async () => {
+    const broken = {
+      meta_connections: {
+        findFirst: jest.fn(async () => { throw new Error('database is away'); }),
+        updateMany: jest.fn(async () => { throw new Error('database is away'); }),
+      },
+    } as unknown as PrismaService;
+    const { make } = setup({ accounts: { accounts: [ACC1] }, ads: { act_1: [ad('1', 'ACTIVE', FORM_A)] } });
+    expect(formStatus(await make(broken).scanFor(7, false), FORM_A).state).toBe('enabled');
+  });
+});
+
+describe('lead ads whose creative names no form (some Advantage+ ads)', () => {
+  /** The CRM's leads, as far as this lookup goes: which ad and which form each came from. */
+  const leadsOf = (rows: { meta_ad_id: string; facebook_form_id: string }[], fail = false) => ({
+    leads: {
+      findMany: jest.fn(async ({ where }: { where: { meta_ad_id: { in: string[] } } }) => {
+        if (fail) throw new Error('database is away');
+        return rows.filter((r) => where.meta_ad_id.in.includes(r.meta_ad_id));
+      }),
+    },
+  } as unknown as PrismaService);
+
+  it('is matched to its form through the leads it brought in, so a running one makes that form Active', async () => {
+    const { make } = setup({ accounts: { accounts: [ACC1] }, ads: { act_1: [ad('7', 'ACTIVE', null)] } });
+    const scan = await make(leadsOf([{ meta_ad_id: '7', facebook_form_id: FORM_A }])).scanFor(1, true);
+    expect(formStatus(scan, FORM_A).state).toBe('enabled');
+    expect(scan.unmatched_lead_ads).toBe(0);
+    expect(formStatus(scan, FORM_B).state).toBe('no_ads');
+  });
+
+  it('a PAUSED one with no leads does not stop "Inactive": it cannot make any form Active', async () => {
+    const { make } = setup({ accounts: { accounts: [ACC1] }, ads: { act_1: [ad('1', 'PAUSED', FORM_A), ad('8', 'PAUSED', null)] } });
+    const scan = await make(leadsOf([])).scanFor(1, true);
+    expect(scan.unmatched_lead_ads).toBe(1);
+    expect(scan.unmatched_enabled_lead_ads).toBe(0);
+    expect(formStatus(scan, FORM_A).state).toBe('not_enabled');
+    expect(formStatus(scan, FORM_B).state).toBe('no_ads');
+  });
+
+  it('a RUNNING one with no leads still makes every form without a running ad Unknown — it may be theirs', async () => {
+    const { make } = setup({ accounts: { accounts: [ACC1] }, ads: { act_1: [ad('1', 'PAUSED', FORM_A), ad('9', 'ACTIVE', null)] } });
+    const scan = await make(leadsOf([])).scanFor(1, true);
+    expect(scan.unmatched_enabled_lead_ads).toBe(1);
+    expect(formStatus(scan, FORM_A)).toMatchObject({ state: 'unknown', reason: expect.stringMatching(/1 enabled lead ad could not be matched/) });
+  });
+
+  it('if the leads cannot be read, the ad simply stays unmatched — the check still finishes', async () => {
+    const { make } = setup({ accounts: { accounts: [ACC1] }, ads: { act_1: [ad('9', 'ACTIVE', null)] } });
+    const scan = await make(leadsOf([], true)).scanFor(1, true);
+    expect(scan.accounts_failed).toEqual([]);
+    expect(scan.unmatched_enabled_lead_ads).toBe(1);
+  });
+
+  it('a check saved before this change (no enabled count) still counts every unmatched ad, as it did', () => {
+    const old = {
+      checked_at: '2026-10-21T09:17:38.005Z', blocked: null, accounts_checked: 1, accounts_failed: [],
+      incomplete: [], unmatched_lead_ads: 2, ads: [], by_form: {},
+    };
+    expect(formStatus(old, FORM_A)).toMatchObject({ state: 'unknown', reason: expect.stringMatching(/2 lead ads did not name a form/) });
+  });
+});
+
 describe('the Graph calls are read-only and cover live and archived ads', () => {
   const realFetch = global.fetch;
   afterEach(() => { global.fetch = realFetch; });
@@ -363,5 +501,107 @@ describe('the Graph calls are read-only and cover live and archived ads', () => 
       ? { status: 500, body: { error: { message: 'An unknown error occurred', code: 1 } } }
       : { body: { data: [] } }));
     await expect(new MetaGraphService().adsInAccount('act_1', 'tok', 1000)).rejects.toThrow('An unknown error occurred');
+  });
+
+  describe("Meta refusing an Advantage+ ad's specs (subcode 2446211) no longer hides the whole account", () => {
+    // Meta's own words, as seen on the live server on 2026-10-21.
+    const DOF = { status: 400, body: { error: {
+      message: 'Invalid parameter', code: 100, error_subcode: 2446211,
+      error_user_title: 'First DoF value should match object story spec field',
+    } } };
+    const lead = (id: string, creative: string, status = 'ACTIVE') => ({
+      id, effective_status: status, campaign: { id: `c${id}`, objective: 'OUTCOME_LEADS' }, creative: { id: creative },
+    });
+    const specsFor = (formId: string) => ({ object_story_spec: leadCreative(formId).object_story_spec });
+    const withSpecs = (u: URL) => (u.searchParams.get('fields') ?? '').includes('creative{object_story_spec');
+
+    it("reads the ads without specs, then each lead ad's creative by id, and the form is found", async () => {
+      const seen = stub((u) => {
+        if (u.pathname.endsWith('/ads')) {
+          if (withSpecs(u)) return DOF;
+          if (u.searchParams.has('effective_status')) return { body: { data: [] } };
+          return { body: { data: [
+            lead('1', 'cr1'), lead('2', 'cr2', 'PAUSED'),
+            { id: '3', effective_status: 'ACTIVE', campaign: { id: 'c3', objective: 'OUTCOME_TRAFFIC' }, creative: { id: 'cr3' } },
+          ] } };
+        }
+        if (u.searchParams.has('ids')) {
+          return { body: { cr1: { id: 'cr1', ...specsFor(FORM_A) }, cr2: { id: 'cr2', ...specsFor(FORM_B) } } };
+        }
+        return { status: 500, body: { error: { message: 'unexpected', code: 1 } } };
+      });
+      const res = await new MetaGraphService().adsInAccount('act_1', 'tok', 1000);
+      expect(res.archivedIncluded).toBe(true);
+      const byId = Object.fromEntries(res.ads.map((a) => [a.id, formIdsInCreative(a.creative)]));
+      expect(byId).toEqual({ 1: [FORM_A], 2: [FORM_B], 3: [] });
+      // Only lead ads are looked up, in one read, and every call is a GET with the token in the header.
+      const lookups = seen.filter((x) => x.url.searchParams.has('ids'));
+      expect(lookups).toHaveLength(1);
+      expect(lookups[0].url.searchParams.get('ids')!.split(',').sort()).toEqual(['cr1', 'cr2']);
+      expect(seen.every((x) => x.method === 'GET' && x.auth === 'Bearer tok' && !x.url.search.includes('access_token'))).toBe(true);
+    });
+
+    it('a refused batch is read one creative at a time; a refused pair, one spec at a time; the unreadable one names no form', async () => {
+      stub((u) => {
+        if (u.pathname.endsWith('/ads')) {
+          if (withSpecs(u)) return DOF;
+          if (u.searchParams.has('effective_status')) return { body: { data: [] } };
+          return { body: { data: [lead('1', 'cr1'), lead('2', 'cr2'), lead('3', 'cr3')] } };
+        }
+        const ids = u.searchParams.get('ids') ?? '';
+        const fields = u.searchParams.get('fields');
+        if (ids.includes(',')) return DOF;                                     // the batch
+        if (ids === 'cr1') return { body: { cr1: { id: 'cr1', ...specsFor(FORM_A) } } };
+        if (ids === 'cr2') {                                                   // only asset_feed_spec readable
+          if (fields === 'asset_feed_spec') return { body: { cr2: { id: 'cr2', asset_feed_spec: { call_to_actions: [{ value: { lead_gen_form_id: FORM_B } }] } } } };
+          return DOF;
+        }
+        return DOF;                                                            // cr3: nothing readable
+      });
+      const res = await new MetaGraphService().adsInAccount('act_1', 'tok', 1000);
+      const byId = Object.fromEntries(res.ads.map((a) => [a.id, formIdsInCreative(a.creative)]));
+      expect(byId).toEqual({ 1: [FORM_A], 2: [FORM_B], 3: [] });
+    });
+
+    it('the same refusal on the archived read is handled the same way, not reported as "archived refused"', async () => {
+      stub((u) => {
+        if (u.pathname.endsWith('/ads')) {
+          if (withSpecs(u)) return DOF;
+          return { body: { data: u.searchParams.has('effective_status') ? [lead('9', 'cr9', 'ARCHIVED')] : [] } };
+        }
+        return { body: { cr9: { id: 'cr9', ...specsFor(FORM_C) } } };
+      });
+      const res = await new MetaGraphService().adsInAccount('act_1', 'tok', 1000);
+      expect(res.archivedIncluded).toBe(true);
+      expect(formIdsInCreative(res.ads[0].creative)).toEqual([FORM_C]);
+    });
+
+    it('any other failure while looking up creatives is not swallowed', async () => {
+      stub((u) => {
+        if (u.pathname.endsWith('/ads')) return withSpecs(u) ? DOF : { body: { data: [lead('1', 'cr1')] } };
+        return { status: 500, body: { error: { message: 'An unknown error occurred', code: 1 } } };
+      });
+      await expect(new MetaGraphService().adsInAccount('act_1', 'tok', 1000)).rejects.toThrow('An unknown error occurred');
+    });
+
+    it('end to end: the account is read, and a form whose ad is running is Active', async () => {
+      stub((u) => {
+        if (u.pathname.endsWith('/me/adaccounts')) return { body: { data: [{ id: 'act_1', name: 'A', account_status: 1 }] } };
+        if (u.pathname.endsWith('/ads')) {
+          if (withSpecs(u)) return DOF;
+          return { body: { data: u.searchParams.has('effective_status') ? [] : [lead('1', 'cr1'), lead('2', 'cr2', 'PAUSED')] } };
+        }
+        return { body: { cr1: { id: 'cr1', ...specsFor(FORM_A) }, cr2: { id: 'cr2', ...specsFor(FORM_B) } } };
+      });
+      const connections = {
+        find: jest.fn(async () => ({ id: 1, token: 'tok', connected_at: new Date('2026-10-01T00:00:00Z'), pages: [] })),
+        meta: jest.fn(async () => ({ granted_scopes: 'ads_read' })),
+      } as unknown as MetaConnectionService;
+      const budget = { consume: jest.fn(async () => ({ allowed: true, spent: 1, limit: 600, resetInSeconds: 120 })) } as unknown as MetaApiBudgetService;
+      const scan = await new MetaAdStatusService(connections, new MetaGraphService(), budget).scanFor(7, true);
+      expect(scan.accounts_failed).toEqual([]);
+      expect(formStatus(scan, FORM_A).state).toBe('enabled');
+      expect(formStatus(scan, FORM_B).state).toBe('not_enabled');
+    });
   });
 });

@@ -154,11 +154,12 @@ describe('what a Documentation user may change on a deal', () => {
    * TYPE AND STATUS ARE THE ONLY BASIC INFO FIELDS THIS ROLE WRITES, since 2026-10-13 (commit
    * "default notice dates and allow type and status edits"). Price, Deposit and Closing Date are
    * requested for Super Admin approval instead. Kept as a named set so that adding one is an
-   * explicit, visible decision rather than a loosened loop.
+   * explicit, visible decision rather than a loosened loop. Agent Name and Property Address were
+   * added on 2026-10-19 at the brokerage's request.
    */
-  const DOCUMENTATION_BASIC_INFO_EXCEPTIONS = new Set<string>(['type', 'statuses']);
+  const DOCUMENTATION_BASIC_INFO_EXCEPTIONS = new Set<string>(['type', 'statuses', 'agent', 'property']);
 
-  it(`NO BASIC INFO FIELD BUT TYPE AND STATUS — checked against the card's own map`, () => {
+  it(`NO BASIC INFO FIELD BUT TYPE, STATUS, AGENT AND ADDRESS — checked against the card's own map`, () => {
     /*
      * Driven off `BASIC_INFO_FIELDS` rather than a list repeated here. A field added to the Basic
      * Info card is added to that set, and this fails until it is withheld from the role too —
@@ -182,8 +183,15 @@ describe('what a Documentation user may change on a deal', () => {
   it('THE REST OF BASIC INFO IS STILL WITHHELD, named one by one', () => {
     // Spelled out rather than inferred, because this is the list somebody will want to read when
     // they ask what the 2026-10-13 change did and did not open up.
-    for (const k of ['agent', 'property', 'offer_date', 'closing_date']) {
+    for (const k of ['offer_date', 'closing_date']) {
       expect([k, DOCUMENTATION_EDITABLE.has(k)]).toEqual([k, false]);
+    }
+  });
+
+  it('AGENT NAME AND PROPERTY ADDRESS are this role\'s to write, since 2026-10-19', () => {
+    for (const k of ['agent', 'property']) {
+      expect(BASIC_INFO_FIELDS.has(k)).toBe(true);
+      expect(DOCUMENTATION_EDITABLE.has(k)).toBe(true);
     }
   });
 
@@ -195,10 +203,14 @@ describe('what a Documentation user may change on a deal', () => {
     }
   });
 
-  it(`the rest of the coordinator's job is untouched — conditions, status, clients, brokerage, builder`, () => {
-    for (const k of ['clients', 'brokerage', 'conditions', 'conditional_offer', 'inter_board_enabled', 'inter_board_listings', 'builder', 'precon_listing_type']) {
+  it(`the rest of the coordinator's job is untouched — conditions, status, builder`, () => {
+    for (const k of ['conditions', 'conditional_offer', 'inter_board_enabled', 'inter_board_listings', 'builder', 'precon_listing_type']) {
       expect(DOCUMENTATION_EDITABLE.has(k)).toBe(true);
     }
+  });
+
+  it('BROKERAGE AND CLIENT INFORMATION change by approval since 2026-10-22, so a direct save drops them', () => {
+    for (const k of ['clients', 'brokerage']) expect([k, DOCUMENTATION_EDITABLE.has(k)]).toEqual([k, false]);
   });
 
   it('never money, team, admin, lawyer or validation', () => {
@@ -252,8 +264,13 @@ describe('Agent Payment Readiness: what a Documentation save keeps', () => {
 });
 
 describe('what an Accounting user may NOT change on a deal', () => {
-  it(`EVERY BASIC INFO FIELD is locked — checked against the card's own map`, () => {
-    for (const k of BASIC_INFO_FIELDS) expect([k, ACCOUNTING_LOCKED.has(k)]).toEqual([k, true]);
+  it(`BASIC INFO IS LOCKED but for Type, Status, Agent Name and Address (2026-10-19) — checked against the card's own map`, () => {
+    const editable = new Set(['type', 'statuses', 'agent', 'property']);
+    for (const k of BASIC_INFO_FIELDS) expect([k, ACCOUNTING_LOCKED.has(k)]).toEqual([k, !editable.has(k)]);
+  });
+
+  it('PRICE, DEPOSIT AND CLOSING DATE stay locked — this role requests them for approval', () => {
+    for (const k of ['price', 'deposit', 'closing_date', 'offer_date']) expect([k, ACCOUNTING_LOCKED.has(k)]).toEqual([k, true]);
   });
 
   it(`THE FINANCIAL PANEL'S FIGURES are locked, for every deal type`, () => {
@@ -265,10 +282,14 @@ describe('what an Accounting user may NOT change on a deal', () => {
     }
   });
 
-  it(`THE REST OF THE ROLE'S WORK IS NOT — status, payments, adjustments, admin, team, terms, clients`, () => {
+  it(`THE REST OF THE ROLE'S WORK IS NOT — status, payments, adjustments, admin, team, terms, conditions`, () => {
     for (const k of ['comm_status', 'comm_paid_status', 'payment_type', 'adjustments', 'admin_activities', 'team',
-      'precon_terms', 'precon_term_count', 'clients', 'conditions', 'brokerage', 'activity_tracker']) {
+      'precon_terms', 'precon_term_count', 'conditions', 'activity_tracker']) {
       expect([k, ACCOUNTING_LOCKED.has(k)]).toEqual([k, false]);
     }
+  });
+
+  it('BROKERAGE AND CLIENT INFORMATION, and the MLS number, change by approval (2026-10-22)', () => {
+    for (const k of ['clients', 'brokerage', 'mls_num']) expect([k, ACCOUNTING_LOCKED.has(k)]).toEqual([k, true]);
   });
 });

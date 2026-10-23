@@ -2,7 +2,7 @@ import { ForbiddenException, Injectable, Logger, NotFoundException } from '@nest
 import { PrismaService } from '../prisma/prisma.service';
 import { MetaConnectionService } from '../meta/meta-connection.service';
 import { LeadTransferService } from '../leads/lead-transfer.service';
-import { isSuperAdmin } from '../core/authz';
+import { hasUsersFullAccess } from './team-lead';
 import type { AuthUserRecord } from '../auth/auth.types';
 
 export interface OffboardingEffect {
@@ -310,7 +310,7 @@ export class OffboardingService {
    * rather than to a screen permission an administrator could grant themselves.
    */
   private assertMaySee(actor: AuthUserRecord | null): void {
-    if (!isSuperAdmin(actor)) {
+    if (!hasUsersFullAccess(actor)) {
       throw new ForbiddenException({
         message: 'Only a Super Admin can review what a departing person still holds.',
       });

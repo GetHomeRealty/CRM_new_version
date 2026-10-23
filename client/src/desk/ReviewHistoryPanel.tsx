@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type CSSProperties } from 'react';
 import { approveEditRequest, exportReviewHistory, listTransactionReviews, rejectEditRequest, type ReviewHistoryQuery, type TransactionReview } from '../lib/api';
 import type { EditRequest } from '../types/transaction';
 import ReviewThread from './ReviewThread';
 import { apiErrorMessage } from '../lib/apiError';
 import { useToast } from './toast';
 import Icon from '../ui/Icon';
+import { dayMonthYear } from './DateBox';
 
 /**
  * The review history of one deal — every decision the office made about an agent's change, and what
@@ -269,7 +270,7 @@ function PendingCommissionApprovals({
     setError('');
     try {
       await (accept ? approveEditRequest(req.id) : rejectEditRequest(req.id));
-      const what = req.scope === 'closing_date' ? 'Closing date change' : 'Commission change';
+      const what = SCOPE_WORDS[req.scope ?? ''] ?? 'Commission change';
       toast(accept ? `${what} approved and applied.` : `${what} rejected.`, 'ok');
       // Both the request and the history move on a decision, so the caller reloads both.
       await onDecided();
@@ -301,18 +302,21 @@ function PendingCommissionApprovals({
           </div>
           {r.reason && <div style={{ fontSize: 12.5, marginTop: 4 }}>“{r.reason}”</div>}
 
-          <table className="tbl" style={{ marginTop: 8 }}>
-            <thead><tr><th>Field</th><th>Current</th><th>Requested</th></tr></thead>
-            <tbody>
-              {commissionRows(r).map((row) => (
-                <tr key={row.label}>
-                  <td>{row.label}</td>
-                  <td data-testid={`req-${r.id}-current`}>{row.from}</td>
-                  <td data-testid={`req-${r.id}-proposed`}><strong>{row.to}</strong></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          {/* Explicit cell padding (2026-10-22): the three columns ran together on a narrow card. */}
+          <div style={{ overflowX: 'auto' }}>
+            <table className="tbl" style={{ marginTop: 8, borderCollapse: 'separate', borderSpacing: 0 }}>
+              <thead><tr>{['Field', 'Current', 'Requested'].map((h) => <th key={h} style={REQ_CELL}>{h}</th>)}</tr></thead>
+              <tbody>
+                {commissionRows(r).map((row) => (
+                  <tr key={row.label}>
+                    <td style={REQ_CELL}>{row.label}</td>
+                    <td style={REQ_CELL} data-testid={`req-${r.id}-current`}>{row.from}</td>
+                    <td style={REQ_CELL} data-testid={`req-${r.id}-proposed`}><strong>{row.to}</strong></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
 
           {error && <p className="help bad" role="alert" style={{ margin: '6px 0 0' }}>{error}</p>}
 
@@ -335,16 +339,54 @@ function PendingCommissionApprovals({
   );
 }
 
+/** What the toast calls a decided request, by its scope. */
+const SCOPE_WORDS: Record<string, string> = {
+  closing_date: 'Closing date change',
+  offer_date: 'Offer date change',
+  mls_num: 'MLS number change',
+  brokerage: 'Brokerage change',
+  clients: 'Client change',
+};
+
+/** The brokerage card's fields, in the order the card shows them. */
+const BROKERAGE_LABELS: [string, string][] = [
+  ['name', 'Brokerage Name'], ['agents', 'Agent Name(s)'], ['address', 'Brokerage Address'], ['email', 'Brokerage Email'],
+  ['invoice_email', 'Invoice Email'], ['agent_email', 'Agent Email'], ['phone', 'Phone Number'],
+];
+
+/** Each cell of the request table: room between the columns, and no squeezing of a date or name. */
+const REQ_CELL: CSSProperties = { padding: '6px 28px 6px 0', whiteSpace: 'nowrap', textAlign: 'left' };
+
+/** Date keys a request can carry; shown as "21-October-2026" (as Basic Info shows them) rather than 2026-10-21. */
+const DATE_KEYS = new Set(['closing_date', 'offer_date']);
+const longDate = (v: unknown): string => (v === null || v === undefined || v === '' ? '—' : dayMonthYear(String(v)));
+
 /** Human labels for the keys a commission proposal can carry. */
 const COMMISSION_LABELS: Record<string, string> = {
   price: 'Price',
   deposit: 'Deposit',
   closing_date: 'Closing Date',
+  offer_date: 'Offer Date',
   comm_pct: 'Commission %',
   comm_amt: 'Commission Amount',
   precon_comm_pct: 'Commission %',
   precon_comm_amt_manual: 'Commission Amount',
   precon_comm_bonus: 'Bonus',
+  // A Listing deal's own commission figures (2026-10-22).
+  mls_num: 'MLS #',
+  comm_adjust_enabled: 'Commission Adjustment',
+  comm_adjust_before: 'Adjustment (Before HST)',
+  comm_adjust_after: 'Adjustment (After HST)',
+  listing_comm_pct: 'Listing Commission %',
+  listing_comm_flat: 'Listing Commission Amount',
+  coop_comm_pct: 'Co-op Commission %',
+  coop_comm_flat: 'Co-op Commission Amount',
+  listing_adj_enabled: 'Listing Comm Adjustment',
+  listing_adj_before: 'Listing Adjustment (Before HST)',
+  listing_adj_after: 'Listing Adjustment (After HST)',
+  coop_adj_enabled: 'Co-op Comm Adjustment',
+  coop_adj_before: 'Co-op Adjustment (Before HST)',
+  coop_adj_after: 'Co-op Adjustment (After HST)',
 };
 
 /**
@@ -356,7 +398,7 @@ const COMMISSION_LABELS: Record<string, string> = {
 function commissionRows(r: EditRequest): { label: string; from: string; to: string }[] {
   const proposed = (r.proposed ?? {}) as Record<string, unknown>;
   const baseline = (r.baseline ?? {}) as Record<string, unknown>;
-  const show = (v: unknown): string => (v === null || v === undefined || v === '' ? '—' : String(v));
+  const show = (v: unknown): string => (v === null || v === undefined || v === '' ? '—' : typeof v === 'boolean' ? (v ? 'Yes' : 'No') : String(v));
   const out: { label: string; from: string; to: string }[] = [];
 
   for (const [k, v] of Object.entries(proposed)) {
@@ -380,8 +422,28 @@ function commissionRows(r: EditRequest): { label: string; from: string; to: stri
             from: show(before[f]), to: show(t[f]) });
         }
       }
+    } else if (k === 'brokerage') {
+      // One row per field that changes; agents read as one comma-separated list.
+      const was = (baseline.brokerage ?? {}) as Record<string, unknown>;
+      const now = (v ?? {}) as Record<string, unknown>;
+      const text = (x: unknown): string => (Array.isArray(x) ? (x.length ? x.join(', ') : '—') : show(x));
+      for (const [f, label] of BROKERAGE_LABELS) {
+        if (text(was[f]) !== text(now[f])) out.push({ label, from: text(was[f]), to: text(now[f]) });
+      }
+    } else if (k === 'clients') {
+      // Matched by position, as the card lists them; an added or removed client shows against '—'.
+      const was = (baseline.clients ?? []) as Record<string, unknown>[];
+      const now = (v ?? []) as Record<string, unknown>[];
+      for (let i = 0; i < Math.max(was.length, now.length); i += 1) {
+        for (const [f, label] of [['name', 'Name'], ['email', 'Email'], ['phone', 'Phone']] as const) {
+          const from = show(was[i]?.[f]);
+          const to = show(now[i]?.[f]);
+          if (from !== to) out.push({ label: `Client ${i + 1} ${label}`, from, to });
+        }
+      }
     } else {
-      out.push({ label: COMMISSION_LABELS[k] ?? k, from: show(baseline[k]), to: show(v) });
+      const fmt = DATE_KEYS.has(k) ? longDate : show;
+      out.push({ label: COMMISSION_LABELS[k] ?? k, from: fmt(baseline[k]), to: fmt(v) });
     }
   }
   return out;

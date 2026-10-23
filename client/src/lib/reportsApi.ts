@@ -1,3 +1,4 @@
+import type { AxiosRequestConfig } from 'axios';
 import api from './axios';
 import { filenameFromDisposition, saveBlob } from './download';
 import type {
@@ -45,3 +46,22 @@ export async function exportReport(type: string, format: 'xlsx' | 'pdf', body: R
  */
 export const saveReportRemark = (transactionId: number, field: 'validation_comments' | 'accounting_remarks', text: string): Promise<{ value: string | null }> =>
   api.put<{ value: string | null }>(`/api/reports/pending-payments/${transactionId}/remarks`, { field, text }).then((r) => r.data);
+
+/* ---- Pending Payments: the uploaded Payment Sheet ---- */
+export interface PaySheetInfo { count: number; uploaded_at: string | null; uploaded_by: string | null }
+export const paySheetInfo = (): Promise<PaySheetInfo> =>
+  api.get<PaySheetInfo>('/api/reports/pending-payments/sheet').then((r) => r.data);
+/** Replace the whole sheet with this .xlsx (the template's columns). */
+export async function uploadPaySheet(file: File): Promise<{ count: number }> {
+  const form = new FormData();
+  form.append('file', file);
+  // Content-Type left unset so the browser writes the multipart boundary (see MULTIPART in api.ts).
+  return api.post<{ count: number }>('/api/reports/pending-payments/sheet', form, { headers: { 'Content-Type': undefined } } as unknown as AxiosRequestConfig).then((r) => r.data);
+}
+export const removePaySheet = (): Promise<{ count: number }> =>
+  api.delete<{ count: number }>('/api/reports/pending-payments/sheet').then((r) => r.data);
+/** The template, filled with the sheet as it stands — edit it and upload it back. */
+export async function downloadPaySheet(): Promise<void> {
+  const res = await api.get('/api/reports/pending-payments/sheet/template', { responseType: 'blob' });
+  saveBlob(res.data as Blob, filenameFromDisposition(res.headers, 'Pay Sheet.xlsx'), 60_000);
+}

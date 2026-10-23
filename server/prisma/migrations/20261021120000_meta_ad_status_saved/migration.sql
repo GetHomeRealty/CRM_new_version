@@ -1,0 +1,11 @@
+-- KEEP THE LAST META AD-STATUS CHECK (brokerage request, 2026-10-21: "show the active status
+-- immediately whenever I open Meta").
+--
+-- The check reads every ad in every ad account from Meta, which takes a while. It was remembered
+-- in memory only, so every deploy or restart emptied it and the next open of the Meta screen waited
+-- for the whole read again. The last check is now kept on the person's own connection row, shown at
+-- once, and refreshed behind it.
+--
+-- ADDITIVE ONLY: one nullable column on an existing table, so the application keeps the access it
+-- already has to that table and needs no new grant. IF NOT EXISTS so a re-run is harmless.
+ALTER TABLE "meta_connections" ADD COLUMN IF NOT EXISTS "ad_status_scan" JSONB;

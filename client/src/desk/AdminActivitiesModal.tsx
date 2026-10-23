@@ -1,14 +1,13 @@
 import { useState, type CSSProperties } from 'react';
 import Icon from '../ui/Icon';
 import { updateTransaction } from '../lib/api';
-import { batchNo, t4aYear, isListingType, isPreconType } from './format';
+import { batchNo, t4aYear, isListingType, isPreconType, roleLabel } from './format';
 import { useToast } from './toast';
 import { apiErrorMessage } from '../lib/apiError';
 import SavedBadge from './SavedBadge';
 import ConfirmDialog, { useConfirm } from './ConfirmDialog';
 import { useAuth } from '../context/AuthContext';
 import MoneyInput from './MoneyInput';
-import { sentStatusLabel } from './invoiceStatus';
 import type {
   AdminDeposit, AdminNote, AgentPayment, CoopInvoice, LawyerPayment, PaidClient,
   PaidLawyer, RecvLawyer, TaCta, TeamMemberData, Transaction,
@@ -129,6 +128,20 @@ export default function AdminActivitiesModal({ open, onClose, transactionId, txn
   const invAdmin = txn.invoice_admin || {};
   const invByTerm = invAdmin.by_term || {};
   const [termFilter, setTermFilter] = useState<string>('All');
+  /*
+   * CTA TO BA OPENS ON "+ ADD TRANSFER", like Agent Commission Paid (brokerage request, 2026-10-22).
+   * Every agent still carries the stored default row (No, no date), because removing it would put a
+   * "CTA to BA" entry in the Recycle Bin on every save of an older deal. It is only HIDDEN until the
+   * button is pressed; a row with anything in it always shows. Keyed by agent, or "term:agent".
+   */
+  const [ctaOpen, setCtaOpen] = useState<Record<string, boolean>>({});
+  const isBlankCta = (c: { cta?: string; date?: string; batch_no?: string }) => (c.cta || 'No') === 'No' && !c.date && !c.batch_no;
+  const ctaVisible = (key: string, c: { cta?: string; date?: string; batch_no?: string }) => !!ctaOpen[key] || !isBlankCta(c);
+  /** Reveal a hidden blank row first; only add a new one once everything is showing. */
+  const onAddTransfer = (key: string, rows: { cta?: string; date?: string; batch_no?: string }[], add: () => void) => {
+    if (!ctaOpen[key] && rows.some(isBlankCta)) setCtaOpen((o) => ({ ...o, [key]: true }));
+    else add();
+  };
 
   const [form, setForm] = useState<AdminForm>(() => {
     const a = txn.admin_activities || {};
@@ -316,9 +329,9 @@ export default function AdminActivitiesModal({ open, onClose, transactionId, txn
                 <div className="help" style={{ marginTop: -4, marginBottom: 8 }}>Auto-filled from the linked term invoice — read-only.</div>
                 <div className="g4">
                   {/* TD-048 — "Invoice Status" is the invoice's own word, the same one the invoice
-                      list shows; whether it has gone out is a separate field with its own label. */}
+                      list shows. A separate "Invoice Sent" field sat beside it until 2026-10-22 and
+                      was removed at the brokerage's request: it repeated the status (both read Paid). */}
                   <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Invoice Status</label><input value={ia.invoice_status || '—'} readOnly style={{ background: 'var(--surface-2)' }} /></div>
-                  <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Invoice Sent</label><input value={sentStatusLabel(ia.invoice_sent_status)} readOnly style={{ background: 'var(--surface-2)' }} /></div>
                   <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Invoice Number</label><input value={ia.invoice_number || '—'} readOnly style={{ background: 'var(--surface-2)' }} /></div>
                   <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Commission Received Date</label><input value={ia.commission_received_date || '—'} readOnly style={{ background: 'var(--surface-2)' }} /></div>
                   <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Commission Received Via</label><input value={ia.commission_received_via || '—'} readOnly style={{ background: 'var(--surface-2)' }} /></div>
@@ -357,15 +370,15 @@ export default function AdminActivitiesModal({ open, onClose, transactionId, txn
                     <div className="xfer-item" key={n}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
                         <strong style={{ color: 'var(--brand)' }}>{n.toUpperCase()}</strong>
-                        <button className="btn btn-blue sm" onClick={() => addTRow(k, n, 'cta', { cta: 'No', date: '', batch_no: '' })}>+ Add Transfer</button>
+                        <button className="btn btn-blue sm" onClick={() => onAddTransfer(`${k}:${n}`, ag.cta, () => addTRow(k, n, 'cta', { cta: 'No', date: '', batch_no: '' }))}>+ Add Transfer</button>
                       </div>
-                      {ag.cta.map((c, i) => (
+                      {ag.cta.map((c, i) => (!ctaVisible(`${k}:${n}`, c) ? null : (
                         <div className="g3" key={i} style={{ alignItems: 'end', marginBottom: 6 }}>
                           <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>CTA to BA</label><select value={na(c.cta)} onChange={(e) => setTRow(k, n, 'cta', i, { cta: e.target.value })}><option>No</option><option>Yes</option><option>N/A</option></select></div>
                           <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Date</label><input type="date" value={c.date} onChange={(e) => setTRow(k, n, 'cta', i, { date: e.target.value, batch_no: batchNo(e.target.value) })} /></div>
                           <div style={{ display: 'flex', gap: 6, alignItems: 'end' }}><div className="field" style={{ marginBottom: 0, flex: 1 }}><label style={lbl}>Batch No.</label><input value={c.batch_no} readOnly style={{ background: 'var(--surface-2)' }} /></div><button className="row-rm" onClick={() => rmTRow(k, n, 'cta', i)}><Icon name="trash" size={13} /></button></div>
                         </div>
-                      ))}
+                      )))}
                     </div>
                   );
                 })}
@@ -382,12 +395,9 @@ export default function AdminActivitiesModal({ open, onClose, transactionId, txn
           <div className="modal-sub">Invoice &amp; Commission Details</div>
           <div className="help" style={{ marginTop: -4, marginBottom: 8 }}>Auto-filled from the linked invoice — read-only.</div>
           <div className="g2">
-            {/* TD-048 — the invoice's own status, then the separate question of whether it was sent. */}
+            {/* TD-048 — the invoice's own status. "Invoice Sent" was removed 2026-10-22 (it repeated it). */}
             <div className="field"><label style={lbl}>Invoice Status</label><input value={invAdmin.invoice_status || '—'} readOnly style={{ background: 'var(--surface-2)' }} /></div>
             <div className="field"><label style={lbl}>Invoice Number</label><input value={invAdmin.invoice_number || '—'} readOnly style={{ background: 'var(--surface-2)' }} /></div>
-          </div>
-          <div className="g2">
-            <div className="field"><label style={lbl}>Invoice Sent</label><input value={sentStatusLabel(invAdmin.invoice_sent_status)} readOnly style={{ background: 'var(--surface-2)' }} /></div>
           </div>
           <div className="g2">
             <div className="field"><label style={lbl}>Commission Received Date</label><input value={invAdmin.commission_received_date || '—'} readOnly style={{ background: 'var(--surface-2)' }} /></div>
@@ -528,9 +538,9 @@ export default function AdminActivitiesModal({ open, onClose, transactionId, txn
             <div className="xfer-item" key={n}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
                 <strong style={{ color: 'var(--brand)' }}>{n.toUpperCase()}</strong>
-                <button className="btn btn-blue sm" onClick={() => addRow(n, 'cta', { cta: 'No', date: '', batch_no: '' })}>+ Add Transfer</button>
+                <button className="btn btn-blue sm" onClick={() => onAddTransfer(n, a.cta, () => addRow(n, 'cta', { cta: 'No', date: '', batch_no: '' }))}>+ Add Transfer</button>
               </div>
-              {a.cta.map((c, i) => (
+              {a.cta.map((c, i) => (!ctaVisible(n, c) ? null : (
                 <div className="g3" key={i} style={{ alignItems: 'end', marginBottom: 6 }}>
                   <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>CTA to BA</label>
                     <select value={na(c.cta)} onChange={(e) => setRow(n, 'cta', i, { cta: e.target.value })}><option>No</option><option>Yes</option><option>N/A</option></select></div>
@@ -540,7 +550,7 @@ export default function AdminActivitiesModal({ open, onClose, transactionId, txn
                     <button className="row-rm" onClick={() => rmRow(n, 'cta', i)}><Icon name="trash" size={13} /></button>
                   </div>
                 </div>
-              ))}
+              )))}
             </div>
           );
         })}
@@ -553,7 +563,7 @@ export default function AdminActivitiesModal({ open, onClose, transactionId, txn
           </div>
         ))}
         <div style={{ textAlign: 'right', marginBottom: 10 }}>
-          <button className="btn primary sm" onClick={() => { const now = new Date().toISOString(); set('notes', [...form.notes, { text: '', date: now.slice(0, 10), created_at: now, author: user?.name || '', role: isSuperAdmin ? 'Super Admin' : 'Admin' }]); }}>+ Add Note</button>
+          <button className="btn primary sm" onClick={() => { const now = new Date().toISOString(); set('notes', [...form.notes, { text: '', date: now.slice(0, 10), created_at: now, author: user?.name || '', role: roleLabel(user?.role || '') || (isSuperAdmin ? 'Super Admin' : 'Admin') }]); }}>+ Add Note</button>
         </div>
         </>)}
         </>)}

@@ -21,6 +21,8 @@ interface NavItem {
   indiaOnly?: boolean;
   /** With superAdmin: shown to a Team Lead too (Users, their own Agents). */
   orTeamLead?: boolean;
+  /** With superAdmin: shown to these roles too (Users → Accounting, 2026-10-21; the API agrees). */
+  orRoles?: string[];
   /** Shown only to agents — their own personal settings, self-scoped. */
   agentOnly?: boolean;
   /**
@@ -129,7 +131,7 @@ const NAV: NavItem[] = [
   // `superAdmin` rather than the `users` screen permission, because that is what the API enforces:
   // `/api/users` is guarded by AdminGuard and never consults the grid. Driving the nav from the
   // permission produced a visible Users item that opened a page answering 403 to every request.
-  { key: 'users', label: 'Users', ico: 'users', superAdmin: true, orTeamLead: true },
+  { key: 'users', label: 'Users', ico: 'users', superAdmin: true, orTeamLead: true, orRoles: ['accounting'] },
   {
     key: 'settings', label: 'Settings', ico: 'settings',
     // Mirrors SettingsPage's own tabs, with the permissions those tabs already carried: the two
@@ -318,7 +320,7 @@ export default function DeskLayout({ area = DEFAULT_AREA }: { area?: Area }) {
     // open before is still openable, it is simply listed under the area it belongs to.
     .filter((n) => screenInArea(n.key, area))
     .filter((n) => !n.indiaOnly || user?.market === 'IN')
-    .filter((n) => (n.agentOnly ? isAgent : n.superAdmin ? (isSuperAdmin || (!!n.orTeamLead && !!user?.is_team_lead)) : can(n.key, 'view')))
+    .filter((n) => (n.agentOnly ? isAgent : n.superAdmin ? (isSuperAdmin || (!!n.orTeamLead && !!user?.is_team_lead) || !!n.orRoles?.includes(user?.role ?? '')) : can(n.key, 'view')))
     // Drop sections the user has no permission for or that belong to the other area, and flatten
     // an entry back to a plain link when only one is left — an expander that reveals a single
     // item is just a slower click.

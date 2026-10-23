@@ -22,10 +22,29 @@ export interface GraphAd {
 }
 
 /** Ad fields for the status check: the ad, its parents' own statuses and schedule, and the creative that names the form. */
-const AD_STATUS_FIELDS = 'id,name,effective_status,configured_status,'
+const AD_BASE_FIELDS = 'id,name,effective_status,configured_status,'
   + 'adset{id,name,effective_status,start_time,end_time},'
-  + 'campaign{id,name,effective_status,objective,stop_time},'
-  + 'creative{object_story_spec,asset_feed_spec}';
+  + 'campaign{id,name,effective_status,objective,stop_time},';
+const CREATIVE_SPECS = 'object_story_spec,asset_feed_spec';
+const AD_STATUS_FIELDS = `${AD_BASE_FIELDS}creative{${CREATIVE_SPECS}}`;
+/** The same ads with only the creative's id, for when Meta refuses to return the specs in the list. */
+const AD_STATUS_FIELDS_NO_SPECS = `${AD_BASE_FIELDS}creative{id}`;
+
+/** Campaign objectives whose ads can carry a lead form. */
+export const LEAD_OBJECTIVES: ReadonlySet<string> = new Set(['OUTCOME_LEADS', 'LEAD_GENERATION']);
+
+/*
+ * META CANNOT RETURN THE SPECS OF SOME ADVANTAGE+ ("degrees of freedom") ADS — error 100, subcode
+ * 2446211, "First DoF value should match object story spec field". Asked for in a list, one such ad
+ * fails the WHOLE list, so an entire ad account looked unreadable (seen live, 2026-10-21). When that
+ * happens the ads are read again without the specs, and each lead ad's creative is then read by id:
+ * 50 at a time, one at a time if a batch is refused, and each spec on its own if both together are.
+ * A creative none of that can read keeps no specs, so its ad counts as a lead ad that names no form —
+ * a stated gap, never a guess.
+ */
+const DOF_SPEC_REFUSED = 2446211;
+const isDofRefusal = (err: unknown): boolean => err instanceof GraphError && err.subcode === DOF_SPEC_REFUSED;
+const CREATIVES_PER_CALL = 50;
 /*
  * WHICH ADS AN EDGE RETURNS. Meta's "Manage Your Ad Object's Status" guide: read as an edge WITHOUT a
  * filter, `/act_{id}/ads` returns live ads only (every status but archived and deleted); archived ads
@@ -280,18 +299,30 @@ export class MetaGraphService {
    * caller must treat its coverage as incomplete; any other failure of that read is thrown too.
    */
   async adsInAccount(accountId: string, token: string, cap: number): Promise<{ ads: GraphAd[]; truncated: boolean; archivedIncluded: boolean }> {
-    const url = (archived: boolean): URL => {
+    const url = (archived: boolean, fields: string): URL => {
       const u = new URL(`${graphOrigin()}/${accountId}/ads`);
-      u.searchParams.set('fields', AD_STATUS_FIELDS);
+      u.searchParams.set('fields', fields);
       u.searchParams.set('limit', '100');
       if (archived) u.searchParams.set('effective_status', ARCHIVED_ONLY);
       return u;
     };
-    const live = await this.walk<GraphAd>(url(false), token, cap, `/${accountId}/ads`);
+    const read = async (archived: boolean): Promise<{ rows: GraphAd[]; truncated: boolean }> => {
+      const label = `/${accountId}/ads${archived ? ' (archived)' : ''}`;
+      try {
+        return await this.walk<GraphAd>(url(archived, AD_STATUS_FIELDS), token, cap, label);
+      } catch (err) {
+        if (!isDofRefusal(err)) throw err;
+        // See DOF_SPEC_REFUSED: the ads without their specs, then each lead ad's creative by id.
+        const res = await this.walk<GraphAd>(url(archived, AD_STATUS_FIELDS_NO_SPECS), token, cap, `${label} (without specs)`);
+        await this.addCreativeSpecs(res.rows, token);
+        return res;
+      }
+    };
+    const live = await read(false);
     let archived: { rows: GraphAd[]; truncated: boolean } = { rows: [], truncated: false };
     let archivedIncluded = true;
     try {
-      archived = await this.walk<GraphAd>(url(true), token, cap, `/${accountId}/ads (archived)`);
+      archived = await read(true);
     } catch (err) {
       if (!(err instanceof GraphError) || err.code !== 100) throw err;
       archivedIncluded = false;
@@ -299,6 +330,58 @@ export class MetaGraphService {
     const seen = new Set<string>();
     const ads = [...live.rows, ...archived.rows].filter((a) => (seen.has(a.id) ? false : (seen.add(a.id), true)));
     return { ads, truncated: live.truncated || archived.truncated, archivedIncluded };
+  }
+
+  /**
+   * Put each lead ad's creative specs back on it, read by creative id — the fallback for
+   * DOF_SPEC_REFUSED. Only ads in lead campaigns are looked up: only they can name a form. READ ONLY.
+   */
+  private async addCreativeSpecs(ads: GraphAd[], token: string): Promise<void> {
+    const creativeId = (a: GraphAd): string => String((a.creative as { id?: unknown } | undefined)?.id ?? '');
+    const ids = [...new Set(ads
+      .filter((a) => LEAD_OBJECTIVES.has(String(a.campaign?.objective ?? '').toUpperCase()))
+      .map(creativeId).filter(Boolean))];
+    const specs = new Map<string, Record<string, unknown>>();
+    for (let i = 0; i < ids.length; i += CREATIVES_PER_CALL) {
+      const chunk = ids.slice(i, i + CREATIVES_PER_CALL);
+      try {
+        const res = await this.creativesById(chunk, CREATIVE_SPECS, token);
+        for (const id of chunk) if (res[id]) specs.set(id, res[id]);
+      } catch (err) {
+        if (!isDofRefusal(err)) throw err;
+        for (const id of chunk) specs.set(id, await this.oneCreativeSpecs(id, token));
+      }
+    }
+    for (const a of ads) {
+      const found = specs.get(creativeId(a));
+      if (found) a.creative = { ...found, id: creativeId(a) };
+    }
+  }
+
+  /** One creative's specs: both together, or each on its own when Meta refuses the pair. */
+  private async oneCreativeSpecs(id: string, token: string): Promise<Record<string, unknown>> {
+    try {
+      return (await this.creativesById([id], CREATIVE_SPECS, token))[id] ?? {};
+    } catch (err) {
+      if (!isDofRefusal(err)) throw err;
+    }
+    const merged: Record<string, unknown> = {};
+    for (const field of CREATIVE_SPECS.split(',')) {
+      try {
+        Object.assign(merged, (await this.creativesById([id], field, token))[id] ?? {});
+      } catch (err) {
+        if (!isDofRefusal(err)) throw err;
+      }
+    }
+    return merged;
+  }
+
+  /** `GET /?ids=…&fields=…` — several creatives in one read, keyed by id. */
+  private creativesById(ids: string[], fields: string, token: string): Promise<Record<string, Record<string, unknown>>> {
+    const u = new URL(`${graphOrigin()}/`);
+    u.searchParams.set('ids', ids.join(','));
+    u.searchParams.set('fields', fields);
+    return this.fetchJson(u, `Graph request failed: creatives (${fields})`, { Authorization: `Bearer ${token}` });
   }
 
   /** Follow Graph's `next` cursor until it runs out or `cap` rows are read. Same guard as `walkLeads`. */

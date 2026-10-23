@@ -511,7 +511,7 @@ export class ReportExportService {
     });
 
     // grand total under a section-grouped report
-    if (p.sections?.length) { y += 6; drawTotals(blocks[blocks.length - 1], p.totals, p.totals.count ?? p.rows.length, 'Total pending'); }
+    if (p.sections?.length && !p.noGrandTotal) { y += 6; drawTotals(blocks[blocks.length - 1], p.totals, p.totals.count ?? p.rows.length, 'Total pending'); }
 
     const range = doc.bufferedPageRange();
     const stamp = this.footerLeft(p);
@@ -609,7 +609,7 @@ export class ReportExportService {
       }
       if (b.totals) addTotals(b.totals, b.totals.count ?? b.count, b.label ? `${b.label} total` : 'Totals');
     });
-    if (p.sections?.length) { ws.addRow([]); addTotals(p.totals, p.totals.count ?? p.rows.length, 'Total pending'); }
+    if (p.sections?.length && !p.noGrandTotal) { ws.addRow([]); addTotals(p.totals, p.totals.count ?? p.rows.length, 'Total pending'); }
 
     // Widths are in PDF points at 6.6 pt (about 3.3 pt a character); the same characters fit the cell.
     p.columns.forEach((c, i) => { ws.getColumn(i + 1).width = Math.max(6, Math.round((c.width ?? c.label.length * 3.3) / 3.3) + 2); });

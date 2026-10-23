@@ -264,12 +264,15 @@ describe('the "Invoice Sent" field speaks its own vocabulary (TD-048)', () => {
     for (const kept of ['Sent', 'Paid', 'Void']) expect(mapping[kept]).toBeUndefined();
   });
 
-  it('is used by every screen that shows the field', () => {
-    // Three render sites, and a mapping applied at two of them would be the same defect narrowed.
+  it('is no longer shown on Admin Activities or the Agent FAQ panel (2026-10-22)', () => {
+    /*
+     * The brokerage asked for the field to go: beside "Invoice Status" it repeated the same word
+     * (both read Paid). The mapping stays for any screen that shows it again; these two must not
+     * bring it back raw, or mapped, under the old label.
+     */
     for (const f of ['AdminActivitiesModal.tsx', 'AgentFaqModal.tsx']) {
       const src = read(f);
-      expect([f, src.includes('sentStatusLabel')]).toEqual([f, true]);
-      // No raw render left behind beside the mapped one.
+      expect([f, /(invAdmin|ia)\.invoice_sent_status/.test(src)]).toEqual([f, false]);
       expect([f, /invoice_sent_status \|\| '—'/.test(src)]).toEqual([f, false]);
     }
   });

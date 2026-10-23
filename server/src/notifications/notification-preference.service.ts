@@ -204,7 +204,7 @@ export const NOTIFICATION_CATEGORIES: readonly NotificationCategory[] = [
   {
     key: 'lead_assigned',
     label: 'Leads assigned to you',
-    description: 'Somebody assigns or transfers a lead to you.',
+    description: 'A lead is assigned or transferred to you, by anyone including yourself.',
     channels: { in_app: 'live', email: 'live', push: 'live' },
   },
   {
@@ -257,7 +257,7 @@ export const NOTIFICATION_CATEGORIES: readonly NotificationCategory[] = [
   {
     key: 'task_assigned',
     label: 'Tasks assigned to you',
-    description: 'Somebody assigns you a follow-up task on a lead.',
+    description: 'A follow-up task on a lead is assigned to you, by anyone including yourself.',
     channels: { in_app: 'live', email: 'live', push: 'live' },
   },
   {

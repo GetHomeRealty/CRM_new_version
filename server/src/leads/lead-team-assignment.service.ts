@@ -183,7 +183,8 @@ export class LeadTeamAssignmentService {
     if (!plan.changed) return;
     const lines = await this.history.record(lead.id, plan.before, plan.after, { id: user.id ?? null, name: user.name ?? null });
     for (const line of lines) await this.audit.record(user, 'Lead assignment changed', lead.name, line);
-    if (plan.after.assigned_to && plan.after.assigned_to !== plan.before.assigned_to && plan.after.assigned_to !== (user.id ?? null)) {
+    // Assigning yourself notifies as well — see `CrmEventNotifier.leadAssigned`.
+    if (plan.after.assigned_to && plan.after.assigned_to !== plan.before.assigned_to) {
       void this.crmEvents?.leadAssigned(
         { id: lead.id, first_name: lead.name, last_name: null, email: lead.email ?? null },
         plan.after.assigned_to, user.id ?? null, user.name,

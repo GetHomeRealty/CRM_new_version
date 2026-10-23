@@ -18,10 +18,10 @@ const lineOf = (wo: number): CommissionAmounts => ({ commission: r2(wo), hst: r2
 // and HST stay at their gross values.
 const lineLessTotal = (wo: number, deduct = 0): CommissionAmounts => ({ commission: r2(wo), hst: r2(wo * taxRate()), total: r2(wo * (1 + taxRate()) - deduct) });
 
-// Field colours: Commission/HST blue, Total green — any negative value shows red.
+// Field colours: Commission/tax blue, Total green — any negative value shows red.
 const commColor = (v: number) => (v < 0 ? 'var(--bad)' : 'var(--info)');
 const totalColor = (v: number) => (v < 0 ? 'var(--bad)' : 'var(--ok-600)');
-const cs = (v: number): CSSProperties => ({ fontWeight: 700, color: commColor(v) }); // Commission / tax style (bold, like Total)
+const cs = (v: number): CSSProperties => ({ fontWeight: 700, color: commColor(v) }); // Commission / HST style (bold, like Total)
 const pctStyle: CSSProperties = { fontWeight: 700, color: 'var(--bad)' }; // % fields: bold red
 const ts = (v: number): CSSProperties => ({ fontWeight: 700, color: totalColor(v) }); // Total style
 
@@ -114,7 +114,8 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
    * NOT WHEN THE DEAL IS DFT/NA, which blanks this whole panel for every role.
    */
   const isDocumentation = user?.role === 'documentation';
-  const docEdits = isDocumentation && !dftNA;
+  // Accounting proposes these figures the same way since 2026-10-19 (brokerage request).
+  const docEdits = (isDocumentation || user?.role === 'accounting') && !dftNA;
 
   /*
    * DOCUMENTATION CHANGES PRICE, DEPOSIT AND COMMISSION AMOUNT BY REQUEST, NOT BY SAVE.
@@ -123,8 +124,12 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
    * one approval request (scope 'commission'), and a Super Admin's approval applies them. Nothing
    * on the deal moves until then.
    */
-  type DocField = 'price' | 'deposit' | 'commAmt' | 'commPct';
-  const [docUnlock, setDocUnlock] = useState<Record<DocField, boolean>>({ price: false, deposit: false, commAmt: false, commPct: false });
+  type DocField = 'price' | 'deposit' | 'commAmt' | 'commPct' | 'listPct' | 'listFlat' | 'coopPct' | 'coopFlat' | 'commAdj';
+  const NOTHING_UNLOCKED: Record<DocField, boolean> = {
+    price: false, deposit: false, commAmt: false, commPct: false,
+    listPct: false, listFlat: false, coopPct: false, coopFlat: false, commAdj: false,
+  };
+  const [docUnlock, setDocUnlock] = useState<Record<DocField, boolean>>(NOTHING_UNLOCKED);
   const [proposeOpen, setProposeOpen] = useState(false);
   const [proposeReason, setProposeReason] = useState('');
   const [proposeBusy, setProposeBusy] = useState(false);
@@ -203,8 +208,9 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
   /** A percentage as typed — not rounded to cents, since terms like 1.443242 % are real. */
   const pctOrNull = (v: number | string | null | undefined): number | null =>
     (v === null || v === undefined || String(v).trim() === '' ? null : parseNumber(v));
-  const docChanges = (): { key: string; label: string; from: number | null; to: number | null; pct?: boolean }[] => {
-    const rows: { key: string; label: string; from: number | null; to: number | null; pct?: boolean }[] = [
+  type DocChange = { key: string; label: string; from: number | boolean | null; to: number | boolean | null; pct?: boolean; bool?: boolean };
+  const docChanges = (): DocChange[] => {
+    const rows: DocChange[] = [
       { key: 'price', label: 'Price', from: amtOrNull(txn.price ?? 0), to: amtOrNull(price) ?? 0 },
     ];
     if (!referral) rows.push({ key: 'deposit', label: 'Deposit', from: amtOrNull(txn.deposit ?? 0), to: amtOrNull(deposit) ?? 0 });
@@ -230,8 +236,56 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
         pct: true,
       });
     }
+    /*
+     * A LISTING DEAL'S OWN COMMISSION, for Accounting (2026-10-22): Listing and Co-op Commission %
+     * and Amount, keyed and valued exactly as an ordinary save sends them (`null` for an empty box,
+     * since typing a % empties the Amount and the other way round). Only what differs is sent.
+     */
+    if (acctListingEdits) {
+      rows.push(
+        { key: 'listing_comm_pct', label: 'Listing Commission %', from: pctOrNull(txn.listing_comm_pct), to: pctOrNull(listPct), pct: true },
+        { key: 'listing_comm_flat', label: 'Listing Commission Amount', from: amtOrNull(txn.listing_comm_flat), to: amtOrNull(listFlat) },
+        { key: 'coop_comm_pct', label: 'Co-op Commission %', from: pctOrNull(txn.coop_comm_pct), to: pctOrNull(coopPct), pct: true },
+        { key: 'coop_comm_flat', label: 'Co-op Commission Amount', from: amtOrNull(txn.coop_comm_flat), to: amtOrNull(coopFlat) },
+      );
+      /*
+       * The Commission Adjustment, once its pencil has been used: each side's switch and its Before
+       * / After HST figures, which a save writes as 0 while that side is off — compared the same
+       * way, so a side left alone is not sent.
+       */
+      if (docUnlock.commAdj) {
+        const side = (
+          p: 'listing' | 'coop', name: string, savedOn: boolean | null | undefined,
+          savedBefore: number | string | null | undefined, savedAfter: number | string | null | undefined,
+          on: boolean, before: number | string, after: number | string,
+        ) => {
+          rows.push(
+            { key: `${p}_adj_enabled`, label: `${name} Comm Adjustment`, from: !!savedOn, to: on, bool: true },
+            { key: `${p}_adj_before`, label: `${name} Adjustment (Before ${taxLabel()})`, from: savedOn ? (amtOrNull(savedBefore) ?? 0) : 0, to: on ? r2(parseNumber(before)) : 0 },
+            { key: `${p}_adj_after`, label: `${name} Adjustment (After ${taxLabel()})`, from: savedOn ? (amtOrNull(savedAfter) ?? 0) : 0, to: on ? r2(parseNumber(after)) : 0 },
+          );
+        };
+        side('listing', 'Listing', txn.listing_adj_enabled, txn.listing_adj_before, txn.listing_adj_after, commAdjMaster && lAdjEn, lBefore, lAfter);
+        side('coop', 'Co-op', txn.coop_adj_enabled, txn.coop_adj_before, txn.coop_adj_after, commAdjMaster && cAdjEn, cBefore, cAfter);
+      }
+    }
+    /*
+     * A Buying / Lease / Sale deal's Commission Adjustment, once its pencil has been used — keyed
+     * and valued as an ordinary save sends them (0 while it is off).
+     */
+    if (acctStdEdits && docUnlock.commAdj) {
+      const savedOn = !!txn.comm_adjust_enabled;
+      rows.push(
+        { key: 'comm_adjust_enabled', label: 'Commission Adjustment', from: savedOn, to: adjEnabled, bool: true },
+        { key: 'comm_adjust_before', label: `Adjustment (Before ${taxLabel()})`, from: savedOn ? (amtOrNull(txn.comm_adjust_before) ?? 0) : 0, to: adjEnabled ? r2(parseNumber(adjBefore)) : 0 },
+        { key: 'comm_adjust_after', label: `Adjustment (After ${taxLabel()})`, from: savedOn ? (amtOrNull(txn.comm_adjust_after) ?? 0) : 0, to: adjEnabled ? r2(parseNumber(adjAfter)) : 0 },
+      );
+    }
     return rows.filter((r) => r.from !== r.to);
   };
+  /** One side of a requested change, as the dialog shows it. */
+  const showChange = (c: DocChange, v: number | boolean | null): string =>
+    (v === null ? '—' : c.bool ? (v ? 'Yes' : 'No') : c.pct ? `${String(v)}%` : formatCurrency(Number(v)));
 
   /** Put the three fields back to the saved deal and lock them again. */
   const resetDocEdits = () => {
@@ -241,13 +295,32 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
     setCommPct(txn.comm_pct ?? (txn.comm_type === '%' ? txn.comm_value : '') ?? '');
     setMasterAmtManual(txn.precon_comm_amt_manual ?? '');
     setMasterPct(txn.precon_comm_pct ?? '');
-    setDocUnlock({ price: false, deposit: false, commAmt: false, commPct: false });
+    setListPct(txn.listing_comm_pct ?? '');
+    setListFlat(txn.listing_comm_flat ?? '');
+    setCoopPct(txn.coop_comm_pct ?? '');
+    setCoopFlat(txn.coop_comm_flat ?? '');
+    setCommAdjMaster(!!(txn.listing_adj_enabled || txn.coop_adj_enabled));
+    setLAdjEn(!!txn.listing_adj_enabled);
+    setLBefore(txn.listing_adj_before ?? 0);
+    setLAfter(txn.listing_adj_after ?? 0);
+    setCAdjEn(!!txn.coop_adj_enabled);
+    setCBefore(txn.coop_adj_before ?? 0);
+    setCAfter(txn.coop_adj_after ?? 0);
+    setAdjEnabled(!!txn.comm_adjust_enabled);
+    setAdjBefore(txn.comm_adjust_before ?? 0);
+    setAdjAfter(txn.comm_adjust_after ?? 0);
+    setDocUnlock(NOTHING_UNLOCKED);
   };
 
   const sendProposal = async () => {
     const changes = docChanges();
     if (!changes.length) { setProposeError('Change at least one value first.'); return; }
     if (!proposeReason.trim()) { setProposeError('Give a reason for the change.'); return; }
+    // The rule an ordinary save applies on a listing, so a request cannot ask for what a save refuses.
+    if (acctListingEdits) {
+      if (parseNumber(listPct) > 0 && parseNumber(listFlat) > 0) { setProposeError('Enter a Listing Commission % OR Amount, not both.'); return; }
+      if (parseNumber(coopPct) > 0 && parseNumber(coopFlat) > 0) { setProposeError('Enter a Co-op Commission % OR Amount, not both.'); return; }
+    }
     setProposeBusy(true);
     setProposeError('');
     try {
@@ -278,6 +351,19 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
   ) : null);
   /** Locked (rendered as plain text by `view-flat`) until its pencil is clicked. */
   const docLocked = (f: DocField) => !docUnlock[f] || !!pendingChangeReq;
+  /*
+   * ACCOUNTING ALSO PROPOSES A LISTING DEAL'S OWN COMMISSION (brokerage request, 2026-10-22):
+   * Listing and Co-op Commission (% and Amount) and the Commission Adjustment, each behind a pencil
+   * like Price and Deposit, sent in the same 'commission' request. Accounting only — Documentation
+   * reads these as before. `listLocked` is undefined for every other role, so the fieldset decides
+   * for them exactly as it did.
+   */
+  const acctListingEdits = docEdits && listing && user?.role === 'accounting';
+  const listPencil = (f: DocField): ReactNode => (acctListingEdits ? docPencil(f) : null);
+  const listLocked = (f: DocField): boolean | undefined => (docEdits ? (!acctListingEdits || docLocked(f)) : undefined);
+  /** The same for a Buying / Lease / Sale deal's Commission Adjustment (2026-10-22, Accounting only). */
+  const acctStdEdits = docEdits && !listing && !precon && user?.role === 'accounting';
+  const stdLocked = (f: DocField): boolean | undefined => (docEdits ? (!acctStdEdits || docLocked(f)) : undefined);
   // Agent Comm (%) and Brok Comm (%) are complementary: editing one fills the
   // other with the remaining percentage (e.g. Agent 80 → Brokerage 20).
   const setMember = (i: number, k: FinMemberKey, v: string) => setMembers((ms) => ms.map((m, idx) => {
@@ -629,7 +715,7 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
         </div>
       )}
       {/* `view-flat` renders already-disabled controls as plain text — see desk.css. */}
-      <div className={`modal xl${user?.role === 'documentation' ? ' view-flat' : ''}`}>
+      <div className={`modal xl${readsOnly ? ' view-flat' : ''}`}>
         <button className="close" onClick={onClose}><Icon name="close" size={15} /></button>
         <div className="modal-h">Financial Information {listing && <span className="pill type-res-sell" style={{ fontSize: 10 }}>Listing</span>}{precon && <span className="pill type-pre" style={{ fontSize: 10 }}>Preconstruction</span>}</div>
 
@@ -679,7 +765,7 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
         {/* NOTE: the original JS referenced an undefined `finLocked` here (a typo that
             would throw when this branch rendered); corrected to `finLock`, the clearly
             intended flag — the view-only banner hides while the finLock banner shows. */}
-        {readOnly && !dftNA && !isAgent && !isDocumentation && (!finLock || readsOnly) && (
+        {readOnly && !dftNA && !isAgent && !docEdits && (!finLock || readsOnly) && (
           <div className="card" style={{ borderLeft: '4px solid #2563eb', background: 'var(--info-bg)', marginBottom: 12 }}>
             {/* Not shown to Documentation, which has its pencils and Send Request instead. */}
             <span style={{ fontSize: 12.5, color: 'var(--info-ink)' }} data-testid="fin-readonly-banner">
@@ -761,6 +847,97 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
                 ? <div className="field" style={{ marginBottom: 0 }} />
                 : <div className="field" style={{ marginBottom: 0 }}><label>Bonus Amount {finPencil()}</label><MoneyInput value={masterBonus} onChange={(v) => setMasterBonus(v)} placeholder="0.00" disabled={readOnly || docEdits} readOnly={finLock} style={finLock ? finLockStyle : undefined} /></div>}
             </div>
+          </>
+        )}
+
+        {/*
+          A LISTING DEAL'S COMMISSION ROWS SIT IN THIS FIRST FIELDSET (moved here 2026-10-22), for the
+          reason Price and Deposit do: Accounting unlocks them by pencil, and nothing inside a disabled
+          fieldset can be re-enabled. Same order and layout as before. `listLocked` keeps every other
+          role exactly where the fieldset left them, and Documentation reading them as before.
+        */}
+        {listing && (
+          <>
+            <div className="modal-sub">Listing Commission {lb.dealType === 'Lease' && <span className="pill type-pre" style={{ fontSize: 10 }}>Lease</span>}</div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 10 }}>
+              <div className="field" style={{ marginBottom: 0 }}><label>Listing Commission % {listPencil('listPct')}</label><input value={listPct} onChange={(e) => onListPct(e.target.value)} placeholder="e.g. 2.5" style={pctStyle} disabled={listLocked('listPct')} data-testid="fin-listing-pct" /></div>
+              <div className="field" style={{ marginBottom: 0 }}><label>Listing Commission Amount {listPencil('listFlat')}</label><input value={listFlat} onChange={(e) => onListFlat(e.target.value)} placeholder="0.00" disabled={listLocked('listFlat')} data-testid="fin-listing-flat" /></div>
+              <div className="field" style={{ marginBottom: 0 }}><label>Commission</label><input readOnly style={cs(lb.listing.commission)} value={formatCurrency(lb.listing.commission)} /></div>
+              <div className="field" style={{ marginBottom: 0 }}><label>{taxLabel()}</label><input readOnly style={cs(lb.listing.hst)} value={formatCurrency(lb.listing.hst)} /></div>
+              <div className="field" style={{ marginBottom: 0 }}><label>Total</label><input readOnly style={ts(lb.listing.total)} value={formatCurrency(lb.listing.total)} /></div>
+            </div>
+            <div className="modal-sub">Co-op Commission</div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 10 }}>
+              <div className="field" style={{ marginBottom: 0 }}><label>Co-op Commission % {listPencil('coopPct')}</label><input value={coopPct} onChange={(e) => onCoopPct(e.target.value)} placeholder="e.g. 2.5" style={pctStyle} disabled={listLocked('coopPct')} data-testid="fin-coop-pct" /></div>
+              <div className="field" style={{ marginBottom: 0 }}><label>Co-op Commission Amount {listPencil('coopFlat')}</label><input value={coopFlat} onChange={(e) => onCoopFlat(e.target.value)} placeholder="0.00" disabled={listLocked('coopFlat')} data-testid="fin-coop-flat" /></div>
+              <div className="field" style={{ marginBottom: 0 }}><label>Commission</label><input readOnly style={cs(lb.coop.commission)} value={formatCurrency(lb.coop.commission)} /></div>
+              <div className="field" style={{ marginBottom: 0 }}><label>{taxLabel()}</label><input readOnly style={cs(lb.coop.hst)} value={formatCurrency(lb.coop.hst)} /></div>
+              <div className="field" style={{ marginBottom: 0 }}><label>Total</label><input readOnly style={ts(lb.coop.total)} value={formatCurrency(lb.coop.total)} /></div>
+            </div>
+            <div className="modal-sub">Total Commissions (Listing + Co-Op)</div>
+            <div className="fin-sum"><Box label="Commission" value={formatCurrency(lb.totals.commission)} /><Box label={taxLabel()} value={formatCurrency(lb.totals.hst)} /><Box label="Total" value={formatCurrency(lb.totals.total)} brand /></div>
+
+            <div className="modal-sub">Commission Adjustment</div>
+            <div className="field" style={{ maxWidth: 220 }}>
+              <label>Commission Adjustment {listPencil('commAdj')}</label>
+              <select value={commAdjMaster ? 'Yes' : 'No'} onChange={(e) => setCommAdjMaster(e.target.value === 'Yes')} disabled={listLocked('commAdj')} data-testid="fin-comm-adj"><option>No</option><option>Yes</option></select>
+            </div>
+            {commAdjMaster && (
+              <div className="g2">
+                <div style={{ background: 'var(--surface-2)', border: '1px solid var(--line)', borderRadius: 8, padding: 12 }}>
+                  <strong style={{ fontSize: 13 }}>Listing Commission Adjustment</strong>
+                  <div className="field" style={{ marginTop: 10, marginBottom: lAdjEn ? 13 : 0 }}><label>Listing Comm Adjustment</label><select value={lAdjEn ? 'Yes' : 'No'} onChange={(e) => setLAdjEn(e.target.value === 'Yes')} disabled={listLocked('commAdj')} data-testid="fin-listing-adj"><option>No</option><option>Yes</option></select></div>
+                  {lAdjEn && (
+                    <div className="g2">
+                      <SignedAdjField label={`Adjustment (Before ${taxLabel()})`} value={lBefore} onChange={(nv) => excl(nv, setLBefore, lAfter, setLAfter)} convention="add" disabled={listLocked('commAdj')} />
+                      <SignedAdjField label={`Adjustment (After ${taxLabel()})`} value={lAfter} onChange={(nv) => excl(nv, setLAfter, lBefore, setLBefore)} convention="add" disabled={listLocked('commAdj')} />
+                    </div>
+                  )}
+                </div>
+                <div style={{ background: 'var(--surface-2)', border: '1px solid var(--line)', borderRadius: 8, padding: 12 }}>
+                  <strong style={{ fontSize: 13 }}>Co-op Commission Adjustment</strong>
+                  <div className="field" style={{ marginTop: 10, marginBottom: cAdjEn ? 13 : 0 }}><label>Co-op Comm Adjustment</label><select value={cAdjEn ? 'Yes' : 'No'} onChange={(e) => setCAdjEn(e.target.value === 'Yes')} disabled={listLocked('commAdj')} data-testid="fin-coop-adj"><option>No</option><option>Yes</option></select></div>
+                  {cAdjEn && (
+                    <div className="g2">
+                      <SignedAdjField label={`Adjustment (Before ${taxLabel()})`} value={cBefore} onChange={(nv) => excl(nv, setCBefore, cAfter, setCAfter)} convention="add" disabled={listLocked('commAdj')} />
+                      <SignedAdjField label={`Adjustment (After ${taxLabel()})`} value={cAfter} onChange={(nv) => excl(nv, setCAfter, cBefore, setCBefore)} convention="add" disabled={listLocked('commAdj')} />
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </>
+        )}
+
+        {/*
+          A BUYING / LEASE / SALE DEAL'S SUMMARY AND COMMISSION ADJUSTMENT sit in this first fieldset
+          (moved here 2026-10-22) so Accounting can unlock the adjustment by pencil, as with Price.
+          Same order and layout as before; `stdLocked` keeps Documentation reading it as before, and
+          every other role is left to the fieldset exactly as it was.
+        */}
+        {!precon && !listing && (
+          <>
+            <div className="fin-sum">
+              <div className="field" style={{ marginBottom: 0 }}><label>Commission</label><input value={formatCurrency(commWoHst)} readOnly />{adjB !== 0 && <div className="help" style={{ margin: '4px 0 0' }}>{adjNote(adjB, `before ${taxLabel()}`)}</div>}</div>
+              <div className="field" style={{ marginBottom: 0 }}><label>{taxLabel()}</label><input value={formatCurrency(stdHst)} readOnly /></div>
+              <div className="field" style={{ marginBottom: 0 }}><label>Total</label><input style={ts(stdTotal)} value={formatCurrency(stdTotal)} readOnly />{adjA !== 0 && <div className="help" style={{ margin: '4px 0 0' }}>{adjNote(adjA, `after ${taxLabel()}`)}</div>}</div>
+            </div>
+
+            {/* Commission Adjustment sits on one row with its Before/After HST fields when enabled,
+                so the two adjustments read beside the toggle rather than dropping below it. */}
+            <div style={{ display: 'grid', gridTemplateColumns: adjEnabled ? '220px 1fr 1fr' : '220px', gap: 16, alignItems: 'end' }}>
+              <div className="field" style={{ marginBottom: 0 }}>
+                <label>Commission Adjustment {acctStdEdits ? docPencil('commAdj') : finPencil()}</label>
+                <select value={adjEnabled ? 'Yes' : 'No'} disabled={docEdits ? stdLocked('commAdj') : finLock} style={!docEdits && finLock ? finLockStyle : undefined} onChange={(e) => setAdjEnabled(e.target.value === 'Yes')} data-testid="fin-std-comm-adj"><option>No</option><option>Yes</option></select>
+              </div>
+              {adjEnabled && (
+                <>
+                  <SignedAdjField label={`Adjustment (Before ${taxLabel()})`} value={adjBefore} onChange={(nv) => excl(nv, setAdjBefore, adjAfter, setAdjAfter)} convention="sub" disabled={docEdits ? stdLocked('commAdj') : undefined} />
+                  <SignedAdjField label={`Adjustment (After ${taxLabel()})`} value={adjAfter} onChange={(nv) => excl(nv, setAdjAfter, adjBefore, setAdjBefore)} convention="sub" disabled={docEdits ? stdLocked('commAdj') : undefined} />
+                </>
+              )}
+            </div>
+
           </>
         )}
 
@@ -922,62 +1099,14 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
             <div className="field" style={{ maxWidth: 220 }}><label>Commission Adjustment</label><select value={adjEnabled ? 'Yes' : 'No'} onChange={(e) => setAdjEnabled(e.target.value === 'Yes')}><option>No</option><option>Yes</option></select></div>
             {adjEnabled && (
               <div className="g2">
-                <SignedAdjField label="Adjustment (Before taxRate())" value={adjBefore} onChange={(nv) => excl(nv, setAdjBefore, adjAfter, setAdjAfter)} convention="sub" />
-                <SignedAdjField label="Adjustment (After taxRate())" value={adjAfter} onChange={(nv) => excl(nv, setAdjAfter, adjBefore, setAdjBefore)} convention="sub" />
+                <SignedAdjField label={`Adjustment (Before ${taxLabel()})`} value={adjBefore} onChange={(nv) => excl(nv, setAdjBefore, adjAfter, setAdjAfter)} convention="sub" />
+                <SignedAdjField label={`Adjustment (After ${taxLabel()})`} value={adjAfter} onChange={(nv) => excl(nv, setAdjAfter, adjBefore, setAdjBefore)} convention="sub" />
               </div>
             )}
           </>
         ) : listing ? (
           <>
-            <div className="modal-sub">Listing Commission {lb.dealType === 'Lease' && <span className="pill type-pre" style={{ fontSize: 10 }}>Lease</span>}</div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 10 }}>
-              <div className="field" style={{ marginBottom: 0 }}><label>Listing Commission %</label><input value={listPct} onChange={(e) => onListPct(e.target.value)} placeholder="e.g. 2.5" style={pctStyle} /></div>
-              <div className="field" style={{ marginBottom: 0 }}><label>Listing Commission Amount</label><input value={listFlat} onChange={(e) => onListFlat(e.target.value)} placeholder="0.00" /></div>
-              <div className="field" style={{ marginBottom: 0 }}><label>Commission</label><input readOnly style={cs(lb.listing.commission)} value={formatCurrency(lb.listing.commission)} /></div>
-              <div className="field" style={{ marginBottom: 0 }}><label>{taxLabel()}</label><input readOnly style={cs(lb.listing.hst)} value={formatCurrency(lb.listing.hst)} /></div>
-              <div className="field" style={{ marginBottom: 0 }}><label>Total</label><input readOnly style={ts(lb.listing.total)} value={formatCurrency(lb.listing.total)} /></div>
-            </div>
-            <div className="modal-sub">Co-op Commission</div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 10 }}>
-              <div className="field" style={{ marginBottom: 0 }}><label>Co-op Commission %</label><input value={coopPct} onChange={(e) => onCoopPct(e.target.value)} placeholder="e.g. 2.5" style={pctStyle} /></div>
-              <div className="field" style={{ marginBottom: 0 }}><label>Co-op Commission Amount</label><input value={coopFlat} onChange={(e) => onCoopFlat(e.target.value)} placeholder="0.00" /></div>
-              <div className="field" style={{ marginBottom: 0 }}><label>Commission</label><input readOnly style={cs(lb.coop.commission)} value={formatCurrency(lb.coop.commission)} /></div>
-              <div className="field" style={{ marginBottom: 0 }}><label>{taxLabel()}</label><input readOnly style={cs(lb.coop.hst)} value={formatCurrency(lb.coop.hst)} /></div>
-              <div className="field" style={{ marginBottom: 0 }}><label>Total</label><input readOnly style={ts(lb.coop.total)} value={formatCurrency(lb.coop.total)} /></div>
-            </div>
-            <div className="modal-sub">Total Commissions (Listing + Co-Op)</div>
-            <div className="fin-sum"><Box label="Commission" value={formatCurrency(lb.totals.commission)} /><Box label={taxLabel()} value={formatCurrency(lb.totals.hst)} /><Box label="Total" value={formatCurrency(lb.totals.total)} brand /></div>
-
-            <div className="modal-sub">Commission Adjustment</div>
-            <div className="field" style={{ maxWidth: 220 }}>
-              <label>Commission Adjustment</label>
-              <select value={commAdjMaster ? 'Yes' : 'No'} onChange={(e) => setCommAdjMaster(e.target.value === 'Yes')}><option>No</option><option>Yes</option></select>
-            </div>
-            {commAdjMaster && (
-              <div className="g2">
-                <div style={{ background: 'var(--surface-2)', border: '1px solid var(--line)', borderRadius: 8, padding: 12 }}>
-                  <strong style={{ fontSize: 13 }}>Listing Commission Adjustment</strong>
-                  <div className="field" style={{ marginTop: 10, marginBottom: lAdjEn ? 13 : 0 }}><label>Listing Comm Adjustment</label><select value={lAdjEn ? 'Yes' : 'No'} onChange={(e) => setLAdjEn(e.target.value === 'Yes')}><option>No</option><option>Yes</option></select></div>
-                  {lAdjEn && (
-                    <div className="g2">
-                      <SignedAdjField label="Adjustment (Before taxRate())" value={lBefore} onChange={(nv) => excl(nv, setLBefore, lAfter, setLAfter)} convention="add" />
-                      <SignedAdjField label="Adjustment (After taxRate())" value={lAfter} onChange={(nv) => excl(nv, setLAfter, lBefore, setLBefore)} convention="add" />
-                    </div>
-                  )}
-                </div>
-                <div style={{ background: 'var(--surface-2)', border: '1px solid var(--line)', borderRadius: 8, padding: 12 }}>
-                  <strong style={{ fontSize: 13 }}>Co-op Commission Adjustment</strong>
-                  <div className="field" style={{ marginTop: 10, marginBottom: cAdjEn ? 13 : 0 }}><label>Co-op Comm Adjustment</label><select value={cAdjEn ? 'Yes' : 'No'} onChange={(e) => setCAdjEn(e.target.value === 'Yes')}><option>No</option><option>Yes</option></select></div>
-                  {cAdjEn && (
-                    <div className="g2">
-                      <SignedAdjField label="Adjustment (Before taxRate())" value={cBefore} onChange={(nv) => excl(nv, setCBefore, cAfter, setCAfter)} convention="add" />
-                      <SignedAdjField label="Adjustment (After taxRate())" value={cAfter} onChange={(nv) => excl(nv, setCAfter, cBefore, setCBefore)} convention="add" />
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-
+            {/* Listing / Co-op Commission and Commission Adjustment render in the first fieldset, above. */}
             <ReferralSections data={listRefView} />
 
             {/* Trust settlement — client payout & lawyer receivable (Deposit Held removed) */}
@@ -1018,27 +1147,7 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
           /* ---- STANDARD (live, like the original) ---- */
           /* Commission % / Amount now sit in the Price + Deposit row above. */
           <>
-            <div className="fin-sum">
-              <div className="field" style={{ marginBottom: 0 }}><label>Commission</label><input value={formatCurrency(commWoHst)} readOnly />{adjB !== 0 && <div className="help" style={{ margin: '4px 0 0' }}>{adjNote(adjB, `before ${taxLabel()}`)}</div>}</div>
-              <div className="field" style={{ marginBottom: 0 }}><label>{taxLabel()}</label><input value={formatCurrency(stdHst)} readOnly /></div>
-              <div className="field" style={{ marginBottom: 0 }}><label>Total</label><input style={ts(stdTotal)} value={formatCurrency(stdTotal)} readOnly />{adjA !== 0 && <div className="help" style={{ margin: '4px 0 0' }}>{adjNote(adjA, `after ${taxLabel()}`)}</div>}</div>
-            </div>
-
-            {/* Commission Adjustment sits on one row with its Before/After taxRate() fields when enabled,
-                so the two adjustments read beside the toggle rather than dropping below it. */}
-            <div style={{ display: 'grid', gridTemplateColumns: adjEnabled ? '220px 1fr 1fr' : '220px', gap: 16, alignItems: 'end' }}>
-              <div className="field" style={{ marginBottom: 0 }}>
-                <label>Commission Adjustment {finPencil()}</label>
-                <select value={adjEnabled ? 'Yes' : 'No'} disabled={finLock} style={finLock ? finLockStyle : undefined} onChange={(e) => setAdjEnabled(e.target.value === 'Yes')}><option>No</option><option>Yes</option></select>
-              </div>
-              {adjEnabled && (
-                <>
-                  <SignedAdjField label="Adjustment (Before taxRate())" value={adjBefore} onChange={(nv) => excl(nv, setAdjBefore, adjAfter, setAdjAfter)} convention="sub" />
-                  <SignedAdjField label="Adjustment (After taxRate())" value={adjAfter} onChange={(nv) => excl(nv, setAdjAfter, adjBefore, setAdjBefore)} convention="sub" />
-                </>
-              )}
-            </div>
-
+            {/* Commission / HST / Total and the Commission Adjustment render in the first fieldset, above. */}
             <ReferralSections data={stdRefView} />
             <AgentCommissionBlocks rows={memberRows} setMember={setMember} minBrok={{ commission: 200, hst: 26, total: 226 }} agentDefaults={agentDefaults} isLease={leaseType} hideT4A={isAgent || india} hadSavedTeam={hadSavedTeam} finLock={finLock} finPencil={finPencil} hideLocks={readsOnly} />
           </>
@@ -1105,8 +1214,8 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
                 {docChanges().map((c) => (
                   <tr key={c.key}>
                     <td>{c.label}</td>
-                    <td data-testid={`current-${c.key}`}>{c.from === null ? '—' : c.pct ? `${c.from}%` : formatCurrency(c.from)}</td>
-                    <td data-testid={`proposed-${c.key}`}><strong>{c.to === null ? '—' : c.pct ? `${c.to}%` : formatCurrency(c.to)}</strong></td>
+                    <td data-testid={`current-${c.key}`}>{showChange(c, c.from)}</td>
+                    <td data-testid={`proposed-${c.key}`}><strong>{showChange(c, c.to)}</strong></td>
                   </tr>
                 ))}
               </tbody>
@@ -1254,7 +1363,7 @@ function ReferralSections({ data }: { data: ReferralView | null }) {
           <div className="fin-sum">
             <Box label={`Commission without ${taxLabel()}`} value={formatCurrency(data.afterBroker.commission)} />
             <Box label={`${taxLabel()} (${taxPct()}%)`} value={formatCurrency(data.afterBroker.hst)} />
-            <Box label="Total Commission (With taxRate())" value={formatCurrency(data.afterBroker.total)} brand />
+            <Box label={`Total Commission (With ${taxLabel()})`} value={formatCurrency(data.afterBroker.total)} brand />
           </div>
         </>
       )}
@@ -1264,7 +1373,7 @@ function ReferralSections({ data }: { data: ReferralView | null }) {
           <div className="fin-sum">
             <Box label={`Commission Without ${taxLabel()}`} value={formatCurrency(data.afterClient.commission)} />
             <Box label={`${taxLabel()} (${taxPct()}%)`} value={formatCurrency(data.afterClient.hst)} />
-            <Box label="Total Commission (With taxRate())" value={formatCurrency(data.afterClient.total)} brand />
+            <Box label={`Total Commission (With ${taxLabel()})`} value={formatCurrency(data.afterClient.total)} brand />
           </div>
         </>
       )}
@@ -1276,7 +1385,7 @@ function ReferralSections({ data }: { data: ReferralView | null }) {
 // decreases it. The stored value is signed to match the formula convention:
 //   'sub'  → commission − value  (so "−" stores +mag, "+" stores −mag)
 //   'add'  → commission + value  (so "+" stores +mag, "−" stores −mag)
-function SignedAdjField({ label, value, onChange, convention = 'sub' }: { label: string; value: number | string; onChange: (v: number) => void; convention?: 'sub' | 'add' }) {
+function SignedAdjField({ label, value, onChange, convention = 'sub', disabled }: { label: string; value: number | string; onChange: (v: number) => void; convention?: 'sub' | 'add'; disabled?: boolean }) {
   const signOf = (n: number): string | null => (n === 0 ? null : (convention === 'sub' ? (n > 0 ? '-' : '+') : (n < 0 ? '-' : '+')));
   const [sign, setSign] = useState(signOf(parseNumber(value)) || '-');
   const [mag, setMag] = useState(() => { const n = parseNumber(value); return n === 0 ? '' : String(Math.abs(n)); });
@@ -1299,10 +1408,10 @@ function SignedAdjField({ label, value, onChange, convention = 'sub' }: { label:
       <label>{label}</label>
       <div style={{ display: 'flex', gap: 6 }}>
         <div className="seg-toggle" style={{ flex: '0 0 auto' }}>
-          <button type="button" className={`seg-btn ${sign === '+' ? 'active' : ''}`} onClick={() => pickSign('+')} title="Increase commission">+</button>
-          <button type="button" className={`seg-btn ${sign === '-' ? 'active' : ''}`} onClick={() => pickSign('-')} title="Decrease commission">−</button>
+          <button type="button" className={`seg-btn ${sign === '+' ? 'active' : ''}`} onClick={() => pickSign('+')} title="Increase commission" disabled={disabled}>+</button>
+          <button type="button" className={`seg-btn ${sign === '-' ? 'active' : ''}`} onClick={() => pickSign('-')} title="Decrease commission" disabled={disabled}>−</button>
         </div>
-        <input value={mag} onChange={(e) => onMag(e.target.value)} placeholder="0.00" style={{ flex: 1 }} />
+        <input value={mag} onChange={(e) => onMag(e.target.value)} placeholder="0.00" style={{ flex: 1 }} disabled={disabled} />
       </div>
     </div>
   );

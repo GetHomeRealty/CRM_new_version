@@ -1,4 +1,5 @@
-import { Body, Controller, Get, HttpCode, Param, ParseIntPipe, Post, Put, Res, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Param, ParseIntPipe, Post, Put, Res, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import type { Response } from 'express';
 import { AuthGuard } from '../auth/guards/auth.guard';
 import { ScreenGuard } from '../auth/guards/screen.guard';
@@ -28,6 +29,37 @@ export class ReportsController {
   @Get()
   list(): { type: string; name: string; description: string; category: string }[] {
     return this.reports.list();
+  }
+
+  /*
+   * Pending Payments: the brokerage's own Payment Sheet (payment-sheet.ts). Declared before the
+   * `:reportType` routes. Reading what is stored needs only the report; changing it — upload, remove,
+   * or downloading the filled template — is Super Admin, Admin or Accounting, checked in the service.
+   */
+  @Get('pending-payments/sheet')
+  paySheetInfo(@CurrentUser() user: AuthUserRecord): Promise<{ count: number; uploaded_at: string | null; uploaded_by: string | null }> {
+    return this.reports.paySheetInfo(user);
+  }
+
+  @Post('pending-payments/sheet')
+  @HttpCode(200)
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 5 * 1024 * 1024 } }))
+  uploadPaySheet(@CurrentUser() user: AuthUserRecord, @UploadedFile() file?: Express.Multer.File): Promise<{ count: number }> {
+    return this.reports.uploadPaySheet(user, file?.buffer);
+  }
+
+  @Delete('pending-payments/sheet')
+  removePaySheet(@CurrentUser() user: AuthUserRecord): Promise<{ count: number }> {
+    return this.reports.removePaySheet(user);
+  }
+
+  @Get('pending-payments/sheet/template')
+  async paySheetTemplate(@CurrentUser() user: AuthUserRecord, @Res() res: Response): Promise<void> {
+    const buffer = await this.reports.paySheetTemplate(user);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', contentDisposition('Pay Sheet.xlsx'));
+    res.setHeader('Content-Length', String(buffer.length));
+    res.end(buffer);
   }
 
   /**

@@ -114,18 +114,18 @@ test.describe('everything else on the panel is still refused', () => {
     });
   });
 
-  test('CANNOT CHANGE THE REST OF BASIC INFO — only Type and Status are written by this role', async ({ page }) => {
-    // Agent, Property, the dates, Price and Deposit are not written directly by this role.
-    // (Type and Status are, since 2026-10-13 — so this sends neither.)
+  test('CANNOT CHANGE THE REST OF BASIC INFO — the dates, Price and Deposit are not written directly', async ({ page }) => {
+    // Type and Status (2026-10-13) and Agent Name and Property Address (2026-10-19) ARE written by
+    // this role, so this sends none of them.
     await asDocumentation(page, async (id) => {
       const before = await readDeal(page, id);
       await apiSend(page, 'PUT', `/api/transactions/${id}`, {
         price: 530000,
-        property: 'ZZ-DOCPRICE SHOULD NOT CHANGE',
+        offer_date: '2026-09-15',
       });
       const after = await readDeal(page, id);
       expect(num(after.price)).toBe(500000);
-      expect(after.property).toBe(before.property);
+      expect(String(after.offer_date ?? '').slice(0, 10)).toBe(String(before.offer_date ?? '').slice(0, 10));
     });
   });
 });
@@ -331,9 +331,8 @@ test.describe('other roles are unchanged', () => {
     }
   });
 
-  test('AN ACCOUNTING USER STILL HAS NO EDITABLE FIELD HERE', async ({ page }) => {
-    // Accounting shares `readsOnly` with Documentation and is deliberately NOT included in the
-    // exception: it reads these figures and does not set them.
+  test('AN ACCOUNTING USER GETS THE SAME PENCILS (2026-10-19): nothing editable until one is clicked', async ({ page }) => {
+    // Accounting proposes Price, Deposit and Commission for approval exactly as Documentation does.
     await signIn(page, 'superAdmin');
     const id = await createDeal(page);
     try {
@@ -348,9 +347,14 @@ test.describe('other roles are unchanged', () => {
       const modal = page.locator('.modal').first();
       await expect(modal).toBeVisible({ timeout: 15_000 });
 
-      const editable = await modal.evaluate((el) => [...el.querySelectorAll('input, select, textarea')]
+      const editable = () => modal.evaluate((el) => [...el.querySelectorAll('input, select, textarea')]
         .filter((f) => !f.matches(':disabled') && !(f as HTMLInputElement).readOnly).length);
-      expect(editable).toBe(0);
+      expect(await editable()).toBe(0);
+      await expect(modal.getByTestId('fin-save')).toHaveCount(0);
+      await expect(modal.getByTestId('fin-send-request')).toBeDisabled();
+      await modal.getByTestId('fin-edit-price').click();
+      await expect(modal.getByTestId('fin-price')).toBeEditable();
+      expect(await editable()).toBe(1);
     } finally {
       await signOut(page);
       await signIn(page, 'superAdmin');

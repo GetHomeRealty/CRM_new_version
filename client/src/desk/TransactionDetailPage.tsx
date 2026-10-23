@@ -3,6 +3,10 @@ import { createPortal } from 'react-dom';
 import Icon from '../ui/Icon';
 import ClosingDateRequestDialog from './ClosingDateRequestDialog';
 import { Flag } from './MarketSwitch';
+import PriceDepositRequestDialog from './PriceDepositRequestDialog';
+import PartiesRequestDialog from './PartiesRequestDialog';
+// Offer / Closing Date read "21-October-2026" (2026-10-22); the browser's calendar still picks them.
+import DateBox from './DateBox';
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { getTransaction, updateTransaction, listAgents, generateTransactionInvoices, getCompanySettings, getCustomers, getBrokerageSuggestions, requestTransactionEdit, approveEditRequest, rejectEditRequest, reviewAgentChanges, rejectAgentChange, requestTransactionDeletion, forwardDeleteRequest, approveDeleteRequest, rejectDeleteRequest, getDocuments, markTransactionReviewsSeen, bulkReviewAction, type OpenReviewItem } from '../lib/api';
@@ -247,6 +251,12 @@ export default function TransactionDetailPage() {
    * else.
    */
   const isAccounting = user?.role === 'accounting';
+  /*
+   * Basic Info the Documentation way (2026-10-19, Accounting added): Type, Status, Agent Name and Property
+   * Address edited directly; Price, Deposit and Closing Date by request for Super Admin approval; a deal
+   * cannot be closed from here. The server agrees (DOCUMENTATION_EDITABLE, ACCOUNTING_BASIC_EDITABLE).
+   */
+  const requestsBasicInfo = isDocumentation || isAccounting;
   const canEdit = can('transactions', 'edit');
   const canInvoice = can('invoice', 'edit');
   const [generating, setGenerating] = useState(false);
@@ -298,6 +308,14 @@ export default function TransactionDetailPage() {
   const [reasonText, setReasonText] = useState('');
   // Documentation's Closing Date pencil — opens ClosingDateRequestDialog.
   const [dateReqOpen, setDateReqOpen] = useState(false);
+  // Accounting's Offer Date pencil — the same dialog, for the offer date (2026-10-22).
+  const [offerReqOpen, setOfferReqOpen] = useState(false);
+  // Accounting's MLS # pencil — the same dialog again, for the MLS number (2026-10-22).
+  const [mlsReqOpen, setMlsReqOpen] = useState(false);
+  // Brokerage / Client cards by request (Documentation + Accounting, 2026-10-22) — which card's dialog is open.
+  const [partyReq, setPartyReq] = useState<null | 'brokerage' | 'clients'>(null);
+  // Documentation's Price / Deposit pencils — open PriceDepositRequestDialog.
+  const [priceReqOpen, setPriceReqOpen] = useState(false);
   const [coreDocReminders, setCoreDocReminders] = useState<string[]>([]); // §5.2 Active: pending core listing docs
 
   // Close-guard and review-decision state. Declared up here with the rest of the state rather
@@ -545,7 +563,7 @@ export default function TransactionDetailPage() {
   // Lawyer Details is hidden for lease / preconstruction / referral types (legal side handled differently).
   const lawyerHidden = precon || /lease/i.test(form.type) || referral;
   const statusOptions = statusOptionsFor(form.type)
-    .filter((o) => !(isDocumentation && o === 'Closed' && !form.statuses.includes('Closed')));
+    .filter((o) => !(requestsBasicInfo && o === 'Closed' && !form.statuses.includes('Closed')));
   const ro = view; // read-only flag
   // Documentation edits Type and Status only. Remaining Basic Info fields stay locked.
   // Accounting reads Basic Info and edits none of it (the server drops it too: ACCOUNTING_LOCKED).
@@ -850,7 +868,7 @@ export default function TransactionDetailPage() {
   const stClosed = form.statuses.includes('Closed');
   const stDFT = form.statuses.includes('DFT');
   // Lock Documentation against the saved lifecycle, so selecting DFT can save before it locks.
-  const editLocked = isDocumentation
+  const editLocked = requestsBasicInfo
     ? (txn?.statuses || []).some((s) => s === 'Closed' || s === 'DFT')
     : stClosed || stDFT;
   const lockedForUser = editLocked && !isSuperAdmin;
@@ -906,7 +924,7 @@ export default function TransactionDetailPage() {
    * 'closing_date'), which a Super Admin approves. Not on a DFT deal, where the dates no longer
    * describe anything.
    */
-  const canRequestClosingDate = isDocumentation && !stDFT;
+  const canRequestClosingDate = requestsBasicInfo && !stDFT;
   const pendingDateReq = editRequests.find((r) => r.status === 'pending' && r.scope === 'closing_date');
   const closingDateLabel = canRequestClosingDate ? (
     <>Closing Date{' '}
@@ -919,6 +937,73 @@ export default function TransactionDetailPage() {
       </button>
     </>
   ) : 'Closing Date';
+  /*
+   * Offer Date the same way, for ACCOUNTING ONLY (brokerage request, 2026-10-22): its own
+   * 'offer_date' request scope, so it does not wait on a pending closing date request. Documentation
+   * keeps the plain label it had.
+   */
+  const canRequestOfferDate = isAccounting && !stDFT;
+  const pendingOfferReq = editRequests.find((r) => r.status === 'pending' && r.scope === 'offer_date');
+  const offerDateLabel = canRequestOfferDate ? (
+    <>Offer Date{' '}
+      <button type="button" className="row-rm" data-testid="offer-date-edit"
+        disabled={!!pendingOfferReq}
+        title={pendingOfferReq ? 'An offer date change is awaiting Super Admin approval' : 'Request an offer date change'}
+        onClick={() => setOfferReqOpen(true)}
+        style={{ marginLeft: 4, color: pendingOfferReq ? 'var(--warn)' : 'var(--brand)' }}>
+        <Icon name={pendingOfferReq ? 'clock' : 'edit'} size={14} />
+      </button>
+    </>
+  ) : 'Offer Date';
+  /*
+   * MLS # the same way, for ACCOUNTING ONLY (brokerage request, 2026-10-22): its own 'mls_num'
+   * request scope. Every other role keeps the box exactly as it was.
+   */
+  const canRequestMls = isAccounting && !stDFT;
+  const pendingMlsReq = editRequests.find((r) => r.status === 'pending' && r.scope === 'mls_num');
+  /*
+   * LISTING / CO-OP BROKERAGE AND CLIENT INFORMATION BY REQUEST (brokerage request, 2026-10-22):
+   * Documentation and Accounting no longer save these two cards directly (the server drops them);
+   * a pencil on each card opens PartiesRequestDialog, which files a 'brokerage' or 'clients'
+   * request for a Super Admin. `partyRo` locks the cards for those two roles only; every other role
+   * keeps `ro` exactly as before.
+   */
+  const partiesByRequest = requestsBasicInfo;
+  const partyRo = ro || partiesByRequest;
+  const canRequestParties = partiesByRequest && !stDFT;
+  const pendingPartyReq = (scope: 'brokerage' | 'clients') => editRequests.find((r) => r.status === 'pending' && r.scope === scope);
+  const partyPencil = (scope: 'brokerage' | 'clients'): ReactNode => {
+    if (!canRequestParties) return null;
+    const pending = pendingPartyReq(scope);
+    const what = scope === 'brokerage' ? 'brokerage' : 'client';
+    return (
+      <button type="button" className="row-rm" data-testid={`${scope}-edit`} disabled={!!pending}
+        title={pending ? `A ${what} change is awaiting Super Admin approval` : `Request a ${what} change`}
+        onClick={() => setPartyReq(scope)}
+        style={{ marginLeft: 6, color: pending ? 'var(--warn)' : 'var(--brand)' }}>
+        <Icon name={pending ? 'clock' : 'edit'} size={14} />
+      </button>
+    );
+  };
+  /*
+   * The same for Price and Deposit (brokerage request, 2026-10-19): a pencil beside each label
+   * opens PriceDepositRequestDialog, which files the `commission`-scope request the Financial
+   * panel already uses for these two figures. One such request may be pending per deal, so a
+   * pending one — from here or from Financial — shows the clock on both.
+   */
+  const canRequestPriceDeposit = requestsBasicInfo && !stDFT;
+  const pendingPriceReq = editRequests.find((r) => r.status === 'pending' && r.scope === 'commission');
+  const priceDepositLabel = (text: string): ReactNode => (canRequestPriceDeposit ? (
+    <>{text}{' '}
+      <button type="button" className="row-rm" data-testid={text === 'Deposit' ? 'deposit-edit' : 'price-edit'}
+        disabled={!!pendingPriceReq}
+        title={pendingPriceReq ? 'A price / deposit / commission change is awaiting Super Admin approval' : `Request a ${text.toLowerCase()} change`}
+        onClick={() => setPriceReqOpen(true)}
+        style={{ marginLeft: 4, color: pendingPriceReq ? 'var(--warn)' : 'var(--brand)' }}>
+        <Icon name={pendingPriceReq ? 'clock' : 'edit'} size={14} />
+      </button>
+    </>
+  ) : text);
 
   // Auto-save is allowed exactly when the Save button would have been offered — same
   // permission, role and lifecycle-lock gate, so it can never write where a manual
@@ -930,7 +1015,9 @@ export default function TransactionDetailPage() {
     && !conflict
     && !(stClosed && !isSuperAdmin)
     && !(lockedForUser && !approvedReq);
-  const basicTypeStatusRo = isDocumentation ? !autoSaveOn : basicRo;
+  // Type, Status, Agent Name and Property Address — the Basic Info fields Documentation writes
+  // directly (server: DOCUMENTATION_EDITABLE). Every other role keeps `basicRo` exactly as before.
+  const basicTypeStatusRo = requestsBasicInfo ? !autoSaveOn : basicRo;
   autoOnRef.current = autoSaveOn;
 
   // Is there an edit the server hasn't got yet? Computed during render, not in an
@@ -1471,7 +1558,19 @@ export default function TransactionDetailPage() {
                   <button type="button" className={`seg-btn ${form.mls_type === 'exclusive' ? 'active' : ''}`} disabled={basicRo} onClick={() => setListingType('exclusive')}>Exclusive</button>
                 </div>
                 {form.mls_type !== 'exclusive'
-                  ? <input style={{ marginTop: 6 }} value={form.mls_num} disabled={basicRo} onChange={(e) => set('mls_num', e.target.value.toUpperCase())} placeholder="e.g. E12345678" />
+                  ? (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 6 }}>
+                      <input style={{ minWidth: 0, flex: 1 }} value={form.mls_num} disabled={basicRo} onChange={(e) => set('mls_num', e.target.value.toUpperCase())} placeholder="e.g. E12345678" />
+                      {canRequestMls && (
+                        <button type="button" className="row-rm" data-testid="mls-num-edit" disabled={!!pendingMlsReq}
+                          title={pendingMlsReq ? 'An MLS number change is awaiting Super Admin approval' : 'Request an MLS number change'}
+                          onClick={() => setMlsReqOpen(true)}
+                          style={{ color: pendingMlsReq ? 'var(--warn)' : 'var(--brand)' }}>
+                          <Icon name={pendingMlsReq ? 'clock' : 'edit'} size={14} />
+                        </button>
+                      )}
+                    </div>
+                  )
                   : <span className="pill type-pre" style={{ marginTop: 6, display: 'inline-block', padding: '6px 12px' }}>Exclusive Listing</span>}
                 {listing && !OFFER_CLOSING_LISTING_TYPES.includes(form.type) && form.mls_type !== 'exclusive' && !slMarkVerifiedHidden && (
                   <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--muted)', marginTop: 8, cursor: basicRo ? 'default' : 'pointer' }}>
@@ -1505,7 +1604,7 @@ export default function TransactionDetailPage() {
                       * that stays possible - but as a deliberate choice rather than a typo. */}
                     <select
                       value={externalAgent || (!!form.agent && !agents.includes(form.agent)) ? '__external__' : (form.agent || '')}
-                      disabled={basicRo}
+                      disabled={basicTypeStatusRo}
                       onChange={(e) => {
                         if (e.target.value === '__external__') { setExternalAgent(true); set('agent', ''); }
                         else { setExternalAgent(false); set('agent', e.target.value); }
@@ -1516,13 +1615,13 @@ export default function TransactionDetailPage() {
                       <option value="__external__">External / co-op agent…</option>
                     </select>
                     {(externalAgent || (!!form.agent && !agents.includes(form.agent))) && (
-                      <input value={form.agent} disabled={basicRo} onChange={(e) => set('agent', e.target.value)} placeholder="External agent name" style={{ marginTop: 6 }} />
+                      <input value={form.agent} disabled={basicTypeStatusRo} onChange={(e) => set('agent', e.target.value)} placeholder="External agent name" style={{ marginTop: 6 }} />
                     )}
                   </>)}
               </Field>
-              <Field label="Property Address" req><input value={form.property} disabled={basicRo} onChange={(e) => set('property', e.target.value)} /></Field>
-              {!hidePriceDeposit && <Field label={priceLabel}><MoneyInput value={form.price} disabled={basicRo} onChange={(v) => set('price', v)} /></Field>}
-              {!hidePriceDeposit && !referral && <Field label="Deposit"><MoneyInput value={form.deposit} disabled={basicRo} onChange={(v) => set('deposit', v)} /></Field>}
+              <Field label="Property Address" req><input value={form.property} disabled={basicTypeStatusRo} onChange={(e) => set('property', e.target.value)} /></Field>
+              {!hidePriceDeposit && <Field label={priceDepositLabel(priceLabel)}><MoneyInput value={form.price} disabled={basicRo} onChange={(v) => set('price', v)} /></Field>}
+              {!hidePriceDeposit && !referral && <Field label={priceDepositLabel('Deposit')}><MoneyInput value={form.deposit} disabled={basicRo} onChange={(v) => set('deposit', v)} /></Field>}
             </div>
             {!OFFER_CLOSING_LISTING_TYPES.includes(form.type) && (
               <div className="g3">
@@ -1532,8 +1631,8 @@ export default function TransactionDetailPage() {
                   <Field label="Listing Expiry Date"><input type="date" value={form.listing_expiry_date} disabled={basicRo} onChange={(e) => set('listing_expiry_date', e.target.value)} /></Field>
                 </>)}
                 {!listing && (<>
-                  <Field label="Offer Date"><input type="date" value={form.offer_date} disabled={basicRo} onChange={(e) => set('offer_date', e.target.value)} /></Field>
-                  <Field label={closingDateLabel}><input type="date" value={form.closing_date} disabled={basicRo} onChange={(e) => set('closing_date', e.target.value)} /></Field>
+                  <Field label={offerDateLabel}><DateBox value={form.offer_date} disabled={basicRo} onChange={(v) => set('offer_date', v)} testId="basic-offer-date" /></Field>
+                  <Field label={closingDateLabel}><DateBox value={form.closing_date} disabled={basicRo} onChange={(v) => set('closing_date', v)} testId="basic-closing-date" /></Field>
                 </>)}
               </div>
             )}
@@ -1541,8 +1640,8 @@ export default function TransactionDetailPage() {
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12, marginTop: 12 }}>
                 <Field label="Listing Contract Date"><input type="date" value={form.listing_contract_date} disabled={basicRo} onChange={(e) => set('listing_contract_date', e.target.value)} /></Field>
                 <Field label="Listing Expiry Date"><input type="date" value={form.listing_expiry_date} disabled={basicRo} onChange={(e) => set('listing_expiry_date', e.target.value)} /></Field>
-                {!slHideBasic && <Field label="Offer Date"><input type="date" value={form.offer_date} disabled={basicRo} onChange={(e) => set('offer_date', e.target.value)} /></Field>}
-                {!slHideBasic && <Field label={closingDateLabel}><input type="date" value={form.closing_date} disabled={basicRo} onChange={(e) => set('closing_date', e.target.value)} /></Field>}
+                {!slHideBasic && <Field label={offerDateLabel}><DateBox value={form.offer_date} disabled={basicRo} onChange={(v) => set('offer_date', v)} testId="basic-offer-date" /></Field>}
+                {!slHideBasic && <Field label={closingDateLabel}><DateBox value={form.closing_date} disabled={basicRo} onChange={(v) => set('closing_date', v)} testId="basic-closing-date" /></Field>}
               </div>
             )}
           </div>
@@ -1698,10 +1797,10 @@ export default function TransactionDetailPage() {
       {/* Brokerage (hidden for preconstruction — Builder card replaces it; §5.2 hides Co-op Brokerage for Active/Terminated sale listings) */}
       {!precon && !slHideBasic && (
       <div className="card">
-        <div className="modal-h" style={{ fontSize: 14 }}>{brokLabel} Brokerage Information</div>
+        <div className="modal-h" style={{ fontSize: 14 }}>{brokLabel} Brokerage Information{partyPencil('brokerage')}</div>
         <Field label={`${brokLabel} Brokerage Name`}>
           <AutoComplete
-            value={form.brokerage.name} disabled={ro} onChange={onBrokName} onPick={pickBrokerage}
+            value={form.brokerage.name} disabled={partyRo} onChange={onBrokName} onPick={pickBrokerage}
             options={brokSuggestions} getLabel={(s) => s.name || ''}
             getSub={(s) => [s.address, s.phone].filter(Boolean).join(' · ')}
             placeholder="Brokerage name"
@@ -1716,28 +1815,28 @@ export default function TransactionDetailPage() {
                   <div className="field" key={i} style={{ flex: '0 0 calc(20% - 10px)', marginBottom: 0 }}>
                     <label>{i === 0 ? `${brokLabel} Agent Name(s)` : `Agent ${i + 1}`}</label>
                     <div style={{ display: 'flex', gap: 4 }}>
-                      <input value={a} disabled={ro} onChange={(e) => updBrokAgent(i, e.target.value)} placeholder="Agent name..." style={{ minWidth: 0 }} />
-                      {!ro && form.brokerage.agents.length > 1 && <button className="row-rm" onClick={() => rmBrokAgent(i)}><Icon name="trash" size={13} /></button>}
+                      <input value={a} disabled={partyRo} onChange={(e) => updBrokAgent(i, e.target.value)} placeholder="Agent name..." style={{ minWidth: 0 }} />
+                      {!partyRo && form.brokerage.agents.length > 1 && <button className="row-rm" onClick={() => rmBrokAgent(i)}><Icon name="trash" size={13} /></button>}
                     </div>
                   </div>
                 ))}
                 {!manyAgents && (
                   <div className="field" style={{ flex: '1 1 0', minWidth: 0, marginBottom: 0 }}>
                     <label>Brokerage Address</label>
-                    <input value={form.brokerage.address} disabled={ro} onChange={(e) => setBrok('address', e.target.value)} />
+                    <input value={form.brokerage.address} disabled={partyRo} onChange={(e) => setBrok('address', e.target.value)} />
                   </div>
                 )}
               </div>
-              {!ro && <button className="btn primary sm" style={{ marginTop: 6, marginBottom: manyAgents ? 6 : 12 }} onClick={addBrokAgent}>+ Add Agent</button>}
-              {manyAgents && <Field label="Brokerage Address" style={{ marginBottom: 12 }}><input value={form.brokerage.address} disabled={ro} onChange={(e) => setBrok('address', e.target.value)} /></Field>}
+              {!partyRo && <button className="btn primary sm" style={{ marginTop: 6, marginBottom: manyAgents ? 6 : 12 }} onClick={addBrokAgent}>+ Add Agent</button>}
+              {manyAgents && <Field label="Brokerage Address" style={{ marginBottom: 12 }}><input value={form.brokerage.address} disabled={partyRo} onChange={(e) => setBrok('address', e.target.value)} /></Field>}
             </>
           );
         })()}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12 }}>
-          <Field label="Brokerage Email"><input type="email" value={form.brokerage.email} disabled={ro} onChange={(e) => setBrok('email', e.target.value)} /></Field>
-          <Field label="Invoice Email"><input type="email" value={form.brokerage.invoice_email} disabled={ro} onChange={(e) => setBrok('invoice_email', e.target.value)} /></Field>
-          <Field label="Agent Email"><input type="email" value={form.brokerage.agent_email} disabled={ro} onChange={(e) => setBrok('agent_email', e.target.value)} /></Field>
-          <Field label="Phone Number"><input value={form.brokerage.phone} disabled={ro} onChange={(e) => setBrok('phone', e.target.value)} placeholder="+1 000-000-0000" /></Field>
+          <Field label="Brokerage Email"><input type="email" value={form.brokerage.email} disabled={partyRo} onChange={(e) => setBrok('email', e.target.value)} /></Field>
+          <Field label="Invoice Email"><input type="email" value={form.brokerage.invoice_email} disabled={partyRo} onChange={(e) => setBrok('invoice_email', e.target.value)} /></Field>
+          <Field label="Agent Email"><input type="email" value={form.brokerage.agent_email} disabled={partyRo} onChange={(e) => setBrok('agent_email', e.target.value)} /></Field>
+          <Field label="Phone Number"><input value={form.brokerage.phone} disabled={partyRo} onChange={(e) => setBrok('phone', e.target.value)} placeholder="+1 000-000-0000" /></Field>
         </div>
       </div>
       )}
@@ -1745,21 +1844,21 @@ export default function TransactionDetailPage() {
       {/* Clients */}
       <div className="card">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-          <div className="modal-h" style={{ fontSize: 14, margin: 0 }}>Client Information</div>
+          <div className="modal-h" style={{ fontSize: 14, margin: 0 }}>Client Information{partyPencil('clients')}</div>
           <span className="pill info" style={{ fontSize: 11 }}>{form.clients.length} client{form.clients.length === 1 ? '' : 's'}</span>
         </div>
         {form.clients.length === 0 && <div className="help">No clients added yet.</div>}
         {form.clients.map((c, i) => (
           <div key={i} className="g3" style={{ alignItems: 'end', marginBottom: 8 }}>
-            <Field label="Full Name" req><input value={c.name} disabled={ro} onChange={(e) => updClient(i, 'name', e.target.value)} /></Field>
-            <Field label="Email"><input type="email" value={c.email || ''} disabled={ro} onChange={(e) => updClient(i, 'email', e.target.value)} /></Field>
+            <Field label="Full Name" req><input value={c.name} disabled={partyRo} onChange={(e) => updClient(i, 'name', e.target.value)} /></Field>
+            <Field label="Email"><input type="email" value={c.email || ''} disabled={partyRo} onChange={(e) => updClient(i, 'email', e.target.value)} /></Field>
             <div style={{ display: 'flex', gap: 6, alignItems: 'end' }}>
-              <Field label="Phone"><input value={c.phone || ''} disabled={ro} onChange={(e) => updClient(i, 'phone', e.target.value)} placeholder="+1 000-000-0000" /></Field>
-              {!ro && <button className="row-rm" style={{ paddingBottom: 10 }} onClick={() => rmClient(i)}><Icon name="trash" size={13} /></button>}
+              <Field label="Phone"><input value={c.phone || ''} disabled={partyRo} onChange={(e) => updClient(i, 'phone', e.target.value)} placeholder="+1 000-000-0000" /></Field>
+              {!partyRo && <button className="row-rm" style={{ paddingBottom: 10 }} onClick={() => rmClient(i)}><Icon name="trash" size={13} /></button>}
             </div>
           </div>
         ))}
-        {!ro && <button className="btn primary sm" onClick={addClient}>+ Add Client</button>}
+        {!partyRo && <button className="btn primary sm" onClick={addClient}>+ Add Client</button>}
       </div>
 
       {/* Conditional Offer — hidden for preconstruction, referral, §5.2 Active/Terminated sale listings, Void / Mutual Release, Secured Firm, and once Sold/Leased */}
@@ -2017,6 +2116,24 @@ export default function TransactionDetailPage() {
       {canRequestClosingDate && (
         <ClosingDateRequestDialog open={dateReqOpen} onClose={() => setDateReqOpen(false)}
           transactionId={id} current={form.closing_date || ''} onSent={reloadTxn} />
+      )}
+      {canRequestOfferDate && (
+        <ClosingDateRequestDialog field="offer_date" open={offerReqOpen} onClose={() => setOfferReqOpen(false)}
+          transactionId={id} current={form.offer_date || ''} onSent={reloadTxn} />
+      )}
+      {canRequestMls && (
+        <ClosingDateRequestDialog field="mls_num" open={mlsReqOpen} onClose={() => setMlsReqOpen(false)}
+          transactionId={id} current={form.mls_num || ''} onSent={reloadTxn} />
+      )}
+      {canRequestParties && (
+        <PartiesRequestDialog open={partyReq !== null} onClose={() => setPartyReq(null)} scope={partyReq ?? 'brokerage'}
+          transactionId={id} brokLabel={brokLabel} currentBrokerage={form.brokerage}
+          currentClients={form.clients.map((c) => ({ name: c.name, email: c.email || null, phone: c.phone || null }))} onSent={reloadTxn} />
+      )}
+      {canRequestPriceDeposit && (
+        <PriceDepositRequestDialog open={priceReqOpen} onClose={() => setPriceReqOpen(false)}
+          transactionId={id} priceLabel={priceLabel} currentPrice={txn?.price ?? form.price}
+          currentDeposit={txn?.deposit ?? form.deposit} showDeposit={!referral} onSent={reloadTxn} />
       )}
     </>
   );

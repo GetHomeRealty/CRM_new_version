@@ -849,6 +849,12 @@ model meta_connections {
   last_error            String?      @db.Text
   last_error_at         DateTime?    @db.Timestamp(0)
   last_webhook_at       DateTime?    @db.Timestamp(0)
+  /**
+   * The last ad-status check for this connection, kept so the Meta screen can show it the moment it
+   * opens (also after a restart) while a fresh check runs. Holds the connection key it was read
+   * with, so an answer from an earlier login is never served. Dropped with the row on disconnect.
+   */
+  ad_status_scan        Json?        @db.JsonB
   created_at            DateTime?    @db.Timestamp(0)
   updated_at            DateTime?    @db.Timestamp(0)
   pages                 meta_pages[]
@@ -1029,10 +1035,46 @@ model lead_tasks {
   created_at  DateTime? @db.Timestamp(0)
   updated_at  DateTime? @db.Timestamp(0)
   leads       leads     @relation(fields: [lead_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  /// Email about this task — see `lead_task_notifications`.
+  notifications lead_task_notifications[]
 
   @@index([lead_id])
   @@index([status])
   @@index([assigned_to])
+}
+
+/**
+ * Email about a lead task — the creator's confirmation, the assigned agent's notice, or one combined
+ * message when they are the same person. An outbox: written in the same transaction as the task, sent
+ * afterwards in the background, outcome recorded here. See migration 20261021150000.
+ *
+ * Users are referenced by id without a relation, as `lead_tasks.assigned_to` already is.
+ */
+model lead_task_notifications {
+  id                Int        @id @default(autoincrement())
+  task_id           Int
+  lead_id           Int
+  /// created | assigned | created_assigned
+  kind              String     @db.VarChar(24)
+  recipient_user_id Int
+  actor_user_id     Int?
+  dedupe_key        String     @unique @db.VarChar(190)
+  /// pending | sending | sent | failed | skipped
+  status            String     @default("pending") @db.VarChar(16)
+  to_email          String?    @db.VarChar(255)
+  subject           String?    @db.VarChar(255)
+  error_message     String?    @db.VarChar(500)
+  attempts          Int        @default(0)
+  next_attempt_at   DateTime?  @db.Timestamp(0)
+  last_attempt_at   DateTime?  @db.Timestamp(0)
+  sent_at           DateTime?  @db.Timestamp(0)
+  created_at        DateTime   @db.Timestamp(0)
+  updated_at        DateTime   @db.Timestamp(0)
+  task              lead_tasks @relation(fields: [task_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@index([task_id])
+  @@index([lead_id])
+  @@index([status, next_attempt_at])
 }
 
 model lead_showings {
@@ -1343,11 +1385,37 @@ model campaigns {
    */
   idempotency_key   String?               @db.VarChar(64)
 
+  /// Celebration & Wishes (migration 20261021180000). 'celebration', or null for a standard
+  /// template campaign. The standard path never reads any of the columns below.
+  kind              String?               @db.VarChar(16)
+  /// festival slug, 'birthday', 'anniversary', 'custom-festival' or 'general'.
+  occasion          String?               @db.VarChar(32)
+  /// The occasion as the author named it ("Diwali", "Lunar New Year", a custom festival).
+  occasion_label    String?               @db.VarChar(120)
+  preview_text      String?               @db.VarChar(255)
+  reply_to          String?               @db.VarChar(255)
+  /// The editable message as written, before it was laid out into `content`.
+  message           String?               @db.Text
+  /// 'brokerage' or 'agent' — whose name and contact details sign the greeting.
+  branding          String?               @db.VarChar(16)
+  /// IANA zone the author scheduled in, so the screen can say "9:00 America/Toronto".
+  timezone          String?               @db.VarChar(64)
+  /// campaign_flyers.id. Not a foreign key, like sender_account_id: flyers are only soft-deleted.
+  flyer_id          Int?
+  /// celebration_automations.id when an annual rule created this campaign.
+  automation_id     Int?
+  ai_assisted       Boolean               @default(false)
+  /// Recipients not attempted because they were no longer eligible at send time.
+  skipped           Int                   @default(0)
+  /// Handed to a mail server that diverts everything (dev sink / MAIL_REDIRECT_TO) — not sent.
+  diverted          Int                   @default(0)
+
   /// The brokerage this row belongs to. See src/core/tenancy.spec.ts for why this table carries one.
   campaign_links  campaign_links[]
   campaign_clicks campaign_clicks[]
 
   @@unique([created_by_id, idempotency_key], map: "campaigns_creator_idempotency_key")
+  @@index([kind])
   @@index([status])
   @@index([created_at])
   // Declared so `migrate diff` stays empty: this index EXISTS in the database, created by a
@@ -1490,6 +1558,14 @@ model campaign_recipients {
   /// When a soft-bounced recipient may be attempted again. Null means "as soon as the send
   /// reaches it" — the state every recipient starts in.
   next_retry_at   DateTime?         @db.Timestamp(3)
+  /// The mail server's Message-ID for this send (celebration campaigns).
+  provider_message_id String?       @db.VarChar(255)
+  /// When the mail server accepted it. Accepted is not "delivered".
+  sent_at         DateTime?         @db.Timestamp(3)
+  /// hard_bounce | soft_exhausted | not_sent | unknown_outcome — celebration campaigns only.
+  /// `not_sent` certainly did not leave and may be retried; `unknown_outcome` is never resent
+  /// automatically, because the mail server may already have it.
+  failure_kind    String?           @db.VarChar(16)
   created_at      DateTime?         @db.Timestamp(0)
   updated_at      DateTime?         @db.Timestamp(0)
   campaign_clicks campaign_clicks[]
@@ -1502,6 +1578,84 @@ model campaign_recipients {
   /// The retry sweep asks "which deferred recipients are due?" once a minute. Without this it
   /// scans every recipient row the brokerage has ever created to answer it.
   @@index([status, next_retry_at])
+}
+
+/**
+ * A celebration flyer image — uploaded, or rendered from the branded template (never AI).
+ * Bytes in the row so a scheduled send still has exactly what was previewed.
+ */
+model campaign_flyers {
+  id            Int       @id @default(autoincrement())
+  created_by_id Int?
+  /// upload | template
+  source        String    @db.VarChar(16)
+  mime          String    @db.VarChar(32)
+  width         Int
+  height        Int
+  size          Int
+  data          Bytes
+  alt_text      String    @db.VarChar(255)
+  /// JSON of the template settings (occasion, headline, greeting, style, format, colours).
+  settings      String?   @db.Text
+  created_at    DateTime  @db.Timestamp(0)
+  updated_at    DateTime  @db.Timestamp(0)
+  deleted_at    DateTime? @db.Timestamp(0)
+
+  @@index([created_by_id])
+}
+
+/**
+ * An annual birthday or anniversary rule. Created paused; runs only what was saved.
+ */
+model celebration_automations {
+  id                Int       @id @default(autoincrement())
+  created_by_id     Int
+  created_by        String?   @db.VarChar(255)
+  name              String    @db.VarChar(255)
+  /// birthday | anniversary
+  occasion          String    @db.VarChar(16)
+  /// active | paused
+  status            String    @default("paused") @db.VarChar(16)
+  subject           String    @db.VarChar(500)
+  preview_text      String?   @db.VarChar(255)
+  message           String    @db.Text
+  branding          String    @default("agent") @db.VarChar(16)
+  flyer_id          Int?
+  sender_account_id Int?
+  reply_to          String?   @db.VarChar(255)
+  /// HH:MM, local to `timezone`.
+  send_time         String    @default("09:00") @db.VarChar(5)
+  timezone          String    @db.VarChar(64)
+  /// feb28 | mar1 | skip — when a Feb 29 date is greeted in a non-leap year.
+  feb29_rule        String    @default("feb28") @db.VarChar(8)
+  /// JSON recipient filters, applied within the creator's lead scope at run time.
+  filters           String?   @db.Text
+  last_run_on       DateTime? @db.Date
+  last_run_at       DateTime? @db.Timestamp(3)
+  last_run_summary  String?   @db.Text
+  created_at        DateTime  @db.Timestamp(0)
+  updated_at        DateTime  @db.Timestamp(0)
+  deleted_at        DateTime? @db.Timestamp(0)
+
+  @@index([created_by_id])
+  @@index([status])
+}
+
+/**
+ * One greeting per address, occasion and year — the durable duplicate guard for celebrations.
+ */
+model celebration_sends {
+  id           Int      @id @default(autoincrement())
+  occasion_key String   @db.VarChar(80)
+  email_key    String   @db.VarChar(255)
+  year         Int
+  lead_id      Int?
+  campaign_id  Int?
+  recipient_id Int?
+  created_at   DateTime @db.Timestamp(3)
+
+  @@unique([occasion_key, email_key, year], map: "celebration_sends_occasion_email_year_key")
+  @@index([campaign_id])
 }
 
 /**
@@ -4042,4 +4196,31 @@ model company_stakeholder_files {
   stakeholder    company_stakeholders @relation(fields: [stakeholder_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
 
   @@index([stakeholder_id])
+}
+
+/// THE BROKERAGE'S PAYMENT SHEET, as uploaded (2026-10-19). When it holds rows, the Pending Payments
+/// report shows them exactly as written instead of computing its rows from the deals. One row per line
+/// of the sheet, in the sheet's order; an upload replaces the whole set. Nothing else reads or writes it.
+/// Created in migrations/20261019120000_payment_sheet_rows.
+model payment_sheet_rows {
+  id                  Int       @id @default(autoincrement())
+  /// Order on the sheet, from 1.
+  position            Int
+  /// client | coop | agent
+  section             String    @db.VarChar(16)
+  /// Agent payments only: Listing | Buying | Lease | Pre-Construction | National Bank
+  agent_group         String?   @db.VarChar(32)
+  trade_no            String?   @db.VarChar(64)
+  closing_date        DateTime? @db.Date
+  property            String?   @db.VarChar(255)
+  agent_name          String?   @db.VarChar(255)
+  docs_status         String?   @db.VarChar(64)
+  validation_status   String?   @db.VarChar(64)
+  validation_comments String?   @db.Text
+  payment_schedule    String?   @db.Text
+  remarks             String?   @db.Text
+  uploaded_by         String?   @db.VarChar(255)
+  uploaded_at         DateTime  @db.Timestamp(0)
+
+  @@index([position])
 }

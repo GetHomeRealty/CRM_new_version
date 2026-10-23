@@ -29,6 +29,8 @@ import { can } from '../core/authz';
  */
 import { htmlToText } from '../email/html-to-text';
 import { leadScopeWhere } from '../common/lead-scope';
+import { CelebrationAudienceService, type CelebrationDelivery } from './celebration-audience.service';
+import { classifyNonBounceFailure } from './celebration';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -265,6 +267,11 @@ export class CampaignsService {
      * service is constructed directly in several specs that have no interest in the log.
      */
     private readonly emailLog?: CrmAdvancedEmailService,
+    /**
+     * Celebration & Wishes: the send-time eligibility re-check for `kind = 'celebration'` campaigns.
+     * Optional on the same terms as the three above; a standard campaign never consults it.
+     */
+    private readonly celebrations?: CelebrationAudienceService,
   ) {}
 
   /**
@@ -354,7 +361,8 @@ export class CampaignsService {
   /** Recent campaigns without the heavy recipient list. */
   async list(user: AuthUserRecord, limit = 100): Promise<Record<string, unknown>[]> {
     const rows = await this.prisma.campaigns.findMany({
-      where: this.ownerScope(user),
+      // Celebration campaigns have their own list and results screen (Celebrations tab).
+      where: { ...this.ownerScope(user), kind: null },
       orderBy: { id: 'desc' }, take: Math.min(200, limit),
     });
     return rows.map((c) => this.summary(c));
@@ -994,7 +1002,7 @@ export class CampaignsService {
      * waiting out its backoff, and honouring that is the whole point: retrying a full mailbox or a
      * greylisting server the instant it refuses us is indistinguishable from hammering it.
      */
-    const pending = await this.prisma.campaign_recipients.findMany({
+    let pending = await this.prisma.campaign_recipients.findMany({
       where: {
         campaign_id: campaignId,
         status: 'pending',
@@ -1003,6 +1011,31 @@ export class CampaignsService {
       orderBy: { id: 'asc' },
     });
     if (!pending.length) return;
+
+    /*
+     * A CELEBRATION re-checks more than consent before anything goes: the sender's permission, the
+     * lead still being theirs, the address unchanged, and the greeting not already received this
+     * year. Ineligible rows are marked `skipped` with the reason; the consent check below then runs
+     * on what is left exactly as it does for every campaign.
+     */
+    let celebration: CelebrationDelivery | null = null;
+    let flyer: MailAttachment | null = null;
+    if (campaign.kind === 'celebration' && !this.celebrations) {
+      // Built without the celebration re-check (a partial construction, as some specs do): a
+      // celebration is never delivered without its permission, eligibility and duplicate checks.
+      this.log.warn(`Celebration #${campaignId} not resumed here: this instance has no celebration re-check.`);
+      return;
+    }
+    if (campaign.kind === 'celebration' && this.celebrations) {
+      const checked = await this.celebrations.recheckBeforeSend(campaign, pending);
+      pending = checked.allowed;
+      celebration = checked.delivery;
+      flyer = checked.flyer;
+      if (!pending.length) {
+        await this.settleIfFinished(campaignId);
+        return;
+      }
+    }
 
     /*
      * CONSENT IS RE-CHECKED HERE, IMMEDIATELY BEFORE DELIVERY — not only when the audience was built.
@@ -1051,12 +1084,16 @@ export class CampaignsService {
       });
     }
     // Everyone left is gone; nothing to deliver.
-    if (!stillAllowed.length) return;
+    if (!stillAllowed.length) {
+      if (celebration) await this.settleIfFinished(campaignId);
+      return;
+    }
 
     const user = { id: campaign.created_by_id ?? null, name: campaign.created_by ?? '' } as AuthUserRecord;
-    const attachments = campaign.template_id
+    const attachments: MailAttachment[] = campaign.template_id
       ? await this.templates.attachmentsForSend(campaign.template_id)
       : [];
+    if (flyer) attachments.push(flyer);
 
     await this.deliver({
       campaignId,
@@ -1093,7 +1130,64 @@ export class CampaignsService {
        * click figures describe a mixture of two different sends.
        */
       bodyMode: parseBodyMode(campaign.body_mode),
+      celebration,
     });
+  }
+
+  /**
+   * Close a celebration whose last pending recipients were all skipped at send time, so it does not
+   * sit in `sending` for ever. Counts are left as they are; only the status is settled.
+   */
+  private async settleIfFinished(campaignId: number): Promise<void> {
+    const left = await this.prisma.campaign_recipients.count({
+      where: { campaign_id: campaignId, status: { in: ['pending', 'sending'] } },
+    });
+    if (left) return;
+    const c = await this.prisma.campaigns.findUnique({
+      where: { id: campaignId }, select: { sent: true, diverted: true, failed: true, status: true, sent_at: true },
+    });
+    if (!c || (c.status !== 'sending' && c.status !== 'scheduled')) return;
+    const reached = c.sent + c.diverted;
+    const status = reached === 0 && c.failed > 0 ? 'failed' : c.failed > 0 ? 'partial' : 'completed';
+    await this.prisma.campaigns.update({
+      where: { id: campaignId }, data: { status, sent_at: c.sent_at ?? new Date(), updated_at: new Date() },
+    });
+  }
+
+  /**
+   * Take the year's greeting mark for this address and occasion, or learn that it is taken.
+   *
+   * The unique index on (occasion_key, email_key, year) is the lock: of two inserts for the same
+   * person, exactly one succeeds. Only a P2002 means "already greeted"; anything else is rethrown.
+   */
+  private async claimGreeting(
+    c: CelebrationDelivery, r: { email: string; leadId?: number | null }, campaignId: number, recipientId: number,
+  ): Promise<boolean> {
+    try {
+      await this.prisma.celebration_sends.create({
+        data: {
+          occasion_key: c.occasionKey as string,
+          email_key: r.email.trim().toLowerCase(),
+          year: c.year,
+          lead_id: r.leadId ?? null,
+          campaign_id: campaignId,
+          recipient_id: recipientId,
+          created_at: new Date(),
+        },
+      });
+      return true;
+    } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') return false;
+      throw err;
+    }
+  }
+
+  /** Give the mark back when the greeting certainly did not reach anybody, so it can be sent again. */
+  private async releaseGreeting(c: CelebrationDelivery, email: string): Promise<void> {
+    if (!c.occasionKey) return;
+    await this.prisma.celebration_sends
+      .deleteMany({ where: { occasion_key: c.occasionKey, email_key: email.trim().toLowerCase(), year: c.year } })
+      .catch(() => undefined);
   }
 
   /**
@@ -1113,6 +1207,8 @@ export class CampaignsService {
     senderAccountId?: number | null;
     /** 'simple' for the text-focused send, or null/absent for the standard one. */
     bodyMode?: string | null;
+    /** Present only for a celebration campaign — see `CelebrationDelivery`. */
+    celebration?: CelebrationDelivery | null;
   }): Promise<void> {
    // Already going out. Whatever this pass was asked to send, the pass that holds the campaign is
    // working through the same `pending` rows and will reach them.
@@ -1174,9 +1270,12 @@ export class CampaignsService {
      */
     const prior = await this.prisma.campaigns.findUnique({
       where: { id: campaign.id },
-      select: { sent: true, failed: true, bounced: true, sent_at: true },
+      select: { sent: true, failed: true, bounced: true, sent_at: true, skipped: true, diverted: true },
     });
     let sent = prior?.sent ?? 0, failed = prior?.failed ?? 0, bounced = prior?.bounced ?? 0;
+    /** Celebration only: skipped by the duplicate guard, and diverted by this machine's mail safety. */
+    let skipped = prior?.skipped ?? 0, diverted = prior?.diverted ?? 0;
+    const celebration = job.celebration ?? null;
     /** Soft bounces left queued for a later attempt. They keep the campaign open. */
     let deferred = 0;
     /** When we last sent to each receiving domain, so the wait is per-domain rather than global. */
@@ -1304,6 +1403,19 @@ export class CampaignsService {
         continue;
       }
 
+      /*
+       * CELEBRATION: ONE GREETING PER ADDRESS, OCCASION AND YEAR, enforced by a unique index rather
+       * than by a read. Written after the recipient claim and before the mail server sees anything,
+       * so two campaigns, two passes or two processes greeting the same person cannot both send.
+       */
+      if (celebration?.occasionKey && !(await this.claimGreeting(celebration, r, campaign.id, row.id))) {
+        skipped++;
+        await this.markRecipient(row.id, {
+          status: 'skipped', error: 'Not sent — already received this greeting this year.',
+        });
+        continue;
+      }
+
       try {
         /*
          * Sent from the account resolved above, by name, rather than re-resolved per recipient.
@@ -1313,7 +1425,7 @@ export class CampaignsService {
          * confirmation dialog showed. Both now come from `resolveSenderInArea`, so the dialog and
          * the send cannot describe different mailboxes.
          */
-        await this.mailer.sendFromAccount(senderAccount, {
+        const result = await this.mailer.sendFromAccount(senderAccount, {
           to: [r.email],
           subject,
           html,
@@ -1322,7 +1434,14 @@ export class CampaignsService {
           // placement for bulk senders, so its absence makes legitimate campaign mail look like
           // spam — which then reads as a list problem. One-Click points at the POST endpoint,
           // which is why that endpoint had to exist as a POST.
-          headers: unsubHeaders(baseUrl, campaign.id, tokens[i]),
+          headers: {
+            ...unsubHeaders(baseUrl, campaign.id, tokens[i]),
+            // Celebration only. Validated as a plain address when the campaign was saved.
+            ...(celebration?.replyTo ? { 'Reply-To': celebration.replyTo } : {}),
+          },
+          // One transport attempt for a celebration: a send that may have reached the server is
+          // never repeated inside the mailer. Standard campaigns keep the mailer's default.
+          ...(celebration ? { maxAttempts: celebration.maxAttempts } : {}),
           /*
            * THE text/plain ALTERNATIVE, which campaign mail did not have.
            *
@@ -1341,8 +1460,32 @@ export class CampaignsService {
            */
           text: campaignText(html, bodyHtml, unsubUrl(baseUrl, campaign.id, tokens[i]), subject),
         });
-        sent++;
-        await this.markRecipient(row.id, { status: 'sent', bounced: false, error: null, bounce_type: null, next_retry_at: null });
+        if (celebration) {
+          /*
+           * ACCEPTED BY THE MAIL SERVER, which is not "delivered" — and on a machine whose mail
+           * safety diverts every message, not even that: the recipient never sees it. A diverted
+           * send is recorded as `diverted`, never as `sent`, and gives the year's greeting mark back.
+           */
+          const at = new Date();
+          if (mailRedirect) {
+            diverted++;
+            await this.markRecipient(row.id, {
+              status: 'diverted', bounced: false, bounce_type: null, next_retry_at: null,
+              error: `Not delivered — this machine diverts all mail to ${mailRedirect}.`,
+              provider_message_id: result?.messageId ?? null, sent_at: at,
+            });
+            await this.releaseGreeting(celebration, r.email);
+          } else {
+            sent++;
+            await this.markRecipient(row.id, {
+              status: 'sent', bounced: false, error: null, bounce_type: null, next_retry_at: null,
+              provider_message_id: result?.messageId ?? null, sent_at: at, failure_kind: null,
+            });
+          }
+        } else {
+          sent++;
+          await this.markRecipient(row.id, { status: 'sent', bounced: false, error: null, bounce_type: null, next_retry_at: null });
+        }
         /*
          * THE CRM EMAIL LOG, which campaigns never reached.
          *
@@ -1351,7 +1494,7 @@ export class CampaignsService {
          * person" had to know to check two places, and nothing said so. The campaign's own record
          * was always complete; it was simply not where people look.
          */
-        await this.logCampaignSend(user, r.email, subject, true, null, mailRedirect);
+        await this.logCampaignSend(user, r.email, subject, true, null, mailRedirect, celebration?.logKind);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         const verdict = classifyBounce(message);
@@ -1368,6 +1511,7 @@ export class CampaignsService {
            */
           deferred++;
           deferredForRetry = true;
+          if (celebration) await this.releaseGreeting(celebration, r.email);
           const due = nextRetryAt(attempt);
           await this.markRecipient(row.id, {
             status: 'pending', bounced: false, bounce_type: 'soft',
@@ -1385,7 +1529,9 @@ export class CampaignsService {
           await this.markRecipient(row.id, {
             status: 'failed', bounced: true, bounce_type: 'hard', next_retry_at: null,
             error: `Hard bounce: ${verdict.reason}`,
+            ...(celebration ? { failure_kind: 'hard_bounce' } : {}),
           });
+          if (celebration) await this.releaseGreeting(celebration, r.email);
           await this.suppressHardBounce(r.email, campaign.id);
         } else if (verdict.type === 'soft') {
           // Retries exhausted. Still not a hard bounce, so the address is NOT suppressed — a
@@ -1394,7 +1540,9 @@ export class CampaignsService {
           await this.markRecipient(row.id, {
             status: 'failed', bounced: false, bounce_type: 'soft', retry_count: attempt, next_retry_at: null,
             error: `Gave up after ${MAX_SOFT_RETRIES} attempts — the receiving server kept deferring: ${verdict.reason}`,
+            ...(celebration ? { failure_kind: 'soft_exhausted' } : {}),
           });
+          if (celebration) await this.releaseGreeting(celebration, r.email);
         } else {
           /*
            * Our own fault — bad credentials, no connection, a certificate problem. `bounced` stays
@@ -1403,11 +1551,27 @@ export class CampaignsService {
            * dead list.
            */
           failed++;
-          await this.markRecipient(row.id, { status: 'failed', bounced: false, bounce_type: 'unknown', error: message });
+          if (celebration) {
+            /*
+             * Did it leave or not? A refused login or connection certainly did not, and may be sent
+             * again; a timeout or a dropped connection mid-send may already be in the inbox, so it
+             * keeps the year's mark and is never resent automatically.
+             */
+            const kind = classifyNonBounceFailure(err);
+            await this.markRecipient(row.id, {
+              status: 'failed', bounced: false, bounce_type: 'unknown', failure_kind: kind,
+              error: kind === 'unknown_outcome'
+                ? `Outcome unknown: the mail server did not confirm and may have received it. Not sent again automatically. (${message})`
+                : message,
+            });
+            if (kind === 'not_sent') await this.releaseGreeting(celebration, r.email);
+          } else {
+            await this.markRecipient(row.id, { status: 'failed', bounced: false, bounce_type: 'unknown', error: message });
+          }
         }
 
         // Recorded once the outcome is settled, so one eventual delivery is one row.
-        if (!deferredForRetry) await this.logCampaignSend(user, r.email, subject, false, message, mailRedirect);
+        if (!deferredForRetry) await this.logCampaignSend(user, r.email, subject, false, message, mailRedirect, celebration?.logKind);
 
         // A missing/broken mail account fails every recipient — stop rather than hammer it.
         if (/no active smtp account/i.test(message)) {
@@ -1416,6 +1580,7 @@ export class CampaignsService {
             await this.markRecipient(campaign.recipients[j].id, {
               status: 'failed', bounced: false, bounce_type: 'unknown',
               error: 'No active SMTP account is configured',
+              ...(celebration ? { failure_kind: 'not_sent' } : {}),
             });
           }
           break;
@@ -1426,7 +1591,7 @@ export class CampaignsService {
       // is that a long send stops being a black box, and one small update per 400 ms is nothing.
       await this.prisma.campaigns.update({
         where: { id: campaign.id },
-        data: { sent, failed, bounced, updated_at: new Date() },
+        data: { sent, failed, bounced, ...(celebration ? { skipped, diverted } : {}), updated_at: new Date() },
       });
 
       /*
@@ -1474,7 +1639,16 @@ export class CampaignsService {
          * would strand them — the campaign would read as done while people it is still trying to
          * reach sit waiting for an attempt that never comes.
          */
-        status: deferred > 0 ? 'sending' : sent === 0 ? 'failed' : failed > 0 ? 'partial' : 'completed',
+        /*
+         * A celebration counts diverted messages as reached for this purpose (the send path worked;
+         * this machine's safety kept them), and a pass where everyone was skipped is complete, not
+         * failed. Standard campaigns keep the rule exactly as it was.
+         */
+        ...(celebration ? { skipped, diverted } : {}),
+        status: deferred > 0 ? 'sending'
+          : celebration
+            ? (sent + diverted === 0 && failed > 0 ? 'failed' : failed > 0 ? 'partial' : 'completed')
+            : sent === 0 ? 'failed' : failed > 0 ? 'partial' : 'completed',
         // First delivery only. A retry pass hours later must not move this: it is when the
         // campaign went out, and the open-tracking prefetch window is measured from it.
         sent_at: prior?.sent_at ?? new Date(),
@@ -1508,7 +1682,7 @@ export class CampaignsService {
         .catch(() => null);
       const summary = { recipients: recipients.length, sent, failed };
 
-      if (sent === 0) {
+      if (sent + (celebration ? diverted : 0) === 0 && (!celebration || failed > 0)) {
         void this.crmEvents?.campaignFailed({ id: campaign.id, name }, owner?.created_by_id, 'no-recipients-reached');
       } else {
         void this.crmEvents?.campaignCompleted({ id: campaign.id, name }, owner?.created_by_id, summary);
@@ -1826,9 +2000,14 @@ export class CampaignsService {
   private async logCampaignSend(
     user: AuthUserRecord, to: string, subject: string,
     ok: boolean, error: string | null, redirect: string | null,
+    /**
+     * 'campaign' unless a celebration says otherwise: birthday and anniversary greetings are logged
+     * under the Settings greeting sweep's own kinds, so that sweep skips anyone already greeted.
+     */
+    kind: string = 'campaign',
   ): Promise<void> {
     try {
-      await this.emailLog?.recordExternalSend('campaign', to, subject, ok, error, user, redirect);
+      await this.emailLog?.recordExternalSend(kind, to, subject, ok, error, user, redirect);
     } catch {
       /* the log is a record, not a gate */
     }
@@ -1870,6 +2049,10 @@ export class CampaignsService {
     bounce_type?: string | null;
     retry_count?: number;
     next_retry_at?: Date | null;
+    /** Celebration campaigns only. */
+    provider_message_id?: string | null;
+    sent_at?: Date | null;
+    failure_kind?: string | null;
   }): Promise<void> {
     await this.prisma.campaign_recipients.update({
       where: { id },

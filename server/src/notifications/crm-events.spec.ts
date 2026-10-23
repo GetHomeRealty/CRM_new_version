@@ -170,12 +170,15 @@ describe('lead assigned', () => {
     });
   });
 
-  it('does not notify somebody who assigned a lead to themselves', async () => {
+  // Changed 21 Oct 2026 at the brokerage's request: assigning a lead to yourself notifies you too.
+  it('notifies somebody who assigned a lead to themselves', async () => {
     await inRollback(async (tx) => {
       const me = await makeUser(tx);
       const { notifier } = build(tx);
       await notifier.leadAssigned(LEAD, me.id, me.id, me.name);
-      expect(await stored(tx, me.id)).toHaveLength(0);
+      const rows = await stored(tx, me.id);
+      expect(rows).toHaveLength(1);
+      expect(rows[0].category).toBe('lead_assigned');
     });
   });
 

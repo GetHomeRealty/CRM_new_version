@@ -10,6 +10,7 @@ import type { AuthUserRecord } from '../auth/auth.types';
 import { STORAGE_ROOT } from '../config/storage';
 
 import { can } from '../core/authz';
+import { hasUsersFullAccess } from './team-lead';
 /**
  * Profile pictures, for every account — agent, accounting, documentation, CRM, manager,
  * admin and super admin alike. A user always manages their own; administrators may also
@@ -72,7 +73,7 @@ export class UserPhotoService {
   /** A user may always act on their own picture; administrators may act on anyone's. */
   assertMayManage(actor: AuthUserRecord | null, targetId: number): void {
     const isSelf = !!actor?.id && actor.id === targetId;
-    if (!isSelf && !can(actor, 'users.manage-photo')) {
+    if (!isSelf && !can(actor, 'users.manage-photo') && !hasUsersFullAccess(actor)) {
       throw new ForbiddenException({ message: 'You can only change your own profile picture.' });
     }
   }

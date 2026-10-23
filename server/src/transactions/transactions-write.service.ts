@@ -165,11 +165,13 @@ export const FILL_KEYS = [
  * Anything not named here is dropped from their update — see the comment in `update`.
  */
 export const DOCUMENTATION_EDITABLE: ReadonlySet<string> = new Set([
-  // Documentation may edit Type and Status in Basic Info. Other basic fields remain locked;
-  // Price, Deposit and Commission Amount still use the Super Admin approval workflow.
-  'type', 'statuses',
+  // Documentation may edit Type, Status, Agent Name and Property Address in Basic Info (Agent
+  // and Address added 2026-10-19 at the brokerage's request). Other basic fields remain locked;
+  // Price, Deposit, Closing Date and Commission Amount still use the Super Admin approval workflow.
+  'type', 'statuses', 'agent', 'property',
   'conditional_offer', 'conditions', 'inter_board_enabled', 'inter_board_listings',
-  'clients', 'brokerage',
+  // 'clients' and 'brokerage' left on 2026-10-22: both cards now change by Super Admin approval
+  // (the 'brokerage' and 'clients' edit-request scopes), so a direct save drops them.
   'builder',
   // Preconstruction Details, not Basic Info — a separate card, and this role's to maintain.
   'precon_listing_type',
@@ -255,14 +257,23 @@ export const BASIC_INFO_FIELDS: ReadonlySet<string> = new Set([
  * sends the whole deal on every save, so a refusal would block this role's legitimate edits to
  * the sections it does maintain.
  */
+/**
+ * 2026-10-19 (brokerage request): Accounting edits Basic Info as Documentation does — Type, Status,
+ * Agent Name and Property Address directly; Price, Deposit and Closing Date only by request for
+ * Super Admin approval (the same edit-request scopes), so they stay locked here.
+ */
+export const ACCOUNTING_BASIC_EDITABLE: ReadonlySet<string> = new Set(['type', 'statuses', 'agent', 'property']);
+
 export const ACCOUNTING_LOCKED: ReadonlySet<string> = new Set([
-  ...BASIC_INFO_FIELDS,
+  ...[...BASIC_INFO_FIELDS].filter((k) => !ACCOUNTING_BASIC_EDITABLE.has(k)),
   'comm_type', 'comm_value', 'comm_pct', 'comm_amt',
   'comm_adjust_enabled', 'comm_adjust_before', 'comm_adjust_after',
   'listing_comm_pct', 'coop_comm_pct', 'listing_comm_flat', 'coop_comm_flat', 'trust_payable',
   'listing_adj_enabled', 'listing_adj_before', 'listing_adj_after',
   'coop_adj_enabled', 'coop_adj_before', 'coop_adj_after',
   'precon_net_of_hst', 'precon_comm_pct', 'precon_comm_amt_manual', 'precon_comm_bonus', 'precon_details_of_terms',
+  // 2026-10-22: Listing / Co-op Brokerage and Client Information change by approval, as Documentation's do.
+  'brokerage', 'clients',
 ]);
 
 // Agents cannot modify these.
@@ -1433,9 +1444,12 @@ export class TransactionsWriteService {
      * commission and locks the deal, and stays with the roles that held it before this role could edit
      * statuses at all.
      */
-    if (user?.role === 'documentation' && Object.prototype.hasOwnProperty.call(data, 'statuses')
+    // Accounting sets Status as Documentation does since 2026-10-19, and like Documentation cannot close a deal.
+    if ((user?.role === 'documentation' || user?.role === 'accounting') && Object.prototype.hasOwnProperty.call(data, 'statuses')
       && (data.statuses as unknown[]).map(String).includes('Closed') && !statuses.includes('Closed')) {
-      throw new ForbiddenException({ message: 'A Documentation user cannot close a deal. Ask an administrator to close it.' });
+      throw new ForbiddenException({
+        message: `${user.role === 'accounting' ? 'An Accounting' : 'A Documentation'} user cannot close a deal. Ask an administrator to close it.`,
+      });
     }
     /*
      * TD-075 - AN AGENT MAY NOT MOVE THE MONEY ON A SAVED DEAL WITHOUT APPROVAL.

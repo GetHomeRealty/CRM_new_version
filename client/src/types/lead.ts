@@ -152,6 +152,34 @@ export interface LeadTask {
   assigned_to_name?: string | null;
   created_by: string | null;
   created_at: string | null;
+  /** Only on a save response: the emails that save queued, and anything the person should know. */
+  email_notifications?: LeadTaskEmailOutcome[];
+  email_warnings?: string[];
+}
+
+/** One email a task save queued (or could not), as the save response reports it. */
+export interface LeadTaskEmailOutcome {
+  kind: 'created' | 'assigned' | 'created_assigned';
+  recipient_user_id: number;
+  recipient_name: string | null;
+  status: 'queued' | 'skipped';
+  message: string;
+}
+
+/** A task email's record: what became of the creator's confirmation or the agent's notice. */
+export interface LeadTaskEmail {
+  id: number;
+  task_id: number;
+  kind: 'created' | 'assigned' | 'created_assigned';
+  recipient_user_id: number;
+  recipient_name: string | null;
+  status: 'pending' | 'sending' | 'sent' | 'failed' | 'skipped';
+  attempts: number;
+  error_message: string | null;
+  next_attempt_at: string | null;
+  sent_at: string | null;
+  created_at: string;
+  retryable: boolean;
 }
 
 /** A lead task with the lead it belongs to, as the Dashboard lists them across all leads. */

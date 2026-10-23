@@ -17,6 +17,7 @@ import CampaignTemplates from './CampaignTemplates';
 import SuppressionsPanel from './SuppressionsPanel';
 import DeliverabilityPanel from './DeliverabilityPanel';
 import CampaignRecipientList from './CampaignRecipientList';
+import CelebrationsPanel from './CelebrationsPanel';
 import type {
   AudienceFilter, AudiencePreview, CampaignDetail, CampaignOptions,
   CampaignRecipientRow, CampaignSummary, EmailPreview, TrackingHealth,
@@ -63,7 +64,7 @@ const toLocalInput = (d: Date): string =>
 const earliestSend = () => toLocalInput(new Date(Date.now() + 60_000));
 
 /** The three sections of this module, held in `?tab=`. */
-type Tab = 'campaigns' | 'templates' | 'suppressions';
+type Tab = 'campaigns' | 'templates' | 'suppressions' | 'celebrations';
 
 /**
  * Whether ANY axis has been narrowed.
@@ -147,7 +148,7 @@ export default function CampaignsPage() {
    */
   const [params, setParams] = useSearchParams();
   const rawTab = params.get('tab');
-  const tab: Tab = rawTab === 'templates' || rawTab === 'suppressions' ? rawTab : 'campaigns';
+  const tab: Tab = rawTab === 'templates' || rawTab === 'suppressions' || rawTab === 'celebrations' ? rawTab : 'campaigns';
   const setTab = (next: Tab) => {
     const p = new URLSearchParams(params);
     if (next === 'campaigns') p.delete('tab'); else p.set('tab', next);
@@ -599,6 +600,11 @@ export default function CampaignsPage() {
           lists Campaigns and Templates under this module. What is left here is an action, not
           navigation, so the row stays. */}
       <div className="toolbar"><div className="toolbar-row">
+        {/* Celebration & Wishes lives on its own tab of this module (?tab=celebrations). */}
+        <button className={`btn sm ${tab === 'celebrations' ? 'primary' : 'ghost'}`} type="button" data-testid="celebrations-tab"
+          onClick={() => setTab(tab === 'celebrations' ? 'campaigns' : 'celebrations')}>
+          {tab === 'celebrations' ? '← Back to campaigns' : '🎉 Celebration & Wishes'}
+        </button>
         {canEdit && (
           <button className="btn sm ghost" type="button"
             onClick={() => { setTestResult(null); setTestOpen(true); }} title="Verify your SMTP credentials before sending a campaign">
@@ -609,6 +615,7 @@ export default function CampaignsPage() {
 
       {tab === 'templates' && <CampaignTemplates options={options} onChanged={refreshOptions} onUse={useTemplate} />}
       {tab === 'suppressions' && <SuppressionsPanel />}
+      {tab === 'celebrations' && <CelebrationsPanel canEdit={canEdit} />}
 
       {/* Open tracking dies silently when the public URL is unreachable — surface it, and let
           the result be re-checked on demand rather than only at page load.
