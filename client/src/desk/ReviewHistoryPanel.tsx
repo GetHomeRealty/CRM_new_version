@@ -6,6 +6,7 @@ import { apiErrorMessage } from '../lib/apiError';
 import { useToast } from './toast';
 import Icon from '../ui/Icon';
 import { dayMonthYear } from './DateBox';
+import { taxLabel } from './format';
 
 /**
  * The review history of one deal — every decision the office made about an agent's change, and what
@@ -443,7 +444,8 @@ function commissionRows(r: EditRequest): { label: string; from: string; to: stri
       }
     } else {
       const fmt = DATE_KEYS.has(k) ? longDate : show;
-      out.push({ label: COMMISSION_LABELS[k] ?? k, from: fmt(baseline[k]), to: fmt(v) });
+      // The labels say HST; on an India deal the tax is GST (23 Oct 2026).
+      out.push({ label: (COMMISSION_LABELS[k] ?? k).replace('HST', taxLabel()), from: fmt(baseline[k]), to: fmt(v) });
     }
   }
   return out;

@@ -2,7 +2,8 @@ import { deskPath } from './area';
 import { createPortal } from 'react-dom';
 import Icon from '../ui/Icon';
 import ClosingDateRequestDialog from './ClosingDateRequestDialog';
-import { Flag } from './MarketSwitch';
+import { Flag, MARKET_NAME } from './MarketSwitch';
+import type { Market } from '../types/auth';
 import PriceDepositRequestDialog from './PriceDepositRequestDialog';
 import PartiesRequestDialog from './PartiesRequestDialog';
 // Offer / Closing Date read "21-October-2026" (2026-10-22); the browser's calendar still picks them.
@@ -262,6 +263,9 @@ export default function TransactionDetailPage() {
   const [generating, setGenerating] = useState(false);
 
   const [form, setForm] = useState<DetailForm | null>(null);
+  // Why the deal could not be shown (23 Oct 2026) - instead of "Loading..." for ever: not found
+  // (deleted, wrong number), in the person's other country (offer the switch), or another error.
+  const [loadFailed, setLoadFailed] = useState<null | { kind: 'notfound' } | { kind: 'other'; market: Market } | { kind: 'error' }>(null);
   const [txn, setTxn] = useState<Transaction | null>(null); // raw API object (carries team + financial breakdown)
   // India deals: the builder project list and this deal's project (stage 3b, 17 Oct 2026).
   const [projects, setProjects] = useState<{ id: number; name: string; builder_name: string; city: string | null }[]>([]);
@@ -333,7 +337,23 @@ export default function TransactionDetailPage() {
   useEffect(() => {
     // applyUpdated (not a bare setForm) so the auto-save baseline is captured with the
     // freshly loaded values — otherwise the first render looks dirty and re-saves.
-    getTransaction(id).then(applyUpdated).catch(() => toast('Could not load transaction', 'bad'));
+    setLoadFailed(null);
+    getTransaction(id).then(applyUpdated).catch(async (e: unknown) => {
+      if ((e as { response?: { status?: number } })?.response?.status !== 404) {
+        setLoadFailed({ kind: 'error' });
+        toast('Could not load transaction', 'bad');
+        return;
+      }
+      // Someone who works in both countries may be holding the other country's link.
+      if ((user?.markets?.length ?? 0) > 1) {
+        try {
+          const r = await api.get<{ market: Market }>(`/api/deal-country/${id}`);
+          setLoadFailed({ kind: 'other', market: r.data.market });
+          return;
+        } catch { /* not there either */ }
+      }
+      setLoadFailed({ kind: 'notfound' });
+    });
     listAgents().then(setAgents).catch(() => {});
     // Loaded lazily so the invoice editor can open in-context on this page.
     getCompanySettings().then(setInvSettings).catch(() => {});
@@ -534,6 +554,35 @@ export default function TransactionDetailPage() {
     else setInvoiceOpen(true);
   };
 
+  if (!form && loadFailed) {
+    const switchTo = async (m: Market) => {
+      try { await api.post('/api/user/market', { market: m }); window.location.reload(); }
+      catch { toast(`Could not switch to ${MARKET_NAME[m]}`, 'bad'); }
+    };
+    return (
+      <div className="card centered" style={{ padding: 40, maxWidth: 560, margin: '40px auto' }}>
+        {loadFailed.kind === 'other' ? (<>
+          <h3 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'center' }}><Flag market={loadFailed.market} /> This deal is in {MARKET_NAME[loadFailed.market]}</h3>
+          <p className="muted" style={{ marginTop: 8 }}>You are working in {MARKET_NAME[(user?.market ?? 'CA') as Market]}. Switch to {MARKET_NAME[loadFailed.market]} to open it.</p>
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'center', marginTop: 16 }}>
+            <button className="btn primary" onClick={() => switchTo(loadFailed.market)}>Switch to {MARKET_NAME[loadFailed.market]}</button>
+            <button className="btn ghost" onClick={() => navigate(deskPath('transactions'))}>Back to Transactions</button>
+          </div>
+        </>) : loadFailed.kind === 'notfound' ? (<>
+          <h3 style={{ margin: 0 }}>This deal was not found</h3>
+          <p className="muted" style={{ marginTop: 8 }}>It may have been deleted, or the link or number is wrong.</p>
+          <div style={{ marginTop: 16 }}><button className="btn primary" onClick={() => navigate(deskPath('transactions'))}>Back to Transactions</button></div>
+        </>) : (<>
+          <h3 style={{ margin: 0 }}>This deal could not be loaded</h3>
+          <p className="muted" style={{ marginTop: 8 }}>Something went wrong while loading it. Please try again.</p>
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'center', marginTop: 16 }}>
+            <button className="btn primary" onClick={() => window.location.reload()}>Try again</button>
+            <button className="btn ghost" onClick={() => navigate(deskPath('transactions'))}>Back to Transactions</button>
+          </div>
+        </>)}
+      </div>
+    );
+  }
   if (!form) return <div className="centered">Loading…</div>;
 
   // Founding team members (selected at creation, access='full') edit like the primary;

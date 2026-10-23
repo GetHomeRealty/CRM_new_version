@@ -212,7 +212,8 @@ export class AuditService {
   columnForLabel(label: string | null | undefined): string | null {
     if (label === null || label === undefined) return null;
     for (const [col, [, lbl]] of Object.entries(SCALAR_MAP)) {
-      if (lbl === label) return col;
+      // An India deal's history says GST where SCALAR_MAP says HST (see snapshot).
+      if (lbl === label || lbl.replace('HST', 'GST') === label) return col;
     }
     return null;
   }
@@ -276,8 +277,11 @@ export class AuditService {
     };
     const row = t as unknown as Record<string, unknown>;
 
+    // India deals (23 Oct 2026): the tax in these labels is GST, not HST. Both snapshots of one diff
+    // are the same deal, so before and after always use the same words.
+    const india = (t as { market?: string | null }).market === 'IN';
     for (const [col, [section, label]] of Object.entries(SCALAR_MAP)) {
-      add(section, label, this.snapCol(col, row[col]));
+      add(section, india ? label.replace('HST', 'GST') : label, this.snapCol(col, row[col]));
     }
 
     for (const [col, [section, prefix]] of Object.entries(JSON_MAP)) {
