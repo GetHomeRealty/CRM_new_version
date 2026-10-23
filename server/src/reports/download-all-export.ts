@@ -329,7 +329,9 @@ const GROUP_FILL: Record<Group, string> = {
  * Build the workbook: one sheet per transaction type present in the data, in the order the
  * types are declared, each with its own applicable columns.
  */
-export function buildDownloadAllWorkbook(rows: ExportRow[], meta: { company: string; generatedBy: string; generatedAt: Date; filters: { label: string; value: string }[] }): ExcelJS.Workbook {
+export function buildDownloadAllWorkbook(rows: ExportRow[], meta: { company: string; generatedBy: string; generatedAt: Date; filters: { label: string; value: string }[]; words?: (s: string) => string }): ExcelJS.Workbook {
+  // The country's tax word in the headings (India: GST); the column definitions keep HST.
+  const words = meta.words ?? ((x: string) => x);
   const wb = new ExcelJS.Workbook();
   wb.creator = meta.company;
   wb.created = meta.generatedAt;
@@ -379,7 +381,7 @@ export function buildDownloadAllWorkbook(rows: ExportRow[], meta: { company: str
     const headRow = ws.getRow(2);
     cols.forEach((c, i) => {
       const cell = headRow.getCell(i + 1);
-      cell.value = c.header;
+      cell.value = words(c.header);
       cell.font = { bold: true, color: { argb: 'FF111827' } };
       cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFDE7E9' } };
       cell.alignment = { vertical: 'middle', horizontal: 'left', wrapText: true };

@@ -6,6 +6,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import type { AnalyticsFilters } from './desk-analytics.filters';
 import type { ScopedUser } from '../common/transaction-scope';
 import type { ExportPayload, ReportColumn, ReportRow } from '../reports/report.types';
+import { marketOf } from '../common/market';
+import { taxLabelFor } from '../common/tax';
 
 /**
  * The Analytics screen, as a spreadsheet.
@@ -53,15 +55,18 @@ export class DeskAnalyticsExportService {
 
     // TD-064 - built once. The rows are the sheet, the section counts and the record count, and
     // deriving them three times invited the three to disagree.
-    const rows = this.rows(data);
+    // India (23 Oct 2026): the tax named in the file is GST, not HST - headings, Summary rows, Basis.
+    const tax = taxLabelFor(marketOf(user));
+    const word = (s: string): string => s.replace(/HST/g, tax);
+    const rows = this.rows(data).map((r) => (r.section === 'summary' ? { ...r, group: word(String(r.group)) } : r));
 
     const payload: ExportPayload = {
       reportName: 'Transaction Desk Analytics',
       generatedAt,
       generatedBy: (user?.name ?? '').trim() || 'Unknown',
-      appliedFilters: await this.appliedFilters(filters),
+      appliedFilters: (await this.appliedFilters(filters)).map((f) => ({ ...f, value: word(f.value) })),
       dealTypeHeading: filters.type ?? null,
-      columns: COLUMNS,
+      columns: COLUMNS.map((c) => ({ ...c, label: word(c.label) })),
       rows,
       // The footer totals the two figures that ARE additive down the sheet. `count` is not summed
       // here because the same deal appears in the month block and again in the agent block; the

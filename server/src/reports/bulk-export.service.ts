@@ -18,6 +18,17 @@ import type { ReportFilters } from './report.types';
 import type { DocRow } from './report-documents';
 import { STORAGE_ROOT } from '../config/storage';
 import { contentDisposition } from '../common/content-disposition';
+import { taxLabelFor } from '../common/tax';
+
+/**
+ * India (23 Oct 2026): the tax a downloaded file names is the country's - GST in India, HST in Canada.
+ * Only the words written into the file change; the names below stay HST, so every rule that reads
+ * them (money columns, ordering) works the same in both countries. Canada files are unchanged.
+ */
+const taxWords = (user: { market?: string | null } | null | undefined): ((s: string) => string) => {
+  const tax = taxLabelFor(user?.market ?? null);
+  return tax === 'HST' ? (s) => s : (s) => s.replace(/HST/g, tax);
+};
 
 /*
  * TD-054 — the columns a 'docs only' team member may not have, named once for every export.
@@ -62,7 +73,7 @@ const MONEY_HEADERS = new Set([
 
 /** A column an agent restricted to documents may not read. */
 const isMoneyHeader = (h: string): boolean =>
-  MONEY_HEADERS.has(h)
+  MONEY_HEADERS.has(h) || MONEY_HEADERS.has(h.replace(/GST/g, 'HST'))
   || /^Team \d+ (Deal Share %|Agent %|Brokerage %)$/.test(h)
   || /^Adjustment \d+ Amount$/.test(h)
   // TD-130 - a preconstruction term is money too. Added with the term columns themselves rather
@@ -333,9 +344,10 @@ export class BulkExportService {
     wb.creator = company;
     wb.created = new Date();
 
+    const words = taxWords(user);
     const sheet = (name: string, headers: string[]) => {
       const ws = wb.addWorksheet(name);
-      const h = ws.addRow(headers);
+      const h = ws.addRow(headers.map(words));
       h.height = 26;
       h.eachCell((c) => {
         c.font = { bold: true, color: { argb: 'FFFFFFFF' } };
@@ -687,7 +699,7 @@ export class BulkExportService {
       }
     }
 
-    return { headers, rows, txns };
+    return { headers: headers.map(taxWords(user)), rows, txns };
   }
 
   /**
@@ -713,6 +725,7 @@ export class BulkExportService {
       generatedBy: user.name,
       generatedAt: new Date(),
       filters: this.filterChips(sel),
+      words: taxWords(user),
     });
     return Buffer.from(await wb.xlsx.writeBuffer());
   }
@@ -734,7 +747,7 @@ export class BulkExportService {
   async dataPdf(sel: BulkSelection, user: AuthUserRecord): Promise<Buffer> {
     const txns = await this.resolve(sel, user);
     const company = (await this.settings.current()).name;
-    return this.renderPdf(txns, company, user.name);
+    return this.renderPdf(txns, company, user.name, taxWords(user));
   }
 
   /** Separate PDFs, one per transaction, packaged into a ZIP. */
@@ -748,14 +761,14 @@ export class BulkExportService {
     zip.pipe(res);
     const used = new Set<string>();
     for (const t of txns) {
-      const buf = await this.renderPdf([t], company, user.name);
+      const buf = await this.renderPdf([t], company, user.name, taxWords(user));
       zip.append(buf, { name: this.unique(used, `${this.safe(`Deal-${t.trade_no}_${t.property ?? ''}`)}.pdf`) });
     }
     await zip.finalize();
   }
 
   /** Render a transaction dossier: reference, parties, financials, conditions, documents. */
-  private async renderPdf(txns: EnrichedTxn[], company: string, by: string): Promise<Buffer> {
+  private async renderPdf(txns: EnrichedTxn[], company: string, by: string, words: (s: string) => string = (x) => x): Promise<Buffer> {
     const doc = new PDFDocument({ size: 'A4', margins: { top: 36, bottom: 44, left: 40, right: 40 }, bufferPages: true });
     const chunks: Buffer[] = [];
     doc.on('data', (c: Buffer) => chunks.push(c));
@@ -772,7 +785,8 @@ export class BulkExportService {
       doc.font('Helvetica').fontSize(9).fillColor('#64748b').text(t.property ?? '—', left, doc.y + 1, { width, align: 'center' });
       doc.moveDown(0.8);
 
-      const section = (title: string, pairs: [string, string][]) => {
+      const section = (title: string, rawPairs: [string, string][]) => {
+        const pairs = rawPairs.map(([k, v]) => [words(k), v] as [string, string]);
         if (doc.y > doc.page.height - 120) doc.addPage();
         doc.font('Helvetica-Bold').fontSize(9).fillColor('#312e81').text(title.toUpperCase(), left, doc.y, { width });
         doc.moveTo(left, doc.y + 2).lineTo(left + width, doc.y + 2).strokeColor('#c7d2fe').lineWidth(1).stroke();
