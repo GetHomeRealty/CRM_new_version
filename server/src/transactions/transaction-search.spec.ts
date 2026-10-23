@@ -141,7 +141,8 @@ describe('the transactions search finds a deal by its client (TD-090)', () => {
     // a permission defect rather than a search one.
     const [clause] = filterClauses({ q: 'Nair' } as never);
     expect(Object.keys(clause)).toEqual(['OR']);
-    expect((clause as { OR: unknown[] }).OR).toHaveLength(4);
+    // Five arms since 23 Oct 2026: property, trade number, old trade number note, agent, client.
+    expect((clause as { OR: unknown[] }).OR).toHaveLength(5);
   });
 });
 
