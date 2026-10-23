@@ -1,6 +1,9 @@
 import { Prisma } from '@prisma/client';
 import type { ListTransactionsDto } from './dto/list-transactions.dto';
 
+/** The one wording an old sheet trade number is kept in, inside a deal's Admin Remarks (23 Oct 2026). */
+export const OLD_TRADE_NO_PREFIX = 'Old trade no: ';
+
 /**
  * The transactions screen's filters, expressed as database predicates.
  *
@@ -97,6 +100,12 @@ export function filterClauses(q: ListTransactionsDto): Prisma.transactionsWhereI
       OR: [
         { property: { contains, mode: 'insensitive' } },
         { trade_no: { contains, mode: 'insensitive' } },
+        // OLD TRADE NUMBERS (Sai, 23 Oct 2026): the brokerage sheet's numbers from before the app
+        // renumbered and imported the deals are kept as Admin Remarks notes in ONE fixed wording,
+        // "Old trade no: 200836", one line per number. Only that wording is matched - never the rest
+        // of the remarks or the payment lines stored beside them - so typing 200836 finds the deal
+        // and an everyday search (1500, 2024, a name) finds exactly what it found before.
+        { admin_activities: { contains: `${OLD_TRADE_NO_PREFIX}${contains}`, mode: 'insensitive' } },
         { agent: { contains, mode: 'insensitive' } },
         { clients: { some: { name: { contains, mode: 'insensitive' } } } },
       ],
