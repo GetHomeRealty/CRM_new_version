@@ -77,8 +77,12 @@ export default function MarketSwitch() {
       // A full reload: every screen fetches again, in the new country. A page about ONE record
       // (/desk/transactions/812) is the other country's record, so it lands on that list instead.
       const path = window.location.pathname;
+      // A page only India has (Builders) means nothing in Canada: land on the Dashboard instead of
+      // "Builders are kept in India" (Sai, 23 Oct 2026).
+      const indiaOnly = path.match(/^(.*?)\/builders(?:\/|$)/);
       const one = path.match(/^(.*?)\/\d+(?:\/|$)/);
-      if (one) window.location.assign(one[1]);
+      if (m !== 'IN' && indiaOnly) window.location.assign(`${indiaOnly[1]}/dashboard`);
+      else if (one) window.location.assign(one[1]);
       else window.location.reload();
     } catch {
       toast(`Could not switch to ${MARKET_NAME[m]}`, 'bad');
