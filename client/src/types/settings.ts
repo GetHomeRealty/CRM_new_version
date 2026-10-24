@@ -12,6 +12,10 @@ export interface CompanySettings {
   thank_you_note?: string;
   deposit_heading?: string;
   deposit_signatory?: string;
+  /** Invoice Settings: the default Terms & Conditions copied onto each new invoice. */
+  invoice_terms_conditions?: string | null;
+  /** Invoice Settings: the default signature (PNG data URL) copied onto each new invoice. */
+  invoice_signature?: string | null;
   /** Cadence (days) for recurring lawyer-detail reminder emails. 0 = off. */
   lawyer_reminder_days?: number;
   default_terms?: string;

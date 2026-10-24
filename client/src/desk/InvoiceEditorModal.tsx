@@ -39,6 +39,12 @@ const today = () => new Date().toISOString().slice(0, 10);
 const addDays = (dateStr: string, n: number) => { const d = new Date(dateStr); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
 const blankItem = (): LineItem => ({ description: '', qty: 1, rate: 0, is_taxable: true });
 const r2c = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+/** '2026-09-25' -> '25 Sep 2026' for the payment line; anything else is shown as it came. */
+const shortDate = (s: string) => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s); return m ? `${Number(m[3])} ${MONTHS[Number(m[2]) - 1]} ${m[1]}` : s; };
+/** One recorded payment, kept to one short line: date · amount · method. */
+const payLine = (p: NonNullable<Invoice['payments']>[number]) =>
+  [shortDate(String(p.paid_on ?? '')), formatCurrency(Number(p.amount ?? 0)), p.method, p.reference].filter(Boolean).join(' · ');
 
 interface LineItem { description: string; qty: number | string; rate: number | string; is_taxable: boolean; }
 interface AutoReminder { mode?: string; dates?: string[]; }
@@ -107,6 +113,7 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
   // TD-172 - Accounting and Super Admin may correct a recorded payment; the server refuses anyone else.
   const auth = useAuth();
   const canCorrectPayments = auth.isSuperAdmin || auth.user?.role === 'accounting';
+  const canEditSettings = auth.can('settings', 'edit');
   const payConfirm = useConfirm();
   const [editPay, setEditPay] = useState<{ id: number; paid_on: string; amount: string; method: string; reference: string } | null>(null);
   const [saving, setSaving] = useState(false);
@@ -121,7 +128,15 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
   useEffect(() => {
     if (!open) return;
     if (invoiceId) {
-      getInvoice(invoiceId).then((d) => { setForm(toForm(d)); setSaved(d); });
+      getInvoice(invoiceId).then((d) => {
+        const f = toForm(d);
+        // Invoice Settings - an invoice that has not been sent and never had Customer Notes, Terms or a
+        // signature (null, as invoices made before the defaults existed) starts from the company
+        // defaults. '' means someone cleared it for this deal, so that stays as it is.
+        const fill = !d.sent_at ? withDefaults(f, d, settings) : null;
+        setForm(fill || f); setSaved(d);
+        if (fill) setEdited(true);
+      });
     } else {
       setForm({
         property_reference: '', customer_id: '', customer_name: '', customer_phone: '', emails: [''],
@@ -129,7 +144,7 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
         invoice_date: today(), terms: settings?.default_terms || 'Due on Receipt', due_date: today(),
         trade_number: '', listing_agent: '', coop_salesperson: '', subject: '', status: 'Draft',
         transaction_id: null, transaction_type: '', purchase_price: null,
-        discount: 0, customer_notes: settings?.thank_you_note || '', terms_conditions: '', signature_path: '',
+        discount: 0, customer_notes: settings?.thank_you_note || '', terms_conditions: settings?.invoice_terms_conditions || '', signature_path: settings?.invoice_signature || '',
         commission_received_date: '', commission_received_via: '', auto_reminder: null,
         broker_name: settings?.broker_name || 'Sai Venkata Ramesh Gollu',
         tax_rate: settings?.default_tax_rate ?? 13,
@@ -517,7 +532,8 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
           {form.status !== 'Void' && (
             <div style={{ border: '1px solid #bbf7d0', background: 'var(--ok-bg)', borderRadius: 8, padding: 10, margin: '2px 0 6px' }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--ok-ink)', marginBottom: 6 }}>Commission Received</div>
-              {amountPaid > 0 && (
+              {/* Fully paid, the payment line below already says it all. */}
+              {amountPaid > 0 && !paymentRecorded && (
                 <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 6 }}>
                   Recorded so far: {formatCurrency(amountPaid)} · Outstanding: {formatCurrency(balanceDue)}
                 </div>
@@ -543,18 +559,24 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
                           </div>
                         </div>
                       ) : (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                          <span style={{ flex: 1 }}>
-                            {String(p.paid_on ?? '')} - {formatCurrency(Number(p.amount ?? 0))}{p.method ? ' - ' + p.method : ''}{p.reference ? ' - ' + p.reference : ''}
-                          </span>
-                          <button className="btn ghost sm" onClick={() => startEditPay(p)} disabled={saving}>Edit</button>
-                          <button className="btn ghost sm" style={{ color: 'var(--bad)' }} onClick={() => askRemovePay(p)} disabled={saving}>Remove</button>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                          <span style={{ flex: 1, color: 'var(--text-2)' }}>{payLine(p)}</span>
+                          <button className="row-rm" title="Edit payment" aria-label="Edit payment" onClick={() => startEditPay(p)} disabled={saving}><Icon name="edit" size={12} /></button>
+                          <button className="row-rm" title="Remove payment" aria-label="Remove payment" style={{ color: 'var(--bad)' }} onClick={() => askRemovePay(p)} disabled={saving}><Icon name="trash" size={12} /></button>
                         </div>
                       )}
                     </div>
                   ))}
                 </div>
               )}
+              {/* Everyone else sees the same short line, without the correction buttons. */}
+              {!canCorrectPayments && paymentRecorded && (saved?.payments || []).map((p) => (
+                <div key={String(p.id)} style={{ fontSize: 11, color: 'var(--text-2)', borderTop: '1px solid #bbf7d0', padding: '5px 0' }}>{payLine(p)}</div>
+              ))}
+              {/* Once the invoice is fully paid the new-payment fields have nothing left to record, so
+                  they are hidden; a recorded payment is changed through its own Edit. A partly paid
+                  invoice keeps them for the next payment. */}
+              {!paymentRecorded && (<>
               <label style={{ fontSize: 11, color: 'var(--text-3)', display: 'block', marginBottom: 2 }}>Date</label>
               <input type="date" value={form.commission_received_date} onChange={(e) => set('commission_received_date', e.target.value)} style={{ width: '100%', marginBottom: 8, border: '1px solid var(--line)', borderRadius: 6, padding: '6px 8px' }} />
               <label style={{ fontSize: 11, color: 'var(--text-3)', display: 'block', marginBottom: 2 }}>Received via</label>
@@ -564,11 +586,8 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
               {/* TD-121 — leave blank to record the whole outstanding balance. */}
               <label style={{ fontSize: 11, color: 'var(--text-3)', display: 'block', marginBottom: 2 }}>Amount</label>
               <input type="number" step="0.01" min="0" value={payAmount} placeholder={balanceDue.toFixed(2)} onChange={(e) => setPayAmount(e.target.value)} style={{ width: '100%', border: '1px solid var(--line)', borderRadius: 6, padding: '6px 8px' }} />
-              {paymentRecorded ? (
-                <button className="btn sm" style={{ marginTop: 8, width: '100%', background: 'var(--ok-600)', borderColor: 'var(--ok-600)', color: '#fff', fontWeight: 700, cursor: 'default' }} disabled><Icon name="check" size={13} /> Payment Recorded</button>
-              ) : (
-                <button className="btn primary sm" style={{ marginTop: 8, width: '100%' }} onClick={recordCommissionPayment} disabled={saving}>Record Payment</button>
-              )}
+              <button className="btn primary sm" style={{ marginTop: 8, width: '100%' }} onClick={recordCommissionPayment} disabled={saving}>Record Payment</button>
+              </>)}
             </div>
           )}
           <ConfirmDialog confirm={payConfirm.confirm} onClose={payConfirm.closeConfirm} />
@@ -685,14 +704,19 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
             <thead><tr>
               <th style={{ border: '1px solid var(--line)', background: 'var(--surface-3)', padding: '10px 12px', textAlign: 'left' }}>DESCRIPTION</th>
               <th style={{ border: '1px solid var(--line)', background: 'var(--surface-3)', padding: '10px 12px', textAlign: 'left', width: 260 }}>AMOUNT ({india ? 'INR' : 'CAD'})</th>
-              <th style={{ width: 36, border: '1px solid var(--line)', background: 'var(--surface-3)' }}></th>
             </tr></thead>
             <tbody>
+              {/* The remove-item bin sits inside the Amount cell, and only when there is more than one
+                  item - it used to have a column of its own that stayed empty on a one-item invoice. */}
               {form.line_items.map((it, i) => (
                 <tr key={i}>
                   <td style={{ border: '1px solid var(--line)', padding: '8px 12px' }}><input value={it.description} onChange={(e) => setItem(i, 'description', e.target.value)} style={docInput({ width: '100%', fontWeight: 600 })} /></td>
-                  <td style={{ border: '1px solid var(--line)', padding: '8px 12px' }}><input value={amountOf(it)} onChange={(e) => setAmount(i, e.target.value)} style={docInput({ width: '100%' })} /></td>
-                  <td style={{ border: '1px solid var(--line)', textAlign: 'center' }}>{form.line_items.length > 1 && <button className="row-rm" onClick={() => rmItem(i)}><Icon name="trash" size={13} /></button>}</td>
+                  <td style={{ border: '1px solid var(--line)', padding: '8px 12px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <input value={amountOf(it)} onChange={(e) => setAmount(i, e.target.value)} style={docInput({ flex: 1, minWidth: 0 })} />
+                      {form.line_items.length > 1 && <button className="row-rm" title="Remove item" aria-label="Remove item" onClick={() => rmItem(i)}><Icon name="trash" size={13} /></button>}
+                    </div>
+                  </td>
                 </tr>
               ))}
               <tr>
@@ -707,7 +731,6 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
                   </span>
                 </td>
                 <td style={{ border: '1px solid var(--line)', padding: '8px 12px' }}>{formatCurrency(tax)}</td>
-                <td style={{ border: '1px solid var(--line)' }}></td>
               </tr>
             </tbody>
           </table>
@@ -742,7 +765,7 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
               })()}
               <tr><td style={{ padding: '6px 14px', color: 'var(--text-3)' }}>Discount</td><td style={{ padding: '6px 14px', textAlign: 'right' }}><input value={form.discount} onChange={(e) => set('discount', e.target.value)} style={docInput({ width: 120, textAlign: 'right' })} /></td></tr>
               <tr><td style={{ padding: '8px 14px', fontWeight: 800, borderTop: '2px solid #0f172a', fontSize: 15 }}>GRAND TOTAL</td><td style={{ padding: '8px 14px', textAlign: 'right', fontWeight: 800, borderTop: '2px solid #0f172a', fontSize: 15 }}>{formatCurrency(grandTotal)}</td></tr>
-              {amountPaid > 0 && <tr><td style={{ padding: '4px 14px', color: 'var(--ok-ink)' }}>Paid</td><td style={{ padding: '4px 14px', textAlign: 'right', color: 'var(--ok-ink)' }}>{formatCurrency(amountPaid)}</td></tr>}
+              {amountPaid > 0 && <tr><td style={{ padding: '6px 14px', color: 'var(--ok-ink)', fontSize: 15, fontWeight: 800 }}>Paid</td><td style={{ padding: '6px 14px', textAlign: 'right', color: 'var(--ok-ink)', fontSize: 15, fontWeight: 800 }}>{formatCurrency(amountPaid)}</td></tr>}
               <tr><td style={{ padding: '4px 14px', fontWeight: 700, color: BRAND }}>Balance Due</td><td style={{ padding: '4px 14px', textAlign: 'right', fontWeight: 700, color: BRAND }}>{formatCurrency(balanceDue)}</td></tr>
             </tbody></table>
           </div>
@@ -762,9 +785,18 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
           {/* Deposit Instructions + Signature */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, marginTop: 18 }}>
             <div>
-              <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>{india ? 'Bank Details:' : 'Deposit Instructions:'}</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'baseline', gap: '0 8px', marginBottom: 6 }}>
+                <div style={{ fontWeight: 700, fontSize: 13, whiteSpace: 'nowrap' }}>{india ? 'Bank Details:' : 'Deposit Instructions:'}</div>
+                {/* The bank details are not stored on the invoice; they are read from Company Settings (Canada's). */}
+                {canEditSettings && !india && (
+                  <button type="button" className="row-rm" style={{ fontSize: 11.5, color: BRAND, display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap', width: 'auto', height: 'auto' }}
+                    onClick={() => navigate(deskPath('settings?tab=company'))}>
+                    Edit in Company Settings <Icon name="external" size={11} />
+                  </button>
+                )}
+              </div>
               <div style={{ background: 'var(--surface-2)', border: '1px solid var(--line)', borderRadius: 8, padding: 14, fontSize: 12.5, color: 'var(--text-2)', lineHeight: 1.7 }}>
-                <div style={{ fontWeight: 700 }}>Beneficiary Bank Account Detail:</div>
+                <div style={{ fontWeight: 700 }}>{india ? 'Beneficiary Bank Account Detail:' : (settings?.deposit_heading || 'Beneficiary Bank Account Detail:')}</div>
                 {india ? (<>
                   <div>Beneficiary Name : {india.bank.beneficiary || '—'}</div>
                   <div>Bank Name: {india.bank.bank_name || '—'}</div>
@@ -793,6 +825,9 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
                   <button className="row-rm" title="Remove signature" onClick={() => set('signature_path', '')}><Icon name="trash" size={13} /></button>
                 </div>
               )}
+              {form.signature_path && form.signature_path === settings?.invoice_signature && (
+                <div style={{ marginTop: 4, fontSize: 11, color: 'var(--muted)' }}>Company signature. Replace or remove it for this deal only.</div>
+              )}
               <div style={{ marginTop: 28, borderTop: '1px dashed var(--muted-2)', paddingTop: 6, fontSize: 11, fontStyle: 'italic', color: 'var(--muted-2)', textAlign: 'center' }}>Signature</div>
               <div style={{ marginTop: 10, fontSize: 12.5 }}>
                 <div style={{ fontStyle: 'italic', color: 'var(--text-3)', marginBottom: 4 }}>{india ? '(Authorised Signatory):' : '(Broker Manager / Broker of Record):'}</div>
@@ -812,6 +847,19 @@ export default function InvoiceEditorModal({ open, invoiceId, settings, onClose,
       <SavedBadge show={savedOk} />
     </div>
   );
+}
+
+/**
+ * The form with Company Settings' Invoice Settings defaults filled into whichever of Customer Notes,
+ * Terms & Conditions and signature the stored invoice has never had (null). Returns null when there
+ * is nothing to fill, so the caller can tell whether the form now differs from what is saved.
+ */
+function withDefaults(f: InvoiceForm, d: Invoice, s: CompanySettings | null | undefined): InvoiceForm | null {
+  const fill: Partial<InvoiceForm> = {};
+  if (d.customer_notes == null && s?.thank_you_note) fill.customer_notes = s.thank_you_note;
+  if (d.terms_conditions == null && s?.invoice_terms_conditions) fill.terms_conditions = s.invoice_terms_conditions;
+  if (d.signature_path == null && s?.invoice_signature) fill.signature_path = s.invoice_signature;
+  return Object.keys(fill).length ? { ...f, ...fill } : null;
 }
 
 function toForm(d: Invoice): InvoiceForm {

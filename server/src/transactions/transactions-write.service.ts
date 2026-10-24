@@ -31,6 +31,8 @@ import type { AuthUserRecord } from '../auth/auth.types';
 import { isAdminOrAbove, isAgent, isSuperAdmin } from '../core/authz';
 import { ownsTransaction, teamMemberIdentity } from '../common/transaction-scope';
 import { INDIA_TYPES, marketOf, typeAllowedIn } from '../common/market';
+import { agentVoteKey, batchReviewIncluded, batchReviewVotes, keepStoredBatchReview, OFFICE_VOTE_KEY, withBatchReviewVote } from './batch-review-votes';
+
 type Tx = Prisma.TransactionClient;
 
 /*
@@ -356,6 +358,59 @@ export function clearSwitchedOffSections(value: unknown): unknown {
     });
   }
   return adj;
+}
+
+/**
+ * A CLOSED ADJUSTMENT ROW STAYS AS IT WAS PAID (Madhu, 2026-10-23).
+ *
+ * A row's Status turns Closed by itself once its agent is paid — a Paid payment for that agent in
+ * Admin Activities, or the deal's agent commission marked paid (`syncAdjustmentStatuses`). The
+ * money has gone out on those figures, so the row is fixed from then on: agent, amount, sign, loan
+ * tick, term and remarks cannot change, the row cannot be deleted, switching Agent Adjust off
+ * cannot remove it, and no NEW row can be added for an agent who is already paid. Accounting and
+ * Super Admin are let through by the caller so they can still correct one.
+ *
+ * Compared as a multiset rather than by position: rows carry no id, and deleting an open row above
+ * a Closed one moves it up the list without changing it. A row's Status is not compared — the
+ * server works it out again after every save.
+ *
+ * `paid(agent)` answers from the deal as stored, so the lock is the one the user saw when they
+ * opened the panel. Returns the refusal message, or null when the save keeps every Closed row.
+ */
+export function closedAdjustmentProblem(stored: unknown, incoming: unknown, paid: (agent: string) => boolean): string | null {
+  const lockedRows = (adj: unknown): Record<string, unknown>[] => {
+    const a = asObject(adj);
+    if ((a.agent_adjust ?? null) !== 'Yes') return [];
+    return asArray(a.adjustment_rows).filter((r) => {
+      const agent = String(asObject(r).agent ?? '').trim();
+      return agent !== '' && paid(agent);
+    });
+  };
+  const key = (r: Record<string, unknown>): string => JSON.stringify([
+    String(r.agent ?? '').trim(),
+    round2(toFloat(r.amount ?? 0)),
+    !!r.is_loan,
+    String(r.term ?? ''),
+    String(r.remarks ?? '').trim(),
+  ]);
+  const left = lockedRows(stored).map(key);
+  const extra = lockedRows(incoming).filter((r) => {
+    const i = left.indexOf(key(r));
+    if (i >= 0) left.splice(i, 1);
+    return i < 0;
+  });
+  const agentOf = (k: string) => String((JSON.parse(k) as unknown[])[0]);
+  for (const r of extra) {
+    const agent = String(r.agent ?? '').trim();
+    // An unmatched Closed row of the same agent means this is that row, edited; otherwise it is new.
+    return left.some((k) => agentOf(k) === agent)
+      ? `${agent}'s adjustment is Closed because the agent has been paid, so it can't be changed. Ask Accounting or a Super Admin to correct it.`
+      : `${agent} has already been paid, so a new adjustment can't be added for them. Ask Accounting or a Super Admin.`;
+  }
+  if (left.length) {
+    return `${agentOf(left[0])}'s adjustment is Closed because the agent has been paid, so it can't be removed. Ask Accounting or a Super Admin to correct it.`;
+  }
+  return null;
 }
 
 const FINANCIAL_FIELDS = new Set([
@@ -1055,11 +1110,9 @@ export class TransactionsWriteService {
       if (isOwner) data.agent = user.name;
       else delete data.agent;
       for (const k of AGENT_LOCKED) delete data[k];
-      if (Object.prototype.hasOwnProperty.call(data, 'activity_tracker')) {
-        const existing = parseJsonObject(t.activity_tracker);
-        existing.batch_review_email = !!asObject(data.activity_tracker).batch_review_email;
-        data.activity_tracker = existing;
-      }
+      // An agent's save changes nothing in the tracker. Their client review email choice is set on
+      // its own (`setBatchReviewChoice`), so on a team split one agent's save cannot undo another's.
+      if (Object.prototype.hasOwnProperty.call(data, 'activity_tracker')) data.activity_tracker = parseJsonObject(t.activity_tracker);
     }
 
     /*
@@ -1133,6 +1186,13 @@ export class TransactionsWriteService {
      */
     if (Object.prototype.hasOwnProperty.call(data, 'adjustments')) {
       data.adjustments = clearSwitchedOffSections(data.adjustments);
+      // A Closed row (agent paid) is fixed for everyone but Accounting and Super Admin.
+      if (!isSuperAdmin(user) && user?.role !== 'accounting') {
+        const paidAgents = this.paidAgentNames(t.admin_activities);
+        const dealPaid = t.comm_paid_status === 'Yes' || (parseJsonObject(t.activity_tracker).agent_commission_paid_status ?? null) === 'Yes';
+        const problem = closedAdjustmentProblem(t.adjustments ? parseJsonObject(t.adjustments) : {}, data.adjustments, (a) => dealPaid || paidAgents.includes(a));
+        if (problem) throw new ForbiddenException({ message: problem, errors: { adjustments: [problem] } });
+      }
     }
 
     const statuses = await this.statusList(this.prisma, txnId);
@@ -1602,6 +1662,17 @@ export class TransactionsWriteService {
       }
 
       await this.captureRemovedRows(tx, t, actor, data);
+
+      /*
+       * Client review email choices are not this save's to change — see `batch-review-votes.ts`.
+       * Re-read under a row lock rather than from `t`, so a choice made while this form was open
+       * is carried through instead of being reverted by the screen's older copy.
+       */
+      if (Object.prototype.hasOwnProperty.call(fill, 'activity_tracker')) {
+        const [row] = await tx.$queryRaw<{ activity_tracker: string | null }[]>`SELECT activity_tracker FROM transactions WHERE id = ${txnId} FOR UPDATE`;
+        const sent = typeof fill.activity_tracker === 'string' ? parseJsonObject(fill.activity_tracker) : {};
+        fill.activity_tracker = JSON.stringify(phpJsonNormalize(keepStoredBatchReview(parseJsonObject(row?.activity_tracker), sent)));
+      }
 
       /*
        * THE VERSION IS CHECKED AGAIN HERE, IN THE WRITE ITSELF.
@@ -2301,6 +2372,53 @@ export class TransactionsWriteService {
     scan(asObject(admin.agents));
     for (const term of Object.values(asObject(admin.term_admin))) scan(asObject(asObject(term).agents));
     return names;
+  }
+
+  // ---- client review email: one person's choice --------------------------
+  /**
+   * Sets (or, with `null`, withdraws) the caller's own Send / Restrict for the client review email.
+   * See `batch-review-votes.ts` for the rule. An agent may answer only for themself, and only on a
+   * deal they own or are on the Team Split of — any access level, because the say is about their
+   * clients, not about editing the deal. Staff answer as the office. Documentation has no say, as
+   * before: their save never carried this flag.
+   */
+  async setBatchReviewChoice(user: AuthUserRecord | null, txnId: number, choice: unknown): Promise<{ data: Record<string, unknown> }> {
+    if (!user) throw new ForbiddenException({ message: 'Sign in to make this choice.' });
+    if (choice !== 'send' && choice !== 'restrict' && choice !== null) {
+      throw new BadRequestException({ message: 'Choose Send or Restrict.' });
+    }
+    const t = await this.prisma.transactions.findFirst({ where: { id: txnId, deleted_at: null }, select: { id: true, agent: true, agent_user_id: true } });
+    if (!t) throw new NotFoundException({ message: `No query results for model [App\\Models\\Transaction] ${txnId}.` });
+    if (user.role === 'documentation') throw new ForbiddenException({ message: 'Only the agents on this deal and the office can choose this.' });
+    let key = OFFICE_VOTE_KEY;
+    if (isAgent(user)) {
+      const onSplit = ownsTransaction(user, t) || (await this.prisma.team_members.findFirst({
+        where: { transaction_id: txnId, ...teamMemberIdentity(user) }, select: { id: true },
+      })) !== null;
+      if (!onSplit) throw new ForbiddenException({ message: 'Only the agents on this deal can choose this.' });
+      key = agentVoteKey(user.id);
+    }
+    if ((await this.statusList(this.prisma, txnId)).includes('DFT')) {
+      throw new UnprocessableEntityException({ message: 'This deal is DFT, so no client review email goes out.' });
+    }
+
+    const actor: ActingUser = { id: user.id, name: user.name };
+    await this.prisma.$transaction(async (tx) => {
+      const [row] = await tx.$queryRaw<{ activity_tracker: string | null }[]>`SELECT activity_tracker FROM transactions WHERE id = ${txnId} FOR UPDATE`;
+      const before = parseJsonObject(row?.activity_tracker);
+      const after = withBatchReviewVote(before, key, choice === null ? null : {
+        choice, name: user.name, user_id: isAgent(user) ? user.id : null, at: new Date().toISOString(),
+      });
+      await tx.transactions.update({ where: { id: txnId }, data: { activity_tracker: JSON.stringify(phpJsonNormalize(after)) } });
+      const label = (c: unknown): string => (c === 'send' ? 'Send' : c === 'restrict' ? 'Restrict' : 'No choice');
+      await this.audit.record(txnId, actor, {
+        section: 'Quick Actions', field: 'Client review email',
+        old: label(batchReviewVotes(before)[key]?.choice ?? null), new: label(choice),
+        source: isAgent(user) ? 'Agent' : 'Manual',
+        details: `Deal ${batchReviewIncluded(after) ? 'is' : 'is not'} included in batch review emails.`,
+      }, tx);
+    });
+    return this.loadResource(txnId, user);
   }
 
   // ---- destroy + agent-change review -------------------------------------

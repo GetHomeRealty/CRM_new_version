@@ -1,5 +1,5 @@
 import { useState, useEffect, type CSSProperties } from 'react';
-import { updateTransaction } from '../lib/api';
+import { setBatchReviewChoice, updateTransaction } from '../lib/api';
 import { isListingType, isPreconType, formatCurrency } from './format';
 import { printDoc } from './printDoc';
 import { useToast } from './toast';
@@ -71,11 +71,26 @@ interface AgentFaqModalProps {
   depositSlipOnly?: boolean;
   dftNA?: boolean;
   readOnly?: boolean;
-  allowBatchEmail?: boolean;
   isAgent?: boolean;
+  /** A client review email choice was saved — the deal's stored tracker, for the page's copy. */
+  onBatchReviewChanged?: (tracker: ActivityTracker) => void;
 }
 
-export default function AgentFaqModal({ open, onClose, transactionId, txn, onSaved, termCount: termCountProp, depositSlipOnly = false, dftNA = false, readOnly = false, allowBatchEmail = false, isAgent = false }: AgentFaqModalProps) {
+type ReviewChoice = 'send' | 'restrict';
+interface ReviewVote { choice: ReviewChoice; name: string; user_id: number | null; at: string }
+
+/** The stored per-person choices (`batch_review_votes`, see the server's batch-review-votes.ts). */
+const reviewVotes = (a: ActivityTracker): Record<string, ReviewVote> => {
+  const raw = a.batch_review_votes;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const out: Record<string, ReviewVote> = {};
+  for (const [k, v] of Object.entries(raw as Record<string, Partial<ReviewVote>>)) {
+    if (v && (v.choice === 'send' || v.choice === 'restrict')) out[k] = { choice: v.choice, name: v.name || '', user_id: v.user_id ?? null, at: v.at || '' };
+  }
+  return out;
+};
+
+export default function AgentFaqModal({ open, onClose, transactionId, txn, onSaved, termCount: termCountProp, depositSlipOnly = false, dftNA = false, readOnly = false, isAgent = false, onBatchReviewChanged }: AgentFaqModalProps) {
   const { user } = useAuth();
   /*
    * THE DOCUMENTATION ROLE ONLY — the same test the transaction page makes, and the same one
@@ -184,6 +199,31 @@ export default function AgentFaqModal({ open, onClose, transactionId, txn, onSav
   const [termFilter, setTermFilter] = useState('All');
   const [saving, setSaving] = useState(false);
   const [savedOk, setSavedOk] = useState(false); // §3.2 — "Saved" then auto-close
+  /*
+   * CLIENT REVIEW EMAIL ON A TEAM SPLIT — each agent has their own Send / Restrict, and one Restrict
+   * keeps the deal out of the batch (Madhu, 2026-10-23). Saved on its own, the moment it is clicked,
+   * so it never rides on this panel's Save and one agent's save cannot undo another's choice.
+   */
+  const [reviewTracker, setReviewTracker] = useState<ActivityTracker>(() => txn.activity_tracker || {});
+  const [reviewBusy, setReviewBusy] = useState(false);
+  const votes = reviewVotes(reviewTracker);
+  const myVoteKey = !user ? null : isAgent ? `user:${user.id}` : 'office';
+  const myChoice = myVoteKey ? votes[myVoteKey]?.choice ?? null : null;
+  const canChooseReview = !!user && !dftNA && !isDocumentation && (isAgent || !readOnly);
+  const restrictedBy = Object.values(votes).filter((v) => v.choice === 'restrict').map((v) => v.name);
+  const reviewIncluded = !!reviewTracker.batch_review_email;
+  const voteFor = (name: string): ReviewVote | undefined => Object.entries(votes).find(([k, v]) => k.startsWith('user:') && v.name === name)?.[1];
+  const otherVotes = Object.entries(votes).filter(([k, v]) => !(k.startsWith('user:') && agentNames.includes(v.name)));
+  const chooseReview = async (choice: ReviewChoice | null) => {
+    setReviewBusy(true);
+    try {
+      const updated = await setBatchReviewChoice(transactionId, choice);
+      const tracker = updated.activity_tracker || {};
+      setReviewTracker(tracker);
+      onBatchReviewChanged?.(tracker);
+    } catch (e) { toast(apiErrorMessage(e, 'Could not save your choice'), 'bad'); }
+    setReviewBusy(false);
+  };
 
   // Agent Commission Paid Status is auto-driven from Admin Activities: once every agent's
   // payment is resolved there (Paid Type + Paid Date entered, or the agent is fully covered
@@ -446,15 +486,36 @@ export default function AgentFaqModal({ open, onClose, transactionId, txn, onSav
           </div>
         )}
 
-        {/* Batch review-email — editable by agents even though the rest is read-only. */}
+        {/* Batch review-email — each person's own choice, open to agents even though the rest is read-only. */}
         {!referral && !depositSlipOnly && (
-        <div style={{ background: '#f9fafb', border: '1px solid var(--line)', borderRadius: 8, padding: 12, marginBottom: 14 }}>
+        <div data-testid="batch-review-box" style={{ background: '#f9fafb', border: '1px solid var(--line)', borderRadius: 8, padding: 12, marginBottom: 14 }}>
           <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>Send client review email (batch)</div>
-          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
-            <input type="checkbox" checked={form.batch_review_email} disabled={dftNA || (readOnly && !allowBatchEmail)} onChange={(e) => set('batch_review_email', e.target.checked)} /> Include this transaction in batch review emails
-          </label>
-          {/* TD-094 — said out loud, so nobody has to infer the default from an empty box. */}
-          <div className="help" style={{ marginTop: 6 }}>Off unless you tick it. Nothing is emailed to a client for this deal while it is unticked.</div>
+          <div data-testid="batch-review-status" style={{ fontSize: 13, marginBottom: 8, color: reviewIncluded ? '#047857' : 'var(--text-2)' }}>
+            {reviewIncluded
+              ? '✓ Included in batch review emails.'
+              : restrictedBy.length
+                ? `Not included — restricted by ${restrictedBy.join(', ')}.`
+                : 'Not included — nobody has asked for it yet.'}
+          </div>
+          {canChooseReview && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
+              <span style={{ fontSize: 13 }}>{isAgent ? 'Your choice:' : 'Office choice:'}</span>
+              <button type="button" className={`btn sm ${myChoice === 'send' ? 'primary' : 'ghost'}`} aria-pressed={myChoice === 'send'} disabled={reviewBusy} onClick={() => chooseReview('send')}>Send</button>
+              <button type="button" className="btn sm ghost" style={myChoice === 'restrict' ? { background: 'var(--bad)', borderColor: 'var(--bad)', color: '#fff' } : undefined} aria-pressed={myChoice === 'restrict'} disabled={reviewBusy} onClick={() => chooseReview('restrict')}>Restrict</button>
+              {myChoice && <button type="button" className="btn sm ghost" disabled={reviewBusy} onClick={() => chooseReview(null)}>Clear my choice</button>}
+            </div>
+          )}
+          {(agentNames.length > 1 || otherVotes.length > 0) && (
+            <ul data-testid="batch-review-votes" style={{ margin: '0 0 6px', paddingLeft: 18, fontSize: 12.5 }}>
+              {agentNames.map((n) => {
+                const v = voteFor(n);
+                return <li key={n}>{n}: <strong>{v ? (v.choice === 'send' ? 'Send' : 'Restrict') : 'No choice yet'}</strong></li>;
+              })}
+              {otherVotes.map(([k, v]) => <li key={k}>{k === 'office' ? `Office (${v.name})` : v.name}: <strong>{v.choice === 'send' ? 'Send' : 'Restrict'}</strong></li>)}
+            </ul>
+          )}
+          {/* TD-094 — said out loud, so nobody has to infer the default. */}
+          <div className="help" style={{ marginTop: 6 }}>Each agent on the deal chooses for themself. The deal is included only when someone picks Send and nobody picks Restrict — one Restrict keeps it out for every agent. Nothing is emailed to a client while it is not included.</div>
         </div>
         )}
 
@@ -680,7 +741,7 @@ export default function AgentFaqModal({ open, onClose, transactionId, txn, onSav
 
         <div className="actions">
           <button className="btn ghost" onClick={onClose}>Close</button>
-          {(!readOnly || allowBatchEmail || docEdit) && <button className="btn primary" onClick={save} disabled={saving || dftNA || savedOk}>{savedOk ? '✓ Saved' : (saving ? 'Saving…' : 'Save')}</button>}
+          {(!readOnly || docEdit) && <button className="btn primary" onClick={save} disabled={saving || dftNA || savedOk}>{savedOk ? '✓ Saved' : (saving ? 'Saving…' : 'Save')}</button>}
         </div>
       </div>
     </div>

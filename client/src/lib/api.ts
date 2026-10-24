@@ -297,6 +297,10 @@ export const createTransaction = (payload: unknown): Promise<Transaction> =>
 export const updateTransaction = (id: Id, payload: unknown): Promise<Transaction> =>
   api.put<{ data: Transaction }>(`/api/transactions/${id}`, payload).then((r) => r.data.data);
 
+/** The signed-in person's own Send / Restrict for the client review email (null withdraws it). */
+export const setBatchReviewChoice = (id: Id, choice: 'send' | 'restrict' | null): Promise<Transaction> =>
+  api.put<{ data: Transaction }>(`/api/transactions/${id}/batch-review`, { choice }).then((r) => r.data.data);
+
 export const deleteTransaction = (id: Id): Promise<unknown> =>
   api.delete(`/api/transactions/${id}`).then((r) => r.data);
 

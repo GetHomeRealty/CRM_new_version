@@ -201,3 +201,68 @@ export const createAgentAccount = (
   body: { password: string; password_confirmation: string; role?: string; username?: string },
 ): Promise<AgentCreated> =>
   api.post<AgentCreated>(`/api/recruitment/candidates/${id}/agent`, body).then((r) => r.data);
+
+// ------------------------------------------------------------------ Onboarding & Training tab
+
+export type OnboardingKind = 'onboarding' | 'training';
+export interface OnboardingStep { id: number; kind: OnboardingKind; title: string; position: number; hidden: boolean }
+export interface OnboardingPerson {
+  id: number;
+  name: string;
+  /** The sheet's "(FE)" / "(FF)". */
+  tag: string | null;
+  candidate_id: number | null;
+  candidate_status: string | null;
+  /** Step id → value. A step with no entry is blank. */
+  marks: Record<string, string>;
+}
+export interface OnboardingList {
+  steps: OnboardingStep[];
+  people: OnboardingPerson[];
+  values: Record<OnboardingKind, string[]>;
+  labels: Record<string, string>;
+  /** Super Admin and Admin: the step list, removing an agent, the sheet import. */
+  can_manage: boolean;
+}
+export interface OnboardingImportSummary {
+  sheets: { onboarding: string | null; training: string | null };
+  ignored_sheets: string[];
+  people: { total: number; new: number; existing: number };
+  marks: { new: number; already_same: number; kept_crm_value: number };
+  unknown_columns: { sheet: string; title: string }[];
+  unknown_values: { sheet: string; cell: string; value: string }[];
+  unknown_value_count: number;
+  /** Training-tab names with no match; `suggestion` is a `pool` key or null. */
+  unmatched: { key: string; name: string; suggestion: string | null }[];
+  pool: { key: string; name: string }[];
+  imported?: { people: number; marks: number };
+}
+
+export const getOnboarding = (): Promise<OnboardingList> =>
+  api.get<OnboardingList>('/api/recruitment/onboarding').then((r) => r.data);
+
+/** An empty value clears the cell. */
+export const setOnboardingMark = (personId: number, stepId: number, value: string): Promise<{ data: unknown }> =>
+  api.put(`/api/recruitment/onboarding/people/${personId}/marks/${stepId}`, { value }).then((r) => r.data);
+
+export const addOnboardingPerson = (body: { name: string; tag?: string }): Promise<{ data: OnboardingPerson }> =>
+  api.post('/api/recruitment/onboarding/people', body).then((r) => r.data);
+
+export const updateOnboardingPerson = (id: number, body: { name: string; tag?: string | null }): Promise<{ data: unknown }> =>
+  api.put(`/api/recruitment/onboarding/people/${id}`, body).then((r) => r.data);
+
+export const removeOnboardingPerson = (id: number): Promise<{ removed: boolean }> =>
+  api.delete(`/api/recruitment/onboarding/people/${id}`).then((r) => r.data);
+
+export const addOnboardingStep = (kind: OnboardingKind, title: string): Promise<{ data: OnboardingStep }> =>
+  api.post('/api/recruitment/onboarding/steps', { kind, title }).then((r) => r.data);
+
+export const updateOnboardingStep = (id: number, body: { title?: string; hidden?: boolean; move?: 'up' | 'down' }): Promise<{ data: OnboardingStep }> =>
+  api.put(`/api/recruitment/onboarding/steps/${id}`, body).then((r) => r.data);
+
+export const previewOnboardingImport = (file: ImportFile): Promise<OnboardingImportSummary> =>
+  api.post<OnboardingImportSummary>('/api/recruitment/onboarding/import/preview', file).then((r) => r.data);
+
+/** `matches`: training-tab name key → pool key, or '' to add them as a new agent. */
+export const importOnboardingSheet = (file: ImportFile, matches: Record<string, string>): Promise<OnboardingImportSummary> =>
+  api.post<OnboardingImportSummary>('/api/recruitment/onboarding/import', { ...file, matches }).then((r) => r.data);

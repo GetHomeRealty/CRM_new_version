@@ -16,6 +16,7 @@ import {
 import { InvoiceCalculator } from './invoice.calculator';
 import { InvoiceNumberService } from './invoice.numbers';
 import { TransactionInvoiceService } from './transaction-invoice.service';
+import { invoiceDocDefaults, type InvoiceDocDefaults } from './invoice-defaults';
 
 const num = (d: Prisma.Decimal | number | null): number => (d === null ? 0 : Number(d));
 
@@ -379,6 +380,7 @@ export class InvoicesService {
       const created = await tx.invoices.create({
         data: {
           ...(this.mapFields(body, settings, 'create') as Prisma.invoicesCreateInput),
+          ...this.docDefaultsFor(body, settings),
           invoice_no: await this.numbers.next(tx),
           source: 'manual',
           created_by: actor?.id ?? null,
@@ -888,6 +890,20 @@ export class InvoicesService {
    * reachable by an API consumer, an integration, or a future partial-save on the screen.
    * `TransactionsWriteService.update` has always done it this way; invoices now match.
    */
+  /**
+   * Invoice Settings defaults for a manual invoice: each of Customer Notes, Terms & Conditions and
+   * the signature that the request left out or sent as null. A value the request did send wins,
+   * including '' - that is somebody clearing it for this invoice.
+   */
+  private docDefaultsFor(body: Record<string, unknown>, settings: Parameters<typeof invoiceDocDefaults>[0]): Partial<InvoiceDocDefaults> {
+    const defaults = invoiceDocDefaults(settings);
+    const out: Partial<InvoiceDocDefaults> = {};
+    for (const k of Object.keys(defaults) as (keyof InvoiceDocDefaults)[]) {
+      if (body[k] === undefined || body[k] === null) out[k] = defaults[k];
+    }
+    return out;
+  }
+
   private mapFields(
     data: Record<string, unknown>,
     settings: { default_tax_rate: Prisma.Decimal | number },

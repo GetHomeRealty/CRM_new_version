@@ -8,6 +8,7 @@ import { apiErrorMessage } from '../lib/apiError';
 import RecruitmentSendMail from './RecruitmentSendMail';
 import RecruitmentAddNote from './RecruitmentAddNote';
 import RecruitmentImport from './RecruitmentImport';
+import RecruitmentOnboarding from './RecruitmentOnboarding';
 import { useToast } from './toast';
 import { useAuth } from '../context/AuthContext';
 import {
@@ -34,7 +35,7 @@ export function statusPill(s: string): string {
 const date = (v: string | null): string => (v ? new Date(v).toLocaleDateString() : '—');
 const dateTime = (v: string | null): string => (v ? new Date(v).toLocaleString() : '—');
 
-type Tab = 'candidates' | 'interviews' | 'reports';
+type Tab = 'candidates' | 'interviews' | 'reports' | 'onboarding';
 
 /**
  * A blank add-candidate form.
@@ -395,7 +396,7 @@ export default function RecruitmentPage() {
       )}
 
       <div className="toolbar-row" style={{ gap: 8, marginBottom: 12 }}>
-        {(['candidates', 'interviews', 'reports'] as Tab[]).map((t) => (
+        {(['candidates', 'interviews', 'reports', 'onboarding'] as Tab[]).map((t) => (
           <button
             key={t}
             type="button"
@@ -403,12 +404,15 @@ export default function RecruitmentPage() {
             aria-pressed={tab === t}
             onClick={() => setTab(t)}
           >
-            {t === 'candidates' ? 'Candidates' : t === 'interviews' ? 'Interviews' : 'Reports'}
+            {t === 'candidates' ? 'Candidates' : t === 'interviews' ? 'Interviews' : t === 'reports' ? 'Reports' : 'Onboarding & Training'}
           </button>
         ))}
       </div>
 
-      {error ? (
+      {/* Its own data and loading, so it does not wait on the candidate list. */}
+      {tab === 'onboarding' ? (
+        <RecruitmentOnboarding canEdit={canEdit} />
+      ) : error ? (
         <div className="card"><p className="help bad">{error}</p></div>
       ) : !loaded ? (
         <div className="card"><p className="help">Loading recruitment…</p></div>

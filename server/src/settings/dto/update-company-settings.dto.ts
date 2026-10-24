@@ -107,6 +107,13 @@ export class UpdateCompanySettingsDto {
   @IsOptional() @Transform(trimmed) @IsString() thank_you_note?: string | null;
   @IsOptional() @Transform(trimmed) @IsString() deposit_heading?: string | null;
   @IsOptional() @Transform(trimmed) @IsString() deposit_signatory?: string | null;
+  /** Invoice Settings - the default Terms & Conditions. Bounded in the service, like the notes above. */
+  @IsOptional() @Transform(trimmed) @IsString() invoice_terms_conditions?: string | null;
+  /**
+   * Invoice Settings - the default signature, as the PNG/JPEG data URL the screen produces after
+   * downscaling. Shape and size are checked in the service (`assertSignature`); '' clears it.
+   */
+  @IsOptional() @IsString() invoice_signature?: string | null;
 
   /** Cadence (days) for recurring lawyer-detail reminders. 0 = off. Stored in feature_flags. */
   @IsOptional() @IsInt() @Min(0) @Max(365) lawyer_reminder_days?: number | null;

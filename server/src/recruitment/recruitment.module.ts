@@ -12,6 +12,8 @@ import { RecruitmentSmsService } from './recruitment-sms.service';
 import { RecruitmentEmailService } from './recruitment-email.service';
 import { RecruitmentEmailDraftService } from './recruitment-email-draft.service';
 import { RecruitmentImportService } from './recruitment-import.service';
+import { RecruitmentOnboardingController } from './recruitment-onboarding.controller';
+import { RecruitmentOnboardingService } from './recruitment-onboarding.service';
 import { AiDisclosureService } from '../common/ai-disclosure.service';
 import { RecruitmentInterviewNotifyService } from './recruitment-interview-notify.service';
 import { RecruitmentInterviewReminderService } from './recruitment-interview-reminder.service';
@@ -41,7 +43,8 @@ import { RecruitmentInterviewReminderScheduler } from './recruitment-interview-r
   // EmailModule for the brokerage's CRM mail account and the mailer every CRM email goes through.
   imports: [AuthModule, SmsModule, NotificationDispatcherModule, EmailModule],
   // The referral controller is the agents' submission-only door; see its own comment.
-  controllers: [RecruitmentController, RecruitmentReferralController],
+  // The onboarding controller is the Onboarding & Training tab (the brokerage's onboarding sheet).
+  controllers: [RecruitmentController, RecruitmentReferralController, RecruitmentOnboardingController],
   providers: [
     RecruitmentService,
     RecruitmentAgentService,
@@ -53,6 +56,8 @@ import { RecruitmentInterviewReminderScheduler } from './recruitment-interview-r
     AiDisclosureService,
     // Bulk candidate import from .xlsx / CSV.
     RecruitmentImportService,
+    // The Onboarding & Training tab and its sheet import.
+    RecruitmentOnboardingService,
     RecruitmentInterviewNotifyService,
     RecruitmentInterviewReminderService,
     RecruitmentInterviewReminderScheduler,
