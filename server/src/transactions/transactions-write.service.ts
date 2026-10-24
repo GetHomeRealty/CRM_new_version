@@ -554,6 +554,12 @@ export class TransactionsWriteService {
     if (knownType && !typeAllowedIn(marketOf(user), type)) {
       errors.type = [`"${type}" is not offered for India deals. Allowed: ${INDIA_TYPES.join(', ')}.`];
     }
+    // India deals: the buyer pays in one go or with a loan - chosen on every new India deal (Sai, 24 Oct
+    // 2026). Not asked of the bulk importer (`quiet`), whose sheets have no such column; those deals get
+    // it in Basic Info. Canada never sees it.
+    if (marketOf(user) === 'IN' && !opts.quiet && !paymentKey(body.india_payment)) {
+      errors.india_payment = [`Choose how the buyer pays: ${INDIA_PAYMENTS.join(' or ')}.`];
+    }
 
     // The status the deal is being opened with has to exist for the type. Creation takes a single
     // status, so the only rule that can bite here is the vocabulary one — but a deal created
@@ -736,6 +742,7 @@ export class TransactionsWriteService {
           builder_project_id: await this.projectFor(tx, marketOf(user), body.builder_project_id),
           // India deals: the office that invoices it (19 Oct 2026) - Hyderabad unless chosen.
           india_office: marketOf(user) === 'IN' ? officeKey(body.india_office) : null,
+          india_payment: marketOf(user) === 'IN' ? paymentKey(body.india_payment) : null,
           property: (body.property ?? null) as string | null,
           agent: agentName,
           // Recorded beside the name, so nothing downstream has to resolve a person from a string
@@ -1642,6 +1649,13 @@ export class TransactionsWriteService {
       if (Object.prototype.hasOwnProperty.call(body, 'india_office') && t.market === 'IN') {
         await tx.transactions.update({ where: { id: txnId }, data: { india_office: officeKey(body.india_office) } });
       }
+      // India deals' payment (24 Oct 2026). The page sends the whole deal on every save, so an empty
+      // value leaves the stored choice alone - it can be changed, never wiped. Anything else is refused.
+      if (Object.prototype.hasOwnProperty.call(body, 'india_payment') && t.market === 'IN' && String(body.india_payment ?? '').trim() !== '') {
+        const v = paymentKey(body.india_payment);
+        if (!v) throw new UnprocessableEntityException({ message: `Choose how the buyer pays: ${INDIA_PAYMENTS.join(' or ')}.`, errors: { india_payment: [`Choose how the buyer pays: ${INDIA_PAYMENTS.join(' or ')}.`] } });
+        await tx.transactions.update({ where: { id: txnId }, data: { india_payment: v } });
+      }
       if (Object.prototype.hasOwnProperty.call(data, 'precon_terms')) await this.syncPreconTerms(tx, txnId, asArray(data.precon_terms));
 
       if (Object.prototype.hasOwnProperty.call(data, 'statuses')) {
@@ -2538,6 +2552,13 @@ export class TransactionsWriteService {
     if (rel === 'conditions') return { type: 'Financing', custom_name: null, deadline: null, status: 'Pending' };
     return { name: null, board_id: null, verified: false };
   }
+}
+
+/** India deals: how the buyer pays (24 Oct 2026). */
+export const INDIA_PAYMENTS = ['One-time payment', 'Loan'] as const;
+function paymentKey(raw: unknown): string | null {
+  const v = String(raw ?? '').trim().toLowerCase();
+  return INDIA_PAYMENTS.find((p) => p.toLowerCase() === v) ?? null;
 }
 
 /** India deals' invoicing office (19 Oct 2026): 'VZM' when chosen, otherwise Hyderabad ('HYD'). */

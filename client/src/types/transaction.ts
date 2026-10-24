@@ -340,6 +340,8 @@ export interface Transaction {
   precon_listing_type?: string;
   commission_agent?: string;
   builder?: BuilderData;
+  /** India deals: 'One-time payment' or 'Loan' (24 Oct 2026). */
+  india_payment?: string | null;
   commercial_lease?: Record<string, unknown> | null;
   notice_of_sale?: { sent_at?: string | null; [key: string]: unknown } | null;
   trade_sheet_sent_at?: string | null;

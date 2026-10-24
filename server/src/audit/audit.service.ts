@@ -82,6 +82,8 @@ export const SCALAR_MAP: Record<string, [string, string]> = {
   agent: ['Basic Information', 'Assigned Agent'],
   conditional_offer: ['Basic Information', 'Conditional Offer'],
   inter_board_enabled: ['Basic Information', 'Inter-Board Enabled'],
+  // India deals only (24 Oct 2026); empty on every Canada deal, so it never shows in their history.
+  india_payment: ['Basic Information', 'Payment'],
   property: ['Property Information', 'Property Address'],
   mls_type: ['Property Information', 'MLS Type'],
   mls_num: ['Property Information', 'MLS Number'],

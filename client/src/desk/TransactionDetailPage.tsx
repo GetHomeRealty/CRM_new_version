@@ -74,6 +74,8 @@ interface DetailForm {
   mls_verified: boolean;
   conditional_offer: boolean;
   inter_board_enabled: boolean;
+  /** India deals: how the buyer pays (24 Oct 2026). Empty on Canada deals. */
+  india_payment: string;
   statuses: string[];
   clients: ClientRow[];
   conditions: ConditionRow[];
@@ -96,6 +98,7 @@ function toForm(t: Transaction): DetailForm {
     listing_contract_date: t.listing_contract_date || '', listing_expiry_date: t.listing_expiry_date || '',
     mls_type: t.mls_type || 'mls', mls_num: t.mls_num || '', mls_verified: !!t.mls_verified,
     conditional_offer: !!t.conditional_offer, inter_board_enabled: !!t.inter_board_enabled,
+    india_payment: t.india_payment || '',
     statuses: t.statuses && t.statuses.length
       ? Array.from(new Set(t.statuses.map((s) => normalizeStatus(t.type, s))))
       : (defaultStatusFor(t.type) ? [defaultStatusFor(t.type)] : []),
@@ -187,6 +190,8 @@ function buildPayload(form: DetailForm): Record<string, unknown> {
   if (isCommercialLeaseType(form.type)) {
     payload.commercial_lease = { ...CL_DEFAULTS, ...(form.commercial_lease || {}) };
   }
+  // India deals only; sent once chosen. The server ignores it on a Canada deal.
+  if (form.india_payment) payload.india_payment = form.india_payment;
   return payload;
 }
 
@@ -1691,6 +1696,21 @@ export default function TransactionDetailPage() {
                 <Field label="Listing Expiry Date"><input type="date" value={form.listing_expiry_date} disabled={basicRo} onChange={(e) => set('listing_expiry_date', e.target.value)} /></Field>
                 {!slHideBasic && <Field label={offerDateLabel}><DateBox value={form.offer_date} disabled={basicRo} onChange={(v) => set('offer_date', v)} testId="basic-offer-date" /></Field>}
                 {!slHideBasic && <Field label={closingDateLabel}><DateBox value={form.closing_date} disabled={basicRo} onChange={(v) => set('closing_date', v)} testId="basic-closing-date" /></Field>}
+              </div>
+            )}
+            {/* India deals: how the buyer pays (Sai, 24 Oct 2026). Information only; Canada never shows it. */}
+            {user?.market === 'IN' && (
+              <div style={{ marginTop: 12 }}>
+                <Field label="Payment" req>
+                  <div style={{ display: 'flex', gap: 18, alignItems: 'center', minHeight: 38 }} data-testid="basic-india-payment">
+                    {(['One-time payment', 'Loan'] as const).map((p) => (
+                      <label key={p} style={{ display: 'inline-flex', gap: 6, alignItems: 'center', margin: 0, fontSize: 13, fontWeight: 400, color: 'var(--text)', cursor: basicRo ? 'default' : 'pointer' }}>
+                        <input type="radio" name="india-payment" checked={form.india_payment === p} disabled={basicRo} onChange={() => set('india_payment', p)} style={{ width: 16, height: 16, margin: 0, padding: 0, accentColor: 'var(--brand)' }} />
+                        {p}
+                      </label>
+                    ))}
+                  </div>
+                </Field>
               </div>
             )}
           </div>

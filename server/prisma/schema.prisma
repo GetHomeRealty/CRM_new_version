@@ -2754,6 +2754,8 @@ model transactions {
   builder_project_id          Int?
   /// India deals: which of our offices invoices it - 'HYD' (Hyderabad, default) or 'VZM' (Vizianagaram).
   india_office                String?                       @db.VarChar(8)
+  /// India deals: how the buyer pays - 'One-time payment' or 'Loan' (Sai, 24 Oct 2026). Information only.
+  india_payment               String?                       @db.VarChar(20)
   /// (The text fields builder_vendor / builder_project above are Canada's pre-construction entries; unchanged.)
   linked_project              builder_projects?             @relation(fields: [builder_project_id], references: [id], onDelete: SetNull, onUpdate: Restrict)
   offer_applications          builder_offer_applications[]

@@ -78,6 +78,8 @@ export default function AddTransactionModal({ open, onClose, onCreated }: AddTra
   const [projectId, setProjectId] = useState('');
   // India deals: which of our offices invoices it (19 Oct 2026). Hyderabad unless chosen.
   const [office, setOffice] = useState('HYD');
+  // India deals: how the buyer pays (24 Oct 2026). Must be chosen.
+  const [payment, setPayment] = useState('');
   useEffect(() => {
     if (!india) return;
     api.get<{ data: { id: number; name: string; builder_name: string; city: string | null }[] }>('/api/builder-projects/pick')
@@ -211,7 +213,7 @@ export default function AddTransactionModal({ open, onClose, onCreated }: AddTra
     setFieldErrors((e) => (e[k] ? { ...e, [k]: undefined } : e));
   };
 
-  const reset = () => { setForm(EMPTY); setError(''); setTeamMode('solo'); setTeamMembers([]); setPrimaryAgent(isAgent ? (user?.name || '') : ''); };
+  const reset = () => { setForm(EMPTY); setError(''); setPayment(''); setTeamMode('solo'); setTeamMembers([]); setPrimaryAgent(isAgent ? (user?.name || '') : ''); };
   const close = () => { reset(); onClose(); };
 
   const addMember = (name: string) => { if (name && !teamMembers.includes(name)) setTeamMembers((m) => [...m, name]); };
@@ -222,9 +224,11 @@ export default function AddTransactionModal({ open, onClose, onCreated }: AddTra
     setFieldErrors({});
     if (!form.type || !form.property.trim()) { toast('Please fill all required fields', 'bad'); return; }
     if (!form.status) { toast('Please select a Status', 'bad'); return; }
+    if (india && !payment) { toast('Please choose Payment: One-time payment or Loan', 'bad'); return; }
     const payload: Record<string, unknown> = { type: form.type, property: form.property.trim(), status: form.status };
     if (india && projectId) payload.builder_project_id = Number(projectId);
     if (india) payload.india_office = office;
+    if (india) payload.india_payment = payment;
 
     if (listing) {
       payload.listing_contract_date = form.listing_contract_date || null;
@@ -322,6 +326,19 @@ export default function AddTransactionModal({ open, onClose, onCreated }: AddTra
                   <option value="HYD">Hyderabad</option>
                   <option value="VZM">Vizianagaram</option>
                 </select>
+              </div>
+            )}
+            {india && (
+              <div className="field">
+                <label>Payment <span className="req">*</span></label>
+                <div style={{ display: 'flex', gap: 18, alignItems: 'center' }} data-testid="add-india-payment">
+                  {['One-time payment', 'Loan'].map((p) => (
+                    <label key={p} style={{ display: 'inline-flex', gap: 6, alignItems: 'center', margin: 0, fontSize: 13, fontWeight: 400, color: 'var(--text)', cursor: 'pointer' }}>
+                      <input type="radio" name="add-india-payment" checked={payment === p} onChange={() => setPayment(p)} style={{ width: 16, height: 16, margin: 0, padding: 0, accentColor: 'var(--brand)' }} />
+                      {p}
+                    </label>
+                  ))}
+                </div>
               </div>
             )}
             <div className="field" style={{ position: 'relative' }}>
