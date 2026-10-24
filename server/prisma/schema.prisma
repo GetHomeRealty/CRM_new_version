@@ -3684,6 +3684,8 @@ model recruitment_candidates {
   events      recruitment_events[]
   messages    recruitment_messages[]
   recruitment_emails   recruitment_emails[]
+  /// Their row on the Onboarding & Training tab, once they reach Onboarding or Active.
+  onboarding_person    recruitment_onboarding_people?
 
   @@index([status])
   @@index([assigned_recruiter_id])
@@ -3902,6 +3904,58 @@ model recruitment_events {
 
   @@index([candidate_id])
   @@index([created_at])
+}
+
+/// RECRUITMENT → ONBOARDING & TRAINING (migration 20261023150000_recruitment_onboarding_tracker).
+/// The brokerage's "Onboarding & Trainings" sheet: steps are its columns, people its rows, marks its
+/// cells. kind: onboarding | training. A hidden step keeps its marks.
+model recruitment_onboarding_steps {
+  id         Int       @id @default(autoincrement())
+  kind       String    @db.VarChar(16)
+  title      String    @db.VarChar(255)
+  position   Int       @default(0)
+  hidden_at  DateTime? @db.Timestamp(0)
+  created_by String?   @db.VarChar(255)
+  created_at DateTime? @db.Timestamp(0)
+  updated_at DateTime? @db.Timestamp(0)
+
+  marks recruitment_onboarding_marks[]
+
+  @@index([kind, position])
+}
+
+/// One agent being onboarded. Not necessarily a candidate: most of the sheet's agents joined before
+/// Recruitment existed. `candidate_id` links one when there is one; `tag` is the sheet's (FE)/(FF).
+model recruitment_onboarding_people {
+  id           Int       @id @default(autoincrement())
+  name         String    @db.VarChar(255)
+  tag          String?   @db.VarChar(16)
+  candidate_id Int?      @unique
+  added_by     String?   @db.VarChar(255)
+  created_at   DateTime? @db.Timestamp(0)
+  updated_at   DateTime? @db.Timestamp(0)
+  removed_at   DateTime? @db.Timestamp(0)
+
+  candidate recruitment_candidates? @relation(fields: [candidate_id], references: [id], onDelete: SetNull, onUpdate: Restrict)
+  marks     recruitment_onboarding_marks[]
+
+  @@index([removed_at])
+}
+
+/// One cell: yes | no | in_progress | not_attended | na | own_email | interested. No row = blank.
+model recruitment_onboarding_marks {
+  id         Int       @id @default(autoincrement())
+  person_id  Int
+  step_id    Int
+  value      String    @db.VarChar(24)
+  updated_by String?   @db.VarChar(255)
+  updated_at DateTime? @db.Timestamp(0)
+
+  person recruitment_onboarding_people @relation(fields: [person_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  step   recruitment_onboarding_steps  @relation(fields: [step_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@unique([person_id, step_id])
+  @@index([step_id])
 }
 
 /// THE BROKERAGE'S PAYMENT SHEET, as uploaded (2026-10-19). When it holds rows, the Pending Payments

@@ -41,6 +41,13 @@ const ROOT = [
    * it as ownership would invert the relationship and leave every un-hired candidate unowned.
    */
   'recruitment_candidates',
+  // Recruitment's Onboarding & Training list: one row per agent being onboarded. ROOT for the same
+  // reason as a candidate — most were never candidates and need not be users, and the optional
+  // `candidate_id` points at the record they came from rather than at an owner.
+  'recruitment_onboarding_people',
+  // That list's columns (onboarding steps and training topics): the brokerage's own checklist, which
+  // its administrators edit. A cell hangs off its row, not its column.
+  'recruitment_onboarding_steps',
   'transactions',
   // The brokerage's own Payment Sheet as uploaded (Pending Payments); rows name deals by trade number only.
   'payment_sheet_rows',
@@ -147,6 +154,8 @@ const DERIVED: Record<string, string> = {
   recruitment_events: 'recruitment_candidates',
   recruitment_messages: 'recruitment_candidates',
   recruitment_emails: 'recruitment_candidates',
+  // One cell of the onboarding sheet; read only through its row, and cascades with it.
+  recruitment_onboarding_marks: 'recruitment_onboarding_people',
   lead_emails: 'leads', lead_messages: 'leads',
   // One row per Meta form submission; read only through its lead, and cascades with it.
   meta_lead_inquiries: 'leads',
