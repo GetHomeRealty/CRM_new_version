@@ -1,8 +1,11 @@
-import { useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { formatCurrency, commissionSummary, taxLabel, taxRate } from './format';
 import { printDoc } from './printDoc';
 import BrandMark from './BrandMark';
-import type { BrokerageLite, Transaction } from '../types';
+import IndiaInvoiceDoc, { type IndiaBlock } from './IndiaInvoiceDoc';
+import api from '../lib/axios';
+import { apiErrorMessage } from '../lib/apiError';
+import type { BrokerageLite, Invoice, Transaction } from '../types';
 
 const BRAND = 'var(--brand-red)';
 
@@ -21,7 +24,62 @@ const isoPlus = (days: number) => {
   return d.toISOString().slice(0, 10);
 };
 
-export default function InvoiceModal({ open, onClose, txn }: { open: boolean; onClose: () => void; txn: Transaction }) {
+type ModalProps = { open: boolean; onClose: () => void; txn: Transaction };
+
+/** The deal's invoice preview: an India deal in the India template (24 Oct 2026), Canada's as before. */
+export default function InvoiceModal(props: ModalProps) {
+  return taxLabel() === 'GST' ? <IndiaInvoicePreview {...props} /> : <CanadaInvoiceModal {...props} />;
+}
+
+type PreviewPage = Invoice & { india: IndiaBlock };
+
+/**
+ * INDIA PREVIEW (Sai, 24 Oct 2026: "use the india template for the preview"). What Create Term
+ * Invoices would make - one page per term, GST 18%, the builder as customer - worked out by the server
+ * and drawn in the India template, marked PREVIEW and without an invoice number. Nothing is saved.
+ */
+function IndiaInvoicePreview({ open, onClose, txn }: ModalProps) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [pages, setPages] = useState<PreviewPage[] | null>(null);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    if (!open) return;
+    api.get<{ data: PreviewPage[] }>(`/api/transactions/${txn.id}/invoice-preview`)
+      .then((r) => setPages(r.data.data))
+      .catch((e) => setError(apiErrorMessage(e, 'The preview could not be loaded.')));
+  }, [open, txn.id]);
+  if (!open) return null;
+  const banner = { background: '#fff7ed', border: '1px solid #fdba74', color: '#9a3412', borderRadius: 8, padding: '8px 12px', fontSize: 12.5, fontWeight: 600, marginBottom: 10 };
+  return (
+    <div className="overlay open" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="modal lg">
+        <button className="close" onClick={onClose}>✕</button>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+          <div className="modal-h" style={{ margin: 0, border: 0, padding: 0 }}>Invoice preview</div>
+          {!!pages?.length && <button className="btn primary sm" onClick={() => printDoc(`Invoice preview ${txn.trade_no}`, ref.current?.innerHTML || '')}>🖨 Print / Save PDF</button>}
+        </div>
+        {error && <div className="pill bad" style={{ display: 'block', padding: 10 }}>{error}</div>}
+        {!error && pages === null && <div style={{ color: 'var(--muted)', padding: 20 }}>Loading…</div>}
+        {!error && pages?.length === 0 && (
+          <div style={{ color: 'var(--text-2)', padding: 20, lineHeight: 1.6 }} data-testid="india-preview-empty">
+            Nothing to preview yet: this deal has no commission terms with an amount. Once its terms are entered under <strong>Financial</strong>, the preview shows each term's invoice.
+          </div>
+        )}
+        <div ref={ref}>
+          {(pages || []).map((p, i) => (
+            <div key={i} style={{ marginBottom: 24 }} data-testid="india-preview-page">
+              <div style={banner}>PREVIEW – not an invoice yet. The office creates the invoice; its number is given then.</div>
+              <IndiaInvoiceDoc invoice={{ ...p, invoice_no: 'PREVIEW' } as Invoice} india={p.india} />
+            </div>
+          ))}
+        </div>
+        <div className="actions"><button className="btn ghost" onClick={onClose}>Close</button></div>
+      </div>
+    </div>
+  );
+}
+
+function CanadaInvoiceModal({ open, onClose, txn }: ModalProps) {
   const ref = useRef<HTMLDivElement>(null);
   if (!open) return null;
 

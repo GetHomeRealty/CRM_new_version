@@ -7,6 +7,7 @@ import { InvoicesService } from './invoices.service';
 import { CustomersService } from './customers.service';
 import { InvoiceCalculator } from './invoice.calculator';
 import { InvoiceNumberService } from './invoice.numbers';
+import { IndiaInvoicePreviewController } from './india-invoice-preview.controller';
 import { TransactionInvoiceService } from './transaction-invoice.service';
 import { InvoiceAccessGuard } from './invoice-access.guard';
 import { InvoiceReminderService } from './invoice-reminder.service';
@@ -17,7 +18,7 @@ import { InvoiceReminderScheduler } from './invoice-reminder.scheduler';
 @Module({
   // EmailModule exports MailerService: invoice send/reminder deliver before recording.
   imports: [AuthModule, SettingsModule, EmailModule],
-  controllers: [InvoicesController],
+  controllers: [InvoicesController, IndiaInvoicePreviewController],
   providers: [
     InvoicesService, CustomersService, InvoiceCalculator, InvoiceNumberService,
     TransactionInvoiceService, InvoiceAccessGuard,

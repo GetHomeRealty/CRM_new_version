@@ -218,7 +218,7 @@ export class InvoicesService {
    * state unknown): CGST 9% + SGST 9%. A different state: IGST 18%. The tax amount is the invoice's
    * own tax total either way; only how it is printed changes.
    */
-  private async indiaBlock(inv: { tax_total: Prisma.Decimal | number | null; transactions: { agent: string | null; india_office: string | null; linked_project: { name: string; builder: { name: string; company_name: string | null; gstin: string | null; state: string | null; billing_address: string | null; address: string | null } } | null } | null }): Promise<Record<string, unknown>> {
+  async indiaBlock(inv: { tax_total: Prisma.Decimal | number | null; transactions: { agent: string | null; india_office: string | null; linked_project: { name: string; builder: { name: string; company_name: string | null; gstin: string | null; state: string | null; billing_address: string | null; address: string | null } } | null } | null }): Promise<Record<string, unknown>> {
     const st = await this.indiaSettings!.get();
     const office = this.indiaSettings!.office(st, inv.transactions?.india_office);
     const b = inv.transactions?.linked_project?.builder ?? null;

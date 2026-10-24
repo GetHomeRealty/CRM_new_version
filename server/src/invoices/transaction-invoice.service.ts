@@ -36,6 +36,55 @@ export class TransactionInvoiceService {
     @Optional() private readonly indiaSettings?: IndiaSettingsService,
   ) {}
 
+  /**
+   * INDIA INVOICE PREVIEW (Sai, 24 Oct 2026): what Create Term Invoices WOULD make for an India deal,
+   * in the India template, for someone who sees the deal before any invoice exists (an agent cannot
+   * create one). Works the figures out exactly as generate() does - one invoice per term, GST 18%,
+   * the builder as customer - but WRITES NOTHING and takes no number: `invoice_no` is null.
+   * Returns [] when the deal is not an India one or has no terms with money yet (generate() would
+   * make nothing either). The caller checks the person may see the deal.
+   */
+  async previewIndia(db: Tx, transactionId: number): Promise<{ invoice: Record<string, unknown>; deal: { agent: string | null; india_office: string | null; linked_project: { name: string; builder: { name: string; company_name: string | null; gstin: string | null; state: string | null; billing_address: string | null; address: string | null } } | null } }[]> {
+    const t = await db.transactions.findUnique({
+      where: { id: transactionId },
+      include: {
+        ...commissionInclude,
+        linked_project: { select: { name: true, builder: { select: { name: true, company_name: true, email: true, phone: true, address: true, billing_address: true, gstin: true, state: true } } } },
+      },
+    });
+    if (!t || t.deleted_at || t.market !== 'IN' || !isInvoiceableType(t.type) || !this.indiaSettings) return [];
+    const india = await this.indiaSettings.get();
+    const breakdown = await this.commission.breakdown(normalizeCommissionTxn(t));
+    const pieces: { label: string; commission: number }[] = [];
+    if (t.type === 'Preconstruction') {
+      const terms = Array.isArray(breakdown.terms) ? (breakdown.terms as Record<string, unknown>[]) : [];
+      if (terms.length === 0 || !terms.every((x) => Number(x.commission) > 0)) return [];
+      for (const term of terms) pieces.push({ label: ` - Term ${Number(term.term_no)}`, commission: Number(term.commission) });
+    } else {
+      pieces.push({ label: '', commission: Number((breakdown as { commission?: number }).commission ?? 0) });
+    }
+    const today = new Date(new Date().toISOString().slice(0, 10) + 'T00:00:00.000Z');
+    const due = this.dueDate(today, india.terms, t.closing_date ?? null);
+    const day = (d: Date | null): string | null => (d ? d.toISOString().slice(0, 10) : null);
+    const b = t.linked_project?.builder;
+    const project = t.linked_project?.name ?? null;
+    return pieces.map((p) => {
+      const sub = round2(p.commission);
+      const tax = round2((sub * 18) / 100);
+      const total = round2(sub + tax);
+      return {
+        invoice: {
+          preview: true, invoice_no: null, invoice_date: day(today), due_date: day(due), terms: india.terms,
+          customer_name: b ? (b.company_name || b.name) : null, customer_address: b ? (b.billing_address || b.address) : null,
+          subject: `Commission for ${project ? `${project} - ` : ''}${t.property ?? ''}${p.label}`,
+          line_items: [{ description: `Brokerage commission${project ? ` - ${project}` : ''}${t.property ? `, ${t.property}` : ''}${p.label}`, qty: 1, rate: sub, amount: sub }],
+          sub_total: sub, tax_total: tax, total, amount_paid: 0, balance_due: total,
+        },
+        deal: { agent: t.agent, india_office: t.india_office, linked_project: t.linked_project ?? null },
+      };
+    });
+  }
+
   /** Generate within an existing tx. Returns created invoices. */
   async generate(db: Tx, transactionId: number, actor: ActingUser | null, skipIfExists = false): Promise<invoices[]> {
     const t = await db.transactions.findUnique({
