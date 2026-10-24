@@ -13,6 +13,12 @@ import { STORAGE_ROOT } from '../config/storage';
 const LOGO_DIR = 'branding';
 /** A brand logo is a small asset; anything larger is a mistake, not a logo. */
 export const MAX_LOGO_BYTES = 2 * 1024 * 1024;
+/**
+ * The default invoice signature is stored as a data URL, as each invoice's own copy already is. The
+ * screen downscales it to at most 600x240 before sending, which is well under this.
+ */
+export const MAX_SIGNATURE_CHARS = 700_000;
+const SIGNATURE_DATA_URL = /^data:image\/(png|jpeg);base64,[A-Za-z0-9+/]+=*$/;
 /** Raster + SVG. Anything else is rejected — this file is rendered in customers' inboxes. */
 const LOGO_TYPES: Record<string, string> = {
   '.png': 'image/png',
@@ -144,9 +150,11 @@ const FIELD_LABELS: Record<string, string> = {
   invoice_prefix: 'Invoice Prefix',
   next_invoice_no: 'Next Invoice No.',
   default_terms: 'Default Terms',
-  thank_you_note: 'Thank-you Note',
+  thank_you_note: 'Default Customer Notes',
   deposit_heading: 'Deposit Heading',
   deposit_signatory: 'Deposit Signatory',
+  invoice_terms_conditions: 'Default Terms & Conditions',
+  invoice_signature: 'Invoice Signature',
   lawyer_reminder_days: 'Lawyer Reminder (days)',
 };
 
@@ -171,6 +179,7 @@ export class CompanySettingsService {
 
     this.assertNotStale(cur, dto.expected_updated_at);
     this.assertNotesWithinLimit(cur, dto);
+    this.assertSignature(dto);
     await this.assertCounterNotRewound(cur, dto.next_invoice_no);
 
     // Only fields actually present in the request are saved (matches validated()).
@@ -248,9 +257,10 @@ export class CompanySettingsService {
   private assertNotesWithinLimit(cur: company_settings, dto: UpdateCompanySettingsDto): void {
     const MAX = 2000;
     const notes: [keyof UpdateCompanySettingsDto, string | null, string][] = [
-      ['thank_you_note', cur.thank_you_note, 'Thank-you Note'],
+      ['thank_you_note', cur.thank_you_note, 'Default Customer Notes'],
       ['deposit_heading', cur.deposit_heading, 'Deposit Heading'],
       ['deposit_signatory', cur.deposit_signatory, 'Deposit Signatory'],
+      ['invoice_terms_conditions', cur.invoice_terms_conditions, 'Default Terms & Conditions'],
     ];
     for (const [key, stored, label] of notes) {
       const next = dto[key];
@@ -262,6 +272,29 @@ export class CompanySettingsService {
       throw new BadRequestException({
         message: `The ${label} is ${next.length.toLocaleString()} characters — the limit is ${MAX.toLocaleString()}. It is printed on the invoice, so it has to fit on one.`,
         errors: { [key]: [`Must be ${MAX} characters or fewer.`] },
+      });
+    }
+  }
+
+  /**
+   * The default invoice signature has to be an image the invoice can print.
+   *
+   * It is copied verbatim into `invoices.signature_path` and rendered by an <img> on the invoice and
+   * in its PDF, so only a PNG or JPEG data URL is accepted. '' or null clears it.
+   */
+  private assertSignature(dto: UpdateCompanySettingsDto): void {
+    const v = dto.invoice_signature;
+    if (v === undefined || v === null || v === '') return;
+    if (v.length > MAX_SIGNATURE_CHARS) {
+      throw new BadRequestException({
+        message: 'The signature image is too large. Use a smaller image (a cropped signature on a plain background).',
+        errors: { invoice_signature: ['The signature image is too large.'] },
+      });
+    }
+    if (!SIGNATURE_DATA_URL.test(v)) {
+      throw new BadRequestException({
+        message: 'The signature must be a PNG or JPEG image.',
+        errors: { invoice_signature: ['The signature must be a PNG or JPEG image.'] },
       });
     }
   }
@@ -356,6 +389,11 @@ export class CompanySettingsService {
   /** Cleared and never-set are the same change to a reader, so both render as an empty string. */
   private auditValue(v: unknown): string {
     if (v === null || v === undefined) return '';
+    // The signature is a data URL; the trail records that an image was set, and a digest of it so
+    // a replacement still reads as a change, not the image itself.
+    if (typeof v === 'string' && v.startsWith('data:image/')) {
+      return '(image ' + crypto.createHash('sha256').update(v).digest('hex').slice(0, 8) + ')';
+    }
     // Decimal columns arrive as Prisma Decimal; String() gives the same text either way.
     return String(v);
   }
@@ -499,6 +537,8 @@ export class CompanySettingsService {
       thank_you_note: s.thank_you_note,
       deposit_heading: s.deposit_heading,
       deposit_signatory: s.deposit_signatory,
+      invoice_terms_conditions: s.invoice_terms_conditions,
+      invoice_signature: s.invoice_signature,
       // Recurring lawyer-detail reminder cadence (days) — surfaced from feature_flags for the UI.
       lawyer_reminder_days: (() => { const n = Number(parseJsonObject(s.feature_flags).lawyer_reminder_days); return Number.isFinite(n) ? Math.max(0, Math.floor(n)) : 3; })(),
       created_at: laravelJsonDate(s.created_at),

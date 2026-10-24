@@ -26,6 +26,9 @@ export const BANKING_FIELDS = [
 export const OPERATIONS_FIELDS = [
   'invoice_prefix', 'next_invoice_no', 'default_terms', 'thank_you_note',
   'deposit_heading', 'deposit_signatory', 'feature_flags',
+  // Invoice Settings defaults. The signature is a broker's signature image, so it goes no further
+  // than the roles that produce invoices.
+  'invoice_terms_conditions', 'invoice_signature',
 ] as const;
 
 @Controller('company-settings')

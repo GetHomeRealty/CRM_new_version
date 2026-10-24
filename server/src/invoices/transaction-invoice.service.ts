@@ -9,6 +9,7 @@ import { round2 } from '../common/serialize';
 import { InvoiceCalculator } from './invoice.calculator';
 import { InvoiceNumberService } from './invoice.numbers';
 import { invoiceCommissionFrom } from './invoice-commission';
+import { invoiceDocDefaults, type InvoiceDocDefaults } from './invoice-defaults';
 
 type Tx = Prisma.TransactionClient;
 
@@ -37,6 +38,8 @@ export class TransactionInvoiceService {
     // TD-117 — the configured prefix, read once here with the other settings and passed down,
     // so the Invoice Prefix field in Company Settings describes the invoices it claims to.
     const invoicePrefix = settings?.invoice_prefix ?? undefined;
+    // Invoice Settings - the Customer Notes, Terms & Conditions and signature a new invoice starts with.
+    const docDefaults = invoiceDocDefaults(settings);
     const breakdown = await this.commission.breakdown(normalizeCommissionTxn(t));
     const brok = t.brokerages;
     const brokAgents = brok ? brok.brokerage_agents.map((a) => a.name).filter(Boolean).join(', ') : '';
@@ -75,10 +78,10 @@ export class TransactionInvoiceService {
       if (terms.length === 0) return [];
       if (!terms.every((t) => Number(t.commission) > 0)) return [];
       for (const term of terms) {
-        created.push(await this.make(db, t, brok, defaultTerms, defaultTaxRate, brokAgents, actor, Number(term.term_no), Number(term.commission), invoicePrefix));
+        created.push(await this.make(db, t, brok, defaultTerms, defaultTaxRate, brokAgents, actor, Number(term.term_no), Number(term.commission), invoicePrefix, docDefaults));
       }
     } else {
-      created.push(await this.make(db, t, brok, defaultTerms, defaultTaxRate, brokAgents, actor, null, Number((breakdown as { commission?: number }).commission ?? 0), invoicePrefix));
+      created.push(await this.make(db, t, brok, defaultTerms, defaultTaxRate, brokAgents, actor, null, Number((breakdown as { commission?: number }).commission ?? 0), invoicePrefix, docDefaults));
     }
 
     for (const inv of created) {
@@ -301,6 +304,7 @@ export class TransactionInvoiceService {
     termNo: number | null,
     commission: number,
     invoicePrefix?: string,
+    docDefaults?: InvoiceDocDefaults,
   ): Promise<invoices> {
     const now = new Date();
     const invoiceDate = new Date(now.toISOString().slice(0, 10) + 'T00:00:00.000Z');
@@ -339,6 +343,7 @@ export class TransactionInvoiceService {
         coop_salesperson: t.agent,
         subject: 'Co-op Commission for ' + (t.property ?? '') + suffix,
         status: 'Unpaid',
+        ...(docDefaults ?? {}),
         created_at: now,
         updated_at: now,
     };

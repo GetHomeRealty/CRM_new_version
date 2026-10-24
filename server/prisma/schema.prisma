@@ -201,6 +201,10 @@ model company_settings {
   thank_you_note   String?   @db.Text
   deposit_heading  String?   @db.Text
   deposit_signatory String?  @db.VarChar(255)
+  /// Invoice Settings: copied onto every new invoice, which may then change its own copy.
+  invoice_terms_conditions String? @db.Text
+  /// The default "Acknowledged by" signature, a PNG/JPEG data URL like invoices.signature_path.
+  invoice_signature String? @db.Text
   created_at       DateTime? @db.Timestamp(0)
   updated_at       DateTime? @db.Timestamp(0)
 }

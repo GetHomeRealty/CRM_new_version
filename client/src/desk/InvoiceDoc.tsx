@@ -99,12 +99,26 @@ export default function InvoiceDoc({ invoice }: { invoice: Invoice }) {
           <tr><td style={{ padding: '4px 10px', color: '#475569' }}>Sub Total</td><td style={{ padding: '4px 10px', textAlign: 'right' }}>{money(Number(invoice.sub_total || 0) + Number(invoice.tax_total || 0))}</td></tr>
           <tr><td style={{ padding: '4px 10px', color: '#475569' }}>Discount</td><td style={{ padding: '4px 10px', textAlign: 'right' }}>{money(invoice.discount)}</td></tr>
           <tr><td style={{ padding: '6px 10px', fontWeight: 800, borderTop: '2px solid #0f172a' }}>Total</td><td style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 800, borderTop: '2px solid #0f172a' }}>{money(invoice.total)}</td></tr>
-          <tr><td style={{ padding: '4px 10px', color: '#166534' }}>Paid</td><td style={{ padding: '4px 10px', textAlign: 'right', color: '#166534' }}>{money(invoice.amount_paid)}</td></tr>
+          <tr><td style={{ padding: '6px 10px', color: '#166534', fontSize: 14, fontWeight: 800 }}>Paid</td><td style={{ padding: '6px 10px', textAlign: 'right', color: '#166534', fontSize: 14, fontWeight: 800 }}>{money(invoice.amount_paid)}</td></tr>
           <tr><td style={{ padding: '6px 10px', fontWeight: 800, color: BRAND }}>Balance Due</td><td style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 800, color: BRAND }}>{money(invoice.balance_due)}</td></tr>
         </tbody></table>
       </div>
 
-      {co.thank_you_note && <div style={{ marginTop: 12, fontStyle: 'italic', color: '#475569', fontSize: 12 }}>{co.thank_you_note}</div>}
+      {/*
+        The invoice's own Customer Notes and Terms & Conditions, as edited for this deal. Customer
+        Notes start from the company's default (the old Thank-you Note); an invoice from before the
+        defaults existed (null) still prints that note as it always did, and '' means it was cleared.
+      */}
+      {(() => {
+        const notes = invoice.customer_notes ?? co.thank_you_note;
+        return notes ? <div style={{ marginTop: 12, fontStyle: 'italic', color: '#475569', fontSize: 12, whiteSpace: 'pre-wrap' }}>{notes}</div> : null;
+      })()}
+      {invoice.terms_conditions && (
+        <div style={{ marginTop: 12, fontSize: 11.5, color: '#475569', lineHeight: 1.6 }}>
+          <div style={{ fontWeight: 700, color: '#334155' }}>Terms &amp; Conditions:</div>
+          <div style={{ whiteSpace: 'pre-wrap' }}>{invoice.terms_conditions}</div>
+        </div>
+      )}
 
       <div style={{ marginTop: 16, borderTop: '1px solid #eef0f5', paddingTop: 12, fontSize: 11.5, color: '#475569', lineHeight: 1.7 }}>
         <div style={{ fontWeight: 700, color: '#334155' }}>{co.deposit_heading || 'Beneficiary Bank Account Detail:'}</div>
@@ -113,6 +127,7 @@ export default function InvoiceDoc({ invoice }: { invoice: Invoice }) {
         <div>Bank Transit Number: {co.transit_no}</div>
         <div>Account Number: {co.account_no}</div>
         <div>Institution Number: {co.institution_no}</div>
+        {co.hst_number && <div style={{ fontWeight: 700, color: '#334155' }}>HST Number : {co.hst_number}</div>}
       </div>
       <div style={{ marginTop: 16, display: 'flex', justifyContent: 'flex-end' }}>
         <div style={{ textAlign: 'center', minWidth: 220 }}>

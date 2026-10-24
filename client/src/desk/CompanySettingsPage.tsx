@@ -39,6 +39,7 @@ export default function CompanySettingsPage() {
   // Bumped after every logo change so the <img> below re-fetches instead of showing a cached file.
   const [logoV, setLogoV] = useState(0);
   const logoInput = useRef<HTMLInputElement>(null);
+  const sigInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => { getCompanySettings().then(setForm).catch(() => toast('Could not load settings', 'bad')); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   if (!form) return <div className="centered">Loading settings…</div>;
@@ -74,6 +75,37 @@ export default function CompanySettingsPage() {
   };
 
   const set = (k: string, v: string) => { setDirty(true); setForm((f) => (f ? { ...f, [k]: v } : f)); };
+
+  /**
+   * Invoice Settings - the default signature. Downscaled to a compact PNG data URL exactly as the
+   * invoice editor does for a per-deal signature, so the copy each new invoice takes is the same kind
+   * of value. Saved with the rest of the form.
+   */
+  const pickSignature = (file: File | null) => {
+    if (sigInput.current) sigInput.current.value = '';
+    if (!file) return;
+    if (!file.type.startsWith('image/')) { toast('Please choose an image file (PNG/JPG).', 'bad'); return; }
+    if (file.size > 5 * 1024 * 1024) { toast('Signature image is too large (max 5 MB).', 'bad'); return; }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const scale = Math.min(1, 600 / img.width, 240 / img.height);
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round(img.width * scale));
+        canvas.height = Math.max(1, Math.round(img.height * scale));
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        set('invoice_signature', canvas.toDataURL('image/png'));
+        toast('Signature added — remember to Save.', 'ok');
+      };
+      img.onerror = () => toast('Could not read the image file.', 'bad');
+      img.src = reader.result as string;
+    };
+    reader.onerror = () => toast('Could not read the image file.', 'bad');
+    reader.readAsDataURL(file);
+  };
   const save = async () => {
     setSaving(true);
     try {
@@ -178,16 +210,63 @@ export default function CompanySettingsPage() {
       <div className="card"><h3 className="modal-h" style={{ fontSize: 14 }}>Company Profile</h3>{grid(FIELDS_A)}</div>
 
       {/*
-        Bank / Deposit Instructions, Automatic Reminders and Invoicing Defaults are Transaction Desk
-        settings: they configure deposit receipts, the lawyer-detail reminder that chases a deal, and
-        invoice numbering and tax. Company Settings itself is shared, so only these three sections are
+        Invoice Settings (bank details and invoice defaults), Automatic Reminders and Invoicing Defaults
+        are Transaction Desk settings: they configure invoices and deposit receipts, the lawyer-detail
+        reminder that chases a deal, and invoice numbering and tax. Company Settings itself is shared, so only these three sections are
         held back from the CRM — the profile and logo above stay on both sides.
 
         Hidden, not dropped from the payload. `save` sends the whole form as it was loaded, so these
         values go back unchanged when the CRM saves; nothing is cleared by editing from that side.
       */}
       {area === 'desk' && (<>
-        <div className="card"><h3 className="modal-h" style={{ fontSize: 14 }}>Bank / Deposit Instructions</h3>{grid(FIELDS_BANK)}</div>
+        {/*
+          Invoice Settings - what every invoice prints or starts with. The bank details are read live
+          (an edit here shows on every invoice, old ones included, and on the Deposit Receipt, Lawyer
+          Statement, Notice of Sale and Trade Sheet). The notes, terms and signature are COPIED onto
+          each new invoice, which can then change its own copy before it is sent.
+        */}
+        <div className="card">
+          <h3 className="modal-h" style={{ fontSize: 14 }}>Invoice Settings</h3>
+          <h4 style={{ fontSize: 12.5, margin: '4px 0 6px' }}>Bank / Deposit Instructions</h4>
+          <p className="help" style={{ marginTop: 0 }}>Printed in the Deposit Instructions of every invoice, and on the Deposit Receipt, Lawyer Statement, Notice of Sale and Trade Sheet.</p>
+          {grid(FIELDS_BANK)}
+          <h4 style={{ fontSize: 12.5, margin: '14px 0 6px' }}>Invoice defaults</h4>
+          <p className="help" style={{ marginTop: 0 }}>Each new invoice starts with these. They can be changed for an individual deal before the invoice is sent.</p>
+          <div className="g2">
+            <div className="field">
+              <label htmlFor="cs-thank_you_note">Default Customer Notes</label>
+              <textarea id="cs-thank_you_note" rows={3} maxLength={2000} value={String(form.thank_you_note ?? '')} disabled={!canEdit} onChange={(e) => set('thank_you_note', e.target.value)} />
+            </div>
+            {!isWithheld('invoice_terms_conditions') && (
+              <div className="field">
+                <label htmlFor="cs-invoice_terms_conditions">Default Terms &amp; Conditions</label>
+                <textarea id="cs-invoice_terms_conditions" rows={3} maxLength={2000} value={String(form.invoice_terms_conditions ?? '')} disabled={!canEdit} onChange={(e) => set('invoice_terms_conditions', e.target.value)} />
+              </div>
+            )}
+          </div>
+          {!isWithheld('invoice_signature') && (
+            <div className="field">
+              <label>Invoice Signature</label>
+              <div style={{ display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
+                <div style={{ border: '1px solid var(--line)', borderRadius: 8, padding: 8, background: '#fff', minWidth: 200, minHeight: 70, display: 'grid', placeItems: 'center' }}>
+                  {form.invoice_signature
+                    ? <img src={String(form.invoice_signature)} alt="Invoice signature" style={{ maxHeight: 70, maxWidth: 260, display: 'block' }} />
+                    : <span className="help">No signature</span>}
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <input ref={sigInput} type="file" accept="image/*" style={{ display: 'none' }} onChange={(e) => pickSignature(e.target.files?.[0] ?? null)} />
+                  <button className="btn primary sm" disabled={!canEdit} onClick={() => sigInput.current?.click()}>
+                    {form.invoice_signature ? '⭱ Replace Signature' : '⭱ Upload Signature'}
+                  </button>
+                  {form.invoice_signature && (
+                    <button className="btn ghost sm" disabled={!canEdit} onClick={() => set('invoice_signature', '')}>🗑 Remove Signature</button>
+                  )}
+                  <span className="help" style={{ maxWidth: 260 }}>Shown under "Acknowledged by" on every new invoice. PNG or JPG, ideally on a plain background. Save to apply.</span>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
         <div className="card">
           <h3 className="modal-h" style={{ fontSize: 14 }}>Automatic Reminders</h3>
           <div className="g3">
@@ -204,10 +283,6 @@ export default function CompanySettingsPage() {
           <h3 className="modal-h" style={{ fontSize: 14 }}>Invoicing Defaults</h3>
           {grid(FIELDS_INV)}
           <div className="g2">
-            <div className="field">
-              <label htmlFor="cs-thank_you_note">Thank-you Note</label>
-              <textarea id="cs-thank_you_note" rows={2} maxLength={2000} value={String(form.thank_you_note ?? '')} disabled={!canEdit} onChange={(e) => set('thank_you_note', e.target.value)} />
-            </div>
             <div className="field">
               <label htmlFor="cs-deposit_heading">Deposit Heading</label>
               <textarea id="cs-deposit_heading" rows={2} maxLength={2000} value={String(form.deposit_heading ?? '')} disabled={!canEdit} onChange={(e) => set('deposit_heading', e.target.value)} />
