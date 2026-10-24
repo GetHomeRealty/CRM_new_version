@@ -1983,7 +1983,7 @@ export default function TransactionDetailPage() {
         <AdminActivitiesModal open onClose={() => setAdminOpen(false)} transactionId={id} txn={txn} onSaved={applyUpdated} depositOnly={slDepositOnly} dftNA={stDFT} readOnly={sectionView} termCount={precon ? (parseInt(String(form.precon_term_count), 10) || 0) : undefined} />
       )}
       {faqOpen && txn && (
-        <AgentFaqModal open onClose={() => setFaqOpen(false)} transactionId={id} txn={txn} onSaved={applyUpdated} depositSlipOnly={slDepositOnly} dftNA={stDFT} readOnly={sectionView || isAgent} allowBatchEmail={isAgent} isAgent={isAgent} termCount={precon ? (parseInt(String(form.precon_term_count), 10) || 0) : undefined} />
+        <AgentFaqModal open onClose={() => setFaqOpen(false)} transactionId={id} txn={txn} onSaved={applyUpdated} depositSlipOnly={slDepositOnly} dftNA={stDFT} readOnly={sectionView || isAgent} isAgent={isAgent} onBatchReviewChanged={(tracker) => setTxn((prev) => (prev ? { ...prev, activity_tracker: tracker } : prev))} termCount={precon ? (parseInt(String(form.precon_term_count), 10) || 0) : undefined} />
       )}
       {adjOpen && txn && (
         <AdjustmentModal open onClose={() => setAdjOpen(false)} transactionId={id} txn={txn} onSaved={applyUpdated} readOnly={adjReadOnly} termCount={precon ? (parseInt(String(form.precon_term_count), 10) || 0) : undefined} />

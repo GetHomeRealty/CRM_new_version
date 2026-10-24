@@ -29,6 +29,8 @@ import type { AuthUserRecord } from '../auth/auth.types';
 
 import { isAdminOrAbove, isAgent, isSuperAdmin } from '../core/authz';
 import { ownsTransaction, teamMemberIdentity } from '../common/transaction-scope';
+import { agentVoteKey, batchReviewIncluded, batchReviewVotes, keepStoredBatchReview, OFFICE_VOTE_KEY, withBatchReviewVote } from './batch-review-votes';
+
 type Tx = Prisma.TransactionClient;
 
 /*
@@ -1018,11 +1020,9 @@ export class TransactionsWriteService {
       if (isOwner) data.agent = user.name;
       else delete data.agent;
       for (const k of AGENT_LOCKED) delete data[k];
-      if (Object.prototype.hasOwnProperty.call(data, 'activity_tracker')) {
-        const existing = parseJsonObject(t.activity_tracker);
-        existing.batch_review_email = !!asObject(data.activity_tracker).batch_review_email;
-        data.activity_tracker = existing;
-      }
+      // An agent's save changes nothing in the tracker. Their client review email choice is set on
+      // its own (`setBatchReviewChoice`), so on a team split one agent's save cannot undo another's.
+      if (Object.prototype.hasOwnProperty.call(data, 'activity_tracker')) data.activity_tracker = parseJsonObject(t.activity_tracker);
     }
 
     /*
@@ -1560,6 +1560,17 @@ export class TransactionsWriteService {
       }
 
       await this.captureRemovedRows(tx, t, actor, data);
+
+      /*
+       * Client review email choices are not this save's to change — see `batch-review-votes.ts`.
+       * Re-read under a row lock rather than from `t`, so a choice made while this form was open
+       * is carried through instead of being reverted by the screen's older copy.
+       */
+      if (Object.prototype.hasOwnProperty.call(fill, 'activity_tracker')) {
+        const [row] = await tx.$queryRaw<{ activity_tracker: string | null }[]>`SELECT activity_tracker FROM transactions WHERE id = ${txnId} FOR UPDATE`;
+        const sent = typeof fill.activity_tracker === 'string' ? parseJsonObject(fill.activity_tracker) : {};
+        fill.activity_tracker = JSON.stringify(phpJsonNormalize(keepStoredBatchReview(parseJsonObject(row?.activity_tracker), sent)));
+      }
 
       /*
        * THE VERSION IS CHECKED AGAIN HERE, IN THE WRITE ITSELF.
@@ -2245,6 +2256,53 @@ export class TransactionsWriteService {
     scan(asObject(admin.agents));
     for (const term of Object.values(asObject(admin.term_admin))) scan(asObject(asObject(term).agents));
     return names;
+  }
+
+  // ---- client review email: one person's choice --------------------------
+  /**
+   * Sets (or, with `null`, withdraws) the caller's own Send / Restrict for the client review email.
+   * See `batch-review-votes.ts` for the rule. An agent may answer only for themself, and only on a
+   * deal they own or are on the Team Split of — any access level, because the say is about their
+   * clients, not about editing the deal. Staff answer as the office. Documentation has no say, as
+   * before: their save never carried this flag.
+   */
+  async setBatchReviewChoice(user: AuthUserRecord | null, txnId: number, choice: unknown): Promise<{ data: Record<string, unknown> }> {
+    if (!user) throw new ForbiddenException({ message: 'Sign in to make this choice.' });
+    if (choice !== 'send' && choice !== 'restrict' && choice !== null) {
+      throw new BadRequestException({ message: 'Choose Send or Restrict.' });
+    }
+    const t = await this.prisma.transactions.findFirst({ where: { id: txnId, deleted_at: null }, select: { id: true, agent: true, agent_user_id: true } });
+    if (!t) throw new NotFoundException({ message: `No query results for model [App\\Models\\Transaction] ${txnId}.` });
+    if (user.role === 'documentation') throw new ForbiddenException({ message: 'Only the agents on this deal and the office can choose this.' });
+    let key = OFFICE_VOTE_KEY;
+    if (isAgent(user)) {
+      const onSplit = ownsTransaction(user, t) || (await this.prisma.team_members.findFirst({
+        where: { transaction_id: txnId, ...teamMemberIdentity(user) }, select: { id: true },
+      })) !== null;
+      if (!onSplit) throw new ForbiddenException({ message: 'Only the agents on this deal can choose this.' });
+      key = agentVoteKey(user.id);
+    }
+    if ((await this.statusList(this.prisma, txnId)).includes('DFT')) {
+      throw new UnprocessableEntityException({ message: 'This deal is DFT, so no client review email goes out.' });
+    }
+
+    const actor: ActingUser = { id: user.id, name: user.name };
+    await this.prisma.$transaction(async (tx) => {
+      const [row] = await tx.$queryRaw<{ activity_tracker: string | null }[]>`SELECT activity_tracker FROM transactions WHERE id = ${txnId} FOR UPDATE`;
+      const before = parseJsonObject(row?.activity_tracker);
+      const after = withBatchReviewVote(before, key, choice === null ? null : {
+        choice, name: user.name, user_id: isAgent(user) ? user.id : null, at: new Date().toISOString(),
+      });
+      await tx.transactions.update({ where: { id: txnId }, data: { activity_tracker: JSON.stringify(phpJsonNormalize(after)) } });
+      const label = (c: unknown): string => (c === 'send' ? 'Send' : c === 'restrict' ? 'Restrict' : 'No choice');
+      await this.audit.record(txnId, actor, {
+        section: 'Quick Actions', field: 'Client review email',
+        old: label(batchReviewVotes(before)[key]?.choice ?? null), new: label(choice),
+        source: isAgent(user) ? 'Agent' : 'Manual',
+        details: `Deal ${batchReviewIncluded(after) ? 'is' : 'is not'} included in batch review emails.`,
+      }, tx);
+    });
+    return this.loadResource(txnId, user);
   }
 
   // ---- destroy + agent-change review -------------------------------------

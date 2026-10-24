@@ -42,11 +42,13 @@ describe('batch review emails are opt-in (TD-094)', () => {
     expect(initialisers[0]).not.toContain('== null ? true');
   });
 
-  it('the server normalises an absent flag to false when an agent saves', () => {
-    // `transactions-write` rebuilds the tracker on an agent's save; `!!` is what makes a missing
-    // key mean excluded there too, so the two ends cannot disagree about silence.
-    const source = readFileSync(join(__dirname, 'transactions-write.service.ts'), 'utf8');
-    expect(source).toContain('existing.batch_review_email = !!asObject(data.activity_tracker).batch_review_email');
+  it('the server treats an absent flag as excluded when anybody saves', () => {
+    // Since 2026-10-23 a save no longer sets the flag at all: it is the result of each agent's own
+    // Send / Restrict (`batch-review-votes.ts`, tested in `batch-review-team-split.spec.ts`). What a
+    // save does is put the stored value back, and a deal with none stored reads as excluded there
+    // too, so the two ends still cannot disagree about silence.
+    const source = readFileSync(join(__dirname, 'batch-review-votes.ts'), 'utf8');
+    expect(source).toContain("if (!Object.prototype.hasOwnProperty.call(next, 'batch_review_email')) next.batch_review_email = false;");
   });
 
   it('nothing sends the batch review email yet — and this fails when something does', () => {

@@ -74,6 +74,17 @@ export class TransactionsController {
     return this.write.destroy(user ?? null, id);
   }
 
+  /** The caller's own Send / Restrict for the client review email: `choice` is 'send', 'restrict' or null. */
+  @Put(':transaction/batch-review')
+  @Screen('transactions', 'edit')
+  setBatchReviewChoice(
+    @CurrentUser() user: AuthUserRecord | undefined,
+    @Param('transaction', ParseIntPipe) id: number,
+    @Body() body: Record<string, unknown>,
+  ): Promise<{ data: Record<string, unknown> }> {
+    return this.write.setBatchReviewChoice(user ?? null, id, body?.choice);
+  }
+
   /** `note` is optional — a line saying what was checked, kept with the review record. */
   @Post(':transaction/review-agent-changes')
   @HttpCode(200)
