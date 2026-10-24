@@ -1,6 +1,6 @@
 import { useState, useEffect, type ChangeEventHandler, type CSSProperties } from 'react';
 import { updateTransaction, getAgentLoans } from '../lib/api';
-import { batchNo, parseNumber, formatCurrency, isPreconType } from './format';
+import { batchNo, parseNumber, formatCurrency, isPreconType, taxLabel, taxRate } from './format';
 import { useToast } from './toast';
 import { useAuth } from '../context/AuthContext';
 import { apiErrorMessage } from '../lib/apiError';
@@ -195,7 +195,8 @@ export default function AdjustmentModal({ open, onClose, transactionId, txn, onS
   };
 
   const extAmt = parseNumber(form.ext.amount);
-  const extHst = Math.round(extAmt * 0.13 * 100) / 100;
+  // The country's tax on the referral fee: HST 13% in Canada, GST 18% in India (24 Oct 2026).
+  const extHst = Math.round(extAmt * taxRate() * 100) / 100;
   const extTotal = Math.round((extAmt + extHst) * 100) / 100;
 
   // Gross Agent Commission total per agent (the T4A total) — the cap for an agent's
@@ -429,12 +430,12 @@ export default function AdjustmentModal({ open, onClose, transactionId, txn, onS
                   setExt({ pct: p, amount: amt });
                 }} placeholder="e.g. 1.5" /></div>
               <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Amount</label><MoneyInput value={form.ext.amount} onChange={(v) => setExt({ amount: v, pct: '' })} placeholder="0.00" /></div>
-              <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>HST</label><input value={formatCurrency(extHst)} readOnly style={{ background: 'var(--surface-2)' }} /></div>
+              <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>{taxLabel()}</label><input value={formatCurrency(extHst)} readOnly style={{ background: 'var(--surface-2)' }} /></div>
               <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Total</label><input value={formatCurrency(extTotal)} readOnly style={{ background: 'var(--surface-2)' }} /></div>
             </div>
             <div className="g2" style={{ marginTop: 10 }}>
               <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Referral Agent Invoice Received?</label><select value={form.ext.invoice_received} onChange={(e) => setExt({ invoice_received: e.target.value })}><option>No</option><option>Yes</option></select></div>
-              {form.ext.invoice_received === 'Yes' && <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Brokerage HST No.</label><input value={form.ext.hst_no} onChange={(e) => setExt({ hst_no: e.target.value })} placeholder="e.g. 123456789 RT0001" /></div>}
+              {form.ext.invoice_received === 'Yes' && <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>{taxLabel() === 'GST' ? 'Brokerage GSTIN' : 'Brokerage HST No.'}</label><input value={form.ext.hst_no} onChange={(e) => setExt({ hst_no: e.target.value })} placeholder={taxLabel() === 'GST' ? 'e.g. 36ABCDE1234F1Z5' : 'e.g. 123456789 RT0001'} /></div>}
             </div>
             {form.ext.invoice_received === 'Yes' && (
               <div className="g4" style={{ marginTop: 10 }}>

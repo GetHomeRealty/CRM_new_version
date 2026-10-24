@@ -1,6 +1,6 @@
 import { useState, useEffect, type CSSProperties } from 'react';
 import { setBatchReviewChoice, updateTransaction } from '../lib/api';
-import { isListingType, isPreconType, formatCurrency } from './format';
+import { isListingType, isPreconType, formatCurrency, taxLabel, taxRate } from './format';
 import { printDoc } from './printDoc';
 import { useToast } from './toast';
 import { useAuth } from '../context/AuthContext';
@@ -334,7 +334,7 @@ export default function AgentFaqModal({ open, onClose, transactionId, txn, onSav
   const advanceRows: AdjustmentRow[] = adj.advance_payment === 'Yes' ? (adj.advance_rows || []) : [];
   const extReferralTotal = fin.ext_referral?.total != null
     ? Number(fin.ext_referral.total)
-    : (adj.ext_referral === 'Yes' ? Number(adj.ext?.amount || 0) * 1.13 : 0);
+    : (adj.ext_referral === 'Yes' ? Number(adj.ext?.amount || 0) * (1 + taxRate()) : 0);
   const clientReferralTotal = (adj.client_referral === 'Yes' ? (adj.client_rows || []) : [])
     .reduce((s, r) => s + Number(r.amount || 0), 0);
   // Adjustment Details "Amount" is stored positive=deduct / negative=add — show with that sign.
@@ -366,7 +366,7 @@ export default function AgentFaqModal({ open, onClose, transactionId, txn, onSav
         ${bRow('Closing Date', txn.closing_date || '')}
         ${bRow('Deal Price', money(txn.price))}
         ${bRow('Generated Commission (% / $)', `${genPct ? genPct + '% / ' : ''}${money(dealComm.commission)}`)}
-        ${bRow('Generated Commission HST', money(dealComm.hst))}
+        ${bRow(`Generated Commission ${taxLabel()}`, money(dealComm.hst))}
         ${bRow('Total', money(dealComm.total))}
         ${bBar('Adjustments & Commission Summary')}
         ${bRow('Team Split Adjustment', `${splitPct}% of ${money(dealComm.total)}`, true)}
@@ -427,14 +427,14 @@ export default function AgentFaqModal({ open, onClose, transactionId, txn, onSav
       <li style="list-style:none;margin:0 0 6px -20px">Inst no.: ${ln(form.client_inst_no)} Transit no.: ${ln(form.client_transit_no)} Account no.: ${ln(form.client_account_no)}</li>
       ${li('Deposit Received', money(txn.deposit))}
       ${li('Listing Commission (% / $)', pctAmt(L))}
-      ${li('Listing Commission HST', money(L.hst))}
+      ${li(`Listing Commission ${taxLabel()}`, money(L.hst))}
       ${li('Co-op Commission (% / $)', pctAmt(Cc))}
-      ${li('Co-op Commission HST', money(Cc.hst))}
-      ${li('Total Commission without HST', money(T.commission))}
-      ${li('Total Commission HST', money(T.hst))}
-      ${li('Total Commission with HST', money(T.total))}
+      ${li(`Co-op Commission ${taxLabel()}`, money(Cc.hst))}
+      ${li(`Total Commission without ${taxLabel()}`, money(T.commission))}
+      ${li(`Total Commission ${taxLabel()}`, money(T.hst))}
+      ${li(`Total Commission with ${taxLabel()}`, money(T.total))}
     </ul>
-    <p style="font-weight:700;font-style:italic;margin:12px 0 6px">Deposit Received - Total Commission with HST = Client Payment</p>
+    <p style="font-weight:700;font-style:italic;margin:12px 0 6px">Deposit Received - Total Commission with ${taxLabel()} = Client Payment</p>
     <p style="font-weight:700;font-size:15px;margin:0 0 6px">${money(txn.deposit)} - ${money(T.total)} = <span style="color:#c8102e">${money(clientPayment)}</span></p>`;
   const clientDocTitle = `Client Payment - ${txn.trade_no || ''}`;
 
@@ -662,14 +662,14 @@ export default function AgentFaqModal({ open, onClose, transactionId, txn, onSav
                 </li>
                 <li><strong>Deposit Received:</strong> {formatCurrency(txn.deposit)}</li>
                 <li><strong>Listing Commission (% / $):</strong> {pctAmt(L)}</li>
-                <li><strong>Listing Commission HST:</strong> {formatCurrency(L.hst)}</li>
+                <li><strong>Listing Commission {taxLabel()}:</strong> {formatCurrency(L.hst)}</li>
                 <li><strong>Co-op Commission (% / $):</strong> {pctAmt(Cc)}</li>
-                <li><strong>Co-op Commission HST:</strong> {formatCurrency(Cc.hst)}</li>
-                <li><strong>Total Commission without HST:</strong> {formatCurrency(T.commission)}</li>
-                <li><strong>Total Commission HST:</strong> {formatCurrency(T.hst)}</li>
-                <li><strong>Total Commission with HST:</strong> {formatCurrency(T.total)}</li>
+                <li><strong>Co-op Commission {taxLabel()}:</strong> {formatCurrency(Cc.hst)}</li>
+                <li><strong>Total Commission without {taxLabel()}:</strong> {formatCurrency(T.commission)}</li>
+                <li><strong>Total Commission {taxLabel()}:</strong> {formatCurrency(T.hst)}</li>
+                <li><strong>Total Commission with {taxLabel()}:</strong> {formatCurrency(T.total)}</li>
               </ul>
-              <p style={{ fontWeight: 700, fontStyle: 'italic', margin: '12px 0 6px' }}>Deposit Received - Total Commission with HST = Client Payment</p>
+              <p style={{ fontWeight: 700, fontStyle: 'italic', margin: '12px 0 6px' }}>Deposit Received - Total Commission with {taxLabel()} = Client Payment</p>
               <p style={{ fontWeight: 700, fontSize: 15, margin: 0 }}>{formatCurrency(txn.deposit)} - {formatCurrency(T.total)} = <span style={{ color: '#c8102e' }}>{formatCurrency(clientPayment)}</span></p>
             </div>
           )}

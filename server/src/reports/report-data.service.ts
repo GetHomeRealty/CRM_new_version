@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { marketOf } from '../common/market';
+import { taxRateFor } from '../common/tax';
 import { Prisma } from '@prisma/client';
 import Decimal from 'decimal.js';
 import { PrismaService } from '../prisma/prisma.service';
@@ -264,6 +265,9 @@ const ALL_NEEDS: ReportNeeds = { documents: true, conditions: true, clients: tru
 const TXN_SELECT = {
   // identity and display
   id: true, trade_no: true, type: true, property: true, agent: true, agent_user_id: true,
+  // The deal's country: its tax is HST 13% in Canada and GST 18% in India, and normalizeCommissionTxn
+  // reads it from here. Unselected, an India deal was worked out at Canada's 13% (24 Oct 2026).
+  market: true,
   offer_date: true, closing_date: true, created_at: true, updated_at: true,
   // financial inputs — every field normalizeCommissionTxn reads
   price: true, deposit: true, listing_price: true,
@@ -705,7 +709,7 @@ export class ReportDataService {
       agent_balance: balance,
       adjustments_total: adjustmentsTotal,
       cashback: cashback(adjustments),
-      referral: referral(adjustments),
+      referral: referral(adjustments, taxRateFor(t.market)),
       statuses,
       is_closed: statuses.includes('Closed'),
       is_mutual_release: statuses.includes('Mutual Release'),

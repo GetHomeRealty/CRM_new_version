@@ -11,6 +11,7 @@ import { ReportExportService } from './report-export.service';
 import { DocumentReminderService, type ReminderRequest, type ReminderScope } from './document-reminder.service';
 import type { ReportFilters, ReportQuery } from './report.types';
 import { contentDisposition } from '../common/content-disposition';
+import { marketOf } from '../common/market';
 import { ReportRemarksService, type RemarkField } from './report-remarks.service';
 
 /** Reports API — all endpoints require the `reports` screen (agents are auto-scoped in the service). */
@@ -104,21 +105,21 @@ export class ReportsController {
   }
 
   @Get(':reportType/columns')
-  columns(@Param('reportType') type: string): unknown {
-    return this.reports.meta(type);
+  columns(@CurrentUser() user: AuthUserRecord, @Param('reportType') type: string): unknown {
+    return taxWords(user, this.reports.meta(type));
   }
 
   @Post(':reportType/search')
   @HttpCode(200)
-  search(@CurrentUser() user: AuthUserRecord, @Param('reportType') type: string, @Body() body: Record<string, unknown>): Promise<unknown> {
-    return this.reports.run(type, user, parseQuery(body));
+  async search(@CurrentUser() user: AuthUserRecord, @Param('reportType') type: string, @Body() body: Record<string, unknown>): Promise<unknown> {
+    return taxWords(user, await this.reports.run(type, user, parseQuery(body)));
   }
 
   @Post(':reportType/export/xlsx')
   @HttpCode(200)
   async exportXlsx(@CurrentUser() user: AuthUserRecord, @Param('reportType') type: string, @Body() body: Record<string, unknown>, @Res() res: Response): Promise<void> {
     const branding = (await this.settings.current()).name;
-    const payload = await this.reports.exportData(type, user, parseQuery(body), branding);
+    const payload = taxWords(user, await this.reports.exportData(type, user, parseQuery(body), branding));
     const buf = await this.exporter.xlsx(payload);
     this.download(res, buf, payload.reportName, this.exporter.fileStamp(payload.generatedAt), 'xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   }
@@ -127,7 +128,7 @@ export class ReportsController {
   @HttpCode(200)
   async exportPdf(@CurrentUser() user: AuthUserRecord, @Param('reportType') type: string, @Body() body: Record<string, unknown>, @Res() res: Response): Promise<void> {
     const branding = (await this.settings.current()).name;
-    const payload = await this.reports.exportData(type, user, parseQuery(body), branding);
+    const payload = taxWords(user, await this.reports.exportData(type, user, parseQuery(body), branding));
     const buf = await this.exporter.pdf(payload);
     this.download(res, buf, payload.reportName, this.exporter.fileStamp(payload.generatedAt), 'pdf', 'application/pdf');
   }
@@ -139,6 +140,18 @@ export class ReportsController {
     res.setHeader('Content-Length', String(buf.length));
     res.end(buf);
   }
+}
+
+/**
+ * India's tax is GST (24 Oct 2026): the column headings say "HST" ("Agent HST", "Brokerage HST"), so a
+ * person working in India reads GST instead - on the screen and in the Excel / PDF. Only the words; the
+ * figures under them are already the deal's own rate. Canada's reply is returned untouched.
+ */
+function taxWords<T>(user: AuthUserRecord, out: T): T {
+  if (marketOf(user) !== 'IN' || !out || typeof out !== 'object') return out;
+  const o = out as unknown as { columns?: { label?: string }[] };
+  if (!Array.isArray(o.columns)) return out;
+  return { ...out, columns: o.columns.map((c) => (typeof c.label === 'string' ? { ...c, label: c.label.replace(/\bHST\b/g, 'GST') } : c)) };
 }
 
 // ---- defensive request parsing (validates/coerces the raw body into a ReportQuery) ----

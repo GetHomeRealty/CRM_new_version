@@ -1,5 +1,5 @@
 import { useRef } from 'react';
-import { formatCurrency, commissionSummary } from './format';
+import { formatCurrency, commissionSummary, taxLabel, taxRate } from './format';
 import { printDoc } from './printDoc';
 import BrandMark from './BrandMark';
 import type { BrokerageLite, Transaction } from '../types';
@@ -102,12 +102,12 @@ export default function InvoiceModal({ open, onClose, txn }: { open: boolean; on
             <thead>
               <tr>
                 <th style={{ border: '1px solid var(--line)', background: 'var(--surface-3)', padding: '8px 10px', textAlign: 'left', fontSize: 11.5 }}>DESCRIPTION</th>
-                <th style={{ border: '1px solid var(--line)', background: 'var(--surface-3)', padding: '8px 10px', textAlign: 'right', fontSize: 11.5, width: 180 }}>AMOUNT (CAD)</th>
+                <th style={{ border: '1px solid var(--line)', background: 'var(--surface-3)', padding: '8px 10px', textAlign: 'right', fontSize: 11.5, width: 180 }}>AMOUNT ({taxLabel() === 'GST' ? 'INR' : 'CAD'})</th>
               </tr>
             </thead>
             <tbody>
               <tr><td style={{ border: '1px solid var(--line)', padding: '8px 10px', fontWeight: 600 }}>Co-op Commission</td><td style={{ border: '1px solid var(--line)', padding: '8px 10px', textAlign: 'right', fontWeight: 600 }}>{formatCurrency(c.commission)}</td></tr>
-              <tr><td style={{ border: '1px solid var(--line)', padding: '8px 10px', fontWeight: 600 }}>HST(13)</td><td style={{ border: '1px solid var(--line)', padding: '8px 10px', textAlign: 'right', fontWeight: 600 }}>{formatCurrency(c.hst)}</td></tr>
+              <tr><td style={{ border: '1px solid var(--line)', padding: '8px 10px', fontWeight: 600 }}>{taxLabel()}({Math.round(taxRate() * 100)})</td><td style={{ border: '1px solid var(--line)', padding: '8px 10px', textAlign: 'right', fontWeight: 600 }}>{formatCurrency(c.hst)}</td></tr>
             </tbody>
           </table>
           <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
@@ -142,7 +142,8 @@ export default function InvoiceModal({ open, onClose, txn }: { open: boolean; on
             </div>
           </div>
 
-          <div style={{ marginTop: 14, fontWeight: 700, fontSize: 12 }}>HST Number : {COMPANY.hst}</div>
+          {/* Canada's HST registration; an India deal does not print it (24 Oct 2026). */}
+          {taxLabel() !== 'GST' && <div style={{ marginTop: 14, fontWeight: 700, fontSize: 12 }}>HST Number : {COMPANY.hst}</div>}
           <div style={{ marginTop: 12, textAlign: 'center', fontStyle: 'italic', fontSize: 11, color: 'var(--muted-2)', borderTop: '1px solid var(--surface-3)', paddingTop: 8 }}>
             This is a system-generated invoice from {COMPANY.name}.
           </div>

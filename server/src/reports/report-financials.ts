@@ -171,12 +171,12 @@ export function cashback(adjustments: Obj): CashbackInfo {
 }
 
 export interface ReferralInfo { party: string | null; pct: number | null; amount: number; hst: number; total: number; paid_date: string | null; status: string }
-/** External brokerage referral (adjustments.ext when ext_referral === 'Yes'); HST computed at 13%. */
-export function referral(adjustments: Obj): ReferralInfo | null {
+/** External brokerage referral (adjustments.ext when ext_referral === 'Yes'); tax at the deal's rate - HST 13%, India GST 18%. */
+export function referral(adjustments: Obj, rate: number = HST_RATE): ReferralInfo | null {
   if (String(adjustments.ext_referral) !== 'Yes') return null;
   const e = obj(adjustments.ext);
   const amount = num(e.amount);
-  const hst = money(new Decimal(amount).times(HST_RATE));
+  const hst = money(new Decimal(amount).times(rate));
   return {
     party: e.brokerage != null && String(e.brokerage) !== '' ? String(e.brokerage) : null,
     pct: e.pct != null && String(e.pct) !== '' ? num(e.pct) : null,

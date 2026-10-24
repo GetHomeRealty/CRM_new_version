@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getDashboardCommissions, getDeskDashboard } from '../lib/api';
 import { deskPath } from './area';
-import { formatCurrency } from './format';
+import { formatCurrency, taxLabel } from './format';
 import { useToast } from './toast';
 import { useNotificationStream } from './useNotificationStream';
 import { useAuth } from '../context/AuthContext';
@@ -232,7 +232,7 @@ export default function DeskDashboardPage() {
           {/* Before HST on both sides: HST is collected and remitted, not earned. */}
           <Tile onOpen={go('analytics')} label="Overall Commission"
             value={money(isAgent ? comm.t4a.overall_total : comm.gross.overall_total)}
-            sub={isAgent ? 'your commission, before HST' : 'brokerage gross, before HST'} />
+            sub={isAgent ? `your commission, before ${taxLabel()}` : `brokerage gross, before ${taxLabel()}`} />
           {!isAgent && (
             <Tile onOpen={go('reports/referral-payment')} label="External Referral" value={money(comm.referrals.external_total)}
               sub="paid to outside brokerages" />

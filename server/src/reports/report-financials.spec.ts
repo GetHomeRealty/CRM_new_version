@@ -119,6 +119,11 @@ describe('report-financials — transaction JSON parsers', () => {
     expect(r).toEqual({ party: 'ABC Realty', pct: 25, amount: 2000, hst: 260, total: 2260, paid_date: '2026-04-01', status: 'Completed' });
     expect(referral({ ext_referral: 'No' })).toBeNull();
   });
+  it('an India deal\'s external referral carries GST at 18% (24 Oct 2026)', () => {
+    const r = referral({ ext_referral: 'Yes', ext: { amount: 2000 } }, 0.18);
+    expect(r?.hst).toBe(360);
+    expect(r?.total).toBe(2360);
+  });
   it('agent-paid detection from admin_activities (paid_status === Paid)', () => {
     const admin = { agents: { Alice: { payments: [{ paid_status: 'Paid', amount: 4000, paid_date: '2026-05-02' }, { paid_status: 'Pending', amount: 1000 }] } } };
     const p = agentPaymentsPaid(admin, ['Alice']);
