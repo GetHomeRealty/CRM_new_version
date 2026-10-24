@@ -85,7 +85,7 @@ interface AdjustmentModalProps {
 }
 
 export default function AdjustmentModal({ open, onClose, transactionId, txn, onSaved, termCount: termCountProp, readOnly = false }: AdjustmentModalProps) {
-  const { user } = useAuth();
+  const { user, isSuperAdmin } = useAuth();
   /*
    * THE DOCUMENTATION ROLE ONLY — the same test the transaction page makes, and the same one
    * `FinancialModal` and `AdminActivitiesModal` make for the same reason.
@@ -228,6 +228,19 @@ export default function AdjustmentModal({ open, onClose, transactionId, txn, onS
     if (r.agent && (paidAgents.has(r.agent) || dealPaid)) return 'Closed';
     return (r.agent && parseNumber(r.amount) !== 0) ? 'Yet to Adjust' : '';
   };
+  /*
+   * A Closed row stays as it was paid (Madhu, 2026-10-23): the whole row is read-only, it cannot be
+   * deleted or switched off, and a paid agent cannot be given a new row. Accounting and Super Admin
+   * can still correct one. The server refuses the same saves (`closedAdjustmentProblem`); this is
+   * the half that stops them being typed.
+   */
+  const canEditClosed = isSuperAdmin || user?.role === 'accounting';
+  const paidOut = canEditClosed ? [] : agentNames.filter((n) => dealPaid || paidAgents.has(n));
+  const lockedRow = (r: AdjustmentEntry) => !!r.agent && paidOut.includes(r.agent);
+  const hasLockedRow = form.agent_adjust === 'Yes' && form.adjustment_rows.some(lockedRow);
+  const adjAgentsOpen = agentNames.filter((n) => !paidOut.includes(n) && (precon || !form.adjustment_rows.some((r) => r.agent === n)));
+  const allPaidOut = agentNames.length > 0 && agentNames.every((n) => paidOut.includes(n));
+  const newAdjRow = (): AdjustmentEntry => ({ agent: soleAgent && !paidOut.includes(soleAgent) ? soleAgent : '', amount: '', status: '', remarks: '', is_loan: false });
 
   // Total deduction (agent adjust + advance) entered for an agent.
   const deductFor = (name: string) => {
@@ -268,8 +281,9 @@ export default function AdjustmentModal({ open, onClose, transactionId, txn, onS
   // Each agent can only be picked once per list (except preconstruction, which is
   // term-based and may repeat an agent across terms). `usedAgents` are the agents
   // already chosen in the OTHER rows of the same list.
-  const agentSelect = (val: string | undefined, onCh: ChangeEventHandler<HTMLSelectElement>, usedAgents: string[] = []) => {
-    const opts = precon ? agentNames : agentNames.filter((n) => n === val || !usedAgents.includes(n));
+  // `blocked` keeps paid agents out of a new adjustment row (see `paidOut`).
+  const agentSelect = (val: string | undefined, onCh: ChangeEventHandler<HTMLSelectElement>, usedAgents: string[] = [], blocked: string[] = []) => {
+    const opts = (precon ? agentNames : agentNames.filter((n) => n === val || !usedAgents.includes(n))).filter((n) => n === val || !blocked.includes(n));
     return (
       <select value={val ?? ''} onChange={onCh}><option value="">Select agent</option>{opts.map((n) => <option key={n} value={n}>{n}</option>)}</select>
     );
@@ -311,12 +325,18 @@ export default function AdjustmentModal({ open, onClose, transactionId, txn, onS
         {/* Adjustment Details */}
         <div className="modal-sub">Adjustment Details</div>
         <div className="field" style={{ maxWidth: 220 }}><label style={lbl}>Agent Adjust</label>
-          <select value={form.agent_adjust} onChange={(e) => { const v = e.target.value; if (v !== 'Yes') { switchSectionOff('agent_adjust', 'adjustment_rows', 'Agent Adjust'); return; } set('agent_adjust', v); if (form.adjustment_rows.length === 0) addRow('adjustment_rows', { agent: soleAgent, amount: '', status: '', remarks: '', is_loan: false }); }}><option>No</option><option>Yes</option></select></div>
+          <select value={form.agent_adjust} disabled={hasLockedRow || (form.agent_adjust !== 'Yes' && allPaidOut)} onChange={(e) => { const v = e.target.value; if (v !== 'Yes') { switchSectionOff('agent_adjust', 'adjustment_rows', 'Agent Adjust'); return; } set('agent_adjust', v); if (form.adjustment_rows.length === 0) addRow('adjustment_rows', newAdjRow()); }}><option>No</option><option>Yes</option></select></div>
+        {(hasLockedRow || allPaidOut) && (
+          <div className="help" style={{ margin: '-4px 0 10px' }} data-testid="adjustment-closed-note">
+            🔒 {allPaidOut ? 'Every agent on this deal has been paid, so adjustments are Closed.' : 'A Closed adjustment can’t be changed once its agent has been paid.'} Only Accounting or a Super Admin can correct it.
+          </div>
+        )}
         {form.agent_adjust === 'Yes' && (<>
-          {form.adjustment_rows.map((r, i) => (
+          {form.adjustment_rows.map((r, i) => { const locked = lockedRow(r); return (
             <div className="dyn-list-box" key={i}>
+              <fieldset disabled={locked} style={{ border: 0, margin: 0, padding: 0, minInlineSize: 0 }}>
               <div style={{ display: 'grid', gridTemplateColumns: precon ? 'repeat(4,1fr)' : 'repeat(3,1fr)', gap: 14 }}>
-                <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Agent Name</label>{agentSelect(r.agent, (e) => setRow('adjustment_rows', i, { agent: e.target.value }), usedIn('adjustment_rows', i))}</div>
+                <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Agent Name</label>{agentSelect(r.agent, (e) => setRow('adjustment_rows', i, { agent: e.target.value }), usedIn('adjustment_rows', i), paidOut)}</div>
                 <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Amount</label><SignedAmount value={r.amount} onChange={(nv) => setRow('adjustment_rows', i, { amount: nv })} />{overNote(r.agent)}</div>
                 <div className="field" style={{ marginBottom: 0 }}><label style={lbl}>Status</label><input value={autoStatus(r) || '—'} readOnly style={{ background: 'var(--surface-2)', fontWeight: 600 }} title="Auto — 'Yet to Adjust' once agent + amount are set; 'Closed' once this agent's commission is marked Paid in Admin Activities." /></div>
                 {precon && termSelect(r.term, (e) => setRow('adjustment_rows', i, { term: e.target.value }))}
@@ -336,10 +356,11 @@ export default function AdjustmentModal({ open, onClose, transactionId, txn, onS
                 </div>
               )}
               <div className="field" style={{ marginTop: 10, marginBottom: 0 }}><label style={lbl}>Remarks</label><textarea rows={1} value={r.remarks} onChange={(e) => setRow('adjustment_rows', i, { remarks: e.target.value })} /></div>
-              <div style={{ textAlign: 'right', marginTop: 6 }}><button className="row-rm" onClick={() => rmRow('adjustment_rows', i)}>🗑️</button></div>
+              </fieldset>
+              <div style={{ textAlign: 'right', marginTop: 6 }}>{!locked && <button className="row-rm" onClick={() => rmRow('adjustment_rows', i)}>🗑️</button>}</div>
             </div>
-          ))}
-          {canAddFor('adjustment_rows') && <button className="btn primary sm" onClick={() => addRow('adjustment_rows', { agent: soleAgent, amount: '', status: '', remarks: '', is_loan: false })}>+ Add New</button>}
+          ); })}
+          {canAddFor('adjustment_rows') && adjAgentsOpen.length > 0 && <button className="btn primary sm" onClick={() => addRow('adjustment_rows', newAdjRow())}>+ Add New</button>}
         </>)}
 
         {/* Advance Payment */}

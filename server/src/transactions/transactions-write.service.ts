@@ -358,6 +358,59 @@ export function clearSwitchedOffSections(value: unknown): unknown {
   return adj;
 }
 
+/**
+ * A CLOSED ADJUSTMENT ROW STAYS AS IT WAS PAID (Madhu, 2026-10-23).
+ *
+ * A row's Status turns Closed by itself once its agent is paid — a Paid payment for that agent in
+ * Admin Activities, or the deal's agent commission marked paid (`syncAdjustmentStatuses`). The
+ * money has gone out on those figures, so the row is fixed from then on: agent, amount, sign, loan
+ * tick, term and remarks cannot change, the row cannot be deleted, switching Agent Adjust off
+ * cannot remove it, and no NEW row can be added for an agent who is already paid. Accounting and
+ * Super Admin are let through by the caller so they can still correct one.
+ *
+ * Compared as a multiset rather than by position: rows carry no id, and deleting an open row above
+ * a Closed one moves it up the list without changing it. A row's Status is not compared — the
+ * server works it out again after every save.
+ *
+ * `paid(agent)` answers from the deal as stored, so the lock is the one the user saw when they
+ * opened the panel. Returns the refusal message, or null when the save keeps every Closed row.
+ */
+export function closedAdjustmentProblem(stored: unknown, incoming: unknown, paid: (agent: string) => boolean): string | null {
+  const lockedRows = (adj: unknown): Record<string, unknown>[] => {
+    const a = asObject(adj);
+    if ((a.agent_adjust ?? null) !== 'Yes') return [];
+    return asArray(a.adjustment_rows).filter((r) => {
+      const agent = String(asObject(r).agent ?? '').trim();
+      return agent !== '' && paid(agent);
+    });
+  };
+  const key = (r: Record<string, unknown>): string => JSON.stringify([
+    String(r.agent ?? '').trim(),
+    round2(toFloat(r.amount ?? 0)),
+    !!r.is_loan,
+    String(r.term ?? ''),
+    String(r.remarks ?? '').trim(),
+  ]);
+  const left = lockedRows(stored).map(key);
+  const extra = lockedRows(incoming).filter((r) => {
+    const i = left.indexOf(key(r));
+    if (i >= 0) left.splice(i, 1);
+    return i < 0;
+  });
+  const agentOf = (k: string) => String((JSON.parse(k) as unknown[])[0]);
+  for (const r of extra) {
+    const agent = String(r.agent ?? '').trim();
+    // An unmatched Closed row of the same agent means this is that row, edited; otherwise it is new.
+    return left.some((k) => agentOf(k) === agent)
+      ? `${agent}'s adjustment is Closed because the agent has been paid, so it can't be changed. Ask Accounting or a Super Admin to correct it.`
+      : `${agent} has already been paid, so a new adjustment can't be added for them. Ask Accounting or a Super Admin.`;
+  }
+  if (left.length) {
+    return `${agentOf(left[0])}'s adjustment is Closed because the agent has been paid, so it can't be removed. Ask Accounting or a Super Admin to correct it.`;
+  }
+  return null;
+}
+
 const FINANCIAL_FIELDS = new Set([
   'price', 'deposit', 'comm_type', 'comm_value', 'comm_pct', 'comm_amt',
   'comm_adjust_enabled', 'comm_adjust_before', 'comm_adjust_after',
@@ -1096,6 +1149,13 @@ export class TransactionsWriteService {
      */
     if (Object.prototype.hasOwnProperty.call(data, 'adjustments')) {
       data.adjustments = clearSwitchedOffSections(data.adjustments);
+      // A Closed row (agent paid) is fixed for everyone but Accounting and Super Admin.
+      if (!isSuperAdmin(user) && user?.role !== 'accounting') {
+        const paidAgents = this.paidAgentNames(t.admin_activities);
+        const dealPaid = t.comm_paid_status === 'Yes' || (parseJsonObject(t.activity_tracker).agent_commission_paid_status ?? null) === 'Yes';
+        const problem = closedAdjustmentProblem(t.adjustments ? parseJsonObject(t.adjustments) : {}, data.adjustments, (a) => dealPaid || paidAgents.includes(a));
+        if (problem) throw new ForbiddenException({ message: problem, errors: { adjustments: [problem] } });
+      }
     }
 
     const statuses = await this.statusList(this.prisma, txnId);
