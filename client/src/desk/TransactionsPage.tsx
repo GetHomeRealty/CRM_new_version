@@ -308,12 +308,13 @@ export default function TransactionsPage() {
   const otherFilters = (Object.keys(filters) as (keyof Filters)[]).some((k) => k !== 'status' && filters[k] !== '');
   const activeRibbonCount = RIBBON_KEYS.filter((k) => filters[k]).length;
   /*
-   * Every filter away from "everything", for the Add Filter button and the line under the toolbar
-   * (2026-10-22): the filters now live behind that button, so the screen must still say when the
-   * list is narrowed. The opening defaults count too, because they narrow it.
+   * Every filter changed from the page's opening defaults, for the Add Filter button (2026-10-23,
+   * Madhu's request): a fresh page reads plain "Add Filter" rather than "(2)" for the default
+   * closing year and status nobody touched. The line under the toolbar still names the defaults,
+   * so the screen still says the list is narrowed.
    */
   const MAIN_FILTERS: (keyof Filters)[] = ['year', 'type', 'validation', 'agent', 'commission', 'docs', 'approvals', 'status'];
-  const activeFilterCount = activeRibbonCount + MAIN_FILTERS.filter((k) => filters[k]).length;
+  const activeFilterCount = activeRibbonCount + MAIN_FILTERS.filter((k) => filters[k] !== EMPTY_FILTERS[k]).length;
   const filterSummary: string[] = [
     filters.year === THIS_YEAR_ONWARD ? `Closing year ${THIS_YEAR_ONWARD.slice(0, 4)} onward + no date` : filters.year ? `Closing year ${filters.year}` : '',
     filters.type ? typeLabel(filters.type) : '',
@@ -414,6 +415,8 @@ export default function TransactionsPage() {
           title="Closing year, type, validation, agent, commission, documents, approvals, status, dates, payout, client and brokerage">
           <Icon name="filter" size={13} /> Add Filter{activeFilterCount ? ` (${activeFilterCount})` : ''} {showRibbon ? <Icon name="chevronDown" size={12} className="flip" /> : <Icon name="chevronDown" size={12} />}
         </button>
+        {/* Reset sits beside Add Filter (2026-10-23, Madhu's request) so it works without opening the panel; same resetAll as before. */}
+        <button className="btn ghost sm" onClick={resetAll} title="Back to the default filters and order" data-testid="txn-reset">Reset</button>
         <button className="btn ghost sm" disabled={downloadingAll || loading} onClick={() => setDownloadAsk({ format: 'xlsx', scope: 'list' })}
           title="Download every transaction — one row each, with team split, clients, lawyer, financial, adjustments and conditions">
           {downloadingAll ? <><Icon name="clock" size={13} /> Preparing…</> : <><Icon name="download" size={13} /> Download All Transactions</>}
@@ -498,7 +501,6 @@ export default function TransactionsPage() {
           <option value="">All statuses</option>
           {ALL_STATUSES.map((s) => <option key={s}>{s}</option>)}
         </select>
-            <button className="btn ghost sm" onClick={resetAll} title="Back to the default filters and order">Reset</button>
           </div>
           <div style={{ marginTop: 12, display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'flex-end' }}>
             <div>
