@@ -170,9 +170,9 @@ export default function DeskTriggersPanel() {
         <div className="field" style={{ maxWidth: 520 }}>
           <label>Closing-date reminders</label>
           <p className="help" style={{ margin: 0 }}>
-            Every night, each deal that has not ended is counted down to its closing date from ten
-            days out, including the morning of the closing itself. The agent on the deal is told
-            in-app, by email and on their phone, once per day.
+            Every night, each deal that has not ended is reminded of its closing date 10, 7 and 4 days
+            out, then every day for the last 3 days, including the morning of the closing itself. The
+            agent on the deal is told in-app, by email and on their phone.
           </p>
         </div>
 

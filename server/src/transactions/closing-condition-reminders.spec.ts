@@ -110,6 +110,11 @@ describe('when each of the two new reminders is due (TD-009)', () => {
     expect(closingReminderFor(today, day(today, CLOSING_WINDOW_DAYS + 1)).due).toBe(false);
   });
 
+  it('goes out 10, 7 and 4 days out, then every day for the last 3 (Sai, 26 Oct 2026)', () => {
+    const sent = Array.from({ length: 12 }, (_, i) => 11 - i).filter((n) => closingReminderFor(today, day(today, n)).due);
+    expect(sent).toEqual([10, 7, 4, 3, 2, 1, 0]);
+  });
+
   it('includes the closing day itself, unlike the expiry countdown', () => {
     // The expiry countdown stops at one day out because the auto-expiry pass acts on the day. This
     // one acts on nothing, so the morning of a closing is exactly when somebody wants telling.
@@ -143,15 +148,15 @@ describe('the closing-date reminder (TD-009)', () => {
       const s = stubs();
       const today = anchor();
       const agent = await makeAgent(tx);
-      const id = await makeDeal(tx, { agent, closing_date: day(today, 6) }, ['Secured Firm']);
+      const id = await makeDeal(tx, { agent, closing_date: day(today, 7) }, ['Secured Firm']);
 
       const result = await sweepFor(tx, s).sweep(today);
 
       expect(result.closingReminders).toBe(1);
       const mail = s.sent.find((m) => m.event === 'transaction.closing_reminder');
       expect(mail).toBeDefined();
-      expect(mail!.vars.days_remaining).toBe('6');
-      expect(mail!.vars.closing_phrase).toBe('closing in 6 days');
+      expect(mail!.vars.days_remaining).toBe('7');
+      expect(mail!.vars.closing_phrase).toBe('closing in 7 days');
 
       const rows = await tx.transaction_reminders.findMany({ where: { transaction_id: id, kind: 'closing' } });
       expect(rows.map((r) => r.delivery_method).sort()).toEqual(['email', 'in-app']);
@@ -383,7 +388,7 @@ describe('what the new reminders leave behind (TD-009)', () => {
       const s = stubs();
       const today = anchor();
       const agent = await makeAgent(tx);
-      const id = await makeDeal(tx, { agent, closing_date: day(today, 5) }, ['Secured Conditional']);
+      const id = await makeDeal(tx, { agent, closing_date: day(today, 4) }, ['Secured Conditional']);
       await addCondition(tx, id, { type: 'Financing', deadline: day(today, 5) });
 
       await sweepFor(tx, s).sweep(today);

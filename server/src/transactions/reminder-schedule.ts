@@ -89,6 +89,12 @@ export function hasExpired(today: Date, expiry: Date): boolean {
  * from the offer, not months, so a fortnight of chasing would be noise before it was ever useful.
  */
 export const CLOSING_WINDOW_DAYS = 10;
+/**
+ * WHICH DAYS OF THE RUN-UP A CLOSING REMINDER GOES OUT (Sai, 26 Oct 2026): "from last 10 days, for every
+ * 3 days and from last 3 days, every day", closing day included - 10, 7 and 4 days out, then 3, 2, 1
+ * and the day itself. Seven reminders instead of eleven. Before this it went every day of the ten.
+ */
+export const CLOSING_REMINDER_DAYS: readonly number[] = [10, 7, 4, 3, 2, 1, 0];
 export const CONDITION_WINDOW_DAYS = 7;
 
 /**
@@ -101,7 +107,7 @@ export const CONDITION_WINDOW_DAYS = 7;
  */
 export function closingReminderFor(today: Date, closing: Date): { due: boolean; daysRemaining: number } {
   const daysRemaining = daysBetween(today, closing);
-  return { due: daysRemaining >= 0 && daysRemaining <= CLOSING_WINDOW_DAYS, daysRemaining };
+  return { due: CLOSING_REMINDER_DAYS.includes(daysRemaining), daysRemaining };
 }
 
 /** Whether a condition due on `deadline` should be chased today. The deadline day counts. */
