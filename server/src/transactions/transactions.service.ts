@@ -1,11 +1,13 @@
 import { AuditService } from '../audit/audit.service';
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CommissionService } from './commission.service';
 import { TransactionReviewService } from './transaction-review.service';
 import { isListingType } from '../reference/transaction.constants';
 import { parseJsonObject } from '../common/serialize';
+import { PAYOUT_STATUSES, payoutWhere } from './payout-filter';
+import { PaymentCacheService } from './payment-cache.service';
 import { filterClauses } from './transaction-filters';
 import type { ListTransactionsDto } from './dto/list-transactions.dto';
 import { isAgent } from '../core/authz';
@@ -47,7 +49,22 @@ export class TransactionsService {
     private readonly commission: CommissionService,
     private readonly reviews: TransactionReviewService,
     private readonly audit: AuditService,
+    /** Fills the payment cache for any deal never computed, before the Payout filter reads it. */
+    @Optional() private readonly paymentCache?: PaymentCacheService,
   ) {}
+
+  /**
+   * The Payout status filter (26 Oct 2026), from the agent payments - see payout-filter.ts. A deal whose
+   * payment figures were never computed is computed first, so the filter never silently leaves it out.
+   */
+  private async payoutClause(payout: string | undefined): Promise<Prisma.transactionsWhereInput | null> {
+    if (!payout || !PAYOUT_STATUSES[payout]) return null;
+    if (this.paymentCache) {
+      const missing = await this.prisma.transactions.findMany({ where: { deleted_at: null, calc_at: null }, select: { id: true }, take: 500 });
+      if (missing.length) await this.paymentCache.recompute(missing.map((m) => m.id)).catch(() => 0);
+    }
+    return payoutWhere(this.prisma, payout);
+  }
 
   /**
    * Transactions list (newest first). Agents only see their own + team-split deals.
@@ -67,6 +84,8 @@ export class TransactionsService {
     const visible = transactionScopeWhere(user);
     if (Object.keys(visible).length) and.push(visible);
     and.push(...filterClauses(query));
+    const payout = await this.payoutClause(query.payout);
+    if (payout) and.push(payout);
     if (and.length) where.AND = and;
 
     const paged = query.page !== undefined;
@@ -164,6 +183,8 @@ export class TransactionsService {
     const visible = transactionScopeWhere(user);
     if (Object.keys(visible).length) and.push(visible);
     and.push(...filterClauses(query));
+    const payout = await this.payoutClause(query.payout);
+    if (payout) and.push(payout);
     if (and.length) where.AND = and;
 
     const rows = await this.prisma.transactions.findMany({

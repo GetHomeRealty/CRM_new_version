@@ -188,12 +188,9 @@ export function filterClauses(q: ListTransactionsDto): Prisma.transactionsWhereI
   if (closingFrom) out.push({ closing_date: { gte: closingFrom } });
   if (closingTo) out.push({ closing_date: { lte: closingTo } });
 
-  // Payout. "Pending" was written as `paid !== 'Yes'`, which in JavaScript is true for null and
-  // for the empty string. SQL disagrees — `comm_paid_status <> 'Yes'` drops NULL rows — so the
-  // null case has to be spelled out or every unset deal would vanish from the Pending filter.
-  if (q.payout === 'Paid') out.push({ comm_paid_status: 'Yes' });
-  if (q.payout === 'Pending') out.push({ OR: [{ comm_paid_status: null }, { comm_paid_status: { not: 'Yes' } }] });
-  if (q.payout === 'N/A') out.push({ comm_paid_status: 'N/A' });
+  // Payout status (26 Oct 2026) is NOT a clause here: it is answered from the agent payments by
+  // `payoutWhere` (payout-filter.ts), which needs the database, in TransactionsService. It used to read
+  // `comm_paid_status`, a column nothing writes - empty on every live deal.
 
   if (has(q.client)) out.push({ clients: { some: { name: { contains: q.client.trim(), mode: 'insensitive' } } } });
   // brokerages is a to-one relation, so `is` rather than `some`; a deal with no brokerage never
