@@ -8,6 +8,7 @@ import { roleLabel, formatCurrency } from './format';
 import { useToast } from './toast';
 import { apiErrorMessage, apiFieldErrors } from '../lib/apiError';
 import { useAuth } from '../context/AuthContext';
+import api from '../lib/axios';
 import PasswordInput from './PasswordInput';
 import UserAvatar, { bumpPhotoVersion } from './UserAvatar';
 
@@ -345,8 +346,14 @@ export default function UsersPage() {
           onSaved={(saved) => {
             setEditing(null);
             load();
-            // If I edited my own account, refresh my permissions immediately.
-            if (saved.id === me?.id) setUser((m) => (m ? { ...m, ...saved } as AuthUser : m));
+            /*
+             * If I edited my own account, refresh my sign-in details from the server (26 Oct 2026).
+             * This used to copy the saved user RECORD over them, and the record's `is_team_lead` is the
+             * stored flag - true for a Documentation / Accounting Team Lead - while the sign-in's
+             * `is_team_lead` means an Agent Team Lead only. Karishma (Accounting Team Lead) saving her
+             * own record was shown "My Team" and "135 agents in my team" until the page was reloaded.
+             */
+            if (saved.id === me?.id) api.get<AuthUser>('/api/user').then((r) => setUser(r.data)).catch(() => {});
           }}
         />
       )}
@@ -638,7 +645,9 @@ function UserModal({ catalog, existing, teamLeadMode, teamLeads, deskLeads, team
   // A Super Admin chooses the Team Lead of a plain Agent.
   const showReportingLine = !teamLeadMode && isAgent && !isTeamLeadChoice;
   // A Super Admin editing somebody who leads Agents: where those Agents go.
-  const showReassign = !teamLeadMode && !!existing?.is_team_lead && teamSize > 0;
+  // Only an AGENT Team Lead's agents need a replacement lead; a Documentation / Accounting lead's team
+  // simply loses its lead (26 Oct 2026 - this blocked saving such a lead who had members).
+  const showReassign = !teamLeadMode && !!existing?.is_team_lead && existing?.role === 'agent' && teamSize > 0;
   const otherTeamLeads = teamLeads.filter((t) => t.id !== existing?.id && (t.status ?? 'Active') === 'Active');
   /*
    * The Team Lead is leaving: this save deactivates them, or makes them something other than a Team
