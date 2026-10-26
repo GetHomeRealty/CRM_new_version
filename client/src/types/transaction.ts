@@ -344,6 +344,10 @@ export interface Transaction {
   builder?: BuilderData;
   /** India deals: 'One-time payment' or 'Loan' (24 Oct 2026). */
   india_payment?: string | null;
+  /** India deals: down payment 'Yes' / 'No', its number, and whether that number is a % or an amount (26 Oct 2026). */
+  india_down_payment?: string | null;
+  india_down_payment_value?: number | null;
+  india_down_payment_kind?: 'Percentage' | 'Amount' | null;
   /** Who handles the deal in Documentation / Accounting (25 Oct 2026). */
   handlers?: { documentation: { id: number; name: string } | null; accounting: { id: number; name: string } | null };
   commercial_lease?: Record<string, unknown> | null;

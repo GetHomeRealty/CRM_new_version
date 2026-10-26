@@ -1727,6 +1727,10 @@ export class TransactionsWriteService {
         if (!v) throw new UnprocessableEntityException({ message: `Choose how the buyer pays: ${INDIA_PAYMENTS.join(' or ')}.`, errors: { india_payment: [`Choose how the buyer pays: ${INDIA_PAYMENTS.join(' or ')}.`] } });
         await tx.transactions.update({ where: { id: txnId }, data: { india_payment: v } });
       }
+      // India deals' down payment (26 Oct 2026): Yes with a number, or No. Empty leaves it as it is.
+      if (Object.prototype.hasOwnProperty.call(body, 'india_down_payment') && t.market === 'IN' && String(body.india_down_payment ?? '').trim() !== '') {
+        await tx.transactions.update({ where: { id: txnId }, data: downPaymentData(body.india_down_payment, body.india_down_payment_value) });
+      }
       if (Object.prototype.hasOwnProperty.call(data, 'precon_terms')) await this.syncPreconTerms(tx, txnId, asArray(data.precon_terms));
 
       if (Object.prototype.hasOwnProperty.call(data, 'statuses')) {
@@ -2670,6 +2674,25 @@ export class TransactionsWriteService {
     if (rel === 'conditions') return { type: 'Financing', custom_name: null, deadline: null, status: 'Pending' };
     return { name: null, board_id: null, verified: false };
   }
+}
+
+/**
+ * INDIA DOWN PAYMENT (Sai, 26 Oct 2026): "if given a 2 digit no, then it should act like percentage, if
+ * given more than 2 digit number then should act like the value". The digits BEFORE the decimal point
+ * decide: 20 or 12.5 is a percentage of the purchase price; 500000 is an amount in rupees.
+ */
+export function downPaymentKind(raw: unknown): 'Percentage' | 'Amount' | null {
+  const s = String(raw ?? '').trim().replace(/,/g, '');
+  if (!/^\d+(\.\d+)?$/.test(s) || Number(s) <= 0) return null;
+  return s.split('.')[0].replace(/^0+(?=\d)/, '').length <= 2 ? 'Percentage' : 'Amount';
+}
+function downPaymentData(choice: unknown, raw: unknown): { india_down_payment: string; india_down_payment_value: number | null; india_down_payment_kind: string | null } {
+  const c = String(choice ?? '').trim().toLowerCase();
+  if (c === 'no') return { india_down_payment: 'No', india_down_payment_value: null, india_down_payment_kind: null };
+  if (c !== 'yes') throw new UnprocessableEntityException({ message: 'Down payment: choose Yes or No.', errors: { india_down_payment: ['Down payment: choose Yes or No.'] } });
+  const kind = downPaymentKind(raw);
+  if (!kind) throw new UnprocessableEntityException({ message: 'Down payment: type a percentage (like 20) or an amount (like 500000).', errors: { india_down_payment_value: ['Type a percentage (like 20) or an amount (like 500000).'] } });
+  return { india_down_payment: 'Yes', india_down_payment_value: Math.round(Number(String(raw).replace(/,/g, '')) * 100) / 100, india_down_payment_kind: kind };
 }
 
 /** India deals: how the buyer pays (24 Oct 2026). */

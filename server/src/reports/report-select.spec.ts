@@ -62,6 +62,8 @@ const LEAVE_ALONE = new Set([
   'market',        // the loader filters on it, like deleted_at: a probe value is no country, so the row would vanish
   'builder_project_id', // a foreign key to an India builder project - a probe number points at nothing
   'india_office',  // India's invoicing office: a short code ('HYD'/'VZM'); a probe string does not fit
+  'india_down_payment',      // India down payment: 'Yes' / 'No' (VARCHAR 3); a probe string does not fit
+  'india_down_payment_kind', // 'Percentage' / 'Amount' (VARCHAR 12); a probe string does not fit
 ]);
 
 /** A distinctive value for a column, by declared type. */

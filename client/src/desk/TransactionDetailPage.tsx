@@ -76,6 +76,9 @@ interface DetailForm {
   inter_board_enabled: boolean;
   /** India deals: how the buyer pays (24 Oct 2026). Empty on Canada deals. */
   india_payment: string;
+  /** India deals: down payment Yes / No and the number typed (26 Oct 2026). */
+  india_down_payment: string;
+  india_down_payment_value: string;
   statuses: string[];
   clients: ClientRow[];
   conditions: ConditionRow[];
@@ -99,6 +102,8 @@ function toForm(t: Transaction): DetailForm {
     mls_type: t.mls_type || 'mls', mls_num: t.mls_num || '', mls_verified: !!t.mls_verified,
     conditional_offer: !!t.conditional_offer, inter_board_enabled: !!t.inter_board_enabled,
     india_payment: t.india_payment || '',
+    india_down_payment: t.india_down_payment || '',
+    india_down_payment_value: t.india_down_payment_value === null || t.india_down_payment_value === undefined ? '' : String(t.india_down_payment_value),
     statuses: t.statuses && t.statuses.length
       ? Array.from(new Set(t.statuses.map((s) => normalizeStatus(t.type, s))))
       : (defaultStatusFor(t.type) ? [defaultStatusFor(t.type)] : []),
@@ -192,6 +197,11 @@ function buildPayload(form: DetailForm): Record<string, unknown> {
   }
   // India deals only; sent once chosen. The server ignores it on a Canada deal.
   if (form.india_payment) payload.india_payment = form.india_payment;
+  // India down payment (26 Oct 2026): sent once chosen; No clears the number.
+  if (form.india_down_payment) {
+    payload.india_down_payment = form.india_down_payment;
+    payload.india_down_payment_value = form.india_down_payment === 'Yes' ? form.india_down_payment_value : null;
+  }
   return payload;
 }
 
@@ -1713,6 +1723,25 @@ export default function TransactionDetailPage() {
                 </Field>
               </div>
             )}
+            {/* India deals: down payment (Sai, 26 Oct 2026). 1-2 digits = a % of the price, more = an amount. */}
+            {user?.market === 'IN' && (
+              <div className="g2" style={{ marginTop: 12 }} data-testid="basic-india-down-payment">
+                <Field label="Down Payment">
+                  <select value={form.india_down_payment} disabled={basicRo} onChange={(e) => set('india_down_payment', e.target.value)}>
+                    <option value="">Select</option>
+                    <option value="Yes">Yes</option>
+                    <option value="No">No</option>
+                  </select>
+                </Field>
+                {form.india_down_payment === 'Yes' && (
+                  <Field label="Down Payment (% or amount)" req>
+                    <input value={form.india_down_payment_value} disabled={basicRo} inputMode="decimal" placeholder="e.g. 20 (%) or 500000 (₹)"
+                      onChange={(e) => set('india_down_payment_value', e.target.value.replace(/[^\d.,]/g, ''))} data-testid="down-payment-value" />
+                    <span className="help" data-testid="down-payment-other-side">{downPaymentOtherSide(form.india_down_payment_value, parseNumber(form.price))}</span>
+                  </Field>
+                )}
+              </div>
+            )}
             {/* Who handles this deal in Documentation / Accounting (25 Oct 2026). Office only. */}
             {!isAgent && txn && <HandledByRow txnId={txn.id} handlers={txn.handlers} onSaved={(h) => setTxn((prev) => (prev ? { ...prev, handlers: h } : prev))} />}
           </div>
@@ -2362,4 +2391,19 @@ function HandledByRow({ txnId, handlers, onSaved }: { txnId: number; handlers?: 
       {cell('accounting', 'Accounting')}
     </div>
   );
+}
+
+/**
+ * INDIA DOWN PAYMENT, THE OTHER SIDE (Sai, 26 Oct 2026): 1 or 2 digits before the point is a percentage
+ * of the purchase price, more is an amount - and the box shows what that comes to, e.g.
+ * "20% = ₹10,00,000" or "₹5,00,000 = 10% of the price". The server reads the number by the same rule.
+ */
+function downPaymentOtherSide(raw: string, price: number): string {
+  const s = String(raw ?? '').trim().replace(/,/g, '');
+  if (!/^\d+(\.\d+)?$/.test(s) || Number(s) <= 0) return 'Type a percentage (like 20) or an amount (like 500000).';
+  const n = Number(s);
+  const pct = s.split('.')[0].replace(/^0+(?=\d)/, '').length <= 2;
+  const round2 = (x: number) => Math.round(x * 100) / 100;
+  if (!(price > 0)) return pct ? `${n}% of the purchase price - add the price to see the amount.` : `${formatCurrency(n)} - add the purchase price to see the %.`;
+  return pct ? `${n}% = ${formatCurrency(round2((price * n) / 100))}` : `${formatCurrency(n)} = ${round2((n / price) * 100)}% of the price`;
 }

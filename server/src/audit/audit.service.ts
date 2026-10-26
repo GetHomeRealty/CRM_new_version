@@ -13,6 +13,8 @@ export const DEC2 = new Set([
   'coop_adj_before', 'coop_adj_after', 'precon_comm_amt_manual', 'precon_comm_bonus',
   // TD-150 - added 2026-10-07: money columns that existed on the deal and changed unrecorded.
   'listing_price', 'gift_coupon_value',
+  // India down payment (26 Oct 2026): a percentage or an amount, recorded like the other figures.
+  'india_down_payment_value',
 ]);
 export const DEC4 = new Set(['comm_pct', 'listing_comm_pct', 'coop_comm_pct', 'precon_comm_pct']);
 const BOOLCOL = new Set([
@@ -84,6 +86,9 @@ export const SCALAR_MAP: Record<string, [string, string]> = {
   inter_board_enabled: ['Basic Information', 'Inter-Board Enabled'],
   // India deals only (24 Oct 2026); empty on every Canada deal, so it never shows in their history.
   india_payment: ['Basic Information', 'Payment'],
+  india_down_payment: ['Basic Information', 'Down Payment'],
+  india_down_payment_value: ['Basic Information', 'Down Payment (number)'],
+  india_down_payment_kind: ['Basic Information', 'Down Payment (% or amount)'],
   property: ['Property Information', 'Property Address'],
   mls_type: ['Property Information', 'MLS Type'],
   mls_num: ['Property Information', 'MLS Number'],

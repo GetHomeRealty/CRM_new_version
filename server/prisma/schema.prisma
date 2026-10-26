@@ -2760,6 +2760,12 @@ model transactions {
   india_office                String?                       @db.VarChar(8)
   /// India deals: how the buyer pays - 'One-time payment' or 'Loan' (Sai, 24 Oct 2026). Information only.
   india_payment               String?                       @db.VarChar(20)
+  /// India deals: is there a down payment - 'Yes' / 'No' (Sai, 26 Oct 2026). Information only.
+  india_down_payment          String?                       @db.VarChar(3)
+  /// The number typed: 1-2 digits before the point = a percentage of the price, more = an amount in rupees.
+  india_down_payment_value    Decimal?                      @db.Decimal(16, 2)
+  /// 'Percentage' or 'Amount' - how the number was read when it was saved, so the deal always shows it the same way.
+  india_down_payment_kind     String?                       @db.VarChar(12)
   /// Who handles this deal in Documentation / in Accounting (25 Oct 2026) - a user id, set by that team's
   /// Team Lead or a Super Admin. Information only: it gives nobody extra access.
   doc_handler_id              Int?
