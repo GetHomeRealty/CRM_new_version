@@ -34,6 +34,8 @@ export interface AuthPayload {
   is_admin_or_above: boolean;
   /** An Agent who manages their own Agents in Users. Read only by Users and Dashboard. */
   is_team_lead: boolean;
+  /** A Documentation / Accounting Team Lead (25 Oct 2026): reviews their team's requests on the Desk. */
+  desk_team_lead: boolean;
   permissions: Record<string, string>;
   /** The countries this person may work in ('CA' always; 'IN' once given India access). */
   markets: Market[];

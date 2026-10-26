@@ -43,6 +43,24 @@ export function hasUsersFullAccess(u: { role?: string | null } | null | undefine
   return isSuperAdmin(u as never) || USERS_FULL_ACCESS_ROLES.includes(u?.role ?? '');
 }
 
+/**
+ * DOCUMENTATION AND ACCOUNTING TEAM LEADS (Sai, 25 Oct 2026). The same two columns as an Agent's Team
+ * Lead - `is_team_lead` on the lead, `team_lead_id` on each member - but WITHIN ONE ROLE: a
+ * Documentation lead leads Documentation people, an Accounting lead Accounting people. They get NONE of
+ * the Agent Team Lead's Users-module powers (`teamLeadIdOf` stays Agent-only); what they get is on the
+ * Transaction Desk: they review their team's requests, choose who handles a deal, and see their team's
+ * work and history. A lead's own requests still go to a Super Admin.
+ */
+export const DESK_TEAM_ROLES: readonly string[] = ['documentation', 'accounting'];
+
+/** The user's own id when they are an active Documentation / Accounting Team Lead, otherwise null. */
+export function deskTeamLeadIdOf(u: TeamLeadPrincipal | null | undefined): number | null {
+  if (!u?.id || !u.is_team_lead) return null;
+  if (!DESK_TEAM_ROLES.includes(u.role ?? '')) return null;
+  if ((u.status ?? 'Active') !== 'Active') return null;
+  return u.id;
+}
+
 export function teamLeadIdOf(u: TeamLeadPrincipal | null | undefined): number | null {
   if (!u?.id || !u.is_team_lead) return null;
   if ((u.role ?? '') !== 'agent') return null;

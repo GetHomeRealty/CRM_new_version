@@ -8,6 +8,7 @@ import type { AuthUserRecord } from '../auth/auth.types';
 
 import { isAdminOrAbove, isSuperAdmin, superAdminRoles } from '../core/authz';
 import { NotificationDispatcher } from '../notifications/notification-dispatcher.service';
+import { leadTitle, mayDecide, teamLeadOfRequester } from './team-review';
 import { TransactionsWriteService } from '../transactions/transactions-write.service';
 /**
  * The scope that means "I am proposing these commission numbers", as opposed to "let me edit".
@@ -329,7 +330,10 @@ export class EditRequestsService {
   private async notifyReviewers(req: transaction_edit_requests, property: string | null): Promise<void> {
     if (!this.dispatcher) return;
     try {
+      // The Super Admins, and the requester's own Team Lead (25 Oct 2026) - either may decide it.
       const ids = await this.reviewers();
+      const lead = await teamLeadOfRequester(this.prisma, req.requested_by);
+      if (lead && !ids.includes(lead.id)) ids.push(lead.id);
       if (!ids.length) return;
       const named = scopeLabel(req.scope);
       const what = named ? `the ${named}` : req.scope ? `${req.scope} fields` : 'this deal';
@@ -525,11 +529,15 @@ export class EditRequestsService {
   }
 
   private async review(user: AuthUserRecord, reqId: number, status: string, action: string): Promise<Record<string, unknown>> {
-    if (!isSuperAdmin(user)) {
-      throw new ForbiddenException({ message: status === 'approved' ? 'Only a Super Admin can approve.' : 'Only a Super Admin can reject.' });
-    }
     const existing = await this.prisma.transaction_edit_requests.findUnique({ where: { id: reqId } });
     if (!existing) throw new NotFoundException({ message: `No query results for model [App\\Models\\TransactionEditRequest] ${reqId}.` });
+    // A Super Admin, or - since 25 Oct 2026 - the requester's own Documentation / Accounting Team Lead.
+    if (!(await mayDecide(this.prisma, user, existing.requested_by))) {
+      throw new ForbiddenException({ message: status === 'approved'
+        ? 'Only a Super Admin or the team lead of the person who asked can approve.'
+        : 'Only a Super Admin or the team lead of the person who asked can reject.' });
+    }
+    const byLead = !isSuperAdmin(user);
 
     /*
      * ================================================================================================
@@ -567,8 +575,28 @@ export class EditRequestsService {
             message: 'This request is already being reviewed, or has already been decided.',
           });
         }
-        // Throws on a stale baseline or a refused write, which rolls the claim back with it.
-        await this.applyProposal(user, existing, tx);
+        /*
+         * Throws on a stale baseline or a refused write, which rolls the claim back with it.
+         *
+         * A TEAM LEAD'S APPROVAL CARRIES APPROVAL AUTHORITY. The proposal is written by the same write
+         * path as a Super Admin's, and that path drops the fields a Documentation or Accounting role may
+         * not write - so written as the lead's own role, an approved commission change would be marked
+         * approved and silently not applied. The approval IS the authority: the write runs with it, and
+         * the history still names the lead who approved.
+         */
+        await this.applyProposal(byLead ? ({ ...user, role: 'admin' } as AuthUserRecord) : user, existing, tx);
+      } else {
+        /*
+         * ONE DECISION ONLY. With a Team Lead and the Super Admins both able to decide, the second
+         * person to press finds it already decided rather than overwriting the first decision.
+         */
+        const open = await tx.transaction_edit_requests.updateMany({
+          where: { id: reqId, status: 'pending' },
+          data: { updated_at: new Date() },
+        });
+        if (!open.count) {
+          throw new UnprocessableEntityException({ message: 'This request has already been decided.' });
+        }
       }
 
       const updated = await tx.transaction_edit_requests.update({
@@ -598,7 +626,43 @@ export class EditRequestsService {
      * decision is the record, the message is the courtesy.
      */
     await this.notifyRequester(req);
+    await this.notifyOtherReviewer(req, user, byLead);
     return this.payload(req);
+  }
+
+  /**
+   * THE OTHER SIDE IS TOLD (Sai, 25 Oct 2026: "if team lead approves the super admin should know that,
+   * if super admin approves team lead should know that"). In the bell only, like every message here.
+   */
+  private async notifyOtherReviewer(req: transaction_edit_requests, decider: AuthUserRecord, byLead: boolean): Promise<void> {
+    if (!this.dispatcher) return;
+    try {
+      const done = req.status === 'approved' ? 'approved' : 'rejected';
+      const named = scopeLabel(req.scope);
+      const what = named ? `the ${named}` : 'an edit';
+      const property = (await this.prisma.transactions.findUnique({ where: { id: req.transaction_id }, select: { property: true } }))?.property;
+      const where = property || `deal #${req.transaction_id}`;
+      let ids: number[] = [];
+      let by = decider.name;
+      if (byLead) {
+        ids = (await this.reviewers()).filter((id) => id !== decider.id);
+        by = leadTitle(decider);
+      } else {
+        const lead = await teamLeadOfRequester(this.prisma, req.requested_by);
+        if (lead && lead.id !== decider.id) ids = [lead.id];
+      }
+      if (!ids.length) return;
+      await this.dispatcher.dispatchMany(ids, {
+        category: 'transaction_approvals',
+        title: `Request ${done} by ${by}`,
+        body: `${by} ${done} ${req.requested_by_name || 'a team member'}'s request to change ${what} on ${where}.`,
+        link: `/desk/transactions/${req.transaction_id}?section=approvals`,
+        dedupeKey: `edit-request-other:${req.id}:${req.status}`,
+        channels: ['in_app'],
+      });
+    } catch (err) {
+      this.log.error(`Edit request ${req.id}: could not tell the other reviewer — ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   /**

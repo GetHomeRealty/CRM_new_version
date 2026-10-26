@@ -1,6 +1,6 @@
 import { Body, Controller, HttpCode, Param, ParseIntPipe, Post, UnauthorizedException, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '../auth/guards/auth.guard';
-import { AdminGuard } from '../auth/guards/admin.guard';
+import { DeskReviewerGuard } from '../auth/guards/desk-reviewer.guard';
 import { ScreenGuard } from '../auth/guards/screen.guard';
 import { CurrentUser, Screen } from '../auth/decorators';
 import type { AuthUserRecord } from '../auth/auth.types';
@@ -35,7 +35,7 @@ export class EditRequestsController {
 
   @Post('edit-requests/:editRequest/approve')
   @HttpCode(200)
-  @UseGuards(AdminGuard)
+  @UseGuards(DeskReviewerGuard)
   approve(
     @CurrentUser() user: AuthUserRecord | undefined,
     @Param('editRequest', ParseIntPipe) id: number,
@@ -45,7 +45,7 @@ export class EditRequestsController {
 
   @Post('edit-requests/:editRequest/reject')
   @HttpCode(200)
-  @UseGuards(AdminGuard)
+  @UseGuards(DeskReviewerGuard)
   reject(
     @CurrentUser() user: AuthUserRecord | undefined,
     @Param('editRequest', ParseIntPipe) id: number,

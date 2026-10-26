@@ -16,7 +16,8 @@ import { ListTransactionsDto } from './dto/list-transactions.dto';
 import { contentDisposition } from '../common/content-disposition';
 
 const toResourceUser = (u: AuthUserRecord | undefined): ResourceUser | null =>
-  u ? { id: u.id, role: u.role, name: u.name, market: u.market ?? null } : null;
+  // is_team_lead + status: whether a Documentation / Accounting Team Lead may decide a request (25 Oct 2026).
+  u ? { id: u.id, role: u.role, name: u.name, market: u.market ?? null, is_team_lead: u.is_team_lead, status: u.status } : null;
 
 /*
  * EVERY ROUTE HERE IS BEHIND THE `transactions` SCREEN PERMISSION, DECLARED ONCE ON THE CLASS.

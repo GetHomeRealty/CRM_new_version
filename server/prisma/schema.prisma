@@ -2760,6 +2760,10 @@ model transactions {
   india_office                String?                       @db.VarChar(8)
   /// India deals: how the buyer pays - 'One-time payment' or 'Loan' (Sai, 24 Oct 2026). Information only.
   india_payment               String?                       @db.VarChar(20)
+  /// Who handles this deal in Documentation / in Accounting (25 Oct 2026) - a user id, set by that team's
+  /// Team Lead or a Super Admin. Information only: it gives nobody extra access.
+  doc_handler_id              Int?
+  acct_handler_id             Int?
   /// (The text fields builder_vendor / builder_project above are Canada's pre-construction entries; unchanged.)
   linked_project              builder_projects?             @relation(fields: [builder_project_id], references: [id], onDelete: SetNull, onUpdate: Restrict)
   offer_applications          builder_offer_applications[]

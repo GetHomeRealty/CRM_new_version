@@ -1,4 +1,5 @@
 import { Prisma, type transactions } from '@prisma/client';
+import { mayDecide } from '../workflows/team-review';
 import { jsonField, toDateString, toDateTimeString, toIso8601String } from '../common/serialize';
 import { normalizeCommissionTxn } from './commission.loader';
 import type { CommissionService } from './commission.service';
@@ -141,6 +142,9 @@ export interface ResourceUser {
   name: string;
   /** The country this request works in (see `common/market.ts`). Absent = Canada. */
   market?: string | null;
+  /** For a Documentation / Accounting Team Lead's review of their team's requests (25 Oct 2026). */
+  is_team_lead?: boolean | null;
+  status?: string | null;
 }
 
 /**
@@ -636,10 +640,28 @@ export async function transactionResource(t: LoadedTxn, ctx: ResourceCtx): Promi
 
   out.edit_locked = statusList(t).some((s) => s === 'DFT' || s === 'Closed');
 
+  // Who handles the deal in Documentation / Accounting (25 Oct 2026), by name. Information only.
+  {
+    const ids = [t.doc_handler_id, t.acct_handler_id].filter((x): x is number => !!x);
+    const people = ids.length ? await ctx.prisma.users.findMany({ where: { id: { in: ids } }, select: { id: true, name: true } }) : [];
+    const who = (id: number | null) => (id ? people.find((p) => p.id === id) ?? { id, name: '(removed user)' } : null);
+    out.handlers = { documentation: who(t.doc_handler_id ?? null), accounting: who(t.acct_handler_id ?? null) };
+  }
+
   // edit_requests (whenLoaded)
   if (t.transaction_edit_requests !== undefined) {
+    /*
+     * WHO MAY DECIDE EACH PENDING REQUEST, for the screen's Approve / Reject (25 Oct 2026): a Super
+     * Admin, or the requester's own Documentation / Accounting Team Lead - the rule the API enforces
+     * (workflows/team-review.ts), asked here so the buttons show to exactly those people.
+     */
+    const decides = new Set<number>();
+    for (const r of t.transaction_edit_requests) {
+      if (r.status === 'pending' && ctx.user && (await mayDecide(ctx.prisma, ctx.user as never, r.requested_by))) decides.add(r.id);
+    }
     out.edit_requests = t.transaction_edit_requests.map((r) => ({
       id: r.id,
+      can_decide: decides.has(r.id),
       status: r.status,
       scope: r.scope,
       status_at_request: r.status_at_request,

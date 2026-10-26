@@ -213,6 +213,8 @@ export interface PreconTermData { term_no: number; pct?: number | null; closing_
 export interface EditRequest {
   id: number;
   status: string;
+  /** May the person looking approve / reject it (a Super Admin, or the requester's Team Lead). */
+  can_decide?: boolean;
   scope?: string | null;
   status_at_request?: string;
   requested_by_name?: string;
@@ -342,6 +344,8 @@ export interface Transaction {
   builder?: BuilderData;
   /** India deals: 'One-time payment' or 'Loan' (24 Oct 2026). */
   india_payment?: string | null;
+  /** Who handles the deal in Documentation / Accounting (25 Oct 2026). */
+  handlers?: { documentation: { id: number; name: string } | null; accounting: { id: number; name: string } | null };
   commercial_lease?: Record<string, unknown> | null;
   notice_of_sale?: { sent_at?: string | null; [key: string]: unknown } | null;
   trade_sheet_sent_at?: string | null;

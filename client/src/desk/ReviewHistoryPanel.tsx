@@ -321,7 +321,8 @@ function PendingCommissionApprovals({
 
           {error && <p className="help bad" role="alert" style={{ margin: '6px 0 0' }}>{error}</p>}
 
-          {canDecide && (
+          {/* A Team Lead decides only their own team's requests; the server says which (`can_decide`). */}
+          {canDecide && (r.can_decide ?? true) && (
             <div className="toolbar-row" style={{ gap: 8, marginTop: 10 }}>
               <button type="button" className="btn ok-btn" data-testid={`accept-${r.id}`}
                 disabled={busy !== 0} onClick={() => void decide(r, true)}>

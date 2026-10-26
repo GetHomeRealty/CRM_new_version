@@ -15,7 +15,7 @@ import type { AuthUserRecord } from '../auth/auth.types';
 import { isSuperAdmin, superAdminRoles } from '../core/authz';
 import { OffboardingService } from './offboarding.service';
 import { UserRenameService } from './user-rename.service';
-import { TEAM_LEAD_EDITABLE_FIELDS, TEAM_LEAD_PROFILE_KEYS, hasUsersFullAccess, teamLeadIdOf } from './team-lead';
+import { DESK_TEAM_ROLES, TEAM_LEAD_EDITABLE_FIELDS, TEAM_LEAD_PROFILE_KEYS, hasUsersFullAccess, teamLeadIdOf } from './team-lead';
 type UserWithPerms = users & { user_permissions: user_permissions[]; user_modules: user_modules[] };
 
 /** bcrypt ignores everything past 72 bytes, so accepting more would overstate the protection. */
@@ -542,7 +542,10 @@ export class UsersService {
 
   /** "Team Lead" for a Team Lead, otherwise the role's usual label. */
   private roleLabelOf(u: Pick<users, 'role' | 'is_team_lead'>): string {
-    return u.role === 'agent' && u.is_team_lead ? 'Team Lead' : this.permissions.label(u.role);
+    if (u.role === 'agent' && u.is_team_lead) return 'Team Lead';
+    // Documentation / Accounting Team Lead (25 Oct 2026): the role's own name, then "Team Lead".
+    if (u.is_team_lead && DESK_TEAM_ROLES.includes(u.role)) return `${this.permissions.label(u.role)} Team Lead`;
+    return this.permissions.label(u.role);
   }
 
   private pick(src: unknown, keys: readonly string[]): Record<string, unknown> {
@@ -655,7 +658,13 @@ export class UsersService {
 
     const out: { is_team_lead?: boolean; team_lead_id?: number | null; reassign_to?: number | null } = {};
 
-    if (role !== 'agent') {
+    // A change of role leaves the old team: unless the save says otherwise, no longer a lead, no lead.
+    if (existing && existing.role !== role) {
+      if (!has('is_team_lead') && existing.is_team_lead) out.is_team_lead = false;
+      if (!has('team_lead_id') && existing.team_lead_id !== null) out.team_lead_id = null;
+    }
+
+    if (role !== 'agent' && !DESK_TEAM_ROLES.includes(role)) {
       // Not an Agent: neither a Team Lead nor on a team. Written only if there is something to clear.
       if (!existing || existing.is_team_lead) out.is_team_lead = false;
       if (!existing || existing.team_lead_id !== null) out.team_lead_id = null;
@@ -670,7 +679,8 @@ export class UsersService {
         const id = idOrNull(body.team_lead_id);
         if (id === 'bad') push('team_lead_id', 'Choose a Team Lead from the list.');
         else if (id !== null) {
-          const tl = await this.mustBeActiveTeamLead(id, existing?.id ?? null);
+          // Documentation / Accounting (25 Oct 2026): the lead must lead the SAME role.
+          const tl = await this.mustBeActiveTeamLead(id, existing?.id ?? null, role);
           if (tl) push('team_lead_id', tl);
           else out.team_lead_id = id;
         } else out.team_lead_id = null;
@@ -718,10 +728,10 @@ export class UsersService {
   }
 
   /** Null when `id` is an active Team Lead other than `self`, otherwise why not. */
-  private async mustBeActiveTeamLead(id: number, self: number | null): Promise<string | null> {
+  private async mustBeActiveTeamLead(id: number, self: number | null, role = 'agent'): Promise<string | null> {
     if (id === self) return 'A person cannot be their own Team Lead.';
     const tl = await this.prisma.users.findUnique({ where: { id }, select: { name: true, role: true, status: true, is_team_lead: true } });
-    if (!tl || tl.role !== 'agent' || !tl.is_team_lead) return 'Choose a Team Lead from the list.';
+    if (!tl || tl.role !== role || !tl.is_team_lead) return 'Choose a Team Lead from the list.';
     if ((tl.status ?? 'Active') !== 'Active') return `${tl.name}'s account is inactive.`;
     return null;
   }

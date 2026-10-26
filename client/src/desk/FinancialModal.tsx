@@ -736,7 +736,7 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
           </div>
         )}
         {/* Super Admin: approve/reject a pending financial edit request inline. */}
-        {isSuperAdmin && pendingFinReq && (
+        {pendingFinReq && (isSuperAdmin || pendingFinReq.can_decide) && (
           <div className="card" style={{ borderLeft: '4px solid #2563eb', background: 'var(--info-bg)', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
             <span style={{ fontSize: 12.5, color: 'var(--info-ink)' }}><Icon name="edit" size={13} /> <strong>{pendingFinReq.requested_by_name || 'A user'}</strong> requested to edit financial fields{pendingFinReq.reason ? ` — “${pendingFinReq.reason}”` : ''}.</span>
             <div style={{ flex: 1 }} />

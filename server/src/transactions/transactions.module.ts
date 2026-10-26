@@ -21,12 +21,14 @@ import { ReminderSchedulerService } from './reminder-scheduler.service';
 import { ReviewSlaSchedulerService } from './review-sla-scheduler.service';
 import { SettingsModule } from '../settings/settings.module';
 
+import { DeskTeamController } from './desk-team.controller';
+import { DeskTeamService } from './desk-team.service';
 import { DealCountryController } from './deal-country.controller';
 @Module({
   // SettingsModule exports CompanySettingsService, which the review email needs for the brand name.
   imports: [NotificationDispatcherModule, AuthModule, InvoicesModule, EmailModule, SettingsModule], // EmailModule exports MailerService (lawyer reminders)
-  controllers: [TransactionsController, MessagesController, DealCountryController],
-  providers: [MentionService, TransactionsService, TransactionsWriteService, MessagesService, TradeNumberService, TransactionLawyerReminderService, LawyerReminderSchedulerService, TransactionReviewService, ReviewSlaService, ReviewSlaSchedulerService, ReviewThreadService, ReviewExportService, ReminderSweepService, ReminderSchedulerService],
+  controllers: [TransactionsController, MessagesController, DealCountryController, DeskTeamController],
+  providers: [DeskTeamService, MentionService, TransactionsService, TransactionsWriteService, MessagesService, TradeNumberService, TransactionLawyerReminderService, LawyerReminderSchedulerService, TransactionReviewService, ReviewSlaService, ReviewSlaSchedulerService, ReviewThreadService, ReviewExportService, ReminderSweepService, ReminderSchedulerService],
   // the bulk importer creates transactions through the same write path as the UI;
   // the review service is exported so the agent's notification bell can read from it.
   exports: [TransactionsWriteService, TransactionReviewService, ReminderSweepService],

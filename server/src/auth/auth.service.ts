@@ -7,7 +7,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { throwValidation } from '../common/laravel-exceptions';
 import { PermissionService } from './permission.service';
 import type { AuthPayload, AuthUserRecord } from './auth.types';
-import { teamLeadIdOf } from '../users/team-lead';
+import { deskTeamLeadIdOf, teamLeadIdOf } from '../users/team-lead';
 import { AccountLockoutService } from './account-lockout.service';
 
 import { isAdminOrAbove, isSuperAdmin } from '../core/authz';
@@ -49,7 +49,7 @@ export class AuthService {
       name: user.name,
       email: user.email,
       role: user.role,
-      role_label: this.permissions.label(role),
+      role_label: deskTeamLeadIdOf(user) !== null ? `${this.permissions.label(role)} Team Lead` : this.permissions.label(role),
       // The client shows and hides on these three. They come from the engine so the interface and
       // the API can never disagree about who counts as an administrator.
       is_admin: isSuperAdmin(user),
@@ -57,6 +57,9 @@ export class AuthService {
       is_admin_or_above: isAdminOrAbove(user),
       // Team Lead stays `role: 'agent'` (see users/team-lead.ts); this is what opens Users for them.
       is_team_lead: teamLeadIdOf(user) !== null,
+      // A Documentation / Accounting Team Lead (25 Oct 2026). Separate from `is_team_lead`, which opens
+      // the Agent Team Lead's Users screens - these leads get none of that.
+      desk_team_lead: deskTeamLeadIdOf(user) !== null,
       permissions: this.permissions.effectiveFor(role, user.user_permissions),
       // India desk (16 Oct 2026): the countries this person may work in, and the one this request
       // is in. The top-bar switch shows only when there is more than one.

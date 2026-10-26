@@ -1360,7 +1360,7 @@ export default function TransactionDetailPage() {
           {pendingReq && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 8, flexWrap: 'wrap' }}>
               <span style={{ fontSize: 12.5 }}><strong>Pending:</strong> {pendingReq.requested_by_name}{pendingReq.reason ? ` — ${pendingReq.reason}` : ''}</span>
-              {isSuperAdmin && <><button className="btn primary sm" onClick={() => onApproveReq(pendingReq.id)}>Approve</button><button className="btn ghost sm" onClick={() => onRejectReq(pendingReq.id)}>Reject</button></>}
+              {(isSuperAdmin || pendingReq.can_decide) && <><button className="btn primary sm" onClick={() => onApproveReq(pendingReq.id)}>Approve</button><button className="btn ghost sm" onClick={() => onRejectReq(pendingReq.id)}>Reject</button></>}
             </div>
           )}
           {approvedReq && <div className="help" style={{ marginTop: 6, color: 'var(--ok-ink)' }}><Icon name="check" size={12} /> Edit approved by {approvedReq.reviewed_by_name} — changes can now be saved.</div>}
@@ -1520,7 +1520,7 @@ export default function TransactionDetailPage() {
       */}
       <ReviewHistoryPanel key={reviewsKey} txnId={Number(id)}
         editRequests={txn?.edit_requests ?? []}
-        canDecide={isSuperAdmin}
+        canDecide={isSuperAdmin || !!user?.desk_team_lead}
         onDecided={async () => { await reloadTxn(); setReviewsKey((k) => k + 1); }} />
 
       {/* India deal in a builder project: the builder's offers - suggested, confirmed or not for this deal (stage 4). */}
@@ -1713,6 +1713,8 @@ export default function TransactionDetailPage() {
                 </Field>
               </div>
             )}
+            {/* Who handles this deal in Documentation / Accounting (25 Oct 2026). Office only. */}
+            {!isAgent && txn && <HandledByRow txnId={txn.id} handlers={txn.handlers} onSaved={(h) => setTxn((prev) => (prev ? { ...prev, handlers: h } : prev))} />}
           </div>
 
           {/* Quick Actions */}
@@ -2312,6 +2314,52 @@ function StatusMultiSelect({ options, selected, disabled, onToggle }: { options:
         </div>,
         document.body,
       )}
+    </div>
+  );
+}
+
+/**
+ * HANDLED BY (Sai, 25 Oct 2026): who handles the deal in Documentation and in Accounting. The team's
+ * Team Lead (themselves or a member of their team) or a Super Admin chooses it, and it saves at once;
+ * everybody else in the office sees the names. Information only - it changes no access.
+ */
+type HandlerPerson = { id: number; name: string } | null;
+type Handlers = { documentation: HandlerPerson; accounting: HandlerPerson };
+type HandlerOptions = { documentation: { id: number; name: string }[]; accounting: { id: number; name: string }[]; can_set: { documentation: boolean; accounting: boolean } };
+function HandledByRow({ txnId, handlers, onSaved }: { txnId: number; handlers?: Handlers; onSaved: (h: Handlers) => void }) {
+  const toast = useToast();
+  const [opts, setOpts] = useState<HandlerOptions | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { api.get<HandlerOptions>('/api/desk-team/handler-options').then((r) => setOpts(r.data)).catch(() => setOpts(null)); }, []);
+  const save = async (kind: 'documentation' | 'accounting', value: string) => {
+    setBusy(true);
+    try {
+      const r = await api.put<{ data: Handlers }>(`/api/transactions/${txnId}/handlers`, { kind, user_id: value ? Number(value) : null });
+      onSaved(r.data.data);
+      toast('Handled by saved', 'ok');
+    } catch (e) { toast(apiErrorMessage(e, 'Could not save'), 'bad'); } finally { setBusy(false); }
+  };
+  const cell = (kind: 'documentation' | 'accounting', label: string) => {
+    const current = handlers?.[kind] ?? null;
+    const list = opts?.[kind] ?? [];
+    return (
+      <Field label={`Handled by (${label})`}>
+        {opts?.can_set[kind] ? (
+          <select value={current ? String(current.id) : ''} disabled={busy} onChange={(e) => void save(kind, e.target.value)} data-testid={`handler-${kind}`}>
+            <option value="">Not chosen</option>
+            {current && !list.some((p) => p.id === current.id) && <option value={current.id}>{current.name}</option>}
+            {list.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+        ) : (
+          <input value={current?.name ?? 'Not chosen'} readOnly style={{ background: 'var(--surface-2)' }} data-testid={`handler-${kind}-view`} />
+        )}
+      </Field>
+    );
+  };
+  return (
+    <div className="g2" style={{ marginTop: 12 }} data-testid="handled-by">
+      {cell('documentation', 'Documentation')}
+      {cell('accounting', 'Accounting')}
     </div>
   );
 }

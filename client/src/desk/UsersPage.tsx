@@ -52,7 +52,12 @@ function StatusPill({ status, style }: { status?: string | null; style?: React.C
  * role alone would call them "Agent".
  */
 const userRoleLabel = (u: Pick<ManagedUser, 'role' | 'is_team_lead'>): string =>
-  (u.role === 'agent' && u.is_team_lead ? 'Team Lead' : roleLabel(u.role));
+  (u.role === 'agent' && u.is_team_lead ? 'Team Lead'
+    // Documentation / Accounting Team Lead (25 Oct 2026).
+    : u.is_team_lead && DESK_TEAM_ROLES.includes(u.role) ? `${roleLabel(u.role)} Team Lead` : roleLabel(u.role));
+
+/** Roles whose people can have a Team Lead of their own role (25 Oct 2026). */
+const DESK_TEAM_ROLES = ['documentation', 'accounting'];
 
 export default function UsersPage() {
   const toast = useToast();
@@ -276,7 +281,12 @@ export default function UsersPage() {
                     : <span className="muted">No agents yet</span>)
                   : u.role === 'agent'
                     ? (teamLeadName(u.team_lead_id) ?? <span className="muted">—</span>)
-                    : <span className="muted">—</span>}</td>
+                    // Documentation / Accounting (25 Oct 2026): a lead's team, or a member's lead.
+                    : DESK_TEAM_ROLES.includes(u.role)
+                      ? (u.is_team_lead
+                        ? (users.filter((x) => x.team_lead_id === u.id && x.role === u.role).map((x) => x.name).join(', ') || <span className="muted">No team yet</span>)
+                        : (users.find((x) => x.id === u.team_lead_id)?.name ?? <span className="muted">—</span>))
+                      : <span className="muted">—</span>}</td>
               )}
               <td><StatusPill status={u.status} /></td>
               {!teamLeadMode && <td><span className="help" style={{ margin: 0 }}>{u.is_admin ? 'Full access (all screens)' : accessSummary(u.permissions)}</span></td>}
@@ -329,6 +339,7 @@ export default function UsersPage() {
           existing={editing.id ? (editing as ManagedUser) : null}
           teamLeadMode={teamLeadMode}
           teamLeads={teamLeads}
+          deskLeads={users.filter((u) => DESK_TEAM_ROLES.includes(u.role) && u.is_team_lead)}
           teamSize={editing.id ? users.filter((u) => u.team_lead_id === editing.id && !u.is_team_lead).length : 0}
           onClose={() => setEditing(null)}
           onSaved={(saved) => {
@@ -524,6 +535,8 @@ interface UserModalProps {
   teamLeadMode: boolean;
   /** Every Team Lead, for a Super Admin's reporting-line pickers. */
   teamLeads: ManagedUser[];
+  /** Documentation / Accounting Team Leads, for those teams' pickers (25 Oct 2026). */
+  deskLeads: ManagedUser[];
   /** How many Agents report to `existing`, when it is a Team Lead. */
   teamSize: number;
   onClose: () => void;
@@ -536,7 +549,7 @@ interface UserModalProps {
  */
 const TEAM_LEAD_CHOICE = 'team_lead';
 
-function UserModal({ catalog, existing, teamLeadMode, teamLeads, teamSize, onClose, onSaved }: UserModalProps) {
+function UserModal({ catalog, existing, teamLeadMode, teamLeads, deskLeads, teamSize, onClose, onSaved }: UserModalProps) {
   const toast = useToast();
   /**
    * Agent Details, Loan and Previous Commission History are Transaction Desk concerns — commission
@@ -584,6 +597,9 @@ function UserModal({ catalog, existing, teamLeadMode, teamLeads, teamSize, onClo
   const [teamLeadId, setTeamLeadId] = useState<string>(existing?.team_lead_id ? String(existing.team_lead_id) : '');
   // For a Team Lead being edited: where their Agents go. 'keep' sends nothing, so nothing moves.
   const [reassignTo, setReassignTo] = useState<string>('keep');
+  // Documentation / Accounting teams (25 Oct 2026): is this person their team's lead, or who is.
+  const [deskLead, setDeskLead] = useState<boolean>(!!existing?.is_team_lead && DESK_TEAM_ROLES.includes(existing?.role ?? ''));
+  const [deskLeadId, setDeskLeadId] = useState<string>(existing?.team_lead_id && DESK_TEAM_ROLES.includes(existing?.role ?? '') ? String(existing.team_lead_id) : '');
   // Previous Commission History is derived: the agent's paid deals (under the previous split).
   const [dealHistory, setDealHistory] = useState<DealHistoryEntry[]>([]);
   useEffect(() => {
@@ -611,6 +627,9 @@ function UserModal({ catalog, existing, teamLeadMode, teamLeads, teamSize, onClo
   const resetToRole = () => setPerms({ ...role_defaults[storedRole(form.role)] });
   const isAdminRole = form.role === 'admin';
   const isTeamLeadChoice = form.role === TEAM_LEAD_CHOICE;
+  const isDeskTeamRole = DESK_TEAM_ROLES.includes(form.role);
+  // The other leads of this person's role (never themselves), for "Team Lead".
+  const sameRoleLeads = deskLeads.filter((t) => t.role === form.role && t.id !== existing?.id && ((t.status ?? 'Active') === 'Active' || String(t.id) === deskLeadId));
   // A Team Lead is an Agent for pay and paperwork, so they keep the Agent sections.
   const isAgent = storedRole(form.role) === 'agent';
   // Only for an agent, and only on the Transaction Desk side — and never to a Team Lead, whose
@@ -775,6 +794,11 @@ function UserModal({ catalog, existing, teamLeadMode, teamLeads, teamSize, onClo
     if (!teamLeadMode) {
       payload.is_team_lead = isTeamLeadChoice;
       if (showReportingLine) payload.team_lead_id = teamLeadId ? Number(teamLeadId) : null;
+      // A Documentation / Accounting person: their team's lead, or who leads them (same role only).
+      if (isDeskTeamRole) {
+        payload.is_team_lead = deskLead;
+        payload.team_lead_id = deskLead ? null : (deskLeadId ? Number(deskLeadId) : null);
+      }
       if (showReassign && reassignValue !== 'keep' && reassignValue !== '') payload.reassign_agents_to = reassignValue === 'none' ? null : Number(reassignValue);
     }
     setSaving(true);
@@ -818,6 +842,26 @@ function UserModal({ catalog, existing, teamLeadMode, teamLeads, teamSize, onClo
               </select>
             )}</div>
         </div>
+        {!teamLeadMode && isDeskTeamRole && (
+          <div className="g3" data-testid="desk-team-lead">
+            <div className="field"><label>Team Lead of the {roleLabel(form.role)} team?</label>
+              <select value={deskLead ? 'yes' : 'no'} onChange={(e) => setDeskLead(e.target.value === 'yes')}>
+                <option value="no">No</option><option value="yes">Yes - this person leads the team</option>
+              </select></div>
+            {!deskLead && (
+              <div className="field"><label>Team Lead</label>
+                <select value={deskLeadId} onChange={(e) => setDeskLeadId(e.target.value)}>
+                  <option value="">No Team Lead</option>
+                  {sameRoleLeads.map((t) => <option key={t.id} value={t.id}>{t.name}{(t.status ?? 'Active') === 'Active' ? '' : ' (inactive)'}</option>)}
+                </select></div>
+            )}
+            <div className="field"><span className="help">
+              {deskLead
+                ? `A Team Lead approves or rejects their team's requests (the Super Admins are told), chooses who handles each deal, and sees their team's work and history. Their own requests still go to a Super Admin.`
+                : `Their requests go to their Team Lead and to the Super Admins; whoever decides first decides it.`}
+            </span></div>
+          </div>
+        )}
         {(showReportingLine || showReassign || isTeamLeadChoice) && (
           <div className="g3">
             {showReportingLine && (

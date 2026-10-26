@@ -32,6 +32,8 @@ export interface AuthUser {
   is_admin_or_above: boolean;
   /** An Agent who manages their own Agents in Users. Optional so an older server still parses. */
   is_team_lead?: boolean;
+  /** A Documentation / Accounting Team Lead (25 Oct 2026): reviews their team's requests. */
+  desk_team_lead?: boolean;
   permissions: Permissions;
   /** The countries this person may work in. Optional so an older server still parses (= Canada). */
   markets?: Market[];

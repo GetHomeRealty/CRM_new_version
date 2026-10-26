@@ -8,6 +8,7 @@ import { useNotificationStream } from './useNotificationStream';
 import { useAuth } from '../context/AuthContext';
 import { apiErrorMessage } from '../lib/apiError';
 import TodoList from './TodoList';
+import MyTeamCard from './MyTeamCard';
 import ReviewWidgets from './ReviewWidgets';
 import ReviewErrorCharts from './ReviewErrorCharts';
 import { Breakdown, TallyBreakdown, Tile, tallyTotal } from './DashboardTiles';
@@ -250,6 +251,8 @@ export default function DeskDashboardPage() {
 
       {/* The Transaction Desk's own list. Tasks added here belong to this area and do not appear on
           the CRM's list — section 11. */}
+      {/* A Documentation / Accounting Team Lead's own team (25 Oct 2026). */}
+      {user?.desk_team_lead && <MyTeamCard />}
       {can('calendar', 'view') && <TodoList onCounts={takeTodoCounts} />}
     </>
   );
