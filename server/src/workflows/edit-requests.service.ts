@@ -179,6 +179,19 @@ const normalClients = (rows: unknown): Record<string, unknown>[] =>
 const scopeLabel = (scope: string | null | undefined): string | undefined =>
   (scope ? DATE_SCOPES[scope]?.label ?? PARTY_SCOPES[scope] : undefined);
 
+/**
+ * What the request was about, in the "approved X's request to edit ___ of <address>" message the other
+ * reviewer gets. It read "request to change an edit" for a financial request (Sai, 28 Oct 2026).
+ */
+export const otherReviewerWhat = (scope: string | null | undefined): string => {
+  const named = scopeLabel(scope);
+  if (named) return `the ${named}`;
+  if (scope === 'financial') return 'the financial details';
+  if (scope === COMMISSION_SCOPE) return 'the commission';
+  if (scope === 'mandatory') return 'the required details';
+  return 'the details';
+};
+
 /** Inside `precon_terms`: which term, and that term's commission. Nothing else. */
 export const COMMISSION_PROPOSABLE_TERM: ReadonlySet<string> = new Set([
   'term_no', 'pct', 'amt',
@@ -638,8 +651,7 @@ export class EditRequestsService {
     if (!this.dispatcher) return;
     try {
       const done = req.status === 'approved' ? 'approved' : 'rejected';
-      const named = scopeLabel(req.scope);
-      const what = named ? `the ${named}` : 'an edit';
+      const what = otherReviewerWhat(req.scope);
       const property = (await this.prisma.transactions.findUnique({ where: { id: req.transaction_id }, select: { property: true } }))?.property;
       const where = property || `deal #${req.transaction_id}`;
       let ids: number[] = [];
@@ -655,7 +667,7 @@ export class EditRequestsService {
       await this.dispatcher.dispatchMany(ids, {
         category: 'transaction_approvals',
         title: `Request ${done} by ${by}`,
-        body: `${by} ${done} ${req.requested_by_name || 'a team member'}'s request to change ${what} on ${where}.`,
+        body: `${by} ${done} ${req.requested_by_name || 'a team member'}'s request to edit ${what} of ${where}.`,
         link: `/desk/transactions/${req.transaction_id}?section=approvals`,
         dedupeKey: `edit-request-other:${req.id}:${req.status}`,
         channels: ['in_app'],

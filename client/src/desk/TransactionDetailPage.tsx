@@ -280,7 +280,7 @@ export default function TransactionDetailPage() {
   const [form, setForm] = useState<DetailForm | null>(null);
   // Why the deal could not be shown (23 Oct 2026) - instead of "Loading..." for ever: not found
   // (deleted, wrong number), in the person's other country (offer the switch), or another error.
-  const [loadFailed, setLoadFailed] = useState<null | { kind: 'notfound' } | { kind: 'other'; market: Market } | { kind: 'error' }>(null);
+  const [loadFailed, setLoadFailed] = useState<null | { kind: 'notfound' } | { kind: 'forbidden' } | { kind: 'other'; market: Market } | { kind: 'error' }>(null);
   const [txn, setTxn] = useState<Transaction | null>(null); // raw API object (carries team + financial breakdown)
   // India deals: the builder project list and this deal's project (stage 3b, 17 Oct 2026).
   const [projects, setProjects] = useState<{ id: number; name: string; builder_name: string; city: string | null }[]>([]);
@@ -354,6 +354,12 @@ export default function TransactionDetailPage() {
     // freshly loaded values — otherwise the first render looks dirty and re-saves.
     setLoadFailed(null);
     getTransaction(id).then(applyUpdated).catch(async (e: unknown) => {
+      // Someone else's deal, reached by a forwarded link or an old bookmark: say so (Sai, 28 Oct 2026),
+      // rather than "something went wrong" and a Try again that can only fail the same way.
+      if ((e as { response?: { status?: number } })?.response?.status === 403) {
+        setLoadFailed({ kind: 'forbidden' });
+        return;
+      }
       if ((e as { response?: { status?: number } })?.response?.status !== 404) {
         setLoadFailed({ kind: 'error' });
         toast('Could not load transaction', 'bad');
@@ -583,6 +589,10 @@ export default function TransactionDetailPage() {
             <button className="btn primary" onClick={() => switchTo(loadFailed.market)}>Switch to {MARKET_NAME[loadFailed.market]}</button>
             <button className="btn ghost" onClick={() => navigate(deskPath('transactions'))}>Back to Transactions</button>
           </div>
+        </>) : loadFailed.kind === 'forbidden' ? (<>
+          <h3 style={{ margin: 0 }}>You don't have access to this deal</h3>
+          <p className="muted" style={{ marginTop: 8 }}>This deal isn't one of yours. If you should be on it, ask an administrator to add you.</p>
+          <div style={{ marginTop: 16 }}><button className="btn primary" onClick={() => navigate(deskPath('transactions'))}>Back to Transactions</button></div>
         </>) : loadFailed.kind === 'notfound' ? (<>
           <h3 style={{ margin: 0 }}>This deal was not found</h3>
           <p className="muted" style={{ marginTop: 8 }}>It may have been deleted, or the link or number is wrong.</p>
