@@ -501,11 +501,34 @@ export class InvoicesService {
     const invoice = await this.prisma.invoices.findFirst({ where: { id, deleted_at: null } });
     if (!invoice) throw new NotFoundException({ message: `No query results for model [App\\Models\\Invoice] ${id}.` });
     this.requireField(body, 'paid_on');
-    const amount = Number(body.amount);
+    const paidOn = this.toDate(body.paid_on);
+    const amount = Math.round(Number(body.amount) * 100) / 100;
+    /*
+     * THE SAME LIMITS AS THE RECORD PAYMENT SCREEN AND AS updatePayment (Sai, 28 Oct 2026).
+     *
+     * The screen refuses a zero or negative amount and anything above the outstanding balance, but
+     * this endpoint took whatever it was sent: a direct call could record -50.00, or 30,000.00 on a
+     * 22,600.00 invoice and leave a balance of -30,000.00. A correction (updatePayment) was already
+     * held to these rules; recording one now is too. Nothing the screen sends is refused here.
+     */
+    if (!paidOn || Number.isNaN(paidOn.getTime())) {
+      const m = 'Enter the date the payment was received.';
+      throw new UnprocessableEntityException({ message: m, errors: { paid_on: [m] } });
+    }
+    if (!(amount > 0)) {
+      const m = 'Enter an amount greater than zero.';
+      throw new UnprocessableEntityException({ message: m, errors: { amount: [m] } });
+    }
+    const already = (await this.prisma.invoice_payments.findMany({ where: { invoice_id: id, deleted_at: null }, select: { amount: true } }))
+      .reduce((sum, p) => sum + num(p.amount), 0);
+    if (already + amount > num(invoice.total) + 0.005) {
+      const m = 'That is more than the outstanding balance of ' + this.numberFormat(Math.max(0, num(invoice.total) - already)) + '.';
+      throw new UnprocessableEntityException({ message: m, errors: { amount: [m] } });
+    }
     const method = (body.method ?? null) as string | null;
     const now = new Date();
     await this.prisma.invoice_payments.create({
-      data: { invoice_id: id, paid_on: this.toDate(body.paid_on)!, amount, method, reference: (body.reference ?? null) as string | null, created_at: now, updated_at: now },
+      data: { invoice_id: id, paid_on: paidOn, amount, method, reference: (body.reference ?? null) as string | null, created_at: now, updated_at: now },
     });
     const settings = await this.settings.current();
     await this.calc.recalculate(this.prisma, id, this.rate(invoice.tax_rate, settings.default_tax_rate));
