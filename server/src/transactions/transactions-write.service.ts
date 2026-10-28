@@ -615,6 +615,15 @@ export class TransactionsWriteService {
     if (marketOf(user) === 'IN' && !opts.quiet && !paymentKey(body.india_payment)) {
       errors.india_payment = [`Choose how the buyer pays: ${INDIA_PAYMENTS.join(' or ')}.`];
     }
+    /*
+     * EVERY NEW DEAL HAS AN AGENT (Sai, 28 Oct 2026). An agent's own deal is theirs; staff name the
+     * agent - in the Team box (`primary_agent`) or, working Solo, the Agent box (`agent`). Staff Solo
+     * creates had no box at all and were saved with no agent: eleven live deals, no reminders.
+     * Not asked of the bulk importer (`quiet`), whose rows carry their own agent column.
+     */
+    if (!opts.quiet && !(user && isAgent(user)) && blank(body.primary_agent) && blank(body.agent)) {
+      errors.agent = ['Choose the agent for this deal.'];
+    }
 
     // The status the deal is being opened with has to exist for the type. Creation takes a single
     // status, so the only rule that can bite here is the vocabulary one — but a deal created
@@ -692,7 +701,8 @@ export class TransactionsWriteService {
       team.push({ name: primaryAgent, is_primary: true, access: 'full' });
       for (const m of members) if (m !== primaryAgent) team.push({ name: m, is_primary: false, access: 'full' });
     }
-    const agentName = isTeam ? primaryAgent : creatorAgent;
+    const soloAgent = body.agent ? String(body.agent).trim() || null : null;
+    const agentName = isTeam ? primaryAgent : (creatorAgent ?? soloAgent);
     const actor: ActingUser | null = user ? { id: user.id, name: user.name } : null;
     const toDate = (v: unknown): Date | null => (v ? new Date(String(v).slice(0, 10) + 'T00:00:00.000Z') : null);
 

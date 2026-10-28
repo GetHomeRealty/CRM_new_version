@@ -18,7 +18,8 @@ interface Refusal { message: string; errors: Record<string, string[]> }
 
 const refusal = async (body: Record<string, unknown>): Promise<Refusal> => {
   try {
-    await service.store(superAdmin, body);
+    // An agent is named so these cases read only the rule each one is about; the agent rule has its own spec.
+    await service.store(superAdmin, { agent: 'QA Agent', ...body });
     throw new Error('expected the create to be refused');
   } catch (e) {
     if (!(e instanceof UnprocessableEntityException)) throw e;

@@ -264,6 +264,11 @@ export default function AddTransactionModal({ open, onClose, onCreated }: AddTra
       });
     }
 
+    // Solo, staff: the Agent box (Sai, 28 Oct 2026). An agent working Solo is the agent themselves.
+    if (teamMode === 'solo' && !isAgent) {
+      if (!primaryAgent) { toast('Please select the Agent', 'bad'); return; }
+      payload.agent = primaryAgent;
+    }
     // Team option — Agent 1 (primary) + involved members. Split % is entered later.
     if (teamMode === 'team') {
       if (!primaryAgent) { toast('Please select Agent 1 (Primary)', 'bad'); return; }
@@ -441,6 +446,15 @@ export default function AddTransactionModal({ open, onClose, onCreated }: AddTra
                 <option value="team">Team</option>
               </select>
             </div>
+            {teamMode === 'solo' && !isAgent && (
+              <div className="field">
+                <label>Agent <span className="req">*</span></label>
+                <select value={primaryAgent} onChange={(e) => setPrimaryAgent(e.target.value)}>
+                  <option value="">Select agent</option>
+                  {agents.map((a) => <option key={a} value={a}>{a}</option>)}
+                </select>
+              </div>
+            )}
             {teamMode === 'team' && (
               <div style={{ border: '1px solid var(--line)', borderRadius: 8, padding: 12, marginBottom: 8, background: 'var(--surface)' }}>
                 <div className="field">

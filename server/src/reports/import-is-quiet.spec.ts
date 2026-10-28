@@ -59,6 +59,7 @@ const store = async (opts?: { quiet?: boolean }) => {
   const body = {
     type: 'Residential Buying', property: '9 Oak Road', status: 'DFT', price: 750_000,
     offer_date: '2022-04-01', closing_date: '2022-06-30', comm_type: '%', comm_value: 2.5,
+    agent: 'QA Agent', // staff name the agent on every new deal (28 Oct 2026)
   };
   await (svc.store as (u: unknown, b: unknown, o?: unknown) => Promise<unknown>)({ id: 7, name: 'Akhil', role: 'admin' }, body, opts);
   return reminded;

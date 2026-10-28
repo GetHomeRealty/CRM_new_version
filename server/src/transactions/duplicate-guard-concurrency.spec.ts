@@ -59,6 +59,7 @@ const admin = { id: 1, name: 'QA Concurrency', role: 'admin' } as never;
 const body = (property: string) => ({
   type: 'Residential Buying',
   property,
+  agent: 'QA Concurrency Agent', // staff name the agent on every new deal (28 Oct 2026)
   status: 'Secured Firm',
   price: 512_345,
   comm_type: '%',
