@@ -135,6 +135,14 @@ export const NOTIFICATION_CATEGORIES: readonly NotificationCategory[] = [
     areas: ['desk'],
   },
   {
+    key: 'void_cheque',
+    label: 'Client void cheque reminders',
+    description: 'A sold or leased listing owes the client money and the client\'s void cheque has not been received.',
+    // 29 Oct 2026. The agent's copy is the `transaction_reminders` row; co-agents' come through the dispatcher.
+    channels: { in_app: 'live', email: 'live', push: 'live' },
+    areas: ['desk'],
+  },
+  {
     key: 'after_closing',
     label: 'After-closing reminders',
     description: 'A deal is past its closing date and its status, required documents or lawyer details are still not done.',

@@ -35,6 +35,13 @@ export const DAYS_KEYS: readonly DaysKey[] = ['lawyer', 'closing', 'condition', 
 export const AFTER_KEYS: readonly AfterKey[] = ['after_status', 'after_docs', 'after_lawyer'];
 
 export interface DaysRule { on: boolean; days: number[] }
+/**
+ * THE CLIENT VOID CHEQUE (Sai, 29 Oct 2026): a Sold sale listing / Leased lease listing with money
+ * Payable to Client and no void cheque yet. `days` before closing (0 = the closing day), then after
+ * closing every `every` days up to `until` days, while it is still not received.
+ */
+export interface VoidChequeRule { on: boolean; days: number[]; every: number; until: number }
+export const DEFAULT_VOID_CHEQUE: VoidChequeRule = { on: true, days: [7, 6, 5, 4, 3, 2, 1, 0], every: 1, until: MAX_REMINDER_DAYS };
 export interface AfterRule { on: boolean; first: number; every: number; until: number }
 
 export interface ReminderRules {
@@ -44,6 +51,7 @@ export interface ReminderRules {
   listing_expiry: DaysRule;
   deposit: { on: boolean; days: number };
   commission: { on: boolean };
+  void_cheque: VoidChequeRule;
   after_status: AfterRule;
   after_docs: AfterRule;
   after_lawyer: AfterRule;
@@ -70,13 +78,14 @@ const MIN_DAY: Record<DaysKey, number> = { lawyer: 0, closing: 0, condition: 0, 
 export const DEFAULT_AFTER: AfterRule = { on: false, first: 1, every: 2, until: MAX_REMINDER_DAYS };
 
 /** Plain names, for the audit trail and for error messages. */
-export const RULE_LABEL: Record<DaysKey | AfterKey | 'deposit' | 'commission', string> = {
+export const RULE_LABEL: Record<DaysKey | AfterKey | 'deposit' | 'commission' | 'void_cheque', string> = {
   lawyer: 'Lawyer-detail reminders',
   closing: 'Closing-date reminders',
   condition: 'Condition deadlines',
   listing_expiry: 'Listing expiry reminders',
   deposit: 'Deposit not recorded',
   commission: 'Commission received',
+  void_cheque: 'Client void cheque not received',
   after_status: 'After closing - status still Firm/Conditional',
   after_docs: 'After closing - required documents outstanding',
   after_lawyer: 'After closing - lawyer details missing',
@@ -93,6 +102,7 @@ export function defaultRules(): ReminderRules {
     listing_expiry: { on: true, days: sortDays(EXPIRY_REMINDER_DAYS) },
     deposit: { on: true, days: DEPOSIT_GRACE_DAYS },
     commission: { on: true },
+    void_cheque: { ...DEFAULT_VOID_CHEQUE, days: [...DEFAULT_VOID_CHEQUE.days] },
     after_status: { ...DEFAULT_AFTER },
     after_docs: { ...DEFAULT_AFTER },
     after_lawyer: { ...DEFAULT_AFTER },
@@ -137,6 +147,16 @@ export function readRules(flags: Record<string, unknown>): ReminderRules {
   const com = isObj(stored.commission) ? stored.commission : {};
   if (typeof com.on === 'boolean') out.commission.on = com.on;
 
+  const vc = isObj(stored.void_cheque) ? stored.void_cheque : {};
+  if (typeof vc.on === 'boolean') out.void_cheque.on = vc.on;
+  if (Array.isArray(vc.days)) {
+    const days = vc.days.map((d) => wholeIn(d, 0, MAX_REMINDER_DAYS));
+    if (days.length > 0 && days.every((d) => d !== null) && new Set(days).size === days.length) out.void_cheque.days = sortDays(days as number[]);
+  }
+  const vcEvery = wholeIn(vc.every, 1, MAX_REMINDER_DAYS);
+  const vcUntil = wholeIn(vc.until, 1, MAX_REMINDER_DAYS);
+  if (vcEvery !== null && vcUntil !== null) { out.void_cheque.every = vcEvery; out.void_cheque.until = vcUntil; }
+
   for (const key of AFTER_KEYS) {
     const r = isObj(stored[key]) ? stored[key] : {};
     if (typeof r.on === 'boolean') out[key].on = r.on;
@@ -160,12 +180,12 @@ export function readRules(flags: Record<string, unknown>): ReminderRules {
  * Read a list of days typed on the Triggers screen ("30, 23, 15" or [30, 23, 15]).
  * Blank goes back to the default days. Returns the error to show instead when it cannot be used.
  */
-function parseDays(key: DaysKey, raw: unknown): { days: number[] } | { error: string } {
-  const lo = MIN_DAY[key];
+function parseDays(key: DaysKey | 'void_cheque', raw: unknown): { days: number[] } | { error: string } {
+  const lo = key === 'void_cheque' ? 0 : MIN_DAY[key];
   const parts: unknown[] = Array.isArray(raw)
     ? raw
     : String(raw ?? '').split(/[\s,;]+/).filter((p) => p !== '').map((p) => (/^\d+$/.test(p) ? Number(p) : p));
-  if (parts.length === 0) return { days: sortDays(DEFAULT_DAYS[key]) };
+  if (parts.length === 0) return { days: sortDays(key === 'void_cheque' ? DEFAULT_VOID_CHEQUE.days : DEFAULT_DAYS[key]) };
   const days: number[] = [];
   for (const p of parts) {
     const n = wholeIn(typeof p === 'string' && /^\d+$/.test(p) ? Number(p) : p, lo, MAX_REMINDER_DAYS);
@@ -225,6 +245,23 @@ export function applyRulesPatch(current: ReminderRules, body: Record<string, unk
     if (on !== undefined) next.commission.on = on;
   }
 
+  if (isObj(body.void_cheque)) {
+    const r = body.void_cheque;
+    const on = onOf('void_cheque', r.on);
+    if (on !== undefined) next.void_cheque.on = on;
+    if (r.days !== undefined) {
+      const p = parseDays('void_cheque', r.days);
+      if ('error' in p) errors.push(p.error); else next.void_cheque.days = p.days;
+    }
+    for (const f of ['every', 'until'] as const) {
+      if (r[f] === undefined) continue;
+      const n = numberIn(r[f]);
+      if (n === null) next.void_cheque[f] = DEFAULT_VOID_CHEQUE[f];
+      else if (n === 'bad' || n < 1 || n > MAX_REMINDER_DAYS) errors.push(`${RULE_LABEL.void_cheque}: use whole numbers from 1 to ${MAX_REMINDER_DAYS}.`);
+      else next.void_cheque[f] = n;
+    }
+  }
+
   for (const key of AFTER_KEYS) {
     if (!isObj(body[key])) continue;
     const r = body[key] as Record<string, unknown>;
@@ -255,6 +292,10 @@ export function describeRule(rules: ReminderRules, key: keyof typeof RULE_LABEL)
   const state = (on: boolean) => (on ? 'On' : 'Off');
   if (key === 'commission') return state(rules.commission.on);
   if (key === 'deposit') return `${state(rules.deposit.on)} - ${rules.deposit.days} days after the offer`;
+  if (key === 'void_cheque') {
+    const v = rules.void_cheque;
+    return `${state(v.on)} - ${v.days.join(', ')} before closing, then every ${v.every} day(s) after closing up to day ${v.until}`;
+  }
   if ((AFTER_KEYS as readonly string[]).includes(key)) {
     const r = rules[key as AfterKey];
     return `${state(r.on)} - day ${r.first} after closing, then every ${r.every} days, up to day ${r.until}`;
@@ -292,4 +333,15 @@ export function afterClosingDue(today: Date, closing: Date, rule: AfterRule): { 
   const daysAfter = daysBetween(closing, today);
   const due = daysAfter >= rule.first && daysAfter <= rule.until && (daysAfter - rule.first) % rule.every === 0;
   return { due, daysAfter };
+}
+
+/**
+ * Whether the void cheque reminder is due today for a deal closing on `closing`: on the listed days
+ * before closing (0 = the closing day), then every `every` days after it, up to `until` days after.
+ */
+export function voidChequeDue(today: Date, closing: Date, rule: VoidChequeRule): { due: boolean; daysRemaining: number } {
+  const daysRemaining = daysBetween(today, closing);
+  if (daysRemaining >= 0) return { due: rule.days.includes(daysRemaining), daysRemaining };
+  const after = -daysRemaining;
+  return { due: after <= rule.until && (after - 1) % rule.every === 0, daysRemaining };
 }

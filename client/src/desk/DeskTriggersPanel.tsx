@@ -149,6 +149,9 @@ export default function DeskTriggersPanel() {
     const d: Record<string, string> = {};
     for (const row of DAYS_ROWS) d[row.key] = r[row.key].days.join(', ');
     d.deposit = String(r.deposit.days);
+    d.void_cheque = r.void_cheque.days.join(', ');
+    d['void_cheque.every'] = String(r.void_cheque.every);
+    d['void_cheque.until'] = String(r.void_cheque.until);
     for (const row of AFTER_ROWS) {
       d[`${row.key}.first`] = String(r[row.key].first);
       d[`${row.key}.every`] = String(r[row.key].every);
@@ -280,6 +283,37 @@ export default function DeskTriggersPanel() {
             </p>
           </div>
         )}
+
+        {rules && (() => {
+          // 29 Oct 2026 (Sai) - the client's void cheque, before and after closing.
+          const v = rules.void_cheque;
+          const changed = (draft.void_cheque ?? '') !== v.days.join(', ')
+            || (draft['void_cheque.every'] ?? '') !== String(v.every) || (draft['void_cheque.until'] ?? '') !== String(v.until);
+          return (
+            <div className="field" style={{ maxWidth: 640 }}>
+              <label style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>Client void cheque not received <span className="muted" style={{ fontWeight: 400, fontSize: 12 }}>to Agent + co-agents</span> {onOff('void_cheque', 'Client void cheque reminders', v.on)}</label>
+              <p className="help" style={{ margin: '0 0 8px' }}>
+                A Sold sale listing or Leased lease listing with money Payable to Client, whose client void
+                cheque has not been uploaded (Agent Payment Readiness) or marked received (Admin Activities).
+                Stops once it is received. After closing, only deals closing from the day this went live.
+              </p>
+              <div className="toolbar-row" style={{ gap: 6, alignItems: 'center', flexWrap: 'wrap', fontSize: 12.5 }}>
+                {box('void_cheque', 200, 'Void cheque days before closing')}
+                <span>days before closing (0 = the closing day), then every</span>{box('void_cheque.every', 56, 'Void cheque every')}
+                <span>day(s) after closing, up to</span>{box('void_cheque.until', 56, 'Void cheque last day')}
+                <span>days</span>
+                {canEdit && changed && (
+                  <button className="btn primary sm" disabled={saving === 'void_cheque'}
+                    onClick={() => void saveRule('void_cheque', {
+                      days: draft.void_cheque ?? '', every: draft['void_cheque.every'] ?? '', until: draft['void_cheque.until'] ?? '',
+                    }, 'Client void cheque: timing saved.')}>
+                    {saving === 'void_cheque' ? 'Saving…' : 'Save'}
+                  </button>
+                )}
+              </div>
+            </div>
+          );
+        })()}
       </div>
 
       {rules && (

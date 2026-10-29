@@ -941,6 +941,28 @@ export const MAIL_EVENTS: Record<string, MailEvent> = {
       + '{{ transaction_button }}'
       + '<p>{{ company_name }}</p>',
   },
+  /**
+   * 29 Oct 2026 (Sai) - a Sold / Leased listing owes the client money and the client's void cheque has
+   * not come in: daily from 7 days before closing, and after closing while it is still missing.
+   */
+  'transaction.void_cheque_reminder': {
+    module: 'Transactions',
+    label: 'Transactions — Client Void Cheque Not Received',
+    variables: ['agent_name', 'deal_number', 'property_address', 'transaction_type', 'closing_date', 'when_phrase', 'payable_to_client', 'transaction_button', 'company_name', 'current_date'],
+    default_subject: 'Client void cheque needed ({{ when_phrase }}) — {{ property_address }} ({{ deal_number }})',
+    default_body_html:
+      '<p>Hello {{ agent_name }},</p>'
+      + '<p>The client on <strong>{{ property_address }}</strong> is owed <strong>${{ payable_to_client }}</strong> from the deposit, and we have not received their <strong>void cheque</strong> yet.</p>'
+      + '<table style="border-collapse:collapse;font-size:14px;margin:10px 0">'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Transaction</td><td style="padding:4px 0;font-weight:600">{{ deal_number }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Property</td><td style="padding:4px 0;font-weight:600">{{ property_address }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Closing date</td><td style="padding:4px 0;font-weight:600">{{ closing_date }} ({{ when_phrase }})</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Payable to client</td><td style="padding:4px 0;font-weight:600">${{ payable_to_client }}</td></tr>'
+      + '</table>'
+      + '<p>Please upload the client\'s void cheque on the deal (Agent Payment Readiness). This reminder stops once it is received.</p>'
+      + '{{ transaction_button }}'
+      + '<p>{{ company_name }}</p>',
+  },
   /** Daily countdown to a listing's expiry date, from ten days out. */
   'transaction.listing_expiry_reminder': {
     module: 'Transactions',

@@ -169,6 +169,7 @@ describe('notification preferences', () => {
       'deposit_outstanding', 'commission_received',
       // 29 Oct 2026 - after-closing reminders: the agent's through the same `deliver`, Documentation's
       // through the dispatcher directly.
+      'void_cheque',
       'after_closing',
       'lawyer_details',
       // 29 Oct 2026 - agent uploads to Documentation, bell and phone (documents.service submitDrafts).

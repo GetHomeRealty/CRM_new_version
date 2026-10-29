@@ -56,7 +56,7 @@ export class ReminderRulesService {
       data: { feature_flags: JSON.stringify(phpJsonNormalize(flags)), updated_at: new Date() },
     });
 
-    const keys = [...DAYS_KEYS, 'deposit', 'commission', ...AFTER_KEYS] as (keyof typeof RULE_LABEL)[];
+    const keys = [...DAYS_KEYS, 'deposit', 'commission', 'void_cheque', ...AFTER_KEYS] as (keyof typeof RULE_LABEL)[];
     for (const key of keys) {
       const old = describeRule(before, key);
       const next = describeRule(after, key);

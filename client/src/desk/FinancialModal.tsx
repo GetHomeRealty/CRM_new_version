@@ -553,7 +553,7 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
   const listClientReferral = (txn.adjustments?.client_referral === 'Yes') ? (txn.adjustments.client_rows || []).reduce((s, r) => s + parseNumber(r.amount), 0) : 0;
   const listExtAmt = (txn.adjustments?.ext_referral === 'Yes') ? parseNumber(txn.adjustments.ext?.amount) : 0;
   const lb = listingBreakdown({
-    price: parseNumber(price), deposit: txn.deposit,
+    price: parseNumber(price), deposit: parseNumber(deposit),
     listPct, coopPct, listFlat: parseNumber(listFlat), coopFlat: parseNumber(coopFlat),
     lAdjBefore: lAdjEff ? parseNumber(lBefore) : 0, lAdjAfter: lAdjEff ? parseNumber(lAfter) : 0,
     cAdjBefore: cAdjEff ? parseNumber(cBefore) : 0, cAdjAfter: cAdjEff ? parseNumber(cAfter) : 0,
@@ -592,7 +592,7 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
   // Trust Verification: Deposit − Total Commissions − Receivable from Lawyer − Payable to Client.
   // Receivable is the signed value (≤ 0 when the trust is short), so a balanced deal nets to 0 = PASS.
   const tvReceivable = lb.trust.receivableFromLawyer;
-  const tvCheck = r2(parseNumber(txn.deposit) - lb.totals.total - tvReceivable - parseNumber(trustPayable));
+  const tvCheck = r2(parseNumber(deposit) - lb.totals.total - tvReceivable - parseNumber(trustPayable));
   const tvPass = Math.abs(tvCheck) < 0.005;
 
   // ---- live preconstruction master computation ----
@@ -631,9 +631,11 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
     // Documentation never saves here — its edits go to a Super Admin as a request (sendProposal).
     if (docEdits) return;
 
+    const depositChanged = !referral && parseNumber(deposit) !== parseNumber(txn.deposit ?? 0);
+    const depositPart = depositChanged ? { deposit: parseNumber(deposit) } : {};
     const payload = precon
       ? {
-          price: parseNumber(price), precon_net_of_hst: netHst,
+          price: parseNumber(price), ...depositPart, precon_net_of_hst: netHst,
           precon_term_count: termCount || null,
           precon_comm_pct: masterPct === '' ? null : parseNumber(masterPct),
           precon_comm_amt_manual: masterAmtManual === '' ? null : parseNumber(masterAmtManual),
@@ -652,7 +654,7 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
         }
       : listing
       ? {
-          price: parseNumber(price),
+          price: parseNumber(price), ...depositPart,
           listing_comm_pct: listPct === '' ? null : parseNumber(listPct), coop_comm_pct: coopPct === '' ? null : parseNumber(coopPct),
           listing_comm_flat: listFlat === '' ? null : parseNumber(listFlat), coop_comm_flat: coopFlat === '' ? null : parseNumber(coopFlat),
           trust_payable: trustPayable === '' ? null : parseNumber(trustPayable),
@@ -661,7 +663,7 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
           team: members.map((m, i) => ({ name: m.name, split: parseNumber(m.split), agent_pct: parseNumber(m.agent_pct), brok_pct: parseNumber(m.brok_pct), is_primary: i === 0, scope: m.scope, terms: m.terms })),
         }
       : {
-          price: parseNumber(price),
+          price: parseNumber(price), ...depositPart,
           comm_pct: commPct === '' ? null : parseNumber(commPct), comm_amt: commAmt === '' ? null : parseNumber(commAmt),
           comm_adjust_enabled: adjEnabled, comm_adjust_before: adjEnabled ? parseNumber(adjBefore) : 0, comm_adjust_after: adjEnabled ? parseNumber(adjAfter) : 0,
           team: members.map((m, i) => ({ name: m.name, split: parseNumber(m.split), agent_pct: parseNumber(m.agent_pct), brok_pct: parseNumber(m.brok_pct), is_primary: i === 0, scope: m.scope, terms: m.terms })),
@@ -686,7 +688,9 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
   const depositField = (
     <div className="field"><label>Deposit {docEdits ? docPencil('deposit') : finPencil()}</label>{docEdits
       ? <MoneyInput value={deposit} onChange={(v) => setDeposit(v)} onBlur={(e) => setDeposit(parseNumber(e.target.value))} disabled={docLocked('deposit')} data-testid="fin-deposit" />
-      : <input value={txn.deposit ?? 0} readOnly style={{ background: 'var(--surface-2)' }} data-testid="fin-deposit" />}</div>
+      // 29 Oct 2026 (Sai) - typed here like Price: open for a Super Admin or after an approved edit
+      // request, locked otherwise. It used to be a read-only copy of Basic Info's figure on every deal.
+      : <MoneyInput value={deposit} onChange={(v) => setDeposit(v)} onBlur={(e) => setDeposit(parseNumber(e.target.value))} readOnly={finLock} style={finLock ? finLockStyle : undefined} data-testid="fin-deposit" />}</div>
   );
 
   return (
@@ -1129,7 +1133,7 @@ export default function FinancialModal({ open, onClose, transactionId, txn, term
             {!hideClientCommission && (<>
             <div className="modal-sub">Trust Verification</div>
             <div className="g4">
-              <div className="field" style={{ marginBottom: 0 }}><label>Deposit</label><input readOnly value={formatCurrency(parseNumber(txn.deposit))} /></div>
+              <div className="field" style={{ marginBottom: 0 }}><label>Deposit</label><input readOnly value={formatCurrency(parseNumber(deposit))} /></div>
               <div className="field" style={{ marginBottom: 0 }}><label>Total Commissions (Listing + Co-Op)</label><input readOnly style={ts(lb.totals.total)} value={formatCurrency(lb.totals.total)} /></div>
               <div className="field" style={{ marginBottom: 0 }}><label>Receivable from Lawyer</label><input readOnly value={formatCurrency(tvReceivable)} /></div>
               <div className="field" style={{ marginBottom: 0 }}><label>Paid to Client</label><MoneyInput value={trustPayable} onChange={(v) => setTrustPayable(v)} placeholder="0.00" /></div>

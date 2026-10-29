@@ -10,7 +10,10 @@ import { toDateString } from '../common/serialize';
 import { missingLawyerParties, tracksBothLawyers } from './lawyer-details';
 import { isSettledDeal } from './deal-state';
 import { docStatus } from '../reports/report-documents';
-import { AFTER_KEYS, type AfterKey, type ReminderRules, afterClosingDue, afterHeldFrom, readRules } from './reminder-rules';
+import { AFTER_KEYS, type AfterKey, type ReminderRules, afterClosingDue, afterHeldFrom, readRules, voidChequeDue, ymdDay } from './reminder-rules';
+import { CommissionService } from './commission.service';
+import { commissionInclude, normalizeCommissionTxn } from './commission.loader';
+import { parseJsonObject } from '../common/serialize';
 import {
   LAWYER_TEMPLATE,
   closingPhrase, closingReminderFor, conditionReminderFor, daysBetween, deadlinePhrase, expiryPhrase,
@@ -61,6 +64,7 @@ const REMINDER_CATEGORY: Record<ReminderKind, string> = {
   after_status: 'after_closing',
   after_docs: 'after_closing',
   after_lawyer: 'after_closing',
+  void_cheque: 'void_cheque',
 };
 const REMINDER_LABEL: Record<ReminderKind, string> = {
   listing_expiry: 'Listing expiry reminder',
@@ -73,6 +77,7 @@ const REMINDER_LABEL: Record<ReminderKind, string> = {
   after_status: 'After closing - status',
   after_docs: 'After closing - documents',
   after_lawyer: 'After closing - lawyer details',
+  void_cheque: 'Client void cheque',
 };
 
 /**
@@ -94,7 +99,7 @@ const redirectTo = (): string | null => {
 };
 
 /** The kinds of reminder this sweep sends. Stored in `transaction_reminders.kind`. */
-export type ReminderKind = 'listing_expiry' | 'lawyer' | 'closing' | 'condition' | 'status' | 'deposit' | 'commission' | AfterKey;
+export type ReminderKind = 'listing_expiry' | 'lawyer' | 'closing' | 'condition' | 'status' | 'deposit' | 'commission' | AfterKey | 'void_cheque';
 
 /**
  * AFTER-CLOSING REMINDERS (Sai, 29 Oct 2026). The statuses a deal should have moved on from once its
@@ -147,6 +152,8 @@ export interface SweepResult {
   commissionsReceived: number;
   /** 29 Oct 2026 - deals past their closing date still waiting on a status, documents or lawyers. */
   afterClosingReminders: number;
+  /** 29 Oct 2026 - sold / leased listings owing the client money with no void cheque yet. */
+  voidChequeReminders: number;
   skipped: number;
   failed: number;
   /** Failed deliveries attempted again this pass. */
@@ -177,13 +184,15 @@ export class ReminderSweepService {
      * untouched. Always injected in the running application.
      */
     private readonly dispatcher?: NotificationDispatcher,
+    /* 29 Oct 2026 - works out Payable to Client for the void cheque reminder. Optional for the same reason. */
+    private readonly commission?: CommissionService,
   ) {}
 
   /** A zeroed tally. The sweep fills one over a night; `statusChanged` uses one for a single send. */
   private emptyResult(): SweepResult {
     return {
       expiryReminders: 0, expired: 0, lawyerReminders: 0, closingReminders: 0, conditionReminders: 0,
-      statusChanges: 0, depositReminders: 0, commissionsReceived: 0, afterClosingReminders: 0, skipped: 0, failed: 0, retried: 0, recovered: 0,
+      statusChanges: 0, depositReminders: 0, commissionsReceived: 0, afterClosingReminders: 0, voidChequeReminders: 0, skipped: 0, failed: 0, retried: 0, recovered: 0,
     };
   }
 
@@ -203,14 +212,15 @@ export class ReminderSweepService {
     if (rules.condition.on) await this.conditionDeadlines(today, result, rules.condition.days);
     if (rules.deposit.on) await this.depositsOutstanding(today, result, rules.deposit.days);
     if (rules.commission.on) await this.commissionsReceived(today, result);
+    if (rules.void_cheque.on) await this.voidCheques(today, result, rules);
     await this.afterClosing(today, result, rules);
 
     if (result.expiryReminders || result.expired || result.lawyerReminders || result.closingReminders
-      || result.conditionReminders || result.afterClosingReminders || result.failed) {
+      || result.conditionReminders || result.afterClosingReminders || result.voidChequeReminders || result.failed) {
       this.log.log(
         `Reminders: ${result.expiryReminders} expiry, ${result.lawyerReminders} lawyer, `
         + `${result.closingReminders} closing, ${result.conditionReminders} condition, `
-        + `${result.afterClosingReminders} after closing, `
+        + `${result.afterClosingReminders} after closing, ${result.voidChequeReminders} void cheque, `
         + `${result.expired} auto-expired, ${result.skipped} skipped, ${result.failed} failed, `
         + `${result.retried} retried (${result.recovered} recovered).`,
       );
@@ -938,6 +948,125 @@ export class ReminderSweepService {
       .map(({ id, name, email }) => ({ id, name, email }));
   }
 
+  // ---------------------------------------------------------------- client void cheque
+
+  /**
+   * THE CLIENT VOID CHEQUE (Sai, 29 Oct 2026). A listing that is Sold (sale) or Leased (lease), whose
+   * Financial shows money Payable to Client, and whose client void cheque has not been received - not
+   * uploaded in Agent Payment Readiness and "Client Void cheque Received" not Yes in Admin Activities.
+   * The agent and every co-agent are reminded every day from 7 days before closing to the closing day,
+   * then every day after closing (up to 60 days) while it is still missing. All of it editable on
+   * Triggers. After closing, only deals closing on or after the go-live day are chased.
+   */
+  private async voidCheques(today: Date, result: SweepResult, rules: ReminderRules): Promise<void> {
+    if (!this.commission) return;
+    const rule = rules.void_cheque;
+    const start = startOfDay(today);
+    const before = Math.max(...rule.days, 0);
+    const held = rules.after_closing_from ? ymdDay(rules.after_closing_from) : start;
+    const byWindow = new Date(start.getFullYear(), start.getMonth(), start.getDate() - rule.until);
+    const lower = held > byWindow ? held : byWindow;
+    const earliest = lower < start ? lower : start;
+    const latest = new Date(start.getFullYear(), start.getMonth(), start.getDate() + before);
+
+    const rows = await this.prisma.transactions.findMany({
+      where: {
+        deleted_at: null, ...REMINDED,
+        OR: [{ type: { contains: 'Listing' } }, { type: 'Business Sale' }],
+        closing_date: { gte: dbDay(earliest), lte: dbDay(latest) },
+      },
+      include: { ...commissionInclude, transaction_statuses: { select: { status: true } } },
+      orderBy: { closing_date: 'asc' },
+    });
+
+    for (const t of rows) {
+      if (!t.closing_date) continue;
+      const closing = calendarDay(t.closing_date);
+      const { due, daysRemaining } = voidChequeDue(today, closing, rule);
+      if (!due) continue;
+      if (daysRemaining < 0 && closing < held) continue; // an old deal: held, as Sai asked
+
+      const statuses = t.transaction_statuses.map((x) => x.status);
+      const lease = /lease/i.test(t.type ?? '');
+      if (!statuses.includes(lease ? 'Leased' : 'Sold')) continue;
+      if (statuses.some((x) => DEAD_STATUSES.includes(x))) continue;
+
+      const admin = parseJsonObject(t.admin_activities);
+      const tracker = parseJsonObject(t.activity_tracker);
+      const uploaded = String((tracker.void_cheque as { data?: unknown } | null | undefined)?.data ?? '').trim() !== '';
+      if (uploaded || admin.void_cheque_received === 'Yes') continue; // received - the stop condition
+
+      const bd = await this.commission.breakdown(normalizeCommissionTxn(t as never));
+      const payable = bd.variant === 'listing' ? Number((bd.trust as { payable_to_client?: unknown } | undefined)?.payable_to_client ?? 0) : 0;
+      if (!(payable > 0)) continue;
+
+      const when = daysRemaining > 0 ? closingPhrase(daysRemaining) : daysRemaining === 0 ? 'closing today' : afterPhrase(-daysRemaining);
+      const vars = {
+        agent_name: t.agent ?? 'there',
+        deal_number: t.trade_no ?? String(t.id),
+        property_address: t.property ?? '-',
+        transaction_type: t.type ?? '-',
+        closing_date: toDateString(t.closing_date) ?? '',
+        when_phrase: when,
+        payable_to_client: payable.toLocaleString('en-CA', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+      };
+      const summary = `Client void cheque not received (${when}) - ${t.property ?? t.trade_no ?? ''}`.trim();
+      const day = dbDay(start);
+      await this.deliver({
+        txnId: t.id, kind: 'void_cheque', variant: null, day, daysRemaining,
+        agentName: t.agent, agentUserId: t.agent_user_id,
+        event: 'transaction.void_cheque_reminder', vars, summary, result,
+        onSent: () => { result.voidChequeReminders++; },
+      });
+      await this.tellCoAgents(t, vars, summary, day);
+    }
+  }
+
+  /**
+   * Co-agents on the deal get the same void cheque reminder (Sai: "yes"): bell + phone through the
+   * dispatcher, whose ledger makes a second run the same day a no-op, and the email through the template.
+   */
+  private async tellCoAgents(
+    t: { id: number; agent: string | null; agent_user_id: number | null; team_members: { name: string; user_id: number | null }[] },
+    vars: Record<string, string>,
+    summary: string,
+    day: Date,
+  ): Promise<void> {
+    if (!this.dispatcher) return;
+    const main = await this.userIdFor(t.agent, t.agent_user_id);
+    const seen = new Set<number>(main ? [main] : []);
+    const company = (await this.settings.current()).name;
+    const base = (process.env.FRONTEND_URL ?? '').trim().replace(/\/+$/, '');
+    const link = base ? `${base}${areaPath('desk', `transactions/${t.id}`)}` : '';
+    for (const m of t.team_members) {
+      const u = await this.people.resolve(m.user_id ?? null, m.name, { activeOnly: true });
+      if (!u || seen.has(u.id)) continue;
+      seen.add(u.id);
+      const sent = await this.dispatcher.dispatch({
+        category: 'void_cheque', userId: u.id, title: summary,
+        link: areaPath('desk', `transactions/${t.id}`),
+        dedupeKey: `void_cheque-${t.id}-${day.toISOString().slice(0, 10)}`,
+        channels: ['in_app', 'push'],
+      }).catch(() => null);
+      if (!sent || sent.skipped.some((x) => x.reason === 'duplicate')) continue;
+      if (!(await this.dispatcher.shouldSend(u.id, 'void_cheque', 'email'))) continue;
+      const address = (u.email ?? '').trim();
+      if (!address) continue;
+      try {
+        await this.mailer.send('transaction.void_cheque_reminder', {
+          ...vars, agent_name: u.name, company_name: company,
+          transaction_button: link
+            ? `<p style="margin:18px 0"><a href="${link}" style="background:#1f3b73;color:#fff;text-decoration:none;padding:10px 18px;border-radius:8px;font-weight:700;display:inline-block">Open the transaction</a></p>`
+            : '',
+        }, redirectTo() ?? address);
+        await this.auditReminder(t.id, 'void_cheque', 'Reminder sent', summary, `Emailed ${address} (co-agent).`);
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        await this.auditReminder(t.id, 'void_cheque', 'Reminder failed', summary, `Co-agent ${address}: ${reason}`);
+      }
+    }
+  }
+
   // ---------------------------------------------------------------- retries
 
   /**
@@ -1052,6 +1181,9 @@ export class ReminderSweepService {
     rules: ReminderRules,
   ): { event: string; vars: Record<string, string>; summary: string } | null {
     // 29 Oct 2026 - a reminder switched off on the Triggers screen is not retried either.
+    // The void cheque reminder goes daily while it is due, so a failed one is not retried - the next
+    // day's reminder is the retry, rebuilt from the deal as it then stands.
+    if (kind === 'void_cheque') return null;
     if ((AFTER_KEYS as readonly string[]).includes(kind)) {
       const key = kind as AfterKey;
       if (!rules[key].on || !t.closing_date) return null;
