@@ -858,6 +858,89 @@ export const MAIL_EVENTS: Record<string, MailEvent> = {
       + '{{ transaction_button }}'
       + '<p>{{ company_name }}</p>',
   },
+  /**
+   * AFTER-CLOSING REMINDERS (Sai, 29 Oct 2026) - sent 1, 3, 5, 7 ... days after the closing date (up to
+   * 60, changeable on the Triggers screen) until the thing is done. Deals that closed before this went
+   * live are not chased.
+   */
+  'transaction.after_closing_status': {
+    module: 'Transactions',
+    label: 'Transactions — After Closing: Status Not Updated',
+    variables: ['agent_name', 'deal_number', 'property_address', 'transaction_type', 'closing_date', 'days_after', 'after_phrase', 'current_status', 'transaction_button', 'company_name', 'current_date'],
+    default_subject: 'Status still {{ current_status }}, {{ after_phrase }} — {{ property_address }} ({{ deal_number }})',
+    default_body_html:
+      '<p>Hello {{ agent_name }},</p>'
+      + '<p>Your deal on <strong>{{ property_address }}</strong> closed on {{ closing_date }}, but its status is still <strong>{{ current_status }}</strong>.</p>'
+      + '<table style="border-collapse:collapse;font-size:14px;margin:10px 0">'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Transaction</td><td style="padding:4px 0;font-weight:600">{{ deal_number }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Property</td><td style="padding:4px 0;font-weight:600">{{ property_address }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Closing date</td><td style="padding:4px 0;font-weight:600">{{ closing_date }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Days since closing</td><td style="padding:4px 0;font-weight:600">{{ days_after }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Status now</td><td style="padding:4px 0;font-weight:600">{{ current_status }}</td></tr>'
+      + '</table>'
+      + '<p>Please update the status, or ask the Documentation team to. This reminder stops once the status is updated.</p>'
+      + '{{ transaction_button }}'
+      + '<p>{{ company_name }}</p>',
+  },
+  /** The same reminder, to Documentation: the deal's "Handled by" person, or the team when nobody is named. */
+  'transaction.after_closing_status_team': {
+    module: 'Transactions',
+    label: 'Transactions — After Closing: Status Not Updated (Documentation)',
+    variables: ['recipient_name', 'agent_name', 'deal_number', 'property_address', 'transaction_type', 'closing_date', 'days_after', 'after_phrase', 'current_status', 'transaction_button', 'company_name', 'current_date'],
+    default_subject: 'Status still {{ current_status }}, {{ after_phrase }} — {{ property_address }} ({{ deal_number }})',
+    default_body_html:
+      '<p>Hello {{ recipient_name }},</p>'
+      + '<p>The deal on <strong>{{ property_address }}</strong> closed on {{ closing_date }}, but its status is still <strong>{{ current_status }}</strong>.</p>'
+      + '<table style="border-collapse:collapse;font-size:14px;margin:10px 0">'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Transaction</td><td style="padding:4px 0;font-weight:600">{{ deal_number }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Property</td><td style="padding:4px 0;font-weight:600">{{ property_address }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Closing date</td><td style="padding:4px 0;font-weight:600">{{ closing_date }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Days since closing</td><td style="padding:4px 0;font-weight:600">{{ days_after }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Agent</td><td style="padding:4px 0">{{ agent_name }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Status now</td><td style="padding:4px 0;font-weight:600">{{ current_status }}</td></tr>'
+      + '</table>'
+      + '<p>This reminder stops once the status is updated.</p>'
+      + '{{ transaction_button }}'
+      + '<p>{{ company_name }}</p>',
+  },
+  'transaction.after_closing_documents': {
+    module: 'Transactions',
+    label: 'Transactions — After Closing: Required Documents Outstanding',
+    variables: ['agent_name', 'deal_number', 'property_address', 'transaction_type', 'closing_date', 'days_after', 'after_phrase', 'document_count', 'document_list', 'transaction_button', 'company_name', 'current_date'],
+    default_subject: 'Required documents outstanding, {{ after_phrase }} — {{ property_address }} ({{ deal_number }})',
+    default_body_html:
+      '<p>Hello {{ agent_name }},</p>'
+      + '<p>Your deal on <strong>{{ property_address }}</strong> closed on {{ closing_date }}, and {{ document_count }} required document(s) are still not complete.</p>'
+      + '<table style="border-collapse:collapse;font-size:14px;margin:10px 0">'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Transaction</td><td style="padding:4px 0;font-weight:600">{{ deal_number }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Property</td><td style="padding:4px 0;font-weight:600">{{ property_address }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Closing date</td><td style="padding:4px 0;font-weight:600">{{ closing_date }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Days since closing</td><td style="padding:4px 0;font-weight:600">{{ days_after }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Documents</td><td style="padding:4px 0;font-weight:600">{{ document_list }}</td></tr>'
+      + '</table>'
+      + '<p>Please upload them on the deal. This reminder stops once every required document is Valid.</p>'
+      + '{{ transaction_button }}'
+      + '<p>{{ company_name }}</p>',
+  },
+  'transaction.after_closing_lawyer': {
+    module: 'Transactions',
+    label: 'Transactions — After Closing: Lawyer Details Missing',
+    variables: ['agent_name', 'deal_number', 'property_address', 'transaction_type', 'closing_date', 'days_after', 'after_phrase', 'missing_details', 'transaction_button', 'company_name', 'current_date'],
+    default_subject: '{{ missing_details }} still missing, {{ after_phrase }} — {{ property_address }} ({{ deal_number }})',
+    default_body_html:
+      '<p>Hello {{ agent_name }},</p>'
+      + '<p>Your deal on <strong>{{ property_address }}</strong> closed on {{ closing_date }}, and the <strong>{{ missing_details }}</strong> are still missing.</p>'
+      + '<table style="border-collapse:collapse;font-size:14px;margin:10px 0">'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Transaction</td><td style="padding:4px 0;font-weight:600">{{ deal_number }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Property</td><td style="padding:4px 0;font-weight:600">{{ property_address }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Closing date</td><td style="padding:4px 0;font-weight:600">{{ closing_date }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Days since closing</td><td style="padding:4px 0;font-weight:600">{{ days_after }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Missing</td><td style="padding:4px 0;font-weight:600">{{ missing_details }}</td></tr>'
+      + '</table>'
+      + '<p>Please add them on the deal. This reminder stops once they are entered.</p>'
+      + '{{ transaction_button }}'
+      + '<p>{{ company_name }}</p>',
+  },
   /** Daily countdown to a listing's expiry date, from ten days out. */
   'transaction.listing_expiry_reminder': {
     module: 'Transactions',

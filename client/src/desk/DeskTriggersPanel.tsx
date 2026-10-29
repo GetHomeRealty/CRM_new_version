@@ -1,21 +1,19 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getCompanySettings, updateCompanySettings, getEmailTemplates, updateEmailTemplate } from '../lib/api';
+import { getReminderRules, saveReminderRules, getEmailTemplates, updateEmailTemplate } from '../lib/api';
 import { deskPath } from './area';
-import { useAuth } from '../context/AuthContext';
 import { useToast } from './toast';
 import { apiErrorMessage } from '../lib/apiError';
-import type { CompanySettings, EmailTemplate } from '../types';
+import type { EmailTemplate, ReminderRules } from '../types';
 
 /**
  * Transaction Desk triggers — the automations that belong to Transaction Management.
  *
  * This surfaces what already runs rather than inventing a new engine. Two kinds exist today:
  *
- *   • The recurring lawyer-detail reminder, a real scheduled trigger. It sweeps hourly and re-emails
- *     the agent every N days while a lawyer detail is still missing. Its cadence has always been
- *     editable — it just lived in Company Settings under a number field with no explanation of what
- *     it drove. Zero switches the recurring reminder off.
+ *   • The scheduled reminders (lawyer details, closing date, conditions, listing expiry, deposit,
+ *     commission, and the after-closing ones). Since 29 Oct 2026 each has an On/Off switch and its
+ *     days can be changed here by a Super Admin.
  *
  *   • The transaction message triggers: each one is an event plus the message it sends, with its own
  *     Active switch. Turning one off stops that message being sent at all, which is the part that
@@ -41,9 +39,8 @@ const DESK_EVENT_PREFIXES = ['invoice.', 'document.', 'notice_of_sale.', 'deposi
  *
  * `transaction.` cannot be admitted as a prefix the way the others are. Most keys under it are the
  * nightly sweeps — closing dates, condition deadlines, listing expiry, the lawyer chase — and those
- * are described in the Scheduled section above with no switch beside them, deliberately, because
- * each is governed per person in Notification preferences. Admitting the prefix would list every one
- * of them a second time, as a switch that contradicts the paragraph directly above it.
+ * are in the Scheduled section, which has their own On/Off switches (29 Oct 2026). Admitting the
+ * prefix would list every one of them a second time, as a second switch for the same thing.
  *
  * The status-change trigger is the exception and belongs here: it fires on a save like every other
  * message trigger, and it must be switchable from this screen. Left out of this list it would send
@@ -70,27 +67,102 @@ const WHEN: Record<string, string> = {
   'transaction.status_changed': 'when a deal becomes firm, or ends',
 };
 
+type DaysKey = 'lawyer' | 'closing' | 'condition' | 'listing_expiry';
+type AfterKey = 'after_status' | 'after_docs' | 'after_lawyer';
+
+/**
+ * THE SCHEDULED REMINDERS (Sai, 29 Oct 2026): each one has an On/Off switch and, except commission,
+ * days that can be changed. Only a Super Admin may change them - the server says who (`can_edit`).
+ * Empty boxes go back to the usual days. Every change is written to the Settings audit trail.
+ */
+const DAYS_ROWS: { key: DaysKey; label: string; unit: string; help: string }[] = [
+  {
+    key: 'lawyer',
+    label: 'Lawyer-detail reminders',
+    unit: 'days before the closing date (0 = the closing day)',
+    help: 'A Buying deal still missing its buyer\'s or seller\'s lawyer name, email or phone. The reminder asks only for the side that is missing, and stops once both are entered.',
+  },
+  {
+    key: 'closing',
+    label: 'Closing-date reminders',
+    unit: 'days before the closing date (0 = the closing day)',
+    help: 'Each deal that has not ended is reminded of its closing date. The agent is told in-app, by email and on their phone.',
+  },
+  {
+    key: 'condition',
+    label: 'Condition deadlines',
+    unit: 'days before the deadline (0 = the deadline day)',
+    help: 'Conditions reaching their deadline are collected per deal and the agent gets one message listing them. A condition marked Fulfilled or Waived is not chased.',
+  },
+  {
+    key: 'listing_expiry',
+    label: 'Listing expiry reminders',
+    unit: 'days before the expiry date (1 or more - on the day itself the listing is expired)',
+    help: 'An Active listing approaching its expiry date. The automatic change to Expired on the day happens whether this is on or off.',
+  },
+];
+
+const AFTER_ROWS: { key: AfterKey; label: string; who: string; help: string }[] = [
+  {
+    key: 'after_status',
+    label: 'Status still Firm / Conditional',
+    who: 'Agent + Documentation',
+    help: 'The closing date has passed but the deal is still Secured Firm, Secured Conditional or Sold Conditional. Documentation means the deal\'s "Handled by" person; when nobody is named, everyone in Documentation. Stops once the status is updated.',
+  },
+  {
+    key: 'after_docs',
+    label: 'Required documents outstanding',
+    who: 'Agent',
+    help: 'Required documents still Pending or Invalid after closing. The message lists them. Stops once every required document is Valid.',
+  },
+  {
+    key: 'after_lawyer',
+    label: 'Lawyer details missing',
+    who: 'Agent',
+    help: 'A Buying deal still missing lawyer details after closing - asks only for the side that is missing. Stops once they are entered.',
+  },
+];
+
+const fmtDay = (ymd: string | null): string => {
+  if (!ymd) return '';
+  const [y, m, d] = ymd.split('-').map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString('en-CA', { day: 'numeric', month: 'short', year: 'numeric' });
+};
+
 export default function DeskTriggersPanel() {
   const toast = useToast();
   const navigate = useNavigate();
-  const { isSuperAdmin, can } = useAuth();
-  const canEdit = can('settings', 'edit') || isSuperAdmin;
 
-  const [settings, setSettings] = useState<CompanySettings | null>(null);
-  const [days, setDays] = useState('');
+  const [rules, setRules] = useState<ReminderRules | null>(null);
+  const [canEdit, setCanEdit] = useState(false);
+  const [maxDays, setMaxDays] = useState(60);
+  /** What is typed in each box, keyed `closing`, `deposit`, `after_docs.first` ... */
+  const [draft, setDraft] = useState<Record<string, string>>({});
   const [templates, setTemplates] = useState<EmailTemplate[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState('');
 
+  const fill = (r: ReminderRules) => {
+    const d: Record<string, string> = {};
+    for (const row of DAYS_ROWS) d[row.key] = r[row.key].days.join(', ');
+    d.deposit = String(r.deposit.days);
+    for (const row of AFTER_ROWS) {
+      d[`${row.key}.first`] = String(r[row.key].first);
+      d[`${row.key}.every`] = String(r[row.key].every);
+      d[`${row.key}.until`] = String(r[row.key].until);
+    }
+    setDraft(d);
+  };
+
   useEffect(() => {
     Promise.all([
-      getCompanySettings().catch(() => null),
-      // Templates are Super-Admin-gated; a manager sees the reminder cadence and an empty message
-      // list rather than an error, which is what their permissions already allow elsewhere.
+      getReminderRules().catch(() => null),
+      // Templates are Super-Admin-gated; anyone else sees the reminders and an empty message list
+      // rather than an error, which is what their permissions already allow elsewhere.
       getEmailTemplates().catch(() => null),
     ])
-      .then(([s, t]) => {
-        if (s) { setSettings(s); setDays(String(s.lawyer_reminder_days ?? 3)); }
+      .then(([r, t]) => {
+        if (r) { setRules(r.data); setCanEdit(r.can_edit); setMaxDays(r.max_days); fill(r.data); }
         // The response is grouped by module; the triggers are the flattened templates.
         const all: EmailTemplate[] = (t?.groups ?? []).flatMap((g) => g.templates ?? []);
         setTemplates(all.filter((x) => isDeskEvent(x.event_key)));
@@ -100,15 +172,16 @@ export default function DeskTriggersPanel() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const saveCadence = async () => {
-    const n = Math.max(0, Math.min(365, Math.floor(Number(days) || 0)));
-    setSaving('cadence');
+  /** Save one reminder. `what` is the toast on success. */
+  const saveRule = async (key: string, payload: Record<string, unknown>, what: string) => {
+    setSaving(key);
     try {
-      await updateCompanySettings({ lawyer_reminder_days: n });
-      setDays(String(n));
-      toast(n === 0 ? 'Recurring lawyer-detail reminders switched off.' : `Reminders will repeat every ${n} day${n === 1 ? '' : 's'}.`, 'ok');
+      const r = await saveReminderRules({ [key]: payload });
+      setRules(r.data);
+      fill(r.data);
+      toast(what, 'ok');
     } catch (e) {
-      toast(apiErrorMessage(e, 'Could not save the reminder cadence'), 'bad');
+      toast(apiErrorMessage(e, 'Could not save that reminder'), 'bad');
     } finally { setSaving(''); }
   };
 
@@ -125,85 +198,125 @@ export default function DeskTriggersPanel() {
 
   if (loading) return <div className="centered">Loading triggers…</div>;
 
-  const cadence = Number(days) || 0;
+  const onOff = (key: string, label: string, on: boolean) => (
+    <span style={{ display: 'inline-flex', gap: 8, alignItems: 'center' }}>
+      <span className={`pill ${on ? 'ok' : ''}`}>{on ? 'On' : 'Off'}</span>
+      {canEdit && (
+        <button className="btn ghost sm" disabled={saving === key}
+          onClick={() => void saveRule(key, { on: !on }, on ? `${label} switched off.` : `${label} switched on.`)}>
+          {on ? 'Switch off' : 'Switch on'}
+        </button>
+      )}
+    </span>
+  );
+
+  const box = (name: string, width: number, label: string) => (
+    <input aria-label={label} value={draft[name] ?? ''} disabled={!canEdit} style={{ width }}
+      onChange={(e) => setDraft((d) => ({ ...d, [name]: e.target.value }))} />
+  );
 
   return (
     <>
       <div className="card">
         <div className="modal-h">Scheduled</div>
         <p className="help" style={{ marginTop: 0 }}>
-          Runs on its own, without anyone asking.
+          Runs on its own every night, without anyone asking. Each reminder can be switched on or off, and
+          its days changed: whole numbers up to {maxDays}, separated by commas. An empty box goes back to
+          the usual days.
+          {!canEdit && <> <strong>Only a Super Admin can change these.</strong></>}
         </p>
 
-        <div className="field" style={{ maxWidth: 520 }}>
-          <label>Lawyer-detail reminders</label>
-          <p className="help" style={{ margin: '0 0 8px' }}>
-            Each Buying deal still missing its buyer's or seller's lawyer name, email or phone is
-            chased 30 and 23 days before closing, then 15 and 11 days before, then 7, 5, 3 and 1 day
-            before, and on the closing day itself. The reminder asks only for the side that is missing,
-            and stops once both are entered. <strong>Zero switches the recurring reminder off</strong> — the
-            one-off nudge when a deal is saved with details missing still goes out.
-          </p>
-          <div className="toolbar-row" style={{ gap: 8, alignItems: 'center' }}>
-            <input type="number" min={0} max={365} value={days} disabled={!canEdit || saving === 'cadence'}
-              onChange={(e) => setDays(e.target.value)} style={{ width: 110 }} />
-            <span className="muted" style={{ fontSize: 12 }}>days between reminders</span>
-            <span className={`pill ${cadence > 0 ? 'ok' : ''}`}>{cadence > 0 ? `Every ${cadence} day${cadence === 1 ? '' : 's'}` : 'Recurring reminder off'}</span>
-            {canEdit && (
-              <button className="btn primary sm" disabled={saving === 'cadence' || String(settings?.lawyer_reminder_days ?? 3) === days}
-                onClick={() => void saveCadence()}>{saving === 'cadence' ? 'Saving…' : 'Save'}</button>
-            )}
+        {rules && DAYS_ROWS.map((row) => {
+          const r = rules[row.key];
+          const changed = (draft[row.key] ?? '') !== r.days.join(', ');
+          return (
+            <div className="field" style={{ maxWidth: 640 }} key={row.key}>
+              <label style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>{row.label} {onOff(row.key, row.label, r.on)}</label>
+              <p className="help" style={{ margin: '0 0 8px' }}>{row.help}</p>
+              <div className="toolbar-row" style={{ gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                {box(row.key, 240, `${row.label} days`)}
+                <span className="muted" style={{ fontSize: 12 }}>{row.unit}</span>
+                {canEdit && changed && (
+                  <button className="btn primary sm" disabled={saving === row.key}
+                    onClick={() => void saveRule(row.key, { days: draft[row.key] ?? '' }, `${row.label}: days saved.`)}>
+                    {saving === row.key ? 'Saving…' : 'Save'}
+                  </button>
+                )}
+              </div>
+            </div>
+          );
+        })}
+
+        {rules && (
+          <div className="field" style={{ maxWidth: 640 }}>
+            <label style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>Deposit not recorded {onOff('deposit', 'Deposit not recorded', rules.deposit.on)}</label>
+            <p className="help" style={{ margin: '0 0 8px' }}>
+              A deal that expects a deposit and has none recorded as received chases its agent once.
+              Recording the deposit under Quick Actions &rarr; Admin stops it.
+            </p>
+            <div className="toolbar-row" style={{ gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              {box('deposit', 70, 'Deposit reminder day')}
+              <span className="muted" style={{ fontSize: 12 }}>days after the offer date (one number)</span>
+              {canEdit && (draft.deposit ?? '') !== String(rules.deposit.days) && (
+                <button className="btn primary sm" disabled={saving === 'deposit'}
+                  onClick={() => void saveRule('deposit', { days: draft.deposit ?? '' }, 'Deposit not recorded: day saved.')}>
+                  {saving === 'deposit' ? 'Saving…' : 'Save'}
+                </button>
+              )}
+            </div>
           </div>
-          {!canEdit && <span className="help">You do not have permission to change this.</span>}
-        </div>
+        )}
 
-        {/*
-          TD-009 - said here because this screen is where somebody comes to find out what runs on
-          its own. Listing them is not decoration: the entry was raised on the sentence at the
-          bottom of this page, and leaving that sentence standing while the reminders went out
-          would be the same defect with the truth reversed.
-
-          No switch beside them, deliberately. Each is governed per person in Notification
-          preferences - the brokerage-wide cadence field above belongs to the lawyer chase, which
-          is the one reminder that repeats until somebody does something.
-        */}
-        <div className="field" style={{ maxWidth: 520 }}>
-          <label>Closing-date reminders</label>
-          <p className="help" style={{ margin: 0 }}>
-            Every night, each deal that has not ended is reminded of its closing date 10, 7 and 4 days
-            out, then every day for the last 3 days, including the morning of the closing itself. The
-            agent on the deal is told in-app, by email and on their phone.
-          </p>
-        </div>
-
-        <div className="field" style={{ maxWidth: 520 }}>
-          <label>Deposit not recorded</label>
-          <p className="help" style={{ margin: 0 }}>
-            Five days after the offer date, a deal that expects a deposit and has none recorded as
-            received chases its agent once. Recording the deposit under Quick Actions &rarr; Admin
-            stops it. There is no deposit due date in the system, so this asks whether the money
-            arrived rather than whether it is late.
-          </p>
-        </div>
-
-        <div className="field" style={{ maxWidth: 520 }}>
-          <label>Commission received</label>
-          <p className="help" style={{ margin: 0 }}>
-            When an invoice is settled and the commission date is recorded, the deal&rsquo;s agent is
-            told that night. This is the brokerage being paid &mdash; the agent&rsquo;s own payment
-            is a separate thing and is not what this announces.
-          </p>
-        </div>
-
-        <div className="field" style={{ maxWidth: 520 }}>
-          <label>Condition deadlines</label>
-          <p className="help" style={{ margin: 0 }}>
-            Every night, conditions reaching their deadline within a week are collected per deal and
-            the agent is sent one message listing them - not one per condition. A condition marked
-            Fulfilled or Waived is not chased.
-          </p>
-        </div>
+        {rules && (
+          <div className="field" style={{ maxWidth: 640 }}>
+            <label style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>Commission received {onOff('commission', 'Commission received', rules.commission.on)}</label>
+            <p className="help" style={{ margin: 0 }}>
+              When an invoice is settled and the commission date is recorded, the deal&rsquo;s agent is
+              told that night. This is the brokerage being paid &mdash; the agent&rsquo;s own payment
+              is a separate thing and is not what this announces.
+            </p>
+          </div>
+        )}
       </div>
+
+      {rules && (
+        <div className="card">
+          <div className="modal-h">After the closing date</div>
+          <p className="help" style={{ marginTop: 0 }}>
+            Once a deal&rsquo;s closing date has passed, these keep reminding until the thing is done
+            &mdash; by default 1, 3, 5, 7&hellip; days after closing (every other day), for up to {maxDays} days.{' '}
+            {rules.after_closing_from
+              ? <>Only deals closing on or after <strong>{fmtDay(rules.after_closing_from)}</strong> are reminded; older deals are left alone.</>
+              : <>Only deals closing from the day this goes live are reminded; older deals are left alone.</>}
+          </p>
+          {AFTER_ROWS.map((row) => {
+            const r = rules[row.key];
+            const changed = ['first', 'every', 'until'].some((f) => (draft[`${row.key}.${f}`] ?? '') !== String(r[f as 'first' | 'every' | 'until']));
+            return (
+              <div className="field" style={{ maxWidth: 640 }} key={row.key}>
+                <label style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                  {row.label} <span className="muted" style={{ fontWeight: 400, fontSize: 12 }}>to {row.who}</span> {onOff(row.key, row.label, r.on)}
+                </label>
+                <p className="help" style={{ margin: '0 0 8px' }}>{row.help}</p>
+                <div className="toolbar-row" style={{ gap: 6, alignItems: 'center', flexWrap: 'wrap', fontSize: 12.5 }}>
+                  <span>First reminder</span>{box(`${row.key}.first`, 56, `${row.label} first day`)}
+                  <span>day(s) after closing, then every</span>{box(`${row.key}.every`, 56, `${row.label} every`)}
+                  <span>day(s), up to</span>{box(`${row.key}.until`, 56, `${row.label} last day`)}
+                  <span>days after closing</span>
+                  {canEdit && changed && (
+                    <button className="btn primary sm" disabled={saving === row.key}
+                      onClick={() => void saveRule(row.key, {
+                        first: draft[`${row.key}.first`] ?? '', every: draft[`${row.key}.every`] ?? '', until: draft[`${row.key}.until`] ?? '',
+                      }, `${row.label}: timing saved.`)}>
+                      {saving === row.key ? 'Saving…' : 'Save'}
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       <div className="card">
         <div className="modal-h">Message triggers</div>

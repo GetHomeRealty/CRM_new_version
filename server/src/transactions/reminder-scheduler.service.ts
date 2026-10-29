@@ -5,6 +5,7 @@ import { clusterTick } from '../redis/cluster-tick';
 import { RedisService } from '../redis/redis.service';
 import { CacheService } from '../redis/cache.service';
 import { ReminderSweepService } from './reminder-sweep.service';
+import { ReminderRulesService } from './reminder-rules.service';
 
 /**
  * The nightly job behind the listing-expiry and lawyer-detail reminders.
@@ -30,6 +31,8 @@ export class ReminderSchedulerService implements OnModuleInit, OnModuleDestroy {
     // Only used to decide whether THIS process should run a given pass — see `clusterTick`.
     private readonly redis: RedisService,
     private readonly cache: CacheService,
+    /* 29 Oct 2026 - fixes the day after-closing reminders start from ("hold the old deals"). */
+    private readonly rules?: ReminderRulesService,
   ) {}
 
   onModuleInit(): void {
@@ -62,6 +65,9 @@ export class ReminderSchedulerService implements OnModuleInit, OnModuleDestroy {
     if (this.running) return;
     this.running = true;
     try {
+      await this.rules?.markAfterClosingStart().catch((err) => {
+        this.log.error(`Could not record the after-closing start date: ${err instanceof Error ? err.message : String(err)}`);
+      });
       await this.sweep.sweep();
     } catch (err) {
       this.log.error(`Reminder sweep failed: ${err instanceof Error ? err.message : String(err)}`);

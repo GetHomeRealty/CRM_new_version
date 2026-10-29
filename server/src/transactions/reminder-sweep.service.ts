@@ -9,11 +9,13 @@ import { areaPath } from '../common/domain';
 import { toDateString } from '../common/serialize';
 import { missingLawyerParties, tracksBothLawyers } from './lawyer-details';
 import { isSettledDeal } from './deal-state';
+import { docStatus } from '../reports/report-documents';
+import { AFTER_KEYS, type AfterKey, type ReminderRules, afterClosingDue, readRules } from './reminder-rules';
 import {
-  CLOSING_WINDOW_DAYS, CONDITION_WINDOW_DAYS, EXPIRY_WINDOW_DAYS, LAWYER_TEMPLATE, LAWYER_WINDOW_DAYS,
+  LAWYER_TEMPLATE,
   closingPhrase, closingReminderFor, conditionReminderFor, daysBetween, deadlinePhrase, expiryPhrase,
   expiryReminderFor, hasExpired, lawyerReminderFor, lawyerVariant, startOfDay, calendarDay, dbDay,
-  DEPOSIT_GRACE_DAYS, depositReminderFor,
+  depositReminderFor,
 } from './reminder-schedule';
 
 /**
@@ -56,6 +58,9 @@ const REMINDER_CATEGORY: Record<ReminderKind, string> = {
   status: 'status_change',
   deposit: 'deposit_outstanding',
   commission: 'commission_received',
+  after_status: 'after_closing',
+  after_docs: 'after_closing',
+  after_lawyer: 'after_closing',
 };
 const REMINDER_LABEL: Record<ReminderKind, string> = {
   listing_expiry: 'Listing expiry reminder',
@@ -65,6 +70,9 @@ const REMINDER_LABEL: Record<ReminderKind, string> = {
   status: 'Deal status change',
   deposit: 'Deposit not recorded',
   commission: 'Commission received',
+  after_status: 'After closing - status',
+  after_docs: 'After closing - documents',
+  after_lawyer: 'After closing - lawyer details',
 };
 
 /**
@@ -86,7 +94,21 @@ const redirectTo = (): string | null => {
 };
 
 /** The kinds of reminder this sweep sends. Stored in `transaction_reminders.kind`. */
-export type ReminderKind = 'listing_expiry' | 'lawyer' | 'closing' | 'condition' | 'status' | 'deposit' | 'commission';
+export type ReminderKind = 'listing_expiry' | 'lawyer' | 'closing' | 'condition' | 'status' | 'deposit' | 'commission' | AfterKey;
+
+/**
+ * AFTER-CLOSING REMINDERS (Sai, 29 Oct 2026). The statuses a deal should have moved on from once its
+ * closing date has passed, and the ones that mean the deal is dead - a dead deal is never chased for
+ * documents or lawyer details. Closed, Sold and Leased are NOT dead: a finished deal can still be
+ * missing its paperwork, which is the point of the documents and lawyer reminders.
+ */
+export const STILL_OPEN_AFTER_CLOSING: readonly string[] = ['Secured Firm', 'Secured Conditional', 'Sold Conditional'];
+const DEAD_STATUSES: readonly string[] = ['Void', 'Terminated', 'Mutual Release', 'Cancelled', 'Expired', 'Suspended', 'Archived'];
+
+/** "1 day after closing" / "5 days after closing". */
+export function afterPhrase(daysAfter: number): string {
+  return daysAfter === 1 ? '1 day after closing' : `${daysAfter} days after closing`;
+}
 
 /**
  * TD-009 - a condition nobody is waiting on any more.
@@ -123,6 +145,8 @@ export interface SweepResult {
   depositReminders: number;
   /** TD-009 — commissions received. Raised reactively by the invoice, never by the sweep. */
   commissionsReceived: number;
+  /** 29 Oct 2026 - deals past their closing date still waiting on a status, documents or lawyers. */
+  afterClosingReminders: number;
   skipped: number;
   failed: number;
   /** Failed deliveries attempted again this pass. */
@@ -159,29 +183,34 @@ export class ReminderSweepService {
   private emptyResult(): SweepResult {
     return {
       expiryReminders: 0, expired: 0, lawyerReminders: 0, closingReminders: 0, conditionReminders: 0,
-      statusChanges: 0, depositReminders: 0, commissionsReceived: 0, skipped: 0, failed: 0, retried: 0, recovered: 0,
+      statusChanges: 0, depositReminders: 0, commissionsReceived: 0, afterClosingReminders: 0, skipped: 0, failed: 0, retried: 0, recovered: 0,
     };
   }
 
   /** One night's work. `today` is injectable so the schedule can be tested across a whole run-up. */
   async sweep(today: Date = new Date()): Promise<SweepResult> {
     const result: SweepResult = this.emptyResult();
+    // The switches and days set on the Triggers screen (29 Oct 2026), read once for the whole night.
+    const rules = await this.rulesInForce();
     // Retries first: a reminder that failed last night is more urgent than tonight's new ones, and
     // clearing the backlog before adding to it keeps a bad evening from compounding.
-    await this.retryFailed(today, result);
-    await this.listingExpiry(today, result);
+    await this.retryFailed(today, result, rules);
+    if (rules.listing_expiry.on) await this.listingExpiry(today, result, rules.listing_expiry.days);
+    // Not a reminder: the automatic expiry runs whatever the listing reminder's switch says.
     await this.autoExpire(today, result);
-    await this.lawyerDetails(today, result);
-    await this.closingApproaching(today, result);
-    await this.conditionDeadlines(today, result);
-    await this.depositsOutstanding(today, result);
-    await this.commissionsReceived(today, result);
+    if (rules.lawyer.on) await this.lawyerDetails(today, result, rules.lawyer.days);
+    if (rules.closing.on) await this.closingApproaching(today, result, rules.closing.days);
+    if (rules.condition.on) await this.conditionDeadlines(today, result, rules.condition.days);
+    if (rules.deposit.on) await this.depositsOutstanding(today, result, rules.deposit.days);
+    if (rules.commission.on) await this.commissionsReceived(today, result);
+    await this.afterClosing(today, result, rules);
 
     if (result.expiryReminders || result.expired || result.lawyerReminders || result.closingReminders
-      || result.conditionReminders || result.failed) {
+      || result.conditionReminders || result.afterClosingReminders || result.failed) {
       this.log.log(
         `Reminders: ${result.expiryReminders} expiry, ${result.lawyerReminders} lawyer, `
         + `${result.closingReminders} closing, ${result.conditionReminders} condition, `
+        + `${result.afterClosingReminders} after closing, `
         + `${result.expired} auto-expired, ${result.skipped} skipped, ${result.failed} failed, `
         + `${result.retried} retried (${result.recovered} recovered).`,
       );
@@ -198,9 +227,9 @@ export class ReminderSweepService {
    * transaction types. A listing type added next year gets these reminders without anybody
    * remembering to register it, which is exactly what "no separate configuration" has to mean.
    */
-  private async listingExpiry(today: Date, result: SweepResult): Promise<void> {
+  private async listingExpiry(today: Date, result: SweepResult, days: readonly number[]): Promise<void> {
     const from = startOfDay(today);
-    const to = new Date(from.getFullYear(), from.getMonth(), from.getDate() + EXPIRY_WINDOW_DAYS);
+    const to = new Date(from.getFullYear(), from.getMonth(), from.getDate() + Math.max(...days));
 
     const rows = await this.prisma.transactions.findMany({
       // Indexed on listing_expiry_date: the sweep reads the handful of listings inside the window,
@@ -216,7 +245,7 @@ export class ReminderSweepService {
       if (!t.listing_expiry_date) continue;
       if (!this.isActive(t.transaction_statuses)) { result.skipped++; continue; }
 
-      const { due, daysRemaining } = expiryReminderFor(today, calendarDay(t.listing_expiry_date));
+      const { due, daysRemaining } = expiryReminderFor(today, calendarDay(t.listing_expiry_date), days);
       if (!due) continue;
 
       await this.deliver({
@@ -343,12 +372,9 @@ export class ReminderSweepService {
    * partial update work: an agent who fills in the buyer's lawyer on Tuesday is asked only for the
    * seller's on Thursday, and is not chased at all once both are there.
    */
-  private async lawyerDetails(today: Date, result: SweepResult): Promise<void> {
-    // Zero switches the recurring reminder off, as it always has on the Triggers screen.
-    if ((await this.reminderDaysSetting()) <= 0) return;
-
+  private async lawyerDetails(today: Date, result: SweepResult, days: readonly number[]): Promise<void> {
     const from = startOfDay(today);
-    const to = new Date(from.getFullYear(), from.getMonth(), from.getDate() + LAWYER_WINDOW_DAYS);
+    const to = new Date(from.getFullYear(), from.getMonth(), from.getDate() + Math.max(...days));
 
     const rows = await this.prisma.transactions.findMany({
       // closing_date is already indexed; this reads the deals closing inside the window only.
@@ -371,7 +397,7 @@ export class ReminderSweepService {
       const variant = lawyerVariant(missing);
       if (!variant) continue; // both present — the stop condition, checked before anything is sent
 
-      const { due, daysRemaining } = lawyerReminderFor(today, calendarDay(t.closing_date));
+      const { due, daysRemaining } = lawyerReminderFor(today, calendarDay(t.closing_date), days);
       if (!due) continue;
 
       await this.deliver({
@@ -415,9 +441,9 @@ export class ReminderSweepService {
    * A SETTLED DEAL IS NOT CHASED. Closed, Sold, Leased, Void, Terminated, Mutual Release and the
    * rest all say somebody has decided; a date arriving is not a reason to reopen the question.
    */
-  private async closingApproaching(today: Date, result: SweepResult): Promise<void> {
+  private async closingApproaching(today: Date, result: SweepResult, days: readonly number[]): Promise<void> {
     const from = startOfDay(today);
-    const to = new Date(from.getFullYear(), from.getMonth(), from.getDate() + CLOSING_WINDOW_DAYS);
+    const to = new Date(from.getFullYear(), from.getMonth(), from.getDate() + Math.max(...days));
 
     const rows = await this.prisma.transactions.findMany({
       // The same indexed range read the lawyer pass uses, over a shorter window.
@@ -432,7 +458,7 @@ export class ReminderSweepService {
       if (!t.closing_date) continue;
       if (this.isSettled(t.transaction_statuses)) { result.skipped++; continue; }
 
-      const { due, daysRemaining } = closingReminderFor(today, calendarDay(t.closing_date));
+      const { due, daysRemaining } = closingReminderFor(today, calendarDay(t.closing_date), days);
       if (!due) continue;
 
       await this.deliver({
@@ -486,9 +512,9 @@ export class ReminderSweepService {
    * this text has been written by hand and by import for years, so 'satisfied' and 'completed' mean
    * Fulfilled here exactly as they do in `report-documents.ts`.
    */
-  private async conditionDeadlines(today: Date, result: SweepResult): Promise<void> {
+  private async conditionDeadlines(today: Date, result: SweepResult, days: readonly number[]): Promise<void> {
     const from = startOfDay(today);
-    const to = new Date(from.getFullYear(), from.getMonth(), from.getDate() + CONDITION_WINDOW_DAYS);
+    const to = new Date(from.getFullYear(), from.getMonth(), from.getDate() + Math.max(...days));
 
     const rows = await this.prisma.conditions.findMany({
       where: { deadline: { gte: dbDay(from), lte: dbDay(to) }, transactions: REMINDED },
@@ -513,7 +539,7 @@ export class ReminderSweepService {
       if (conditionIsSettled(c.status)) continue;
       if (this.isSettled(t.transaction_statuses)) continue;
 
-      const { due, daysRemaining } = conditionReminderFor(today, calendarDay(c.deadline));
+      const { due, daysRemaining } = conditionReminderFor(today, calendarDay(c.deadline), days);
       if (!due) continue;
 
       const entry = byDeal.get(t.id) ?? { txn: t, due: [] };
@@ -571,9 +597,9 @@ export class ReminderSweepService {
    * activities` is a text column holding the panel's own shape; a row counts as recorded when it
    * carries a date, which is exactly what the Admin panel writes when somebody enters one.
    */
-  private async depositsOutstanding(today: Date, result: SweepResult): Promise<void> {
+  private async depositsOutstanding(today: Date, result: SweepResult, grace: number): Promise<void> {
     const from = startOfDay(today);
-    const offerDay = new Date(from.getFullYear(), from.getMonth(), from.getDate() - DEPOSIT_GRACE_DAYS);
+    const offerDay = new Date(from.getFullYear(), from.getMonth(), from.getDate() - grace);
 
     const rows = await this.prisma.transactions.findMany({
       // Exactly the day the grace period ends, so this reads one day's deals rather than the table.
@@ -590,7 +616,7 @@ export class ReminderSweepService {
       if (this.isSettled(t.transaction_statuses)) { result.skipped++; continue; }
       if (this.depositRecorded(t.admin_activities)) { result.skipped++; continue; }
 
-      const { due, daysOutstanding } = depositReminderFor(today, calendarDay(t.offer_date));
+      const { due, daysOutstanding } = depositReminderFor(today, calendarDay(t.offer_date), grace);
       if (!due) continue;
 
       await this.deliver({
@@ -697,6 +723,220 @@ export class ReminderSweepService {
     }
   }
 
+  // ---------------------------------------------------------------- after closing
+
+  /**
+   * AFTER-CLOSING REMINDERS (Sai, 29 Oct 2026): once a deal's closing date has passed, chase what is
+   * still not done - by default 1, 3, 5, 7 ... days after closing, up to 60 days, and never again once
+   * it is done:
+   *
+   *   after_status  the deal is still Secured Firm / Secured Conditional / Sold Conditional
+   *                 -> the agent AND Documentation (the deal's "Handled by" person, or, when nobody
+   *                    is named, everyone active in Documentation for the deal's country)
+   *   after_docs    required (mandatory) documents not yet Valid   -> the agent only
+   *   after_lawyer  buyer and/or seller lawyer details missing      -> the agent only, asking only
+   *                                                                    for the side that is missing
+   *
+   * "HOLD THE OLD DEALS": only deals whose closing date is on or after `after_closing_from` - the day
+   * this went live. Every deal that had already closed before then is left alone.
+   *
+   * Each kind is keyed in `transaction_reminders` like every other reminder (deal, kind, day,
+   * channel), so a second run on the same day sends nothing.
+   */
+  private async afterClosing(today: Date, result: SweepResult, rules: ReminderRules): Promise<void> {
+    const on = AFTER_KEYS.filter((k) => rules[k].on);
+    if (on.length === 0) return;
+
+    const start = startOfDay(today);
+    const held = rules.after_closing_from
+      ? (() => { const [y, m, d] = rules.after_closing_from!.split('-').map(Number); return new Date(y, m - 1, d); })()
+      : start;
+    const longest = Math.max(...on.map((k) => rules[k].until));
+    const soonest = Math.min(...on.map((k) => rules[k].first));
+    const byWindow = new Date(start.getFullYear(), start.getMonth(), start.getDate() - longest);
+    const lower = held > byWindow ? held : byWindow;
+    const upper = new Date(start.getFullYear(), start.getMonth(), start.getDate() - soonest);
+    if (lower > upper) return;
+
+    const rows = await this.prisma.transactions.findMany({
+      where: { deleted_at: null, ...REMINDED, closing_date: { gte: dbDay(lower), lte: dbDay(upper) } },
+      select: {
+        id: true, trade_no: true, property: true, agent: true, agent_user_id: true, type: true, closing_date: true,
+        market: true, doc_handler_id: true,
+        buyer_lawyer_name: true, buyer_lawyer_email: true, buyer_lawyer_phone: true, seller_lawyer_name: true, seller_lawyer_email: true, seller_lawyer_phone: true,
+        transaction_statuses: { select: { status: true } },
+        documents: { where: { deleted_at: null, mandatory: true }, select: { title: true, status: true, validation: true }, orderBy: { position: 'asc' } },
+      },
+      orderBy: { closing_date: 'asc' },
+    });
+
+    for (const t of rows) {
+      if (!t.closing_date) continue;
+      for (const key of on) {
+        const { due, daysAfter } = afterClosingDue(today, calendarDay(t.closing_date), rules[key]);
+        if (!due) continue;
+        const msg = this.afterClosingMessage(key, t, daysAfter);
+        if (!msg) continue; // done already - the stop condition, checked before anything is sent
+
+        const day = dbDay(start);
+        await this.deliver({
+          txnId: t.id,
+          kind: key,
+          variant: msg.variant,
+          day,
+          daysRemaining: -daysAfter,
+          agentName: t.agent,
+          agentUserId: t.agent_user_id,
+          event: msg.event,
+          vars: msg.vars,
+          summary: msg.summary,
+          result,
+          onSent: () => { result.afterClosingReminders++; },
+        });
+        if (key === 'after_status') await this.tellDocumentation(t, msg, day);
+      }
+    }
+  }
+
+  /**
+   * What an after-closing reminder says today, or null when there is nothing left to chase. Asked
+   * fresh every time, from the deal as it stands, so a retry never chases something already done.
+   */
+  private afterClosingMessage(
+    key: AfterKey,
+    t: {
+      id: number; trade_no: string | null; property: string | null; agent: string | null; type: string | null; closing_date: Date | null;
+      buyer_lawyer_name: string | null; seller_lawyer_name: string | null;
+      transaction_statuses: { status: string }[];
+      documents: { title: string; status: string; validation: string }[];
+    },
+    daysAfter: number,
+  ): { event: string; vars: Record<string, string>; summary: string; variant: string | null } | null {
+    const statuses = t.transaction_statuses.map((s) => s.status);
+    const where = t.property ?? t.trade_no ?? '';
+    const base = {
+      agent_name: t.agent ?? 'there',
+      deal_number: t.trade_no ?? String(t.id),
+      property_address: t.property ?? '-',
+      transaction_type: t.type ?? '-',
+      closing_date: toDateString(t.closing_date) ?? '',
+      days_after: String(daysAfter),
+      after_phrase: afterPhrase(daysAfter),
+    };
+
+    if (key === 'after_status') {
+      if (this.isSettled(t.transaction_statuses)) return null;
+      const open = statuses.filter((s) => STILL_OPEN_AFTER_CLOSING.includes(s));
+      if (open.length === 0) return null;
+      const now = open.join(', ');
+      return {
+        event: 'transaction.after_closing_status',
+        vars: { ...base, current_status: now },
+        summary: `Still ${now}, ${afterPhrase(daysAfter)} - update the status - ${where}`.trim(),
+        variant: null,
+      };
+    }
+
+    // A dead deal (void, terminated, released ...) is not chased for paperwork.
+    if (statuses.some((s) => DEAD_STATUSES.includes(s))) return null;
+
+    if (key === 'after_docs') {
+      const outstanding = t.documents.filter((d) => docStatus(d) !== 'Valid');
+      if (outstanding.length === 0) return null;
+      const names = outstanding.map((d) => `${d.title} (${docStatus(d)})`);
+      const list = names.length > 10 ? `${names.slice(0, 10).join(', ')} and ${names.length - 10} more` : names.join(', ');
+      const what = outstanding.length === 1 ? '1 required document' : `${outstanding.length} required documents`;
+      return {
+        event: 'transaction.after_closing_documents',
+        vars: { ...base, document_count: String(outstanding.length), document_list: list },
+        summary: `${what} still outstanding, ${afterPhrase(daysAfter)} - ${where}`.trim(),
+        variant: null,
+      };
+    }
+
+    // after_lawyer - only deals that carry both sides' details, as before closing.
+    if (!tracksBothLawyers(t.type)) return null;
+    const variant = lawyerVariant(missingLawyerParties(t));
+    if (!variant) return null;
+    const missing = variant === 'both' ? 'Buyer and Seller Lawyer Details' : variant === 'buyer' ? 'Buyer Lawyer Details' : 'Seller Lawyer Details';
+    return {
+      event: 'transaction.after_closing_lawyer',
+      vars: { ...base, missing_details: missing },
+      summary: `${variant === 'both' ? 'Buyer & seller' : variant === 'buyer' ? 'Buyer' : 'Seller'} lawyer details still missing, ${afterPhrase(daysAfter)} - ${where}`.trim(),
+      variant,
+    };
+  }
+
+  /**
+   * The Documentation side of the status reminder (Sai: "agent and doc team"; answer (a)): the deal's
+   * Documentation "Handled by" person, or, when nobody is named, everyone active in Documentation who
+   * works in the deal's country. In-app and push through the dispatcher - whose ledger makes a second
+   * run the same day a no-op - and the email through the template, from the Desk mailbox.
+   */
+  private async tellDocumentation(
+    t: { id: number; market: string | null; doc_handler_id: number | null },
+    msg: { vars: Record<string, string>; summary: string },
+    day: Date,
+  ): Promise<void> {
+    if (!this.dispatcher) return;
+    const people = await this.documentationFor(t);
+    if (people.length === 0) return;
+
+    const company = (await this.settings.current()).name;
+    const base = (process.env.FRONTEND_URL ?? '').trim().replace(/\/+$/, '');
+    const link = base ? `${base}${areaPath('desk', `transactions/${t.id}`)}` : '';
+
+    for (const p of people) {
+      const sent = await this.dispatcher.dispatch({
+        category: 'after_closing',
+        userId: p.id,
+        title: msg.summary,
+        link: areaPath('desk', `transactions/${t.id}`),
+        dedupeKey: `after_status_team-${t.id}-${day.toISOString().slice(0, 10)}`,
+        channels: ['in_app', 'push'],
+      }).catch(() => null);
+      // Already told today (the ledger said so), or the dispatcher could not be asked: nothing more.
+      if (!sent || sent.skipped.some((x) => x.reason === 'duplicate')) continue;
+      if (!(await this.dispatcher.shouldSend(p.id, 'after_closing', 'email'))) continue;
+      const address = (p.email ?? '').trim();
+      if (!address) continue;
+      try {
+        await this.mailer.send('transaction.after_closing_status_team', {
+          ...msg.vars,
+          recipient_name: p.name,
+          company_name: company,
+          transaction_button: link
+            ? `<p style="margin:18px 0"><a href="${link}" style="background:#1f3b73;color:#fff;text-decoration:none;padding:10px 18px;border-radius:8px;font-weight:700;display:inline-block">Open the transaction</a></p>`
+            : '',
+        }, redirectTo() ?? address);
+        await this.auditReminder(t.id, 'after_status', 'Reminder sent', msg.summary, `Emailed ${address} (Documentation).`);
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        await this.auditReminder(t.id, 'after_status', 'Reminder failed', msg.summary, `Documentation, ${address}: ${reason}`);
+      }
+    }
+  }
+
+  /** Who in Documentation hears about a deal: its "Handled by" person, else the whole team for its country. */
+  private async documentationFor(t: { market: string | null; doc_handler_id: number | null }): Promise<{ id: number; name: string; email: string | null }[]> {
+    if (t.doc_handler_id) {
+      const handler = await this.prisma.users.findFirst({
+        where: { id: t.doc_handler_id, status: 'Active' },
+        select: { id: true, name: true, email: true },
+      });
+      if (handler) return [handler];
+    }
+    const market = (t.market ?? 'CA').trim().toUpperCase() || 'CA';
+    const team = await this.prisma.users.findMany({
+      where: { role: 'documentation', status: 'Active' },
+      select: { id: true, name: true, email: true, markets: true },
+      orderBy: { id: 'asc' },
+    });
+    return team
+      .filter((u) => (u.markets ?? 'CA').split(',').map((m) => m.trim().toUpperCase()).includes(market))
+      .map(({ id, name, email }) => ({ id, name, email }));
+  }
+
   // ---------------------------------------------------------------- retries
 
   /**
@@ -711,7 +951,7 @@ export class ReminderSweepService {
    * that replays yesterday's text would chase people for work they have done. If the reason to send
    * has gone away entirely the row is closed as Skipped, which is the honest record.
    */
-  private async retryFailed(today: Date, result: SweepResult): Promise<void> {
+  private async retryFailed(today: Date, result: SweepResult, rules: ReminderRules): Promise<void> {
     const due = await this.prisma.transaction_reminders.findMany({
       where: {
         delivery_method: 'email',
@@ -731,6 +971,8 @@ export class ReminderSweepService {
             // TD-009 - a condition reminder is rebuilt from the conditions as they stand TONIGHT,
             // so one satisfied since the failed attempt is not chased again.
             conditions: { select: { deadline: true, status: true, type: true, custom_name: true }, orderBy: { position: 'asc' } },
+            // 29 Oct 2026 - an after-closing documents reminder is rebuilt from the documents as they stand.
+            documents: { where: { deleted_at: null, mandatory: true }, select: { title: true, status: true, validation: true }, orderBy: { position: 'asc' } },
           },
         },
       },
@@ -740,7 +982,7 @@ export class ReminderSweepService {
       const t = row.transactions;
       result.retried++;
 
-      const rebuilt = t && !t.deleted_at ? this.rebuild(row.kind, t, today) : null;
+      const rebuilt = t && !t.deleted_at ? this.rebuild(row.kind, t, today, rules) : null;
       if (!rebuilt) {
         // The deal is gone, closed, or no longer missing anything: there is nothing left to send.
         await this.closeRetry(row.id, 'Skipped', 'No longer applicable — the reminder condition has cleared.');
@@ -803,12 +1045,22 @@ export class ReminderSweepService {
       buyer_lawyer_name: string | null; seller_lawyer_name: string | null;
       transaction_statuses: { status: string }[];
       conditions?: { deadline: Date | null; status: string; type: string | null; custom_name: string | null }[];
+      documents?: { title: string; status: string; validation: string }[];
     },
     today: Date,
+    rules: ReminderRules,
   ): { event: string; vars: Record<string, string>; summary: string } | null {
+    // 29 Oct 2026 - a reminder switched off on the Triggers screen is not retried either.
+    if ((AFTER_KEYS as readonly string[]).includes(kind)) {
+      const key = kind as AfterKey;
+      if (!rules[key].on || !t.closing_date) return null;
+      const daysAfter = daysBetween(calendarDay(t.closing_date), today);
+      const msg = this.afterClosingMessage(key, { ...t, documents: t.documents ?? [] }, daysAfter);
+      return msg ? { event: msg.event, vars: msg.vars, summary: msg.summary } : null;
+    }
     if (kind === 'listing_expiry') {
-      if (!t.listing_expiry_date || !this.isActive(t.transaction_statuses)) return null;
-      const { due, daysRemaining } = expiryReminderFor(today, calendarDay(t.listing_expiry_date));
+      if (!rules.listing_expiry.on || !t.listing_expiry_date || !this.isActive(t.transaction_statuses)) return null;
+      const { due, daysRemaining } = expiryReminderFor(today, calendarDay(t.listing_expiry_date), rules.listing_expiry.days);
       if (!due) return null;
       return {
         event: 'transaction.listing_expiry_reminder',
@@ -834,8 +1086,8 @@ export class ReminderSweepService {
      * and the fall-through is the last of four rather than the other of two.
      */
     if (kind === 'closing') {
-      if (!t.closing_date || this.isSettled(t.transaction_statuses)) return null;
-      const { due, daysRemaining } = closingReminderFor(today, calendarDay(t.closing_date));
+      if (!rules.closing.on || !t.closing_date || this.isSettled(t.transaction_statuses)) return null;
+      const { due, daysRemaining } = closingReminderFor(today, calendarDay(t.closing_date), rules.closing.days);
       if (!due) return null;
       return {
         event: 'transaction.closing_reminder',
@@ -845,10 +1097,10 @@ export class ReminderSweepService {
     }
 
     if (kind === 'condition') {
-      if (this.isSettled(t.transaction_statuses)) return null;
+      if (!rules.condition.on || this.isSettled(t.transaction_statuses)) return null;
       const due = (t.conditions ?? [])
         .filter((c) => c.deadline && !conditionIsSettled(c.status))
-        .map((c) => ({ label: conditionLabel(c), deadline: c.deadline as Date, ...conditionReminderFor(today, calendarDay(c.deadline as Date)) }))
+        .map((c) => ({ label: conditionLabel(c), deadline: c.deadline as Date, ...conditionReminderFor(today, calendarDay(c.deadline as Date), rules.condition.days) }))
         .filter((c) => c.due);
       if (due.length === 0) return null; // satisfied, waived or past - nothing left to chase
       const soonest = due.reduce((a, b) => (b.daysRemaining < a.daysRemaining ? b : a));
@@ -869,7 +1121,7 @@ export class ReminderSweepService {
       };
     }
 
-    if (!t.closing_date || !tracksBothLawyers(t.type) || this.isSettled(t.transaction_statuses)) return null;
+    if (!rules.lawyer.on || !t.closing_date || !tracksBothLawyers(t.type) || this.isSettled(t.transaction_statuses)) return null;
     const variant = lawyerVariant(missingLawyerParties(t));
     if (!variant) return null; // filled in since — nothing to chase
     const { daysRemaining } = lawyerReminderFor(today, calendarDay(t.closing_date));
@@ -1130,16 +1382,20 @@ export class ReminderSweepService {
     return isSettledDeal(statuses);
   }
 
-  /** The Triggers screen's cadence field, still the on/off switch for lawyer reminders. */
-  private async reminderDaysSetting(): Promise<number> {
+  /**
+   * The switches and days set on the Triggers screen (29 Oct 2026). The lawyer switch is still
+   * `lawyer_reminder_days` (0 = off); everything unset or unreadable is today's default.
+   */
+  private async rulesInForce(): Promise<ReminderRules> {
     const s = await this.prisma.company_settings.findUnique({ where: { id: 1 }, select: { feature_flags: true } });
+    let flags: Record<string, unknown> = {};
     try {
-      const flags = JSON.parse(String(s?.feature_flags ?? '{}')) as Record<string, unknown>;
-      const raw = Number(flags.lawyer_reminder_days);
-      return Number.isFinite(raw) ? Math.max(0, Math.floor(raw)) : 3;
+      const parsed = JSON.parse(String(s?.feature_flags ?? '{}')) as unknown;
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) flags = parsed as Record<string, unknown>;
     } catch {
-      return 3;
+      flags = {};
     }
+    return readRules(flags);
   }
 
   // ---------------------------------------------------------------- reading
