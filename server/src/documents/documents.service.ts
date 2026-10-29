@@ -1,5 +1,4 @@
 import { ConflictException, ForbiddenException, Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
-import { NotificationDispatcher } from '../notifications/notification-dispatcher.service';
 import { promises as fs } from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
@@ -62,11 +61,14 @@ export class DocumentsService {
     private readonly mailer: MailerService,
     private readonly settings: CompanySettingsService,
     private readonly mail: DocumentMailService,
-    /** Optional so existing constructions keep working; always injected in the running app. */
-    private readonly dispatcher?: NotificationDispatcher,
   ) {}
 
   private actor(u: Actor): ActingUser | null { return u ? { id: u.id, name: u.name } : null; }
+
+  /** A bell or phone message must never fail the save that caused it (29 Oct 2026). */
+  private async quietly(send: () => Promise<void>): Promise<void> {
+    try { await send(); } catch { /* best-effort, like the emails */ }
+  }
 
   private async txnOr404(id: number): Promise<{ id: number; type: string; agent: string | null; agent_user_id: number | null; property: string | null; trade_no: string; conditional_offer: boolean; reco_audit_ready: string | null; reco_audit_remarks: string | null; market: string }> {
     const t = await this.prisma.transactions.findFirst({ where: { id, deleted_at: null } });
@@ -313,6 +315,8 @@ export class DocumentsService {
     // Admin path.
     const keep: number[] = [];
     let reviewed = false;
+    // 29 Oct 2026 (Sai) - what the agent is told about this save, in one message.
+    const agentChanges: string[] = [];
     /*
      * TD-159 - MANDATORY IS A SUPER ADMIN ACTION, and this is checked BEFORE anything is written.
      *
@@ -366,8 +370,14 @@ export class DocumentsService {
               reviewedAt = { reviewed_at: nw === 'Valid' || nw === 'Invalid' ? new Date() : null };
             }
             if (k === 'mandatory') mandatoryByHand = true;
+            if (k === 'status') agentChanges.push(`${existing.title}: ${nw}`);
             await this.audit.record(txnId, this.actor(user), { section: SECTION, field: `${existing.title} — ${lbl}`, action: 'Updated', old, new: nw });
           }
+        }
+        const oldRemark = String(existing.remarks ?? '').trim();
+        const newRemark = String(attrs.remarks ?? '').trim();
+        if (newRemark !== '' && newRemark !== oldRemark) {
+          agentChanges.push(`${existing.title}: remark "${newRemark.length > 80 ? newRemark.slice(0, 77) + '...' : newRemark}"`);
         }
         await this.prisma.documents.update({
           where: { id: existing.id },
@@ -383,6 +393,7 @@ export class DocumentsService {
         const created = await this.createDoc(txnId, { ...(attrs as Partial<DocRow>), ...(decided ? { reviewed_at: new Date() } : {}), manual: true } as Partial<DocRow>);
         keep.push(created.id);
         await this.audit.record(txnId, this.actor(user), { section: SECTION, field: created.title, action: 'Document added' });
+        agentChanges.push(`New document needed: ${created.title}`);
       }
     }
 
@@ -433,23 +444,11 @@ export class DocumentsService {
        * Best-effort in the same way the email is — a review must not fail because a phone was
        * unreachable.
        */
-      if (this.dispatcher) {
-        const agent = await this.prisma.users.findFirst({
-          where: { name: txn.agent ?? '', status: 'Active' },
-          select: { id: true },
-          orderBy: { id: 'asc' },
-        });
-        if (agent) {
-          await this.dispatcher.dispatch({
-            category: 'document_review',
-            userId: agent.id,
-            title: 'Your documents were reviewed',
-            body: parts.join(' · '),
-            link: `/desk/transactions/${txnId}`,
-            channels: ['push'],
-          }).catch(() => {});
-        }
-      }
+      // 29 Oct 2026 (Sai) - every agent on the deal, co-agents too, with the other changes of this save.
+      await this.quietly(() => this.mail.tellAgentsOfChanges(txnId, agentChanges, true, parts.join(' · ')));
+    } else if (agentChanges.length) {
+      // No Valid/Invalid decision, but a remark, a status or a new document: bell + phone, one message.
+      await this.quietly(() => this.mail.tellAgentsOfChanges(txnId, agentChanges, false, null));
     }
 
     await this.docsValidation.sync(txnId, this.actor(user));
@@ -609,7 +608,7 @@ export class DocumentsService {
       const docs = await tx.documents.findMany({ where: { transaction_id: txnId, deleted_at: null, draft_files: { not: null } }, orderBy: { id: 'asc' } });
       const found = docs.flatMap((d) => this.drafts(d).filter((f) => ids.has(f.id)));
       if (found.length !== ids.size) throw new ConflictException('Some drafts changed or were already submitted. Refresh and review them again.');
-      const notices: { title: string; file: DraftFile }[] = [];
+      const notices: { title: string; file: DraftFile; reupload: boolean }[] = [];
       let position = (await tx.documents.aggregate({ where: { transaction_id: txnId }, _max: { position: true } }))._max.position ?? 0;
       for (const document of docs) {
         const drafts = this.drafts(document);
@@ -637,7 +636,7 @@ export class DocumentsService {
         }
         const changed = await tx.documents.updateMany({ where: this.draftVersion(document), data });
         if (changed.count !== 1) throw new ConflictException('A document changed during submission. Refresh and try again.');
-        for (const file of selected) notices.push({ title: document.title, file });
+        for (const file of selected) notices.push({ title: document.title, file, reupload: String(document.validation ?? '').trim().toLowerCase() === 'invalid' });
       }
       return notices;
     });
@@ -647,6 +646,8 @@ export class DocumentsService {
       await this.audit.record(txnId, this.actor(user), { section: SECTION, field: title, action: 'Document submitted', new: file.file_name, source: 'Agent' });
       await this.notifyDealsDesk(user, txnId, title, file.file_name, file.file_path);
     }
+    // 29 Oct 2026 (Sai) - Documentation hears about it in the bell and on the phone, once per submit.
+    await this.quietly(() => this.mail.tellDocumentationOfUploads(txnId, user?.name ?? null, submitted.map(({ title, reupload }) => ({ title, reupload }))));
     return { ...await this.payload(txnId, user), submitted_count: submitted.length };
   }
 

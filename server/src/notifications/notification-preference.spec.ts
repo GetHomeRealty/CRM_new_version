@@ -171,7 +171,8 @@ describe('notification preferences', () => {
       // through the dispatcher directly.
       'after_closing',
       'lawyer_details',
-      'document_review', 'transaction_approvals', 'inbox_new_mail',
+      // 29 Oct 2026 - agent uploads to Documentation, bell and phone (documents.service submitDrafts).
+      'document_review', 'document_uploads', 'transaction_approvals', 'inbox_new_mail',
       // The six CRM lead and campaign events, all dispatched from their own event sites.
       'lead_new', 'lead_assigned', 'lead_meta',
       /*
@@ -217,6 +218,9 @@ describe('notification preferences', () => {
     const unsupported = NOTIFICATION_CATEGORIES.flatMap((c) =>
       NOTIFICATION_CHANNELS.filter((ch) => c.channels[ch] === 'unsupported').map((ch) => `${c.key}:${ch}`));
     expect(unsupported).toEqual([
+      // 29 Oct 2026 - agent uploads reach Documentation by bell and phone only (Sai); their email is
+      // the one morning summary, sent through its own template.
+      'document_uploads:email',
       'approval_requested:email', 'approval_requested:push',
       'inbox_new_mail:email',
       'crm_birthday:in_app', 'crm_birthday:push',

@@ -8,10 +8,11 @@ import { DocumentsService } from './documents.service';
 import { DocumentDefaultsService } from './document-defaults.service';
 import { DocsValidationService } from './docs-validation.service';
 import { DocumentMailService } from './document-mail.service';
+import { DocumentDigestService } from './document-digest.service';
 
 @Module({
   imports: [NotificationDispatcherModule, AuthModule, EmailModule, SettingsModule],
   controllers: [DocumentsController],
-  providers: [DocumentsService, DocumentDefaultsService, DocsValidationService, DocumentMailService],
+  providers: [DocumentsService, DocumentDefaultsService, DocsValidationService, DocumentMailService, DocumentDigestService],
 })
 export class DocumentsModule {}

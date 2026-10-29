@@ -162,6 +162,15 @@ export const NOTIFICATION_CATEGORIES: readonly NotificationCategory[] = [
     areas: ['desk'],
   },
   {
+    key: 'document_uploads',
+    label: 'Documents uploaded by agents',
+    description: 'For Documentation: an agent uploaded documents on a deal you handle, and the morning list of documents waiting for review.',
+    // 29 Oct 2026 (Sai): "only bell and phone" for each upload - the email is the one morning summary,
+    // sent through its own template, so this category offers no email channel of its own.
+    channels: { in_app: 'live', email: 'unsupported', push: 'live' },
+    areas: ['desk'],
+  },
+  {
     key: 'transaction_approvals',
     label: 'Transaction approvals',
     description: 'A correction or review on one of your deals has been approved or turned down.',

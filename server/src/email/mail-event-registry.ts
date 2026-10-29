@@ -1095,6 +1095,19 @@ export const MAIL_EVENTS: Record<string, MailEvent> = {
    * Sent the moment an agent uploads a document, with the file itself attached, so the deals desk
    * has the paperwork without having to open the transaction to find it.
    */
+  /** 29 Oct 2026 (Sai) - one email a morning to each Documentation person instead of one per upload. */
+  'document.waiting_summary': {
+    module: 'Documents',
+    label: 'Documents — Morning Summary for Documentation',
+    variables: ['recipient_name', 'document_count', 'deal_count', 'deals_table', 'company_name', 'current_date'],
+    default_subject: '{{ document_count }} documents waiting for review — {{ current_date }}',
+    default_body_html:
+      '<p>Hello {{ recipient_name }},</p>'
+      + '<p><strong>{{ document_count }}</strong> uploaded document(s) on <strong>{{ deal_count }}</strong> deal(s) are waiting for review (still Pending). Oldest first:</p>'
+      + '{{ deals_table }}'
+      + '<p>These are the deals you handle, and deals that have nobody set under "Handled by".</p>'
+      + '<p>{{ company_name }}</p>',
+  },
   'document.agent_upload': {
     module: 'Documents',
     label: 'Documents — Agent Upload Notice',

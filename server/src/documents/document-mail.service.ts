@@ -77,9 +77,9 @@ export class DocumentMailService {
       });
       if (!txn) return;
 
-      const agent = await this.agentFor(txn.agent);
-      const recipient = (agent?.email ?? '').trim() || null;
-      if (!recipient) {
+      // 29 Oct 2026 (Sai) - every agent on the deal: its agent and each co-agent with an account.
+      const agents = (await this.agentsOf(txnId)).filter((a) => (a.email ?? '').trim() !== '');
+      if (agents.length === 0) {
         this.log.warn(`Document review on ${txn.trade_no}: no email on file for "${txn.agent ?? 'unassigned'}" — nothing sent.`);
         return;
       }
@@ -92,10 +92,6 @@ export class DocumentMailService {
        * it went out whatever the person had chosen. The dispatcher owns that decision for every
        * channel of every category; this asks it and then sends its own, better message.
        */
-      if (agent && this.dispatcher && !(await this.dispatcher.shouldSend(agent.id, 'document_review', 'email'))) {
-        this.log.log(`Document review on ${txn.trade_no}: ${txn.agent} has turned this email off.`);
-        return;
-      }
 
       const docs = await this.prisma.documents.findMany({
         where: { transaction_id: txnId, deleted_at: null },
@@ -109,18 +105,24 @@ export class DocumentMailService {
       if (valid.length === 0 && invalid.length === 0) return;
 
       const company = (await this.settings.current()).name;
-      await this.mailer.send('document.review_result', {
-        agent_name: txn.agent ?? 'there',
-        deal_number: txn.trade_no ?? String(txn.id),
-        property_address: txn.property ?? '—',
-        valid_count: String(valid.length),
-        invalid_count: String(invalid.length),
-        documents_table: this.outcomeTable(valid, invalid),
-        instructions: invalid.length
-          ? 'Please re-upload the documents marked invalid, correcting the point noted against each one.'
-          : 'No further action is needed.',
-        company_name: company,
-      }, redirectTo() ?? recipient);
+      for (const agent of agents) {
+        if (this.dispatcher && !(await this.dispatcher.shouldSend(agent.id, 'document_review', 'email'))) {
+          this.log.log(`Document review on ${txn.trade_no}: ${agent.name} has turned this email off.`);
+          continue;
+        }
+        await this.mailer.send('document.review_result', {
+          agent_name: agent.name,
+          deal_number: txn.trade_no ?? String(txn.id),
+          property_address: txn.property ?? '—',
+          valid_count: String(valid.length),
+          invalid_count: String(invalid.length),
+          documents_table: this.outcomeTable(valid, invalid),
+          instructions: invalid.length
+            ? 'Please re-upload the documents marked invalid, correcting the point noted against each one.'
+            : 'No further action is needed.',
+          company_name: company,
+        }, redirectTo() ?? (agent.email as string));
+      }
     } catch (err) {
       this.log.error(`Could not send the document review outcome for transaction ${txnId}: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -182,15 +184,105 @@ export class DocumentMailService {
    * This replaced `agentEmail`, which returned only the address and had exactly one caller — the
    * one that now needs the id too.
    */
-  private async agentFor(agentName: string | null): Promise<{ id: number; email: string | null } | null> {
-    const name = (agentName ?? '').trim();
-    if (!name) return null;
-    return this.prisma.users.findFirst({
-      where: { name, status: 'Active' },
-      select: { id: true, email: true },
+  // ---------------------------------------------------------------- 29 Oct 2026 (Sai): who is told
+
+  /**
+   * Every agent on a deal: its agent (by account, else by name) and each co-agent on the team with an
+   * active account. One entry per person.
+   */
+  async agentsOf(txnId: number): Promise<{ id: number; name: string; email: string | null }[]> {
+    const t = await this.prisma.transactions.findFirst({
+      where: { id: txnId, deleted_at: null },
+      select: { agent: true, agent_user_id: true, team_members: { select: { user_id: true, name: true } } },
+    });
+    if (!t) return [];
+    const out = new Map<number, { id: number; name: string; email: string | null }>();
+    const add = async (id: number | null, name: string | null) => {
+      const n = (name ?? '').trim();
+      const u = id
+        ? await this.prisma.users.findFirst({ where: { id, status: 'Active' }, select: { id: true, name: true, email: true } })
+        : n ? await this.prisma.users.findFirst({ where: { name: n, status: 'Active' }, select: { id: true, name: true, email: true }, orderBy: { id: 'asc' } }) : null;
+      if (u && !out.has(u.id)) out.set(u.id, u);
+    };
+    await add(t.agent_user_id ?? null, t.agent);
+    for (const m of t.team_members) await add(m.user_id ?? null, m.name);
+    return [...out.values()];
+  }
+
+  /**
+   * Who in Documentation hears about a deal - the same rule as the after-closing reminders (Sai, answer
+   * (a)): the deal's Documentation "Handled by" person; when nobody is named, everyone active in
+   * Documentation who works in the deal's country.
+   */
+  async documentationFor(txnId: number): Promise<{ id: number; name: string; email: string | null }[]> {
+    const t = await this.prisma.transactions.findFirst({ where: { id: txnId }, select: { doc_handler_id: true, market: true } });
+    if (!t) return [];
+    if (t.doc_handler_id) {
+      const h = await this.prisma.users.findFirst({ where: { id: t.doc_handler_id, status: 'Active' }, select: { id: true, name: true, email: true } });
+      if (h) return [h];
+    }
+    const market = (t.market ?? 'CA').trim().toUpperCase() || 'CA';
+    const team = await this.prisma.users.findMany({
+      where: { role: 'documentation', status: 'Active' },
+      select: { id: true, name: true, email: true, markets: true },
       orderBy: { id: 'asc' },
     });
+    return team
+      .filter((u) => (u.markets ?? 'CA').split(',').map((m) => m.trim().toUpperCase()).includes(market))
+      .map(({ id, name, email }) => ({ id, name, email }));
   }
+
+  /**
+   * An agent submitted documents: Documentation is told in the bell and on their phone - no email
+   * (Sai: "only bell and phone"; deals@ still gets its email with the file). One message per submit,
+   * naming each document and marking the ones sent again after being marked Invalid.
+   */
+  async tellDocumentationOfUploads(txnId: number, agentName: string | null, items: { title: string; reupload: boolean }[]): Promise<void> {
+    if (!this.dispatcher || items.length === 0) return;
+    try {
+      const txn = await this.prisma.transactions.findFirst({ where: { id: txnId, deleted_at: null }, select: { trade_no: true, property: true } });
+      if (!txn) return;
+      const reup = items.filter((i) => i.reupload).length;
+      const what = items.length === 1 ? (items[0].reupload ? 're-uploaded 1 document' : 'uploaded 1 document') : `uploaded ${items.length} documents${reup ? ` (${reup} re-uploaded)` : ''}`;
+      const title = `${agentName ?? 'An agent'} ${what} - ${txn.property ?? txn.trade_no ?? ''}`.trim();
+      const body = items.map((i) => (i.reupload ? `${i.title} (re-upload after Invalid)` : i.title)).join(' · ');
+      for (const p of await this.documentationFor(txnId)) {
+        await this.dispatcher.dispatch({
+          category: 'document_uploads', userId: p.id, title, body,
+          link: `/desk/transactions/${txnId}`, channels: ['in_app', 'push'],
+        }).catch(() => undefined);
+      }
+    } catch (err) {
+      this.log.error(`Could not tell Documentation about uploads on transaction ${txnId}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  /**
+   * The office changed documents on a deal: every agent on it is told, in the bell and on their phone,
+   * in ONE message listing what changed. `reviewed` = a Valid/Invalid decision was in this save; that
+   * one already has its email (sendReviewOutcome) and its bell row (the DocReview audit), so only the
+   * phone is asked for here.
+   */
+  async tellAgentsOfChanges(txnId: number, changes: string[], reviewed: boolean, reviewSummary: string | null): Promise<void> {
+    if (!this.dispatcher || (changes.length === 0 && !reviewed)) return;
+    try {
+      const txn = await this.prisma.transactions.findFirst({ where: { id: txnId, deleted_at: null }, select: { trade_no: true, property: true } });
+      if (!txn) return;
+      const where = txn.property ?? txn.trade_no ?? '';
+      const title = reviewed ? 'Your documents were reviewed' : `Documents updated - ${where}`.trim();
+      const shown = changes.length > 8 ? [...changes.slice(0, 8), `and ${changes.length - 8} more`] : changes;
+      const body = [reviewSummary, ...shown].filter((x): x is string => !!x).join(' · ');
+      for (const a of await this.agentsOf(txnId)) {
+        await this.dispatcher.dispatch({
+          category: 'document_review', userId: a.id, title, body,
+          link: `/desk/transactions/${txnId}`, channels: reviewed ? ['push'] : ['in_app', 'push'],
+        }).catch(() => undefined);
+      }
+    } catch (err) {
+      this.log.error(`Could not tell the agents about document changes on transaction ${txnId}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
 
 
   /** Valid documents, then invalid ones with their reason. */
