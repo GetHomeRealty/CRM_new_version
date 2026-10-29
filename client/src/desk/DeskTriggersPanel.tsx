@@ -284,10 +284,9 @@ export default function DeskTriggersPanel() {
           <div className="modal-h">After the closing date</div>
           <p className="help" style={{ marginTop: 0 }}>
             Once a deal&rsquo;s closing date has passed, these keep reminding until the thing is done
-            &mdash; by default 1, 3, 5, 7&hellip; days after closing (every other day), for up to {maxDays} days.{' '}
-            {rules.after_closing_from
-              ? <>Only deals closing on or after <strong>{fmtDay(rules.after_closing_from)}</strong> are reminded; older deals are left alone.</>
-              : <>Only deals closing from the day this goes live are reminded; older deals are left alone.</>}
+            &mdash; by default 1, 3, 5, 7&hellip; days after closing (every other day), for up to {maxDays} days.
+            They start <strong>Off</strong>. When one is switched on, only deals closing from that day are
+            reminded; deals that had already closed are left alone.
           </p>
           {AFTER_ROWS.map((row) => {
             const r = rules[row.key];
@@ -298,6 +297,11 @@ export default function DeskTriggersPanel() {
                   {row.label} <span className="muted" style={{ fontWeight: 400, fontSize: 12 }}>to {row.who}</span> {onOff(row.key, row.label, r.on)}
                 </label>
                 <p className="help" style={{ margin: '0 0 8px' }}>{row.help}</p>
+                {r.on && rules.after_started[row.key] && (
+                  <p className="help" style={{ margin: '0 0 8px' }}>
+                    Switched on {fmtDay(rules.after_started[row.key] ?? null)} &mdash; reminding deals that close on or after that day.
+                  </p>
+                )}
                 <div className="toolbar-row" style={{ gap: 6, alignItems: 'center', flexWrap: 'wrap', fontSize: 12.5 }}>
                   <span>First reminder</span>{box(`${row.key}.first`, 56, `${row.label} first day`)}
                   <span>day(s) after closing, then every</span>{box(`${row.key}.every`, 56, `${row.label} every`)}

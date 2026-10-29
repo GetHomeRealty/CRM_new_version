@@ -47,5 +47,6 @@ export interface ReminderRules {
   after_docs: ReminderAfterRule;
   after_lawyer: ReminderAfterRule;
   after_closing_from: string | null;
+  after_started: Partial<Record<'after_status' | 'after_docs' | 'after_lawyer', string>>;
 }
 export interface ReminderRulesResponse { data: ReminderRules; can_edit: boolean; max_days: number }

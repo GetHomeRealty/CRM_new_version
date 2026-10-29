@@ -8,6 +8,7 @@ import {
   AFTER_KEYS, DAYS_KEYS, MAX_REMINDER_DAYS, RULE_LABEL, type ReminderRules, applyRulesPatch, describeRule, readRules, storedForm,
 } from './reminder-rules';
 import { startOfDay } from './reminder-schedule';
+import { dayYmd } from './reminder-rules';
 
 /**
  * The Triggers screen's reminder switches and days (Sai, 29 Oct 2026). See reminder-rules.ts for
@@ -43,7 +44,12 @@ export class ReminderRulesService {
       const cur = Math.max(0, Math.floor(Number(flags.lawyer_reminder_days) || 0));
       flags.lawyer_reminder_days = after.lawyer.on ? (cur > 0 ? cur : 3) : 0;
     }
-    // The start of after-closing reminders is fixed when they go live, never by a save.
+    // "Hold the old deals": an after-closing reminder switched On today only chases deals closing from
+    // today. The go-live day itself is fixed by the scheduler, never by a save.
+    const today = dayYmd(startOfDay(new Date()));
+    for (const key of AFTER_KEYS) {
+      if (after[key].on && !before[key].on) after.after_started = { ...after.after_started, [key]: today };
+    }
     flags.reminder_rules = { ...storedForm(after), after_closing_from: before.after_closing_from };
     await this.prisma.company_settings.update({
       where: { id: 1 },
@@ -75,8 +81,7 @@ export class ReminderRulesService {
     const flags = await this.flags();
     const rules = readRules(flags);
     if (rules.after_closing_from) return;
-    const d = startOfDay(today);
-    const day = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const day = dayYmd(startOfDay(today));
     const stored = flags.reminder_rules && typeof flags.reminder_rules === 'object' && !Array.isArray(flags.reminder_rules)
       ? flags.reminder_rules as Record<string, unknown>
       : {};

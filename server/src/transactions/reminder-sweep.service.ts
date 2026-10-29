@@ -10,7 +10,7 @@ import { toDateString } from '../common/serialize';
 import { missingLawyerParties, tracksBothLawyers } from './lawyer-details';
 import { isSettledDeal } from './deal-state';
 import { docStatus } from '../reports/report-documents';
-import { AFTER_KEYS, type AfterKey, type ReminderRules, afterClosingDue, readRules } from './reminder-rules';
+import { AFTER_KEYS, type AfterKey, type ReminderRules, afterClosingDue, afterHeldFrom, readRules } from './reminder-rules';
 import {
   LAWYER_TEMPLATE,
   closingPhrase, closingReminderFor, conditionReminderFor, daysBetween, deadlinePhrase, expiryPhrase,
@@ -748,9 +748,9 @@ export class ReminderSweepService {
     if (on.length === 0) return;
 
     const start = startOfDay(today);
-    const held = rules.after_closing_from
-      ? (() => { const [y, m, d] = rules.after_closing_from!.split('-').map(Number); return new Date(y, m - 1, d); })()
-      : start;
+    // Each reminder holds the deals that closed before it was switched On (and before go-live).
+    const heldFor = Object.fromEntries(on.map((k) => [k, afterHeldFrom(rules, k, start)])) as Record<AfterKey, Date>;
+    const held = on.map((k) => heldFor[k]).reduce((a, b) => (b < a ? b : a));
     const longest = Math.max(...on.map((k) => rules[k].until));
     const soonest = Math.min(...on.map((k) => rules[k].first));
     const byWindow = new Date(start.getFullYear(), start.getMonth(), start.getDate() - longest);
@@ -773,6 +773,7 @@ export class ReminderSweepService {
     for (const t of rows) {
       if (!t.closing_date) continue;
       for (const key of on) {
+        if (calendarDay(t.closing_date) < heldFor[key]) continue; // an old deal for this reminder
         const { due, daysAfter } = afterClosingDue(today, calendarDay(t.closing_date), rules[key]);
         if (!due) continue;
         const msg = this.afterClosingMessage(key, t, daysAfter);
