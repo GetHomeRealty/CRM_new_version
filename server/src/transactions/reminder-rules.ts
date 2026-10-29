@@ -14,10 +14,13 @@
  *                  commission - On/Off only (it goes the night the invoice is paid)
  * After closing:   after_status (Firm/Conditional still), after_docs (required documents still
  *                  Pending/Invalid), after_lawyer (lawyer details still missing) - first day after
- *                  closing, then every N days, up to a last day. Defaults 1, every 2, up to 60.
+ *                  closing, then every N days, up to a last day. Defaults 1, every 2, up to 60, and
+ *                  OFF until a Super Admin switches them on.
  *
  * "Hold the old deals" (Sai): after-closing reminders are only for deals whose closing date is on or
- * after `after_closing_from`, the day this went live. Deals already past closing are left alone.
+ * after `after_closing_from` (the day this went live) AND on or after the day that reminder was last
+ * switched On (`after_started`). Deals already past closing at that moment are left alone - so turning
+ * one on weeks later does not suddenly chase every deal that closed in between.
  */
 import {
   CLOSING_REMINDER_DAYS, CONDITION_REMINDER_DAYS, DEPOSIT_GRACE_DAYS, EXPIRY_REMINDER_DAYS, LAWYER_REMINDER_DAYS, daysBetween,
@@ -46,6 +49,8 @@ export interface ReminderRules {
   after_lawyer: AfterRule;
   /** YYYY-MM-DD. Deals closing before this day get no after-closing reminders. Null = not set yet. */
   after_closing_from: string | null;
+  /** YYYY-MM-DD per after-closing reminder: the day it was last switched On. Set by a save, never typed. */
+  after_started: Partial<Record<AfterKey, string>>;
 }
 
 const DEFAULT_DAYS: Record<DaysKey, readonly number[]> = {
@@ -56,7 +61,13 @@ const DEFAULT_DAYS: Record<DaysKey, readonly number[]> = {
 };
 /** The smallest day each list may hold. A listing is expired ON its day, so 0 is not a reminder. */
 const MIN_DAY: Record<DaysKey, number> = { lawyer: 0, closing: 0, condition: 0, listing_expiry: 1 };
-export const DEFAULT_AFTER: AfterRule = { on: true, first: 1, every: 2, until: MAX_REMINDER_DAYS };
+/*
+ * The after-closing reminders START OFF (Sai, 29 Oct 2026, answer "A"): on live, statuses are rarely
+ * moved on after closing and required documents are rarely marked Valid (12 of 766 on the deals that
+ * closed Aug-Oct), so switched on at go-live they would chase almost every deal for work already done.
+ * A Super Admin switches each one on from the Triggers screen when the team is ready.
+ */
+export const DEFAULT_AFTER: AfterRule = { on: false, first: 1, every: 2, until: MAX_REMINDER_DAYS };
 
 /** Plain names, for the audit trail and for error messages. */
 export const RULE_LABEL: Record<DaysKey | AfterKey | 'deposit' | 'commission', string> = {
@@ -86,6 +97,7 @@ export function defaultRules(): ReminderRules {
     after_docs: { ...DEFAULT_AFTER },
     after_lawyer: { ...DEFAULT_AFTER },
     after_closing_from: null,
+    after_started: {},
   };
 }
 
@@ -136,6 +148,11 @@ export function readRules(flags: Record<string, unknown>): ReminderRules {
 
   const from = stored.after_closing_from;
   if (typeof from === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(from)) out.after_closing_from = from;
+  const started = isObj(stored.after_started) ? stored.after_started : {};
+  for (const key of AFTER_KEYS) {
+    const d = started[key];
+    if (typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d)) out.after_started[key] = d;
+  }
   return out;
 }
 
@@ -244,6 +261,27 @@ export function describeRule(rules: ReminderRules, key: keyof typeof RULE_LABEL)
   }
   const r = rules[key as DaysKey];
   return `${state(r.on)} - ${r.days.join(', ')}`;
+}
+
+/** A YYYY-MM-DD day as local midnight. */
+export function ymdDay(ymd: string): Date {
+  const [y, m, d] = ymd.split('-').map(Number);
+  return new Date(y, m - 1, d);
+}
+
+/** The local day as YYYY-MM-DD. */
+export function dayYmd(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+/**
+ * The first closing date an after-closing reminder may chase: the later of the go-live day and the day
+ * it was switched On. With neither recorded, today - which reaches nobody, since day 1 is tomorrow.
+ */
+export function afterHeldFrom(rules: ReminderRules, key: AfterKey, today: Date): Date {
+  const days = [rules.after_closing_from, rules.after_started[key]].filter((x): x is string => !!x).map(ymdDay);
+  if (days.length === 0) return new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  return days.reduce((a, b) => (b > a ? b : a));
 }
 
 /**

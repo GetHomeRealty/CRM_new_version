@@ -117,7 +117,7 @@ async function setFlags(tx: PrismaService, flags: Record<string, unknown>): Prom
 // ---------------------------------------------------------------------------
 
 describe('reminder rules - defaults are exactly what ran before', () => {
-  it('starts every reminder On with today\'s days', () => {
+  it('starts every existing reminder On with today\'s days, and the after-closing ones Off', () => {
     const r = defaultRules();
     expect(r.lawyer).toEqual({ on: true, days: [30, 23, 15, 11, 7, 5, 3, 1, 0] });
     expect(r.closing).toEqual({ on: true, days: [10, 7, 4, 3, 2, 1, 0] });
@@ -125,7 +125,8 @@ describe('reminder rules - defaults are exactly what ran before', () => {
     expect(r.listing_expiry).toEqual({ on: true, days: [10, 9, 8, 7, 6, 5, 4, 3, 2, 1] });
     expect(r.deposit).toEqual({ on: true, days: 5 });
     expect(r.commission).toEqual({ on: true });
-    for (const k of ['after_status', 'after_docs', 'after_lawyer'] as const) expect(r[k]).toEqual({ on: true, first: 1, every: 2, until: 60 });
+    // The after-closing ones start OFF (Sai, answer A) - switched on from the Triggers screen.
+    for (const k of ['after_status', 'after_docs', 'after_lawyer'] as const) expect(r[k]).toEqual({ on: false, first: 1, every: 2, until: 60 });
     expect(readRules({})).toEqual(r);
   });
 
@@ -190,7 +191,7 @@ describe('reminder rules - what the Triggers screen may save', () => {
 
   it('after closing: first day, every N days, last day - first must not be after the last', () => {
     const r = applyRulesPatch(base, { after_docs: { first: 2, every: 7, until: 30 } });
-    expect('rules' in r && r.rules.after_docs).toEqual({ on: true, first: 2, every: 7, until: 30 });
+    expect('rules' in r && r.rules.after_docs).toEqual({ on: false, first: 2, every: 7, until: 30 });
     expect('errors' in applyRulesPatch(base, { after_docs: { first: 40, until: 30 } })).toBe(true);
     expect('errors' in applyRulesPatch(base, { after_docs: { until: 61 } })).toBe(true);
   });
@@ -249,7 +250,21 @@ describe('switches and edited days in the nightly sweep', () => {
 
 describe('after-closing reminders in the nightly sweep', () => {
   const closing = anchor();
-  const held = { reminder_rules: { after_closing_from: ymd(day(closing, -10)) } };
+  const ON = { after_status: { on: true }, after_docs: { on: true }, after_lawyer: { on: true } };
+  const held = { reminder_rules: { after_closing_from: ymd(day(closing, -10)), ...ON } };
+
+  it('they start OFF: with only the go-live day recorded, nothing after closing is sent', async () => {
+    await inRollback(async (tx) => {
+      const agent = await makeUser(tx);
+      await makeUser(tx, 'documentation');
+      await makeDeal(tx, { agent: agent.name, agent_user_id: agent.id, closing_date: dbDate(closing) }, ['Secured Firm']);
+      await setFlags(tx, { reminder_rules: { after_closing_from: ymd(day(closing, -10)) } });
+      const s = stubs();
+      for (let n = 1; n <= 7; n++) await sweepFor(tx, s).sweep(day(closing, n));
+      expect(s.sent.filter((m) => m.event.startsWith('transaction.after_closing'))).toHaveLength(0);
+      expect(s.dispatched.filter((d) => d.category === 'after_closing')).toHaveLength(0);
+    });
+  });
 
   it('status still Firm: the agent and the deal\'s Documentation handler, every other day, until it is Closed', async () => {
     await inRollback(async (tx) => {
@@ -340,7 +355,7 @@ describe('after-closing reminders in the nightly sweep', () => {
     await inRollback(async (tx) => {
       const agent = await makeUser(tx);
       await makeDeal(tx, { agent: agent.name, agent_user_id: agent.id, closing_date: dbDate(closing) }, ['Secured Firm']);
-      await setFlags(tx, { reminder_rules: { after_closing_from: ymd(day(closing, 1)) } });
+      await setFlags(tx, { reminder_rules: { after_closing_from: ymd(day(closing, 1)), ...ON } });
       const s = stubs();
       await sweepFor(tx, s).sweep(day(closing, 3));
       expect(s.sent.filter((m) => m.event.startsWith('transaction.after_closing'))).toHaveLength(0);
@@ -356,7 +371,7 @@ describe('after-closing reminders in the nightly sweep', () => {
       await sweepFor(tx, s).sweep(day(closing, 1));
       expect(s.sent.filter((m) => m.event.startsWith('transaction.after_closing'))).toHaveLength(0);
 
-      await setFlags(tx, { reminder_rules: { after_closing_from: ymd(day(closing, -1)), after_status: { on: false }, after_lawyer: { on: false } } });
+      await setFlags(tx, { reminder_rules: { after_closing_from: ymd(day(closing, -1)), ...ON, after_status: { on: false }, after_lawyer: { on: false } } });
       s = stubs();
       await sweepFor(tx, s).sweep(day(closing, 1));
       expect(s.sent.filter((m) => m.event.startsWith('transaction.after_closing'))).toHaveLength(0);
@@ -401,6 +416,31 @@ describe('saving the reminders (Super Admin only)', () => {
       expect(trail.map((a) => a.field).sort()).toEqual(['Closing-date reminders', 'Lawyer-detail reminders']);
 
       await expect(svc.save(asUser(admin, 'admin'), { closing: { days: '99' } })).rejects.toThrow();
+    });
+  });
+
+  it('switching an after-closing reminder On holds every deal that closed before that day', async () => {
+    await inRollback(async (tx) => {
+      const today = new Date();
+      const agent = await makeUser(tx);
+      const admin = await makeUser(tx, 'admin');
+      // Go-live was ten days ago; the reminder was Off until now.
+      await setFlags(tx, { reminder_rules: { after_closing_from: ymd(day(today, -10)) } });
+      const closedYesterday = await makeDeal(tx, { agent: agent.name, agent_user_id: agent.id, closing_date: dbDate(day(today, -1)) }, ['Secured Firm']);
+      const closesToday = await makeDeal(tx, { agent: agent.name, agent_user_id: agent.id, closing_date: dbDate(today) }, ['Secured Firm']);
+
+      const svc = new ReminderRulesService(tx, new AuditService(tx));
+      const out = await svc.save(asUser(admin, 'admin'), { after_status: { on: true } });
+      expect(out.data.after_status.on).toBe(true);
+      expect(out.data.after_started.after_status).toBe(ymd(today));
+
+      const s = stubs();
+      await sweepFor(tx, s).sweep(day(today, 1));
+      await sweepFor(tx, s).sweep(day(today, 2));
+      const mails = s.sent.filter((m) => m.event === 'transaction.after_closing_status');
+      const deals = await tx.transactions.findMany({ where: { id: { in: [closedYesterday, closesToday] } }, select: { id: true, trade_no: true } });
+      const no = (id: number) => deals.find((d) => d.id === id)!.trade_no;
+      expect(mails.map((m) => m.vars.deal_number)).toEqual([no(closesToday)]); // day 1 of the new deal only
     });
   });
 
