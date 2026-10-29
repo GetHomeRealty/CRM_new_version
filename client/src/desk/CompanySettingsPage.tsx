@@ -271,10 +271,16 @@ export default function CompanySettingsPage() {
           <h3 className="modal-h" style={{ fontSize: 14 }}>Automatic Reminders</h3>
           <div className="g3">
             <div className="field">
-              <label htmlFor="cs-lawyer_reminder_days">Lawyer detail reminder — every (days)</label>
-              <input id="cs-lawyer_reminder_days" type="number" min={0} max={365} value={String(form.lawyer_reminder_days ?? 3)} disabled={!canEdit}
-                onChange={(e) => set('lawyer_reminder_days', e.target.value)} />
-              <span className="help">Agents are re-emailed this often while buyer/seller lawyer details are missing on a Buying deal. Set to 0 to turn recurring reminders off.</span>
+              <label htmlFor="cs-lawyer_reminder_days">Lawyer detail reminders</label>
+              {/* 29 Oct 2026 (Sai) - the number only ever worked as On (above 0) / Off (0), so it is
+                  shown as that: On stores 3 (its old default), Off stores 0. The days themselves
+                  are set on the Triggers screen. */}
+              <select id="cs-lawyer_reminder_days" value={Number(form.lawyer_reminder_days ?? 3) > 0 ? 'on' : 'off'} disabled={!canEdit}
+                onChange={(e) => { setDirty(true); setForm((f) => (f ? { ...f, lawyer_reminder_days: e.target.value === 'on' ? 3 : 0 } : f)); }}>
+                <option value="on">On</option>
+                <option value="off">Off</option>
+              </select>
+              <span className="help">Agents are reminded while buyer/seller lawyer details are missing on a Buying deal. The days are set on the Triggers screen.</span>
             </div>
           </div>
         </div>

@@ -48,6 +48,8 @@ export function daysBetween(from: Date, to: Date): number {
 
 /** The first countdown message goes out this many days before expiry. */
 export const EXPIRY_WINDOW_DAYS = 10;
+/** The same ten-to-one countdown as a list of days, so the Triggers screen can change it (29 Oct 2026). */
+export const EXPIRY_REMINDER_DAYS: readonly number[] = [10, 9, 8, 7, 6, 5, 4, 3, 2, 1];
 
 /**
  * Whether a listing expiring on `expiry` should be chased today, and with what number.
@@ -56,9 +58,9 @@ export const EXPIRY_WINDOW_DAYS = 10;
  * telling somebody their listing expires "in 0 days" on the morning it is being expired is a message
  * that arrives too late to act on and reads like a fault.
  */
-export function expiryReminderFor(today: Date, expiry: Date): { due: boolean; daysRemaining: number } {
+export function expiryReminderFor(today: Date, expiry: Date, days: readonly number[] = EXPIRY_REMINDER_DAYS): { due: boolean; daysRemaining: number } {
   const daysRemaining = daysBetween(today, expiry);
-  return { due: daysRemaining >= 1 && daysRemaining <= EXPIRY_WINDOW_DAYS, daysRemaining };
+  return { due: daysRemaining >= 1 && days.includes(daysRemaining), daysRemaining };
 }
 
 /** "expires tomorrow" reads better than "expires in 1 day", and is the wording people expect. */
@@ -96,6 +98,8 @@ export const CLOSING_WINDOW_DAYS = 10;
  */
 export const CLOSING_REMINDER_DAYS: readonly number[] = [10, 7, 4, 3, 2, 1, 0];
 export const CONDITION_WINDOW_DAYS = 7;
+/** Every day of the last week, the deadline day included, as a list the Triggers screen can change. */
+export const CONDITION_REMINDER_DAYS: readonly number[] = [7, 6, 5, 4, 3, 2, 1, 0];
 
 /**
  * Whether a deal closing on `closing` should be announced today, and with what number.
@@ -105,15 +109,15 @@ export const CONDITION_WINDOW_DAYS = 7;
  * after the fact. Nothing acts on a closing date, so the morning of a closing is precisely when
  * somebody wants to be told about it.
  */
-export function closingReminderFor(today: Date, closing: Date): { due: boolean; daysRemaining: number } {
+export function closingReminderFor(today: Date, closing: Date, days: readonly number[] = CLOSING_REMINDER_DAYS): { due: boolean; daysRemaining: number } {
   const daysRemaining = daysBetween(today, closing);
-  return { due: CLOSING_REMINDER_DAYS.includes(daysRemaining), daysRemaining };
+  return { due: days.includes(daysRemaining), daysRemaining };
 }
 
 /** Whether a condition due on `deadline` should be chased today. The deadline day counts. */
-export function conditionReminderFor(today: Date, deadline: Date): { due: boolean; daysRemaining: number } {
+export function conditionReminderFor(today: Date, deadline: Date, days: readonly number[] = CONDITION_REMINDER_DAYS): { due: boolean; daysRemaining: number } {
   const daysRemaining = daysBetween(today, deadline);
-  return { due: daysRemaining >= 0 && daysRemaining <= CONDITION_WINDOW_DAYS, daysRemaining };
+  return { due: days.includes(daysRemaining), daysRemaining };
 }
 
 // ---------------------------------------------------------------- deposit outstanding
@@ -142,9 +146,9 @@ export const DEPOSIT_GRACE_DAYS = 5;
  * single thing to go and ask about; repeating it daily until somebody types a date turns the
  * reminder into noise, and the deal's own screen already shows it missing.
  */
-export function depositReminderFor(today: Date, offer: Date): { due: boolean; daysOutstanding: number } {
+export function depositReminderFor(today: Date, offer: Date, grace: number = DEPOSIT_GRACE_DAYS): { due: boolean; daysOutstanding: number } {
   const daysOutstanding = daysBetween(offer, today);
-  return { due: daysOutstanding === DEPOSIT_GRACE_DAYS, daysOutstanding };
+  return { due: daysOutstanding === grace, daysOutstanding };
 }
 
 /** "due today" / "due tomorrow" — the same reason closingPhrase exists. */
@@ -183,9 +187,9 @@ export interface LawyerDue {
  * Outside thirty days: nothing. Past the closing date: nothing either — a reminder to prepare for
  * something that has already happened is noise, and the deal has bigger problems by then.
  */
-export function lawyerReminderFor(today: Date, closing: Date): LawyerDue {
+export function lawyerReminderFor(today: Date, closing: Date, days: readonly number[] = LAWYER_REMINDER_DAYS): LawyerDue {
   const daysRemaining = daysBetween(today, closing);
-  return { due: LAWYER_REMINDER_DAYS.includes(daysRemaining), daysRemaining };
+  return { due: days.includes(daysRemaining), daysRemaining };
 }
 
 /** "closing tomorrow" / "closing today" read better than a bare number at the sharp end. */

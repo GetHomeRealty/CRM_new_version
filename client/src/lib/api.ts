@@ -1,7 +1,7 @@
 import type { AxiosRequestConfig } from 'axios';
 import api from './axios';
 import { filenameFromDisposition, saveBlob } from './download';
-import type { EmailTemplateAttachment, AgentChangeNotif, AgentCommissionMap, AgentLoanMap, AuditLogPage, BrokerageSuggestion, ChatMessage, ClientIdentification, CompanySettings, DashboardCommissions, DealHistoryEntry, DeletionLogEntry, DocNotif, DocumentsResponse, EmailTemplate, EmailTemplatesResponse, GenerateInvoicesResult, Invoice, LawyerSuggestion, MailAccount, ManagedRole, ManagedUser, NoticeOfSaleData, SendResult, TemplatePreview, TestMailResult, Transaction, TrashedDocument, TrashedInvoice, TrashedPayment, TrashedResponse, TrashedRowItem, TrashedTransaction, UsersCatalog, CrmDashboard, DeskDashboard, DeskAnalytics } from '../types';
+import type { EmailTemplateAttachment, AgentChangeNotif, AgentCommissionMap, AgentLoanMap, AuditLogPage, BrokerageSuggestion, ChatMessage, ClientIdentification, CompanySettings, ReminderRulesResponse, DashboardCommissions, DealHistoryEntry, DeletionLogEntry, DocNotif, DocumentsResponse, EmailTemplate, EmailTemplatesResponse, GenerateInvoicesResult, Invoice, LawyerSuggestion, MailAccount, ManagedRole, ManagedUser, NoticeOfSaleData, SendResult, TemplatePreview, TestMailResult, Transaction, TrashedDocument, TrashedInvoice, TrashedPayment, TrashedResponse, TrashedRowItem, TrashedTransaction, UsersCatalog, CrmDashboard, DeskDashboard, DeskAnalytics } from '../types';
 
 /** Route parameter identifiers (Laravel accepts numeric or string ids). */
 type Id = number | string;
@@ -750,6 +750,10 @@ export const changePassword = (payload: unknown): Promise<unknown> => api.post('
 
 export const getCompanySettings = (): Promise<CompanySettings> => api.get<CompanySettings>('/api/company-settings').then((r) => r.data);
 export const updateCompanySettings = (payload: unknown): Promise<CompanySettings> => api.put<CompanySettings>('/api/company-settings', payload).then((r) => r.data);
+
+/** The scheduled reminders' switches and days (Triggers screen, 29 Oct 2026). Only a Super Admin may save. */
+export const getReminderRules = (): Promise<ReminderRulesResponse> => api.get<ReminderRulesResponse>('/api/reminder-rules').then((r) => r.data);
+export const saveReminderRules = (payload: Record<string, unknown>): Promise<ReminderRulesResponse> => api.put<ReminderRulesResponse>('/api/reminder-rules', payload).then((r) => r.data);
 
 /**
  * The brand logo endpoint. Absolute (not a relative path) because it is rendered by plain

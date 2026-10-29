@@ -32,3 +32,20 @@ export interface CompanySettings {
   updated_at?: string | null;
   [key: string]: unknown;
 }
+
+/** Triggers screen - the scheduled reminders' switches and days (29 Oct 2026). */
+export interface ReminderDaysRule { on: boolean; days: number[] }
+export interface ReminderAfterRule { on: boolean; first: number; every: number; until: number }
+export interface ReminderRules {
+  lawyer: ReminderDaysRule;
+  closing: ReminderDaysRule;
+  condition: ReminderDaysRule;
+  listing_expiry: ReminderDaysRule;
+  deposit: { on: boolean; days: number };
+  commission: { on: boolean };
+  after_status: ReminderAfterRule;
+  after_docs: ReminderAfterRule;
+  after_lawyer: ReminderAfterRule;
+  after_closing_from: string | null;
+}
+export interface ReminderRulesResponse { data: ReminderRules; can_edit: boolean; max_days: number }

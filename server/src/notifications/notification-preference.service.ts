@@ -135,6 +135,15 @@ export const NOTIFICATION_CATEGORIES: readonly NotificationCategory[] = [
     areas: ['desk'],
   },
   {
+    key: 'after_closing',
+    label: 'After-closing reminders',
+    description: 'A deal is past its closing date and its status, required documents or lawyer details are still not done.',
+    // 29 Oct 2026. Same sweep as the closing reminders; the agent's copy is the `transaction_reminders`
+    // row, Documentation's comes through the dispatcher.
+    channels: { in_app: 'live', email: 'live', push: 'live' },
+    areas: ['desk'],
+  },
+  {
     key: 'lawyer_details',
     label: 'Lawyer detail reminders',
     description: 'A deal has reached a phase where the lawyer’s details are still missing.',
